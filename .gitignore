@@ -7,3 +7,7 @@ coverage/
 .vscode/
 .idea/
 *.log
+
+# Large backup files (keep locally, don't commit)
+deploy/supabase_backup.sql
+*.backup.sql
