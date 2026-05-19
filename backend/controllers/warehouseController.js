@@ -1,0 +1,256 @@
+const pool = require('../config/db');
+
+const logOrderStatusHistory = async (client, { orderId, fromStatus, toStatus, changedBy, notes }) => {
+    await client.query(
+        `INSERT INTO order_status_history (order_id, from_status, to_status, changed_by, notes)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [orderId, fromStatus, toStatus, changedBy || null, notes || null]
+    );
+};
+
+// Get warehouse items (order_items with status Warehouse - Cooling Period laptops)
+exports.getWarehouseItems = async (req, res) => {
+    try {
+        const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
+        const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+        const search = (req.query.search || '').trim();
+        const term = search ? `%${search}%` : null;
+
+        // Include rows mis-tagged Assigned while inventory is still Cooling Period (common when qty > selected inventory_ids).
+        const baseJoin = `
+            FROM order_items oi
+            LEFT JOIN inventory i ON oi.inventory_id = i.inventory_id
+            JOIN orders o ON oi.order_id = o.order_id
+            JOIN customers c ON o.customer_id = c.customer_id
+            WHERE o.status != 'Cancelled'
+              AND (
+                oi.status = 'Warehouse'
+                OR (
+                  o.status = 'Warehouse Pending'
+                  AND oi.status = 'Assigned'
+                  AND oi.inventory_id IS NOT NULL
+                  AND i.stock_type = 'Cooling Period'
+                )
+              )
+        `;
+        const params = [];
+        let p = 1;
+        let searchClause = '';
+        if (term) {
+            searchClause = ` AND (
+                c.company_name ILIKE $${p} OR c.name ILIKE $${p}
+                OR CAST(o.order_id AS TEXT) ILIKE $${p}
+                OR i.machine_number ILIKE $${p} OR i.serial_number ILIKE $${p}
+            )`;
+            params.push(term);
+            p++;
+        }
+
+        const countSql = `SELECT COUNT(*)::int AS c ${baseJoin} ${searchClause}`;
+        const listSql = `
+            SELECT 
+                oi.item_id, oi.order_id, o.created_at as order_date, oi.brand, oi.processor, oi.generation, oi.ram, oi.storage, oi.preferred_model,
+                oi.status as item_status, oi.inventory_id,
+                i.machine_number, i.serial_number, i.stock_type,
+                o.status as order_status, o.customer_id,
+                c.name as customer_name, c.company_name, c.email as customer_email, c.gst_no
+            ${baseJoin} ${searchClause}
+            ORDER BY oi.item_id ASC
+            LIMIT $${p} OFFSET $${p + 1}
+        `;
+
+        const [countRes, listRes, totalAllRes] = await Promise.all([
+            pool.query(countSql, [...params]),
+            pool.query(listSql, [...params, limit, offset]),
+            pool.query(`SELECT COUNT(*)::int AS c ${baseJoin}`, [])
+        ]);
+
+        res.json({
+            items: listRes.rows || [],
+            total: countRes.rows[0]?.c ?? 0,
+            total_all: totalAllRes.rows[0]?.c ?? 0
+        });
+    } catch (err) {
+        console.error('Warehouse getItems error:', err);
+        res.status(500).json({ message: 'Failed to fetch warehouse items' });
+    }
+};
+
+// Mark item ready - move to QC
+exports.markReady = async (req, res) => {
+    const { item_id } = req.params;
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        const itemRes = await client.query(
+            `SELECT oi.item_id, oi.order_id, oi.inventory_id
+             FROM order_items oi
+             JOIN orders o ON o.order_id = oi.order_id
+             LEFT JOIN inventory inv ON oi.inventory_id = inv.inventory_id
+             WHERE oi.item_id = $1
+               AND o.status != 'Cancelled'
+               AND (
+                 oi.status = 'Warehouse'
+                 OR (
+                   oi.status = 'Assigned'
+                   AND o.status = 'Warehouse Pending'
+                   AND inv.stock_type = 'Cooling Period'
+                 )
+               )`,
+            [item_id]
+        );
+        if (itemRes.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ message: 'Warehouse item not found' });
+        }
+        const item = itemRes.rows[0];
+
+        await client.query(
+            `UPDATE inventory SET stock_type = 'Ready', status = 'Reserved' WHERE inventory_id = $1`,
+            [item.inventory_id]
+        );
+        await client.query(
+            `UPDATE order_items SET status = 'Assigned' WHERE item_id = $1`,
+            [item_id]
+        );
+
+        // Move order to QC Pending when at least one item is Assigned (ready for QC)
+        // This allows QC to pass ready laptops even when others are still in Warehouse
+        const orderRes = await client.query(`SELECT status FROM orders WHERE order_id = $1`, [item.order_id]);
+        const fromStatus = orderRes.rows[0]?.status || null;
+        const canMoveToQC = ['Warehouse Pending', 'Procurement Pending'].includes(fromStatus);
+        if (canMoveToQC) {
+            await client.query(
+                `UPDATE orders SET status = 'QC Pending',
+                    qc_received_at = COALESCE(qc_received_at, CURRENT_TIMESTAMP),
+                    updated_at = CURRENT_TIMESTAMP
+                 WHERE order_id = $1`,
+                [item.order_id]
+            );
+            await logOrderStatusHistory(client, {
+                orderId: item.order_id,
+                fromStatus,
+                toStatus: 'QC Pending',
+                changedBy: req.user.user_id,
+                notes: 'Warehouse marked laptop ready, order moved to QC (partial items ready)'
+            });
+        }
+
+        await client.query('COMMIT');
+        res.json({ success: true, message: 'Laptop marked ready, moved to QC', order_id: item.order_id });
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('Warehouse markReady error:', err);
+        res.status(500).json({ message: err.message || 'Failed to mark ready' });
+    } finally {
+        client.release();
+    }
+};
+
+// Replace machine - swap with new machine, old goes to In Repair
+exports.replaceMachine = async (req, res) => {
+    const { item_id } = req.params;
+    const { new_machine_number } = req.body;
+    if (!new_machine_number || !String(new_machine_number).trim()) {
+        return res.status(400).json({ message: 'new_machine_number is required' });
+    }
+    const machineNum = String(new_machine_number).trim();
+    // Normalize for flexible match (TTSPL6177 = TTSPL-6177 = TTSPL 6177)
+    const normalized = machineNum.replace(/[\s\-_]/g, '').toUpperCase();
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        const itemRes = await client.query(
+            `SELECT oi.item_id, oi.order_id, oi.inventory_id, oi.brand, oi.processor, oi.ram, oi.storage
+             FROM order_items oi
+             JOIN orders o ON o.order_id = oi.order_id
+             LEFT JOIN inventory inv ON oi.inventory_id = inv.inventory_id
+             WHERE oi.item_id = $1
+               AND o.status != 'Cancelled'
+               AND (
+                 oi.status = 'Warehouse'
+                 OR (
+                   oi.status = 'Assigned'
+                   AND o.status = 'Warehouse Pending'
+                   AND inv.stock_type = 'Cooling Period'
+                 )
+               )`,
+            [item_id]
+        );
+        if (itemRes.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ message: 'Warehouse item not found' });
+        }
+        const item = itemRes.rows[0];
+
+        const newInvRes = await client.query(
+            `SELECT inventory_id, machine_number, serial_number, brand, model, processor, ram, storage
+             FROM inventory
+             WHERE (machine_number = $1 OR UPPER(REPLACE(REPLACE(REPLACE(COALESCE(machine_number,''), ' ', ''), '-', ''), '_', '')) = $2)
+               AND status IN ('Ready', 'In Stock')
+               AND stock_type IN ('Ready', 'Cooling Period')
+               FOR UPDATE SKIP LOCKED`,
+            [machineNum, normalized]
+        );
+
+        let newInv = null;
+        if (newInvRes.rows.length > 0) {
+            if (item.inventory_id && newInvRes.rows.some(r => r.inventory_id === item.inventory_id)) {
+                newInv = newInvRes.rows.find(r => r.inventory_id === item.inventory_id);
+                await client.query('COMMIT');
+                return res.json({
+                    success: true,
+                    message: 'Machine is already assigned to this item.',
+                    order_id: item.order_id,
+                    new_machine_number: newInv.machine_number,
+                    new_serial_number: newInv.serial_number
+                });
+            }
+            newInv = newInvRes.rows[0];
+        }
+
+        if (!newInv) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ message: `Machine ${machineNum} not found or not available for assignment. Ensure it exists in inventory with status Ready/In Stock and stock_type Ready.` });
+        }
+
+        const oldInvId = item.inventory_id;
+        const newInvId = newInv.inventory_id;
+
+        if (oldInvId && oldInvId !== newInvId) {
+            await client.query(
+                `UPDATE inventory SET status = 'In Repair' WHERE inventory_id = $1`,
+                [oldInvId]
+            );
+        }
+        await client.query(
+            `UPDATE inventory SET status = 'Reserved' WHERE inventory_id = $1`,
+            [newInvId]
+        );
+
+        await client.query(
+            `UPDATE order_items 
+             SET inventory_id = $1, brand = $2, processor = $3, ram = $4, storage = $5, preferred_model = $6
+             WHERE item_id = $7`,
+            [newInvId, newInv.brand, newInv.processor, newInv.ram, newInv.storage, newInv.model, item_id]
+        );
+
+        await client.query('COMMIT');
+        res.json({
+            success: true,
+            message: 'Machine replaced. Old laptop marked In Repair.',
+            order_id: item.order_id,
+            new_machine_number: newInv.machine_number,
+            new_serial_number: newInv.serial_number
+        });
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('Warehouse replaceMachine error:', err);
+        res.status(500).json({ message: err.message || 'Failed to replace machine' });
+    } finally {
+        client.release();
+    }
+};

@@ -1,0 +1,4 @@
+# Ensure shell scripts use LF (Unix) line endings for Linux VPS
+*.sh text eol=lf
+deploy/*.sh text eol=lf
+deploy/docker-entrypoint.sh text eol=lf

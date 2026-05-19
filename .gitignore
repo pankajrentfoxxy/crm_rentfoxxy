@@ -7,7 +7,18 @@ coverage/
 .vscode/
 .idea/
 *.log
+*.sql.gz
+*.dump
 
 # Large backup files (keep locally, don't commit)
 deploy/supabase_backup.sql
 *.backup.sql
+
+# Temp/deploy artifacts
+*.tmp
+*.temp
+.env.local
+.env.*.local
+
+# Local nested-repo backups (not pushed)
+**/.git-repo-backup/

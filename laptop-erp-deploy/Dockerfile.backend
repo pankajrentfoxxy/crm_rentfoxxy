@@ -1,0 +1,12 @@
+# Build backend from GitHub repo
+FROM node:20-alpine
+RUN apk add --no-cache git
+
+WORKDIR /app
+RUN git clone https://github.com/pankajrentfoxxy/laptop-refurb-backend.git .
+
+RUN npm ci --only=production
+RUN npx prisma generate
+
+EXPOSE 5001
+CMD ["node", "server.js"]

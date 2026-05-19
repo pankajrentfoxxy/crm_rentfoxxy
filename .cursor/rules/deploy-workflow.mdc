@@ -1,0 +1,18 @@
+---
+description: Deploy workflow for laptop-erp CRM (crm.rentfoxxy.com)
+alwaysApply: true
+---
+
+# Deploy Workflow
+
+For deployment changes, redeploys, or troubleshooting the CRM on Hostinger VPS:
+
+**Step-by-step commands:** `deploy/DEPLOY_STEP_BY_STEP.md`  
+**Full reference:** `deploy/DEPLOY_WORKFLOW.md`
+
+These documents contain:
+- Curl commands for backend and frontend deploy
+- ERP API token (JWT) configuration
+- SSL/HTTPS setup
+- Migration commands
+- Essential file references
