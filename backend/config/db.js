@@ -1,8 +1,11 @@
 const { Pool } = require('pg');
 require('dotenv').config();
 
-// Disable SSL for local Docker postgres; enable for Supabase/cloud
-const useSsl = process.env.DB_HOST !== 'postgres' &&
+// SSL: disabled for localhost / Docker postgres. For remote hostnames, SSL defaults ON
+// unless DB_SSL=false (typical VPS Postgres without TLS). Managed DBs often need ssl on.
+const hostLower = String(process.env.DB_HOST || '').toLowerCase();
+const sslDisabledHosts = new Set(['postgres', 'localhost', '127.0.0.1']);
+const useSsl = !sslDisabledHosts.has(hostLower) &&
   process.env.DB_SSL !== 'false' &&
   process.env.DB_SSL !== '0';
 const pool = new Pool({
