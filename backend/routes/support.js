@@ -29,6 +29,7 @@ const {
     upsertCategory,
     deleteCategory,
     checkDuplicateTicket,
+    addWorkflowPhaseItems,
     assignTicketBulk,
     updateTicket,
     logVisit,
@@ -76,6 +77,7 @@ router.get('/tickets/check-duplicate', checkDuplicateTicket);
 router.post('/tickets', createTicket);
 router.get('/tickets/:ticketId', getTicket);
 router.patch('/tickets/:ticketId', requireSupportLead, updateTicket);
+router.post('/tickets/:ticketId/phases', requireSupportLead, addWorkflowPhaseItems);
 router.post('/tickets/:ticketId/assign-all', requireSupportLead, assignTicketBulk);
 router.post('/tickets/:ticketId/close', requireSupportLead, closeTicket);
 router.post('/tickets/:ticketId/replacements', requireSupportLead, initiateReplacement);

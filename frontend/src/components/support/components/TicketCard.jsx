@@ -22,8 +22,13 @@ export default function TicketCard({ ticket, closed, technicians = [], canAssign
   const hours = ticket.hours_since_last_update || 0;
   const updatedClass = ticket.is_overdue ? 'text-red-700' : hours >= 24 ? 'text-amber-700' : 'text-slate-500';
 
+  const primaryCategory = ticket.ticket_category
+    || (ticket.items || []).find((i) => i.item_type)?.item_type
+    || 'complaint';
+
   const cardClass = [
     'support-ticket-card',
+    `cat-${primaryCategory}`,
     closed ? 'closed' : '',
     !closed && ticket.is_overdue ? 'overdue' : '',
     !closed && urgent.urgent ? 'urgent' : ''
@@ -49,7 +54,8 @@ export default function TicketCard({ ticket, closed, technicians = [], canAssign
     >
       <div className="flex items-start justify-between gap-2">
         <span className="text-xs text-slate-500 font-mono">{formatTicketId(ticket.id)}</span>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 flex-wrap justify-end">
+          <span className={`support-category-label ${primaryCategory}`}>{primaryCategory}</span>
           {ticket.priority && ticket.priority !== 'normal' && (
             <span className="support-pill open text-[10px] uppercase">{ticket.priority}</span>
           )}
