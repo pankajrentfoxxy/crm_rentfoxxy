@@ -10,6 +10,7 @@ import CommentThread from './components/CommentThread';
 import TicketEditPanel from './components/TicketEditPanel';
 import DetailSidebar from './components/DetailSidebar';
 import ReplacementPanel from './components/ReplacementPanel';
+import AddWorkflowPhasePanel from './components/AddWorkflowPhasePanel';
 import {
   formatItemId,
   formatRelative,
@@ -51,7 +52,8 @@ function ItemCard({
   onRefresh,
   technicians,
   canAssign,
-  otpNote
+  otpNote,
+  workflowActions
 }) {
   const { user } = useAuth();
   const [comment, setComment] = useState('');
@@ -304,9 +306,31 @@ function ItemCard({
             </div>
           </div>
         )}
+
+        {workflowActions && <WorkflowActionsBar workflowActions={workflowActions} item={item} />}
       </div>
     </article>
   );
+}
+
+function WorkflowActionsBar({ workflowActions, item }) {
+    return (
+        <div className="support-workflow-actions">
+            {workflowActions.showPickup && (
+                <button type="button" className="support-btn-outline w-full min-h-[44px]" onClick={() => workflowActions.onAddPhase('pickup')}>
+                    + Add pickup phase (this machine)
+                </button>
+            )}
+            {workflowActions.showReplacement && (
+                <button type="button" className="support-btn-outline w-full min-h-[44px]" onClick={() => workflowActions.onAddPhase('replacement')}>
+                    + Add replacement phase
+                </button>
+            )}
+            {item.source_item_id && (
+                <p className="text-xs text-slate-500">Linked to item #{item.source_item_id}</p>
+            )}
+        </div>
+    );
 }
 
 export default function SupportTicketDetail() {
@@ -317,6 +341,7 @@ export default function SupportTicketDetail() {
   const [categories, setCategories] = useState([]);
   const [editing, setEditing] = useState(false);
   const [showReplacement, setShowReplacement] = useState(false);
+  const [phasePanel, setPhasePanel] = useState(null);
   const [mobileDetails, setMobileDetails] = useState(false);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('complaint');
@@ -415,6 +440,26 @@ export default function SupportTicketDetail() {
 
   const tabItems = tab === 'complaint' ? complaints : tab === 'pickup' ? pickups : replacements;
 
+  const hasLinkedPickup = (sourceId) => pickups.some((p) => p.source_item_id === sourceId);
+  const hasLinkedReplacement = (sourceId) => replacements.some((r) => r.source_item_id === sourceId);
+
+  const workflowForItem = (item) => {
+    if (!isSupportLead(user) || ticket.status === 'closed') return null;
+    const resolved = ['resolved', 'closed'].includes(item.status);
+    const actions = { onAddPhase: (type) => setPhasePanel({ sourceItem: item, phaseType: type }) };
+    if (item.item_type === 'complaint' && (resolved || item.outcome === 'replacement_required')) {
+      if (!hasLinkedPickup(item.id)) actions.showPickup = true;
+      if (item.outcome === 'replacement_required' && !hasLinkedReplacement(item.id)) actions.showReplacement = true;
+    }
+    if (item.item_type === 'replacement' && item.status === 'inventory_updated' && !hasLinkedPickup(item.id)) {
+      actions.showPickup = true;
+    }
+    if (!actions.showPickup && !actions.showReplacement) return null;
+    return actions;
+  };
+
+  const ticketCategory = ticket.ticket_category || complaints[0]?.item_type || pickups[0]?.item_type || 'complaint';
+
   const cityLine = formatAddress(ticket.ticket_address);
   const shortCity = cityLine.length > 80 ? `${cityLine.slice(0, 77)}…` : cityLine;
 
@@ -434,6 +479,17 @@ export default function SupportTicketDetail() {
           )}
         </div>
       </div>
+
+      {phasePanel && (
+        <AddWorkflowPhasePanel
+          ticketId={ticket.id}
+          customerId={ticket.customer_id}
+          sourceItem={phasePanel.sourceItem}
+          phaseType={phasePanel.phaseType}
+          onDone={() => { setPhasePanel(null); load(); }}
+          onCancel={() => setPhasePanel(null)}
+        />
+      )}
 
       {showReplacement && flaggedItem && (
         <ReplacementPanel
@@ -465,6 +521,12 @@ export default function SupportTicketDetail() {
               {ticket.created_by_name ? ` · Created by ${ticket.created_by_name}` : ''}
             </p>
             <h1 className="support-ticket-title">{ticket.customer_name}</h1>
+            <div className="flex flex-wrap gap-2 mt-2">
+              <span className={`support-category-label ${ticketCategory}`}>{ticketCategory} ticket</span>
+              {complaints.length > 0 && <span className="support-phase-count complaint">{complaints.length} complaint</span>}
+              {pickups.length > 0 && <span className="support-phase-count pickup">{pickups.length} pickup</span>}
+              {replacements.length > 0 && <span className="support-phase-count replacement">{replacements.length} replacement</span>}
+            </div>
             <div className="flex flex-wrap gap-3 text-sm mt-2 items-center">
               <span className="inline-flex items-center gap-1" style={{ color: 'var(--color-text-secondary)' }}>
                 <Phone className="w-4 h-4 shrink-0" /> {ticket.display_phone || ticket.customer_phone}
@@ -515,6 +577,7 @@ export default function SupportTicketDetail() {
                   technicians={technicians}
                   canAssign={isSupportLead(user)}
                   otpNote={otpNote}
+                  workflowActions={workflowForItem(item)}
                 />
               ))}
             </div>

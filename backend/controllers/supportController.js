@@ -14,6 +14,104 @@ const TICKET_CLOSED = 'closed';
 
 const generateOtp = () => String(Math.floor(100000 + Math.random() * 900000));
 
+const VALID_ITEM_TYPES = new Set(['complaint', 'pickup', 'replacement']);
+const TERMINAL_ITEM_STATUSES = ['resolved', 'closed', 'inventory_updated'];
+
+const machineKey = (item) => {
+    if (item.customer_inventory_id) return `inv:${item.customer_inventory_id}`;
+    const serial = (item.unique_serial_number || item.serial_number || '').trim();
+    return serial ? `serial:${serial}` : null;
+};
+
+/** Open item on any non-closed ticket for this customer/machine. */
+const findOpenTicketForMachine = async (client, customerId, item, excludeTicketId = null) => {
+    const serial = (item.unique_serial_number || item.serial_number || '').trim();
+    const invId = item.customer_inventory_id ? parseInt(item.customer_inventory_id, 10) : null;
+    if (!invId && !serial) return null;
+
+    const params = [customerId];
+    let sql = `
+        SELECT t.id, t.status, i.item_type, i.unique_serial_number, i.serial_number
+        FROM support_tickets t
+        JOIN support_ticket_items i ON i.ticket_id = t.id
+        WHERE t.customer_id = $1 AND t.status <> 'closed'
+          AND i.status NOT IN ('resolved', 'closed', 'inventory_updated')
+    `;
+    if (excludeTicketId) {
+        params.push(excludeTicketId);
+        sql += ` AND t.id <> $${params.length}`;
+    }
+    if (invId) {
+        params.push(invId);
+        sql += ` AND i.customer_inventory_id = $${params.length}`;
+    } else {
+        params.push(serial);
+        sql += ` AND (i.serial_number = $${params.length} OR i.unique_serial_number = $${params.length})`;
+    }
+    sql += ' LIMIT 1';
+    const { rows } = await client.query(sql, params);
+    return rows[0] || null;
+};
+
+const assertMachinesAvailable = async (client, customerId, items, excludeTicketId = null) => {
+    const seen = new Set();
+    for (const item of items) {
+        const key = machineKey(item);
+        if (key && seen.has(key)) {
+            const err = new Error('Duplicate machine in the same request');
+            err.status = 400;
+            throw err;
+        }
+        if (key) seen.add(key);
+        const dup = await findOpenTicketForMachine(client, customerId, item, excludeTicketId);
+        if (dup) {
+            const label = item.unique_serial_number || item.serial_number || `inventory #${item.customer_inventory_id}`;
+            const err = new Error(`Machine ${label} already has an open ticket (#${dup.id})`);
+            err.status = 409;
+            err.duplicate = { id: dup.id, status: dup.status };
+            throw err;
+        }
+    }
+};
+
+const insertTicketItem = async (client, ticketId, item, userId, extra = {}) => {
+    const otp = generateOtp();
+    const ins = await client.query(
+        `INSERT INTO support_ticket_items (
+            ticket_id, customer_inventory_id, serial_number, unique_serial_number,
+            brand, model, ram, storage, generation, item_type,
+            issue_category_id, issue_category_label, remarks, assigned_to, status, otp_code, source_item_id
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'open',$15,$16)
+        RETURNING id`,
+        [
+            ticketId,
+            item.customer_inventory_id || null,
+            item.serial_number || null,
+            item.unique_serial_number || null,
+            item.brand || null,
+            item.model || null,
+            item.ram || null,
+            item.storage || null,
+            item.generation || null,
+            item.item_type,
+            item.issue_category_id || null,
+            item.issue_category_label || null,
+            item.remarks || null,
+            item.assigned_to || null,
+            otp,
+            extra.source_item_id || item.source_item_id || null
+        ]
+    );
+    await logAudit(client, {
+        itemId: ins.rows[0].id,
+        ticketId,
+        userId,
+        action: 'item_created',
+        detail: { item_type: item.item_type, source_item_id: extra.source_item_id || item.source_item_id || null }
+    });
+    return ins.rows[0];
+};
+
 /** Idempotent DDL so set-outcome works even if migration 029 did not run yet on this DB. */
 const ensureSupportTicketItemV3Columns = async (client) => {
     await client.query(`
@@ -371,6 +469,7 @@ exports.createTicket = async (req, res) => {
         customer_name,
         customer_phone,
         items,
+        ticket_category: ticketCategoryRaw,
         priority,
         top_level_remarks,
         ticket_phone_override,
@@ -382,16 +481,33 @@ exports.createTicket = async (req, res) => {
         return res.status(400).json({ success: false, message: 'customer_id and items are required' });
     }
 
+    const ticketCategory = VALID_ITEM_TYPES.has(ticketCategoryRaw)
+        ? ticketCategoryRaw
+        : (VALID_ITEM_TYPES.has(items[0]?.item_type) ? items[0].item_type : null);
+    if (!ticketCategory) {
+        return res.status(400).json({ success: false, message: 'ticket_category must be complaint, pickup, or replacement' });
+    }
+    const mismatched = items.find((item) => item.item_type !== ticketCategory);
+    if (mismatched) {
+        return res.status(400).json({
+            success: false,
+            message: `All machines must be type "${ticketCategory}". Mixed types belong in separate tickets or use "Add phase" on the ticket detail page.`
+        });
+    }
+
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
+        await assertMachinesAvailable(client, customer_id, items);
+
         const hasUnassigned = items.some((item) => !item.assigned_to);
         const initialStatus = hasUnassigned ? TICKET_OPEN : TICKET_IN_PROGRESS;
         const ticketRes = await client.query(
             `INSERT INTO support_tickets (
                 customer_id, customer_name, customer_phone, status, created_by, last_activity_at,
-                priority, top_level_remarks, ticket_phone_override, ticket_alt_phone, ticket_email, ticket_address
-            ) VALUES ($1,$2,$3,$4,$5,CURRENT_TIMESTAMP,$6,$7,$8,$9,$10,$11) RETURNING *`,
+                priority, top_level_remarks, ticket_phone_override, ticket_alt_phone, ticket_email, ticket_address,
+                ticket_category
+            ) VALUES ($1,$2,$3,$4,$5,CURRENT_TIMESTAMP,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
             [
                 customer_id,
                 customer_name || null,
@@ -403,7 +519,8 @@ exports.createTicket = async (req, res) => {
                 ticket_phone_override || customer_phone || null,
                 ticket_alt_phone || null,
                 ticket_email || null,
-                ticket_address || null
+                ticket_address || null,
+                ticketCategory
             ]
         );
         const ticket = ticketRes.rows[0];
@@ -412,43 +529,11 @@ exports.createTicket = async (req, res) => {
             ticketId: ticket.id,
             userId: req.user.user_id,
             action: 'ticket_created',
-            detail: { customer_id }
+            detail: { customer_id, ticket_category: ticketCategory }
         });
 
         for (const item of items) {
-            const otp = generateOtp();
-            const ins = await client.query(
-                `INSERT INTO support_ticket_items (
-                    ticket_id, customer_inventory_id, serial_number, unique_serial_number,
-                    brand, model, ram, storage, generation, item_type,
-                    issue_category_id, issue_category_label, remarks, assigned_to, status, otp_code
-                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'open',$15)
-                RETURNING id`,
-                [
-                    ticket.id,
-                    item.customer_inventory_id || null,
-                    item.serial_number || null,
-                    item.unique_serial_number || null,
-                    item.brand || null,
-                    item.model || null,
-                    item.ram || null,
-                    item.storage || null,
-                    item.generation || null,
-                    item.item_type,
-                    item.issue_category_id || null,
-                    item.issue_category_label || null,
-                    item.remarks || null,
-                    item.assigned_to || null,
-                    otp
-                ]
-            );
-            await logAudit(client, {
-                itemId: ins.rows[0].id,
-                ticketId: ticket.id,
-                userId: req.user.user_id,
-                action: 'item_created',
-                detail: { item_type: item.item_type }
-            });
+            await insertTicketItem(client, ticket.id, { ...item, item_type: ticketCategory }, req.user.user_id);
         }
 
         await client.query('COMMIT');
@@ -457,7 +542,12 @@ exports.createTicket = async (req, res) => {
     } catch (e) {
         await client.query('ROLLBACK');
         console.error('support createTicket', e);
-        res.status(500).json({ success: false, message: 'Failed to create ticket' });
+        const status = e.status || 500;
+        res.status(status).json({
+            success: false,
+            message: e.message || 'Failed to create ticket',
+            duplicate: e.duplicate || undefined
+        });
     } finally {
         client.release();
     }
@@ -991,20 +1081,111 @@ exports.checkDuplicateTicket = async (req, res) => {
     try {
         const customerId = parseInt(req.query.customer_id, 10);
         const serial = (req.query.serial || '').trim();
-        if (!customerId || !serial) {
+        const inventoryId = req.query.customer_inventory_id
+            ? parseInt(req.query.customer_inventory_id, 10)
+            : null;
+        if (!customerId || (!serial && !inventoryId)) {
             return res.json({ success: true, duplicate: null });
         }
-        const { rows } = await pool.query(
-            `SELECT t.id, t.status FROM support_tickets t
-             JOIN support_ticket_items i ON i.ticket_id = t.id
-             WHERE t.customer_id = $1 AND t.status <> 'closed'
-               AND (i.serial_number = $2 OR i.unique_serial_number = $2)
-             LIMIT 1`,
-            [customerId, serial]
-        );
-        res.json({ success: true, duplicate: rows[0] || null });
+        const client = await pool.connect();
+        try {
+            const dup = await findOpenTicketForMachine(client, customerId, {
+                customer_inventory_id: inventoryId,
+                serial_number: serial,
+                unique_serial_number: serial
+            });
+            res.json({ success: true, duplicate: dup ? { id: dup.id, status: dup.status } : null });
+        } finally {
+            client.release();
+        }
     } catch (e) {
         res.status(500).json({ success: false, message: 'Duplicate check failed' });
+    }
+};
+
+/** Add pickup / replacement phase items to an existing ticket (linked to complaint or replacement source). */
+exports.addWorkflowPhaseItems = async (req, res) => {
+    if (!isSupportLead(req.user)) {
+        return res.status(403).json({ success: false, message: 'Only team lead can add workflow phases' });
+    }
+    const ticketId = parseInt(req.params.ticketId, 10);
+    const { items } = req.body || {};
+    if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ success: false, message: 'items array is required' });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const ticketRes = await client.query('SELECT * FROM support_tickets WHERE id = $1', [ticketId]);
+        if (!ticketRes.rows.length) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ success: false, message: 'Ticket not found' });
+        }
+        const ticket = ticketRes.rows[0];
+        if (ticket.status === 'closed') {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'Cannot add items to a closed ticket' });
+        }
+
+        const normalized = [];
+        for (const raw of items) {
+            const itemType = raw.item_type;
+            if (!VALID_ITEM_TYPES.has(itemType) || itemType === 'complaint') {
+                throw Object.assign(new Error('Phase items must be pickup or replacement'), { status: 400 });
+            }
+            const sourceId = raw.source_item_id ? parseInt(raw.source_item_id, 10) : null;
+            if (sourceId) {
+                const srcRes = await client.query(
+                    'SELECT * FROM support_ticket_items WHERE id = $1 AND ticket_id = $2',
+                    [sourceId, ticketId]
+                );
+                if (!srcRes.rows.length) {
+                    throw Object.assign(new Error('Source item not found on this ticket'), { status: 400 });
+                }
+                const src = srcRes.rows[0];
+                if (itemType === 'pickup' && src.item_type === 'complaint' && !['resolved', 'closed'].includes(src.status)) {
+                    throw Object.assign(
+                        new Error('Complaint must be resolved before scheduling pickup for that machine'),
+                        { status: 400 }
+                    );
+                }
+                if (itemType === 'pickup' && src.item_type === 'replacement' && src.status !== 'inventory_updated') {
+                    throw Object.assign(
+                        new Error('Replacement must be delivered before scheduling return pickup of the old machine'),
+                        { status: 400 }
+                    );
+                }
+            }
+            normalized.push({
+                ...raw,
+                item_type: itemType,
+                source_item_id: sourceId,
+                customer_inventory_id: raw.customer_inventory_id || null
+            });
+        }
+
+        await assertMachinesAvailable(client, ticket.customer_id, normalized, ticketId);
+
+        for (const item of normalized) {
+            await insertTicketItem(client, ticketId, item, req.user.user_id, { source_item_id: item.source_item_id });
+        }
+
+        await bumpTicketActivity(client, ticketId);
+        await recomputeTicketStatus(client, ticketId);
+        await client.query('COMMIT');
+        const full = await getTicketWithItems(ticketId, req.user);
+        res.json({ success: true, ...full });
+    } catch (e) {
+        await client.query('ROLLBACK');
+        const status = e.status || 500;
+        res.status(status).json({
+            success: false,
+            message: e.message || 'Failed to add workflow items',
+            duplicate: e.duplicate || undefined
+        });
+    } finally {
+        client.release();
     }
 };
 
@@ -1123,41 +1304,11 @@ exports.updateTicket = async (req, res) => {
                 });
             }
         }
-        if (Array.isArray(newItems)) {
+        if (Array.isArray(newItems) && newItems.length) {
+            const ticketRow = await client.query('SELECT customer_id FROM support_tickets WHERE id = $1', [ticketId]);
+            await assertMachinesAvailable(client, ticketRow.rows[0].customer_id, newItems, ticketId);
             for (const item of newItems) {
-                const otp = generateOtp();
-                const ins = await client.query(
-                    `INSERT INTO support_ticket_items (
-                        ticket_id, customer_inventory_id, serial_number, unique_serial_number,
-                        brand, model, ram, storage, generation, item_type,
-                        issue_category_id, issue_category_label, remarks, assigned_to, status, otp_code
-                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'open',$15)
-                    RETURNING id`,
-                    [
-                        ticketId,
-                        item.customer_inventory_id || null,
-                        item.serial_number || null,
-                        item.unique_serial_number || null,
-                        item.brand || null,
-                        item.model || null,
-                        item.ram || null,
-                        item.storage || null,
-                        item.generation || null,
-                        item.item_type,
-                        item.issue_category_id || null,
-                        item.issue_category_label || null,
-                        item.remarks || null,
-                        item.assigned_to || null,
-                        otp
-                    ]
-                );
-                await logAudit(client, {
-                    itemId: ins.rows[0].id,
-                    ticketId,
-                    userId: req.user.user_id,
-                    action: 'item_created',
-                    detail: { item_type: item.item_type, added_in_edit: true }
-                });
+                await insertTicketItem(client, ticketId, item, req.user.user_id);
             }
         }
         await logAudit(client, {
@@ -1533,7 +1684,7 @@ exports.removeTicketItem = async (req, res) => {
 };
 
 exports.ensureSupportSchema = async () => {
-    for (const file of ['025_support_module.sql', '026_support_redesign.sql', '027_support_v2.sql', '029_support_v3.sql']) {
+    for (const file of ['025_support_module.sql', '026_support_redesign.sql', '027_support_v2.sql', '029_support_v3.sql', '031_support_ticket_category.sql']) {
         const sqlPath = path.join(__dirname, '../migrations', file);
         if (fs.existsSync(sqlPath)) {
             const sql = fs.readFileSync(sqlPath, 'utf8');

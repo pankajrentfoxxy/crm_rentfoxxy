@@ -117,7 +117,7 @@ export default function SupportTicketsView({ view = 'active', showFilters = true
               <button
                 key={chip || 'all'}
                 type="button"
-                className={`support-filter-chip${typeFilter === chip ? ' active' : ''}`}
+                className={`support-filter-chip ${chip || 'all'}${typeFilter === chip ? ' active' : ''}`}
                 onClick={() => setTypeFilter(chip)}
               >
                 {chip ? chip.charAt(0).toUpperCase() + chip.slice(1) : 'All'}

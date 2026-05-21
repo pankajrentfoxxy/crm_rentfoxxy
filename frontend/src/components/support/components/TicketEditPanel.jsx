@@ -184,7 +184,7 @@ export default function TicketEditPanel({ ticket, items, customerAddresses, tech
             ))}
           </select>
           <div className="flex gap-2">
-            {['complaint', 'pickup'].map((type) => (
+            {['complaint', 'pickup', 'replacement'].map((type) => (
               <button key={type} type="button" className={`support-filter-chip flex-1${row.item_type === type ? ' active' : ''}`} onClick={() => updateNewRow(row.key, { item_type: type })}>
                 {type.charAt(0).toUpperCase() + type.slice(1)}
               </button>

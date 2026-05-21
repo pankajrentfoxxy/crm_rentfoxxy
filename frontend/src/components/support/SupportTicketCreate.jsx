@@ -1,24 +1,15 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Loader2, Plus, Trash2 } from 'lucide-react';
+import { AlertTriangle, Check, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 import api from '../../utils/api';
 import { formatAddress } from './utils';
 import './support.css';
 
-const emptyRow = () => ({
-    customer_inventory_id: '',
-    serial_number: '',
-    unique_serial_number: '',
-    brand: '',
-    model: '',
-    ram: '',
-    storage: '',
-    generation: '',
-    item_type: 'complaint',
-    issue_category_id: '',
-    remarks: '',
-    assigned_to: ''
-});
+const CATEGORIES = [
+    { id: 'complaint', title: 'Complaint', color: 'complaint' },
+    { id: 'pickup', title: 'Pickup', color: 'pickup' },
+    { id: 'replacement', title: 'Replacement', color: 'replacement' }
+];
 
 function useIsMobile() {
     const [mobile, setMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768);
@@ -30,17 +21,140 @@ function useIsMobile() {
     return mobile;
 }
 
+function CategoryChips({ ticketCategory, setTicketCategory }) {
+    return (
+        <div className="support-category-chips">
+            {CATEGORIES.map((cat) => (
+                <button
+                    key={cat.id}
+                    type="button"
+                    className={`support-category-chip ${cat.color} ${ticketCategory === cat.id ? 'active' : ''}`}
+                    onClick={() => setTicketCategory(cat.id)}
+                >
+                    {cat.title}
+                </button>
+            ))}
+        </div>
+    );
+}
+
+function CustomerCard({
+    customer,
+    onClear,
+    ticketPhone,
+    setTicketPhone,
+    ticketAltPhone,
+    setTicketAltPhone,
+    ticketEmail,
+    setTicketEmail,
+    ticketAddress,
+    setTicketAddress,
+    priority,
+    setPriority,
+    showContactExtra,
+    setShowContactExtra
+}) {
+    return (
+        <div className="support-customer-card support-customer-card-compact">
+            <div className="flex justify-between items-start gap-2">
+                <div className="min-w-0">
+                    <p className="font-semibold text-sm truncate">{customer.customer_name}</p>
+                    <p className="text-xs text-slate-500 truncate">{customer.contact_person_number || customer.customer_number}</p>
+                </div>
+                <button type="button" className="text-sm support-link shrink-0" onClick={onClear}>Change</button>
+            </div>
+            <div className="grid gap-2 mt-2 sm:grid-cols-2">
+                <label className="support-label-compact">
+                    <span className="support-label-text">Phone</span>
+                    <input className="support-field support-field-compact" value={ticketPhone} onChange={(e) => setTicketPhone(e.target.value)} />
+                </label>
+                <label className="support-label-compact">
+                    <span className="support-label-text">Priority</span>
+                    <select className="support-field support-field-compact" value={priority} onChange={(e) => setPriority(e.target.value)}>
+                        <option value="normal">Normal</option>
+                        <option value="high">High</option>
+                        <option value="urgent">Urgent</option>
+                    </select>
+                </label>
+            </div>
+            <button type="button" className="support-optional-toggle mt-2" onClick={() => setShowContactExtra((v) => !v)}>
+                {showContactExtra ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                More contact details
+            </button>
+            {showContactExtra && (
+                <div className="grid gap-2 mt-2">
+                    <label className="support-label-compact">
+                        <span className="support-label-text">Alt phone</span>
+                        <input className="support-field support-field-compact" value={ticketAltPhone} onChange={(e) => setTicketAltPhone(e.target.value)} />
+                    </label>
+                    <label className="support-label-compact">
+                        <span className="support-label-text">Email</span>
+                        <input className="support-field support-field-compact" value={ticketEmail} onChange={(e) => setTicketEmail(e.target.value)} />
+                    </label>
+                    <label className="support-label-compact">
+                        <span className="support-label-text">Address</span>
+                        <input className="support-field support-field-compact" value={ticketAddress} onChange={(e) => setTicketAddress(e.target.value)} />
+                    </label>
+                </div>
+            )}
+        </div>
+    );
+}
+
+function AssetCard({ asset, isOn, block, onToggle }) {
+    return (
+        <div className={`support-asset-card support-asset-card-compact ${isOn ? 'selected' : ''} ${block ? 'blocked' : ''}`}>
+            <button type="button" className="support-asset-card-btn" onClick={onToggle} disabled={!!block}>
+                <span className={`support-asset-check ${isOn ? 'on' : ''}`}>{isOn && <Check className="w-3.5 h-3.5" />}</span>
+                <div className="text-left flex-1 min-w-0">
+                    <p className="font-mono text-xs font-semibold truncate">{asset.unique_serial_number || asset.serial_number}</p>
+                    <p className="text-[11px] text-slate-600 truncate">{asset.model_name}</p>
+                </div>
+            </button>
+            {block && (
+                <p className="support-asset-blocked">
+                    <AlertTriangle className="w-3 h-3 inline" /> Open #{block.id}
+                </p>
+            )}
+        </div>
+    );
+}
+
+function CreateNav({ step, setStep, customer, saving, selectedCount }) {
+    return (
+        <div className="support-create-nav">
+            {step > 0 && (
+                <button type="button" onClick={() => setStep(step - 1)} className="support-btn-outline flex-1">Back</button>
+            )}
+            {step < 2 ? (
+                <button type="button" disabled={step === 0 && !customer} onClick={() => setStep(step + 1)} className="support-btn-primary flex-1">
+                    Next
+                </button>
+            ) : (
+                <button type="submit" disabled={saving || !selectedCount} className="support-btn-primary flex-1">
+                    {saving ? 'Saving…' : 'Create'}
+                </button>
+            )}
+        </div>
+    );
+}
+
 export default function SupportTicketCreate() {
     const navigate = useNavigate();
     const isMobile = useIsMobile();
     const [step, setStep] = useState(0);
+    const [ticketCategory, setTicketCategory] = useState('complaint');
     const [customerQuery, setCustomerQuery] = useState('');
     const [customers, setCustomers] = useState([]);
     const [customer, setCustomer] = useState(null);
     const [assets, setAssets] = useState([]);
     const [categories, setCategories] = useState([]);
     const [technicians, setTechnicians] = useState([]);
-    const [rows, setRows] = useState([emptyRow()]);
+    const [selected, setSelected] = useState({});
+    const [bulkRemarks, setBulkRemarks] = useState('');
+    const [showRemarks, setShowRemarks] = useState(false);
+    const [defaultAssignee, setDefaultAssignee] = useState('');
+    const [showContactExtra, setShowContactExtra] = useState(false);
     const [saving, setSaving] = useState(false);
     const [searching, setSearching] = useState(false);
     const [priority, setPriority] = useState('normal');
@@ -48,7 +162,7 @@ export default function SupportTicketCreate() {
     const [ticketAltPhone, setTicketAltPhone] = useState('');
     const [ticketEmail, setTicketEmail] = useState('');
     const [ticketAddress, setTicketAddress] = useState('');
-    const [duplicateWarning, setDuplicateWarning] = useState(null);
+    const [blocked, setBlocked] = useState({});
 
     useEffect(() => {
         api.get('/support/categories').then((r) => setCategories(r.data.categories || []));
@@ -76,6 +190,10 @@ export default function SupportTicketCreate() {
         setCustomer(c);
         setCustomerQuery(c.customer_name || '');
         setCustomers([]);
+        setSelected({});
+        setBlocked({});
+        setShowRemarks(false);
+        setShowContactExtra(false);
         const [detailRes, assetsRes] = await Promise.all([
             api.get(`/support/customers/${c.customer_id}`),
             api.get(`/support/customers/${c.customer_id}/assets`)
@@ -84,33 +202,77 @@ export default function SupportTicketCreate() {
         setCustomer(picked);
         setTicketPhone(picked.contact_person_number || picked.customer_number || '');
         setTicketEmail(picked.email || '');
+        setTicketAddress(formatAddress(picked.billing_address || picked.shipping_address) || '');
         setAssets(assetsRes.data.assets || []);
         if (isMobile) setStep(1);
     };
 
-    const updateRow = (idx, patch) => {
-        setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
-    };
-
-    const onAssetPick = (idx, assetId) => {
-        const asset = assets.find((a) => String(a.id) === String(assetId));
-        if (!asset) return;
-        updateRow(idx, {
-            customer_inventory_id: asset.id,
-            serial_number: asset.serial_number,
-            unique_serial_number: asset.unique_serial_number,
-            model: asset.model_name,
-            brand: asset.model_name?.split(' ')[0] || '',
-            ram: asset.ram,
-            storage: asset.storage,
-            generation: asset.generation
-        });
-        if (customer?.customer_id) {
-            api.get(`/support/tickets/check-duplicate?customer_id=${customer.customer_id}&serial=${encodeURIComponent(asset.unique_serial_number || asset.serial_number || '')}`)
-                .then((r) => setDuplicateWarning(r.data.duplicate || null))
-                .catch(() => setDuplicateWarning(null));
+    const checkAsset = async (asset) => {
+        if (!customer?.customer_id) return null;
+        const serial = asset.unique_serial_number || asset.serial_number || '';
+        try {
+            const { data } = await api.get(
+                `/support/tickets/check-duplicate?customer_id=${customer.customer_id}&serial=${encodeURIComponent(serial)}&customer_inventory_id=${asset.id}`
+            );
+            return data.duplicate;
+        } catch {
+            return null;
         }
     };
+
+    const toggleAsset = async (asset) => {
+        const id = String(asset.id);
+        if (selected[id]) {
+            setSelected((prev) => {
+                const next = { ...prev };
+                delete next[id];
+                return next;
+            });
+            setBlocked((prev) => {
+                const next = { ...prev };
+                delete next[id];
+                return next;
+            });
+            return;
+        }
+        const dup = await checkAsset(asset);
+        if (dup) {
+            setBlocked((prev) => ({ ...prev, [id]: dup }));
+            return;
+        }
+        setSelected((prev) => ({
+            ...prev,
+            [id]: { asset, remarks: '', issue_category_id: '' }
+        }));
+    };
+
+    const updateMachineRemarks = (id, patch) => {
+        setSelected((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+    };
+
+    const selectedList = useMemo(() => Object.values(selected), [selected]);
+    const selectedCount = selectedList.length;
+    const firstSelectedId = Object.keys(selected)[0];
+
+    const buildItems = () =>
+        selectedList.map(({ asset, remarks, issue_category_id }) => {
+            const cat = categories.find((c) => String(c.id) === String(issue_category_id));
+            return {
+                customer_inventory_id: asset.id,
+                serial_number: asset.serial_number,
+                unique_serial_number: asset.unique_serial_number,
+                model: asset.model_name,
+                brand: asset.model_name?.split(' ')[0] || '',
+                ram: asset.ram,
+                storage: asset.storage,
+                generation: asset.generation,
+                item_type: ticketCategory,
+                issue_category_id: issue_category_id ? Number(issue_category_id) : null,
+                issue_category_label: cat?.name || null,
+                remarks: showRemarks ? (bulkRemarks || remarks) : '',
+                assigned_to: defaultAssignee ? Number(defaultAssignee) : null
+            };
+        });
 
     const submit = async (e) => {
         e.preventDefault();
@@ -118,199 +280,191 @@ export default function SupportTicketCreate() {
             alert('Select a customer');
             return;
         }
+        if (!selectedCount) {
+            alert('Select at least one machine');
+            return;
+        }
         setSaving(true);
         try {
-            const payload = {
+            const { data } = await api.post('/support/tickets', {
                 customer_id: customer.customer_id,
                 customer_name: customer.customer_name,
                 customer_phone: customer.contact_person_number || customer.customer_number,
+                ticket_category: ticketCategory,
                 priority,
                 ticket_phone_override: ticketPhone,
                 ticket_alt_phone: ticketAltPhone,
                 ticket_email: ticketEmail,
                 ticket_address: ticketAddress,
-                items: rows.map((r) => ({
-                    ...r,
-                    issue_category_id: r.issue_category_id ? Number(r.issue_category_id) : null,
-                    assigned_to: r.assigned_to ? Number(r.assigned_to) : null
-                }))
-            };
-            const { data } = await api.post('/support/tickets', payload);
+                items: buildItems()
+            });
             navigate(`/support/tickets/${data.ticket.id}`);
         } catch (err) {
-            alert(err.response?.data?.message || 'Failed to create ticket');
+            const dup = err.response?.data?.duplicate;
+            alert(
+                dup
+                    ? `Cannot create: machine already on open ticket #${dup.id}`
+                    : err.response?.data?.message || 'Failed to create ticket'
+            );
         } finally {
             setSaving(false);
         }
     };
 
     const customerStep = (
-        <section className="space-y-3">
-            <label className="block text-sm font-medium text-slate-700">Search customer</label>
+        <section className="support-create-section support-create-section-compact">
+            <h2 className="support-create-section-title">Customer</h2>
             <input
                 value={customerQuery}
                 onChange={(e) => setCustomerQuery(e.target.value)}
-                className="w-full border border-slate-300 rounded-lg px-3 py-3 min-h-[44px]"
-                placeholder="Name or customer ID"
+                className="support-field support-field-compact"
+                placeholder="Search name, phone, or ID"
             />
-            {searching && <Loader2 className="w-5 h-5 animate-spin text-indigo-600" />}
-            <ul className="border border-slate-200 rounded-lg divide-y max-h-48 overflow-auto">
-                {customers.map((c) => (
-                    <li key={c.customer_id}>
-                        <button
-                            type="button"
-                            onClick={() => pickCustomer(c)}
-                            className="w-full text-left px-3 py-3 min-h-[44px] hover:bg-slate-50"
-                        >
-                            <span className="font-medium">{c.customer_name}</span>
-                            <span className="text-xs text-slate-500 ml-2">#{c.customer_id}</span>
-                        </button>
-                    </li>
-                ))}
-            </ul>
-            {duplicateWarning && (
-                <div className="border border-amber-300 bg-amber-50 rounded-xl p-3 text-sm text-amber-900">
-                    This machine already has an open ticket — #{duplicateWarning.id}. You can still create a new ticket.
-                </div>
+            {searching && <Loader2 className="w-5 h-5 animate-spin text-[var(--support-primary)]" />}
+            {customers.length > 0 && (
+                <ul className="support-customer-list">
+                    {customers.map((c) => (
+                        <li key={c.customer_id}>
+                            <button type="button" onClick={() => pickCustomer(c)} className="support-customer-pick">
+                                <span className="font-medium">{c.customer_name}</span>
+                                <span className="text-xs text-slate-500">#{c.customer_id}</span>
+                            </button>
+                        </li>
+                    ))}
+                </ul>
             )}
             {customer && (
-                <div className="border border-slate-200 rounded-xl p-4 bg-white text-sm space-y-3">
-                    <div className="flex justify-between gap-2">
-                        <p className="font-medium">{customer.customer_name}</p>
-                        <button type="button" className="text-[#534AB7] min-h-[44px] px-2" onClick={() => setCustomer(null)}>Change</button>
-                    </div>
-                    <p className="text-slate-600">{customer.contact_person_number || customer.customer_number}</p>
-                    <p className="text-slate-500">{formatAddress(customer.billing_address || customer.shipping_address)}</p>
-                    <label className="block">Phone for this ticket
-                        <input className="w-full border rounded-lg px-3 py-3 min-h-[44px] text-base mt-1" value={ticketPhone} onChange={(e) => setTicketPhone(e.target.value)} />
-                    </label>
-                    <label className="block">Alt phone
-                        <input className="w-full border rounded-lg px-3 py-3 min-h-[44px] text-base mt-1" value={ticketAltPhone} onChange={(e) => setTicketAltPhone(e.target.value)} />
-                    </label>
-                    <label className="block">Email
-                        <input className="w-full border rounded-lg px-3 py-3 min-h-[44px] text-base mt-1" value={ticketEmail} onChange={(e) => setTicketEmail(e.target.value)} />
-                    </label>
-                    <label className="block">Address
-                        <input className="w-full border rounded-lg px-3 py-3 min-h-[44px] text-base mt-1" value={ticketAddress} onChange={(e) => setTicketAddress(e.target.value)} />
-                    </label>
-                    <label className="block">Priority
-                        <select className="w-full border rounded-lg px-3 py-3 min-h-[44px] text-base mt-1" value={priority} onChange={(e) => setPriority(e.target.value)}>
-                            <option value="normal">Normal</option>
-                            <option value="high">High</option>
-                            <option value="urgent">Urgent</option>
-                        </select>
-                    </label>
-                </div>
+                <CustomerCard
+                    customer={customer}
+                    ticketPhone={ticketPhone}
+                    setTicketPhone={setTicketPhone}
+                    ticketAltPhone={ticketAltPhone}
+                    setTicketAltPhone={setTicketAltPhone}
+                    ticketEmail={ticketEmail}
+                    setTicketEmail={setTicketEmail}
+                    ticketAddress={ticketAddress}
+                    setTicketAddress={setTicketAddress}
+                    priority={priority}
+                    setPriority={setPriority}
+                    showContactExtra={showContactExtra}
+                    setShowContactExtra={setShowContactExtra}
+                    onClear={() => {
+                        setCustomer(null);
+                        setSelected({});
+                        setBlocked({});
+                    }}
+                />
             )}
+        </section>
+    );
+
+    const categoryStep = (
+        <section className="support-create-section support-create-section-compact">
+            <h2 className="support-create-section-title">Type</h2>
+            <CategoryChips ticketCategory={ticketCategory} setTicketCategory={setTicketCategory} />
         </section>
     );
 
     const machinesStep = (
-        <section className="space-y-4">
-            {rows.map((row, idx) => (
-                <article key={idx} className="border border-slate-200 rounded-xl p-4 space-y-3 bg-white">
-                    <div className="flex justify-between items-center">
-                        <h3 className="font-semibold text-sm">Machine {idx + 1}</h3>
-                        {rows.length > 1 && (
-                            <button type="button" onClick={() => setRows((r) => r.filter((_, i) => i !== idx))} className="p-2 min-h-[44px] min-w-[44px]">
-                                <Trash2 className="w-4 h-4 text-red-600" />
-                            </button>
-                        )}
-                    </div>
-                    <select
-                        className="w-full border rounded-lg px-3 py-3 min-h-[44px]"
-                        value={row.customer_inventory_id}
-                        onChange={(e) => onAssetPick(idx, e.target.value)}
-                    >
-                        <option value="">Select serial / machine #</option>
-                        {assets.map((a) => (
-                            <option key={a.id} value={a.id}>
-                                {a.unique_serial_number || a.serial_number} — {a.model_name}
-                            </option>
-                        ))}
-                    </select>
-                    <p className="text-xs text-slate-600">
-                        {[row.brand, row.model, row.generation, row.ram, row.storage].filter(Boolean).join(' · ') || 'Specs appear after selection'}
-                    </p>
-                    <div className="grid sm:grid-cols-2 gap-3">
-                        <select
-                            className="border rounded-lg px-3 py-3 min-h-[44px]"
-                            value={row.item_type}
-                            onChange={(e) => updateRow(idx, { item_type: e.target.value })}
-                        >
-                            <option value="complaint">Complaint</option>
-                            <option value="pickup">Pickup</option>
-                        </select>
-                        <select
-                            className="border rounded-lg px-3 py-3 min-h-[44px]"
-                            value={row.issue_category_id}
-                            onChange={(e) => updateRow(idx, { issue_category_id: e.target.value })}
-                        >
-                            <option value="">Issue category</option>
-                            {categories.map((c) => (
-                                <option key={c.id} value={c.id}>{c.name}</option>
+        <section className="support-create-section support-create-section-compact">
+            <div className="flex items-center justify-between gap-2 mb-2">
+                <h2 className="support-create-section-title m-0">Machines</h2>
+                <span className={`support-category-label ${ticketCategory}`}>{ticketCategory}</span>
+            </div>
+
+            {selectedCount > 0 && (
+                <div className="support-bulk-bar support-bulk-bar-compact">
+                    <label className="support-label-compact flex-1">
+                        <span className="support-label-text">Technician</span>
+                        <select className="support-field support-field-compact" value={defaultAssignee} onChange={(e) => setDefaultAssignee(e.target.value)}>
+                            <option value="">Unassigned</option>
+                            {technicians.map((t) => (
+                                <option key={t.user_id} value={t.user_id}>{t.name}</option>
                             ))}
                         </select>
-                    </div>
-                    <textarea
-                        className="w-full border rounded-lg px-3 py-2 min-h-[80px]"
-                        placeholder="Remarks"
-                        value={row.remarks}
-                        onChange={(e) => updateRow(idx, { remarks: e.target.value })}
-                    />
-                    <select
-                        className="w-full border rounded-lg px-3 py-3 min-h-[44px]"
-                        value={row.assigned_to}
-                        onChange={(e) => updateRow(idx, { assigned_to: e.target.value })}
-                    >
-                        <option value="">Assign technician (optional)</option>
-                        {technicians.map((t) => (
-                            <option key={t.user_id} value={t.user_id}>{t.name}</option>
-                        ))}
-                    </select>
-                </article>
-            ))}
-            <button
-                type="button"
-                onClick={() => setRows((r) => [...r, emptyRow()])}
-                className="inline-flex items-center gap-2 text-indigo-700 text-sm font-medium min-h-[44px] px-2"
-            >
-                <Plus className="w-4 h-4" /> Add machine row
-            </button>
+                    </label>
+                </div>
+            )}
+
+            {!assets.length && <p className="support-empty-msg">No machines for this customer.</p>}
+
+            <div className="support-asset-grid support-asset-grid-compact">
+                {assets.map((asset) => {
+                    const id = String(asset.id);
+                    return (
+                        <AssetCard
+                            key={id}
+                            asset={asset}
+                            isOn={!!selected[id]}
+                            block={blocked[id]}
+                            onToggle={() => toggleAsset(asset)}
+                        />
+                    );
+                })}
+            </div>
+
+            {selectedCount > 0 && (
+                <div className="support-optional-block">
+                    <button type="button" className="support-optional-toggle" onClick={() => setShowRemarks((v) => !v)}>
+                        {showRemarks ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                        Remarks (optional)
+                    </button>
+                    {showRemarks && (
+                        <div className="support-optional-body">
+                            <textarea
+                                className="support-field support-field-compact w-full"
+                                rows={2}
+                                placeholder="Optional notes"
+                                value={bulkRemarks}
+                                onChange={(e) => setBulkRemarks(e.target.value)}
+                            />
+                            {ticketCategory === 'complaint' && selectedCount === 1 && firstSelectedId && (
+                                <select
+                                    className="support-field support-field-compact w-full mt-2"
+                                    value={selected[firstSelectedId]?.issue_category_id || ''}
+                                    onChange={(e) => updateMachineRemarks(firstSelectedId, { issue_category_id: e.target.value })}
+                                >
+                                    <option value="">Issue category (optional)</option>
+                                    {categories.map((c) => (
+                                        <option key={c.id} value={c.id}>{c.name}</option>
+                                    ))}
+                                </select>
+                            )}
+                        </div>
+                    )}
+                    <p className="support-selected-count">{selectedCount} selected</p>
+                </div>
+            )}
         </section>
     );
 
     return (
-        <form onSubmit={submit} className="space-y-6 max-w-3xl">
-            <h1 className="text-xl font-bold">Create support ticket</h1>
+        <form onSubmit={submit} className="support-create-page">
+            <header className="support-create-header support-create-header-compact">
+                <h1>New ticket</h1>
+            </header>
 
             {isMobile ? (
                 <>
-                    {step === 0 && customerStep}
-                    {step === 1 && machinesStep}
-                    <div className="flex gap-2">
-                        {step > 0 && (
-                            <button type="button" onClick={() => setStep(step - 1)} className="flex-1 border rounded-lg py-3 min-h-[44px]">
-                                Back
-                            </button>
-                        )}
-                        {step < 1 ? (
-                            <button type="button" disabled={!customer} onClick={() => setStep(1)} className="flex-1 bg-indigo-600 text-white rounded-lg py-3 min-h-[44px] disabled:opacity-50">
-                                Next
-                            </button>
-                        ) : (
-                            <button type="submit" disabled={saving} className="flex-1 bg-indigo-600 text-white rounded-lg py-3 min-h-[44px]">
-                                {saving ? 'Saving…' : 'Create ticket'}
-                            </button>
-                        )}
+                    <div className="support-create-steps">
+                        {['Customer', 'Type', 'Machines'].map((label, i) => (
+                            <span key={label} className={`support-create-step-dot ${step >= i ? 'done' : ''} ${step === i ? 'current' : ''}`}>
+                                {label}
+                            </span>
+                        ))}
                     </div>
+                    {step === 0 && customerStep}
+                    {step === 1 && categoryStep}
+                    {step === 2 && machinesStep}
+                    <CreateNav step={step} setStep={setStep} customer={customer} saving={saving} selectedCount={selectedCount} />
                 </>
             ) : (
                 <>
                     {customerStep}
+                    {categoryStep}
                     {machinesStep}
-                    <button type="submit" disabled={saving} className="bg-indigo-600 text-white px-6 py-3 rounded-lg min-h-[44px]">
-                        {saving ? 'Saving…' : 'Create ticket'}
+                    <button type="submit" disabled={saving || !customer || !selectedCount} className="support-btn-primary w-full sm:w-auto">
+                        {saving ? 'Creating…' : `Create ticket (${selectedCount})`}
                     </button>
                 </>
             )}
