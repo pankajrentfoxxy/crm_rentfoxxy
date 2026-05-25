@@ -1,97 +1,100 @@
 import { useState, useEffect } from 'react';
 import { ClipboardList, Users, Clock, CheckCircle } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
 import api from '../utils/api';
+import {
+  PRIMARY, ACCENT, PageWrapper, KpiCard, DataTable, DonutChart,
+  TableRow, TableCell, Tag
+} from '../components/ui';
 
 export default function Dashboard() {
-    const [stats, setStats] = useState(null);
-    const [loading, setLoading] = useState(true);
-  
-    useEffect(() => {
-      loadStats();
-    }, []);
-  
-    const loadStats = async () => {
-      try {
-        const { data } = await api.get('/analytics/dashboard');
-        setStats(data.stats);
-      } catch (error) {
-        console.error('Load stats error:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-  
-    if (loading) {
-      return <div className="text-center py-12">Loading dashboard...</div>;
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const { user } = useAuth();
+
+  useEffect(() => {
+    loadStats();
+  }, []);
+
+  const loadStats = async () => {
+    try {
+      const { data } = await api.get('/analytics/dashboard');
+      setStats(data.stats);
+    } catch (error) {
+      console.error('Load stats error:', error);
+    } finally {
+      setLoading(false);
     }
-  
-    const statCards = [
-      { label: 'Total Laptop on Floor', value: stats?.totalTickets || 0, icon: ClipboardList, color: 'blue' },
-      { label: 'Active Users', value: stats?.activeUsers || 0, icon: Users, color: 'green' },
-      { label: 'Avg. Hour', value: stats?.avgCompletionHours || 0, icon: Clock, color: 'yellow' },
-      { label: 'Completed', value: stats?.ticketsByStatus?.find(s => s.status === 'completed')?.count || 0, icon: CheckCircle, color: 'purple' },
-    ];
-  
+  };
+
+  if (loading) {
     return (
-      <div className="space-y-6">
-        <div>
-          <h2 className="text-2xl font-bold mb-1">Dashboard</h2>
-          <p className="text-gray-600">Overview of your refurbishment operations</p>
+      <PageWrapper>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 200 }}>
+          <p style={{ color: '#64748b', fontSize: 14 }}>Loading dashboard...</p>
         </div>
-  
-        {/* Stats Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {statCards.map((stat, idx) => (
-            <div key={idx} className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-              <div className="flex items-center justify-between mb-4">
-                <div className={`p-3 rounded-lg bg-${stat.color}-100`}>
-                  <stat.icon className={`w-6 h-6 text-${stat.color}-600`} />
-                </div>
-              </div>
-              <h3 className="text-3xl font-bold mb-1">{stat.value}</h3>
-              <p className="text-gray-600 text-sm">{stat.label}</p>
-            </div>
-          ))}
-        </div>
-  
-        {/* Tickets by Stage */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-          <h3 className="text-lg font-bold mb-4">Tickets by Stage</h3>
-          <div className="space-y-3">
-            {stats?.ticketsByStage?.map((stage, idx) => (
-              <div key={idx} className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center text-sm font-bold text-blue-600">
-                    {stage.stage_order}
-                  </div>
-                  <span className="font-medium">{stage.stage_name}</span>
-                </div>
-                <span className="px-3 py-1 bg-gray-100 rounded-full text-sm font-semibold">
-                  {stage.count} tickets
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-  
-        {/* Recent Tickets */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-          <h3 className="text-lg font-bold mb-4">Recent Tickets</h3>
-          <div className="space-y-3">
-            {stats?.recentTickets?.slice(0, 5).map((ticket) => (
-              <div key={ticket.ticket_id} className="flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg">
-                <div>
-                  <p className="font-medium">{ticket.serial_number}</p>
-                  <p className="text-sm text-gray-500">{ticket.brand} {ticket.model}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm font-medium text-blue-600">{ticket.stage_name}</p>
-                  <p className="text-xs text-gray-500">{new Date(ticket.created_at).toLocaleDateString()}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+      </PageWrapper>
     );
   }
+
+  const statCards = [
+    { label: 'Total Laptop on Floor', value: stats?.totalTickets || 0, icon: ClipboardList, color: PRIMARY },
+    { label: 'Active Users', value: stats?.activeUsers || 0, icon: Users, color: ACCENT },
+    { label: 'Avg. Hour', value: stats?.avgCompletionHours || 0, icon: Clock, color: '#7c3aed' },
+    { label: 'Completed', value: stats?.ticketsByStatus?.find(s => s.status === 'completed')?.count || 0, icon: CheckCircle, color: '#0891b2' },
+  ];
+
+  const firstName = user?.name?.split(' ')[0] || 'there';
+  const stages = stats?.ticketsByStage || [];
+  const recentTickets = stats?.recentTickets?.slice(0, 5) || [];
+
+  return (
+    <PageWrapper>
+      <div style={{ marginBottom: 24 }}>
+        <div style={{
+          background: `linear-gradient(135deg, ${PRIMARY} 0%, ${ACCENT} 100%)`,
+          borderRadius: 16, padding: '22px 28px', color: '#fff',
+          boxShadow: '0 4px 24px rgba(2,67,123,0.25)'
+        }}>
+          <p style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>Welcome back, {firstName}!</p>
+          <p style={{ margin: '4px 0 0', fontSize: 13, opacity: 0.8 }}>Overview of your refurbishment operations.</p>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 16, marginBottom: 24 }}>
+        {statCards.map((stat, idx) => (
+          <KpiCard key={idx} title={stat.label} value={stat.value} icon={stat.icon} color={stat.color} />
+        ))}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 20 }}>
+        <DonutChart
+          title="Tickets by Stage"
+          centerLabel="DEVICES"
+          data={stages.map(stage => ({
+            name: stage.stage_name,
+            value: Number(stage.count) || 0,
+          }))}
+          emptyMessage="No stage data available."
+        />
+
+        <DataTable
+          title="Recent Tickets"
+          columns={['SERIAL', 'DEVICE', 'STAGE', 'DATE']}
+          data={recentTickets}
+          emptyMessage="No recent tickets."
+          renderRow={(ticket) => (
+            <TableRow key={ticket.ticket_id}>
+              <TableCell bold>{ticket.serial_number}</TableCell>
+              <TableCell muted>{ticket.brand} {ticket.model}</TableCell>
+              <TableCell>
+                <Tag bg="#e0f2fe" color={ACCENT}>{ticket.stage_name}</Tag>
+              </TableCell>
+              <TableCell muted small>{new Date(ticket.created_at).toLocaleDateString()}</TableCell>
+            </TableRow>
+          )}
+        />
+      </div>
+    </PageWrapper>
+  );
+}

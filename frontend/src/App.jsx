@@ -10,7 +10,7 @@ import Procurement from './components/Procurement';
 import Warehouse from './components/Warehouse';
 import Dispatch from './components/Dispatch';
 import Sales from './components/Sales';
-import LeadList from './components/LeadList';
+import LeadList from './pages/leads/LeadList';
 import LeadDetail from './components/LeadDetail';
 import QuotationAccept from './components/QuotationAccept';
 import FollowUps from './components/FollowUps';

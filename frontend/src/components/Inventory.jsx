@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Package, RefreshCw, Loader2, Search, Plus, X, History, Undo2, Pencil } from 'lucide-react';
+import { Package, RefreshCw, Loader2, Plus, X, History, Undo2, Pencil } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import {
+  TableContainer, Table, TableRow, TableCell, TableEmpty, Pagination,
+  SearchBar, Tag, ACCENT
+} from './ui';
 
 const PAGE_SIZE = 50;
 
@@ -133,6 +137,15 @@ export default function Inventory({ api }) {
     const canMarkReturn = ['admin', 'manager', 'floor_manager'].includes(user?.role || '');
 
     const showActionsColumn = canMarkReturn || canSeeHistory;
+
+    const columns = useMemo(() => {
+        const cols = [
+            'MACHINE #', 'SERIAL / DETAILS', 'DEVICE', 'SPECS',
+            'STAGE', 'GRADE', 'STOCK TYPE', 'STATUS',
+        ];
+        if (showActionsColumn) cols.push('ACTIONS');
+        return cols;
+    }, [showActionsColumn]);
 
     const [items, setItems] = useState([]);
     const [total, setTotal] = useState(0);
@@ -324,8 +337,13 @@ export default function Inventory({ api }) {
         }
     };
 
-    const th = 'text-left py-1.5 px-2 text-[11px] font-semibold uppercase tracking-wide text-gray-600';
-    const td = 'py-1.5 px-2 text-[12px] leading-snug';
+    const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
+    const colSpan = columns.length;
+
+    const actionBtnStyle = {
+        padding: 4, border: '1px solid #e2e8f0', borderRadius: 8, cursor: 'pointer',
+        background: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center'
+    };
 
     return (
         <div className="space-y-4">
@@ -365,14 +383,11 @@ export default function Inventory({ api }) {
             <div className="flex flex-col gap-2">
                 <StockSummaryWidget summary={summary} loading={sumLoading} listTotal={total} />
                 <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-3">
-                    <div className="relative flex-1 min-w-0 max-w-md">
-                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                        <input
-                            type="search"
+                    <div className="flex-1 min-w-0 max-w-md">
+                        <SearchBar
+                            placeholder="Search Machine #, Serial, Brand…"
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
-                            placeholder="Search Machine #, Serial, Brand…"
-                            className="w-full pl-9 pr-3 py-1.5 border border-gray-300 rounded-lg text-[12px]"
                         />
                     </div>
                     <select
@@ -387,70 +402,62 @@ export default function Inventory({ api }) {
                 </div>
             </div>
 
-            <div className="bg-white rounded-lg border border-gray-200 overflow-x-auto">
-                <table className="w-full min-w-[860px]">
-                    <thead className="bg-gray-100">
-                        <tr>
-                            <th className={th}>Machine #</th>
-                            <th className={th}>Serial / Details</th>
-                            <th className={th}>Device</th>
-                            <th className={th}>Specs</th>
-                            <th className={th}>Stage</th>
-                            <th className={th}>Grade</th>
-                            <th className={th}>Stock type</th>
-                            <th className={th}>Status</th>
-                            {showActionsColumn && <th className={th}>Actions</th>}
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {items.map((row) => (
-                            <tr key={row.inventory_id ?? row.machine_number} className="border-t border-gray-100 hover:bg-gray-50">
-                                <td className={td}>
+            <TableContainer>
+                <Table columns={columns} minWidth={860}>
+                    {loading ? (
+                        <TableRow>
+                            <TableCell colSpan={colSpan} style={{ textAlign: 'center', padding: '32px 16px' }}>
+                                <Loader2 className="w-6 h-6 animate-spin mx-auto text-blue-600" />
+                            </TableCell>
+                        </TableRow>
+                    ) : items.length === 0 ? (
+                        <TableEmpty colSpan={colSpan} message="No items found" />
+                    ) : (
+                        items.map((row) => (
+                            <TableRow key={row.inventory_id ?? row.machine_number}>
+                                <TableCell bold>
                                     {canSeeHistory ? (
                                         <button
                                             type="button"
                                             onClick={() => openHistory(row)}
-                                            className="font-semibold text-blue-700 hover:text-blue-900 hover:underline text-left"
+                                            style={{
+                                                background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                                                color: ACCENT, fontWeight: 600, textAlign: 'left'
+                                            }}
                                         >
                                             {row.machine_number || '—'}
                                         </button>
                                     ) : (
-                                        <span className="font-semibold text-blue-700">{row.machine_number || '—'}</span>
+                                        row.machine_number || '—'
                                     )}
-                                </td>
-                                <td className={`${td} text-gray-700`}>
-                                    <div>{row.serial_number || '—'}</div>
-                                </td>
-                                <td className={td}>
-                                    <div className="font-medium text-gray-800">{row.brand || ''} {row.model || ''}</div>
-                                    <div className="text-[11px] text-gray-500">{row.device_type || ''}</div>
-                                </td>
-                                <td className={`${td} text-gray-600 text-[11px]`}>
+                                </TableCell>
+                                <TableCell muted>{row.serial_number || '—'}</TableCell>
+                                <TableCell>
+                                    <div style={{ fontWeight: 500 }}>{row.brand || ''} {row.model || ''}</div>
+                                    <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>{row.device_type || ''}</div>
+                                </TableCell>
+                                <TableCell muted small>
                                     {[row.processor, row.generation, row.ram, row.storage].filter(Boolean).join(' · ') || '—'}
-                                </td>
-                                <td className={td}>
-                                    <span className="text-[11px] text-gray-700">{row.stage || row.workflow_stage || '—'}</span>
-                                </td>
-                                <td className={td}>
-                                    <span className="text-[11px]">{row.grade || '—'}</span>
-                                </td>
-                                <td className={td}>
-                                    <span className="px-2 py-0.5 rounded text-[11px] bg-slate-100 text-slate-800">{row.stock_type || '—'}</span>
-                                </td>
-                                <td className={td}>
-                                    <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-gray-100 text-gray-800">{row.status || '—'}</span>
-                                </td>
+                                </TableCell>
+                                <TableCell small>{row.stage || row.workflow_stage || '—'}</TableCell>
+                                <TableCell small>{row.grade || '—'}</TableCell>
+                                <TableCell>
+                                    <Tag bg="#f1f5f9" color="#334155">{row.stock_type || '—'}</Tag>
+                                </TableCell>
+                                <TableCell>
+                                    <Tag>{row.status || '—'}</Tag>
+                                </TableCell>
                                 {showActionsColumn && (
-                                    <td className={td}>
-                                        <div className="flex flex-wrap gap-1">
+                                    <TableCell>
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                                             {canSeeHistory && (
                                                 <button
                                                     type="button"
                                                     title="History"
                                                     onClick={() => openHistory(row)}
-                                                    className="p-1 rounded border border-gray-200 hover:bg-gray-50 text-gray-700"
+                                                    style={actionBtnStyle}
                                                 >
-                                                    <History className="w-3.5 h-3.5" />
+                                                    <History size={14} />
                                                 </button>
                                             )}
                                             {canEditInventory && (
@@ -461,9 +468,9 @@ export default function Inventory({ api }) {
                                                         setEditRow(row);
                                                         setEditForm(rowToEditForm(row));
                                                     }}
-                                                    className="p-1 rounded border border-teal-200 bg-teal-50 hover:bg-teal-100 text-teal-900"
+                                                    style={{ ...actionBtnStyle, borderColor: '#99f6e4', background: '#f0fdfa', color: '#115e59' }}
                                                 >
-                                                    <Pencil className="w-3.5 h-3.5" />
+                                                    <Pencil size={14} />
                                                 </button>
                                             )}
                                             {canMarkReturn && row.status === 'Outward' && (
@@ -475,59 +482,27 @@ export default function Inventory({ api }) {
                                                         setReturnStockType('Ready');
                                                         setReturnStatus('In Stock');
                                                     }}
-                                                    className="p-1 rounded border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-900"
+                                                    style={{ ...actionBtnStyle, borderColor: '#fde68a', background: '#fffbeb', color: '#92400e' }}
                                                 >
-                                                    <Undo2 className="w-3.5 h-3.5" />
+                                                    <Undo2 size={14} />
                                                 </button>
                                             )}
                                         </div>
-                                    </td>
+                                    </TableCell>
                                 )}
-                            </tr>
-                        ))}
-                        {!loading && items.length === 0 && (
-                            <tr>
-                                <td colSpan={showActionsColumn ? 9 : 8} className="py-8 text-center text-gray-500 text-[12px]">
-                                    No items found
-                                </td>
-                            </tr>
-                        )}
-                        {loading && (
-                            <tr>
-                                <td colSpan={showActionsColumn ? 9 : 8} className="py-8 text-center">
-                                    <Loader2 className="w-6 h-6 animate-spin mx-auto text-blue-600" />
-                                </td>
-                            </tr>
-                        )}
-                    </tbody>
-                </table>
-            </div>
-
-            {total > PAGE_SIZE && (
-                <div className="flex items-center justify-between text-[12px] text-gray-600">
-                    <span>
-                        Showing {offset + 1}–{Math.min(offset + items.length, total)} of {total}
-                    </span>
-                    <div className="flex gap-2">
-                        <button
-                            type="button"
-                            disabled={offset === 0}
-                            onClick={() => setOffset((o) => Math.max(0, o - PAGE_SIZE))}
-                            className="px-2 py-1 rounded border border-gray-200 disabled:opacity-40"
-                        >
-                            Prev
-                        </button>
-                        <button
-                            type="button"
-                            disabled={offset + PAGE_SIZE >= total}
-                            onClick={() => setOffset((o) => o + PAGE_SIZE)}
-                            className="px-2 py-1 rounded border border-gray-200 disabled:opacity-40"
-                        >
-                            Next
-                        </button>
-                    </div>
-                </div>
-            )}
+                            </TableRow>
+                        ))
+                    )}
+                </Table>
+                {total > 0 && (
+                    <Pagination
+                        current={currentPage}
+                        total={total}
+                        pageSize={PAGE_SIZE}
+                        onChange={(page) => setOffset((page - 1) * PAGE_SIZE)}
+                    />
+                )}
+            </TableContainer>
 
             {showAddModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
