@@ -154,7 +154,7 @@ export default function Layout({ children }) {
           )}
         </div>
 
-        <div style={{ fontWeight: 700, fontSize: 16, color: '#fff', marginLeft: 8, whiteSpace: 'nowrap' }}>
+        {/* <div style={{ fontWeight: 700, fontSize: 16, color: '#fff', marginLeft: 8, whiteSpace: 'nowrap' }}>
           {pageTitle}
         </div>
 
@@ -170,7 +170,7 @@ export default function Layout({ children }) {
             background: 'rgba(255,255,255,0.08)',
             outline: 'none'
           }} />
-        </div>
+        </div> */}
 
         <div style={{ flex: 1 }} />
 
