@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 // API Configuration - Production: set REACT_APP_API_URL in Vercel (e.g. https://your-backend.railway.app/api)
-const getApiUrl = () => {
+export function getApiUrl() {
     if (process.env.REACT_APP_API_URL) {
         return process.env.REACT_APP_API_URL;
     }
@@ -16,10 +16,15 @@ const getApiUrl = () => {
     return process.env.NODE_ENV === 'production'
         ? (process.env.REACT_APP_API_URL || '')
         : `http://localhost:5001/api`;
-};
+}
 
-// const API_URL = getApiUrl();
-const API_URL = 'https://crm.rentfoxxy.com/api';
+/** Backend origin without `/api` (for `/uploads/...` URLs). */
+export function getBackendOrigin() {
+    return getApiUrl().replace(/\/?api\/?$/i, '');
+}
+
+const API_URL = getApiUrl();
+// const API_URL = 'https://crm.rentfoxxy.com/api';
 
 const api = axios.create({
     baseURL: API_URL,

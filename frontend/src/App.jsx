@@ -29,6 +29,8 @@ import Teams from './pages/Teams';
 import TicketsList from './pages/tickets/TicketsList';
 import CreateTicket from './pages/tickets/CreateTicket';
 import TicketDetails from './pages/tickets/TicketDetails';
+import { Toaster } from 'react-hot-toast';
+import VendorManagement from './features/vendor-management/VendorManagementApp';
 
 
 // Main App
@@ -36,6 +38,7 @@ function App() {
   return (
     <AuthProvider>
       <Router>
+        <Toaster position="top-right" toastOptions={{ className: 'text-sm', duration: 4500 }} />
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/quotation/accept/:token" element={<QuotationAccept />} />
@@ -86,6 +89,16 @@ function App() {
           <Route path="/qc-orders" element={<ProtectedRoute allowedRoles={['admin', 'manager', 'floor_manager', 'qc']} allowedPermissions={['qc_access']}><Layout><QCOrders api={api} /></Layout></ProtectedRoute>} />
           <Route path="/dispatch" element={<ProtectedRoute allowedRoles={['admin', 'manager', 'floor_manager', 'dispatch']} allowedPermissions={['dispatch_access']}><Layout><Dispatch api={api} /></Layout></ProtectedRoute>} />
           <Route path="/teams" element={<ProtectedRoute><Layout><Teams /></Layout></ProtectedRoute>} />
+          <Route
+            path="/vendor-management/*"
+            element={
+              <ProtectedRoute allowedRoles={['admin', 'manager', 'procurement']} allowedPermissions={['vendor_management_access']}>
+                <Layout>
+                  <VendorManagement />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
         </Routes>
       </Router>
     </AuthProvider>
