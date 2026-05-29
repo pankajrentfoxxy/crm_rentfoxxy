@@ -21,6 +21,12 @@ import {
 } from 'lucide-react';
 import { fetchProductReceivedContext, receivePoLineBulk } from '../vendorManagementApi';
 
+function formatWorkflowStatus(status) {
+  const s = String(status || '').toLowerCase();
+  if (!s) return '—';
+  return s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 function formatPoType(t) {
   if (!t) return '—';
   return String(t)
@@ -200,6 +206,8 @@ export default function ProductReceivedPage() {
   const po = ctx?.purchase_order;
   const lines = ctx?.lines || [];
   const stats = ctx?.stats || statsFromLines(lines);
+  const poStatusLower = String(po?.status || '').toLowerCase();
+  const receiveMutationsBlocked = poStatusLower === 'completed';
   const n = lines.length;
   function remainingOnLine(idx) {
     const line = lines[idx];
@@ -394,10 +402,23 @@ export default function ProductReceivedPage() {
                     {po.purchase_order_number || `PO-${po.po_id}`}
                   </span>
                 </div>
-                <div className="flex items-center justify-center">
+                <div className="flex items-center justify-center gap-2 flex-wrap">
                   <span className="inline-flex items-center rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 px-4 py-1.5 text-xs sm:text-sm font-semibold capitalize">
                     {formatPoType(po.purchase_order_type)}
                   </span>
+                  {po.status ? (
+                    <span
+                      className={`inline-flex items-center rounded-full border px-3 py-1 text-xs sm:text-sm font-semibold capitalize ${
+                        poStatusLower === 'completed'
+                          ? 'bg-slate-800 text-white border-slate-700'
+                          : poStatusLower === 'processing'
+                            ? 'bg-amber-100 text-amber-900 border-amber-200'
+                            : 'bg-violet-100 text-violet-900 border-violet-200'
+                      }`}
+                    >
+                      {formatWorkflowStatus(po.status)}
+                    </span>
+                  ) : null}
                 </div>
                 <div className="flex items-center justify-end">
                   <span className="rounded-md bg-white/95 border border-rose-100 px-3 py-2 text-xs sm:text-sm font-medium text-slate-700 tabular-nums shadow-sm">
@@ -502,12 +523,12 @@ export default function ProductReceivedPage() {
                           <td className="px-3 py-3 align-middle">
                             <button
                               type="button"
-                              disabled={complete}
+                              disabled={complete || receiveMutationsBlocked}
                               onClick={() => openReceiveWizard(idx)}
                               className="inline-flex items-center gap-1.5 rounded-md px-4 py-2 text-xs sm:text-sm font-semibold whitespace-nowrap transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed bg-teal-700 hover:bg-teal-800 text-white"
                             >
-                              {complete ? null : <Plus className="w-4 h-4" />}
-                              {complete ? 'Received' : 'Receive'}
+                              {receiveMutationsBlocked ? null : complete ? null : <Plus className="w-4 h-4" />}
+                              {receiveMutationsBlocked ? 'Completed' : complete ? 'Received' : 'Receive'}
                             </button>
                           </td>
                         </tr>

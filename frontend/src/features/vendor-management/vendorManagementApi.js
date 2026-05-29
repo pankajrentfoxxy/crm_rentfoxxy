@@ -82,7 +82,7 @@ export function fetchGrnReceivedProducts(poId, grnId) {
   return api.get(`${base}/purchase-orders/${poId}/grns/${grnId}/received-products`);
 }
 
-/** Laravel list: pending/draft orders can move to pending or approved only. */
+/** List workflow: after bill upload, status can move to approved (server validates bill_files). */
 export function patchPurchaseOrderStatus(id, status) {
   return api.patch(`${base}/purchase-orders/${id}/status`, { status });
 }

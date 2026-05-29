@@ -135,10 +135,26 @@ function RemarkCell({ text }) {
   );
 }
 
-/** purchase-order-view: dropdown enabled only for pending / draft / empty */
-function statusRowEditable(status) {
+function hasUploadedBill(row) {
+  return parseBillFiles(row).length > 0;
+}
+
+/** draft / pending (legacy) / empty — waiting for explicit Approve on the list */
+function awaitingApproveAction(status) {
   const s = String(status || '').toLowerCase();
   return s === 'pending' || s === 'draft' || s === '';
+}
+
+/** Eye / receive screen only after approve; completed still viewable */
+function showReceiveEye(status) {
+  const s = String(status || '').toLowerCase();
+  return s === 'approved' || s === 'processing' || s === 'completed';
+}
+
+function formatWorkflowStatus(status) {
+  const s = String(status || '').toLowerCase();
+  if (!s) return '—';
+  return s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 const emptyModalForm = () => ({
@@ -627,11 +643,10 @@ export default function PurchaseOrdersPage() {
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-slate-900">Purchase orders</h1>
-          <p className="text-xs text-slate-500 mt-1">
-            Laravel-style list and preview: each line shows received quantity aggregated from{' '}
-            vendor serial rows (match lines via serial <span className="font-mono text-[11px]">extra.line_index</span>{' '}
-            or <span className="font-mono text-[11px]">extra.product_detail_id</span>). Bills, status workflow, and GST
-            match the legacy admin behaviour.
+          <p className="text-xs text-slate-500 mt-1 max-w-3xl leading-relaxed">
+            Workflow: upload a bill first — then status shows <strong>Approve</strong>. After approval, use the Eye to
+            receive. While units are inbound the PO moves to <strong>Processing</strong>; when fully received it becomes{' '}
+            <strong>Completed</strong> automatically.
           </p>
         </div>
         <button
@@ -692,11 +707,12 @@ export default function PurchaseOrdersPage() {
             </thead>
             <tbody>
               {rows.map((r, i) => {
-                const editable = statusRowEditable(r.status);
                 const st = String(r.status || '').toLowerCase();
+                const uploaded = hasUploadedBill(r);
                 const vendorName =
                   r.vendor_display_name || r.vendor_business_name || r.vendor_first_name || `Vendor #${r.vendor_id}`;
-                const showReceive = st !== 'void' && st !== 'pending';
+                const showEye = uploaded && showReceiveEye(r.status);
+                const showApproveUi = uploaded && awaitingApproveAction(r.status);
 
                 return (
                   <tr key={r.po_id} className="border-t hover:bg-slate-50/80">
@@ -766,50 +782,41 @@ export default function PurchaseOrdersPage() {
                       )}
                     </td>
                     <td className="p-3">
-                      {editable ? (
-                        <select
-                          className="border border-slate-200 rounded-md px-2 py-1.5 text-sm bg-white max-w-[11rem]"
-                          value={(() => {
-                            const st = String(r.status || '').toLowerCase();
-                            if (st === 'draft') return 'draft';
-                            if (st === 'pending') return 'pending';
-                            return '';
-                          })()}
-                          onChange={(e) => {
-                            const next = e.target.value;
-                            if (!next || next === String(r.status || '').toLowerCase()) return;
-                            if (next === 'draft') return;
-                            onStatusChange(r, next);
-                          }}
-                        >
-                          <option value="">Please take action</option>
-                          {String(r.status || '').toLowerCase() === 'draft' ? (
-                            <option value="draft">Draft</option>
-                          ) : null}
-                          <option value="pending">Pending</option>
-                          <option value="approved">Approve</option>
-                          <option value="completed" disabled>
-                            Completed
-                          </option>
-                          <option value="processing" disabled>
-                            Processing
-                          </option>
-                        </select>
+                      {!uploaded ? (
+                        <span className="text-slate-400 text-xs italic" title="Upload a bill first">
+                          Hidden until bill uploaded
+                        </span>
+                      ) : showApproveUi ? (
+                        <div className="flex flex-col gap-1.5 items-start">
+                          <span className="text-[11px] text-slate-500">Awaiting approval</span>
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold shadow-sm"
+                            onClick={() => onStatusChange(r, 'approved')}
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            Approve
+                          </button>
+                        </div>
                       ) : (
-                        <span className="capitalize text-slate-800 font-medium">{r.status || '—'}</span>
+                        <span className="text-slate-800 font-medium text-sm">{formatWorkflowStatus(r.status)}</span>
                       )}
                     </td>
                     <td className="p-3">
-                      {showReceive ? (
+                      {showEye ? (
                         <Link
                           to={`/vendor-management/purchase-orders/${r.po_id}/receive`}
                           className="inline-flex items-center justify-center w-9 h-9 rounded-md border border-slate-200 text-slate-700 hover:bg-slate-50"
-                          title="Product received — view / receive"
+                          title={
+                            st === 'completed'
+                              ? 'View received items'
+                              : 'Receive products against this PO'
+                          }
                         >
                           <Eye className="w-4 h-4" />
                         </Link>
                       ) : (
-                        <span className="text-slate-300">—</span>
+                        <span className="text-slate-300 text-xs">—</span>
                       )}
                     </td>
                   </tr>

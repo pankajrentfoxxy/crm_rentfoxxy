@@ -110,10 +110,70 @@ function attachProductDetails(poRow, qtyMaps) {
   };
 }
 
-/** Matches Laravel purchase-order-view: receive action hidden for void / pending. */
-function receiveAllowed(poRow) {
+/** Receive page (view GRN stats) opens only once PO is approved. */
+function receiveViewAllowed(poRow) {
   const st = String(poRow?.status || '').toLowerCase();
-  return st !== 'void' && st !== 'pending';
+  return st === 'approved' || st === 'processing' || st === 'completed';
+}
+
+/** New serial receipts allowed while PO is approved (first units) or in progress — not once fully closed. */
+function receiveMutationAllowed(poRow) {
+  const st = String(poRow?.status || '').toLowerCase();
+  return st === 'approved' || st === 'processing';
+}
+
+async function computeReceiveTotalsForPoId(poId) {
+  const r = await pool.query(
+    `SELECT line_items FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL`,
+    [poId]
+  );
+  if (!r.rows.length) return null;
+  const qtyMaps = await buildReceivedQtyMapsForPoIds([poId]);
+  const lines = enrichLineItemsWithReceived(parseLineItemsJson(r.rows[0].line_items), qtyMaps.get(poId));
+  let orderQty = 0;
+  let receivedQty = 0;
+  lines.forEach((l) => {
+    orderQty += Number(l.quantity) || 0;
+    receivedQty += Number(l.receivedQty) || 0;
+  });
+  return { orderQty, receivedQty };
+}
+
+/**
+ * While receiving: PO → processing. When every ordered unit has a serial: → completed.
+ * Called after successful inserts into vendor_serial_numbers.
+ */
+async function syncPoReceiveProgressStatus(poId, actorUserId) {
+  const cur = await pool.query(
+    `SELECT status FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL`,
+    [poId]
+  );
+  if (!cur.rows.length) return;
+  const st = String(cur.rows[0].status || '').toLowerCase();
+  if (!['approved', 'processing'].includes(st)) return;
+
+  const totals = await computeReceiveTotalsForPoId(poId);
+  if (!totals || totals.orderQty <= 0) return;
+
+  let next = null;
+  if (totals.receivedQty >= totals.orderQty) next = 'completed';
+  else if (totals.receivedQty > 0) next = 'processing';
+
+  if (next && next !== st) {
+    await pool.query(
+      `UPDATE vendor_purchase_orders SET status = $1, status_updated_by_admin_id = $2, updated_at = NOW()
+       WHERE po_id = $3 AND deleted_at IS NULL`,
+      [next, actorUserId ?? null, poId]
+    );
+    await logVendorAudit({
+      actorUserId: actorUserId ?? null,
+      vendorId: null,
+      entityType: 'purchase_order',
+      entityId: poId,
+      action: 'status_auto_receive_progress',
+      payload: { from: st, to: next }
+    });
+  }
 }
 
 const productReceivedValidators = [param('poId').isInt().toInt()];
@@ -141,10 +201,11 @@ async function getProductReceivedContext(req, res) {
   if (!r.rows.length) return res.status(404).json({ success: false, message: 'Not found' });
 
   const row = r.rows[0];
-  if (!receiveAllowed(row)) {
+  if (!receiveViewAllowed(row)) {
     return res.status(403).json({
       success: false,
-      message: 'Receiving is not available for void or pending purchase orders.'
+      message:
+        'Open receiving after approving the PO: upload a bill on the Purchase orders list, then choose Approve.'
     });
   }
 
@@ -221,10 +282,18 @@ async function receiveProductSerial(req, res) {
   ]);
   if (!r.rows.length) return res.status(404).json({ success: false, message: 'Not found' });
   const po = r.rows[0];
-  if (!receiveAllowed(po)) {
+  if (!receiveMutationAllowed(po)) {
+    const stPo = String(po.status || '').toLowerCase();
+    if (stPo === 'completed') {
+      return res.status(403).json({
+        success: false,
+        message: 'This purchase order is fully received; receipts are closed.'
+      });
+    }
     return res.status(403).json({
       success: false,
-      message: 'Receiving is not available for void or pending purchase orders.'
+      message:
+        'Receiving opens only once the PO is approved (invoice uploaded and Approved on the purchase order list).'
     });
   }
 
@@ -311,6 +380,8 @@ async function receiveProductSerial(req, res) {
     payload: { po_id: poId, grn_id: finalGrnId, line_index: lineIndex }
   });
 
+  await syncPoReceiveProgressStatus(poId, req.user?.user_id);
+
   const qtyMaps2 = await buildReceivedQtyMapsForPoIds([poId]);
   const lines2 = enrichLineItemsWithReceived(parseLineItemsJson(po.line_items), qtyMaps2.get(poId));
 
@@ -372,10 +443,18 @@ async function receivePoLineBulk(req, res) {
   ]);
   if (!r.rows.length) return res.status(404).json({ success: false, message: 'Not found' });
   const po = r.rows[0];
-  if (!receiveAllowed(po)) {
+  if (!receiveMutationAllowed(po)) {
+    const stPo = String(po.status || '').toLowerCase();
+    if (stPo === 'completed') {
+      return res.status(403).json({
+        success: false,
+        message: 'This purchase order is fully received; receipts are closed.'
+      });
+    }
     return res.status(403).json({
       success: false,
-      message: 'Receiving is not available for void or pending purchase orders.'
+      message:
+        'Receiving opens only once the PO is approved (invoice uploaded and Approved on the purchase order list).'
     });
   }
 
@@ -498,6 +577,8 @@ async function receivePoLineBulk(req, res) {
       inventory_codes: createdRows.map((x) => x.inventory_asset_code)
     }
   });
+
+  await syncPoReceiveProgressStatus(poId, req.user?.user_id);
 
   const qtyMapsAfter = await buildReceivedQtyMapsForPoIds([poId]);
   const linesAfter = enrichLineItemsWithReceived(parseLineItemsJson(po.line_items), qtyMapsAfter.get(poId));
@@ -1003,7 +1084,7 @@ async function create(req, res) {
         JSON.stringify(line_items),
         body.assets_details != null ? JSON.stringify(body.assets_details) : null,
         body.remarks || null,
-        body.status || 'pending',
+        body.status || 'draft',
         req.user?.user_id || null,
         body.status_updated_by_name || 'Admin'
       ]
@@ -1147,8 +1228,22 @@ async function remove(req, res) {
   res.json({ success: true, message: 'Deleted' });
 }
 
-/* List screen matches Laravel: only pending → pending|approved (other statuses lock the dropdown). */
-const statusValidators = [param('id').isInt().toInt(), body('status').isIn(['pending', 'approved'])];
+/* List workflow: approve only, and only when at least one bill file exists. */
+const statusValidators = [param('id').isInt().toInt(), body('status').isIn(['approved'])];
+
+function normalizeBillFilesJson(raw) {
+  if (raw == null) return [];
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try {
+      const p = JSON.parse(raw);
+      return Array.isArray(p) ? p : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
 
 async function updateStatus(req, res) {
   const errors = validationResult(req);
@@ -1157,18 +1252,29 @@ async function updateStatus(req, res) {
   const id = Number(req.params.id);
   const { status } = req.body;
 
-  const cur = await pool.query(`SELECT status FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL`, [
-    id
-  ]);
+  const cur = await pool.query(
+    `SELECT status, bill_files FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL`,
+    [id]
+  );
   if (!cur.rows.length) return res.status(404).json({ success: false, message: 'Purchase order not found' });
 
   const prev = String(cur.rows[0].status || '').toLowerCase();
-  /* Matches purchase-order-view: select disabled unless pending/draft */
+  /* Until approved, list offers Approve (draft / pending legacy / empty). */
   if (!['pending', 'draft', ''].includes(prev)) {
     return res.status(400).json({
       success: false,
-      message: 'Purchase order status is locked (only pending or draft can be changed from the list).'
+      message: 'Purchase order status is locked once it has progressed past awaiting approval.'
     });
+  }
+
+  if (status === 'approved') {
+    const bills = normalizeBillFilesJson(cur.rows[0].bill_files);
+    if (bills.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Upload at least one bill / invoice before approving this purchase order.'
+      });
+    }
   }
 
   await pool.query(
