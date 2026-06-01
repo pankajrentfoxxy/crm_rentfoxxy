@@ -18,7 +18,9 @@ const allowedOrigins = [
   'http://187.77.187.213',
   'https://187.77.187.213',
   'http://crm.rentfoxxy.com',
-  'https://crm.rentfoxxy.com'
+  'https://crm.rentfoxxy.com',
+  'http://staging.rentfoxxy.com',
+  'https://staging.rentfoxxy.com'
 ];
 
 if (process.env.FRONTEND_URL) {
@@ -72,6 +74,7 @@ app.use('/api/leads', require('./routes/leads'));
 app.use('/api/customer-inventory', require('./routes/customerInventory'));
 app.use('/api/support', require('./routes/support'));
 app.use('/api/vendor-management', require('./routes/vendorManagement'));
+app.use('/api/qc-management', require('./routes/qcManagement'));
 
 // Health check
 app.get('/health', (req, res) => {

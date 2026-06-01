@@ -349,8 +349,8 @@ async function receiveProductSerial(req, res) {
     }
 
     const insS = await client.query(
-      `INSERT INTO vendor_serial_numbers (po_id, grn_id, serial_number, extra)
-       VALUES ($1,$2,$3,$4::jsonb) RETURNING serial_id`,
+      `INSERT INTO vendor_serial_numbers (po_id, grn_id, serial_number, qc_status, extra)
+       VALUES ($1,$2,$3,'pending',$4::jsonb) RETURNING serial_id`,
       [poId, finalGrnId, serial_number, JSON.stringify(extra)]
     );
     serialId = insS.rows[0].serial_id;
@@ -535,8 +535,8 @@ async function receivePoLineBulk(req, res) {
       if (pd != null && String(pd).trim() !== '') extra.product_detail_id = String(pd);
 
       const insS = await client.query(
-        `INSERT INTO vendor_serial_numbers (po_id, grn_id, serial_number, inventory_asset_code, rental_start_date, extra)
-         VALUES ($1,$2,$3,$4,$5::date,$6::jsonb) RETURNING serial_id`,
+        `INSERT INTO vendor_serial_numbers (po_id, grn_id, serial_number, inventory_asset_code, rental_start_date, qc_status, extra)
+         VALUES ($1,$2,$3,$4,$5::date,'pending',$6::jsonb) RETURNING serial_id`,
         [poId, finalGrnId, serial_number, inventory_asset_code, rental_start_date, JSON.stringify(extra)]
       );
       createdRows.push({

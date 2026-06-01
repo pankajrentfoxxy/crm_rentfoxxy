@@ -31,6 +31,7 @@ import CreateTicket from './pages/tickets/CreateTicket';
 import TicketDetails from './pages/tickets/TicketDetails';
 import { Toaster } from 'react-hot-toast';
 import VendorManagement from './features/vendor-management/VendorManagementApp';
+import QCManagement from './features/qc-management/QCManagementApp';
 
 
 // Main App
@@ -95,6 +96,16 @@ function App() {
               <ProtectedRoute allowedRoles={['admin', 'manager', 'procurement']} allowedPermissions={['vendor_management_access']}>
                 <Layout>
                   <VendorManagement />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/qc-management/*"
+            element={
+              <ProtectedRoute allowedRoles={['admin', 'manager', 'floor_manager', 'qc']} allowedPermissions={['qc_access']}>
+                <Layout>
+                  <QCManagement />
                 </Layout>
               </ProtectedRoute>
             }

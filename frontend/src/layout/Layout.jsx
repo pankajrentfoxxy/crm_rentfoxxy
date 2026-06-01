@@ -45,6 +45,7 @@ import {
 } from 'lucide-react';
 
 import { isSupportUser } from '../utils/supportAccess';
+import { useQcStatusCounts } from '../features/qc-management/hooks/useQcStatusCounts';
 
 
 
@@ -74,6 +75,24 @@ const vendorAccordionChildren = [
 
 ];
 
+/** QC submenu — paths match QCManagementApp nested routes */
+
+const qcAccordionChildren = [
+
+  { label: 'QC Processing List', path: '/qc-management/processing', countKey: 'pending' },
+
+  { label: 'QC Passed List', path: '/qc-management/passed', countKey: 'passed' },
+
+  { label: 'QC Failed List', path: '/qc-management/failed', countKey: 'failed' },
+
+  { label: 'Dead Assets List', path: '/qc-management/dead-assets', countKey: 'dead' },
+
+  { label: 'Require For Parts', path: '/qc-management/require-for-parts', countKey: 'require_for_parts' },
+
+  { label: 'Bundle Management', path: '/qc-management/bundle' }
+
+];
+
 
 
 function canSeeVendorAccordion(user) {
@@ -83,6 +102,20 @@ function canSeeVendorAccordion(user) {
   const roles = ['manager', 'admin', 'procurement'];
 
   const permOk = Array.isArray(user.permissions) && user.permissions.includes('vendor_management_access');
+
+  return roles.includes(user.role) || permOk;
+
+}
+
+
+
+function canSeeQcAccordion(user) {
+
+  if (!user) return false;
+
+  const roles = ['manager', 'admin', 'floor_manager', 'qc'];
+
+  const permOk = Array.isArray(user.permissions) && user.permissions.includes('qc_access');
 
   return roles.includes(user.role) || permOk;
 
@@ -100,11 +133,21 @@ export default function Layout({ children }) {
 
   const navigate = useNavigate();
 
+  const showQcAccordion = canSeeQcAccordion(user);
+
+  const { counts: qcCounts } = useQcStatusCounts(showQcAccordion);
+
 
 
   const [vendorAccordionOpen, setVendorAccordionOpen] = useState(() =>
 
     location.pathname.startsWith('/vendor-management')
+
+  );
+
+  const [qcAccordionOpen, setQcAccordionOpen] = useState(() =>
+
+    location.pathname.startsWith('/qc-management')
 
   );
 
@@ -115,6 +158,12 @@ export default function Layout({ children }) {
     if (location.pathname.startsWith('/vendor-management')) {
 
       setVendorAccordionOpen(true);
+
+    }
+
+    if (location.pathname.startsWith('/qc-management')) {
+
+      setQcAccordionOpen(true);
 
     }
 
@@ -322,15 +371,7 @@ export default function Layout({ children }) {
 
     {
 
-      icon: CheckCircle,
-
-      label: 'QC Orders',
-
-      path: '/qc-orders',
-
-      roles: ['manager', 'admin', 'floor_manager', 'qc'],
-
-      permission: 'qc_access'
+      type: 'qcAccordion'
 
     },
 
@@ -401,6 +442,12 @@ export default function Layout({ children }) {
     if (item.type === 'vendorAccordion') {
 
       return canSeeVendorAccordion(user);
+
+    }
+
+    if (item.type === 'qcAccordion') {
+
+      return canSeeQcAccordion(user);
 
     }
 
@@ -583,6 +630,101 @@ export default function Layout({ children }) {
                         );
 
                       })}
+
+                    </div>
+
+                  )}
+
+                </div>
+
+              );
+
+            }
+
+
+
+            if (item.type === 'qcAccordion') {
+
+              return (
+
+                <div key="qc-accordion" className="space-y-0.5">
+
+                  <button
+
+                    type="button"
+
+                    onClick={() => setQcAccordionOpen((o) => !o)}
+
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors text-left hover:bg-gray-100 ${location.pathname.startsWith('/qc-management') ? 'text-teal-700 bg-teal-50/60' : 'text-gray-800'
+
+                      }`}
+
+                  >
+
+                    <CheckCircle className="w-5 h-5 text-gray-600 shrink-0" />
+
+                    <span className="flex-1">QC Management</span>
+
+                    <ChevronDown
+
+                      className={`w-4 h-4 text-gray-500 shrink-0 transition-transform duration-200 ${qcAccordionOpen ? 'rotate-180' : ''
+
+                        }`}
+
+                    />
+
+                  </button>
+
+                  {qcAccordionOpen && (
+
+                    <div className="mt-1 ml-2 pl-3 border-l border-teal-100 space-y-0.5">
+
+                      {qcAccordionChildren.map((child) => {
+
+                        const badge =
+                          child.countKey && qcCounts && qcCounts[child.countKey] != null
+                            ? qcCounts[child.countKey]
+                            : null;
+
+                        return (
+
+                        <NavLink
+
+                          key={child.path}
+
+                          to={child.path}
+
+                          onClick={() => setSidebarOpen(false)}
+
+                          className={({ isActive }) =>
+
+                            [
+
+                              'flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-xs transition-colors',
+
+                              isActive
+
+                                ? 'bg-teal-100 text-teal-900 font-semibold'
+
+                                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+
+                            ].join(' ')
+
+                          }
+
+                        >
+
+                          <span>{child.label}</span>
+
+                          {badge != null ? (
+                            <span className="shrink-0 rounded-full bg-teal-100 text-teal-900 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums">
+                              {badge}
+                            </span>
+                          ) : null}
+
+                        </NavLink>
+
+                      );})}
 
                     </div>
 

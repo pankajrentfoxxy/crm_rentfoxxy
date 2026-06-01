@@ -1,8 +1,8 @@
 # Backend File Structure
 
-Node.js / Express CRM API (`laptop-refurbishment-backend`) — PostgreSQL, Prisma ORM, JWT auth, background workers, and VPS deploy scripts.
+Node.js / Express API (`laptop-refurbishment-backend`) for the RentFoxxy CRM — PostgreSQL via `pg` pool and Prisma, JWT auth, ERP sync workers, and background services.
 
-> Generated structure excludes `node_modules/` and runtime upload contents.
+> Generated structure excludes `node_modules/` and runtime upload files under `uploads/`.
 
 ## Directory tree
 
@@ -15,6 +15,13 @@ backend/
 ├── constants/
 │   └── leadStages.js
 ├── controllers/
+│   ├── vendorManagement/
+│   │   ├── billing.controller.js
+│   │   ├── purchaseOrders.controller.js
+│   │   ├── replacedProducts.controller.js
+│   │   ├── serialNumbers.controller.js
+│   │   ├── sparePartsOrders.controller.js
+│   │   └── vendors.controller.js
 │   ├── analyticsController.js
 │   ├── authController.js
 │   ├── chipLevelController.js
@@ -33,16 +40,8 @@ backend/
 │   ├── supportController.js
 │   ├── teamController.js
 │   ├── ticketController.js
+│   ├── vendorManagementSchema.js
 │   └── warehouseController.js
-├── deploy/
-│   ├── docker-entrypoint-web.sh
-│   ├── fix-https-vps.sh
-│   ├── nginx.deploy.conf
-│   ├── nginx.deploy.http-only.conf
-│   ├── redeploy-vps.sh
-│   ├── setup-ssl-vps.sh
-│   ├── test-erp-connection-vps.sh
-│   └── trigger-inventory-sync-vps.sh
 ├── docs/
 │   └── ERP_INVENTORY_SYNC_FLOW.md
 ├── middleware/
@@ -53,34 +52,8 @@ backend/
 │   ├── 000_schema_migrations.sql
 │   ├── 001_user_teams.sql
 │   ├── 002_order_items_qc_passed.sql
-│   ├── 003_stage_categories_ttspl_id.sql
-│   ├── 004_add_qc_tables.sql
-│   ├── 005_order_item_level_logistics.sql
-│   ├── 006_inventory_erp_sync.sql
-│   ├── 007_add_address_type.sql
-│   ├── 008_replace_repeat_with_callback.sql
-│   ├── 009_lead_remarks.sql
-│   ├── 010_add_order_teams.sql
-│   ├── 011_add_proposed_delivery_date.sql
-│   ├── 013_warehouse_team.sql
-│   ├── 014_stage_categories_ttspl_id.sql
-│   ├── 015_hardware_software_team.sql
-│   ├── 016_apple_generation_from_processor.sql
-│   ├── 017_apple_generation_laptop_catalog.sql
-│   ├── 018_order_items_qc_sales_checklist.sql
-│   ├── 019_lead_stage_demo.sql
-│   ├── 020_order_type_normalize.sql
-│   ├── 021_qc_pipeline_schema_guards.sql
-│   ├── 022_orders_qc_timing.sql
-│   ├── 023_tickets_serial_repair_cycles.sql
-│   ├── 024_existing_customer_inventory.sql
-│   ├── 025_support_module.sql
-│   ├── 026_support_redesign.sql
-│   ├── 027_support_v2.sql
-│   ├── 028_support_user_roles.sql
-│   ├── 029_support_v3.sql
-│   ├── 030_lead_quotation_accept.sql
-│   ├── 031_support_ticket_category.sql
+│   ├── … (003–036 numbered migrations)
+│   ├── 037_vendor_serial_inventory_meta.sql
 │   ├── add_qc_round_robin_state.sql
 │   ├── diagnosis_tables.sql
 │   └── seed_dummy_inventory.sql
@@ -105,6 +78,7 @@ backend/
 │   ├── support.js
 │   ├── teams.js
 │   ├── tickets.js
+│   ├── vendorManagement.js
 │   └── warehouse.js
 ├── scripts/
 │   ├── run-inventory-sync.js
@@ -123,17 +97,23 @@ backend/
 │   ├── supportInventoryService.js
 │   ├── supportQuery.js
 │   ├── supportTicketFlow.js
-│   └── ticketWorkLogService.js
+│   ├── ticketWorkLogService.js
+│   ├── vendorAuditLogService.js
+│   ├── vendorInventoryAssetCodeService.js
+│   └── vendorNumberService.js
 ├── uploads/
 │   ├── customers/
-│   └── support/
+│   ├── support/
+│   ├── vendor-po-bills/
+│   └── vendor-spo-bills/
+├── utils/
+│   └── purchaseOrderGst.js
 ├── .dockerignore
 ├── .env
 ├── .env.example
-├── .gitignore
+├── backup.sql
 ├── docker-compose.yaml
-├── FILE_STRUCTURE.md
-├── LOCAL_DEV_REMOTE_DB.md
+├── Dockerfile
 ├── master_setup.sql
 ├── package.json
 ├── package-lock.json
@@ -144,211 +124,212 @@ backend/
 
 | File | Purpose |
 |------|---------|
-| `server.js` | Express app entry; mounts routes, static uploads, health checks, and background workers |
-| `master_setup.sql` | Full database bootstrap / reference schema |
-| `package.json` | Dependencies and npm scripts (`start`, `dev`, `prisma:generate`) |
+| `server.js` | Express app entry: CORS, static uploads, route mounting, health checks, schema ensure on boot |
+| `package.json` | Dependencies and scripts (`start`, `dev`, `prisma:generate`) |
 | `package-lock.json` | Locked dependency versions |
-| `docker-compose.yaml` | Docker stack for local / VPS deployment |
-| `.env` | Environment variables (DB, JWT, ERP, email, etc.) |
-| `.env.example` | Example env template |
+| `master_setup.sql` | Full database bootstrap / reference schema |
+| `backup.sql` | Database backup snapshot |
+| `Dockerfile` | Container image for API deployment |
+| `docker-compose.yaml` | Local Docker stack (API + Postgres) |
 | `.dockerignore` | Files excluded from Docker build context |
-| `.gitignore` | Git ignore rules |
-| `FILE_STRUCTURE.md` | This file — backend directory reference |
-| `LOCAL_DEV_REMOTE_DB.md` | Guide for connecting local dev to remote DB |
-
-## API routes (`server.js`)
-
-| Mount path | Route file | Domain |
-|------------|------------|--------|
-| `/api/auth` | `routes/auth.js` | Login, users, JWT |
-| `/api/tickets` | `routes/tickets.js` | Repair tickets & QC |
-| `/api/sales` | `routes/sales.js` | Sales orders & QC pipeline |
-| `/api/procurement` | `routes/procurement.js` | Procurement |
-| `/api/warehouse` | `routes/warehouse.js` | Warehouse operations |
-| `/api/stages` | `routes/stages.js` | Workflow stages |
-| `/api/teams` | `routes/teams.js` | Team management |
-| `/api/parts` | `routes/parts.js` | Parts catalog |
-| `/api/inventory` | `routes/inventory.js` | Inventory & ERP sync |
-| `/api/analytics` | `routes/analytics.js` | Dashboard analytics |
-| `/api/reports` | `routes/reports.js` | Reports |
-| `/api/diagnosis` | `routes/diagnosis.js` | Device diagnosis |
-| `/api/chip-repair` | `routes/chipLevel.js` | Chip-level repair |
-| `/api/quotation` | `routes/quotationPublic.js` | Public quotation accept links |
-| `/api/leads` | `routes/leads.js` | Leads CRUD, CSV, assign, follow-up |
-| `/api/customer-inventory` | `routes/customerInventory.js` | Customer-owned inventory |
-| `/api/support` | `routes/support.js` | Customer support tickets |
-| `/uploads` | — | Static file serving for uploads |
-| `/health`, `/api/health` | — | Server and DB health checks |
+| `.env` | Runtime secrets (DB, JWT, ERP, email, etc.) |
+| `.env.example` | Environment variable template |
 
 ## `config/`
 
 | File | Purpose |
 |------|---------|
-| `db.js` | PostgreSQL connection pool |
-
-## `constants/`
-
-| File | Purpose |
-|------|---------|
-| `leadStages.js` | Lead pipeline stages and status-to-stage mappings |
-
-## `middleware/`
-
-| File | Purpose |
-|------|---------|
-| `auth.js` | JWT authentication and role checks |
-| `errorHandler.js` | Global Express error handler |
-| `supportAccess.js` | Support module access control |
-
-## `controllers/`
-
-| File | Purpose |
-|------|---------|
-| `analyticsController.js` | Dashboard stats and analytics |
-| `authController.js` | Auth, users, schema ensure |
-| `chipLevelController.js` | Chip-level repair workflow |
-| `customerInventoryController.js` | Customer inventory CRUD & sync |
-| `diagnosisController.js` | Device diagnosis records |
-| `inventoryController.js` | Inventory management & ERP sync |
-| `inventoryStockSummary.js` | Stock summary helpers |
-| `leadController.js` | Leads, CSV import/export, assign |
-| `partController.js` | Parts inventory |
-| `partsDropdownController.js` | Parts dropdown data |
-| `procurementController.js` | Procurement orders |
-| `qcController.js` | QC forms, photos, history |
-| `reportsController.js` | Report generation |
-| `salesController.js` | Sales orders and pipeline |
-| `stageController.js` | Workflow stage categories |
-| `supportController.js` | Support tickets, schema ensure |
-| `teamController.js` | Team CRUD |
-| `ticketController.js` | Repair ticket lifecycle |
-| `warehouseController.js` | Warehouse dispatch & logistics |
-
-## `routes/`
-
-| File | Purpose |
-|------|---------|
-| `analytics.js` | Analytics endpoints |
-| `auth.js` | Auth & user endpoints |
-| `chipLevel.js` | Chip repair endpoints |
-| `customerInventory.js` | Customer inventory endpoints |
-| `diagnosis.js` | Diagnosis endpoints |
-| `inventory.js` | Inventory endpoints |
-| `leads.js` | Lead endpoints |
-| `parts.js` | Parts endpoints |
-| `procurement.js` | Procurement endpoints |
-| `quotationPublic.js` | Public quotation endpoints |
-| `reports.js` | Report endpoints |
-| `sales.js` | Sales & QC pipeline endpoints |
-| `salesPipeline.js` | Sales pipeline route helpers |
-| `stages.js` | Stage endpoints |
-| `support.js` | Support ticket endpoints |
-| `teams.js` | Team endpoints |
-| `tickets.js` | Ticket & QC endpoints |
-| `warehouse.js` | Warehouse endpoints |
-
-## `services/` — Background jobs & business logic
-
-| File | Purpose |
-|------|---------|
-| `emailQueueService.js` | Outbound email queue worker |
-| `inventoryErpSyncService.js` | ERP inventory sync worker |
-| `inventoryLinkedSyncService.js` | Linked inventory sync helpers |
-| `customerInventoryErpSyncService.js` | Customer inventory ERP sync worker |
-| `leadEmailIngestionService.js` | Inbound lead email (IMAP) worker |
-| `leadAutoAssignService.js` | Auto-assign unassigned leads |
-| `leadQuotationService.js` | Lead quotation generation |
-| `leadResearchService.js` | Lead research enrichment |
-| `perplexityService.js` | Perplexity AI integration |
-| `qcRoundRobinService.js` | QC round-robin assignment |
-| `supportInventoryService.js` | Support ↔ inventory linking |
-| `supportQuery.js` | Support DB query helpers |
-| `supportTicketFlow.js` | Support ticket state machine |
-| `ticketWorkLogService.js` | Ticket work timer / logs |
+| `db.js` | PostgreSQL connection pool (`pg`); SSL rules for local vs remote hosts |
 
 ## `prisma/`
 
 | File | Purpose |
 |------|---------|
-| `schema.prisma` | Prisma ORM schema (PostgreSQL models) |
+| `schema.prisma` | Prisma models (users, leads, orders, support, vendor management, etc.) |
 | `client.js` | Shared Prisma client instance |
+
+## `constants/`
+
+| File | Purpose |
+|------|---------|
+| `leadStages.js` | Lead pipeline stage definitions (shared with frontend) |
+
+## `middleware/`
+
+| File | Purpose |
+|------|---------|
+| `auth.js` | JWT verification and role/team authorization |
+| `errorHandler.js` | Central Express error handler |
+| `supportAccess.js` | Support-module access checks |
+
+## `routes/` — HTTP API surface
+
+Routes are mounted in `server.js` under `/api/*`. Each file wires validators and controller handlers.
+
+| File | Mount path | Domain |
+|------|------------|--------|
+| `auth.js` | `/api/auth` | Login, users, roles |
+| `tickets.js` | `/api/tickets` | Refurbishment / repair tickets |
+| `sales.js` | `/api/sales` | Sales orders and pipeline |
+| `salesPipeline.js` | (imported by sales) | Sales pipeline helpers |
+| `procurement.js` | `/api/procurement` | Procurement workflow |
+| `warehouse.js` | `/api/warehouse` | Warehouse operations |
+| `stages.js` | `/api/stages` | Workflow stages |
+| `teams.js` | `/api/teams` | Team management |
+| `parts.js` | `/api/parts` | Parts catalog and inventory |
+| `inventory.js` | `/api/inventory` | Stock and ERP-linked inventory |
+| `analytics.js` | `/api/analytics` | Dashboard analytics |
+| `reports.js` | `/api/reports` | Reporting exports |
+| `diagnosis.js` | `/api/diagnosis` | Device diagnosis |
+| `chipLevel.js` | `/api/chip-repair` | Chip-level repair |
+| `quotationPublic.js` | `/api/quotation` | Public quotation accept (no CRM auth) |
+| `leads.js` | `/api/leads` | Lead CRM, research, quotations |
+| `customerInventory.js` | `/api/customer-inventory` | Customer-owned inventory + ERP sync |
+| `support.js` | `/api/support` | Support tickets module |
+| `vendorManagement.js` | `/api/vendor-management` | Vendors, POs, GRNs, spare parts, billing |
+
+## `controllers/` — Request handlers
+
+| File | Purpose |
+|------|---------|
+| `authController.js` | Authentication, user CRUD, schema ensure |
+| `ticketController.js` | Ticket lifecycle, stages, work logs |
+| `salesController.js` | Sales orders, QC checklist, dispatch |
+| `procurementController.js` | Procurement requests and fulfillment |
+| `warehouseController.js` | Warehouse receive, dispatch, stock moves |
+| `stageController.js` | Stage categories and transitions |
+| `teamController.js` | Teams and assignments |
+| `partController.js` | Parts master data |
+| `partsDropdownController.js` | Dropdown / lookup data for parts |
+| `inventoryController.js` | Inventory CRUD and movements |
+| `inventoryStockSummary.js` | Stock summary aggregations |
+| `analyticsController.js` | Analytics queries |
+| `reportsController.js` | Report generation (incl. PDF via pdfkit) |
+| `diagnosisController.js` | Diagnosis forms and results |
+| `chipLevelController.js` | Chip-level repair records |
+| `leadController.js` | Leads, follow-ups, assignments, quotations |
+| `customerInventoryController.js` | Customer inventory and serials |
+| `supportController.js` | Support tickets, OTP, replacements; schema ensure |
+| `qcController.js` | QC rounds, checklists, round-robin |
+| `vendorManagementSchema.js` | Vendor tables DDL ensure on boot |
+
+### `controllers/vendorManagement/`
+
+| File | Purpose |
+|------|---------|
+| `vendors.controller.js` | Vendor CRUD, login-as, lookups |
+| `purchaseOrders.controller.js` | Purchase orders, status, bills |
+| `sparePartsOrders.controller.js` | Spare-parts PO workflow |
+| `serialNumbers.controller.js` | GRN, serial numbers, TTSPL linkage |
+| `billing.controller.js` | Vendor billing records |
+| `replacedProducts.controller.js` | Replaced / RMA product tracking |
+
+## `services/` — Background and shared logic
+
+| File | Purpose |
+|------|---------|
+| `inventoryErpSyncService.js` | Periodic ERP inventory sync worker |
+| `inventoryLinkedSyncService.js` | Linked inventory sync helpers |
+| `customerInventoryErpSyncService.js` | Customer inventory ERP sync worker |
+| `leadEmailIngestionService.js` | IMAP lead email ingestion worker |
+| `emailQueueService.js` | Outbound email queue worker |
+| `leadAutoAssignService.js` | Round-robin / rule-based lead assignment |
+| `leadQuotationService.js` | Quotation build and accept flow |
+| `leadResearchService.js` | Lead company research orchestration |
+| `perplexityService.js` | Perplexity API for lead research |
+| `qcRoundRobinService.js` | QC technician round-robin assignment |
+| `supportQuery.js` | Support ticket SQL/query helpers |
+| `supportTicketFlow.js` | Support state machine and transitions |
+| `supportInventoryService.js` | Support replacement inventory logic |
+| `ticketWorkLogService.js` | Ticket work-log persistence |
+| `vendorAuditLogService.js` | Vendor action audit trail |
+| `vendorInventoryAssetCodeService.js` | Asset code generation for vendor stock |
+| `vendorNumberService.js` | PO / SPO number sequences |
+
+## `utils/`
+
+| File | Purpose |
+|------|---------|
+| `purchaseOrderGst.js` | GST calculation helpers for vendor POs |
+
+## `scripts/` — CLI utilities
+
+| File | Purpose |
+|------|---------|
+| `run-inventory-sync.js` | One-off ERP inventory sync |
+| `test-erp-connection.js` | ERP API connectivity smoke test |
 
 ## `migrations/`
 
-Numbered SQL migration files (000–031 plus supplemental scripts). Applied manually or via deploy scripts. Covers QC, support, leads, inventory ERP sync, tickets, and teams.
+Incremental SQL migrations applied in order (`000`–`037` plus ad-hoc files). Tracks schema evolution: users/teams, QC, logistics, ERP sync, leads, support (v1–v3), vendor management, serial/GRN, etc.
 
-## `scripts/`
-
-| File | Purpose |
-|------|---------|
-| `run-inventory-sync.js` | Manual ERP inventory sync trigger |
-| `test-erp-connection.js` | ERP API connectivity test |
-
-## `deploy/`
-
-| File | Purpose |
-|------|---------|
-| `docker-entrypoint-web.sh` | Web container entrypoint |
-| `fix-https-vps.sh` | VPS HTTPS troubleshooting |
-| `nginx.deploy.conf` | Production nginx config |
-| `nginx.deploy.http-only.conf` | HTTP-only nginx config |
-| `redeploy-vps.sh` | Full VPS redeploy script |
-| `setup-ssl-vps.sh` | SSL / Let's Encrypt setup |
-| `test-erp-connection-vps.sh` | ERP connection test on VPS |
-| `trigger-inventory-sync-vps.sh` | Trigger inventory sync on VPS |
+| Pattern | Examples |
+|---------|----------|
+| Numbered | `001_user_teams.sql` … `037_vendor_serial_inventory_meta.sql` |
+| Ad-hoc | `add_qc_round_robin_state.sql`, `diagnosis_tables.sql`, `seed_dummy_inventory.sql` |
 
 ## `docs/`
 
 | File | Purpose |
 |------|---------|
-| `ERP_INVENTORY_SYNC_FLOW.md` | ERP inventory sync flow documentation |
+| `ERP_INVENTORY_SYNC_FLOW.md` | ERP ↔ CRM inventory sync design notes |
 
 ## `assets/`
 
 | File | Purpose |
 |------|---------|
-| `rentfoxxy-logo.png` | Brand logo (emails / PDFs) |
+| `rentfoxxy-logo.png` | Logo used in PDFs / emails |
 
-## `uploads/`
+## `uploads/` — Runtime file storage
 
-Runtime file storage (not committed).
+Served statically at `/uploads` from `server.js`. Not committed (user/vendor uploads).
 
-| Folder | Purpose |
-|--------|---------|
+| Path | Purpose |
+|------|---------|
 | `customers/` | Customer-related uploads |
 | `support/` | Support ticket attachments |
+| `vendor-po-bills/` | Purchase order bill images/PDFs |
+| `vendor-spo-bills/` | Spare-parts order bill uploads |
 
-## Background workers (started in `server.js`)
+## Architecture overview
 
-| Worker | Service |
-|--------|---------|
-| Email queue | `emailQueueService.js` |
-| ERP inventory sync | `inventoryErpSyncService.js` |
-| Lead email ingestion | `leadEmailIngestionService.js` |
-| Customer inventory ERP sync | `customerInventoryErpSyncService.js` |
+```
+Client (React CRM)
+       │  HTTPS / JSON
+       ▼
+  server.js ──► routes/*.js ──► controllers/*.js
+       │              │                    │
+       │              │                    ├──► config/db.js (raw SQL)
+       │              │                    └──► prisma/client.js (ORM)
+       │
+       ├──► middleware/auth.js
+       ├──► services/* (workers, ERP, email, support flow)
+       └──► uploads/ (multer static files)
+```
 
 ## Excluded from tree
 
 | Path | Notes |
 |------|-------|
 | `node_modules/` | npm dependencies (not committed) |
-| `uploads/*` | User-uploaded files at runtime |
+| `uploads/**` (file contents) | Runtime uploads; only folder layout documented |
 
 ## File counts
 
 | Area | Files |
 |------|-------|
-| Root | 11 |
+| Root (config, entry, Docker, SQL) | 11 |
 | `config/` | 1 |
+| `prisma/` | 2 |
 | `constants/` | 1 |
-| `controllers/` | 19 |
 | `middleware/` | 3 |
 | `routes/` | 18 |
-| `services/` | 14 |
-| `prisma/` | 2 |
-| `migrations/` | 35 |
+| `controllers/` (top-level) | 18 |
+| `controllers/vendorManagement/` | 6 |
+| `services/` | 17 |
+| `utils/` | 1 |
 | `scripts/` | 2 |
-| `deploy/` | 8 |
+| `migrations/` | 42 |
 | `docs/` | 1 |
 | `assets/` | 1 |
-| **Total (source + config)** | **116** |
+| **Total (source + config, excl. uploads)** | **~124** |
