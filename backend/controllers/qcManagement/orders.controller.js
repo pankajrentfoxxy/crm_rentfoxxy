@@ -65,6 +65,7 @@ async function listOrdersByStatus(req, res) {
          s.inventory_asset_code,
          s.qc_status,
          s.remark,
+         s.inventory_status,
          s.extra,
          s.created_at AS serial_created_at,
          s.updated_at AS serial_updated_at,
@@ -77,7 +78,7 @@ async function listOrdersByStatus(req, res) {
          p.vendor_id,
          p.line_items,
          v.business_name,
-         v.contact_name AS vendor_name
+         v.first_name AS vendor_name
        ${fromSql}
        ORDER BY s.updated_at DESC
        LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
@@ -246,6 +247,7 @@ const qcCheckValidators = [
     'pending',
     'passed',
     'failed',
+    'dead',
     'require_for_parts',
     'send_to_qc_check'
   ]),
@@ -363,6 +365,11 @@ async function hardwareQcCheck(req, res) {
          WHERE serial_id = $2`,
         [JSON.stringify(extra), serialId]
       );
+    } else if (['ready', 'not_ready', 'pending'].includes(req.body.selected_value)) {
+      await pool.query(
+        `UPDATE vendor_serial_numbers SET extra = $1::jsonb, updated_at = NOW() WHERE serial_id = $2`,
+        [JSON.stringify(extra), serialId]
+      );
     } else {
       await pool.query(
         `UPDATE vendor_serial_numbers SET extra = $1::jsonb, updated_at = NOW() WHERE serial_id = $2`,
@@ -377,7 +384,24 @@ async function hardwareQcCheck(req, res) {
   }
 }
 
+/** Laravel getSparePartsDetailsById() — active    catalog */
+async function listSpareParts(req, res) {
+  try {
+    const r = await pool.query(
+      `SELECT part_id AS id, name
+       FROM vendor_spare_parts_catalog
+       WHERE active = TRUE
+       ORDER BY name ASC`
+    );
+    res.json({ success: true, data: r.rows });
+  } catch (e) {
+    console.error('listSpareParts', e);
+    res.status(500).json({ success: false, message: e.message || 'Failed to load spare parts' });
+  }
+}
+
 module.exports = {
+  listSpareParts,
   listValidators,
   listOrdersByStatus,
   getStatusCounts,

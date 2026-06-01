@@ -10,6 +10,11 @@ export function fetchQcStatusCounts() {
   return api.get(`${base}/orders/counts`);
 }
 
+/** Active spare parts catalog (Laravel spare_parts / getSparePartsDetailsById) */
+export function fetchQcSpareParts() {
+  return api.get(`${base}/spare-parts`);
+}
+
 export function fetchPendingPoProducts(poId, status) {
   const seg = status ? `/${encodeURIComponent(status)}` : '';
   return api.get(`${base}/pending-orders/${poId}${seg}`);

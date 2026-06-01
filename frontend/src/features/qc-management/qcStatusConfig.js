@@ -7,31 +7,38 @@ export const QC_STATUS_BY_ROUTE = {
   'require-for-parts': 'require_for_parts'
 };
 
+/** List page config — mirrors qc-list.blade.php columns per status */
 export const QC_LIST_META = {
   processing: {
-    title: 'QC Processing List',
+    title: 'QC Pending',
+    titleSuffix: 'List',
     apiStatus: 'pending',
-    showQcActions: true
+    showFiles: true,
+    showPendingExtras: true
   },
   passed: {
-    title: 'QC Passed List',
+    title: 'QC Passed',
+    titleSuffix: 'List',
     apiStatus: 'passed',
-    showQcActions: false
+    showPassedAction: true
   },
   failed: {
-    title: 'QC Failed List',
+    title: 'QC Failed',
+    titleSuffix: 'List',
     apiStatus: 'failed',
-    showRemark: true,
-    showQcActions: false
+    showFiles: true,
+    showFailedExtras: true
   },
   'dead-assets': {
-    title: 'Dead Assets List',
+    title: 'Dead Assets',
+    titleSuffix: 'List',
     apiStatus: 'dead',
-    showQcActions: false
+    showDeadExtras: true
   },
   'require-for-parts': {
-    title: 'Require For Parts',
+    title: 'QC Require For Parts',
+    titleSuffix: 'List',
     apiStatus: 'require_for_parts',
-    showQcActions: false
+    showRequireParts: true
   }
 };

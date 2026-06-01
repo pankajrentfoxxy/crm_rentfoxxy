@@ -29,6 +29,7 @@ router.get('/', authorize, (req, res) =>
 );
 
 router.get('/orders/counts', authorize, orders.getStatusCounts);
+router.get('/spare-parts', authorize, orders.listSpareParts);
 router.get('/orders/:status', authorize, orders.listValidators, orders.listOrdersByStatus);
 router.get(
   '/pending-orders/:poId/:status?',
