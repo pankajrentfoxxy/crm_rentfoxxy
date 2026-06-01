@@ -11,22 +11,42 @@ function formatDuration(seconds) {
     return `${s}s`;
 }
 
-function buildFilter(query) {
-    const conditions = [];
-    const params = [];
-    let idx = 1;
-
+function resolveDateRange(query) {
     const allTime = query.all_time === '1' || query.all_time === 'true';
-    if (!allTime) {
-        let from = query.from;
-        let to = query.to;
-        if (!from || !to) {
-            const end = new Date();
-            const start = new Date();
-            start.setUTCDate(start.getUTCDate() - 30);
-            from = from || start.toISOString().slice(0, 10);
-            to = to || end.toISOString().slice(0, 10);
-        }
+    if (allTime) {
+        return { allTime: true, from: null, to: null };
+    }
+    let from = query.from;
+    let to = query.to;
+    if (!from || !to) {
+        const end = new Date();
+        const start = new Date();
+        start.setUTCDate(start.getUTCDate() - 30);
+        from = from || start.toISOString().slice(0, 10);
+        to = to || end.toISOString().slice(0, 10);
+    }
+    return { allTime: false, from, to };
+}
+
+/**
+ * Date window for the main segment list.
+ * - Completed segments: filter by segment end (end_time).
+ * - Active / all other cases: filter by assigned_at (start_time).
+ */
+function appendDateRangeConditions(conditions, params, idx, query, segmentStatus) {
+    const { allTime, from, to } = resolveDateRange(query);
+    if (allTime) {
+        return { idx };
+    }
+
+    if (segmentStatus === 'completed') {
+        conditions.push(`wl.end_time >= $${idx}::date`);
+        params.push(from);
+        idx += 1;
+        conditions.push(`wl.end_time < ($${idx}::date + interval '1 day')`);
+        params.push(to);
+        idx += 1;
+    } else {
         conditions.push(`wl.start_time >= $${idx}::date`);
         params.push(from);
         idx += 1;
@@ -34,6 +54,21 @@ function buildFilter(query) {
         params.push(to);
         idx += 1;
     }
+    return { idx };
+}
+
+function buildFilter(query) {
+    const conditions = [];
+    const params = [];
+    let idx = 1;
+
+    const segmentStatus = query.segment_status === 'active'
+        ? 'active'
+        : query.segment_status === 'completed'
+            ? 'completed'
+            : '';
+
+    ({ idx } = appendDateRangeConditions(conditions, params, idx, query, segmentStatus));
 
     if (query.user_id) {
         const uid = parseInt(query.user_id, 10);
@@ -50,9 +85,9 @@ function buildFilter(query) {
         idx += 1;
     }
 
-    if (query.segment_status === 'active') {
+    if (segmentStatus === 'active') {
         conditions.push('wl.end_time IS NULL');
-    } else if (query.segment_status === 'completed') {
+    } else if (segmentStatus === 'completed') {
         conditions.push('wl.end_time IS NOT NULL');
     }
 
@@ -66,7 +101,79 @@ function buildFilter(query) {
     }
 
     const whereSql = conditions.length ? conditions.join(' AND ') : 'TRUE';
-    return { whereSql, params, idx };
+    return { whereSql, params, idx, segmentStatus };
+}
+
+/** Users who work tickets: on a team tied to at least one workflow stage. */
+const STAGE_TECHNICIANS_SQL = `
+  SELECT DISTINCT u.user_id, u.name
+  FROM users u
+  WHERE COALESCE(u.active, true) = true
+    AND u.role IN ('team_member', 'team_lead', 'floor_manager')
+    AND (
+      EXISTS (
+        SELECT 1 FROM stages s WHERE s.team_id IS NOT NULL AND s.team_id = u.team_id
+      )
+      OR EXISTS (
+        SELECT 1 FROM user_teams ut
+        INNER JOIN stages s ON s.team_id = ut.team_id
+        WHERE ut.user_id = u.user_id
+      )
+    )
+  ORDER BY u.name ASC
+`;
+
+async function fetchTeamOverview(query) {
+    const { allTime, from, to } = resolveDateRange(query);
+    const techRes = await pool.query(STAGE_TECHNICIANS_SQL);
+    const technicians = techRes.rows;
+
+    if (technicians.length === 0) {
+        return [];
+    }
+
+    const activeRes = await pool.query(
+        `SELECT wl.user_id, COUNT(*)::int AS cnt
+         FROM work_logs wl
+         WHERE wl.end_time IS NULL
+         GROUP BY wl.user_id`
+    );
+    const activeMap = Object.fromEntries(activeRes.rows.map((r) => [r.user_id, r.cnt]));
+
+    let pendingMap = {};
+    let doneMap = {};
+
+    if (!allTime) {
+        const pendingRes = await pool.query(
+            `SELECT wl.user_id, COUNT(*)::int AS cnt
+             FROM work_logs wl
+             WHERE wl.end_time IS NULL
+               AND wl.start_time >= $1::date
+               AND wl.start_time < ($2::date + interval '1 day')
+             GROUP BY wl.user_id`,
+            [from, to]
+        );
+        pendingMap = Object.fromEntries(pendingRes.rows.map((r) => [r.user_id, r.cnt]));
+
+        const doneRes = await pool.query(
+            `SELECT wl.user_id, COUNT(*)::int AS cnt
+             FROM work_logs wl
+             WHERE wl.end_time IS NOT NULL
+               AND wl.end_time >= $1::date
+               AND wl.end_time < ($2::date + interval '1 day')
+             GROUP BY wl.user_id`,
+            [from, to]
+        );
+        doneMap = Object.fromEntries(doneRes.rows.map((r) => [r.user_id, r.cnt]));
+    }
+
+    return technicians.map((t) => ({
+        user_id: t.user_id,
+        name: t.name,
+        active_till_today: activeMap[t.user_id] ?? 0,
+        pending_in_range: allTime ? (activeMap[t.user_id] ?? 0) : (pendingMap[t.user_id] ?? 0),
+        done_in_range: allTime ? 0 : (doneMap[t.user_id] ?? 0)
+    }));
 }
 
 exports.getTechnicianPerformance = async (req, res) => {
@@ -137,22 +244,15 @@ exports.getTechnicianPerformance = async (req, res) => {
       LIMIT ${limit}
     `;
 
-        const techSql = `
-      SELECT user_id, name
-      FROM users
-      WHERE COALESCE(active, true) = true
-        AND role IN ('team_member', 'team_lead', 'floor_manager', 'admin', 'manager')
-      ORDER BY name ASC
-    `;
-
         const stagesSql = `SELECT stage_id, stage_name, stage_order FROM stages ORDER BY stage_order ASC`;
 
-        const [sumRes, breakRes, rowsRes, techRes, stagesRes] = await Promise.all([
+        const [sumRes, breakRes, rowsRes, techRes, stagesRes, teamOverview] = await Promise.all([
             pool.query(summarySql, params),
             pool.query(breakdownSql, params),
             pool.query(rowsSql, params),
-            pool.query(techSql),
-            pool.query(stagesSql)
+            pool.query(STAGE_TECHNICIANS_SQL),
+            pool.query(stagesSql),
+            fetchTeamOverview(req.query)
         ]);
 
         const summaryRow = sumRes.rows[0] || {};
@@ -160,6 +260,15 @@ exports.getTechnicianPerformance = async (req, res) => {
         breakRes.rows.forEach((r) => {
             ticketStatusBreakdown[r.status] = r.cnt;
         });
+
+        const overviewTotals = teamOverview.reduce(
+            (acc, row) => ({
+                active_till_today: acc.active_till_today + row.active_till_today,
+                pending_in_range: acc.pending_in_range + row.pending_in_range,
+                done_in_range: acc.done_in_range + row.done_in_range
+            }),
+            { active_till_today: 0, pending_in_range: 0, done_in_range: 0 }
+        );
 
         const rows = rowsRes.rows.map((row) => ({
             log_id: row.log_id,
@@ -179,17 +288,21 @@ exports.getTechnicianPerformance = async (req, res) => {
             current_stage_name: row.current_stage_name || '—'
         }));
 
+        const { allTime, from, to } = resolveDateRange(req.query);
         const summary = {
             total_segments: summaryRow.total_segments ?? 0,
             unique_tickets: summaryRow.unique_tickets ?? 0,
             active_segments: summaryRow.active_segments ?? 0,
             closed_segments: summaryRow.closed_segments ?? 0,
-            ticket_status_breakdown: ticketStatusBreakdown
+            ticket_status_breakdown: ticketStatusBreakdown,
+            team_overview_totals: overviewTotals,
+            date_range: allTime ? null : { from, to }
         };
 
         res.json({
             success: true,
             summary,
+            team_overview: teamOverview,
             rows,
             technicians: techRes.rows,
             stages: stagesRes.rows,

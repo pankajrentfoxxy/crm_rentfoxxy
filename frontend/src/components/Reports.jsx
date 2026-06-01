@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { BarChart3, RefreshCw, User, Filter, Ticket, Layers, Clock, CheckCircle2 } from 'lucide-react';
+import { BarChart3, RefreshCw, User, Filter, Ticket, Layers, Clock, CheckCircle2, ListTodo, Hourglass } from 'lucide-react';
 
 function defaultDateRange() {
     const to = new Date();
@@ -15,6 +15,7 @@ export default function Reports({ api }) {
     const defaults = useMemo(() => defaultDateRange(), []);
     const [rows, setRows] = useState([]);
     const [summary, setSummary] = useState(null);
+    const [teamOverview, setTeamOverview] = useState([]);
     const [technicians, setTechnicians] = useState([]);
     const [stages, setStages] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -45,12 +46,14 @@ export default function Reports({ api }) {
             const { data } = await api.get('/reports/technician-performance?' + params.toString());
             setRows(data.rows || data.report || []);
             setSummary(data.summary || null);
+            setTeamOverview(data.team_overview || []);
             setTechnicians(data.technicians || []);
             setStages(data.stages || []);
         } catch (error) {
             console.error('Report load error:', error);
             setRows([]);
             setSummary(null);
+            setTeamOverview([]);
         } finally {
             setLoading(false);
         }
@@ -94,6 +97,12 @@ export default function Reports({ api }) {
     const td = 'px-3 py-2 text-xs text-gray-800 align-top';
 
     const breakdown = summary?.ticket_status_breakdown || {};
+    const overviewTotals = summary?.team_overview_totals;
+    const dateLabel = allTime
+        ? 'all time'
+        : summary?.date_range
+            ? `${summary.date_range.from} → ${summary.date_range.to}`
+            : `${from} → ${to}`;
 
     return (
         <div className="space-y-6">
@@ -114,6 +123,78 @@ export default function Reports({ api }) {
                 >
                     <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} /> Refresh
                 </button>
+            </div>
+
+            {/* Team workload overview (all technicians — uses date range; done = segment end) */}
+            <div className="rounded-xl border border-indigo-200 bg-gradient-to-br from-indigo-50/80 to-white p-4 shadow-sm">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
+                    <div>
+                        <h3 className="text-sm font-bold text-gray-900">Team workload overview</h3>
+                        <p className="text-[11px] text-gray-600 mt-0.5">
+                            All stage technicians · Active = open segments now · Pending = still open, assigned in range ·
+                            Done = segment ended in range ({dateLabel})
+                        </p>
+                    </div>
+                    {!allTime && overviewTotals && (
+                        <div className="flex flex-wrap gap-2 text-[11px]">
+                            <span className="rounded-full bg-amber-100 text-amber-900 px-2.5 py-1 font-semibold tabular-nums">
+                                Active now: {overviewTotals.active_till_today}
+                            </span>
+                            <span className="rounded-full bg-blue-100 text-blue-900 px-2.5 py-1 font-semibold tabular-nums">
+                                Pending in range: {overviewTotals.pending_in_range}
+                            </span>
+                            <span className="rounded-full bg-emerald-100 text-emerald-900 px-2.5 py-1 font-semibold tabular-nums">
+                                Done in range: {overviewTotals.done_in_range}
+                            </span>
+                        </div>
+                    )}
+                </div>
+                {loading ? (
+                    <p className="text-sm text-gray-500 py-4 text-center">Loading team overview…</p>
+                ) : teamOverview.length === 0 ? (
+                    <p className="text-sm text-gray-500 py-4 text-center">No stage technicians found.</p>
+                ) : (
+                    <div className="overflow-x-auto -mx-1">
+                        <table className="w-full text-left min-w-[640px]">
+                            <thead>
+                                <tr className="border-b border-indigo-100">
+                                    <th className="px-3 py-2 text-[11px] font-semibold text-gray-600">Technician</th>
+                                    <th className="px-3 py-2 text-[11px] font-semibold text-gray-600 text-right">
+                                        <span className="inline-flex items-center justify-end gap-1">
+                                            <ListTodo className="w-3.5 h-3.5 text-amber-500" /> Active till today
+                                        </span>
+                                    </th>
+                                    <th className="px-3 py-2 text-[11px] font-semibold text-gray-600 text-right">
+                                        <span className="inline-flex items-center justify-end gap-1">
+                                            <Hourglass className="w-3.5 h-3.5 text-blue-500" /> Pending (in range)
+                                        </span>
+                                    </th>
+                                    <th className="px-3 py-2 text-[11px] font-semibold text-gray-600 text-right">
+                                        <span className="inline-flex items-center justify-end gap-1">
+                                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> Done (segment end)
+                                        </span>
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-indigo-50">
+                                {teamOverview.map((row) => (
+                                    <tr key={row.user_id} className="hover:bg-white/60">
+                                        <td className="px-3 py-2 text-sm font-medium text-gray-900">{row.name}</td>
+                                        <td className="px-3 py-2 text-sm text-right tabular-nums font-semibold text-amber-800">
+                                            {row.active_till_today}
+                                        </td>
+                                        <td className="px-3 py-2 text-sm text-right tabular-nums font-semibold text-blue-800">
+                                            {row.pending_in_range}
+                                        </td>
+                                        <td className="px-3 py-2 text-sm text-right tabular-nums font-semibold text-emerald-800">
+                                            {row.done_in_range}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
             </div>
 
             {/* Summary counts */}
@@ -252,12 +333,16 @@ export default function Reports({ api }) {
                             onChange={(e) => setSegmentStatus(e.target.value)}
                             className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm"
                         >
-                            <option value="">All</option>
-                            <option value="active">Active (ongoing)</option>
-                            <option value="completed">Ended</option>
+                            <option value="">All (by assigned date)</option>
+                            <option value="active">Active (by assigned date)</option>
+                            <option value="completed">Ended (by segment end date)</option>
                         </select>
                     </label>
                 </div>
+                <p className="text-[11px] text-gray-500 mt-3">
+                    Date range uses <strong>assigned at</strong> for open/all segments. When segment is <strong>Ended</strong>, the
+                    range uses <strong>segment end</strong> so today&apos;s completions appear even if work started earlier.
+                </p>
             </div>
 
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">

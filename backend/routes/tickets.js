@@ -52,6 +52,9 @@ router.get('/my', getMyTickets);
 // @access  Private (Admin, Manager, Floor Manager)
 router.post('/bulk-move', checkRole('admin', 'manager', 'floor_manager'), bulkMoveTickets);
 
+// QC assignee list (must be before /:id)
+router.get('/qc/qc2-assignees', qcController.getQC2Assignees);
+
 // @route   GET /api/tickets/:id
 // @desc    Get ticket by ID with full details
 // @access  Private

@@ -1,5 +1,9 @@
 const pool = require('../config/db');
-const { pickNextAssigneeForTeam } = require('../services/qcRoundRobinService');
+const {
+    pickNextAssigneeForTeam,
+    fetchOrderedMemberIds,
+    recordAssigneeForTeam
+} = require('../services/qcRoundRobinService');
 const { syncWorkLogForTicketState } = require('../services/ticketWorkLogService');
 
 // QC Checklist Configuration
@@ -159,6 +163,32 @@ exports.getQCData = async (req, res) => {
     }
 };
 
+// Active users eligible for QC2 assignment (QC2 team members, incl. multi-team QC1+QC2)
+exports.getQC2Assignees = async (req, res) => {
+    try {
+        const stageRes = await pool.query(
+            `SELECT team_id FROM stages WHERE stage_name = 'QC2' LIMIT 1`
+        );
+        if (stageRes.rows.length === 0 || stageRes.rows[0].team_id == null) {
+            return res.json({ success: true, assignees: [] });
+        }
+        const teamId = stageRes.rows[0].team_id;
+        const result = await pool.query(
+            `SELECT DISTINCT u.user_id, u.name, u.email
+             FROM users u
+             LEFT JOIN user_teams ut ON u.user_id = ut.user_id AND ut.team_id = $1
+             WHERE (u.team_id = $1 OR ut.team_id = $1)
+               AND COALESCE(u.active, true) = true
+             ORDER BY u.name ASC`,
+            [teamId]
+        );
+        res.json({ success: true, assignees: result.rows });
+    } catch (error) {
+        console.error('Get QC2 assignees error:', error);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
 // Save QC draft
 exports.saveQC = async (req, res) => {
     const { id } = req.params;
@@ -218,7 +248,7 @@ exports.saveQC = async (req, res) => {
 // Submit QC and route ticket
 exports.submitQC = async (req, res) => {
     const { id } = req.params;
-    const { qcStage, header, checklist, grading, remarks, replacedParts, signOff } = req.body;
+    const { qcStage, header, checklist, grading, remarks, replacedParts, signOff, assignToUserId } = req.body;
     const userId = req.user.user_id;
 
     const client = await pool.connect();
@@ -316,11 +346,31 @@ exports.submitQC = async (req, res) => {
             const isCompleted = nextStage === 'Inventory';
             let assignedUserId = null;
             if (result === 'PASS' && qcStage === 'QC1') {
-                try {
-                    assignedUserId = await pickNextAssigneeForTeam(client, team_id);
-                } catch (rrErr) {
-                    console.error('QC2 round-robin assignment failed:', rrErr);
-                    assignedUserId = null;
+                const manualId = assignToUserId != null && assignToUserId !== ''
+                    ? parseInt(assignToUserId, 10)
+                    : null;
+                if (manualId != null && !Number.isNaN(manualId)) {
+                    const eligible = await fetchOrderedMemberIds(client, team_id);
+                    if (!eligible.includes(manualId)) {
+                        await client.query('ROLLBACK');
+                        return res.status(400).json({
+                            success: false,
+                            message: 'Selected assignee is not an active QC2 team member'
+                        });
+                    }
+                    assignedUserId = manualId;
+                    try {
+                        await recordAssigneeForTeam(client, team_id, manualId);
+                    } catch (rrErr) {
+                        console.error('QC2 manual assign round-robin sync failed:', rrErr);
+                    }
+                } else {
+                    try {
+                        assignedUserId = await pickNextAssigneeForTeam(client, team_id);
+                    } catch (rrErr) {
+                        console.error('QC2 round-robin assignment failed:', rrErr);
+                        assignedUserId = null;
+                    }
                 }
             }
 
@@ -364,12 +414,22 @@ exports.submitQC = async (req, res) => {
             const checklistNote = checklistItems.length > 0 ? ` | Checklist: ${checklistItems.join(', ')}` : '';
 
             // Log activity
+            let assigneeNote = '';
+            if (result === 'PASS' && qcStage === 'QC1' && assignedUserId) {
+                const assigneeRes = await client.query(
+                    'SELECT name FROM users WHERE user_id = $1',
+                    [assignedUserId]
+                );
+                const assigneeName = assigneeRes.rows[0]?.name || `User #${assignedUserId}`;
+                assigneeNote = ` Assigned to ${assigneeName} for QC2.`;
+            }
+
             await client.query(
                 `INSERT INTO activities (ticket_id, stage_id, user_id, action, notes)
                  VALUES ($1, $2, $3, $4, $5)`,
                 [
                     id, stage_id, userId, `qc_${qcStage.toLowerCase()}_submitted`,
-                    `${qcStage} completed. Result: ${result}. Grade: ${grading.final_grade}. Next: ${nextStage}${checklistNote}`
+                    `${qcStage} completed. Result: ${result}. Grade: ${grading.final_grade}. Next: ${nextStage}${assigneeNote}${checklistNote}`
                 ]
             );
         }
