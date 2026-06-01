@@ -123,57 +123,253 @@ const STAGE_TECHNICIANS_SQL = `
   ORDER BY u.name ASC
 `;
 
-async function fetchTeamOverview(query) {
+const HW_STAGE_FILTER = `(s.stage_category = 'Hardware & Software' OR s.stage_name IN ('Diagnosis', 'Assembly & Software', 'Final Testing'))`;
+const QC_STAGE_FILTER = `(s.stage_category = 'QC Team' OR s.stage_name IN ('QC1', 'QC2'))`;
+
+/** Same filters as the segment table, without the date-range clause (for open-segment counts). */
+function buildFilterWithoutDate(query) {
+    const conditions = [];
+    const params = [];
+    let idx = 1;
+
+    const segmentStatus = query.segment_status === 'active'
+        ? 'active'
+        : query.segment_status === 'completed'
+            ? 'completed'
+            : '';
+
+    if (query.user_id) {
+        const uid = parseInt(query.user_id, 10);
+        if (Number.isInteger(uid)) {
+            conditions.push(`wl.user_id = $${idx}`);
+            params.push(uid);
+            idx += 1;
+        }
+    }
+
+    if (query.ticket_status) {
+        conditions.push(`t.status = $${idx}`);
+        params.push(String(query.ticket_status));
+        idx += 1;
+    }
+
+    if (segmentStatus === 'active') {
+        conditions.push('wl.end_time IS NULL');
+    } else if (segmentStatus === 'completed') {
+        conditions.push('wl.end_time IS NOT NULL');
+    }
+
+    if (query.stage_id) {
+        const sid = parseInt(query.stage_id, 10);
+        if (Number.isInteger(sid)) {
+            conditions.push(`wl.stage_id = $${idx}`);
+            params.push(sid);
+            idx += 1;
+        }
+    }
+
+    const whereSql = conditions.length ? conditions.join(' AND ') : 'TRUE';
+    return { whereSql, params, idx, segmentStatus };
+}
+
+function diagnosisDateClause(query, startIdx) {
     const { allTime, from, to } = resolveDateRange(query);
-    const techRes = await pool.query(STAGE_TECHNICIANS_SQL);
-    const technicians = techRes.rows;
+    if (allTime) {
+        return { clause: `dr.status = 'Completed'`, params: [], nextIdx: startIdx };
+    }
+    return {
+        clause: `dr.status = 'Completed'
+            AND dr.diagnosed_at >= $${startIdx}::date
+            AND dr.diagnosed_at < ($${startIdx + 1}::date + interval '1 day')`,
+        params: [from, to],
+        nextIdx: startIdx + 2
+    };
+}
 
-    if (technicians.length === 0) {
-        return [];
+const HW_MEMBERS_SQL = `
+  SELECT DISTINCT u.user_id, u.name
+  FROM users u
+  WHERE COALESCE(u.active, true) = true
+    AND EXISTS (
+      SELECT 1 FROM stages s
+      WHERE (s.stage_category = 'Hardware & Software'
+        OR s.stage_name IN ('Diagnosis', 'Assembly & Software', 'Final Testing'))
+        AND s.team_id IS NOT NULL
+        AND (s.team_id = u.team_id OR EXISTS (
+          SELECT 1 FROM user_teams ut WHERE ut.user_id = u.user_id AND ut.team_id = s.team_id
+        ))
+    )
+  ORDER BY u.name ASC
+`;
+
+const QC_MEMBERS_SQL = `
+  SELECT DISTINCT u.user_id, u.name
+  FROM users u
+  WHERE COALESCE(u.active, true) = true
+    AND EXISTS (
+      SELECT 1 FROM stages s
+      WHERE (s.stage_category = 'QC Team' OR s.stage_name IN ('QC1', 'QC2'))
+        AND s.team_id IS NOT NULL
+        AND (s.team_id = u.team_id OR EXISTS (
+          SELECT 1 FROM user_teams ut WHERE ut.user_id = u.user_id AND ut.team_id = s.team_id
+        ))
+    )
+  ORDER BY u.name ASC
+`;
+
+function sumMetrics(rows, keys) {
+    const totals = {};
+    keys.forEach((k) => { totals[k] = 0; });
+    rows.forEach((row) => {
+        keys.forEach((k) => { totals[k] += row[k] ?? 0; });
+    });
+    return totals;
+}
+
+function mergeCategoryRows(members, workRows, dxRows, metricKeys) {
+    const nameMap = Object.fromEntries(members.map((m) => [m.user_id, m.name]));
+    const byUser = {};
+
+    workRows.forEach((r) => {
+        byUser[r.user_id] = { ...r, name: r.name || nameMap[r.user_id] };
+    });
+    dxRows.forEach((r) => {
+        if (!byUser[r.user_id]) {
+            byUser[r.user_id] = { user_id: r.user_id, name: r.name || nameMap[r.user_id] };
+        }
+        byUser[r.user_id].chip_tickets = r.chip_tickets ?? 0;
+        byUser[r.user_id].body_tickets = r.body_tickets ?? 0;
+    });
+
+    const membersOut = Object.values(byUser)
+        .map((row) => {
+            const out = {
+                user_id: row.user_id,
+                name: row.name || nameMap[row.user_id] || `User #${row.user_id}`,
+                total_tickets: row.total_tickets ?? 0,
+                active_till_today: row.active_till_today ?? 0,
+                completed_segments: row.completed_segments ?? 0,
+                chip_tickets: row.chip_tickets ?? 0,
+                body_tickets: row.body_tickets ?? 0,
+                qc1_segments: row.qc1_segments ?? 0,
+                qc2_segments: row.qc2_segments ?? 0
+            };
+            return out;
+        })
+        .filter((row) => metricKeys.some((k) => row[k] > 0))
+        .sort((a, b) => a.name.localeCompare(b.name));
+
+    return { members: membersOut, totals: sumMetrics(membersOut, metricKeys) };
+}
+
+async function queryCategoryWorkMetrics(query, categoryFilter) {
+    const tableFilter = buildFilter(query);
+    const openFilter = buildFilterWithoutDate(query);
+
+    const joinFrom = `
+      FROM work_logs wl
+      INNER JOIN tickets t ON t.ticket_id = wl.ticket_id
+      INNER JOIN stages s ON s.stage_id = wl.stage_id
+      INNER JOIN users u ON u.user_id = wl.user_id
+    `;
+
+    const [tableRes, openRes] = await Promise.all([
+        pool.query(
+            `SELECT wl.user_id, u.name,
+              COUNT(DISTINCT wl.ticket_id)::int AS total_tickets,
+              COUNT(*) FILTER (WHERE wl.end_time IS NOT NULL)::int AS completed_segments,
+              COUNT(*) FILTER (WHERE s.stage_name = 'QC1' AND wl.end_time IS NOT NULL)::int AS qc1_segments,
+              COUNT(*) FILTER (WHERE s.stage_name = 'QC2' AND wl.end_time IS NOT NULL)::int AS qc2_segments
+             ${joinFrom}
+             WHERE (${tableFilter.whereSql}) AND ${categoryFilter}
+             GROUP BY wl.user_id, u.name`,
+            tableFilter.params
+        ),
+        pool.query(
+            `SELECT wl.user_id, COUNT(*)::int AS active_till_today
+             FROM work_logs wl
+             INNER JOIN tickets t ON t.ticket_id = wl.ticket_id
+             INNER JOIN stages s ON s.stage_id = wl.stage_id
+             WHERE (${openFilter.whereSql}) AND ${categoryFilter} AND wl.end_time IS NULL
+             GROUP BY wl.user_id`,
+            openFilter.params
+        )
+    ]);
+
+    const openMap = Object.fromEntries(openRes.rows.map((r) => [r.user_id, r.active_till_today]));
+
+    const userIds = new Set([
+        ...tableRes.rows.map((r) => r.user_id),
+        ...openRes.rows.map((r) => r.user_id)
+    ]);
+
+    return [...userIds].map((userId) => {
+        const main = tableRes.rows.find((r) => r.user_id === userId) || {};
+        return {
+            user_id: userId,
+            name: main.name,
+            total_tickets: main.total_tickets ?? 0,
+            active_till_today: openMap[userId] ?? 0,
+            completed_segments: main.completed_segments ?? 0,
+            qc1_segments: main.qc1_segments ?? 0,
+            qc2_segments: main.qc2_segments ?? 0
+        };
+    });
+}
+
+async function queryDiagnosisRouting(query) {
+    const dxDate = diagnosisDateClause(query, 1);
+    const conditions = [dxDate.clause];
+    const params = [...dxDate.params];
+    let idx = dxDate.nextIdx;
+
+    if (query.user_id) {
+        const uid = parseInt(query.user_id, 10);
+        if (Number.isInteger(uid)) {
+            conditions.push(`dr.diagnosed_by = $${idx}`);
+            params.push(uid);
+            idx += 1;
+        }
     }
 
-    const activeRes = await pool.query(
-        `SELECT wl.user_id, COUNT(*)::int AS cnt
-         FROM work_logs wl
-         WHERE wl.end_time IS NULL
-         GROUP BY wl.user_id`
-    );
-    const activeMap = Object.fromEntries(activeRes.rows.map((r) => [r.user_id, r.cnt]));
+    const sql = `
+      SELECT
+        dr.diagnosed_by AS user_id,
+        u.name,
+        COUNT(DISTINCT dr.ticket_id) FILTER (WHERE dr.next_team = 'Chip Level Repair')::int AS chip_tickets,
+        COUNT(DISTINCT dr.ticket_id) FILTER (WHERE dr.next_team = 'Body & Paint')::int AS body_tickets
+      FROM diagnosis_results dr
+      INNER JOIN users u ON u.user_id = dr.diagnosed_by
+      WHERE ${conditions.join(' AND ')}
+      GROUP BY dr.diagnosed_by, u.name
+    `;
 
-    let pendingMap = {};
-    let doneMap = {};
+    const res = await pool.query(sql, params);
+    return res.rows;
+}
 
-    if (!allTime) {
-        const pendingRes = await pool.query(
-            `SELECT wl.user_id, COUNT(*)::int AS cnt
-             FROM work_logs wl
-             WHERE wl.end_time IS NULL
-               AND wl.start_time >= $1::date
-               AND wl.start_time < ($2::date + interval '1 day')
-             GROUP BY wl.user_id`,
-            [from, to]
-        );
-        pendingMap = Object.fromEntries(pendingRes.rows.map((r) => [r.user_id, r.cnt]));
+async function fetchTeamWorkloadDashboard(query) {
+    const HW_METRIC_KEYS = ['total_tickets', 'active_till_today', 'completed_segments', 'chip_tickets', 'body_tickets'];
+    const QC_METRIC_KEYS = ['total_tickets', 'active_till_today', 'completed_segments', 'qc1_segments', 'qc2_segments'];
 
-        const doneRes = await pool.query(
-            `SELECT wl.user_id, COUNT(*)::int AS cnt
-             FROM work_logs wl
-             WHERE wl.end_time IS NOT NULL
-               AND wl.end_time >= $1::date
-               AND wl.end_time < ($2::date + interval '1 day')
-             GROUP BY wl.user_id`,
-            [from, to]
-        );
-        doneMap = Object.fromEntries(doneRes.rows.map((r) => [r.user_id, r.cnt]));
-    }
+    const [hwMembersRes, qcMembersRes, hwWork, qcWork, dxRows] = await Promise.all([
+        pool.query(HW_MEMBERS_SQL),
+        pool.query(QC_MEMBERS_SQL),
+        queryCategoryWorkMetrics(query, HW_STAGE_FILTER),
+        queryCategoryWorkMetrics(query, QC_STAGE_FILTER),
+        queryDiagnosisRouting(query)
+    ]);
 
-    return technicians.map((t) => ({
-        user_id: t.user_id,
-        name: t.name,
-        active_till_today: activeMap[t.user_id] ?? 0,
-        pending_in_range: allTime ? (activeMap[t.user_id] ?? 0) : (pendingMap[t.user_id] ?? 0),
-        done_in_range: allTime ? 0 : (doneMap[t.user_id] ?? 0)
-    }));
+    const hardware_software = mergeCategoryRows(hwMembersRes.rows, hwWork, dxRows, HW_METRIC_KEYS);
+    const qc = mergeCategoryRows(qcMembersRes.rows, qcWork, [], QC_METRIC_KEYS);
+
+    const { allTime, from, to } = resolveDateRange(query);
+    return {
+        date_range: allTime ? null : { from, to },
+        uses_table_filters: true,
+        hardware_software,
+        qc
+    };
 }
 
 exports.getTechnicianPerformance = async (req, res) => {
@@ -246,13 +442,13 @@ exports.getTechnicianPerformance = async (req, res) => {
 
         const stagesSql = `SELECT stage_id, stage_name, stage_order FROM stages ORDER BY stage_order ASC`;
 
-        const [sumRes, breakRes, rowsRes, techRes, stagesRes, teamOverview] = await Promise.all([
+        const [sumRes, breakRes, rowsRes, techRes, stagesRes, workloadDashboard] = await Promise.all([
             pool.query(summarySql, params),
             pool.query(breakdownSql, params),
             pool.query(rowsSql, params),
             pool.query(STAGE_TECHNICIANS_SQL),
             pool.query(stagesSql),
-            fetchTeamOverview(req.query)
+            fetchTeamWorkloadDashboard(req.query)
         ]);
 
         const summaryRow = sumRes.rows[0] || {};
@@ -260,15 +456,6 @@ exports.getTechnicianPerformance = async (req, res) => {
         breakRes.rows.forEach((r) => {
             ticketStatusBreakdown[r.status] = r.cnt;
         });
-
-        const overviewTotals = teamOverview.reduce(
-            (acc, row) => ({
-                active_till_today: acc.active_till_today + row.active_till_today,
-                pending_in_range: acc.pending_in_range + row.pending_in_range,
-                done_in_range: acc.done_in_range + row.done_in_range
-            }),
-            { active_till_today: 0, pending_in_range: 0, done_in_range: 0 }
-        );
 
         const rows = rowsRes.rows.map((row) => ({
             log_id: row.log_id,
@@ -288,21 +475,19 @@ exports.getTechnicianPerformance = async (req, res) => {
             current_stage_name: row.current_stage_name || '—'
         }));
 
-        const { allTime, from, to } = resolveDateRange(req.query);
         const summary = {
             total_segments: summaryRow.total_segments ?? 0,
             unique_tickets: summaryRow.unique_tickets ?? 0,
             active_segments: summaryRow.active_segments ?? 0,
             closed_segments: summaryRow.closed_segments ?? 0,
             ticket_status_breakdown: ticketStatusBreakdown,
-            team_overview_totals: overviewTotals,
-            date_range: allTime ? null : { from, to }
+            date_range: workloadDashboard.date_range
         };
 
         res.json({
             success: true,
             summary,
-            team_overview: teamOverview,
+            workload_dashboard: workloadDashboard,
             rows,
             technicians: techRes.rows,
             stages: stagesRes.rows,

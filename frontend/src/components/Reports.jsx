@@ -1,5 +1,117 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { BarChart3, RefreshCw, User, Filter, Ticket, Layers, Clock, CheckCircle2, ListTodo, Hourglass } from 'lucide-react';
+import { BarChart3, RefreshCw, User, Filter, Ticket, Layers, Clock, CheckCircle2, ChevronDown, ChevronRight, Cpu } from 'lucide-react';
+
+const BASE_COLUMNS = [
+    { key: 'total_tickets', label: 'Distinct tickets (same rules as segment table below)', short: 'Total Ticket' },
+    { key: 'active_till_today', label: 'Open segments now (assigned at)', short: 'Active Till Today' },
+    { key: 'completed_segments', label: 'Ended segments in filtered set (matches Ended segments card)', short: 'Completed Stage' }
+];
+
+const HW_COLUMNS = [
+    ...BASE_COLUMNS,
+    { key: 'chip_tickets', label: 'Sent to Chip Level Repair from diagnosis', short: 'Chip Ticket' },
+    { key: 'body_tickets', label: 'Sent to Body & Paint from diagnosis', short: 'Body Ticket' }
+];
+
+const QC_COLUMNS = [
+    ...BASE_COLUMNS,
+    { key: 'qc1_segments', label: 'QC1 ended segments in filtered set', short: 'QC1 Stage' },
+    { key: 'qc2_segments', label: 'QC2 ended segments in filtered set', short: 'QC2 Stage' }
+];
+
+function formatHwSummary(totals) {
+    if (!totals) return 'No activity in range';
+    return `${totals.total_tickets} Ticket · ${totals.active_till_today} active · ${totals.completed_segments} completed stage · Chip ${totals.chip_tickets} · Body ${totals.body_tickets}`;
+}
+
+function formatQcSummary(totals) {
+    if (!totals) return 'No activity in range';
+    return `${totals.total_tickets} Ticket · ${totals.active_till_today} active · ${totals.completed_segments} completed stage · QC1 ${totals.qc1_segments} · QC2 ${totals.qc2_segments}`;
+}
+
+function WorkloadSection({ title, icon: Icon, accent, summaryText, totals, columns, members, expanded, onToggle, loading }) {
+    const thClass = 'px-2 py-2 text-[10px] font-semibold text-gray-600 text-right whitespace-nowrap';
+    const tdClass = 'px-2 py-2 text-xs text-right tabular-nums font-medium text-gray-800';
+
+    return (
+        <div className={`rounded-lg border ${accent.border} overflow-hidden`}>
+            <button
+                type="button"
+                onClick={onToggle}
+                className={`w-full flex items-center gap-3 px-4 py-3 text-left ${accent.header} hover:opacity-95 transition-opacity`}
+            >
+                {expanded ? <ChevronDown className="w-4 h-4 shrink-0" /> : <ChevronRight className="w-4 h-4 shrink-0" />}
+                {Icon && <Icon className={`w-4 h-4 shrink-0 ${accent.icon}`} />}
+                <div className="flex-1 min-w-0">
+                    <div className="text-sm font-bold text-gray-900">{title}</div>
+                    {!expanded && (
+                        <div className="text-[11px] text-gray-600 truncate mt-0.5">{summaryText}</div>
+                    )}
+                </div>
+            </button>
+
+            {expanded && (
+                <div className="bg-white px-4 pb-4 pt-2 border-t border-gray-100">
+                    {loading ? (
+                        <p className="text-sm text-gray-500 py-4 text-center">Loading…</p>
+                    ) : (
+                        <>
+                            <div className={`grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 mb-4 p-3 rounded-lg ${accent.totalsBg}`}>
+                                {columns.map((col) => (
+                                    <div key={col.key} className="text-center">
+                                        <div className="text-[10px] font-medium text-gray-500 uppercase">{col.short}</div>
+                                        <div className={`text-lg font-bold tabular-nums ${accent.totalsNum}`}>
+                                            {totals?.[col.key] ?? 0}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                            {members.length === 0 ? (
+                                <p className="text-sm text-gray-500 py-3 text-center">No activity for this category in the selected range.</p>
+                            ) : (
+                                <div className="overflow-x-auto -mx-1">
+                                    <table className="w-full min-w-[720px]">
+                                        <thead>
+                                            <tr className="border-b border-gray-200">
+                                                <th className="px-2 py-2 text-[10px] font-semibold text-gray-600 text-left sticky left-0 bg-white">
+                                                    Technician
+                                                </th>
+                                                {columns.map((col) => (
+                                                    <th key={col.key} className={thClass} title={col.label}>
+                                                        {col.short}
+                                                    </th>
+                                                ))}
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-100">
+                                            {members.map((row) => (
+                                                <tr key={row.user_id} className="hover:bg-gray-50/80">
+                                                    <td className="px-2 py-2 text-sm font-medium text-gray-900 sticky left-0 bg-white">
+                                                        {row.name}
+                                                    </td>
+                                                    {columns.map((col) => (
+                                                        <td key={col.key} className={tdClass}>
+                                                            {row[col.key] ?? 0}
+                                                        </td>
+                                                    ))}
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                            <p className="text-[10px] text-gray-500 mt-3">
+                                Uses the same filters as the report below. Total Ticket = unique tickets in that list.
+                                Completed Stage = ended segments in that list (same as Ended segments when all stages are included).
+                                QC1/QC2 Stage = ended QC1 or QC2 segments in that list. Active Till Today = open segments now.
+                            </p>
+                        </>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}
 
 function defaultDateRange() {
     const to = new Date();
@@ -15,7 +127,10 @@ export default function Reports({ api }) {
     const defaults = useMemo(() => defaultDateRange(), []);
     const [rows, setRows] = useState([]);
     const [summary, setSummary] = useState(null);
-    const [teamOverview, setTeamOverview] = useState([]);
+    const [workloadDashboard, setWorkloadDashboard] = useState(null);
+    const [dashExpanded, setDashExpanded] = useState(false);
+    const [hwExpanded, setHwExpanded] = useState(false);
+    const [qcExpanded, setQcExpanded] = useState(false);
     const [technicians, setTechnicians] = useState([]);
     const [stages, setStages] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -46,14 +161,16 @@ export default function Reports({ api }) {
             const { data } = await api.get('/reports/technician-performance?' + params.toString());
             setRows(data.rows || data.report || []);
             setSummary(data.summary || null);
-            setTeamOverview(data.team_overview || []);
+            setWorkloadDashboard(data.workload_dashboard || null);
             setTechnicians(data.technicians || []);
             setStages(data.stages || []);
         } catch (error) {
             console.error('Report load error:', error);
             setRows([]);
             setSummary(null);
-            setTeamOverview([]);
+            setWorkloadDashboard(null);
+            const msg = error.response?.data?.message || error.message;
+            if (msg) alert(`Report failed to load: ${msg}. Check backend is running and database is connected.`);
         } finally {
             setLoading(false);
         }
@@ -97,12 +214,15 @@ export default function Reports({ api }) {
     const td = 'px-3 py-2 text-xs text-gray-800 align-top';
 
     const breakdown = summary?.ticket_status_breakdown || {};
-    const overviewTotals = summary?.team_overview_totals;
+    const hw = workloadDashboard?.hardware_software;
+    const qc = workloadDashboard?.qc;
     const dateLabel = allTime
         ? 'all time'
-        : summary?.date_range
-            ? `${summary.date_range.from} → ${summary.date_range.to}`
-            : `${from} → ${to}`;
+        : workloadDashboard?.date_range
+            ? `${workloadDashboard.date_range.from} → ${workloadDashboard.date_range.to}`
+            : summary?.date_range
+                ? `${summary.date_range.from} → ${summary.date_range.to}`
+                : `${from} → ${to}`;
 
     return (
         <div className="space-y-6">
@@ -125,74 +245,70 @@ export default function Reports({ api }) {
                 </button>
             </div>
 
-            {/* Team workload overview (all technicians — uses date range; done = segment end) */}
-            <div className="rounded-xl border border-indigo-200 bg-gradient-to-br from-indigo-50/80 to-white p-4 shadow-sm">
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
-                    <div>
-                        <h3 className="text-sm font-bold text-gray-900">Team workload overview</h3>
+            {/* Manager dashboard — collapsible HW/SW + QC */}
+            <div className="rounded-xl border border-indigo-200 bg-gradient-to-br from-indigo-50/40 to-white shadow-sm overflow-hidden">
+                <button
+                    type="button"
+                    onClick={() => setDashExpanded((v) => !v)}
+                    className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-indigo-50/50 transition-colors"
+                >
+                    {dashExpanded ? <ChevronDown className="w-5 h-5 text-indigo-600" /> : <ChevronRight className="w-5 h-5 text-indigo-600" />}
+                    <div className="flex-1 min-w-0">
+                        <h3 className="text-sm font-bold text-gray-900">Manager dashboard</h3>
                         <p className="text-[11px] text-gray-600 mt-0.5">
-                            All stage technicians · Active = open segments now · Pending = still open, assigned in range ·
-                            Done = segment ended in range ({dateLabel})
+                            Hardware & Software + QC · Unique tickets & segments · {dateLabel}
                         </p>
+                        {!dashExpanded && !loading && (
+                            <div className="flex flex-col sm:flex-row sm:gap-4 gap-1 mt-2 text-[11px] text-gray-700">
+                                <span>{formatHwSummary(hw?.totals)}</span>
+                                <span className="hidden sm:inline text-gray-300">|</span>
+                                <span>{formatQcSummary(qc?.totals)}</span>
+                            </div>
+                        )}
                     </div>
-                    {!allTime && overviewTotals && (
-                        <div className="flex flex-wrap gap-2 text-[11px]">
-                            <span className="rounded-full bg-amber-100 text-amber-900 px-2.5 py-1 font-semibold tabular-nums">
-                                Active now: {overviewTotals.active_till_today}
-                            </span>
-                            <span className="rounded-full bg-blue-100 text-blue-900 px-2.5 py-1 font-semibold tabular-nums">
-                                Pending in range: {overviewTotals.pending_in_range}
-                            </span>
-                            <span className="rounded-full bg-emerald-100 text-emerald-900 px-2.5 py-1 font-semibold tabular-nums">
-                                Done in range: {overviewTotals.done_in_range}
-                            </span>
-                        </div>
-                    )}
-                </div>
-                {loading ? (
-                    <p className="text-sm text-gray-500 py-4 text-center">Loading team overview…</p>
-                ) : teamOverview.length === 0 ? (
-                    <p className="text-sm text-gray-500 py-4 text-center">No stage technicians found.</p>
-                ) : (
-                    <div className="overflow-x-auto -mx-1">
-                        <table className="w-full text-left min-w-[640px]">
-                            <thead>
-                                <tr className="border-b border-indigo-100">
-                                    <th className="px-3 py-2 text-[11px] font-semibold text-gray-600">Technician</th>
-                                    <th className="px-3 py-2 text-[11px] font-semibold text-gray-600 text-right">
-                                        <span className="inline-flex items-center justify-end gap-1">
-                                            <ListTodo className="w-3.5 h-3.5 text-amber-500" /> Active till today
-                                        </span>
-                                    </th>
-                                    <th className="px-3 py-2 text-[11px] font-semibold text-gray-600 text-right">
-                                        <span className="inline-flex items-center justify-end gap-1">
-                                            <Hourglass className="w-3.5 h-3.5 text-blue-500" /> Pending (in range)
-                                        </span>
-                                    </th>
-                                    <th className="px-3 py-2 text-[11px] font-semibold text-gray-600 text-right">
-                                        <span className="inline-flex items-center justify-end gap-1">
-                                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> Done (segment end)
-                                        </span>
-                                    </th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-indigo-50">
-                                {teamOverview.map((row) => (
-                                    <tr key={row.user_id} className="hover:bg-white/60">
-                                        <td className="px-3 py-2 text-sm font-medium text-gray-900">{row.name}</td>
-                                        <td className="px-3 py-2 text-sm text-right tabular-nums font-semibold text-amber-800">
-                                            {row.active_till_today}
-                                        </td>
-                                        <td className="px-3 py-2 text-sm text-right tabular-nums font-semibold text-blue-800">
-                                            {row.pending_in_range}
-                                        </td>
-                                        <td className="px-3 py-2 text-sm text-right tabular-nums font-semibold text-emerald-800">
-                                            {row.done_in_range}
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
+                </button>
+
+                {dashExpanded && (
+                    <div className="px-4 pb-4 space-y-3 border-t border-indigo-100">
+                        <WorkloadSection
+                            title="Hardware & Software"
+                            icon={Cpu}
+                            accent={{
+                                border: 'border-blue-200',
+                                header: 'bg-blue-50',
+                                icon: 'text-blue-600',
+                                totalsBg: 'bg-blue-50/60',
+                                totalsNum: 'text-blue-800'
+                            }}
+                            summaryText={formatHwSummary(hw?.totals)}
+                            totals={hw?.totals}
+                            columns={HW_COLUMNS}
+                            members={hw?.members || []}
+                            expanded={hwExpanded}
+                            onToggle={() => setHwExpanded((v) => !v)}
+                            loading={loading}
+                        />
+                        <WorkloadSection
+                            title="QC (QC1 & QC2)"
+                            icon={CheckCircle2}
+                            accent={{
+                                border: 'border-violet-200',
+                                header: 'bg-violet-50',
+                                icon: 'text-violet-600',
+                                totalsBg: 'bg-violet-50/60',
+                                totalsNum: 'text-violet-800'
+                            }}
+                            summaryText={formatQcSummary(qc?.totals)}
+                            totals={qc?.totals}
+                            columns={QC_COLUMNS}
+                            members={qc?.members || []}
+                            expanded={qcExpanded}
+                            onToggle={() => setQcExpanded((v) => !v)}
+                            loading={loading}
+                        />
+                        <p className="text-[10px] text-gray-500 px-1">
+                            Dashboard counts follow the filters in the section below so totals stay in sync with the segment list.
+                        </p>
                     </div>
                 )}
             </div>
