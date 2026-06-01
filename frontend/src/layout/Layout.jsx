@@ -40,12 +40,15 @@ import {
 
   Store,
 
+  ShoppingCart,
+
   ChevronDown
 
 } from 'lucide-react';
 
 import { isSupportUser } from '../utils/supportAccess';
 import { useQcStatusCounts } from '../features/qc-management/hooks/useQcStatusCounts';
+import { useInventoryListCounts } from '../features/inventory-management/hooks/useInventoryListCounts';
 
 
 
@@ -93,6 +96,30 @@ const qcAccordionChildren = [
 
 ];
 
+/** Inventory submenu — paths match InventoryManagementApp nested routes */
+
+const inventoryAccordionChildren = [
+
+  { label: 'Ready to Rent or Sell', path: '/inventory-management/ready-to-rent-or-sell', countKey: 'passed' },
+
+  { label: 'Rent To Own', path: '/inventory-management/rent-to-own', countKey: 'rent_to_own' },
+
+  { label: 'Rental Purchase', path: '/inventory-management/rental-purchase', countKey: 'rental_purchase' },
+
+  { label: 'Direct Purchase', path: '/inventory-management/direct-purchase', countKey: 'direct_purchase' },
+
+  { label: 'Out For Repare', path: '/inventory-management/out-for-repare', countKey: 'out_for_repare' },
+
+  { label: 'Spare Parts', path: '/inventory-management/spare-parts', countKey: 'spare_parts' },
+
+  { label: 'Serial Number Status', path: '/inventory-management/serial-number-status' },
+
+  { label: 'Universal Search', path: '/inventory-management/universal-search' },
+
+  { label: 'NPA Assets', path: '/inventory-management/npa-assets', countKey: 'npa' }
+
+];
+
 
 
 function canSeeVendorAccordion(user) {
@@ -123,6 +150,22 @@ function canSeeQcAccordion(user) {
 
 
 
+function canSeeInventoryAccordion(user) {
+
+  if (!user) return false;
+
+  const roles = ['manager', 'admin', 'floor_manager'];
+
+  const perms = ['inventory_read', 'inventory_write', 'inventory_access', 'inventory_management_access'];
+
+  const permOk = Array.isArray(user.permissions) && user.permissions.some((p) => perms.includes(p));
+
+  return roles.includes(user.role) || permOk;
+
+}
+
+
+
 export default function Layout({ children }) {
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -135,7 +178,11 @@ export default function Layout({ children }) {
 
   const showQcAccordion = canSeeQcAccordion(user);
 
+  const showInventoryAccordion = canSeeInventoryAccordion(user);
+
   const { counts: qcCounts } = useQcStatusCounts(showQcAccordion);
+
+  const { counts: inventoryCounts } = useInventoryListCounts(showInventoryAccordion);
 
 
 
@@ -148,6 +195,12 @@ export default function Layout({ children }) {
   const [qcAccordionOpen, setQcAccordionOpen] = useState(() =>
 
     location.pathname.startsWith('/qc-management')
+
+  );
+
+  const [inventoryAccordionOpen, setInventoryAccordionOpen] = useState(() =>
+
+    location.pathname.startsWith('/inventory-management')
 
   );
 
@@ -164,6 +217,12 @@ export default function Layout({ children }) {
     if (location.pathname.startsWith('/qc-management')) {
 
       setQcAccordionOpen(true);
+
+    }
+
+    if (location.pathname.startsWith('/inventory-management')) {
+
+      setInventoryAccordionOpen(true);
 
     }
 
@@ -377,6 +436,12 @@ export default function Layout({ children }) {
 
     {
 
+      type: 'inventoryAccordion'
+
+    },
+
+    {
+
       icon: Truck,
 
       label: 'Dispatch',
@@ -448,6 +513,12 @@ export default function Layout({ children }) {
     if (item.type === 'qcAccordion') {
 
       return canSeeQcAccordion(user);
+
+    }
+
+    if (item.type === 'inventoryAccordion') {
+
+      return canSeeInventoryAccordion(user);
 
     }
 
@@ -718,6 +789,101 @@ export default function Layout({ children }) {
 
                           {badge != null ? (
                             <span className="shrink-0 rounded-full bg-teal-100 text-teal-900 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums">
+                              {badge}
+                            </span>
+                          ) : null}
+
+                        </NavLink>
+
+                      );})}
+
+                    </div>
+
+                  )}
+
+                </div>
+
+              );
+
+            }
+
+
+
+            if (item.type === 'inventoryAccordion') {
+
+              return (
+
+                <div key="inventory-accordion" className="space-y-0.5">
+
+                  <button
+
+                    type="button"
+
+                    onClick={() => setInventoryAccordionOpen((o) => !o)}
+
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors text-left hover:bg-gray-100 ${location.pathname.startsWith('/inventory-management') ? 'text-sky-700 bg-sky-50/60' : 'text-gray-800'
+
+                      }`}
+
+                  >
+
+                    <ShoppingCart className="w-5 h-5 text-gray-600 shrink-0" />
+
+                    <span className="flex-1">Inventory Management</span>
+
+                    <ChevronDown
+
+                      className={`w-4 h-4 text-gray-500 shrink-0 transition-transform duration-200 ${inventoryAccordionOpen ? 'rotate-180' : ''
+
+                        }`}
+
+                    />
+
+                  </button>
+
+                  {inventoryAccordionOpen && (
+
+                    <div className="mt-1 ml-2 pl-3 border-l border-sky-100 space-y-0.5">
+
+                      {inventoryAccordionChildren.map((child) => {
+
+                        const badge =
+                          child.countKey && inventoryCounts && inventoryCounts[child.countKey] != null
+                            ? inventoryCounts[child.countKey]
+                            : null;
+
+                        return (
+
+                        <NavLink
+
+                          key={child.path}
+
+                          to={child.path}
+
+                          onClick={() => setSidebarOpen(false)}
+
+                          className={({ isActive }) =>
+
+                            [
+
+                              'flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-xs transition-colors',
+
+                              isActive
+
+                                ? 'bg-sky-100 text-sky-900 font-semibold'
+
+                                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+
+                            ].join(' ')
+
+                          }
+
+                        >
+
+                          <span>{child.label}</span>
+
+                          {badge != null ? (
+                            <span className="shrink-0 rounded-full bg-sky-100 text-sky-900 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums">
                               {badge}
                             </span>
                           ) : null}

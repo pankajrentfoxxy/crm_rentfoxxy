@@ -19,6 +19,7 @@ import {
   submitQcCheck
 } from '../qcManagementApi';
 import { invalidateQcCounts } from '../qcCountsEvents';
+import { invalidateInventoryCounts } from '../../inventory-management/inventoryCountsEvents';
 import { QC_LIST_META } from '../qcStatusConfig';
 import { getBackendOrigin } from '../../../utils/api';
 
@@ -390,6 +391,7 @@ function QcStatusSelect({ row, onUpdated, options, placeholder }) {
       if (data.success) {
         toast.success(data.message || 'QC updated');
         invalidateQcCounts();
+        invalidateInventoryCounts();
         setSelectValue(selected);
         onUpdated?.();
       } else {
@@ -558,6 +560,7 @@ function HardwareQcSelect({ row, onUpdated }) {
       if (data.success) {
         toast.success(data.message || 'Hardware QC updated');
         invalidateQcCounts();
+        invalidateInventoryCounts();
         onUpdated?.();
       } else {
         toast.error(data.message || 'Update failed');

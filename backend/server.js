@@ -75,6 +75,7 @@ app.use('/api/customer-inventory', require('./routes/customerInventory'));
 app.use('/api/support', require('./routes/support'));
 app.use('/api/vendor-management', require('./routes/vendorManagement'));
 app.use('/api/qc-management', require('./routes/qcManagement'));
+app.use('/api/inventory-management', require('./routes/inventoryManagement'));
 
 // Health check
 app.get('/health', (req, res) => {
@@ -140,10 +141,10 @@ app.listen(PORT, () => {
     console.log(`Server running on port ${PORT} (${process.env.NODE_ENV || 'development'})`);
   }
 
-  // startEmailQueueWorker().catch((err) => console.error('Email queue worker failed:', err.message));
-  // startInventorySyncWorker().catch((err) => console.error('ERP inventory sync worker failed:', err.message));
-  // startLeadEmailIngestionWorker().catch((err) => console.error('Lead email ingestion worker failed:', err.message));
-  // startCustomerInventorySyncWorker().catch((err) => console.error('Customer inventory ERP worker failed:', err.message));
+  startEmailQueueWorker().catch((err) => console.error('Email queue worker failed:', err.message));
+  startInventorySyncWorker().catch((err) => console.error('ERP inventory sync worker failed:', err.message));
+  startLeadEmailIngestionWorker().catch((err) => console.error('Lead email ingestion worker failed:', err.message));
+  startCustomerInventorySyncWorker().catch((err) => console.error('Customer inventory ERP worker failed:', err.message));
   const { ensureSupportSchema } = require('./controllers/supportController');
   const { ensureUserSchema } = require('./controllers/authController');
   const { ensureVendorManagementSchema } = require('./controllers/vendorManagementSchema');
