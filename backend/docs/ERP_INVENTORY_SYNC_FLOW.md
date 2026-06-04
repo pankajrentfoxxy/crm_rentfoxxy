@@ -1,6 +1,16 @@
 # ERP Inventory Sync – How It Works & Where Wrong Details Come From
 
-## Data Flow
+## Bulk sync (disabled by default)
+
+Full pagination over `/qc-orders/passed` is **off** unless `ERP_INVENTORY_BULK_SYNC_ENABLED=true`.  
+Use **single-item** sync instead: `POST /api/inventory/sync/:serialOrMachineId` (CRM Inventory UI: **Get from ERP**).
+
+Optional env for single lookup:
+
+- `ERP_QC_LOOKUP_QUERY` — query param on page 1 (default `search`)
+- `ERP_SINGLE_QC_MAX_PAGES` — max pages to scan if lookup misses (default `0` = no scan)
+
+## Data Flow (bulk only, when enabled)
 
 ```
 ┌─────────────────────────┐     ┌──────────────────────────┐
