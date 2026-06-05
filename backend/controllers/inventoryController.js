@@ -370,9 +370,20 @@ exports.updateInventory = async (req, res) => {
     }
 };
 
-// Trigger full ERP sync (Admin/Manager only)
+// Trigger full ERP sync (Admin/Manager only) — disabled unless ERP_INVENTORY_BULK_SYNC_ENABLED=true
 // ?async=1 returns immediately and runs sync in background (avoids 504 timeout)
 exports.triggerErpSync = async (req, res) => {
+    const bulkEnabled =
+        process.env.ERP_INVENTORY_BULK_SYNC_ENABLED === '1' ||
+        process.env.ERP_INVENTORY_BULK_SYNC_ENABLED === 'true';
+    if (!bulkEnabled) {
+        return res.status(403).json({
+            success: false,
+            message:
+                'Full ERP sync is disabled to protect erp.rentfoxxy.com. Use POST /api/inventory/sync/:serialOrMachineId for one laptop at a time.'
+        });
+    }
+
     const runAsync = req.query.async === '1' || req.query.async === 'true';
 
     if (runAsync) {
