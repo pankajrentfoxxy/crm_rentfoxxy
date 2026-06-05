@@ -19,9 +19,10 @@ import {
   submitQcCheck
 } from '../qcManagementApi';
 import { invalidateQcCounts } from '../qcCountsEvents';
-import { invalidateInventoryCounts } from '../../inventory-management/inventoryCountsEvents';
+import { invalidateInventoryManagement } from '../../inventory-management/inventoryCountsEvents';
 import { QC_LIST_META } from '../qcStatusConfig';
 import { getBackendOrigin } from '../../../utils/api';
+import ReturnRepareActionModal from './ReturnRepareActionModal';
 
 const PAGE_SIZE = 100;
 
@@ -391,7 +392,7 @@ function QcStatusSelect({ row, onUpdated, options, placeholder }) {
       if (data.success) {
         toast.success(data.message || 'QC updated');
         invalidateQcCounts();
-        invalidateInventoryCounts();
+        invalidateInventoryManagement();
         setSelectValue(selected);
         onUpdated?.();
       } else {
@@ -560,7 +561,7 @@ function HardwareQcSelect({ row, onUpdated }) {
       if (data.success) {
         toast.success(data.message || 'Hardware QC updated');
         invalidateQcCounts();
-        invalidateInventoryCounts();
+        invalidateInventoryManagement();
         onUpdated?.();
       } else {
         toast.error(data.message || 'Update failed');
@@ -612,6 +613,41 @@ function useColumnCount(meta, apiStatus) {
     else n += 1;
     return n;
   }, [meta, apiStatus]);
+}
+
+function FailedQcActionSelect({ row, onUpdated, hideReturnOption }) {
+  const [modalAction, setModalAction] = useState(null);
+
+  return (
+    <>
+      <select
+        className="rounded-md border border-slate-200 text-xs px-2 py-1.5 min-w-[9rem]"
+        defaultValue=""
+        onChange={(e) => {
+          const value = e.target.value;
+          if (value) setModalAction(value);
+          e.target.value = '';
+        }}
+      >
+        <option value="">Take Action</option>
+        {!hideReturnOption ? <option value="out_for_return">Out For Return</option> : null}
+        <option value="out_for_repare">Out For Repare</option>
+      </select>
+      {modalAction ? (
+        <ReturnRepareActionModal
+          open
+          row={row}
+          selectedValue={modalAction}
+          requireVendor
+          onCancel={() => setModalAction(null)}
+          onSuccess={() => {
+            setModalAction(null);
+            onUpdated?.();
+          }}
+        />
+      ) : null}
+    </>
+  );
 }
 
 export default function QcOrdersTable({ routeKey }) {
@@ -934,20 +970,11 @@ export default function QcOrdersTable({ routeKey }) {
                           <ReadMoreText text={row.remark} />
                         </td>
                         <td className="px-3 py-3 text-center">
-                          <select
-                            className="rounded-md border border-slate-200 text-xs px-2 py-1.5 min-w-[9rem]"
-                            defaultValue=""
-                            onChange={(e) => {
-                              if (e.target.value) {
-                                toast('Out for return/repair will connect to repair API next.', { icon: 'ℹ️' });
-                              }
-                              e.target.value = '';
-                            }}
-                          >
-                            <option value="">Take Action</option>
-                            {!isRentToOwn(row) ? <option value="out_for_return">Out For Return</option> : null}
-                            <option value="out_for_repare">Out For Repare</option>
-                          </select>
+                          <FailedQcActionSelect
+                            row={row}
+                            onUpdated={load}
+                            hideReturnOption={isRentToOwn(row)}
+                          />
                         </td>
                       </>
                     ) : null}

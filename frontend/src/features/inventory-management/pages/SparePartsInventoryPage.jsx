@@ -1,6 +1,6 @@
 import React from 'react';
-import InventoryListPage from './InventoryListPage';
+import SparePartsInventoryTable from '../components/SparePartsInventoryTable';
 
 export default function SparePartsInventoryPage() {
-  return <InventoryListPage routeKey="spare-parts" />;
+  return <SparePartsInventoryTable />;
 }

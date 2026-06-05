@@ -384,6 +384,125 @@ async function hardwareQcCheck(req, res) {
   }
 }
 
+const RETURN_REPAIR_VALUES = [
+  'out_for_return',
+  'out_for_repare',
+  'repared',
+  'replace',
+  'qc_reject'
+];
+
+const VENDOR_REQUIRED_ACTIONS = new Set(['out_for_return', 'out_for_repare']);
+const FILES_REQUIRED_ACTIONS = new Set(['out_for_return', 'out_for_repare', 'repared', 'replace']);
+
+const returnAndRepareCheckValidators = [
+  body('serial_number_id').isInt({ min: 1 }).toInt(),
+  body('serial_number').notEmpty().trim(),
+  body('selected_value').isIn(RETURN_REPAIR_VALUES),
+  body('remark').optional().isString(),
+  body('vendor_id').optional({ nullable: true }).isInt().toInt()
+];
+
+/** Laravel QualityCheckController@ReturnAndRepareCheck */
+async function returnAndRepareCheck(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  const serialId = req.body.serial_number_id;
+  const serialNumber = String(req.body.serial_number).trim();
+  const selected = req.body.selected_value;
+  const remark = String(req.body.remark ?? '').trim();
+  const vendorIdRaw = req.body.vendor_id;
+  const vendorId =
+    vendorIdRaw === '' || vendorIdRaw === undefined || vendorIdRaw === null ? null : Number(vendorIdRaw);
+  const uploaded = Array.isArray(req.files) ? req.files : [];
+
+  if (!remark) {
+    return res.status(400).json({ success: false, message: 'Remark is required' });
+  }
+  if (VENDOR_REQUIRED_ACTIONS.has(selected) && !vendorId) {
+    return res.status(400).json({ success: false, message: 'Please select a vendor' });
+  }
+  if (FILES_REQUIRED_ACTIONS.has(selected) && uploaded.length === 0) {
+    return res.status(400).json({ success: false, message: 'At least one file is required' });
+  }
+
+  const filePaths = uploaded.map((f) => `return_and_repare_files/${f.filename}`);
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const cur = await client.query(
+      `SELECT s.serial_id, s.extra, s.po_id
+       FROM vendor_serial_numbers s
+       WHERE s.serial_id = $1 AND s.serial_number = $2 AND s.deleted_at IS NULL AND s.po_id IS NOT NULL
+       FOR UPDATE`,
+      [serialId, serialNumber]
+    );
+    if (!cur.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Serial not found' });
+    }
+
+    let repairVendorName = null;
+    if (vendorId) {
+      const v = await client.query(
+        `SELECT vendor_id, first_name, business_name FROM vendors WHERE vendor_id = $1 AND deleted_at IS NULL`,
+        [vendorId]
+      );
+      if (!v.rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: 'Invalid vendor' });
+      }
+      repairVendorName = v.rows[0].first_name || v.rows[0].business_name || null;
+    }
+
+    const extra = parseExtra(cur.rows[0].extra);
+    const resetToPending = ['repared', 'replace', 'qc_reject'].includes(selected);
+    const qcStatus = resetToPending ? 'pending' : selected;
+
+    extra.status2 = selected;
+    extra.came_from = 'Vendor';
+    extra.action_status = selected;
+    extra.action_remark = remark;
+    if (filePaths.length) extra.file_path = filePaths;
+    if (vendorId) {
+      extra.repair_vendor_id = vendorId;
+      extra.seller_id = vendorId;
+    }
+    if (repairVendorName) extra.vendor_name = repairVendorName;
+
+    if (selected === 'out_for_repare') {
+      extra.repair_start_date = new Date().toISOString().slice(0, 10);
+      extra.repair_type = 'out_for_repare';
+    }
+
+    await client.query(
+      `UPDATE vendor_serial_numbers
+       SET qc_status = $1,
+           remark = $2,
+           inventory_status = $3,
+           extra = $4::jsonb,
+           updated_at = NOW()
+       WHERE serial_id = $5`,
+      [qcStatus, remark, selected, JSON.stringify(extra), serialId]
+    );
+
+    await client.query('COMMIT');
+    res.json({ success: true, message: 'Action taken successfully!' });
+  } catch (e) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (_) {
+      /* ignore */
+    }
+    console.error('returnAndRepareCheck', e);
+    res.status(500).json({ success: false, message: e.message || 'Action failed' });
+  } finally {
+    client.release();
+  }
+}
+
 /** Laravel getSparePartsDetailsById() — active    catalog */
 async function listSpareParts(req, res) {
   try {
@@ -412,5 +531,7 @@ module.exports = {
   qcCheckValidators,
   qcCheck,
   hardwareQcValidators,
-  hardwareQcCheck
+  hardwareQcCheck,
+  returnAndRepareCheckValidators,
+  returnAndRepareCheck
 };

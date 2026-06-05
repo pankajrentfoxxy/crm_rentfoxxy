@@ -21,3 +21,13 @@ export function fetchUniversalSearch(search) {
 export function fetchSparePartsList(params) {
   return api.get(`${base}/spare-parts`, { params });
 }
+
+/** Laravel inventoryListChangeStatus for serial_number_parts */
+export function updateSparePartStatus(body) {
+  return api.post(`${base}/spare-parts/change-status`, body);
+}
+
+/** Laravel ReturnAndRepareCheckXYZ — sets serial status2 for ready-to-rent list */
+export function updateReadyToRentSaleAction(body) {
+  return api.post(`${base}/ready-to-rent-action`, body);
+}

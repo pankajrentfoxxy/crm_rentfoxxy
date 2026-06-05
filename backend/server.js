@@ -59,8 +59,6 @@ app.use('/api/tickets', require('./routes/tickets'));
 app.use('/api/sales', require('./routes/sales'));
 app.use('/api/procurement', require('./routes/procurement'));
 app.use('/api/warehouse', require('./routes/warehouse'));
-
-
 app.use('/api/stages', require('./routes/stages'));
 app.use('/api/teams', require('./routes/teams'));
 app.use('/api/parts', require('./routes/parts'));
@@ -122,10 +120,8 @@ app.get('/', (req, res) => {
     }
   });
 });
-
 // Error handler (must be last)
 app.use(errorHandler);
-
 // Handle 404
 app.use((req, res) => {
   res.status(404).json({
@@ -133,18 +129,16 @@ app.use((req, res) => {
     message: 'Endpoint not found'
   });
 });
-
 const PORT = process.env.PORT || 5000;
-
 app.listen(PORT, () => {
   if (process.env.NODE_ENV !== 'production') {
     console.log(`Server running on port ${PORT} (${process.env.NODE_ENV || 'development'})`);
   }
 
-  startEmailQueueWorker().catch((err) => console.error('Email queue worker failed:', err.message));
-  startInventorySyncWorker().catch((err) => console.error('ERP inventory sync worker failed:', err.message));
-  startLeadEmailIngestionWorker().catch((err) => console.error('Lead email ingestion worker failed:', err.message));
-  startCustomerInventorySyncWorker().catch((err) => console.error('Customer inventory ERP worker failed:', err.message));
+  // startEmailQueueWorker().catch((err) => console.error('Email queue worker failed:', err.message));
+  // startInventorySyncWorker().catch((err) => console.error('ERP inventory sync worker failed:', err.message));
+  // startLeadEmailIngestionWorker().catch((err) => console.error('Lead email ingestion worker failed:', err.message));
+  // startCustomerInventorySyncWorker().catch((err) => console.error('Customer inventory ERP worker failed:', err.message));
   const { ensureSupportSchema } = require('./controllers/supportController');
   const { ensureUserSchema } = require('./controllers/authController');
   const { ensureVendorManagementSchema } = require('./controllers/vendorManagementSchema');

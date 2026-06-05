@@ -19,6 +19,7 @@ import {
   UserCircle,
   X
 } from 'lucide-react';
+import { invalidateInventoryManagement } from '../../inventory-management/inventoryCountsEvents';
 import { createSpareGrn, fetchSpareProductReceivedContext, receiveSpareLineBulk } from '../vendorManagementApi';
 
 function statsFromLines(lines) {
@@ -256,6 +257,7 @@ export default function SparePartsProductReceivedPage() {
             (example ? `Received ${created.length} unit(s). Codes include ${example}…` : 'Units received')
         );
         resetReceiveWizardUi();
+        invalidateInventoryManagement();
         await load();
       }
     } catch (e) {

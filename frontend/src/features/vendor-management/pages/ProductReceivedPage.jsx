@@ -19,6 +19,8 @@ import {
   UserCircle,
   X
 } from 'lucide-react';
+import { invalidateInventoryManagement } from '../../inventory-management/inventoryCountsEvents';
+import { invalidateQcCounts } from '../../qc-management/qcCountsEvents';
 import { fetchProductReceivedContext, receivePoLineBulk } from '../vendorManagementApi';
 
 function formatWorkflowStatus(status) {
@@ -289,6 +291,8 @@ export default function ProductReceivedPage() {
             (example ? `Received ${created.length} unit(s). Codes include ${example}…` : 'Units received')
         );
         resetReceiveWizardUi();
+        invalidateQcCounts();
+        invalidateInventoryManagement();
         await load();
       }
     } catch (e) {

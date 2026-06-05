@@ -26,12 +26,26 @@ router.get('/', authorize, (req, res) =>
       '/lists/:segment',
       '/serial-number-status',
       '/universal-search',
-      '/spare-parts'
+      '/spare-parts',
+      '/spare-parts/change-status',
+      '/ready-to-rent-action'
     ]
   })
 );
 
 router.get('/lists/counts', authorize, inventoryList.getListCounts);
+router.post(
+  '/spare-parts/change-status',
+  authorize,
+  inventoryList.changeSparePartStatusValidators,
+  inventoryList.changeSparePartStatus
+);
+router.post(
+  '/ready-to-rent-action',
+  authorize,
+  inventoryList.readyToRentActionValidators,
+  inventoryList.updateReadyToRentAction
+);
 router.get('/lists/:segment', authorize, inventoryList.listValidators, inventoryList.listInventory);
 router.get('/serial-number-status', authorize, serialStatus.searchValidators, serialStatus.serialNumberStatus);
 router.get('/universal-search', authorize, universalSearch.searchValidators, universalSearch.universalSearch);

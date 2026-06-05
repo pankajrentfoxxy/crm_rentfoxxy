@@ -31,3 +31,10 @@ export function submitQcCheck(payload) {
 export function submitHardwareQcCheck(payload) {
   return api.post(`${base}/hardware-qc-check`, payload);
 }
+
+/** Laravel ReturnAndRepareCheck — multipart (remark, vendor_id, files[]) */
+export function submitReturnAndRepareCheck(formData) {
+  return api.post(`${base}/return-and-repare-check`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  });
+}

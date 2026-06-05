@@ -907,8 +907,8 @@ async function receiveSpareLineBulk(req, res) {
       if (pd != null && String(pd).trim() !== '') extra.part_id = String(pd);
 
       const insS = await client.query(
-        `INSERT INTO vendor_serial_numbers (spo_id, grn_id, serial_number, inventory_asset_code, rental_start_date, extra)
-         VALUES ($1,$2,$3,$4,NULL,$5::jsonb) RETURNING serial_id`,
+        `INSERT INTO vendor_serial_numbers (spo_id, grn_id, serial_number, inventory_asset_code, qc_status, extra)
+         VALUES ($1,$2,$3,$4,'pending',$5::jsonb) RETURNING serial_id`,
         [spoId, finalGrnId, serial_number, inventory_asset_code, JSON.stringify(extra)]
       );
       createdRows.push({

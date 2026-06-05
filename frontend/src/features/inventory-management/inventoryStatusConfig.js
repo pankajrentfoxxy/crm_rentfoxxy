@@ -1,3 +1,17 @@
+/** Laravel inventory-list out_for_repare — repared / replace (ReturnAndRepareCheck) */
+export const OUT_FOR_REPAIR_INVENTORY_ACTIONS = [
+  { value: 'repared', label: 'Repared' },
+  { value: 'replace', label: 'Replace' }
+];
+
+/** Laravel inventory-list/passed — status2 sale routing (ReturnAndRepareCheckXYZ) */
+export const READY_TO_RENT_SALE_ACTIONS = [
+  { value: 'normal_sale', label: 'Normal Sale' },
+  { value: 'clearance_sale', label: 'Clearance Sale' },
+  { value: 'rent', label: 'Rent Sale' },
+  { value: 'rent_or_normal_sale', label: 'Rent or Normal Sale' }
+];
+
 /** CRM route segment → Laravel admin.inventory.inventoryList segment */
 export const INVENTORY_SEGMENT_BY_ROUTE = {
   'ready-to-rent-or-sell': 'passed',
@@ -46,7 +60,7 @@ export const INVENTORY_PAGE_META = {
     title: 'Spare Parts',
     erpSegment: 'spare_parts',
     countKey: 'spare_parts',
-    description: 'Spare parts inventory stock.'
+    description: 'Spare parts inventory (Laravel spare-parts-l: warehouse, used, dead).'
   },
   'serial-number-status': {
     title: 'Serial Number Status',
@@ -65,3 +79,10 @@ export const INVENTORY_PAGE_META = {
     description: 'Non-performing assets (Laravel npa-assets).'
   }
 };
+
+/** Laravel spare-parts-l.blade.php tabs */
+export const SPARE_PARTS_TABS = [
+  { key: 'warehouse', label: 'Warehouse Parts', status: 'pending' },
+  { key: 'used', label: 'Running (Used) Parts', status: 'in_used' },
+  { key: 'dead', label: 'Dead Parts', status: 'dead' }
+];

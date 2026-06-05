@@ -223,7 +223,8 @@ function enrichSerialRow(row) {
     purchase_order_type: poType,
     purchase_order_type_label: formatPoType(poType),
     vendor_id: row.vendor_id,
-    vendor_name: row.vendor_name || row.business_name || '',
+    vendor_name:
+      (actionStatus && ex.vendor_name) || row.vendor_name || row.business_name || '',
     product_id: line?.product_detail_id ?? line?.product_id ?? ex.product_detail_id ?? null,
     item_description: {
       brand,
