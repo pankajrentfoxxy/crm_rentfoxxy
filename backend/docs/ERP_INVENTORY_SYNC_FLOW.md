@@ -77,6 +77,8 @@ Optional env for single lookup:
 - If IDs overlap across different orders, the first match wins
 - **Fix:** Prefer `po_id` / `purchase_order_id` from QC record; avoid matching by generic `id` when it can collide
 
+ds
+
 ### 2. **products[0] fallback (multi-laptop orders)**
 - When `product_id` and `machine_number` don’t match any product, code uses `products[0]`
 - For orders with multiple laptops, this always picks the first product
