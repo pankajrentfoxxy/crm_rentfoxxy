@@ -7,7 +7,8 @@ Use **single-item** sync instead: `POST /api/inventory/sync/:serialOrMachineId` 
 
 Optional env for single lookup:
 
-- `ERP_QC_LOOKUP_QUERY` — query param on page 1 (default `search`)
+- `ERP_QC_LOOKUP_PARAMS` — comma-separated ERP filter params (default `serial_number,unique_product_serial`)
+- Legacy: `ERP_QC_LOOKUP_QUERY` — single param name (still supported)
 - `ERP_SINGLE_QC_MAX_PAGES` — max pages to scan if lookup misses (default `0` = no scan)
 
 ## Data Flow (bulk only, when enabled)

@@ -9,8 +9,11 @@ const ERP_MAX_RETRIES = parseInt(process.env.ERP_MAX_RETRIES || '5', 10);
 const ERP_INVENTORY_BULK_SYNC_ENABLED =
     process.env.ERP_INVENTORY_BULK_SYNC_ENABLED === '1' ||
     process.env.ERP_INVENTORY_BULK_SYNC_ENABLED === 'true';
-/** Query param for single-item QC lookup on page 1 (ERP may use search, serial_number, etc.). */
-const ERP_QC_LOOKUP_QUERY = (process.env.ERP_QC_LOOKUP_QUERY || 'search').trim();
+/** Comma-separated ERP query params for single QC lookup (see MyApiController::qcOrdersApi). */
+const ERP_QC_LOOKUP_PARAMS = (process.env.ERP_QC_LOOKUP_PARAMS || process.env.ERP_QC_LOOKUP_QUERY || 'serial_number,unique_product_serial')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 /** Optional cap when filtered lookup misses (0 = no page scan). */
 const ERP_SINGLE_QC_MAX_PAGES = parseInt(process.env.ERP_SINGLE_QC_MAX_PAGES || '0', 10);
 
@@ -130,6 +133,14 @@ const fetchQcPassedPage = async (page = 1, extraParams = {}) => {
     return { rows, ...pageMeta };
 };
 
+/** Targeted ERP search — e.g. /qc-orders/passed?page=1&serial_number=G5QBM33 */
+const fetchQcPassedFiltered = async (filterParams) => {
+    const { data } = await requestWithRetry(
+        buildErpUrl('/qc-orders/passed', { page: 1, limit: 25, ...filterParams })
+    );
+    return parseArrayPayload(data);
+};
+
 const fetchQCPassedOrders = async () => fetchAllPages('/qc-orders/passed');
 
 const qcRecordMatchesTarget = (record, targetUpper) => {
@@ -145,16 +156,23 @@ const qcRecordMatchesTarget = (record, targetUpper) => {
     );
 };
 
-/** Targeted QC lookup — avoids loading every paginated page (ERP overload). */
+/** Targeted QC lookup — uses ERP filters (serial_number, unique_product_serial) instead of full pagination. */
 const findQcRecordForIdentifier = async (identifier) => {
     const target = normalizeText(identifier);
     if (!target) return null;
     const targetUpper = target.toUpperCase();
 
-    if (ERP_QC_LOOKUP_QUERY) {
-        const { rows } = await fetchQcPassedPage(1, { [ERP_QC_LOOKUP_QUERY]: target });
-        const hit = rows.find((r) => qcRecordMatchesTarget(r, targetUpper));
-        if (hit) return hit;
+    for (const param of ERP_QC_LOOKUP_PARAMS) {
+        try {
+            const rows = await fetchQcPassedFiltered({ [param]: target });
+            if (!rows.length) continue;
+            const hit = rows.find((r) => qcRecordMatchesTarget(r, targetUpper));
+            if (hit) return hit;
+            // ERP already filtered by exact param — trust a single result
+            if (rows.length === 1) return rows[0];
+        } catch (error) {
+            console.warn(`QC lookup via ${param} failed:`, error.message);
+        }
     }
 
     try {
@@ -482,7 +500,7 @@ const syncSingleInventoryFromErp = async (identifier) => {
     if (!qcRecord) {
         return {
             found: false,
-            message: `No QC passed record found for: ${target}. Check serial / TTSPL id, or ask admin to set ERP_QC_LOOKUP_QUERY for ERP search.`
+            message: `No QC passed record found for: ${target}. Check serial / TTSPL id (ERP filters: ${ERP_QC_LOOKUP_PARAMS.join(', ')}).`
         };
     }
 
