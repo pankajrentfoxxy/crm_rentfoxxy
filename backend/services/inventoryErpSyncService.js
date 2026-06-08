@@ -152,8 +152,9 @@ const findQcRecordForIdentifier = async (identifier) => {
     const targetUpper = target.toUpperCase();
 
     if (ERP_QC_LOOKUP_QUERY) {
-        const { rows } = await fetchQcPassedPage(1, { [ERP_QC_LOOKUP_QUERY]: target });
-        const hit = rows.find((r) => qcRecordMatchesTarget(r, targetUpper));
+        const res = await fetchQcPassedPage(1, { [ERP_QC_LOOKUP_QUERY]: target });
+        console.log('rows', res);
+        const hit = res?.rows.find((r) => qcRecordMatchesTarget(r, targetUpper));
         if (hit) return hit;
     }
 

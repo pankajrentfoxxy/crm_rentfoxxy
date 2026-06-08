@@ -55,6 +55,11 @@ const pool = require('./config/db');
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));
+app.use('/api/users', require('./routes/users'));
+app.use('/api/roles', require('./routes/roles'));
+app.use('/api/role-permissions', require('./routes/rolePermissions'));
+app.use('/api/permissions', require('./routes/permissionsLegacy'));
+app.use('/api/user-permissions', require('./routes/userPermissions'));
 app.use('/api/tickets', require('./routes/tickets'));
 app.use('/api/sales', require('./routes/sales'));
 app.use('/api/procurement', require('./routes/procurement'));

@@ -42,127 +42,25 @@ import {
 
   ShoppingCart,
 
-  ChevronDown
+  ChevronDown,
+
+  Settings
 
 } from 'lucide-react';
 
 import { isSupportUser } from '../utils/supportAccess';
 import { useQcStatusCounts } from '../features/qc-management/hooks/useQcStatusCounts';
 import { useInventoryListCounts } from '../features/inventory-management/hooks/useInventoryListCounts';
-
-
-
-/** Vendor submenu — paths match VendorManagementApp nested routes */
-
-const vendorAccordionChildren = [
-
-  { label: 'Vendors', path: '/vendor-management/vendors' },
-
-  { label: 'Purchase order', path: '/vendor-management/purchase-orders' },
-
-  { label: 'Spare parts PO', path: '/vendor-management/spare-parts-po' },
-
-  { label: 'Update serial number', path: '/vendor-management/serial-numbers' },
-
-  { label: 'Replaced product', path: '/vendor-management/replaced-products' },
-
-  { type: 'subheader', label: 'Billing' },
-
-  { label: 'Vendor billing', path: '/vendor-management/billing/vendor-overview' },
-
-  { label: 'Monthly pending', path: '/vendor-management/billing/pending' },
-
-  { label: 'Monthly approved', path: '/vendor-management/billing/approved' },
-
-  { label: 'Monthly completed', path: '/vendor-management/billing/completed' }
-
-];
-
-/** QC submenu — paths match QCManagementApp nested routes */
-
-const qcAccordionChildren = [
-
-  { label: 'QC Processing List', path: '/qc-management/processing', countKey: 'pending' },
-
-  { label: 'QC Passed List', path: '/qc-management/passed', countKey: 'passed' },
-
-  { label: 'QC Failed List', path: '/qc-management/failed', countKey: 'failed' },
-
-  { label: 'Dead Assets List', path: '/qc-management/dead-assets', countKey: 'dead' },
-
-  { label: 'Require For Parts', path: '/qc-management/require-for-parts', countKey: 'require_for_parts' },
-
-  { label: 'Bundle Management', path: '/qc-management/bundle' }
-
-];
-
-/** Inventory submenu — paths match InventoryManagementApp nested routes */
-
-const inventoryAccordionChildren = [
-
-  { label: 'Ready to Rent or Sell', path: '/inventory-management/ready-to-rent-or-sell', countKey: 'passed' },
-
-  { label: 'Rent To Own', path: '/inventory-management/rent-to-own', countKey: 'rent_to_own' },
-
-  { label: 'Rental Purchase', path: '/inventory-management/rental-purchase', countKey: 'rental_purchase' },
-
-  { label: 'Direct Purchase', path: '/inventory-management/direct-purchase', countKey: 'direct_purchase' },
-
-  { label: 'Out For Repare', path: '/inventory-management/out-for-repare', countKey: 'out_for_repare' },
-
-  { label: 'Spare Parts', path: '/inventory-management/spare-parts', countKey: 'spare_parts' },
-
-  { label: 'Serial Number Status', path: '/inventory-management/serial-number-status' },
-
-  { label: 'Universal Search', path: '/inventory-management/universal-search' },
-
-  { label: 'NPA Assets', path: '/inventory-management/npa-assets', countKey: 'npa' }
-
-];
-
-
-
-function canSeeVendorAccordion(user) {
-
-  if (!user) return false;
-
-  const roles = ['manager', 'admin', 'procurement'];
-
-  const permOk = Array.isArray(user.permissions) && user.permissions.includes('vendor_management_access');
-
-  return roles.includes(user.role) || permOk;
-
-}
-
-
-
-function canSeeQcAccordion(user) {
-
-  if (!user) return false;
-
-  const roles = ['manager', 'admin', 'floor_manager', 'qc'];
-
-  const permOk = Array.isArray(user.permissions) && user.permissions.includes('qc_access');
-
-  return roles.includes(user.role) || permOk;
-
-}
-
-
-
-function canSeeInventoryAccordion(user) {
-
-  if (!user) return false;
-
-  const roles = ['manager', 'admin', 'floor_manager'];
-
-  const perms = ['inventory_read', 'inventory_write', 'inventory_access', 'inventory_management_access'];
-
-  const permOk = Array.isArray(user.permissions) && user.permissions.some((p) => perms.includes(p));
-
-  return roles.includes(user.role) || permOk;
-
-}
+import usePermission from '../hooks/usePermission';
+import {
+  FLAT_MENU_ITEMS,
+  vendorAccordionChildren,
+  qcAccordionChildren,
+  inventoryAccordionChildren,
+  settingsAccordionChildren,
+  isMenuItemVisible,
+  isSettingsChildVisible,
+} from '../config/menuConfig';
 
 
 
@@ -173,12 +71,13 @@ export default function Layout({ children }) {
   const location = useLocation();
 
   const { user, logout } = useAuth();
+  const { canView } = usePermission();
 
   const navigate = useNavigate();
 
-  const showQcAccordion = canSeeQcAccordion(user);
+  const showQcAccordion = canView('qc_management');
 
-  const showInventoryAccordion = canSeeInventoryAccordion(user);
+  const showInventoryAccordion = canView('inventory_management');
 
   const { counts: qcCounts } = useQcStatusCounts(showQcAccordion);
 
@@ -204,6 +103,12 @@ export default function Layout({ children }) {
 
   );
 
+  const [settingsAccordionOpen, setSettingsAccordionOpen] = useState(() =>
+
+    location.pathname.startsWith('/settings')
+
+  );
+
 
 
   useEffect(() => {
@@ -226,6 +131,12 @@ export default function Layout({ children }) {
 
     }
 
+    if (location.pathname.startsWith('/settings')) {
+
+      setSettingsAccordionOpen(true);
+
+    }
+
   }, [location.pathname]);
 
 
@@ -240,300 +151,13 @@ export default function Layout({ children }) {
 
 
 
-  const menuItems = [
-
-    {
-
-      icon: BarChart3,
-
-      label: 'Dashboard',
-
-      path: '/dashboard',
-
-      roles: ['team_member', 'team_lead', 'manager', 'admin', 'floor_manager', 'sales']
-
-    },
-
-    {
-
-      icon: Archive,
-
-      label: 'Inventory',
-
-      path: '/inventory',
-
-      roles: ['manager', 'admin', 'floor_manager'],
-
-      permission: 'inventory_read',
-
-      permissionAny: ['inventory_read', 'inventory_write', 'inventory_access']
-
-    },
-
-    {
-
-      icon: ClipboardList,
-
-      label: 'Tickets',
-
-      path: '/tickets',
-
-      roles: ['team_member', 'team_lead', 'manager', 'admin', 'floor_manager']
-
-    },
-
-    {
-
-      icon: Briefcase,
-
-      label: 'Leads',
-
-      path: '/leads',
-
-      roles: ['manager', 'admin', 'sales'],
-
-      permission: 'sales_access'
-
-    },
-
-    {
-
-      icon: Briefcase,
-
-      label: 'Sales Orders',
-
-      path: '/sales',
-
-      roles: ['manager', 'admin', 'sales'],
-
-      permission: 'sales_access'
-
-    },
-
-    {
-
-      icon: Clock,
-
-      label: 'Follow-ups',
-
-      path: '/follow-ups',
-
-      roles: ['manager', 'admin', 'sales'],
-
-      permission: 'sales_access'
-
-    },
-
-    {
-
-      icon: ClipboardList,
-
-      label: 'Lead Orders',
-
-      path: '/lead-orders',
-
-      roles: ['manager', 'admin', 'sales'],
-
-      permission: 'orders_access'
-
-    },
-
-    {
-
-      icon: Users,
-
-      label: 'Customers',
-
-      path: '/customers',
-
-      roles: ['manager', 'admin', 'sales'],
-
-      permission: 'sales_access'
-
-    },
-
-    {
-
-      icon: BarChart3,
-
-      label: 'Manager Dashboard',
-
-      path: '/manager-dashboard',
-
-      roles: ['manager', 'admin'],
-
-      permission: 'reports_access'
-
-    },
-
-    {
-
-      icon: BarChart3,
-
-      label: 'Reports',
-
-      path: '/reports',
-
-      roles: ['manager', 'admin', 'floor_manager'],
-
-      permission: 'reports_access'
-
-    },
-
-    {
-
-      icon: Package,
-
-      label: 'Parts',
-
-      path: '/parts',
-
-      roles: ['manager', 'admin', 'floor_manager'],
-
-      permission: 'parts_access'
-
-    },
-
-    {
-
-      icon: Truck,
-
-      label: 'Procurement',
-
-      path: '/procurement',
-
-      roles: ['manager', 'admin', 'procurement'],
-
-      permission: 'procurement_access'
-
-    },
-
-    {
-
-      type: 'vendorAccordion'
-
-    },
-
-    {
-
-      icon: Package,
-
-      label: 'Warehouse',
-
-      path: '/warehouse',
-
-      roles: ['manager', 'admin', 'warehouse'],
-
-      permission: 'warehouse_access'
-
-    },
-
-    {
-
-      type: 'qcAccordion'
-
-    },
-
-    {
-
-      type: 'inventoryAccordion'
-
-    },
-
-    {
-
-      icon: Truck,
-
-      label: 'Dispatch',
-
-      path: '/dispatch',
-
-      roles: ['manager', 'admin', 'floor_manager', 'dispatch'],
-
-      permission: 'dispatch_access'
-
-    },
-
-    { type: 'section', label: 'Support' },
-
-    {
-
-      icon: Headphones,
-
-      label: 'Support tickets',
-
-      path: '/support/tickets',
-
-      roles: ['admin', 'support_lead', 'support_tech']
-
-    },
-
-    {
-
-      icon: Building2,
-
-      label: 'Customer Inventory',
-
-      path: '/customer-inventory',
-
-      roles: ['manager', 'admin', 'floor_manager', 'support_lead', 'support_tech'],
-
-      permissionAny: ['customer_inventory_access']
-
-    },
-
-    { type: 'section', label: 'Team' },
-
-    { icon: Users, label: 'Teams', path: '/teams', roles: ['manager', 'admin'] }
-
-  ];
-
-
+  const menuItems = FLAT_MENU_ITEMS;
 
   function itemAllowed(item) {
-
-    if (item.type === 'section') {
-
-      if (item.label === 'Support') {
-
-        return user && (['manager', 'admin', 'floor_manager', 'support_lead', 'support_tech'].includes(user.role) || isSupportUser(user));
-
-      }
-
-      return user && ['manager', 'admin'].includes(user.role);
-
+    if (item.type === 'section' && item.label === 'Support') {
+      return isSupportUser(user) || canView('support_tickets') || canView('customer_inventory');
     }
-
-    if (item.type === 'vendorAccordion') {
-
-      return canSeeVendorAccordion(user);
-
-    }
-
-    if (item.type === 'qcAccordion') {
-
-      return canSeeQcAccordion(user);
-
-    }
-
-    if (item.type === 'inventoryAccordion') {
-
-      return canSeeInventoryAccordion(user);
-
-    }
-
-    const permMatch = item.permissionAny
-
-      ? item.permissionAny.some((p) => user?.permissions?.includes(p))
-
-      : item.permission && user?.permissions?.includes(item.permission);
-
-    return (
-
-      !item.roles || (user && (item.roles.includes(user.role) || permMatch))
-
-    );
-
+    return isMenuItemVisible(item, canView);
   }
 
 
@@ -903,6 +527,49 @@ export default function Layout({ children }) {
             }
 
 
+
+            if (item.type === 'settingsAccordion') {
+              return (
+                <div key="settings-accordion" className="space-y-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setSettingsAccordionOpen((o) => !o)}
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors text-left hover:bg-gray-100 ${
+                      location.pathname.startsWith('/settings') ? 'text-indigo-700 bg-indigo-50/60' : 'text-gray-800'
+                    }`}
+                  >
+                    <Settings className="w-5 h-5 text-gray-600 shrink-0" />
+                    <span className="flex-1">Settings</span>
+                    <ChevronDown
+                      className={`w-4 h-4 text-gray-500 shrink-0 transition-transform duration-200 ${
+                        settingsAccordionOpen ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </button>
+                  {settingsAccordionOpen && (
+                    <div className="mt-1 ml-2 pl-3 border-l border-indigo-100 space-y-0.5">
+                      {settingsAccordionChildren.filter((child) => isSettingsChildVisible(child, canView)).map((child) => (
+                        <NavLink
+                          key={child.path}
+                          to={child.path}
+                          onClick={() => setSidebarOpen(false)}
+                          className={({ isActive }) =>
+                            [
+                              'block px-2 py-1.5 rounded-md text-xs transition-colors',
+                              isActive
+                                ? 'bg-indigo-100 text-indigo-900 font-semibold'
+                                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900',
+                            ].join(' ')
+                          }
+                        >
+                          {child.label}
+                        </NavLink>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            }
 
             const { icon: Icon, label, path } = item;
 
