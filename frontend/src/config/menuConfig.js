@@ -13,6 +13,7 @@ import {
   ShoppingCart,
   Store,
   Settings,
+  Cog,
 } from 'lucide-react';
 
 /** Vendor submenu paths match VendorManagementApp nested routes */
@@ -50,6 +51,13 @@ export const inventoryAccordionChildren = [
   { label: 'NPA Assets', path: '/inventory-management/npa-assets', countKey: 'npa' },
 ];
 
+export const operationAccordionChildren = [
+  { label: 'Quotations', path: '/operation-management/quotations', section: 'sales_quotations', countKey: 'quotations' },
+  { label: 'Sales Orders', path: '/operation-management/sales-orders', section: 'sales_orders_doc', countKey: 'sales_orders' },
+  { label: 'Delivery Challans', path: '/operation-management/delivery-challans', section: 'delivery_challans', countKey: 'delivery_challans' },
+  { label: 'Return DC', path: '/operation-management/return-dc', section: 'return_dc', countKey: 'return_dc' },
+];
+
 export const settingsAccordionChildren = [
   { label: 'Roles', path: '/settings/roles', section: 'roles' },
   { label: 'Role Permissions', path: '/settings/role-permissions', section: 'role_permissions' },
@@ -78,6 +86,18 @@ export const MENU_GROUPS = [
     ],
   },
   {
+    key: 'operation',
+    label: 'Operation Management',
+    items: [
+      {
+        type: 'operationAccordion',
+        icon: Cog,
+        label: 'Operation Management',
+        sections: ['sales_quotations', 'sales_orders_doc', 'delivery_challans', 'return_dc'],
+      },
+    ],
+  },
+  {
     key: 'warehouse',
     label: 'Warehouse',
     items: [
@@ -87,6 +107,13 @@ export const MENU_GROUPS = [
       { type: 'qcAccordion', section: 'qc_management', icon: CheckCircle, label: 'QC Management' },
       { type: 'inventoryAccordion', section: 'inventory_management', icon: ShoppingCart, label: 'Inventory Management' },
       { icon: Truck, label: 'Dispatch', path: '/dispatch', section: 'dispatch' },
+    ],
+  },
+  {
+    key: 'customer_management',
+    label: 'Customer Management',
+    items: [
+      { icon: Users, label: 'Customers', path: '/customer-management/customers', section: 'customer_management' },
     ],
   },
   {
@@ -130,11 +157,20 @@ export function isMenuItemVisible(item, canView) {
     return (item.sections || []).some((section) => canView(section));
   }
 
+  if (item.type === 'operationAccordion') {
+    return (item.sections || []).some((section) => canView(section));
+  }
+
   if (item.type === 'vendorAccordion' || item.type === 'qcAccordion' || item.type === 'inventoryAccordion') {
     return item.section ? canView(item.section) : false;
   }
 
   if (item.section) return canView(item.section);
+  return true;
+}
+
+export function isOperationChildVisible(child, canView) {
+  if (child.section) return canView(child.section);
   return true;
 }
 

@@ -44,22 +44,25 @@ import {
 
   ChevronDown,
 
-  Settings
-
+  Settings,
+  Cog,
 } from 'lucide-react';
 
 import { isSupportUser } from '../utils/supportAccess';
 import { useQcStatusCounts } from '../features/qc-management/hooks/useQcStatusCounts';
 import { useInventoryListCounts } from '../features/inventory-management/hooks/useInventoryListCounts';
 import usePermission from '../hooks/usePermission';
+import { useOperationCounts } from '../features/operation-management/hooks/useOperationCounts';
 import {
   FLAT_MENU_ITEMS,
   vendorAccordionChildren,
   qcAccordionChildren,
   inventoryAccordionChildren,
   settingsAccordionChildren,
+  operationAccordionChildren,
   isMenuItemVisible,
   isSettingsChildVisible,
+  isOperationChildVisible,
 } from '../config/menuConfig';
 
 
@@ -78,6 +81,14 @@ export default function Layout({ children }) {
   const showQcAccordion = canView('qc_management');
 
   const showInventoryAccordion = canView('inventory_management');
+
+  const showOperationAccordion =
+    canView('sales_quotations') ||
+    canView('sales_orders_doc') ||
+    canView('delivery_challans') ||
+    canView('return_dc');
+
+  const { counts: operationCounts } = useOperationCounts(showOperationAccordion);
 
   const { counts: qcCounts } = useQcStatusCounts(showQcAccordion);
 
@@ -109,6 +120,10 @@ export default function Layout({ children }) {
 
   );
 
+  const [operationAccordionOpen, setOperationAccordionOpen] = useState(() =>
+    location.pathname.startsWith('/operation-management')
+  );
+
 
 
   useEffect(() => {
@@ -135,6 +150,10 @@ export default function Layout({ children }) {
 
       setSettingsAccordionOpen(true);
 
+    }
+
+    if (location.pathname.startsWith('/operation-management')) {
+      setOperationAccordionOpen(true);
     }
 
   }, [location.pathname]);
@@ -527,6 +546,59 @@ export default function Layout({ children }) {
             }
 
 
+
+            if (item.type === 'operationAccordion') {
+              return (
+                <div key="operation-accordion" className="space-y-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setOperationAccordionOpen((o) => !o)}
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors text-left hover:bg-gray-100 ${
+                      location.pathname.startsWith('/operation-management') ? 'text-teal-700 bg-teal-50/60' : 'text-gray-800'
+                    }`}
+                  >
+                    <Cog className="w-5 h-5 text-gray-600 shrink-0" />
+                    <span className="flex-1">Operation Management</span>
+                    <ChevronDown
+                      className={`w-4 h-4 text-gray-500 shrink-0 transition-transform duration-200 ${
+                        operationAccordionOpen ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </button>
+                  {operationAccordionOpen && (
+                    <div className="mt-1 ml-2 pl-3 border-l border-teal-100 space-y-0.5">
+                      {operationAccordionChildren.filter((child) => isOperationChildVisible(child, canView)).map((child) => {
+                        const badge = child.countKey && operationCounts[child.countKey] != null
+                          ? operationCounts[child.countKey]
+                          : null;
+                        return (
+                          <NavLink
+                            key={child.path}
+                            to={child.path}
+                            onClick={() => setSidebarOpen(false)}
+                            className={({ isActive }) =>
+                              [
+                                'flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-xs transition-colors',
+                                isActive
+                                  ? 'bg-teal-100 text-teal-900 font-semibold'
+                                  : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900',
+                              ].join(' ')
+                            }
+                          >
+                            <span>{child.label}</span>
+                            {badge != null ? (
+                              <span className="shrink-0 rounded-full bg-sky-100 text-sky-800 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums">
+                                {badge}
+                              </span>
+                            ) : null}
+                          </NavLink>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            }
 
             if (item.type === 'settingsAccordion') {
               return (

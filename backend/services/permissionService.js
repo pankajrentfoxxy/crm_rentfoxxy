@@ -7,6 +7,7 @@ const DEFAULT_SECTIONS = [
   'customers', 'manager_dashboard', 'reports', 'parts', 'procurement', 'vendor_management',
   'warehouse', 'qc_management', 'inventory_management', 'dispatch', 'support_tickets',
   'customer_inventory', 'teams', 'roles', 'role_permissions', 'user_permissions',
+  'customer_management',
 ];
 
 const ACTION_ALIASES = {

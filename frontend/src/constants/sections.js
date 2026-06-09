@@ -23,6 +23,10 @@ export const APPLICATION_SECTIONS = [
   'roles',
   'role_permissions',
   'user_permissions',
+  'sales_quotations',
+  'sales_orders_doc',
+  'delivery_challans',
+  'return_dc',
 ];
 
 export const SECTION_LABELS = {
@@ -49,6 +53,10 @@ export const SECTION_LABELS = {
   roles: 'Roles',
   role_permissions: 'Role Permissions',
   user_permissions: 'User Permissions',
+  sales_quotations: 'Sales Quotations',
+  sales_orders_doc: 'Sales Order Documents',
+  delivery_challans: 'Delivery Challans',
+  return_dc: 'Return Delivery Challan',
 };
 
 export const PERMISSION_ACTIONS = ['can_view', 'can_create', 'can_edit', 'can_delete'];

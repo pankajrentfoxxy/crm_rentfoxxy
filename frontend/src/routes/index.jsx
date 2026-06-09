@@ -4,6 +4,8 @@ import { supportRoutes } from './supportRoutes';
 import { warehouseRoutes } from './warehouseRoutes';
 import { teamRoutes } from './teamRoutes';
 import { settingsRoutes } from './settingsRoutes';
+import { operationManagementRoutes } from './operationManagementRoutes';
+import { customerManagementRoutes } from './customerManagementRoutes';
 
 export const appRoutes = [
   ...publicRoutes,
@@ -12,6 +14,17 @@ export const appRoutes = [
   ...warehouseRoutes,
   ...teamRoutes,
   ...settingsRoutes,
+  ...operationManagementRoutes,
+  ...customerManagementRoutes,
 ];
 
-export { publicRoutes, salesRoutes, supportRoutes, warehouseRoutes, teamRoutes, settingsRoutes };
+export {
+  publicRoutes,
+  salesRoutes,
+  supportRoutes,
+  warehouseRoutes,
+  teamRoutes,
+  settingsRoutes,
+  operationManagementRoutes,
+  customerManagementRoutes,
+};

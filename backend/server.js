@@ -62,6 +62,8 @@ app.use('/api/permissions', require('./routes/permissionsLegacy'));
 app.use('/api/user-permissions', require('./routes/userPermissions'));
 app.use('/api/tickets', require('./routes/tickets'));
 app.use('/api/sales', require('./routes/sales'));
+app.use('/api/sales-management', require('./routes/salesManagement'));
+app.use('/api/customer-management', require('./routes/customerManagement'));
 app.use('/api/procurement', require('./routes/procurement'));
 app.use('/api/warehouse', require('./routes/warehouse'));
 app.use('/api/stages', require('./routes/stages'));
@@ -147,9 +149,13 @@ app.listen(PORT, () => {
   const { ensureSupportSchema } = require('./controllers/supportController');
   const { ensureUserSchema } = require('./controllers/authController');
   const { ensureVendorManagementSchema } = require('./controllers/vendorManagementSchema');
+  const { ensureSalesManagementSchema } = require('./controllers/salesManagementController');
+  const { ensureCustomerManagementSchema } = require('./controllers/customerManagementController');
   ensureSupportSchema().catch((err) => console.error('Support schema ensure failed:', err.message));
   ensureUserSchema().catch((err) => console.error('User schema ensure failed:', err.message));
   ensureVendorManagementSchema().catch((err) => console.error('Vendor management schema failed:', err.message));
+  ensureSalesManagementSchema().catch((err) => console.error('Sales management schema failed:', err.message));
+  ensureCustomerManagementSchema().catch((err) => console.error('Customer management schema failed:', err.message));
 });
 
 module.exports = app;
