@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const pool = require('../config/db');
+const { resolveLineItem } = require('./qcManagementService');
 
 const DOC_TYPES = {
   quotation: { prefix: 'EST-', pad: 6 },
@@ -259,43 +260,195 @@ async function getOperationCounts() {
   };
 }
 
-async function searchAvailableInventory({ brand, model_name, processor, generation, search, limit = 50 }) {
-  const params = [];
-  const conditions = [`(status IS NULL OR status NOT IN ('out_stock', 'sold', 'dispatched'))`];
-  if (brand) {
-    params.push(`%${brand}%`);
-    conditions.push(`brand ILIKE $${params.length}`);
-  }
-  if (model_name) {
-    params.push(`%${model_name}%`);
-    conditions.push(`model ILIKE $${params.length}`);
-  }
-  if (processor) {
-    params.push(`%${processor}%`);
-    conditions.push(`processor ILIKE $${params.length}`);
-  }
-  if (generation) {
-    params.push(`%${generation}%`);
-    conditions.push(`generation ILIKE $${params.length}`);
-  }
+function partialSpecMatch(dbValue, inputValue) {
+  if (!inputValue) return true;
+  return String(dbValue || '').toLowerCase().includes(String(inputValue).toLowerCase());
+}
+
+function exactSpecMatch(dbValue, inputValue) {
+  if (!inputValue) return true;
+  return String(dbValue || '').toLowerCase() === String(inputValue).toLowerCase();
+}
+
+function mapInventorySerialRow(row) {
+  const serialId = row.serial_id;
+  const serialNumber = row.serial_number || '';
+  const uniqueNumber =
+    row.unique_product_serial ||
+    row.inventory_asset_code ||
+    row.unique_number ||
+    'N/A';
+  const formatted =
+    serialId && serialNumber
+      ? `${serialId}|${serialNumber}|${uniqueNumber}`
+      : 'N/A';
+
+  return {
+    id: row.inventory_row_id || serialId,
+    serial_id: serialId,
+    serial_number: serialNumber,
+    unique_number: uniqueNumber,
+    unique_product_serial: uniqueNumber,
+    product_model_name: row.product_model_name || row.pd_model || row.model_name,
+    brand: row.brand || '',
+    model: row.pd_model || row.product_model_name || '',
+    processor: row.processor || '',
+    generation: row.generation || '',
+    status: row.inventory_status || row.status || 'in_stock',
+    picker_value: formatted,
+    formatted_serial: formatted,
+    label: `${serialNumber} | ${uniqueNumber}`,
+  };
+}
+
+function filterSpecRows(rows, { model_name, processor, generation, isSale }) {
+  const model = model_name?.trim();
+  if (!model) return [];
+
+  return rows.filter((row) => {
+    const pdModel = row.pd_model || row.product_model_name || '';
+
+    if (isSale) {
+      if (!partialSpecMatch(pdModel, model) && !partialSpecMatch(row.product_model_name, model)) return false;
+      if (!partialSpecMatch(row.processor, processor)) return false;
+      if (!partialSpecMatch(row.generation, generation)) return false;
+      if (!row.po_id) return false;
+      return true;
+    }
+
+    if (!exactSpecMatch(pdModel, model) && !exactSpecMatch(row.product_model_name, model)) return false;
+    if (!exactSpecMatch(row.processor, processor)) return false;
+    if (!exactSpecMatch(row.generation, generation)) return false;
+    return true;
+  });
+}
+
+/**
+ * Laravel getAllProductFromInventoryUsingModelIfSaleNew / getAllProductFromInventoryUsingModelNew
+ * — vendor_product_inventory (in_stock) + product_details specs + serial_numbers unique code.
+ */
+async function searchAvailableInventory({
+  brand,
+  model_name,
+  processor,
+  generation,
+  quotation_type,
+  search,
+  limit = 200,
+}) {
+  const model = model_name?.trim();
+  if (!model) return [];
+
+  const qt = String(quotation_type || '').toLowerCase();
+  const isSale = qt === 'sale';
+
+  const params = [model.toLowerCase()];
+  let searchSql = '';
   if (search) {
     params.push(`%${search}%`);
-    conditions.push(`(serial_number ILIKE $${params.length} OR machine_number ILIKE $${params.length})`);
+    searchSql = ` AND (
+      vpi.serial_number ILIKE $${params.length}
+      OR COALESCE(vpi.unique_product_serial, '') ILIKE $${params.length}
+      OR COALESCE(vsn.inventory_asset_code, '') ILIKE $${params.length}
+    )`;
   }
-  params.push(Math.min(limit, 100));
+
   const result = await pool.query(
-    `SELECT inventory_id, machine_number, serial_number, brand, model, processor, generation, ram, storage, status
-     FROM inventory
-     WHERE ${conditions.join(' AND ')}
-     ORDER BY updated_at DESC NULLS LAST
-     LIMIT $${params.length}`,
+    `SELECT
+       vpi.id AS inventory_row_id,
+       vpi.serial_id,
+       vpi.serial_number,
+       vpi.unique_product_serial,
+       vpi.product_model_name,
+       vpi.product_id,
+       vpi.status AS inventory_status,
+       vpd.model AS pd_model,
+       vpd.processor,
+       vpd.generation,
+       vpd.brand,
+       vsn.po_id,
+       vsn.inventory_asset_code,
+       vpo.purchase_order_type
+     FROM vendor_product_inventory vpi
+     INNER JOIN vendor_serial_numbers vsn
+       ON vsn.serial_id = vpi.serial_id AND vsn.deleted_at IS NULL
+     LEFT JOIN vendor_product_details vpd
+       ON vpd.product_detail_id = vpi.product_id
+     LEFT JOIN vendor_purchase_orders vpo
+       ON vpo.po_id = vsn.po_id AND vpo.deleted_at IS NULL
+     WHERE vpi.status = 'in_stock'
+       AND LOWER(vpi.product_model_name) = $1
+       ${searchSql}
+     ORDER BY vpi.id DESC
+     LIMIT ${Math.min(Number(limit) || 200, 500)}`,
     params
   );
-  return result.rows.map((row) => ({
-    ...row,
-    picker_value: `${row.inventory_id}|${row.serial_number}|${row.machine_number}`,
-    label: `${row.serial_number} / ${row.machine_number} — ${row.brand || ''} ${row.model || ''}`.trim(),
-  }));
+
+  let rows = filterSpecRows(result.rows, { model_name: model, processor, generation, isSale });
+
+  if (!rows.length) {
+    const fallback = await pool.query(
+      `SELECT
+         vsn.serial_id,
+         vsn.serial_number,
+         vsn.po_id,
+         vsn.inventory_asset_code,
+         vsn.qc_status,
+         vsn.inventory_status,
+         vsn.extra,
+         p.line_items,
+         p.purchase_order_type,
+         vpd.model AS pd_model,
+         vpd.processor,
+         vpd.generation,
+         vpd.brand
+       FROM vendor_serial_numbers vsn
+       INNER JOIN vendor_purchase_orders p ON p.po_id = vsn.po_id AND p.deleted_at IS NULL
+       LEFT JOIN vendor_product_details vpd
+         ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id', '')::int
+       WHERE vsn.deleted_at IS NULL
+         AND COALESCE(vsn.qc_status, vsn.extra->>'status', 'pending') = 'passed'
+         AND COALESCE(vsn.inventory_status, 'in_stock') IN ('in_stock', 'passed')
+         AND NOT EXISTS (
+           SELECT 1 FROM vendor_product_inventory vpi2
+           WHERE vpi2.serial_id = vsn.serial_id AND vpi2.status = 'out_stock'
+         )
+       ORDER BY vsn.serial_id DESC
+       LIMIT 500`
+    );
+
+    rows = fallback.rows
+      .map((row) => {
+        const line = resolveLineItem(row.line_items, row.extra);
+        return {
+          inventory_row_id: row.serial_id,
+          serial_id: row.serial_id,
+          serial_number: row.serial_number,
+          unique_product_serial: row.inventory_asset_code || row.extra?.unique_product_serial,
+          product_model_name: line?.model ?? line?.product_name ?? line?.model_name ?? '',
+          pd_model: line?.model ?? line?.product_name ?? row.pd_model,
+          processor: line?.processor ?? row.processor ?? '',
+          generation: line?.generation ?? row.generation ?? '',
+          brand: line?.brand ?? row.brand ?? '',
+          po_id: row.po_id,
+          inventory_asset_code: row.inventory_asset_code,
+          status: 'in_stock',
+        };
+      })
+      .filter((row) => {
+        const hay = String(row.product_model_name || row.pd_model || '').toLowerCase();
+        return hay === model.toLowerCase() || (isSale && hay.includes(model.toLowerCase()));
+      });
+
+    rows = filterSpecRows(rows, { model_name: model, processor, generation, isSale });
+  }
+
+  if (brand) {
+    const b = brand.toLowerCase();
+    rows = rows.filter((r) => !r.brand || String(r.brand).toLowerCase().includes(b));
+  }
+
+  return rows.map(mapInventorySerialRow);
 }
 
 module.exports = {

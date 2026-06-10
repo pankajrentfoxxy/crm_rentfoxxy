@@ -614,9 +614,24 @@ exports.storeDeliveryChallan = async (req, res) => {
         if (sn) serialNumbers.push(sn);
       }
       if (serialNumbers.length) {
+        const serialIds = [];
+        for (const serial of serialList) {
+          const parts = String(serial).split('|');
+          if (parts[0] && /^\d+$/.test(parts[0])) serialIds.push(Number(parts[0]));
+        }
         await client.query(
-          `UPDATE inventory SET status = 'out_stock', updated_at = NOW() WHERE serial_number = ANY($1::text[])`,
-          [serialNumbers]
+          `UPDATE vendor_product_inventory
+           SET status = 'out_stock', updated_at = NOW()
+           WHERE serial_number = ANY($1::text[])
+              OR serial_id = ANY($2::int[])`,
+          [serialNumbers, serialIds.length ? serialIds : [-1]]
+        );
+        await client.query(
+          `UPDATE vendor_serial_numbers
+           SET inventory_status = 'out_stock', updated_at = NOW()
+           WHERE serial_number = ANY($1::text[])
+              OR serial_id = ANY($2::int[])`,
+          [serialNumbers, serialIds.length ? serialIds : [-1]]
         );
       }
     }
@@ -646,7 +661,15 @@ exports.getOperationCounts = async (req, res) => {
 
 exports.getAvailableSerials = async (req, res) => {
   try {
-    const serials = await searchAvailableInventory(req.query);
+    const serials = await searchAvailableInventory({
+      brand: req.query.brand,
+      model_name: req.query.model_name || req.query.model,
+      processor: req.query.processor,
+      generation: req.query.generation,
+      quotation_type: req.query.quotation_type,
+      search: req.query.search,
+      limit: req.query.limit,
+    });
     res.json({ success: true, serials });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

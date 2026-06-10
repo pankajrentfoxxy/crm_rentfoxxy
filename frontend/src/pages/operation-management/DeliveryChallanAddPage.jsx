@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { BillingAddressPanel, ShippingAddressPanel } from '../../features/operation-management/components/CustomerAddressPanels';
+import SearchableMultiSelect from '../../features/operation-management/components/SearchableMultiSelect';
 import { createDeliveryChallan, fetchAvailableSerials, fetchDeliveryChallanMeta } from '../../utils/salesManagementApi';
 
 const COURIERS = [
@@ -32,7 +33,7 @@ export default function DeliveryChallanAddPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  const loadSerials = async (index, linesOverride) => {
+  const loadSerials = async (index, linesOverride, quotationType) => {
     const line = (linesOverride || lineStates)[index];
     if (!line) return;
     try {
@@ -41,6 +42,7 @@ export default function DeliveryChallanAddPage() {
         model_name: line.model_name,
         processor: line.processor,
         generation: line.generation,
+        quotation_type: quotationType ?? meta?.quotation_type,
       });
       setLineStates((prev) => prev.map((row, i) => (i === index ? { ...row, serialOptions: data.serials || [] } : row)));
     } catch {
@@ -60,13 +62,13 @@ export default function DeliveryChallanAddPage() {
         remark: line.remark || '',
       }));
       setLineStates(lines);
-      lines.forEach((_, index) => {
-        const line = lines[index];
+      lines.forEach((line, index) => {
         fetchAvailableSerials({
           brand: line.brand,
           model_name: line.model_name,
           processor: line.processor,
           generation: line.generation,
+          quotation_type: data.quotation_type,
         }).then((serialData) => {
           setLineStates((prev) => prev.map((row, i) => (i === index ? { ...row, serialOptions: serialData.serials || [] } : row)));
         }).catch(() => {});
@@ -193,7 +195,7 @@ export default function DeliveryChallanAddPage() {
         </div>
 
         {lineStates.map((line, index) => (
-          <div key={index} className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+          <div key={index} className="bg-white border border-gray-200 rounded-xl shadow-sm">
             <div className="px-4 py-3 border-b bg-gray-50">
               <h3 className="text-sm font-semibold">Assets details {index + 1}</h3>
             </div>
@@ -239,24 +241,26 @@ export default function DeliveryChallanAddPage() {
                 />
               </div>
               <div className="sm:col-span-2 lg:col-span-4">
-                <label className="text-xs font-medium text-gray-600">Serial Number<span className="text-red-500">*</span></label>
-                <select
-                  multiple
+                <SearchableMultiSelect
+                  id={`dc-serial-${index}`}
+                  label="Serial Number"
                   required
-                  className="w-full mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm min-h-[100px]"
-                  value={line.serials}
-                  onChange={(e) => {
-                    const selected = Array.from(e.target.selectedOptions, (o) => o.value);
-                    if (selected.length > Number(line.ship_qty)) return;
-                    updateLine(index, { serials: selected });
-                  }}
-                >
-                  {(line.serialOptions || []).map((s) => (
-                    <option key={s.picker_value} value={s.picker_value}>{s.label}</option>
-                  ))}
-                </select>
-                <p className="text-xs text-gray-500 mt-1">Select up to {line.ship_qty} serial(s). Selected: {line.serials?.length || 0}</p>
-                <button type="button" onClick={() => loadSerials(index)} className="text-xs text-cyan-700 mt-1 hover:underline">Refresh serials</button>
+                  placeholder="Please Select"
+                  value={line.serials || []}
+                  maxSelections={Number(line.ship_qty) || 1}
+                  options={(line.serialOptions || []).map((s) => ({
+                    value: s.picker_value || s.formatted_serial,
+                    label: s.label,
+                  }))}
+                  emptyMessage="No in-stock serials for this configuration"
+                  onChange={(selected) => updateLine(index, { serials: selected })}
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Select up to {line.ship_qty} serial(s). Selected: {line.serials?.length || 0}
+                </p>
+                <button type="button" onClick={() => loadSerials(index)} className="text-xs text-cyan-700 mt-1 hover:underline">
+                  Refresh serials
+                </button>
               </div>
             </div>
           </div>
