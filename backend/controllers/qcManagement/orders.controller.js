@@ -7,6 +7,13 @@ const {
   parseExtra,
   resolveLineItem
 } = require('../../services/qcManagementService');
+const {
+  getProductDetailsBySerialNumber,
+  applySerialQcUpdate,
+  buildAllocationLogPayload,
+  insertAllocationLog,
+  addToInventory
+} = require('../../services/qcCheckService');
 
 const listValidators = [
   param('status').isString().trim(),
@@ -255,7 +262,7 @@ const qcCheckValidators = [
   body('sparePartsIds').optional()
 ];
 
-/** Laravel qcCheck — updates qc_status / remark / extra */
+/** Laravel qcCheck — status update, repair log, allocation log, inventory on pass */
 async function qcCheck(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
@@ -264,48 +271,59 @@ async function qcCheck(req, res) {
   const serialNumber = String(req.body.serial_number).trim();
   const selected = req.body.selected_value;
   const remark = req.body.remark ?? '';
+  const sparePartsIds = req.body.sparePartsIds ?? '';
+  const userId = req.user?.user_id ?? null;
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const cur = await client.query(
-      `SELECT serial_id, extra, qc_status FROM vendor_serial_numbers
-       WHERE serial_id = $1 AND serial_number = $2 AND deleted_at IS NULL
-       FOR UPDATE`,
-      [serialId, serialNumber]
-    );
-    if (!cur.rows.length) {
+
+    const updateResult = await applySerialQcUpdate(client, {
+      serialId,
+      serialNumber,
+      selected,
+      remark,
+      sparePartsIds
+    });
+
+    if (!updateResult.ok) {
       await client.query('ROLLBACK');
-      return res.status(404).json({ success: false, message: 'Serial not found' });
+      return res.status(updateResult.status || 400).json({
+        success: false,
+        message: updateResult.message
+      });
     }
 
-    const extra = parseExtra(cur.rows[0].extra);
-    let qcStatus = selected;
-    let inventoryStatus = extra.status2 ?? null;
+    const details = await getProductDetailsBySerialNumber(client, serialNumber);
+    if (details) {
+      const logPayload = await buildAllocationLogPayload(
+        client,
+        details,
+        selected,
+        remark,
+        sparePartsIds,
+        userId
+      );
+      await insertAllocationLog(client, logPayload);
 
-    if (selected === 'require_for_parts') {
-      extra.status2 = 'require_for_parts';
-      extra.require_parts = req.body.sparePartsIds ?? '';
-      inventoryStatus = 'require_for_parts';
-    } else if (selected === 'send_to_qc_check') {
-      qcStatus = 'pending';
-      extra.status2 = 'send_to_qc_check';
-    } else if (selected === 'failed') {
-      /* parity with Laravel repair log hook — stored in extra for now */
-      extra.repair_start_date = new Date().toISOString().slice(0, 10);
-      extra.repair_type = 'failed';
+      if (selected === 'passed') {
+        await addToInventory(
+          client,
+          serialId,
+          serialNumber,
+          details.product_id,
+          details.model_name,
+          'in_stock',
+          details.unique_product_serial
+        );
+        await client.query(
+          `UPDATE vendor_serial_numbers
+           SET inventory_status = 'in_stock', updated_at = NOW()
+           WHERE serial_id = $1`,
+          [serialId]
+        );
+      }
     }
-
-    await client.query(
-      `UPDATE vendor_serial_numbers
-       SET qc_status = $1,
-           remark = $2,
-           inventory_status = COALESCE($3, inventory_status),
-           extra = $4::jsonb,
-           updated_at = NOW()
-       WHERE serial_id = $5`,
-      [qcStatus, remark, inventoryStatus, JSON.stringify(extra), serialId]
-    );
 
     await client.query('COMMIT');
     res.json({ success: true, message: 'QC check updated successfully' });

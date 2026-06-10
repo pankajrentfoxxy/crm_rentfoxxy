@@ -3,6 +3,7 @@ const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
+const { buildEffectivePermissionsForUser } = require('../services/permissionService');
 
 const MANAGEABLE_ROLES = ['team_member', 'team_lead', 'sales', 'floor_manager', 'procurement', 'qc', 'dispatch', 'manager', 'admin', 'support_lead', 'support_tech'];
 const hasUserMgmtAccess = (user) => ['admin', 'manager'].includes(user?.role);
@@ -113,10 +114,39 @@ exports.register = async (req, res) => {
 };
 
 exports.ensureUserSchema = async () => {
-  const sqlPath = path.join(__dirname, '../migrations', '028_support_user_roles.sql');
-  if (!fs.existsSync(sqlPath)) return;
-  const sql = fs.readFileSync(sqlPath, 'utf8');
-  await pool.query(sql);
+  const migrationFiles = ['028_support_user_roles.sql', '029_rbac_system.sql', '040_rbac_roles_module.sql', '041_application_sections.sql'];
+  for (const file of migrationFiles) {
+    const sqlPath = path.join(__dirname, '../migrations', file);
+    if (!fs.existsSync(sqlPath)) continue;
+    const sql = fs.readFileSync(sqlPath, 'utf8');
+    await pool.query(sql);
+  }
+};
+
+const hasRbacUserMgmtAccess = (user) => ['admin', 'super_admin'].includes(user?.role);
+
+const upsertUserPermissionRows = async (userId, permissions, grantedBy) => {
+  const results = [];
+  for (const perm of permissions) {
+    const { section, can_view, can_create, can_edit, can_delete } = perm;
+    if (!section) continue;
+    const result = await pool.query(
+      `INSERT INTO user_permissions (user_id, section, can_view, can_create, can_edit, can_delete, granted_by, granted_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+       ON CONFLICT (user_id, section)
+       DO UPDATE SET
+         can_view = EXCLUDED.can_view,
+         can_create = EXCLUDED.can_create,
+         can_edit = EXCLUDED.can_edit,
+         can_delete = EXCLUDED.can_delete,
+         granted_by = EXCLUDED.granted_by,
+         granted_at = NOW()
+       RETURNING id, user_id, section, can_view, can_create, can_edit, can_delete, granted_by, granted_at`,
+      [userId, section, can_view ?? null, can_create ?? null, can_edit ?? null, can_delete ?? null, grantedBy]
+    );
+    results.push(result.rows[0]);
+  }
+  return results;
 };
 
 // Helper: get user's team_ids (from user_teams, fallback to team_id)
@@ -164,6 +194,22 @@ exports.login = async (req, res) => {
       });
     }
 
+    if (user.status === 'pending_approval') {
+      return res.status(403).json({
+        success: false,
+        message: 'Your account is pending approval from admin'
+      });
+    }
+    if (user.status === 'rejected') {
+      return res.status(403).json({
+        success: false,
+        message: user.rejection_reason || 'Your registration was rejected'
+      });
+    }
+    if (user.status === 'blocked') {
+      return res.status(403).json({ success: false, message: 'Your account has been blocked' });
+    }
+
     const teamIds = await getUserTeamIds(user.user_id, user.team_id);
 
     const token = jwt.sign(
@@ -171,6 +217,8 @@ exports.login = async (req, res) => {
         user_id: user.user_id,
         email: user.email,
         role: user.role,
+        status: user.status || 'active',
+        user_type: user.user_type || 'internal',
         team_id: user.team_id,
         team_ids: teamIds,
         permissions: user.permissions || []
@@ -182,6 +230,7 @@ exports.login = async (req, res) => {
     delete user.password_hash;
     user.permissions = Array.isArray(user.permissions) ? user.permissions : [];
     user.team_ids = teamIds;
+    user.effective_permissions = await buildEffectivePermissionsForUser(user.user_id, user.role);
 
     res.json({
       success: true,
@@ -219,6 +268,7 @@ exports.getCurrentUser = async (req, res) => {
     const user = result.rows[0];
     user.permissions = Array.isArray(user.permissions) ? user.permissions : [];
     user.team_ids = req.user.team_ids || await getUserTeamIds(user.user_id, user.team_id);
+    user.effective_permissions = await buildEffectivePermissionsForUser(user.user_id, user.role);
     res.json({
       success: true,
       user
@@ -446,17 +496,17 @@ exports.updateUserTeams = async (req, res) => {
   }
 };
 
-// Update User Permissions (Admin/Manager)
+// Update User Permissions (Admin/Super Admin) — RBAC per-section overrides
 exports.updateUserPermissions = async (req, res) => {
   const { id } = req.params;
-  const { permissions } = req.body; // Expecting an array of strings
+  const { permissions } = req.body;
 
   if (!Array.isArray(permissions)) {
     return res.status(400).json({ success: false, message: 'Permissions must be an array' });
   }
 
   try {
-    if (!hasUserMgmtAccess(req.user)) {
+    if (!hasRbacUserMgmtAccess(req.user)) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
@@ -467,21 +517,206 @@ exports.updateUserPermissions = async (req, res) => {
     if (targetResult.rows.length === 0) return res.status(404).json({ success: false, message: 'User not found' });
     const target = targetResult.rows[0];
 
-    if (!canManageTargetUser(req.user, target)) {
+    if (req.user.role !== 'super_admin' && !canManageTargetUser(req.user, target)) {
       return res.status(403).json({ success: false, message: 'You cannot update access for this user' });
     }
 
-    const result = await pool.query(
-      `UPDATE users SET permissions = $1 WHERE user_id = $2 RETURNING user_id, name, permissions`,
-      [permissions, id]
+    const updatedPermissions = await upsertUserPermissionRows(
+      parseInt(id, 10),
+      permissions,
+      req.user.user_id
     );
 
-    if (result.rows.length === 0) return res.status(404).json({ success: false, message: 'User not found' });
-
-    res.json({ success: true, message: 'Permissions updated', user: result.rows[0] });
+    res.json({ success: true, message: 'Permissions updated', permissions: updatedPermissions });
   } catch (error) {
     console.error('Update permissions error:', error);
     res.status(500).json({ success: false, message: 'Server error updating permissions' });
+  }
+};
+
+// Register Customer (public)
+exports.registerCustomer = async (req, res) => {
+  const { name, email, password, mobile_no } = req.body;
+
+  try {
+    if (!name || !email || !password) {
+      return res.status(400).json({ success: false, message: 'Name, email, and password are required' });
+    }
+
+    const userExists = await pool.query('SELECT user_id FROM users WHERE email = $1', [email]);
+    if (userExists.rows.length > 0) {
+      return res.status(400).json({ success: false, message: 'User already exists' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const password_hash = await bcrypt.hash(password, salt);
+    const mobileNo = mobile_no ? String(mobile_no).trim() : null;
+
+    const result = await pool.query(
+      `INSERT INTO users (name, email, password_hash, role, user_type, status, active, mobile_no)
+       VALUES ($1, $2, $3, 'customer', 'customer', 'active', true, $4)
+       RETURNING user_id, name, email, role, user_type, status, mobile_no, created_at`,
+      [name, email, password_hash, mobileNo]
+    );
+
+    res.status(201).json({ success: true, user: result.rows[0] });
+  } catch (error) {
+    console.error('Register customer error:', error);
+    res.status(500).json({ success: false, message: 'Server error during registration' });
+  }
+};
+
+// Register Vendor (public, pending approval)
+exports.registerVendor = async (req, res) => {
+  const { name, email, password, mobile_no, company_name, gst_number } = req.body;
+
+  try {
+    if (!name || !email || !password) {
+      return res.status(400).json({ success: false, message: 'Name, email, and password are required' });
+    }
+
+    const userExists = await pool.query('SELECT user_id FROM users WHERE email = $1', [email]);
+    if (userExists.rows.length > 0) {
+      return res.status(400).json({ success: false, message: 'User already exists' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const password_hash = await bcrypt.hash(password, salt);
+    const mobileNo = mobile_no ? String(mobile_no).trim() : null;
+
+    const result = await pool.query(
+      `INSERT INTO users (name, email, password_hash, role, user_type, status, active, mobile_no, company_name, gst_number)
+       VALUES ($1, $2, $3, 'vendor', 'vendor', 'pending_approval', true, $4, $5, $6)
+       RETURNING user_id, name, email, role, user_type, status, mobile_no, company_name, gst_number, created_at`,
+      [
+        name,
+        email,
+        password_hash,
+        mobileNo,
+        company_name ? String(company_name).trim() : null,
+        gst_number ? String(gst_number).trim() : null,
+      ]
+    );
+
+    res.status(201).json({
+      success: true,
+      message: 'Registration submitted. Awaiting admin approval.',
+      user: result.rows[0],
+    });
+  } catch (error) {
+    console.error('Register vendor error:', error);
+    res.status(500).json({ success: false, message: 'Server error during registration' });
+  }
+};
+
+// Register Technician (admin/super_admin only)
+exports.registerTechnician = async (req, res) => {
+  const { name, email, password, mobile_no, permissions } = req.body;
+
+  try {
+    if (!['admin', 'super_admin'].includes(req.user?.role)) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+
+    if (!name || !email || !password) {
+      return res.status(400).json({ success: false, message: 'Name, email, and password are required' });
+    }
+
+    const userExists = await pool.query('SELECT user_id FROM users WHERE email = $1', [email]);
+    if (userExists.rows.length > 0) {
+      return res.status(400).json({ success: false, message: 'User already exists' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const password_hash = await bcrypt.hash(password, salt);
+    const mobileNo = mobile_no ? String(mobile_no).trim() : null;
+
+    const result = await pool.query(
+      `INSERT INTO users (name, email, password_hash, role, user_type, status, active, mobile_no)
+       VALUES ($1, $2, $3, 'technician', 'technician', 'active', true, $4)
+       RETURNING user_id, name, email, role, user_type, status, mobile_no, created_at`,
+      [name, email, password_hash, mobileNo]
+    );
+
+    const user = result.rows[0];
+
+    if (Array.isArray(permissions) && permissions.length > 0) {
+      await upsertUserPermissionRows(user.user_id, permissions, req.user.user_id);
+    }
+
+    res.status(201).json({ success: true, user });
+  } catch (error) {
+    console.error('Register technician error:', error);
+    res.status(500).json({ success: false, message: 'Server error during registration' });
+  }
+};
+
+// Approve or reject vendor (super_admin only)
+exports.approveVendor = async (req, res) => {
+  const { id } = req.params;
+  const { action, reason } = req.body;
+
+  try {
+    if (req.user?.role !== 'super_admin') {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+
+    if (!['approve', 'reject'].includes(action)) {
+      return res.status(400).json({ success: false, message: "action must be 'approve' or 'reject'" });
+    }
+
+    const vendorResult = await pool.query(
+      `SELECT user_id, role, status FROM users WHERE user_id = $1`,
+      [id]
+    );
+    if (vendorResult.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    if (vendorResult.rows[0].role !== 'vendor') {
+      return res.status(400).json({ success: false, message: 'User is not a vendor' });
+    }
+
+    if (action === 'approve') {
+      await pool.query(
+        `UPDATE users
+         SET status = 'active', approved_by = $1, approved_at = NOW(), rejection_reason = NULL
+         WHERE user_id = $2`,
+        [req.user.user_id, id]
+      );
+      return res.json({ success: true, message: 'Vendor approved successfully' });
+    }
+
+    await pool.query(
+      `UPDATE users
+       SET status = 'rejected', rejection_reason = $1, approved_by = NULL, approved_at = NULL
+       WHERE user_id = $2`,
+      [reason || null, id]
+    );
+    return res.json({ success: true, message: 'Vendor registration rejected' });
+  } catch (error) {
+    console.error('Approve vendor error:', error);
+    res.status(500).json({ success: false, message: 'Server error processing vendor approval' });
+  }
+};
+
+// List pending vendor registrations (admin/super_admin)
+exports.getPendingVendors = async (req, res) => {
+  try {
+    if (!['admin', 'super_admin'].includes(req.user?.role)) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+
+    const result = await pool.query(
+      `SELECT user_id, name, email, company_name, gst_number, mobile_no, created_at
+       FROM users
+       WHERE role = 'vendor' AND status = 'pending_approval'
+       ORDER BY created_at ASC`
+    );
+
+    res.json({ success: true, vendors: result.rows });
+  } catch (error) {
+    console.error('Get pending vendors error:', error);
+    res.status(500).json({ success: false, message: 'Server error fetching pending vendors' });
   }
 };
 

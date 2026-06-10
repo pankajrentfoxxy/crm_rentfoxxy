@@ -10,7 +10,12 @@ const {
   updateMobile,
   updateUserTeams,
   updateUserPermissions,
-  deleteUser
+  deleteUser,
+  registerCustomer,
+  registerVendor,
+  registerTechnician,
+  approveVendor,
+  getPendingVendors,
 } = require('../controllers/authController');
 const { authMiddleware } = require('../middleware/auth');
 
@@ -42,6 +47,31 @@ router.get('/debug', async (req, res) => {
 // @desc    Login user
 // @access  Public
 router.post('/login', login);
+
+// @route   POST /api/auth/register/customer
+// @desc    Public customer self-registration
+// @access  Public
+router.post('/register/customer', registerCustomer);
+
+// @route   POST /api/auth/register/vendor
+// @desc    Public vendor self-registration (pending approval)
+// @access  Public
+router.post('/register/vendor', registerVendor);
+
+// @route   POST /api/auth/register/technician
+// @desc    Register technician with per-user RBAC overrides
+// @access  Private (admin/super_admin)
+router.post('/register/technician', authMiddleware, registerTechnician);
+
+// @route   GET /api/auth/vendors/pending
+// @desc    List vendors awaiting approval
+// @access  Private (admin/super_admin)
+router.get('/vendors/pending', authMiddleware, getPendingVendors);
+
+// @route   POST /api/auth/vendors/:id/approve
+// @desc    Approve or reject a vendor registration
+// @access  Private (super_admin)
+router.post('/vendors/:id/approve', authMiddleware, approveVendor);
 
 // @route   GET /api/auth/me
 // @desc    Get current logged in user

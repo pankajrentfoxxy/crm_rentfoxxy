@@ -173,6 +173,11 @@ const findQcRecordForIdentifier = async (identifier) => {
         } catch (error) {
             console.warn(`QC lookup via ${param} failed:`, error.message);
         }
+    if (ERP_QC_LOOKUP_QUERY) {
+        const res = await fetchQcPassedPage(1, { [ERP_QC_LOOKUP_QUERY]: target });
+        console.log('rows', res);
+        const hit = res?.rows.find((r) => qcRecordMatchesTarget(r, targetUpper));
+        if (hit) return hit;
     }
 
     try {
@@ -216,6 +221,7 @@ const findQcRecordForIdentifier = async (identifier) => {
 
     return null;
 };
+}
 const fetchProductDetail = async (productId) => {
     if (!productId) return null;
     const { data } = await requestWithRetry(`${ERP_BASE_URL}/get-product-detail/${productId}`);

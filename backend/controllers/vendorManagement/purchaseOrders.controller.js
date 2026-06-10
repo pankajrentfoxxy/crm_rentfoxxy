@@ -7,6 +7,12 @@ const { getTotalAmountOfPurchaseOrder } = require('../../utils/purchaseOrderGst'
 const { nextPurchaseOrderNumber } = require('../../services/vendorNumberService');
 const { logVendorAudit } = require('../../services/vendorAuditLogService');
 const { allocateTtsplCodes } = require('../../services/vendorInventoryAssetCodeService');
+const {
+  normalizeIncomingLines,
+  buildAssetsDetailsFromLines,
+  lineSubtotalFromRows,
+  insertProductDetailsForPo
+} = require('../../services/purchaseOrderProductDetailsService');
 
 /** Normalize JSONB/array/string line_items → array */
 function parseLineItemsJson(raw) {
@@ -1029,25 +1035,29 @@ async function create(req, res) {
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
 
   const body = req.body;
-  const vState = await vendorState(body.vendor_id);
+  const rawLines = normalizeIncomingLines(body);
+  if (!rawLines.length) {
+    return res.status(400).json({
+      success: false,
+      message: 'Add at least one asset line (line_items or assetsDetails required)'
+    });
+  }
+
+  const vendorCheck = await pool.query(
+    `SELECT vendor_id, state FROM vendors WHERE vendor_id = $1 AND deleted_at IS NULL`,
+    [body.vendor_id]
+  );
+  if (!vendorCheck.rows.length) {
+    return res.status(400).json({ success: false, message: 'Vendor not found' });
+  }
+
+  const vState = vendorCheck.rows[0].state;
   const is_same_state =
     typeof body.is_same_state === 'boolean'
       ? body.is_same_state
       : normalizeStateValue(vState) === normalizeStateValue(body.po_state);
 
-  let line_items = Array.isArray(body.line_items) ? body.line_items : [];
-  if (line_items.length === 0) {
-    line_items = [
-      {
-        draft_placeholder: true,
-        brand: 'TBD',
-        quantity: 1,
-        rate: 0,
-        note: 'Add asset line items later (full PO flow)'
-      }
-    ];
-  }
-  const sub_total_amount = body.sub_total_amount ?? lineSubtotal(line_items);
+  const sub_total_amount = body.sub_total_amount ?? lineSubtotalFromRows(rawLines);
   const total_amount = getTotalAmountOfPurchaseOrder(sub_total_amount, !!is_same_state);
 
   const purchase_order_number =
@@ -1063,14 +1073,27 @@ async function create(req, res) {
     return res.status(409).json({ success: false, message: 'PO number already exists' });
   }
 
+  const assets_details =
+    body.assets_details != null ? body.assets_details : buildAssetsDetailsFromLines(rawLines);
+
+  const client = await pool.connect();
   try {
-    const ins = await pool.query(
+    await client.query('BEGIN');
+
+    const { insertedIds, enrichedLines } = await insertProductDetailsForPo(
+      client,
+      null,
+      rawLines,
+      body.purchase_order_type
+    );
+
+    const ins = await client.query(
       `INSERT INTO vendor_purchase_orders (
         purchase_order_number, purchase_order_date, purchase_order_type, vendor_id,
         po_state, is_same_state, sub_total_amount, total_amount,
-        line_items, assets_details, remarks,
+        line_items, assets_details, product_details_legacy_ids, remarks,
         status, status_updated_by_admin_id, status_updated_by_name
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
       RETURNING *`,
       [
         purchase_order_number,
@@ -1081,28 +1104,49 @@ async function create(req, res) {
         is_same_state,
         sub_total_amount,
         total_amount,
-        JSON.stringify(line_items),
-        body.assets_details != null ? JSON.stringify(body.assets_details) : null,
+        JSON.stringify(enrichedLines),
+        JSON.stringify(assets_details),
+        JSON.stringify(insertedIds),
         body.remarks || null,
-        body.status || 'draft',
+        body.status || 'pending',
         req.user?.user_id || null,
         body.status_updated_by_name || 'Admin'
       ]
     );
 
+    const poId = ins.rows[0].po_id;
+    await client.query(
+      `UPDATE vendor_product_details SET po_id = $1, updated_at = NOW()
+       WHERE product_detail_id = ANY($2::int[])`,
+      [poId, insertedIds]
+    );
+
+    await client.query('COMMIT');
+
     await logVendorAudit({
       actorUserId: req.user?.user_id,
       vendorId: body.vendor_id,
       entityType: 'purchase_order',
-      entityId: ins.rows[0].po_id,
+      entityId: poId,
       action: 'create',
-      payload: { purchase_order_number }
+      payload: { purchase_order_number, product_detail_ids: insertedIds }
     });
 
-    res.status(201).json({ success: true, message: 'Purchase Order saved successfully', data: ins.rows[0] });
+    res.status(201).json({
+      success: true,
+      message: 'Purchase Order saved successfully',
+      data: { ...ins.rows[0], po_id: poId, line_items: enrichedLines, product_details: enrichedLines }
+    });
   } catch (e) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (_) {
+      /* ignore */
+    }
     console.error(e);
     res.status(500).json({ success: false, message: e.message });
+  } finally {
+    client.release();
   }
 }
 
@@ -1113,7 +1157,9 @@ function createValidators() {
     body('vendor_id').isInt().toInt(),
     body('po_state').trim().notEmpty(),
     body('remarks').trim().notEmpty(),
-    body('line_items').optional().isArray()
+    body('line_items').optional().isArray(),
+    body('assets_details').optional(),
+    body('assetsDetails').optional().isString()
   ];
 }
 

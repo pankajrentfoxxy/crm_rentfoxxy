@@ -33,6 +33,10 @@ const checkRole = (...roles) => {
       });
     }
 
+    if (req.user.role === 'super_admin') {
+      return next();
+    }
+
     if (!roles.includes(req.user.role)) {
       return res.status(403).json({
         success: false,
@@ -48,6 +52,7 @@ const checkRole = (...roles) => {
 const checkRoleOrPermission = (roles = [], permissions = []) => {
   return (req, res, next) => {
     if (!req.user) return res.status(401).json({ success: false, message: 'Unauthorized' });
+    if (req.user.role === 'super_admin') return next();
     const hasRole = roles.length === 0 || roles.includes(req.user.role);
     const userPerms = req.user.permissions || [];
     const hasPermission = permissions.length === 0 || permissions.some(p => userPerms.includes(p));
@@ -60,13 +65,8 @@ const checkRoleOrPermission = (roles = [], permissions = []) => {
 const checkPermission = (permission) => {
   return (req, res, next) => {
     if (!req.user) return res.status(401).json({ success: false, message: 'Unauthorized' });
+    if (req.user.role === 'super_admin') return next();
 
-    // 1. Check Role-based mapping (Optional: Define roles that typically have this permission)
-    // For now, we rely on the specific 'permissions' array from the token or DB
-    // But since the token might be old, strict systems re-fetch. 
-    // We will use the token's permission array (req.user.permissions)
-
-    // Note: Verify authMiddleware decodes permissions into req.user
     const userPermissions = req.user.permissions || [];
 
     if (userPermissions.includes(permission)) {

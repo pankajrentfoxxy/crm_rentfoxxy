@@ -466,7 +466,9 @@ export default function PurchaseOrdersPage() {
         Storage: assetRows.map((r) => r.storage),
         GPU: assetRows.map((r) => r.gpu),
         quantity: assetRows.map((r) => Number(r.quantity)),
-        'Screen size': assetRows.map((r) => r.screen_size)
+        rate: assetRows.map((r) => Number(r.rate)),
+        'Screen size': assetRows.map((r) => r.screen_size),
+        locking_period: assetRows.map((r) => Number(r.period_months) || '')
       };
 
       const body = {
