@@ -14,6 +14,7 @@ import {
   Store,
   Settings,
   Cog,
+  ClipboardCheck,
 } from 'lucide-react';
 
 /** Vendor submenu paths match VendorManagementApp nested routes */
@@ -49,6 +50,13 @@ export const inventoryAccordionChildren = [
   { label: 'Serial Number Status', path: '/inventory-management/serial-number-status' },
   { label: 'Universal Search', path: '/inventory-management/universal-search' },
   { label: 'NPA Assets', path: '/inventory-management/npa-assets', countKey: 'npa' },
+];
+
+export const deliveryRegisterAccordionChildren = [
+  { label: 'In Transit', path: '/delivery-register-management/in-transit', countKey: 'in_transit' },
+  { label: 'Delivered', path: '/delivery-register-management/delivered', countKey: 'delivered' },
+  { label: 'Rejected', path: '/delivery-register-management/rejected', countKey: 'rejected' },
+  { label: 'Technician List', path: '/delivery-register-management/technicians', countKey: 'technicians' },
 ];
 
 export const operationAccordionChildren = [
@@ -110,6 +118,18 @@ export const MENU_GROUPS = [
     ],
   },
   {
+    key: 'delivery_register',
+    label: 'Delivery Register Management',
+    items: [
+      {
+        type: 'deliveryRegisterAccordion',
+        section: 'delivery_register_management',
+        icon: ClipboardCheck,
+        label: 'Delivery Register Manager',
+      },
+    ],
+  },
+  {
     key: 'customer_management',
     label: 'Customer Management',
     items: [
@@ -161,7 +181,12 @@ export function isMenuItemVisible(item, canView) {
     return (item.sections || []).some((section) => canView(section));
   }
 
-  if (item.type === 'vendorAccordion' || item.type === 'qcAccordion' || item.type === 'inventoryAccordion') {
+  if (
+    item.type === 'vendorAccordion'
+    || item.type === 'qcAccordion'
+    || item.type === 'inventoryAccordion'
+    || item.type === 'deliveryRegisterAccordion'
+  ) {
     return item.section ? canView(item.section) : false;
   }
 

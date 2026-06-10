@@ -16,8 +16,8 @@ const {
   getOperationCounts,
   searchAvailableInventory,
 } = require('../services/salesManagementService');
-const { generateDocumentPdf, emailDocument } = require('../services/salesManagementPdfService');
-
+const { generateDocumentPdf } = require('../services/salesManagementPdfService');
+const {emailDocument} = require('../services/salesManagementPdfService');
 function parseJsonSafe(value, fallback = null) {
   if (value == null) return fallback;
   if (typeof value === 'object') return value;

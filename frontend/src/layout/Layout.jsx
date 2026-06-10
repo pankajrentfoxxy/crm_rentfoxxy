@@ -46,6 +46,7 @@ import {
 
   Settings,
   Cog,
+  ClipboardCheck,
 } from 'lucide-react';
 
 import { isSupportUser } from '../utils/supportAccess';
@@ -53,6 +54,7 @@ import { useQcStatusCounts } from '../features/qc-management/hooks/useQcStatusCo
 import { useInventoryListCounts } from '../features/inventory-management/hooks/useInventoryListCounts';
 import usePermission from '../hooks/usePermission';
 import { useOperationCounts } from '../features/operation-management/hooks/useOperationCounts';
+import { useDeliveryRegisterCounts } from '../features/delivery-register-management/hooks/useDeliveryRegisterCounts';
 import {
   FLAT_MENU_ITEMS,
   vendorAccordionChildren,
@@ -60,6 +62,7 @@ import {
   inventoryAccordionChildren,
   settingsAccordionChildren,
   operationAccordionChildren,
+  deliveryRegisterAccordionChildren,
   isMenuItemVisible,
   isSettingsChildVisible,
   isOperationChildVisible,
@@ -88,7 +91,11 @@ export default function Layout({ children }) {
     canView('delivery_challans') ||
     canView('return_dc');
 
+  const showDeliveryRegisterAccordion = canView('delivery_register_management');
+
   const { counts: operationCounts } = useOperationCounts(showOperationAccordion);
+
+  const deliveryRegisterCounts = useDeliveryRegisterCounts(showDeliveryRegisterAccordion);
 
   const { counts: qcCounts } = useQcStatusCounts(showQcAccordion);
 
@@ -124,6 +131,10 @@ export default function Layout({ children }) {
     location.pathname.startsWith('/operation-management')
   );
 
+  const [deliveryRegisterAccordionOpen, setDeliveryRegisterAccordionOpen] = useState(() =>
+    location.pathname.startsWith('/delivery-register-management')
+  );
+
 
 
   useEffect(() => {
@@ -154,6 +165,10 @@ export default function Layout({ children }) {
 
     if (location.pathname.startsWith('/operation-management')) {
       setOperationAccordionOpen(true);
+    }
+
+    if (location.pathname.startsWith('/delivery-register-management')) {
+      setDeliveryRegisterAccordionOpen(true);
     }
 
   }, [location.pathname]);
@@ -546,6 +561,60 @@ export default function Layout({ children }) {
             }
 
 
+
+            if (item.type === 'deliveryRegisterAccordion') {
+              return (
+                <div key="delivery-register-accordion" className="space-y-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setDeliveryRegisterAccordionOpen((o) => !o)}
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors text-left hover:bg-gray-100 ${
+                      location.pathname.startsWith('/delivery-register-management') ? 'text-teal-700 bg-teal-50/60' : 'text-gray-800'
+                    }`}
+                  >
+                    <ClipboardCheck className="w-5 h-5 text-gray-600 shrink-0" />
+                    <span className="flex-1">Delivery Register Manager</span>
+                    <ChevronDown
+                      className={`w-4 h-4 text-gray-500 shrink-0 transition-transform duration-200 ${
+                        deliveryRegisterAccordionOpen ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </button>
+                  {deliveryRegisterAccordionOpen && (
+                    <div className="mt-1 ml-2 pl-3 border-l border-teal-100 space-y-0.5">
+                      {deliveryRegisterAccordionChildren.map((child) => {
+                        const badge =
+                          child.countKey && deliveryRegisterCounts && deliveryRegisterCounts[child.countKey] != null
+                            ? deliveryRegisterCounts[child.countKey]
+                            : null;
+                        return (
+                          <NavLink
+                            key={child.path}
+                            to={child.path}
+                            onClick={() => setSidebarOpen(false)}
+                            className={({ isActive }) =>
+                              [
+                                'flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-xs transition-colors',
+                                isActive
+                                  ? 'bg-teal-100 text-teal-900 font-semibold'
+                                  : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900',
+                              ].join(' ')
+                            }
+                          >
+                            <span>{child.label}</span>
+                            {badge != null ? (
+                              <span className="shrink-0 rounded-full bg-sky-100 text-sky-800 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums">
+                                {badge}
+                              </span>
+                            ) : null}
+                          </NavLink>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            }
 
             if (item.type === 'operationAccordion') {
               return (
