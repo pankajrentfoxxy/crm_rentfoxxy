@@ -1,6 +1,9 @@
 import {
   BarChart3,
+  BarChart2,
+  TrendingUp,
   Users,
+  UserCheck,
   Package,
   Truck,
   Building2,
@@ -52,6 +55,18 @@ export const salesPipelineAccordionChildren = [
   { label: 'Delivery Challans', path: '/sales-pipeline/delivery-challans', section: 'delivery_challans', countKey: 'delivery_challans' },
   { label: 'Delivery Register', path: '/sales-pipeline/delivery-register', section: 'delivery_register_management' },
   { label: 'Return DC', path: '/sales-pipeline/return-dc', section: 'return_dc', countKey: 'return_dc' },
+];
+
+export const reportsMenuItems = [
+  { icon: BarChart2, label: 'Manager Dashboard', path: '/reports/manager-dashboard', section: 'analytics_dashboard' },
+  { icon: TrendingUp, label: 'Sales Dashboard', path: '/reports/sales-dashboard', section: 'analytics_dashboard' },
+  { icon: DollarSign, label: 'Revenue', path: '/reports/revenue', section: 'reports' },
+  { icon: Package, label: 'Inventory', path: '/reports/inventory', section: 'reports' },
+  { icon: Users, label: 'Lead Conversion', path: '/reports/lead-conversion', section: 'reports' },
+  { icon: UserCheck, label: 'Salesperson', path: '/reports/salesperson', section: 'reports' },
+  { icon: CreditCard, label: 'Collections', path: '/reports/collections', section: 'reports' },
+  { icon: Building2, label: 'Vendor Spend', path: '/reports/vendor-spend', section: 'reports' },
+  { icon: Wrench, label: 'Technician', path: '/reports/technician', section: 'reports' },
 ];
 
 export const financeMenuItems = [
@@ -183,8 +198,13 @@ export const MENU_GROUPS = [
     key: 'reports',
     label: 'Reports & Analytics',
     items: [
-      { icon: BarChart3, label: 'Manager Dashboard', path: '/manager-dashboard', section: 'manager_dashboard' },
-      { icon: ClipboardCheck, label: 'Reports', path: '/reports', section: 'reports' },
+      {
+        type: 'reportsAccordion',
+        icon: BarChart2,
+        label: 'Reports & Analytics',
+        section: 'analytics_dashboard',
+        children: reportsMenuItems,
+      },
     ],
   },
   {
@@ -232,6 +252,10 @@ export function isMenuItemVisible(item, canView) {
     return (item.children || []).some((child) => (child.section ? canView(child.section) : true));
   }
 
+  if (item.type === 'reportsAccordion') {
+    return (item.children || []).some((child) => (child.section ? canView(child.section) : true));
+  }
+
   if (item.type === 'deliveryRegisterAccordion') {
     return (item.sections || []).some((section) => canView(section));
   }
@@ -249,6 +273,7 @@ export function isMenuItemVisible(item, canView) {
     || item.type === 'leadCrmAccordion'
     || item.type === 'salesPipelineAccordion'
     || item.type === 'financeAccordion'
+    || item.type === 'reportsAccordion'
     || item.type === 'qcAccordion'
     || item.type === 'inventoryAccordion'
   ) {
@@ -278,6 +303,15 @@ export function isSalesPipelineChildVisible(child, canView) {
 }
 
 export function isFinanceChildVisible(child, canView) {
+  if (child.section) return canView(child.section);
+  return true;
+}
+
+export function isReportsChildVisible(child, canView, userRole) {
+  if (child.path === '/reports/manager-dashboard' && userRole === 'sales') return false;
+  if (child.path === '/reports/sales-dashboard' && !['admin', 'manager', 'sales'].includes(userRole)) {
+    return canView(child.section);
+  }
   if (child.section) return canView(child.section);
   return true;
 }

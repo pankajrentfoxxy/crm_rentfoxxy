@@ -9,6 +9,7 @@ import { useNavigate, Link, NavLink, useLocation } from 'react-router-dom';
 import {
 
   BarChart3,
+  BarChart2,
 
   CheckCircle,
 
@@ -71,12 +72,14 @@ import {
   operationAccordionChildren,
   salesPipelineAccordionChildren,
   financeMenuItems,
+  reportsMenuItems,
   deliveryRegisterAccordionChildren,
   isMenuItemVisible,
   isSettingsChildVisible,
   isOperationChildVisible,
   isSalesPipelineChildVisible,
   isFinanceChildVisible,
+  isReportsChildVisible,
   isDeliveryRegisterChildVisible,
   isLeadCrmChildVisible,
 } from '../config/menuConfig';
@@ -117,6 +120,9 @@ export default function Layout({ children }) {
     canView('security_deposits') ||
     canView('billing_dashboard') ||
     canView('einvoice_ewb');
+
+  const showReportsAccordion =
+    canView('analytics_dashboard') || canView('reports');
 
   const showSupportNav = canView('support_tickets');
   const { counts: supportCounts } = useSupportCounts(showSupportNav);
@@ -185,6 +191,10 @@ export default function Layout({ children }) {
     location.pathname.startsWith('/finance')
   );
 
+  const [reportsAccordionOpen, setReportsAccordionOpen] = useState(() =>
+    location.pathname.startsWith('/reports')
+  );
+
 
 
   useEffect(() => {
@@ -227,6 +237,10 @@ export default function Layout({ children }) {
 
     if (location.pathname.startsWith('/delivery-register-management')) {
       setDeliveryRegisterAccordionOpen(true);
+    }
+
+    if (location.pathname.startsWith('/reports')) {
+      setReportsAccordionOpen(true);
     }
 
     if (
@@ -912,6 +926,56 @@ export default function Layout({ children }) {
                           </NavLink>
                         );
                       })}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            if (item.type === 'reportsAccordion' && showReportsAccordion) {
+              return (
+                <div key="reports-accordion" className="space-y-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setReportsAccordionOpen((o) => !o)}
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors text-left hover:bg-gray-100 ${
+                      location.pathname.startsWith('/reports')
+                        ? 'text-violet-700 bg-violet-50/60' : 'text-gray-800'
+                    }`}
+                  >
+                    <BarChart2 className="w-5 h-5 text-gray-600 shrink-0" />
+                    <span className="flex-1">Reports & Analytics</span>
+                    <ChevronDown
+                      className={`w-4 h-4 text-gray-500 shrink-0 transition-transform duration-200 ${
+                        reportsAccordionOpen ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </button>
+                  {reportsAccordionOpen && (
+                    <div className="mt-1 ml-2 pl-3 border-l border-violet-100 space-y-0.5">
+                      {reportsMenuItems
+                        .filter((child) => isReportsChildVisible(child, canView, user?.role))
+                        .map((child) => {
+                          const Icon = child.icon;
+                          return (
+                            <NavLink
+                              key={child.path}
+                              to={child.path}
+                              onClick={() => setSidebarOpen(false)}
+                              className={({ isActive }) =>
+                                [
+                                  'flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs transition-colors',
+                                  isActive
+                                    ? 'bg-violet-100 text-violet-900 font-semibold'
+                                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900',
+                                ].join(' ')
+                              }
+                            >
+                              {Icon ? <Icon className="w-3.5 h-3.5 shrink-0" /> : null}
+                              {child.label}
+                            </NavLink>
+                          );
+                        })}
                     </div>
                   )}
                 </div>

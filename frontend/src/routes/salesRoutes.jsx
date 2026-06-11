@@ -5,14 +5,12 @@ import ProtectedRoute from '../router/ProtectedRoute';
 import Dashboard from '../pages/Dashboard';
 import Inventory from '../components/Inventory';
 import PartsInventory from '../components/PartsInventory';
-import Reports from '../components/Reports';
 import Sales from '../components/Sales';
 import LeadList from '../components/LeadList.legacy';
 import LeadDetail from '../components/LeadDetail.legacy';
 import FollowUps from '../components/FollowUps.legacy';
 import LeadCrmApp from '../features/lead-crm/LeadCrmApp';
 import SalesPipelineApp from '../features/sales-pipeline/SalesPipelineApp';
-import ManagerDashboard from '../components/ManagerDashboard';
 import Orders from '../components/Orders';
 import Customers from '../components/Customers';
 import TicketsList from '../pages/tickets/TicketsList';
@@ -45,7 +43,5 @@ export const salesRoutes = [
   { path: '/follow-ups', element: guard('follow_ups', 'view', withLayout(<FollowUps api={api} />)) },
   { path: '/lead-orders', element: guard('lead_orders', 'view', withLayout(<Orders api={api} />)) },
   { path: '/customers', element: guard('customers', 'view', withLayout(<Customers api={api} />)) },
-  { path: '/manager-dashboard', element: guard('manager_dashboard', 'view', withLayout(<ManagerDashboard api={api} />)) },
-  { path: '/reports', element: guard('reports', 'view', withLayout(<Reports api={api} />)) },
   { path: '/orders', element: guard('lead_orders', 'view', withLayout(<Orders api={api} />)) },
 ];

@@ -28,14 +28,16 @@ const LEGACY_ROLE_SECTIONS = {
     'procurement', 'vendor_management', 'warehouse', 'qc_management',
     'inventory_management', 'dispatch', 'support_tickets', 'customer_inventory',
     'teams', 'roles', 'role_permissions', 'user_permissions',
+    'analytics_dashboard', 'reports_export',
   ],
   manager: [
     'dashboard', 'inventory', 'tickets', 'leads', 'sales_orders', 'follow_ups',
-    'lead_orders', 'customers', 'manager_dashboard', 'reports', 'parts',
+    'lead_orders', 'customers', 'manager_dashboard', 'reports', 'analytics_dashboard', 'reports_export', 'parts',
     'procurement', 'vendor_management', 'warehouse', 'qc_management',
     'inventory_management', 'dispatch', 'support_tickets', 'customer_inventory', 'teams',
   ],
-  sales: ['dashboard', 'leads', 'sales_orders', 'follow_ups', 'lead_orders', 'customers'],
+  sales: ['dashboard', 'leads', 'sales_orders', 'follow_ups', 'lead_orders', 'customers', 'analytics_dashboard'],
+  accounts: ['customer_billing', 'vendor_billing_mgmt', 'credit_notes', 'debit_notes', 'reports', 'reports_export'],
   floor_manager: [
     'dashboard', 'inventory', 'tickets', 'reports', 'parts', 'qc_management',
     'inventory_management', 'dispatch', 'customer_inventory',

@@ -9,6 +9,7 @@ import { customerManagementRoutes } from './customerManagementRoutes';
 import { deliveryRegisterManagementRoutes } from './deliveryRegisterManagementRoutes';
 import { technicianRoutes } from './technicianRoutes';
 import { financeRoutes } from './financeRoutes';
+import { reportingRoutes } from './reportingRoutes';
 
 export const appRoutes = [
   ...publicRoutes,
@@ -22,6 +23,7 @@ export const appRoutes = [
   ...deliveryRegisterManagementRoutes,
   ...technicianRoutes,
   ...financeRoutes,
+  ...reportingRoutes,
 ];
 
 export {
@@ -36,4 +38,5 @@ export {
   deliveryRegisterManagementRoutes,
   technicianRoutes,
   financeRoutes,
+  reportingRoutes,
 };

@@ -506,3 +506,682 @@ exports.getTechnicianPerformance = async (req, res) => {
         res.status(500).json({ success: false, message: 'Server error generating report' });
     }
 };
+
+function parsePagination(query) {
+    const page = Math.max(parseInt(query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(query.limit, 10) || 50, 1), 500);
+    const offset = (page - 1) * limit;
+    return { page, limit, offset };
+}
+
+function defaultDateRange(query) {
+    const { allTime, from, to } = resolveDateRange(query);
+    return { from, to, allTime };
+}
+
+async function fetchRevenueData(query) {
+    const { from, to } = defaultDateRange(query);
+    const { page, limit, offset } = parsePagination(query);
+    const conditions = ['ci.invoice_date >= $1::date', 'ci.invoice_date <= $2::date'];
+    const params = [from, to];
+    let idx = 3;
+
+    if (query.customer_id) {
+        const cid = parseInt(query.customer_id, 10);
+        if (Number.isInteger(cid)) {
+            conditions.push(`ci.customer_id = $${idx}`);
+            params.push(cid);
+            idx += 1;
+        }
+    }
+
+    if (query.type === 'rental' || query.type === 'sale') {
+        conditions.push(`EXISTS (
+          SELECT 1 FROM delivery_challan_lines dcl
+          WHERE dcl.customer_id = ci.customer_id
+            AND dcl.quotation_type = $${idx}
+        )`);
+        params.push(query.type);
+        idx += 1;
+    }
+
+    const whereSql = conditions.join(' AND ');
+
+    const [countRes, rowsRes, totalsRes] = await Promise.all([
+        pool.query(`SELECT COUNT(*)::int AS total FROM customer_invoices ci WHERE ${whereSql}`, params),
+        pool.query(
+            `SELECT ci.invoice_number, ci.invoice_month, ci.invoice_year, ci.subtotal, ci.gst_amount,
+                    ci.credit_note_adjustment, ci.grand_total, ci.status, ci.invoice_date,
+                    c.company_name AS customer_name, c.name AS contact_name
+             FROM customer_invoices ci
+             LEFT JOIN customers c ON c.customer_id = ci.customer_id
+             WHERE ${whereSql}
+             ORDER BY ci.invoice_date DESC
+             LIMIT $${idx} OFFSET $${idx + 1}`,
+            [...params, limit, offset]
+        ),
+        pool.query(
+            `SELECT
+              COALESCE(SUM(ci.grand_total), 0)::float AS invoiced,
+              COALESCE(SUM(ci.grand_total) FILTER (WHERE ci.status = 'paid'), 0)::float AS collected,
+              COALESCE(SUM(ci.grand_total) FILTER (WHERE ci.status NOT IN ('paid', 'cancelled')), 0)::float AS outstanding,
+              COALESCE(SUM(ci.credit_note_adjustment), 0)::float AS credit_notes_applied
+             FROM customer_invoices ci
+             WHERE ${whereSql}`,
+            params
+        ),
+    ]);
+
+    const total = countRes.rows[0]?.total || 0;
+    return {
+        invoices: rowsRes.rows,
+        totals: totalsRes.rows[0] || {},
+        pagination: {
+            page,
+            limit,
+            total,
+            total_pages: Math.ceil(total / limit) || 1,
+        },
+    };
+}
+
+exports.getRevenueReport = async (req, res) => {
+    try {
+        const data = await fetchRevenueData(req.query);
+        res.json({ success: true, ...data });
+    } catch (error) {
+        console.error('getRevenueReport error:', error);
+        res.status(500).json({ success: false, message: 'Server error generating revenue report' });
+    }
+};
+
+async function fetchInventoryUtilisationData() {
+    const [summaryRes, brandRes, topCustomersRes] = await Promise.all([
+        pool.query(
+            `SELECT COUNT(*)::int AS total_fleet,
+              COUNT(*) FILTER (WHERE inventory_status = 'out_stock')::int AS rented
+             FROM vendor_serial_numbers
+             WHERE deleted_at IS NULL`
+        ),
+        pool.query(
+            `SELECT COALESCE(NULLIF(TRIM(extra->>'brand'), ''), NULLIF(TRIM(extra->>'brand_name'), ''), 'Unknown') AS brand,
+              COUNT(*)::int AS total,
+              COUNT(*) FILTER (WHERE inventory_status = 'out_stock')::int AS rented,
+              COUNT(*) FILTER (WHERE qc_status = 'qc_passed' AND inventory_status = 'in_stock')::int AS available,
+              COUNT(*) FILTER (
+                WHERE serial_number IN (
+                  SELECT serial_number FROM tickets
+                  WHERE status NOT IN ('completed', 'qc_failed_return_vendor')
+                )
+              )::int AS in_repair
+             FROM vendor_serial_numbers
+             WHERE deleted_at IS NULL
+             GROUP BY COALESCE(NULLIF(TRIM(extra->>'brand'), ''), NULLIF(TRIM(extra->>'brand_name'), ''), 'Unknown')
+             ORDER BY total DESC`
+        ),
+        pool.query(
+            `SELECT c.company_name AS customer_name,
+              COUNT(DISTINCT dcl.serial_number)::int AS laptop_count,
+              COALESCE(SUM(sol.rate), 0)::float AS monthly_value
+             FROM delivery_challan_lines dcl
+             JOIN customers c ON c.customer_id = dcl.customer_id
+             LEFT JOIN sales_order_lines sol
+               ON sol.sales_order_number = dcl.sales_order_number AND sol.brand = dcl.brand
+             WHERE dcl.status = 'delivered'
+             GROUP BY c.customer_id, c.company_name
+             ORDER BY laptop_count DESC
+             LIMIT 10`
+        ),
+    ]);
+
+    const summaryRow = summaryRes.rows[0] || {};
+    const totalFleet = summaryRow.total_fleet || 0;
+    const rented = summaryRow.rented || 0;
+    const avgUtilisedPct = totalFleet > 0
+        ? parseFloat(((rented / totalFleet) * 100).toFixed(1))
+        : 0;
+
+    return {
+        summary: { total_fleet: totalFleet, avg_utilised_pct: avgUtilisedPct },
+        by_brand: brandRes.rows,
+        top_customers: topCustomersRes.rows,
+    };
+}
+
+exports.getInventoryUtilisationReport = async (req, res) => {
+    try {
+        const data = await fetchInventoryUtilisationData();
+        res.json({ success: true, ...data });
+    } catch (error) {
+        console.error('getInventoryUtilisationReport error:', error);
+        res.status(500).json({ success: false, message: 'Server error generating inventory report' });
+    }
+};
+
+async function fetchLeadConversionData(query) {
+    const { from, to } = defaultDateRange(query);
+    const conditions = ['l.created_at >= $1::date', 'l.created_at < ($2::date + interval \'1 day\')'];
+    const params = [from, to];
+    let idx = 3;
+
+    if (query.assigned_to) {
+        const uid = parseInt(query.assigned_to, 10);
+        if (Number.isInteger(uid)) {
+            conditions.push(`l.assigned_user_id = $${idx}`);
+            params.push(uid);
+            idx += 1;
+        }
+    }
+
+    const whereSql = conditions.join(' AND ');
+
+    const [funnelRes, salespersonRes, stageRes, sourcesRes] = await Promise.all([
+        pool.query(
+            `SELECT status, COUNT(*)::int AS count
+             FROM leads l
+             WHERE ${whereSql}
+             GROUP BY status
+             ORDER BY count DESC`,
+            params
+        ),
+        pool.query(
+            `SELECT u.name AS user_name,
+              COUNT(l.lead_id)::int AS total_leads,
+              COUNT(l.lead_id) FILTER (WHERE l.status IN ('Deal', 'Demo'))::int AS converted,
+              COUNT(l.lead_id) FILTER (WHERE l.status IN ('Gone', 'Rejected'))::int AS lost,
+              ROUND(
+                AVG(EXTRACT(EPOCH FROM (l.converted_at - l.created_at)) / 86400)
+                  FILTER (WHERE l.converted_at IS NOT NULL)::numeric,
+                1
+              ) AS avg_days_to_convert
+             FROM leads l
+             LEFT JOIN users u ON u.user_id = l.assigned_user_id
+             WHERE ${whereSql}
+             GROUP BY u.user_id, u.name
+             ORDER BY converted DESC`,
+            params
+        ),
+        pool.query(
+            `SELECT l.status,
+              ROUND(AVG(EXTRACT(EPOCH FROM (NOW() - l.created_at)) / 86400)::numeric, 1) AS avg_days
+             FROM leads l
+             WHERE ${whereSql}
+             GROUP BY l.status
+             ORDER BY avg_days DESC`,
+            params
+        ),
+        pool.query(
+            `SELECT COALESCE(NULLIF(TRIM(l.source), ''), 'Unknown') AS source,
+              COUNT(l.lead_id)::int AS count,
+              COUNT(l.lead_id) FILTER (WHERE l.status IN ('Deal', 'Demo'))::int AS converted
+             FROM leads l
+             WHERE ${whereSql}
+             GROUP BY COALESCE(NULLIF(TRIM(l.source), ''), 'Unknown')
+             ORDER BY count DESC`,
+            params
+        ),
+    ]);
+
+    const totalLeads = funnelRes.rows.reduce((s, r) => s + (r.count || 0), 0);
+    const funnel = funnelRes.rows.map((r) => ({
+        status: r.status,
+        count: r.count,
+        pct_of_total: totalLeads > 0 ? parseFloat(((r.count / totalLeads) * 100).toFixed(1)) : 0,
+    }));
+
+    const bySalesperson = salespersonRes.rows.map((r) => {
+        const total = r.total_leads || 0;
+        const converted = r.converted || 0;
+        return {
+            ...r,
+            conversion_rate_pct: total > 0 ? parseFloat(((converted / total) * 100).toFixed(1)) : 0,
+            avg_days_to_convert: r.avg_days_to_convert != null ? parseFloat(r.avg_days_to_convert) : null,
+        };
+    });
+
+    const sources = sourcesRes.rows.map((r) => {
+        const count = r.count || 0;
+        const converted = r.converted || 0;
+        return {
+            source: r.source,
+            count,
+            converted,
+            conversion_rate_pct: count > 0 ? parseFloat(((converted / count) * 100).toFixed(1)) : 0,
+        };
+    });
+
+    const avgDaysPerStage = stageRes.rows.map((r) => ({
+        status: r.status,
+        avg_days: r.avg_days != null ? parseFloat(r.avg_days) : 0,
+    }));
+
+    return { funnel, by_salesperson: bySalesperson, avg_days_per_stage: avgDaysPerStage, sources };
+}
+
+exports.getLeadConversionReport = async (req, res) => {
+    try {
+        const data = await fetchLeadConversionData(req.query);
+        res.json({ success: true, ...data });
+    } catch (error) {
+        console.error('getLeadConversionReport error:', error);
+        res.status(500).json({ success: false, message: 'Server error generating lead conversion report' });
+    }
+};
+
+async function fetchSalespersonData(query, reqUser) {
+    const { from, to } = defaultDateRange(query);
+    const leadDateFilter = `l.created_at >= $1::date AND l.created_at < ($2::date + interval '1 day')`;
+    const params = [from, to];
+    let userFilter = '';
+    let idx = 3;
+
+    if (reqUser?.role === 'sales') {
+        userFilter = `AND u.user_id = $${idx}`;
+        params.push(reqUser.user_id);
+        idx += 1;
+    } else if (query.user_id) {
+        const uid = parseInt(query.user_id, 10);
+        if (Number.isInteger(uid)) {
+            userFilter = `AND u.user_id = $${idx}`;
+            params.push(uid);
+            idx += 1;
+        }
+    }
+
+    const resUsers = await pool.query(
+        `SELECT u.user_id, u.name, u.role,
+          COUNT(l.lead_id)::int AS total_leads,
+          COUNT(l.lead_id) FILTER (WHERE l.status NOT IN ('Gone', 'Rejected', 'Deal', 'Demo'))::int AS active,
+          COUNT(l.lead_id) FILTER (WHERE l.status IN ('Deal', 'Demo'))::int AS converted,
+          COUNT(l.lead_id) FILTER (WHERE l.status IN ('Gone', 'Rejected'))::int AS lost,
+          COUNT(l.lead_id) FILTER (
+            WHERE l.status NOT IN ('Gone', 'Rejected', 'Deal', 'Demo')
+              AND l.follow_up_date IS NOT NULL
+              AND l.follow_up_date < NOW()
+          )::int AS follow_up_overdue,
+          COUNT(l.lead_id) FILTER (
+            WHERE l.follow_up_date IS NOT NULL
+          )::int AS follow_up_scheduled
+         FROM users u
+         LEFT JOIN leads l ON l.assigned_user_id = u.user_id AND ${leadDateFilter}
+         WHERE u.role IN ('sales', 'manager', 'admin') AND COALESCE(u.active, true) = true
+         ${userFilter}
+         GROUP BY u.user_id, u.name, u.role
+         HAVING COUNT(l.lead_id) > 0 OR u.role = 'sales'
+         ORDER BY converted DESC`,
+        params
+    );
+
+    const quotRes = await pool.query(
+        `SELECT sq.created_by AS user_id,
+          COUNT(DISTINCT sq.quotation_number) FILTER (WHERE sq.status IN ('sent', 'pending', 'approved'))::int AS sent,
+          COUNT(DISTINCT sq.quotation_number) FILTER (WHERE sq.status = 'approved')::int AS approved,
+          COUNT(DISTINCT sq.quotation_number) FILTER (WHERE sq.status = 'rejected')::int AS rejected
+         FROM sales_quotations sq
+         WHERE sq.created_at >= $1::date
+           AND sq.created_at < ($2::date + interval '1 day')
+         GROUP BY sq.created_by`,
+        [from, to]
+    );
+
+    const quotMap = Object.fromEntries(quotRes.rows.map((r) => [r.user_id, r]));
+
+    const salespeople = resUsers.rows.map((row) => {
+        const q = quotMap[row.user_id] || {};
+        const sent = q.sent || 0;
+        const approved = q.approved || 0;
+        return {
+            user_id: row.user_id,
+            name: row.name,
+            role: row.role,
+            leads: {
+                total: row.total_leads || 0,
+                active: row.active || 0,
+                converted: row.converted || 0,
+                lost: row.lost || 0,
+            },
+            quotations: {
+                sent,
+                approved,
+                rejected: q.rejected || 0,
+                hit_rate_pct: sent > 0 ? parseFloat(((approved / sent) * 100).toFixed(1)) : 0,
+            },
+            follow_ups: {
+                scheduled: row.follow_up_scheduled || 0,
+                overdue: row.follow_up_overdue || 0,
+            },
+        };
+    });
+
+    return { salespeople };
+}
+
+exports.getSalespersonReport = async (req, res) => {
+    try {
+        const data = await fetchSalespersonData(req.query, req.user);
+        res.json({ success: true, ...data });
+    } catch (error) {
+        console.error('getSalespersonReport error:', error);
+        res.status(500).json({ success: false, message: 'Server error generating salesperson report' });
+    }
+};
+
+async function fetchCollectionsData(query) {
+    const year = parseInt(query.year, 10) || new Date().getFullYear();
+    const month = query.month ? parseInt(query.month, 10) : null;
+    const conditions = ['ci.invoice_year = $1'];
+    const params = [year];
+    let idx = 2;
+
+    if (month && month >= 1 && month <= 12) {
+        conditions.push(`ci.invoice_month = $${idx}`);
+        params.push(month);
+        idx += 1;
+    }
+
+    if (query.customer_id) {
+        const cid = parseInt(query.customer_id, 10);
+        if (Number.isInteger(cid)) {
+            conditions.push(`ci.customer_id = $${idx}`);
+            params.push(cid);
+            idx += 1;
+        }
+    }
+
+    const whereSql = conditions.join(' AND ');
+
+    const [summaryRes, byCustomerRes, trendRes] = await Promise.all([
+        pool.query(
+            `SELECT
+              COALESCE(SUM(ci.grand_total), 0)::float AS total_invoiced,
+              COALESCE(SUM(ci.grand_total) FILTER (WHERE ci.status = 'paid'), 0)::float AS total_collected,
+              COALESCE(SUM(ci.grand_total) FILTER (WHERE ci.status NOT IN ('paid', 'cancelled')), 0)::float AS outstanding,
+              COALESCE(SUM(ci.grand_total) FILTER (
+                WHERE ci.status NOT IN ('paid', 'cancelled')
+                  AND ci.invoice_date < (CURRENT_DATE - interval '30 days')
+              ), 0)::float AS overdue
+             FROM customer_invoices ci
+             WHERE ${whereSql}`,
+            params
+        ),
+        pool.query(
+            `SELECT c.company_name AS customer_name,
+              COALESCE(SUM(ci.grand_total), 0)::float AS invoiced,
+              COALESCE(SUM(ci.grand_total) FILTER (WHERE ci.status = 'paid'), 0)::float AS collected,
+              COALESCE(SUM(ci.grand_total) FILTER (WHERE ci.status NOT IN ('paid', 'cancelled')), 0)::float AS outstanding,
+              MIN(ci.invoice_date) FILTER (WHERE ci.status NOT IN ('paid', 'cancelled')) AS oldest_unpaid_date,
+              CASE
+                WHEN COALESCE(SUM(ci.grand_total) FILTER (WHERE ci.status NOT IN ('paid', 'cancelled')), 0) = 0 THEN 'paid'
+                WHEN MIN(ci.invoice_date) FILTER (WHERE ci.status NOT IN ('paid', 'cancelled')) < (CURRENT_DATE - interval '30 days') THEN 'overdue'
+                ELSE 'outstanding'
+              END AS status
+             FROM customer_invoices ci
+             JOIN customers c ON c.customer_id = ci.customer_id
+             WHERE ${whereSql}
+             GROUP BY c.customer_id, c.company_name
+             ORDER BY outstanding DESC`,
+            params
+        ),
+        pool.query(
+            `SELECT ci.invoice_month AS month, ci.invoice_year AS year,
+              COALESCE(SUM(ci.grand_total), 0)::float AS invoiced,
+              COALESCE(SUM(ci.grand_total) FILTER (WHERE ci.status = 'paid'), 0)::float AS collected
+             FROM customer_invoices ci
+             WHERE ci.invoice_year = $1
+             GROUP BY ci.invoice_month, ci.invoice_year
+             ORDER BY ci.invoice_year, ci.invoice_month`,
+            [year]
+        ),
+    ]);
+
+    return {
+        summary: summaryRes.rows[0] || {},
+        by_customer: byCustomerRes.rows,
+        monthly_trend: trendRes.rows,
+    };
+}
+
+exports.getCollectionsReport = async (req, res) => {
+    try {
+        const data = await fetchCollectionsData(req.query);
+        res.json({ success: true, ...data });
+    } catch (error) {
+        console.error('getCollectionsReport error:', error);
+        res.status(500).json({ success: false, message: 'Server error generating collections report' });
+    }
+};
+
+async function fetchVendorSpendData(query) {
+    const { from, to } = defaultDateRange(query);
+    const conditions = ['vmb.bill_date >= $1::date', 'vmb.bill_date <= $2::date'];
+    const params = [from, to];
+    let idx = 3;
+
+    if (query.vendor_id) {
+        const vid = parseInt(query.vendor_id, 10);
+        if (Number.isInteger(vid)) {
+            conditions.push(`vmb.vendor_id = $${idx}`);
+            params.push(vid);
+            idx += 1;
+        }
+    }
+
+    const whereSql = conditions.join(' AND ');
+
+    const [vendorsRes, trendRes, debitRes] = await Promise.all([
+        pool.query(
+            `SELECT v.business_name AS vendor_name,
+              MAX(vpo.purchase_order_type) AS po_type,
+              COUNT(vmb.bill_id)::int AS total_bills,
+              COALESCE(SUM(vmb.total_payable), 0)::float AS total_payable,
+              COALESCE(SUM(vmb.total_payable) FILTER (WHERE vmb.status = 'paid'), 0)::float AS total_paid,
+              COALESCE(SUM(vmb.debit_note_adjustment), 0)::float AS debit_adjustments
+             FROM vendor_monthly_bills vmb
+             JOIN vendors v ON v.vendor_id = vmb.vendor_id
+             LEFT JOIN vendor_purchase_orders vpo ON vpo.vendor_id = vmb.vendor_id
+             WHERE ${whereSql}
+             GROUP BY v.vendor_id, v.business_name
+             ORDER BY total_payable DESC`,
+            params
+        ),
+        pool.query(
+            `SELECT vmb.bill_month AS month, vmb.bill_year AS year,
+              COALESCE(SUM(vmb.total_payable), 0)::float AS total_payable
+             FROM vendor_monthly_bills vmb
+             WHERE ${whereSql}
+             GROUP BY vmb.bill_month, vmb.bill_year
+             ORDER BY vmb.bill_year, vmb.bill_month`,
+            params
+        ),
+        pool.query(
+            `SELECT COALESCE(SUM(vdn.amount), 0)::float AS debit_notes_total
+             FROM vendor_debit_notes vdn
+             WHERE vdn.created_at >= $1::date
+               AND vdn.created_at < ($2::date + interval '1 day')`,
+            [from, to]
+        ),
+    ]);
+
+    const vendors = vendorsRes.rows.map((r) => ({
+        ...r,
+        net_payable: parseFloat((r.total_payable - r.debit_adjustments).toFixed(2)),
+    }));
+
+    return {
+        vendors,
+        monthly_trend: trendRes.rows,
+        debit_notes_total: parseFloat(debitRes.rows[0]?.debit_notes_total || 0),
+    };
+}
+
+exports.getVendorSpendReport = async (req, res) => {
+    try {
+        const data = await fetchVendorSpendData(req.query);
+        res.json({ success: true, ...data });
+    } catch (error) {
+        console.error('getVendorSpendReport error:', error);
+        res.status(500).json({ success: false, message: 'Server error generating vendor spend report' });
+    }
+};
+
+function sheetFromRows(rows, headers) {
+    const XLSX = require('xlsx');
+    const mapped = rows.map((row) => {
+        const out = {};
+        headers.forEach((h) => {
+            out[h.label] = row[h.key] ?? '';
+        });
+        return out;
+    });
+    const ws = XLSX.utils.json_to_sheet(mapped.length ? mapped : [{}]);
+    ws['!cols'] = headers.map((h) => ({ wch: Math.max(String(h.label).length, 15) }));
+    return ws;
+}
+
+exports.exportToExcel = async (req, res) => {
+    try {
+        const XLSX = require('xlsx');
+        const { report_type: reportType, filters = {} } = req.body || {};
+        const date = new Date().toISOString().slice(0, 10);
+        let rows = [];
+        let headers = [];
+        let sheetName = 'Report';
+
+        if (reportType === 'revenue') {
+            const data = await fetchRevenueData({ ...filters, page: 1, limit: 5000 });
+            rows = data.invoices;
+            headers = [
+                { key: 'invoice_number', label: 'Invoice #' },
+                { key: 'customer_name', label: 'Customer' },
+                { key: 'invoice_month', label: 'Month' },
+                { key: 'invoice_year', label: 'Year' },
+                { key: 'subtotal', label: 'Subtotal' },
+                { key: 'gst_amount', label: 'GST' },
+                { key: 'credit_note_adjustment', label: 'Credit Adj' },
+                { key: 'grand_total', label: 'Total' },
+                { key: 'status', label: 'Status' },
+                { key: 'invoice_date', label: 'Date' },
+            ];
+            sheetName = 'Revenue';
+        } else if (reportType === 'inventory') {
+            const data = await fetchInventoryUtilisationData();
+            rows = data.by_brand;
+            headers = [
+                { key: 'brand', label: 'Brand' },
+                { key: 'total', label: 'Total' },
+                { key: 'available', label: 'Available' },
+                { key: 'rented', label: 'Rented' },
+                { key: 'in_repair', label: 'In Repair' },
+            ];
+            sheetName = 'Inventory';
+        } else if (reportType === 'lead_conversion') {
+            const data = await fetchLeadConversionData(filters);
+            rows = data.by_salesperson;
+            headers = [
+                { key: 'user_name', label: 'Salesperson' },
+                { key: 'total_leads', label: 'Total Leads' },
+                { key: 'converted', label: 'Converted' },
+                { key: 'lost', label: 'Lost' },
+                { key: 'conversion_rate_pct', label: 'Conv Rate %' },
+                { key: 'avg_days_to_convert', label: 'Avg Days' },
+            ];
+            sheetName = 'Lead Conversion';
+        } else if (reportType === 'salesperson') {
+            const data = await fetchSalespersonData(filters, req.user);
+            rows = data.salespeople.map((sp) => ({
+                name: sp.name,
+                role: sp.role,
+                total_leads: sp.leads.total,
+                active: sp.leads.active,
+                converted: sp.leads.converted,
+                lost: sp.leads.lost,
+                quotations_sent: sp.quotations.sent,
+                hit_rate_pct: sp.quotations.hit_rate_pct,
+                follow_ups_overdue: sp.follow_ups.overdue,
+            }));
+            headers = [
+                { key: 'name', label: 'Salesperson' },
+                { key: 'role', label: 'Role' },
+                { key: 'total_leads', label: 'Total Leads' },
+                { key: 'active', label: 'Active' },
+                { key: 'converted', label: 'Converted' },
+                { key: 'lost', label: 'Lost' },
+                { key: 'quotations_sent', label: 'Quotations Sent' },
+                { key: 'hit_rate_pct', label: 'Hit Rate %' },
+                { key: 'follow_ups_overdue', label: 'Overdue Follow-ups' },
+            ];
+            sheetName = 'Salesperson';
+        } else if (reportType === 'collections') {
+            const data = await fetchCollectionsData(filters);
+            rows = data.by_customer;
+            headers = [
+                { key: 'customer_name', label: 'Customer' },
+                { key: 'invoiced', label: 'Invoiced' },
+                { key: 'collected', label: 'Collected' },
+                { key: 'outstanding', label: 'Outstanding' },
+                { key: 'oldest_unpaid_date', label: 'Oldest Unpaid' },
+                { key: 'status', label: 'Status' },
+            ];
+            sheetName = 'Collections';
+        } else if (reportType === 'vendor_spend') {
+            const data = await fetchVendorSpendData(filters);
+            rows = data.vendors;
+            headers = [
+                { key: 'vendor_name', label: 'Vendor' },
+                { key: 'po_type', label: 'PO Type' },
+                { key: 'total_bills', label: 'Bills' },
+                { key: 'total_payable', label: 'Total Payable' },
+                { key: 'total_paid', label: 'Paid' },
+                { key: 'debit_adjustments', label: 'Debit Adj' },
+                { key: 'net_payable', label: 'Net Payable' },
+            ];
+            sheetName = 'Vendor Spend';
+        } else if (reportType === 'technician_performance') {
+            const mockReq = { query: { ...filters, limit: 5000 } };
+            let techRows = [];
+            await new Promise((resolve, reject) => {
+                const mockRes = {
+                    json: (payload) => {
+                        techRows = payload.rows || [];
+                        resolve();
+                    },
+                    status: () => ({ json: reject }),
+                };
+                exports.getTechnicianPerformance(mockReq, mockRes).catch(reject);
+            });
+            rows = techRows.map((r) => ({
+                technician: r.technician_name,
+                team: r.team_name,
+                machine: r.machine_number,
+                stage: r.stage_at_assignment,
+                status: r.segment_status,
+                duration: r.duration_human,
+                ticket_id: r.ticket_id,
+            }));
+            headers = [
+                { key: 'technician', label: 'Technician' },
+                { key: 'team', label: 'Team' },
+                { key: 'machine', label: 'Machine' },
+                { key: 'stage', label: 'Stage' },
+                { key: 'status', label: 'Status' },
+                { key: 'duration', label: 'Duration' },
+                { key: 'ticket_id', label: 'Ticket ID' },
+            ];
+            sheetName = 'Technician';
+        } else {
+            return res.status(400).json({ success: false, message: 'Invalid report_type' });
+        }
+
+        const wb = XLSX.utils.book_new();
+        const ws = sheetFromRows(rows, headers);
+        XLSX.utils.book_append_sheet(wb, ws, sheetName);
+        const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${reportType}_${date}.xlsx"`);
+        res.send(buf);
+    } catch (error) {
+        console.error('exportToExcel error:', error);
+        res.status(500).json({ success: false, message: 'Server error exporting report' });
+    }
+};
