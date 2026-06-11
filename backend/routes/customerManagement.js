@@ -30,6 +30,9 @@ router.post(
   ]),
   ctrl.storeCustomer
 );
+router.put('/customers/:customerId', checkRole(...roles), ctrl.updateCustomer);
+router.put('/customers/:customerId/verify-kyc', checkRole('admin', 'manager'), ctrl.verifyCustomerKyc);
+router.get('/customers/:customerId/laptops', checkRole(...roles), ctrl.getCustomerLaptops);
 router.delete('/customers/:customerId', checkRole('admin', 'manager'), ctrl.deleteCustomer);
 
 module.exports = router;

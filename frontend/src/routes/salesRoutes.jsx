@@ -7,9 +7,10 @@ import Inventory from '../components/Inventory';
 import PartsInventory from '../components/PartsInventory';
 import Reports from '../components/Reports';
 import Sales from '../components/Sales';
-import LeadList from '../components/LeadList';
-import LeadDetail from '../components/LeadDetail';
-import FollowUps from '../components/FollowUps';
+import LeadList from '../components/LeadList.legacy';
+import LeadDetail from '../components/LeadDetail.legacy';
+import FollowUps from '../components/FollowUps.legacy';
+import LeadCrmApp from '../features/lead-crm/LeadCrmApp';
 import ManagerDashboard from '../components/ManagerDashboard';
 import Orders from '../components/Orders';
 import Customers from '../components/Customers';
@@ -36,6 +37,7 @@ export const salesRoutes = [
   { path: '/tickets/create', element: guard('tickets', 'create', withLayout(<CreateTicket />)) },
   { path: '/parts', element: guard('parts', 'view', withLayout(<PartsInventory />)) },
   { path: '/sales', element: guard('sales_orders', 'view', withLayout(<Sales api={api} />)) },
+  { path: '/lead-crm/*', element: guard('leads', 'view', withLayout(<LeadCrmApp />)) },
   { path: '/leads', element: guard('leads', 'view', withLayout(<LeadList api={api} />)) },
   { path: '/leads/:id', element: guard('leads', 'view', withLayout(<LeadDetail api={api} />)) },
   { path: '/follow-ups', element: guard('follow_ups', 'view', withLayout(<FollowUps api={api} />)) },

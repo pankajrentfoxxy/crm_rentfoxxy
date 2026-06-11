@@ -68,6 +68,12 @@ export const operationAccordionChildren = [
   { label: 'Return DC', path: '/operation-management/return-dc', section: 'return_dc', countKey: 'return_dc' },
 ];
 
+export const leadCrmAccordionChildren = [
+  { label: 'Leads Pipeline', path: '/lead-crm/leads', section: 'leads', countKey: 'active_leads' },
+  { label: 'Follow-ups', path: '/lead-crm/follow-ups', section: 'follow_ups', countKey: 'followups_today' },
+  { label: 'Customers', path: '/lead-crm/customers', section: 'customers' },
+];
+
 export const floorPipelineAccordionChildren = [
   { label: 'Floor Dashboard', path: '/floor-pipeline/dashboard', section: 'floor_pipeline' },
   { label: 'All Tickets', path: '/floor-pipeline/tickets', section: 'floor_pipeline' },
@@ -94,11 +100,9 @@ export const MENU_GROUPS = [
       { icon: BarChart3, label: 'Dashboard', path: '/dashboard', section: 'dashboard' },
       { icon: Archive, label: 'Inventory', path: '/inventory', section: 'inventory' },
       { icon: ClipboardList, label: 'Tickets', path: '/tickets', section: 'tickets' },
-      { icon: Briefcase, label: 'Leads', path: '/leads', section: 'leads' },
+      { type: 'leadCrmAccordion', icon: Users, label: 'Lead & Sales CRM', section: 'leads' },
       { icon: Briefcase, label: 'Sales Orders', path: '/sales', section: 'sales_orders' },
-      { icon: Clock, label: 'Follow-ups', path: '/follow-ups', section: 'follow_ups' },
       { icon: ClipboardList, label: 'Lead Orders', path: '/lead-orders', section: 'lead_orders' },
-      { icon: Users, label: 'Customers', path: '/customers', section: 'customers' },
       { icon: BarChart3, label: 'Manager Dashboard', path: '/manager-dashboard', section: 'manager_dashboard' },
       { icon: BarChart3, label: 'Reports', path: '/reports', section: 'reports' },
       { icon: Package, label: 'Parts', path: '/parts', section: 'parts' },
@@ -200,6 +204,7 @@ export function isMenuItemVisible(item, canView) {
   if (
     item.type === 'vendorAccordion'
     || item.type === 'floorPipelineAccordion'
+    || item.type === 'leadCrmAccordion'
     || item.type === 'qcAccordion'
     || item.type === 'inventoryAccordion'
   ) {
@@ -207,6 +212,11 @@ export function isMenuItemVisible(item, canView) {
   }
 
   if (item.section) return canView(item.section);
+  return true;
+}
+
+export function isLeadCrmChildVisible(child, canView) {
+  if (child.section) return canView(child.section);
   return true;
 }
 
