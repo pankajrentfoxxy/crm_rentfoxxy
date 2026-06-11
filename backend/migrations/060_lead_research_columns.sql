@@ -1,0 +1,3 @@
+ALTER TABLE lead_company_research
+  ADD COLUMN IF NOT EXISTS industry VARCHAR(255),
+  ADD COLUMN IF NOT EXISTS pincode VARCHAR(20);

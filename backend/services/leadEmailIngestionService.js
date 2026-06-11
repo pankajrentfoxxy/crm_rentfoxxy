@@ -146,7 +146,7 @@ const findExistingLeadId = async ({ email, phone }) => {
         const result = await pool.query(
             `SELECT lead_id
              FROM leads
-             WHERE source IN ('Google', 'Website Email')
+             WHERE source IN ('Google', 'Website Email', 'Email')
                AND (
                     LOWER(COALESCE(email, '')) = $1
                     OR regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = $2
@@ -162,7 +162,7 @@ const findExistingLeadId = async ({ email, phone }) => {
         const result = await pool.query(
             `SELECT lead_id
              FROM leads
-             WHERE source IN ('Google', 'Website Email')
+             WHERE source IN ('Google', 'Website Email', 'Email')
                AND LOWER(COALESCE(email, '')) = $1
              ORDER BY lead_id ASC
              LIMIT 1`,
@@ -174,7 +174,7 @@ const findExistingLeadId = async ({ email, phone }) => {
     const result = await pool.query(
         `SELECT lead_id
          FROM leads
-         WHERE source IN ('Google', 'Website Email')
+         WHERE source IN ('Google', 'Website Email', 'Email')
            AND regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = $1
          ORDER BY lead_id ASC
          LIMIT 1`,
@@ -255,12 +255,14 @@ const insertLeadFromEmail = async ({ parsedFields, subject, fromAddress, sentAt 
 
     const autoAssignee = await getNextAutoAssignee();
     const assignCols = autoAssignee
-        ? 'name, company_name, email, phone, city, source, status, created_at, updated_at, assigned_user_id, assigned_at'
-        : 'name, company_name, email, phone, city, source, status, created_at, updated_at';
+        ? 'name, company_name, email, phone, city, source, status, personal_remarks, inquiry_type, created_at, updated_at, assigned_user_id, assigned_at'
+        : 'name, company_name, email, phone, city, source, status, personal_remarks, inquiry_type, created_at, updated_at';
     const assignVals = autoAssignee
-        ? `$1, $2, $3, $4, $5, 'Google', 'Pending', $6, $6, $7, $6`
-        : `$1, $2, $3, $4, $5, 'Google', 'Pending', $6, $6`;
-    const assignParams = autoAssignee ? [name, companyName, email, phone, city, safeReceivedAt, autoAssignee] : [name, companyName, email, phone, city, safeReceivedAt];
+        ? `$1, $2, $3, $4, $5, 'Email', 'Pending', $8, 'rental', $6, $6, $7, $6`
+        : `$1, $2, $3, $4, $5, 'Email', 'Pending', $7, 'rental', $6, $6`;
+    const assignParams = autoAssignee
+        ? [name, companyName, email, phone, city, safeReceivedAt, autoAssignee, safeNotes]
+        : [name, companyName, email, phone, city, safeReceivedAt, safeNotes];
 
     const leadResult = await pool.query(
         `INSERT INTO leads (${assignCols}) VALUES (${assignVals}) RETURNING lead_id`,
@@ -379,7 +381,12 @@ const runLeadEmailSync = async () => {
                             continue;
                         }
 
-                        if (isPersonalEmail(fields.email)) {
+                        const hasStructuredEnquiry = !!(
+                            normalizeText(fields.name) &&
+                            (normalizeText(fields.email) || normalizeText(fields.phone))
+                        );
+                        // Skip only non-enquiry mail from personal domains; website enquiries often use Gmail/Yahoo.
+                        if (!hasStructuredEnquiry && isPersonalEmail(fields.email)) {
                             await markMessageProcessed({ messageId, mailbox, subject, leadId: null });
                             skipped++;
                             continue;

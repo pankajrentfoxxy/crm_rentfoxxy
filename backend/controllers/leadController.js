@@ -714,17 +714,32 @@ exports.createLead = async (req, res) => {
     if (isSalesOperator) {
       assignData = { assignedUserId: req.user.user_id, assignedById: req.user.user_id, assignedAt: new Date() };
     } else {
-      const autoAssignee = await getNextAutoAssignee();
+      let autoAssignee = null;
+      try {
+        autoAssignee = await getNextAutoAssignee();
+      } catch (assignErr) {
+        console.error('Auto-assign lookup failed:', assignErr.message);
+      }
       if (autoAssignee) {
         assignData = { assignedUserId: autoAssignee, assignedById: req.user.user_id, assignedAt: new Date() };
       }
     }
 
+    const body = req.body || {};
+    const personalRemarks = body.personal_remarks ?? body.personalRemarks;
+    const inquiryType = body.inquiry_type ?? body.inquiryType ?? 'rental';
+
     const lead = await prisma.lead.create({
       data: {
         ...payload,
-        companyBrand: payload.companyBrand,
-        brand: payload.brand,
+        companyBrand: payload.companyBrand || null,
+        brand: payload.brand || null,
+        processor: body.processor || null,
+        generation: body.generation || null,
+        ram: body.ram || null,
+        storage: body.storage || null,
+        personalRemarks: personalRemarks ? String(personalRemarks).trim() : null,
+        inquiryType: ['rental', 'sales', 'both'].includes(inquiryType) ? inquiryType : 'rental',
         status: 'Pending',
         createdAt: new Date(),
         ...assignData,
