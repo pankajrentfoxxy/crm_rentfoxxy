@@ -373,21 +373,60 @@ exports.storeQuotation = async (req, res) => {
 
 exports.updateQuotationStatus = async (req, res) => {
   try {
-    const { status } = req.body;
-    if (!['pending', 'approved', 'rejected'].includes(status)) {
+    const { status, email, cc } = req.body;
+    if (!['pending', 'sent', 'approved', 'rejected'].includes(status)) {
       return res.status(400).json({ success: false, message: 'Invalid status' });
     }
-    const updaterName = req.user?.name || req.user?.username || req.user?.email || 'Admin';
-    const result = await pool.query(
-      `UPDATE sales_quotations SET status = $1, status_updated_by_id = $2, status_updated_by_name = $3, updated_at = NOW()
-       WHERE quotation_number = $4 RETURNING quotation_number`,
-      [status, req.user?.user_id, updaterName, req.params.quotationNumber]
-    );
-    if (!result.rows.length) {
+    const quotationNumber = req.params.quotationNumber;
+    const lines = await getQuotationLines(quotationNumber);
+    if (!lines.length) {
       return res.status(404).json({ success: false, message: 'Quotation not found' });
     }
-    res.json({ success: true, message: 'Status updated' });
+    const header = lines[0];
+    const updaterName = req.user?.name || req.user?.username || req.user?.email || 'Admin';
+
+    await pool.query(
+      `UPDATE sales_quotations SET status = $1, status_updated_by_id = $2, status_updated_by_name = $3, updated_at = NOW()
+       WHERE quotation_number = $4`,
+      [status, req.user?.user_id, updaterName, quotationNumber]
+    );
+
+    if (status === 'sent') {
+      try {
+        let pdfPath = header.pdf_path;
+        if (!pdfPath) {
+          pdfPath = await generateDocumentPdf({
+            docType: 'quotation',
+            docNumber: quotationNumber,
+            header,
+            lines,
+          });
+          await pool.query(
+            `UPDATE sales_quotations SET pdf_path = $1 WHERE quotation_number = $2`,
+            [pdfPath, quotationNumber]
+          );
+        }
+        const to = email || header.customer_email;
+        if (to) {
+          await emailDocument({
+            to,
+            cc: cc || undefined,
+            subject: `Quotation ${quotationNumber}`,
+            text: `Please find attached quotation ${quotationNumber}.`,
+            pdfRelativePath: pdfPath,
+          });
+        }
+      } catch (sendErr) {
+        console.warn('Quotation send email skipped:', sendErr.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: status === 'sent' ? 'Quotation sent' : 'Status updated',
+    });
   } catch (error) {
+    console.error('updateQuotationStatus:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -865,6 +904,7 @@ exports.ensureSalesManagementSchema = async () => {
     '043_operation_management_extras.sql',
     '044_quotation_demo_type.sql',
     '065_quotation_lead_link.sql',
+    '066_quotation_sent_status.sql',
   ]) {
     const sqlPath = path.join(__dirname, '../migrations', file);
     if (!fs.existsSync(sqlPath)) continue;

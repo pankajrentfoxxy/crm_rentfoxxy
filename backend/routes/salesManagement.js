@@ -17,7 +17,7 @@ router.get('/quotations/meta/add', checkRole(...roles), ctrl.getAddQuotationMeta
 router.get('/quotations', checkRole(...roles), ctrl.listQuotations);
 router.get('/quotations/:quotationNumber', checkRole(...roles), ctrl.getQuotation);
 router.post('/quotations', checkRole(...roles), ctrl.storeQuotation);
-router.patch('/quotations/:quotationNumber/status', checkRole('admin', 'manager'), ctrl.updateQuotationStatus);
+router.patch('/quotations/:quotationNumber/status', checkRole(...roles), ctrl.updateQuotationStatus);
 
 router.get('/sales-orders/meta/add', checkRole(...roles), ctrl.getAddSalesOrderMeta);
 router.get('/sales-orders', checkRole(...roles), ctrl.listSalesOrders);

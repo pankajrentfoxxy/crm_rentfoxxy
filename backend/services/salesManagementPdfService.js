@@ -53,17 +53,19 @@ async function generateDocumentPdf({ docType, docNumber, header, lines }) {
   return relativePath;
 }
 
-async function emailDocument({ to, subject, text, pdfRelativePath }) {
+async function emailDocument({ to, subject, text, pdfRelativePath, cc }) {
   const transport = getMailTransport();
   if (!transport || !to) return false;
   const abs = path.join(__dirname, '..', pdfRelativePath);
-  await transport.sendMail({
+  const mail = {
     from: process.env.SMTP_FROM || process.env.SMTP_USER,
     to,
     subject,
     text,
     attachments: fs.existsSync(abs) ? [{ filename: path.basename(abs), path: abs }] : [],
-  });
+  };
+  if (cc) mail.cc = cc;
+  await transport.sendMail(mail);
   return true;
 }
 
