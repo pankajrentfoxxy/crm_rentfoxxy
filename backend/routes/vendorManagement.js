@@ -46,6 +46,7 @@ router.put(
 );
 router.delete('/vendors/:id', authorize, vendors.getValidators, vendors.deleteVendor);
 router.post('/vendors/login-as', authorize, vendors.loginAsVendor);
+router.patch('/vendors/:id/portal-access', authorize, vendors.portalAccessValidators, vendors.updatePortalAccess);
 
 // Convenience REST aliases (explicit user requirement)
 router.get('/', authorize, (req, res) =>
@@ -99,6 +100,14 @@ router.post(
   authorize,
   poBillsUpload.array('files', 25),
   purchaseOrders.uploadBills
+);
+const grnBillsUpload = purchaseOrders.createGrnBillsUpload();
+router.post(
+  '/purchase-orders/:poId/grns/:grnId/bills',
+  authorize,
+  grnBillsUpload.array('files', 10),
+  purchaseOrders.grnBillParamValidators,
+  purchaseOrders.uploadGrnBill
 );
 
 router.get('/purchase-orders/:id', authorize, purchaseOrders.getValidators, purchaseOrders.getOne);

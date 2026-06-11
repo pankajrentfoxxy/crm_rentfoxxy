@@ -87,10 +87,42 @@ async function listVendors(req, res) {
   });
 }
 
+function extendedVendorValidators() {
+  return [
+    body('po_payment_terms')
+      .optional({ checkFalsy: true })
+      .isIn(['postpaid_monthly', 'net30', 'net15', 'advance']),
+    body('credit_days').optional({ checkFalsy: true }).isInt({ min: 0, max: 365 }),
+    body('pan_number').optional({ checkFalsy: true }).isString().isLength({ max: 20 }),
+    body('msme_number').optional({ checkFalsy: true }).isString().isLength({ max: 50 }),
+    body('contact_person_name').optional({ checkFalsy: true }).isString().isLength({ max: 255 }),
+    body('contact_person_phone').optional({ checkFalsy: true }).isString().isLength({ max: 32 }),
+    body('alternate_phone').optional({ checkFalsy: true }).isString().isLength({ max: 32 }),
+    body('city').optional({ checkFalsy: true }).isString().isLength({ max: 100 }),
+    body('pincode').optional({ checkFalsy: true }).isString().isLength({ max: 10 }),
+    body('notes').optional({ checkFalsy: true }).isString().isLength({ max: 5000 })
+  ];
+}
+
+function pickExtendedVendorFields(body) {
+  return {
+    po_payment_terms: body.po_payment_terms || 'postpaid_monthly',
+    credit_days: body.credit_days != null && body.credit_days !== '' ? Number(body.credit_days) : 1,
+    pan_number: body.pan_number || null,
+    msme_number: body.msme_number || null,
+    contact_person_name: body.contact_person_name || null,
+    contact_person_phone: body.contact_person_phone || null,
+    alternate_phone: body.alternate_phone || null,
+    city: body.city || null,
+    pincode: body.pincode || null,
+    notes: body.notes || null
+  };
+}
+
 function normalizeVendorRow(row) {
   if (!row) return row;
   // eslint-disable-next-line no-unused-vars
-  const { password_hash, remember_pass_plain, ...rest } = row;
+  const { password_hash, vendor_portal_password_hash, remember_pass_plain, ...rest } = row;
   return {
     ...rest,
     id: row.vendor_id,
@@ -166,7 +198,8 @@ function createValidators() {
     body('gst_number').optional({ checkFalsy: true }).isString().isLength({ max: 64 }),
     body('brand_code').optional({ checkFalsy: true }).isString().isLength({ max: 64 }),
     body('business_registration_number').optional({ checkFalsy: true }).isString().isLength({ max: 128 }),
-    body('tax_identification_number').optional({ checkFalsy: true }).isString().isLength({ max: 128 })
+    body('tax_identification_number').optional({ checkFalsy: true }).isString().isLength({ max: 128 }),
+    ...extendedVendorValidators()
   ];
 }
 
@@ -190,18 +223,22 @@ async function createVendor(req, res) {
 
     const image_url = saveUploadedFile(req.files?.image?.[0]);
     const licenses_url = saveUploadedFile(req.files?.licenses_and_permits?.[0]);
+    const logo_url = saveUploadedFile(req.files?.logo?.[0]);
+    const ext = pickExtendedVendorFields(req.body);
 
     await pool.query('BEGIN');
 
     const ins = await pool.query(
       `INSERT INTO vendors (
-        status, first_name, last_name, business_name, email, phone, password_hash, address,
-        business_type, registration_date, state,
-        gst_number, brand_code, business_registration_number, tax_identification_number,
+        status, first_name, last_name, business_name, email, phone, password_hash, vendor_portal_password_hash, address,
+        business_type, registration_date, state, city, pincode,
+        gst_number, pan_number, msme_number, brand_code, business_registration_number, tax_identification_number,
+        contact_person_name, contact_person_phone, alternate_phone,
         bank_name, account_number, bank_ifsc_code, account_holder_name,
-        image_url, licenses_url, remember_pass_plain
+        po_payment_terms, credit_days, notes,
+        image_url, logo_url, licenses_url, remember_pass_plain, vendor_portal_enabled
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,TRUE
       ) RETURNING *`,
       [
         req.body.status,
@@ -211,19 +248,31 @@ async function createVendor(req, res) {
         req.body.email,
         req.body.number,
         password_hash,
+        password_hash,
         req.body.address,
         req.body.business_type,
         req.body.registration_date,
         req.body.state,
+        ext.city,
+        ext.pincode,
         req.body.gst_number || null,
+        ext.pan_number,
+        ext.msme_number,
         req.body.brand_code || null,
         req.body.business_registration_number || null,
         req.body.tax_identification_number || null,
+        ext.contact_person_name,
+        ext.contact_person_phone,
+        ext.alternate_phone,
         req.body.bank_name,
         req.body.account_number,
         req.body.bank_ifsc_code,
         req.body.account_holder_name,
+        ext.po_payment_terms,
+        ext.credit_days,
+        ext.notes,
         image_url,
+        logo_url,
         licenses_url,
         remember_pass_plain
       ]
@@ -297,7 +346,8 @@ function updateValidatorsFixed() {
     body('gst_number').optional({ checkFalsy: true }).isString().isLength({ max: 64 }),
     body('brand_code').optional({ checkFalsy: true }).isString().isLength({ max: 64 }),
     body('business_registration_number').optional({ checkFalsy: true }).isString().isLength({ max: 128 }),
-    body('tax_identification_number').optional({ checkFalsy: true }).isString().isLength({ max: 128 })
+    body('tax_identification_number').optional({ checkFalsy: true }).isString().isLength({ max: 128 }),
+    ...extendedVendorValidators()
   ];
 }
 
@@ -320,14 +370,19 @@ async function updateVendor(req, res) {
   const prev = cur.rows[0];
 
   let password_hash = prev.password_hash;
+  let vendor_portal_password_hash = prev.vendor_portal_password_hash || prev.password_hash;
   let remember_pass_plain = prev.remember_pass_plain;
   if (req.body.password && String(req.body.password).length >= 8) {
-    password_hash = await bcrypt.hash(req.body.password, await bcrypt.genSalt(10));
+    const hashed = await bcrypt.hash(req.body.password, await bcrypt.genSalt(10));
+    password_hash = hashed;
+    vendor_portal_password_hash = hashed;
     remember_pass_plain = String(req.body.password);
   }
 
   const image_url = saveUploadedFile(req.files?.image?.[0]) || prev.image_url;
   const licenses_url = saveUploadedFile(req.files?.licenses_and_permits?.[0]) || prev.licenses_url;
+  const logo_url = saveUploadedFile(req.files?.logo?.[0]) || prev.logo_url;
+  const ext = pickExtendedVendorFields(req.body);
 
   const upd = await pool.query(
     `UPDATE vendors SET
@@ -338,23 +393,35 @@ async function updateVendor(req, res) {
       email = $5,
       phone = $6,
       password_hash = $7,
-      address = $8,
-      business_type = $9,
-      registration_date = $10,
-      state = $11,
-      gst_number = $12,
-      brand_code = $13,
-      business_registration_number = $14,
-      tax_identification_number = $15,
-      bank_name = $16,
-      account_number = $17,
-      bank_ifsc_code = $18,
-      account_holder_name = $19,
-      image_url = $20,
-      licenses_url = $21,
-      remember_pass_plain = $22,
+      vendor_portal_password_hash = $8,
+      address = $9,
+      business_type = $10,
+      registration_date = $11,
+      state = $12,
+      city = $13,
+      pincode = $14,
+      gst_number = $15,
+      pan_number = $16,
+      msme_number = $17,
+      brand_code = $18,
+      business_registration_number = $19,
+      tax_identification_number = $20,
+      contact_person_name = $21,
+      contact_person_phone = $22,
+      alternate_phone = $23,
+      bank_name = $24,
+      account_number = $25,
+      bank_ifsc_code = $26,
+      account_holder_name = $27,
+      po_payment_terms = $28,
+      credit_days = $29,
+      notes = $30,
+      image_url = $31,
+      logo_url = $32,
+      licenses_url = $33,
+      remember_pass_plain = $34,
       updated_at = NOW()
-     WHERE vendor_id = $23 AND deleted_at IS NULL
+     WHERE vendor_id = $35 AND deleted_at IS NULL
      RETURNING *`,
     [
       req.body.status,
@@ -364,19 +431,31 @@ async function updateVendor(req, res) {
       req.body.email,
       req.body.number,
       password_hash,
+      vendor_portal_password_hash,
       req.body.address,
       req.body.business_type,
       req.body.registration_date,
       req.body.state,
+      ext.city,
+      ext.pincode,
       req.body.gst_number || null,
+      ext.pan_number,
+      ext.msme_number,
       req.body.brand_code || null,
       req.body.business_registration_number || null,
       req.body.tax_identification_number || null,
+      ext.contact_person_name,
+      ext.contact_person_phone,
+      ext.alternate_phone,
       req.body.bank_name,
       req.body.account_number,
       req.body.bank_ifsc_code,
       req.body.account_holder_name,
+      ext.po_payment_terms,
+      ext.credit_days,
+      ext.notes,
       image_url,
+      logo_url,
       licenses_url,
       remember_pass_plain,
       vendor_id
@@ -475,6 +554,74 @@ async function deleteVendor(req, res) {
   res.json({ success: true, message: 'Vendor Details deleted successfully.' });
 }
 
+const portalAccessValidators = [
+  param('id').isInt().toInt(),
+  body('portal_enabled').optional().isBoolean(),
+  body('password').optional({ checkFalsy: true }).isLength({ min: 8, max: 256 })
+];
+
+async function updatePortalAccess(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  const vendor_id = Number(req.params.id);
+  const cur = await pool.query(
+    `SELECT vendor_id, vendor_portal_enabled, vendor_portal_last_login FROM vendors WHERE vendor_id = $1 AND deleted_at IS NULL`,
+    [vendor_id]
+  );
+  if (!cur.rows.length) return res.status(404).json({ success: false, message: 'Vendor not found' });
+
+  const sets = [];
+  const params = [];
+  let idx = 1;
+
+  if (typeof req.body.portal_enabled === 'boolean') {
+    sets.push(`vendor_portal_enabled = $${idx}`);
+    params.push(req.body.portal_enabled);
+    idx += 1;
+  }
+
+  if (req.body.password && String(req.body.password).length >= 8) {
+    const hashed = await bcrypt.hash(String(req.body.password), await bcrypt.genSalt(10));
+    sets.push(`vendor_portal_password_hash = $${idx}`);
+    params.push(hashed);
+    idx += 1;
+    sets.push(`password_hash = $${idx}`);
+    params.push(hashed);
+    idx += 1;
+    sets.push(`remember_pass_plain = $${idx}`);
+    params.push(String(req.body.password));
+    idx += 1;
+  }
+
+  if (!sets.length) {
+    return res.status(400).json({ success: false, message: 'No portal changes provided' });
+  }
+
+  params.push(vendor_id);
+  const r = await pool.query(
+    `UPDATE vendors SET ${sets.join(', ')}, updated_at = NOW()
+     WHERE vendor_id = $${idx} AND deleted_at IS NULL
+     RETURNING vendor_id, vendor_portal_enabled, vendor_portal_last_login, email`,
+    params
+  );
+
+  await logVendorAudit({
+    actorUserId: req.user?.user_id,
+    vendorId: vendor_id,
+    entityType: 'vendor',
+    entityId: vendor_id,
+    action: 'portal_access_update',
+    payload: { portal_enabled: req.body.portal_enabled }
+  });
+
+  res.json({
+    success: true,
+    message: 'Vendor portal access updated',
+    data: r.rows[0]
+  });
+}
+
 async function loginAsVendor(req, res) {
   const privileged = req.user.role === 'admin' || req.user.is_superadmin === true;
   if (!privileged) {
@@ -545,5 +692,7 @@ module.exports = {
   updateValidatorsFixed,
   updateVendor,
   deleteVendor,
-  loginAsVendor
+  loginAsVendor,
+  portalAccessValidators,
+  updatePortalAccess
 };

@@ -82,9 +82,17 @@ export function fetchGrnReceivedProducts(poId, grnId) {
   return api.get(`${base}/purchase-orders/${poId}/grns/${grnId}/received-products`);
 }
 
-/** List workflow: after bill upload, status can move to approved (server validates bill_files). */
-export function patchPurchaseOrderStatus(id, status) {
-  return api.patch(`${base}/purchase-orders/${id}/status`, { status });
+/** PO workflow: pending_approval | approved | rejected (with rejection_reason) */
+export function patchPurchaseOrderStatus(id, status, extra = {}) {
+  return api.patch(`${base}/purchase-orders/${id}/status`, { status, ...extra });
+}
+
+export function uploadGrnBill(poId, grnId, formData) {
+  return api.post(`${base}/purchase-orders/${poId}/grns/${grnId}/bills`, formData);
+}
+
+export function updateVendorPortalAccess(id, body) {
+  return api.patch(`${base}/vendors/${id}/portal-access`, body);
 }
 
 export function uploadPurchaseOrderBills(id, formData) {

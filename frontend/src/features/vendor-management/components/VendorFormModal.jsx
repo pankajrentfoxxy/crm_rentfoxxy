@@ -96,6 +96,16 @@ function emptyVendorForm({ password } = {}) {
     brand_code: '',
     business_registration_number: '',
     tax_identification_number: '',
+    pan_number: '',
+    msme_number: '',
+    city: '',
+    pincode: '',
+    contact_person_name: '',
+    contact_person_phone: '',
+    alternate_phone: '',
+    po_payment_terms: 'postpaid_monthly',
+    credit_days: '1',
+    notes: '',
     from_submit: 'admin'
   };
 }
@@ -180,6 +190,16 @@ export default function VendorFormModal({ open, mode, vendorId, onClose, onSaved
           brand_code: v.brand_code || '',
           business_registration_number: v.business_registration_number || '',
           tax_identification_number: v.tax_identification_number || '',
+          pan_number: v.pan_number || '',
+          msme_number: v.msme_number || '',
+          city: v.city || '',
+          pincode: v.pincode || '',
+          contact_person_name: v.contact_person_name || '',
+          contact_person_phone: v.contact_person_phone || '',
+          alternate_phone: v.alternate_phone || '',
+          po_payment_terms: v.po_payment_terms || 'postpaid_monthly',
+          credit_days: String(v.credit_days ?? '1'),
+          notes: v.notes || '',
           from_submit: 'admin'
         });
         setFiles({});
@@ -630,6 +650,29 @@ export default function VendorFormModal({ open, mode, vendorId, onClose, onSaved
                     )}
                   </div>
                 )}
+              </div>
+            </section>
+
+            <section className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+              <h3 className="text-base font-semibold text-slate-900 border-b border-slate-100 pb-3 mb-4">
+                Contact &amp; PO settings
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <Input label="PAN number" value={form.pan_number} on={(v) => onChange('pan_number', v)} />
+                <Input label="MSME number" value={form.msme_number} on={(v) => onChange('msme_number', v)} />
+                <Input label="City" value={form.city} on={(v) => onChange('city', v)} />
+                <Input label="Pincode" value={form.pincode} on={(v) => onChange('pincode', v.replace(/\D/g, '').slice(0, 10))} />
+                <Input label="Contact person" value={form.contact_person_name} on={(v) => onChange('contact_person_name', v)} />
+                <Input label="Contact phone" value={form.contact_person_phone} on={(v) => onChange('contact_person_phone', v)} />
+                <Input label="Alternate phone" value={form.alternate_phone} on={(v) => onChange('alternate_phone', v)} />
+                <Select label="PO payment terms" value={form.po_payment_terms} on={(v) => onChange('po_payment_terms', v)}>
+                  <option value="postpaid_monthly">Postpaid monthly</option>
+                  <option value="net30">Net 30</option>
+                  <option value="net15">Net 15</option>
+                  <option value="advance">Advance</option>
+                </Select>
+                <Input label="Credit days" type="number" value={form.credit_days} on={(v) => onChange('credit_days', v)} />
+                <Input label="Notes" value={form.notes} on={(v) => onChange('notes', v)} className="md:col-span-3" />
               </div>
             </section>
 

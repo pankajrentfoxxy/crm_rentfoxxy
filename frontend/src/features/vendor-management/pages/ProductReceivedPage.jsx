@@ -161,6 +161,8 @@ export default function ProductReceivedPage() {
   const [rentalStartDate, setRentalStartDate] = useState('');
   const [bulkQtyStr, setBulkQtyStr] = useState('');
   const [bulkSerials, setBulkSerials] = useState([]);
+  const [billStatus, setBillStatus] = useState('pending');
+  const [billName, setBillName] = useState('');
   const [modalBusy, setModalBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -194,6 +196,8 @@ export default function ProductReceivedPage() {
     setRentalStartDate('');
     setBulkQtyStr('');
     setBulkSerials([]);
+    setBillStatus('pending');
+    setBillName('');
   }
 
   useEffect(() => {
@@ -247,6 +251,10 @@ export default function ProductReceivedPage() {
       toast.error('Maximum 250 units per submission');
       return;
     }
+    if (billStatus === 'received' && !billName.trim()) {
+      toast.error('Bill number is required when bill is marked as received');
+      return;
+    }
     setBulkSerials(Array.from({ length: q }, () => ''));
     setReceiveStep('serials');
   }
@@ -280,7 +288,9 @@ export default function ProductReceivedPage() {
         line_index: receiveLineIndex,
         rental_start_date: rentalStartDate.trim(),
         quantity: q,
-        serial_numbers: trimmed
+        serial_numbers: trimmed,
+        bill_status: billStatus,
+        bill_name: billStatus === 'received' ? billName.trim() : undefined
       };
       const { data } = await receivePoLineBulk(poId, body);
       if (data.success) {
@@ -650,6 +660,41 @@ export default function ProductReceivedPage() {
                       onChange={(e) => setRentalStartDate(e.target.value)}
                       required
                     />
+                  </div>
+                  <div>
+                    <p className="block text-xs font-semibold text-slate-600 mb-2">Bill status</p>
+                    <div className="flex flex-wrap gap-4 text-sm">
+                      <label className="inline-flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="bill-status"
+                          checked={billStatus === 'received'}
+                          onChange={() => setBillStatus('received')}
+                        />
+                        Bill received
+                      </label>
+                      <label className="inline-flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="bill-status"
+                          checked={billStatus === 'pending'}
+                          onChange={() => setBillStatus('pending')}
+                        />
+                        Bill pending
+                      </label>
+                    </div>
+                    {billStatus === 'received' ? (
+                      <input
+                        className="mt-2 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                        placeholder="Vendor bill / invoice number"
+                        value={billName}
+                        onChange={(e) => setBillName(e.target.value)}
+                      />
+                    ) : (
+                      <p className="text-[11px] text-amber-700 mt-2 font-medium">
+                        BILL PENDING badge will show on this GRN until a bill is uploaded later.
+                      </p>
+                    )}
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1.5" htmlFor="receive-qty">

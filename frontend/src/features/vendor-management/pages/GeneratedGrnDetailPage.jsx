@@ -256,6 +256,7 @@ export default function GeneratedGrnDetailPage() {
                       <th className="text-left px-4 py-3 font-semibold">GRN number</th>
                       <th className="text-left px-4 py-3 font-semibold">Date</th>
                       <th className="text-left px-4 py-3 font-semibold">Received product</th>
+                      <th className="text-left px-4 py-3 font-semibold">Bill</th>
                       <th className="text-left px-4 py-3 font-semibold">Action</th>
                     </tr>
                   </thead>
@@ -266,6 +267,17 @@ export default function GeneratedGrnDetailPage() {
                         <td className="px-4 py-3 font-medium text-slate-900">{row.grn_number || `GRN-${row.grn_id}`}</td>
                         <td className="px-4 py-3 text-slate-700 tabular-nums text-xs">{formatRowDate(row.created_at)}</td>
                         <td className="px-4 py-3 tabular-nums font-semibold text-slate-900">{row.received_qty}</td>
+                        <td className="px-4 py-3">
+                          {String(row.bill_status || '').toLowerCase() === 'received' ? (
+                            <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">
+                              {row.bill_name || 'Received'}
+                            </span>
+                          ) : (
+                            <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800">
+                              BILL PENDING
+                            </span>
+                          )}
+                        </td>
                         <td className="px-4 py-3">
                           <button
                             type="button"

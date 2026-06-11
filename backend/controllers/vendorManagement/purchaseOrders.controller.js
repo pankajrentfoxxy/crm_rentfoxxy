@@ -14,6 +14,8 @@ const {
   insertProductDetailsForPo
 } = require('../../services/purchaseOrderProductDetailsService');
 const { createTicketFromGrnReceive } = require('../../services/grnTicketService');
+const { generatePurchaseOrderPdf } = require('../../services/vendorPurchaseOrderPdfService');
+const { sendPurchaseOrderApprovedEmail } = require('../../services/vendorPoEmailService');
 
 /** Normalize JSONB/array/string line_items → array */
 function parseLineItemsJson(raw) {
@@ -435,6 +437,8 @@ const receivePoLineBulkValidators = [
   body('serial_numbers').isArray({ min: 1 }).withMessage('serial_numbers required'),
   body('serial_numbers.*').trim().notEmpty(),
   body('grn_id').optional({ nullable: true }).isInt().toInt(),
+  body('bill_status').optional().isIn(['pending', 'received']),
+  body('bill_name').optional({ nullable: true }).isString().trim().isLength({ max: 255 }),
   body().custom((_v, { req }) => {
     const q = Number(req.body.quantity);
     const arr = req.body.serial_numbers;
@@ -550,6 +554,16 @@ async function receivePoLineBulk(req, res) {
         finalGrnId = insG.rows[0].grn_id;
       }
     }
+
+    const billStatus = String(req.body.bill_status || 'pending').toLowerCase() === 'received' ? 'received' : 'pending';
+    const billName = billStatus === 'received' ? String(req.body.bill_name || '').trim() || null : null;
+
+    await client.query(
+      `UPDATE vendor_goods_received_notes
+       SET bill_status = $1, bill_name = COALESCE($2, bill_name), updated_at = NOW()
+       WHERE grn_id = $3`,
+      [billStatus, billName, finalGrnId]
+    );
 
     const assetCodes = await allocateTtsplCodes(client, quantity);
 
@@ -691,13 +705,16 @@ async function getGeneratedGrnOverview(req, res) {
       g.grn_id,
       g.created_at,
       g.updated_at,
+      g.bill_status,
+      g.bill_name,
+      g.bill_files,
       COUNT(s.serial_id)::int AS received_qty,
       ('GRN-' || LPAD(g.grn_id::text, 4, '0')) AS grn_number
     FROM vendor_goods_received_notes g
     LEFT JOIN vendor_serial_numbers s
       ON s.grn_id = g.grn_id AND s.po_id = g.po_id AND s.deleted_at IS NULL
     WHERE g.po_id = $1 AND g.deleted_at IS NULL
-    GROUP BY g.grn_id, g.created_at, g.updated_at
+    GROUP BY g.grn_id, g.created_at, g.updated_at, g.bill_status, g.bill_name, g.bill_files
     ORDER BY g.grn_id DESC
     `,
     [poId]
@@ -1154,7 +1171,7 @@ async function create(req, res) {
         JSON.stringify(assets_details),
         JSON.stringify(insertedIds),
         body.remarks || null,
-        body.status || 'pending',
+        body.status || 'draft',
         req.user?.user_id || null,
         body.status_updated_by_name || 'Admin'
       ]
@@ -1320,8 +1337,20 @@ async function remove(req, res) {
   res.json({ success: true, message: 'Deleted' });
 }
 
-/* List workflow: approve only, and only when at least one bill file exists. */
-const statusValidators = [param('id').isInt().toInt(), body('status').isIn(['approved'])];
+const MANAGER_ROLES = new Set(['manager', 'admin', 'super_admin']);
+
+function isManagerUser(user) {
+  if (!user) return false;
+  if (user.is_superadmin === true) return true;
+  return MANAGER_ROLES.has(String(user.role || '').toLowerCase());
+}
+
+/* PO workflow: draft → pending_approval → approved (+ email) | rejected */
+const statusValidators = [
+  param('id').isInt().toInt(),
+  body('status').isIn(['pending_approval', 'approved', 'rejected']),
+  body('rejection_reason').optional({ nullable: true }).isString().trim().isLength({ max: 2000 })
+];
 
 function normalizeBillFilesJson(raw) {
   if (raw == null) return [];
@@ -1342,50 +1371,173 @@ async function updateStatus(req, res) {
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
 
   const id = Number(req.params.id);
-  const { status } = req.body;
+  const { status, rejection_reason: rejectionReason } = req.body;
 
   const cur = await pool.query(
-    `SELECT status, bill_files FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL`,
+    `SELECT p.*, v.email AS vendor_email, v.business_name AS vendor_business_name,
+            v.first_name AS vendor_first_name, v.phone AS vendor_phone, v.gst_number AS vendor_gst
+     FROM vendor_purchase_orders p
+     LEFT JOIN vendors v ON v.vendor_id = p.vendor_id
+     WHERE p.po_id = $1 AND p.deleted_at IS NULL`,
     [id]
   );
   if (!cur.rows.length) return res.status(404).json({ success: false, message: 'Purchase order not found' });
 
-  const prev = String(cur.rows[0].status || '').toLowerCase();
-  /* Until approved, list offers Approve (draft / pending legacy / empty). */
-  if (!['pending', 'draft', ''].includes(prev)) {
-    return res.status(400).json({
-      success: false,
-      message: 'Purchase order status is locked once it has progressed past awaiting approval.'
-    });
-  }
+  const po = cur.rows[0];
+  const prev = String(po.status || '').toLowerCase();
 
-  if (status === 'approved') {
-    const bills = normalizeBillFilesJson(cur.rows[0].bill_files);
-    if (bills.length === 0) {
+  if (status === 'pending_approval') {
+    if (!['pending', 'draft', ''].includes(prev)) {
       return res.status(400).json({
         success: false,
-        message: 'Upload at least one bill / invoice before approving this purchase order.'
+        message: 'Only draft purchase orders can be submitted for manager approval.'
       });
     }
-  }
+    await pool.query(
+      `UPDATE vendor_purchase_orders
+       SET status = 'pending_approval', submitted_at = NOW(), status_updated_by_admin_id = $1, updated_at = NOW()
+       WHERE po_id = $2 AND deleted_at IS NULL`,
+      [req.user?.user_id || null, id]
+    );
+  } else if (status === 'approved') {
+    if (!isManagerUser(req.user)) {
+      return res.status(403).json({ success: false, message: 'Only managers can approve purchase orders' });
+    }
+    if (prev !== 'pending_approval') {
+      return res.status(400).json({
+        success: false,
+        message: 'Purchase order must be in pending approval before a manager can approve it.'
+      });
+    }
 
-  await pool.query(
-    `UPDATE vendor_purchase_orders
-     SET status = $1, status_updated_by_admin_id = $2, updated_at = NOW()
-     WHERE po_id = $3 AND deleted_at IS NULL`,
-    [status, req.user?.user_id || null, id]
-  );
+    await pool.query(
+      `UPDATE vendor_purchase_orders
+       SET status = 'approved', approved_at = NOW(), sent_to_vendor_at = NOW(),
+           status_updated_by_admin_id = $1, rejection_reason = NULL, updated_at = NOW()
+       WHERE po_id = $2 AND deleted_at IS NULL`,
+      [req.user?.user_id || null, id]
+    );
+
+    try {
+      const vendor = {
+        email: po.vendor_email,
+        business_name: po.vendor_business_name,
+        first_name: po.vendor_first_name
+      };
+      const { absolutePath } = await generatePurchaseOrderPdf({ po, vendor });
+      await sendPurchaseOrderApprovedEmail({ po, vendor, pdfAbsolutePath: absolutePath });
+    } catch (emailErr) {
+      console.error('PO approval email failed:', emailErr);
+    }
+  } else if (status === 'rejected') {
+    if (!isManagerUser(req.user)) {
+      return res.status(403).json({ success: false, message: 'Only managers can reject purchase orders' });
+    }
+    if (prev !== 'pending_approval') {
+      return res.status(400).json({
+        success: false,
+        message: 'Purchase order must be in pending approval before it can be rejected.'
+      });
+    }
+    const reason = String(rejectionReason || '').trim();
+    if (!reason) {
+      return res.status(400).json({ success: false, message: 'Rejection reason is required' });
+    }
+    await pool.query(
+      `UPDATE vendor_purchase_orders
+       SET status = 'rejected', rejection_reason = $1, status_updated_by_admin_id = $2, updated_at = NOW()
+       WHERE po_id = $3 AND deleted_at IS NULL`,
+      [reason, req.user?.user_id || null, id]
+    );
+  }
 
   await logVendorAudit({
     actorUserId: req.user?.user_id,
-    vendorId: null,
+    vendorId: po.vendor_id || null,
     entityType: 'purchase_order',
     entityId: id,
     action: 'status_change',
-    payload: { from: prev, to: status }
+    payload: { from: prev, to: status, rejection_reason: rejectionReason || null }
   });
 
   res.json({ success: true, message: 'Purchase order status updated!', data: { po_id: id, status } });
+}
+
+const grnBillParamValidators = [param('poId').isInt().toInt(), param('grnId').isInt().toInt()];
+
+function createGrnBillsUpload() {
+  return multer({
+    storage: multer.diskStorage({
+      destination: (req, file, cb) => {
+        const dir = path.join(
+          __dirname,
+          '..',
+          '..',
+          'uploads',
+          'vendor-grn-bills',
+          String(req.params.poId),
+          String(req.params.grnId)
+        );
+        fs.mkdirSync(dir, { recursive: true });
+        cb(null, dir);
+      },
+      filename: (req, file, cb) => {
+        const safe = String(file.originalname || 'file').replace(/[^a-zA-Z0-9._-]/g, '_');
+        cb(null, `${Date.now()}_${safe}`);
+      }
+    }),
+    limits: { fileSize: 8 * 1024 * 1024 }
+  });
+}
+
+async function uploadGrnBill(req, res) {
+  try {
+    const poId = Number(req.params.poId);
+    const grnId = Number(req.params.grnId);
+    const bill_name = String(req.body.bill_name || '').trim();
+    if (!bill_name) return res.status(400).json({ success: false, message: 'Bill number is required' });
+
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ success: false, message: 'At least one file is required' });
+
+    const cur = await pool.query(
+      `SELECT grn_id, bill_files FROM vendor_goods_received_notes
+       WHERE grn_id = $1 AND po_id = $2 AND deleted_at IS NULL`,
+      [grnId, poId]
+    );
+    if (!cur.rows.length) return res.status(404).json({ success: false, message: 'GRN not found' });
+
+    let existing = cur.rows[0].bill_files;
+    if (existing != null && typeof existing === 'string') {
+      try {
+        existing = JSON.parse(existing);
+      } catch {
+        existing = [];
+      }
+    }
+    if (!Array.isArray(existing)) existing = [];
+
+    const newPaths = files.map(
+      (f) => `/uploads/vendor-grn-bills/${poId}/${grnId}/${f.filename}`
+    );
+    const merged = [...existing, ...newPaths];
+
+    await pool.query(
+      `UPDATE vendor_goods_received_notes
+       SET bill_name = $1, bill_files = $2::jsonb, bill_status = 'received', updated_at = NOW()
+       WHERE grn_id = $3`,
+      [bill_name, JSON.stringify(merged), grnId]
+    );
+
+    res.json({
+      success: true,
+      message: 'GRN bill uploaded successfully',
+      data: { bill_name, bill_files: merged, bill_status: 'received' }
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ success: false, message: e.message || 'Upload failed' });
+  }
 }
 
 function createBillsUpload() {
@@ -1485,5 +1637,8 @@ module.exports = {
   statusValidators,
   updateStatus,
   createBillsUpload,
-  uploadBills
+  uploadBills,
+  grnBillParamValidators,
+  createGrnBillsUpload,
+  uploadGrnBill
 };

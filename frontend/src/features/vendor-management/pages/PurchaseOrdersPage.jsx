@@ -23,6 +23,7 @@ import {
   uploadPurchaseOrderBills
 } from '../vendorManagementApi';
 import { getBackendOrigin } from '../../../utils/api';
+import { useAuth } from '../../../context/AuthContext';
 
 /** Matches Laravel purchase-order-form.blade.php state list (Str::slug(_, '_)) */
 const RAW_INDIAN_STATES = [
@@ -139,16 +140,34 @@ function hasUploadedBill(row) {
   return parseBillFiles(row).length > 0;
 }
 
-/** draft / pending (legacy) / empty — waiting for explicit Approve on the list */
-function awaitingApproveAction(status) {
+function canSubmitForApproval(status) {
   const s = String(status || '').toLowerCase();
   return s === 'pending' || s === 'draft' || s === '';
 }
 
-/** Eye / receive screen only after approve; completed still viewable */
+function isPendingManagerApproval(status) {
+  return String(status || '').toLowerCase() === 'pending_approval';
+}
+
+function isManagerUser(user) {
+  if (!user) return false;
+  if (user.is_superadmin) return true;
+  const role = String(user.role || '').toLowerCase();
+  return ['manager', 'admin', 'super_admin'].includes(role);
+}
+
+/** Eye / receive screen only after manager approval */
 function showReceiveEye(status) {
   const s = String(status || '').toLowerCase();
-  return s === 'approved' || s === 'processing' || s === 'completed';
+  return s === 'approved' || s === 'processing' || s === 'completed' || s === 'sent';
+}
+
+function poTypeBadgeClass(t) {
+  const s = String(t || '').toLowerCase();
+  if (s === 'rent_to_own') return 'bg-purple-100 text-purple-700';
+  if (s === 'direct_purchase') return 'bg-blue-100 text-blue-700';
+  if (s === 'rental_purchase') return 'bg-teal-100 text-teal-700';
+  return 'bg-slate-100 text-slate-700';
 }
 
 function formatWorkflowStatus(status) {
@@ -233,8 +252,12 @@ function AssetTextInput({ label, value, onChange, placeholder, required, type = 
 }
 
 export default function PurchaseOrdersPage() {
+  const { user } = useAuth();
+  const manager = isManagerUser(user);
+
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [rejectModal, setRejectModal] = useState({ open: false, po: null, reason: '' });
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
@@ -550,12 +573,13 @@ export default function PurchaseOrdersPage() {
     setPreview({ open: false, loading: false, detail: null });
   }
 
-  async function onStatusChange(po, next) {
+  async function onStatusChange(po, next, extra = {}) {
     if (!next || next === po.status) return;
     try {
-      const { data } = await patchPurchaseOrderStatus(po.po_id, next);
+      const { data } = await patchPurchaseOrderStatus(po.po_id, next, extra);
       if (!data.success) throw new Error(data.message);
       toast.success(data.message || 'Purchase order status updated!');
+      if (next === 'rejected') setRejectModal({ open: false, po: null, reason: '' });
       await loadList();
     } catch (err) {
       toast.error(err.response?.data?.message || err.message || 'Update failed');
@@ -646,9 +670,10 @@ export default function PurchaseOrdersPage() {
         <div>
           <h1 className="text-xl font-bold text-slate-900">Purchase orders</h1>
           <p className="text-xs text-slate-500 mt-1 max-w-3xl leading-relaxed">
-            Workflow: upload a bill first — then status shows <strong>Approve</strong>. After approval, use the Eye to
-            receive. While units are inbound the PO moves to <strong>Processing</strong>; when fully received it becomes{' '}
-            <strong>Completed</strong> automatically.
+            Workflow: procurement saves a <strong>Draft</strong> → submits for <strong>Manager approval</strong> → on
+            approve the vendor is emailed automatically. Use the Eye to receive goods (GRN + TTSPL IDs). Bills can be
+            marked <strong>Bill pending</strong> at GRN. PO becomes <strong>Processing</strong> then{' '}
+            <strong>Completed</strong> when fully received.
           </p>
         </div>
         <button
@@ -710,11 +735,11 @@ export default function PurchaseOrdersPage() {
             <tbody>
               {rows.map((r, i) => {
                 const st = String(r.status || '').toLowerCase();
-                const uploaded = hasUploadedBill(r);
                 const vendorName =
                   r.vendor_display_name || r.vendor_business_name || r.vendor_first_name || `Vendor #${r.vendor_id}`;
-                const showEye = uploaded && showReceiveEye(r.status);
-                const showApproveUi = uploaded && awaitingApproveAction(r.status);
+                const showEye = showReceiveEye(r.status);
+                const showSubmit = canSubmitForApproval(r.status);
+                const showManagerActions = isPendingManagerApproval(r.status) && manager;
 
                 return (
                   <tr key={r.po_id} className="border-t hover:bg-slate-50/80">
@@ -727,9 +752,12 @@ export default function PurchaseOrdersPage() {
                       >
                         {r.purchase_order_number}
                       </button>
-                      <p className="mt-1 text-xs text-slate-600">
-                        <span>{formatPoType(r.purchase_order_type)}</span>
-                        <span className="mx-1">|</span>
+                      <p className="mt-1 text-xs text-slate-600 flex flex-wrap items-center gap-1">
+                        <span
+                          className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold ${poTypeBadgeClass(r.purchase_order_type)}`}
+                        >
+                          {formatPoType(r.purchase_order_type)}
+                        </span>
                         <span>{r.purchase_order_date}</span>
                       </p>
                     </td>
@@ -784,24 +812,53 @@ export default function PurchaseOrdersPage() {
                       )}
                     </td>
                     <td className="p-3">
-                      {!uploaded ? (
-                        <span className="text-slate-400 text-xs italic" title="Upload a bill first">
-                          Hidden until bill uploaded
-                        </span>
-                      ) : showApproveUi ? (
+                      {showSubmit ? (
                         <div className="flex flex-col gap-1.5 items-start">
-                          <span className="text-[11px] text-slate-500">Awaiting approval</span>
+                          <span className="text-[11px] text-slate-500">Draft</span>
                           <button
                             type="button"
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold shadow-sm"
-                            onClick={() => onStatusChange(r, 'approved')}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-sm"
+                            onClick={() => onStatusChange(r, 'pending_approval')}
                           >
-                            <Check className="w-3.5 h-3.5" />
-                            Approve
+                            Submit for approval
                           </button>
                         </div>
+                      ) : showManagerActions ? (
+                        <div className="flex flex-col gap-1.5 items-start">
+                          <span className="text-[11px] text-amber-600 font-semibold">Pending approval</span>
+                          <div className="flex flex-wrap gap-1.5">
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-green-600 hover:bg-green-700 text-white text-xs font-semibold"
+                              onClick={() => onStatusChange(r, 'approved')}
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                              Approve
+                            </button>
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-semibold"
+                              onClick={() => setRejectModal({ open: true, po: r, reason: '' })}
+                            >
+                              Reject
+                            </button>
+                          </div>
+                        </div>
+                      ) : st === 'rejected' ? (
+                        <div>
+                          <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">
+                            Rejected
+                          </span>
+                          {r.rejection_reason ? (
+                            <p className="text-[11px] text-slate-500 mt-1 max-w-[12rem]" title={r.rejection_reason}>
+                              {r.rejection_reason}
+                            </p>
+                          ) : null}
+                        </div>
                       ) : (
-                        <span className="text-slate-800 font-medium text-sm">{formatWorkflowStatus(r.status)}</span>
+                        <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-700">
+                          {formatWorkflowStatus(r.status)}
+                        </span>
                       )}
                     </td>
                     <td className="p-3">
@@ -1761,6 +1818,42 @@ export default function PurchaseOrdersPage() {
           </div>
         </div>
       )}
+
+      {rejectModal.open && rejectModal.po ? (
+        <div
+          className="fixed inset-0 z-[103] flex items-center justify-center p-4 bg-black/50"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-5">
+            <h3 className="font-bold text-slate-900">Reject purchase order</h3>
+            <p className="text-xs text-slate-500 mt-1">{rejectModal.po.purchase_order_number}</p>
+            <textarea
+              className="mt-4 w-full border rounded-lg px-3 py-2 text-sm min-h-[100px]"
+              placeholder="Reason for rejection (required)"
+              value={rejectModal.reason}
+              onChange={(e) => setRejectModal((m) => ({ ...m, reason: e.target.value }))}
+            />
+            <div className="flex justify-end gap-2 mt-4">
+              <button
+                type="button"
+                className="px-4 py-2 rounded-lg border text-sm"
+                onClick={() => setRejectModal({ open: false, po: null, reason: '' })}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-semibold disabled:opacity-50"
+                disabled={!rejectModal.reason.trim()}
+                onClick={() => onStatusChange(rejectModal.po, 'rejected', { rejection_reason: rejectModal.reason.trim() })}
+              >
+                Reject PO
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

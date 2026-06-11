@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Purchase Order — Rentfoxxy</title>
+</head>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:24px 0;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
+          <tr>
+            <td style="background:#2563EB;padding:24px 32px;">
+              <h1 style="margin:0;color:#ffffff;font-size:22px;">Rentfoxxy</h1>
+              <p style="margin:8px 0 0;color:#dbeafe;font-size:13px;">Purchase Order — Action Required</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px;">
+              <p style="margin:0 0 16px;color:#111827;font-size:15px;">Dear {{vendorName}},</p>
+              <p style="margin:0 0 20px;color:#374151;font-size:14px;line-height:1.6;">
+                A new purchase order <strong>{{poNumber}}</strong> has been approved and is attached to this email.
+                Please review the line items, quantities, and delivery expectations.
+              </p>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:24px;">
+                <tr>
+                  <td style="padding:16px 20px;">
+                    <p style="margin:0 0 8px;color:#6b7280;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;">Order summary</p>
+                    <p style="margin:0;color:#111827;font-size:14px;"><strong>PO Number:</strong> {{poNumber}}</p>
+                    <p style="margin:8px 0 0;color:#111827;font-size:14px;"><strong>PO Date:</strong> {{poDate}}</p>
+                    <p style="margin:8px 0 0;color:#111827;font-size:14px;"><strong>Type:</strong> {{poType}}</p>
+                    <p style="margin:8px 0 0;color:#111827;font-size:14px;"><strong>Total:</strong> ₹{{totalAmount}}</p>
+                  </td>
+                </tr>
+              </table>
+              <p style="margin:0 0 24px;color:#374151;font-size:14px;line-height:1.6;">
+                You can also view this order in the vendor portal. Please confirm receipt by replying to this email or logging into your vendor account.
+              </p>
+              <a href="{{portalUrl}}" style="display:inline-block;background:#16A34A;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:bold;">
+                Open Vendor Portal
+              </a>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:20px 32px;background:#f9fafb;border-top:1px solid #e5e7eb;">
+              <p style="margin:0;color:#9ca3af;font-size:12px;text-align:center;">
+                Rentfoxxy Technologies Pvt Ltd · noreply@rentfoxxy.com
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
