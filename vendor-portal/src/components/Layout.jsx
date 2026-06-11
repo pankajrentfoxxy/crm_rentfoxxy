@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { FileText, Laptop, LayoutDashboard, LogOut, Receipt, RotateCcw, User } from 'lucide-react';
+import { FileText, Laptop, LayoutDashboard, LogOut, Receipt, RotateCcw, User, AlertCircle } from 'lucide-react';
 import { useVendorAuth } from '../context/VendorAuthContext';
 
 const nav = [
@@ -8,6 +8,7 @@ const nav = [
   { to: '/purchase-orders', label: 'Purchase Orders', icon: FileText },
   { to: '/laptops', label: 'My Laptops', icon: Laptop },
   { to: '/bills', label: 'My Bills', icon: Receipt },
+  { to: '/debit-notes', label: 'Debit Notes', icon: AlertCircle },
   { to: '/returns', label: 'Returns', icon: RotateCcw },
   { to: '/profile', label: 'Profile', icon: User }
 ];

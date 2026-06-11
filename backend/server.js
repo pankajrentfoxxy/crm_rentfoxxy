@@ -14,6 +14,7 @@ const app = express();
 const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:3001',
+  'http://localhost:3002',
   'http://localhost:5001',
   'https://rentfoxxy.vercel.app',
   'http://187.77.187.213',
@@ -85,6 +86,7 @@ app.use('/api/customer-inventory', require('./routes/customerInventory'));
 app.use('/api/support', require('./routes/support'));
 app.use('/api/vendor-management', require('./routes/vendorManagement'));
 app.use('/api/vendor-portal', require('./routes/vendorPortal'));
+app.use('/api/customer-portal', require('./routes/customerPortal'));
 app.use('/api/qc-management', require('./routes/qcManagement'));
 app.use('/api/inventory-management', require('./routes/inventoryManagement'));
 app.use('/api/customer-billing', require('./routes/customerBilling'));

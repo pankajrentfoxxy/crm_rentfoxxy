@@ -17,6 +17,7 @@ import {
   AlertCircle,
   Zap,
   DollarSign,
+  Headphones,
 } from 'lucide-react';
 
 /** Vendor Management accordion */
@@ -162,6 +163,19 @@ export const MENU_GROUPS = [
         label: 'Finance',
         section: 'customer_billing',
         children: financeMenuItems,
+      },
+    ],
+  },
+  {
+    key: 'support',
+    label: 'Support',
+    items: [
+      {
+        icon: Headphones,
+        label: 'Support',
+        path: '/support',
+        section: 'support_tickets',
+        countKey: 'open_tickets',
       },
     ],
   },

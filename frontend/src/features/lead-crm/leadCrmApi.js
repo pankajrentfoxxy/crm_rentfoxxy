@@ -32,6 +32,8 @@ export const addCustomerAddress = (id, data) => api.post(`/customer-management/c
 export const deleteCustomerAddress = (id, addressId) => api.delete(`/customer-management/customers/${id}/addresses/${addressId}`);
 export const setDefaultCustomerAddress = (id, addressId) => api.patch(`/customer-management/customers/${id}/addresses/${addressId}/default`);
 
+export const enableCustomerPortal = (id, data) => api.patch(`/customer-management/customers/${id}/portal-access`, data);
+
 export const getCustomerDocuments = (customerId) => api.get(`/customer-documents/${customerId}`);
 export const uploadCustomerDocument = (customerId, formData) =>
   api.post(`/customer-documents/${customerId}/upload`, formData, {

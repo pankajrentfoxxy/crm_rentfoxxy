@@ -28,6 +28,8 @@ router.post(
 
 router.get('/serial-numbers', vendorPortalAuth, portal.listSerialValidators, portal.listSerialNumbers);
 router.get('/bills', vendorPortalAuth, portal.listBillsValidators, portal.listVendorBills);
+router.get('/bills/:billId', vendorPortalAuth, portal.billIdParam, portal.getBillDetail);
+router.get('/debit-notes', vendorPortalAuth, portal.listVendorDebitNotes);
 router.get('/returns', vendorPortalAuth, portal.listReturnsValidators, portal.listVendorReturns);
 
 module.exports = router;

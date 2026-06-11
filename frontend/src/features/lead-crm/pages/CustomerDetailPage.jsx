@@ -1,17 +1,41 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Copy } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
 import {
-  getCustomer, getCustomerLaptops, updateCustomer, verifyCustomerKyc,
+  getCustomer, getCustomerLaptops, updateCustomer, verifyCustomerKyc, enableCustomerPortal,
 } from '../leadCrmApi';
 import { formatCurrency } from '../leadCrmUtils';
 import CustomerDocuments from '../components/CustomerDocuments';
 import CustomerFormDrawer from '../components/CustomerFormDrawer';
 
 const TABS = ['Profile', 'Documents', 'Laptops', 'Orders', 'Lead Origin', 'Portal Access'];
+const PORTAL_URL = process.env.REACT_APP_CUSTOMER_PORTAL_URL || 'http://localhost:3002';
+
+function PasswordModal({ password, onClose }) {
+  const copy = () => {
+    navigator.clipboard.writeText(password);
+    toast.success('Password copied');
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 space-y-4">
+        <h3 className="text-lg font-semibold">Portal credentials</h3>
+        <p className="text-sm text-gray-600">Share this temporary password with the customer:</p>
+        <div className="flex items-center gap-2 bg-gray-50 border rounded-lg p-3 font-mono text-sm">
+          <span className="flex-1">{password}</span>
+          <button type="button" onClick={copy} className="p-1.5 hover:bg-gray-200 rounded">
+            <Copy className="w-4 h-4" />
+          </button>
+        </div>
+        <p className="text-xs text-gray-500">Portal URL: {PORTAL_URL}</p>
+        <button type="button" onClick={onClose} className="w-full py-2 bg-blue-600 text-white rounded-lg text-sm">Done</button>
+      </div>
+    </div>
+  );
+}
 
 export default function CustomerDetailPage() {
   const { id } = useParams();
@@ -21,8 +45,10 @@ export default function CustomerDetailPage() {
   const [tab, setTab] = useState(0);
   const [editOpen, setEditOpen] = useState(false);
   const [ttsplOpen, setTtsplOpen] = useState(null);
+  const [portalBusy, setPortalBusy] = useState(false);
+  const [newPassword, setNewPassword] = useState(null);
 
-  const load = useCallback(async () => {
+  const load = React.useCallback(async () => {
     try {
       const res = await getCustomer(id);
       setCustomer(res.data?.customer);
@@ -33,14 +59,22 @@ export default function CustomerDetailPage() {
     }
   }, [id]);
 
-  useEffect(() => { load(); }, [load]);
+  React.useEffect(() => { load(); }, [load]);
 
   if (!customer) return <div className="p-6 text-center text-gray-400">Loading...</div>;
 
-  const togglePortal = async () => {
-    await updateCustomer(id, { portal_enabled: !customer.portal_enabled });
-    toast.success('Portal access updated');
-    load();
+  const handlePortalAction = async (payload) => {
+    setPortalBusy(true);
+    try {
+      const res = await enableCustomerPortal(id, payload);
+      if (res.data?.new_password) setNewPassword(res.data.new_password);
+      toast.success(payload.enabled === false ? 'Portal disabled' : 'Portal updated');
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Portal update failed');
+    } finally {
+      setPortalBusy(false);
+    }
   };
 
   const handleVerifyKyc = async () => {
@@ -180,19 +214,78 @@ export default function CustomerDetailPage() {
       {tab === 5 && (
         <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 space-y-4">
           <PermissionGate section="customers" action="edit">
-            <label className="flex items-center gap-3 text-sm">
-              <input type="checkbox" checked={!!customer.portal_enabled} onChange={togglePortal} />
-              Portal enabled
-            </label>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">Portal status</p>
+                <p className={`text-xs mt-1 ${customer.portal_enabled ? 'text-green-600' : 'text-gray-500'}`}>
+                  {customer.portal_enabled ? 'Enabled' : 'Disabled'}
+                </p>
+              </div>
+              <span className={`px-2 py-1 rounded-full text-xs font-semibold ${customer.portal_enabled ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                {customer.portal_enabled ? 'Active' : 'Inactive'}
+              </span>
+            </div>
+
+            {customer.portal_enabled && (
+              <p className="text-sm text-gray-600">
+                Last login:{' '}
+                {customer.portal_last_login
+                  ? new Date(customer.portal_last_login).toLocaleString('en-IN')
+                  : 'Never'}
+              </p>
+            )}
+
+            <p className="text-xs text-gray-500">Customer portal URL: {PORTAL_URL}</p>
+
+            <div className="flex flex-wrap gap-2 pt-2">
+              {!customer.portal_enabled ? (
+                <button
+                  type="button"
+                  disabled={portalBusy}
+                  onClick={() => handlePortalAction({ enabled: true })}
+                  className="px-4 py-2 text-sm bg-green-600 text-white rounded-lg disabled:opacity-50"
+                >
+                  Enable Portal Access
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    disabled={portalBusy}
+                    onClick={() => handlePortalAction({ reset_password: true })}
+                    className="px-4 py-2 text-sm border rounded-lg disabled:opacity-50"
+                  >
+                    Reset Password
+                  </button>
+                  <button
+                    type="button"
+                    disabled={portalBusy}
+                    onClick={() => handlePortalAction({ send_login_email: true })}
+                    className="px-4 py-2 text-sm border border-teal-200 text-teal-700 rounded-lg disabled:opacity-50"
+                  >
+                    Send Login Email
+                  </button>
+                  <button
+                    type="button"
+                    disabled={portalBusy}
+                    onClick={() => handlePortalAction({ enabled: false })}
+                    className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg disabled:opacity-50"
+                  >
+                    Disable Portal
+                  </button>
+                </>
+              )}
+            </div>
           </PermissionGate>
-          <p className="text-xs text-gray-500">
-            {customer.portal_enabled ? 'Customer can access the vendor portal.' : 'Portal access is disabled.'}
-          </p>
+          {!customer.portal_enabled && (
+            <p className="text-xs text-gray-500">Enable portal access to let this customer view invoices, laptops, and raise support tickets.</p>
+          )}
         </div>
       )}
 
       <CustomerFormDrawer open={editOpen} customer={customer} onClose={() => setEditOpen(false)} onSaved={load} />
       <TtsplHistoryDrawer ttsplId={ttsplOpen} open={!!ttsplOpen} onClose={() => setTtsplOpen(null)} />
+      {newPassword && <PasswordModal password={newPassword} onClose={() => setNewPassword(null)} />}
     </div>
   );
 }

@@ -31,6 +31,7 @@ router.post(
 );
 // Specific /customers/:id/* routes must be registered before /customers/:customerId
 router.put('/customers/:customerId/verify-kyc', checkRole('admin', 'manager'), ctrl.verifyCustomerKyc);
+router.patch('/customers/:customerId/portal-access', checkRole('admin', 'manager'), ctrl.enableCustomerPortal);
 router.get('/customers/:customerId/laptops', checkRole(...roles), ctrl.getCustomerLaptops);
 router.get('/customers/:customerId/addresses', checkRole(...roles), ctrl.getCustomerAddresses);
 router.post('/customers/:customerId/addresses', checkRole(...roles), ctrl.addCustomerAddress);

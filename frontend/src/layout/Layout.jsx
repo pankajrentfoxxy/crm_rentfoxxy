@@ -59,6 +59,7 @@ import { useOperationCounts } from '../features/operation-management/hooks/useOp
 import { useDeliveryRegisterCounts } from '../features/delivery-register-management/hooks/useDeliveryRegisterCounts';
 import { useLeadCrmCounts } from '../features/lead-crm/hooks/useLeadCrmCounts';
 import { useFinanceCounts } from '../features/finance-overview/hooks/useFinanceCounts';
+import { useSupportCounts } from '../features/support-module/hooks/useSupportCounts';
 import {
   FLAT_MENU_ITEMS,
   vendorAccordionChildren,
@@ -116,6 +117,9 @@ export default function Layout({ children }) {
     canView('security_deposits') ||
     canView('billing_dashboard') ||
     canView('einvoice_ewb');
+
+  const showSupportNav = canView('support_tickets');
+  const { counts: supportCounts } = useSupportCounts(showSupportNav);
 
   const { counts: operationCounts } = useOperationCounts(showSalesPipelineAccordion);
   const { counts: financeCounts } = useFinanceCounts(showFinanceAccordion);
@@ -1017,7 +1021,8 @@ export default function Layout({ children }) {
               );
             }
 
-            const { icon: Icon, label, path } = item;
+            const { icon: Icon, label, path, countKey } = item;
+            const badge = countKey && supportCounts[countKey] != null ? supportCounts[countKey] : null;
 
             return (
 
@@ -1035,7 +1040,13 @@ export default function Layout({ children }) {
 
                 <Icon className="w-5 h-5 text-gray-600 shrink-0" />
 
-                <span className="font-medium">{label}</span>
+                <span className="font-medium flex-1">{label}</span>
+
+                {badge != null && badge > 0 ? (
+                  <span className="ml-auto inline-flex min-w-[1.25rem] justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                    {badge}
+                  </span>
+                ) : null}
 
               </Link>
 

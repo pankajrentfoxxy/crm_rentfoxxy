@@ -295,18 +295,28 @@ async function listSerialNumbers(req, res) {
 
 async function dashboardStats(req, res) {
   const vendorId = req.vendor.vendor_id;
-  const [pos, serials] = await Promise.all([
+  const [pos, serials, bills] = await Promise.all([
     pool.query(
       `SELECT COUNT(*)::int AS c FROM vendor_purchase_orders
        WHERE vendor_id = $1 AND deleted_at IS NULL
-         AND status IN ('approved', 'sent', 'processing', 'completed')`,
+         AND status IN ('approved', 'sent', 'processing', 'completed', 'vendor_accepted')`,
       [vendorId]
     ),
     pool.query(
       `SELECT COUNT(*)::int AS c
        FROM vendor_serial_numbers s
        JOIN vendor_purchase_orders p ON p.po_id = s.po_id
-       WHERE p.vendor_id = $1 AND s.deleted_at IS NULL AND p.deleted_at IS NULL`,
+       WHERE p.vendor_id = $1 AND s.deleted_at IS NULL AND p.deleted_at IS NULL
+         AND COALESCE(s.inventory_status, 'in_stock') NOT IN ('returned')`,
+      [vendorId]
+    ),
+    pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE status IN ('generated', 'approved'))::int AS pending_bills,
+         COALESCE(SUM(total_payable) FILTER (WHERE status NOT IN ('paid', 'cancelled')), 0) AS total_outstanding,
+         COALESCE(SUM(total_payable) FILTER (WHERE status IN ('generated', 'approved')), 0) AS pending_amount
+       FROM vendor_monthly_bills
+       WHERE vendor_id = $1`,
       [vendorId]
     )
   ]);
@@ -316,8 +326,10 @@ async function dashboardStats(req, res) {
     data: {
       active_pos: pos.rows[0].c,
       laptops_with_rentfoxxy: serials.rows[0].c,
-      pending_bills: 0,
-      overdue_amount: 0
+      pending_bills: bills.rows[0].pending_bills || 0,
+      pending_bills_amount: parseFloat(bills.rows[0].pending_amount || 0),
+      total_outstanding: parseFloat(bills.rows[0].total_outstanding || 0),
+      overdue_amount: parseFloat(bills.rows[0].total_outstanding || 0)
     }
   });
 }
@@ -504,6 +516,62 @@ async function listVendorBills(req, res) {
   });
 }
 
+const billIdParam = [param('billId').isInt({ min: 1 }).toInt()];
+
+async function getBillDetail(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  const vendorId = req.vendor.vendor_id;
+  const billId = req.params.billId;
+
+  const dataR = await pool.query(
+    `SELECT bill_id, bill_number, bill_month, bill_year, bill_date, from_date, to_date,
+            line_items, subtotal, gst_amount, debit_note_adjustment, total_payable, status,
+            payment_date, payment_reference, pdf_path, created_at
+     FROM vendor_monthly_bills
+     WHERE bill_id = $1 AND vendor_id = $2`,
+    [billId, vendorId]
+  );
+
+  if (!dataR.rows.length) {
+    return res.status(404).json({ success: false, message: 'Bill not found' });
+  }
+
+  const row = dataR.rows[0];
+  const items = Array.isArray(row.line_items)
+    ? row.line_items
+    : typeof row.line_items === 'string'
+      ? JSON.parse(row.line_items || '[]')
+      : [];
+
+  res.json({
+    success: true,
+    data: {
+      ...row,
+      line_items: items,
+      period: `${row.from_date} – ${row.to_date}`,
+    },
+  });
+}
+
+async function listVendorDebitNotes(req, res) {
+  const vendorId = req.vendor.vendor_id;
+  const dataR = await pool.query(
+    `SELECT dn.debit_note_id, dn.debit_note_number, dn.po_id, dn.reason, dn.description,
+            dn.amount, dn.status, dn.created_at, dn.adjusted_in_bill_id,
+            p.po_number, mb.bill_number AS applied_bill_number
+     FROM vendor_debit_notes dn
+     LEFT JOIN vendor_purchase_orders p ON p.po_id = dn.po_id
+     LEFT JOIN vendor_monthly_bills mb ON mb.bill_id = dn.adjusted_in_bill_id
+     WHERE dn.vendor_id = $1
+     ORDER BY dn.created_at DESC`,
+    [vendorId]
+  );
+
+  res.json({ success: true, data: dataR.rows });
+}
+
 const listReturnsValidators = [
   query('page').optional().isInt({ min: 1 }).toInt(),
   query('limit').optional().isInt({ min: 1, max: 100 }).toInt()
@@ -598,6 +666,9 @@ module.exports = {
   uploadPurchaseOrderInvoice,
   listBillsValidators,
   listVendorBills,
+  billIdParam,
+  getBillDetail,
+  listVendorDebitNotes,
   listReturnsValidators,
   listVendorReturns,
   formatPoType

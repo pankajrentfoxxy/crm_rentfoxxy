@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const pool = require('../config/db');
+const { sendCustomerPortalWelcome } = require('../services/emailQueueService');
 
 function parseDetails(value) {
   if (value == null) return {};
@@ -79,6 +80,7 @@ function formatCustomerRow(row) {
     onboarded_by: row.onboarded_by || null,
     onboarded_at: row.onboarded_at || null,
     portal_enabled: row.portal_enabled ?? false,
+    portal_last_login: row.portal_last_login || null,
     notes: row.notes || null,
     kyc_verified: row.kyc_verified ?? false,
     kyc_verified_by: row.kyc_verified_by || null,
@@ -92,7 +94,7 @@ function formatCustomerRow(row) {
 }
 
 async function ensureCustomerManagementSchema() {
-  for (const file of ['045_customer_management_module.sql', '064_customer_addresses.sql']) {
+  for (const file of ['045_customer_management_module.sql', '064_customer_addresses.sql', '068_phase6_support_customer_portal.sql']) {
     const migrationPath = path.join(__dirname, '../migrations', file);
     if (!fs.existsSync(migrationPath)) continue;
     const sql = fs.readFileSync(migrationPath, 'utf8');
@@ -541,6 +543,81 @@ exports.deleteCustomer = async (req, res) => {
     await pool.query(`DELETE FROM customers WHERE customer_id = $1`, [req.params.customerId]);
     res.json({ success: true, message: 'Customer deleted successfully' });
   } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.enableCustomerPortal = async (req, res) => {
+  try {
+    const customerId = parseInt(req.params.customerId, 10);
+    const { enabled, reset_password, send_login_email } = req.body || {};
+
+    const existing = await pool.query('SELECT * FROM customers WHERE customer_id = $1', [customerId]);
+    if (!existing.rows.length) {
+      return res.status(404).json({ success: false, message: 'Customer not found' });
+    }
+    const row = existing.rows[0];
+
+    if (enabled === false) {
+      await pool.query(
+        `UPDATE customers SET portal_enabled = false, updated_at = NOW() WHERE customer_id = $1`,
+        [customerId]
+      );
+      await pool.query(`DELETE FROM customer_portal_sessions WHERE customer_id = $1`, [customerId]);
+      return res.json({ success: true, enabled: false });
+    }
+
+    if (send_login_email && enabled !== true && reset_password !== true) {
+      if (!row.portal_enabled) {
+        return res.status(400).json({ success: false, message: 'Portal is not enabled for this customer' });
+      }
+      if (!row.email) {
+        return res.status(400).json({ success: false, message: 'Customer has no email address' });
+      }
+      await sendCustomerPortalWelcome({
+        customerEmail: row.email,
+        customerName: row.company_name || row.name,
+        portalUrl: process.env.CUSTOMER_PORTAL_URL || 'http://localhost:3002',
+        tempPassword: null,
+      });
+      return res.json({ success: true, enabled: true, email_sent: true });
+    }
+
+    let newPassword = null;
+    const needsPassword = reset_password === true || (enabled === true && !row.portal_password_hash);
+
+    if (needsPassword) {
+      newPassword = generatePassword();
+      const hash = await bcrypt.hash(newPassword, 10);
+      await pool.query(
+        `UPDATE customers SET portal_password_hash = $1, portal_enabled = COALESCE($2, portal_enabled, true), updated_at = NOW() WHERE customer_id = $3`,
+        [hash, enabled === true ? true : null, customerId]
+      );
+    } else if (enabled === true) {
+      await pool.query(
+        `UPDATE customers SET portal_enabled = true, updated_at = NOW() WHERE customer_id = $1`,
+        [customerId]
+      );
+    } else {
+      return res.status(400).json({ success: false, message: 'Specify enabled, reset_password, or send_login_email' });
+    }
+
+    if (send_login_email && row.email) {
+      await sendCustomerPortalWelcome({
+        customerEmail: row.email,
+        customerName: row.company_name || row.name,
+        portalUrl: process.env.CUSTOMER_PORTAL_URL || 'http://localhost:3002',
+        tempPassword: newPassword,
+      });
+    }
+
+    res.json({
+      success: true,
+      enabled: enabled !== false,
+      new_password: newPassword || undefined,
+    });
+  } catch (error) {
+    console.error('enableCustomerPortal:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };

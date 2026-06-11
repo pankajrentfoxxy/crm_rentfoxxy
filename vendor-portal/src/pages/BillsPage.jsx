@@ -14,9 +14,16 @@ function statusBadge(status) {
   return map[s] || 'bg-slate-100 text-slate-600';
 }
 
+function inr(n) {
+  return `₹${Number(n || 0).toLocaleString('en-IN')}`;
+}
+
 export default function BillsPage() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [selectedId, setSelectedId] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   useEffect(() => {
     api
@@ -26,6 +33,20 @@ export default function BillsPage() {
       })
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (!selectedId) {
+      setDetail(null);
+      return;
+    }
+    setDetailLoading(true);
+    api
+      .get(`/vendor-portal/bills/${selectedId}`)
+      .then(({ data }) => {
+        if (data.success) setDetail(data.data);
+      })
+      .finally(() => setDetailLoading(false));
+  }, [selectedId]);
 
   return (
     <div className="space-y-6">
@@ -55,21 +76,23 @@ export default function BillsPage() {
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.bill_id} className="border-t hover:bg-slate-50/80">
+                <tr
+                  key={r.bill_id}
+                  className={`border-t hover:bg-slate-50/80 cursor-pointer ${selectedId === r.bill_id ? 'bg-emerald-50/50' : ''}`}
+                  onClick={() => setSelectedId(selectedId === r.bill_id ? null : r.bill_id)}
+                >
                   <td className="p-3 font-medium">
                     {MONTHS[r.bill_month] || r.bill_month} {r.bill_year}
                   </td>
                   <td className="p-3 text-slate-600 text-xs">{r.period || `${r.from_date} – ${r.to_date}`}</td>
                   <td className="p-3 tabular-nums">{r.units ?? 0}</td>
-                  <td className="p-3 tabular-nums">₹{Number(r.subtotal || 0).toLocaleString('en-IN')}</td>
+                  <td className="p-3 tabular-nums">{inr(r.subtotal)}</td>
                   <td className="p-3 tabular-nums text-red-600">
                     {Number(r.debit_note_adjustment || 0) > 0
                       ? `-₹${Number(r.debit_note_adjustment).toLocaleString('en-IN')}`
                       : '—'}
                   </td>
-                  <td className="p-3 tabular-nums font-semibold">
-                    ₹{Number(r.total_payable || 0).toLocaleString('en-IN')}
-                  </td>
+                  <td className="p-3 tabular-nums font-semibold">{inr(r.total_payable)}</td>
                   <td className="p-3">
                     <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${statusBadge(r.status)}`}>
                       {r.status}
@@ -81,6 +104,60 @@ export default function BillsPage() {
           </table>
         )}
       </div>
+
+      {selectedId && (
+        <div className="bg-white rounded-xl border p-6 shadow-sm space-y-4">
+          {detailLoading ? (
+            <p className="text-slate-500 animate-pulse">Loading bill details…</p>
+          ) : detail ? (
+            <>
+              <div className="flex flex-wrap justify-between gap-2">
+                <div>
+                  <h2 className="font-bold text-lg">{detail.bill_number}</h2>
+                  <p className="text-sm text-slate-500">{MONTHS[detail.bill_month]} {detail.bill_year} · {detail.period}</p>
+                </div>
+                <span className={`px-2 py-1 rounded-full text-xs capitalize h-fit ${statusBadge(detail.status)}`}>{detail.status}</span>
+              </div>
+              <table className="min-w-full text-sm">
+                <thead className="text-xs text-slate-500 text-left">
+                  <tr>
+                    {['TTSPL ID', 'Brand', 'Config', 'Received', 'Return', 'Days', 'Rate', 'Amount'].map((h) => (
+                      <th key={h} className="pb-2 pr-2">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(detail.line_items || []).map((line, i) => (
+                    <tr key={i} className="border-t">
+                      <td className="py-2 font-mono text-xs">{line.ttspl_id || '—'}</td>
+                      <td className="py-2">{line.brand || '—'}</td>
+                      <td className="py-2 text-xs">{line.config || '—'}</td>
+                      <td className="py-2 text-xs">{line.received_date || '—'}</td>
+                      <td className="py-2 text-xs">{line.return_date || '—'}</td>
+                      <td className="py-2">{line.days || '—'}</td>
+                      <td className="py-2">{inr(line.rate || line.daily_rate)}</td>
+                      <td className="py-2">{inr(line.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="text-sm space-y-1 border-t pt-4 max-w-xs ml-auto">
+                <p className="flex justify-between"><span>Subtotal</span><span>{inr(detail.subtotal)}</span></p>
+                <p className="flex justify-between"><span>GST</span><span>{inr(detail.gst_amount)}</span></p>
+                <p className="flex justify-between text-red-600"><span>Debit Note Adjustment</span><span>-{inr(detail.debit_note_adjustment)}</span></p>
+                <p className="flex justify-between font-bold"><span>Total Payable</span><span>{inr(detail.total_payable)}</span></p>
+              </div>
+              {detail.status === 'paid' && (
+                <p className="text-sm text-green-700">
+                  Paid on {detail.payment_date || '—'} {detail.payment_reference ? `(Ref: ${detail.payment_reference})` : ''}
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="text-red-600">Could not load bill details</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

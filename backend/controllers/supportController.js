@@ -475,7 +475,12 @@ exports.createTicket = async (req, res) => {
         ticket_phone_override,
         ticket_alt_phone,
         ticket_email,
-        ticket_address
+        ticket_address,
+        ttspl_id,
+        dc_number,
+        sales_order_number,
+        customer_portal_ticket,
+        portal_customer_id
     } = req.body;
     if (!customer_id || !Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ success: false, message: 'customer_id and items are required' });
@@ -506,8 +511,8 @@ exports.createTicket = async (req, res) => {
             `INSERT INTO support_tickets (
                 customer_id, customer_name, customer_phone, status, created_by, last_activity_at,
                 priority, top_level_remarks, ticket_phone_override, ticket_alt_phone, ticket_email, ticket_address,
-                ticket_category
-            ) VALUES ($1,$2,$3,$4,$5,CURRENT_TIMESTAMP,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+                ticket_category, ttspl_id, dc_number, sales_order_number, customer_portal_ticket, portal_customer_id
+            ) VALUES ($1,$2,$3,$4,$5,CURRENT_TIMESTAMP,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
             [
                 customer_id,
                 customer_name || null,
@@ -520,7 +525,12 @@ exports.createTicket = async (req, res) => {
                 ticket_alt_phone || null,
                 ticket_email || null,
                 ticket_address || null,
-                ticketCategory
+                ticketCategory,
+                ttspl_id || null,
+                dc_number || null,
+                sales_order_number || null,
+                customer_portal_ticket === true,
+                portal_customer_id || (customer_portal_ticket === true ? customer_id : null)
             ]
         );
         const ticket = ticketRes.rows[0];

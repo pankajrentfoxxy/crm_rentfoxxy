@@ -8,6 +8,7 @@ import PurchaseOrdersPage from './pages/PurchaseOrdersPage';
 import PurchaseOrderDetailPage from './pages/PurchaseOrderDetailPage';
 import SerialNumbersPage from './pages/SerialNumbersPage';
 import BillsPage from './pages/BillsPage';
+import DebitNotesPage from './pages/DebitNotesPage';
 import ReturnsPage from './pages/ReturnsPage';
 import ProfilePage from './pages/ProfilePage';
 
@@ -34,6 +35,7 @@ export default function App() {
         <Route path="purchase-orders/:poId" element={<PurchaseOrderDetailPage />} />
         <Route path="laptops" element={<SerialNumbersPage />} />
         <Route path="bills" element={<BillsPage />} />
+        <Route path="debit-notes" element={<DebitNotesPage />} />
         <Route path="returns" element={<ReturnsPage />} />
         <Route path="profile" element={<ProfilePage />} />
       </Route>

@@ -2,6 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../utils/api';
 
+function inr(n) {
+  return `₹${Number(n || 0).toLocaleString('en-IN')}`;
+}
+
 export default function DashboardPage() {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -16,9 +20,14 @@ export default function DashboardPage() {
   }, []);
 
   const cards = [
-    { label: 'Active POs', value: stats?.active_pos ?? '—' },
     { label: 'Laptops with Rentfoxxy', value: stats?.laptops_with_rentfoxxy ?? '—' },
-    { label: 'Pending bills', value: stats?.pending_bills ?? 0 }
+    { label: 'Active POs', value: stats?.active_pos ?? '—' },
+    {
+      label: 'Pending Bills',
+      value: stats?.pending_bills ?? 0,
+      sub: stats?.pending_bills_amount != null ? inr(stats.pending_bills_amount) : null,
+    },
+    { label: 'Total Outstanding', value: inr(stats?.total_outstanding ?? 0) },
   ];
 
   return (
@@ -28,17 +37,18 @@ export default function DashboardPage() {
         <p className="text-sm text-slate-500 mt-1">Overview of your business with Rentfoxxy</p>
       </div>
       {loading ? (
-        <div className="grid sm:grid-cols-3 gap-4 animate-pulse">
-          {[1, 2, 3].map((i) => (
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 animate-pulse">
+          {[1, 2, 3, 4].map((i) => (
             <div key={i} className="h-24 bg-white rounded-xl border" />
           ))}
         </div>
       ) : (
-        <div className="grid sm:grid-cols-3 gap-4">
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {cards.map((c) => (
             <div key={c.label} className="bg-white rounded-xl border border-slate-100 shadow-sm p-5">
               <p className="text-xs uppercase tracking-wide text-slate-500 font-semibold">{c.label}</p>
               <p className="text-3xl font-bold text-slate-900 mt-2 tabular-nums">{c.value}</p>
+              {c.sub && <p className="text-sm text-slate-500 mt-1">{c.sub}</p>}
             </div>
           ))}
         </div>
@@ -51,6 +61,12 @@ export default function DashboardPage() {
           </Link>
           <Link to="/laptops" className="px-4 py-2 rounded-lg bg-slate-100 text-slate-700 text-sm font-semibold">
             My laptops (TTSPL)
+          </Link>
+          <Link to="/bills" className="px-4 py-2 rounded-lg bg-slate-100 text-slate-700 text-sm font-semibold">
+            My bills
+          </Link>
+          <Link to="/debit-notes" className="px-4 py-2 rounded-lg bg-slate-100 text-slate-700 text-sm font-semibold">
+            Debit notes
           </Link>
         </div>
       </div>

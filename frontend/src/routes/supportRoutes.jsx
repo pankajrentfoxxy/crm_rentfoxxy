@@ -4,7 +4,7 @@ import Layout from '../layout/Layout';
 import ProtectedRoute from '../router/ProtectedRoute';
 import SupportProtectedRoute from '../router/SupportProtectedRoute';
 import CustomerInventory from '../components/CustomerInventory';
-import SupportApp from '../components/support/SupportApp';
+import SupportModuleApp from '../features/support-module/SupportModuleApp';
 
 const withInventoryPadding = (node) => (
   <Layout>
@@ -26,7 +26,9 @@ export const supportRoutes = [
     element: (
       <ProtectedRoute section="support_tickets" action="view">
         <SupportProtectedRoute>
-          <SupportApp />
+          <Layout>
+            <SupportModuleApp />
+          </Layout>
         </SupportProtectedRoute>
       </ProtectedRoute>
     ),
