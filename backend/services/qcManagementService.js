@@ -244,7 +244,9 @@ function enrichSerialRow(row) {
     hardware_remark: ex.hardware_remark ?? '',
     require_parts: parseRequireParts(ex),
     rental_period: row.rental_start_date || line?.rental_period || null,
-    product_warranty: line?.warranty_months ?? line?.product_warranty ?? null
+    product_warranty: line?.warranty_months ?? line?.product_warranty ?? null,
+    inventory_tag: ex.inventory_tag || null,
+    extra: ex
   };
 }
 

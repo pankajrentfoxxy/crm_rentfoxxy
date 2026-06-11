@@ -1,6 +1,7 @@
 const { param, query, body, validationResult } = require('express-validator');
 const pool = require('../../config/db');
 const { parseExtra } = require('../../services/qcManagementService');
+const { logTtsplEvent } = require('../../services/ttsplAuditService');
 const {
   normalizeListSegment,
   listTitleForSegment,
@@ -287,6 +288,56 @@ async function changeSparePartStatus(req, res) {
   }
 }
 
+const tagInventoryValidators = [
+  param('id').isInt().toInt(),
+  body('tag').isIn(['rental', 'sales'])
+];
+
+/** Tag vendor serial as rental or sales (stored in extra.inventory_tag) */
+async function tagInventoryItem(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  const serialId = req.params.id;
+  const tag = req.body.tag;
+
+  try {
+    const cur = await pool.query(
+      `SELECT serial_id, serial_number, inventory_asset_code, extra
+       FROM vendor_serial_numbers WHERE serial_id = $1 AND deleted_at IS NULL`,
+      [serialId]
+    );
+    if (!cur.rows.length) {
+      return res.status(404).json({ success: false, message: 'Serial not found' });
+    }
+    const row = cur.rows[0];
+    const extra = parseExtra(row.extra);
+    extra.inventory_tag = tag;
+
+    await pool.query(
+      `UPDATE vendor_serial_numbers SET extra = $1::jsonb, updated_at = NOW() WHERE serial_id = $2`,
+      [JSON.stringify(extra), serialId]
+    );
+
+    const ttsplId = row.inventory_asset_code || row.serial_number;
+    if (ttsplId) {
+      await logTtsplEvent({
+        ttsplId,
+        vendorSerialId: serialId,
+        eventType: 'inventory_tagged',
+        description: `Inventory tagged as ${tag}`,
+        metadata: { tag },
+        actorUserId: req.user?.user_id
+      });
+    }
+
+    res.json({ success: true, message: `Tagged as ${tag}`, tag });
+  } catch (e) {
+    console.error('tagInventoryItem', e);
+    res.status(500).json({ success: false, message: e.message || 'Failed to tag' });
+  }
+}
+
 module.exports = {
   listValidators,
   listInventory,
@@ -294,5 +345,7 @@ module.exports = {
   readyToRentActionValidators,
   updateReadyToRentAction,
   changeSparePartStatusValidators,
-  changeSparePartStatus
+  changeSparePartStatus,
+  tagInventoryValidators,
+  tagInventoryItem
 };

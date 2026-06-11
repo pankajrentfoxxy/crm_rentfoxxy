@@ -1,8 +1,14 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
-import { Clock, ExternalLink, FileImage, FileText, Loader2, RefreshCw, Search } from 'lucide-react';
-import { fetchInventoryList, updateReadyToRentSaleAction } from '../inventoryManagementApi';
+import { Clock, ExternalLink, FileImage, FileText, History, Loader2, RefreshCw, Search } from 'lucide-react';
+import {
+  fetchInventoryList,
+  fetchInventoryListCounts,
+  tagInventorySerial,
+  updateReadyToRentSaleAction
+} from '../inventoryManagementApi';
+import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
 import {
   INVENTORY_API_SEGMENT_BY_ROUTE,
   INVENTORY_PAGE_META,
@@ -143,6 +149,46 @@ function PassedStatusBadge() {
   );
 }
 
+function InventoryTagButtons({ row, onUpdated }) {
+  const [saving, setSaving] = useState(false);
+  const tag = row.inventory_tag || row.extra?.inventory_tag;
+
+  const applyTag = async (next) => {
+    setSaving(true);
+    try {
+      const { data } = await tagInventorySerial(row.serial_id, next);
+      if (data.success) {
+        toast.success(data.message || 'Tagged');
+        onUpdated?.();
+      }
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Tag failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-wrap gap-1 items-center">
+      {tag ? (
+        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize ${
+          tag === 'rental' ? 'bg-violet-100 text-violet-800' : 'bg-emerald-100 text-emerald-800'
+        }`}>
+          {tag}
+        </span>
+      ) : (
+        <span className="text-[10px] text-slate-400">Untagged</span>
+      )}
+      <button type="button" disabled={saving} onClick={() => applyTag('rental')} className="text-[10px] px-2 py-0.5 rounded border hover:bg-slate-50">
+        Rental
+      </button>
+      <button type="button" disabled={saving} onClick={() => applyTag('sales')} className="text-[10px] px-2 py-0.5 rounded border hover:bg-slate-50">
+        Sales
+      </button>
+    </div>
+  );
+}
+
 function ReadyToRentActionSelect({ row, onUpdated }) {
   const [saving, setSaving] = useState(false);
   const current = READY_TO_RENT_SALE_ACTIONS.some((o) => o.value === row.status2) ? row.status2 : '';
@@ -216,6 +262,9 @@ export default function InventoryListTable({ routeKey }) {
   const [total, setTotal] = useState(0);
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
+  const [listCounts, setListCounts] = useState(null);
+  const [historyTtspl, setHistoryTtspl] = useState(null);
+  const [selectedIds, setSelectedIds] = useState([]);
 
   useEffect(() => {
     const t = setTimeout(() => setSearch(searchInput.trim()), 300);
@@ -249,6 +298,14 @@ export default function InventoryListTable({ routeKey }) {
   }, [load]);
 
   useEffect(() => {
+    fetchInventoryListCounts()
+      .then(({ data }) => {
+        if (data.success) setListCounts(data.counts || data.data || data);
+      })
+      .catch(() => {});
+  }, [rows.length]);
+
+  useEffect(() => {
     const onInvalidate = () => load();
     window.addEventListener(INVENTORY_LIST_INVALIDATE, onInvalidate);
     return () => window.removeEventListener(INVENTORY_LIST_INVALIDATE, onInvalidate);
@@ -259,9 +316,54 @@ export default function InventoryListTable({ routeKey }) {
   const showOutForRepareExtras = routeKey === 'out-for-repare';
   const showReadyToRentAction = routeKey === 'ready-to-rent-or-sell';
   const showPassedStatus = showReadyToRentAction || ['rent-to-own', 'rental-purchase', 'direct-purchase'].includes(routeKey);
+  const showTagColumn = showReadyToRentAction || routeKey === 'ready-to-rent-or-sell';
+
+  const bulkTag = async (tag) => {
+    if (!selectedIds.length) {
+      toast.error('Select rows first');
+      return;
+    }
+    try {
+      await Promise.all(selectedIds.map((id) => tagInventorySerial(id, tag)));
+      toast.success(`Tagged ${selectedIds.length} item(s) as ${tag}`);
+      setSelectedIds([]);
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Bulk tag failed');
+    }
+  };
+
+  const statCards = listCounts ? [
+    { label: 'QC Passed Available', value: listCounts.passed ?? listCounts.ready ?? 0 },
+    { label: 'Currently Rented', value: listCounts.rent_to_own ?? 0 },
+    { label: 'Sold', value: listCounts.direct_purchase ?? 0 },
+    { label: 'In Repair', value: listCounts.out_for_repare ?? 0 },
+    { label: 'In QC', value: listCounts.pending ?? 0 },
+    { label: 'QC Failed', value: listCounts.failed ?? 0 }
+  ] : null;
 
   return (
     <div className="space-y-4">
+      {statCards ? (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+          {statCards.map((c) => (
+            <div key={c.label} className="rounded-xl border border-gray-100 bg-white p-3 shadow-sm">
+              <p className="text-lg font-bold text-slate-900">{c.value}</p>
+              <p className="text-[10px] text-slate-500 leading-tight">{c.label}</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {showReadyToRentAction && selectedIds.length ? (
+        <div className="flex gap-2">
+          <button type="button" onClick={() => bulkTag('rental')} className="text-xs px-3 py-1.5 rounded-lg bg-violet-600 text-white">
+            Tag as Rental ({selectedIds.length})
+          </button>
+          <button type="button" onClick={() => bulkTag('sales')} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white">
+            Tag as Sales ({selectedIds.length})
+          </button>
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-2xl font-bold text-slate-900">
           {meta.title} <span className="text-slate-600 font-semibold text-lg">List</span>
@@ -286,7 +388,7 @@ export default function InventoryListTable({ routeKey }) {
           type="search"
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
-          placeholder="Search serial, PO, vendor…"
+          placeholder="Search TTSPL, serial, PO, vendor…"
           className="w-full rounded-lg border border-slate-200 pl-9 pr-3 py-2 text-sm"
         />
       </div>
@@ -295,7 +397,9 @@ export default function InventoryListTable({ routeKey }) {
         <table className="min-w-full text-sm">
           <thead className="bg-slate-50 text-left text-xs font-semibold uppercase text-slate-500">
             <tr>
+              {showReadyToRentAction ? <th className="px-3 py-3 w-8" /> : null}
               <th className="px-3 py-3">S.No</th>
+              {!isSpare ? <th className="px-3 py-3">TTSPL</th> : null}
               {showOutForRepareExtras ? (
                 <>
                   <th className="px-3 py-3">Added Date</th>
@@ -318,6 +422,7 @@ export default function InventoryListTable({ routeKey }) {
                     </>
                   ) : null}
                   {showReadyToRentAction ? <th className="px-3 py-3">Action</th> : null}
+                  {showTagColumn ? <th className="px-3 py-3">Tagged As</th> : null}
                   <th className="px-3 py-3">Status</th>
                 </>
               ) : (
@@ -344,7 +449,44 @@ export default function InventoryListTable({ routeKey }) {
             ) : (
               rows.map((row, idx) => (
                 <tr key={row.serial_id} className="hover:bg-slate-50/60 align-top">
+                  {showReadyToRentAction ? (
+                    <td className="px-3 py-3">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.includes(row.serial_id)}
+                        onChange={(e) => {
+                          setSelectedIds((ids) =>
+                            e.target.checked
+                              ? [...ids, row.serial_id]
+                              : ids.filter((x) => x !== row.serial_id)
+                          );
+                        }}
+                      />
+                    </td>
+                  ) : null}
                   <td className="px-3 py-3">{idx + 1}</td>
+                  <td className="px-3 py-3">
+                    {row.unique_product_serial || row.inventory_asset_code ? (
+                      <div className="flex flex-col gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setHistoryTtspl(row.unique_product_serial || row.inventory_asset_code)}
+                          className="font-mono text-xs font-semibold text-blue-700 hover:underline text-left"
+                        >
+                          {row.unique_product_serial || row.inventory_asset_code}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setHistoryTtspl(row.unique_product_serial || row.inventory_asset_code)}
+                          className="inline-flex items-center gap-1 text-[10px] text-slate-500 hover:text-blue-600"
+                        >
+                          <History className="w-3 h-3" /> History
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="text-slate-400 text-xs">—</span>
+                    )}
+                  </td>
                   {showOutForRepareExtras ? (
                     <>
                       <td className="px-3 py-3 text-xs text-slate-600">
@@ -419,6 +561,11 @@ export default function InventoryListTable({ routeKey }) {
                       <ReadyToRentActionSelect row={row} onUpdated={load} />
                     </td>
                   ) : null}
+                  {showTagColumn ? (
+                    <td className="px-3 py-3">
+                      <InventoryTagButtons row={row} onUpdated={load} />
+                    </td>
+                  ) : null}
                   <td className="px-3 py-3 text-xs">
                     {showPassedStatus ? (
                       <PassedStatusBadge />
@@ -432,6 +579,11 @@ export default function InventoryListTable({ routeKey }) {
           </tbody>
         </table>
       </div>
+      <TtsplHistoryDrawer
+        ttsplId={historyTtspl}
+        open={Boolean(historyTtspl)}
+        onClose={() => setHistoryTtspl(null)}
+      />
     </div>
   );
 }

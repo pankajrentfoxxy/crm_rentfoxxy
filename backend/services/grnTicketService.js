@@ -2,6 +2,7 @@
  * GRN receive → repair ticket (Floor Manager) → ticket completion → vendor QC passed.
  */
 const { startWorkLog } = require('./ticketWorkLogService');
+const { logTtsplEvent } = require('./ttsplAuditService');
 const {
   applySerialQcUpdate,
   getProductDetailsBySerialId,
@@ -149,9 +150,9 @@ async function createTicketFromGrnReceive(db, {
   const ins = await db.query(
     `INSERT INTO tickets (
        serial_number, ttspl_id, machine_number, brand, model, processor, ram, storage,
-       initial_condition, priority, current_stage_id, assigned_team_id, assigned_user_id,
+       initial_condition, priority, ticket_type, current_stage_id, assigned_team_id, assigned_user_id,
        initial_cost, vendor_serial_id
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'normal',$10,$11,$12,0,$13)
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'normal','grn_qc',$10,$11,$12,0,$13)
      RETURNING ticket_id`,
     [
       serialNumber,
@@ -188,6 +189,18 @@ async function createTicketFromGrnReceive(db, {
       ticketId,
       userId: floorManagerUserId,
       stageId: stage.stage_id
+    });
+  }
+
+  if (ttspl) {
+    await logTtsplEvent({
+      ttsplId: ttspl,
+      vendorSerialId: serialId,
+      eventType: 'ticket_created',
+      description: 'QC ticket created from GRN receive',
+      metadata: { ticket_id: ticketId, po: poLabel, serial_number: serialNumber },
+      actorUserId: actorUserId,
+      db
     });
   }
 

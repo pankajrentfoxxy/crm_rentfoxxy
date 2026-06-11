@@ -31,3 +31,8 @@ export function updateSparePartStatus(body) {
 export function updateReadyToRentSaleAction(body) {
   return api.post(`${base}/ready-to-rent-action`, body);
 }
+
+/** Phase 2 — tag serial as rental or sales */
+export function tagInventorySerial(serialId, tag) {
+  return api.patch(`${base}/${serialId}/tag`, { tag });
+}

@@ -55,4 +55,11 @@ router.get('/spare-parts', authorize, (req, res) => {
   return inventoryList.listInventory(req, res);
 });
 
+router.patch(
+  '/:id/tag',
+  authorize,
+  inventoryList.tagInventoryValidators,
+  inventoryList.tagInventoryItem
+);
+
 module.exports = router;

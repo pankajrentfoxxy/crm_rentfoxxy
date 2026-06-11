@@ -9,6 +9,7 @@ import QCOrders from '../components/QCOrders';
 import VendorManagement from '../features/vendor-management/VendorManagementApp';
 import QCManagement from '../features/qc-management/QCManagementApp';
 import InventoryManagement from '../features/inventory-management/InventoryManagementApp';
+import FloorPipelineApp from '../features/floor-pipeline/FloorPipelineApp';
 
 const withLayout = (node) => <Layout>{node}</Layout>;
 
@@ -24,4 +25,5 @@ export const warehouseRoutes = [
   { path: '/vendor-management/*', element: guard('vendor_management', 'view', withLayout(<VendorManagement />)) },
   { path: '/qc-management/*', element: guard('qc_management', 'view', withLayout(<QCManagement />)) },
   { path: '/inventory-management/*', element: guard('inventory_management', 'view', withLayout(<InventoryManagement />)) },
+  { path: '/floor-pipeline/*', element: guard('floor_pipeline', 'view', withLayout(<FloorPipelineApp />)) },
 ];

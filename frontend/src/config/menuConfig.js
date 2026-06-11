@@ -15,6 +15,7 @@ import {
   Settings,
   Cog,
   ClipboardCheck,
+  Wrench,
 } from 'lucide-react';
 
 /** Vendor submenu paths match VendorManagementApp nested routes */
@@ -67,9 +68,18 @@ export const operationAccordionChildren = [
   { label: 'Return DC', path: '/operation-management/return-dc', section: 'return_dc', countKey: 'return_dc' },
 ];
 
+export const floorPipelineAccordionChildren = [
+  { label: 'Floor Dashboard', path: '/floor-pipeline/dashboard', section: 'floor_pipeline' },
+  { label: 'All Tickets', path: '/floor-pipeline/tickets', section: 'floor_pipeline' },
+  { label: 'Chip Level Repair', path: '/floor-pipeline/tickets?stage=Chip+Level+Repair', section: 'chip_level_repair' },
+  { label: 'Body & Paint', path: '/floor-pipeline/tickets?stage=Body+%26+Paint', section: 'floor_pipeline' },
+  { label: 'QC Queue', path: '/floor-pipeline/tickets?stage=QC1,QC2', section: 'floor_pipeline' },
+];
+
 export const settingsAccordionChildren = [
   { label: 'Roles', path: '/settings/roles', section: 'roles' },
   { label: 'Role Permissions', path: '/settings/role-permissions', section: 'role_permissions' },
+  { label: 'Floor Permissions', path: '/settings/role-permissions?filter=floor', section: 'role_permissions' },
   { label: 'User Permissions', path: '/settings/user-permissions', section: 'user_permissions' },
 ];
 
@@ -112,6 +122,7 @@ export const MENU_GROUPS = [
     items: [
       { icon: Truck, label: 'Procurement', path: '/procurement', section: 'procurement' },
       { type: 'vendorAccordion', section: 'vendor_management', icon: Store, label: 'Vendor Management' },
+      { type: 'floorPipelineAccordion', section: 'floor_pipeline', icon: Wrench, label: 'Floor Pipeline' },
       { icon: Package, label: 'Warehouse', path: '/warehouse', section: 'warehouse' },
       { type: 'qcAccordion', section: 'qc_management', icon: CheckCircle, label: 'QC Management' },
       { type: 'inventoryAccordion', section: 'inventory_management', icon: ShoppingCart, label: 'Inventory Management' },
@@ -188,6 +199,7 @@ export function isMenuItemVisible(item, canView) {
 
   if (
     item.type === 'vendorAccordion'
+    || item.type === 'floorPipelineAccordion'
     || item.type === 'qcAccordion'
     || item.type === 'inventoryAccordion'
   ) {

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import PermissionMatrix from '../../../components/admin/PermissionMatrix';
 import RoleBadge from '../../../components/ui/RoleBadge';
 import { ToastContainer, useToast } from '../../../components/ui/Toast';
@@ -11,7 +12,17 @@ import {
   saveRolePermissions,
 } from '../../../utils/rbacApi';
 
+const FLOOR_SECTIONS = new Set([
+  'floor_pipeline',
+  'floor_tickets',
+  'chip_level_repair',
+  'parts_inventory',
+  'ttspl_history'
+]);
+
 export default function RolePermissionsPage() {
+  const [searchParams] = useSearchParams();
+  const floorFilter = searchParams.get('filter') === 'floor';
   const { toasts, setToasts, showToast } = useToast();
   const showToastRef = useRef(showToast);
   showToastRef.current = showToast;
@@ -187,7 +198,12 @@ export default function RolePermissionsPage() {
             ))}
           </div>
         ) : (
-          <PermissionMatrix sections={sections} matrix={matrix} onChange={updateCell} mode="checkbox" />
+          <PermissionMatrix
+            sections={floorFilter ? sections.filter((s) => FLOOR_SECTIONS.has(s.section || s)) : sections}
+            matrix={matrix}
+            onChange={updateCell}
+            mode="checkbox"
+          />
         )}
       </div>
       <ToastContainer toasts={toasts} setToasts={setToasts} />

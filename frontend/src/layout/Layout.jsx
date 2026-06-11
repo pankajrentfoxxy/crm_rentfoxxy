@@ -47,6 +47,7 @@ import {
   Settings,
   Cog,
   ClipboardCheck,
+  Wrench,
 } from 'lucide-react';
 
 import { isSupportUser } from '../utils/supportAccess';
@@ -58,6 +59,7 @@ import { useDeliveryRegisterCounts } from '../features/delivery-register-managem
 import {
   FLAT_MENU_ITEMS,
   vendorAccordionChildren,
+  floorPipelineAccordionChildren,
   qcAccordionChildren,
   inventoryAccordionChildren,
   settingsAccordionChildren,
@@ -108,6 +110,12 @@ export default function Layout({ children }) {
   const [vendorAccordionOpen, setVendorAccordionOpen] = useState(() =>
 
     location.pathname.startsWith('/vendor-management')
+
+  );
+
+  const [floorPipelineAccordionOpen, setFloorPipelineAccordionOpen] = useState(() =>
+
+    location.pathname.startsWith('/floor-pipeline')
 
   );
 
@@ -361,6 +369,88 @@ export default function Layout({ children }) {
                         );
 
                       })}
+
+                    </div>
+
+                  )}
+
+                </div>
+
+              );
+
+            }
+
+
+
+            if (item.type === 'floorPipelineAccordion') {
+
+              return (
+
+                <div key="floor-pipeline-accordion" className="space-y-0.5">
+
+                  <button
+
+                    type="button"
+
+                    onClick={() => setFloorPipelineAccordionOpen((o) => !o)}
+
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors text-left hover:bg-gray-100 ${location.pathname.startsWith('/floor-pipeline') ? 'text-blue-700 bg-blue-50/60' : 'text-gray-800'
+
+                      }`}
+
+                  >
+
+                    <Wrench className="w-5 h-5 text-gray-600 shrink-0" />
+
+                    <span className="flex-1">Floor Pipeline</span>
+
+                    <ChevronDown
+
+                      className={`w-4 h-4 text-gray-500 shrink-0 transition-transform duration-200 ${floorPipelineAccordionOpen ? 'rotate-180' : ''
+
+                        }`}
+
+                    />
+
+                  </button>
+
+                  {floorPipelineAccordionOpen && (
+
+                    <div className="mt-1 ml-2 pl-3 border-l border-blue-100 space-y-0.5">
+
+                      {floorPipelineAccordionChildren.map((child) => (
+
+                        <NavLink
+
+                          key={child.path}
+
+                          to={child.path}
+
+                          onClick={() => setSidebarOpen(false)}
+
+                          className={({ isActive }) =>
+
+                            [
+
+                              'block px-2 py-1.5 rounded-md text-xs transition-colors',
+
+                              isActive
+
+                                ? 'bg-blue-100 text-blue-900 font-semibold'
+
+                                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+
+                            ].join(' ')
+
+                          }
+
+                        >
+
+                          {child.label}
+
+                        </NavLink>
+
+                      ))}
 
                     </div>
 

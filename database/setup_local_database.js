@@ -197,6 +197,13 @@ async function main() {
   console.log('\nApplying Phase 1 vendor patch…');
   await runSqlFile(client, path.join(__dirname, 'phase1_schema_patch.sql'), 'phase1_schema_patch.sql');
 
+  console.log('\nApplying Phase 2 floor pipeline patch…');
+  await runSqlFile(
+    client,
+    path.join(__dirname, '../backend/migrations/056_phase2_floor_pipeline.sql'),
+    '056_phase2_floor_pipeline.sql'
+  );
+
   await seedAdmin(client);
   await printSummary(client);
   await client.end();
