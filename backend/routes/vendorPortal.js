@@ -18,7 +18,16 @@ router.get('/purchase-orders/:poId', vendorPortalAuth, portal.poIdParam, portal.
 router.get('/purchase-orders/:poId/pdf', vendorPortalAuth, portal.poIdParam, portal.downloadPurchaseOrderPdf);
 router.post('/purchase-orders/:poId/accept', vendorPortalAuth, portal.poIdParam, portal.acceptPurchaseOrder);
 router.post('/purchase-orders/:poId/reject', vendorPortalAuth, portal.rejectPoValidators, portal.rejectPurchaseOrder);
+router.post(
+  '/purchase-orders/:poId/upload-invoice',
+  vendorPortalAuth,
+  portal.poIdParam,
+  portal.createVendorInvoiceUpload().single('file'),
+  portal.uploadPurchaseOrderInvoice
+);
 
 router.get('/serial-numbers', vendorPortalAuth, portal.listSerialValidators, portal.listSerialNumbers);
+router.get('/bills', vendorPortalAuth, portal.listBillsValidators, portal.listVendorBills);
+router.get('/returns', vendorPortalAuth, portal.listReturnsValidators, portal.listVendorReturns);
 
 module.exports = router;

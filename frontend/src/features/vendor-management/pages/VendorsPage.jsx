@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Pencil, Plus, ShoppingBag, Trash2, UserCog } from 'lucide-react';
-import { deleteVendor, fetchVendors } from '../vendorManagementApi';
+import { deleteVendor, fetchVendors, updateVendorPortalAccess } from '../vendorManagementApi';
 import LoginAsVendorModal from '../components/LoginAsVendorModal';
 import VendorFormModal from '../components/VendorFormModal';
 import { useVendorMgmtCapabilities } from '../hooks/useVendorMgmtCapabilities';
@@ -34,6 +34,8 @@ export default function VendorsPage() {
 
   const [loginModal, setLoginModal] = useState({ open: false, vendor_id: '', vendor_email: '' });
   const [vendorModal, setVendorModal] = useState({ open: false, mode: 'create', vendorId: null });
+  const [passwordModal, setPasswordModal] = useState({ open: false, password: '', vendorName: '' });
+  const [portalBusyId, setPortalBusyId] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -90,6 +92,59 @@ export default function VendorsPage() {
 
   function openEdit(row) {
     setVendorModal({ open: true, mode: 'edit', vendorId: row.vendor_id });
+  }
+
+  function formatPortalLogin(raw) {
+    if (!raw) return 'Never logged in';
+    try {
+      return new Date(raw).toLocaleString();
+    } catch {
+      return String(raw);
+    }
+  }
+
+  async function togglePortalAccess(row) {
+    const enabled = row.vendor_portal_enabled !== false;
+    setPortalBusyId(row.vendor_id);
+    try {
+      const { data } = await updateVendorPortalAccess(row.vendor_id, { portal_enabled: !enabled });
+      if (!data.success) throw new Error(data.message);
+      toast.success('Portal access updated');
+      await load();
+    } catch (e) {
+      toast.error(e.response?.data?.message || e.message || 'Update failed');
+    } finally {
+      setPortalBusyId(null);
+    }
+  }
+
+  async function resetPortalPassword(row) {
+    setPortalBusyId(row.vendor_id);
+    try {
+      const { data } = await updateVendorPortalAccess(row.vendor_id, { reset_password: true });
+      if (!data.success) throw new Error(data.message);
+      if (data.new_password) {
+        setPasswordModal({
+          open: true,
+          password: data.new_password,
+          vendorName: row.business_name || row.f_name || `Vendor #${row.vendor_id}`
+        });
+      }
+      toast.success('Portal password reset');
+      await load();
+    } catch (e) {
+      toast.error(e.response?.data?.message || e.message || 'Reset failed');
+    } finally {
+      setPortalBusyId(null);
+    }
+  }
+
+  function copyPassword() {
+    if (!passwordModal.password) return;
+    navigator.clipboard.writeText(passwordModal.password).then(
+      () => toast.success('Password copied'),
+      () => toast.error('Could not copy')
+    );
   }
 
   return (
@@ -201,6 +256,48 @@ export default function VendorsPage() {
                               <p>
                                 <span className="text-slate-500">Address:</span> {row.address || '—'}
                               </p>
+                              <div className="border-t border-slate-100 pt-2 mt-2 space-y-2">
+                                <p className="font-semibold text-slate-800 text-xs uppercase tracking-wide">
+                                  Portal access
+                                </p>
+                                {row.vendor_portal_enabled !== false ? (
+                                  <span className="inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-800">
+                                    Enabled
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-100 text-rose-800">
+                                    Disabled
+                                  </span>
+                                )}
+                                <p className="text-slate-600">
+                                  <span className="text-slate-500">Last login:</span>{' '}
+                                  {formatPortalLogin(row.vendor_portal_last_login)}
+                                </p>
+                                <div className="flex flex-wrap gap-1.5">
+                                  <button
+                                    type="button"
+                                    disabled={portalBusyId === row.vendor_id}
+                                    className="px-2 py-1 rounded-md border border-slate-200 bg-white text-[11px] font-semibold hover:bg-slate-50 disabled:opacity-50"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      togglePortalAccess(row);
+                                    }}
+                                  >
+                                    {row.vendor_portal_enabled !== false ? 'Disable portal' : 'Enable portal'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={portalBusyId === row.vendor_id}
+                                    className="px-2 py-1 rounded-md border border-orange-200 bg-orange-50 text-orange-800 text-[11px] font-semibold hover:bg-orange-100 disabled:opacity-50"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      resetPortalPassword(row);
+                                    }}
+                                  >
+                                    Reset password
+                                  </button>
+                                </div>
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -319,6 +416,39 @@ export default function VendorsPage() {
       />
 
       <LoginAsVendorModal modal={loginModal} onClose={() => setLoginModal({ open: false })} />
+
+      {passwordModal.open ? (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50" role="dialog" aria-modal="true">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-5">
+            <h3 className="font-bold text-slate-900">New portal password</h3>
+            <p className="text-xs text-slate-500 mt-1">{passwordModal.vendorName}</p>
+            <p className="mt-4 text-sm text-slate-600">Share this password with the vendor securely:</p>
+            <div className="mt-2 flex gap-2">
+              <input
+                readOnly
+                className="flex-1 border rounded-lg px-3 py-2 text-sm font-mono bg-slate-50"
+                value={passwordModal.password}
+              />
+              <button
+                type="button"
+                onClick={copyPassword}
+                className="px-3 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold"
+              >
+                Copy
+              </button>
+            </div>
+            <div className="flex justify-end mt-4">
+              <button
+                type="button"
+                className="px-4 py-2 rounded-lg border text-sm"
+                onClick={() => setPasswordModal({ open: false, password: '', vendorName: '' })}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

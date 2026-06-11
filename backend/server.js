@@ -153,12 +153,13 @@ app.listen(PORT, () => {
   // startCustomerInventorySyncWorker().catch((err) => console.error('Customer inventory ERP worker failed:', err.message));
   const { ensureSupportSchema } = require('./controllers/supportController');
   const { ensureUserSchema } = require('./controllers/authController');
-  const { ensureVendorManagementSchema } = require('./controllers/vendorManagementSchema');
+  const { ensureVendorManagementSchema, ensureVendorBillingSchema } = require('./controllers/vendorManagementSchema');
   const { ensureSalesManagementSchema } = require('./controllers/salesManagementController');
   const { ensureCustomerManagementSchema } = require('./controllers/customerManagementController');
   ensureSupportSchema().catch((err) => console.error('Support schema ensure failed:', err.message));
   ensureUserSchema().catch((err) => console.error('User schema ensure failed:', err.message));
   ensureVendorManagementSchema().catch((err) => console.error('Vendor management schema failed:', err.message));
+  ensureVendorBillingSchema().catch((err) => console.error('Vendor billing schema failed:', err.message));
   ensureSalesManagementSchema().catch((err) => console.error('Sales management schema failed:', err.message));
   ensureCustomerManagementSchema().catch((err) => console.error('Customer management schema failed:', err.message));
 });

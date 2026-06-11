@@ -554,9 +554,25 @@ async function deleteVendor(req, res) {
   res.json({ success: true, message: 'Vendor Details deleted successfully.' });
 }
 
+function generatePortalPassword(length = 10) {
+  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const lower = 'abcdefghijkmnopqrstuvwxyz';
+  const digits = '23456789';
+  const all = upper + lower + digits;
+  const pick = (s) => s[Math.floor(Math.random() * s.length)];
+  let out = pick(upper) + pick(lower) + pick(digits);
+  for (let i = out.length; i < length; i += 1) out += pick(all);
+  return out
+    .split('')
+    .sort(() => Math.random() - 0.5)
+    .join('');
+}
+
 const portalAccessValidators = [
   param('id').isInt().toInt(),
   body('portal_enabled').optional().isBoolean(),
+  body('enabled').optional().isBoolean(),
+  body('reset_password').optional().isBoolean(),
   body('password').optional({ checkFalsy: true }).isLength({ min: 8, max: 256 })
 ];
 
@@ -574,14 +590,34 @@ async function updatePortalAccess(req, res) {
   const sets = [];
   const params = [];
   let idx = 1;
+  let newPasswordPlain = null;
 
-  if (typeof req.body.portal_enabled === 'boolean') {
+  const portalEnabled =
+    typeof req.body.portal_enabled === 'boolean'
+      ? req.body.portal_enabled
+      : typeof req.body.enabled === 'boolean'
+        ? req.body.enabled
+        : undefined;
+
+  if (typeof portalEnabled === 'boolean') {
     sets.push(`vendor_portal_enabled = $${idx}`);
-    params.push(req.body.portal_enabled);
+    params.push(portalEnabled);
     idx += 1;
   }
 
-  if (req.body.password && String(req.body.password).length >= 8) {
+  if (req.body.reset_password === true) {
+    newPasswordPlain = generatePortalPassword(10);
+    const hashed = await bcrypt.hash(newPasswordPlain, await bcrypt.genSalt(10));
+    sets.push(`vendor_portal_password_hash = $${idx}`);
+    params.push(hashed);
+    idx += 1;
+    sets.push(`password_hash = $${idx}`);
+    params.push(hashed);
+    idx += 1;
+    sets.push(`remember_pass_plain = $${idx}`);
+    params.push(newPasswordPlain);
+    idx += 1;
+  } else if (req.body.password && String(req.body.password).length >= 8) {
     const hashed = await bcrypt.hash(String(req.body.password), await bcrypt.genSalt(10));
     sets.push(`vendor_portal_password_hash = $${idx}`);
     params.push(hashed);
@@ -612,13 +648,14 @@ async function updatePortalAccess(req, res) {
     entityType: 'vendor',
     entityId: vendor_id,
     action: 'portal_access_update',
-    payload: { portal_enabled: req.body.portal_enabled }
+    payload: { portal_enabled: portalEnabled, reset_password: req.body.reset_password === true }
   });
 
   res.json({
     success: true,
     message: 'Vendor portal access updated',
-    data: r.rows[0]
+    data: r.rows[0],
+    ...(newPasswordPlain ? { new_password: newPasswordPlain } : {})
   });
 }
 

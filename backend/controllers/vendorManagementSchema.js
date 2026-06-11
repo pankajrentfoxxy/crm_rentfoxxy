@@ -21,4 +21,13 @@ async function ensureVendorManagementSchema() {
   }
 }
 
-module.exports = { ensureVendorManagementSchema };
+async function ensureVendorBillingSchema() {
+  for (const file of ['053_vendor_billing_tables.sql', '054_vendor_invoice_upload.sql']) {
+    const sqlPath = path.join(__dirname, '../migrations', file);
+    if (!fs.existsSync(sqlPath)) continue;
+    const sql = fs.readFileSync(sqlPath, 'utf8');
+    await pool.query(sql);
+  }
+}
+
+module.exports = { ensureVendorManagementSchema, ensureVendorBillingSchema };

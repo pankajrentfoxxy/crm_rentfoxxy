@@ -7,6 +7,8 @@ import DashboardPage from './pages/DashboardPage';
 import PurchaseOrdersPage from './pages/PurchaseOrdersPage';
 import PurchaseOrderDetailPage from './pages/PurchaseOrderDetailPage';
 import SerialNumbersPage from './pages/SerialNumbersPage';
+import BillsPage from './pages/BillsPage';
+import ReturnsPage from './pages/ReturnsPage';
 import ProfilePage from './pages/ProfilePage';
 
 function PrivateRoute({ children }) {
@@ -31,6 +33,8 @@ export default function App() {
         <Route path="purchase-orders" element={<PurchaseOrdersPage />} />
         <Route path="purchase-orders/:poId" element={<PurchaseOrderDetailPage />} />
         <Route path="laptops" element={<SerialNumbersPage />} />
+        <Route path="bills" element={<BillsPage />} />
+        <Route path="returns" element={<ReturnsPage />} />
         <Route path="profile" element={<ProfilePage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

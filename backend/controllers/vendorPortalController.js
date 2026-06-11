@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const fs = require('fs');
 const path = require('path');
+const multer = require('multer');
 const { body, param, query, validationResult } = require('express-validator');
 const pool = require('../config/db');
 const { generatePurchaseOrderPdf, formatPoType } = require('../services/vendorPurchaseOrderPdfService');
@@ -338,7 +339,7 @@ async function acceptPurchaseOrder(req, res) {
   }
 
   await pool.query(
-    `UPDATE vendor_purchase_orders SET status = 'approved', updated_at = NOW() WHERE po_id = $1`,
+    `UPDATE vendor_purchase_orders SET status = 'vendor_accepted', updated_at = NOW() WHERE po_id = $1`,
     [req.params.poId]
   );
   res.json({ success: true, message: 'Purchase order accepted' });
@@ -346,7 +347,7 @@ async function acceptPurchaseOrder(req, res) {
 
 const rejectPoValidators = [
   ...poIdParam,
-  body('reason').trim().notEmpty().isLength({ max: 500 })
+  body('reason').trim().notEmpty().isLength({ min: 10, max: 500 })
 ];
 
 async function rejectPurchaseOrder(req, res) {
@@ -374,6 +375,209 @@ async function rejectPurchaseOrder(req, res) {
   res.json({ success: true, message: 'Purchase order rejected' });
 }
 
+function createVendorInvoiceUpload() {
+  return multer({
+    storage: multer.diskStorage({
+      destination: (req, file, cb) => {
+        const dir = path.join(__dirname, '..', 'uploads', 'vendor-invoice-uploads', String(req.params.poId));
+        fs.mkdirSync(dir, { recursive: true });
+        cb(null, dir);
+      },
+      filename: (req, file, cb) => {
+        const safe = String(file.originalname || 'invoice').replace(/[^a-zA-Z0-9._-]/g, '_');
+        cb(null, `${Date.now()}_${safe}`);
+      }
+    }),
+    limits: { fileSize: 8 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+      const ok =
+        /pdf|image\/jpeg|image\/png|image\/gif|image\/webp/i.test(file.mimetype) ||
+        /\.(pdf|jpe?g|png|gif|webp)$/i.test(file.originalname || '');
+      cb(ok ? null : new Error('Only PDF or image files are allowed'), ok);
+    }
+  });
+}
+
+async function uploadPurchaseOrderInvoice(req, res) {
+  try {
+    const poId = Number(req.params.poId);
+    const invoice_number = String(req.body.invoice_number || '').trim();
+    if (!invoice_number) {
+      return res.status(400).json({ success: false, message: 'Invoice number is required' });
+    }
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'Invoice file is required' });
+    }
+
+    const cur = await pool.query(
+      `SELECT po_id, status FROM vendor_purchase_orders
+       WHERE po_id = $1 AND vendor_id = $2 AND deleted_at IS NULL`,
+      [poId, req.vendor.vendor_id]
+    );
+    if (!cur.rows.length) {
+      return res.status(404).json({ success: false, message: 'Purchase order not found' });
+    }
+
+    const st = String(cur.rows[0].status || '').toLowerCase();
+    if (!['approved', 'vendor_accepted', 'processing', 'completed', 'sent'].includes(st)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invoice upload is not allowed for this purchase order status'
+      });
+    }
+
+    const relativePath = `/uploads/vendor-invoice-uploads/${poId}/${req.file.filename}`;
+    await pool.query(
+      `UPDATE vendor_purchase_orders
+       SET vendor_invoice_number = $1, vendor_invoice_file = $2, vendor_invoice_uploaded_at = NOW(), updated_at = NOW()
+       WHERE po_id = $3`,
+      [invoice_number, relativePath, poId]
+    );
+
+    res.json({
+      success: true,
+      message: 'Invoice uploaded successfully',
+      data: {
+        invoice_number,
+        invoice_file: relativePath,
+        uploaded_at: new Date().toISOString()
+      }
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ success: false, message: e.message || 'Upload failed' });
+  }
+}
+
+const listBillsValidators = [
+  query('page').optional().isInt({ min: 1 }).toInt(),
+  query('limit').optional().isInt({ min: 1, max: 100 }).toInt()
+];
+
+async function listVendorBills(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  const page = req.query.page || 1;
+  const limit = req.query.limit || 25;
+  const offset = (page - 1) * limit;
+  const vendorId = req.vendor.vendor_id;
+
+  const countR = await pool.query(
+    `SELECT COUNT(*)::int AS c FROM vendor_monthly_bills WHERE vendor_id = $1`,
+    [vendorId]
+  );
+  const total = countR.rows[0].c;
+
+  const dataR = await pool.query(
+    `SELECT bill_id, bill_number, bill_month, bill_year, bill_date, from_date, to_date,
+            line_items, subtotal, gst_amount, debit_note_adjustment, total_payable, status,
+            payment_date, payment_reference, created_at
+     FROM vendor_monthly_bills
+     WHERE vendor_id = $1
+     ORDER BY bill_year DESC, bill_month DESC, bill_id DESC
+     LIMIT $2 OFFSET $3`,
+    [vendorId, limit, offset]
+  );
+
+  const data = dataR.rows.map((row) => {
+    const items = Array.isArray(row.line_items)
+      ? row.line_items
+      : typeof row.line_items === 'string'
+        ? JSON.parse(row.line_items || '[]')
+        : [];
+    return {
+      ...row,
+      line_items: items,
+      units: items.length,
+      period: `${row.from_date} – ${row.to_date}`
+    };
+  });
+
+  res.json({
+    success: true,
+    data,
+    total,
+    page,
+    limit,
+    totalPages: Math.ceil(total / limit) || 1
+  });
+}
+
+const listReturnsValidators = [
+  query('page').optional().isInt({ min: 1 }).toInt(),
+  query('limit').optional().isInt({ min: 1, max: 100 }).toInt()
+];
+
+async function listVendorReturns(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  const vendorId = req.vendor.vendor_id;
+
+  const rdcRows = await pool.query(
+    `SELECT
+       st.return_dc_number AS rdc_number,
+       MIN(st.updated_at) AS return_date,
+       COUNT(DISTINCT sti.id)::int AS laptop_count,
+       COALESCE(MAX(st.complaint_type), MAX(sti.issue_category_label), 'Return to vendor') AS reason,
+       COALESCE(MAX(st.status), 'open') AS status,
+       jsonb_agg(DISTINCT COALESCE(vsn.inventory_asset_code, sti.unique_serial_number, sti.serial_number))
+         FILTER (WHERE COALESCE(vsn.inventory_asset_code, sti.unique_serial_number, sti.serial_number) IS NOT NULL) AS ttspl_ids
+     FROM support_tickets st
+     JOIN support_ticket_items sti ON sti.ticket_id = st.id
+     JOIN vendor_serial_numbers vsn ON vsn.deleted_at IS NULL
+       AND (
+         LOWER(COALESCE(vsn.inventory_asset_code, '')) = LOWER(COALESCE(sti.unique_serial_number, ''))
+         OR LOWER(COALESCE(vsn.serial_number, '')) = LOWER(COALESCE(sti.serial_number, ''))
+       )
+     JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id AND vpo.vendor_id = $1 AND vpo.deleted_at IS NULL
+     WHERE st.return_dc_number IS NOT NULL
+     GROUP BY st.return_dc_number
+     ORDER BY MIN(st.updated_at) DESC NULLS LAST`,
+    [vendorId]
+  );
+
+  const replacedRows = await pool.query(
+    `SELECT
+       COALESCE(payload->>'rdc_number', payload->>'return_dc_number', 'RP-' || replaced_id::text) AS rdc_number,
+       created_at AS return_date,
+       COALESCE((payload->>'quantity')::int, 1) AS laptop_count,
+       COALESCE(payload->>'reason', payload->>'remarks', status) AS reason,
+       status,
+       COALESCE(payload->'ttspl_ids', payload->'serial_ids', '[]'::jsonb) AS ttspl_ids
+     FROM vendor_replaced_products
+     WHERE vendor_id = $1 AND deleted_at IS NULL
+     ORDER BY created_at DESC`,
+    [vendorId]
+  );
+
+  const merged = [
+    ...rdcRows.rows.map((row) => ({
+      rdc_number: row.rdc_number,
+      return_date: row.return_date,
+      laptop_count: row.laptop_count,
+      reason: row.reason,
+      status: row.status,
+      ttspl_ids: Array.isArray(row.ttspl_ids) ? row.ttspl_ids : []
+    })),
+    ...replacedRows.rows.map((row) => ({
+      rdc_number: row.rdc_number,
+      return_date: row.return_date,
+      laptop_count: row.laptop_count,
+      reason: row.reason,
+      status: row.status,
+      ttspl_ids: Array.isArray(row.ttspl_ids) ? row.ttspl_ids : []
+    }))
+  ].sort((a, b) => new Date(b.return_date || 0) - new Date(a.return_date || 0));
+
+  res.json({
+    success: true,
+    data: merged,
+    total: merged.length
+  });
+}
+
 module.exports = {
   loginValidators,
   login,
@@ -390,5 +594,11 @@ module.exports = {
   acceptPurchaseOrder,
   rejectPoValidators,
   rejectPurchaseOrder,
+  createVendorInvoiceUpload,
+  uploadPurchaseOrderInvoice,
+  listBillsValidators,
+  listVendorBills,
+  listReturnsValidators,
+  listVendorReturns,
   formatPoType
 };
