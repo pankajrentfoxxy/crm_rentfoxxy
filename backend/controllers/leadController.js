@@ -193,7 +193,8 @@ const formatHeadOfficeAddress = (research) => {
 
 const ensureCustomerFromLead = async (leadId) => {
   const leadRes = await pool.query(
-    `SELECT l.lead_id, l.name, l.brand, l.company_name, l.email, l.phone, r.gst, r.address, r.city, r.state, r.pincode
+    `SELECT l.lead_id, l.name, l.brand, l.company_name, l.email, l.phone,
+            COALESCE(r.gst, l.gst_number) AS gst, r.address, r.city, r.state, r.pincode
      FROM leads l
      LEFT JOIN lead_company_research r ON r.lead_id = l.lead_id
      WHERE l.lead_id = $1`,
@@ -203,56 +204,83 @@ const ensureCustomerFromLead = async (leadId) => {
   const lead = leadRes.rows[0];
   const headOffice = formatHeadOfficeAddress(lead) || null;
 
-  const customerUpsert = await pool.query(
-    `INSERT INTO customers (name, company_name, source_lead_id, email, phone, gst_no, address, type, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 'Lead', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-     ON CONFLICT (source_lead_id)
-     DO UPDATE SET
-       name = EXCLUDED.name,
-       company_name = EXCLUDED.company_name,
-       email = EXCLUDED.email,
-       phone = EXCLUDED.phone,
-       gst_no = EXCLUDED.gst_no,
-       address = EXCLUDED.address,
-       updated_at = CURRENT_TIMESTAMP
-     RETURNING customer_id`,
-    [
-      lead.name || lead.company_name || 'Lead Customer',
-      lead.company_name || null,
-      lead.lead_id,
-      lead.email || null,
-      lead.phone || null,
-      lead.gst || null,
-      headOffice
-    ]
+  const existingCustomer = await pool.query(
+    'SELECT customer_id FROM customers WHERE source_lead_id = $1 LIMIT 1',
+    [lead.lead_id]
   );
-  const customerId = customerUpsert.rows[0].customer_id;
 
-  if (headOffice) {
+  let customerId;
+  if (existingCustomer.rows.length) {
+    customerId = existingCustomer.rows[0].customer_id;
     await pool.query(
-      `INSERT INTO customer_addresses (customer_id, concern_person, mobile_no, address, pincode, is_head_office, address_type, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, true, 'Billing', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-       ON CONFLICT (customer_id, is_head_office)
-       WHERE is_head_office = true
-       DO UPDATE SET
-         concern_person = EXCLUDED.concern_person,
-         mobile_no = EXCLUDED.mobile_no,
-         address = EXCLUDED.address,
-         pincode = EXCLUDED.pincode,
-         address_type = EXCLUDED.address_type,
-         updated_at = CURRENT_TIMESTAMP`,
-      [customerId, lead.name || null, lead.phone || null, headOffice, lead.pincode || null]
+      `UPDATE customers SET
+         name = $1, company_name = $2, email = $3, phone = $4, gst_no = $5, address = $6, updated_at = CURRENT_TIMESTAMP
+       WHERE customer_id = $7`,
+      [
+        lead.name || lead.company_name || 'Lead Customer',
+        lead.company_name || null,
+        lead.email || null,
+        lead.phone || null,
+        lead.gst || null,
+        headOffice,
+        customerId,
+      ]
     );
+  } else {
+    const inserted = await pool.query(
+      `INSERT INTO customers (name, company_name, source_lead_id, email, phone, gst_no, address, type, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'Lead', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       RETURNING customer_id`,
+      [
+        lead.name || lead.company_name || 'Lead Customer',
+        lead.company_name || null,
+        lead.lead_id,
+        lead.email || null,
+        lead.phone || null,
+        lead.gst || null,
+        headOffice,
+      ]
+    );
+    customerId = inserted.rows[0].customer_id;
   }
 
-  await pool.query(
-    `INSERT INTO customer_addresses (customer_id, concern_person, mobile_no, address, pincode, is_head_office, address_type, source_lead_address_id, created_at, updated_at)
-     SELECT $1, la.concern_person, la.mobile_no, la.address, la.pincode, false, COALESCE(la.address_type, 'Shipping'), la.address_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-     FROM lead_addresses la
-     WHERE la.lead_id = $2
-     ON CONFLICT (source_lead_address_id) DO NOTHING`,
-    [customerId, leadId]
-  );
+  if (headOffice) {
+    const billingAddr = await pool.query(
+      `SELECT customer_address_id FROM customer_addresses
+       WHERE customer_id = $1 AND is_head_office = true LIMIT 1`,
+      [customerId]
+    );
+    if (billingAddr.rows.length) {
+      await pool.query(
+        `UPDATE customer_addresses SET
+           concern_person = $1, mobile_no = $2, address = $3, pincode = $4,
+           address_type = 'Billing', updated_at = CURRENT_TIMESTAMP
+         WHERE customer_address_id = $5`,
+        [lead.name || null, lead.phone || null, headOffice, lead.pincode || null, billingAddr.rows[0].customer_address_id]
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO customer_addresses (customer_id, concern_person, mobile_no, address, pincode, is_head_office, address_type, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, true, 'Billing', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [customerId, lead.name || null, lead.phone || null, headOffice, lead.pincode || null]
+      );
+    }
+  }
+
+  try {
+    await pool.query(
+      `INSERT INTO customer_addresses (customer_id, concern_person, mobile_no, address, pincode, is_head_office, address_type, source_lead_address_id, created_at, updated_at)
+       SELECT $1, la.concern_person, la.mobile_no, la.address, la.pincode, false, COALESCE(la.address_type, 'Shipping'), la.address_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+       FROM lead_addresses la
+       WHERE la.lead_id = $2
+         AND NOT EXISTS (
+           SELECT 1 FROM customer_addresses ca WHERE ca.source_lead_address_id = la.address_id
+         )`,
+      [customerId, leadId]
+    );
+  } catch (addrErr) {
+    if (addrErr.code !== '42703') throw addrErr;
+  }
 
   return customerId;
 };
@@ -961,21 +989,46 @@ exports.assignLeads = async (req, res) => {
   }
 };
 
+function normalizeGstin(value) {
+  return String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '');
+}
+
+function isValidIndianGstin(value) {
+  return /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(normalizeGstin(value));
+}
+
+function resolveLeadGstin({ gst, gstNumber, researchGst, leadGstNumber }) {
+  const candidates = [gst, gstNumber, researchGst, leadGstNumber];
+  for (const candidate of candidates) {
+    if (candidate == null || String(candidate).trim() === '') continue;
+    const normalized = normalizeGstin(candidate);
+    if (isValidIndianGstin(normalized)) return normalized;
+  }
+  return null;
+}
+
 exports.updateLeadStatus = async (req, res) => {
   const { id } = req.params;
-  const { status, rejection_reason, notes, lead_stage, brand, processor, generation, ram, storage, gst: gstInput } = req.body;
+  const {
+    status,
+    rejection_reason,
+    notes,
+    lead_stage,
+    brand,
+    processor,
+    generation,
+    ram,
+    storage,
+    gst: gstInput,
+    gst_number: gstNumberInput,
+  } = req.body;
 
   if (!LEAD_STATUSES.includes(status)) {
     return res.status(400).json({ success: false, message: 'Invalid lead status' });
   }
-
-  const normalizeGst = (s) =>
-    String(s || '')
-      .trim()
-      .toUpperCase()
-      .replace(/\s+/g, '');
-  const isValidIndianGstin = (s) =>
-    /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(normalizeGst(s));
 
   try {
     const lead = await prisma.lead.findUnique({
@@ -1015,23 +1068,26 @@ exports.updateLeadStatus = async (req, res) => {
     const rejectionReasonDb = status === 'Rejected' ? resolvedStage : null;
 
     if (status === 'Deal' || status === 'Demo') {
-      if (gstInput !== undefined && gstInput !== null && String(gstInput).trim() !== '') {
-        const g = normalizeGst(gstInput);
-        if (!isValidIndianGstin(g)) {
-          return res.status(400).json({ success: false, message: 'Invalid GSTIN format (15-character GSTIN required).' });
-        }
-      }
-      const fromBody =
-        gstInput !== undefined && gstInput !== null && String(gstInput).trim() !== '' ? normalizeGst(gstInput) : null;
-      const fromResearch =
-        lead.research?.gst && isValidIndianGstin(lead.research.gst) ? normalizeGst(lead.research.gst) : null;
-      const resolvedGst =
-        fromBody && isValidIndianGstin(fromBody) ? fromBody : fromResearch && isValidIndianGstin(fromResearch) ? fromResearch : null;
+      const resolvedGst = resolveLeadGstin({
+        gst: gstInput,
+        gstNumber: gstNumberInput,
+        researchGst: lead.research?.gst,
+        leadGstNumber: lead.gstNumber,
+      });
       if (!resolvedGst) {
+        const hasAnyGst = [gstInput, gstNumberInput, lead.research?.gst, lead.gstNumber].some(
+          (v) => v != null && String(v).trim() !== ''
+        );
+        if (hasAnyGst) {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid GSTIN format (15-character GSTIN required).',
+          });
+        }
         return res.status(400).json({
           success: false,
           message:
-            'GSTIN is mandatory for Deal or Demo. Add a valid GST in company research or send gst in the request before linking to Customers.'
+            'GSTIN is mandatory for Deal or Demo. Add a valid GST on the lead profile (Company Info) before updating status.',
         });
       }
       await prisma.leadCompanyResearch.upsert({

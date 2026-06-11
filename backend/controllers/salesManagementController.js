@@ -17,7 +17,9 @@ const {
   searchAvailableInventory,
 } = require('../services/salesManagementService');
 const { generateDocumentPdf } = require('../services/salesManagementPdfService');
-const {emailDocument} = require('../services/salesManagementPdfService');
+const { emailDocument } = require('../services/salesManagementPdfService');
+const { createSalesOrderQcTicket } = require('../services/grnTicketService');
+const { logTtsplEvent } = require('../services/ttsplAuditService');
 function parseJsonSafe(value, fallback = null) {
   if (value == null) return fallback;
   if (typeof value === 'object') return value;
@@ -111,6 +113,34 @@ const toNullableInt = (value) => {
   const n = parseInt(value, 10);
   return Number.isNaN(n) ? null : n;
 };
+
+function parseSerialEntries(raw) {
+  if (!raw) return [];
+  const parsed = parseJsonField(raw);
+  const list = Array.isArray(parsed) ? parsed : [parsed];
+  return list.filter(Boolean).map((entry) => {
+    const parts = String(entry).split('|');
+    const serialId = /^\d+$/.test(parts[0]) ? parseInt(parts[0], 10) : null;
+    const serialNumber = parts[1] || parts[0];
+    const ttsplId = parts[2] || null;
+    return { serialId, serialNumber, ttsplId, raw: entry };
+  });
+}
+
+async function getDcLines(dcNumber) {
+  return getDeliveryChallanLines(dcNumber);
+}
+
+async function collectDcSerials(dcNumber) {
+  const lines = await getDcLines(dcNumber);
+  const serials = [];
+  for (const line of lines) {
+    for (const s of parseSerialEntries(line.serial_number)) {
+      serials.push({ ...s, line_id: line.id, sales_order_number: line.sales_order_number });
+    }
+  }
+  return serials;
+}
 
 const normalizeLineItems = (body) => {
   if (Array.isArray(body.line_items) && body.line_items.length) return body.line_items;
@@ -781,6 +811,385 @@ exports.ensureSalesManagementSchema = async () => {
     if (!fs.existsSync(sqlPath)) continue;
     const sql = fs.readFileSync(sqlPath, 'utf8');
     await pool.query(sql);
+  }
+};
+
+exports.recordPayment = async (req, res) => {
+  try {
+    const soNumber = req.params.soNumber;
+    const body = req.body || {};
+    const amount = Number(body.amount);
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid amount is required' });
+    }
+    const paymentType = body.payment_type;
+    const allowed = ['advance', 'security_deposit', 'monthly', 'partial', 'final'];
+    if (!allowed.includes(paymentType)) {
+      return res.status(400).json({ success: false, message: 'Invalid payment_type' });
+    }
+    const soLines = await getSalesOrderLines(soNumber);
+    if (!soLines.length) {
+      return res.status(404).json({ success: false, message: 'Sales order not found' });
+    }
+    const customerId = soLines[0].customer_id || null;
+    const result = await pool.query(
+      `INSERT INTO sales_order_payments
+        (sales_order_number, customer_id, payment_type, amount, payment_date, payment_mode, reference_number, notes, recorded_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       RETURNING payment_id`,
+      [
+        soNumber,
+        customerId,
+        paymentType,
+        amount,
+        body.payment_date || new Date().toISOString().slice(0, 10),
+        body.payment_mode || 'bank_transfer',
+        body.reference_number || null,
+        body.notes || null,
+        req.user.user_id,
+      ]
+    );
+    res.status(201).json({
+      success: true,
+      payment_id: result.rows[0].payment_id,
+      message: 'Payment recorded',
+    });
+  } catch (error) {
+    console.error('recordPayment:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.listPayments = async (req, res) => {
+  try {
+    const soNumber = req.params.soNumber;
+    const { rows } = await pool.query(
+      `SELECT p.*, u.name AS recorded_by_name
+       FROM sales_order_payments p
+       LEFT JOIN users u ON u.user_id = p.recorded_by
+       WHERE p.sales_order_number = $1
+       ORDER BY p.payment_date DESC, p.payment_id DESC`,
+      [soNumber]
+    );
+    const totals = rows.reduce(
+      (acc, r) => {
+        const amt = Number(r.amount) || 0;
+        acc.total_paid += amt;
+        if (r.payment_type === 'advance') acc.total_advance += amt;
+        if (r.payment_type === 'security_deposit') acc.total_security += amt;
+        return acc;
+      },
+      { total_paid: 0, total_advance: 0, total_security: 0 }
+    );
+    res.json({ success: true, payments: rows, ...totals });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getSoWithPayments = async (req, res) => {
+  try {
+    const soNumber = req.params.soNumber;
+    const lines = await getSalesOrderLines(soNumber);
+    if (!lines.length) {
+      return res.status(404).json({ success: false, message: 'Sales order not found' });
+    }
+    const payRes = await pool.query(
+      `SELECT * FROM sales_order_payments WHERE sales_order_number = $1 ORDER BY payment_date DESC`,
+      [soNumber]
+    );
+    const dcRes = await pool.query(
+      `SELECT DISTINCT ON (dc_number) dc_number, status, created_at, ship_by, dispatch_mode
+       FROM delivery_challan_lines WHERE sales_order_number = $1 ORDER BY dc_number, id DESC`,
+      [soNumber]
+    );
+    const totalValue = lines.reduce((s, l) => s + Number(l.rate || 0) * Number(l.quantity || 0), 0);
+    const totalPaid = payRes.rows.reduce((s, p) => s + Number(p.amount || 0), 0);
+    res.json({
+      success: true,
+      sales_order_number: soNumber,
+      lines,
+      payments: payRes.rows,
+      delivery_challans: dcRes.rows,
+      summary: {
+        total_value: totalValue,
+        total_paid: totalPaid,
+        balance_due: Math.max(0, totalValue - totalPaid),
+        security_amount: Number(lines[0].security_amount || 0),
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.createPreDispatchQcTicket = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const dcNumber = req.params.dcNumber;
+    const lines = await getDcLines(dcNumber);
+    if (!lines.length) {
+      return res.status(404).json({ success: false, message: 'Delivery challan not found' });
+    }
+    const serials = await collectDcSerials(dcNumber);
+    if (!serials.length) {
+      return res.status(400).json({ success: false, message: 'No serials attached to this DC' });
+    }
+
+    await client.query('BEGIN');
+    const ticketIds = [];
+    let created = 0;
+
+    for (const s of serials) {
+      let serialRow = null;
+      if (s.serialId) {
+        const r = await client.query(
+          `SELECT serial_id, serial_number, inventory_asset_code, brand, processor, ram, storage, qc_status
+           FROM vendor_serial_numbers WHERE serial_id = $1 AND deleted_at IS NULL`,
+          [s.serialId]
+        );
+        serialRow = r.rows[0];
+      }
+      if (!serialRow && s.serialNumber) {
+        const r = await client.query(
+          `SELECT serial_id, serial_number, inventory_asset_code, brand, processor, ram, storage, qc_status
+           FROM vendor_serial_numbers WHERE serial_number = $1 AND deleted_at IS NULL LIMIT 1`,
+          [s.serialNumber]
+        );
+        serialRow = r.rows[0];
+      }
+      if (!serialRow) continue;
+
+      const existing = await client.query(
+        `SELECT id FROM dc_qc_tickets WHERE dc_number = $1 AND serial_id = $2`,
+        [dcNumber, serialRow.serial_id]
+      );
+      if (existing.rows.length) continue;
+
+      const result = await createSalesOrderQcTicket(client, {
+        serialId: serialRow.serial_id,
+        ttsplId: serialRow.inventory_asset_code || s.ttsplId,
+        serialNumber: serialRow.serial_number,
+        brand: serialRow.brand,
+        processor: serialRow.processor,
+        ram: serialRow.ram,
+        storage: serialRow.storage,
+        salesOrderNumber: lines[0].sales_order_number,
+        dcNumber,
+        createdByUserId: req.user.user_id,
+      });
+
+      if (!result.ok || !result.ticket_id) continue;
+
+      await client.query(
+        `INSERT INTO dc_qc_tickets (dc_number, sales_order_number, ticket_id, ttspl_id, serial_id, status)
+         VALUES ($1,$2,$3,$4,$5,'pending')`,
+        [
+          dcNumber,
+          lines[0].sales_order_number,
+          result.ticket_id,
+          serialRow.inventory_asset_code || s.ttsplId,
+          serialRow.serial_id,
+        ]
+      );
+
+      if (s.line_id) {
+        await client.query(
+          `UPDATE delivery_challan_lines SET pre_dispatch_qc_ticket_id = $1, updated_at = NOW() WHERE id = $2`,
+          [result.ticket_id, s.line_id]
+        );
+      }
+
+      ticketIds.push(result.ticket_id);
+      created += 1;
+    }
+
+    await client.query('COMMIT');
+    res.json({ success: true, tickets_created: created, ticket_ids: ticketIds });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('createPreDispatchQcTicket:', error);
+    res.status(500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
+  }
+};
+
+exports.getDcQcStatus = async (req, res) => {
+  try {
+    const dcNumber = req.params.dcNumber;
+    const { rows } = await pool.query(
+      `SELECT d.*, t.current_stage_id, s.stage_name, t.status AS ticket_status
+       FROM dc_qc_tickets d
+       LEFT JOIN tickets t ON t.ticket_id = d.ticket_id
+       LEFT JOIN stages s ON s.stage_id = t.current_stage_id
+       WHERE d.dc_number = $1
+       ORDER BY d.id`,
+      [dcNumber]
+    );
+    const tickets = rows.map((r) => ({
+      ticket_id: r.ticket_id,
+      ttspl_id: r.ttspl_id,
+      serial_id: r.serial_id,
+      status: r.status,
+      stage_name: r.stage_name,
+      ticket_status: r.ticket_status,
+    }));
+    const allPassed = tickets.length > 0 && tickets.every((t) => t.status === 'qc_passed');
+    const anyFailed = tickets.some((t) => t.status === 'qc_failed');
+    res.json({
+      success: true,
+      all_passed: allPassed,
+      any_failed: anyFailed,
+      tickets,
+      pending_count: tickets.filter((t) => t.status === 'pending').length,
+      total_count: tickets.length,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+async function assertDcQcComplete(dcNumber) {
+  const { rows } = await pool.query(
+    `SELECT status FROM dc_qc_tickets WHERE dc_number = $1`,
+    [dcNumber]
+  );
+  if (!rows.length) return { ok: true, skipped: true };
+  const incomplete = rows.some((r) => r.status !== 'qc_passed');
+  if (incomplete) {
+    return {
+      ok: false,
+      message: 'Pre-dispatch QC not completed. All laptops must pass QC before dispatch.',
+    };
+  }
+  return { ok: true };
+}
+
+exports.updateDcDispatch = async (req, res) => {
+  try {
+    const dcNumber = req.params.dcNumber;
+    const qc = await assertDcQcComplete(dcNumber);
+    if (!qc.ok) {
+      return res.status(400).json({ success: false, message: qc.message });
+    }
+
+    const body = req.body || {};
+    const dispatchMode = body.dispatch_mode || 'courier';
+    const allowed = ['courier', 'porter', 'inhouse'];
+    if (!allowed.includes(dispatchMode)) {
+      return res.status(400).json({ success: false, message: 'Invalid dispatch_mode' });
+    }
+
+    await pool.query(
+      `UPDATE delivery_challan_lines SET
+        dispatch_mode = $1,
+        ship_by = $2,
+        courier_name = $3,
+        awb_number = $4,
+        porter_booking_id = $5,
+        delivery_person_id = $6,
+        estimated_delivery = $7,
+        status = 'in_transit',
+        updated_at = NOW()
+       WHERE dc_number = $8`,
+      [
+        dispatchMode,
+        dispatchMode === 'inhouse' ? 'by_hand' : 'by_courier',
+        body.courier_name || null,
+        body.awb_number || null,
+        body.porter_booking_id || null,
+        toNullableInt(body.delivery_person_id),
+        body.estimated_delivery || null,
+        dcNumber,
+      ]
+    );
+
+    const serials = await collectDcSerials(dcNumber);
+    for (const s of serials) {
+      const ttspl = s.ttsplId || s.serialNumber;
+      await logTtsplEvent({
+        ttsplId: ttspl,
+        vendorSerialId: s.serialId,
+        eventType: 'dispatched',
+        description: `DC ${dcNumber} dispatched (${dispatchMode})`,
+        metadata: { dc_number: dcNumber, dispatch_mode: dispatchMode },
+        actorUserId: req.user.user_id,
+        actorName: req.user.name,
+      });
+    }
+
+    res.json({ success: true, message: 'Dispatch updated', status: 'in_transit' });
+  } catch (error) {
+    console.error('updateDcDispatch:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.markDcDelivered = async (req, res) => {
+  try {
+    const dcNumber = req.params.dcNumber;
+    const body = req.body || {};
+    await pool.query(
+      `UPDATE delivery_challan_lines SET
+        status = 'delivered',
+        delivered_at = NOW(),
+        delivered_by = $1,
+        delivery_location = $2,
+        pod_image_url = $3,
+        delivery_completed_at = NOW(),
+        updated_at = NOW()
+       WHERE dc_number = $4`,
+      [req.user.user_id, body.delivery_location || null, body.pod_image_url || null, dcNumber]
+    );
+
+    const serials = await collectDcSerials(dcNumber);
+    const serialNumbers = serials.map((s) => s.serialNumber).filter(Boolean);
+    const serialIds = serials.map((s) => s.serialId).filter(Boolean);
+    if (serialNumbers.length) {
+      await pool.query(
+        `UPDATE vendor_serial_numbers SET inventory_status = 'dispatched', updated_at = NOW()
+         WHERE serial_number = ANY($1::text[]) OR serial_id = ANY($2::int[])`,
+        [serialNumbers, serialIds.length ? serialIds : [-1]]
+      );
+    }
+
+    res.json({ success: true, message: 'Marked as delivered' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.markDcRejected = async (req, res) => {
+  try {
+    const dcNumber = req.params.dcNumber;
+    const reason = req.body?.rejection_reason || req.body?.reason;
+    if (!reason?.trim()) {
+      return res.status(400).json({ success: false, message: 'rejection_reason is required' });
+    }
+    await pool.query(
+      `UPDATE delivery_challan_lines SET
+        status = 'rejected',
+        rejection_reason = $1,
+        updated_at = NOW()
+       WHERE dc_number = $2`,
+      [reason.trim(), dcNumber]
+    );
+
+    const serials = await collectDcSerials(dcNumber);
+    const serialNumbers = serials.map((s) => s.serialNumber).filter(Boolean);
+    const serialIds = serials.map((s) => s.serialId).filter(Boolean);
+    if (serialNumbers.length) {
+      await pool.query(
+        `UPDATE vendor_serial_numbers SET inventory_status = 'in_stock', updated_at = NOW()
+         WHERE serial_number = ANY($1::text[]) OR serial_id = ANY($2::int[])`,
+        [serialNumbers, serialIds.length ? serialIds : [-1]]
+      );
+    }
+
+    res.json({ success: true, message: 'Delivery marked as rejected' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 

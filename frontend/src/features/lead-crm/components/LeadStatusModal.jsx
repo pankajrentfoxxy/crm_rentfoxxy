@@ -35,12 +35,17 @@ export default function LeadStatusModal({ open, lead, onClose, onSaved }) {
     }
     setSaving(true);
     try {
-      await updateLeadStatus(lead.leadId, {
+      const payload = {
         status,
         lead_stage: showStage ? stage : (showRejection ? stage : null),
         rejection_reason: showRejection ? stage : undefined,
         notes: remarks,
-      });
+      };
+      if (status === 'Deal' || status === 'Demo') {
+        const gst = lead.gstNumber || lead.research?.gst;
+        if (gst) payload.gst_number = gst;
+      }
+      await updateLeadStatus(lead.leadId, payload);
       toast.success('Status updated');
       if (status === 'Deal' || status === 'Demo') {
         toast('This lead is ready to convert to customer', { icon: 'ℹ️' });

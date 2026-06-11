@@ -335,6 +335,20 @@ exports.moveToStage = async (req, res) => {
       updates.push(`completed_at = NOW()`);
       updates.push(`qc2_passed_at = NOW()`);
       await applyInventoryCompletion(client, ticket, req.user.user_id);
+
+      if (ticket.ticket_type === 'sales_order_qc') {
+        await client.query(
+          `UPDATE dc_qc_tickets SET status = 'qc_passed', updated_at = NOW()
+           WHERE ticket_id = $1`,
+          [ticket.ticket_id]
+        );
+        await client.query(
+          `UPDATE delivery_challan_lines
+           SET pre_dispatch_qc_passed = TRUE, updated_at = NOW()
+           WHERE pre_dispatch_qc_ticket_id = $1`,
+          [ticket.ticket_id]
+        );
+      }
     } else {
       updates.push(`status = 'in_progress'`);
       updates.push(`completed_at = NULL`);

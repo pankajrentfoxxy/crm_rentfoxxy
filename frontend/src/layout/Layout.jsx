@@ -66,10 +66,12 @@ import {
   inventoryAccordionChildren,
   settingsAccordionChildren,
   operationAccordionChildren,
+  salesPipelineAccordionChildren,
   deliveryRegisterAccordionChildren,
   isMenuItemVisible,
   isSettingsChildVisible,
   isOperationChildVisible,
+  isSalesPipelineChildVisible,
   isDeliveryRegisterChildVisible,
   isLeadCrmChildVisible,
 } from '../config/menuConfig';
@@ -91,16 +93,18 @@ export default function Layout({ children }) {
 
   const showInventoryAccordion = canView('inventory_management');
 
-  const showOperationAccordion =
+  const showSalesPipelineAccordion =
+    canView('sales_pipeline') ||
     canView('sales_quotations') ||
     canView('sales_orders_doc') ||
     canView('delivery_challans') ||
-    canView('return_dc');
+    canView('return_dc') ||
+    canView('delivery_register_management');
 
   const showDeliveryRegisterAccordion =
     canView('delivery_register_management') || canView('technicians_bucket_list');
 
-  const { counts: operationCounts } = useOperationCounts(showOperationAccordion);
+  const { counts: operationCounts } = useOperationCounts(showSalesPipelineAccordion);
 
   const deliveryRegisterCounts = useDeliveryRegisterCounts(showDeliveryRegisterAccordion);
 
@@ -149,6 +153,10 @@ export default function Layout({ children }) {
     location.pathname.startsWith('/operation-management')
   );
 
+  const [salesPipelineAccordionOpen, setSalesPipelineAccordionOpen] = useState(() =>
+    location.pathname.startsWith('/sales-pipeline')
+  );
+
   const [deliveryRegisterAccordionOpen, setDeliveryRegisterAccordionOpen] = useState(() =>
     location.pathname.startsWith('/delivery-register-management')
   );
@@ -187,6 +195,10 @@ export default function Layout({ children }) {
 
     if (location.pathname.startsWith('/operation-management')) {
       setOperationAccordionOpen(true);
+    }
+
+    if (location.pathname.startsWith('/sales-pipeline')) {
+      setSalesPipelineAccordionOpen(true);
     }
 
     if (location.pathname.startsWith('/delivery-register-management')) {
@@ -821,27 +833,27 @@ export default function Layout({ children }) {
               );
             }
 
-            if (item.type === 'operationAccordion') {
+            if (item.type === 'salesPipelineAccordion') {
               return (
-                <div key="operation-accordion" className="space-y-0.5">
+                <div key="sales-pipeline-accordion" className="space-y-0.5">
                   <button
                     type="button"
-                    onClick={() => setOperationAccordionOpen((o) => !o)}
+                    onClick={() => setSalesPipelineAccordionOpen((o) => !o)}
                     className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors text-left hover:bg-gray-100 ${
-                      location.pathname.startsWith('/operation-management') ? 'text-teal-700 bg-teal-50/60' : 'text-gray-800'
+                      location.pathname.startsWith('/sales-pipeline') ? 'text-blue-700 bg-blue-50/60' : 'text-gray-800'
                     }`}
                   >
-                    <Cog className="w-5 h-5 text-gray-600 shrink-0" />
-                    <span className="flex-1">Operation Management</span>
+                    <ShoppingCart className="w-5 h-5 text-gray-600 shrink-0" />
+                    <span className="flex-1">Sales Pipeline</span>
                     <ChevronDown
                       className={`w-4 h-4 text-gray-500 shrink-0 transition-transform duration-200 ${
-                        operationAccordionOpen ? 'rotate-180' : ''
+                        salesPipelineAccordionOpen ? 'rotate-180' : ''
                       }`}
                     />
                   </button>
-                  {operationAccordionOpen && (
-                    <div className="mt-1 ml-2 pl-3 border-l border-teal-100 space-y-0.5">
-                      {operationAccordionChildren.filter((child) => isOperationChildVisible(child, canView)).map((child) => {
+                  {salesPipelineAccordionOpen && (
+                    <div className="mt-1 ml-2 pl-3 border-l border-blue-100 space-y-0.5">
+                      {salesPipelineAccordionChildren.filter((child) => isSalesPipelineChildVisible(child, canView)).map((child) => {
                         const badge = child.countKey && operationCounts[child.countKey] != null
                           ? operationCounts[child.countKey]
                           : null;
@@ -854,7 +866,7 @@ export default function Layout({ children }) {
                               [
                                 'flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-xs transition-colors',
                                 isActive
-                                  ? 'bg-teal-100 text-teal-900 font-semibold'
+                                  ? 'bg-blue-100 text-blue-900 font-semibold'
                                   : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900',
                               ].join(' ')
                             }

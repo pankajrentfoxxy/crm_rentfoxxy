@@ -101,7 +101,12 @@ export default function LeadListPage() {
   const handleDrop = async (status) => {
     if (!dragLead || dragLead.status === status) return;
     try {
-      await updateLeadStatus(dragLead.leadId, { status, notes: `Moved via kanban to ${status}` });
+      const payload = { status, notes: `Moved via kanban to ${status}` };
+      if (status === 'Deal' || status === 'Demo') {
+        const gst = dragLead.gstNumber || dragLead.research?.gst;
+        if (gst) payload.gst_number = gst;
+      }
+      await updateLeadStatus(dragLead.leadId, payload);
       toast.success('Status updated');
       load();
     } catch (err) {

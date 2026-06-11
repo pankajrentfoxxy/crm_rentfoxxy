@@ -257,8 +257,88 @@ async function applyGrnVendorQcPassOnTicketComplete(db, ticket, userId) {
   return { applied: true, serial_id: vendorSerialId };
 }
 
+/**
+ * Priority pre-dispatch QC ticket for a serial on a Sales Order / DC.
+ */
+async function createSalesOrderQcTicket(db, {
+  serialId,
+  ttsplId,
+  serialNumber,
+  brand,
+  processor,
+  ram,
+  storage,
+  salesOrderNumber,
+  dcNumber,
+  createdByUserId,
+}) {
+  const open = await db.query(
+    `SELECT ticket_id FROM tickets WHERE serial_number = $1 AND status IN ('in_progress', 'on_hold')`,
+    [serialNumber]
+  );
+  if (open.rows.length) {
+    return { ok: false, skipped: true, reason: 'open_ticket', ticket_id: open.rows[0].ticket_id };
+  }
+
+  const stage = await resolveFloorManagerStage(db);
+  if (!stage) {
+    return { ok: false, skipped: true, reason: 'no_stage' };
+  }
+
+  const floorManagerUserId = await pickFloorManagerUser(db);
+  const initialCondition = `Pre-dispatch QC for SO ${salesOrderNumber || ''} / DC ${dcNumber || ''}`.trim();
+
+  const ins = await db.query(
+    `INSERT INTO tickets (
+       serial_number, ttspl_id, machine_number, brand, model, processor, ram, storage,
+       initial_condition, priority, ticket_type, current_stage_id, assigned_team_id, assigned_user_id,
+       initial_cost, vendor_serial_id, sales_order_number, highlighted
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'sales_order','sales_order_qc',$10,$11,$12,0,$13,$14,FALSE)
+     RETURNING ticket_id`,
+    [
+      serialNumber,
+      ttsplId,
+      ttsplId || serialNumber,
+      brand || null,
+      null,
+      processor || null,
+      ram || null,
+      storage || null,
+      initialCondition,
+      stage.stage_id,
+      stage.team_id,
+      floorManagerUserId,
+      serialId,
+      salesOrderNumber || null,
+    ]
+  );
+
+  const ticketId = ins.rows[0].ticket_id;
+
+  await db.query(
+    `INSERT INTO activities (ticket_id, stage_id, user_id, action, notes)
+     VALUES ($1, $2, $3, 'created', $4)`,
+    [ticketId, stage.stage_id, createdByUserId, `Pre-dispatch QC ticket for DC ${dcNumber}`]
+  );
+
+  if (ttsplId) {
+    await logTtsplEvent({
+      ttsplId,
+      vendorSerialId: serialId,
+      eventType: 'ticket_created',
+      description: `Pre-dispatch QC ticket created for SO ${salesOrderNumber}`,
+      metadata: { ticket_id: ticketId, dc_number: dcNumber, sales_order_number: salesOrderNumber },
+      actorUserId: createdByUserId,
+      db,
+    });
+  }
+
+  return { ok: true, ticket_id: ticketId };
+}
+
 module.exports = {
   lineItemSpecs,
   createTicketFromGrnReceive,
-  applyGrnVendorQcPassOnTicketComplete
+  applyGrnVendorQcPassOnTicketComplete,
+  createSalesOrderQcTicket,
 };

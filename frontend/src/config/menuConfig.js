@@ -68,6 +68,14 @@ export const operationAccordionChildren = [
   { label: 'Return DC', path: '/operation-management/return-dc', section: 'return_dc', countKey: 'return_dc' },
 ];
 
+export const salesPipelineAccordionChildren = [
+  { label: 'Quotations', path: '/sales-pipeline/quotations', section: 'sales_quotations', countKey: 'quotations' },
+  { label: 'Sales Orders', path: '/sales-pipeline/sales-orders', section: 'sales_orders_doc', countKey: 'sales_orders' },
+  { label: 'Delivery Challans', path: '/sales-pipeline/delivery-challans', section: 'delivery_challans', countKey: 'delivery_challans' },
+  { label: 'Delivery Register', path: '/sales-pipeline/delivery-register', section: 'delivery_register_management' },
+  { label: 'Return DC', path: '/sales-pipeline/return-dc', section: 'return_dc', countKey: 'return_dc' },
+];
+
 export const leadCrmAccordionChildren = [
   { label: 'Leads Pipeline', path: '/lead-crm/leads', section: 'leads', countKey: 'active_leads' },
   { label: 'Follow-ups', path: '/lead-crm/follow-ups', section: 'follow_ups', countKey: 'followups_today' },
@@ -110,13 +118,14 @@ export const MENU_GROUPS = [
   },
   {
     key: 'operation',
-    label: 'Operation Management',
+    label: 'Sales Pipeline',
     items: [
       {
-        type: 'operationAccordion',
-        icon: Cog,
-        label: 'Operation Management',
-        sections: ['sales_quotations', 'sales_orders_doc', 'delivery_challans', 'return_dc'],
+        type: 'salesPipelineAccordion',
+        icon: ShoppingCart,
+        label: 'Sales Pipeline',
+        section: 'sales_pipeline',
+        children: salesPipelineAccordionChildren,
       },
     ],
   },
@@ -197,6 +206,11 @@ export function isMenuItemVisible(item, canView) {
     return (item.sections || []).some((section) => canView(section));
   }
 
+  if (item.type === 'salesPipelineAccordion') {
+    if (item.section && canView(item.section)) return true;
+    return (item.children || []).some((child) => (child.section ? canView(child.section) : true));
+  }
+
   if (item.type === 'deliveryRegisterAccordion') {
     return (item.sections || []).some((section) => canView(section));
   }
@@ -205,6 +219,7 @@ export function isMenuItemVisible(item, canView) {
     item.type === 'vendorAccordion'
     || item.type === 'floorPipelineAccordion'
     || item.type === 'leadCrmAccordion'
+    || item.type === 'salesPipelineAccordion'
     || item.type === 'qcAccordion'
     || item.type === 'inventoryAccordion'
   ) {
@@ -221,6 +236,11 @@ export function isLeadCrmChildVisible(child, canView) {
 }
 
 export function isOperationChildVisible(child, canView) {
+  if (child.section) return canView(child.section);
+  return true;
+}
+
+export function isSalesPipelineChildVisible(child, canView) {
   if (child.section) return canView(child.section);
   return true;
 }
