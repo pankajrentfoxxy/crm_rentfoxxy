@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus } from 'lucide-react';
+import { listSalesOrders } from '../../sales-pipeline/salesPipelineApi';
 import { getCustomers } from '../leadCrmApi';
 import CustomerFormDrawer from '../components/CustomerFormDrawer';
 import PermissionGate from '../../../components/PermissionGate';
@@ -14,6 +15,7 @@ export default function CustomerListPage() {
   const [kycFilter, setKycFilter] = useState('');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editCustomer, setEditCustomer] = useState(null);
+  const [activeOrderCounts, setActiveOrderCounts] = useState({});
 
   const load = useCallback(async (page = 1) => {
     try {
@@ -26,6 +28,22 @@ export default function CustomerListPage() {
   }, [search]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    listSalesOrders({ limit: 500 })
+      .then((res) => {
+        const counts = {};
+        (res.data?.sales_orders || []).forEach((so) => {
+          if (!so.customer_id) return;
+          const qty = Number(so.remaining_qty ?? 0);
+          if (qty > 0) {
+            counts[so.customer_id] = (counts[so.customer_id] || 0) + 1;
+          }
+        });
+        setActiveOrderCounts(counts);
+      })
+      .catch(() => setActiveOrderCounts({}));
+  }, []);
 
   const filtered = useMemo(() => {
     if (kycFilter === 'verified') return customers.filter((c) => c.kyc_verified);
@@ -76,7 +94,7 @@ export default function CustomerListPage() {
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-xs text-gray-500 text-left">
             <tr>
-              {['ID', 'Company', 'Contact', 'Phone', 'Email', 'GST', 'City', 'Portal', 'KYC', 'Actions'].map((h) => (
+              {['ID', 'Company', 'Contact', 'Phone', 'Email', 'GST', 'City', 'Active Orders', 'Portal', 'KYC', 'Actions'].map((h) => (
                 <th key={h} className="p-3 whitespace-nowrap">{h}</th>
               ))}
             </tr>
@@ -91,6 +109,7 @@ export default function CustomerListPage() {
                 <td className="p-3">{c.email || '—'}</td>
                 <td className="p-3 text-xs">{c.gst_number || '—'}</td>
                 <td className="p-3">{c.billing_city || '—'}</td>
+                <td className="p-3 text-center">{activeOrderCounts[c.customer_id] ?? 0}</td>
                 <td className="p-3">
                   <span className={`inline-block w-2 h-2 rounded-full ${c.portal_enabled ? 'bg-green-500' : 'bg-gray-300'}`} />
                 </td>

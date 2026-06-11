@@ -12,7 +12,8 @@ import FollowUpWidget from '../components/FollowUpWidget';
 import LeadStatusModal from '../components/LeadStatusModal';
 import LeadConvertModal from '../components/LeadConvertModal';
 import LeadFormDrawer from '../components/LeadFormDrawer';
-import QuotationSendModal from '../components/QuotationSendModal';
+import { listQuotations } from '../../sales-pipeline/salesPipelineApi';
+import { formatDate, QUOTE_STATUS_STYLES, typeLabel, TYPE_STYLES } from '../../sales-pipeline/salesPipelineUtils';
 
 const TABS = ['Activity & Remarks', 'Lead Profile', 'Follow-ups', 'Quotations', 'Addresses'];
 
@@ -26,7 +27,8 @@ export default function LeadDetailPage() {
   const [statusOpen, setStatusOpen] = useState(false);
   const [convertOpen, setConvertOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
-  const [quoteOpen, setQuoteOpen] = useState(false);
+  const [leadQuotations, setLeadQuotations] = useState([]);
+  const [quotationsLoading, setQuotationsLoading] = useState(false);
   const [addresses, setAddresses] = useState([]);
   const [addrForm, setAddrForm] = useState({ address: '', pincode: '', address_type: 'Shipping', concern_person: '', mobile_no: '' });
 
@@ -43,6 +45,47 @@ export default function LeadDetailPage() {
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (tab !== 3 || !lead?.leadId) return;
+    setQuotationsLoading(true);
+    listQuotations({ source_lead_id: lead.leadId, limit: 50 })
+      .then((res) => setLeadQuotations(res.data?.quotations || []))
+      .catch(() => toast.error('Failed to load quotations'))
+      .finally(() => setQuotationsLoading(false));
+  }, [tab, lead?.leadId]);
+
+  const navigateToQuotation = () => {
+    const customerId = conversion?.customer_id || lead.customerId || null;
+    if (!customerId) {
+      toast('Note: Convert this lead to a customer first for full quotation details.', {
+        icon: 'ℹ️',
+        duration: 4000,
+      });
+    }
+    navigate('/sales-pipeline/quotations', {
+      state: {
+        openForm: true,
+        prefill: {
+          customer_id: customerId,
+          customer_name: lead.companyName || lead.name,
+          lead_id: lead.leadId,
+          lead_name: lead.name,
+          email: lead.email,
+          quotation_type: lead.inquiryType === 'sales' ? 'sale' : 'rental',
+          line_items: lead.processor ? [{
+            brand: lead.brand || '',
+            processor: lead.processor || '',
+            generation: lead.generation || '',
+            ram: lead.ram || '',
+            storage: lead.storage || '',
+            quantity: lead.quantityRequired || 1,
+            rate: lead.monthlyBudget || 0,
+          }] : [],
+        },
+      },
+    });
+  };
 
   if (!lead) {
     return <div className="p-6 text-center text-gray-400">Loading...</div>;
@@ -123,19 +166,58 @@ export default function LeadDetailPage() {
             <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
               <div className="flex justify-between mb-4">
                 <h3 className="font-semibold text-sm">Quotations</h3>
-                <button type="button" onClick={() => setQuoteOpen(true)}
+                <button type="button" onClick={navigateToQuotation}
                   className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg">
                   <Send className="w-4 h-4" /> Send Quotation
                 </button>
               </div>
-              {lead.quotationLastEstimateNo ? (
-                <div className="p-3 rounded-lg bg-gray-50 text-sm">
-                  <p className="font-medium">{lead.quotationLastEstimateNo}</p>
-                  <p className="text-gray-500 text-xs">Sent to {lead.quotationLastToEmail} · {relativeTime(lead.quotationLastSentAt)}</p>
-                  {lead.quotationAcceptedAt && <span className="text-green-600 text-xs">Accepted</span>}
-                </div>
+              {quotationsLoading ? (
+                <p className="text-gray-400 text-sm">Loading quotations…</p>
+              ) : leadQuotations.length === 0 ? (
+                <p className="text-gray-400 text-sm">No quotations yet</p>
               ) : (
-                <p className="text-gray-400 text-sm">No quotations sent yet</p>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="text-xs text-gray-500 uppercase border-b">
+                      <tr>
+                        <th className="text-left py-2 pr-3">Quote #</th>
+                        <th className="text-left py-2 pr-3">Date</th>
+                        <th className="text-left py-2 pr-3">Customer</th>
+                        <th className="text-left py-2 pr-3">Type</th>
+                        <th className="text-left py-2 pr-3">Status</th>
+                        <th className="text-left py-2">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {leadQuotations.map((q) => (
+                        <tr key={q.quotation_number}>
+                          <td className="py-2 pr-3 font-mono text-blue-700">{q.quotation_number}</td>
+                          <td className="py-2 pr-3">{formatDate(q.created_at || q.updated_at)}</td>
+                          <td className="py-2 pr-3">{q.customer_name || '—'}</td>
+                          <td className="py-2 pr-3">
+                            <span className={`px-2 py-0.5 rounded-full text-xs ${TYPE_STYLES[q.quotation_type] || 'bg-gray-100'}`}>
+                              {typeLabel(q.quotation_type)}
+                            </span>
+                          </td>
+                          <td className="py-2 pr-3">
+                            <span className={`px-2 py-0.5 rounded-full text-xs ${QUOTE_STATUS_STYLES[q.status] || 'bg-gray-100'}`}>
+                              {q.status}
+                            </span>
+                          </td>
+                          <td className="py-2">
+                            <button
+                              type="button"
+                              onClick={() => navigate(`/sales-pipeline/quotations/${q.quotation_number}`)}
+                              className="text-blue-600 text-xs hover:underline"
+                            >
+                              View in Sales Pipeline
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
           )}
@@ -177,7 +259,7 @@ export default function LeadDetailPage() {
                 className="w-full py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50">Change Status</button>
               <button type="button" onClick={() => setTab(2)}
                 className="w-full py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50">Set Follow-up</button>
-              <button type="button" onClick={() => setQuoteOpen(true)}
+              <button type="button" onClick={navigateToQuotation}
                 className="w-full py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50">Send Quotation</button>
               {canConvert && (
                 <button type="button" onClick={() => setConvertOpen(true)}
@@ -210,7 +292,6 @@ export default function LeadDetailPage() {
       <LeadStatusModal open={statusOpen} lead={lead} onClose={() => setStatusOpen(false)} onSaved={load} />
       <LeadConvertModal open={convertOpen} lead={lead} onClose={() => setConvertOpen(false)} />
       <LeadFormDrawer open={editOpen} lead={lead} onClose={() => setEditOpen(false)} onSaved={load} />
-      <QuotationSendModal open={quoteOpen} lead={lead} onClose={() => setQuoteOpen(false)} onSent={load} />
     </div>
   );
 }

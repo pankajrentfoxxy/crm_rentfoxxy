@@ -20,16 +20,11 @@ import {
 
 /** Vendor submenu paths match VendorManagementApp nested routes */
 export const vendorAccordionChildren = [
-  { label: 'Vendors', path: '/vendor-management/vendors' },
-  { label: 'Purchase order', path: '/vendor-management/purchase-orders' },
-  { label: 'Spare parts PO', path: '/vendor-management/spare-parts-po' },
-  { label: 'Update serial number', path: '/vendor-management/serial-numbers' },
-  { label: 'Replaced product', path: '/vendor-management/replaced-products' },
-  { type: 'subheader', label: 'Billing' },
-  { label: 'Vendor billing', path: '/vendor-management/billing/vendor-overview' },
-  { label: 'Monthly pending', path: '/vendor-management/billing/pending' },
-  { label: 'Monthly approved', path: '/vendor-management/billing/approved' },
-  { label: 'Monthly completed', path: '/vendor-management/billing/completed' },
+  { label: 'Purchase Orders', path: '/vendor-management/purchase-orders' },
+  { label: 'Spare Parts PO', path: '/vendor-management/spare-parts-po' },
+  { label: 'GRN / Receive', path: '/vendor-management/purchase-orders' },
+  { label: 'Vendor Billing', path: '/vendor-management/billing/vendor-overview' },
+  { label: 'Monthly Bills', path: '/vendor-management/billing/pending' },
 ];
 
 export const qcAccordionChildren = [
@@ -79,7 +74,11 @@ export const salesPipelineAccordionChildren = [
 export const leadCrmAccordionChildren = [
   { label: 'Leads Pipeline', path: '/lead-crm/leads', section: 'leads', countKey: 'active_leads' },
   { label: 'Follow-ups', path: '/lead-crm/follow-ups', section: 'follow_ups', countKey: 'followups_today' },
-  { label: 'Customers', path: '/lead-crm/customers', section: 'customers' },
+];
+
+export const masterDataMenuItems = [
+  { icon: Users, label: 'Customers', path: '/lead-crm/customers', section: 'customers' },
+  { icon: Building2, label: 'Vendors', path: '/vendor-management/vendors', section: 'vendor_management' },
 ];
 
 export const floorPipelineAccordionChildren = [
@@ -117,6 +116,11 @@ export const MENU_GROUPS = [
     ],
   },
   {
+    key: 'master_data',
+    label: 'Master Data',
+    items: masterDataMenuItems,
+  },
+  {
     key: 'operation',
     label: 'Sales Pipeline',
     items: [
@@ -152,13 +156,6 @@ export const MENU_GROUPS = [
         icon: ClipboardCheck,
         label: 'Delivery Register Manager',
       },
-    ],
-  },
-  {
-    key: 'customer_management',
-    label: 'Customer Management',
-    items: [
-      { icon: Users, label: 'Customers', path: '/customer-management/customers', section: 'customer_management' },
     ],
   },
   {

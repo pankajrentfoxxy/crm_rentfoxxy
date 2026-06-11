@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
@@ -11,11 +11,21 @@ const TABS = ['all', 'draft', 'sent', 'approved', 'rejected'];
 
 export default function QuotationListPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('all');
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
+  const [prefill, setPrefill] = useState({});
   const [expanded, setExpanded] = useState(null);
+
+  useEffect(() => {
+    if (location.state?.openForm) {
+      setFormOpen(true);
+      setPrefill(location.state.prefill || {});
+      window.history.replaceState({}, '');
+    }
+  }, [location.state]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -59,7 +69,7 @@ export default function QuotationListPage() {
           <p className="text-sm text-gray-500">EST-* series</p>
         </div>
         <PermissionGate section="sales_quotations" action="create">
-          <button type="button" onClick={() => setDrawerOpen(true)} className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">
+          <button type="button" onClick={() => setFormOpen(true)} className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">
             <Plus className="w-4 h-4" /> Create Quotation
           </button>
         </PermissionGate>
@@ -140,7 +150,12 @@ export default function QuotationListPage() {
         </table>
       </div>
 
-      <QuotationForm open={drawerOpen} onClose={() => setDrawerOpen(false)} onSaved={load} />
+      <QuotationForm
+        open={formOpen}
+        prefill={prefill}
+        onClose={() => { setFormOpen(false); setPrefill({}); }}
+        onSaved={load}
+      />
     </div>
   );
 }

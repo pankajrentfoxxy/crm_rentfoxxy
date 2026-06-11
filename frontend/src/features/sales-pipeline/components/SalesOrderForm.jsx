@@ -145,7 +145,7 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
               </select>
             </div>
           </div>
-          <AssetDetailsForm lines={lines} onChange={setLines} catalog={meta} quotationType={form.quotation_type} />
+          <AssetDetailsForm lines={lines} onChange={setLines} catalog={meta?.catalog} quotationType={form.quotation_type} />
           <div className="grid grid-cols-2 gap-3">
             <input type="number" placeholder="Security Deposit (₹)" className="border rounded-lg px-3 py-2 text-sm" value={form.security_amount} onChange={(e) => setForm((f) => ({ ...f, security_amount: e.target.value }))} />
             <input type="number" placeholder="Shipping Charges (₹)" className="border rounded-lg px-3 py-2 text-sm" value={form.shiping_charges} onChange={(e) => setForm((f) => ({ ...f, shiping_charges: e.target.value }))} />

@@ -1,16 +1,14 @@
 import React from 'react';
-import Layout from '../layout/Layout';
-import ProtectedRoute from '../router/ProtectedRoute';
-import CustomersListPage from '../pages/customer-management/CustomersListPage';
-import CustomerAddPage from '../pages/customer-management/CustomerAddPage';
+import { Navigate, useParams } from 'react-router-dom';
 
-const withLayout = (node) => <Layout>{node}</Layout>;
-
-function guard(section, element, action = 'view') {
-  return <ProtectedRoute section={section} action={action}>{element}</ProtectedRoute>;
+function RedirectCustomerDetail() {
+  const { id } = useParams();
+  return <Navigate to={`/lead-crm/customers/${id}`} replace />;
 }
 
+/** Legacy URLs redirect to Lead CRM — backend /api/customer-management/* unchanged */
 export const customerManagementRoutes = [
-  { path: '/customer-management/customers', element: guard('customer_management', withLayout(<CustomersListPage />)) },
-  { path: '/customer-management/customers/add', element: guard('customer_management', withLayout(<CustomerAddPage />), 'create') },
+  { path: '/customer-management/customers', element: <Navigate to="/lead-crm/customers" replace /> },
+  { path: '/customer-management/customers/add', element: <Navigate to="/lead-crm/customers" replace /> },
+  { path: '/customer-management/customers/:id', element: <RedirectCustomerDetail /> },
 ];

@@ -7,6 +7,7 @@ import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDraw
 import {
   getCustomer, getCustomerLaptops, updateCustomer, verifyCustomerKyc,
 } from '../leadCrmApi';
+import { formatCurrency } from '../leadCrmUtils';
 import CustomerDocuments from '../components/CustomerDocuments';
 import CustomerFormDrawer from '../components/CustomerFormDrawer';
 
@@ -81,17 +82,46 @@ export default function CustomerDetailPage() {
       </div>
 
       {tab === 0 && (
-        <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-          {[
-            ['Name', customer.customer_name], ['Company', customer.company_name],
-            ['Email', customer.email], ['Phone', customer.customer_number || customer.phone],
-            ['GST', customer.gst_number], ['PAN', customer.pan_number || customer.pan_card_number],
-            ['Company Type', customer.company_type], ['Industry', customer.industry],
-            ['Billing', customer.billing_address], ['City', customer.billing_city],
-            ['State', customer.billing_state], ['Pincode', customer.billing_pincode],
-          ].map(([label, val]) => (
-            <div key={label}><span className="text-gray-500">{label}</span><p className="font-medium">{val || '—'}</p></div>
-          ))}
+        <div className="space-y-4">
+          <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+            {[
+              ['Name', customer.customer_name], ['Company', customer.company_name],
+              ['Email', customer.email], ['Phone', customer.customer_number || customer.phone],
+              ['GST', customer.gst_number], ['PAN', customer.pan_number || customer.pan_card_number],
+              ['Company Type', customer.company_type], ['Industry', customer.industry],
+              ['Billing', typeof customer.billing_address === 'object'
+                ? customer.billing_address?.address
+                : customer.billing_address],
+              ['City', customer.billing_city],
+              ['State', customer.billing_state], ['Pincode', customer.billing_pincode],
+              ['Shipping same as billing', customer.shipping_same !== false ? 'Yes' : 'No'],
+              ...(customer.shipping_same === false ? [
+                ['Shipping Address', customer.shipping_address],
+                ['Shipping City', customer.shipping_city],
+                ['Shipping State', customer.shipping_state],
+                ['Shipping Pincode', customer.shipping_pincode],
+              ] : []),
+            ].map(([label, val]) => (
+              <div key={label}><span className="text-gray-500">{label}</span><p className="font-medium">{val || '—'}</p></div>
+            ))}
+          </div>
+          <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 text-sm">
+            <h3 className="font-semibold text-gray-900 mb-3">Financial</h3>
+            <p>
+              <span className="text-gray-500">Security Deposit: </span>
+              <span className="font-medium">{formatCurrency(customer.total_security_amount || 0)}</span>
+            </p>
+            <p className="text-xs text-gray-500 mt-2">
+              Total held from quotations. For full deposit history,{' '}
+              <Link
+                to={`/finance/security-deposits?customer_id=${customer.customer_id}`}
+                className="text-blue-600 hover:underline"
+              >
+                view in Finance → Security Deposits
+              </Link>
+              .
+            </p>
+          </div>
         </div>
       )}
 

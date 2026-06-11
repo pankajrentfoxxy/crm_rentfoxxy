@@ -3,20 +3,56 @@ import { X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import AssetDetailsForm, { emptyLineItem, lineItemsToPayload } from '../../operation-management/components/AssetDetailsForm';
 import { BillingAddressPanel, ShippingAddressPanel } from '../../operation-management/components/CustomerAddressPanels';
-import ShippingAddressModal from '../../operation-management/components/ShippingAddressModal';
 import { branchForQuotationType } from '../../operation-management/utils/quotationHelpers';
 import { INDIAN_STATES, slugifyState } from '../../../constants/indianStates';
-import { createQuotation, getQuotationMeta, saveCustomerShippingAddress, updateQuotationStatus } from '../salesPipelineApi';
+import {
+  createQuotation, getCustomerAddresses, getCustomerDetail, getQuotationMeta, updateQuotationStatus,
+} from '../salesPipelineApi';
 
 const DEFAULT_TERMS = 'Payment terms as agreed. Goods remain property of Rentfoxxy until full payment.';
 
-export default function QuotationForm({ open, onClose, onSaved, initialCustomerId }) {
+function getField(obj, snake, camel) {
+  if (!obj) return '';
+  const val = obj[snake] ?? obj[camel];
+  if (val && typeof val === 'object' && val.address) return val.address;
+  return val || '';
+}
+
+function buildBillingAddress(customer) {
+  if (!customer) return null;
+  if (customer.billing_address && typeof customer.billing_address === 'object') {
+    return {
+      ...customer.billing_address,
+      gst_number: customer.billing_address.gst_number
+        || getField(customer, 'gst_no', 'gstNo')
+        || getField(customer, 'gst_number', 'gstNumber'),
+    };
+  }
+  return {
+    name: customer.name || customer.company_name || customer.companyName || 'N/A',
+    phone: customer.phone || customer.customer_number || 'N/A',
+    country: 'India',
+    state: getField(customer, 'billing_state', 'billingState') || 'N/A',
+    city: getField(customer, 'billing_city', 'billingCity') || 'N/A',
+    zip_code: getField(customer, 'billing_pincode', 'billingPincode') || 'N/A',
+    gst_number: getField(customer, 'gst_no', 'gstNo') || getField(customer, 'gst_number', 'gstNumber') || 'N/A',
+    address: getField(customer, 'billing_address', 'billingAddress') || 'N/A',
+  };
+}
+
+const emptyManualShipping = () => ({
+  name: '', phone: '', country: 'India', state: '', city: '', zip_code: '', address: '',
+});
+
+export default function QuotationForm({ open, onClose, onSaved, initialCustomerId, prefill = {} }) {
   const [meta, setMeta] = useState(null);
   const [customers, setCustomers] = useState([]);
+  const [customerDetail, setCustomerDetail] = useState(null);
+  const [billingAddress, setBillingAddress] = useState(null);
+  const [shippingOptions, setShippingOptions] = useState([]);
+  const [selectedShippingValue, setSelectedShippingValue] = useState('');
+  const [manualShipping, setManualShipping] = useState(emptyManualShipping());
   const [lines, setLines] = useState([emptyLineItem()]);
-  const [shippingIndex, setShippingIndex] = useState(-1);
-  const [showShippingModal, setShowShippingModal] = useState(false);
-  const [savingShipping, setSavingShipping] = useState(false);
   const [saving, setSaving] = useState(false);
   const [sendEmail, setSendEmail] = useState('');
   const [ccEmail, setCcEmail] = useState('');
@@ -24,7 +60,7 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
     customer_id: '', supply_state: slugifyState('Haryana'), quotation_type: 'rental',
     branch: 'rentfoxxy', security_amount: '', shiping_charges: '', GST_number: '',
     customer_mobile: '', email: '', customer_name: '', remarks: '', terms: DEFAULT_TERMS,
-    validity_date: '',
+    validity_date: '', source_lead_id: '',
   });
 
   useEffect(() => {
@@ -38,16 +74,89 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
     }).catch(() => toast.error('Failed to load form'));
   }, [open, initialCustomerId]);
 
-  const selectedCustomer = useMemo(
-    () => customers.find((c) => String(c.customer_id) === String(form.customer_id)),
-    [customers, form.customer_id]
-  );
+  const loadCustomerDetail = async (customerId) => {
+    if (!customerId) {
+      setCustomerDetail(null);
+      setBillingAddress(null);
+      setShippingOptions([]);
+      setSelectedShippingValue('');
+      return;
+    }
+    try {
+      const [custRes, addrRes] = await Promise.all([
+        getCustomerDetail(customerId),
+        getCustomerAddresses(customerId),
+      ]);
+      const customer = custRes.data?.customer || custRes.data;
+      const billing = buildBillingAddress(customer);
+      const savedAddresses = addrRes.data?.addresses || customer.saved_addresses || [];
+      const options = [];
 
-  const selectedShipping = shippingIndex >= 0 ? selectedCustomer?.shipping_addresses?.[shippingIndex] : null;
+      options.push({
+        label: 'Same as billing address',
+        value: 'billing',
+        address: billing,
+      });
 
-  const onCustomerChange = (customerId) => {
+      const shippingSame = customer.shipping_same ?? customer.shippingSame ?? true;
+      if (!shippingSame && getField(customer, 'shipping_address', 'shippingAddress')) {
+        options.push({
+          label: 'Customer shipping address',
+          value: 'customer_shipping',
+          address: {
+            name: customer.name || customer.customer_name,
+            phone: customer.phone || customer.customer_number,
+            country: 'India',
+            state: getField(customer, 'shipping_state', 'shippingState'),
+            city: getField(customer, 'shipping_city', 'shippingCity'),
+            zip_code: getField(customer, 'shipping_pincode', 'shippingPincode'),
+            address: getField(customer, 'shipping_address', 'shippingAddress'),
+          },
+        });
+      }
+
+      savedAddresses.forEach((addr, i) => {
+        options.push({
+          label: `${addr.concern_person || 'Address'} — ${addr.address}, ${addr.pincode || ''}`,
+          value: `saved_${addr.customer_address_id || i}`,
+          address: {
+            name: addr.concern_person || customer.name || customer.customer_name,
+            phone: addr.mobile_no || customer.phone,
+            country: 'India',
+            state: addr.state || '',
+            city: addr.city || '',
+            zip_code: addr.pincode || '',
+            address: addr.address || '',
+          },
+        });
+      });
+
+      options.push({
+        label: '+ Enter address manually',
+        value: 'manual',
+        address: null,
+      });
+
+      setCustomerDetail(customer);
+      setBillingAddress(billing);
+      setShippingOptions(options);
+      setSelectedShippingValue('billing');
+      setManualShipping({
+        name: customer.name || customer.customer_name || '',
+        phone: customer.phone || customer.customer_number || '',
+        country: 'India',
+        state: '',
+        city: '',
+        zip_code: '',
+        address: '',
+      });
+    } catch {
+      toast.error('Failed to load customer addresses');
+    }
+  };
+
+  const onCustomerChange = async (customerId) => {
     const customer = customers.find((c) => String(c.customer_id) === String(customerId));
-    const addresses = customer?.shipping_addresses || [];
     setForm((prev) => ({
       ...prev,
       customer_id: customerId,
@@ -57,13 +166,55 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
       GST_number: customer?.gst_no || '',
     }));
     setSendEmail(customer?.email || '');
-    setShippingIndex(addresses.length ? addresses.length - 1 : -1);
+    await loadCustomerDetail(customerId);
   };
+
+  const selectedShippingAddress = useMemo(() => {
+    if (selectedShippingValue === 'manual') {
+      if (!manualShipping.address?.trim()) return null;
+      return manualShipping;
+    }
+    const opt = shippingOptions.find((o) => o.value === selectedShippingValue);
+    return opt?.address || null;
+  }, [selectedShippingValue, shippingOptions, manualShipping]);
 
   useEffect(() => {
     if (initialCustomerId && customers.length) onCustomerChange(initialCustomerId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialCustomerId, customers.length]);
+
+  useEffect(() => {
+    if (!open || !prefill || !Object.keys(prefill).length) return;
+    if (prefill.customer_id) {
+      setForm((f) => ({ ...f, customer_id: String(prefill.customer_id) }));
+    }
+    if (prefill.quotation_type) {
+      setForm((f) => ({
+        ...f,
+        quotation_type: prefill.quotation_type,
+        branch: branchForQuotationType(prefill.quotation_type),
+      }));
+    }
+    if (prefill.lead_id) {
+      setForm((f) => ({ ...f, source_lead_id: prefill.lead_id }));
+    }
+    if (prefill.email) setForm((f) => ({ ...f, email: prefill.email }));
+    if (prefill.customer_name) setForm((f) => ({ ...f, customer_name: prefill.customer_name }));
+    if (prefill.line_items?.length) {
+      setLines(prefill.line_items.map((item) => ({
+        ...emptyLineItem(),
+        ...item,
+        model_name: item.model_name || item.model || '',
+      })));
+    }
+  }, [open, prefill]);
+
+  useEffect(() => {
+    if (prefill?.customer_id && customers.length) {
+      onCustomerChange(String(prefill.customer_id));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill?.customer_id, customers.length]);
 
   const onTypeChange = (quotationType) => {
     setForm((prev) => ({
@@ -73,22 +224,13 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
     }));
   };
 
-  const handleSaveShipping = async (payload) => {
-    if (!form.customer_id) throw new Error('Select a customer first');
-    setSavingShipping(true);
-    try {
-      const result = await saveCustomerShippingAddress(form.customer_id, payload);
-      const updated = result.data?.customer || result.data;
-      setCustomers((prev) => prev.map((c) => (c.customer_id === updated.customer_id ? updated : c)));
-      setShippingIndex((updated.shipping_addresses?.length || 1) - 1);
-    } finally {
-      setSavingShipping(false);
-    }
-  };
-
   const submit = async (andSend) => {
-    if (!selectedShipping) {
+    if (!selectedShippingAddress) {
       toast.error('Select a shipping address');
+      return;
+    }
+    if (!billingAddress) {
+      toast.error('Billing address is missing');
       return;
     }
     setSaving(true);
@@ -96,9 +238,10 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
       const res = await createQuotation({
         quotation_number: meta?.quotation_number,
         ...form,
+        source_lead_id: form.source_lead_id || prefill.lead_id || null,
         ...lineItemsToPayload(lines),
-        customer_shipping_address: selectedShipping,
-        customer_billing_address: selectedCustomer?.billing_address || { address: selectedCustomer?.address || '' },
+        customer_shipping_address: selectedShippingAddress,
+        customer_billing_address: billingAddress,
       });
       const qn = res.data?.quotation_number || meta?.quotation_number;
       if (andSend && qn) {
@@ -154,7 +297,7 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
             </div>
           </div>
 
-          <AssetDetailsForm lines={lines} onChange={setLines} catalog={meta} quotationType={form.quotation_type} />
+          <AssetDetailsForm lines={lines} onChange={setLines} catalog={meta?.catalog} quotationType={form.quotation_type} />
 
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -169,15 +312,59 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
           <textarea className="w-full border rounded-lg px-3 py-2 text-sm" rows={2} placeholder="Remarks" value={form.remarks} onChange={(e) => setForm((f) => ({ ...f, remarks: e.target.value }))} />
           <textarea className="w-full border rounded-lg px-3 py-2 text-sm" rows={3} placeholder="Terms & Conditions" value={form.terms} onChange={(e) => setForm((f) => ({ ...f, terms: e.target.value }))} />
 
-          {selectedCustomer && (
+          {customerDetail && billingAddress && (
             <div className="grid grid-cols-1 gap-3">
-              <BillingAddressPanel address={selectedCustomer.billing_address || { address: selectedCustomer.address }} />
-              <ShippingAddressPanel
-                addresses={selectedCustomer.shipping_addresses || []}
-                selectedIndex={shippingIndex}
-                onSelect={setShippingIndex}
-                onAdd={() => setShowShippingModal(true)}
-              />
+              <BillingAddressPanel billing={billingAddress} gstNumber={form.GST_number || billingAddress.gst_number} />
+              <div className="border border-gray-200 rounded-xl overflow-hidden">
+                <div className="p-2 border-b bg-gray-50">
+                  <label className="text-xs font-medium text-gray-600">Shipping Address *</label>
+                  <select
+                    className="w-full mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white"
+                    value={selectedShippingValue}
+                    onChange={(e) => setSelectedShippingValue(e.target.value)}
+                  >
+                    <option value="">Please Select</option>
+                    {shippingOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                </div>
+                {selectedShippingValue === 'manual' && (
+                  <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3 border-b bg-gray-50/50">
+                    {[
+                      ['name', 'Name'], ['phone', 'Phone'], ['city', 'City'],
+                      ['state', 'State'], ['zip_code', 'Pincode'],
+                    ].map(([k, label]) => (
+                      <div key={k}>
+                        <label className="text-xs text-gray-500">{label}</label>
+                        <input
+                          className="w-full mt-1 border rounded-lg px-3 py-2 text-sm"
+                          value={manualShipping[k]}
+                          onChange={(e) => setManualShipping((m) => ({ ...m, [k]: e.target.value }))}
+                        />
+                      </div>
+                    ))}
+                    <div className="sm:col-span-2">
+                      <label className="text-xs text-gray-500">Address</label>
+                      <textarea
+                        className="w-full mt-1 border rounded-lg px-3 py-2 text-sm"
+                        rows={2}
+                        value={manualShipping.address}
+                        onChange={(e) => setManualShipping((m) => ({ ...m, address: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+                )}
+                <div className="p-4">
+                  <ShippingAddressPanel
+                    readOnly
+                    selectedAddress={selectedShippingAddress}
+                    shippingAddresses={[]}
+                    selectedIndex={-1}
+                    onSelectIndex={() => {}}
+                  />
+                </div>
+              </div>
             </div>
           )}
 
@@ -192,9 +379,6 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
           <button type="button" disabled={saving} onClick={() => submit(false)} className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50">Save Draft</button>
           <button type="button" disabled={saving} onClick={() => submit(true)} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">Save & Send</button>
         </div>
-        {showShippingModal && (
-          <ShippingAddressModal onClose={() => setShowShippingModal(false)} onSave={handleSaveShipping} saving={savingShipping} />
-        )}
       </aside>
     </div>
   );

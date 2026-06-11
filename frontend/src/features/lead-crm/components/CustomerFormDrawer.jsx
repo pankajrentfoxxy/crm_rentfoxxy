@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { COMPANY_TYPES } from '../leadConstants';
-import { createCustomer, updateCustomer } from '../leadCrmApi';
+import {
+  addCustomerAddress, createCustomer, deleteCustomerAddress,
+  getCustomerAddresses, setDefaultCustomerAddress, updateCustomer,
+} from '../leadCrmApi';
 import toast from 'react-hot-toast';
 
 const empty = () => ({
@@ -12,8 +15,17 @@ const empty = () => ({
   whatsapp_number: '', designation: '', notes: '',
 });
 
+const emptyAddrForm = () => ({
+  address: '', city: '', state: '', pincode: '', concern_person: '', mobile_no: '',
+});
+
 export default function CustomerFormDrawer({ open, customer, onClose, onSaved }) {
   const [form, setForm] = useState(empty());
+  const [shippingSame, setShippingSame] = useState(true);
+  const [savedAddresses, setSavedAddresses] = useState([]);
+  const [showAddrForm, setShowAddrForm] = useState(false);
+  const [addrForm, setAddrForm] = useState(emptyAddrForm());
+  const [addrSaving, setAddrSaving] = useState(false);
   const [saving, setSaving] = useState(false);
   const isEdit = !!customer;
 
@@ -41,18 +53,89 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
         designation: customer.designation || '',
         notes: customer.notes || '',
       });
-    } else if (open) setForm(empty());
+      setShippingSame(customer.shipping_same !== false);
+    } else if (open) {
+      setForm(empty());
+      setShippingSame(true);
+      setSavedAddresses([]);
+    }
   }, [customer, open]);
+
+  useEffect(() => {
+    if (!open || !customer?.customer_id) {
+      setSavedAddresses([]);
+      return;
+    }
+    getCustomerAddresses(customer.customer_id)
+      .then((res) => setSavedAddresses(res.data?.addresses || []))
+      .catch(() => setSavedAddresses([]));
+  }, [open, customer?.customer_id]);
 
   if (!open) return null;
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
+  const loadAddresses = async () => {
+    if (!customer?.customer_id) return;
+    const res = await getCustomerAddresses(customer.customer_id);
+    setSavedAddresses(res.data?.addresses || []);
+  };
+
+  const handleSaveAddress = async () => {
+    if (!customer?.customer_id || !addrForm.address.trim()) {
+      toast.error('Address is required');
+      return;
+    }
+    setAddrSaving(true);
+    try {
+      await addCustomerAddress(customer.customer_id, {
+        ...addrForm,
+        address_type: 'Shipping',
+      });
+      toast.success('Shipping address saved');
+      setAddrForm(emptyAddrForm());
+      setShowAddrForm(false);
+      await loadAddresses();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to save address');
+    } finally {
+      setAddrSaving(false);
+    }
+  };
+
+  const handleDeleteAddress = async (addressId) => {
+    try {
+      await deleteCustomerAddress(customer.customer_id, addressId);
+      toast.success('Address deleted');
+      await loadAddresses();
+    } catch {
+      toast.error('Failed to delete address');
+    }
+  };
+
+  const handleSetDefaultAddress = async (addressId) => {
+    try {
+      const res = await setDefaultCustomerAddress(customer.customer_id, addressId);
+      setSavedAddresses(res.data?.addresses || []);
+      toast.success('Default address updated');
+    } catch {
+      toast.error('Failed to set default');
+    }
+  };
+
   const handleSave = async () => {
     setSaving(true);
     try {
+      const payload = {
+        ...form,
+        shipping_same: shippingSame,
+        shipping_address: shippingSame ? '' : form.shipping_address,
+        shipping_city: shippingSame ? '' : form.shipping_city,
+        shipping_state: shippingSame ? '' : form.shipping_state,
+        shipping_pincode: shippingSame ? '' : form.shipping_pincode,
+      };
       if (isEdit) {
-        await updateCustomer(customer.customer_id, form);
+        await updateCustomer(customer.customer_id, payload);
         toast.success('Customer updated');
       } else {
         await createCustomer({
@@ -126,6 +209,99 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
                 className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
             </div>
           ))}
+
+          <div className="sm:col-span-2 pt-2 border-t">
+            <h3 className="text-sm font-semibold text-gray-800 mb-2">Shipping Address</h3>
+            <label className="flex items-center gap-2 text-sm text-gray-700">
+              <input
+                type="checkbox"
+                checked={shippingSame}
+                onChange={(e) => {
+                  setShippingSame(e.target.checked);
+                  set('shipping_same', e.target.checked);
+                }}
+              />
+              Shipping address same as billing
+            </label>
+          </div>
+          {!shippingSame && (
+            <>
+              <div className="sm:col-span-2">
+                <label className="text-xs text-gray-500">Shipping Address</label>
+                <textarea value={form.shipping_address} onChange={(e) => set('shipping_address', e.target.value)} rows={2}
+                  className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              </div>
+              {[
+                ['shipping_city', 'City'],
+                ['shipping_state', 'State'],
+                ['shipping_pincode', 'Pincode'],
+              ].map(([k, label]) => (
+                <div key={k}>
+                  <label className="text-xs text-gray-500">{label}</label>
+                  <input value={form[k]} onChange={(e) => set(k, e.target.value)}
+                    className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                </div>
+              ))}
+            </>
+          )}
+
+          {isEdit && (
+            <div className="sm:col-span-2 pt-2 border-t space-y-3">
+              <h3 className="text-sm font-semibold text-gray-800">Saved Shipping Addresses (for quotation/DC use)</h3>
+              {savedAddresses.length === 0 ? (
+                <p className="text-xs text-gray-400">No saved addresses yet</p>
+              ) : savedAddresses.map((addr) => (
+                <div key={addr.customer_address_id} className="p-3 rounded-lg border border-gray-100 bg-gray-50 text-sm space-y-1">
+                  <p>{addr.address}</p>
+                  <p className="text-gray-500 text-xs">
+                    {[addr.city, addr.pincode].filter(Boolean).join(' · ') || addr.pincode || '—'}
+                    {addr.concern_person ? ` · ${addr.concern_person}` : ''}
+                    {addr.mobile_no ? ` · ${addr.mobile_no}` : ''}
+                  </p>
+                  {addr.is_head_office && <span className="text-xs text-green-700">Default</span>}
+                  <div className="flex gap-2 pt-1">
+                    {!addr.is_head_office && (
+                      <button type="button" onClick={() => handleSetDefaultAddress(addr.customer_address_id)}
+                        className="text-xs text-blue-600 hover:underline">Set as default</button>
+                    )}
+                    <button type="button" onClick={() => handleDeleteAddress(addr.customer_address_id)}
+                      className="text-xs text-red-600 hover:underline">Delete</button>
+                  </div>
+                </div>
+              ))}
+              {showAddrForm ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-3 border rounded-lg">
+                  <div className="sm:col-span-2">
+                    <label className="text-xs text-gray-500">Address *</label>
+                    <textarea value={addrForm.address} onChange={(e) => setAddrForm((f) => ({ ...f, address: e.target.value }))}
+                      rows={2} className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" />
+                  </div>
+                  {[
+                    ['city', 'City *'], ['state', 'State'], ['pincode', 'Pincode'],
+                    ['concern_person', 'Contact Person'], ['mobile_no', 'Mobile No'],
+                  ].map(([k, label]) => (
+                    <div key={k}>
+                      <label className="text-xs text-gray-500">{label}</label>
+                      <input value={addrForm[k]} onChange={(e) => setAddrForm((f) => ({ ...f, [k]: e.target.value }))}
+                        className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                  ))}
+                  <div className="sm:col-span-2 flex gap-2">
+                    <button type="button" onClick={handleSaveAddress} disabled={addrSaving}
+                      className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg disabled:opacity-50">
+                      {addrSaving ? 'Saving...' : 'Save Address'}
+                    </button>
+                    <button type="button" onClick={() => { setShowAddrForm(false); setAddrForm(emptyAddrForm()); }}
+                      className="px-3 py-1.5 text-sm border rounded-lg">Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <button type="button" onClick={() => setShowAddrForm(true)}
+                  className="text-sm text-blue-600 hover:underline">+ Add Shipping Address</button>
+              )}
+            </div>
+          )}
+
           <div className="sm:col-span-2">
             <label className="text-xs text-gray-500">Notes</label>
             <textarea value={form.notes} onChange={(e) => set('notes', e.target.value)} rows={2}

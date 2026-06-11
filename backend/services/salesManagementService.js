@@ -66,7 +66,7 @@ async function getSalesOrderRemainingQty(salesOrderNumber) {
   return result.rows[0]?.qty || 0;
 }
 
-async function listQuotationsGrouped({ page = 1, limit = 20, search = '', status }) {
+async function listQuotationsGrouped({ page = 1, limit = 20, search = '', status, source_lead_id }) {
   const params = [];
   const conditions = [];
   if (search) {
@@ -76,6 +76,10 @@ async function listQuotationsGrouped({ page = 1, limit = 20, search = '', status
   if (status) {
     params.push(status);
     conditions.push(`status = $${params.length}`);
+  }
+  if (source_lead_id) {
+    params.push(Number(source_lead_id));
+    conditions.push(`source_lead_id = $${params.length}`);
   }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
@@ -91,8 +95,8 @@ async function listQuotationsGrouped({ page = 1, limit = 20, search = '', status
        (SELECT COALESCE(SUM(quantity), 0) FROM sales_quotations sq WHERE sq.quotation_number = g.quotation_number) AS remaining_qty
      FROM (
        SELECT DISTINCT ON (quotation_number)
-         quotation_number, customer_id, customer_name, gst_number, status,
-         pdf_path, status_updated_by_id, status_updated_by_name, updated_at
+         quotation_number, customer_id, customer_name, gst_number, status, quotation_type,
+         pdf_path, status_updated_by_id, status_updated_by_name, created_at, updated_at, source_lead_id
        FROM sales_quotations
        ${where}
        ORDER BY quotation_number, updated_at DESC

@@ -1,4 +1,8 @@
 import React from 'react';
+import {
+  FALLBACK_BRANDS, FALLBACK_MODELS, FALLBACK_PROCESSORS, FALLBACK_GENERATIONS,
+  FALLBACK_RAM, FALLBACK_STORAGE, FALLBACK_GPU, FALLBACK_SCREEN_SIZES,
+} from '../../sales-pipeline/salesPipelineUtils';
 import { emptyLineItem, lineItemsToPayload } from './DocumentLineItemsForm';
 import SearchableSelect from './SearchableSelect';
 
@@ -52,12 +56,21 @@ function pickOptions(catalogRows, line, field, fallback = []) {
   return filtered.length ? filtered : fallback;
 }
 
+function modelOptionsForBrand(catalog, brand) {
+  const models = catalog?.models;
+  if (Array.isArray(models) && models.length) return models;
+  if (models && typeof models === 'object' && brand && models[brand]?.length) {
+    return models[brand];
+  }
+  return brand ? (FALLBACK_MODELS[brand] || ['Other']) : [];
+}
+
 export default function AssetDetailsForm({ lines, onChange, catalog, quotationType }) {
   const showRentalFields = quotationType === 'rental' || quotationType === 'demo';
   const catalogRows = catalog?.catalog_rows || [];
   const globalOptions = {
-    gpu: catalog?.gpus || [],
-    screen_size: catalog?.screen_sizes || [],
+    gpu: catalog?.gpus?.length ? catalog.gpus : FALLBACK_GPU,
+    screen_size: catalog?.screen_sizes?.length ? catalog.screen_sizes : FALLBACK_SCREEN_SIZES,
   };
 
   const updateLine = (index, field, value) => {
@@ -106,12 +119,24 @@ export default function AssetDetailsForm({ lines, onChange, catalog, quotationTy
   return (
     <div className="space-y-4">
       {lines.map((line, index) => {
-        const brandOptions = pickOptions(catalogRows, line, 'brand', catalog?.brands || []);
-        const modelOptions = pickOptions(catalogRows, line, 'model_name', catalog?.models || []);
-        const processorOptions = pickOptions(catalogRows, line, 'processor', catalog?.processors || []);
-        const generationOptions = pickOptions(catalogRows, line, 'generation', catalog?.generations || []);
-        const ramOptions = pickOptions(catalogRows, line, 'ram', catalog?.rams || []);
-        const storageOptions = pickOptions(catalogRows, line, 'storage', catalog?.storages || []);
+        const brandOptions = pickOptions(
+          catalogRows, line, 'brand', catalog?.brands?.length ? catalog.brands : FALLBACK_BRANDS
+        );
+        const modelOptions = pickOptions(
+          catalogRows, line, 'model_name', modelOptionsForBrand(catalog, line.brand)
+        );
+        const processorOptions = pickOptions(
+          catalogRows, line, 'processor', catalog?.processors?.length ? catalog.processors : FALLBACK_PROCESSORS
+        );
+        const generationOptions = pickOptions(
+          catalogRows, line, 'generation', catalog?.generations?.length ? catalog.generations : FALLBACK_GENERATIONS
+        );
+        const ramOptions = pickOptions(
+          catalogRows, line, 'ram', catalog?.rams?.length ? catalog.rams : FALLBACK_RAM
+        );
+        const storageOptions = pickOptions(
+          catalogRows, line, 'storage', catalog?.storages?.length ? catalog.storages : FALLBACK_STORAGE
+        );
 
         return (
         <div key={index} className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">

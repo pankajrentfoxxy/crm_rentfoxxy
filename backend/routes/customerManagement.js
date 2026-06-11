@@ -20,7 +20,6 @@ router.use(authMiddleware);
 
 router.get('/customers/meta/add', checkRole(...roles), ctrl.getAddCustomerMeta);
 router.get('/customers', checkRole(...roles), ctrl.listCustomers);
-router.get('/customers/:customerId', checkRole(...roles), ctrl.getCustomer);
 router.post(
   '/customers',
   checkRole(...roles),
@@ -30,9 +29,15 @@ router.post(
   ]),
   ctrl.storeCustomer
 );
-router.put('/customers/:customerId', checkRole(...roles), ctrl.updateCustomer);
+// Specific /customers/:id/* routes must be registered before /customers/:customerId
 router.put('/customers/:customerId/verify-kyc', checkRole('admin', 'manager'), ctrl.verifyCustomerKyc);
 router.get('/customers/:customerId/laptops', checkRole(...roles), ctrl.getCustomerLaptops);
+router.get('/customers/:customerId/addresses', checkRole(...roles), ctrl.getCustomerAddresses);
+router.post('/customers/:customerId/addresses', checkRole(...roles), ctrl.addCustomerAddress);
+router.delete('/customers/:customerId/addresses/:addressId', checkRole(...roles), ctrl.deleteCustomerAddress);
+router.patch('/customers/:customerId/addresses/:addressId/default', checkRole(...roles), ctrl.setDefaultCustomerAddress);
+router.get('/customers/:customerId', checkRole(...roles), ctrl.getCustomer);
+router.put('/customers/:customerId', checkRole(...roles), ctrl.updateCustomer);
 router.delete('/customers/:customerId', checkRole('admin', 'manager'), ctrl.deleteCustomer);
 
 module.exports = router;

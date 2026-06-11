@@ -20,9 +20,26 @@ function generatePassword(length = 10) {
   return out;
 }
 
+function billingAddressFromRow(row, details) {
+  const street = typeof row.billing_address === 'string' && row.billing_address
+    ? row.billing_address
+    : (details.billing_address?.address || details.billing_address || '');
+  return {
+    name: row.name || row.company_name || '',
+    phone: row.phone || '',
+    country: 'India',
+    state: row.billing_state || '',
+    city: row.billing_city || '',
+    zip_code: row.billing_pincode || '',
+    gst_number: row.gst_no || details.gst_number || '',
+    address: street || '',
+  };
+}
+
 function formatCustomerRow(row) {
   const details = parseDetails(row.details);
   const uploadDocs = Array.isArray(details.upload_docs) ? details.upload_docs : [];
+  const billingObj = billingAddressFromRow(row, details);
   return {
     id: row.customer_id,
     customer_id: row.customer_id,
@@ -35,6 +52,7 @@ function formatCustomerRow(row) {
     contact_person_name: details.contact_person_name || row.name || '',
     contact_person_number: details.contact_person_number || row.phone || '',
     gst_number: row.gst_no || details.gst_number || '',
+    gst_no: row.gst_no || details.gst_number || '',
     pan_card_number: row.pan_number || details.pan_card_number || '',
     pan_number: row.pan_number || details.pan_card_number || '',
     business_type: details.business_type || row.company_type || '',
@@ -44,7 +62,8 @@ function formatCustomerRow(row) {
     profile: details.profile || null,
     upload_docs: uploadDocs,
     total_security_amount: Number(row.total_security_amount || 0),
-    billing_address: row.billing_address || details.billing_address || null,
+    billing_address: billingObj,
+    billingAddress: billingObj.address,
     billing_city: row.billing_city || null,
     billing_state: row.billing_state || null,
     billing_pincode: row.billing_pincode || null,
@@ -73,10 +92,12 @@ function formatCustomerRow(row) {
 }
 
 async function ensureCustomerManagementSchema() {
-  const migrationPath = path.join(__dirname, '../migrations/045_customer_management_module.sql');
-  if (!fs.existsSync(migrationPath)) return;
-  const sql = fs.readFileSync(migrationPath, 'utf8');
-  await pool.query(sql);
+  for (const file of ['045_customer_management_module.sql', '064_customer_addresses.sql']) {
+    const migrationPath = path.join(__dirname, '../migrations', file);
+    if (!fs.existsSync(migrationPath)) continue;
+    const sql = fs.readFileSync(migrationPath, 'utf8');
+    await pool.query(sql);
+  }
 }
 
 exports.ensureCustomerManagementSchema = ensureCustomerManagementSchema;
@@ -142,18 +163,136 @@ exports.listCustomers = async (req, res) => {
 
 exports.getCustomer = async (req, res) => {
   try {
+    const customerId = parseInt(req.params.customerId, 10);
     const result = await pool.query(
       `SELECT c.*,
         COALESCE((
           SELECT SUM(security_amount) FROM sales_quotations sq WHERE sq.customer_id = c.customer_id
         ), 0) AS total_security_amount
        FROM customers c WHERE c.customer_id = $1`,
-      [req.params.customerId]
+      [customerId]
     );
     if (!result.rows.length) {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
-    res.json({ success: true, customer: formatCustomerRow(result.rows[0]) });
+    const addrRes = await pool.query(
+      `SELECT customer_address_id, customer_id, concern_person, mobile_no, address, pincode,
+              is_head_office, address_type, created_at, updated_at
+       FROM customer_addresses
+       WHERE customer_id = $1
+       ORDER BY is_head_office DESC, customer_address_id ASC`,
+      [customerId]
+    );
+    const customer = formatCustomerRow(result.rows[0]);
+    customer.saved_addresses = addrRes.rows;
+    res.json({ success: true, customer });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getCustomerAddresses = async (req, res) => {
+  try {
+    const customerId = parseInt(req.params.customerId, 10);
+    if (!customerId) {
+      return res.status(400).json({ success: false, message: 'Invalid customer id' });
+    }
+    const { rows } = await pool.query(
+      `SELECT customer_address_id, customer_id, concern_person, mobile_no, address, pincode,
+              is_head_office, address_type, created_at, updated_at
+       FROM customer_addresses
+       WHERE customer_id = $1
+       ORDER BY is_head_office DESC, customer_address_id ASC`,
+      [customerId]
+    );
+    res.json({ success: true, addresses: rows });
+  } catch (error) {
+    if (error.message && error.message.includes('customer_addresses')) {
+      return res.json({ success: true, addresses: [] });
+    }
+    console.error('getCustomerAddresses:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.addCustomerAddress = async (req, res) => {
+  try {
+    const customerId = parseInt(req.params.customerId, 10);
+    const body = req.body || {};
+    const check = await pool.query('SELECT 1 FROM customers WHERE customer_id = $1', [customerId]);
+    if (!check.rows.length) {
+      return res.status(404).json({ success: false, message: 'Customer not found' });
+    }
+    if (!body.address) {
+      return res.status(400).json({ success: false, message: 'Address is required' });
+    }
+    const result = await pool.query(
+      `INSERT INTO customer_addresses
+        (customer_id, concern_person, mobile_no, address, pincode, is_head_office, address_type)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [
+        customerId,
+        body.concern_person || null,
+        body.mobile_no || null,
+        body.address,
+        body.pincode || null,
+        !!body.is_head_office,
+        body.address_type || 'Shipping',
+      ]
+    );
+    res.status(201).json({ success: true, address: result.rows[0] });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.deleteCustomerAddress = async (req, res) => {
+  try {
+    const customerId = parseInt(req.params.customerId, 10);
+    const addressId = parseInt(req.params.addressId, 10);
+    const result = await pool.query(
+      `DELETE FROM customer_addresses
+       WHERE customer_address_id = $1 AND customer_id = $2
+       RETURNING customer_address_id`,
+      [addressId, customerId]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ success: false, message: 'Address not found' });
+    }
+    res.json({ success: true, message: 'Address deleted' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.setDefaultCustomerAddress = async (req, res) => {
+  try {
+    const customerId = parseInt(req.params.customerId, 10);
+    const addressId = parseInt(req.params.addressId, 10);
+    const check = await pool.query(
+      'SELECT 1 FROM customer_addresses WHERE customer_address_id = $1 AND customer_id = $2',
+      [addressId, customerId]
+    );
+    if (!check.rows.length) {
+      return res.status(404).json({ success: false, message: 'Address not found' });
+    }
+    await pool.query(
+      'UPDATE customer_addresses SET is_head_office = FALSE WHERE customer_id = $1',
+      [customerId]
+    );
+    await pool.query(
+      'UPDATE customer_addresses SET is_head_office = TRUE, updated_at = NOW() WHERE customer_address_id = $1',
+      [addressId]
+    );
+    const { rows } = await pool.query(
+      `SELECT customer_address_id, customer_id, concern_person, mobile_no, address, pincode,
+              is_head_office, address_type
+       FROM customer_addresses WHERE customer_id = $1
+       ORDER BY is_head_office DESC, customer_address_id ASC`,
+      [customerId]
+    );
+    res.json({ success: true, addresses: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

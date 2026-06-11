@@ -35,3 +35,5 @@ export const verifyDeliveryOtp = (dcNumber, d) => api.post(`${base}/delivery-cha
 export const getAvailableSerials = (p) => api.get(`${base}/inventory/available-serials`, { params: p });
 export const getOperationCounts = () => api.get(`${base}/counts`);
 export const saveCustomerShippingAddress = (id, d) => api.post(`${base}/customers/${id}/shipping-address`, d);
+export const getCustomerDetail = (customerId) => api.get(`/customer-management/customers/${customerId}`);
+export const getCustomerAddresses = (customerId) => api.get(`/customer-management/customers/${customerId}/addresses`);

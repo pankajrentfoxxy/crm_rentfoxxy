@@ -226,7 +226,7 @@ export default function TechniciansBucketListPage() {
                     <td className="px-4 py-3">
                       {row.customer_id ? (
                         <Link
-                          to={`/customer-management/customers`}
+                          to="/lead-crm/customers"
                           className="text-red-600 font-medium hover:underline"
                         >
                           {row.customer_name}
@@ -308,7 +308,7 @@ export default function TechniciansBucketListPage() {
                     <td className="px-4 py-3">{row.delivery_person_name}</td>
                     <td className="px-4 py-3">
                       {row.customer_id ? (
-                        <Link to="/customer-management/customers" className="text-red-600 font-medium hover:underline">
+                        <Link to="/lead-crm/customers" className="text-red-600 font-medium hover:underline">
                           {row.customer_name}
                         </Link>
                       ) : (
