@@ -80,6 +80,33 @@ exports.updatePart = async (req, res) => {
   }
 };
 
+exports.getPartUsage = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query(
+      `SELECT tp.quantity_used, tp.notes, tp.added_at,
+              t.ticket_id, t.serial_number, t.machine_number,
+              u.name AS technician_name
+       FROM ticket_parts tp
+       JOIN tickets t ON t.ticket_id = tp.ticket_id
+       LEFT JOIN LATERAL (
+         SELECT wl.user_id FROM work_logs wl
+         WHERE wl.ticket_id = t.ticket_id
+         ORDER BY wl.start_time DESC LIMIT 1
+       ) wl ON TRUE
+       LEFT JOIN users u ON u.user_id = wl.user_id
+       WHERE tp.part_id = $1
+       ORDER BY tp.added_at DESC
+       LIMIT 100`,
+      [id]
+    );
+    res.json({ success: true, usage: result.rows });
+  } catch (error) {
+    console.error('Get part usage error:', error);
+    res.status(500).json({ success: false, message: 'Server error fetching part usage' });
+  }
+};
+
 // Update Part Quantity (Restock or Consume)
 exports.updatePartQuantity = async (req, res) => {
   const { id } = req.params;

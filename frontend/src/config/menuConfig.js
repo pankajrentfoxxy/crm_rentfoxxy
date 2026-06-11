@@ -39,13 +39,13 @@ export const floorPipelineAccordionChildren = [
   { label: 'QC Queue', path: '/floor-pipeline/tickets?stage=QC1,QC2', section: 'floor_pipeline' },
   { label: 'Chip Level Repair', path: '/floor-pipeline/tickets?stage=Chip+Level+Repair', section: 'chip_level_repair' },
   { label: 'Body & Paint', path: '/floor-pipeline/tickets?stage=Body+%26+Paint', section: 'floor_pipeline' },
-  { label: 'Parts', path: '/parts', section: 'parts' },
 ];
 
 /** Inventory accordion (simplified) */
 export const inventoryAccordionChildren = [
   { label: 'Stock Management', path: '/inventory-management/universal-search', section: 'inventory_management' },
   { label: 'Ready to Rent/Sell', path: '/inventory-management/ready-to-rent-or-sell', countKey: 'passed', section: 'inventory_management' },
+  { label: 'Parts Inventory', path: '/inventory-management/parts', section: 'parts_inventory' },
   { label: 'Customer Inventory', path: '/customer-inventory', section: 'customer_inventory' },
 ];
 
@@ -60,13 +60,13 @@ export const salesPipelineAccordionChildren = [
 export const reportsMenuItems = [
   { icon: BarChart2, label: 'Manager Dashboard', path: '/reports/manager-dashboard', section: 'analytics_dashboard' },
   { icon: TrendingUp, label: 'Sales Dashboard', path: '/reports/sales-dashboard', section: 'analytics_dashboard' },
-  { icon: DollarSign, label: 'Revenue', path: '/reports/revenue', section: 'reports' },
-  { icon: Package, label: 'Inventory', path: '/reports/inventory', section: 'reports' },
-  { icon: Users, label: 'Lead Conversion', path: '/reports/lead-conversion', section: 'reports' },
-  { icon: UserCheck, label: 'Salesperson', path: '/reports/salesperson', section: 'reports' },
-  { icon: CreditCard, label: 'Collections', path: '/reports/collections', section: 'reports' },
-  { icon: Building2, label: 'Vendor Spend', path: '/reports/vendor-spend', section: 'reports' },
-  { icon: Wrench, label: 'Technician', path: '/reports/technician', section: 'reports' },
+  { icon: DollarSign, label: 'Revenue', path: '/reports/revenue', section: 'reports_access' },
+  { icon: Package, label: 'Inventory', path: '/reports/inventory', section: 'reports_access' },
+  { icon: Users, label: 'Lead Conversion', path: '/reports/lead-conversion', section: 'reports_access' },
+  { icon: UserCheck, label: 'Salesperson', path: '/reports/salesperson', section: 'reports_access' },
+  { icon: CreditCard, label: 'Collections', path: '/reports/collections', section: 'reports_access' },
+  { icon: Building2, label: 'Vendor Spend', path: '/reports/vendor-spend', section: 'reports_access' },
+  { icon: Wrench, label: 'Technician', path: '/reports/technician', section: 'reports_access' },
 ];
 
 export const financeMenuItems = [
@@ -154,7 +154,7 @@ export const MENU_GROUPS = [
     items: [
       {
         type: 'inventoryAccordion',
-        sections: ['inventory_management', 'customer_inventory'],
+        sections: ['inventory_management', 'customer_inventory', 'parts_inventory'],
         section: 'inventory_management',
         icon: Package,
         label: 'Inventory',
@@ -311,6 +311,9 @@ export function isReportsChildVisible(child, canView, userRole) {
   if (child.path === '/reports/manager-dashboard' && userRole === 'sales') return false;
   if (child.path === '/reports/sales-dashboard' && !['admin', 'manager', 'sales'].includes(userRole)) {
     return canView(child.section);
+  }
+  if (child.section === 'reports_access') {
+    return canView('reports_access') || canView('reports');
   }
   if (child.section) return canView(child.section);
   return true;

@@ -1185,3 +1185,106 @@ exports.exportToExcel = async (req, res) => {
         res.status(500).json({ success: false, message: 'Server error exporting report' });
     }
 };
+
+exports.getSupportStats = async (req, res) => {
+    try {
+        const { from, to } = defaultDateRange(req.query);
+        const params = [from, to];
+        const dateFilter = `t.created_at >= $1::date AND t.created_at < ($2::date + interval '1 day')`;
+
+        const [avgRes, techRes, catRes, repeatRes] = await Promise.all([
+            pool.query(
+                `SELECT
+                  ROUND(AVG(EXTRACT(EPOCH FROM (i.resolved_at - t.created_at)) / 3600)
+                    FILTER (WHERE i.resolved_at IS NOT NULL)::numeric, 1) AS avg_resolution_hours,
+                  ROUND((PERCENTILE_CONT(0.5) WITHIN GROUP (
+                    ORDER BY EXTRACT(EPOCH FROM (i.resolved_at - t.created_at)) / 3600
+                  ) FILTER (WHERE i.resolved_at IS NOT NULL))::numeric, 1) AS median_resolution_hours
+                 FROM support_tickets t
+                 JOIN support_ticket_items i ON i.ticket_id = t.id
+                 WHERE ${dateFilter}`,
+                params
+            ),
+            pool.query(
+                `SELECT u.name,
+                  COUNT(DISTINCT t.id)::int AS tickets,
+                  ROUND(AVG(EXTRACT(EPOCH FROM (i.resolved_at - t.created_at)) / 3600)
+                    FILTER (WHERE i.resolved_at IS NOT NULL)::numeric, 1) AS avg_hours,
+                  ROUND(
+                    100.0 * COUNT(*) FILTER (
+                      WHERE i.resolved_at IS NOT NULL
+                        AND EXTRACT(EPOCH FROM (i.resolved_at - t.created_at)) / 3600 < 48
+                    ) / NULLIF(COUNT(*) FILTER (WHERE i.resolved_at IS NOT NULL), 0),
+                    1
+                  ) AS under48h_pct
+                 FROM support_ticket_items i
+                 JOIN support_tickets t ON t.id = i.ticket_id
+                 LEFT JOIN users u ON u.user_id = i.assigned_to
+                 WHERE ${dateFilter}
+                 GROUP BY u.user_id, u.name
+                 HAVING COUNT(DISTINCT t.id) > 0
+                 ORDER BY tickets DESC`,
+                params
+            ),
+            pool.query(
+                `SELECT COALESCE(i.issue_category_label, c.name, 'Uncategorized') AS label,
+                  COUNT(*)::int AS count,
+                  COUNT(*) FILTER (WHERE i.status IN ('resolved', 'closed', 'inventory_updated'))::int AS resolved,
+                  COUNT(*) FILTER (WHERE i.status NOT IN ('resolved', 'closed', 'inventory_updated'))::int AS open,
+                  ROUND(AVG(EXTRACT(EPOCH FROM (COALESCE(i.resolved_at, NOW()) - t.created_at)) / 3600)::numeric, 1) AS avg_hours
+                 FROM support_ticket_items i
+                 JOIN support_tickets t ON t.id = i.ticket_id
+                 LEFT JOIN support_issue_categories c ON c.id = i.issue_category_id
+                 WHERE ${dateFilter}
+                 GROUP BY COALESCE(i.issue_category_label, c.name, 'Uncategorized')
+                 ORDER BY count DESC`,
+                params
+            ),
+            pool.query(
+                `SELECT t.customer_name,
+                  COUNT(DISTINCT t.id)::int AS total,
+                  COUNT(DISTINCT t.id) FILTER (WHERE t.status = 'closed')::int AS resolved,
+                  ROUND(
+                    100.0 * (COUNT(DISTINCT t.id) - 1) / NULLIF(COUNT(DISTINCT t.id), 0),
+                    1
+                  ) AS repeat_rate
+                 FROM support_tickets t
+                 WHERE ${dateFilter}
+                 GROUP BY t.customer_id, t.customer_name
+                 HAVING COUNT(DISTINCT t.id) > 1
+                 ORDER BY total DESC
+                 LIMIT 25`,
+                params
+            ),
+        ]);
+
+        const avgRow = avgRes.rows[0] || {};
+        res.json({
+            success: true,
+            avg_resolution_hours: parseFloat(avgRow.avg_resolution_hours || 0),
+            median_resolution_hours: parseFloat(avgRow.median_resolution_hours || 0),
+            by_technician: techRes.rows.map((r) => ({
+                name: r.name || 'Unassigned',
+                tickets: r.tickets,
+                avg_hours: r.avg_hours != null ? parseFloat(r.avg_hours) : null,
+                under48h_pct: r.under48h_pct != null ? parseFloat(r.under48h_pct) : 0,
+            })),
+            by_category: catRes.rows.map((r) => ({
+                label: r.label,
+                count: r.count,
+                resolved: r.resolved,
+                open: r.open,
+                avg_hours: r.avg_hours != null ? parseFloat(r.avg_hours) : 0,
+            })),
+            repeat_customers: repeatRes.rows.map((r) => ({
+                customer_name: r.customer_name,
+                total: r.total,
+                resolved: r.resolved,
+                repeat_rate: r.repeat_rate != null ? parseFloat(r.repeat_rate) : 0,
+            })),
+        });
+    } catch (error) {
+        console.error('getSupportStats error:', error);
+        res.status(500).json({ success: false, message: 'Server error generating support stats' });
+    }
+};

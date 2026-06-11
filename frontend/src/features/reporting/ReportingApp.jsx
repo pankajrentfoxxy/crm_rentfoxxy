@@ -14,11 +14,12 @@ import TechnicianReportPage from './pages/TechnicianReportPage';
 function ReportsIndexRedirect() {
   const { user, canView } = usePermission();
   if (user?.role === 'sales') return <Navigate to="sales-dashboard" replace />;
-  if (user?.role === 'floor_manager' && canView('reports')) {
+  const canReports = canView('reports') || canView('reports_access');
+  if (user?.role === 'floor_manager' && canReports) {
     return <Navigate to="technician" replace />;
   }
   if (canView('analytics_dashboard')) return <Navigate to="manager-dashboard" replace />;
-  if (canView('reports')) return <Navigate to="technician" replace />;
+  if (canReports) return <Navigate to="technician" replace />;
   return <Navigate to="sales-dashboard" replace />;
 }
 

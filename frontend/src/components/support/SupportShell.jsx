@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   Headphones, LayoutDashboard, Ticket, UserCog, Clock, Truck, MessageSquare,
-  Users, Package, Settings, ClipboardList, CheckCircle2, Plus
+  Users, Package, Settings, ClipboardList, CheckCircle2, Plus, BarChart2
 } from 'lucide-react';
 import api from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
@@ -11,6 +11,8 @@ import { initials } from './utils';
 import './support.css';
 
 const titles = {
+  overview: 'Overview',
+  stats: 'Stats & Reports',
   dashboard: 'Dashboard',
   tickets: 'All tickets',
   'pending-assign': 'Pending assign',
@@ -91,16 +93,21 @@ export default function SupportShell() {
           ) : (
             <nav>
               <div className="support-nav-label">Overview</div>
-              <NavItem to="/support/dashboard" icon={LayoutDashboard} label="Dashboard" badge={badges.open_tickets} />
-              <NavItem to="/support/tickets" icon={Ticket} label="All tickets" badge={badges.overdue_tickets} badgeDanger />
+              <NavItem to="/support/overview" icon={LayoutDashboard} label="Overview" badge={badges.open_tickets} />
+              <NavItem to="/support/tickets" icon={Ticket} label="All tickets" />
+              <NavItem to="/support/my-tickets" icon={ClipboardList} label="My tickets" badge={badges.my_open} badgeDanger />
 
               <div className="support-nav-label">Work</div>
               <NavItem to="/support/pending-assign" icon={UserCog} label="Pending assign" badge={badges.pending_assign} badgeDanger />
               <NavItem to="/support/overdue" icon={Clock} label="Overdue" badge={badges.overdue_tickets} badgeDanger />
               <NavItem to="/support/pickups" icon={Truck} label="Pickups" />
               <NavItem to="/support/complaints" icon={MessageSquare} label="Complaints" />
+              <NavItem to="/support/my-resolved" icon={CheckCircle2} label="My resolved" badge={badges.my_resolved} />
 
               <div className="support-nav-label">Manage</div>
+              {(user?.role === 'admin' || user?.role === 'manager' || user?.role === 'support_lead') && (
+                <NavItem to="/support/stats" icon={BarChart2} label="Stats & Reports" />
+              )}
               <NavItem to="/support/technicians" icon={Users} label="Technicians" />
               {canAccessCustomerInventory(user) && (
                 <Link to="/customer-inventory" className="support-nav-link">
@@ -129,7 +136,7 @@ export default function SupportShell() {
           </>
         ) : (
           <>
-            <NavLink to="/support/dashboard" className={({ isActive }) => (isActive ? 'active' : '')}>
+            <NavLink to="/support/overview" className={({ isActive }) => (isActive ? 'active' : '')}>
               <LayoutDashboard className="w-5 h-5" /> Home
             </NavLink>
             <NavLink to="/support/tickets" className={({ isActive }) => (isActive ? 'active' : '')}>

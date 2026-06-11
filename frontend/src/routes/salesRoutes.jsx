@@ -1,10 +1,10 @@
 import React from 'react';
 import api from '../utils/api';
+import PartsRedirect from './PartsRedirect';
 import Layout from '../layout/Layout';
 import ProtectedRoute from '../router/ProtectedRoute';
 import Dashboard from '../pages/Dashboard';
 import Inventory from '../components/Inventory';
-import PartsInventory from '../components/PartsInventory';
 import Sales from '../components/Sales';
 import LeadList from '../components/LeadList.legacy';
 import LeadDetail from '../components/LeadDetail.legacy';
@@ -34,7 +34,7 @@ export const salesRoutes = [
   { path: '/tickets', element: guard('tickets', 'view', withLayout(<TicketsList />)) },
   { path: '/tickets/:id', element: guard('tickets', 'view', withLayout(<TicketDetails />)) },
   { path: '/tickets/create', element: guard('tickets', 'create', withLayout(<CreateTicket />)) },
-  { path: '/parts', element: guard('parts', 'view', withLayout(<PartsInventory />)) },
+  { path: '/parts', element: guard('parts_inventory', 'view', withLayout(<PartsRedirect />)) },
   { path: '/sales', element: guard('sales_orders', 'view', withLayout(<Sales api={api} />)) },
   { path: '/lead-crm/*', element: guard('leads', 'view', withLayout(<LeadCrmApp />)) },
   { path: '/sales-pipeline/*', element: guard('sales_pipeline', 'view', withLayout(<SalesPipelineApp />)) },

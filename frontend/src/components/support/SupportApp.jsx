@@ -4,6 +4,8 @@ import { useAuth } from '../../context/AuthContext';
 import { isSupportLead, isSupportTechnician } from '../../utils/supportAccess';
 import SupportShell from './SupportShell';
 import SupportDashboard from './SupportDashboard';
+import SupportOverviewPage from '../../features/support-module/pages/SupportOverviewPage';
+import SupportStatsPage from '../../features/support-module/pages/SupportStatsPage';
 import SupportTicketsView from './SupportTicketsView';
 import SupportTicketCreate from './SupportTicketCreate';
 import SupportTicketDetail from './SupportTicketDetail';
@@ -15,18 +17,26 @@ function SupportHomeRedirect() {
   if (isSupportTechnician(user) && !isSupportLead(user)) {
     return <Navigate to="/support/my-tickets" replace />;
   }
-  return <Navigate to="/support/dashboard" replace />;
+  return <Navigate to="/support/overview" replace />;
 }
 
 function LeadOnly({ children }) {
   const { user } = useAuth();
-  if (!isSupportLead(user)) return <Navigate to="/support/dashboard" replace />;
+  if (!isSupportLead(user)) return <Navigate to="/support/overview" replace />;
+  return children;
+}
+
+function StatsOnly({ children }) {
+  const { user } = useAuth();
+  if (!['admin', 'manager', 'support_lead'].includes(user?.role)) {
+    return <Navigate to="/support/overview" replace />;
+  }
   return children;
 }
 
 function AdminOnly({ children }) {
   const { user } = useAuth();
-  if (user?.role !== 'admin') return <Navigate to="/support/dashboard" replace />;
+  if (user?.role !== 'admin') return <Navigate to="/support/overview" replace />;
   return children;
 }
 
@@ -35,8 +45,10 @@ export default function SupportApp() {
     <Routes>
       <Route element={<SupportShell />}>
         <Route index element={<SupportHomeRedirect />} />
-        <Route path="dashboard" element={<SupportDashboard />} />
-        <Route path="tickets" element={<SupportTicketsView view="all" splitSections showFilters />} />
+        <Route path="overview" element={<SupportOverviewPage />} />
+        <Route path="dashboard" element={<Navigate to="/support/overview" replace />} />
+        <Route path="stats" element={<StatsOnly><SupportStatsPage /></StatsOnly>} />
+        <Route path="tickets" element={<SupportTicketsView view="all" splitSections showFilters enhancedList />} />
         <Route path="pending-assign" element={<SupportTicketsView view="pending_assign" showFilters />} />
         <Route path="overdue" element={<SupportTicketsView view="overdue" showFilters />} />
         <Route path="pickups" element={<SupportTicketsView view="pickups" showFilters />} />

@@ -9,6 +9,7 @@ import SparePartsInventoryPage from './pages/SparePartsInventoryPage';
 import SerialNumberStatusPage from './pages/SerialNumberStatusPage';
 import UniversalSearchPage from './pages/UniversalSearchPage';
 import NpaAssetsPage from './pages/NpaAssetsPage';
+import PartsPage from './pages/PartsPage';
 
 /**
  * Nested routes only — navigation lives in Layout sidebar (accordion).
@@ -44,6 +45,7 @@ export default function InventoryManagementApp() {
         <Route path="direct-purchase" element={<DirectPurchasePage />} />
         <Route path="out-for-repare" element={<OutForReparePage />} />
         <Route path="spare-parts" element={<SparePartsInventoryPage />} />
+        <Route path="parts" element={<PartsPage />} />
         <Route path="serial-number-status" element={<SerialNumberStatusPage />} />
         <Route path="universal-search" element={<UniversalSearchPage />} />
         <Route path="npa-assets" element={<NpaAssetsPage />} />

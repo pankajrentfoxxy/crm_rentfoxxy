@@ -59,4 +59,11 @@ router.post(
     reportsController.exportToExcel
 );
 
+router.get(
+    '/support-stats',
+    authMiddleware,
+    checkRoleOrPermission(['admin', 'manager', 'support_lead'], ['support_tickets']),
+    reportsController.getSupportStats
+);
+
 module.exports = router;

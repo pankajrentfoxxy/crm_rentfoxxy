@@ -9,7 +9,7 @@ export default function ReportingRouteGuard({ children }) {
   const { canView, user } = usePermission();
 
   const canAnalytics = canView('analytics_dashboard');
-  const canReports = canView('reports');
+  const canReports = canView('reports') || canView('reports_access');
 
   const needsAnalytics = ANALYTICS_ONLY.some((p) => pathname.startsWith(p));
 
