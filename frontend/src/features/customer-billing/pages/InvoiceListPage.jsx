@@ -1,0 +1,233 @@
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { Plus } from 'lucide-react';
+import toast from 'react-hot-toast';
+import PermissionGate from '../../../components/PermissionGate';
+import InvoiceStatusBadge from '../components/InvoiceStatusBadge';
+import { downloadInvoicePdf, generateInvoice, listInvoices, markInvoicePaid } from '../customerBillingApi';
+import api from '../../../utils/api';
+
+const TABS = ['all', 'draft', 'sent', 'paid', 'overdue'];
+const MONTHS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function fmt(n) {
+  return `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+}
+
+export default function InvoiceListPage() {
+  const [rows, setRows] = useState([]);
+  const [summary, setSummary] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState('all');
+  const [customerId, setCustomerId] = useState('');
+  const [month, setMonth] = useState('');
+  const [year, setYear] = useState(String(new Date().getFullYear()));
+  const [customers, setCustomers] = useState([]);
+  const [genOpen, setGenOpen] = useState(false);
+  const [genForm, setGenForm] = useState({ customer_id: '', month: String(new Date().getMonth() || 12), year: String(new Date().getFullYear()) });
+
+  useEffect(() => {
+    api.get('/customer-management/customers', { params: { limit: 200 } })
+      .then((r) => setCustomers(r.data?.customers || r.data?.rows || []))
+      .catch(() => setCustomers([]));
+  }, []);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = { limit: 100 };
+      if (tab !== 'all') params.status = tab;
+      if (customerId) params.customer_id = customerId;
+      if (month) params.month = month;
+      if (year) params.year = year;
+      const res = await listInvoices(params);
+      setRows(res.data?.invoices || []);
+      setSummary(res.data?.summary || {});
+    } catch {
+      toast.error('Failed to load invoices');
+    } finally {
+      setLoading(false);
+    }
+  }, [tab, customerId, month, year]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const stats = useMemo(() => ({
+    draft: { count: summary.draft_count || 0, total: summary.draft_total || 0 },
+    sent: { count: summary.sent_count || 0, total: summary.sent_total || 0 },
+    paid: { count: summary.paid_count || 0, total: summary.paid_total || 0 },
+    overdue: { count: summary.overdue_count || 0, total: summary.overdue_total || 0 },
+    outstanding: summary.outstanding_total || 0,
+  }), [summary]);
+
+  const handleGenerate = async () => {
+    try {
+      await generateInvoice({
+        customer_id: Number(genForm.customer_id),
+        month: Number(genForm.month),
+        year: Number(genForm.year),
+      });
+      toast.success('Invoice generated');
+      setGenOpen(false);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Generate failed');
+    }
+  };
+
+  const handleDownload = async (id, num) => {
+    try {
+      const res = await downloadInvoicePdf(id);
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${num}.pdf`;
+      a.click();
+    } catch {
+      toast.error('PDF download failed');
+    }
+  };
+
+  const handleMarkPaid = async (id) => {
+    const ref = window.prompt('Payment reference (optional):');
+    try {
+      await markInvoicePaid(id, { payment_reference: ref || '' });
+      toast.success('Marked paid');
+      load();
+    } catch {
+      toast.error('Failed');
+    }
+  };
+
+  return (
+    <div className="p-4 max-w-7xl mx-auto">
+      <div className="flex flex-wrap items-start justify-between gap-4 mb-6">
+        <div>
+          <h1 className="text-2xl font-semibold text-gray-900">Customer Invoices</h1>
+          <p className="text-sm text-gray-500">INV-* series</p>
+        </div>
+        <PermissionGate section="customer_billing" action="create">
+          <button type="button" onClick={() => setGenOpen(true)} className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">
+            <Plus className="w-4 h-4" /> Generate Invoice
+          </button>
+        </PermissionGate>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
+        {[
+          ['Draft', stats.draft.count, stats.draft.total],
+          ['Sent', stats.sent.count, stats.sent.total],
+          ['Paid', stats.paid.count, stats.paid.total],
+          ['Overdue', stats.overdue.count, stats.overdue.total],
+          ['Outstanding', '—', stats.outstanding],
+        ].map(([label, count, total]) => (
+          <div key={label} className="bg-white border rounded-lg p-3">
+            <p className="text-xs text-gray-500">{label}</p>
+            <p className="text-lg font-semibold">{count}</p>
+            {total !== '—' && <p className="text-xs text-gray-600">{fmt(total)}</p>}
+            {total === '—' && <p className="text-xs text-gray-600">{fmt(stats.outstanding)}</p>}
+          </div>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap gap-2 mb-3">
+        <select value={customerId} onChange={(e) => setCustomerId(e.target.value)} className="border rounded-lg px-2 py-1.5 text-sm">
+          <option value="">All customers</option>
+          {customers.map((c) => <option key={c.customer_id} value={c.customer_id}>{c.company_name}</option>)}
+        </select>
+        <select value={month} onChange={(e) => setMonth(e.target.value)} className="border rounded-lg px-2 py-1.5 text-sm">
+          <option value="">All months</option>
+          {MONTHS.slice(1).map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
+        </select>
+        <input type="number" value={year} onChange={(e) => setYear(e.target.value)} className="border rounded-lg px-2 py-1.5 text-sm w-24" placeholder="Year" />
+      </div>
+
+      <div className="flex flex-wrap gap-2 mb-4">
+        {TABS.map((t) => (
+          <button key={t} type="button" onClick={() => setTab(t)} className={`px-3 py-1.5 rounded-full text-xs font-medium capitalize ${tab === t ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'}`}>{t}</button>
+        ))}
+      </div>
+
+      <div className="bg-white border rounded-xl overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
+            <tr>
+              <th className="px-4 py-3">Invoice #</th>
+              <th className="px-4 py-3">Month</th>
+              <th className="px-4 py-3">Customer</th>
+              <th className="px-4 py-3">Laptops</th>
+              <th className="px-4 py-3">Subtotal</th>
+              <th className="px-4 py-3">GST</th>
+              <th className="px-4 py-3">Credit Adj</th>
+              <th className="px-4 py-3">Total</th>
+              <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">IRN</th>
+              <th className="px-4 py-3">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {loading ? (
+              <tr><td colSpan={11} className="px-4 py-8 text-center text-gray-500">Loading…</td></tr>
+            ) : rows.length === 0 ? (
+              <tr><td colSpan={11} className="px-4 py-8 text-center text-gray-500">No invoices</td></tr>
+            ) : rows.map((r) => (
+              <tr key={r.invoice_id} className="hover:bg-gray-50">
+                <td className="px-4 py-3 font-medium">
+                  <Link to={`/customer-billing/invoices/${r.invoice_id}`} className="text-blue-600 hover:underline">{r.invoice_number}</Link>
+                </td>
+                <td className="px-4 py-3">{MONTHS[r.invoice_month]} {r.invoice_year}</td>
+                <td className="px-4 py-3">{r.customer_name}</td>
+                <td className="px-4 py-3">{r.laptop_count || 0}</td>
+                <td className="px-4 py-3">{fmt(r.subtotal)}</td>
+                <td className="px-4 py-3">{fmt(r.gst_amount)}</td>
+                <td className="px-4 py-3">{fmt(r.credit_note_adjustment)}</td>
+                <td className="px-4 py-3 font-medium">{fmt(r.grand_total)}</td>
+                <td className="px-4 py-3"><InvoiceStatusBadge status={r.status} /></td>
+                <td className="px-4 py-3">{r.irn ? <span className="text-green-700 text-xs font-medium">✓ IRN</span> : <span className="text-gray-400">—</span>}</td>
+                <td className="px-4 py-3">
+                  <div className="flex flex-wrap gap-1">
+                    <Link to={`/customer-billing/invoices/${r.invoice_id}`} className="text-xs text-blue-600 hover:underline">View</Link>
+                    {(r.status === 'draft' || r.status === 'sent') && (
+                      <PermissionGate section="customer_billing" action="edit">
+                        <Link to={`/customer-billing/invoices/${r.invoice_id}`} className="text-xs text-blue-600 hover:underline">Send</Link>
+                      </PermissionGate>
+                    )}
+                    {r.status === 'sent' && (
+                      <PermissionGate section="customer_billing" action="edit">
+                        <button type="button" onClick={() => handleMarkPaid(r.invoice_id)} className="text-xs text-green-600 hover:underline">Paid</button>
+                      </PermissionGate>
+                    )}
+                    <button type="button" onClick={() => handleDownload(r.invoice_id, r.invoice_number)} className="text-xs text-gray-600 hover:underline">PDF</button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {genOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <button type="button" className="absolute inset-0 bg-black/40" onClick={() => setGenOpen(false)} aria-label="Close" />
+          <div className="relative bg-white rounded-xl shadow-xl max-w-md w-full p-6 space-y-3">
+            <h3 className="font-semibold">Generate Invoice</h3>
+            <select value={genForm.customer_id} onChange={(e) => setGenForm((f) => ({ ...f, customer_id: e.target.value }))} className="w-full border rounded-lg px-3 py-2 text-sm">
+              <option value="">Customer…</option>
+              {customers.map((c) => <option key={c.customer_id} value={c.customer_id}>{c.company_name}</option>)}
+            </select>
+            <div className="grid grid-cols-2 gap-2">
+              <select value={genForm.month} onChange={(e) => setGenForm((f) => ({ ...f, month: e.target.value }))} className="border rounded-lg px-3 py-2 text-sm">
+                {MONTHS.slice(1).map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
+              </select>
+              <input type="number" value={genForm.year} onChange={(e) => setGenForm((f) => ({ ...f, year: e.target.value }))} className="border rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <div className="flex gap-2 justify-end">
+              <button type="button" onClick={() => setGenOpen(false)} className="px-4 py-2 text-sm border rounded-lg">Cancel</button>
+              <button type="button" onClick={handleGenerate} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg">Generate</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

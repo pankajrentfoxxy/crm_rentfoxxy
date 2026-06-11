@@ -1,0 +1,230 @@
+const pool = require('../config/db');
+const { generateVendorBill } = require('../services/billingSchedulerService');
+
+async function nextDebitNoteNumber() {
+  const res = await pool.query(
+    `UPDATE sm_document_sequences
+     SET last_value = last_value + 1
+     WHERE doc_type = 'vendor_debit_note'
+     RETURNING prefix || LPAD(last_value::text, 4, '0') AS number`
+  );
+  return res.rows[0].number;
+}
+
+exports.listVendorBills = async (req, res) => {
+  try {
+    const { vendor_id, month, year, status, page = 1, limit = 50 } = req.query;
+    const params = [];
+    const where = ['1=1'];
+    if (vendor_id) {
+      params.push(vendor_id);
+      where.push(`vb.vendor_id = $${params.length}`);
+    }
+    if (month) {
+      params.push(month);
+      where.push(`vb.bill_month = $${params.length}`);
+    }
+    if (year) {
+      params.push(year);
+      where.push(`vb.bill_year = $${params.length}`);
+    }
+    if (status) {
+      params.push(status);
+      where.push(`vb.status = $${params.length}`);
+    }
+    const offset = (Math.max(1, parseInt(page, 10)) - 1) * parseInt(limit, 10);
+    params.push(parseInt(limit, 10), offset);
+
+    const [listRes, summaryRes] = await Promise.all([
+      pool.query(
+        `SELECT vb.*, COALESCE(v.business_name, v.first_name) AS vendor_name,
+                jsonb_array_length(vb.line_items) AS unit_count
+         FROM vendor_monthly_bills vb
+         LEFT JOIN vendors v ON v.vendor_id = vb.vendor_id
+         WHERE ${where.join(' AND ')}
+         ORDER BY vb.bill_year DESC, vb.bill_month DESC
+         LIMIT $${params.length - 1} OFFSET $${params.length}`,
+        params
+      ),
+      pool.query(
+        `SELECT
+           COUNT(*) FILTER (WHERE status = 'generated')::int AS generated_count,
+           COALESCE(SUM(total_payable) FILTER (WHERE status = 'generated'), 0) AS generated_total,
+           COUNT(*) FILTER (WHERE status = 'approved')::int AS approved_count,
+           COALESCE(SUM(total_payable) FILTER (WHERE status = 'approved'), 0) AS approved_total,
+           COUNT(*) FILTER (WHERE status = 'paid')::int AS paid_count,
+           COALESCE(SUM(total_payable) FILTER (WHERE status = 'paid'), 0) AS paid_total
+         FROM vendor_monthly_bills vb
+         WHERE ${where.join(' AND ')}`,
+        params.slice(0, params.length - 2)
+      ),
+    ]);
+
+    res.json({
+      success: true,
+      bills: listRes.rows,
+      summary: summaryRes.rows[0] || {},
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.getVendorBill = async (req, res) => {
+  try {
+    const { billId } = req.params;
+    const result = await pool.query(
+      `SELECT vb.*, COALESCE(v.business_name, v.first_name) AS vendor_name, v.gst_number
+       FROM vendor_monthly_bills vb
+       LEFT JOIN vendors v ON v.vendor_id = vb.vendor_id
+       WHERE vb.bill_id = $1`,
+      [billId]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ success: false, message: 'Bill not found' });
+    }
+    res.json({ success: true, bill: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.generateVendorBill = async (req, res) => {
+  try {
+    const { vendor_id, month, year } = req.body || {};
+    if (!vendor_id || !month || !year) {
+      return res.status(400).json({ success: false, message: 'vendor_id, month, year required' });
+    }
+    const result = await generateVendorBill(Number(vendor_id), Number(month), Number(year));
+    if (result.skipped && !result.bill_id) {
+      return res.json({ success: true, skipped: true, reason: result.reason });
+    }
+    const bill = await pool.query(
+      `SELECT vb.*, COALESCE(v.business_name, v.first_name) AS vendor_name FROM vendor_monthly_bills vb
+       LEFT JOIN vendors v ON v.vendor_id = vb.vendor_id
+       WHERE vb.bill_id = $1`,
+      [result.bill_id]
+    );
+    res.json({ success: true, ...result, bill: bill.rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.approveVendorBill = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(
+      `UPDATE vendor_monthly_bills
+       SET status = 'approved', approved_by = $1, updated_at = NOW()
+       WHERE bill_id = $2 AND status = 'generated'
+       RETURNING *`,
+      [req.user?.user_id || null, id]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ success: false, message: 'Bill not found or not in generated status' });
+    }
+    res.json({ success: true, bill: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.markVendorBillPaid = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { payment_reference, payment_date } = req.body || {};
+    const result = await pool.query(
+      `UPDATE vendor_monthly_bills
+       SET status = 'paid', payment_reference = $1, payment_date = $2, updated_at = NOW()
+       WHERE bill_id = $3
+       RETURNING *`,
+      [payment_reference || null, payment_date || new Date().toISOString().slice(0, 10), id]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ success: false, message: 'Bill not found' });
+    }
+    res.json({ success: true, bill: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.listDebitNotes = async (req, res) => {
+  try {
+    const { vendor_id, status } = req.query;
+    const params = [];
+    const where = ['1=1'];
+    if (vendor_id) {
+      params.push(vendor_id);
+      where.push(`dn.vendor_id = $${params.length}`);
+    }
+    if (status) {
+      params.push(status);
+      where.push(`dn.status = $${params.length}`);
+    }
+    const result = await pool.query(
+      `SELECT dn.*, COALESCE(v.business_name, v.first_name) AS vendor_name
+       FROM vendor_debit_notes dn
+       LEFT JOIN vendors v ON v.vendor_id = dn.vendor_id
+       WHERE ${where.join(' AND ')}
+       ORDER BY dn.created_at DESC`,
+      params
+    );
+    res.json({ success: true, debit_notes: result.rows });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.createDebitNote = async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.vendor_id || !body.reason) {
+      return res.status(400).json({ success: false, message: 'vendor_id and reason required' });
+    }
+    const dnNumber = await nextDebitNoteNumber();
+    const amount = parseFloat(body.amount || 0);
+    const result = await pool.query(
+      `INSERT INTO vendor_debit_notes
+        (debit_note_number, vendor_id, po_id, reason, description, amount,
+         quantity, unit_rate, ttspl_ids, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10)
+       RETURNING *`,
+      [
+        dnNumber,
+        body.vendor_id,
+        body.po_id || null,
+        body.reason,
+        body.description || null,
+        amount,
+        body.quantity || 0,
+        body.unit_rate || 0,
+        JSON.stringify(body.ttspl_ids || []),
+        req.user?.user_id || null,
+      ]
+    );
+    res.status(201).json({ success: true, debit_note: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.approveDebitNote = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(
+      `UPDATE vendor_debit_notes
+       SET status = 'approved', approved_by = $1, updated_at = NOW()
+       WHERE debit_note_id = $2 AND status = 'pending'
+       RETURNING *`,
+      [req.user?.user_id || null, id]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ success: false, message: 'Debit note not found or not pending' });
+    }
+    res.json({ success: true, debit_note: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};

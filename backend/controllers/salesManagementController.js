@@ -903,6 +903,7 @@ exports.ensureSalesManagementSchema = async () => {
     '042_sales_management_module.sql',
     '043_operation_management_extras.sql',
     '044_quotation_demo_type.sql',
+    '061_phase4_sales_pipeline.sql',
     '065_quotation_lead_link.sql',
     '066_quotation_sent_status.sql',
   ]) {

@@ -48,6 +48,7 @@ import {
   Cog,
   ClipboardCheck,
   Wrench,
+  DollarSign,
 } from 'lucide-react';
 
 import { isSupportUser } from '../utils/supportAccess';
@@ -57,6 +58,7 @@ import usePermission from '../hooks/usePermission';
 import { useOperationCounts } from '../features/operation-management/hooks/useOperationCounts';
 import { useDeliveryRegisterCounts } from '../features/delivery-register-management/hooks/useDeliveryRegisterCounts';
 import { useLeadCrmCounts } from '../features/lead-crm/hooks/useLeadCrmCounts';
+import { useFinanceCounts } from '../features/finance-overview/hooks/useFinanceCounts';
 import {
   FLAT_MENU_ITEMS,
   vendorAccordionChildren,
@@ -67,11 +69,13 @@ import {
   settingsAccordionChildren,
   operationAccordionChildren,
   salesPipelineAccordionChildren,
+  financeMenuItems,
   deliveryRegisterAccordionChildren,
   isMenuItemVisible,
   isSettingsChildVisible,
   isOperationChildVisible,
   isSalesPipelineChildVisible,
+  isFinanceChildVisible,
   isDeliveryRegisterChildVisible,
   isLeadCrmChildVisible,
 } from '../config/menuConfig';
@@ -104,7 +108,17 @@ export default function Layout({ children }) {
   const showDeliveryRegisterAccordion =
     canView('delivery_register_management') || canView('technicians_bucket_list');
 
+  const showFinanceAccordion =
+    canView('customer_billing') ||
+    canView('vendor_billing_mgmt') ||
+    canView('credit_notes') ||
+    canView('debit_notes') ||
+    canView('security_deposits') ||
+    canView('billing_dashboard') ||
+    canView('einvoice_ewb');
+
   const { counts: operationCounts } = useOperationCounts(showSalesPipelineAccordion);
+  const { counts: financeCounts } = useFinanceCounts(showFinanceAccordion);
 
   const deliveryRegisterCounts = useDeliveryRegisterCounts(showDeliveryRegisterAccordion);
 
@@ -161,6 +175,12 @@ export default function Layout({ children }) {
     location.pathname.startsWith('/delivery-register-management')
   );
 
+  const [financeAccordionOpen, setFinanceAccordionOpen] = useState(() =>
+    location.pathname.startsWith('/customer-billing') ||
+    location.pathname.startsWith('/vendor-billing') ||
+    location.pathname.startsWith('/finance')
+  );
+
 
 
   useEffect(() => {
@@ -203,6 +223,14 @@ export default function Layout({ children }) {
 
     if (location.pathname.startsWith('/delivery-register-management')) {
       setDeliveryRegisterAccordionOpen(true);
+    }
+
+    if (
+      location.pathname.startsWith('/customer-billing') ||
+      location.pathname.startsWith('/vendor-billing') ||
+      location.pathname.startsWith('/finance')
+    ) {
+      setFinanceAccordionOpen(true);
     }
 
   }, [location.pathname]);
@@ -873,6 +901,66 @@ export default function Layout({ children }) {
                           >
                             <span>{child.label}</span>
                             {badge != null ? (
+                              <span className="shrink-0 rounded-full bg-sky-100 text-sky-800 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums">
+                                {badge}
+                              </span>
+                            ) : null}
+                          </NavLink>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            if (item.type === 'financeAccordion') {
+              return (
+                <div key="finance-accordion" className="space-y-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setFinanceAccordionOpen((o) => !o)}
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors text-left hover:bg-gray-100 ${
+                      location.pathname.startsWith('/customer-billing') ||
+                      location.pathname.startsWith('/vendor-billing') ||
+                      location.pathname.startsWith('/finance')
+                        ? 'text-emerald-700 bg-emerald-50/60' : 'text-gray-800'
+                    }`}
+                  >
+                    <DollarSign className="w-5 h-5 text-gray-600 shrink-0" />
+                    <span className="flex-1">Finance</span>
+                    <ChevronDown
+                      className={`w-4 h-4 text-gray-500 shrink-0 transition-transform duration-200 ${
+                        financeAccordionOpen ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </button>
+                  {financeAccordionOpen && (
+                    <div className="mt-1 ml-2 pl-3 border-l border-emerald-100 space-y-0.5">
+                      {financeMenuItems.filter((child) => isFinanceChildVisible(child, canView)).map((child) => {
+                        const badge = child.countKey && financeCounts[child.countKey] != null
+                          ? financeCounts[child.countKey]
+                          : null;
+                        const Icon = child.icon;
+                        return (
+                          <NavLink
+                            key={child.path}
+                            to={child.path}
+                            onClick={() => setSidebarOpen(false)}
+                            className={({ isActive }) =>
+                              [
+                                'flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-xs transition-colors',
+                                isActive
+                                  ? 'bg-emerald-100 text-emerald-900 font-semibold'
+                                  : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900',
+                              ].join(' ')
+                            }
+                          >
+                            <span className="flex items-center gap-1.5">
+                              {Icon ? <Icon className="w-3.5 h-3.5 shrink-0" /> : null}
+                              {child.label}
+                            </span>
+                            {badge != null && badge > 0 ? (
                               <span className="shrink-0 rounded-full bg-sky-100 text-sky-800 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums">
                                 {badge}
                               </span>

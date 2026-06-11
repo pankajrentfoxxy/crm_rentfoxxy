@@ -252,7 +252,7 @@ export default function DeliveryChallanDetailPage() {
           )}
 
           {tab === 'einvoice' && isSale && (
-            <EInvoicePanel dcLine={head} customerEmail={head.email} />
+            <EInvoicePanel dcNumber={dcNumber} dcLine={head} customerEmail={head.email} onReload={load} />
           )}
         </div>
 

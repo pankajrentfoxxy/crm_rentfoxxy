@@ -1,66 +1,48 @@
 import {
   BarChart3,
-  Archive,
-  ClipboardList,
-  Briefcase,
-  Clock,
   Users,
   Package,
   Truck,
-  Headphones,
   Building2,
   CheckCircle,
   ShoppingCart,
   Store,
   Settings,
-  Cog,
   ClipboardCheck,
   Wrench,
+  LayoutDashboard,
+  FileText,
+  CreditCard,
+  Shield,
+  AlertCircle,
+  Zap,
+  DollarSign,
 } from 'lucide-react';
 
-/** Vendor submenu paths match VendorManagementApp nested routes */
+/** Vendor Management accordion */
 export const vendorAccordionChildren = [
   { label: 'Purchase Orders', path: '/vendor-management/purchase-orders' },
   { label: 'Spare Parts PO', path: '/vendor-management/spare-parts-po' },
-  { label: 'GRN / Receive', path: '/vendor-management/purchase-orders' },
+  { label: 'GRN / Received', path: '/vendor-management/purchase-orders' },
   { label: 'Vendor Billing', path: '/vendor-management/billing/vendor-overview' },
   { label: 'Monthly Bills', path: '/vendor-management/billing/pending' },
 ];
 
-export const qcAccordionChildren = [
-  { label: 'QC Processing List', path: '/qc-management/processing', countKey: 'pending' },
-  { label: 'QC Passed List', path: '/qc-management/passed', countKey: 'passed' },
-  { label: 'QC Failed List', path: '/qc-management/failed', countKey: 'failed' },
-  { label: 'Dead Assets List', path: '/qc-management/dead-assets', countKey: 'dead' },
-  { label: 'Require For Parts', path: '/qc-management/require-for-parts', countKey: 'require_for_parts' },
-  { label: 'Bundle Management', path: '/qc-management/bundle' },
+/** Floor & Quality accordion (includes Parts) */
+export const floorPipelineAccordionChildren = [
+  { label: 'Floor Dashboard', path: '/floor-pipeline/dashboard', section: 'floor_pipeline' },
+  { label: 'All Tickets', path: '/floor-pipeline/tickets', section: 'floor_pipeline' },
+  { label: 'QC Queue', path: '/floor-pipeline/tickets?stage=QC1,QC2', section: 'floor_pipeline' },
+  { label: 'Chip Level Repair', path: '/floor-pipeline/tickets?stage=Chip+Level+Repair', section: 'chip_level_repair' },
+  { label: 'Body & Paint', path: '/floor-pipeline/tickets?stage=Body+%26+Paint', section: 'floor_pipeline' },
+  { label: 'Parts', path: '/parts', section: 'parts' },
 ];
 
+/** Inventory accordion (simplified) */
 export const inventoryAccordionChildren = [
-  { label: 'Ready to Rent or Sell', path: '/inventory-management/ready-to-rent-or-sell', countKey: 'passed' },
-  { label: 'Rent To Own', path: '/inventory-management/rent-to-own', countKey: 'rent_to_own' },
-  { label: 'Rental Purchase', path: '/inventory-management/rental-purchase', countKey: 'rental_purchase' },
-  { label: 'Direct Purchase', path: '/inventory-management/direct-purchase', countKey: 'direct_purchase' },
-  { label: 'Out For Repare', path: '/inventory-management/out-for-repare', countKey: 'out_for_repare' },
-  { label: 'Spare Parts', path: '/inventory-management/spare-parts', countKey: 'spare_parts' },
-  { label: 'Serial Number Status', path: '/inventory-management/serial-number-status' },
-  { label: 'Universal Search', path: '/inventory-management/universal-search' },
-  { label: 'NPA Assets', path: '/inventory-management/npa-assets', countKey: 'npa' },
-];
-
-export const deliveryRegisterAccordionChildren = [
-  { label: 'In Transit', path: '/delivery-register-management/in-transit', countKey: 'in_transit', section: 'delivery_register_management' },
-  { label: 'Delivered', path: '/delivery-register-management/delivered', countKey: 'delivered', section: 'delivery_register_management' },
-  { label: 'Rejected', path: '/delivery-register-management/rejected', countKey: 'rejected', section: 'delivery_register_management' },
-  { label: 'Technician List', path: '/delivery-register-management/technicians', countKey: 'technicians', section: 'delivery_register_management' },
-  { label: 'Technician Bucket List', path: '/delivery-register-management/bucket-list', section: 'technicians_bucket_list' },
-];
-
-export const operationAccordionChildren = [
-  { label: 'Quotations', path: '/operation-management/quotations', section: 'sales_quotations', countKey: 'quotations' },
-  { label: 'Sales Orders', path: '/operation-management/sales-orders', section: 'sales_orders_doc', countKey: 'sales_orders' },
-  { label: 'Delivery Challans', path: '/operation-management/delivery-challans', section: 'delivery_challans', countKey: 'delivery_challans' },
-  { label: 'Return DC', path: '/operation-management/return-dc', section: 'return_dc', countKey: 'return_dc' },
+  { label: 'Stock Management', path: '/inventory-management/universal-search', section: 'inventory_management' },
+  { label: 'Ready to Rent/Sell', path: '/inventory-management/ready-to-rent-or-sell', countKey: 'passed', section: 'inventory_management' },
+  { label: 'Customer Inventory', path: '/customer-inventory', section: 'customer_inventory' },
 ];
 
 export const salesPipelineAccordionChildren = [
@@ -69,6 +51,16 @@ export const salesPipelineAccordionChildren = [
   { label: 'Delivery Challans', path: '/sales-pipeline/delivery-challans', section: 'delivery_challans', countKey: 'delivery_challans' },
   { label: 'Delivery Register', path: '/sales-pipeline/delivery-register', section: 'delivery_register_management' },
   { label: 'Return DC', path: '/sales-pipeline/return-dc', section: 'return_dc', countKey: 'return_dc' },
+];
+
+export const financeMenuItems = [
+  { icon: LayoutDashboard, label: 'Finance Dashboard', path: '/finance/dashboard', section: 'billing_dashboard' },
+  { icon: FileText, label: 'Customer Invoices', path: '/customer-billing/invoices', section: 'customer_billing', countKey: 'draft_invoices' },
+  { icon: CreditCard, label: 'Credit Notes', path: '/customer-billing/credit-notes', section: 'credit_notes' },
+  { icon: Shield, label: 'Security Deposits', path: '/customer-billing/security-deposits', section: 'security_deposits' },
+  { icon: Building2, label: 'Vendor Bills', path: '/vendor-billing/bills', section: 'vendor_billing_mgmt' },
+  { icon: AlertCircle, label: 'Debit Notes', path: '/vendor-billing/debit-notes', section: 'debit_notes' },
+  { icon: Zap, label: 'E-Invoice Queue', path: '/finance/einvoice-queue', section: 'einvoice_ewb', countKey: 'einvoice_queue' },
 ];
 
 export const leadCrmAccordionChildren = [
@@ -81,38 +73,26 @@ export const masterDataMenuItems = [
   { icon: Building2, label: 'Vendors', path: '/vendor-management/vendors', section: 'vendor_management' },
 ];
 
-export const floorPipelineAccordionChildren = [
-  { label: 'Floor Dashboard', path: '/floor-pipeline/dashboard', section: 'floor_pipeline' },
-  { label: 'All Tickets', path: '/floor-pipeline/tickets', section: 'floor_pipeline' },
-  { label: 'Chip Level Repair', path: '/floor-pipeline/tickets?stage=Chip+Level+Repair', section: 'chip_level_repair' },
-  { label: 'Body & Paint', path: '/floor-pipeline/tickets?stage=Body+%26+Paint', section: 'floor_pipeline' },
-  { label: 'QC Queue', path: '/floor-pipeline/tickets?stage=QC1,QC2', section: 'floor_pipeline' },
+export const settingsAccordionChildren = [
+  { label: 'Users', path: '/settings/user-permissions', section: 'user_permissions' },
+  { label: 'Role Permissions', path: '/settings/role-permissions', section: 'role_permissions' },
+  { label: 'Teams', path: '/teams', section: 'teams' },
 ];
 
-export const settingsAccordionChildren = [
-  { label: 'Roles', path: '/settings/roles', section: 'roles' },
-  { label: 'Role Permissions', path: '/settings/role-permissions', section: 'role_permissions' },
-  { label: 'Floor Permissions', path: '/settings/role-permissions?filter=floor', section: 'role_permissions' },
-  { label: 'User Permissions', path: '/settings/user-permissions', section: 'user_permissions' },
-];
+/** Legacy exports — kept for Layout imports; not shown in sidebar */
+export const qcAccordionChildren = [];
+export const deliveryRegisterAccordionChildren = [];
+export const operationAccordionChildren = salesPipelineAccordionChildren;
 
 /**
  * Sidebar menu configuration — visibility driven by hasPermission(section, 'view')
  */
 export const MENU_GROUPS = [
   {
-    key: 'sales',
-    label: 'Sales',
+    key: 'home',
+    label: 'Overview',
     items: [
       { icon: BarChart3, label: 'Dashboard', path: '/dashboard', section: 'dashboard' },
-      { icon: Archive, label: 'Inventory', path: '/inventory', section: 'inventory' },
-      { icon: ClipboardList, label: 'Tickets', path: '/tickets', section: 'tickets' },
-      { type: 'leadCrmAccordion', icon: Users, label: 'Lead & Sales CRM', section: 'leads' },
-      { icon: Briefcase, label: 'Sales Orders', path: '/sales', section: 'sales_orders' },
-      { icon: ClipboardList, label: 'Lead Orders', path: '/lead-orders', section: 'lead_orders' },
-      { icon: BarChart3, label: 'Manager Dashboard', path: '/manager-dashboard', section: 'manager_dashboard' },
-      { icon: BarChart3, label: 'Reports', path: '/reports', section: 'reports' },
-      { icon: Package, label: 'Parts', path: '/parts', section: 'parts' },
     ],
   },
   {
@@ -121,7 +101,14 @@ export const MENU_GROUPS = [
     items: masterDataMenuItems,
   },
   {
-    key: 'operation',
+    key: 'lead_crm',
+    label: 'Lead & Sales CRM',
+    items: [
+      { type: 'leadCrmAccordion', icon: Users, label: 'Lead & Sales CRM', section: 'leads' },
+    ],
+  },
+  {
+    key: 'sales_pipeline',
     label: 'Sales Pipeline',
     items: [
       {
@@ -134,50 +121,68 @@ export const MENU_GROUPS = [
     ],
   },
   {
-    key: 'warehouse',
-    label: 'Warehouse',
-    items: [
-      { icon: Truck, label: 'Procurement', path: '/procurement', section: 'procurement' },
-      { type: 'vendorAccordion', section: 'vendor_management', icon: Store, label: 'Vendor Management' },
-      { type: 'floorPipelineAccordion', section: 'floor_pipeline', icon: Wrench, label: 'Floor Pipeline' },
-      { icon: Package, label: 'Warehouse', path: '/warehouse', section: 'warehouse' },
-      { type: 'qcAccordion', section: 'qc_management', icon: CheckCircle, label: 'QC Management' },
-      { type: 'inventoryAccordion', section: 'inventory_management', icon: ShoppingCart, label: 'Inventory Management' },
-      { icon: Truck, label: 'Dispatch', path: '/dispatch', section: 'dispatch' },
-    ],
-  },
-  {
-    key: 'delivery_register',
-    label: 'Delivery Register Management',
+    key: 'floor_quality',
+    label: 'Floor & Quality',
     items: [
       {
-        type: 'deliveryRegisterAccordion',
-        sections: ['delivery_register_management', 'technicians_bucket_list'],
-        icon: ClipboardCheck,
-        label: 'Delivery Register Manager',
+        type: 'floorPipelineAccordion',
+        section: 'floor_pipeline',
+        icon: Wrench,
+        label: 'Floor & Quality',
       },
     ],
   },
   {
-    key: 'support',
-    label: 'Support',
+    key: 'inventory',
+    label: 'Inventory',
     items: [
-      { icon: Headphones, label: 'Support tickets', path: '/support/tickets', section: 'support_tickets' },
-      { icon: Building2, label: 'Customer Inventory', path: '/customer-inventory', section: 'customer_inventory' },
+      {
+        type: 'inventoryAccordion',
+        sections: ['inventory_management', 'customer_inventory'],
+        section: 'inventory_management',
+        icon: Package,
+        label: 'Inventory',
+      },
     ],
   },
   {
-    key: 'team',
-    label: 'Team',
+    key: 'vendor',
+    label: 'Vendor Management',
     items: [
-      { icon: Users, label: 'Teams', path: '/teams', section: 'teams' },
+      { type: 'vendorAccordion', section: 'vendor_management', icon: Store, label: 'Vendor Management' },
+    ],
+  },
+  {
+    key: 'finance',
+    label: 'Finance',
+    items: [
+      {
+        type: 'financeAccordion',
+        icon: DollarSign,
+        label: 'Finance',
+        section: 'customer_billing',
+        children: financeMenuItems,
+      },
+    ],
+  },
+  {
+    key: 'reports',
+    label: 'Reports & Analytics',
+    items: [
+      { icon: BarChart3, label: 'Manager Dashboard', path: '/manager-dashboard', section: 'manager_dashboard' },
+      { icon: ClipboardCheck, label: 'Reports', path: '/reports', section: 'reports' },
     ],
   },
   {
     key: 'settings',
     label: 'Settings',
     items: [
-      { type: 'settingsAccordion', icon: Settings, label: 'Settings', sections: ['roles', 'role_permissions', 'user_permissions'] },
+      {
+        type: 'settingsAccordion',
+        icon: Settings,
+        label: 'Settings',
+        sections: ['users', 'user_permissions', 'role_permissions', 'teams', 'roles'],
+      },
     ],
   },
 ];
@@ -208,8 +213,20 @@ export function isMenuItemVisible(item, canView) {
     return (item.children || []).some((child) => (child.section ? canView(child.section) : true));
   }
 
+  if (item.type === 'financeAccordion') {
+    if (item.section && canView(item.section)) return true;
+    return (item.children || []).some((child) => (child.section ? canView(child.section) : true));
+  }
+
   if (item.type === 'deliveryRegisterAccordion') {
     return (item.sections || []).some((section) => canView(section));
+  }
+
+  if (item.type === 'inventoryAccordion') {
+    if (item.sections?.length) {
+      return item.sections.some((section) => canView(section));
+    }
+    return item.section ? canView(item.section) : false;
   }
 
   if (
@@ -217,9 +234,13 @@ export function isMenuItemVisible(item, canView) {
     || item.type === 'floorPipelineAccordion'
     || item.type === 'leadCrmAccordion'
     || item.type === 'salesPipelineAccordion'
+    || item.type === 'financeAccordion'
     || item.type === 'qcAccordion'
     || item.type === 'inventoryAccordion'
   ) {
+    if (item.sections?.length) {
+      return item.sections.some((section) => canView(section));
+    }
     return item.section ? canView(item.section) : false;
   }
 
@@ -242,12 +263,27 @@ export function isSalesPipelineChildVisible(child, canView) {
   return true;
 }
 
+export function isFinanceChildVisible(child, canView) {
+  if (child.section) return canView(child.section);
+  return true;
+}
+
 export function isSettingsChildVisible(child, canView) {
   if (child.section) return canView(child.section);
   return true;
 }
 
+export function isInventoryChildVisible(child, canView) {
+  if (child.section) return canView(child.section);
+  return true;
+}
+
 export function isDeliveryRegisterChildVisible(child, canView) {
+  if (child.section) return canView(child.section);
+  return true;
+}
+
+export function isFloorPipelineChildVisible(child, canView) {
   if (child.section) return canView(child.section);
   return true;
 }

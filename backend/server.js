@@ -87,6 +87,10 @@ app.use('/api/vendor-management', require('./routes/vendorManagement'));
 app.use('/api/vendor-portal', require('./routes/vendorPortal'));
 app.use('/api/qc-management', require('./routes/qcManagement'));
 app.use('/api/inventory-management', require('./routes/inventoryManagement'));
+app.use('/api/customer-billing', require('./routes/customerBilling'));
+app.use('/api/vendor-billing', require('./routes/vendorBilling'));
+app.use('/api/einvoice', require('./routes/einvoice'));
+app.use('/api/finance-overview', require('./routes/financeOverview'));
 
 // Health check
 app.get('/health', (req, res) => {
@@ -157,12 +161,16 @@ app.listen(PORT, () => {
   const { ensureVendorManagementSchema, ensureVendorBillingSchema } = require('./controllers/vendorManagementSchema');
   const { ensureSalesManagementSchema } = require('./controllers/salesManagementController');
   const { ensureCustomerManagementSchema } = require('./controllers/customerManagementController');
+  const { ensureBillingEngineSchema } = require('./controllers/customerBillingController');
+  const { startBillingScheduler } = require('./services/billingSchedulerService');
   ensureSupportSchema().catch((err) => console.error('Support schema ensure failed:', err.message));
   ensureUserSchema().catch((err) => console.error('User schema ensure failed:', err.message));
   ensureVendorManagementSchema().catch((err) => console.error('Vendor management schema failed:', err.message));
   ensureVendorBillingSchema().catch((err) => console.error('Vendor billing schema failed:', err.message));
   ensureSalesManagementSchema().catch((err) => console.error('Sales management schema failed:', err.message));
   ensureCustomerManagementSchema().catch((err) => console.error('Customer management schema failed:', err.message));
+  ensureBillingEngineSchema().catch((err) => console.error('Billing engine schema failed:', err.message));
+  startBillingScheduler();
 });
 
 module.exports = app;
