@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import {
   Check,
   ChevronLeft,
@@ -15,6 +15,7 @@ import {
   X
 } from 'lucide-react';
 import {
+  API_LIST_MAX,
   fetchPurchaseOrders,
   fetchPurchaseOrderFormMeta,
   createPurchaseOrder,
@@ -24,6 +25,14 @@ import {
 } from '../vendorManagementApi';
 import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
+import {
+  isManagerUser,
+  isProcurementUser,
+  mergeAssetCatalog,
+  modelsForBrand,
+  poStatusBadge,
+  poTypeBadge
+} from '../vendorMgmtUi';
 
 /** Matches Laravel purchase-order-form.blade.php state list (Str::slug(_, '_)) */
 const RAW_INDIAN_STATES = [
@@ -142,18 +151,11 @@ function hasUploadedBill(row) {
 
 function canSubmitForApproval(status) {
   const s = String(status || '').toLowerCase();
-  return s === 'pending' || s === 'draft' || s === '';
+  return s === 'draft' || s === 'pending' || s === '';
 }
 
 function isPendingManagerApproval(status) {
   return String(status || '').toLowerCase() === 'pending_approval';
-}
-
-function isManagerUser(user) {
-  if (!user) return false;
-  if (user.is_superadmin) return true;
-  const role = String(user.role || '').toLowerCase();
-  return ['manager', 'admin', 'super_admin'].includes(role);
 }
 
 /** Eye / receive screen only after manager approval */
@@ -162,18 +164,20 @@ function showReceiveEye(status) {
   return s === 'approved' || s === 'processing' || s === 'completed' || s === 'sent';
 }
 
-function poTypeBadgeClass(t) {
-  const s = String(t || '').toLowerCase();
-  if (s === 'rent_to_own') return 'bg-purple-100 text-purple-700';
-  if (s === 'direct_purchase') return 'bg-blue-100 text-blue-700';
-  if (s === 'rental_purchase') return 'bg-teal-100 text-teal-700';
-  return 'bg-slate-100 text-slate-700';
-}
+const PO_STATUS_TABS = [
+  { key: 'all', label: 'All' },
+  { key: 'draft', label: 'Draft' },
+  { key: 'pending_approval', label: 'Pending Approval' },
+  { key: 'approved', label: 'Approved' },
+  { key: 'processing', label: 'Processing' },
+  { key: 'completed', label: 'Completed' },
+  { key: 'rejected', label: 'Rejected' }
+];
 
-function formatWorkflowStatus(status) {
+function normalizePoStatus(status) {
   const s = String(status || '').toLowerCase();
-  if (!s) return '—';
-  return s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  if (s === 'pending' || s === '') return 'draft';
+  return s;
 }
 
 const emptyModalForm = () => ({
@@ -196,20 +200,13 @@ const emptyAssetDraft = () => ({
   screen_size: '',
   quantity: '',
   rate: '',
-  period_months: ''
+  period_months: '',
+  monthly_rental_amount: '',
+  tenure_months: ''
 });
 
-/** PO form-meta `asset_catalog` fallback */
-const defaultAssetCatalog = () => ({
-  brands: [],
-  models: [],
-  processors: [],
-  generations: [],
-  rams: [],
-  storages: [],
-  gpus: [],
-  screen_sizes: []
-});
+/** PO form-meta `asset_catalog` fallback when API omits catalog */
+const defaultAssetCatalog = () => mergeAssetCatalog({});
 
 function AssetSelect({ label, value, onChange, options, required }) {
   return (
@@ -253,8 +250,14 @@ function AssetTextInput({ label, value, onChange, placeholder, required, type = 
 
 export default function PurchaseOrdersPage() {
   const { user } = useAuth();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const vendorFilterId = searchParams.get('vendor_id');
   const manager = isManagerUser(user);
+  const procurement = isProcurementUser(user);
 
+  const [allRows, setAllRows] = useState([]);
+  const [statusTab, setStatusTab] = useState('all');
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [rejectModal, setRejectModal] = useState({ open: false, po: null, reason: '' });
@@ -283,29 +286,56 @@ export default function PurchaseOrdersPage() {
   const loadList = useCallback(async () => {
     try {
       setLoading(true);
-      const { data } = await fetchPurchaseOrders({
-        page,
-        limit: LIST_PAGE_SIZE,
-        search: search.trim() || undefined
-      });
-      if (data.success) {
-        setRows(data.data || []);
-        const p = data.pagination;
-        if (p) {
-          setTotalPages(p.totalPages || 1);
-          setTotal(p.total || 0);
-        }
-      }
+      const all = [];
+      let pg = 1;
+      let totalPg = 1;
+      const baseParams = {
+        search: search.trim() || undefined,
+        vendor_id: vendorFilterId || undefined
+      };
+      do {
+        const { data } = await fetchPurchaseOrders({ ...baseParams, page: pg, limit: API_LIST_MAX });
+        if (!data.success) throw new Error(data.message || 'Failed to load purchase orders');
+        all.push(...(data.data || []));
+        totalPg = data.pagination?.totalPages || 1;
+        pg += 1;
+      } while (pg <= totalPg);
+      setAllRows(all);
     } catch (e) {
       toast.error(e.response?.data?.message || 'Failed to load purchase orders');
     } finally {
       setLoading(false);
     }
-  }, [page, search]);
+  }, [search, vendorFilterId]);
 
   useEffect(() => {
     loadList();
   }, [loadList]);
+
+  const statusTabCounts = useMemo(() => {
+    const c = { all: allRows.length, draft: 0, pending_approval: 0, approved: 0, processing: 0, completed: 0, rejected: 0 };
+    allRows.forEach((r) => {
+      const k = normalizePoStatus(r.status);
+      if (c[k] != null) c[k] += 1;
+    });
+    return c;
+  }, [allRows]);
+
+  useEffect(() => {
+    let list = [...allRows];
+    if (statusTab !== 'all') {
+      list = list.filter((r) => normalizePoStatus(r.status) === statusTab);
+    }
+    setTotal(list.length);
+    const tp = Math.max(1, Math.ceil(list.length / LIST_PAGE_SIZE));
+    setTotalPages(tp);
+    const start = (page - 1) * LIST_PAGE_SIZE;
+    setRows(list.slice(start, start + LIST_PAGE_SIZE));
+  }, [allRows, statusTab, page]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [statusTab, search, vendorFilterId]);
 
   function applySearch(e) {
     e.preventDefault();
@@ -313,7 +343,7 @@ export default function PurchaseOrdersPage() {
     setSearch(searchInput.trim());
   }
 
-  async function openModal() {
+  const openModal = useCallback(async (preselectVendorId) => {
     setModalOpen(true);
     setMetaLoading(true);
     setForm(emptyModalForm());
@@ -327,10 +357,12 @@ export default function PurchaseOrdersPage() {
       if (!data.success) throw new Error(data.message || 'Failed');
       setVendorOptions(data.vendors || []);
       setAssetCatalog(data.asset_catalog || defaultAssetCatalog());
+      const vid = preselectVendorId || vendorFilterId || '';
       setForm((f) => ({
         ...f,
         purchase_order_number: data.purchase_order_number || '',
-        purchase_order_date: new Date().toISOString().slice(0, 10)
+        purchase_order_date: new Date().toISOString().slice(0, 10),
+        vendor_id: vid ? String(vid) : ''
       }));
     } catch (e) {
       toast.error(e.response?.data?.message || e.message || 'Could not load form');
@@ -338,7 +370,14 @@ export default function PurchaseOrdersPage() {
     } finally {
       setMetaLoading(false);
     }
-  }
+  }, [vendorFilterId]);
+
+  useEffect(() => {
+    if (location.state?.openCreate) {
+      openModal(location.state.vendorId);
+      window.history.replaceState({}, document.title);
+    }
+  }, [location.state, openModal]);
 
   function closeModal() {
     setModalOpen(false);
@@ -358,11 +397,18 @@ export default function PurchaseOrdersPage() {
 
   const catalog = assetCatalog || defaultAssetCatalog();
 
+  const modelOptions = useMemo(
+    () => modelsForBrand(assetDraft.brand, catalog),
+    [assetDraft.brand, catalog]
+  );
+
   function addAssetRow() {
     if (!form.vendor_id || !form.purchase_order_type) {
       toast.error('Select vendor and purchase order type before adding asset lines');
       return;
     }
+    const isRental = ['rental_purchase', 'rent_to_own'].includes(form.purchase_order_type);
+    const isRto = form.purchase_order_type === 'rent_to_own';
     const checks = [
       assetDraft.brand,
       assetDraft.model,
@@ -374,7 +420,9 @@ export default function PurchaseOrdersPage() {
       assetDraft.screen_size,
       assetDraft.quantity,
       assetDraft.rate,
-      assetDraft.period_months
+      assetDraft.period_months,
+      ...(isRental ? [assetDraft.monthly_rental_amount] : []),
+      ...(isRto ? [assetDraft.tenure_months] : [])
     ];
     if (checks.some((x) => x === '' || x == null || String(x).trim() === '')) {
       toast.error('Fill every asset detail field');
@@ -398,7 +446,9 @@ export default function PurchaseOrdersPage() {
       screen_size: assetDraft.screen_size,
       quantity: qty,
       rate,
-      period_months: pm
+      period_months: pm,
+      monthly_rental_amount: isRental ? Number(assetDraft.monthly_rental_amount) : undefined,
+      tenure_months: isRto ? Number(assetDraft.tenure_months) : undefined
     };
     if (editingAssetIndex !== null) {
       setAssetRows((rows) => {
@@ -429,7 +479,10 @@ export default function PurchaseOrdersPage() {
       screen_size: String(row.screen_size ?? ''),
       quantity: row.quantity !== '' && row.quantity != null ? String(row.quantity) : '',
       rate: row.rate !== '' && row.rate != null ? String(row.rate) : '',
-      period_months: row.period_months !== '' && row.period_months != null ? String(row.period_months) : ''
+      period_months: row.period_months !== '' && row.period_months != null ? String(row.period_months) : '',
+      monthly_rental_amount:
+        row.monthly_rental_amount != null ? String(row.monthly_rental_amount) : '',
+      tenure_months: row.tenure_months != null ? String(row.tenure_months) : ''
     });
     setEditingAssetIndex(index);
   }
@@ -477,6 +530,12 @@ export default function PurchaseOrdersPage() {
           line.warranty = Number(row.period_months);
         } else {
           line.vendor_locking_period = Number(row.period_months);
+        }
+        if (['rental_purchase', 'rent_to_own'].includes(form.purchase_order_type) && row.monthly_rental_amount != null) {
+          line.monthly_rental_amount = Number(row.monthly_rental_amount);
+        }
+        if (form.purchase_order_type === 'rent_to_own' && row.tenure_months != null) {
+          line.tenure_months = Number(row.tenure_months);
         }
         return line;
       });
@@ -668,23 +727,42 @@ export default function PurchaseOrdersPage() {
     <div className="space-y-6">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">Purchase orders</h1>
-          <p className="text-xs text-slate-500 mt-1 max-w-3xl leading-relaxed">
-            Workflow: procurement saves a <strong>Draft</strong> → submits for <strong>Manager approval</strong> → on
-            approve the vendor is emailed automatically. Use the Eye to receive goods (GRN + TTSPL IDs). Bills can be
-            marked <strong>Bill pending</strong> at GRN. PO becomes <strong>Processing</strong> then{' '}
-            <strong>Completed</strong> when fully received.
-          </p>
+          <h1 className="text-2xl font-bold text-gray-900">Purchase Orders</h1>
+          {vendorFilterId ? (
+            <p className="text-xs text-blue-600 mt-1 font-medium">Filtered by vendor #{vendorFilterId}</p>
+          ) : null}
         </div>
         <button
           type="button"
-          onClick={openModal}
-          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-orange-600 text-white text-sm font-semibold shadow-sm hover:bg-orange-700 transition-colors"
+          onClick={() => openModal()}
+          className="inline-flex items-center gap-2 h-9 px-4 rounded-lg bg-blue-600 text-white text-sm font-medium shadow-sm hover:bg-blue-700"
         >
-          <Plus className="w-5 h-5" />
-          Add purchase order
+          <Plus className="w-4 h-4" />
+          Add Purchase Order
         </button>
       </header>
+
+      <div className="flex flex-wrap gap-1 border-b border-gray-100 bg-white rounded-xl border border-gray-100 p-2 shadow-sm">
+        {PO_STATUS_TABS.map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => setStatusTab(tab.key)}
+            className={`inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
+              statusTab === tab.key ? 'bg-blue-50 text-blue-700' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-50'
+            }`}
+          >
+            {tab.label}
+            <span
+              className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                statusTab === tab.key ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'
+              }`}
+            >
+              {loading ? '…' : statusTabCounts[tab.key]}
+            </span>
+          </button>
+        ))}
+      </div>
 
       <form onSubmit={applySearch} className="flex flex-wrap items-center gap-2">
         <input
@@ -738,11 +816,13 @@ export default function PurchaseOrdersPage() {
                 const vendorName =
                   r.vendor_display_name || r.vendor_business_name || r.vendor_first_name || `Vendor #${r.vendor_id}`;
                 const showEye = showReceiveEye(r.status);
-                const showSubmit = canSubmitForApproval(r.status);
+                const showSubmit = canSubmitForApproval(r.status) && procurement;
                 const showManagerActions = isPendingManagerApproval(r.status) && manager;
+                const typeBadge = poTypeBadge(r.purchase_order_type);
+                const stBadge = poStatusBadge(r.status);
 
                 return (
-                  <tr key={r.po_id} className="border-t hover:bg-slate-50/80">
+                  <tr key={r.po_id} className="border-b border-gray-100 hover:bg-gray-50">
                     <td className="p-3 text-slate-600">{(page - 1) * LIST_PAGE_SIZE + i + 1}</td>
                     <td className="p-3">
                       <button
@@ -752,11 +832,9 @@ export default function PurchaseOrdersPage() {
                       >
                         {r.purchase_order_number}
                       </button>
-                      <p className="mt-1 text-xs text-slate-600 flex flex-wrap items-center gap-1">
-                        <span
-                          className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold ${poTypeBadgeClass(r.purchase_order_type)}`}
-                        >
-                          {formatPoType(r.purchase_order_type)}
+                      <p className="mt-1 text-xs text-gray-600 flex flex-wrap items-center gap-1">
+                        <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold ${typeBadge.className}`}>
+                          {typeBadge.label}
                         </span>
                         <span>{r.purchase_order_date}</span>
                       </p>
@@ -812,24 +890,26 @@ export default function PurchaseOrdersPage() {
                       )}
                     </td>
                     <td className="p-3">
-                      {showSubmit ? (
-                        <div className="flex flex-col gap-1.5 items-start">
-                          <span className="text-[11px] text-slate-500">Draft</span>
+                      <div className="flex flex-col gap-2 items-start">
+                        {!showSubmit && !showManagerActions ? (
+                          <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold ${stBadge.className}`}>
+                            {stBadge.label}
+                          </span>
+                        ) : null}
+                        {showSubmit ? (
                           <button
                             type="button"
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-sm"
+                            className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold"
                             onClick={() => onStatusChange(r, 'pending_approval')}
                           >
-                            Submit for approval
+                            Submit for Approval
                           </button>
-                        </div>
-                      ) : showManagerActions ? (
-                        <div className="flex flex-col gap-1.5 items-start">
-                          <span className="text-[11px] text-amber-600 font-semibold">Pending approval</span>
+                        ) : null}
+                        {showManagerActions ? (
                           <div className="flex flex-wrap gap-1.5">
                             <button
                               type="button"
-                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-green-600 hover:bg-green-700 text-white text-xs font-semibold"
+                              className="inline-flex items-center gap-1 h-8 px-3 rounded-lg bg-green-600 hover:bg-green-700 text-white text-xs font-semibold"
                               onClick={() => onStatusChange(r, 'approved')}
                             >
                               <Check className="w-3.5 h-3.5" />
@@ -837,45 +917,33 @@ export default function PurchaseOrdersPage() {
                             </button>
                             <button
                               type="button"
-                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-semibold"
+                              className="inline-flex items-center gap-1 h-8 px-3 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-semibold"
                               onClick={() => setRejectModal({ open: true, po: r, reason: '' })}
                             >
                               Reject
                             </button>
                           </div>
-                        </div>
-                      ) : st === 'rejected' ? (
-                        <div>
-                          <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">
-                            Rejected
-                          </span>
-                          {r.rejection_reason ? (
-                            <p className="text-[11px] text-slate-500 mt-1 max-w-[12rem]" title={r.rejection_reason}>
-                              {r.rejection_reason}
-                            </p>
-                          ) : null}
-                        </div>
-                      ) : (
-                        <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-700">
-                          {formatWorkflowStatus(r.status)}
-                        </span>
-                      )}
+                        ) : null}
+                        {st === 'rejected' && r.rejection_reason ? (
+                          <p className="text-[11px] text-gray-500 max-w-[12rem]" title={r.rejection_reason}>
+                            {r.rejection_reason}
+                          </p>
+                        ) : null}
+                      </div>
                     </td>
                     <td className="p-3">
-                      {showEye ? (
+                      {showSubmit ? (
+                        <span className="text-gray-300 text-xs">—</span>
+                      ) : showEye ? (
                         <Link
                           to={`/vendor-management/purchase-orders/${r.po_id}/receive`}
-                          className="inline-flex items-center justify-center w-9 h-9 rounded-md border border-slate-200 text-slate-700 hover:bg-slate-50"
-                          title={
-                            st === 'completed'
-                              ? 'View received items'
-                              : 'Receive products against this PO'
-                          }
+                          className="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-blue-200 text-blue-600 hover:bg-blue-50"
+                          title={st === 'completed' ? 'View received items' : 'Receive Goods'}
                         >
                           <Eye className="w-4 h-4" />
                         </Link>
                       ) : (
-                        <span className="text-slate-300 text-xs">—</span>
+                        <span className="text-gray-300 text-xs">—</span>
                       )}
                     </td>
                   </tr>
@@ -1082,7 +1150,14 @@ export default function PurchaseOrdersPage() {
                         label="All Brands"
                         required
                         value={assetDraft.brand}
-                        onChange={(v) => setAssetDraft((d) => ({ ...d, brand: v }))}
+                        onChange={(v) =>
+                          setAssetDraft((d) => {
+                            const nextModels = modelsForBrand(v, catalog);
+                            const model =
+                              d.model && nextModels.includes(d.model) ? d.model : '';
+                            return { ...d, brand: v, model };
+                          })
+                        }
                         options={catalog.brands}
                       />
                       <AssetSelect
@@ -1090,7 +1165,7 @@ export default function PurchaseOrdersPage() {
                         required
                         value={assetDraft.model}
                         onChange={(v) => setAssetDraft((d) => ({ ...d, model: v }))}
-                        options={catalog.models}
+                        options={modelOptions}
                       />
                       <AssetSelect
                         label="Processor"
@@ -1168,6 +1243,29 @@ export default function PurchaseOrdersPage() {
                           onChange={(v) => setAssetDraft((d) => ({ ...d, period_months: v }))}
                         />
                       </div>
+                      {['rental_purchase', 'rent_to_own'].includes(form.purchase_order_type) ? (
+                        <AssetTextInput
+                          label="Monthly Rental Amount"
+                          required
+                          type="number"
+                          min={0}
+                          step="any"
+                          placeholder="Monthly rental (₹)"
+                          value={assetDraft.monthly_rental_amount}
+                          onChange={(v) => setAssetDraft((d) => ({ ...d, monthly_rental_amount: v }))}
+                        />
+                      ) : null}
+                      {form.purchase_order_type === 'rent_to_own' ? (
+                        <AssetTextInput
+                          label="Tenure (months)"
+                          required
+                          type="number"
+                          min={1}
+                          placeholder="Rent-to-own tenure"
+                          value={assetDraft.tenure_months}
+                          onChange={(v) => setAssetDraft((d) => ({ ...d, tenure_months: v }))}
+                        />
+                      ) : null}
                     </div>
 
                     <div className="mt-4 flex flex-wrap items-center gap-2">

@@ -1,5 +1,6 @@
 import React from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
+import VendorMgmtMobileNav from './components/VendorMgmtMobileNav';
 import VendorsPage from './pages/VendorsPage';
 import PurchaseOrdersPage from './pages/PurchaseOrdersPage';
 import ProductReceivedPage from './pages/ProductReceivedPage';
@@ -16,7 +17,7 @@ import BillingMonthlyPage from './pages/BillingMonthlyPage';
  */
 export default function VendorManagementApp() {
   return (
-    <div className="min-w-0">
+    <div className="min-w-0 pb-16 md:pb-0">
       <Routes>
         <Route
           index
@@ -60,6 +61,7 @@ export default function VendorManagementApp() {
 
         <Route path="*" element={<Navigate to="/vendor-management" replace />} />
       </Routes>
+      <VendorMgmtMobileNav />
     </div>
   );
 }

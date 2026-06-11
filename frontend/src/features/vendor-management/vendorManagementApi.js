@@ -1,6 +1,35 @@
 import api from '../../utils/api';
+import { mergeAssetCatalog } from './vendorMgmtUi';
 
 const base = '/vendor-management';
+
+/** Backend validates limit max 200 on list endpoints */
+export const API_LIST_MAX = 200;
+
+async function fetchAllPages(requestFn, params = {}) {
+  const rows = [];
+  let page = 1;
+  let totalPages = 1;
+  do {
+    const { data } = await requestFn({ ...params, page, limit: API_LIST_MAX });
+    if (!data?.success) {
+      const msg = data?.errors?.[0]?.msg || data?.message || 'Request failed';
+      throw new Error(msg);
+    }
+    rows.push(...(data.data || []));
+    totalPages = data.pagination?.totalPages || 1;
+    page += 1;
+  } while (page <= totalPages);
+  return rows;
+}
+
+export function fetchAllVendors(params) {
+  return fetchAllPages((p) => api.get(`${base}/vendors`, { params: p }), params);
+}
+
+export function fetchAllPurchaseOrders(params) {
+  return fetchAllPages((p) => api.get(`${base}/purchase-orders`, { params: p }), params);
+}
 
 /** Admin/staff API calls (uses default JWT from localStorage) */
 export function fetchVendors(params) {
@@ -45,8 +74,12 @@ export function fetchNextPoNumber() {
 }
 
 /** Next PO number + approved vendor list (+ contact fields) */
-export function fetchPurchaseOrderFormMeta() {
-  return api.get(`${base}/purchase-orders/form-meta`);
+export async function fetchPurchaseOrderFormMeta() {
+  const res = await api.get(`${base}/purchase-orders/form-meta`);
+  if (res?.data?.success) {
+    res.data.asset_catalog = mergeAssetCatalog(res.data.asset_catalog);
+  }
+  return res;
 }
 
 export function createPurchaseOrder(body) {

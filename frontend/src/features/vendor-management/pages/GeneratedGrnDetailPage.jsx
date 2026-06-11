@@ -2,8 +2,10 @@ import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Link, useParams } from 'react-router-dom';
 import {
+  AlertTriangle,
   ArrowLeft,
   Building2,
+  Check,
   CheckCircle2,
   Clock,
   Eye,
@@ -13,10 +15,11 @@ import {
   Mail,
   Package,
   Phone,
+  Upload,
   UserCircle,
   X
 } from 'lucide-react';
-import { fetchGeneratedGrnOverview, fetchGrnReceivedProducts } from '../vendorManagementApi';
+import { fetchGeneratedGrnOverview, fetchGrnReceivedProducts, uploadGrnBill } from '../vendorManagementApi';
 
 function formatPoType(t) {
   if (!t) return '—';
@@ -48,6 +51,9 @@ export default function GeneratedGrnDetailPage() {
   const [modalGrnId, setModalGrnId] = useState(null);
   const [modalLoading, setModalLoading] = useState(false);
   const [modalPayload, setModalPayload] = useState(null);
+  const [uploadModal, setUploadModal] = useState({ open: false, grnId: null, grnNumber: '' });
+  const [uploadBillName, setUploadBillName] = useState('');
+  const [uploadBusy, setUploadBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -65,6 +71,40 @@ export default function GeneratedGrnDetailPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  function openUploadBill(row) {
+    setUploadModal({ open: true, grnId: row.grn_id, grnNumber: row.grn_number || `GRN-${row.grn_id}` });
+    setUploadBillName('');
+  }
+
+  async function submitBillUpload(e) {
+    e.preventDefault();
+    const { grnId } = uploadModal;
+    const input = document.getElementById('grn-bill-file-input');
+    const file = input?.files?.[0];
+    const name = uploadBillName.trim();
+    if (!name) {
+      toast.error('Bill number is required');
+      return;
+    }
+    const fd = new FormData();
+    fd.append('bill_name', name);
+    if (file) fd.append('files', file);
+    setUploadBusy(true);
+    try {
+      const { data } = await uploadGrnBill(poId, grnId, fd);
+      if (!data.success) throw new Error(data.message);
+      toast.success(data.message || 'Bill uploaded');
+      setUploadModal({ open: false, grnId: null, grnNumber: '' });
+      if (input) input.value = '';
+      await load();
+      if (modalGrnId === grnId) await openGrnModal(grnId);
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Upload failed');
+    } finally {
+      setUploadBusy(false);
+    }
+  }
 
   async function openGrnModal(grnId) {
     setModalGrnId(grnId);
@@ -269,13 +309,25 @@ export default function GeneratedGrnDetailPage() {
                         <td className="px-4 py-3 tabular-nums font-semibold text-slate-900">{row.received_qty}</td>
                         <td className="px-4 py-3">
                           {String(row.bill_status || '').toLowerCase() === 'received' ? (
-                            <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">
-                              {row.bill_name || 'Received'}
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-green-50 text-green-700 border border-green-200">
+                              <Check className="w-3.5 h-3.5" />
+                              {row.bill_name || 'Bill Received'}
                             </span>
                           ) : (
-                            <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800">
-                              BILL PENDING
-                            </span>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                                <AlertTriangle className="w-3.5 h-3.5" />
+                                BILL PENDING
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => openUploadBill(row)}
+                                className="inline-flex items-center gap-1 h-8 px-3 rounded-lg bg-amber-500 text-white text-xs font-semibold hover:bg-amber-600"
+                              >
+                                <Upload className="w-3.5 h-3.5" />
+                                Upload Bill
+                              </button>
+                            </div>
                           )}
                         </td>
                         <td className="px-4 py-3">
@@ -344,46 +396,62 @@ export default function GeneratedGrnDetailPage() {
               ) : (
                 <div className="grid sm:grid-cols-2 gap-4">
                   {(modalPayload?.items || []).map((item) => {
-                    const title = [item.brand, item.model].filter(Boolean).join(' - ') || 'Product';
+                    const config = [item.processor, item.generation, item.ram, item.storage, item.gpu]
+                      .filter(Boolean)
+                      .join(' · ');
+                    const ttspl = item.unique_product_serial || item.inventory_asset_code || item.ttspl_id;
+                    const condition = item.condition || item.device_condition || 'Good';
+                    const qcStatus =
+                      item.qc_status ||
+                      (item.qc_passed === true
+                        ? 'QC Passed'
+                        : item.qc_passed === false
+                          ? 'QC Failed'
+                          : 'Pending QC');
+
                     return (
                       <div
                         key={item.serial_id}
-                        className="rounded-xl border border-slate-200 bg-white p-4 shadow-md hover:shadow-lg transition-shadow"
+                        className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm hover:shadow-md transition-shadow"
                       >
-                        <div className="flex justify-between items-start gap-2 mb-2">
-                          <h3 className="text-sm font-bold text-slate-900 leading-snug">{title}</h3>
-                          <span className="shrink-0 flex flex-wrap gap-1 justify-end">
+                        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                          {ttspl ? (
+                            <span className="font-mono text-sm font-bold text-blue-600">{ttspl}</span>
+                          ) : (
+                            <span className="font-mono text-sm text-gray-400">No TTSPL</span>
+                          )}
+                          <div className="flex flex-wrap gap-1">
+                            <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-700">
+                              {condition}
+                            </span>
+                            <span
+                              className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                                qcStatus === 'QC Passed'
+                                  ? 'bg-green-50 text-green-700'
+                                  : qcStatus === 'QC Failed'
+                                    ? 'bg-red-50 text-red-700'
+                                    : 'bg-amber-50 text-amber-800'
+                              }`}
+                            >
+                              {qcStatus}
+                            </span>
+                          </div>
+                        </div>
+                        <p className="text-sm font-semibold text-gray-900">
+                          {[item.brand, item.model].filter(Boolean).join(' ') || 'Laptop'}
+                        </p>
+                        <p className="text-xs text-gray-600 mt-1 leading-relaxed">{config || '—'}</p>
+                        <p className="text-xs font-mono text-gray-500 mt-2">S/N: {item.serial_number || '—'}</p>
+                        {item.is_replaced || item.is_repaired ? (
+                          <div className="flex gap-1 mt-2">
                             {item.is_replaced ? (
-                              <span className="text-[10px] font-bold px-2.5 py-1 rounded-full border border-pink-500 text-pink-600 bg-pink-50">
-                                Replaced
-                              </span>
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-pink-50 text-pink-700">Replaced</span>
                             ) : null}
                             {item.is_repaired ? (
-                              <span className="text-[10px] font-bold px-2.5 py-1 rounded-full border border-emerald-600 text-emerald-700 bg-emerald-50">
-                                Repaired
-                              </span>
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">Repaired</span>
                             ) : null}
-                          </span>
-                        </div>
-                        <p className="text-xs text-slate-700 mb-3 leading-relaxed">
-                          {[item.processor, item.generation ? `(${item.generation})` : null].filter(Boolean).join(' ')}
-                          {item.ram || item.storage ? (
-                            <>
-                              {' '}
-                              | {item.ram} | {item.storage}
-                            </>
-                          ) : null}
-                          <br />
-                          {[item.gpu, item.screen_size ? `${item.screen_size} display` : null].filter(Boolean).join(' | ')}
-                        </p>
-                        <div className="flex flex-wrap gap-2 text-xs">
-                          <span className="rounded-md bg-slate-800 text-white px-2.5 py-1 font-mono">{item.serial_number}</span>
-                          {item.unique_product_serial ? (
-                            <span className="rounded-md bg-slate-100 text-slate-800 px-2.5 py-1 font-mono border border-slate-200">
-                              {item.unique_product_serial}
-                            </span>
-                          ) : null}
-                        </div>
+                          </div>
+                        ) : null}
                       </div>
                     );
                   })}
@@ -393,6 +461,64 @@ export default function GeneratedGrnDetailPage() {
                 </div>
               )}
             </div>
+          </div>
+        </div>
+      ) : null}
+
+      {uploadModal.open ? (
+        <div className="fixed inset-0 z-[140] flex items-center justify-center p-4 bg-black/50" role="dialog" aria-modal="true">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 border border-gray-100">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <h3 className="font-bold text-gray-900">Upload Bill</h3>
+                <p className="text-xs text-gray-500 mt-1">{uploadModal.grnNumber}</p>
+              </div>
+              <button
+                type="button"
+                className="p-2 rounded-lg hover:bg-gray-100"
+                onClick={() => !uploadBusy && setUploadModal({ open: false, grnId: null, grnNumber: '' })}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={submitBillUpload} className="mt-4 space-y-3">
+              <div>
+                <label className="text-xs font-medium text-gray-600">Bill number *</label>
+                <input
+                  required
+                  className="mt-1 w-full h-9 px-3 border border-gray-200 rounded-lg text-sm"
+                  value={uploadBillName}
+                  onChange={(e) => setUploadBillName(e.target.value)}
+                  placeholder="Invoice / bill number"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-600">Bill file</label>
+                <input
+                  id="grn-bill-file-input"
+                  type="file"
+                  accept=".pdf,image/*"
+                  className="mt-1 w-full text-sm"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  disabled={uploadBusy}
+                  className="h-9 px-4 rounded-lg border border-gray-200 text-sm"
+                  onClick={() => setUploadModal({ open: false, grnId: null, grnNumber: '' })}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={uploadBusy}
+                  className="h-9 px-4 rounded-lg bg-blue-600 text-white text-sm font-medium disabled:opacity-50"
+                >
+                  {uploadBusy ? 'Uploading…' : 'Upload'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       ) : null}

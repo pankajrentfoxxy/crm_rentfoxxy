@@ -19,31 +19,34 @@ async function list(req, res) {
   const limit = req.query.limit || 50;
   const offset = (page - 1) * limit;
 
-  let where = `deleted_at IS NULL`;
+  let where = `b.deleted_at IS NULL`;
   const p = [];
   let i = 1;
   if (req.query.status) {
-    where += ` AND status = $${i}`;
+    where += ` AND b.status = $${i}`;
     p.push(req.query.status);
     i++;
   }
   if (req.query.vendor_id) {
-    where += ` AND vendor_id = $${i}`;
+    where += ` AND b.vendor_id = $${i}`;
     p.push(req.query.vendor_id);
     i++;
   }
   if (req.query.billing_year) {
-    where += ` AND billing_year = $${i}`;
+    where += ` AND b.billing_year = $${i}`;
     p.push(req.query.billing_year);
     i++;
   }
   if (req.query.billing_month) {
-    where += ` AND billing_month = $${i}`;
+    where += ` AND b.billing_month = $${i}`;
     p.push(req.query.billing_month);
     i++;
   }
 
-  const cnt = await pool.query(`SELECT COUNT(*)::int AS c FROM vendor_billing WHERE ${where}`, p);
+  const cnt = await pool.query(
+    `SELECT COUNT(*)::int AS c FROM vendor_billing b WHERE ${where}`,
+    p
+  );
   const total = cnt.rows[0].c;
   const data = await pool.query(
     `

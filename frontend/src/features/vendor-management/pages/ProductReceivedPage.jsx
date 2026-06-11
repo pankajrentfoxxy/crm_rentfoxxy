@@ -662,39 +662,65 @@ export default function ProductReceivedPage() {
                     />
                   </div>
                   <div>
-                    <p className="block text-xs font-semibold text-slate-600 mb-2">Bill status</p>
-                    <div className="flex flex-wrap gap-4 text-sm">
-                      <label className="inline-flex items-center gap-2 cursor-pointer">
+                    <p className="block text-sm font-semibold text-gray-800 mb-3">Bill status</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <label
+                        className={`flex items-start gap-3 p-4 rounded-xl border-2 cursor-pointer transition-colors ${
+                          billStatus === 'pending'
+                            ? 'border-amber-400 bg-amber-50'
+                            : 'border-gray-200 bg-white hover:border-gray-300'
+                        }`}
+                      >
                         <input
                           type="radio"
                           name="bill-status"
-                          checked={billStatus === 'received'}
-                          onChange={() => setBillStatus('received')}
-                        />
-                        Bill received
-                      </label>
-                      <label className="inline-flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="radio"
-                          name="bill-status"
+                          className="mt-1 w-4 h-4 text-amber-600"
                           checked={billStatus === 'pending'}
                           onChange={() => setBillStatus('pending')}
                         />
-                        Bill pending
+                        <div>
+                          <span className="block text-sm font-semibold text-gray-900">Bill Pending</span>
+                          <span className="block text-xs text-gray-600 mt-1 leading-relaxed">
+                            You can upload the bill later from the GRN detail page.
+                          </span>
+                        </div>
+                      </label>
+                      <label
+                        className={`flex items-start gap-3 p-4 rounded-xl border-2 cursor-pointer transition-colors ${
+                          billStatus === 'received'
+                            ? 'border-green-400 bg-green-50'
+                            : 'border-gray-200 bg-white hover:border-gray-300'
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="bill-status"
+                          className="mt-1 w-4 h-4 text-green-600"
+                          checked={billStatus === 'received'}
+                          onChange={() => setBillStatus('received')}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <span className="block text-sm font-semibold text-gray-900">Bill Received</span>
+                          <span className="block text-xs text-gray-600 mt-1">Enter bill number and attach file now.</span>
+                        </div>
                       </label>
                     </div>
                     {billStatus === 'received' ? (
-                      <input
-                        className="mt-2 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
-                        placeholder="Vendor bill / invoice number"
-                        value={billName}
-                        onChange={(e) => setBillName(e.target.value)}
-                      />
-                    ) : (
-                      <p className="text-[11px] text-amber-700 mt-2 font-medium">
-                        BILL PENDING badge will show on this GRN until a bill is uploaded later.
-                      </p>
-                    )}
+                      <div className="mt-3 space-y-2 rounded-xl border border-green-100 bg-green-50/50 p-3">
+                        <input
+                          className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm bg-white"
+                          placeholder="Vendor bill / invoice number *"
+                          value={billName}
+                          onChange={(e) => setBillName(e.target.value)}
+                        />
+                        <input
+                          type="file"
+                          accept=".pdf,image/*"
+                          className="w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-white file:text-sm file:font-medium"
+                        />
+                        <p className="text-[11px] text-gray-500">Optional file — bill number is required.</p>
+                      </div>
+                    ) : null}
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1.5" htmlFor="receive-qty">
