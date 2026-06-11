@@ -5,6 +5,7 @@ import ProtectedRoute from '../router/ProtectedRoute';
 import DeliveryRegisterListPage from '../pages/delivery-register-management/DeliveryRegisterListPage';
 import DeliveryTechniciansPage from '../pages/delivery-register-management/DeliveryTechniciansPage';
 import DeliveryTechnicianFormPage from '../pages/delivery-register-management/DeliveryTechnicianFormPage';
+import TechniciansBucketListPage from '../pages/delivery-register-management/TechniciansBucketListPage';
 
 const withLayout = (node) => <Layout>{node}</Layout>;
 
@@ -33,5 +34,9 @@ export const deliveryRegisterManagementRoutes = [
   {
     path: '/delivery-register-management/technicians/:id/edit',
     element: guard('delivery_register_management', withLayout(<DeliveryTechnicianFormPage />), 'edit'),
+  },
+  {
+    path: '/delivery-register-management/bucket-list',
+    element: guard('technicians_bucket_list', withLayout(<TechniciansBucketListPage />)),
   },
 ];

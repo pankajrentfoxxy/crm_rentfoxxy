@@ -285,10 +285,15 @@ export default function ProductReceivedPage() {
       const { data } = await receivePoLineBulk(poId, body);
       if (data.success) {
         const created = data.data?.created || [];
+        const tickets = (data.data?.tickets || []).filter((t) => t?.ok);
         const example = created[0]?.inventory_asset_code;
+        const ticketNote =
+          tickets.length > 0
+            ? ` ${tickets.length} repair ticket(s) created for Floor Manager.`
+            : '';
         toast.success(
-          data.message ||
-            (example ? `Received ${created.length} unit(s). Codes include ${example}…` : 'Units received')
+          (data.message ||
+            (example ? `Received ${created.length} unit(s). Codes include ${example}…` : 'Units received')) + ticketNote
         );
         resetReceiveWizardUi();
         invalidateQcCounts();

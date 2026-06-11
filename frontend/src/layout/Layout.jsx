@@ -66,6 +66,7 @@ import {
   isMenuItemVisible,
   isSettingsChildVisible,
   isOperationChildVisible,
+  isDeliveryRegisterChildVisible,
 } from '../config/menuConfig';
 
 
@@ -91,7 +92,8 @@ export default function Layout({ children }) {
     canView('delivery_challans') ||
     canView('return_dc');
 
-  const showDeliveryRegisterAccordion = canView('delivery_register_management');
+  const showDeliveryRegisterAccordion =
+    canView('delivery_register_management') || canView('technicians_bucket_list');
 
   const { counts: operationCounts } = useOperationCounts(showOperationAccordion);
 
@@ -582,7 +584,7 @@ export default function Layout({ children }) {
                   </button>
                   {deliveryRegisterAccordionOpen && (
                     <div className="mt-1 ml-2 pl-3 border-l border-teal-100 space-y-0.5">
-                      {deliveryRegisterAccordionChildren.map((child) => {
+                      {deliveryRegisterAccordionChildren.filter((child) => isDeliveryRegisterChildVisible(child, canView)).map((child) => {
                         const badge =
                           child.countKey && deliveryRegisterCounts && deliveryRegisterCounts[child.countKey] != null
                             ? deliveryRegisterCounts[child.countKey]

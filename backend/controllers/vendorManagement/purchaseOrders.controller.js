@@ -13,6 +13,7 @@ const {
   lineSubtotalFromRows,
   insertProductDetailsForPo
 } = require('../../services/purchaseOrderProductDetailsService');
+const { createTicketFromGrnReceive } = require('../../services/grnTicketService');
 
 /** Normalize JSONB/array/string line_items → array */
 function parseLineItemsJson(raw) {
@@ -388,13 +389,35 @@ async function receiveProductSerial(req, res) {
 
   await syncPoReceiveProgressStatus(poId, req.user?.user_id);
 
+  let ticketResult = null;
+  try {
+    const serialRow = await pool.query(
+      `SELECT serial_id, serial_number, inventory_asset_code FROM vendor_serial_numbers WHERE serial_id = $1`,
+      [serialId]
+    );
+    const row = serialRow.rows[0];
+    if (row) {
+      ticketResult = await createTicketFromGrnReceive(pool, {
+        serialId: row.serial_id,
+        serialNumber: row.serial_number,
+        inventoryAssetCode: row.inventory_asset_code,
+        po,
+        line,
+        actorUserId: req.user?.user_id
+      });
+    }
+  } catch (ticketErr) {
+    console.error('GRN ticket creation failed (single receive):', ticketErr);
+    ticketResult = { ok: false, error: ticketErr.message };
+  }
+
   const qtyMaps2 = await buildReceivedQtyMapsForPoIds([poId]);
   const lines2 = enrichLineItemsWithReceived(parseLineItemsJson(po.line_items), qtyMaps2.get(poId));
 
   res.status(201).json({
     success: true,
     message: 'Serial recorded against this PO line.',
-    data: { grn_id: finalGrnId, serial_id: serialId, lines: lines2 }
+    data: { grn_id: finalGrnId, serial_id: serialId, lines: lines2, ticket: ticketResult }
   });
 }
 
@@ -586,17 +609,40 @@ async function receivePoLineBulk(req, res) {
 
   await syncPoReceiveProgressStatus(poId, req.user?.user_id);
 
+  const ticketResults = [];
+  for (const row of createdRows) {
+    try {
+      const tr = await createTicketFromGrnReceive(pool, {
+        serialId: row.serial_id,
+        serialNumber: row.serial_number,
+        inventoryAssetCode: row.inventory_asset_code,
+        po,
+        line,
+        actorUserId: req.user?.user_id
+      });
+      ticketResults.push(tr);
+    } catch (ticketErr) {
+      console.error('GRN ticket creation failed (bulk receive):', row.serial_number, ticketErr);
+      ticketResults.push({ ok: false, serial_number: row.serial_number, error: ticketErr.message });
+    }
+  }
+
   const qtyMapsAfter = await buildReceivedQtyMapsForPoIds([poId]);
   const linesAfter = enrichLineItemsWithReceived(parseLineItemsJson(po.line_items), qtyMapsAfter.get(poId));
 
+  const ticketsCreated = ticketResults.filter((t) => t.ok).length;
   res.status(201).json({
     success: true,
-    message: `${quantity} unit(s) received with asset codes.`,
+    message:
+      ticketsCreated > 0
+        ? `${quantity} unit(s) received with asset codes. ${ticketsCreated} repair ticket(s) created for Floor Manager.`
+        : `${quantity} unit(s) received with asset codes.`,
     data: {
       grn_id: finalGrnId,
       rental_start_date,
       created: createdRows,
-      lines: linesAfter
+      lines: linesAfter,
+      tickets: ticketResults
     }
   });
 }

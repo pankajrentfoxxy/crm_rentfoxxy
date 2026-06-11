@@ -65,6 +65,7 @@ app.use('/api/sales', require('./routes/sales'));
 app.use('/api/sales-management', require('./routes/salesManagement'));
 app.use('/api/delivery-register-management', require('./routes/deliveryRegisterManagement'));
 app.use('/api/technician-auth', require('./routes/technicianAuth'));
+app.use('/api/technicians-bucket-list', require('./routes/techniciansBucketList'));
 app.use('/api/customer-management', require('./routes/customerManagement'));
 app.use('/api/procurement', require('./routes/procurement'));
 app.use('/api/warehouse', require('./routes/warehouse'));

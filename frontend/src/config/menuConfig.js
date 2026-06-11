@@ -53,10 +53,11 @@ export const inventoryAccordionChildren = [
 ];
 
 export const deliveryRegisterAccordionChildren = [
-  { label: 'In Transit', path: '/delivery-register-management/in-transit', countKey: 'in_transit' },
-  { label: 'Delivered', path: '/delivery-register-management/delivered', countKey: 'delivered' },
-  { label: 'Rejected', path: '/delivery-register-management/rejected', countKey: 'rejected' },
-  { label: 'Technician List', path: '/delivery-register-management/technicians', countKey: 'technicians' },
+  { label: 'In Transit', path: '/delivery-register-management/in-transit', countKey: 'in_transit', section: 'delivery_register_management' },
+  { label: 'Delivered', path: '/delivery-register-management/delivered', countKey: 'delivered', section: 'delivery_register_management' },
+  { label: 'Rejected', path: '/delivery-register-management/rejected', countKey: 'rejected', section: 'delivery_register_management' },
+  { label: 'Technician List', path: '/delivery-register-management/technicians', countKey: 'technicians', section: 'delivery_register_management' },
+  { label: 'Technician Bucket List', path: '/delivery-register-management/bucket-list', section: 'technicians_bucket_list' },
 ];
 
 export const operationAccordionChildren = [
@@ -123,7 +124,7 @@ export const MENU_GROUPS = [
     items: [
       {
         type: 'deliveryRegisterAccordion',
-        section: 'delivery_register_management',
+        sections: ['delivery_register_management', 'technicians_bucket_list'],
         icon: ClipboardCheck,
         label: 'Delivery Register Manager',
       },
@@ -181,11 +182,14 @@ export function isMenuItemVisible(item, canView) {
     return (item.sections || []).some((section) => canView(section));
   }
 
+  if (item.type === 'deliveryRegisterAccordion') {
+    return (item.sections || []).some((section) => canView(section));
+  }
+
   if (
     item.type === 'vendorAccordion'
     || item.type === 'qcAccordion'
     || item.type === 'inventoryAccordion'
-    || item.type === 'deliveryRegisterAccordion'
   ) {
     return item.section ? canView(item.section) : false;
   }
@@ -200,6 +204,11 @@ export function isOperationChildVisible(child, canView) {
 }
 
 export function isSettingsChildVisible(child, canView) {
+  if (child.section) return canView(child.section);
+  return true;
+}
+
+export function isDeliveryRegisterChildVisible(child, canView) {
   if (child.section) return canView(child.section);
   return true;
 }

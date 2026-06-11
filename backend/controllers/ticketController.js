@@ -5,6 +5,7 @@ const {
   syncWorkLogForTicketState,
   closeOpenWorkLogsForTickets
 } = require('../services/ticketWorkLogService');
+const { applyGrnVendorQcPassOnTicketComplete } = require('../services/grnTicketService');
 
 // Create Ticket
 exports.createTicket = async (req, res) => {
@@ -527,6 +528,17 @@ exports.moveToNextStage = async (req, res) => {
              WHERE serial_number = $1`,
         [ticket.serial_number]
       );
+
+      if (ticket.vendor_serial_id) {
+        try {
+          const qcPass = await applyGrnVendorQcPassOnTicketComplete(pool, ticket, req.user.user_id);
+          if (qcPass.applied) {
+            successMessage = 'Ticket completed — laptop marked QC Passed';
+          }
+        } catch (grnQcErr) {
+          console.error('GRN vendor QC pass on ticket complete failed:', grnQcErr);
+        }
+      }
     }
 
     // Final Testing -> QC1: always round-robin among QC1 team members (not the Final Testing assignee).

@@ -5,6 +5,7 @@ const {
     recordAssigneeForTeam
 } = require('../services/qcRoundRobinService');
 const { syncWorkLogForTicketState } = require('../services/ticketWorkLogService');
+const { applyGrnVendorQcPassOnTicketComplete } = require('../services/grnTicketService');
 
 // QC Checklist Configuration
 const QC_CHECKLIST_STRUCTURE = {
@@ -257,7 +258,7 @@ exports.submitQC = async (req, res) => {
         await client.query('BEGIN');
 
         const ticketMetaRes = await client.query(
-            `SELECT serial_number, machine_number FROM tickets WHERE ticket_id = $1`,
+            `SELECT serial_number, machine_number, vendor_serial_id FROM tickets WHERE ticket_id = $1`,
             [id]
         );
         const ticketMeta = ticketMetaRes.rows[0] || {};
@@ -403,6 +404,13 @@ exports.submitQC = async (req, res) => {
                      WHERE serial_number = $1 OR machine_number = $2`,
                     [serialNumber, machineNumber]
                 );
+                if (ticketMeta.vendor_serial_id) {
+                    try {
+                        await applyGrnVendorQcPassOnTicketComplete(client, ticketMeta, userId);
+                    } catch (grnQcErr) {
+                        console.error('GRN vendor QC pass on QC completion failed:', grnQcErr);
+                    }
+                }
             } else if (serialNumber || machineNumber) {
                 await client.query(
                     `UPDATE inventory SET stage = $1 WHERE serial_number = $2 OR machine_number = $3`,
