@@ -32,8 +32,12 @@ export default function SupportPage() {
   const [busy, setBusy] = useState(false);
 
   const load = () => {
-    api.get('/laptops').then(({ data }) => setLaptops(data.laptops || []));
-    api.get('/tickets').then(({ data }) => setTickets(data.tickets || []));
+    api.get('/laptops')
+      .then(({ data }) => setLaptops(data.laptops || []))
+      .catch(() => setLaptops([]));
+    api.get('/tickets')
+      .then(({ data }) => setTickets(data.tickets || []))
+      .catch(() => setTickets([]));
   };
 
   useEffect(() => { load(); }, []);

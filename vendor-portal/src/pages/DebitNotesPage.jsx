@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { format } from 'date-fns';
+import toast from 'react-hot-toast';
 import api from '../utils/api';
 
 function inr(n) {
@@ -25,6 +26,15 @@ export default function DebitNotesPage() {
       .get('/vendor-portal/debit-notes')
       .then(({ data }) => {
         if (data.success) setRows(data.data || []);
+        else toast.error(data.message || 'Failed to load debit notes');
+      })
+      .catch((err) => {
+        const msg = err.response?.data?.message
+          || (err.message === 'Network Error'
+            ? 'Cannot reach the API server. Ensure the backend is running on port 5001.'
+            : err.message);
+        toast.error(msg);
+        setRows([]);
       })
       .finally(() => setLoading(false));
   }, []);

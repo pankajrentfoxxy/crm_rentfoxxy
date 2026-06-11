@@ -556,20 +556,25 @@ async function getBillDetail(req, res) {
 }
 
 async function listVendorDebitNotes(req, res) {
-  const vendorId = req.vendor.vendor_id;
-  const dataR = await pool.query(
-    `SELECT dn.debit_note_id, dn.debit_note_number, dn.po_id, dn.reason, dn.description,
-            dn.amount, dn.status, dn.created_at, dn.adjusted_in_bill_id,
-            p.po_number, mb.bill_number AS applied_bill_number
-     FROM vendor_debit_notes dn
-     LEFT JOIN vendor_purchase_orders p ON p.po_id = dn.po_id
-     LEFT JOIN vendor_monthly_bills mb ON mb.bill_id = dn.adjusted_in_bill_id
-     WHERE dn.vendor_id = $1
-     ORDER BY dn.created_at DESC`,
-    [vendorId]
-  );
+  try {
+    const vendorId = req.vendor.vendor_id;
+    const dataR = await pool.query(
+      `SELECT dn.debit_note_id, dn.debit_note_number, dn.po_id, dn.reason, dn.description,
+              dn.amount, dn.status, dn.created_at, dn.adjusted_in_bill_id,
+              p.purchase_order_number AS po_number, mb.bill_number AS applied_bill_number
+       FROM vendor_debit_notes dn
+       LEFT JOIN vendor_purchase_orders p ON p.po_id = dn.po_id
+       LEFT JOIN vendor_monthly_bills mb ON mb.bill_id = dn.adjusted_in_bill_id
+       WHERE dn.vendor_id = $1
+       ORDER BY dn.created_at DESC`,
+      [vendorId]
+    );
 
-  res.json({ success: true, data: dataR.rows });
+    res.json({ success: true, data: dataR.rows });
+  } catch (err) {
+    console.error('listVendorDebitNotes:', err);
+    res.status(500).json({ success: false, message: err.message || 'Failed to load debit notes' });
+  }
 }
 
 const listReturnsValidators = [

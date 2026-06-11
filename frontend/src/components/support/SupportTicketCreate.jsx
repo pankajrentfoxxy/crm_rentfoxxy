@@ -165,8 +165,8 @@ export default function SupportTicketCreate() {
     const [blocked, setBlocked] = useState({});
 
     useEffect(() => {
-        api.get('/support/categories').then((r) => setCategories(r.data.categories || []));
-        api.get('/support/technicians').then((r) => setTechnicians(r.data.technicians || []));
+        api.get('/support/categories').then((r) => setCategories(r.data.categories || [])).catch(() => setCategories([]));
+        api.get('/support/technicians').then((r) => setTechnicians(r.data.technicians || [])).catch(() => setTechnicians([]));
     }, []);
 
     useEffect(() => {

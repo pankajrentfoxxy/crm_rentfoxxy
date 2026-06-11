@@ -13,7 +13,10 @@ export default function LaptopsPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.get('/laptops').then(({ data }) => setLaptops(data.laptops || [])).finally(() => setLoading(false));
+    api.get('/laptops')
+      .then(({ data }) => setLaptops(data.laptops || []))
+      .catch(() => setLaptops([]))
+      .finally(() => setLoading(false));
   }, []);
 
   return (

@@ -19,17 +19,17 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([
+    Promise.allSettled([
       api.get('/laptops'),
       api.get('/invoices'),
       api.get('/tickets'),
       api.get('/deliveries'),
     ])
       .then(([lap, inv, tix, del]) => {
-        setLaptops(lap.data?.laptops || []);
-        setInvoices(inv.data?.invoices || []);
-        setTickets(tix.data?.tickets || []);
-        setDeliveries(del.data?.deliveries || []);
+        if (lap.status === 'fulfilled') setLaptops(lap.value.data?.laptops || []);
+        if (inv.status === 'fulfilled') setInvoices(inv.value.data?.invoices || []);
+        if (tix.status === 'fulfilled') setTickets(tix.value.data?.tickets || []);
+        if (del.status === 'fulfilled') setDeliveries(del.value.data?.deliveries || []);
       })
       .finally(() => setLoading(false));
   }, []);

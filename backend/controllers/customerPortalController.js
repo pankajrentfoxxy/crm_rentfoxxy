@@ -108,7 +108,8 @@ exports.me = async (req, res) => {
     const result = await pool.query(
       `SELECT customer_id, name, company_name, email, phone, gst_no AS gst_number,
               billing_address, billing_city, billing_state, billing_pincode,
-              kyc_verified, portal_last_login, whatsapp_number, pan_card_number AS pan_number
+              shipping_same, shipping_address, shipping_city, shipping_state, shipping_pincode,
+              kyc_verified, portal_last_login, whatsapp_number, pan_number
        FROM customers WHERE customer_id = $1`,
       [req.customer.customer_id]
     );
@@ -124,44 +125,67 @@ exports.me = async (req, res) => {
 exports.listLaptops = async (req, res) => {
   try {
     const customerId = req.customer.customer_id;
-    const result = await pool.query(
-      `SELECT DISTINCT ON (dcl.id)
-         vsn.ttspl_id,
-         dcl.brand,
-         dcl.model_name AS model,
-         dcl.serial_number,
-         dcl.dc_number,
-         dcl.delivered_at AS dispatch_date,
-         dcl.status,
-         sol.rate AS monthly_rate,
-         sol.processor,
-         sol.ram,
-         sol.storage,
-         sol.generation
-       FROM delivery_challan_lines dcl
-       LEFT JOIN sales_order_lines sol
-         ON sol.sales_order_number = dcl.sales_order_number AND sol.brand = dcl.brand
-       LEFT JOIN vendor_serial_numbers vsn
-         ON vsn.serial_number = (dcl.serial_number::jsonb->>0)
-         OR vsn.ttspl_id = (dcl.serial_number::jsonb->>0)
-       WHERE dcl.customer_id = $1 AND dcl.status = 'delivered'
-       ORDER BY dcl.id, dcl.delivered_at DESC`,
-      [customerId]
-    );
+    let rows = [];
+    try {
+      const inv = await pool.query(
+        `SELECT COALESCE(unique_serial_number, serial_number) AS ttspl_id,
+                model_name AS model, processor, generation, ram, storage,
+                asset_kind AS status, COALESCE(delivery_date, created_at) AS dispatch_date,
+                dc_number
+         FROM customer_inventory
+         WHERE customer_id = $1
+         ORDER BY id DESC`,
+        [customerId]
+      );
+      rows = inv.rows;
+    } catch (invErr) {
+      console.warn('customerPortal listLaptops inventory:', invErr.message);
+    }
 
-    const laptops = result.rows.map((row) => ({
+    if (!rows.length) {
+      const dc = await pool.query(
+        `SELECT DISTINCT ON (dcl.id)
+           COALESCE(vsn.inventory_asset_code, dcl.serial_number::text) AS ttspl_id,
+           dcl.brand,
+           dcl.model_name AS model,
+           dcl.dc_number,
+           COALESCE(dcl.delivered_at, dcl.created_at) AS dispatch_date,
+           dcl.status,
+           sol.rate AS monthly_rate,
+           sol.processor,
+           sol.ram,
+           sol.storage,
+           sol.generation
+         FROM delivery_challan_lines dcl
+         LEFT JOIN sales_order_lines sol
+           ON sol.sales_order_number = dcl.sales_order_number AND sol.brand = dcl.brand
+         LEFT JOIN vendor_serial_numbers vsn
+           ON vsn.deleted_at IS NULL
+           AND (
+             vsn.inventory_asset_code = (dcl.serial_number::jsonb->>0)
+             OR vsn.serial_number = (dcl.serial_number::jsonb->>0)
+           )
+         WHERE dcl.customer_id = $1 AND dcl.status = 'delivered'
+         ORDER BY dcl.id, dcl.created_at DESC`,
+        [customerId]
+      );
+      rows = dc.rows;
+    }
+
+    const laptops = rows.map((row) => ({
       ttspl_id: row.ttspl_id || null,
-      brand: row.brand,
+      brand: row.brand || null,
       model: row.model,
       config: [row.processor, row.generation, row.ram, row.storage].filter(Boolean).join(' | '),
       dispatch_date: row.dispatch_date,
       monthly_rate: parseFloat(row.monthly_rate || 0),
-      dc_number: row.dc_number,
-      status: row.status,
+      dc_number: row.dc_number || null,
+      status: row.status || 'active',
     }));
 
     res.json({ success: true, laptops });
   } catch (err) {
+    console.error('customerPortal listLaptops:', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -314,8 +338,8 @@ exports.raiseTicket = async (req, res) => {
     if (ttspl_id) {
       const dcRes = await client.query(
         `SELECT dc_number FROM delivery_challan_lines dcl
-         LEFT JOIN vendor_serial_numbers vsn
-           ON vsn.ttspl_id = $2 OR vsn.serial_number = $2
+         LEFT JOIN vendor_serial_numbers vsn ON vsn.deleted_at IS NULL
+           AND (vsn.inventory_asset_code = $2 OR vsn.serial_number = $2)
          WHERE dcl.customer_id = $1
          LIMIT 1`,
         [customerId, ttspl_id]
@@ -379,21 +403,41 @@ exports.raiseTicket = async (req, res) => {
 
 exports.listTickets = async (req, res) => {
   try {
-    const result = await pool.query(
-      `SELECT id AS ticket_id,
-              SPLIT_PART(top_level_remarks, E'\n', 1) AS subject,
-              ticket_category AS type,
-              status,
-              created_at,
-              updated_at,
-              ttspl_id
-       FROM support_tickets
-       WHERE portal_customer_id = $1 OR (customer_id = $1 AND customer_portal_ticket = TRUE)
-       ORDER BY created_at DESC`,
-      [req.customer.customer_id]
-    );
+    const customerId = req.customer.customer_id;
+    let result;
+    try {
+      result = await pool.query(
+        `SELECT id AS ticket_id,
+                SPLIT_PART(COALESCE(top_level_remarks, ''), E'\n', 1) AS subject,
+                ticket_category AS type,
+                status,
+                created_at,
+                updated_at,
+                ttspl_id
+         FROM support_tickets
+         WHERE portal_customer_id = $1
+            OR (customer_id = $1 AND COALESCE(customer_portal_ticket, FALSE) = TRUE)
+         ORDER BY created_at DESC`,
+        [customerId]
+      );
+    } catch (colErr) {
+      if (!String(colErr.message || '').includes('does not exist')) throw colErr;
+      result = await pool.query(
+        `SELECT id AS ticket_id,
+                SPLIT_PART(COALESCE(top_level_remarks, ''), E'\n', 1) AS subject,
+                ticket_category AS type,
+                status,
+                created_at,
+                updated_at
+         FROM support_tickets
+         WHERE customer_id = $1
+         ORDER BY created_at DESC`,
+        [customerId]
+      );
+    }
     res.json({ success: true, tickets: result.rows });
   } catch (err) {
+    console.error('customerPortal listTickets:', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };

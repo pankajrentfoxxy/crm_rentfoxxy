@@ -23,18 +23,20 @@ export function AuthProvider({ children }) {
     api
       .get('/me')
       .then(({ data }) => {
-        if (data.success !== false) {
+        if (data.success !== false && data.customer_id) {
           const profile = { ...data, customer_id: data.customer_id };
           setCustomer(profile);
           localStorage.setItem('cp_customer', JSON.stringify(profile));
         } else {
           localStorage.removeItem('cp_token');
           localStorage.removeItem('cp_customer');
+          setCustomer(null);
         }
       })
       .catch(() => {
         localStorage.removeItem('cp_token');
         localStorage.removeItem('cp_customer');
+        setCustomer(null);
       })
       .finally(() => setLoading(false));
   }, []);
