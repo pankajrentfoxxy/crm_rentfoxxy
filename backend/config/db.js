@@ -15,7 +15,6 @@ const pool = new Pool({
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   ssl: useSsl ? { rejectUnauthorized: false } : false,
-  // Pooler-specific settings
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000,

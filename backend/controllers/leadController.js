@@ -6,7 +6,7 @@ const pool = require('../config/db');
 const { ensureResearch } = require('../services/leadResearchService');
 const { getNextAutoAssignee, updateAutoAssignConfig } = require('../services/leadAutoAssignService');
 
-const { STATUSES_WITHOUT_STAGE_CHOICE, stagesForStatus } = require('../constants/leadStages');
+const { STATUSES_WITHOUT_STAGE_CHOICE, STAGES_BY_STATUS, stagesForStatus } = require('../constants/leadStages');
 
 async function ensureLeadQuotationColumns() {
   await pool.query(`
@@ -74,6 +74,9 @@ function buildPrismaWhereForLeads(req) {
     andConditions.push({ assignedUserId: req.user.user_id });
   } else if (assigned_to) {
     const parts = normalizeArrayField(assigned_to);
+    if (parts.some((p) => String(p).toLowerCase() === 'me')) {
+      andConditions.push({ assignedUserId: req.user.user_id });
+    } else {
     const hasUnassigned = parts.some((p) => String(p).toLowerCase() === 'unassigned');
     const userIds = parts
       .filter((p) => String(p).toLowerCase() !== 'unassigned')
@@ -87,6 +90,7 @@ function buildPrismaWhereForLeads(req) {
       andConditions.push({ assignedUserId: userIds[0] });
     } else if (userIds.length > 1) {
       andConditions.push({ assignedUserId: { in: userIds } });
+    }
     }
   }
 
@@ -189,7 +193,8 @@ const formatHeadOfficeAddress = (research) => {
 
 const ensureCustomerFromLead = async (leadId) => {
   const leadRes = await pool.query(
-    `SELECT l.lead_id, l.name, l.brand, l.company_name, l.email, l.phone, r.gst, r.address, r.city, r.state, r.pincode
+    `SELECT l.lead_id, l.name, l.brand, l.company_name, l.email, l.phone,
+            COALESCE(r.gst, l.gst_number) AS gst, r.address, r.city, r.state, r.pincode
      FROM leads l
      LEFT JOIN lead_company_research r ON r.lead_id = l.lead_id
      WHERE l.lead_id = $1`,
@@ -199,56 +204,83 @@ const ensureCustomerFromLead = async (leadId) => {
   const lead = leadRes.rows[0];
   const headOffice = formatHeadOfficeAddress(lead) || null;
 
-  const customerUpsert = await pool.query(
-    `INSERT INTO customers (name, company_name, source_lead_id, email, phone, gst_no, address, type, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 'Lead', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-     ON CONFLICT (source_lead_id)
-     DO UPDATE SET
-       name = EXCLUDED.name,
-       company_name = EXCLUDED.company_name,
-       email = EXCLUDED.email,
-       phone = EXCLUDED.phone,
-       gst_no = EXCLUDED.gst_no,
-       address = EXCLUDED.address,
-       updated_at = CURRENT_TIMESTAMP
-     RETURNING customer_id`,
-    [
-      lead.name || lead.company_name || 'Lead Customer',
-      lead.company_name || null,
-      lead.lead_id,
-      lead.email || null,
-      lead.phone || null,
-      lead.gst || null,
-      headOffice
-    ]
+  const existingCustomer = await pool.query(
+    'SELECT customer_id FROM customers WHERE source_lead_id = $1 LIMIT 1',
+    [lead.lead_id]
   );
-  const customerId = customerUpsert.rows[0].customer_id;
 
-  if (headOffice) {
+  let customerId;
+  if (existingCustomer.rows.length) {
+    customerId = existingCustomer.rows[0].customer_id;
     await pool.query(
-      `INSERT INTO customer_addresses (customer_id, concern_person, mobile_no, address, pincode, is_head_office, address_type, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, true, 'Billing', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-       ON CONFLICT (customer_id, is_head_office)
-       WHERE is_head_office = true
-       DO UPDATE SET
-         concern_person = EXCLUDED.concern_person,
-         mobile_no = EXCLUDED.mobile_no,
-         address = EXCLUDED.address,
-         pincode = EXCLUDED.pincode,
-         address_type = EXCLUDED.address_type,
-         updated_at = CURRENT_TIMESTAMP`,
-      [customerId, lead.name || null, lead.phone || null, headOffice, lead.pincode || null]
+      `UPDATE customers SET
+         name = $1, company_name = $2, email = $3, phone = $4, gst_no = $5, address = $6, updated_at = CURRENT_TIMESTAMP
+       WHERE customer_id = $7`,
+      [
+        lead.name || lead.company_name || 'Lead Customer',
+        lead.company_name || null,
+        lead.email || null,
+        lead.phone || null,
+        lead.gst || null,
+        headOffice,
+        customerId,
+      ]
     );
+  } else {
+    const inserted = await pool.query(
+      `INSERT INTO customers (name, company_name, source_lead_id, email, phone, gst_no, address, type, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'Lead', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       RETURNING customer_id`,
+      [
+        lead.name || lead.company_name || 'Lead Customer',
+        lead.company_name || null,
+        lead.lead_id,
+        lead.email || null,
+        lead.phone || null,
+        lead.gst || null,
+        headOffice,
+      ]
+    );
+    customerId = inserted.rows[0].customer_id;
   }
 
-  await pool.query(
-    `INSERT INTO customer_addresses (customer_id, concern_person, mobile_no, address, pincode, is_head_office, address_type, source_lead_address_id, created_at, updated_at)
-     SELECT $1, la.concern_person, la.mobile_no, la.address, la.pincode, false, COALESCE(la.address_type, 'Shipping'), la.address_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-     FROM lead_addresses la
-     WHERE la.lead_id = $2
-     ON CONFLICT (source_lead_address_id) DO NOTHING`,
-    [customerId, leadId]
-  );
+  if (headOffice) {
+    const billingAddr = await pool.query(
+      `SELECT customer_address_id FROM customer_addresses
+       WHERE customer_id = $1 AND is_head_office = true LIMIT 1`,
+      [customerId]
+    );
+    if (billingAddr.rows.length) {
+      await pool.query(
+        `UPDATE customer_addresses SET
+           concern_person = $1, mobile_no = $2, address = $3, pincode = $4,
+           address_type = 'Billing', updated_at = CURRENT_TIMESTAMP
+         WHERE customer_address_id = $5`,
+        [lead.name || null, lead.phone || null, headOffice, lead.pincode || null, billingAddr.rows[0].customer_address_id]
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO customer_addresses (customer_id, concern_person, mobile_no, address, pincode, is_head_office, address_type, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, true, 'Billing', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [customerId, lead.name || null, lead.phone || null, headOffice, lead.pincode || null]
+      );
+    }
+  }
+
+  try {
+    await pool.query(
+      `INSERT INTO customer_addresses (customer_id, concern_person, mobile_no, address, pincode, is_head_office, address_type, source_lead_address_id, created_at, updated_at)
+       SELECT $1, la.concern_person, la.mobile_no, la.address, la.pincode, false, COALESCE(la.address_type, 'Shipping'), la.address_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+       FROM lead_addresses la
+       WHERE la.lead_id = $2
+         AND NOT EXISTS (
+           SELECT 1 FROM customer_addresses ca WHERE ca.source_lead_address_id = la.address_id
+         )`,
+      [customerId, leadId]
+    );
+  } catch (addrErr) {
+    if (addrErr.code !== '42703') throw addrErr;
+  }
 
   return customerId;
 };
@@ -280,11 +312,89 @@ const normalizeArrayField = (value) => {
     .filter(Boolean);
 };
 
+async function enrichLeadsPhase3(leads) {
+  if (!leads?.length) return leads;
+  const ids = leads.map((l) => l.leadId);
+  const { rows } = await pool.query(
+    `SELECT lead_id, whatsapp_number, designation, quantity_required, monthly_budget,
+            rental_duration, use_case, company_type, company_size, industry, annual_revenue,
+            pan_number, gst_number, state, pincode, billing_address, shipping_same_as_billing,
+            shipping_address, follow_up_time, converted_at, converted_by, customer_id,
+            inquiry_type, last_activity_at
+     FROM leads WHERE lead_id = ANY($1::int[])`,
+    [ids]
+  );
+  const map = new Map(rows.map((r) => [r.lead_id, r]));
+  return leads.map((lead) => {
+    const ex = map.get(lead.leadId);
+    if (!ex) return lead;
+    return {
+      ...lead,
+      whatsappNumber: ex.whatsapp_number,
+      designation: ex.designation,
+      quantityRequired: ex.quantity_required,
+      monthlyBudget: ex.monthly_budget,
+      rentalDuration: ex.rental_duration,
+      useCase: ex.use_case,
+      companyType: ex.company_type,
+      companySize: ex.company_size,
+      industry: ex.industry,
+      annualRevenue: ex.annual_revenue,
+      panNumber: ex.pan_number,
+      gstNumber: ex.gst_number,
+      state: ex.state,
+      pincode: ex.pincode,
+      billingAddress: ex.billing_address,
+      shippingSameAsBilling: ex.shipping_same_as_billing,
+      shippingAddress: ex.shipping_address,
+      followUpTime: ex.follow_up_time,
+      convertedAt: ex.converted_at,
+      convertedBy: ex.converted_by,
+      customerId: ex.customer_id,
+      inquiryType: ex.inquiry_type,
+      lastActivityAt: ex.last_activity_at
+    };
+  });
+}
+
+function applyLeadListFilters(leads, req) {
+  let out = leads;
+  const { inquiry_type, follow_up } = req.query;
+  if (inquiry_type) {
+    const types = normalizeArrayField(inquiry_type);
+    out = out.filter((l) => types.includes(l.inquiryType || 'rental'));
+  }
+  if (follow_up) {
+    const now = new Date();
+    const startOfDay = new Date(now);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(now);
+    endOfDay.setHours(23, 59, 59, 999);
+    const filter = String(follow_up).toLowerCase();
+    out = out.filter((l) => {
+      if (!l.followUpDate) return false;
+      const fd = new Date(l.followUpDate);
+      if (filter === 'today') return fd >= startOfDay && fd <= endOfDay;
+      if (filter === 'overdue') return fd < startOfDay;
+      if (filter === 'this_week') {
+        const startOfWeek = new Date(startOfDay);
+        startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
+        const endOfWeek = new Date(startOfWeek);
+        endOfWeek.setDate(endOfWeek.getDate() + 6);
+        endOfWeek.setHours(23, 59, 59, 999);
+        return fd >= startOfWeek && fd <= endOfWeek;
+      }
+      return true;
+    });
+  }
+  return out;
+}
+
 exports.getLeads = async (req, res) => {
   try {
     const where = buildPrismaWhereForLeads(req);
 
-    const leads = await prisma.lead.findMany({
+    let leads = await prisma.lead.findMany({
       where,
       orderBy: { createdAt: 'desc' },
       include: {
@@ -292,6 +402,9 @@ exports.getLeads = async (req, res) => {
         research: true
       }
     });
+
+    leads = await enrichLeadsPhase3(leads);
+    leads = applyLeadListFilters(leads, req);
 
     res.json({ success: true, count: leads.length, leads });
   } catch (error) {
@@ -465,6 +578,9 @@ exports.getLeadById = async (req, res) => {
       lead.personalRemarks = lead.personal_remarks;
     }
 
+    const [enriched] = await enrichLeadsPhase3([lead]);
+    Object.assign(lead, enriched);
+
     await attachQuotationMeta(lead);
 
     res.json({ success: true, lead });
@@ -626,17 +742,32 @@ exports.createLead = async (req, res) => {
     if (isSalesOperator) {
       assignData = { assignedUserId: req.user.user_id, assignedById: req.user.user_id, assignedAt: new Date() };
     } else {
-      const autoAssignee = await getNextAutoAssignee();
+      let autoAssignee = null;
+      try {
+        autoAssignee = await getNextAutoAssignee();
+      } catch (assignErr) {
+        console.error('Auto-assign lookup failed:', assignErr.message);
+      }
       if (autoAssignee) {
         assignData = { assignedUserId: autoAssignee, assignedById: req.user.user_id, assignedAt: new Date() };
       }
     }
 
+    const body = req.body || {};
+    const personalRemarks = body.personal_remarks ?? body.personalRemarks;
+    const inquiryType = body.inquiry_type ?? body.inquiryType ?? 'rental';
+
     const lead = await prisma.lead.create({
       data: {
         ...payload,
-        companyBrand: payload.companyBrand,
-        brand: payload.brand,
+        companyBrand: payload.companyBrand || null,
+        brand: payload.brand || null,
+        processor: body.processor || null,
+        generation: body.generation || null,
+        ram: body.ram || null,
+        storage: body.storage || null,
+        personalRemarks: personalRemarks ? String(personalRemarks).trim() : null,
+        inquiryType: ['rental', 'sales', 'both'].includes(inquiryType) ? inquiryType : 'rental',
         status: 'Pending',
         createdAt: new Date(),
         ...assignData,
@@ -726,6 +857,16 @@ exports.uploadLeadsCsv = async (req, res) => {
         } catch (error) {
           errors.push({ row, message: error.message });
         }
+      }
+
+      try {
+        await pool.query(
+          `INSERT INTO lead_import_logs (imported_by, total_rows, imported, duplicates, errors, error_details)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [req.user.user_id, rows.length, created, duplicates, errors.length, JSON.stringify(errors.slice(0, 50))]
+        );
+      } catch (logErr) {
+        console.error('lead_import_logs insert failed:', logErr);
       }
 
       res.json({
@@ -848,21 +989,46 @@ exports.assignLeads = async (req, res) => {
   }
 };
 
+function normalizeGstin(value) {
+  return String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '');
+}
+
+function isValidIndianGstin(value) {
+  return /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(normalizeGstin(value));
+}
+
+function resolveLeadGstin({ gst, gstNumber, researchGst, leadGstNumber }) {
+  const candidates = [gst, gstNumber, researchGst, leadGstNumber];
+  for (const candidate of candidates) {
+    if (candidate == null || String(candidate).trim() === '') continue;
+    const normalized = normalizeGstin(candidate);
+    if (isValidIndianGstin(normalized)) return normalized;
+  }
+  return null;
+}
+
 exports.updateLeadStatus = async (req, res) => {
   const { id } = req.params;
-  const { status, rejection_reason, notes, lead_stage, brand, processor, generation, ram, storage, gst: gstInput } = req.body;
+  const {
+    status,
+    rejection_reason,
+    notes,
+    lead_stage,
+    brand,
+    processor,
+    generation,
+    ram,
+    storage,
+    gst: gstInput,
+    gst_number: gstNumberInput,
+  } = req.body;
 
   if (!LEAD_STATUSES.includes(status)) {
     return res.status(400).json({ success: false, message: 'Invalid lead status' });
   }
-
-  const normalizeGst = (s) =>
-    String(s || '')
-      .trim()
-      .toUpperCase()
-      .replace(/\s+/g, '');
-  const isValidIndianGstin = (s) =>
-    /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(normalizeGst(s));
 
   try {
     const lead = await prisma.lead.findUnique({
@@ -902,23 +1068,26 @@ exports.updateLeadStatus = async (req, res) => {
     const rejectionReasonDb = status === 'Rejected' ? resolvedStage : null;
 
     if (status === 'Deal' || status === 'Demo') {
-      if (gstInput !== undefined && gstInput !== null && String(gstInput).trim() !== '') {
-        const g = normalizeGst(gstInput);
-        if (!isValidIndianGstin(g)) {
-          return res.status(400).json({ success: false, message: 'Invalid GSTIN format (15-character GSTIN required).' });
-        }
-      }
-      const fromBody =
-        gstInput !== undefined && gstInput !== null && String(gstInput).trim() !== '' ? normalizeGst(gstInput) : null;
-      const fromResearch =
-        lead.research?.gst && isValidIndianGstin(lead.research.gst) ? normalizeGst(lead.research.gst) : null;
-      const resolvedGst =
-        fromBody && isValidIndianGstin(fromBody) ? fromBody : fromResearch && isValidIndianGstin(fromResearch) ? fromResearch : null;
+      const resolvedGst = resolveLeadGstin({
+        gst: gstInput,
+        gstNumber: gstNumberInput,
+        researchGst: lead.research?.gst,
+        leadGstNumber: lead.gstNumber,
+      });
       if (!resolvedGst) {
+        const hasAnyGst = [gstInput, gstNumberInput, lead.research?.gst, lead.gstNumber].some(
+          (v) => v != null && String(v).trim() !== ''
+        );
+        if (hasAnyGst) {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid GSTIN format (15-character GSTIN required).',
+          });
+        }
         return res.status(400).json({
           success: false,
           message:
-            'GSTIN is mandatory for Deal or Demo. Add a valid GST in company research or send gst in the request before linking to Customers.'
+            'GSTIN is mandatory for Deal or Demo. Add a valid GST on the lead profile (Company Info) before updating status.',
         });
       }
       await prisma.leadCompanyResearch.upsert({
@@ -980,17 +1149,27 @@ exports.updateFollowUp = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
-    const updated = await prisma.lead.update({
-      where: { leadId: parseInt(id, 10) },
-      data: { followUpDate: follow_up_date ? new Date(follow_up_date) : null }
-    });
+    const leadId = parseInt(id, 10);
+    const followUpTime = req.body.follow_up_time || null;
 
+    await pool.query(
+      `UPDATE leads SET
+        follow_up_date = $1,
+        follow_up_time = $2,
+        updated_at = NOW()
+       WHERE lead_id = $3`,
+      [follow_up_date ? new Date(follow_up_date) : null, followUpTime, leadId]
+    );
+
+    const updated = await prisma.lead.findUnique({ where: { leadId } });
+
+    const timeNote = followUpTime ? ` at ${followUpTime}` : '';
     await prisma.leadActivity.create({
       data: {
         leadId: updated.leadId,
         userId: req.user.user_id,
         action: 'follow_up_set',
-        notes: notes || `Follow-up set to ${follow_up_date}`
+        notes: notes || `Follow-up scheduled for ${follow_up_date || '—'}${timeNote}`
       }
     });
 
@@ -1712,5 +1891,291 @@ exports.sendLeadQuotation = async (req, res) => {
       success: false,
       message: error.message || 'Failed to send quotation'
     });
+  }
+};
+
+exports.getLeadStages = async (_req, res) => {
+  try {
+    const stages = Object.entries(STAGES_BY_STATUS).map(([status, stageList]) => ({
+      status,
+      stages: stageList
+    }));
+    res.json({ success: true, stages });
+  } catch (error) {
+    console.error('getLeadStages error:', error);
+    res.status(500).json({ success: false, message: 'Server error fetching stages' });
+  }
+};
+
+exports.updateLeadFullProfile = async (req, res) => {
+  const { id } = req.params;
+  const leadId = parseInt(id, 10);
+  if (Number.isNaN(leadId)) {
+    return res.status(400).json({ success: false, message: 'Invalid lead id' });
+  }
+
+  try {
+    const existing = await prisma.lead.findUnique({ where: { leadId } });
+    if (!existing) return res.status(404).json({ success: false, message: 'Lead not found' });
+    if (!canEditLead(req.user, existing)) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+
+    const body = req.body || {};
+    const changes = [];
+    const setClauses = [];
+    const params = [];
+    let idx = 1;
+
+    const addField = (dbCol, value, label, prevVal) => {
+      if (value === undefined) return;
+      setClauses.push(`${dbCol} = $${idx}`);
+      params.push(value);
+      idx += 1;
+      const prev = prevVal == null ? '' : String(prevVal);
+      const next = value == null ? '' : String(value);
+      if (prev !== next) changes.push(label);
+    };
+
+    const pick = (snake, camel) => (body[snake] !== undefined ? body[snake] : body[camel]);
+
+    addField('name', pick('name', 'name')?.trim?.() ?? pick('name', 'name'), 'name', existing.name);
+    addField('company_name', pick('company_name', 'companyName'), 'company', existing.companyName);
+    addField('company_brand', pick('company_brand', 'companyBrand'), 'company brand', existing.companyBrand);
+    addField('email', pick('email', 'email') != null ? normalizeEmail(pick('email', 'email')) : undefined, 'email', existing.email);
+    addField('phone', pick('phone', 'phone') != null ? normalizePhone(pick('phone', 'phone')) : undefined, 'phone', existing.phone);
+    addField('whatsapp_number', pick('whatsapp_number', 'whatsappNumber'), 'whatsapp', existing.whatsappNumber);
+    addField('designation', pick('designation', 'designation'), 'designation', existing.designation);
+    addField('quantity_required', pick('quantity_required', 'quantityRequired'), 'quantity', existing.quantityRequired);
+    addField('monthly_budget', pick('monthly_budget', 'monthlyBudget'), 'budget', existing.monthlyBudget);
+    addField('rental_duration', pick('rental_duration', 'rentalDuration'), 'duration', existing.rentalDuration);
+    addField('use_case', pick('use_case', 'useCase'), 'use case', existing.useCase);
+    addField('company_type', pick('company_type', 'companyType'), 'company type', existing.companyType);
+    addField('company_size', pick('company_size', 'companySize'), 'company size', existing.companySize);
+    addField('industry', pick('industry', 'industry'), 'industry', existing.industry);
+    addField('annual_revenue', pick('annual_revenue', 'annualRevenue'), 'revenue', existing.annualRevenue);
+    addField('pan_number', pick('pan_number', 'panNumber'), 'PAN', existing.panNumber);
+    addField('gst_number', pick('gst_number', 'gstNumber'), 'GST', existing.gstNumber);
+    addField('state', pick('state', 'state'), 'state', existing.state);
+    addField('pincode', pick('pincode', 'pincode'), 'pincode', existing.pincode);
+    addField('city', pick('city', 'city'), 'city', existing.city);
+    addField('billing_address', pick('billing_address', 'billingAddress'), 'billing address', existing.billingAddress);
+    addField('shipping_same_as_billing', pick('shipping_same_as_billing', 'shippingSameAsBilling'), 'shipping same', existing.shippingSameAsBilling);
+    addField('shipping_address', pick('shipping_address', 'shippingAddress'), 'shipping address', existing.shippingAddress);
+    addField('inquiry_type', pick('inquiry_type', 'inquiryType'), 'inquiry type', existing.inquiryType);
+    addField('personal_remarks', pick('personal_remarks', 'personalRemarks'), 'remarks', existing.personalRemarks);
+    addField('brand', pick('brand', 'brand'), 'brand', existing.brand);
+    addField('processor', pick('processor', 'processor'), 'processor', existing.processor);
+    addField('generation', pick('generation', 'generation'), 'generation', existing.generation);
+    addField('ram', pick('ram', 'ram'), 'ram', existing.ram);
+    addField('storage', pick('storage', 'storage'), 'storage', existing.storage);
+    addField('source', pick('source', 'source'), 'source', existing.source);
+
+    if (pick('assigned_user_id', 'assignedUserId') !== undefined) {
+      const uid = pick('assigned_user_id', 'assignedUserId');
+      addField('assigned_user_id', uid ? parseInt(uid, 10) : null, 'assignee', existing.assignedUserId);
+    }
+
+    if (pick('follow_up_date', 'followUpDate') !== undefined) {
+      const fud = pick('follow_up_date', 'followUpDate');
+      addField('follow_up_date', fud ? new Date(fud) : null, 'follow-up date', existing.followUpDate);
+    }
+
+    if (pick('follow_up_time', 'followUpTime') !== undefined) {
+      addField('follow_up_time', pick('follow_up_time', 'followUpTime') || null, 'follow-up time', existing.followUpTime);
+    }
+
+    if (!setClauses.length) {
+      return res.status(400).json({ success: false, message: 'No fields to update' });
+    }
+
+    setClauses.push('updated_at = NOW()');
+    params.push(leadId);
+    await pool.query(
+      `UPDATE leads SET ${setClauses.join(', ')} WHERE lead_id = $${idx}`,
+      params
+    );
+
+    const updated = await prisma.lead.findUnique({
+      where: { leadId },
+      include: { assignedUser: { select: { userId: true, name: true, role: true } } }
+    });
+
+    await prisma.leadActivity.create({
+      data: {
+        leadId,
+        userId: req.user.user_id,
+        action: 'profile_updated',
+        notes: changes.length ? `Updated: ${changes.join(', ')}` : 'Profile updated'
+      }
+    });
+
+    res.json({ success: true, lead: updated });
+  } catch (error) {
+    console.error('updateLeadFullProfile error:', error);
+    res.status(500).json({ success: false, message: 'Server error updating profile' });
+  }
+};
+
+exports.convertToCustomer = async (req, res) => {
+  const { id } = req.params;
+  const leadId = parseInt(id, 10);
+  if (Number.isNaN(leadId)) {
+    return res.status(400).json({ success: false, message: 'Invalid lead id' });
+  }
+
+  try {
+    const leadRes = await pool.query('SELECT * FROM leads WHERE lead_id = $1', [leadId]);
+    if (!leadRes.rows.length) {
+      return res.status(404).json({ success: false, message: 'Lead not found' });
+    }
+    const lead = leadRes.rows[0];
+
+    if (!['Deal', 'Demo'].includes(lead.status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Lead must be in Deal or Demo status to convert'
+      });
+    }
+
+    if (req.user.role === 'sales' && lead.assigned_user_id !== req.user.user_id) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+
+    const body = req.body || {};
+    const billingAddress = body.billing_address || lead.billing_address || null;
+    const billingCity = body.billing_city || body.city || lead.city || null;
+    const billingState = body.billing_state || body.state || lead.state || null;
+    const billingPincode = body.billing_pincode || body.pincode || lead.pincode || null;
+
+    if (!billingAddress || !billingCity || !billingState || !billingPincode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Billing address, city, state, and pincode are required'
+      });
+    }
+
+    const shippingSame = body.shipping_same_as_billing !== false && body.shipping_same !== false
+      && lead.shipping_same_as_billing !== false;
+    const shippingAddress = shippingSame
+      ? billingAddress
+      : (body.shipping_address || lead.shipping_address || billingAddress);
+    const shippingCity = shippingSame ? billingCity : (body.shipping_city || lead.city || billingCity);
+    const shippingState = shippingSame ? billingState : (body.shipping_state || lead.state || billingState);
+    const shippingPincode = shippingSame ? billingPincode : (body.shipping_pincode || lead.pincode || billingPincode);
+
+    const customerName = body.customer_name || body.name || lead.name;
+    const companyName = body.company_name || lead.company_name || null;
+    const email = body.email || lead.email || null;
+    const phone = body.phone || lead.phone || null;
+    const gstNo = body.gst_number || body.gst_no || lead.gst_number || null;
+    const panNumber = body.pan_number || lead.pan_number || null;
+
+    let customerId = lead.customer_id;
+    let isNew = false;
+
+    const existingByLead = await pool.query(
+      'SELECT customer_id FROM customers WHERE source_lead_id = $1',
+      [leadId]
+    );
+
+    if (existingByLead.rows.length) {
+      customerId = existingByLead.rows[0].customer_id;
+      await pool.query(
+        `UPDATE customers SET
+          name = $1, company_name = $2, email = $3, phone = $4, gst_no = $5,
+          pan_number = $6, company_type = $7, company_size = $8, industry = $9,
+          billing_address = $10, billing_city = $11, billing_state = $12, billing_pincode = $13,
+          shipping_same = $14, shipping_address = $15, shipping_city = $16, shipping_state = $17, shipping_pincode = $18,
+          whatsapp_number = $19, designation = $20, source_lead_stage = $21,
+          onboarded_by = $22, onboarded_at = COALESCE(onboarded_at, NOW()), updated_at = NOW()
+         WHERE customer_id = $23`,
+        [
+          customerName, companyName, email, phone, gstNo, panNumber,
+          lead.company_type, lead.company_size, lead.industry,
+          billingAddress, billingCity, billingState, billingPincode,
+          shippingSame, shippingAddress, shippingCity, shippingState, shippingPincode,
+          lead.whatsapp_number, lead.designation, lead.lead_stage,
+          req.user.user_id, customerId
+        ]
+      );
+    } else {
+      const insertRes = await pool.query(
+        `INSERT INTO customers (
+          name, company_name, source_lead_id, email, phone, gst_no, pan_number,
+          company_type, company_size, industry,
+          billing_address, billing_city, billing_state, billing_pincode,
+          shipping_same, shipping_address, shipping_city, shipping_state, shipping_pincode,
+          whatsapp_number, designation, source_lead_stage, onboarded_by, onboarded_at,
+          type, created_at, updated_at
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+          $11, $12, $13, $14, $15, $16, $17, $18, $19,
+          $20, $21, $22, $23, NOW(), 'Lead', NOW(), NOW()
+        ) RETURNING customer_id`,
+        [
+          customerName, companyName, leadId, email, phone, gstNo, panNumber,
+          lead.company_type, lead.company_size, lead.industry,
+          billingAddress, billingCity, billingState, billingPincode,
+          shippingSame, shippingAddress, shippingCity, shippingState, shippingPincode,
+          lead.whatsapp_number, lead.designation, lead.lead_stage,
+          req.user.user_id
+        ]
+      );
+      customerId = insertRes.rows[0].customer_id;
+      isNew = true;
+    }
+
+    await pool.query(
+      `UPDATE leads SET
+        customer_id = $1, converted_at = NOW(), converted_by = $2, updated_at = NOW()
+       WHERE lead_id = $3`,
+      [customerId, req.user.user_id, leadId]
+    );
+
+    await prisma.leadActivity.create({
+      data: {
+        leadId,
+        userId: req.user.user_id,
+        action: 'converted_to_customer',
+        notes: `Converted to customer #${customerId}`
+      }
+    });
+
+    res.json({ success: true, customer_id: customerId, is_new: isNew });
+  } catch (error) {
+    console.error('convertToCustomer error:', error);
+    res.status(500).json({ success: false, message: error.message || 'Conversion failed' });
+  }
+};
+
+exports.getLeadConversionStatus = async (req, res) => {
+  const leadId = parseInt(req.params.id, 10);
+  if (Number.isNaN(leadId)) {
+    return res.status(400).json({ success: false, message: 'Invalid lead id' });
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT l.customer_id, l.converted_at, l.converted_by, c.name AS customer_name, c.company_name
+       FROM leads l
+       LEFT JOIN customers c ON c.customer_id = l.customer_id
+       WHERE l.lead_id = $1`,
+      [leadId]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ success: false, message: 'Lead not found' });
+    }
+    const row = result.rows[0];
+    res.json({
+      success: true,
+      converted: !!row.customer_id,
+      customer_id: row.customer_id,
+      converted_at: row.converted_at,
+      customer_name: row.customer_name || row.company_name || null
+    });
+  } catch (error) {
+    console.error('getLeadConversionStatus error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };

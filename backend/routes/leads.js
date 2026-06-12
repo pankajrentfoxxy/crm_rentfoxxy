@@ -26,6 +26,7 @@ const upload = multer({
 router.use(authMiddleware);
 
 router.get('/export-csv', leadController.exportLeadsCsv);
+router.get('/stages', leadController.getLeadStages);
 router.get('/', leadController.getLeads);
 router.get('/follow-ups', leadController.getFollowUps);
 router.get('/orders', leadController.getLeadOrders);
@@ -51,5 +52,8 @@ router.get('/:id/customer-profile', checkRole('admin', 'manager', 'sales'), lead
 router.put('/:id/status', checkRole('admin', 'manager', 'sales'), leadController.updateLeadStatus);
 router.put('/:id/follow-up', checkRole('admin', 'manager', 'sales'), leadController.updateFollowUp);
 router.put('/:id/basic', checkRole('admin', 'manager', 'sales'), leadController.updateLeadBasicDetails);
+router.put('/:id/profile', checkRole('admin', 'manager', 'sales'), leadController.updateLeadFullProfile);
+router.post('/:id/convert', checkRole('admin', 'manager', 'sales'), leadController.convertToCustomer);
+router.get('/:id/conversion', checkRole('admin', 'manager', 'sales'), leadController.getLeadConversionStatus);
 
 module.exports = router;

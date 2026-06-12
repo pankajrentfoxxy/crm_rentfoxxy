@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Package, RefreshCw, Loader2, Search, Plus, X, History, Undo2, Pencil } from 'lucide-react';
+import { Package, RefreshCw, Loader2, Search, Plus, X, History, Undo2, Pencil, Download } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 const PAGE_SIZE = 50;
@@ -132,6 +132,8 @@ export default function Inventory({ api }) {
 
     const canMarkReturn = ['admin', 'manager', 'floor_manager'].includes(user?.role || '');
 
+    const canGetFromErp = user?.role === 'admin' || user?.role === 'manager';
+
     const showActionsColumn = canMarkReturn || canSeeHistory;
 
     const [items, setItems] = useState([]);
@@ -160,6 +162,9 @@ export default function Inventory({ api }) {
     const [editRow, setEditRow] = useState(null);
     const [editForm, setEditForm] = useState(null);
     const [editSaving, setEditSaving] = useState(false);
+
+    const [erpLookupId, setErpLookupId] = useState('');
+    const [erpSyncing, setErpSyncing] = useState(false);
 
     useEffect(() => {
         const t = setTimeout(() => setDebouncedSearch(search.trim()), 300);
@@ -290,6 +295,34 @@ export default function Inventory({ api }) {
         return t === '' ? null : t;
     };
 
+    const runGetFromErp = async () => {
+        const id = erpLookupId.trim();
+        if (!id) {
+            alert('Enter serial number or TTSPL / machine id');
+            return;
+        }
+        setErpSyncing(true);
+        try {
+            const { data } = await api.post(`/inventory/sync/${encodeURIComponent(id)}`);
+            if (data?.success) {
+                alert(
+                    data.action === 'inserted'
+                        ? `Added to inventory: ${data.machine_number || id}`
+                        : `Updated inventory: ${data.machine_number || id}`
+                );
+                setErpLookupId('');
+                refreshAll();
+            } else {
+                alert(data?.message || 'Could not fetch from ERP');
+            }
+        } catch (err) {
+            const msg = err.response?.data?.message || err.response?.data?.error || 'ERP fetch failed';
+            alert(msg);
+        } finally {
+            setErpSyncing(false);
+        }
+    };
+
     const submitEditInventory = async (e) => {
         e.preventDefault();
         if (!editRow?.inventory_id || !editForm) return;
@@ -351,14 +384,54 @@ export default function Inventory({ api }) {
                             Add stock
                         </button>
                     )}
-                    <button
-                        type="button"
-                        onClick={refreshAll}
-                        className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg text-[12px]"
-                    >
-                        <RefreshCw className={`w-4 h-4 ${loading || sumLoading ? 'animate-spin' : ''}`} />
-                        Refresh
-                    </button>
+                    {canGetFromErp ? (
+                        <div className="flex flex-wrap items-center gap-2">
+                            <input
+                                type="text"
+                                value={erpLookupId}
+                                onChange={(e) => setErpLookupId(e.target.value)}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        runGetFromErp();
+                                    }
+                                }}
+                                placeholder="Serial or TTSPL / machine #"
+                                className="w-44 sm:w-52 px-2 py-1.5 border border-gray-300 rounded-lg text-[12px]"
+                                disabled={erpSyncing}
+                            />
+                            <button
+                                type="button"
+                                onClick={runGetFromErp}
+                                disabled={erpSyncing || !erpLookupId.trim()}
+                                className="flex items-center gap-2 px-3 py-1.5 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white rounded-lg text-[12px] font-medium"
+                            >
+                                {erpSyncing ? (
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                    <Download className="w-4 h-4" />
+                                )}
+                                Get from ERP
+                            </button>
+                            <button
+                                type="button"
+                                title="Reload list from CRM (no ERP call)"
+                                onClick={refreshAll}
+                                className="p-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg text-gray-700"
+                            >
+                                <RefreshCw className={`w-4 h-4 ${loading || sumLoading ? 'animate-spin' : ''}`} />
+                            </button>
+                        </div>
+                    ) : (
+                        <button
+                            type="button"
+                            onClick={refreshAll}
+                            className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg text-[12px]"
+                        >
+                            <RefreshCw className={`w-4 h-4 ${loading || sumLoading ? 'animate-spin' : ''}`} />
+                            Refresh
+                        </button>
+                    )}
                 </div>
             </div>
 

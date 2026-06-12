@@ -209,6 +209,43 @@ const startEmailQueueWorker = async () => {
   await processQueue();
 };
 
+async function sendCustomerPortalWelcome({ customerEmail, customerName, portalUrl, tempPassword }) {
+  const subject = 'Your Rentfoxxy Customer Portal is Ready';
+  const passwordBlock = tempPassword
+    ? `<p><strong>Temporary password:</strong> ${tempPassword}</p><p>Please change your password after your first login.</p>`
+    : '<p>Use the password shared with you by Rentfoxxy to sign in.</p>';
+  const bodyText = [
+    `Hello ${customerName || 'Customer'},`,
+    '',
+    'Your customer portal is now active.',
+    '',
+    `Portal URL: ${portalUrl}`,
+    `Email: ${customerEmail}`,
+    tempPassword ? `Temporary password: ${tempPassword}` : '',
+    tempPassword ? 'Please change your password after your first login.' : '',
+  ].filter(Boolean).join('\n');
+  const bodyHtml = `
+    <div style="font-family: Arial, sans-serif; line-height: 1.6; max-width: 560px;">
+      <h2 style="color: #0D9488;">Customer Portal Access</h2>
+      <p>Hello ${customerName || 'Customer'},</p>
+      <p>Your Rentfoxxy customer portal is now active.</p>
+      <p><strong>Portal URL:</strong> <a href="${portalUrl}">${portalUrl}</a></p>
+      <p><strong>Email:</strong> ${customerEmail}</p>
+      ${passwordBlock}
+      <p style="color: #64748b; font-size: 12px;">— Rentfoxxy Technologies</p>
+    </div>
+  `;
+  return enqueueEmail({
+    toEmail: customerEmail,
+    subject,
+    bodyText,
+    bodyHtml,
+    dedupeKey: `customer-portal-welcome-${customerEmail}-${Date.now()}`,
+  });
+}
+
 module.exports = {
-  startEmailQueueWorker
+  startEmailQueueWorker,
+  sendCustomerPortalWelcome,
+  enqueueEmail,
 };

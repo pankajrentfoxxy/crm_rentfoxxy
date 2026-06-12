@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getAllParts, createPart, updatePartQuantity, updatePart } = require('../controllers/partController');
+const { getAllParts, createPart, updatePartQuantity, updatePart, getPartUsage } = require('../controllers/partController');
 const { getPartsGrouped } = require('../controllers/partsDropdownController');
 const { authMiddleware, checkRole } = require('../middleware/auth');
 
@@ -19,6 +19,8 @@ router.get('/grouped', getPartsGrouped);
 // @desc    Create a new part
 // @access  Private (Manager, Admin)
 router.post('/', checkRole('manager', 'admin', 'floor_manager'), createPart);
+
+router.get('/:id/usage', getPartUsage);
 
 // @route   PUT /api/parts/:id
 // @desc    Update part details

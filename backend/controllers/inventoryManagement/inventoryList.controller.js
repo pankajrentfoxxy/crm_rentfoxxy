@@ -1,0 +1,351 @@
+const { param, query, body, validationResult } = require('express-validator');
+const pool = require('../../config/db');
+const { parseExtra } = require('../../services/qcManagementService');
+const { logTtsplEvent } = require('../../services/ttsplAuditService');
+const {
+  normalizeListSegment,
+  listTitleForSegment,
+  buildListWhere,
+  enrichSerialRow,
+  enrichSparePartRow,
+  normalizeSpareTab,
+  spareStatusForTab,
+  effectiveSpareStatusSql,
+  fetchSparePartTabCounts,
+  SPARE_STATUS_VALUES
+} = require('../../services/inventoryManagementService');
+
+const READY_TO_RENT_SALE_VALUES = [
+  'normal_sale',
+  'clearance_sale',
+  'rent',
+  'rent_or_normal_sale'
+];
+
+const listValidators = [
+  param('segment').isString().trim(),
+  query('page').optional().isInt({ min: 1 }).toInt(),
+  query('limit').optional().isInt({ min: 1, max: 500 }).toInt(),
+  query('search').optional().isString().trim(),
+  query('tab').optional().isString().trim()
+];
+
+async function listInventory(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  const segment = normalizeListSegment(req.params.segment);
+  if (!segment) return res.status(400).json({ success: false, message: 'Invalid inventory segment' });
+
+  const page = req.query.page || 1;
+  const limit = req.query.limit || 50;
+  const offset = (page - 1) * limit;
+  const search = (req.query.search || '').trim();
+  const isSpare = segment === 'spare_parts';
+
+  try {
+    if (isSpare) {
+      const tab = normalizeSpareTab(req.query.tab);
+      const tabStatus = spareStatusForTab(tab);
+      const statusSql = effectiveSpareStatusSql('s');
+      const params = [tabStatus];
+      let searchSql = '';
+      if (search) {
+        params.push(`%${search}%`);
+        const i = params.length;
+        searchSql = ` AND (
+          s.serial_number ILIKE $${i}
+          OR COALESCE(s.inventory_asset_code, '') ILIKE $${i}
+          OR sp.purchase_order_number ILIKE $${i}
+          OR COALESCE(v.business_name, '') ILIKE $${i}
+          OR COALESCE(v.first_name, '') ILIKE $${i}
+          OR COALESCE(v.email, '') ILIKE $${i}
+          OR COALESCE(s.extra->>'main_serial_number', '') ILIKE $${i}
+        )`;
+      }
+      const fromSql = `
+        FROM vendor_serial_numbers s
+        INNER JOIN vendor_spare_parts_purchase_orders sp ON sp.spo_id = s.spo_id AND sp.deleted_at IS NULL
+        LEFT JOIN vendors v ON v.vendor_id = sp.vendor_id AND v.deleted_at IS NULL
+        LEFT JOIN vendor_spare_parts_catalog c ON c.part_id::text = s.extra->>'part_id'
+        LEFT JOIN vendor_serial_numbers asset ON asset.deleted_at IS NULL
+          AND asset.serial_number = COALESCE(s.extra->>'main_serial_number', '')
+          AND asset.serial_number != ''
+        LEFT JOIN vendor_purchase_orders apo ON apo.po_id = asset.po_id AND apo.deleted_at IS NULL
+        WHERE s.deleted_at IS NULL AND s.spo_id IS NOT NULL
+          AND ${statusSql} = $1
+        ${searchSql}
+      `;
+      const tabCounts = await fetchSparePartTabCounts(pool);
+      const countR = await pool.query(`SELECT COUNT(*)::int AS total ${fromSql}`, params);
+      const total = countR.rows[0]?.total || 0;
+      const listParams = [...params, limit, offset];
+      const rowsR = await pool.query(
+        `SELECT s.*,
+                sp.purchase_order_number,
+                sp.line_items,
+                sp.vendor_id,
+                v.business_name,
+                v.first_name || COALESCE(' ' || NULLIF(v.last_name, ''), '') AS vendor_display_name,
+                v.email AS vendor_email,
+                v.phone AS vendor_phone,
+                c.name AS catalog_name,
+                s.extra->>'main_serial_number' AS main_serial_number,
+                s.extra->>'main_unique_number' AS main_unique_number,
+                apo.purchase_order_number AS asset_purchase_order_number,
+                asset.grn_id AS asset_grn_id
+         ${fromSql}
+         ORDER BY s.updated_at DESC
+         LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+        listParams
+      );
+      return res.json({
+        success: true,
+        segment,
+        tab,
+        title: listTitleForSegment(segment),
+        tabCounts,
+        data: rowsR.rows.map(enrichSparePartRow),
+        pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) }
+      });
+    }
+
+    const params = [];
+    const { sql: segmentSql } = buildListWhere(segment, params);
+    let searchSql = '';
+    if (search) {
+      params.push(`%${search}%`);
+      const i = params.length;
+      searchSql = ` AND (
+        s.serial_number ILIKE $${i}
+        OR COALESCE(s.inventory_asset_code, '') ILIKE $${i}
+        OR p.purchase_order_number ILIKE $${i}
+        OR COALESCE(v.business_name, '') ILIKE $${i}
+        OR s.extra::text ILIKE $${i}
+      )`;
+    }
+    const fromSql = `
+      FROM vendor_serial_numbers s
+      INNER JOIN vendor_purchase_orders p ON p.po_id = s.po_id AND p.deleted_at IS NULL
+      LEFT JOIN vendors v ON v.vendor_id = p.vendor_id AND v.deleted_at IS NULL
+      WHERE s.deleted_at IS NULL
+      ${segmentSql}
+      ${searchSql}
+    `;
+    const countR = await pool.query(`SELECT COUNT(*)::int AS total ${fromSql}`, params);
+    const total = countR.rows[0]?.total || 0;
+    const listParams = [...params, limit, offset];
+    const rowsR = await pool.query(
+      `SELECT
+         s.serial_id, s.serial_number, s.inventory_asset_code, s.qc_status, s.remark,
+         s.extra, s.created_at AS serial_created_at, s.updated_at AS serial_updated_at,
+         s.rental_start_date, s.grn_id, s.inventory_status,
+         p.po_id, p.purchase_order_number, p.purchase_order_type, p.vendor_id, p.line_items,
+         v.business_name, v.first_name || ' ' || v.last_name AS vendor_name
+       ${fromSql}
+       ORDER BY s.updated_at DESC
+       LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+      listParams
+    );
+    res.json({
+      success: true,
+      segment,
+      title: listTitleForSegment(segment),
+      data: rowsR.rows.map(enrichSerialRow),
+      pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) }
+    });
+  } catch (e) {
+    console.error('listInventory', e);
+    res.status(500).json({ success: false, message: e.message || 'Failed to load inventory list' });
+  }
+}
+
+async function getListCounts(req, res) {
+  try {
+    const keys = ['passed', 'rent_to_own', 'rental_purchase', 'direct_purchase', 'out_for_repare', 'spare_parts'];
+    const counts = {};
+    for (const seg of keys) {
+      const params = [];
+      const { sql: segmentSql } = buildListWhere(seg, params);
+      if (seg === 'spare_parts') {
+        const tabCounts = await fetchSparePartTabCounts(pool);
+        counts[seg] = tabCounts.total;
+        counts.spare_parts_tabs = tabCounts;
+      } else {
+        const r = await pool.query(
+          `SELECT COUNT(*)::int AS c
+           FROM vendor_serial_numbers s
+           INNER JOIN vendor_purchase_orders p ON p.po_id = s.po_id AND p.deleted_at IS NULL
+           WHERE s.deleted_at IS NULL ${segmentSql}`,
+          params
+        );
+        counts[seg] = r.rows[0]?.c || 0;
+      }
+    }
+    counts.npa = 0;
+    res.json({ success: true, counts });
+  } catch (e) {
+    console.error('getListCounts', e);
+    res.status(500).json({ success: false, message: e.message || 'Failed to load counts' });
+  }
+}
+
+const readyToRentActionValidators = [
+  body('serial_number_id').isInt({ min: 1 }).toInt(),
+  body('serial_number').notEmpty().trim(),
+  body('selected_value').isIn(READY_TO_RENT_SALE_VALUES)
+];
+
+/** Laravel QualityCheckController@ReturnAndRepareCheckXYZ — status2 on passed serials */
+async function updateReadyToRentAction(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  const serialId = req.body.serial_number_id;
+  const serialNumber = String(req.body.serial_number).trim();
+  const selected = req.body.selected_value;
+
+  try {
+    const cur = await pool.query(
+      `SELECT serial_id, extra, qc_status
+       FROM vendor_serial_numbers
+       WHERE serial_id = $1 AND serial_number = $2 AND deleted_at IS NULL AND po_id IS NOT NULL`,
+      [serialId, serialNumber]
+    );
+    if (!cur.rows.length) {
+      return res.status(404).json({ success: false, message: 'Serial not found' });
+    }
+
+    const row = cur.rows[0];
+    const effectiveQc = String(row.qc_status || parseExtra(row.extra).status || 'pending').trim();
+    if (effectiveQc !== 'passed') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only QC passed serials can be routed to sale or rent'
+      });
+    }
+
+    const extra = parseExtra(row.extra);
+    extra.status2 = selected;
+
+    await pool.query(
+      `UPDATE vendor_serial_numbers
+       SET inventory_status = $1,
+           extra = $2::jsonb,
+           updated_at = NOW()
+       WHERE serial_id = $3`,
+      [selected, JSON.stringify(extra), serialId]
+    );
+
+    res.json({ success: true, message: 'Action taken successfully!' });
+  } catch (e) {
+    console.error('updateReadyToRentAction', e);
+    res.status(500).json({ success: false, message: e.message || 'Failed to update action' });
+  }
+}
+
+const changeSparePartStatusValidators = [
+  body('serial_number_id').isInt({ min: 1 }).toInt(),
+  body('serial_number').notEmpty().trim(),
+  body('status').isIn([...SPARE_STATUS_VALUES])
+];
+
+/** Laravel BillingPersonController@inventoryListChangeStatus */
+async function changeSparePartStatus(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  const serialId = req.body.serial_number_id;
+  const serialNumber = String(req.body.serial_number).trim();
+  const status = req.body.status;
+
+  try {
+    const cur = await pool.query(
+      `SELECT serial_id, extra FROM vendor_serial_numbers
+       WHERE serial_id = $1 AND serial_number = $2 AND deleted_at IS NULL AND spo_id IS NOT NULL`,
+      [serialId, serialNumber]
+    );
+    if (!cur.rows.length) {
+      return res.status(404).json({ success: false, message: 'Spare part serial not found' });
+    }
+
+    const extra = parseExtra(cur.rows[0].extra);
+    extra.status = status;
+
+    await pool.query(
+      `UPDATE vendor_serial_numbers
+       SET qc_status = $1,
+           extra = $2::jsonb,
+           updated_at = NOW()
+       WHERE serial_id = $3`,
+      [status, JSON.stringify(extra), serialId]
+    );
+
+    res.json({ success: true, message: 'Status updated successfully.' });
+  } catch (e) {
+    console.error('changeSparePartStatus', e);
+    res.status(500).json({ success: false, message: e.message || 'Failed to update status' });
+  }
+}
+
+const tagInventoryValidators = [
+  param('id').isInt().toInt(),
+  body('tag').isIn(['rental', 'sales'])
+];
+
+/** Tag vendor serial as rental or sales (stored in extra.inventory_tag) */
+async function tagInventoryItem(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  const serialId = req.params.id;
+  const tag = req.body.tag;
+
+  try {
+    const cur = await pool.query(
+      `SELECT serial_id, serial_number, inventory_asset_code, extra
+       FROM vendor_serial_numbers WHERE serial_id = $1 AND deleted_at IS NULL`,
+      [serialId]
+    );
+    if (!cur.rows.length) {
+      return res.status(404).json({ success: false, message: 'Serial not found' });
+    }
+    const row = cur.rows[0];
+    const extra = parseExtra(row.extra);
+    extra.inventory_tag = tag;
+
+    await pool.query(
+      `UPDATE vendor_serial_numbers SET extra = $1::jsonb, updated_at = NOW() WHERE serial_id = $2`,
+      [JSON.stringify(extra), serialId]
+    );
+
+    const ttsplId = row.inventory_asset_code || row.serial_number;
+    if (ttsplId) {
+      await logTtsplEvent({
+        ttsplId,
+        vendorSerialId: serialId,
+        eventType: 'inventory_tagged',
+        description: `Inventory tagged as ${tag}`,
+        metadata: { tag },
+        actorUserId: req.user?.user_id
+      });
+    }
+
+    res.json({ success: true, message: `Tagged as ${tag}`, tag });
+  } catch (e) {
+    console.error('tagInventoryItem', e);
+    res.status(500).json({ success: false, message: e.message || 'Failed to tag' });
+  }
+}
+
+module.exports = {
+  listValidators,
+  listInventory,
+  getListCounts,
+  readyToRentActionValidators,
+  updateReadyToRentAction,
+  changeSparePartStatusValidators,
+  changeSparePartStatus,
+  tagInventoryValidators,
+  tagInventoryItem
+};

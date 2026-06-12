@@ -5,6 +5,17 @@ const ERP_BASE_URL = process.env.ERP_BASE_URL || 'https://erp.rentfoxxy.com/rent
 const ERP_TOKEN = process.env.ERP_API_TOKEN || '';
 const ERP_SYNC_INTERVAL_MS = parseInt(process.env.ERP_SYNC_INTERVAL_MS || '120000', 10);
 const ERP_MAX_RETRIES = parseInt(process.env.ERP_MAX_RETRIES || '5', 10);
+/** Bulk pagination sync is off by default — it hammers ERP with one request per page. */
+const ERP_INVENTORY_BULK_SYNC_ENABLED =
+    process.env.ERP_INVENTORY_BULK_SYNC_ENABLED === '1' ||
+    process.env.ERP_INVENTORY_BULK_SYNC_ENABLED === 'true';
+/** Comma-separated ERP query params for single QC lookup (see MyApiController::qcOrdersApi). */
+const ERP_QC_LOOKUP_PARAMS = (process.env.ERP_QC_LOOKUP_PARAMS || process.env.ERP_QC_LOOKUP_QUERY || 'serial_number,unique_product_serial')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+/** Optional cap when filtered lookup misses (0 = no page scan). */
+const ERP_SINGLE_QC_MAX_PAGES = parseInt(process.env.ERP_SINGLE_QC_MAX_PAGES || '0', 10);
 
 let syncInterval = null;
 const brandNameCache = new Map();
@@ -102,7 +113,115 @@ const fetchAllPages = async (endpoint) => {
     return allRows;
 };
 
+const buildErpUrl = (endpoint, queryParams = {}) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(queryParams)) {
+        if (value !== undefined && value !== null && String(value).length) {
+            params.set(key, String(value));
+        }
+    }
+    const qs = params.toString();
+    return qs ? `${ERP_BASE_URL}${endpoint}?${qs}` : `${ERP_BASE_URL}${endpoint}`;
+};
+
+const fetchQcPassedPage = async (page = 1, extraParams = {}) => {
+    const { data } = await requestWithRetry(
+        buildErpUrl('/qc-orders/passed', { page, ...extraParams })
+    );
+    const rows = parseArrayPayload(data);
+    const pageMeta = parsePagination(data);
+    return { rows, ...pageMeta };
+};
+
+/** Targeted ERP search — e.g. /qc-orders/passed?page=1&serial_number=G5QBM33 */
+const fetchQcPassedFiltered = async (filterParams) => {
+    const { data } = await requestWithRetry(
+        buildErpUrl('/qc-orders/passed', { page: 1, limit: 25, ...filterParams })
+    );
+    return parseArrayPayload(data);
+};
+
 const fetchQCPassedOrders = async () => fetchAllPages('/qc-orders/passed');
+
+const qcRecordMatchesTarget = (record, targetUpper) => {
+    const machine = normalizeText(record.unique_product_serial)?.toUpperCase();
+    const serial = normalizeText(record.serial_number)?.toUpperCase();
+    const recordId = normalizeText(record.id)?.toUpperCase();
+    const productId = normalizeText(record.product_id)?.toUpperCase();
+    return (
+        machine === targetUpper ||
+        serial === targetUpper ||
+        recordId === targetUpper ||
+        productId === targetUpper
+    );
+};
+
+/** Targeted QC lookup — uses ERP filters (serial_number, unique_product_serial) instead of full pagination. */
+const findQcRecordForIdentifier = async (identifier) => {
+    const target = normalizeText(identifier);
+    if (!target) return null;
+    const targetUpper = target.toUpperCase();
+
+    for (const param of ERP_QC_LOOKUP_PARAMS) {
+        try {
+            const rows = await fetchQcPassedFiltered({ [param]: target });
+            if (!rows.length) continue;
+            const hit = rows.find((r) => qcRecordMatchesTarget(r, targetUpper));
+            if (hit) return hit;
+            // ERP already filtered by exact param — trust a single result
+            if (rows.length === 1) return rows[0];
+        } catch (error) {
+            console.warn(`QC lookup via ${param} failed:`, error.message);
+        }
+    if (ERP_QC_LOOKUP_QUERY) {
+        const res = await fetchQcPassedPage(1, { [ERP_QC_LOOKUP_QUERY]: target });
+        console.log('rows', res);
+        const hit = res?.rows.find((r) => qcRecordMatchesTarget(r, targetUpper));
+        if (hit) return hit;
+    }
+
+    try {
+        const productDetails = await fetchProductDetail(target);
+        if (productDetails) {
+            const machineNumber = pickFirst(productDetails, [
+                'unique_product_serial',
+                'machine_number',
+                'machineNumber',
+                'ttspl_id',
+                'TTSPL_id'
+            ]);
+            const serialNumber = pickFirst(productDetails, ['serial_number', 'serialNo', 'serial']);
+            if (machineNumber || serialNumber) {
+                return {
+                    product_id: pickFirst(productDetails, ['id', 'product_id', 'product_details_id']) || target,
+                    unique_product_serial: machineNumber || target,
+                    serial_number: serialNumber || machineNumber,
+                    ...productDetails
+                };
+            }
+        }
+    } catch {
+        // Not a product id — continue to optional page scan.
+    }
+
+    const maxPages = Number.isFinite(ERP_SINGLE_QC_MAX_PAGES) && ERP_SINGLE_QC_MAX_PAGES > 0
+        ? ERP_SINGLE_QC_MAX_PAGES
+        : 0;
+    if (maxPages > 0) {
+        let page = 1;
+        let lastPage = 1;
+        do {
+            const { rows, lastPage: lp } = await fetchQcPassedPage(page);
+            lastPage = Math.min(lp, maxPages);
+            const hit = rows.find((r) => qcRecordMatchesTarget(r, targetUpper));
+            if (hit) return hit;
+            page++;
+        } while (page <= lastPage);
+    }
+
+    return null;
+};
+}
 const fetchProductDetail = async (productId) => {
     if (!productId) return null;
     const { data } = await requestWithRetry(`${ERP_BASE_URL}/get-product-detail/${productId}`);
@@ -313,6 +432,18 @@ const upsertInventoryFromErpRecord = async ({ machineNumber, serialNumber, detai
 };
 
 const syncInventoryFromErp = async () => {
+    if (!ERP_INVENTORY_BULK_SYNC_ENABLED) {
+        console.warn('⚠️ ERP bulk inventory sync is disabled (set ERP_INVENTORY_BULK_SYNC_ENABLED=true to allow)');
+        return {
+            inserted: 0,
+            updated: 0,
+            skipped: 0,
+            total: 0,
+            disabled: true,
+            error: 'Bulk ERP sync is disabled. Use single-item sync (POST /api/inventory/sync/:identifier).'
+        };
+    }
+
     if (!ERP_TOKEN) {
         console.warn('⚠️ ERP inventory sync skipped: ERP_API_TOKEN is missing');
         return { inserted: 0, updated: 0, skipped: 0, total: 0, error: 'ERP_API_TOKEN is missing' };
@@ -370,18 +501,13 @@ const syncSingleInventoryFromErp = async (identifier) => {
         throw new Error('Machine number / serial / ERP ID is required');
     }
 
-    const qcPassedRecords = await fetchQCPassedOrders();
-    const targetUpper = target.toUpperCase();
-    const qcRecord = qcPassedRecords.find((record) => {
-        const machine = normalizeText(record.unique_product_serial)?.toUpperCase();
-        const serial = normalizeText(record.serial_number)?.toUpperCase();
-        const recordId = normalizeText(record.id)?.toUpperCase();
-        const productId = normalizeText(record.product_id)?.toUpperCase();
-        return machine === targetUpper || serial === targetUpper || recordId === targetUpper || productId === targetUpper;
-    });
+    const qcRecord = await findQcRecordForIdentifier(target);
 
     if (!qcRecord) {
-        return { found: false, message: `No QC passed record found for: ${target}` };
+        return {
+            found: false,
+            message: `No QC passed record found for: ${target}. Check serial / TTSPL id (ERP filters: ${ERP_QC_LOOKUP_PARAMS.join(', ')}).`
+        };
     }
 
     const serialNumber = pickFirst(qcRecord, ['serial_number', 'serialNo', 'serial']);
@@ -432,6 +558,10 @@ const ensureInventoryColumns = async () => {
 
 const startInventorySyncWorker = async () => {
     await ensureInventoryColumns();
+    if (!ERP_INVENTORY_BULK_SYNC_ENABLED) {
+        console.log('ERP inventory sync worker not started (bulk sync disabled)');
+        return;
+    }
     await syncInventoryFromErp();
 
     if (!syncInterval) {
@@ -446,14 +576,8 @@ const startInventorySyncWorker = async () => {
 const traceMachineNumberFromErp = async (machineNumber) => {
     if (!ERP_TOKEN) return { error: 'ERP_API_TOKEN is missing' };
 
-    const qcPassedRecords = await fetchQCPassedOrders();
-
     const mn = String(machineNumber || '').trim();
-    const qcRecord = qcPassedRecords.find(
-        (r) => normalizeText(r.unique_product_serial) === mn ||
-              normalizeText(r.machine_number) === mn ||
-              normalizeText(r.machineNumber) === mn
-    );
+    const qcRecord = await findQcRecordForIdentifier(mn);
 
     if (!qcRecord) {
         return { found: false, message: `Machine number ${mn} not found in ERP QC Passed` };

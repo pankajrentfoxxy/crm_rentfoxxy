@@ -1,200 +1,270 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { postLoginPath } from '../utils/supportAccess';
 import api from '../utils/api';
-import { Laptop, Scan } from 'lucide-react';
+import { Laptop, Mail, Scan } from 'lucide-react';
 import BarcodeScanner from '../components/BarcodeScanner';
 
 export default function Login() {
-    const [mode, setMode] = useState('email'); // 'email' or 'barcode'
-    const [email, setEmail] = useState('');
-    const [password, setPassword] = useState('');
-    const [barcode, setBarcode] = useState('');
-    const [error, setError] = useState('');
-    const [loading, setLoading] = useState(false);
-    const [showScanner, setShowScanner] = useState(false);
-    const { login } = useAuth();
-    const navigate = useNavigate();
-  
-    const handleEmailLogin = async (e) => {
-      e.preventDefault();
-      setError('');
-      setLoading(true);
-      try {
-        const data = await login(email, password);
-        navigate(postLoginPath(data.user));
-      } catch (err) {
-        const msg = err.response?.data?.message || err.message || 'Login failed';
-        setError(msg === 'Network Error' ? 'Cannot reach server. Check if backend is running.' : msg);
-      } finally {
-        setLoading(false);
-      }
-    };
-  
-    const handleBarcodeLogin = async (e) => {
-      e.preventDefault();
-      if (!barcode) return;
-      setError('');
-      setLoading(true);
-      try {
-        const { data } = await api.post('/auth/login-barcode', { barcode });
-        localStorage.setItem('token', data.token);
-        window.location.href = '/dashboard'; // Hard reload to refresh context or use context login setter
-      } catch (err) {
-        setError(err.response?.data?.message || 'Invalid barcode');
-        setBarcode('');
-      } finally {
-        setLoading(false);
-      }
-    };
-  
-    return (
-      <div className="min-h-screen bg-slate-50">
-        <div className="grid min-h-screen lg:grid-cols-2">
-          <div className="flex items-center justify-center px-6 py-12">
-            <div className="w-full max-w-md">
-              <div className="mb-8">
-                <div className="flex items-center gap-3">
-                  <div className="p-3 bg-orange-100 rounded-xl">
-                    <Laptop className="w-8 h-8 text-orange-600" />
-                  </div>
-                  <div>
-                    <h1 className="text-3xl font-bold text-slate-900">Rentfoxxy</h1>
-                    <p className="text-slate-500 text-sm">Refurbishment Operations Suite</p>
-                  </div>
-                </div>
-                <p className="text-slate-600 mt-4">
-                  Sign in to manage refurbishment flow, QC, inventory, and dispatch in one place.
-                </p>
-              </div>
-  
-              {error && (
-                <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
-                  {error}
-                </div>
-              )}
-  
-              <div className="flex border-b border-gray-200 mb-6">
-                <button
-                  onClick={() => setMode('email')}
-                  className={`flex-1 py-3 text-sm font-medium border-b-2 transition-colors ${mode === 'email' ? 'border-orange-600 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                >
-                  Email Login
-                </button>
-                <button
-                  onClick={() => setMode('barcode')}
-                  className={`flex-1 py-3 text-sm font-medium border-b-2 transition-colors ${mode === 'barcode' ? 'border-orange-600 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                >
-                  Barcode Login
-                </button>
-              </div>
-  
-              {mode === 'email' ? (
-                <form onSubmit={handleEmailLogin} className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Work Email</label>
-                    <input
-                      type="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
-                      placeholder="Enter your email"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Password</label>
-                    <input
-                      type="password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
-                      placeholder="••••••••"
-                      required
-                    />
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={loading}
-                    className="w-full bg-slate-900 text-white py-3 rounded-lg font-semibold hover:bg-slate-800 transition-colors disabled:opacity-50"
-                  >
-                    {loading ? 'Logging in...' : 'Sign In'}
-                  </button>
-                </form>
-              ) : (
-                <form onSubmit={handleBarcodeLogin} className="space-y-4">
-                  <div className="text-left mb-2">
-                    <p className="text-sm text-slate-500">Scan your ID badge or enter code</p>
-                  </div>
-                  <div>
-                    <div className="flex gap-2 mb-2">
-                      <input
-                        type="text"
-                        value={barcode}
-                        onChange={(e) => setBarcode(e.target.value)}
-                        className="flex-1 px-4 py-3 border-2 border-orange-400 rounded-lg focus:ring-2 focus:ring-orange-500 text-center font-mono text-xl tracking-widest"
-                        placeholder="SCAN CODE HERE"
-                        autoFocus
-                        required
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowScanner(!showScanner)}
-                        className="bg-gray-100 px-3 rounded-lg hover:bg-gray-200"
-                        title="Toggle Camera"
-                      >
-                        <Scan className="w-6 h-6 text-gray-700" />
-                      </button>
-                    </div>
-  
-                    {showScanner && (
-                      <div className="mb-4 border rounded p-2">
-                        <BarcodeScanner
-                          onScanSuccess={(code) => {
-                            setBarcode(code);
-                            setShowScanner(false);
-                          }}
-                        />
-                      </div>
-                    )}
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={loading}
-                    className="w-full bg-slate-900 text-white py-3 rounded-lg font-semibold hover:bg-slate-800 transition-colors disabled:opacity-50"
-                  >
-                    {loading ? 'Verifying...' : 'Login with Barcode'}
-                  </button>
-                </form>
-              )}
-  
+  const [mode, setMode] = useState('email');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [barcode, setBarcode] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [showScanner, setShowScanner] = useState(false);
+  const { login } = useAuth();
+  const navigate = useNavigate();
+
+  const handleEmailLogin = async (e) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      const data = await login(email, password);
+      navigate(postLoginPath(data.user));
+    } catch (err) {
+      const msg = err.response?.data?.message || err.message || 'Login failed';
+      setError(msg === 'Network Error' ? 'Cannot reach server. Check if backend is running.' : msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleBarcodeLogin = async (e) => {
+    e.preventDefault();
+    if (!barcode) return;
+    setError('');
+    setLoading(true);
+    try {
+      const { data } = await api.post('/auth/login-barcode', { barcode });
+      localStorage.setItem('token', data.token);
+      window.location.href = '/dashboard';
+    } catch (err) {
+      setError(err.response?.data?.message || 'Invalid barcode');
+      setBarcode('');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
+      <div className="w-full max-w-4xl grid lg:grid-cols-2 bg-white rounded-2xl overflow-hidden border border-slate-200">
+
+        {/* ── Left: Auth panel ── */}
+        <div className="px-10 py-10 flex flex-col justify-center">
+
+          {/* Brand */}
+          <div className="flex items-center gap-3 mb-8">
+            <div className="w-9 h-9 bg-orange-50 rounded-xl flex items-center justify-center shrink-0">
+              <Laptop className="w-5 h-5 text-orange-600" />
+            </div>
+            <div>
+              <p className="text-base font-semibold text-slate-900 leading-tight">Rentfoxxy</p>
+              <p className="text-[11px] text-slate-400 leading-tight">Operations Suite</p>
             </div>
           </div>
-  
-          <div className="hidden lg:block relative">
-            <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-slate-800 to-orange-600"></div>
-            <div className="absolute inset-0 opacity-20">
-              <div className="w-full h-full bg-[radial-gradient(circle_at_20%_20%,rgba(255,255,255,0.25),transparent_40%),radial-gradient(circle_at_80%_30%,rgba(255,255,255,0.2),transparent_35%),radial-gradient(circle_at_50%_80%,rgba(255,255,255,0.15),transparent_40%)]"></div>
+
+          {/* Heading */}
+          <h1 className="text-xl font-semibold text-slate-900 mb-1">Welcome back</h1>
+          <p className="text-sm text-slate-500 mb-6">Sign in to your workspace</p>
+
+          {/* Error */}
+          {error && (
+            <div className="mb-5 px-3.5 py-2.5 bg-red-50 border border-red-100 rounded-lg text-red-600 text-xs">
+              {error}
             </div>
-            <div className="relative h-full flex items-end p-12">
-              <div className="text-white max-w-md">
-                <p className="text-sm uppercase tracking-widest text-orange-200 mb-3">Rentfoxxy Operations</p>
-                <h2 className="text-4xl font-bold leading-tight mb-4">
-                  Professional laptop rental & refurbishment workflow.
-                </h2>
-                <p className="text-orange-100">
-                  Track every device from intake to inventory with QC-driven quality and clear accountability.
-                </p>
-                <div className="mt-8 grid grid-cols-3 gap-4 text-xs text-orange-100">
-                  <div className="bg-white/10 rounded-lg p-3">QC1/QC2 Controls</div>
-                  <div className="bg-white/10 rounded-lg p-3">Inventory Ready</div>
-                  <div className="bg-white/10 rounded-lg p-3">Sales Dispatch</div>
+          )}
+
+          {/* Mode tabs */}
+          <div className="flex bg-slate-50 border border-slate-200 rounded-xl p-1 gap-1 mb-6">
+            <button
+              onClick={() => { setMode('email'); setError(''); }}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium transition-all ${
+                mode === 'email'
+                  ? 'bg-white text-slate-900 border border-slate-200 shadow-none'
+                  : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              <Mail className="w-3.5 h-3.5" />
+              Email
+            </button>
+            <button
+              onClick={() => { setMode('barcode'); setError(''); }}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium transition-all ${
+                mode === 'barcode'
+                  ? 'bg-white text-slate-900 border border-slate-200 shadow-none'
+                  : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              <Scan className="w-3.5 h-3.5" />
+              Barcode
+            </button>
+          </div>
+
+          {/* Email form */}
+          {mode === 'email' && (
+            <form onSubmit={handleEmailLogin} className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1.5">Work email</label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@rentfoxxy.com"
+                  required
+                  className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm text-slate-900 placeholder-slate-300 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors"
+                />
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-medium text-slate-600">Password</label>
+                </div>
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    required
+                    className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm text-slate-900 placeholder-slate-300 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition-colors pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs"
+                  >
+                    {showPassword ? 'Hide' : 'Show'}
+                  </button>
                 </div>
               </div>
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full bg-slate-900 hover:bg-slate-800 text-white py-2.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-1"
+              >
+                {loading ? 'Signing in...' : 'Sign in'}
+              </button>
+            </form>
+          )}
+
+          {/* Barcode form */}
+          {mode === 'barcode' && (
+            <form onSubmit={handleBarcodeLogin} className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1.5">Barcode / badge ID</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={barcode}
+                    onChange={(e) => setBarcode(e.target.value)}
+                    placeholder="Scan or enter code"
+                    autoFocus
+                    required
+                    className="flex-1 px-3 py-2.5 border-2 border-orange-300 rounded-lg text-sm font-mono tracking-widest text-center text-slate-900 placeholder-slate-300 focus:outline-none focus:border-orange-500 transition-colors"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowScanner(!showScanner)}
+                    className="px-3 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors"
+                    title="Toggle camera scanner"
+                  >
+                    <Scan className="w-4 h-4 text-slate-600" />
+                  </button>
+                </div>
+                {showScanner && (
+                  <div className="mt-3 border border-slate-200 rounded-lg overflow-hidden">
+                    <BarcodeScanner
+                      onScanSuccess={(code) => { setBarcode(code); setShowScanner(false); }}
+                    />
+                  </div>
+                )}
+              </div>
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full bg-slate-900 hover:bg-slate-800 text-white py-2.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {loading ? 'Verifying...' : 'Login with barcode'}
+              </button>
+            </form>
+          )}
+
+          {/* Register section */}
+          <div className="mt-7 pt-6 border-t border-slate-100">
+            <p className="text-xs font-medium text-slate-700 mb-1">New to Rentfoxxy?</p>
+            <p className="text-[11px] text-slate-400 mb-3 leading-relaxed">
+              Internal staff use the login above — credentials are issued by your admin.
+            </p>
+            <div className="grid grid-cols-2 gap-2 mb-3">
+              <Link
+                to="/register/customer"
+                className="rounded-xl border border-amber-100 bg-amber-50 px-3.5 py-3 hover:bg-amber-100 transition-colors group"
+              >
+                <div className="flex items-center gap-1.5 mb-0.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0"></span>
+                  <p className="text-xs font-medium text-amber-900">Customer</p>
+                </div>
+                <p className="text-[11px] text-amber-700 leading-snug">Raise tickets and view invoices</p>
+              </Link>
+              <Link
+                to="/register/vendor"
+                className="rounded-xl border border-orange-100 bg-orange-50 px-3.5 py-3 hover:bg-orange-100 transition-colors group"
+              >
+                <div className="flex items-center gap-1.5 mb-0.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-orange-500 shrink-0"></span>
+                  <p className="text-xs font-medium text-orange-900">Vendor</p>
+                </div>
+                <p className="text-[11px] text-orange-700 leading-snug">Partner — pending admin approval</p>
+              </Link>
+            </div>
+            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3.5 py-3">
+              <p className="text-[11px] font-medium text-slate-500 mb-1.5">Internal roles</p>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Technician, admin, sales, QC, dispatch, warehouse, procurement, and support — accounts are issued by your organization.{' '}
+                <Link to="/settings/user-permissions" className="text-orange-600 hover:underline">
+                  Roles &amp; permissions
+                </Link>{' '}
+                (sign in first).
+              </p>
             </div>
           </div>
         </div>
+
+        {/* ── Right: Brand panel ── */}
+        <div className="hidden lg:flex flex-col justify-between bg-slate-900 px-10 py-10">
+          <div>
+            <span className="inline-block text-[10px] font-medium text-orange-400 tracking-widest bg-orange-400/10 px-2.5 py-1 rounded-full mb-5">
+              RENTFOXXY OPERATIONS
+            </span>
+            <h2 className="text-2xl font-semibold text-white leading-snug mb-3">
+              Professional laptop rental &amp; refurbishment workflow
+            </h2>
+            <p className="text-sm text-slate-400 leading-relaxed">
+              Track every device from intake to dispatch with QC-driven quality and full accountability across your team.
+            </p>
+            <div className="grid grid-cols-3 gap-3 mt-7">
+              {[
+                { value: 'QC1 / QC2', label: 'Quality controls' },
+                { value: 'Inventory', label: 'Live tracking' },
+                { value: 'Dispatch', label: 'Sales flow' },
+              ].map((s) => (
+                <div key={s.label} className="bg-white/5 border border-white/8 rounded-xl px-3 py-3">
+                  <p className="text-sm font-medium text-white mb-0.5">{s.value}</p>
+                  <p className="text-[11px] text-slate-500">{s.label}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+          <p className="text-[11px] text-slate-600">
+            Rentfoxxy · Refurbishment Operations Suite
+          </p>
+        </div>
+
       </div>
-    );
-  }
+    </div>
+  );
+}

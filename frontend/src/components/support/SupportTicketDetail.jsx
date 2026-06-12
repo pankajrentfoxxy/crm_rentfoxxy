@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Loader2, Phone, MapPin, CheckCircle2, Clock, RefreshCw, Camera } from 'lucide-react';
+import { Loader2, Phone, MapPin, CheckCircle2, Clock, RefreshCw, Camera, Laptop } from 'lucide-react';
+import TtsplHistoryDrawer from '../../features/floor-pipeline/components/TtsplHistoryDrawer';
 import api from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
 import { isSupportLead, isSupportTechnician } from '../../utils/supportAccess';
@@ -345,6 +346,8 @@ export default function SupportTicketDetail() {
   const [mobileDetails, setMobileDetails] = useState(false);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('complaint');
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [customerLaptops, setCustomerLaptops] = useState([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -362,6 +365,17 @@ export default function SupportTicketDetail() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    const cid = data?.ticket?.customer_id;
+    if (!cid) {
+      setCustomerLaptops([]);
+      return;
+    }
+    api.get(`/customer-management/customers/${cid}/laptops`)
+      .then((r) => setCustomerLaptops((r.data.laptops || []).slice(0, 5)))
+      .catch(() => setCustomerLaptops([]));
+  }, [data?.ticket?.customer_id]);
 
   useEffect(() => {
     if (!isSupportLead(user)) return;
@@ -527,6 +541,15 @@ export default function SupportTicketDetail() {
               {pickups.length > 0 && <span className="support-phase-count pickup">{pickups.length} pickup</span>}
               {replacements.length > 0 && <span className="support-phase-count replacement">{replacements.length} replacement</span>}
             </div>
+            {ticket.ttspl_id && (
+              <button
+                type="button"
+                onClick={() => setHistoryOpen(true)}
+                className="flex items-center gap-1 text-sm text-blue-600 hover:underline mt-2"
+              >
+                <Laptop className="w-4 h-4" /> View TTSPL History: {ticket.ttspl_id}
+              </button>
+            )}
             <div className="flex flex-wrap gap-3 text-sm mt-2 items-center">
               <span className="inline-flex items-center gap-1" style={{ color: 'var(--color-text-secondary)' }}>
                 <Phone className="w-4 h-4 shrink-0" /> {ticket.display_phone || ticket.customer_phone}
@@ -583,17 +606,20 @@ export default function SupportTicketDetail() {
             </div>
           </section>
 
-          {isSupportLead(user) && audit?.length > 0 && (
+          {audit?.length > 0 && (
             <section className="support-v3-card">
-              <h2 className="font-semibold mb-3" style={{ color: 'var(--color-text-primary)' }}>Activity</h2>
-              <ul className="space-y-3">
+              <h2 className="font-semibold mb-3" style={{ color: 'var(--color-text-primary)' }}>Activity Log</h2>
+              <ul className="space-y-2 border-l-2 border-slate-200 ml-2 pl-4">
                 {audit.map((entry) => (
-                  <li key={entry.id} className="flex gap-3 text-sm">
-                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-slate-200 text-xs font-semibold">{initials(entry.user_name)}</span>
-                    <div>
-                      <p style={{ color: 'var(--color-text-primary)' }}><span className="font-medium">{entry.user_name || 'System'}</span> {entry.action.replace(/_/g, ' ')}</p>
-                      <p className="text-[10px]" style={{ color: 'var(--color-text-tertiary)' }}>{formatRelative(entry.created_at)}</p>
-                    </div>
+                  <li key={entry.id} className="text-sm">
+                    <p style={{ color: 'var(--color-text-primary)' }}>
+                      <span className="text-xs text-gray-500">{new Date(entry.created_at).toLocaleString()}</span>
+                      {' · '}
+                      <span className="font-medium">{entry.user_name || 'System'}</span>
+                      {' · '}
+                      {entry.action.replace(/_/g, ' ')}
+                      {entry.detail?.text ? `: ${entry.detail.text}` : ''}
+                    </p>
                   </li>
                 ))}
               </ul>
@@ -614,16 +640,42 @@ export default function SupportTicketDetail() {
           )}
         </div>
 
-        <DetailSidebar
-          ticket={ticket}
-          items={items}
-          otpNote={otpNote}
-          mobileOpen={mobileDetails}
-          onCloseMobile={() => setMobileDetails(false)}
-          showLeadOtp={isSupportLead(user)}
-          onPriorityChange={isSupportLead(user) ? onPriorityChange : null}
-        />
+        <div className="support-detail-side space-y-3">
+          <section className="support-v3-card">
+            <h3 className="support-v3-section-label mb-2">Customer&apos;s Active Laptops</h3>
+            {customerLaptops.length ? customerLaptops.map((lap) => {
+              const highlight = ticket.ttspl_id && lap.ttspl_id === ticket.ttspl_id;
+              return (
+                <button
+                  key={lap.id}
+                  type="button"
+                  onClick={() => { if (lap.ttspl_id) { setHistoryOpen(true); } }}
+                  className={`w-full text-left text-sm py-2 border-b border-gray-50 last:border-0 ${highlight ? 'bg-blue-50 rounded px-2 -mx-2' : ''}`}
+                >
+                  <span className="font-mono text-blue-600">{lap.ttspl_id || lap.serial_number}</span>
+                  <span className="text-gray-500 block text-xs">{[lap.processor, lap.ram, lap.storage].filter(Boolean).join(' · ') || lap.model_name}</span>
+                  <span className="text-xs capitalize text-gray-400">{lap.status}</span>
+                </button>
+              );
+            }) : <p className="text-xs text-gray-500">No active laptops on record</p>}
+          </section>
+          <DetailSidebar
+            ticket={ticket}
+            items={items}
+            otpNote={otpNote}
+            mobileOpen={mobileDetails}
+            onCloseMobile={() => setMobileDetails(false)}
+            showLeadOtp={isSupportLead(user)}
+            onPriorityChange={isSupportLead(user) ? onPriorityChange : null}
+          />
+        </div>
       </div>
+
+      <TtsplHistoryDrawer
+        ttsplId={ticket.ttspl_id || customerLaptops[0]?.ttspl_id}
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+      />
     </div>
   );
 }

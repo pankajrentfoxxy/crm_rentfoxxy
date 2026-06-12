@@ -1,7 +1,12 @@
 const express = require('express');
 const router = express.Router();
-const { getDashboardStats, getTeamPerformance } = require('../controllers/analyticsController');
-const { authMiddleware } = require('../middleware/auth');
+const {
+  getDashboardStats,
+  getTeamPerformance,
+  getManagerDashboard,
+  getSalesDashboard,
+} = require('../controllers/analyticsController');
+const { authMiddleware, checkRole } = require('../middleware/auth');
 
 router.use(authMiddleware);
 
@@ -14,5 +19,8 @@ router.get('/dashboard', getDashboardStats);
 // @desc    Get team performance metrics
 // @access  Private
 router.get('/team-performance', getTeamPerformance);
+
+router.get('/manager-dashboard', checkRole('admin', 'manager'), getManagerDashboard);
+router.get('/sales-dashboard', checkRole('admin', 'manager', 'sales'), getSalesDashboard);
 
 module.exports = router;

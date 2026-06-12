@@ -5,6 +5,8 @@ const {
   syncWorkLogForTicketState,
   closeOpenWorkLogsForTickets
 } = require('../services/ticketWorkLogService');
+const { applyGrnVendorQcPassOnTicketComplete } = require('../services/grnTicketService');
+const ttsplAuditService = require('../services/ttsplAuditService');
 
 // Create Ticket
 exports.createTicket = async (req, res) => {
@@ -139,7 +141,7 @@ exports.createTicket = async (req, res) => {
 
 // Get Tickets (with filters)
 exports.getTickets = async (req, res) => {
-  const { status, stage_id, team_id, search, view } = req.query;
+  const { status, stage_id, team_id, search, view, priority, ticket_type, stage_names } = req.query;
 
   try {
     let query = `
@@ -172,6 +174,10 @@ exports.getTickets = async (req, res) => {
     // Role-based visibility: Admin & Floor Manager see all; Team members see only tickets assigned to them
     const privilegedRoles = ['admin', 'floor_manager', 'manager'];
 
+    if (req.user.role === 'qc' && !privilegedRoles.includes(req.user.role)) {
+      query += ` AND s.stage_name IN ('QC1', 'QC2')`;
+    }
+
     if (!privilegedRoles.includes(req.user.role)) {
       // Team members: See ONLY tickets assigned to them (never unassigned tickets)
       if (view === 'completed') {
@@ -196,8 +202,37 @@ exports.getTickets = async (req, res) => {
       }
     }
 
+    if (priority) {
+      query += ` AND t.priority = $${paramCount}`;
+      params.push(priority);
+      paramCount++;
+    }
+
+    if (ticket_type) {
+      query += ` AND t.ticket_type = $${paramCount}`;
+      params.push(ticket_type);
+      paramCount++;
+    }
+
+    if (stage_names) {
+      const names = String(stage_names)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (names.length) {
+        query += ` AND s.stage_name = ANY($${paramCount}::text[])`;
+        params.push(names);
+        paramCount++;
+      }
+    }
+
     if (search) {
-      query += ` AND (t.serial_number ILIKE $${paramCount} OR t.model ILIKE $${paramCount})`;
+      query += ` AND (
+        t.serial_number ILIKE $${paramCount}
+        OR t.model ILIKE $${paramCount}
+        OR COALESCE(t.ttspl_id, '') ILIKE $${paramCount}
+        OR COALESCE(t.machine_number, '') ILIKE $${paramCount}
+      )`;
       params.push(`%${search}%`);
       paramCount++;
     }
@@ -527,6 +562,17 @@ exports.moveToNextStage = async (req, res) => {
              WHERE serial_number = $1`,
         [ticket.serial_number]
       );
+
+      if (ticket.vendor_serial_id) {
+        try {
+          const qcPass = await applyGrnVendorQcPassOnTicketComplete(pool, ticket, req.user.user_id);
+          if (qcPass.applied) {
+            successMessage = 'Ticket completed — laptop marked QC Passed';
+          }
+        } catch (grnQcErr) {
+          console.error('GRN vendor QC pass on ticket complete failed:', grnQcErr);
+        }
+      }
     }
 
     // Final Testing -> QC1: always round-robin among QC1 team members (not the Final Testing assignee).
@@ -935,24 +981,79 @@ exports.addPartToTicket = async (req, res) => {
   const { part_id, quantity_used, notes } = req.body;
 
   try {
+    const ticketRes = await pool.query('SELECT * FROM tickets WHERE ticket_id = $1', [id]);
+    if (!ticketRes.rows.length) {
+      return res.status(404).json({ success: false, message: 'Ticket not found' });
+    }
+    const ticket = ticketRes.rows[0];
+
+    const partRes = await pool.query(
+      `SELECT part_id, part_name, part_type, cost FROM parts WHERE part_id = $1`,
+      [part_id]
+    );
+    if (!partRes.rows.length) {
+      return res.status(404).json({ success: false, message: 'Part not found' });
+    }
+    const part = partRes.rows[0];
+    const qty = Number(quantity_used) || 1;
+    const unitCost = parseFloat(part.cost) || 0;
+    const totalCost = unitCost * qty;
+
     await pool.query(
       `INSERT INTO ticket_parts (ticket_id, part_id, quantity_used, notes)
        VALUES ($1, $2, $3, $4)`,
-      [id, part_id, quantity_used, notes]
+      [id, part_id, qty, notes]
     );
 
-    // Update parts inventory
     await pool.query(
       `UPDATE parts SET quantity = quantity - $1 WHERE part_id = $2`,
-      [quantity_used, part_id]
+      [qty, part_id]
     );
 
-    // Log activity
     await pool.query(
       `INSERT INTO activities (ticket_id, user_id, action, notes) 
        VALUES ($1, $2, $3, $4)`,
-      [id, req.user.user_id, 'part_added', `Added ${quantity_used} unit(s) of part ID: ${part_id}`]
+      [id, req.user.user_id, 'part_added', `Added ${qty} × ${part.part_name}`]
     );
+
+    if (ticket.ttspl_id) {
+      await ttsplAuditService.logTtsplEvent({
+        ttsplId: ticket.ttspl_id,
+        vendorSerialId: ticket.vendor_serial_id,
+        eventType: 'parts_used',
+        description: `Part used: ${part.part_name} × ${qty} (₹${totalCost.toFixed(2)})`,
+        metadata: {
+          part_id,
+          part_name: part.part_name,
+          quantity: qty,
+          unit_cost: unitCost,
+          total_cost: totalCost
+        },
+        actorUserId: req.user.user_id
+      });
+
+      const upgradeTypes = ['RAM', 'Storage', 'Memory', 'SSD', 'HDD'];
+      const partType = String(part.part_type || '').trim();
+      if (upgradeTypes.some((t) => partType.toLowerCase().includes(t.toLowerCase()))) {
+        const fieldMap = { RAM: 'ram', Memory: 'ram', Storage: 'storage', SSD: 'storage', HDD: 'storage' };
+        const fieldName =
+          Object.entries(fieldMap).find(([k]) => partType.toLowerCase().includes(k.toLowerCase()))?.[1] ||
+          'storage';
+        await ttsplAuditService.logConfigChange({
+          ttsplId: ticket.ttspl_id,
+          vendorSerialId: ticket.vendor_serial_id,
+          ticketId: ticket.ticket_id,
+          changedBy: req.user.user_id,
+          changeType: 'upgrade',
+          fieldName,
+          oldValue: ticket[fieldName] || '',
+          newValue: part.part_name,
+          notes: notes || `Part upgrade via ticket #${id}`,
+          partUsedId: part_id,
+          partCost: totalCost
+        });
+      }
+    }
 
     res.json({
       success: true,

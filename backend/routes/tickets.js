@@ -22,6 +22,7 @@ const {
   bulkMoveTickets
 } = require('../controllers/ticketController');
 const qcController = require('../controllers/qcController');
+const phase2 = require('../controllers/ticketPhase2Controller');
 const { authMiddleware, checkRole } = require('../middleware/auth');
 
 // All routes require authentication
@@ -51,6 +52,23 @@ router.get('/my', getMyTickets);
 // @desc    Bulk move all tickets from one stage to another
 // @access  Private (Admin, Manager, Floor Manager)
 router.post('/bulk-move', checkRole('admin', 'manager', 'floor_manager'), bulkMoveTickets);
+
+// QC assignee list (must be before /:id)
+router.get('/qc/qc2-assignees', qcController.getQC2Assignees);
+
+// Phase 2 — floor pipeline (must be before /:id)
+router.get('/floor-dashboard', phase2.getFloorDashboard);
+router.get('/ttspl/:ttsplId/history', phase2.getTtsplHistory);
+router.get('/ttspl/:ttsplId', phase2.getTicketsByTtsplId);
+router.post('/:id/move-stage', phase2.moveToStage);
+router.patch('/:id/chip-repair', phase2.markChipRepairRequired);
+router.patch('/:id/body-paint', phase2.markBodyPaintRequired);
+router.patch(
+  '/:id/floor-manager-fail',
+  checkRole('admin', 'manager', 'floor_manager'),
+  phase2.markQcFailed
+);
+router.patch('/:id/config', phase2.updateTtsplConfig);
 
 // @route   GET /api/tickets/:id
 // @desc    Get ticket by ID with full details

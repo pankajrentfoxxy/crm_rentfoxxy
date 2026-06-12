@@ -68,7 +68,24 @@ async function pickNextAssigneeForTeamPool(db, teamId) {
     }
 }
 
+/**
+ * Record manual QC2 pick so the next round-robin continues from this user.
+ */
+async function recordAssigneeForTeam(client, teamId, userId) {
+    if (teamId == null || userId == null) return;
+    await client.query(
+        `INSERT INTO qc_round_robin_state (team_id, last_assigned_user_id, updated_at)
+         VALUES ($1, $2, CURRENT_TIMESTAMP)
+         ON CONFLICT (team_id) DO UPDATE
+         SET last_assigned_user_id = EXCLUDED.last_assigned_user_id,
+             updated_at = CURRENT_TIMESTAMP`,
+        [teamId, userId]
+    );
+}
+
 module.exports = {
+    fetchOrderedMemberIds,
     pickNextAssigneeForTeam,
-    pickNextAssigneeForTeamPool
+    pickNextAssigneeForTeamPool,
+    recordAssigneeForTeam
 };

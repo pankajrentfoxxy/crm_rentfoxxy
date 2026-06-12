@@ -34,6 +34,7 @@ async function getNextAutoAssignee() {
     return nextUserId;
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
+    if (e.code === '42P01') return null;
     throw e;
   } finally {
     client.release();

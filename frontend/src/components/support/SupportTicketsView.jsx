@@ -5,6 +5,7 @@ import api from '../../utils/api';
 import { isSupportLead } from '../../utils/supportAccess';
 import { useAuth } from '../../context/AuthContext';
 import TicketCard from './components/TicketCard';
+import SupportTicketList from './SupportTicketList';
 
 const emptyCopy = {
   active: { title: 'No support tickets yet', body: 'Create your first ticket to get started.' },
@@ -13,7 +14,7 @@ const emptyCopy = {
   my_open: { title: 'You have no assigned tickets right now', body: 'New assignments will appear here.' }
 };
 
-export default function SupportTicketsView({ view = 'active', showFilters = true, splitSections = false }) {
+function SupportTicketsViewCards({ view = 'active', showFilters = true, splitSections = false }) {
   const { user } = useAuth();
   const [search, setSearch] = useState('');
   const [debounced, setDebounced] = useState('');
@@ -197,4 +198,9 @@ export default function SupportTicketsView({ view = 'active', showFilters = true
       )}
     </div>
   );
+}
+
+export default function SupportTicketsView({ enhancedList = false, ...props }) {
+  if (enhancedList) return <SupportTicketList />;
+  return <SupportTicketsViewCards {...props} />;
 }

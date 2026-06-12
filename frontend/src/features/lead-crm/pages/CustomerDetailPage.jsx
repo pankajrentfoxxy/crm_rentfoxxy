@@ -1,0 +1,291 @@
+import React, { useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { ArrowLeft, Copy } from 'lucide-react';
+import toast from 'react-hot-toast';
+import PermissionGate from '../../../components/PermissionGate';
+import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
+import {
+  getCustomer, getCustomerLaptops, updateCustomer, verifyCustomerKyc, enableCustomerPortal,
+} from '../leadCrmApi';
+import { formatCurrency } from '../leadCrmUtils';
+import CustomerDocuments from '../components/CustomerDocuments';
+import CustomerFormDrawer from '../components/CustomerFormDrawer';
+
+const TABS = ['Profile', 'Documents', 'Laptops', 'Orders', 'Lead Origin', 'Portal Access'];
+const PORTAL_URL = process.env.REACT_APP_CUSTOMER_PORTAL_URL || 'http://localhost:3002';
+
+function PasswordModal({ password, onClose }) {
+  const copy = () => {
+    navigator.clipboard.writeText(password);
+    toast.success('Password copied');
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 space-y-4">
+        <h3 className="text-lg font-semibold">Portal credentials</h3>
+        <p className="text-sm text-gray-600">Share this temporary password with the customer:</p>
+        <div className="flex items-center gap-2 bg-gray-50 border rounded-lg p-3 font-mono text-sm">
+          <span className="flex-1">{password}</span>
+          <button type="button" onClick={copy} className="p-1.5 hover:bg-gray-200 rounded">
+            <Copy className="w-4 h-4" />
+          </button>
+        </div>
+        <p className="text-xs text-gray-500">Portal URL: {PORTAL_URL}</p>
+        <button type="button" onClick={onClose} className="w-full py-2 bg-blue-600 text-white rounded-lg text-sm">Done</button>
+      </div>
+    </div>
+  );
+}
+
+export default function CustomerDetailPage() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const [customer, setCustomer] = useState(null);
+  const [laptops, setLaptops] = useState([]);
+  const [tab, setTab] = useState(0);
+  const [editOpen, setEditOpen] = useState(false);
+  const [ttsplOpen, setTtsplOpen] = useState(null);
+  const [portalBusy, setPortalBusy] = useState(false);
+  const [newPassword, setNewPassword] = useState(null);
+
+  const load = React.useCallback(async () => {
+    try {
+      const res = await getCustomer(id);
+      setCustomer(res.data?.customer);
+      const lapRes = await getCustomerLaptops(id);
+      setLaptops(lapRes.data?.laptops || []);
+    } catch {
+      toast.error('Failed to load customer');
+    }
+  }, [id]);
+
+  React.useEffect(() => { load(); }, [load]);
+
+  if (!customer) return <div className="p-6 text-center text-gray-400">Loading...</div>;
+
+  const handlePortalAction = async (payload) => {
+    setPortalBusy(true);
+    try {
+      const res = await enableCustomerPortal(id, payload);
+      if (res.data?.new_password) setNewPassword(res.data.new_password);
+      toast.success(payload.enabled === false ? 'Portal disabled' : 'Portal updated');
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Portal update failed');
+    } finally {
+      setPortalBusy(false);
+    }
+  };
+
+  const handleVerifyKyc = async () => {
+    await verifyCustomerKyc(id);
+    toast.success('KYC verified');
+    load();
+  };
+
+  return (
+    <div className="p-4 md:p-6 max-w-7xl mx-auto">
+      <button type="button" onClick={() => navigate('/lead-crm/customers')}
+        className="flex items-center gap-2 text-sm text-gray-600 mb-4">
+        <ArrowLeft className="w-4 h-4" /> Back to Customers
+      </button>
+
+      <div className="flex flex-wrap items-start justify-between gap-4 mb-6">
+        <div>
+          <h1 className="text-2xl font-bold">{customer.company_name || customer.customer_name}</h1>
+          <p className="text-gray-500 text-sm">Customer #{customer.customer_id}</p>
+        </div>
+        <div className="flex gap-2">
+          <button type="button" onClick={() => setEditOpen(true)} className="px-3 py-1.5 text-sm border rounded-lg">Edit</button>
+          <PermissionGate section="customer_documents" action="edit">
+            {!customer.kyc_verified && (
+              <button type="button" onClick={handleVerifyKyc}
+                className="px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg">Verify KYC</button>
+            )}
+          </PermissionGate>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2 border-b border-gray-100 pb-2 mb-4">
+        {TABS.map((t, i) => (
+          <button key={t} type="button" onClick={() => setTab(i)}
+            className={`px-3 py-1.5 text-sm rounded-lg ${tab === i ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
+            {t}
+          </button>
+        ))}
+      </div>
+
+      {tab === 0 && (
+        <div className="space-y-4">
+          <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+            {[
+              ['Name', customer.customer_name], ['Company', customer.company_name],
+              ['Email', customer.email], ['Phone', customer.customer_number || customer.phone],
+              ['GST', customer.gst_number], ['PAN', customer.pan_number || customer.pan_card_number],
+              ['Company Type', customer.company_type], ['Industry', customer.industry],
+              ['Billing', typeof customer.billing_address === 'object'
+                ? customer.billing_address?.address
+                : customer.billing_address],
+              ['City', customer.billing_city],
+              ['State', customer.billing_state], ['Pincode', customer.billing_pincode],
+              ['Shipping same as billing', customer.shipping_same !== false ? 'Yes' : 'No'],
+              ...(customer.shipping_same === false ? [
+                ['Shipping Address', customer.shipping_address],
+                ['Shipping City', customer.shipping_city],
+                ['Shipping State', customer.shipping_state],
+                ['Shipping Pincode', customer.shipping_pincode],
+              ] : []),
+            ].map(([label, val]) => (
+              <div key={label}><span className="text-gray-500">{label}</span><p className="font-medium">{val || '—'}</p></div>
+            ))}
+          </div>
+          <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 text-sm">
+            <h3 className="font-semibold text-gray-900 mb-3">Financial</h3>
+            <p>
+              <span className="text-gray-500">Security Deposit: </span>
+              <span className="font-medium">{formatCurrency(customer.total_security_amount || 0)}</span>
+            </p>
+            <p className="text-xs text-gray-500 mt-2">
+              Total held from quotations. For full deposit history,{' '}
+              <Link
+                to={`/finance/security-deposits?customer_id=${customer.customer_id}`}
+                className="text-blue-600 hover:underline"
+              >
+                view in Finance → Security Deposits
+              </Link>
+              .
+            </p>
+          </div>
+        </div>
+      )}
+
+      {tab === 1 && <CustomerDocuments customerId={customer.customer_id} />}
+
+      {tab === 2 && (
+        <div className="rounded-xl border border-gray-100 bg-white shadow-sm overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 text-xs text-gray-500 text-left">
+              <tr>
+                {['TTSPL ID', 'Model', 'Config', 'Dispatch', 'Status'].map((h) => <th key={h} className="p-3">{h}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {laptops.length === 0 ? (
+                <tr><td colSpan={5} className="p-6 text-center text-gray-400">No laptops on record</td></tr>
+              ) : laptops.map((lap) => (
+                <tr key={lap.id || lap.ttspl_id} className="border-t border-gray-100">
+                  <td className="p-3">
+                    <button type="button" onClick={() => setTtsplOpen(lap.ttspl_id || lap.serial_number)}
+                      className="text-blue-600 hover:underline font-mono text-xs">
+                      {lap.ttspl_id || lap.serial_number}
+                    </button>
+                  </td>
+                  <td className="p-3">{lap.model_name || '—'}</td>
+                  <td className="p-3 text-xs">{[lap.processor, lap.ram, lap.storage].filter(Boolean).join(' · ')}</td>
+                  <td className="p-3 text-xs">{lap.dispatch_date ? new Date(lap.dispatch_date).toLocaleDateString('en-IN') : '—'}</td>
+                  <td className="p-3">{lap.status || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {tab === 3 && (
+        <p className="text-sm text-gray-500 p-4 rounded-xl border border-gray-100 bg-white">
+          Orders are managed in Operation Management. Link customer orders from sales orders module.
+        </p>
+      )}
+
+      {tab === 4 && (
+        <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 text-sm">
+          {customer.source_lead_id ? (
+            <>
+              <p>Converted from lead <Link to={`/lead-crm/leads/${customer.source_lead_id}`} className="text-blue-600">#{customer.source_lead_id}</Link></p>
+              <p className="text-gray-500 mt-2">Stage at conversion: {customer.source_lead_stage || '—'}</p>
+              <p className="text-gray-500">Onboarded: {customer.onboarded_at ? new Date(customer.onboarded_at).toLocaleString('en-IN') : '—'}</p>
+            </>
+          ) : (
+            <p>Added directly on {new Date(customer.created_at).toLocaleDateString('en-IN')}</p>
+          )}
+        </div>
+      )}
+
+      {tab === 5 && (
+        <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 space-y-4">
+          <PermissionGate section="customers" action="edit">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">Portal status</p>
+                <p className={`text-xs mt-1 ${customer.portal_enabled ? 'text-green-600' : 'text-gray-500'}`}>
+                  {customer.portal_enabled ? 'Enabled' : 'Disabled'}
+                </p>
+              </div>
+              <span className={`px-2 py-1 rounded-full text-xs font-semibold ${customer.portal_enabled ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                {customer.portal_enabled ? 'Active' : 'Inactive'}
+              </span>
+            </div>
+
+            {customer.portal_enabled && (
+              <p className="text-sm text-gray-600">
+                Last login:{' '}
+                {customer.portal_last_login
+                  ? new Date(customer.portal_last_login).toLocaleString('en-IN')
+                  : 'Never'}
+              </p>
+            )}
+
+            <p className="text-xs text-gray-500">Customer portal URL: {PORTAL_URL}</p>
+
+            <div className="flex flex-wrap gap-2 pt-2">
+              {!customer.portal_enabled ? (
+                <button
+                  type="button"
+                  disabled={portalBusy}
+                  onClick={() => handlePortalAction({ enabled: true })}
+                  className="px-4 py-2 text-sm bg-green-600 text-white rounded-lg disabled:opacity-50"
+                >
+                  Enable Portal Access
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    disabled={portalBusy}
+                    onClick={() => handlePortalAction({ reset_password: true })}
+                    className="px-4 py-2 text-sm border rounded-lg disabled:opacity-50"
+                  >
+                    Reset Password
+                  </button>
+                  <button
+                    type="button"
+                    disabled={portalBusy}
+                    onClick={() => handlePortalAction({ send_login_email: true })}
+                    className="px-4 py-2 text-sm border border-teal-200 text-teal-700 rounded-lg disabled:opacity-50"
+                  >
+                    Send Login Email
+                  </button>
+                  <button
+                    type="button"
+                    disabled={portalBusy}
+                    onClick={() => handlePortalAction({ enabled: false })}
+                    className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg disabled:opacity-50"
+                  >
+                    Disable Portal
+                  </button>
+                </>
+              )}
+            </div>
+          </PermissionGate>
+          {!customer.portal_enabled && (
+            <p className="text-xs text-gray-500">Enable portal access to let this customer view invoices, laptops, and raise support tickets.</p>
+          )}
+        </div>
+      )}
+
+      <CustomerFormDrawer open={editOpen} customer={customer} onClose={() => setEditOpen(false)} onSaved={load} />
+      <TtsplHistoryDrawer ttsplId={ttsplOpen} open={!!ttsplOpen} onClose={() => setTtsplOpen(null)} />
+      {newPassword && <PasswordModal password={newPassword} onClose={() => setNewPassword(null)} />}
+    </div>
+  );
+}

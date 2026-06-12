@@ -97,6 +97,10 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
     const [processing, setProcessing] = useState(false);
     const [saving, setSaving] = useState(false);
     const [bitlockerModal, setBitlockerModal] = useState(false);
+    const [assigneeModal, setAssigneeModal] = useState(false);
+    const [qc2Assignees, setQc2Assignees] = useState([]);
+    const [selectedAssigneeId, setSelectedAssigneeId] = useState('');
+    const [loadingAssignees, setLoadingAssignees] = useState(false);
 
     const loadQCData = useCallback(async () => {
         try {
@@ -140,6 +144,50 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
         return Object.values(checklist).some(val =>
             val === 'NO' || val === 'NOT WORKING' || val === 'BAD' || val === 'FAIL' || val === 'NOT INSTALLED'
         );
+    };
+
+    const willPassQC = () => {
+        const criticalFailures = [
+            checklist.keyboard === 'NOT WORKING',
+            checklist.touchpad === 'NOT WORKING',
+            checklist.usb_ports === 'NOT WORKING',
+            checklist.wifi_test === 'NOT WORKING',
+            checklist.battery_health === 'BAD',
+            checklist.ssd_health === 'BAD',
+            checklist.screen_resolution === 'FAIL'
+        ];
+        return !criticalFailures.some(Boolean);
+    };
+
+    const submitQC = async (assignToUserId = null) => {
+        setProcessing(true);
+        try {
+            const payload = {
+                qcStage,
+                header,
+                checklist,
+                grading,
+                remarks,
+                replacedParts: partReplacement.parts_replaced ? partReplacement.replaced_parts : [],
+                signOff
+            };
+            if (assignToUserId != null) {
+                payload.assignToUserId = assignToUserId;
+            }
+            const res = await api.post(`/tickets/${ticket.ticket_id}/qc/submit`, payload);
+
+            if (res.data.success) {
+                alert(`${qcStage} submitted successfully!\nResult: ${res.data.result}\nNext Stage: ${res.data.nextStage}`);
+                onComplete();
+            }
+        } catch (error) {
+            console.error('Submit QC error:', error);
+            alert(error.response?.data?.message || 'Failed to submit QC');
+        } finally {
+            setProcessing(false);
+            setAssigneeModal(false);
+            setSelectedAssigneeId('');
+        }
     };
 
     const handleSave = async () => {
@@ -195,28 +243,45 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
 
     const handleBitlockerDone = async () => {
         setBitlockerModal(false);
-        setProcessing(true);
-        try {
-            const res = await api.post(`/tickets/${ticket.ticket_id}/qc/submit`, {
-                qcStage,
-                header,
-                checklist,
-                grading,
-                remarks,
-                replacedParts: partReplacement.parts_replaced ? partReplacement.replaced_parts : [],
-                signOff
-            });
 
-            if (res.data.success) {
-                alert(`${qcStage} submitted successfully!\nResult: ${res.data.result}\nNext Stage: ${res.data.nextStage}`);
-                onComplete();
-            }
-        } catch (error) {
-            console.error('Submit QC error:', error);
-            alert('Failed to submit QC');
-        } finally {
-            setProcessing(false);
+        const needsQc2Assignee = qcStage === 'QC1' && willPassQC();
+        if (!needsQc2Assignee) {
+            await submitQC();
+            return;
         }
+
+        setLoadingAssignees(true);
+        try {
+            const res = await api.get('/tickets/qc/qc2-assignees');
+            const assignees = res.data.success ? (res.data.assignees || []) : [];
+            setQc2Assignees(assignees);
+
+            if (assignees.length === 0) {
+                await submitQC();
+                return;
+            }
+
+            if (assignees.length === 1) {
+                await submitQC(assignees[0].user_id);
+                return;
+            }
+
+            setSelectedAssigneeId('');
+            setAssigneeModal(true);
+        } catch (error) {
+            console.error('Load QC2 assignees error:', error);
+            alert('Could not load QC2 team members. Submitting with automatic assignment.');
+            await submitQC();
+        } finally {
+            setLoadingAssignees(false);
+        }
+    };
+
+    const handleAssigneeConfirm = async () => {
+        if (!selectedAssigneeId) {
+            return alert('Please select a QC2 team member to assign this ticket');
+        }
+        await submitQC(parseInt(selectedAssigneeId, 10));
     };
 
     const addReplacedPart = () => {
@@ -596,13 +661,63 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
 
                 <button
                     onClick={handleSubmit}
-                    disabled={processing || saving}
+                    disabled={processing || saving || loadingAssignees}
                     className="flex-1 bg-gradient-to-r from-green-600 to-emerald-600 text-white py-4 rounded-lg font-bold text-lg hover:from-green-700 hover:to-emerald-700 disabled:from-gray-300 disabled:to-gray-400 transition-all shadow-lg flex items-center justify-center gap-2"
                 >
                     <CheckCircle className="w-6 h-6" />
-                    {processing ? 'Submitting...' : `Submit ${qcStage}`}
+                    {processing || loadingAssignees ? 'Submitting...' : `Submit ${qcStage}`}
                 </button>
             </div>
+
+            {/* QC2 assignee selection (after QC1 pass + Bitlocker confirm) */}
+            {assigneeModal && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-[60]">
+                    <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+                        <div className="mb-6">
+                            <h3 className="text-lg font-bold text-gray-900 mb-2">Assign for QC2</h3>
+                            <p className="text-gray-600 text-sm">
+                                Select a team member with QC2 access. The ticket will move to QC2 and be assigned to them.
+                            </p>
+                        </div>
+                        <div className="mb-6">
+                            <label className="block text-sm font-semibold text-gray-700 mb-2">
+                                QC2 assignee <span className="text-red-600">*</span>
+                            </label>
+                            <select
+                                value={selectedAssigneeId}
+                                onChange={(e) => setSelectedAssigneeId(e.target.value)}
+                                className="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-purple-500"
+                            >
+                                <option value="">Select team member</option>
+                                {qc2Assignees.map((member) => (
+                                    <option key={member.user_id} value={member.user_id}>
+                                        {member.name}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        <div className="flex gap-3">
+                            <button
+                                onClick={() => {
+                                    setAssigneeModal(false);
+                                    setSelectedAssigneeId('');
+                                }}
+                                disabled={processing}
+                                className="flex-1 px-4 py-3 border border-gray-300 rounded-lg font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleAssigneeConfirm}
+                                disabled={processing || !selectedAssigneeId}
+                                className="flex-1 px-4 py-3 bg-green-600 text-white rounded-lg font-semibold hover:bg-green-700 disabled:bg-gray-300"
+                            >
+                                {processing ? 'Submitting...' : 'Submit QC1'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Bitlocker Reminder Modal */}
             {bitlockerModal && (

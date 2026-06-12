@@ -1,6 +1,17 @@
 # ERP Inventory Sync – How It Works & Where Wrong Details Come From
 
-## Data Flow
+## Bulk sync (disabled by default)
+
+Full pagination over `/qc-orders/passed` is **off** unless `ERP_INVENTORY_BULK_SYNC_ENABLED=true`.  
+Use **single-item** sync instead: `POST /api/inventory/sync/:serialOrMachineId` (CRM Inventory UI: **Get from ERP**).
+
+Optional env for single lookup:
+
+- `ERP_QC_LOOKUP_PARAMS` — comma-separated ERP filter params (default `serial_number,unique_product_serial`)
+- Legacy: `ERP_QC_LOOKUP_QUERY` — single param name (still supported)
+- `ERP_SINGLE_QC_MAX_PAGES` — max pages to scan if lookup misses (default `0` = no scan)
+
+## Data Flow (bulk only, when enabled)
 
 ```
 ┌─────────────────────────┐     ┌──────────────────────────┐
@@ -65,6 +76,8 @@
 - **buildPurchaseOrderMap** indexes by multiple IDs: `id`, `qc_order_id`, `purchase_order_id`, `order_id`
 - If IDs overlap across different orders, the first match wins
 - **Fix:** Prefer `po_id` / `purchase_order_id` from QC record; avoid matching by generic `id` when it can collide
+
+ds
 
 ### 2. **products[0] fallback (multi-laptop orders)**
 - When `product_id` and `machine_number` don’t match any product, code uses `products[0]`

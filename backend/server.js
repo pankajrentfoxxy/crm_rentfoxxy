@@ -13,12 +13,16 @@ const app = express();
 // Middleware
 const allowedOrigins = [
   'http://localhost:3000',
+  'http://localhost:3001',
+  'http://localhost:3002',
   'http://localhost:5001',
   'https://rentfoxxy.vercel.app',
   'http://187.77.187.213',
   'https://187.77.187.213',
   'http://crm.rentfoxxy.com',
-  'https://crm.rentfoxxy.com'
+  'https://crm.rentfoxxy.com',
+  'http://staging.rentfoxxy.com',
+  'https://staging.rentfoxxy.com'
 ];
 
 if (process.env.FRONTEND_URL) {
@@ -53,12 +57,20 @@ const pool = require('./config/db');
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));
+app.use('/api/users', require('./routes/users'));
+app.use('/api/roles', require('./routes/roles'));
+app.use('/api/role-permissions', require('./routes/rolePermissions'));
+app.use('/api/permissions', require('./routes/permissionsLegacy'));
+app.use('/api/user-permissions', require('./routes/userPermissions'));
 app.use('/api/tickets', require('./routes/tickets'));
 app.use('/api/sales', require('./routes/sales'));
+app.use('/api/sales-management', require('./routes/salesManagement'));
+app.use('/api/delivery-register-management', require('./routes/deliveryRegisterManagement'));
+app.use('/api/technician-auth', require('./routes/technicianAuth'));
+app.use('/api/technicians-bucket-list', require('./routes/techniciansBucketList'));
+app.use('/api/customer-management', require('./routes/customerManagement'));
 app.use('/api/procurement', require('./routes/procurement'));
 app.use('/api/warehouse', require('./routes/warehouse'));
-
-
 app.use('/api/stages', require('./routes/stages'));
 app.use('/api/teams', require('./routes/teams'));
 app.use('/api/parts', require('./routes/parts'));
@@ -69,8 +81,18 @@ app.use('/api/diagnosis', require('./routes/diagnosis'));
 app.use('/api/chip-repair', require('./routes/chipLevel'));
 app.use('/api/quotation', require('./routes/quotationPublic'));
 app.use('/api/leads', require('./routes/leads'));
+app.use('/api/customer-documents', require('./routes/customerDocuments'));
 app.use('/api/customer-inventory', require('./routes/customerInventory'));
 app.use('/api/support', require('./routes/support'));
+app.use('/api/vendor-management', require('./routes/vendorManagement'));
+app.use('/api/vendor-portal', require('./routes/vendorPortal'));
+app.use('/api/customer-portal', require('./routes/customerPortal'));
+app.use('/api/qc-management', require('./routes/qcManagement'));
+app.use('/api/inventory-management', require('./routes/inventoryManagement'));
+app.use('/api/customer-billing', require('./routes/customerBilling'));
+app.use('/api/vendor-billing', require('./routes/vendorBilling'));
+app.use('/api/einvoice', require('./routes/einvoice'));
+app.use('/api/finance-overview', require('./routes/financeOverview'));
 
 // Health check
 app.get('/health', (req, res) => {
@@ -117,10 +139,8 @@ app.get('/', (req, res) => {
     }
   });
 });
-
 // Error handler (must be last)
 app.use(errorHandler);
-
 // Handle 404
 app.use((req, res) => {
   res.status(404).json({
@@ -128,22 +148,31 @@ app.use((req, res) => {
     message: 'Endpoint not found'
   });
 });
-
 const PORT = process.env.PORT || 5000;
-
 app.listen(PORT, () => {
   if (process.env.NODE_ENV !== 'production') {
     console.log(`Server running on port ${PORT} (${process.env.NODE_ENV || 'development'})`);
   }
 
-  startEmailQueueWorker().catch((err) => console.error('Email queue worker failed:', err.message));
-  startInventorySyncWorker().catch((err) => console.error('ERP inventory sync worker failed:', err.message));
-  startLeadEmailIngestionWorker().catch((err) => console.error('Lead email ingestion worker failed:', err.message));
-  startCustomerInventorySyncWorker().catch((err) => console.error('Customer inventory ERP worker failed:', err.message));
+  // startEmailQueueWorker().catch((err) => console.error('Email queue worker failed:', err.message));
+  // startInventorySyncWorker().catch((err) => console.error('ERP inventory sync worker failed:', err.message));
+  // startLeadEmailIngestionWorker().catch((err) => console.error('Lead email ingestion worker failed:', err.message));
+  // startCustomerInventorySyncWorker().catch((err) => console.error('Customer inventory ERP worker failed:', err.message));
   const { ensureSupportSchema } = require('./controllers/supportController');
   const { ensureUserSchema } = require('./controllers/authController');
+  const { ensureVendorManagementSchema, ensureVendorBillingSchema } = require('./controllers/vendorManagementSchema');
+  const { ensureSalesManagementSchema } = require('./controllers/salesManagementController');
+  const { ensureCustomerManagementSchema } = require('./controllers/customerManagementController');
+  const { ensureBillingEngineSchema } = require('./controllers/customerBillingController');
+  const { startBillingScheduler } = require('./services/billingSchedulerService');
   ensureSupportSchema().catch((err) => console.error('Support schema ensure failed:', err.message));
   ensureUserSchema().catch((err) => console.error('User schema ensure failed:', err.message));
+  ensureVendorManagementSchema().catch((err) => console.error('Vendor management schema failed:', err.message));
+  ensureVendorBillingSchema().catch((err) => console.error('Vendor billing schema failed:', err.message));
+  ensureSalesManagementSchema().catch((err) => console.error('Sales management schema failed:', err.message));
+  ensureCustomerManagementSchema().catch((err) => console.error('Customer management schema failed:', err.message));
+  ensureBillingEngineSchema().catch((err) => console.error('Billing engine schema failed:', err.message));
+  startBillingScheduler();
 });
 
 module.exports = app;
