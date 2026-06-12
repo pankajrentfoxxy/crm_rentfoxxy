@@ -1435,7 +1435,7 @@ exports.getFloorManagerQueue = async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT t.*, s.stage_name,
-              vsn.ttspl_id,
+              COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id', t.ttspl_id) AS ttspl_id,
               vsn.extra->>'brand' AS brand,
               vsn.extra->>'processor' AS processor,
               vsn.extra->>'ram' AS ram,

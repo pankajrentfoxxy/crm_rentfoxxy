@@ -46,7 +46,7 @@ async function generateCustomerInvoice(customerId, month, year) {
        dcl.model_name,
        dcl.delivered_at,
        dcl.status AS dc_status,
-       vsn.ttspl_id,
+       COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
        vsn.serial_id,
        sol.rate,
        COALESCE(sol.quotation_type, sq.quotation_type, 'rental') AS quotation_type
@@ -55,7 +55,7 @@ async function generateCustomerInvoice(customerId, month, year) {
      LEFT JOIN sales_quotations sq ON sq.quotation_number = dcl.quotation_number
      LEFT JOIN vendor_serial_numbers vsn
        ON vsn.serial_number = (dcl.serial_number::jsonb->>0)
-       OR vsn.ttspl_id = (dcl.serial_number::jsonb->>0)
+       OR COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') = (dcl.serial_number::jsonb->>0)
      WHERE dcl.customer_id = $1
        AND dcl.status IN ('delivered', 'shipped')
        AND COALESCE(sol.quotation_type, sq.quotation_type, 'rental') = 'rental'
@@ -192,16 +192,21 @@ async function generateVendorBill(vendorId, month, year) {
   }
 
   const serialsRes = await pool.query(
-    `SELECT vsn.serial_id, vsn.ttspl_id, vsn.serial_number,
-            vsn.inventory_status, vsn.received_at, vsn.returned_at,
-            vpo.rental_monthly_rate, vpo.po_type
+    `SELECT vsn.serial_id,
+            COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
+            vsn.serial_number,
+            vsn.inventory_status,
+            COALESCE((vsn.extra->>'received_at')::date, vsn.rental_start_date, vsn.created_at::date) AS received_at,
+            (vsn.extra->>'returned_at')::date AS returned_at,
+            (vpo.line_items->0->>'rate')::numeric AS rental_monthly_rate,
+            vpo.purchase_order_type AS po_type
      FROM vendor_serial_numbers vsn
      JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id
-     WHERE vsn.vendor_id = $1
-       AND vpo.po_type IN ('rental_purchase','rent_to_own')
-       AND vsn.received_at IS NOT NULL
-       AND vsn.received_at <= $2`,
-    [vendorId, monthEnd.toISOString()]
+     WHERE vpo.vendor_id = $1
+       AND vpo.purchase_order_type IN ('rental_purchase','rent_to_own')
+       AND COALESCE((vsn.extra->>'received_at')::date, vsn.rental_start_date, vsn.created_at::date) IS NOT NULL
+       AND COALESCE((vsn.extra->>'received_at')::date, vsn.rental_start_date, vsn.created_at::date) <= $2::date`,
+    [vendorId, monthEnd.toISOString().slice(0, 10)]
   );
 
   if (!serialsRes.rows.length) {
@@ -293,11 +298,11 @@ async function generateVendorBill(vendorId, month, year) {
 
 async function generateAllVendorBills(month, year) {
   const vendorsRes = await pool.query(
-    `SELECT DISTINCT vsn.vendor_id
+    `SELECT DISTINCT vpo.vendor_id
      FROM vendor_serial_numbers vsn
      JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id
-     WHERE vpo.po_type IN ('rental_purchase','rent_to_own')
-       AND vsn.received_at IS NOT NULL`
+     WHERE vpo.purchase_order_type IN ('rental_purchase','rent_to_own')
+       AND COALESCE((vsn.extra->>'received_at')::date, vsn.rental_start_date, vsn.created_at::date) IS NOT NULL`
   );
 
   const results = [];
