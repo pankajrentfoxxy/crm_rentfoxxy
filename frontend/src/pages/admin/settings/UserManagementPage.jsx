@@ -11,9 +11,9 @@ import {
   ROLE_DESCRIPTIONS,
   ROLE_DISPLAY_NAMES,
 } from '../../../constants/roles';
-import api from '../../../utils/api';
 import {
   createUser,
+  fetchAuthTeams,
   fetchUsers,
   resetUserPassword,
   updateUser,
@@ -145,7 +145,9 @@ export default function UserManagementPage() {
   }, [loadUsers]);
 
   useEffect(() => {
-    api.get('/teams').then((r) => setTeams(r.data?.teams || r.data || [])).catch(() => {});
+    fetchAuthTeams()
+      .then((data) => setTeams(data.teams || []))
+      .catch(() => setTeams([]));
   }, []);
 
   const openAdd = () => {
@@ -619,21 +621,36 @@ export default function UserManagementPage() {
 
                   {showTeamField ? (
                     <div>
-                      <label className="block text-sm text-gray-700 mb-1">Team(s)</label>
-                      <select
-                        multiple
-                        value={form.team_ids.map(String)}
-                        onChange={(e) => {
-                          const selected = Array.from(e.target.selectedOptions).map((o) => parseInt(o.value, 10));
-                          setField('team_ids', selected);
-                        }}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm min-h-[100px]"
-                      >
-                        {teams.map((t) => (
-                          <option key={t.team_id} value={t.team_id}>{t.team_name}</option>
-                        ))}
-                      </select>
-                      <p className="text-xs text-gray-400 mt-1">Hold Ctrl/Cmd to select multiple</p>
+                      <label className="block text-sm text-gray-700 mb-2">Teams</label>
+                      <div className="space-y-2 rounded-lg border border-gray-200 p-3 max-h-48 overflow-y-auto">
+                        {teams.length === 0 ? (
+                          <p className="text-xs text-gray-400">No teams available</p>
+                        ) : (
+                          teams.map((t) => {
+                            const checked = form.team_ids.includes(t.team_id);
+                            return (
+                              <label key={t.team_id} className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setField('team_ids', [...form.team_ids, t.team_id]);
+                                    } else {
+                                      setField('team_ids', form.team_ids.filter((id) => id !== t.team_id));
+                                    }
+                                  }}
+                                  className="w-4 h-4 rounded border-gray-300 text-blue-600"
+                                />
+                                {t.team_name}
+                              </label>
+                            );
+                          })
+                        )}
+                      </div>
+                      <p className="text-xs text-gray-400 mt-1">
+                        Floor users can belong to multiple teams (e.g. QC1 and QC2).
+                      </p>
                     </div>
                   ) : null}
 

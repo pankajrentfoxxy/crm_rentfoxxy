@@ -148,6 +148,7 @@ exports.getTickets = async (req, res) => {
       SELECT t.*, 
              s.stage_name, s.stage_order,
              tm.team_name,
+             tm.team_name AS assigned_team_name,
              u.name as assigned_user_name
       FROM tickets t
       LEFT JOIN stages s ON t.current_stage_id = s.stage_id
@@ -1507,6 +1508,92 @@ exports.getTeamMembers = async (req, res) => {
   } catch (error) {
     console.error('getTeamMembers:', error);
     res.status(500).json({ success: false, message: 'Failed to load team members' });
+  }
+};
+
+/** GET /api/tickets/:id/next-assignee?to_stage_name=QC2 */
+exports.getNextAssignee = async (req, res) => {
+  const { to_stage_name } = req.query;
+  if (!to_stage_name) {
+    return res.status(400).json({ success: false, message: 'to_stage_name required' });
+  }
+
+  const ROUND_ROBIN_TARGETS = new Set([
+    'Final Testing→QC1',
+    'QC1→QC2',
+    'QC2→QC1',
+  ]);
+
+  try {
+    const ticket = await pool.query(
+      `SELECT t.*, s.stage_name AS current_stage_name
+       FROM tickets t
+       JOIN stages s ON s.stage_id = t.current_stage_id
+       WHERE t.ticket_id = $1`,
+      [req.params.id]
+    );
+    if (!ticket.rows.length) {
+      return res.status(404).json({ success: false, message: 'Not found' });
+    }
+
+    const t = ticket.rows[0];
+    const key = `${t.current_stage_name}→${to_stage_name}`;
+
+    if (!ROUND_ROBIN_TARGETS.has(key)) {
+      if (!t.assigned_user_id) {
+        return res.json({ success: true, assignee: null, keep_same: true });
+      }
+      const u = await pool.query(
+        'SELECT user_id, name, role FROM users WHERE user_id = $1',
+        [t.assigned_user_id]
+      );
+      return res.json({ success: true, assignee: u.rows[0] || null, keep_same: true });
+    }
+
+    const stageRes = await pool.query('SELECT * FROM stages WHERE stage_name = $1', [to_stage_name]);
+    if (!stageRes.rows.length) {
+      return res.json({ success: true, assignee: null });
+    }
+    const teamId = stageRes.rows[0].team_id;
+    if (!teamId) {
+      return res.json({ success: true, assignee: null });
+    }
+
+    const members = await pool.query(
+      `SELECT DISTINCT u.user_id, u.name, u.role,
+         COUNT(tkt.ticket_id) FILTER (WHERE tkt.status = 'in_progress')::int AS active_tickets
+       FROM users u
+       LEFT JOIN user_teams ut ON ut.user_id = u.user_id AND ut.team_id = $1
+       LEFT JOIN tickets tkt ON tkt.assigned_user_id = u.user_id AND tkt.status = 'in_progress'
+       WHERE (u.team_id = $1 OR ut.team_id = $1) AND COALESCE(u.active, true) = true
+       GROUP BY u.user_id, u.name, u.role
+       ORDER BY active_tickets ASC, u.user_id ASC`,
+      [teamId]
+    );
+
+    const rrState = await pool.query(
+      'SELECT last_assigned_user_id FROM qc_round_robin_state WHERE team_id = $1',
+      [teamId]
+    );
+    const ids = members.rows.map((r) => r.user_id);
+    if (!ids.length) {
+      return res.json({ success: true, assignee: null, team_has_no_members: true });
+    }
+
+    let nextIdx = 0;
+    if (rrState.rows.length && rrState.rows[0].last_assigned_user_id) {
+      const lastIdx = ids.indexOf(rrState.rows[0].last_assigned_user_id);
+      nextIdx = (lastIdx + 1) % ids.length;
+    }
+    const next = members.rows.find((r) => r.user_id === ids[nextIdx]);
+    return res.json({
+      success: true,
+      assignee: next || null,
+      team_members: members.rows,
+    });
+  } catch (error) {
+    console.error('getNextAssignee:', error);
+    res.status(500).json({ success: false, message: 'Failed to preview assignee' });
   }
 };
 

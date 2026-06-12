@@ -22,6 +22,7 @@ const {
   bulkMoveTickets,
   getFloorManagerQueue,
   getTeamMembers,
+  getNextAssignee,
   addPartToTicketWithConfig,
   logNote
 } = require('../controllers/ticketController');
@@ -68,6 +69,7 @@ router.get(
   getFloorManagerQueue
 );
 router.get('/team-members', getTeamMembers);
+router.get('/:id/next-assignee', getNextAssignee);
 router.get('/ttspl/:ttsplId/history', phase2.getTtsplHistory);
 router.get('/ttspl/:ttsplId', phase2.getTicketsByTtsplId);
 router.post('/:id/move-stage', phase2.moveToStage);

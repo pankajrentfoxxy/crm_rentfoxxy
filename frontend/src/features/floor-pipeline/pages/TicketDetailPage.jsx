@@ -9,6 +9,7 @@ import {
   fetchTicketDetail,
   fetchTtsplHistory,
   floorManagerFail,
+  getNextAssignee,
   markBodyPaint,
   markChipRepair,
   moveTicketStage
@@ -43,6 +44,8 @@ export default function TicketDetailPage() {
   const [assignOpen, setAssignOpen] = useState(false);
   const [configHistory, setConfigHistory] = useState([]);
   const [auditLog, setAuditLog] = useState([]);
+  const [nextAssignee, setNextAssignee] = useState(null);
+  const [nextAssigneeWarning, setNextAssigneeWarning] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -68,6 +71,35 @@ export default function TicketDetailPage() {
   useEffect(() => { load(); }, [load]);
 
   const ticket = data?.ticket;
+
+  useEffect(() => {
+    if (!ticket?.ticket_id) return;
+    const currentStage = ticket.stage_name;
+    if (currentStage === 'QC1') {
+      getNextAssignee(ticket.ticket_id, 'QC2')
+        .then((r) => {
+          setNextAssignee(r.data?.assignee || null);
+          setNextAssigneeWarning(!!r.data?.team_has_no_members);
+        })
+        .catch(() => {
+          setNextAssignee(null);
+          setNextAssigneeWarning(false);
+        });
+    } else if (currentStage === 'Final Testing') {
+      getNextAssignee(ticket.ticket_id, 'QC1')
+        .then((r) => {
+          setNextAssignee(r.data?.assignee || null);
+          setNextAssigneeWarning(!!r.data?.team_has_no_members);
+        })
+        .catch(() => {
+          setNextAssignee(null);
+          setNextAssigneeWarning(false);
+        });
+    } else {
+      setNextAssignee(null);
+      setNextAssigneeWarning(false);
+    }
+  }, [ticket?.ticket_id, ticket?.stage_name]);
   const stage = ticket?.stage_name;
   const fm = isFloorManagerRole(user?.role);
   const tech = isTechnicianRole(user?.role);
@@ -309,21 +341,39 @@ export default function TicketDetailPage() {
             ) : null}
             <div className="space-y-2">
               {stageButtons.map((btn) => (
-                <button
-                  key={btn.label}
-                  type="button"
-                  onClick={btn.action}
-                  className={`w-full py-2 rounded-lg text-xs font-semibold ${
-                    btn.primary ? 'bg-blue-600 text-white' :
-                    btn.success ? 'bg-green-600 text-white' :
-                    btn.danger || btn.destructive ? 'bg-red-700 text-white' :
-                    btn.warn ? 'bg-amber-500 text-white' :
-                    btn.pink ? 'bg-pink-500 text-white' :
-                    'bg-slate-100 text-slate-800'
-                  }`}
-                >
-                  {btn.label}
-                </button>
+                <div key={btn.label}>
+                  <button
+                    type="button"
+                    onClick={btn.action}
+                    className={`w-full py-2 rounded-lg text-xs font-semibold ${
+                      btn.primary ? 'bg-blue-600 text-white' :
+                      btn.success ? 'bg-green-600 text-white' :
+                      btn.danger || btn.destructive ? 'bg-red-700 text-white' :
+                      btn.warn ? 'bg-amber-500 text-white' :
+                      btn.pink ? 'bg-pink-500 text-white' :
+                      'bg-slate-100 text-slate-800'
+                    }`}
+                  >
+                    {btn.label}
+                  </button>
+                  {stage === 'QC1' && btn.label.includes('QC1 PASS') && nextAssignee ? (
+                    <p className="text-xs text-slate-500 mt-1 text-center">
+                      Will assign to:{' '}
+                      <span className="font-medium text-slate-700">{nextAssignee.name}</span>
+                    </p>
+                  ) : null}
+                  {stage === 'QC1' && btn.label.includes('QC1 PASS') && !nextAssignee && nextAssigneeWarning ? (
+                    <p className="text-xs text-amber-600 mt-1 text-center">
+                      QC2 team has no members — ticket will be unassigned
+                    </p>
+                  ) : null}
+                  {stage === 'Final Testing' && btn.label.includes('Move to QC1') && nextAssignee ? (
+                    <p className="text-xs text-slate-500 mt-1 text-center">
+                      Will assign to:{' '}
+                      <span className="font-medium text-slate-700">{nextAssignee.name}</span>
+                    </p>
+                  ) : null}
+                </div>
               ))}
             </div>
           </div>

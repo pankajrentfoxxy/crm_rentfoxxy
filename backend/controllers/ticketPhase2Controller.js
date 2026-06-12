@@ -355,12 +355,31 @@ exports.moveToStage = async (req, res) => {
     }
 
     let assignedUserId = ticket.assigned_user_id;
-    if (to_stage_name === 'QC1' && currentStageName === 'Final Testing' && nextStage.team_id) {
+
+    const KEEP_SAME_TECH_TRANSITIONS = new Set([
+      'Diagnosis→Assembly & Software',
+      'Assembly & Software→Final Testing',
+      'Chip Level Repair→Assembly & Software',
+      'Body & Paint→Assembly & Software',
+      'QC1→Assembly & Software',
+    ]);
+
+    const ROUND_ROBIN_TRANSITIONS = new Set([
+      'Final Testing→QC1',
+      'QC1→QC2',
+      'QC2→QC1',
+    ]);
+
+    const transitionKey = `${currentStageName}→${to_stage_name}`;
+
+    if (ROUND_ROBIN_TRANSITIONS.has(transitionKey) && nextStage.team_id) {
       try {
         assignedUserId = await pickNextAssigneeForTeamPool(client, nextStage.team_id);
       } catch {
         assignedUserId = null;
       }
+    } else if (KEEP_SAME_TECH_TRANSITIONS.has(transitionKey)) {
+      assignedUserId = ticket.assigned_user_id;
     }
 
     updates.push(`current_stage_id = $${pi++}`); params.push(nextStage.stage_id);

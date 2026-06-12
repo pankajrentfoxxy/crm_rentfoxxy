@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { AlertTriangle, CheckCircle2, Loader2, Package, TrendingUp } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../../context/AuthContext';
-import { fetchFloorDashboard, getFloorManagerQueue } from '../floorPipelineApi';
+import { fetchFloorDashboard, getFloorManagerQueue, getTeamMembers } from '../floorPipelineApi';
 import { configSummary, isFloorManagerRole, priorityBadge } from '../floorPipelineUi';
 import AssignmentModal from '../components/AssignmentModal';
 
@@ -34,6 +34,7 @@ export default function FloorDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [queue, setQueue] = useState([]);
   const [assignTicket, setAssignTicket] = useState(null);
+  const [teamWorkload, setTeamWorkload] = useState({ hw: [], qc1: [], qc2: [] });
 
   const loadQueue = () => {
     if (!fm) return;
@@ -51,6 +52,20 @@ export default function FloorDashboardPage() {
       .catch((e) => toast.error(e.response?.data?.message || 'Dashboard failed'))
       .finally(() => setLoading(false));
     loadQueue();
+
+    Promise.all([
+      getTeamMembers('Hardware & Software'),
+      getTeamMembers('QC1 Team'),
+      getTeamMembers('QC2 Team'),
+    ])
+      .then(([hw, qc1, qc2]) => {
+        setTeamWorkload({
+          hw: hw.data?.members || [],
+          qc1: qc1.data?.members || [],
+          qc2: qc2.data?.members || [],
+        });
+      })
+      .catch(() => setTeamWorkload({ hw: [], qc1: [], qc2: [] }));
   }, [fm]);
 
   if (loading) {
@@ -157,21 +172,59 @@ export default function FloorDashboardPage() {
         </div>
       </div>
 
-      <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm overflow-x-auto">
-        <h2 className="font-semibold mb-3">Technician load</h2>
-        <table className="min-w-full text-sm">
-          <thead className="text-xs text-slate-500 uppercase"><tr>
-            <th className="text-left py-2">Technician</th><th className="text-left py-2">Active tickets</th>
-          </tr></thead>
-          <tbody>
-            {(data.technicianLoad || []).map((t) => (
-              <tr key={t.user_id} className="border-t">
-                <td className="py-2">{t.name}</td>
-                <td className="py-2">{t.active_tickets}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+        <h2 className="font-semibold mb-4">Team workload</h2>
+        <div className="grid lg:grid-cols-2 gap-6">
+          <div>
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">
+              Hardware &amp; Software Team
+            </h3>
+            <ul className="space-y-2 text-sm">
+              {teamWorkload.hw.length === 0 ? (
+                <li className="text-slate-400 text-xs">No members</li>
+              ) : (
+                teamWorkload.hw.map((m) => (
+                  <li key={m.user_id} className="flex justify-between gap-2 border-b border-slate-50 pb-2">
+                    <span className="font-medium text-slate-800">{m.name}</span>
+                    <span className="text-slate-500">{m.active_tickets || 0} active</span>
+                  </li>
+                ))
+              )}
+            </ul>
+          </div>
+          <div className="space-y-4">
+            <div>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">QC1 Team</h3>
+              <ul className="space-y-2 text-sm">
+                {teamWorkload.qc1.length === 0 ? (
+                  <li className="text-slate-400 text-xs">No members</li>
+                ) : (
+                  teamWorkload.qc1.map((m) => (
+                    <li key={m.user_id} className="flex justify-between gap-2 border-b border-slate-50 pb-2">
+                      <span className="font-medium text-slate-800">{m.name}</span>
+                      <span className="text-slate-500">{m.active_tickets || 0} active</span>
+                    </li>
+                  ))
+                )}
+              </ul>
+            </div>
+            <div>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">QC2 Team</h3>
+              <ul className="space-y-2 text-sm">
+                {teamWorkload.qc2.length === 0 ? (
+                  <li className="text-slate-400 text-xs">No members</li>
+                ) : (
+                  teamWorkload.qc2.map((m) => (
+                    <li key={m.user_id} className="flex justify-between gap-2 border-b border-slate-50 pb-2">
+                      <span className="font-medium text-slate-800">{m.name}</span>
+                      <span className="text-slate-500">{m.active_tickets || 0} active</span>
+                    </li>
+                  ))
+                )}
+              </ul>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="grid lg:grid-cols-2 gap-4">

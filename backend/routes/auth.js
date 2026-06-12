@@ -19,6 +19,7 @@ const {
   registerTechnician,
   approveVendor,
   getPendingVendors,
+  getTeams,
 } = require('../controllers/authController');
 const { authMiddleware } = require('../middleware/auth');
 
@@ -100,6 +101,11 @@ router.put('/users/:id/mobile', authMiddleware, updateMobile);
 // @desc    Update user team assignments (multi-team for team_member/team_lead)
 // @access  Private (Admin/Manager)
 router.put('/users/:id/teams', authMiddleware, updateUserTeams);
+
+// @route   GET /api/auth/teams
+// @desc    List teams for user assignment
+// @access  Private
+router.get('/teams', authMiddleware, getTeams);
 
 // @route   GET /api/auth/users
 // @desc    Get all users (Manager/Admin)

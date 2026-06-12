@@ -9,6 +9,7 @@ const MANAGEABLE_ROLES = [
   'team_member', 'team_lead', 'sales', 'floor_manager', 'procurement', 'qc', 'dispatch',
   'manager', 'admin', 'support_lead', 'support_tech', 'accounts', 'warehouse',
 ];
+const FLOOR_ROLES = ['team_member', 'team_lead', 'floor_manager', 'qc'];
 const CRM_EXCLUDED_ROLES = ['vendor', 'customer', 'technician'];
 const hasUserMgmtAccess = (user) => ['admin', 'manager', 'super_admin'].includes(user?.role);
 const canViewUsers = (user) => ['admin', 'manager', 'super_admin', 'floor_manager'].includes(user?.role);
@@ -438,6 +439,18 @@ exports.updateBarcode = async (req, res) => {
   }
 };
 
+exports.getTeams = async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT team_id, team_name FROM teams ORDER BY team_name ASC'
+    );
+    res.json({ success: true, teams: result.rows });
+  } catch (error) {
+    console.error('getTeams error:', error);
+    res.status(500).json({ success: false, message: 'Server error fetching teams' });
+  }
+};
+
 // Get All Users (for Managers/Admins to assign tasks)
 exports.getAllUsers = async (req, res) => {
   try {
@@ -601,7 +614,11 @@ exports.updateUser = async (req, res) => {
       ]
     );
 
-    if (Array.isArray(team_ids)) {
+    const effectiveRole = role
+      ? String(role).trim().toLowerCase()
+      : target.rows[0].role;
+
+    if (Array.isArray(team_ids) && FLOOR_ROLES.includes(effectiveRole)) {
       const validTeamIds = team_ids.map((tid) => parseInt(tid, 10)).filter((tid) => !Number.isNaN(tid) && tid > 0);
       await pool.query('DELETE FROM user_teams WHERE user_id = $1', [id]);
       for (const tid of validTeamIds) {
@@ -612,6 +629,9 @@ exports.updateUser = async (req, res) => {
       }
       const primaryTeamId = validTeamIds[0] || null;
       await pool.query('UPDATE users SET team_id = $1 WHERE user_id = $2', [primaryTeamId, id]);
+    } else if (role && !FLOOR_ROLES.includes(effectiveRole)) {
+      await pool.query('DELETE FROM user_teams WHERE user_id = $1', [id]);
+      await pool.query('UPDATE users SET team_id = NULL WHERE user_id = $1', [id]);
     }
 
     const updated = await pool.query(

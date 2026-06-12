@@ -93,7 +93,6 @@ export const settingsAccordionChildren = [
   { label: 'Users', path: '/settings/users', section: 'users' },
   { label: 'Role Permissions', path: '/settings/role-permissions', section: 'role_permissions' },
   { label: 'User Overrides', path: '/settings/user-permissions', section: 'user_permissions' },
-  { label: 'Teams', path: '/teams', section: 'teams' },
   { label: 'Roles', path: '/settings/roles', section: 'roles' },
   { label: 'Role Reference', path: '/settings/role-reference', section: 'roles' },
 ];
@@ -218,7 +217,7 @@ export const MENU_GROUPS = [
         type: 'settingsAccordion',
         icon: Settings,
         label: 'Settings',
-        sections: ['users', 'user_permissions', 'role_permissions', 'teams', 'roles'],
+        sections: ['users', 'user_permissions', 'role_permissions', 'roles'],
       },
     ],
   },

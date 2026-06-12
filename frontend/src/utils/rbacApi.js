@@ -48,6 +48,11 @@ export async function fetchUsers(params = {}) {
   return data;
 }
 
+export async function fetchAuthTeams() {
+  const { data } = await api.get('/auth/teams');
+  return data;
+}
+
 export async function createUser(payload) {
   const { data } = await api.post('/auth/register', payload);
   return data;

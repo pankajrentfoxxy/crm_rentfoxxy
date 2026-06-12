@@ -25,9 +25,16 @@ export default function TicketCard({ ticket, pendingParts, onCardClick }) {
         </div>
       ) : null}
       <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-        <span className="inline-flex items-center gap-1">
-          <User className="w-3 h-3" />
-          {ticket.assigned_user_name || 'Unassigned'}
+        <span className="inline-flex flex-col gap-0.5 min-w-0">
+          <span className="inline-flex items-center gap-1">
+            <User className="w-3 h-3 shrink-0" />
+            {ticket.assigned_user_name || 'Unassigned'}
+          </span>
+          {ticket.assigned_team_name || ticket.team_name ? (
+            <span className="text-slate-400 pl-4 truncate">
+              {ticket.assigned_team_name || ticket.team_name}
+            </span>
+          ) : null}
         </span>
         <span className="inline-flex items-center gap-1">
           <Clock className="w-3 h-3" />

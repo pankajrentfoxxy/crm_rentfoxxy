@@ -1,32 +1,60 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Loader2, Star, User, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { assignTicket, getTeamMembers } from '../floorPipelineApi';
 import { configSummary, priorityBadge } from '../floorPipelineUi';
 
-const TEAMS = [
-  { key: 'hw', label: 'Hardware & Software Team', teamName: 'Hardware & Software' },
-  { key: 'qc', label: 'QC Team', teamName: 'QC Team' }
-];
+function getRelevantTeams(stageName) {
+  if (stageName === 'Floor Manager') {
+    return [
+      { key: 'hw', label: 'Hardware & Software', teamName: 'Hardware & Software' },
+      { key: 'qc1', label: 'QC1 Team', teamName: 'QC1 Team' },
+    ];
+  }
+  if (['Diagnosis', 'Assembly & Software', 'Final Testing', 'Chip Level Repair', 'Body & Paint'].includes(stageName)) {
+    return [{ key: 'hw', label: 'Hardware & Software', teamName: 'Hardware & Software' }];
+  }
+  if (stageName === 'QC1') {
+    return [{ key: 'qc1', label: 'QC1 Team', teamName: 'QC1 Team' }];
+  }
+  if (stageName === 'QC2') {
+    return [{ key: 'qc2', label: 'QC2 Team', teamName: 'QC2 Team' }];
+  }
+  return [
+    { key: 'hw', label: 'Hardware & Software', teamName: 'Hardware & Software' },
+    { key: 'qc1', label: 'QC1 Team', teamName: 'QC1 Team' },
+    { key: 'qc2', label: 'QC2 Team', teamName: 'QC2 Team' },
+  ];
+}
 
 export default function AssignmentModal({ ticket, open, onClose, onAssigned }) {
-  const [tab, setTab] = useState('hw');
+  const stageName = ticket?.stage_name;
+  const teams = useMemo(() => getRelevantTeams(stageName), [stageName]);
+  const [tab, setTab] = useState(teams[0]?.key || 'hw');
   const [members, setMembers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [assigning, setAssigning] = useState(null);
 
-  const team = TEAMS.find((t) => t.key === tab) || TEAMS[0];
+  const team = teams.find((t) => t.key === tab) || teams[0];
   const isSalesQc = ticket?.ticket_type === 'sales_order_qc' || ticket?.priority === 'sales_order';
+  const isQcStage = ['QC1', 'QC2'].includes(stageName);
 
   useEffect(() => {
-    if (!open || !ticket) return;
-    if (isSalesQc) setTab('qc');
+    if (!open || !ticket || !teams.length) return;
+    const defaultTab = isSalesQc
+      ? (teams.find((t) => t.key.startsWith('qc'))?.key || teams[0].key)
+      : teams[0].key;
+    setTab(defaultTab);
+  }, [open, ticket, teams, isSalesQc]);
+
+  useEffect(() => {
+    if (!open || !ticket || !team) return;
     setLoading(true);
     getTeamMembers(team.teamName)
       .then(({ data }) => setMembers(data.members || []))
       .catch(() => setMembers([]))
       .finally(() => setLoading(false));
-  }, [open, ticket, team.teamName, isSalesQc]);
+  }, [open, ticket, team?.teamName]);
 
   if (!open || !ticket) return null;
 
@@ -69,20 +97,32 @@ export default function AssignmentModal({ ticket, open, onClose, onAssigned }) {
           </button>
         </div>
 
-        <div className="flex border-b text-sm">
-          {TEAMS.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => setTab(t.key)}
-              className={`flex-1 py-2.5 font-medium ${tab === t.key ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500'}`}
-            >
-              {t.label.replace(' Team', '')}
-            </button>
-          ))}
-        </div>
+        {teams.length > 1 ? (
+          <div className="flex border-b text-sm">
+            {teams.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setTab(t.key)}
+                className={`flex-1 py-2.5 font-medium ${tab === t.key ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500'}`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="px-4 py-2 border-b text-sm font-medium text-slate-700 bg-slate-50">
+            {team?.label}
+          </div>
+        )}
 
         <div className="flex-1 overflow-y-auto p-4 space-y-2">
+          {isQcStage ? (
+            <p className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-lg p-3">
+              Auto-assignment active — ticket will be assigned via round-robin when moved to this stage.
+              Use manual assignment to override.
+            </p>
+          ) : null}
           {isSalesQc && tab === 'hw' ? (
             <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
               Sales Order QC tickets are usually assigned directly to the QC team.

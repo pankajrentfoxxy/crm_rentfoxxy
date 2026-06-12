@@ -82,6 +82,12 @@ export function getTeamMembers(teamName) {
   return api.get(`${base}/team-members`, { params: { team_name: teamName } });
 }
 
+export function getNextAssignee(ticketId, toStageName) {
+  return api.get(`${base}/${ticketId}/next-assignee`, {
+    params: { to_stage_name: toStageName },
+  });
+}
+
 export function addPartWithConfig(id, body) {
   return api.post(`${base}/${id}/parts-with-config`, body);
 }
