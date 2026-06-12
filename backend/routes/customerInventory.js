@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { authMiddleware, checkRole } = require('../middleware/auth');
+const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
 const {
     listCustomers,
     getCustomerDetail,
@@ -8,12 +8,15 @@ const {
     triggerCustomerSync
 } = require('../controllers/customerInventoryController');
 
+// NOTE: customer_inventory is deprecated (see migration 074). These endpoints
+// remain for historical reads only; gated via the matrix.
+const cp = checkSectionPermission;
+
 router.use(authMiddleware);
 
-// Support / ops: admin & manager (same scope as reports-style tools)
-router.get('/customers', checkRole('admin', 'manager', 'floor_manager'), listCustomers);
-router.get('/customers/:customerId', checkRole('admin', 'manager', 'floor_manager'), getCustomerDetail);
-router.post('/sync', checkRole('admin', 'manager'), triggerFullSync);
-router.post('/sync/:customerId', checkRole('admin', 'manager'), triggerCustomerSync);
+router.get('/customers', cp('customer_assets', 'view'), listCustomers);
+router.get('/customers/:customerId', cp('customer_assets', 'view'), getCustomerDetail);
+router.post('/sync', cp('inventory_management', 'edit'), triggerFullSync);
+router.post('/sync/:customerId', cp('inventory_management', 'edit'), triggerCustomerSync);
 
 module.exports = router;

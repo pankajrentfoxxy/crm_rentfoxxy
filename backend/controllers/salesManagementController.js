@@ -3,6 +3,8 @@ const path = require('path');
 const pool = require('../config/db');
 const {
   nextDocumentNumber,
+  entityForQuotationType,
+  entityDocType,
   generateToken,
   listQuotationsGrouped,
   getQuotationLines,
@@ -20,6 +22,40 @@ const { generateDocumentPdf } = require('../services/salesManagementPdfService')
 const { emailDocument } = require('../services/salesManagementPdfService');
 const { createSalesOrderQcTicket } = require('../services/grnTicketService');
 const { logTtsplEvent } = require('../services/ttsplAuditService');
+const inventorySM = require('../services/inventoryStateMachine');
+
+/**
+ * Resolve a vendor_serial_numbers.serial_id from a parsed DC serial entry,
+ * by explicit id first then by serial number / TTSPL code.
+ */
+async function resolveSerialId(client, s) {
+  if (s.serialId) return s.serialId;
+  const key = s.serialNumber || s.ttsplId;
+  if (!key) return null;
+  const r = await client.query(
+    `SELECT serial_id FROM vendor_serial_numbers
+      WHERE deleted_at IS NULL
+        AND (serial_number = $1 OR inventory_asset_code = $1 OR extra->>'ttspl_id' = $1)
+      LIMIT 1`,
+    [key]
+  );
+  return r.rows[0]?.serial_id || null;
+}
+
+/** Fetch DC-level context needed to drive inventory transitions. */
+async function getDcContext(client, dcNumber) {
+  const r = await client.query(
+    `SELECT dcl.customer_id, dcl.entity_code, dcl.dispatch_mode,
+            COALESCE(sol.quotation_type, sq.quotation_type, 'rental') AS quotation_type
+       FROM delivery_challan_lines dcl
+       LEFT JOIN sales_order_lines sol ON sol.sales_order_number = dcl.sales_order_number
+       LEFT JOIN sales_quotations sq ON sq.quotation_number = dcl.quotation_number
+      WHERE dcl.dc_number = $1
+      LIMIT 1`,
+    [dcNumber]
+  );
+  return r.rows[0] || {};
+}
 function parseJsonSafe(value, fallback = null) {
   if (value == null) return fallback;
   if (typeof value === 'object') return value;
@@ -287,7 +323,9 @@ exports.storeQuotation = async (req, res) => {
       return res.status(400).json({ success: false, message: 'At least one line item is required' });
     }
 
-    const quotationNumber = body.quotation_number || (await nextDocumentNumber('quotation'));
+    const quoteEntity = entityForQuotationType(body.quotation_type || 'rental');
+    const quotationNumber = body.quotation_number
+      || (await nextDocumentNumber(entityDocType('quotation', quoteEntity)));
     const token = generateToken();
     const shipping = parseJsonField(body.customer_shipping_address);
     const billing = parseJsonField(body.customer_billing_address);
@@ -337,6 +375,10 @@ exports.storeQuotation = async (req, res) => {
         ]
       );
     }
+    await client.query(
+      `UPDATE sales_quotations SET entity_code = $1 WHERE quotation_number = $2`,
+      [quoteEntity, quotationNumber]
+    );
     await client.query('COMMIT');
 
     const savedLines = await getQuotationLines(quotationNumber);
@@ -545,6 +587,11 @@ exports.storeSalesOrder = async (req, res) => {
         ]
       );
     }
+    // Tag the owning entity (Sales -> gorefurbo, Rental/Demo -> rentfoxxy).
+    await client.query(
+      `UPDATE sales_order_lines SET entity_code = $1 WHERE sales_order_number = $2`,
+      [entityForQuotationType(body.quotation_type || 'rental'), salesOrderNumber]
+    );
     await client.query('COMMIT');
 
     const savedLines = await getSalesOrderLines(salesOrderNumber);
@@ -671,7 +718,20 @@ exports.storeDeliveryChallan = async (req, res) => {
       return res.status(400).json({ success: false, message: 'At least one line is required' });
     }
 
-    const dcNumber = body.challan_number || body.dc_number || (await nextDocumentNumber('delivery_challan'));
+    // Determine the owning entity from the linked SO/quotation type.
+    const typeRes = await pool.query(
+      `SELECT COALESCE(sol.quotation_type, sq.quotation_type, 'rental') AS quotation_type
+         FROM sales_order_lines sol
+         LEFT JOIN sales_quotations sq ON sq.quotation_number = sol.quotation_number
+        WHERE sol.sales_order_number = $1
+        LIMIT 1`,
+      [body.sales_order_number]
+    );
+    const quotationType = typeRes.rows[0]?.quotation_type || body.quotation_type || 'rental';
+    const entityCode = entityForQuotationType(quotationType);
+
+    const dcNumber = body.challan_number || body.dc_number
+      || (await nextDocumentNumber(entityDocType('delivery_challan', entityCode)));
     const shipping = parseJsonField(body.customer_shipping_address);
     const billing = parseJsonField(body.customer_billing_address);
 
@@ -696,10 +756,10 @@ exports.storeDeliveryChallan = async (req, res) => {
       await client.query(
         `INSERT INTO delivery_challan_lines (
           dc_number, sales_order_number, quotation_number, customer_id, customer_name, email, gst_number,
-          supply_state, security_amount, shiping_charges, branch, customer_billing_address,
+          supply_state, security_amount, shiping_charges, branch, entity_code, customer_billing_address,
           customer_shipping_address, brand, model_name, quantity, main_qty, serial_number, ship_by,
           courier_name, awb_number, delivery_person_id, remarks, status, created_by
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,'pending',$24)`,
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,'pending',$25)`,
         [
           dcNumber,
           body.sales_order_number,
@@ -711,7 +771,8 @@ exports.storeDeliveryChallan = async (req, res) => {
           body.supply_state,
           body.security_amount || 0,
           body.shiping_charges || 0,
-          body.branch,
+          body.branch || entityCode,
+          entityCode,
           billing ? JSON.stringify(billing) : null,
           shipping ? JSON.stringify(shipping) : null,
           brand,
@@ -749,13 +810,32 @@ exports.storeDeliveryChallan = async (req, res) => {
               OR serial_id = ANY($2::int[])`,
           [serialNumbers, serialIds.length ? serialIds : [-1]]
         );
-        await client.query(
-          `UPDATE vendor_serial_numbers
-           SET inventory_status = 'out_stock', updated_at = NOW()
-           WHERE serial_number = ANY($1::text[])
-              OR serial_id = ANY($2::int[])`,
-          [serialNumbers, serialIds.length ? serialIds : [-1]]
-        );
+        // Reserve each attached unit through the state machine (in_stock -> reserved).
+        for (let k = 0; k < serialList.length; k += 1) {
+          const parts = String(serialList[k]).split('|');
+          const sId = (parts[0] && /^\d+$/.test(parts[0])) ? Number(parts[0]) : null;
+          const serialId = await resolveSerialId(client, {
+            serialId: sId, serialNumber: parts[1] || parts[0], ttsplId: parts[2] || null,
+          });
+          if (!serialId) continue;
+          try {
+            await inventorySM.reserveForDc(client, serialId, {
+              dcNumber,
+              customerId: body.customer_id || null,
+              entityCode,
+              actorUserId: req.user?.user_id,
+              actorName: req.user?.name,
+            });
+          } catch (rErr) {
+            // Non-canonical current state (e.g. already reserved/out): keep the
+            // legacy out_stock write below as a fallback so the DC still forms.
+            await client.query(
+              `UPDATE vendor_serial_numbers SET inventory_status = 'reserved', updated_at = NOW()
+               WHERE serial_id = $1`,
+              [serialId]
+            );
+          }
+        }
       }
     }
     if (!inserted) {
@@ -1181,42 +1261,81 @@ exports.updateDcDispatch = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid dispatch_mode' });
     }
 
-    await pool.query(
-      `UPDATE delivery_challan_lines SET
-        dispatch_mode = $1,
-        ship_by = $2,
-        courier_name = $3,
-        awb_number = $4,
-        porter_booking_id = $5,
-        delivery_person_id = $6,
-        estimated_delivery = $7,
-        status = 'in_transit',
-        updated_at = NOW()
-       WHERE dc_number = $8`,
-      [
-        dispatchMode,
-        dispatchMode === 'inhouse' ? 'by_hand' : 'by_courier',
-        body.courier_name || null,
-        body.awb_number || null,
-        body.porter_booking_id || null,
-        toNullableInt(body.delivery_person_id),
-        body.estimated_delivery || null,
-        dcNumber,
-      ]
+    // KYC gate: a Demo unit may not be dispatched until the customer's KYC is verified.
+    const gate = await pool.query(
+      `SELECT COALESCE(sol.quotation_type, sq.quotation_type, 'rental') AS quotation_type,
+              c.kyc_status, dcl.customer_id
+         FROM delivery_challan_lines dcl
+         LEFT JOIN sales_order_lines sol ON sol.sales_order_number = dcl.sales_order_number
+         LEFT JOIN sales_quotations sq ON sq.quotation_number = dcl.quotation_number
+         LEFT JOIN customers c ON c.customer_id = dcl.customer_id
+        WHERE dcl.dc_number = $1 LIMIT 1`,
+      [dcNumber]
     );
-
-    const serials = await collectDcSerials(dcNumber);
-    for (const s of serials) {
-      const ttspl = s.ttsplId || s.serialNumber;
-      await logTtsplEvent({
-        ttsplId: ttspl,
-        vendorSerialId: s.serialId,
-        eventType: 'dispatched',
-        description: `DC ${dcNumber} dispatched (${dispatchMode})`,
-        metadata: { dc_number: dcNumber, dispatch_mode: dispatchMode },
-        actorUserId: req.user.user_id,
-        actorName: req.user.name,
+    const gateRow = gate.rows[0] || {};
+    if (String(gateRow.quotation_type).toLowerCase() === 'demo'
+        && gateRow.kyc_status !== 'verified') {
+      return res.status(400).json({
+        success: false,
+        message: 'Customer KYC must be verified before dispatching a demo unit.',
       });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // State guard: a DC already dispatched/delivered cannot be re-dispatched.
+      const cur = await client.query(
+        `SELECT DISTINCT status FROM delivery_challan_lines WHERE dc_number = $1`,
+        [dcNumber]
+      );
+      const statuses = cur.rows.map((r) => r.status);
+      if (statuses.some((s) => ['delivered', 'in_transit'].includes(s))) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ success: false, message: `DC already ${statuses.join('/')}` });
+      }
+
+      await client.query(
+        `UPDATE delivery_challan_lines SET
+          dispatch_mode = $1, ship_by = $2, courier_name = $3, awb_number = $4,
+          porter_booking_id = $5, delivery_person_id = $6, estimated_delivery = $7,
+          status = 'in_transit', updated_at = NOW()
+         WHERE dc_number = $8`,
+        [
+          dispatchMode,
+          dispatchMode === 'inhouse' ? 'by_hand' : 'by_courier',
+          body.courier_name || null,
+          body.awb_number || null,
+          body.porter_booking_id || null,
+          toNullableInt(body.delivery_person_id),
+          body.estimated_delivery || null,
+          dcNumber,
+        ]
+      );
+
+      const ctx = await getDcContext(client, dcNumber);
+      const serials = await collectDcSerials(dcNumber);
+      for (const s of serials) {
+        const serialId = await resolveSerialId(client, s);
+        if (!serialId) continue;
+        // reserved -> in_transit (mark the asset unavailable the moment it ships).
+        await inventorySM.markDispatched(client, serialId, {
+          dcNumber,
+          customerId: ctx.customer_id || null,
+          entityCode: ctx.entity_code || null,
+          dispatchMode,
+          actorUserId: req.user.user_id,
+          actorName: req.user.name,
+        });
+      }
+
+      await client.query('COMMIT');
+    } catch (txErr) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw txErr;
+    } finally {
+      client.release();
     }
 
     res.json({ success: true, message: 'Dispatch updated', status: 'in_transit' });
@@ -1227,36 +1346,92 @@ exports.updateDcDispatch = async (req, res) => {
 };
 
 exports.markDcDelivered = async (req, res) => {
+  const client = await pool.connect();
   try {
     const dcNumber = req.params.dcNumber;
     const body = req.body || {};
-    await pool.query(
+    await client.query('BEGIN');
+
+    await client.query(
       `UPDATE delivery_challan_lines SET
-        status = 'delivered',
-        delivered_at = NOW(),
-        delivered_by = $1,
-        delivery_location = $2,
-        pod_image_url = $3,
-        delivery_completed_at = NOW(),
+        status = 'delivered', delivered_at = NOW(), delivered_by = $1,
+        delivery_location = $2, pod_image_url = $3, delivery_completed_at = NOW(),
         updated_at = NOW()
        WHERE dc_number = $4`,
       [req.user.user_id, body.delivery_location || null, body.pod_image_url || null, dcNumber]
     );
 
+    const ctx = await getDcContext(client, dcNumber);
+    const quotationType = ctx.quotation_type || 'rental';
     const serials = await collectDcSerials(dcNumber);
-    const serialNumbers = serials.map((s) => s.serialNumber).filter(Boolean);
-    const serialIds = serials.map((s) => s.serialId).filter(Boolean);
-    if (serialNumbers.length) {
-      await pool.query(
-        `UPDATE vendor_serial_numbers SET inventory_status = 'dispatched', updated_at = NOW()
-         WHERE serial_number = ANY($1::text[]) OR serial_id = ANY($2::int[])`,
-        [serialNumbers, serialIds.length ? serialIds : [-1]]
+    const deliveredAt = new Date();
+    const demoRows = [];
+
+    for (const s of serials) {
+      const serialId = await resolveSerialId(client, s);
+      if (!serialId) continue;
+      // Read dispatch context recorded at dispatch time for rent-start math.
+      const sr = await client.query(
+        `SELECT dispatch_mode, dispatched_at, inventory_asset_code AS ttspl_id
+           FROM vendor_serial_numbers WHERE serial_id = $1`,
+        [serialId]
       );
+      const row = sr.rows[0] || {};
+      // Capture the agreed monthly rate from the SO line for this DC (best match).
+      const rateRes = await client.query(
+        `SELECT sol.rate
+           FROM delivery_challan_lines dcl
+           JOIN sales_order_lines sol ON sol.sales_order_number = dcl.sales_order_number
+          WHERE dcl.dc_number = $1
+          ORDER BY (sol.brand = dcl.brand) DESC NULLS LAST
+          LIMIT 1`,
+        [dcNumber]
+      );
+      const rentMonthlyRate = quotationType === 'rental'
+        ? parseFloat(rateRes.rows[0]?.rate || 0) || null
+        : null;
+      const result = await inventorySM.markDelivered(client, serialId, {
+        quotationType,
+        dcNumber,
+        customerId: ctx.customer_id || null,
+        entityCode: ctx.entity_code || null,
+        dispatchMode: row.dispatch_mode || ctx.dispatch_mode || 'courier',
+        dispatchedAt: row.dispatched_at || null,
+        deliveredAt,
+        rentMonthlyRate,
+        actorUserId: req.user.user_id,
+        actorName: req.user.name,
+      });
+      if (result.to === inventorySM.STATUS.ON_DEMO) {
+        demoRows.push({ serialId, ttsplId: row.ttspl_id });
+      }
     }
 
+    // Demo deliveries: open a demo_agreements record with a delivery+7d decision date.
+    if (demoRows.length && ctx.customer_id) {
+      const decisionDue = new Date(deliveredAt);
+      decisionDue.setDate(decisionDue.getDate() + 7);
+      for (const d of demoRows) {
+        await client.query(
+          `INSERT INTO demo_agreements
+             (sales_order_number, dc_number, customer_id, serial_id, ttspl_id,
+              delivered_at, decision_due_at, decision)
+           VALUES (
+             (SELECT sales_order_number FROM delivery_challan_lines WHERE dc_number=$2 LIMIT 1),
+             $2, $3, $4, $5, $6, $7, 'pending')`,
+          [null, dcNumber, ctx.customer_id, d.serialId, d.ttsplId, deliveredAt, decisionDue]
+        );
+      }
+    }
+
+    await client.query('COMMIT');
     res.json({ success: true, message: 'Marked as delivered' });
   } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('markDcDelivered:', error);
     res.status(500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
   }
 };
 
@@ -1267,28 +1442,38 @@ exports.markDcRejected = async (req, res) => {
     if (!reason?.trim()) {
       return res.status(400).json({ success: false, message: 'rejection_reason is required' });
     }
-    await pool.query(
-      `UPDATE delivery_challan_lines SET
-        status = 'rejected',
-        rejection_reason = $1,
-        updated_at = NOW()
-       WHERE dc_number = $2`,
-      [reason.trim(), dcNumber]
-    );
-
-    const serials = await collectDcSerials(dcNumber);
-    const serialNumbers = serials.map((s) => s.serialNumber).filter(Boolean);
-    const serialIds = serials.map((s) => s.serialId).filter(Boolean);
-    if (serialNumbers.length) {
-      await pool.query(
-        `UPDATE vendor_serial_numbers SET inventory_status = 'in_stock', updated_at = NOW()
-         WHERE serial_number = ANY($1::text[]) OR serial_id = ANY($2::int[])`,
-        [serialNumbers, serialIds.length ? serialIds : [-1]]
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `UPDATE delivery_challan_lines SET
+          status = 'rejected', rejection_reason = $1, updated_at = NOW()
+         WHERE dc_number = $2`,
+        [reason.trim(), dcNumber]
       );
+
+      const serials = await collectDcSerials(dcNumber);
+      for (const s of serials) {
+        const serialId = await resolveSerialId(client, s);
+        if (!serialId) continue;
+        // Delivery rejected at the door — asset comes straight back to stock.
+        await inventorySM.backToStock(client, serialId, {
+          reason: `DC ${dcNumber} delivery rejected: ${reason.trim()}`,
+          actorUserId: req.user.user_id,
+          actorName: req.user.name,
+        });
+      }
+      await client.query('COMMIT');
+    } catch (txErr) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw txErr;
+    } finally {
+      client.release();
     }
 
     res.json({ success: true, message: 'Delivery marked as rejected' });
   } catch (error) {
+    console.error('markDcRejected:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };

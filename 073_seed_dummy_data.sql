@@ -49,7 +49,7 @@ ON CONFLICT DO NOTHING;
 -- bcrypt hash of "Test@1234"
 DO $$
 DECLARE
-  pw TEXT := '$2b$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi';
+  pw TEXT := '$2b$10$N9qo8uLOickgx2ZMRZoMyO.TQkPsUdP6PdWCZjFVMCVrBZyDqKH/K';
   hw_team_id   INT;
   qc1_team_id  INT;
   qc2_team_id  INT;
@@ -224,7 +224,7 @@ INSERT INTO vendors (
 VALUES (
   'approved', 'Bibhaw', 'Raj', 'TechRent Supplies Pvt Ltd',
   'vendor@techrent.com', '9811122233',
-  '$2b$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi',
+  '$2b$10$N9qo8uLOickgx2ZMRZoMyO.TQkPsUdP6PdWCZjFVMCVrBZyDqKH/K',
   'Plot 45, Sector 18, NSEZ, Noida',
   'Pvt Ltd', '2019-04-01', 'Uttar Pradesh',
   '09AABCT1234A1Z5',
@@ -236,7 +236,7 @@ VALUES (
 (
   'approved', 'Sunita', 'Kapoor', 'Kapoor Laptops',
   'vendor2@kapoorlaptops.com', '9822233344',
-  '$2b$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi',
+  '$2b$10$N9qo8uLOickgx2ZMRZoMyO.TQkPsUdP6PdWCZjFVMCVrBZyDqKH/K',
   '12, Nehru Place, New Delhi',
   'Proprietorship', '2020-06-15', 'Delhi',
   '07AAUPK5678B1Z1',
@@ -249,7 +249,7 @@ ON CONFLICT DO NOTHING;
 
 -- Enable vendor portal for test vendor
 UPDATE vendors
-SET vendor_portal_password_hash = '$2b$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi'
+SET vendor_portal_password_hash = '$2b$10$N9qo8uLOickgx2ZMRZoMyO.TQkPsUdP6PdWCZjFVMCVrBZyDqKH/K'
 WHERE email = 'vendor@techrent.com';
 
 -- ─────────────────────────────────────────────────────────────
@@ -480,7 +480,7 @@ FROM (VALUES
     'B-204, DLF Cyber City, Phase 2', 'Gurugram',
     'AAHCT0310N', 'Pvt Ltd', 150, 'IT Services',
     true,
-    '$2b$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi',
+    '$2b$10$N9qo8uLOickgx2ZMRZoMyO.TQkPsUdP6PdWCZjFVMCVrBZyDqKH/K',
     true
   ),
   (

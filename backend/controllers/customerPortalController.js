@@ -126,20 +126,32 @@ exports.listLaptops = async (req, res) => {
   try {
     const customerId = req.customer.customer_id;
     let rows = [];
+
+    // Authoritative source: assets currently held by this customer per the
+    // inventory state machine (customer_inventory is deprecated).
     try {
-      const inv = await pool.query(
-        `SELECT COALESCE(unique_serial_number, serial_number) AS ttspl_id,
-                model_name AS model, processor, generation, ram, storage,
-                asset_kind AS status, COALESCE(delivery_date, created_at) AS dispatch_date,
-                dc_number
-         FROM customer_inventory
-         WHERE customer_id = $1
-         ORDER BY id DESC`,
+      const held = await pool.query(
+        `SELECT COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
+                vsn.extra->>'brand' AS brand,
+                COALESCE(vsn.extra->>'model', vsn.extra->>'model_name') AS model,
+                vsn.extra->>'processor' AS processor,
+                vsn.extra->>'generation' AS generation,
+                vsn.extra->>'ram' AS ram,
+                vsn.extra->>'storage' AS storage,
+                vsn.current_dc_number AS dc_number,
+                vsn.delivered_at AS dispatch_date,
+                vsn.inventory_status AS status,
+                vsn.rent_monthly_rate AS monthly_rate
+           FROM vendor_serial_numbers vsn
+          WHERE vsn.current_customer_id = $1
+            AND vsn.deleted_at IS NULL
+            AND vsn.inventory_status IN ('rented','on_demo','sold')
+          ORDER BY vsn.delivered_at DESC NULLS LAST`,
         [customerId]
       );
-      rows = inv.rows;
-    } catch (invErr) {
-      console.warn('customerPortal listLaptops inventory:', invErr.message);
+      rows = held.rows;
+    } catch (heldErr) {
+      console.warn('customerPortal listLaptops (derived):', heldErr.message);
     }
 
     if (!rows.length) {

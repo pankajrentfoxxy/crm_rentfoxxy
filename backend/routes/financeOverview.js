@@ -1,14 +1,14 @@
 const express = require('express');
 const router = express.Router();
-const { authMiddleware, checkRole } = require('../middleware/auth');
+const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
 const ctrl = require('../controllers/financeOverviewController');
 
-const roles = ['admin', 'manager', 'accounts'];
+const cp = checkSectionPermission;
 
 router.use(authMiddleware);
 
-router.get('/counts', checkRole(...roles), ctrl.getCounts);
-router.get('/dashboard', checkRole(...roles), ctrl.getDashboard);
-router.get('/einvoice-queue', checkRole(...roles), ctrl.getEinvoiceQueue);
+router.get('/counts', cp('billing_dashboard', 'view'), ctrl.getCounts);
+router.get('/dashboard', cp('billing_dashboard', 'view'), ctrl.getDashboard);
+router.get('/einvoice-queue', cp('einvoice_ewb', 'view'), ctrl.getEinvoiceQueue);
 
 module.exports = router;

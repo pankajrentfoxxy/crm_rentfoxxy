@@ -4,14 +4,24 @@
 const cron = require('node-cron');
 const pool = require('../config/db');
 
-async function nextInvoiceNumber() {
+async function nextInvoiceNumber(entity = 'rentfoxxy') {
+  // Rentals invoice under Rentfoxxy; per-entity sequence (migration 074),
+  // falling back to the legacy shared sequence if the entity one is absent.
+  const docType = entity === 'gorefurbo' ? 'invoice_gorefurbo' : 'invoice_rentfoxxy';
   const res = await pool.query(
     `UPDATE sm_document_sequences
      SET last_value = last_value + 1
+     WHERE doc_type = $1
+     RETURNING prefix || LPAD(last_value::text, 4, '0') AS number`,
+    [docType]
+  );
+  if (res.rows.length) return res.rows[0].number;
+  const fb = await pool.query(
+    `UPDATE sm_document_sequences SET last_value = last_value + 1
      WHERE doc_type = 'customer_invoice'
      RETURNING prefix || LPAD(last_value::text, 4, '0') AS number`
   );
-  return res.rows[0].number;
+  return fb.rows[0].number;
 }
 
 async function nextVendorBillNumber() {
@@ -37,30 +47,33 @@ async function generateCustomerInvoice(customerId, month, year) {
     return { skipped: true, invoice_id: existing.rows[0].invoice_id };
   }
 
+  // Authoritative source: vendor_serial_numbers (the inventory state machine).
+  // Bill rental units held by this customer whose rent overlaps the month.
+  // rent_start_date honours the dispatch-mode rule; rent_end_date/returned_at
+  // makes billing react to returns. One row per unit => multi-serial DC lines
+  // are billed correctly by construction.
+  const monthStartStr = monthStart.toISOString().slice(0, 10);
+  const monthEndStr = monthEnd.toISOString().slice(0, 10);
   const serialsRes = await pool.query(
-    `SELECT DISTINCT ON (dcl.id)
-       dcl.id,
-       dcl.serial_number,
-       dcl.dc_number,
-       dcl.brand,
-       dcl.model_name,
-       dcl.delivered_at,
-       dcl.status AS dc_status,
-       COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
-       vsn.serial_id,
-       sol.rate,
-       COALESCE(sol.quotation_type, sq.quotation_type, 'rental') AS quotation_type
-     FROM delivery_challan_lines dcl
-     LEFT JOIN sales_order_lines sol ON sol.sales_order_number = dcl.sales_order_number AND sol.brand = dcl.brand
-     LEFT JOIN sales_quotations sq ON sq.quotation_number = dcl.quotation_number
-     LEFT JOIN vendor_serial_numbers vsn
-       ON vsn.serial_number = (dcl.serial_number::jsonb->>0)
-       OR COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') = (dcl.serial_number::jsonb->>0)
-     WHERE dcl.customer_id = $1
-       AND dcl.status IN ('delivered', 'shipped')
-       AND COALESCE(sol.quotation_type, sq.quotation_type, 'rental') = 'rental'
-     ORDER BY dcl.id, dcl.delivered_at`,
-    [customerId]
+    `SELECT vsn.serial_id,
+            COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
+            vsn.serial_number,
+            vsn.current_dc_number AS dc_number,
+            vsn.inventory_status,
+            vsn.rent_start_date,
+            COALESCE(vsn.rent_end_date, vsn.returned_at::date) AS rent_end_date,
+            vsn.rent_monthly_rate,
+            COALESCE(vsn.extra->>'brand', '') AS brand,
+            COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', '') AS model
+       FROM vendor_serial_numbers vsn
+      WHERE vsn.current_customer_id = $1
+        AND vsn.deleted_at IS NULL
+        AND vsn.inventory_status IN ('rented', 'returned')
+        AND vsn.rent_start_date IS NOT NULL
+        AND vsn.rent_start_date <= $3::date
+        AND (vsn.rent_end_date IS NULL AND vsn.returned_at IS NULL
+             OR COALESCE(vsn.rent_end_date, vsn.returned_at::date) >= $2::date)`,
+    [customerId, monthStartStr, monthEndStr]
   );
 
   if (!serialsRes.rows.length) {
@@ -70,16 +83,19 @@ async function generateCustomerInvoice(customerId, month, year) {
   const daysInMonth = monthEnd.getDate();
   const lineItems = [];
   let subtotal = 0;
+  const msPerDay = 24 * 60 * 60 * 1000;
 
   for (const row of serialsRes.rows) {
-    const dispatchDate = row.delivered_at ? new Date(row.delivered_at) : monthStart;
-    const effectiveStart = dispatchDate > monthStart ? dispatchDate : monthStart;
-    const effectiveEnd = monthEnd;
+    const rentStart = new Date(row.rent_start_date);
+    const rentEnd = row.rent_end_date ? new Date(row.rent_end_date) : null;
 
-    const msPerDay = 24 * 60 * 60 * 1000;
+    const effectiveStart = rentStart > monthStart ? rentStart : monthStart;
+    const effectiveEnd = (rentEnd && rentEnd < monthEnd) ? rentEnd : monthEnd;
+    if (effectiveStart > effectiveEnd) continue;
+
     const days = Math.max(1, Math.round((effectiveEnd - effectiveStart) / msPerDay) + 1);
 
-    const monthlyRate = parseFloat(row.rate || 0);
+    const monthlyRate = parseFloat(row.rent_monthly_rate || 0);
     const dailyRate = monthlyRate / daysInMonth;
     const amount = parseFloat((dailyRate * days).toFixed(2));
 
@@ -89,13 +105,19 @@ async function generateCustomerInvoice(customerId, month, year) {
       serial_number: row.serial_number,
       dc_number: row.dc_number,
       brand: row.brand || '',
-      model: row.model_name || '',
-      dispatch_date: effectiveStart.toISOString().slice(0, 10),
+      model: row.model || '',
+      rent_start: effectiveStart.toISOString().slice(0, 10),
+      rent_end: effectiveEnd.toISOString().slice(0, 10),
       days_in_month: days,
       monthly_rate: monthlyRate,
       daily_rate: parseFloat(dailyRate.toFixed(2)),
       amount,
+      returned: row.inventory_status === 'returned',
     });
+  }
+
+  if (!lineItems.length) {
+    return { skipped: true, reason: 'No billable rental period this month' };
   }
 
   const cnRes = await pool.query(
@@ -111,15 +133,17 @@ async function generateCustomerInvoice(customerId, month, year) {
   const gstAmount = parseFloat((subtotal * gstPercent / 100).toFixed(2));
   const grandTotal = Math.max(0, parseFloat((subtotal + gstAmount - creditAdjustment).toFixed(2)));
 
-  const invoiceNumber = await nextInvoiceNumber();
+  // Rentals always bill under Rentfoxxy.
+  const entityCode = 'rentfoxxy';
+  const invoiceNumber = await nextInvoiceNumber(entityCode);
 
   const insertRes = await pool.query(
     `INSERT INTO customer_invoices
       (invoice_number, customer_id, invoice_month, invoice_year,
        invoice_date, from_date, to_date, line_items,
        subtotal, gst_percent, gst_amount,
-       credit_note_adjustment, grand_total, status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,'draft')
+       credit_note_adjustment, grand_total, status, entity_code)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,'draft',$14)
      RETURNING invoice_id, invoice_number`,
     [
       invoiceNumber,
@@ -135,6 +159,7 @@ async function generateCustomerInvoice(customerId, month, year) {
       gstAmount,
       creditAdjustment.toFixed(2),
       grandTotal,
+      entityCode,
     ]
   );
 
@@ -156,11 +181,14 @@ async function generateCustomerInvoice(customerId, month, year) {
 }
 
 async function generateAllCustomerInvoices(month, year) {
+  // Customers holding billable rental units, per the authoritative inventory.
   const customersRes = await pool.query(
-    `SELECT DISTINCT customer_id
-     FROM delivery_challan_lines
-     WHERE status IN ('delivered', 'shipped')
-       AND customer_id IS NOT NULL`
+    `SELECT DISTINCT current_customer_id AS customer_id
+     FROM vendor_serial_numbers
+     WHERE current_customer_id IS NOT NULL
+       AND deleted_at IS NULL
+       AND inventory_status IN ('rented', 'returned')
+       AND rent_start_date IS NOT NULL`
   );
 
   const results = [];

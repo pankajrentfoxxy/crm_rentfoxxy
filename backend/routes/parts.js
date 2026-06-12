@@ -2,7 +2,8 @@ const express = require('express');
 const router = express.Router();
 const { getAllParts, createPart, updatePartQuantity, updatePart, getPartUsage } = require('../controllers/partController');
 const { getPartsGrouped } = require('../controllers/partsDropdownController');
-const { authMiddleware, checkRole } = require('../middleware/auth');
+const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
+const cp = checkSectionPermission;
 
 router.use(authMiddleware);
 
@@ -18,18 +19,18 @@ router.get('/grouped', getPartsGrouped);
 // @route   POST /api/parts
 // @desc    Create a new part
 // @access  Private (Manager, Admin)
-router.post('/', checkRole('manager', 'admin', 'floor_manager'), createPart);
+router.post('/', cp('parts_inventory', 'create'), createPart);
 
 router.get('/:id/usage', getPartUsage);
 
 // @route   PUT /api/parts/:id
 // @desc    Update part details
 // @access  Private (Manager, Admin)
-router.put('/:id', checkRole('manager', 'admin', 'floor_manager'), updatePart);
+router.put('/:id', cp('parts_inventory', 'edit'), updatePart);
 
 // @route   PUT /api/parts/:id/quantity
 // @desc    Update part quantity
 // @access  Private (Manager, Admin)
-router.put('/:id/quantity', checkRole('manager', 'admin', 'floor_manager', 'team_lead'), updatePartQuantity);
+router.put('/:id/quantity', cp('parts_inventory', 'edit'), updatePartQuantity);
 
 module.exports = router;

@@ -581,10 +581,23 @@ async function fetchRevenueData(query) {
         ),
     ]);
 
+    // Rentfoxxy vs Gorefurbo split for the dashboard revenue chart.
+    const byEntityRes = await pool.query(
+        `SELECT COALESCE(ci.entity_code, 'rentfoxxy') AS entity_code,
+                COALESCE(SUM(ci.grand_total), 0)::float AS invoiced,
+                COALESCE(SUM(ci.grand_total) FILTER (WHERE ci.status = 'paid'), 0)::float AS collected,
+                COALESCE(SUM(ci.grand_total) FILTER (WHERE ci.status NOT IN ('paid','cancelled')), 0)::float AS outstanding
+           FROM customer_invoices ci
+          WHERE ${whereSql}
+          GROUP BY COALESCE(ci.entity_code, 'rentfoxxy')`,
+        params
+    );
+
     const total = countRes.rows[0]?.total || 0;
     return {
         invoices: rowsRes.rows,
         totals: totalsRes.rows[0] || {},
+        by_entity: byEntityRes.rows,
         pagination: {
             page,
             limit,

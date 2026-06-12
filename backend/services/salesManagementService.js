@@ -7,7 +7,30 @@ const DOC_TYPES = {
   sales_order: { prefix: 'SO-', pad: 6 },
   delivery_challan: { prefix: 'DC-', pad: 6 },
   return_dc: { prefix: 'RDC', pad: 6 },
+  // Per-entity sequences (migration 074). Rental/Demo -> rentfoxxy, Sales -> gorefurbo.
+  quote_rentfoxxy: { prefix: 'EST-', pad: 6 },
+  quote_gorefurbo: { prefix: 'GEST-', pad: 6 },
+  so_rentfoxxy: { prefix: 'SO-', pad: 6 },
+  so_gorefurbo: { prefix: 'GSO-', pad: 6 },
+  dc_rentfoxxy: { prefix: 'DC-', pad: 6 },
+  dc_gorefurbo: { prefix: 'GDC-', pad: 6 },
+  invoice_rentfoxxy: { prefix: 'INV-', pad: 4 },
+  invoice_gorefurbo: { prefix: 'GINV-', pad: 4 },
 };
+
+// Rental + Demo bill/dispatch under Rentfoxxy; Sales under Gorefurbo.
+function entityForQuotationType(quotationType) {
+  return String(quotationType || 'rental').toLowerCase() === 'sales' ? 'gorefurbo' : 'rentfoxxy';
+}
+
+// Resolve an entity-scoped doc type, e.g. ('delivery_challan','gorefurbo') -> 'dc_gorefurbo'.
+function entityDocType(base, entityCode) {
+  const map = { quotation: 'quote', sales_order: 'so', delivery_challan: 'dc', customer_invoice: 'invoice' };
+  const key = map[base] || base;
+  const entity = entityCode === 'gorefurbo' ? 'gorefurbo' : 'rentfoxxy';
+  const docType = `${key}_${entity}`;
+  return DOC_TYPES[docType] ? docType : base; // fall back to shared sequence if unknown
+}
 
 async function nextDocumentNumber(docType) {
   const meta = DOC_TYPES[docType];
@@ -457,6 +480,8 @@ async function searchAvailableInventory({
 
 module.exports = {
   nextDocumentNumber,
+  entityForQuotationType,
+  entityDocType,
   generateToken,
   getQuotationRemainingQty,
   getSalesOrderRemainingQty,

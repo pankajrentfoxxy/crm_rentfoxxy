@@ -11,7 +11,18 @@ import { formatCurrency } from '../leadCrmUtils';
 import CustomerDocuments from '../components/CustomerDocuments';
 import CustomerFormDrawer from '../components/CustomerFormDrawer';
 
-const TABS = ['Profile', 'Documents', 'Laptops', 'Orders', 'Lead Origin', 'Portal Access'];
+const TABS = ['Profile', 'Documents', 'Assets', 'Orders', 'Lead Origin', 'Portal Access'];
+
+function KycBadge({ status }) {
+  const map = {
+    verified: 'bg-green-100 text-green-700',
+    submitted: 'bg-amber-100 text-amber-700',
+    rejected: 'bg-red-100 text-red-700',
+    pending: 'bg-gray-100 text-gray-600',
+  };
+  const s = status || 'pending';
+  return <span className={`px-2 py-1 rounded-full text-xs font-semibold ${map[s] || map.pending}`}>KYC: {s}</span>;
+}
 const PORTAL_URL = process.env.REACT_APP_CUSTOMER_PORTAL_URL || 'http://localhost:3002';
 
 function PasswordModal({ password, onClose }) {
@@ -95,10 +106,11 @@ export default function CustomerDetailPage() {
           <h1 className="text-2xl font-bold">{customer.company_name || customer.customer_name}</h1>
           <p className="text-gray-500 text-sm">Customer #{customer.customer_id}</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          <KycBadge status={customer.kyc_status || (customer.kyc_verified ? 'verified' : 'pending')} />
           <button type="button" onClick={() => setEditOpen(true)} className="px-3 py-1.5 text-sm border rounded-lg">Edit</button>
-          <PermissionGate section="customer_documents" action="edit">
-            {!customer.kyc_verified && (
+          <PermissionGate section="kyc_management" action="edit">
+            {(customer.kyc_status !== 'verified' && !customer.kyc_verified) && (
               <button type="button" onClick={handleVerifyKyc}
                 className="px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg">Verify KYC</button>
             )}
@@ -166,14 +178,14 @@ export default function CustomerDetailPage() {
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-xs text-gray-500 text-left">
               <tr>
-                {['TTSPL ID', 'Model', 'Config', 'Dispatch', 'Status'].map((h) => <th key={h} className="p-3">{h}</th>)}
+                {['TTSPL ID', 'Model', 'Config', 'Entity', 'Dispatch', 'Monthly Rate', 'Status'].map((h) => <th key={h} className="p-3">{h}</th>)}
               </tr>
             </thead>
             <tbody>
               {laptops.length === 0 ? (
-                <tr><td colSpan={5} className="p-6 text-center text-gray-400">No laptops on record</td></tr>
+                <tr><td colSpan={7} className="p-6 text-center text-gray-400">No assets currently with this customer</td></tr>
               ) : laptops.map((lap) => (
-                <tr key={lap.id || lap.ttspl_id} className="border-t border-gray-100">
+                <tr key={lap.serial_id || lap.ttspl_id} className="border-t border-gray-100">
                   <td className="p-3">
                     <button type="button" onClick={() => setTtsplOpen(lap.ttspl_id || lap.serial_number)}
                       className="text-blue-600 hover:underline font-mono text-xs">
@@ -182,8 +194,14 @@ export default function CustomerDetailPage() {
                   </td>
                   <td className="p-3">{lap.model_name || '—'}</td>
                   <td className="p-3 text-xs">{[lap.processor, lap.ram, lap.storage].filter(Boolean).join(' · ')}</td>
+                  <td className="p-3 text-xs">
+                    {lap.entity_code === 'gorefurbo'
+                      ? <span className="px-2 py-0.5 rounded bg-purple-100 text-purple-700">Gorefurbo</span>
+                      : <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-700">Rentfoxxy</span>}
+                  </td>
                   <td className="p-3 text-xs">{lap.dispatch_date ? new Date(lap.dispatch_date).toLocaleDateString('en-IN') : '—'}</td>
-                  <td className="p-3">{lap.status || '—'}</td>
+                  <td className="p-3 text-xs">{lap.rent_monthly_rate ? formatCurrency(lap.rent_monthly_rate) : '—'}</td>
+                  <td className="p-3"><span className="px-2 py-0.5 rounded-full bg-gray-100 text-xs">{lap.status || '—'}</span></td>
                 </tr>
               ))}
             </tbody>

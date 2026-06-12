@@ -28,7 +28,9 @@ const {
 } = require('../controllers/ticketController');
 const qcController = require('../controllers/qcController');
 const phase2 = require('../controllers/ticketPhase2Controller');
-const { authMiddleware, checkRole } = require('../middleware/auth');
+const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
+const ftView = checkSectionPermission('floor_tickets', 'view');
+const ftEdit = checkSectionPermission('floor_tickets', 'edit');
 
 // All routes require authentication
 router.use(authMiddleware);
@@ -56,7 +58,7 @@ router.get('/my', getMyTickets);
 // @route   POST /api/tickets/bulk-move
 // @desc    Bulk move all tickets from one stage to another
 // @access  Private (Admin, Manager, Floor Manager)
-router.post('/bulk-move', checkRole('admin', 'manager', 'floor_manager'), bulkMoveTickets);
+router.post('/bulk-move', ftEdit, bulkMoveTickets);
 
 // QC assignee list (must be before /:id)
 router.get('/qc/qc2-assignees', qcController.getQC2Assignees);
@@ -65,7 +67,7 @@ router.get('/qc/qc2-assignees', qcController.getQC2Assignees);
 router.get('/floor-dashboard', phase2.getFloorDashboard);
 router.get(
   '/floor-manager-queue',
-  checkRole('admin', 'manager', 'floor_manager'),
+  ftView,
   getFloorManagerQueue
 );
 router.get('/team-members', getTeamMembers);
@@ -77,7 +79,7 @@ router.patch('/:id/chip-repair', phase2.markChipRepairRequired);
 router.patch('/:id/body-paint', phase2.markBodyPaintRequired);
 router.patch(
   '/:id/floor-manager-fail',
-  checkRole('admin', 'manager', 'floor_manager'),
+  ftEdit,
   phase2.markQcFailed
 );
 router.patch('/:id/config', phase2.updateTtsplConfig);
@@ -100,7 +102,7 @@ router.post('/:id/next-stage', moveToNextStage);
 // @route   POST /api/tickets/:id/assign
 // @desc    Assign ticket to a user
 // @access  Private (Team Lead, Manager, Floor Manager, Admin)
-router.post('/:id/assign', checkRole('team_lead', 'manager', 'floor_manager', 'admin'), assignTicket);
+router.post('/:id/assign', ftEdit, assignTicket);
 
 // @route   POST /api/tickets/:id/claim
 // @desc    Claim an unassigned ticket for your team
@@ -123,7 +125,7 @@ router.post('/:id/notes', addNote);
 router.post('/:id/parts', addPartToTicket);
 router.post(
   '/:id/parts-with-config',
-  checkRole('technician', 'floor_manager', 'admin', 'manager'),
+  ftEdit,
   addPartToTicketWithConfig
 );
 router.post('/:id/log-note', logNote);

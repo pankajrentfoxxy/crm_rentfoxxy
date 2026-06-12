@@ -1,69 +1,19 @@
 const express = require('express');
 const router = express.Router();
 const reportsController = require('../controllers/reportsController');
-const { authMiddleware, checkRole, checkRoleOrPermission } = require('../middleware/auth');
+const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
 
-router.get(
-    '/technician-performance',
-    authMiddleware,
-    checkRoleOrPermission(['admin', 'manager', 'floor_manager'], ['reports_access']),
-    reportsController.getTechnicianPerformance
-);
+const cp = checkSectionPermission;
+const reportsView = cp('reports_access', 'view');
 
-router.get(
-    '/revenue',
-    authMiddleware,
-    checkRole('admin', 'manager', 'accounts'),
-    reportsController.getRevenueReport
-);
-
-router.get(
-    '/inventory-utilisation',
-    authMiddleware,
-    checkRoleOrPermission(['admin', 'manager', 'floor_manager'], ['reports_access']),
-    reportsController.getInventoryUtilisationReport
-);
-
-router.get(
-    '/lead-conversion',
-    authMiddleware,
-    checkRole('admin', 'manager'),
-    reportsController.getLeadConversionReport
-);
-
-router.get(
-    '/salesperson',
-    authMiddleware,
-    checkRole('admin', 'manager', 'sales'),
-    reportsController.getSalespersonReport
-);
-
-router.get(
-    '/collections',
-    authMiddleware,
-    checkRole('admin', 'manager', 'accounts'),
-    reportsController.getCollectionsReport
-);
-
-router.get(
-    '/vendor-spend',
-    authMiddleware,
-    checkRole('admin', 'manager', 'accounts'),
-    reportsController.getVendorSpendReport
-);
-
-router.post(
-    '/export',
-    authMiddleware,
-    checkRole('admin', 'manager', 'accounts'),
-    reportsController.exportToExcel
-);
-
-router.get(
-    '/support-stats',
-    authMiddleware,
-    checkRoleOrPermission(['admin', 'manager', 'support_lead'], ['support_tickets']),
-    reportsController.getSupportStats
-);
+router.get('/technician-performance', authMiddleware, reportsView, reportsController.getTechnicianPerformance);
+router.get('/revenue', authMiddleware, reportsView, reportsController.getRevenueReport);
+router.get('/inventory-utilisation', authMiddleware, reportsView, reportsController.getInventoryUtilisationReport);
+router.get('/lead-conversion', authMiddleware, reportsView, reportsController.getLeadConversionReport);
+router.get('/salesperson', authMiddleware, reportsView, reportsController.getSalespersonReport);
+router.get('/collections', authMiddleware, reportsView, reportsController.getCollectionsReport);
+router.get('/vendor-spend', authMiddleware, reportsView, reportsController.getVendorSpendReport);
+router.post('/export', authMiddleware, cp('reports_export', 'create'), reportsController.exportToExcel);
+router.get('/support-stats', authMiddleware, reportsView, reportsController.getSupportStats);
 
 module.exports = router;

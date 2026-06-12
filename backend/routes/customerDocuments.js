@@ -2,12 +2,11 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
-const { authMiddleware, checkRole } = require('../middleware/auth');
+const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
 const ctrl = require('../controllers/customerDocumentController');
 
 const router = express.Router();
-const roles = ['admin', 'manager', 'sales', 'accounts'];
-const deleteRoles = ['admin', 'manager'];
+const cp = checkSectionPermission;
 
 const uploadDir = path.join('uploads', 'customer-documents', 'tmp');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
@@ -24,8 +23,8 @@ const upload = multer({
 
 router.use(authMiddleware);
 
-router.get('/:customerId', checkRole(...roles), ctrl.listDocuments);
-router.post('/:customerId/upload', checkRole(...roles), upload.single('file'), ctrl.uploadDocument);
-router.delete('/:customerId/:docId', checkRole(...deleteRoles), ctrl.deleteDocument);
+router.get('/:customerId', cp('customer_documents', 'view'), ctrl.listDocuments);
+router.post('/:customerId/upload', cp('customer_documents', 'create'), upload.single('file'), ctrl.uploadDocument);
+router.delete('/:customerId/:docId', cp('customer_documents', 'delete'), ctrl.deleteDocument);
 
 module.exports = router;

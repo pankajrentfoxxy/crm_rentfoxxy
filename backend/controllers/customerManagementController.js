@@ -493,7 +493,8 @@ exports.verifyCustomerKyc = async (req, res) => {
   try {
     const customerId = parseInt(req.params.customerId, 10);
     const result = await pool.query(
-      `UPDATE customers SET kyc_verified = TRUE, kyc_verified_by = $1, kyc_verified_at = NOW(), updated_at = NOW()
+      `UPDATE customers SET kyc_verified = TRUE, kyc_status = 'verified',
+              kyc_verified_by = $1, kyc_verified_at = NOW(), updated_at = NOW()
        WHERE customer_id = $2 RETURNING *`,
       [req.user.user_id, customerId]
     );
@@ -506,20 +507,36 @@ exports.verifyCustomerKyc = async (req, res) => {
   }
 };
 
+// "Assets with Customer" — derived from the authoritative inventory
+// (vendor_serial_numbers), replacing the deprecated customer_inventory table.
 exports.getCustomerLaptops = async (req, res) => {
   try {
     const customerId = parseInt(req.params.customerId, 10);
     const { rows } = await pool.query(
-      `SELECT id, serial_number AS ttspl_id, model_name, processor, generation, ram, storage,
-              asset_kind AS status, created_at AS dispatch_date
-       FROM customer_inventory WHERE customer_id = $1 ORDER BY id DESC`,
+      `SELECT vsn.serial_id,
+              COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
+              vsn.serial_number,
+              vsn.extra->>'brand' AS brand,
+              COALESCE(vsn.extra->>'model', vsn.extra->>'model_name') AS model_name,
+              vsn.extra->>'processor' AS processor,
+              vsn.extra->>'generation' AS generation,
+              vsn.extra->>'ram' AS ram,
+              vsn.extra->>'storage' AS storage,
+              vsn.inventory_status AS status,
+              vsn.current_entity AS entity_code,
+              vsn.current_dc_number AS dc_number,
+              vsn.delivered_at AS dispatch_date,
+              vsn.rent_start_date,
+              vsn.rent_monthly_rate
+         FROM vendor_serial_numbers vsn
+        WHERE vsn.current_customer_id = $1
+          AND vsn.deleted_at IS NULL
+          AND vsn.inventory_status IN ('rented','on_demo','sold')
+        ORDER BY vsn.delivered_at DESC NULLS LAST`,
       [customerId]
     );
     res.json({ success: true, laptops: rows });
   } catch (error) {
-    if (error.message && error.message.includes('customer_inventory')) {
-      return res.json({ success: true, laptops: [] });
-    }
     res.status(500).json({ success: false, message: error.message });
   }
 };

@@ -6,6 +6,7 @@ const { deriveItemCurrentStep } = require('../services/supportTicketFlow');
 const { ensureCustomerTables } = require('../services/customerInventoryErpSyncService');
 const supportQuery = require('../services/supportQuery');
 const supportInventoryService = require('../services/supportInventoryService');
+const inventorySM = require('../services/inventoryStateMachine');
 
 const ITEM_OPEN_STATUSES = new Set(['open', 'work_done', 'awaiting_otp']);
 const TICKET_OPEN = 'open';
@@ -827,6 +828,26 @@ exports.verifyOtp = async (req, res) => {
             action: 'item_closed',
             detail: null
         });
+
+        // Pure pickup (return without replacement): stop billing on the unit by
+        // marking it returned in the authoritative inventory. Replacement returns
+        // are handled in deliverReplacement, so only act on standalone pickups.
+        if (item.item_type === 'pickup') {
+            try {
+                const code = item.ttspl_id || item.unique_serial_number || item.serial_number;
+                const serial = await inventorySM.findSerialByCode(client, code);
+                if (serial && ['rented', 'on_demo', 'sold'].includes(serial.inventory_status)) {
+                    await inventorySM.markReturned(client, serial.serial_id, {
+                        reason: `Picked up via support TKT-${String(item.ticket_id).padStart(3, '0')}`,
+                        actorUserId: req.user.user_id,
+                        actorName: req.user.name,
+                    });
+                }
+            } catch (bridgeErr) {
+                console.error('[support] pickup inventory bridge failed for item', itemId, bridgeErr.message);
+            }
+        }
+
         await bumpTicketActivity(client, item.ticket_id);
         await recomputeTicketStatus(client, item.ticket_id);
         await client.query('COMMIT');
@@ -1597,6 +1618,35 @@ exports.deliverReplacement = async (req, res) => {
         if (order.new_customer_inventory_id) {
             await supportInventoryService.activateAsset(client, order.new_customer_inventory_id);
         }
+
+        // Bridge into the authoritative inventory (vendor_serial_numbers):
+        // return the faulty unit (stops billing) and rent out the replacement.
+        try {
+            const codeRows = await client.query(
+                `SELECT
+                    (SELECT COALESCE(unique_serial_number, serial_number)
+                       FROM customer_inventory WHERE id = $1) AS old_code,
+                    (SELECT COALESCE(unique_serial_number, serial_number)
+                       FROM customer_inventory WHERE id = $2) AS new_code`,
+                [order.old_customer_inventory_id || null, order.new_customer_inventory_id || null]
+            );
+            const { old_code, new_code } = codeRows.rows[0] || {};
+            if (old_code || new_code) {
+                await inventorySM.bridgeSupportReplacement(client, {
+                    oldCode: old_code,
+                    newCode: new_code,
+                    customerId,
+                    dcNumber: order.return_dc_number || null,
+                    actorUserId: req.user.user_id,
+                    actorName: req.user.name,
+                });
+            }
+        } catch (bridgeErr) {
+            // Don't fail the support swap if the authoritative bridge can't match a serial;
+            // log so it can be reconciled. (e.g. ERP-era assets without a vendor serial row.)
+            console.error('[support] inventory bridge failed for order', orderId, bridgeErr.message);
+        }
+
         await client.query(
             `UPDATE support_replacement_orders
              SET status = 'inventory_updated', delivered_at = COALESCE(delivered_at, CURRENT_TIMESTAMP),

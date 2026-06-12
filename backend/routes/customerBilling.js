@@ -1,26 +1,26 @@
 const express = require('express');
 const router = express.Router();
-const { authMiddleware, checkRole } = require('../middleware/auth');
+const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
 const ctrl = require('../controllers/customerBillingController');
 
-const viewRoles = ['admin', 'manager', 'accounts', 'sales'];
-const editRoles = ['admin', 'manager', 'accounts'];
+// RBAC is driven by the role_permissions matrix (section + action).
+const cp = checkSectionPermission;
 
 router.use(authMiddleware);
 
-router.get('/invoices', checkRole(...viewRoles), ctrl.listInvoices);
-router.post('/invoices/generate', checkRole(...editRoles), ctrl.generateInvoice);
-router.get('/invoices/:invoiceId/pdf', checkRole(...viewRoles), ctrl.downloadInvoicePdf);
-router.get('/invoices/:invoiceId', checkRole(...viewRoles), ctrl.getInvoice);
-router.post('/invoices/:id/send', checkRole(...editRoles), ctrl.sendInvoice);
-router.patch('/invoices/:id/paid', checkRole(...editRoles), ctrl.markPaid);
+router.get('/invoices', cp('customer_billing', 'view'), ctrl.listInvoices);
+router.post('/invoices/generate', cp('customer_billing', 'create'), ctrl.generateInvoice);
+router.get('/invoices/:invoiceId/pdf', cp('customer_billing', 'view'), ctrl.downloadInvoicePdf);
+router.get('/invoices/:invoiceId', cp('customer_billing', 'view'), ctrl.getInvoice);
+router.post('/invoices/:id/send', cp('customer_billing', 'edit'), ctrl.sendInvoice);
+router.patch('/invoices/:id/paid', cp('customer_billing', 'edit'), ctrl.markPaid);
 
-router.get('/credit-notes', checkRole(...viewRoles), ctrl.listCreditNotes);
-router.post('/credit-notes', checkRole(...editRoles), ctrl.createCreditNote);
-router.patch('/credit-notes/:id/approve', checkRole('admin', 'manager'), ctrl.approveCreditNote);
+router.get('/credit-notes', cp('credit_notes', 'view'), ctrl.listCreditNotes);
+router.post('/credit-notes', cp('credit_notes', 'create'), ctrl.createCreditNote);
+router.patch('/credit-notes/:id/approve', cp('credit_notes', 'edit'), ctrl.approveCreditNote);
 
-router.get('/security-deposits', checkRole(...viewRoles), ctrl.listSecurityDeposits);
-router.post('/security-deposits', checkRole(...editRoles), ctrl.recordSecurityDeposit);
-router.patch('/security-deposits/:id/refund', checkRole(...editRoles), ctrl.refundSecurityDeposit);
+router.get('/security-deposits', cp('security_deposits', 'view'), ctrl.listSecurityDeposits);
+router.post('/security-deposits', cp('security_deposits', 'create'), ctrl.recordSecurityDeposit);
+router.patch('/security-deposits/:id/refund', cp('security_deposits', 'edit'), ctrl.refundSecurityDeposit);
 
 module.exports = router;

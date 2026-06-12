@@ -46,7 +46,7 @@ export const inventoryAccordionChildren = [
   { label: 'Stock Management', path: '/inventory-management/universal-search', section: 'inventory_management' },
   { label: 'Ready to Rent/Sell', path: '/inventory-management/ready-to-rent-or-sell', countKey: 'passed', section: 'inventory_management' },
   { label: 'Parts Inventory', path: '/inventory-management/parts', section: 'parts_inventory' },
-  { label: 'Customer Inventory', path: '/customer-inventory', section: 'customer_inventory' },
+  { label: 'Customer Assets', path: '/lead-crm/customers', section: 'customer_assets' },
 ];
 
 export const salesPipelineAccordionChildren = [

@@ -336,9 +336,55 @@ async function createSalesOrderQcTicket(db, {
   return { ok: true, ticket_id: ticketId };
 }
 
+/**
+ * Recovery for GRN serials that never got a floor ticket (e.g. the post-commit
+ * ticket creation failed). Finds received serials with no ticket at all and
+ * creates the missing Floor Manager ticket for each. Idempotent.
+ * @returns {{ scanned:number, created:number, errors:Array }}
+ */
+async function recoverOrphanGrnTickets(db) {
+  const client = db || require('../config/db');
+  const orphans = await client.query(
+    `SELECT vsn.serial_id, vsn.serial_number, vsn.inventory_asset_code, vsn.po_id,
+            vpo.purchase_order_number, vpo.line_items
+       FROM vendor_serial_numbers vsn
+       JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id
+      WHERE vsn.deleted_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM tickets t WHERE t.vendor_serial_id = vsn.serial_id
+        )
+        AND COALESCE(vsn.inventory_status, 'in_stock') NOT IN ('rented','on_demo','sold')`
+  );
+
+  let created = 0;
+  const errors = [];
+  for (const row of orphans.rows) {
+    try {
+      let line = {};
+      try {
+        const items = typeof row.line_items === 'string' ? JSON.parse(row.line_items) : row.line_items;
+        if (Array.isArray(items) && items.length) line = items[0];
+      } catch { /* ignore */ }
+      const result = await createTicketFromGrnReceive(client, {
+        serialId: row.serial_id,
+        serialNumber: row.serial_number,
+        inventoryAssetCode: row.inventory_asset_code,
+        po: { po_id: row.po_id, purchase_order_number: row.purchase_order_number },
+        line,
+        actorUserId: null,
+      });
+      if (result.ok) created += 1;
+    } catch (err) {
+      errors.push({ serial_id: row.serial_id, error: err.message });
+    }
+  }
+  return { scanned: orphans.rows.length, created, errors };
+}
+
 module.exports = {
   lineItemSpecs,
   createTicketFromGrnReceive,
   applyGrnVendorQcPassOnTicketComplete,
   createSalesOrderQcTicket,
+  recoverOrphanGrnTickets,
 };

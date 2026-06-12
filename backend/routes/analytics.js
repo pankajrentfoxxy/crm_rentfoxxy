@@ -6,7 +6,8 @@ const {
   getManagerDashboard,
   getSalesDashboard,
 } = require('../controllers/analyticsController');
-const { authMiddleware, checkRole } = require('../middleware/auth');
+const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
+const cp = checkSectionPermission;
 
 router.use(authMiddleware);
 
@@ -20,7 +21,7 @@ router.get('/dashboard', getDashboardStats);
 // @access  Private
 router.get('/team-performance', getTeamPerformance);
 
-router.get('/manager-dashboard', checkRole('admin', 'manager'), getManagerDashboard);
-router.get('/sales-dashboard', checkRole('admin', 'manager', 'sales'), getSalesDashboard);
+router.get('/manager-dashboard', cp('analytics_dashboard', 'view'), getManagerDashboard);
+router.get('/sales-dashboard', cp('analytics_dashboard', 'view'), getSalesDashboard);
 
 module.exports = router;

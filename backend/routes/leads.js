@@ -3,8 +3,15 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { authMiddleware, checkRole } = require('../middleware/auth');
+const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
 const leadController = require('../controllers/leadController');
+
+// RBAC via the role_permissions matrix (section 'leads').
+const cp = checkSectionPermission;
+const leadsView = cp('leads', 'view');
+const leadsCreate = cp('leads', 'create');
+const leadsEdit = cp('leads', 'edit');
+const leadsDelete = cp('leads', 'delete');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -25,35 +32,35 @@ const upload = multer({
 
 router.use(authMiddleware);
 
-router.get('/export-csv', leadController.exportLeadsCsv);
-router.get('/stages', leadController.getLeadStages);
-router.get('/', leadController.getLeads);
-router.get('/follow-ups', leadController.getFollowUps);
-router.get('/orders', leadController.getLeadOrders);
-router.get('/reports', checkRole('admin', 'manager'), leadController.getReports);
-router.get('/auto-assign-config', checkRole('admin', 'manager'), leadController.getAutoAssignConfig);
-router.get('/sample', checkRole('admin', 'manager', 'sales'), leadController.getSampleCsv);
-router.get('/:id', leadController.getLeadById);
+router.get('/export-csv', leadsView, leadController.exportLeadsCsv);
+router.get('/stages', leadsView, leadController.getLeadStages);
+router.get('/', leadsView, leadController.getLeads);
+router.get('/follow-ups', leadsView, leadController.getFollowUps);
+router.get('/orders', leadsView, leadController.getLeadOrders);
+router.get('/reports', leadsView, leadController.getReports);
+router.get('/auto-assign-config', leadsView, leadController.getAutoAssignConfig);
+router.get('/sample', leadsView, leadController.getSampleCsv);
+router.get('/:id', leadsView, leadController.getLeadById);
 
-router.post('/', checkRole('admin', 'manager', 'sales'), leadController.createLead);
-router.post('/upload', checkRole('admin', 'manager'), upload.single('file'), leadController.uploadLeadsCsv);
-router.post('/assign', checkRole('admin', 'manager'), leadController.assignLeads);
-router.post('/:id/research', checkRole('admin', 'manager', 'sales'), leadController.runResearch);
-router.post('/:id/send-quotation', checkRole('admin', 'manager', 'sales'), leadController.sendLeadQuotation);
-router.post('/:id/orders', checkRole('admin', 'manager', 'sales'), leadController.createLeadOrder);
-router.put('/:id/research', checkRole('admin', 'manager', 'sales'), leadController.updateResearchDetails);
-router.get('/:id/addresses', checkRole('admin', 'manager', 'sales'), leadController.getLeadAddresses);
-router.post('/:id/addresses', checkRole('admin', 'manager', 'sales'), leadController.addLeadAddress);
-router.delete('/:id/addresses/:address_id', checkRole('admin', 'manager', 'sales'), leadController.deleteLeadAddress);
-router.post('/:id/remarks', checkRole('admin', 'manager', 'sales'), leadController.addLeadRemark);
-router.delete('/:id/remarks/:remark_id', checkRole('admin', 'manager', 'sales'), leadController.deleteLeadRemark);
-router.get('/:id/customer-profile', checkRole('admin', 'manager', 'sales'), leadController.getLeadCustomerProfile);
+router.post('/', leadsCreate, leadController.createLead);
+router.post('/upload', leadsCreate, upload.single('file'), leadController.uploadLeadsCsv);
+router.post('/assign', leadsEdit, leadController.assignLeads);
+router.post('/:id/research', leadsEdit, leadController.runResearch);
+router.post('/:id/send-quotation', leadsEdit, leadController.sendLeadQuotation);
+router.post('/:id/orders', leadsCreate, leadController.createLeadOrder);
+router.put('/:id/research', leadsEdit, leadController.updateResearchDetails);
+router.get('/:id/addresses', leadsView, leadController.getLeadAddresses);
+router.post('/:id/addresses', leadsEdit, leadController.addLeadAddress);
+router.delete('/:id/addresses/:address_id', leadsEdit, leadController.deleteLeadAddress);
+router.post('/:id/remarks', leadsEdit, leadController.addLeadRemark);
+router.delete('/:id/remarks/:remark_id', leadsEdit, leadController.deleteLeadRemark);
+router.get('/:id/customer-profile', leadsView, leadController.getLeadCustomerProfile);
 
-router.put('/:id/status', checkRole('admin', 'manager', 'sales'), leadController.updateLeadStatus);
-router.put('/:id/follow-up', checkRole('admin', 'manager', 'sales'), leadController.updateFollowUp);
-router.put('/:id/basic', checkRole('admin', 'manager', 'sales'), leadController.updateLeadBasicDetails);
-router.put('/:id/profile', checkRole('admin', 'manager', 'sales'), leadController.updateLeadFullProfile);
-router.post('/:id/convert', checkRole('admin', 'manager', 'sales'), leadController.convertToCustomer);
-router.get('/:id/conversion', checkRole('admin', 'manager', 'sales'), leadController.getLeadConversionStatus);
+router.put('/:id/status', leadsEdit, leadController.updateLeadStatus);
+router.put('/:id/follow-up', leadsEdit, leadController.updateFollowUp);
+router.put('/:id/basic', leadsEdit, leadController.updateLeadBasicDetails);
+router.put('/:id/profile', leadsEdit, leadController.updateLeadFullProfile);
+router.post('/:id/convert', cp('lead_conversion', 'create'), leadController.convertToCustomer);
+router.get('/:id/conversion', leadsView, leadController.getLeadConversionStatus);
 
 module.exports = router;
