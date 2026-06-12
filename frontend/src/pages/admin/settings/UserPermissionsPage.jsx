@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, Pencil } from 'lucide-react';
-import CreateTechnicianModal from '../../../components/admin/CreateTechnicianModal';
 import RoleBadge from '../../../components/ui/RoleBadge';
 import { ToastContainer, useToast } from '../../../components/ui/Toast';
+import { ROLE_DISPLAY_NAMES } from '../../../constants/roles';
+import { SECTION_LABELS } from '../../../constants/sections';
 import {
   RBAC_ACTIONS,
+  RBAC_CRM_ROLES,
   RBAC_SECTIONS,
   buildOverrideMatrix,
   fetchUserPermissions,
@@ -14,11 +16,9 @@ import {
   saveUserPermissions,
 } from '../../../utils/rbacApi';
 
-const USER_PERM_ROLES = ['admin', 'technician', 'vendor'];
-
-const ROLE_OPTIONS = USER_PERM_ROLES.map((name) => ({
+const ROLE_OPTIONS = RBAC_CRM_ROLES.map((name) => ({
   value: name,
-  label: name.charAt(0).toUpperCase() + name.slice(1),
+  label: ROLE_DISPLAY_NAMES[name] || name,
 }));
 
 const ACTION_LABELS = {
@@ -85,7 +85,9 @@ function UserPermissionSectionCard({
           onClick={() => onToggleExpand(section)}
           className="flex-1 flex items-center gap-3 text-left min-w-0"
         >
-          <span className="font-semibold text-gray-800 capitalize shrink-0">{section}</span>
+          <span className="font-semibold text-gray-800 shrink-0">
+            {SECTION_LABELS[section] || section}
+          </span>
           <div className="flex flex-wrap gap-1.5 min-w-0">
             {badges.length > 0 ? (
               badges.map((badge) => (
@@ -169,7 +171,7 @@ export default function UserPermissionsPage() {
   const showToastRef = useRef(showToast);
   showToastRef.current = showToast;
 
-  const [selectedRole, setSelectedRole] = useState(USER_PERM_ROLES[0]);
+  const [selectedRole, setSelectedRole] = useState(RBAC_CRM_ROLES[0]);
   const [users, setUsers] = useState([]);
   const [usersLoading, setUsersLoading] = useState(false);
   const [selectedUserId, setSelectedUserId] = useState('');
@@ -182,8 +184,6 @@ export default function UserPermissionsPage() {
   const [expandedSections, setExpandedSections] = useState({});
   const [editingSection, setEditingSection] = useState(null);
   const [draftOverrides, setDraftOverrides] = useState(null);
-  const [showCreateModal, setShowCreateModal] = useState(false);
-
   useEffect(() => {
     if (!selectedRole) return;
     let cancelled = false;
@@ -331,18 +331,14 @@ export default function UserPermissionsPage() {
       <div className="max-w-5xl mx-auto">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
           <div>
-            <h1 className="text-2xl font-semibold text-gray-800">User Permissions</h1>
-            <p className="text-sm text-gray-500">Select a role and user, then edit permissions by section</p>
+            <h1 className="text-2xl font-semibold text-gray-800">User Permission Overrides</h1>
+            <p className="text-sm text-gray-500">Per-user overrides above or below role defaults</p>
           </div>
-          {selectedRole === 'technician' ? (
-            <button
-              type="button"
-              onClick={() => setShowCreateModal(true)}
-              className="px-3 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700"
-            >
-              Create Technician
-            </button>
-          ) : null}
+        </div>
+
+        <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+          These are per-user overrides. A user&apos;s effective permissions =
+          their role defaults + these overrides. Leave as &apos;Role Default&apos; to inherit.
         </div>
 
         {/* Step 1 & 2: Role + User dropdowns */}
@@ -446,15 +442,6 @@ export default function UserPermissionsPage() {
           </div>
         )}
       </div>
-
-      <CreateTechnicianModal
-        isOpen={showCreateModal}
-        onClose={() => setShowCreateModal(false)}
-        onSuccess={() => {
-          showToastRef.current('Technician created', 'success');
-          fetchUsersByRole('technician', { limit: 200 }).then((data) => setUsers(data.users || []));
-        }}
-      />
 
       <ToastContainer toasts={toasts} setToasts={setToasts} />
     </>

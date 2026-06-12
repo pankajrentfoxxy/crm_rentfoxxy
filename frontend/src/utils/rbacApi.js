@@ -1,10 +1,12 @@
 import api from './api';
 import { APPLICATION_SECTIONS, PERMISSION_ACTIONS } from '../constants/sections';
+import { CRM_ROLES, MANAGEABLE_ROLES } from '../constants/roles';
 
 export const RBAC_SECTIONS = APPLICATION_SECTIONS;
 export const RBAC_ACTIONS = PERMISSION_ACTIONS;
-
-export const RBAC_ASSIGNABLE_ROLES = ['admin', 'technician', 'vendor', 'customer'];
+export const RBAC_CRM_ROLES = CRM_ROLES;
+export const RBAC_MANAGEABLE_ROLES = MANAGEABLE_ROLES;
+export const RBAC_ASSIGNABLE_ROLES = CRM_ROLES;
 
 export async function fetchRoles(params = {}) {
   const { data } = await api.get('/roles', { params });
@@ -33,6 +35,38 @@ export async function fetchRolePermissions(role) {
 
 export async function saveRolePermissions(role, permissions) {
   const { data } = await api.put(`/role-permissions/${role}`, { permissions });
+  return data;
+}
+
+export async function applyRoleDefaults(role) {
+  const { data } = await api.post(`/role-permissions/${role}/apply-defaults`);
+  return data;
+}
+
+export async function fetchUsers(params = {}) {
+  const { data } = await api.get('/auth/users', { params });
+  return data;
+}
+
+export async function createUser(payload) {
+  const { data } = await api.post('/auth/register', payload);
+  return data;
+}
+
+export async function updateUser(userId, payload) {
+  const { data } = await api.put(`/auth/users/${userId}`, payload);
+  return data;
+}
+
+export async function updateUserStatus(userId, status, reason) {
+  const { data } = await api.patch(`/auth/users/${userId}/status`, { status, reason });
+  return data;
+}
+
+export async function resetUserPassword(userId, newPassword) {
+  const { data } = await api.post(`/auth/users/${userId}/reset-password`, {
+    new_password: newPassword || undefined,
+  });
   return data;
 }
 

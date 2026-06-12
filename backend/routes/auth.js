@@ -11,6 +11,9 @@ const {
   updateUserTeams,
   updateUserPermissions,
   deleteUser,
+  updateUser,
+  updateUserStatus,
+  resetUserPassword,
   registerCustomer,
   registerVendor,
   registerTechnician,
@@ -102,6 +105,21 @@ router.put('/users/:id/teams', authMiddleware, updateUserTeams);
 // @desc    Get all users (Manager/Admin)
 // @access  Private
 router.get('/users', authMiddleware, getAllUsers);
+
+// @route   PUT /api/auth/users/:id
+// @desc    Update user profile and role
+// @access  Private (Admin/Manager)
+router.put('/users/:id', authMiddleware, updateUser);
+
+// @route   PATCH /api/auth/users/:id/status
+// @desc    Activate, deactivate, or block user
+// @access  Private (Admin/Manager)
+router.patch('/users/:id/status', authMiddleware, updateUserStatus);
+
+// @route   POST /api/auth/users/:id/reset-password
+// @desc    Reset user password (admin only)
+// @access  Private (Admin)
+router.post('/users/:id/reset-password', authMiddleware, resetUserPassword);
 
 // @route   PUT /api/auth/users/:id/permissions
 // @desc    Update user permissions

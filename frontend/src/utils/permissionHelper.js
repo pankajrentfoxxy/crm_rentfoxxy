@@ -27,7 +27,7 @@ const LEGACY_ROLE_SECTIONS = {
     'lead_orders', 'customers', 'manager_dashboard', 'reports', 'parts', 'parts_inventory',
     'procurement', 'vendor_management', 'warehouse', 'qc_management',
     'inventory_management', 'dispatch', 'support_tickets', 'customer_inventory',
-    'teams', 'roles', 'role_permissions', 'user_permissions',
+    'teams', 'roles', 'role_permissions', 'user_permissions', 'users',
     'analytics_dashboard', 'reports_export', 'reports_access',
   ],
   manager: [
@@ -35,6 +35,7 @@ const LEGACY_ROLE_SECTIONS = {
     'lead_orders', 'customers', 'manager_dashboard', 'reports', 'reports_access', 'analytics_dashboard', 'reports_export', 'parts', 'parts_inventory',
     'procurement', 'vendor_management', 'warehouse', 'qc_management',
     'inventory_management', 'dispatch', 'support_tickets', 'customer_inventory', 'teams',
+    'users', 'role_permissions', 'user_permissions',
   ],
   sales: ['dashboard', 'leads', 'sales_orders', 'follow_ups', 'lead_orders', 'customers', 'analytics_dashboard'],
   accounts: ['customer_billing', 'vendor_billing_mgmt', 'credit_notes', 'debit_notes', 'reports', 'reports_export'],

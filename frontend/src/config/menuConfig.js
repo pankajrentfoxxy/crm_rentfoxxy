@@ -90,9 +90,12 @@ export const masterDataMenuItems = [
 ];
 
 export const settingsAccordionChildren = [
-  { label: 'Users', path: '/settings/user-permissions', section: 'user_permissions' },
+  { label: 'Users', path: '/settings/users', section: 'users' },
   { label: 'Role Permissions', path: '/settings/role-permissions', section: 'role_permissions' },
+  { label: 'User Overrides', path: '/settings/user-permissions', section: 'user_permissions' },
   { label: 'Teams', path: '/teams', section: 'teams' },
+  { label: 'Roles', path: '/settings/roles', section: 'roles' },
+  { label: 'Role Reference', path: '/settings/role-reference', section: 'roles' },
 ];
 
 /** Legacy exports — kept for Layout imports; not shown in sidebar */
