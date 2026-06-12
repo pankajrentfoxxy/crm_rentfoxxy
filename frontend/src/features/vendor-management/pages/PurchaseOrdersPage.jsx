@@ -145,8 +145,32 @@ function RemarkCell({ text }) {
   );
 }
 
-function hasUploadedBill(row) {
-  return parseBillFiles(row).length > 0;
+/** CRM bill upload + vendor portal invoice + legacy bill_files */
+function getPoBillInfo(row) {
+  const crmFiles = parseBillFiles(row);
+  if (row?.bill_name) {
+    return {
+      billName: row.bill_name,
+      files: crmFiles.length ? crmFiles : (row.vendor_invoice_file ? [row.vendor_invoice_file] : []),
+      source: row.vendor_invoice_number && !crmFiles.length ? 'vendor' : 'crm',
+    };
+  }
+  if (row?.vendor_invoice_number) {
+    return {
+      billName: row.vendor_invoice_number,
+      files: row.vendor_invoice_file ? [row.vendor_invoice_file] : [],
+      source: 'vendor',
+    };
+  }
+  if (crmFiles.length) {
+    return { billName: 'Bill', files: crmFiles, source: 'crm' };
+  }
+  return { billName: null, files: [], source: null };
+}
+
+function hasPoBill(row) {
+  const info = getPoBillInfo(row);
+  return !!(info.billName || info.files.length);
 }
 
 function canSubmitForApproval(status) {
@@ -161,10 +185,18 @@ function isPendingManagerApproval(status) {
   return String(status || '').toLowerCase() === 'pending_approval';
 }
 
-/** Eye / receive screen only after manager approval */
+/** Eye / receive screen after manager approval (incl. vendor accepted) */
 function showReceiveEye(status) {
   const s = String(status || '').toLowerCase();
-  return s === 'approved' || s === 'processing' || s === 'completed' || s === 'sent';
+  return ['approved', 'vendor_accepted', 'processing', 'completed', 'sent'].includes(s);
+}
+
+function matchesPoStatusTab(rowStatus, tab) {
+  const s = String(rowStatus || '').toLowerCase();
+  if (tab === 'approved') {
+    return ['approved', 'vendor_accepted', 'sent'].includes(s);
+  }
+  return normalizePoStatus(rowStatus) === tab;
 }
 
 const PO_STATUS_TABS = [
@@ -318,8 +350,13 @@ export default function PurchaseOrdersPage() {
   const statusTabCounts = useMemo(() => {
     const c = { all: allRows.length, draft: 0, pending_approval: 0, approved: 0, processing: 0, completed: 0, rejected: 0 };
     allRows.forEach((r) => {
-      const k = normalizePoStatus(r.status);
-      if (c[k] != null) c[k] += 1;
+      const s = String(r.status || '').toLowerCase();
+      if (['approved', 'vendor_accepted', 'sent'].includes(s)) {
+        c.approved += 1;
+      } else {
+        const k = normalizePoStatus(r.status);
+        if (c[k] != null) c[k] += 1;
+      }
     });
     return c;
   }, [allRows]);
@@ -327,7 +364,7 @@ export default function PurchaseOrdersPage() {
   useEffect(() => {
     let list = [...allRows];
     if (statusTab !== 'all') {
-      list = list.filter((r) => normalizePoStatus(r.status) === statusTab);
+      list = list.filter((r) => matchesPoStatusTab(r.status, statusTab));
     }
     setTotal(list.length);
     const tp = Math.max(1, Math.ceil(list.length / LIST_PAGE_SIZE));
@@ -650,7 +687,11 @@ export default function PurchaseOrdersPage() {
   }
 
   function openBillUpload(po) {
-    setBillUpload({ open: true, po, bill_name: po.bill_name || '' });
+    setBillUpload({
+      open: true,
+      po,
+      bill_name: po.bill_name || po.vendor_invoice_number || '',
+    });
   }
 
   async function submitBillUpload(e) {
@@ -745,6 +786,27 @@ export default function PurchaseOrdersPage() {
         </button>
       </header>
 
+      <div className="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3 text-sm text-blue-900">
+        <p className="font-semibold mb-1">PO approval &amp; vendor flow</p>
+        <ol className="list-decimal list-inside space-y-1 text-blue-800/90 text-xs sm:text-sm">
+          <li>
+            <strong>Procurement</strong> creates a PO and clicks <em>Submit for Approval</em>.
+          </li>
+          <li>
+            <strong>Manager / Admin</strong> reviews POs in the <em>Pending Approval</em> tab and approves or rejects.
+            Managers with SMTP configured receive an email alert; otherwise use the <em>Pending Approval</em> tab.
+          </li>
+          <li>
+            On approval, the vendor receives an email with the PO PDF and can accept/reject in the{' '}
+            <strong>Vendor Portal</strong> (optional — you can still receive goods without portal use).
+          </li>
+          <li>
+            After approval, use the <strong>eye icon</strong> to receive goods. Upload the vendor bill here or during GRN;
+            vendor portal invoices also appear in the bill column.
+          </li>
+        </ol>
+      </div>
+
       <div className="flex flex-wrap gap-1 border-b border-gray-100 bg-white rounded-xl border border-gray-100 p-2 shadow-sm">
         {PO_STATUS_TABS.map((tab) => (
           <button
@@ -823,6 +885,7 @@ export default function PurchaseOrdersPage() {
                 const showManagerActions = isPendingManagerApproval(r.status) && manager;
                 const typeBadge = poTypeBadge(r.purchase_order_type);
                 const stBadge = poStatusBadge(r.status);
+                const billInfo = getPoBillInfo(r);
 
                 return (
                   <tr key={r.po_id} className="border-b border-gray-100 hover:bg-gray-50">
@@ -847,42 +910,45 @@ export default function PurchaseOrdersPage() {
                       <RemarkCell text={r.remarks} />
                     </td>
                     <td className="p-3">
-                      {r.bill_name ? (
+                      {billInfo.billName ? (
                         <button
                           type="button"
                           className="text-orange-600 font-medium hover:underline text-left"
                           onClick={() =>
                             setBillView({
                               open: true,
-                              bill_name: r.bill_name,
-                              files: parseBillFiles(r),
+                              bill_name: billInfo.billName,
+                              files: billInfo.files,
                               poId: r.po_id
                             })
                           }
                         >
-                          {r.bill_name}
+                          {billInfo.billName}
+                          {billInfo.source === 'vendor' ? (
+                            <span className="block text-[10px] text-slate-500 font-normal">via vendor portal</span>
+                          ) : null}
                         </button>
                       ) : (
                         <span className="text-slate-400">N/A</span>
                       )}
                     </td>
                     <td className="p-3">
-                      {r.bill_name ? (
+                      {hasPoBill(r) ? (
                         <button
                           type="button"
                           className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-800 hover:bg-slate-100"
                           onClick={() =>
                             setBillView({
                               open: true,
-                              bill_name: r.bill_name,
-                              files: parseBillFiles(r),
+                              bill_name: billInfo.billName,
+                              files: billInfo.files,
                               poId: r.po_id
                             })
                           }
                         >
                           View bill
                         </button>
-                      ) : (
+                      ) : showEye ? (
                         <button
                           type="button"
                           className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-orange-500 text-orange-600 text-xs font-semibold hover:bg-orange-50"
@@ -890,6 +956,8 @@ export default function PurchaseOrdersPage() {
                         >
                           Upload bill
                         </button>
+                      ) : (
+                        <span className="text-slate-400 text-xs">After approval</span>
                       )}
                     </td>
                     <td className="p-3">

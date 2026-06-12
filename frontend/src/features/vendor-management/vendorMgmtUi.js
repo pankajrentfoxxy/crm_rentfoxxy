@@ -192,6 +192,9 @@ export function poStatusBadge(status) {
   if (s === 'draft' || s === 'pending' || s === '') return { label: 'Draft', className: 'bg-gray-100 text-gray-700' };
   if (s === 'pending_approval') return { label: 'Awaiting Approval', className: 'bg-amber-50 text-amber-800' };
   if (s === 'approved') return { label: 'Approved', className: 'bg-green-50 text-green-700' };
+  if (s === 'vendor_accepted') return { label: 'Vendor Accepted', className: 'bg-emerald-50 text-emerald-800' };
+  if (s === 'vendor_rejected') return { label: 'Vendor Rejected', className: 'bg-red-50 text-red-700' };
+  if (s === 'sent') return { label: 'Sent to Vendor', className: 'bg-teal-50 text-teal-800' };
   if (s === 'processing') return { label: 'Processing', className: 'bg-blue-50 text-blue-700' };
   if (s === 'completed') return { label: 'Completed', className: 'bg-slate-100 text-slate-700' };
   if (s === 'rejected') return { label: 'Rejected', className: 'bg-red-50 text-red-700' };

@@ -15,7 +15,10 @@ const {
 } = require('../../services/purchaseOrderProductDetailsService');
 const { createTicketFromGrnReceive } = require('../../services/grnTicketService');
 const { generatePurchaseOrderPdf } = require('../../services/vendorPurchaseOrderPdfService');
-const { sendPurchaseOrderApprovedEmail } = require('../../services/vendorPoEmailService');
+const {
+  sendPurchaseOrderApprovedEmail,
+  sendPoPendingApprovalEmailToManagers,
+} = require('../../services/vendorPoEmailService');
 
 /** Normalize JSONB/array/string line_items → array */
 function parseLineItemsJson(raw) {
@@ -119,16 +122,32 @@ function attachProductDetails(poRow, qtyMaps) {
   };
 }
 
-/** Receive page (view GRN stats) opens only once PO is approved. */
+/** Receive page opens after manager approval (incl. vendor accepted / in progress). */
 function receiveViewAllowed(poRow) {
   const st = String(poRow?.status || '').toLowerCase();
-  return st === 'approved' || st === 'processing' || st === 'completed';
+  return ['approved', 'vendor_accepted', 'sent', 'processing', 'completed'].includes(st);
 }
 
-/** New serial receipts allowed while PO is approved (first units) or in progress — not once fully closed. */
+/** New serial receipts while PO is approved, vendor-accepted, or in progress. */
 function receiveMutationAllowed(poRow) {
   const st = String(poRow?.status || '').toLowerCase();
-  return st === 'approved' || st === 'processing';
+  return ['approved', 'vendor_accepted', 'sent', 'processing'].includes(st);
+}
+
+async function syncPoBillFromGrn(poId, billName, billFiles = []) {
+  if (!billName && (!billFiles || !billFiles.length)) return;
+  const filesJson = JSON.stringify(Array.isArray(billFiles) ? billFiles : []);
+  await pool.query(
+    `UPDATE vendor_purchase_orders
+     SET bill_name = COALESCE(bill_name, $1),
+         bill_files = CASE
+           WHEN bill_files IS NULL OR bill_files = '[]'::jsonb THEN $2::jsonb
+           ELSE bill_files
+         END,
+         updated_at = NOW()
+     WHERE po_id = $3 AND deleted_at IS NULL`,
+    [billName || null, filesJson, poId]
+  );
 }
 
 async function computeReceiveTotalsForPoId(poId) {
@@ -159,7 +178,7 @@ async function syncPoReceiveProgressStatus(poId, actorUserId) {
   );
   if (!cur.rows.length) return;
   const st = String(cur.rows[0].status || '').toLowerCase();
-  if (!['approved', 'processing'].includes(st)) return;
+  if (!['approved', 'vendor_accepted', 'sent', 'processing'].includes(st)) return;
 
   const totals = await computeReceiveTotalsForPoId(poId);
   if (!totals || totals.orderQty <= 0) return;
@@ -214,7 +233,7 @@ async function getProductReceivedContext(req, res) {
     return res.status(403).json({
       success: false,
       message:
-        'Open receiving after approving the PO: upload a bill on the Purchase orders list, then choose Approve.'
+        'Goods receiving opens after manager approval. Approve the PO first, then use the receive (eye) action.'
     });
   }
 
@@ -564,6 +583,15 @@ async function receivePoLineBulk(req, res) {
        WHERE grn_id = $3`,
       [billStatus, billName, finalGrnId]
     );
+
+    if (billStatus === 'received' && billName) {
+      await client.query(
+        `UPDATE vendor_purchase_orders
+         SET bill_name = COALESCE(bill_name, $1), updated_at = NOW()
+         WHERE po_id = $2 AND deleted_at IS NULL`,
+        [billName, poId]
+      );
+    }
 
     const assetCodes = await allocateTtsplCodes(client, quantity);
 
@@ -1399,6 +1427,16 @@ async function updateStatus(req, res) {
        WHERE po_id = $2 AND deleted_at IS NULL`,
       [req.user?.user_id || null, id]
     );
+
+    try {
+      await sendPoPendingApprovalEmailToManagers({
+        po,
+        vendorName: po.vendor_business_name || po.vendor_first_name,
+        submitterName: req.user?.name || req.user?.email,
+      });
+    } catch (emailErr) {
+      console.error('PO pending-approval manager email failed:', emailErr);
+    }
   } else if (status === 'approved') {
     if (!isManagerUser(req.user)) {
       return res.status(403).json({ success: false, message: 'Only managers can approve purchase orders' });
@@ -1528,6 +1566,8 @@ async function uploadGrnBill(req, res) {
        WHERE grn_id = $3`,
       [bill_name, JSON.stringify(merged), grnId]
     );
+
+    await syncPoBillFromGrn(poId, bill_name, merged);
 
     res.json({
       success: true,

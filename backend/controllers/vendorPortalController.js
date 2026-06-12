@@ -439,11 +439,20 @@ async function uploadPurchaseOrderInvoice(req, res) {
     }
 
     const relativePath = `/uploads/vendor-invoice-uploads/${poId}/${req.file.filename}`;
+    const billFilesJson = JSON.stringify([relativePath]);
     await pool.query(
       `UPDATE vendor_purchase_orders
-       SET vendor_invoice_number = $1, vendor_invoice_file = $2, vendor_invoice_uploaded_at = NOW(), updated_at = NOW()
-       WHERE po_id = $3`,
-      [invoice_number, relativePath, poId]
+       SET vendor_invoice_number = $1,
+           vendor_invoice_file = $2,
+           vendor_invoice_uploaded_at = NOW(),
+           bill_name = COALESCE(bill_name, $1),
+           bill_files = CASE
+             WHEN bill_files IS NULL OR bill_files = '[]'::jsonb THEN $3::jsonb
+             ELSE bill_files
+           END,
+           updated_at = NOW()
+       WHERE po_id = $4`,
+      [invoice_number, relativePath, billFilesJson, poId]
     );
 
     res.json({
