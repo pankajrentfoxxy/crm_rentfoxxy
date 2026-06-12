@@ -151,7 +151,10 @@ function hasUploadedBill(row) {
 
 function canSubmitForApproval(status) {
   const s = String(status || '').toLowerCase();
-  return s === 'draft' || s === 'pending' || s === '';
+  if (s === 'draft' || s === 'pending') {
+    return true;
+  }
+  return false;
 }
 
 function isPendingManagerApproval(status) {
