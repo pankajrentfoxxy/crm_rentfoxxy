@@ -85,9 +85,35 @@ async function getTtsplHistory(ttsplId) {
       [ttsplId]
     )
   ]);
+  const costRes = await pool.query(
+    `SELECT
+       COALESCE(SUM(tp.quantity_used * COALESCE(tp.unit_cost, p.cost, 0)), 0)::numeric AS parts_cost,
+       COALESCE((
+         SELECT MAX(vpd.rate)
+         FROM vendor_serial_numbers vsn2
+         LEFT JOIN vendor_product_details vpd ON vpd.po_id = vsn2.po_id
+         WHERE vsn2.ttspl_id = $1
+       ), 0)::numeric AS base_cost
+     FROM vendor_serial_numbers vsn
+     LEFT JOIN tickets t ON t.vendor_serial_id = vsn.serial_id
+     LEFT JOIN ticket_parts tp ON tp.ticket_id = t.ticket_id
+     LEFT JOIN parts p ON p.part_id = tp.part_id
+     WHERE vsn.ttspl_id = $1`,
+    [ttsplId]
+  );
+
+  const costRow = costRes.rows[0] || { parts_cost: 0, base_cost: 0 };
+  const partsCost = parseFloat(costRow.parts_cost) || 0;
+  const baseCost = parseFloat(costRow.base_cost) || 0;
+
   return {
     auditLog: auditRes.rows,
-    configHistory: configRes.rows
+    configHistory: configRes.rows,
+    costSummary: {
+      parts_cost: partsCost,
+      base_cost: baseCost,
+      total_cost: partsCost + baseCost
+    }
   };
 }
 

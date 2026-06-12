@@ -73,3 +73,19 @@ export function fetchTicketQc(id) {
 export function tagInventoryItem(serialId, tag) {
   return api.patch(`/inventory-management/${serialId}/tag`, { tag });
 }
+
+export function getFloorManagerQueue() {
+  return api.get(`${base}/floor-manager-queue`);
+}
+
+export function getTeamMembers(teamName) {
+  return api.get(`${base}/team-members`, { params: { team_name: teamName } });
+}
+
+export function addPartWithConfig(id, body) {
+  return api.post(`${base}/${id}/parts-with-config`, body);
+}
+
+export function logTicketNote(id, body) {
+  return api.post(`${base}/${id}/log-note`, body);
+}

@@ -19,7 +19,11 @@ const {
   startWork,
   endWork,
   getActiveWorkLog,
-  bulkMoveTickets
+  bulkMoveTickets,
+  getFloorManagerQueue,
+  getTeamMembers,
+  addPartToTicketWithConfig,
+  logNote
 } = require('../controllers/ticketController');
 const qcController = require('../controllers/qcController');
 const phase2 = require('../controllers/ticketPhase2Controller');
@@ -58,6 +62,12 @@ router.get('/qc/qc2-assignees', qcController.getQC2Assignees);
 
 // Phase 2 — floor pipeline (must be before /:id)
 router.get('/floor-dashboard', phase2.getFloorDashboard);
+router.get(
+  '/floor-manager-queue',
+  checkRole('admin', 'manager', 'floor_manager'),
+  getFloorManagerQueue
+);
+router.get('/team-members', getTeamMembers);
 router.get('/ttspl/:ttsplId/history', phase2.getTtsplHistory);
 router.get('/ttspl/:ttsplId', phase2.getTicketsByTtsplId);
 router.post('/:id/move-stage', phase2.moveToStage);
@@ -109,6 +119,12 @@ router.post('/:id/notes', addNote);
 // @desc    Add part to ticket
 // @access  Private
 router.post('/:id/parts', addPartToTicket);
+router.post(
+  '/:id/parts-with-config',
+  checkRole('technician', 'floor_manager', 'admin', 'manager'),
+  addPartToTicketWithConfig
+);
+router.post('/:id/log-note', logNote);
 
 // Cost & Parts System
 router.post('/:id/part-request', requestPart);

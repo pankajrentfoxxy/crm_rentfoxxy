@@ -16,6 +16,44 @@ export const KANBAN_STAGES = [
   'Inventory'
 ];
 
+export const STAGE_GROUPS = [
+  {
+    label: 'FLOOR MANAGER',
+    color: 'text-slate-500',
+    stages: ['Floor Manager']
+  },
+  {
+    label: 'HARDWARE & SOFTWARE',
+    color: 'text-blue-600',
+    stages: ['Diagnosis', 'Assembly & Software', 'Final Testing', 'Chip Level Repair', 'Body & Paint']
+  },
+  {
+    label: 'QUALITY CONTROL',
+    color: 'text-indigo-600',
+    stages: ['QC1', 'QC2']
+  },
+  {
+    label: 'COMPLETE',
+    color: 'text-green-600',
+    stages: ['Inventory']
+  }
+];
+
+export function stageCategory(stageName) {
+  if (stageName === 'Floor Manager') return 'Floor Manager';
+  if (['QC1', 'QC2'].includes(stageName)) return 'QC Team';
+  if (stageName === 'Inventory') return 'Complete';
+  return 'Hardware & Software';
+}
+
+export function stageCategoryBadge(stageName) {
+  const cat = stageCategory(stageName);
+  if (cat === 'QC Team') return 'bg-indigo-100 text-indigo-800';
+  if (cat === 'Floor Manager') return 'bg-slate-100 text-slate-700';
+  if (cat === 'Complete') return 'bg-green-100 text-green-800';
+  return 'bg-blue-100 text-blue-800';
+}
+
 export const STAGE_COLUMN_STYLE = {
   QC1: 'border-indigo-300 bg-indigo-50/40',
   QC2: 'border-indigo-300 bg-indigo-50/40',

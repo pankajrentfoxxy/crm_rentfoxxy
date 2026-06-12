@@ -1,8 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, Loader2, Package, TrendingUp } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Loader2, Package, TrendingUp } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { fetchFloorDashboard } from '../floorPipelineApi';
+import { useAuth } from '../../../context/AuthContext';
+import { fetchFloorDashboard, getFloorManagerQueue } from '../floorPipelineApi';
+import { configSummary, isFloorManagerRole, priorityBadge } from '../floorPipelineUi';
+import AssignmentModal from '../components/AssignmentModal';
 
 function BarChart({ data, valueKey = 'count' }) {
   const max = Math.max(...data.map((d) => d[valueKey] || 0), 1);
@@ -25,8 +28,19 @@ function BarChart({ data, valueKey = 'count' }) {
 }
 
 export default function FloorDashboardPage() {
+  const { user } = useAuth();
+  const fm = isFloorManagerRole(user?.role);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [queue, setQueue] = useState([]);
+  const [assignTicket, setAssignTicket] = useState(null);
+
+  const loadQueue = () => {
+    if (!fm) return;
+    getFloorManagerQueue()
+      .then(({ data: res }) => { if (res.success) setQueue(res.tickets || []); })
+      .catch(() => setQueue([]));
+  };
 
   useEffect(() => {
     fetchFloorDashboard()
@@ -36,7 +50,8 @@ export default function FloorDashboardPage() {
       })
       .catch((e) => toast.error(e.response?.data?.message || 'Dashboard failed'))
       .finally(() => setLoading(false));
-  }, []);
+    loadQueue();
+  }, [fm]);
 
   if (loading) {
     return <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>;
@@ -58,6 +73,54 @@ export default function FloorDashboardPage() {
         <h1 className="text-2xl font-bold text-slate-900">Floor Dashboard</h1>
         <p className="text-sm text-slate-500">Pipeline overview for floor managers</p>
       </div>
+
+      {fm ? (
+        <section className="rounded-xl border border-amber-200 bg-amber-50/40 p-4 shadow-sm">
+          <h2 className="font-semibold text-slate-900 mb-2">Needs Assignment</h2>
+          {queue.length === 0 ? (
+            <div className="flex items-center gap-2 text-green-700 text-sm bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+              <CheckCircle2 className="w-4 h-4" /> All tickets assigned
+            </div>
+          ) : (
+            <>
+              <p className="text-sm text-amber-800 mb-3">{queue.length} ticket(s) waiting in Floor Manager</p>
+              <div className="rounded-xl border bg-white overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                    <tr>
+                      <th className="px-3 py-2 text-left">TTSPL</th>
+                      <th className="px-3 py-2 text-left">Config</th>
+                      <th className="px-3 py-2 text-left">Priority</th>
+                      <th className="px-3 py-2 text-left">Type</th>
+                      <th className="px-3 py-2 text-left">Created</th>
+                      <th className="px-3 py-2" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {queue.map((t) => {
+                      const pri = priorityBadge(t.priority);
+                      return (
+                        <tr key={t.ticket_id} className="border-t">
+                          <td className="px-3 py-2 font-mono font-semibold text-blue-700">{t.ttspl_id || '—'}</td>
+                          <td className="px-3 py-2 text-xs">{configSummary(t)}</td>
+                          <td className="px-3 py-2"><span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${pri.className}`}>{pri.label}</span></td>
+                          <td className="px-3 py-2 text-xs">{t.ticket_type || 'grn_qc'}</td>
+                          <td className="px-3 py-2 text-xs">{t.created_at ? new Date(t.created_at).toLocaleDateString() : '—'}</td>
+                          <td className="px-3 py-2">
+                            <button type="button" onClick={() => setAssignTicket(t)} className="text-xs font-semibold text-blue-600 hover:underline">
+                              Assign Now
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </section>
+      ) : null}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {[
@@ -141,6 +204,13 @@ export default function FloorDashboardPage() {
           </ul>
         </div>
       </div>
+
+      <AssignmentModal
+        ticket={assignTicket}
+        open={!!assignTicket}
+        onClose={() => setAssignTicket(null)}
+        onAssigned={loadQueue}
+      />
     </div>
   );
 }

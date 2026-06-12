@@ -381,10 +381,13 @@ exports.getTicketById = async (req, res) => {
 
     // Get parts
     const parts = await pool.query(
-      `SELECT tp.*, p.part_name, p.part_type, p.cost as unit_cost, (tp.quantity_used * p.cost) as total_part_cost
+      `SELECT tp.*, p.part_name, p.part_type, p.category,
+              COALESCE(tp.unit_cost, p.cost, 0) AS unit_cost,
+              (tp.quantity_used * COALESCE(tp.unit_cost, p.cost, 0)) AS total_part_cost
        FROM ticket_parts tp
        LEFT JOIN parts p ON tp.part_id = p.part_id
-       WHERE tp.ticket_id = $1`,
+       WHERE tp.ticket_id = $1
+       ORDER BY tp.added_at DESC`,
       [id]
     );
 
@@ -1420,5 +1423,275 @@ exports.bulkMoveTickets = async (req, res) => {
   } catch (error) {
     console.error('Bulk move error:', error);
     res.status(500).json({ success: false, message: 'Server error performing bulk move' });
+  }
+};
+
+/** GET /api/tickets/floor-manager-queue */
+exports.getFloorManagerQueue = async (req, res) => {
+  if (!['admin', 'manager', 'floor_manager'].includes(req.user.role)) {
+    return res.status(403).json({ success: false, message: 'Floor manager access required' });
+  }
+  try {
+    const { rows } = await pool.query(
+      `SELECT t.*, s.stage_name,
+              vsn.ttspl_id,
+              vsn.extra->>'brand' AS brand,
+              vsn.extra->>'processor' AS processor,
+              vsn.extra->>'ram' AS ram,
+              vsn.extra->>'storage' AS storage,
+              u.name AS assigned_user_name
+       FROM tickets t
+       JOIN stages s ON s.stage_id = t.current_stage_id
+       LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = t.vendor_serial_id
+       LEFT JOIN users u ON u.user_id = t.assigned_user_id
+       WHERE s.stage_name = 'Floor Manager'
+         AND t.status NOT IN ('completed', 'qc_failed_return_vendor')
+       ORDER BY
+         CASE t.priority WHEN 'sales_order' THEN 0 WHEN 'high' THEN 1 ELSE 2 END,
+         t.created_at ASC`
+    );
+    res.json({ success: true, tickets: rows });
+  } catch (error) {
+    console.error('getFloorManagerQueue:', error);
+    res.status(500).json({ success: false, message: 'Failed to load floor manager queue' });
+  }
+};
+
+/** GET /api/tickets/team-members?team_name=Hardware+%26+Software */
+exports.getTeamMembers = async (req, res) => {
+  const teamName = String(req.query.team_name || 'Hardware & Software').trim();
+  const isQc = /qc/i.test(teamName);
+  const roles = isQc ? ['qc'] : ['technician', 'floor_manager', 'team_member', 'team_lead'];
+  try {
+    const teamRes = await pool.query(
+      `SELECT team_id FROM teams WHERE team_name = $1 LIMIT 1`,
+      [teamName]
+    );
+    const teamId = teamRes.rows[0]?.team_id;
+
+    let rows;
+    if (teamId) {
+      const r = await pool.query(
+        `SELECT u.user_id, u.name, u.role,
+                COUNT(t.ticket_id) FILTER (WHERE t.status = 'in_progress')::int AS active_tickets
+         FROM users u
+         LEFT JOIN tickets t ON t.assigned_user_id = u.user_id AND t.status = 'in_progress'
+         WHERE COALESCE(u.active, true) = true
+           AND u.role = ANY($1::text[])
+           AND (
+             u.team_id = $2
+             OR EXISTS (SELECT 1 FROM user_teams ut WHERE ut.user_id = u.user_id AND ut.team_id = $2)
+           )
+         GROUP BY u.user_id, u.name, u.role
+         ORDER BY active_tickets ASC, u.name ASC`,
+        [roles, teamId]
+      );
+      rows = r.rows;
+    }
+
+    if (!rows?.length) {
+      const fallback = await pool.query(
+        `SELECT u.user_id, u.name, u.role,
+                COUNT(t.ticket_id) FILTER (WHERE t.status = 'in_progress')::int AS active_tickets
+         FROM users u
+         LEFT JOIN tickets t ON t.assigned_user_id = u.user_id AND t.status = 'in_progress'
+         WHERE COALESCE(u.active, true) = true AND u.role = ANY($1::text[])
+         GROUP BY u.user_id, u.name, u.role
+         ORDER BY active_tickets ASC, u.name ASC`,
+        [roles]
+      );
+      rows = fallback.rows;
+    }
+
+    res.json({ success: true, team_name: teamName, members: rows });
+  } catch (error) {
+    console.error('getTeamMembers:', error);
+    res.status(500).json({ success: false, message: 'Failed to load team members' });
+  }
+};
+
+const CONFIG_FIELD_MAP = {
+  RAM: 'ram',
+  Storage: 'storage',
+  Processor: 'processor',
+  GPU: 'gpu',
+  Screen: 'screen_size',
+  OS: 'os',
+  Other: 'other'
+};
+
+/** POST /api/tickets/:id/parts-with-config */
+exports.addPartToTicketWithConfig = async (req, res) => {
+  const { id } = req.params;
+  const {
+    part_id,
+    quantity,
+    notes,
+    is_upgrade: isUpgradeRaw,
+    config_field: configFieldRaw,
+    old_value: oldValueRaw,
+    new_value: newValueRaw
+  } = req.body;
+
+  const qty = Math.max(1, Number(quantity) || 1);
+  const isUpgrade = Boolean(isUpgradeRaw);
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const ticketRes = await client.query('SELECT * FROM tickets WHERE ticket_id = $1 FOR UPDATE', [id]);
+    if (!ticketRes.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Ticket not found' });
+    }
+    const ticket = ticketRes.rows[0];
+
+    const partRes = await client.query(
+      `SELECT part_id, part_name, part_type, category, quantity, cost FROM parts WHERE part_id = $1 FOR UPDATE`,
+      [part_id]
+    );
+    if (!partRes.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Part not found' });
+    }
+    const part = partRes.rows[0];
+    if (part.quantity < qty) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: `Insufficient stock (${part.quantity} available)` });
+    }
+
+    const unitCost = parseFloat(part.cost) || 0;
+    const totalCost = unitCost * qty;
+
+    const tpRes = await client.query(
+      `INSERT INTO ticket_parts (ticket_id, part_id, quantity_used, notes, unit_cost, is_upgrade)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id`,
+      [id, part_id, qty, notes || null, unitCost, isUpgrade]
+    );
+
+    const newQtyRes = await client.query(
+      `UPDATE parts SET quantity = quantity - $1 WHERE part_id = $2 RETURNING quantity`,
+      [qty, part_id]
+    );
+    const newPartsQuantity = newQtyRes.rows[0]?.quantity ?? 0;
+
+    await client.query(
+      `INSERT INTO activities (ticket_id, user_id, action, notes) VALUES ($1, $2, 'part_added', $3)`,
+      [id, req.user.user_id, `Added ${qty} × ${part.part_name}${isUpgrade ? ' (upgrade)' : ''}`]
+    );
+
+    let configUpdated = false;
+    if (ticket.ttspl_id) {
+      await ttsplAuditService.logTtsplEvent({
+        ttsplId: ticket.ttspl_id,
+        vendorSerialId: ticket.vendor_serial_id,
+        eventType: 'parts_used',
+        description: `Part used: ${part.part_name} × ${qty} (₹${totalCost.toFixed(2)})`,
+        metadata: { part_id, part_name: part.part_name, quantity: qty, unit_cost: unitCost, is_upgrade: isUpgrade },
+        actorUserId: req.user.user_id,
+        actorName: req.user.name,
+        db: client
+      });
+
+      if (isUpgrade && configFieldRaw && newValueRaw) {
+        const fieldName = CONFIG_FIELD_MAP[configFieldRaw] || String(configFieldRaw).toLowerCase();
+        const oldValue = oldValueRaw || ticket[fieldName] || '';
+        const newValue = String(newValueRaw).trim();
+
+        await ttsplAuditService.logConfigChange({
+          ttsplId: ticket.ttspl_id,
+          vendorSerialId: ticket.vendor_serial_id,
+          ticketId: ticket.ticket_id,
+          changedBy: req.user.user_id,
+          changeType: 'upgrade',
+          fieldName,
+          oldValue,
+          newValue,
+          notes: notes || `Upgrade via part: ${part.part_name}`,
+          partUsedId: part_id,
+          partCost: totalCost,
+          db: client
+        });
+
+        if (ticket.vendor_serial_id) {
+          const vs = await client.query(
+            `SELECT extra FROM vendor_serial_numbers WHERE serial_id = $1`,
+            [ticket.vendor_serial_id]
+          );
+          let extra = vs.rows[0]?.extra || {};
+          if (typeof extra === 'string') {
+            try { extra = JSON.parse(extra); } catch { extra = {}; }
+          }
+          if (fieldName !== 'other') extra[fieldName] = newValue;
+          await client.query(
+            `UPDATE vendor_serial_numbers SET extra = $1::jsonb, updated_at = NOW() WHERE serial_id = $2`,
+            [JSON.stringify(extra), ticket.vendor_serial_id]
+          );
+          if (['processor', 'ram', 'storage'].includes(fieldName)) {
+            await client.query(
+              `UPDATE tickets SET ${fieldName} = $1 WHERE ticket_id = $2`,
+              [newValue, id]
+            );
+          }
+        }
+        configUpdated = true;
+      }
+    }
+
+    await client.query('COMMIT');
+    res.json({
+      success: true,
+      ticket_part_id: tpRes.rows[0].id,
+      new_parts_quantity: newPartsQuantity,
+      config_updated: configUpdated,
+      message: `Part attached. ${part.part_name} — ${newPartsQuantity} remaining in stock`
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('addPartToTicketWithConfig:', error);
+    res.status(500).json({ success: false, message: error.message || 'Failed to attach part' });
+  } finally {
+    client.release();
+  }
+};
+
+/** POST /api/tickets/:id/log-note */
+exports.logNote = async (req, res) => {
+  const { id } = req.params;
+  const { note_text, time_spent_minutes } = req.body;
+  if (!note_text?.trim() || note_text.trim().length < 3) {
+    return res.status(400).json({ success: false, message: 'Note text required (min 3 characters)' });
+  }
+  try {
+    const ticketRes = await pool.query('SELECT * FROM tickets WHERE ticket_id = $1', [id]);
+    if (!ticketRes.rows.length) {
+      return res.status(404).json({ success: false, message: 'Not found' });
+    }
+    const t = ticketRes.rows[0];
+    const text = note_text.trim();
+
+    await pool.query(
+      `INSERT INTO activities (ticket_id, user_id, action, notes) VALUES ($1, $2, 'note_added', $3)`,
+      [id, req.user.user_id, text]
+    );
+
+    if (t.ttspl_id) {
+      await ttsplAuditService.logTtsplEvent({
+        ttsplId: t.ttspl_id,
+        vendorSerialId: t.vendor_serial_id,
+        eventType: 'note_added',
+        description: text,
+        metadata: { time_spent_minutes: time_spent_minutes || null },
+        actorUserId: req.user.user_id,
+        actorName: req.user.name
+      });
+    }
+
+    res.json({ success: true, message: 'Work note logged' });
+  } catch (error) {
+    console.error('logNote:', error);
+    res.status(500).json({ success: false, message: 'Failed to log note' });
   }
 };

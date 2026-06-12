@@ -3,13 +3,11 @@ import { AlertTriangle, Clock, User, Wrench } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { configSummary, priorityBadge, ticketAgeDays } from '../floorPipelineUi';
 
-export default function TicketCard({ ticket, pendingParts }) {
+export default function TicketCard({ ticket, pendingParts, onCardClick }) {
   const pri = priorityBadge(ticket.priority);
-  return (
-    <Link
-      to={`/floor-pipeline/tickets/${ticket.ticket_id}`}
-      className="block rounded-xl border border-gray-100 bg-white p-3 shadow-sm hover:shadow-md transition-shadow"
-    >
+  const className = 'block w-full text-left rounded-xl border border-gray-100 bg-white p-3 shadow-sm hover:shadow-md transition-shadow';
+  const inner = (
+    <>
       <div className="flex items-start justify-between gap-2 mb-2">
         <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${pri.className}`}>
           {pri.label}
@@ -42,6 +40,19 @@ export default function TicketCard({ ticket, pendingParts }) {
           Parts pending
         </span>
       ) : null}
+    </>
+  );
+
+  if (onCardClick) {
+    return (
+      <button type="button" onClick={() => onCardClick(ticket)} className={className}>
+        {inner}
+      </button>
+    );
+  }
+  return (
+    <Link to={`/floor-pipeline/tickets/${ticket.ticket_id}`} className={className}>
+      {inner}
     </Link>
   );
 }

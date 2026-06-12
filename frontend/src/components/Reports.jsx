@@ -10,18 +10,22 @@ const BASE_COLUMNS = [
 const HW_COLUMNS = [
     ...BASE_COLUMNS,
     { key: 'chip_tickets', label: 'Sent to Chip Level Repair from diagnosis', short: 'Chip Ticket' },
-    { key: 'body_tickets', label: 'Sent to Body & Paint from diagnosis', short: 'Body Ticket' }
+    { key: 'body_tickets', label: 'Sent to Body & Paint from diagnosis', short: 'Body Ticket' },
+    { key: 'parts_used_count', label: 'Parts attached during work segments', short: 'Parts Used' },
+    { key: 'upgrades_done', label: 'Config upgrades via parts', short: 'Upgrades Done' }
 ];
 
 const QC_COLUMNS = [
     ...BASE_COLUMNS,
     { key: 'qc1_segments', label: 'QC1 ended segments in filtered set', short: 'QC1 Stage' },
-    { key: 'qc2_segments', label: 'QC2 ended segments in filtered set', short: 'QC2 Stage' }
+    { key: 'qc2_segments', label: 'QC2 ended segments in filtered set', short: 'QC2 Stage' },
+    { key: 'parts_used_count', label: 'Parts attached during work segments', short: 'Parts Used' },
+    { key: 'upgrades_done', label: 'Config upgrades via parts', short: 'Upgrades Done' }
 ];
 
 function formatHwSummary(totals) {
     if (!totals) return 'No activity in range';
-    return `${totals.total_tickets} Ticket · ${totals.active_till_today} active · ${totals.completed_segments} completed stage · Chip ${totals.chip_tickets} · Body ${totals.body_tickets}`;
+    return `${totals.total_tickets} Ticket · ${totals.active_till_today} active · ${totals.completed_segments} completed · Chip ${totals.chip_tickets} · Body ${totals.body_tickets} · Parts ${totals.parts_used_count || 0} · Upgrades ${totals.upgrades_done || 0}`;
 }
 
 function formatQcSummary(totals) {

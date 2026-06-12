@@ -252,7 +252,9 @@ function mergeCategoryRows(members, workRows, dxRows, metricKeys) {
                 chip_tickets: row.chip_tickets ?? 0,
                 body_tickets: row.body_tickets ?? 0,
                 qc1_segments: row.qc1_segments ?? 0,
-                qc2_segments: row.qc2_segments ?? 0
+                qc2_segments: row.qc2_segments ?? 0,
+                parts_used_count: row.parts_used_count ?? 0,
+                upgrades_done: row.upgrades_done ?? 0
             };
             return out;
         })
@@ -271,6 +273,9 @@ async function queryCategoryWorkMetrics(query, categoryFilter) {
       INNER JOIN tickets t ON t.ticket_id = wl.ticket_id
       INNER JOIN stages s ON s.stage_id = wl.stage_id
       INNER JOIN users u ON u.user_id = wl.user_id
+      LEFT JOIN ticket_parts tp ON tp.ticket_id = wl.ticket_id
+        AND tp.added_at >= wl.start_time
+        AND tp.added_at <= COALESCE(wl.end_time, NOW())
     `;
 
     const [tableRes, openRes] = await Promise.all([
@@ -279,7 +284,9 @@ async function queryCategoryWorkMetrics(query, categoryFilter) {
               COUNT(DISTINCT wl.ticket_id)::int AS total_tickets,
               COUNT(*) FILTER (WHERE wl.end_time IS NOT NULL)::int AS completed_segments,
               COUNT(*) FILTER (WHERE s.stage_name = 'QC1' AND wl.end_time IS NOT NULL)::int AS qc1_segments,
-              COUNT(*) FILTER (WHERE s.stage_name = 'QC2' AND wl.end_time IS NOT NULL)::int AS qc2_segments
+              COUNT(*) FILTER (WHERE s.stage_name = 'QC2' AND wl.end_time IS NOT NULL)::int AS qc2_segments,
+              COUNT(DISTINCT tp.id) FILTER (WHERE tp.id IS NOT NULL)::int AS parts_used_count,
+              COUNT(DISTINCT tp.id) FILTER (WHERE tp.is_upgrade = true)::int AS upgrades_done
              ${joinFrom}
              WHERE (${tableFilter.whereSql}) AND ${categoryFilter}
              GROUP BY wl.user_id, u.name`,
@@ -312,7 +319,9 @@ async function queryCategoryWorkMetrics(query, categoryFilter) {
             active_till_today: openMap[userId] ?? 0,
             completed_segments: main.completed_segments ?? 0,
             qc1_segments: main.qc1_segments ?? 0,
-            qc2_segments: main.qc2_segments ?? 0
+            qc2_segments: main.qc2_segments ?? 0,
+            parts_used_count: main.parts_used_count ?? 0,
+            upgrades_done: main.upgrades_done ?? 0
         };
     });
 }
@@ -349,8 +358,8 @@ async function queryDiagnosisRouting(query) {
 }
 
 async function fetchTeamWorkloadDashboard(query) {
-    const HW_METRIC_KEYS = ['total_tickets', 'active_till_today', 'completed_segments', 'chip_tickets', 'body_tickets'];
-    const QC_METRIC_KEYS = ['total_tickets', 'active_till_today', 'completed_segments', 'qc1_segments', 'qc2_segments'];
+    const HW_METRIC_KEYS = ['total_tickets', 'active_till_today', 'completed_segments', 'chip_tickets', 'body_tickets', 'parts_used_count', 'upgrades_done'];
+    const QC_METRIC_KEYS = ['total_tickets', 'active_till_today', 'completed_segments', 'qc1_segments', 'qc2_segments', 'parts_used_count', 'upgrades_done'];
 
     const [hwMembersRes, qcMembersRes, hwWork, qcWork, dxRows] = await Promise.all([
         pool.query(HW_MEMBERS_SQL),
