@@ -19,8 +19,10 @@ const DOC_TYPES = {
 };
 
 // Rental + Demo bill/dispatch under Rentfoxxy; Sales under Gorefurbo.
+// Accept both 'sale' and 'sales' (the UI uses 'sale').
 function entityForQuotationType(quotationType) {
-  return String(quotationType || 'rental').toLowerCase() === 'sales' ? 'gorefurbo' : 'rentfoxxy';
+  const t = String(quotationType || 'rental').toLowerCase();
+  return (t === 'sales' || t === 'sale') ? 'gorefurbo' : 'rentfoxxy';
 }
 
 // Resolve an entity-scoped doc type, e.g. ('delivery_challan','gorefurbo') -> 'dc_gorefurbo'.
@@ -163,15 +165,20 @@ async function listSalesOrdersGrouped({ page = 1, limit = 20, search = '' }) {
   const listParams = [...params, limit, offset];
   const listResult = await pool.query(
     `SELECT g.*,
-       (SELECT COALESCE(SUM(quantity), 0) FROM sales_order_lines sol WHERE sol.sales_order_number = g.sales_order_number) AS remaining_qty
+       COALESCE(NULLIF(g.customer_name, ''), c.company_name, c.name) AS customer_name,
+       (SELECT COALESCE(SUM(quantity), 0) FROM sales_order_lines sol WHERE sol.sales_order_number = g.sales_order_number) AS remaining_qty,
+       (SELECT COALESCE(SUM(COALESCE(rate,0) * COALESCE(quantity,0)), 0) FROM sales_order_lines sol WHERE sol.sales_order_number = g.sales_order_number) AS total_value,
+       (SELECT COALESCE(SUM(COALESCE(rate,0) * COALESCE(quantity,0)), 0) FROM sales_order_lines sol WHERE sol.sales_order_number = g.sales_order_number) AS total_amount,
+       (SELECT COUNT(DISTINCT dcl.dc_number) FROM delivery_challan_lines dcl WHERE dcl.sales_order_number = g.sales_order_number) AS dc_count
      FROM (
        SELECT DISTINCT ON (sales_order_number)
          id, sales_order_number, quotation_number, customer_id, customer_name, gst_number,
-         pdf_path, created_at
+         quotation_type, entity_code, pdf_path, created_at
        FROM sales_order_lines
        ${where}
        ORDER BY sales_order_number, id DESC
      ) g
+     LEFT JOIN customers c ON c.customer_id = g.customer_id
      ORDER BY g.created_at DESC
      LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
     listParams
@@ -321,6 +328,8 @@ function mapInventorySerialRow(row) {
     model: row.pd_model || row.product_model_name || '',
     processor: row.processor || '',
     generation: row.generation || '',
+    ram: row.ram || '',
+    storage: row.storage || '',
     status: row.inventory_status || row.status || 'in_stock',
     picker_value: formatted,
     formatted_serial: formatted,
@@ -367,46 +376,50 @@ async function searchAvailableInventory({
   if (!model) return [];
 
   const qt = String(quotation_type || '').toLowerCase();
-  const isSale = qt === 'sale';
+  const isSale = qt === 'sale' || qt === 'sales';
 
-  const params = [model.toLowerCase()];
+  const params = [];
   let searchSql = '';
   if (search) {
     params.push(`%${search}%`);
     searchSql = ` AND (
-      vpi.serial_number ILIKE $${params.length}
-      OR COALESCE(vpi.unique_product_serial, '') ILIKE $${params.length}
+      vsn.serial_number ILIKE $${params.length}
       OR COALESCE(vsn.inventory_asset_code, '') ILIKE $${params.length}
+      OR COALESCE(vsn.extra->>'ttspl_id', '') ILIKE $${params.length}
     )`;
   }
 
+  // Single authoritative source: vendor_serial_numbers (QC-passed + in_stock)
+  // enriched with vendor_product_details specs. Anything procured and received
+  // becomes selectable here automatically — no separate catalog/vpi table, so
+  // status can no longer drift (the legacy vendor_product_inventory is bypassed).
   const result = await pool.query(
     `SELECT
-       vpi.id AS inventory_row_id,
-       vpi.serial_id,
-       vpi.serial_number,
-       vpi.unique_product_serial,
-       vpi.product_model_name,
-       vpi.product_id,
-       vpi.status AS inventory_status,
-       vpd.model AS pd_model,
-       vpd.processor,
-       vpd.generation,
-       vpd.brand,
-       vsn.po_id,
+       vsn.serial_id AS inventory_row_id,
+       vsn.serial_id,
+       vsn.serial_number,
+       vsn.inventory_asset_code AS unique_product_serial,
        vsn.inventory_asset_code,
+       vsn.po_id,
+       vsn.inventory_status,
+       COALESCE(vsn.extra->>'brand', vpd.brand) AS brand,
+       COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', vpd.model) AS pd_model,
+       COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', vpd.model) AS product_model_name,
+       COALESCE(vsn.extra->>'processor', vpd.processor) AS processor,
+       COALESCE(vsn.extra->>'generation', vpd.generation) AS generation,
+       COALESCE(vsn.extra->>'ram', vpd.ram) AS ram,
+       COALESCE(vsn.extra->>'storage', vpd.storage) AS storage,
        vpo.purchase_order_type
-     FROM vendor_product_inventory vpi
-     INNER JOIN vendor_serial_numbers vsn
-       ON vsn.serial_id = vpi.serial_id AND vsn.deleted_at IS NULL
+     FROM vendor_serial_numbers vsn
      LEFT JOIN vendor_product_details vpd
-       ON vpd.product_detail_id = vpi.product_id
+       ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id', '')::int
      LEFT JOIN vendor_purchase_orders vpo
        ON vpo.po_id = vsn.po_id AND vpo.deleted_at IS NULL
-     WHERE vpi.status = 'in_stock'
-       AND LOWER(vpi.product_model_name) = $1
+     WHERE vsn.deleted_at IS NULL
+       AND COALESCE(vsn.qc_status, vsn.extra->>'status', 'pending') = 'passed'
+       AND COALESCE(vsn.inventory_status, 'in_stock') = 'in_stock'
        ${searchSql}
-     ORDER BY vpi.id DESC
+     ORDER BY vsn.serial_id DESC
      LIMIT ${Math.min(Number(limit) || 200, 500)}`,
     params
   );

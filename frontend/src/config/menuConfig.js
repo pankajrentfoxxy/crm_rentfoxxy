@@ -55,6 +55,7 @@ export const salesPipelineAccordionChildren = [
   { label: 'Delivery Challans', path: '/sales-pipeline/delivery-challans', section: 'delivery_challans', countKey: 'delivery_challans' },
   { label: 'Delivery Register', path: '/sales-pipeline/delivery-register', section: 'delivery_register_management' },
   { label: 'Return DC', path: '/sales-pipeline/return-dc', section: 'return_dc', countKey: 'return_dc' },
+  { label: 'Demo Agreements', path: '/sales-pipeline/demo', section: 'demo_management' },
 ];
 
 export const reportsMenuItems = [
@@ -95,6 +96,7 @@ export const settingsAccordionChildren = [
   { label: 'User Overrides', path: '/settings/user-permissions', section: 'user_permissions' },
   { label: 'Roles', path: '/settings/roles', section: 'roles' },
   { label: 'Role Reference', path: '/settings/role-reference', section: 'roles' },
+  { label: 'Companies', path: '/settings/companies', section: 'company_settings' },
 ];
 
 /** Legacy exports — kept for Layout imports; not shown in sidebar */

@@ -26,7 +26,14 @@ export default function DeliveryChallanDetailModal({ dcNumber, onClose }) {
         </div>
         <div className="p-5 space-y-3">
           <div className="rounded-lg border border-cyan-200 bg-cyan-50 p-3 text-sm">
-            <p className="text-cyan-800 font-bold">{dcNumber}</p>
+            <div className="flex items-center gap-2">
+              <p className="text-cyan-800 font-bold">{dcNumber}</p>
+              {header.entity_code && (
+                <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${header.entity_code === 'gorefurbo' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
+                  {header.entity_code === 'gorefurbo' ? 'Gorefurbo' : 'Rentfoxxy'}
+                </span>
+              )}
+            </div>
             <p className="text-gray-600 mt-1">SO: {header.sales_order_number || '—'} | Quotation: {header.quotation_number || '—'}</p>
           </div>
           {loading ? <p className="text-sm text-gray-500">Loading...</p> : null}

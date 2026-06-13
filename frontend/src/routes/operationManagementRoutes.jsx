@@ -10,6 +10,7 @@ import DeliveryChallansListPage from '../pages/operation-management/DeliveryChal
 import DeliveryChallanAddPage from '../pages/operation-management/DeliveryChallanAddPage';
 import DeliveryRegisterPage from '../pages/operation-management/DeliveryRegisterPage';
 import ReturnDcListPage from '../pages/operation-management/ReturnDcListPage';
+import DemoAgreementsPage from '../pages/demo/DemoAgreementsPage';
 
 const withLayout = (node) => <Layout>{node}</Layout>;
 
@@ -27,4 +28,5 @@ export const operationManagementRoutes = [
   { path: '/operation-management/delivery-challans/add', element: guard('delivery_challans', withLayout(<DeliveryChallanAddPage />), 'create') },
   { path: '/operation-management/delivery-challans/:dcNumber/register', element: guard('delivery_challans', withLayout(<DeliveryRegisterPage />), 'edit') },
   { path: '/operation-management/return-dc', element: guard('return_dc', withLayout(<ReturnDcListPage />)) },
+  { path: '/sales-pipeline/demo', element: guard('demo_management', withLayout(<DemoAgreementsPage />)) },
 ];

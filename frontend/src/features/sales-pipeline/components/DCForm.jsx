@@ -152,15 +152,28 @@ export default function DCForm({ open, onClose, prefillSo }) {
           )}
           {meta && (
             <>
-              <p className="text-sm text-gray-600">DC: <strong>{meta.dc_number}</strong> · {meta.customer_name} · {meta.quotation_type}</p>
+              <p className="text-sm text-gray-600">
+                DC: <strong>{meta.dc_number}</strong> · {meta.customer_name || '—'} · {meta.quotation_type}
+              </p>
               {lineStates.map((line, index) => (
                 <div key={index} className="border rounded-lg p-3 space-y-2">
-                  <p className="text-sm font-medium">{line.brand} {line.model_name} × {line.ship_qty}</p>
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-medium">{line.brand} {line.model_name} × {line.ship_qty}</p>
+                    {line.rate ? (
+                      <span className="text-xs text-gray-600">
+                        Rate: ₹{Number(line.rate).toLocaleString('en-IN')}
+                        {meta.quotation_type === 'rental' ? '/mo' : ''}
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    {[line.processor, line.generation, line.ram, line.storage].filter(Boolean).join(' · ') || 'Config from catalog'}
+                  </p>
                   <SearchableMultiSelect
                     label="Serial Numbers (QC passed)"
                     options={(line.serialOptions || []).map((s) => ({
                       value: s.serial_id ? `${s.serial_id}|${s.serial_number}|${s.inventory_asset_code || ''}` : s.serial_number,
-                      label: `${s.inventory_asset_code || s.serial_number} — ${s.brand || ''} ${s.qc_status || ''}`,
+                      label: `${s.inventory_asset_code || s.serial_number} — ${[s.processor, s.ram, s.storage].filter(Boolean).join(' / ') || s.brand || ''}`,
                     }))}
                     value={line.serials}
                     onChange={(serials) => updateLine(index, { serials })}
@@ -189,14 +202,21 @@ export default function DCForm({ open, onClose, prefillSo }) {
                 {shipBy === 'by_hand' && (
                   <select className="border rounded-lg px-3 py-2 text-sm" value={deliveryPersonId} onChange={(e) => setDeliveryPersonId(e.target.value)}>
                     <option value="">Delivery Technician *</option>
-                    {(meta.delivery_technicians || []).map((t) => (
-                      <option key={t.user_id} value={t.user_id}>{t.name}</option>
+                    {(meta.delivery_persons || meta.delivery_technicians || []).map((t) => (
+                      <option key={t.id || t.user_id} value={t.id || t.user_id}>{t.name}</option>
                     ))}
                   </select>
                 )}
               </div>
-              <BillingAddressPanel address={meta.billing_address} />
-              <ShippingAddressPanel addresses={[meta.shipping_address].filter(Boolean)} selectedIndex={0} onSelect={() => {}} onAdd={() => {}} />
+              <BillingAddressPanel billing={meta.billing_address} gstNumber={meta.gst_number} />
+              <ShippingAddressPanel
+                shippingAddresses={[meta.shipping_address].filter(Boolean)}
+                selectedIndex={0}
+                onSelectIndex={() => {}}
+                onAddClick={() => {}}
+                selectedAddress={meta.shipping_address}
+                readOnly
+              />
             </>
           )}
         </div>

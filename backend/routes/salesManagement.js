@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
+const { authMiddleware, checkSectionPermission, checkRole } = require('../middleware/auth');
 const cp = checkSectionPermission;
 // Section guards
 const quoteView = cp('sales_quotations', 'view');
@@ -40,6 +40,8 @@ router.get('/delivery-challans/meta/add', dcView, ctrl.getAddDeliveryChallanMeta
 router.get('/delivery-challans', dcView, ctrl.listDeliveryChallans);
 router.get('/delivery-challans/:dcNumber', dcView, ctrl.getDeliveryChallan);
 router.post('/delivery-challans', dcCreate, ctrl.storeDeliveryChallan);
+// Edit an existing DC in place — Super Admin only.
+router.patch('/delivery-challans/:dcNumber', checkRole('super_admin'), ctrl.updateDeliveryChallan);
 router.post('/delivery-challans/:dcNumber/send-otp', dcEdit, ctrl.sendDeliveryOtp);
 router.post('/delivery-challans/:dcNumber/verify-otp', dcEdit, ctrl.verifyDeliveryOtp);
 router.post('/delivery-challans/:dcNumber/delivery-register', dcEdit, ctrl.submitDeliveryRegister);

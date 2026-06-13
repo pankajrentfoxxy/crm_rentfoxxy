@@ -19,6 +19,7 @@ export const recordPayment = (n, d) => api.post(`${base}/sales-orders/${n}/payme
 export const listDCs = (p) => api.get(`${base}/delivery-challans`, { params: p });
 export const getDC = (n) => api.get(`${base}/delivery-challans/${n}`);
 export const createDC = (d) => api.post(`${base}/delivery-challans`, d);
+export const updateDC = (n, d) => api.patch(`${base}/delivery-challans/${n}`, d);
 export const getDCMeta = (so) => api.get(`${base}/delivery-challans/meta/add`, { params: { sales_order_number: so } });
 export const getDcQcStatus = (n) => api.get(`${base}/delivery-challans/${n}/qc-status`);
 export const createDcQcTickets = (n) => api.post(`${base}/delivery-challans/${n}/qc-ticket`);

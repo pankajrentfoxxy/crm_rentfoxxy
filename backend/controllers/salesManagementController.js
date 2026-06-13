@@ -160,10 +160,20 @@ async function fetchCatalogAttributeOptions() {
     catalog_rows: [],
   };
   try {
+    // Config options come from the ACTUAL procured/received product specs
+    // (vendor_product_details) UNION the optional laptop_catalog master, so any
+    // item received via a PO/GRN is immediately selectable for quotations & SOs.
     const [catalog, gpuRes, screenRes] = await Promise.all([
       pool.query(
-        `SELECT DISTINCT brand, model, processor, generation, ram, storage
-         FROM laptop_catalog WHERE active = true ORDER BY brand, model`
+        `SELECT DISTINCT brand, model, processor, generation, ram, storage FROM (
+           SELECT brand, model, processor, generation, ram, storage
+             FROM vendor_product_details
+            WHERE COALESCE(model, '') <> ''
+           UNION
+           SELECT brand, model, processor, generation, ram, storage
+             FROM laptop_catalog WHERE active = true
+         ) c
+         ORDER BY brand, model`
       ),
       pool.query(`SELECT DISTINCT gpu FROM inventory WHERE gpu IS NOT NULL AND gpu != '' ORDER BY gpu`).catch(() => ({ rows: [] })),
       pool.query(`SELECT DISTINCT screen_size FROM inventory WHERE screen_size IS NOT NULL AND screen_size != '' ORDER BY screen_size`).catch(() => ({ rows: [] })),
@@ -637,8 +647,39 @@ exports.getAddDeliveryChallanMeta = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Sales order not found' });
     }
     const header = lines[0];
-    const billing = parseJsonSafe(header.customer_billing_address);
-    const shipping = parseJsonSafe(header.customer_shipping_address);
+    let billing = parseJsonSafe(header.customer_billing_address);
+    let shipping = parseJsonSafe(header.customer_shipping_address);
+
+    // Resolve customer details from the customers table when the SO snapshot is
+    // incomplete (older SOs stored customer_id but not name/billing).
+    let customerRow = null;
+    if (header.customer_id) {
+      const cRes = await pool.query(
+        `SELECT customer_id, name, company_name, email, customer_number, phone,
+                gst_number, billing_address, billing_city, billing_state, billing_pincode, details
+           FROM customers WHERE customer_id = $1`,
+        [header.customer_id]
+      );
+      customerRow = cRes.rows[0] || null;
+    }
+    if ((!billing || !billing.address) && customerRow) {
+      const cb = parseJsonSafe(customerRow.billing_address);
+      billing = (cb && (cb.address || cb.city)) ? cb : {
+        name: customerRow.company_name || customerRow.name,
+        phone: customerRow.customer_number || customerRow.phone,
+        gst_number: customerRow.gst_number,
+        address: typeof customerRow.billing_address === 'string' ? customerRow.billing_address : '',
+        city: customerRow.billing_city,
+        state: customerRow.billing_state,
+        zip_code: customerRow.billing_pincode,
+        country: 'India',
+      };
+    }
+    if (!shipping && customerRow) {
+      const details = parseJsonSafe(customerRow.details, {}) || {};
+      const sa = Array.isArray(details.shipping_address) ? details.shipping_address.slice(-1)[0] : null;
+      if (sa) shipping = sa;
+    }
     const shippableLines = lines.filter((line) => Number(line.quantity) > 0);
     const existingDc = await pool.query(
       `SELECT dc_number FROM delivery_challan_lines WHERE sales_order_number = $1 LIMIT 1`,
@@ -658,10 +699,10 @@ exports.getAddDeliveryChallanMeta = async (req, res) => {
       security_amount: header.security_amount,
       shiping_charges: header.shiping_charges,
       customer_id: header.customer_id,
-      customer_name: header.customer_name,
-      customer_email: header.customer_email,
-      customer_mobile: header.customer_mobile,
-      gst_number: header.gst_number,
+      customer_name: header.customer_name || customerRow?.company_name || customerRow?.name || '',
+      customer_email: header.customer_email || customerRow?.email || '',
+      customer_mobile: header.customer_mobile || customerRow?.customer_number || customerRow?.phone || '',
+      gst_number: header.gst_number || customerRow?.gst_number || '',
       supply_state: header.supply_state,
       billing_address: billing,
       shipping_address: shipping,
@@ -843,10 +884,94 @@ exports.storeDeliveryChallan = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Select quantity and serial numbers for at least one line' });
     }
     await client.query('COMMIT');
-    res.status(201).json({ success: true, message: 'Delivery challan created', dc_number: dcNumber });
+
+    // Generate the entity-branded DC PDF and store its path.
+    let pdfPath = null;
+    try {
+      const dcLines = await getDeliveryChallanLines(dcNumber);
+      const head = dcLines[0] || {};
+      pdfPath = await generateDocumentPdf({
+        docType: 'delivery_challan',
+        docNumber: dcNumber,
+        header: head,
+        lines: dcLines,
+      });
+      await pool.query(`UPDATE delivery_challan_lines SET pdf_path = $1 WHERE dc_number = $2`, [pdfPath, dcNumber]);
+    } catch (pdfErr) {
+      console.error('DC PDF generation failed:', pdfErr.message);
+    }
+
+    res.status(201).json({ success: true, message: 'Delivery challan created', dc_number: dcNumber, pdf_path: pdfPath });
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('storeDeliveryChallan:', error);
+    res.status(500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
+  }
+};
+
+// Edit an existing DC in place (same DC number). Super Admin only.
+// Updates the shared header fields across all lines and regenerates the PDF.
+exports.updateDeliveryChallan = async (req, res) => {
+  const dcNumber = req.params.dcNumber;
+  const b = req.body || {};
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const exists = await client.query(
+      'SELECT 1 FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1', [dcNumber]
+    );
+    if (!exists.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Delivery challan not found' });
+    }
+
+    const billing = b.customer_billing_address != null
+      ? JSON.stringify(parseJsonSafe(b.customer_billing_address, b.customer_billing_address)) : null;
+    const shipping = b.customer_shipping_address != null
+      ? JSON.stringify(parseJsonSafe(b.customer_shipping_address, b.customer_shipping_address)) : null;
+
+    await client.query(
+      `UPDATE delivery_challan_lines SET
+         customer_name = COALESCE($1, customer_name),
+         email = COALESCE($2, email),
+         gst_number = COALESCE($3, gst_number),
+         supply_state = COALESCE($4, supply_state),
+         customer_billing_address = COALESCE($5::jsonb, customer_billing_address),
+         customer_shipping_address = COALESCE($6::jsonb, customer_shipping_address),
+         ship_by = COALESCE($7, ship_by),
+         courier_name = COALESCE($8, courier_name),
+         awb_number = COALESCE($9, awb_number),
+         remarks = COALESCE($10, remarks),
+         updated_at = NOW()
+       WHERE dc_number = $11`,
+      [
+        b.customer_name ?? null, b.email ?? b.customer_email ?? null,
+        b.gst_number ?? b.GST_number ?? null, b.supply_state ?? null,
+        billing, shipping,
+        b.ship_by ?? null, b.courier_name ?? null, b.awb_number ?? null,
+        b.remarks ?? null, dcNumber,
+      ]
+    );
+    await client.query('COMMIT');
+
+    // Regenerate the PDF so it reflects the edits (same DC number).
+    let pdfPath = null;
+    try {
+      const dcLines = await getDeliveryChallanLines(dcNumber);
+      pdfPath = await generateDocumentPdf({
+        docType: 'delivery_challan', docNumber: dcNumber, header: dcLines[0] || {}, lines: dcLines,
+      });
+      await pool.query(`UPDATE delivery_challan_lines SET pdf_path = $1 WHERE dc_number = $2`, [pdfPath, dcNumber]);
+    } catch (pdfErr) {
+      console.error('DC PDF regeneration failed:', pdfErr.message);
+    }
+
+    res.json({ success: true, message: 'Delivery challan updated', dc_number: dcNumber, pdf_path: pdfPath });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('updateDeliveryChallan:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
     client.release();

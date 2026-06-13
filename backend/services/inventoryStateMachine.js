@@ -203,7 +203,7 @@ const markDispatched = (db, serialId, { dcNumber, customerId, entityCode, dispat
  */
 function deliveredStatusForType(quotationType) {
   const t = String(quotationType || 'rental').toLowerCase();
-  if (t === 'sales') return STATUS.SOLD;
+  if (t === 'sales' || t === 'sale') return STATUS.SOLD;
   if (t === 'demo') return STATUS.ON_DEMO;
   return STATUS.RENTED;
 }

@@ -8,17 +8,28 @@ import EInvoicePanel from '../components/EInvoicePanel';
 import QcStatusBadge from '../components/QcStatusBadge';
 import {
   createDcQcTickets, getDC, getDcQcStatus, getSalesOrderFull,
-  markDelivered, markRejected, sendDeliveryOtp, verifyDeliveryOtp,
+  markDelivered, markRejected, sendDeliveryOtp, verifyDeliveryOtp, updateDC,
 } from '../salesPipelineApi';
 import {
   DC_STATUS_STYLES, formatConfig, formatCurrency, formatDateTime,
   parseSerials, statusLabel,
 } from '../salesPipelineUtils';
+import { getBackendOrigin } from '../../../utils/api';
+import { useAuth } from '../../../context/AuthContext';
+import DcEditModal from '../components/DcEditModal';
 
 const TABS = ['details', 'qc', 'dispatch', 'einvoice'];
 
+function dcPdfUrl(path) {
+  if (!path) return null;
+  if (path.startsWith('http')) return path;
+  return `${getBackendOrigin().replace(/\/$/, '')}/${path.replace(/^\//, '')}`;
+}
+
 export default function DeliveryChallanDetailPage() {
   const { dcNumber } = useParams();
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === 'super_admin';
   const [tab, setTab] = useState('details');
   const [lines, setLines] = useState([]);
   const [qc, setQc] = useState(null);
@@ -29,9 +40,10 @@ export default function DeliveryChallanDetailPage() {
   const [otpValue, setOtpValue] = useState('');
   const [rejectModal, setRejectModal] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
+  const [editOpen, setEditOpen] = useState(false);
 
   const head = lines[0] || {};
-  const isSale = head.quotation_type === 'sale';
+  const isSale = head.entity_code === 'gorefurbo' || head.quotation_type === 'sale' || head.quotation_type === 'sales';
 
   const loadQc = useCallback(async () => {
     try {
@@ -119,11 +131,26 @@ export default function DeliveryChallanDetailPage() {
         <div>
           <Link to="/sales-pipeline/delivery-challans" className="text-sm text-blue-600">← Back</Link>
           <h1 className="text-2xl font-semibold font-mono mt-1">{dcNumber}</h1>
-          <p className="text-gray-600">{head.customer_name} · SO: <Link className="text-blue-600" to={`/sales-pipeline/sales-orders/${head.sales_order_number}`}>{head.sales_order_number}</Link></p>
-          <div className="flex gap-2 mt-2">
+          <p className="text-gray-600">{head.customer_name || '—'} · SO: <Link className="text-blue-600" to={`/sales-pipeline/sales-orders/${head.sales_order_number}`}>{head.sales_order_number}</Link></p>
+          <div className="flex flex-wrap gap-2 mt-2 items-center">
             <span className={`px-2 py-0.5 rounded-full text-xs ${DC_STATUS_STYLES[head.status || 'pending']}`}>{statusLabel(head.status || 'pending')}</span>
+            {head.entity_code && (
+              <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${head.entity_code === 'gorefurbo' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
+                {head.entity_code === 'gorefurbo' ? 'Gorefurbo' : 'Rentfoxxy'}
+              </span>
+            )}
             <QcStatusBadge allPassed={qc?.all_passed} pendingCount={qc?.pending_count} failedCount={qc?.tickets?.filter((t) => t.status === 'qc_failed').length} totalCount={qc?.total_count} />
           </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {dcPdfUrl(head.pdf_path) && (
+            <a href={dcPdfUrl(head.pdf_path)} target="_blank" rel="noreferrer"
+              className="px-3 py-1.5 text-sm border rounded-lg text-gray-700 hover:bg-gray-50">Download PDF</a>
+          )}
+          {isSuperAdmin && (
+            <button type="button" onClick={() => setEditOpen(true)}
+              className="px-3 py-1.5 text-sm bg-amber-600 text-white rounded-lg">Edit DC</button>
+          )}
         </div>
       </div>
 
@@ -307,6 +334,15 @@ export default function DeliveryChallanDetailPage() {
       )}
 
       <TtsplHistoryDrawer ttsplId={ttsplDrawer} open={Boolean(ttsplDrawer)} onClose={() => setTtsplDrawer(null)} />
+
+      {editOpen && (
+        <DcEditModal
+          dcNumber={dcNumber}
+          head={head}
+          onClose={() => setEditOpen(false)}
+          onSaved={() => { setEditOpen(false); load(); }}
+        />
+      )}
     </div>
   );
 }
