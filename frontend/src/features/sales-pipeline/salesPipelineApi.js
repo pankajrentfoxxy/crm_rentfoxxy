@@ -34,6 +34,11 @@ export const listByStatus = (status, p) => api.get(`/delivery-register-managemen
 export const sendDeliveryOtp = (dcNumber, d) => api.post(`${base}/delivery-challans/${dcNumber}/send-otp`, d || {});
 export const verifyDeliveryOtp = (dcNumber, d) => api.post(`${base}/delivery-challans/${dcNumber}/verify-otp`, d);
 export const getAvailableSerials = (p) => api.get(`${base}/inventory/available-serials`, { params: p });
+
+// SO-level serial allocation (attach laptops -> QC ticket each)
+export const listSoSerials = (so) => api.get(`${base}/sales-orders/${so}/serials`);
+export const attachSoSerial = (so, d) => api.post(`${base}/sales-orders/${so}/serials`, d);
+export const detachSoSerial = (so, allocId) => api.delete(`${base}/sales-orders/${so}/serials/${allocId}`);
 export const getOperationCounts = () => api.get(`${base}/counts`);
 export const saveCustomerShippingAddress = (id, d) => api.post(`${base}/customers/${id}/shipping-address`, d);
 export const getCustomerDetail = (customerId) => api.get(`/customer-management/customers/${customerId}`);

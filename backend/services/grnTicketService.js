@@ -295,7 +295,7 @@ async function createSalesOrderQcTicket(db, {
        serial_number, ttspl_id, machine_number, brand, model, processor, ram, storage,
        initial_condition, priority, ticket_type, current_stage_id, assigned_team_id, assigned_user_id,
        initial_cost, vendor_serial_id, sales_order_number, highlighted
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'sales_order','sales_order_qc',$10,$11,$12,0,$13,$14,FALSE)
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'high','sales_order_qc',$10,$11,$12,0,$13,$14,FALSE)
      RETURNING ticket_id`,
     [
       serialNumber,

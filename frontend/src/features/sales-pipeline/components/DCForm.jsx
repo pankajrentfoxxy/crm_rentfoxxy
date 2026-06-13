@@ -29,6 +29,27 @@ export default function DCForm({ open, onClose, prefillSo }) {
     getDCMeta(soNumber).then((res) => {
       const data = res.data;
       setMeta(data);
+
+      if (data.use_attached) {
+        // New flow: laptops are already attached to the SO with QC tickets.
+        // Build read-only lines from the attached serials — no re-selection.
+        const lines = (data.sales_order_lines || []).map((line) => {
+          const attached = (data.attached_serials || []).filter((a) => a.line_id === line.id);
+          return {
+            ...line,
+            ship_qty: attached.length,
+            attachedUnits: attached,
+            serials: attached.map((a) => `${a.serial_id}|${a.serial_number || ''}|${a.ttspl_id || ''}`),
+            serialOptions: [],
+            remark: line.remark || '',
+            preAttached: true,
+          };
+        });
+        setLineStates(lines.filter((l) => l.attachedUnits.length > 0));
+        return;
+      }
+
+      // Legacy flow: manual serial selection.
       const lines = (data.sales_order_lines || []).map((line) => ({
         ...line,
         ship_qty: line.quantity,
@@ -72,6 +93,14 @@ export default function DCForm({ open, onClose, prefillSo }) {
   const submit = async () => {
     if (!soNumber) {
       toast.error('Select a sales order');
+      return;
+    }
+    if (meta?.use_attached && !meta?.all_attached_qc_passed) {
+      toast.error('All attached laptops must pass pre-dispatch QC before generating the DC');
+      return;
+    }
+    if (meta?.use_attached && lineStates.every((l) => !(l.serials || []).length)) {
+      toast.error('No laptops attached to this sales order yet');
       return;
     }
     if (badSerials.length) {
@@ -169,18 +198,36 @@ export default function DCForm({ open, onClose, prefillSo }) {
                   <p className="text-xs text-gray-500">
                     {[line.processor, line.generation, line.ram, line.storage].filter(Boolean).join(' · ') || 'Config from catalog'}
                   </p>
-                  <SearchableMultiSelect
-                    label="Serial Numbers (QC passed)"
-                    options={(line.serialOptions || []).map((s) => ({
-                      value: s.serial_id ? `${s.serial_id}|${s.serial_number}|${s.inventory_asset_code || ''}` : s.serial_number,
-                      label: `${s.inventory_asset_code || s.serial_number} — ${[s.processor, s.ram, s.storage].filter(Boolean).join(' / ') || s.brand || ''}`,
-                    }))}
-                    value={line.serials}
-                    onChange={(serials) => updateLine(index, { serials })}
-                    maxSelections={Number(line.ship_qty) || 1}
-                  />
+                  {line.preAttached ? (
+                    <div className="divide-y border rounded-lg">
+                      {(line.attachedUnits || []).map((a) => (
+                        <div key={a.allocation_id} className="flex items-center justify-between px-3 py-1.5">
+                          <span className="font-mono text-xs text-blue-700">{a.ttspl_id || a.serial_number}</span>
+                          <span className={`px-2 py-0.5 rounded-full text-xs ${a.qc_status === 'passed' ? 'bg-emerald-100 text-emerald-700' : a.qc_status === 'failed' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                            QC {a.qc_status}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <SearchableMultiSelect
+                      label="Serial Numbers (QC passed)"
+                      options={(line.serialOptions || []).map((s) => ({
+                        value: s.serial_id ? `${s.serial_id}|${s.serial_number}|${s.inventory_asset_code || ''}` : s.serial_number,
+                        label: `${s.inventory_asset_code || s.serial_number} — ${[s.processor, s.ram, s.storage].filter(Boolean).join(' / ') || s.brand || ''}`,
+                      }))}
+                      value={line.serials}
+                      onChange={(serials) => updateLine(index, { serials })}
+                      maxSelections={Number(line.ship_qty) || 1}
+                    />
+                  )}
                 </div>
               ))}
+              {meta.use_attached && !meta.all_attached_qc_passed && (
+                <p className="text-xs text-amber-600">
+                  ⚠ Some attached laptops have not passed pre-dispatch QC yet. Complete QC before generating the DC.
+                </p>
+              )}
               {badSerials.map((b) => (
                 <p key={b.serial} className="text-xs text-red-600">
                   {b.serial} is not QC passed (status: {b.status}). Remove before proceeding.

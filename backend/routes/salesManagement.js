@@ -16,8 +16,14 @@ const payCreate = cp('payment_records', 'create');
 const rdcView = cp('return_dc', 'view');
 const rdcEdit = cp('return_dc', 'edit');
 const ctrl = require('../controllers/salesManagementController');
+const sosCtrl = require('../controllers/salesOrderSerialController');
 
 router.use(authMiddleware);
+
+// SO-level serial allocation (warehouse attaches laptops -> 1 QC ticket each)
+router.get('/sales-orders/:soNumber/serials', dcView, sosCtrl.listSerials);
+router.post('/sales-orders/:soNumber/serials', dcEdit, sosCtrl.attachSerial);
+router.delete('/sales-orders/:soNumber/serials/:allocId', dcEdit, sosCtrl.detachSerial);
 
 router.get('/counts', quoteView, ctrl.getOperationCounts);
 router.get('/inventory/available-serials', dcView, ctrl.getAvailableSerials);

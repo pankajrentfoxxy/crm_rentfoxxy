@@ -348,6 +348,21 @@ exports.moveToStage = async (req, res) => {
            WHERE pre_dispatch_qc_ticket_id = $1`,
           [ticket.ticket_id]
         );
+        // SO-level allocation: mark this laptop QC-passed and keep it reserved
+        // (a passed pre-dispatch unit stays allocated to its order, not back to stock).
+        await client.query(
+          `UPDATE sales_order_serials SET qc_status = 'passed', updated_at = NOW()
+           WHERE qc_ticket_id = $1 AND status = 'attached'`,
+          [ticket.ticket_id]
+        );
+        if (ticket.vendor_serial_id) {
+          await client.query(
+            `UPDATE vendor_serial_numbers SET inventory_status = 'reserved', updated_at = NOW()
+             WHERE serial_id = $1
+               AND COALESCE(inventory_status,'in_stock') NOT IN ('rented','sold','on_demo','in_transit','returned')`,
+            [ticket.vendor_serial_id]
+          );
+        }
       }
     } else {
       updates.push(`status = 'in_progress'`);
@@ -511,6 +526,16 @@ exports.markQcFailed = async (req, res) => {
         `UPDATE vendor_serial_numbers SET qc_status = 'qc_failed_return_vendor', updated_at = NOW()
          WHERE serial_id = $1`,
         [ticket.vendor_serial_id]
+      );
+    }
+
+    // SO-level allocation: this laptop failed pre-dispatch QC — mark it failed so
+    // the warehouse detaches/replaces it before the DC can be generated.
+    if (ticket.ticket_type === 'sales_order_qc') {
+      await pool.query(
+        `UPDATE sales_order_serials SET qc_status = 'failed', updated_at = NOW()
+         WHERE qc_ticket_id = $1 AND status = 'attached'`,
+        [ticket.ticket_id]
       );
     }
 

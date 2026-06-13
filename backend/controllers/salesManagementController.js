@@ -690,6 +690,28 @@ exports.getAddDeliveryChallanMeta = async (req, res) => {
       pool.query(`SELECT user_id, name, email FROM users WHERE status = 'active' ORDER BY name ASC LIMIT 100`),
       fetchCatalogAttributeOptions(),
     ]);
+
+    // Laptops the warehouse already attached to this SO (new flow). The DC is
+    // generated from these — no re-selection of serials.
+    const attachedRes = await pool.query(
+      `SELECT sos.allocation_id, sos.line_id, sos.serial_id, sos.ttspl_id, sos.serial_number,
+              sos.qc_status, sos.status,
+              COALESCE(vsn.extra->>'brand', vpd.brand) AS brand,
+              COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', vpd.model) AS model,
+              COALESCE(vsn.extra->>'processor', vpd.processor) AS processor,
+              COALESCE(vsn.extra->>'generation', vpd.generation) AS generation,
+              COALESCE(vsn.extra->>'ram', vpd.ram) AS ram,
+              COALESCE(vsn.extra->>'storage', vpd.storage) AS storage,
+              COALESCE(vsn.extra->>'gpu', vpd.gpu) AS gpu,
+              COALESCE(vsn.extra->>'screen_size', vpd.screen_size) AS screen_size
+         FROM sales_order_serials sos
+         LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = sos.serial_id
+         LEFT JOIN vendor_product_details vpd ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id','')::int
+        WHERE sos.sales_order_number = $1 AND sos.status = 'attached'
+        ORDER BY sos.allocation_id ASC`,
+      [salesOrderNumber]
+    ).catch(() => ({ rows: [] }));
+    const attachedSerials = attachedRes.rows;
     res.json({
       success: true,
       sales_order_number: salesOrderNumber,
@@ -707,6 +729,9 @@ exports.getAddDeliveryChallanMeta = async (req, res) => {
       billing_address: billing,
       shipping_address: shipping,
       sales_order_lines: shippableLines,
+      attached_serials: attachedSerials,
+      use_attached: attachedSerials.length > 0,
+      all_attached_qc_passed: attachedSerials.length > 0 && attachedSerials.every((a) => a.qc_status === 'passed'),
       dc_number: dcNumber,
       remaining_qty: await getSalesOrderRemainingQty(salesOrderNumber),
       delivery_persons: deliveryPersons.rows.map((u) => ({
@@ -934,6 +959,35 @@ exports.storeDeliveryChallan = async (req, res) => {
       await client.query('ROLLBACK');
       return res.status(400).json({ success: false, message: 'Select quantity and serial numbers for at least one line' });
     }
+
+    // New flow: any SO-attached allocation whose serial was placed on this DC
+    // (reserveForDc set current_dc_number) is now committed to the DC.
+    if (body.sales_order_number) {
+      await client.query(
+        `UPDATE sales_order_serials sos
+           SET status = 'dispatched', dc_number = $1, updated_at = NOW()
+          FROM vendor_serial_numbers vsn
+         WHERE sos.serial_id = vsn.serial_id
+           AND sos.sales_order_number = $2 AND sos.status = 'attached'
+           AND vsn.current_dc_number = $1`,
+        [dcNumber, body.sales_order_number]
+      );
+
+      // Mirror the SO-level QC result into dc_qc_tickets so the DC's QC tab and
+      // the dispatch gate (assertDcQcComplete) reflect the already-done QC.
+      await client.query(
+        `INSERT INTO dc_qc_tickets (dc_number, sales_order_number, ticket_id, ttspl_id, serial_id, status)
+         SELECT sos.dc_number, sos.sales_order_number, sos.qc_ticket_id, sos.ttspl_id, sos.serial_id,
+                CASE WHEN sos.qc_status = 'passed' THEN 'qc_passed' ELSE 'pending' END
+           FROM sales_order_serials sos
+          WHERE sos.dc_number = $1 AND sos.status = 'dispatched'
+            AND NOT EXISTS (
+              SELECT 1 FROM dc_qc_tickets d WHERE d.dc_number = sos.dc_number AND d.serial_id = sos.serial_id
+            )`,
+        [dcNumber]
+      );
+    }
+
     await client.query('COMMIT');
 
     // Generate the entity-branded DC PDF and store its path.
