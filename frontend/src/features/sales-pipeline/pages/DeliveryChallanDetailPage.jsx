@@ -113,10 +113,17 @@ export default function DeliveryChallanDetailPage() {
     }
   };
 
-  const laptops = lines.flatMap((l) => parseSerials(l.serial_number).map((s) => {
-    const parts = String(s).split('|');
-    return { ttspl: parts[2] || parts[1] || parts[0], config: formatConfig(l) };
-  }));
+  const specStr = (d) => [d.processor, d.generation, d.ram, d.storage, d.gpu, d.screen_size]
+    .filter(Boolean).join(' · ');
+  const laptops = lines.flatMap((l) => (
+    (l.serials_detail && l.serials_detail.length)
+      ? l.serials_detail.map((d) => ({ ttspl: d.ttspl, config: `${d.brand} ${d.model} · ${specStr(d)}`.trim() }))
+      : parseSerials(l.serial_number).map((s) => {
+        const parts = String(s).split('|');
+        return { ttspl: parts[2] || parts[1] || parts[0], config: formatConfig(l) };
+      })
+  ));
+  const allUnits = lines.flatMap((l) => l.serials_detail || []);
 
   const qcBanner = () => {
     if (!qc?.total_count) return null;
@@ -166,26 +173,40 @@ export default function DeliveryChallanDetailPage() {
 
           {tab === 'details' && (
             <div className="bg-white border rounded-xl overflow-hidden">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50 text-xs uppercase text-gray-500">
-                  <tr>
-                    <th className="px-4 py-2 text-left">Brand</th>
-                    <th className="px-4 py-2 text-left">Config</th>
-                    <th className="px-4 py-2 text-right">Qty</th>
-                    <th className="px-4 py-2 text-left">Serials</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {lines.map((l, i) => (
-                    <tr key={i}>
-                      <td className="px-4 py-2">{l.brand}</td>
-                      <td className="px-4 py-2 text-gray-600">{formatConfig(l)}</td>
-                      <td className="px-4 py-2 text-right">{l.quantity}</td>
-                      <td className="px-4 py-2 font-mono text-xs">{parseSerials(l.serial_number).join(', ')}</td>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 text-xs uppercase text-gray-500">
+                    <tr>
+                      <th className="px-3 py-2 text-left">TTSPL</th>
+                      <th className="px-3 py-2 text-left">Brand</th>
+                      <th className="px-3 py-2 text-left">Model</th>
+                      <th className="px-3 py-2 text-left">Processor</th>
+                      <th className="px-3 py-2 text-left">Gen</th>
+                      <th className="px-3 py-2 text-left">RAM</th>
+                      <th className="px-3 py-2 text-left">Storage</th>
+                      <th className="px-3 py-2 text-left">GPU</th>
+                      <th className="px-3 py-2 text-left">Screen</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y">
+                    {allUnits.length === 0 ? (
+                      <tr><td colSpan={9} className="px-3 py-6 text-center text-gray-400">No laptops attached</td></tr>
+                    ) : allUnits.map((d, i) => (
+                      <tr key={d.ttspl || i}>
+                        <td className="px-3 py-2 font-mono text-xs text-blue-700">{d.ttspl}</td>
+                        <td className="px-3 py-2">{d.brand || '—'}</td>
+                        <td className="px-3 py-2">{d.model || '—'}</td>
+                        <td className="px-3 py-2">{d.processor || '—'}</td>
+                        <td className="px-3 py-2">{d.generation || '—'}</td>
+                        <td className="px-3 py-2">{d.ram || '—'}</td>
+                        <td className="px-3 py-2">{d.storage || '—'}</td>
+                        <td className="px-3 py-2">{d.gpu || '—'}</td>
+                        <td className="px-3 py-2">{d.screen_size || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
               <div className="p-4 text-sm border-t space-y-1">
                 <p>Courier: {head.courier_name || '—'} · AWB: {head.awb_number || '—'}</p>
                 <p>Security: {formatCurrency(head.security_amount)} · Shipping: {formatCurrency(head.shiping_charges)}</p>

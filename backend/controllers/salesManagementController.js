@@ -739,6 +739,57 @@ exports.getDeliveryChallan = async (req, res) => {
     if (!lines.length) {
       return res.status(404).json({ success: false, message: 'Delivery challan not found' });
     }
+
+    // Resolve full laptop specs for every attached serial from the authoritative
+    // source (vendor_serial_numbers + vendor_product_details), since the DC line
+    // itself only stores brand/model.
+    const specSelect = `
+      SELECT vsn.serial_id, vsn.serial_number, vsn.inventory_asset_code,
+             COALESCE(vsn.extra->>'brand', vpd.brand) AS brand,
+             COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', vpd.model) AS model,
+             COALESCE(vsn.extra->>'processor', vpd.processor) AS processor,
+             COALESCE(vsn.extra->>'generation', vpd.generation) AS generation,
+             COALESCE(vsn.extra->>'ram', vpd.ram) AS ram,
+             COALESCE(vsn.extra->>'storage', vpd.storage) AS storage,
+             COALESCE(vsn.extra->>'gpu', vpd.gpu) AS gpu,
+             COALESCE(vsn.extra->>'screen_size', vpd.screen_size) AS screen_size,
+             vsn.inventory_status
+      FROM vendor_serial_numbers vsn
+      LEFT JOIN vendor_product_details vpd
+        ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id', '')::int
+      WHERE vsn.deleted_at IS NULL
+        AND (vsn.serial_id = ANY($1::int[]) OR vsn.serial_number = ANY($2::text[]) OR vsn.inventory_asset_code = ANY($2::text[]))`;
+
+    for (const line of lines) {
+      const entries = parseSerialEntries(line.serial_number);
+      const ids = entries.map((e) => e.serialId).filter(Boolean);
+      const nums = entries.flatMap((e) => [e.serialNumber, e.ttsplId].filter(Boolean));
+      let details = [];
+      if (ids.length || nums.length) {
+        const r = await pool.query(specSelect, [ids.length ? ids : [-1], nums.length ? nums : ['']]);
+        details = r.rows;
+      }
+      line.serials_detail = entries.map((e) => {
+        const d = details.find((x) =>
+          (e.serialId && x.serial_id === e.serialId)
+          || (e.serialNumber && x.serial_number === e.serialNumber)
+          || (e.ttsplId && x.inventory_asset_code === e.ttsplId)) || {};
+        return {
+          ttspl: d.inventory_asset_code || e.ttsplId || e.serialNumber,
+          serial_number: d.serial_number || e.serialNumber,
+          brand: d.brand || line.brand || '',
+          model: d.model || line.model_name || '',
+          processor: d.processor || '',
+          generation: d.generation || '',
+          ram: d.ram || '',
+          storage: d.storage || '',
+          gpu: d.gpu || '',
+          screen_size: d.screen_size || '',
+          status: d.inventory_status || '',
+        };
+      });
+    }
+
     res.json({ success: true, dc_number: req.params.dcNumber, lines });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1245,22 +1296,31 @@ exports.createPreDispatchQcTicket = async (req, res) => {
     const ticketIds = [];
     let created = 0;
 
+    // Specs live in vendor_serial_numbers.extra (jsonb) / vendor_product_details,
+    // NOT as columns on vendor_serial_numbers.
+    const specSelect = `
+      SELECT vsn.serial_id, vsn.serial_number, vsn.inventory_asset_code, vsn.qc_status,
+             COALESCE(vsn.extra->>'brand', vpd.brand) AS brand,
+             COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', vpd.model) AS model,
+             COALESCE(vsn.extra->>'processor', vpd.processor) AS processor,
+             COALESCE(vsn.extra->>'generation', vpd.generation) AS generation,
+             COALESCE(vsn.extra->>'ram', vpd.ram) AS ram,
+             COALESCE(vsn.extra->>'storage', vpd.storage) AS storage,
+             COALESCE(vsn.extra->>'gpu', vpd.gpu) AS gpu,
+             COALESCE(vsn.extra->>'screen_size', vpd.screen_size) AS screen_size
+      FROM vendor_serial_numbers vsn
+      LEFT JOIN vendor_product_details vpd
+        ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id', '')::int
+      WHERE vsn.deleted_at IS NULL AND `;
+
     for (const s of serials) {
       let serialRow = null;
       if (s.serialId) {
-        const r = await client.query(
-          `SELECT serial_id, serial_number, inventory_asset_code, brand, processor, ram, storage, qc_status
-           FROM vendor_serial_numbers WHERE serial_id = $1 AND deleted_at IS NULL`,
-          [s.serialId]
-        );
+        const r = await client.query(`${specSelect} vsn.serial_id = $1`, [s.serialId]);
         serialRow = r.rows[0];
       }
       if (!serialRow && s.serialNumber) {
-        const r = await client.query(
-          `SELECT serial_id, serial_number, inventory_asset_code, brand, processor, ram, storage, qc_status
-           FROM vendor_serial_numbers WHERE serial_number = $1 AND deleted_at IS NULL LIMIT 1`,
-          [s.serialNumber]
-        );
+        const r = await client.query(`${specSelect} vsn.serial_number = $1 LIMIT 1`, [s.serialNumber]);
         serialRow = r.rows[0];
       }
       if (!serialRow) continue;
@@ -1276,7 +1336,9 @@ exports.createPreDispatchQcTicket = async (req, res) => {
         ttsplId: serialRow.inventory_asset_code || s.ttsplId,
         serialNumber: serialRow.serial_number,
         brand: serialRow.brand,
+        model: serialRow.model,
         processor: serialRow.processor,
+        generation: serialRow.generation,
         ram: serialRow.ram,
         storage: serialRow.storage,
         salesOrderNumber: lines[0].sales_order_number,
