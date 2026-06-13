@@ -655,8 +655,8 @@ exports.getAddDeliveryChallanMeta = async (req, res) => {
     let customerRow = null;
     if (header.customer_id) {
       const cRes = await pool.query(
-        `SELECT customer_id, name, company_name, email, customer_number, phone,
-                gst_number, billing_address, billing_city, billing_state, billing_pincode, details
+        `SELECT customer_id, name, company_name, email, phone, whatsapp_number,
+                gst_no, billing_address, billing_city, billing_state, billing_pincode, details
            FROM customers WHERE customer_id = $1`,
         [header.customer_id]
       );
@@ -666,8 +666,8 @@ exports.getAddDeliveryChallanMeta = async (req, res) => {
       const cb = parseJsonSafe(customerRow.billing_address);
       billing = (cb && (cb.address || cb.city)) ? cb : {
         name: customerRow.company_name || customerRow.name,
-        phone: customerRow.customer_number || customerRow.phone,
-        gst_number: customerRow.gst_number,
+        phone: customerRow.phone,
+        gst_number: customerRow.gst_no,
         address: typeof customerRow.billing_address === 'string' ? customerRow.billing_address : '',
         city: customerRow.billing_city,
         state: customerRow.billing_state,
@@ -701,8 +701,8 @@ exports.getAddDeliveryChallanMeta = async (req, res) => {
       customer_id: header.customer_id,
       customer_name: header.customer_name || customerRow?.company_name || customerRow?.name || '',
       customer_email: header.customer_email || customerRow?.email || '',
-      customer_mobile: header.customer_mobile || customerRow?.customer_number || customerRow?.phone || '',
-      gst_number: header.gst_number || customerRow?.gst_number || '',
+      customer_mobile: header.customer_mobile || customerRow?.phone || customerRow?.whatsapp_number || '',
+      gst_number: header.gst_number || customerRow?.gst_no || '',
       supply_state: header.supply_state,
       billing_address: billing,
       shipping_address: shipping,
