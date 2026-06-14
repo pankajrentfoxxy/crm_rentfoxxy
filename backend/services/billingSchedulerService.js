@@ -4,6 +4,16 @@
 const cron = require('node-cron');
 const pool = require('../config/db');
 
+// Format a Date as YYYY-MM-DD in LOCAL time. Using .toISOString() here shifts
+// dates back a day in IST (UTC+5:30 midnight = previous day in UTC), which both
+// mislabels invoice line items and skews the month-boundary overlap test.
+function toLocalYmd(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 async function nextInvoiceNumber(entity = 'rentfoxxy') {
   // Rentals invoice under Rentfoxxy; per-entity sequence (migration 074),
   // falling back to the legacy shared sequence if the entity one is absent.
@@ -52,8 +62,8 @@ async function generateCustomerInvoice(customerId, month, year) {
   // rent_start_date honours the dispatch-mode rule; rent_end_date/returned_at
   // makes billing react to returns. One row per unit => multi-serial DC lines
   // are billed correctly by construction.
-  const monthStartStr = monthStart.toISOString().slice(0, 10);
-  const monthEndStr = monthEnd.toISOString().slice(0, 10);
+  const monthStartStr = toLocalYmd(monthStart);
+  const monthEndStr = toLocalYmd(monthEnd);
   const serialsRes = await pool.query(
     `SELECT vsn.serial_id,
             COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
@@ -106,8 +116,8 @@ async function generateCustomerInvoice(customerId, month, year) {
       dc_number: row.dc_number,
       brand: row.brand || '',
       model: row.model || '',
-      rent_start: effectiveStart.toISOString().slice(0, 10),
-      rent_end: effectiveEnd.toISOString().slice(0, 10),
+      rent_start: toLocalYmd(effectiveStart),
+      rent_end: toLocalYmd(effectiveEnd),
       days_in_month: days,
       monthly_rate: monthlyRate,
       daily_rate: parseFloat(dailyRate.toFixed(2)),
@@ -150,9 +160,9 @@ async function generateCustomerInvoice(customerId, month, year) {
       customerId,
       month,
       year,
-      new Date().toISOString().slice(0, 10),
-      monthStart.toISOString().slice(0, 10),
-      monthEnd.toISOString().slice(0, 10),
+      toLocalYmd(new Date()),
+      toLocalYmd(monthStart),
+      toLocalYmd(monthEnd),
       JSON.stringify(lineItems),
       subtotal.toFixed(2),
       gstPercent,
@@ -234,7 +244,7 @@ async function generateVendorBill(vendorId, month, year) {
        AND vpo.purchase_order_type IN ('rental_purchase','rent_to_own')
        AND COALESCE((vsn.extra->>'received_at')::date, vsn.rental_start_date, vsn.created_at::date) IS NOT NULL
        AND COALESCE((vsn.extra->>'received_at')::date, vsn.rental_start_date, vsn.created_at::date) <= $2::date`,
-    [vendorId, monthEnd.toISOString().slice(0, 10)]
+    [vendorId, toLocalYmd(monthEnd)]
   );
 
   if (!serialsRes.rows.length) {
@@ -266,8 +276,8 @@ async function generateVendorBill(vendorId, month, year) {
       serial_id: row.serial_id,
       ttspl_id: row.ttspl_id || null,
       serial_number: row.serial_number,
-      received_date: receivedAt.toISOString().slice(0, 10),
-      return_date: returnedAt ? returnedAt.toISOString().slice(0, 10) : null,
+      received_date: toLocalYmd(receivedAt),
+      return_date: returnedAt ? toLocalYmd(returnedAt) : null,
       days_in_month: days,
       monthly_rate: monthlyRate,
       daily_rate: parseFloat(dailyRate.toFixed(2)),
@@ -302,9 +312,9 @@ async function generateVendorBill(vendorId, month, year) {
      RETURNING bill_id, bill_number`,
     [
       billNumber, vendorId, month, year,
-      new Date().toISOString().slice(0, 10),
-      monthStart.toISOString().slice(0, 10),
-      monthEnd.toISOString().slice(0, 10),
+      toLocalYmd(new Date()),
+      toLocalYmd(monthStart),
+      toLocalYmd(monthEnd),
       JSON.stringify(lineItems),
       subtotal.toFixed(2), gstAmount, debitAdjustment.toFixed(2), totalPayable,
     ]
