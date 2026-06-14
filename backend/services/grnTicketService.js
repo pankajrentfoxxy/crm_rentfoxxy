@@ -40,6 +40,14 @@ async function resolveFloorManagerStage(db) {
   return fallback.rows[0] || null;
 }
 
+async function resolveStageByName(db, stageName) {
+  const r = await db.query(
+    `SELECT stage_id, team_id, stage_name FROM stages WHERE stage_name = $1 ORDER BY stage_order ASC LIMIT 1`,
+    [stageName]
+  );
+  return r.rows[0] || null;
+}
+
 async function pickFloorManagerUser(db) {
   const r = await db.query(
     `SELECT user_id FROM users WHERE role = 'floor_manager' AND active = TRUE ORDER BY user_id ASC LIMIT 1`
@@ -282,20 +290,23 @@ async function createSalesOrderQcTicket(db, {
     return { ok: false, skipped: true, reason: 'open_ticket', ticket_id: open.rows[0].ticket_id };
   }
 
-  const stage = await resolveFloorManagerStage(db);
+  // Pre-dispatch QC goes straight to QC2 (the unit is already GRN-QC-passed) with
+  // High priority and a bold "Sales Order" tag — no full refurb pipeline.
+  const stage = (await resolveStageByName(db, 'QC2'))
+    || (await resolveStageByName(db, 'QC1'))
+    || (await resolveFloorManagerStage(db));
   if (!stage) {
     return { ok: false, skipped: true, reason: 'no_stage' };
   }
 
-  const floorManagerUserId = await pickFloorManagerUser(db);
   const initialCondition = `Pre-dispatch QC for SO ${salesOrderNumber || ''} / DC ${dcNumber || ''}`.trim();
 
   const ins = await db.query(
     `INSERT INTO tickets (
        serial_number, ttspl_id, machine_number, brand, model, processor, ram, storage,
        initial_condition, priority, ticket_type, current_stage_id, assigned_team_id, assigned_user_id,
-       initial_cost, vendor_serial_id, sales_order_number, highlighted
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'high','sales_order_qc',$10,$11,$12,0,$13,$14,FALSE)
+       initial_cost, vendor_serial_id, sales_order_number, highlighted, highlighted_reason
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'high','sales_order_qc',$10,$11,NULL,0,$12,$13,TRUE,'Sales Order')
      RETURNING ticket_id`,
     [
       serialNumber,
@@ -309,7 +320,6 @@ async function createSalesOrderQcTicket(db, {
       initialCondition,
       stage.stage_id,
       stage.team_id,
-      floorManagerUserId,
       serialId,
       salesOrderNumber || null,
     ]

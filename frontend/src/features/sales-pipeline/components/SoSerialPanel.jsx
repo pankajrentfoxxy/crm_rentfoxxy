@@ -62,15 +62,19 @@ function AttachPicker({ soNumber, line, onAttached }) {
           ) : options.length === 0 ? (
             <p className="text-xs text-gray-400">No QC-passed stock matching this config.</p>
           ) : (
-            <div className="space-y-1 max-h-48 overflow-y-auto">
+            <div className="space-y-1 max-h-56 overflow-y-auto">
+              <div className="grid grid-cols-[1fr_1fr_auto] gap-2 px-2 text-[10px] uppercase text-gray-400 font-semibold">
+                <span>TTSPL ID</span><span>Serial Number</span><span></span>
+              </div>
               {options.map((o) => (
-                <div key={o.serial_id} className="flex items-center justify-between gap-2 bg-white border rounded px-2 py-1">
-                  <span className="text-xs font-mono">
-                    {o.unique_product_serial || o.serial_number}
-                    <span className="text-gray-500 ml-2">{[o.processor, o.ram, o.storage].filter(Boolean).join(' / ')}</span>
-                  </span>
+                <div key={o.serial_id} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center bg-white border rounded px-2 py-1.5">
+                  <span className="text-xs font-mono font-semibold text-blue-700">{o.unique_product_serial || o.inventory_asset_code || '—'}</span>
+                  <span className="text-xs font-mono text-gray-700">{o.serial_number || '—'}</span>
                   <button type="button" disabled={busy} onClick={() => attach(o.serial_id)}
-                    className="text-xs px-2 py-0.5 bg-teal-600 text-white rounded disabled:opacity-50">Attach</button>
+                    className="text-xs px-2.5 py-0.5 bg-teal-600 text-white rounded disabled:opacity-50">Attach</button>
+                  <span className="col-span-3 text-[11px] text-gray-500 -mt-1">
+                    {[o.processor, o.generation, o.ram, o.storage].filter(Boolean).join(' · ')}
+                  </span>
                 </div>
               ))}
             </div>

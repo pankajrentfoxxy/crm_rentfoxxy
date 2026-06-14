@@ -6,10 +6,12 @@ const FIELDS = [
   ['legal_name', 'Legal Name'],
   ['gstin', 'GSTIN'],
   ['pan', 'PAN'],
+  ['email', 'Email'],
+  ['phone', 'Phone'],
   ['state_code', 'State Code'],
   ['hsn_code', 'HSN Code'],
   ['address', 'Registered Address'],
-  ['logo_url', 'Logo URL (uploads/...)'],
+  ['logo_url', 'Logo URL (assets/... or uploads/...)'],
 ];
 
 function CompanyCard({ company, onSaved }) {
