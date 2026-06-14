@@ -4,6 +4,7 @@ import ProtectedRoute from '../router/ProtectedRoute';
 import CustomerBillingApp from '../features/customer-billing/CustomerBillingApp';
 import VendorBillingApp from '../features/vendor-billing/VendorBillingApp';
 import FinanceOverviewApp from '../features/finance-overview/FinanceOverviewApp';
+import EInvoiceQueuePage from '../features/finance-overview/pages/EInvoiceQueuePage';
 
 const withLayout = (node) => <Layout>{node}</Layout>;
 
@@ -25,10 +26,12 @@ export const financeRoutes = [
     ),
   },
   {
+    // Render the page directly — mounting the whole FinanceOverviewApp (which has
+    // its own index redirect to "dashboard") here produced /finance/einvoice-queue/dashboard.
     path: '/finance/einvoice-queue',
     element: (
       <ProtectedRoute section="einvoice_ewb" action="view">
-        {withLayout(<FinanceOverviewApp />)}
+        {withLayout(<EInvoiceQueuePage />)}
       </ProtectedRoute>
     ),
   },
