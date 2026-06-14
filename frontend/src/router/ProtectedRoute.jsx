@@ -11,6 +11,7 @@ import { hasPermission as checkPermission } from '../utils/permissionHelper';
 export default function ProtectedRoute({
   children,
   section,
+  sections,
   action = 'view',
   allowedRoles,
   allowedPermissions,
@@ -29,7 +30,10 @@ export default function ProtectedRoute({
 
   let allowed = true;
 
-  if (section) {
+  if (Array.isArray(sections) && sections.length) {
+    // Allow if the user can view ANY of the given sections (module umbrella guard).
+    allowed = sections.some((s) => checkPermission(user, effectivePermissions, s, action));
+  } else if (section) {
     allowed = checkPermission(user, effectivePermissions, section, action);
   } else if (allowedRoles || allowedPermissions) {
     const perms = Array.isArray(user?.permissions) ? user.permissions : [];

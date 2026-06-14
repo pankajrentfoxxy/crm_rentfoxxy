@@ -10,5 +10,5 @@ export const publicRoutes = [
   { path: '/register/customer', element: <CustomerRegister /> },
   { path: '/register/vendor', element: <VendorRegister /> },
   { path: '/quotation/accept/:token', element: <QuotationAccept /> },
-  { path: '/', element: <Navigate to="/dashboard" replace /> },
+  { path: '/', element: <Navigate to="/reports" replace /> },
 ];

@@ -20,5 +20,7 @@ export const canAccessCustomerInventory = (user) => {
 
 export const postLoginPath = (user) => {
     if (isSupportTechnician(user)) return '/support/my-tickets';
-    return '/dashboard';
+    // Reports is now the primary landing; the /reports guard falls back to the
+    // floor dashboard for roles without analytics/reports access.
+    return '/reports';
 };

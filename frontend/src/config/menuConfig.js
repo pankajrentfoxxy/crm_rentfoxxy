@@ -32,29 +32,37 @@ export const vendorAccordionChildren = [
   { label: 'Monthly Bills', path: '/vendor-management/billing/pending' },
 ];
 
-/** Floor & Quality accordion (includes Parts) */
+/** Production accordion (formerly Floor & Quality).
+ *  All pages live under /floor-pipeline/* which is guarded by a single
+ *  'floor_pipeline' section, so every child uses that section to keep the
+ *  sidebar in lock-step with what the route actually allows. */
 export const floorPipelineAccordionChildren = [
   { label: 'Floor Dashboard', path: '/floor-pipeline/dashboard', section: 'floor_pipeline' },
   { label: 'All Tickets', path: '/floor-pipeline/tickets', section: 'floor_pipeline' },
   { label: 'QC Queue', path: '/floor-pipeline/tickets?stage=QC1,QC2', section: 'floor_pipeline' },
-  { label: 'Chip Level Repair', path: '/floor-pipeline/tickets?stage=Chip+Level+Repair', section: 'chip_level_repair' },
+  { label: 'Chip Level Repair', path: '/floor-pipeline/tickets?stage=Chip+Level+Repair', section: 'floor_pipeline' },
   { label: 'Body & Paint', path: '/floor-pipeline/tickets?stage=Body+%26+Paint', section: 'floor_pipeline' },
 ];
 
-/** Inventory accordion (simplified) */
+/** Inventory accordion. Stock/Ready/Parts live under /inventory-management/*
+ *  (guarded by 'inventory_management'); Customer Assets routes into
+ *  /lead-crm/customers (guarded by 'customers'). Sections mirror the routes. */
 export const inventoryAccordionChildren = [
   { label: 'Stock Management', path: '/inventory-management/universal-search', section: 'inventory_management' },
   { label: 'Ready to Rent/Sell', path: '/inventory-management/ready-to-rent-or-sell', countKey: 'passed', section: 'inventory_management' },
-  { label: 'Parts Inventory', path: '/inventory-management/parts', section: 'parts_inventory' },
-  { label: 'Customer Assets', path: '/lead-crm/customers', section: 'customer_assets' },
+  { label: 'Parts Inventory', path: '/inventory-management/parts', section: 'inventory_management' },
+  { label: 'Customer Assets', path: '/lead-crm/customers', section: 'customers' },
 ];
 
+/** Sales Pipeline. All pages live under /sales-pipeline/* (single
+ *  'sales_pipeline' guard) except Demo Agreements (its own 'demo_management'
+ *  route), so sections match the route guards exactly. */
 export const salesPipelineAccordionChildren = [
-  { label: 'Quotations', path: '/sales-pipeline/quotations', section: 'sales_quotations', countKey: 'quotations' },
-  { label: 'Sales Orders', path: '/sales-pipeline/sales-orders', section: 'sales_orders_doc', countKey: 'sales_orders' },
-  { label: 'Delivery Challans', path: '/sales-pipeline/delivery-challans', section: 'delivery_challans', countKey: 'delivery_challans' },
-  { label: 'Delivery Register', path: '/sales-pipeline/delivery-register', section: 'delivery_register_management' },
-  { label: 'Return DC', path: '/sales-pipeline/return-dc', section: 'return_dc', countKey: 'return_dc' },
+  { label: 'Quotations', path: '/sales-pipeline/quotations', section: 'sales_pipeline', countKey: 'quotations' },
+  { label: 'Sales Orders', path: '/sales-pipeline/sales-orders', section: 'sales_pipeline', countKey: 'sales_orders' },
+  { label: 'Delivery Challans', path: '/sales-pipeline/delivery-challans', section: 'sales_pipeline', countKey: 'delivery_challans' },
+  { label: 'Delivery Register', path: '/sales-pipeline/delivery-register', section: 'sales_pipeline' },
+  { label: 'Return DC', path: '/sales-pipeline/return-dc', section: 'sales_pipeline', countKey: 'return_dc' },
   { label: 'Demo Agreements', path: '/sales-pipeline/demo', section: 'demo_management' },
 ];
 
@@ -70,13 +78,17 @@ export const reportsMenuItems = [
   { icon: Wrench, label: 'Technician', path: '/reports/technician', section: 'reports_access' },
 ];
 
+// Sections mirror the actual route guards: /customer-billing/* -> customer_billing,
+// /vendor-billing/* -> vendor_billing_mgmt, /finance/dashboard -> billing_dashboard,
+// /finance/einvoice-queue -> einvoice_ewb. (Credit/Security/Debit pages share their
+// module's guard, so they use the module section — not a separate granular one.)
 export const financeMenuItems = [
   { icon: LayoutDashboard, label: 'Finance Dashboard', path: '/finance/dashboard', section: 'billing_dashboard' },
   { icon: FileText, label: 'Customer Invoices', path: '/customer-billing/invoices', section: 'customer_billing', countKey: 'draft_invoices' },
-  { icon: CreditCard, label: 'Credit Notes', path: '/customer-billing/credit-notes', section: 'credit_notes' },
-  { icon: Shield, label: 'Security Deposits', path: '/customer-billing/security-deposits', section: 'security_deposits' },
+  { icon: CreditCard, label: 'Credit Notes', path: '/customer-billing/credit-notes', section: 'customer_billing' },
+  { icon: Shield, label: 'Security Deposits', path: '/customer-billing/security-deposits', section: 'customer_billing' },
   { icon: Building2, label: 'Vendor Bills', path: '/vendor-billing/bills', section: 'vendor_billing_mgmt' },
-  { icon: AlertCircle, label: 'Debit Notes', path: '/vendor-billing/debit-notes', section: 'debit_notes' },
+  { icon: AlertCircle, label: 'Debit Notes', path: '/vendor-billing/debit-notes', section: 'vendor_billing_mgmt' },
   { icon: Zap, label: 'E-Invoice Queue', path: '/finance/einvoice-queue', section: 'einvoice_ewb', countKey: 'einvoice_queue' },
 ];
 
@@ -96,6 +108,7 @@ export const settingsAccordionChildren = [
   { label: 'User Overrides', path: '/settings/user-permissions', section: 'user_permissions' },
   { label: 'Roles', path: '/settings/roles', section: 'roles' },
   { label: 'Role Reference', path: '/settings/role-reference', section: 'roles' },
+  // (role-reference shares the 'roles' section so Settings never shows for non-admins)
   { label: 'Companies', path: '/settings/companies', section: 'company_settings' },
 ];
 
@@ -109,10 +122,16 @@ export const operationAccordionChildren = salesPipelineAccordionChildren;
  */
 export const MENU_GROUPS = [
   {
-    key: 'home',
-    label: 'Overview',
+    key: 'reports',
+    label: 'Reports & Analytics',
     items: [
-      { icon: BarChart3, label: 'Dashboard', path: '/dashboard', section: 'dashboard' },
+      {
+        type: 'reportsAccordion',
+        icon: BarChart2,
+        label: 'Reports & Analytics',
+        section: 'analytics_dashboard',
+        children: reportsMenuItems,
+      },
     ],
   },
   {
@@ -142,13 +161,13 @@ export const MENU_GROUPS = [
   },
   {
     key: 'floor_quality',
-    label: 'Floor & Quality',
+    label: 'Production',
     items: [
       {
         type: 'floorPipelineAccordion',
         section: 'floor_pipeline',
         icon: Wrench,
-        label: 'Floor & Quality',
+        label: 'Production',
       },
     ],
   },
@@ -158,7 +177,7 @@ export const MENU_GROUPS = [
     items: [
       {
         type: 'inventoryAccordion',
-        sections: ['inventory_management', 'customer_inventory', 'parts_inventory'],
+        sections: ['inventory_management', 'customers'],
         section: 'inventory_management',
         icon: Package,
         label: 'Inventory',
@@ -195,19 +214,6 @@ export const MENU_GROUPS = [
         path: '/support',
         section: 'support_tickets',
         countKey: 'open_tickets',
-      },
-    ],
-  },
-  {
-    key: 'reports',
-    label: 'Reports & Analytics',
-    items: [
-      {
-        type: 'reportsAccordion',
-        icon: BarChart2,
-        label: 'Reports & Analytics',
-        section: 'analytics_dashboard',
-        children: reportsMenuItems,
       },
     ],
   },

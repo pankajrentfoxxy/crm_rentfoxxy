@@ -36,7 +36,16 @@ export const salesRoutes = [
   { path: '/tickets/create', element: guard('tickets', 'create', withLayout(<CreateTicket />)) },
   { path: '/parts', element: guard('parts_inventory', 'view', withLayout(<PartsRedirect />)) },
   { path: '/sales', element: guard('sales_orders', 'view', withLayout(<Sales api={api} />)) },
-  { path: '/lead-crm/*', element: guard('leads', 'view', withLayout(<LeadCrmApp />)) },
+  {
+    // Umbrella guard: lets in anyone who can view leads OR customers OR follow-ups.
+    // Per-page access is enforced inside LeadCrmApp so each sub-page matches its section.
+    path: '/lead-crm/*',
+    element: (
+      <ProtectedRoute sections={['leads', 'customers', 'follow_ups']} action="view">
+        {withLayout(<LeadCrmApp />)}
+      </ProtectedRoute>
+    ),
+  },
   { path: '/sales-pipeline/*', element: guard('sales_pipeline', 'view', withLayout(<SalesPipelineApp />)) },
   { path: '/leads', element: guard('leads', 'view', withLayout(<LeadList api={api} />)) },
   { path: '/leads/:id', element: guard('leads', 'view', withLayout(<LeadDetail api={api} />)) },

@@ -82,6 +82,8 @@ import {
   isReportsChildVisible,
   isDeliveryRegisterChildVisible,
   isLeadCrmChildVisible,
+  isFloorPipelineChildVisible,
+  isInventoryChildVisible,
 } from '../config/menuConfig';
 
 
@@ -267,9 +269,53 @@ export default function Layout({ children }) {
 
   const menuItems = FLAT_MENU_ITEMS;
 
+  // Permission-filtered children for each accordion. The sidebar must only show
+  // what the user can actually open (sections mirror the real route guards), so
+  // every accordion is filtered and a group/header is hidden when it has none.
+  const reportsVisibleChildren = reportsMenuItems.filter((c) => isReportsChildVisible(c, canView, user?.role));
+  const leadCrmVisibleChildren = leadCrmAccordionChildren.filter((c) => isLeadCrmChildVisible(c, canView));
+  const salesVisibleChildren = salesPipelineAccordionChildren.filter((c) => isSalesPipelineChildVisible(c, canView));
+  const floorVisibleChildren = floorPipelineAccordionChildren.filter((c) => isFloorPipelineChildVisible(c, canView));
+  const inventoryVisibleChildren = inventoryAccordionChildren.filter((c) => isInventoryChildVisible(c, canView));
+  const financeVisibleChildren = financeMenuItems.filter((c) => isFinanceChildVisible(c, canView));
+  const settingsVisibleChildren = settingsAccordionChildren.filter((c) => isSettingsChildVisible(c, canView));
+  const showVendorAccordion = canView('vendor_management');
+  const showSupportNav2 = canView('support_tickets') || isSupportUser(user) || canView('customer_inventory');
+
+  // Whether each sidebar group has any content the user can reach.
+  const groupHasContent = {
+    reports: showReportsAccordion && reportsVisibleChildren.length > 0,
+    master_data: canView('customers') || canView('vendor_management'),
+    lead_crm: showLeadCrmAccordion && leadCrmVisibleChildren.length > 0,
+    sales_pipeline: showSalesPipelineAccordion && salesVisibleChildren.length > 0,
+    floor_quality: canView('floor_pipeline') && floorVisibleChildren.length > 0,
+    inventory: inventoryVisibleChildren.length > 0,
+    vendor: showVendorAccordion,
+    finance: showFinanceAccordion && financeVisibleChildren.length > 0,
+    support: showSupportNav2,
+    settings: settingsVisibleChildren.length > 0,
+  };
+
+  const ACCORDION_GROUP = {
+    reportsAccordion: 'reports',
+    leadCrmAccordion: 'lead_crm',
+    salesPipelineAccordion: 'sales_pipeline',
+    floorPipelineAccordion: 'floor_quality',
+    inventoryAccordion: 'inventory',
+    vendorAccordion: 'vendor',
+    financeAccordion: 'finance',
+    settingsAccordion: 'settings',
+  };
+
   function itemAllowed(item) {
-    if (item.type === 'section' && item.label === 'Support') {
-      return isSupportUser(user) || canView('support_tickets') || canView('customer_inventory');
+    if (item.type === 'section') {
+      return groupHasContent[item.groupKey] ?? isMenuItemVisible(item, canView);
+    }
+    if (ACCORDION_GROUP[item.type]) {
+      return !!groupHasContent[ACCORDION_GROUP[item.type]];
+    }
+    if (item.label === 'Support') {
+      return showSupportNav2;
     }
     return isMenuItemVisible(item, canView);
   }
@@ -573,7 +619,7 @@ export default function Layout({ children }) {
 
                     <Wrench className="w-5 h-5 text-gray-600 shrink-0" />
 
-                    <span className="flex-1">Floor Pipeline</span>
+                    <span className="flex-1">Production</span>
 
                     <ChevronDown
 
@@ -589,7 +635,7 @@ export default function Layout({ children }) {
 
                     <div className="mt-1 ml-2 pl-3 border-l border-blue-100 space-y-0.5">
 
-                      {floorPipelineAccordionChildren.map((child) => (
+                      {floorVisibleChildren.map((child) => (
 
                         <NavLink
 
@@ -766,7 +812,7 @@ export default function Layout({ children }) {
 
                     <div className="mt-1 ml-2 pl-3 border-l border-sky-100 space-y-0.5">
 
-                      {inventoryAccordionChildren.map((child) => {
+                      {inventoryVisibleChildren.map((child) => {
 
                         const badge =
                           child.countKey && inventoryCounts && inventoryCounts[child.countKey] != null
