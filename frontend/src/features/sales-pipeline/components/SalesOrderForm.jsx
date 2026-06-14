@@ -34,7 +34,7 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
   const [form, setForm] = useState({
     customer_id: '', quotation_number: prefillQuotation || '', quotation_type: 'rental',
     branch: 'rentfoxxy', supply_state: slugifyState('Haryana'),
-    security_amount: '', shiping_charges: '', remarks: '',
+    security_type: 'none', security_amount: '', shiping_charges: '', remarks: '',
     advance_amount: '', advance_due_date: '',
   });
 
@@ -78,7 +78,11 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
   };
 
   const totalValue = useMemo(() => sumLines(lines), [lines]);
-  const security = Number(form.security_amount) || 0;
+  // '1 month rental' security = sum of each line's monthly rate x qty.
+  const security = form.security_type === 'one_month_rental'
+    ? totalValue
+    : (Number(form.security_amount) || 0);
+  const isSaleType = form.quotation_type === 'sale' || form.quotation_type === 'sales';
   const advance = advanceRequired ? (Number(form.advance_amount) || 0) : 0;
   const collectBeforeDispatch = totalValue + security + advance;
 
@@ -92,6 +96,7 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
       await createSalesOrder({
         sales_order_number: meta?.sales_order_number,
         ...form,
+        security_amount: security,
         ...lineItemsToPayload(lines),
       });
       toast.success('Sales order created');
@@ -146,9 +151,27 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
             </div>
           </div>
           <AssetDetailsForm lines={lines} onChange={setLines} catalog={meta?.catalog} quotationType={form.quotation_type} />
-          <div className="grid grid-cols-2 gap-3">
-            <input type="number" placeholder="Security Deposit (₹)" className="border rounded-lg px-3 py-2 text-sm" value={form.security_amount} onChange={(e) => setForm((f) => ({ ...f, security_amount: e.target.value }))} />
-            <input type="number" placeholder="Shipping Charges (₹)" className="border rounded-lg px-3 py-2 text-sm" value={form.shiping_charges} onChange={(e) => setForm((f) => ({ ...f, shiping_charges: e.target.value }))} />
+          {!isSaleType && (
+            <div className="border rounded-lg p-3 space-y-2">
+              <p className="text-xs font-medium text-gray-600">Security Deposit</p>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="radio" name="sec" checked={form.security_type === 'none'}
+                  onChange={() => setForm((f) => ({ ...f, security_type: 'none' }))} />
+                No Security
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="radio" name="sec" checked={form.security_type === 'one_month_rental'}
+                  onChange={() => setForm((f) => ({ ...f, security_type: 'one_month_rental' }))} />
+                1 Month Rental as Security
+                {form.security_type === 'one_month_rental' && (
+                  <span className="ml-auto font-semibold text-blue-700">{formatCurrency(security)}</span>
+                )}
+              </label>
+              <p className="text-[11px] text-gray-400">Auto-calculated from each laptop&apos;s monthly rate × quantity.</p>
+            </div>
+          )}
+          <div>
+            <input type="number" placeholder="Shipping Charges (₹)" className="w-full border rounded-lg px-3 py-2 text-sm" value={form.shiping_charges} onChange={(e) => setForm((f) => ({ ...f, shiping_charges: e.target.value }))} />
           </div>
           <select className="w-full border rounded-lg px-3 py-2 text-sm" value={form.supply_state} onChange={(e) => setForm((f) => ({ ...f, supply_state: e.target.value }))}>
             {INDIAN_STATES.map((s) => <option key={s} value={slugifyState(s)}>{s}</option>)}

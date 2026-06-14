@@ -8,6 +8,7 @@ import { INDIAN_STATES, slugifyState } from '../../../constants/indianStates';
 import {
   createQuotation, getCustomerAddresses, getCustomerDetail, getQuotationMeta, updateQuotationStatus,
 } from '../salesPipelineApi';
+import { formatCurrency, sumLines } from '../salesPipelineUtils';
 
 const DEFAULT_TERMS = 'Payment terms as agreed. Goods remain property of Rentfoxxy until full payment.';
 
@@ -58,7 +59,7 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
   const [ccEmail, setCcEmail] = useState('');
   const [form, setForm] = useState({
     customer_id: '', supply_state: slugifyState('Haryana'), quotation_type: 'rental',
-    branch: 'rentfoxxy', security_amount: '', shiping_charges: '', GST_number: '',
+    branch: 'rentfoxxy', security_type: 'none', security_amount: '', shiping_charges: '', GST_number: '',
     customer_mobile: '', email: '', customer_name: '', remarks: '', terms: DEFAULT_TERMS,
     validity_date: '', source_lead_id: '',
   });
@@ -224,6 +225,10 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
     }));
   };
 
+  const totalValue = sumLines(lines);
+  const security = form.security_type === 'one_month_rental' ? totalValue : (Number(form.security_amount) || 0);
+  const isSaleType = form.quotation_type === 'sale' || form.quotation_type === 'sales';
+
   const submit = async (andSend) => {
     if (!selectedShippingAddress) {
       toast.error('Select a shipping address');
@@ -238,6 +243,7 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
       const res = await createQuotation({
         quotation_number: meta?.quotation_number,
         ...form,
+        security_amount: security,
         source_lead_id: form.source_lead_id || prefill.lead_id || null,
         ...lineItemsToPayload(lines),
         customer_shipping_address: selectedShippingAddress,
@@ -299,15 +305,28 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
 
           <AssetDetailsForm lines={lines} onChange={setLines} catalog={meta?.catalog} quotationType={form.quotation_type} />
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-medium text-gray-600">Security Amount (₹)</label>
-              <input type="number" className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" value={form.security_amount} onChange={(e) => setForm((f) => ({ ...f, security_amount: e.target.value }))} />
+          {!isSaleType && (
+            <div className="border rounded-lg p-3 space-y-2">
+              <p className="text-xs font-medium text-gray-600">Security Deposit</p>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="radio" name="qsec" checked={form.security_type === 'none'}
+                  onChange={() => setForm((f) => ({ ...f, security_type: 'none' }))} />
+                No Security
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="radio" name="qsec" checked={form.security_type === 'one_month_rental'}
+                  onChange={() => setForm((f) => ({ ...f, security_type: 'one_month_rental' }))} />
+                1 Month Rental as Security
+                {form.security_type === 'one_month_rental' && (
+                  <span className="ml-auto font-semibold text-blue-700">{formatCurrency(security)}</span>
+                )}
+              </label>
+              <p className="text-[11px] text-gray-400">Auto-calculated from each laptop&apos;s monthly rate × quantity.</p>
             </div>
-            <div>
-              <label className="text-xs font-medium text-gray-600">Shipping Charges (₹)</label>
-              <input type="number" className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" value={form.shiping_charges} onChange={(e) => setForm((f) => ({ ...f, shiping_charges: e.target.value }))} />
-            </div>
+          )}
+          <div>
+            <label className="text-xs font-medium text-gray-600">Shipping Charges (₹)</label>
+            <input type="number" className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" value={form.shiping_charges} onChange={(e) => setForm((f) => ({ ...f, shiping_charges: e.target.value }))} />
           </div>
           <textarea className="w-full border rounded-lg px-3 py-2 text-sm" rows={2} placeholder="Remarks" value={form.remarks} onChange={(e) => setForm((f) => ({ ...f, remarks: e.target.value }))} />
           <textarea className="w-full border rounded-lg px-3 py-2 text-sm" rows={3} placeholder="Terms & Conditions" value={form.terms} onChange={(e) => setForm((f) => ({ ...f, terms: e.target.value }))} />

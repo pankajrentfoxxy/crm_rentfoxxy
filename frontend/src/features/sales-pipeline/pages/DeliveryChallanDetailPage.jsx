@@ -8,7 +8,7 @@ import EInvoicePanel from '../components/EInvoicePanel';
 import QcStatusBadge from '../components/QcStatusBadge';
 import {
   createDcQcTickets, getDC, getDcQcStatus, getSalesOrderFull,
-  markDelivered, markRejected, sendDeliveryOtp, verifyDeliveryOtp, updateDC,
+  markDelivered, markRejected, sendDeliveryOtp, verifyDeliveryOtp, updateDC, dispatchDC,
 } from '../salesPipelineApi';
 import {
   DC_STATUS_STYLES, formatConfig, formatCurrency, formatDateTime,
@@ -255,16 +255,21 @@ export default function DeliveryChallanDetailPage() {
 
           {tab === 'dispatch' && (
             <div className="bg-white border rounded-xl p-4 space-y-4">
-              <h2 className="font-semibold">Dispatch Information</h2>
-              {head.status !== 'in_transit' && head.status !== 'delivered' && (
-                <>
-                  {!qc?.all_passed && qc?.total_count > 0 && (
-                    <p className="text-amber-700 text-sm">⚠ Complete pre-dispatch QC before dispatching</p>
-                  )}
-                  <PermissionGate section="dispatch_ops" action="edit">
-                    <button type="button" onClick={() => setDispatchOpen(true)} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">Dispatch Now</button>
-                  </PermissionGate>
-                </>
+              <h2 className="font-semibold">Dispatch &amp; Delivery</h2>
+              <div className="text-sm text-gray-600 space-y-1 bg-gray-50 border rounded-lg p-3">
+                <p>Mode: <strong className="capitalize">{head.dispatch_mode || head.ship_by || '—'}</strong></p>
+                {head.courier_name && <p>Courier: {head.courier_name} · AWB: {head.awb_number || '—'}</p>}
+                {(head.dispatch_mode === 'inhouse' || head.ship_by === 'by_hand') && (
+                  <p>Assigned to delivery technician — visible in their delivery bucket.</p>
+                )}
+              </div>
+              {head.status === 'pending' && (
+                <PermissionGate section="dispatch_ops" action="edit">
+                  <p className="text-amber-700 text-xs">This DC is not dispatched yet.</p>
+                  <button type="button"
+                    onClick={() => dispatchDC(dcNumber, { dispatch_mode: head.dispatch_mode || (head.ship_by === 'by_hand' ? 'inhouse' : head.ship_by === 'by_porter' ? 'porter' : 'courier'), courier_name: head.courier_name, awb_number: head.awb_number, delivery_person_id: head.delivery_person_id }).then(load).then(() => toast.success('Dispatched'))}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">Mark Dispatched</button>
+                </PermissionGate>
               )}
               {head.status === 'in_transit' && (
                 <div className="text-sm space-y-2">

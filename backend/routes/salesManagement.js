@@ -31,12 +31,14 @@ router.get('/inventory/available-serials', dcView, ctrl.getAvailableSerials);
 router.get('/quotations/meta/add', quoteView, ctrl.getAddQuotationMeta);
 router.get('/quotations', quoteView, ctrl.listQuotations);
 router.get('/quotations/:quotationNumber', quoteView, ctrl.getQuotation);
+router.post('/quotations/:quotationNumber/pdf', quoteView, ctrl.regenerateQuotationPdf);
 router.post('/quotations', quoteCreate, ctrl.storeQuotation);
 router.patch('/quotations/:quotationNumber/status', quoteEdit, ctrl.updateQuotationStatus);
 
 router.get('/sales-orders/meta/add', soView, ctrl.getAddSalesOrderMeta);
 router.get('/sales-orders', soView, ctrl.listSalesOrders);
 router.get('/sales-orders/:salesOrderNumber', soView, ctrl.getSalesOrder);
+router.post('/sales-orders/:salesOrderNumber/pdf', soView, ctrl.regenerateSalesOrderPdf);
 router.get('/sales-orders/:soNumber/payments', payView, ctrl.listPayments);
 router.post('/sales-orders/:soNumber/payments', payCreate, ctrl.recordPayment);
 router.get('/sales-orders/:soNumber/full', soView, ctrl.getSoWithPayments);
@@ -45,6 +47,7 @@ router.post('/sales-orders', soCreate, ctrl.storeSalesOrder);
 router.get('/delivery-challans/meta/add', dcView, ctrl.getAddDeliveryChallanMeta);
 router.get('/delivery-challans', dcView, ctrl.listDeliveryChallans);
 router.get('/delivery-challans/:dcNumber', dcView, ctrl.getDeliveryChallan);
+router.post('/delivery-challans/:dcNumber/pdf', dcView, ctrl.regenerateDcPdf);
 router.post('/delivery-challans', dcCreate, ctrl.storeDeliveryChallan);
 // Edit an existing DC in place — Super Admin only.
 router.patch('/delivery-challans/:dcNumber', checkRole('super_admin'), ctrl.updateDeliveryChallan);

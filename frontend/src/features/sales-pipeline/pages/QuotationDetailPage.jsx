@@ -2,8 +2,15 @@ import React, { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
-import { getQuotation, updateQuotationStatus } from '../salesPipelineApi';
+import { getQuotation, updateQuotationStatus, regenerateQuotationPdf } from '../salesPipelineApi';
+import { getBackendOrigin } from '../../../utils/api';
 import { formatConfig, formatCurrency, formatDate, lineTotal, QUOTE_STATUS_STYLES, TYPE_STYLES, typeLabel } from '../salesPipelineUtils';
+
+function pdfUrl(p) {
+  if (!p) return null;
+  if (p.startsWith('http')) return p;
+  return `${getBackendOrigin().replace(/\/$/, '')}/${p.replace(/^\//, '')}`;
+}
 
 export default function QuotationDetailPage() {
   const { quotationNumber } = useParams();
@@ -46,6 +53,13 @@ export default function QuotationDetailPage() {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={async () => {
+            try {
+              let url = pdfUrl(head.pdf_path);
+              if (!url) { const r = await regenerateQuotationPdf(quotationNumber); url = pdfUrl(r.data?.pdf_path); }
+              if (url) window.open(url, '_blank'); else toast.error('PDF not available');
+            } catch { toast.error('Could not open PDF'); }
+          }} className="px-4 py-2 border rounded-lg text-sm">Download PDF</button>
           <PermissionGate section="sales_quotations" action="edit">
             {head.status === 'approved' && (
               <button type="button" onClick={() => navigate('/sales-pipeline/sales-orders', { state: { fromQuote: quotationNumber } })} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">Create SO</button>

@@ -15,6 +15,14 @@ function AttachPicker({ soNumber, line, onAttached }) {
   const [options, setOptions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [query, setQuery] = useState('');
+
+  const filtered = options.filter((o) => {
+    if (!query.trim()) return true;
+    const q = query.trim().toLowerCase();
+    return [o.unique_product_serial, o.inventory_asset_code, o.serial_number, o.processor, o.ram, o.storage]
+      .filter(Boolean).some((v) => String(v).toLowerCase().includes(q));
+  });
 
   const loadOptions = async () => {
     setOpen(true);
@@ -57,16 +65,25 @@ function AttachPicker({ soNumber, line, onAttached }) {
         </button>
       ) : (
         <div className="border rounded-lg p-2 bg-gray-50">
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search TTSPL / Serial / config…"
+            className="w-full mb-2 border rounded px-2 py-1 text-xs"
+          />
           {loading ? (
             <p className="text-xs text-gray-400">Loading available units…</p>
           ) : options.length === 0 ? (
             <p className="text-xs text-gray-400">No QC-passed stock matching this config.</p>
+          ) : filtered.length === 0 ? (
+            <p className="text-xs text-gray-400">No units match “{query}”.</p>
           ) : (
             <div className="space-y-1 max-h-56 overflow-y-auto">
               <div className="grid grid-cols-[1fr_1fr_auto] gap-2 px-2 text-[10px] uppercase text-gray-400 font-semibold">
                 <span>TTSPL ID</span><span>Serial Number</span><span></span>
               </div>
-              {options.map((o) => (
+              {filtered.map((o) => (
                 <div key={o.serial_id} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center bg-white border rounded px-2 py-1.5">
                   <span className="text-xs font-mono font-semibold text-blue-700">{o.unique_product_serial || o.inventory_asset_code || '—'}</span>
                   <span className="text-xs font-mono text-gray-700">{o.serial_number || '—'}</span>

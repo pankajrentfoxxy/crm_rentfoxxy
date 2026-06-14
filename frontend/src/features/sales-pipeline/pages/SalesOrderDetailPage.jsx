@@ -5,8 +5,15 @@ import PermissionGate from '../../../components/PermissionGate';
 import PaymentModal from '../components/PaymentModal';
 import DCForm from '../components/DCForm';
 import SoSerialPanel from '../components/SoSerialPanel';
-import { getQuotation, getSalesOrderFull, listPayments } from '../salesPipelineApi';
+import { getQuotation, getSalesOrderFull, listPayments, regenerateSalesOrderPdf } from '../salesPipelineApi';
+import { getBackendOrigin } from '../../../utils/api';
 import { formatConfig, formatCurrency, formatDate, lineTotal, TYPE_STYLES, typeLabel } from '../salesPipelineUtils';
+
+function pdfUrl(p) {
+  if (!p) return null;
+  if (p.startsWith('http')) return p;
+  return `${getBackendOrigin().replace(/\/$/, '')}/${p.replace(/^\//, '')}`;
+}
 
 const TABS = ['overview', 'laptops', 'payments', 'dcs', 'quote'];
 
@@ -51,6 +58,17 @@ export default function SalesOrderDetailPage() {
           <span className={`inline-block mt-1 px-2 py-0.5 rounded-full text-xs ${TYPE_STYLES[head.quotation_type]}`}>{typeLabel(head.quotation_type)}</span>
         </div>
         <div className="flex gap-2">
+          <button type="button" onClick={async () => {
+            try {
+              let url = pdfUrl(head.pdf_path);
+              if (!url) {
+                const r = await regenerateSalesOrderPdf(soNumber);
+                url = pdfUrl(r.data?.pdf_path);
+              }
+              if (url) window.open(url, '_blank');
+              else toast.error('PDF not available');
+            } catch { toast.error('Could not open PDF'); }
+          }} className="px-4 py-2 border rounded-lg text-sm">Download PDF</button>
           <PermissionGate section="delivery_challans" action="create">
             <button type="button" onClick={() => setDcOpen(true)} className="px-4 py-2 border rounded-lg text-sm">Create DC</button>
           </PermissionGate>

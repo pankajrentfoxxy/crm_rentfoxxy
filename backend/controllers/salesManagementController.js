@@ -389,6 +389,21 @@ exports.storeQuotation = async (req, res) => {
       `UPDATE sales_quotations SET entity_code = $1 WHERE quotation_number = $2`,
       [quoteEntity, quotationNumber]
     );
+
+    // Security: 'one_month_rental' = sum(rate x qty) of all lines; 'none' = 0.
+    const qSecurityType = String(body.security_type || 'none').toLowerCase();
+    if (qSecurityType === 'one_month_rental') {
+      const oneMonth = lineItems.reduce((s, it) => s + (Number(it.rate || 0) * Number(it.quantity || 1)), 0);
+      await client.query(
+        `UPDATE sales_quotations SET security_amount = $1, security_type = 'one_month_rental' WHERE quotation_number = $2`,
+        [oneMonth, quotationNumber]
+      );
+    } else {
+      await client.query(
+        `UPDATE sales_quotations SET security_type = 'none' WHERE quotation_number = $1`,
+        [quotationNumber]
+      );
+    }
     await client.query('COMMIT');
 
     const savedLines = await getQuotationLines(quotationNumber);
@@ -602,6 +617,22 @@ exports.storeSalesOrder = async (req, res) => {
       `UPDATE sales_order_lines SET entity_code = $1 WHERE sales_order_number = $2`,
       [entityForQuotationType(body.quotation_type || 'rental'), salesOrderNumber]
     );
+
+    // Security: 'one_month_rental' auto-computes from the sum of each line's
+    // monthly rate x qty (server-authoritative). 'none' = 0.
+    const securityType = String(body.security_type || 'none').toLowerCase();
+    if (securityType === 'one_month_rental') {
+      const oneMonth = lineItems.reduce((s, it) => s + (Number(it.rate || 0) * Number(it.quantity || 1)), 0);
+      await client.query(
+        `UPDATE sales_order_lines SET security_amount = $1, security_type = 'one_month_rental' WHERE sales_order_number = $2`,
+        [oneMonth, salesOrderNumber]
+      );
+    } else {
+      await client.query(
+        `UPDATE sales_order_lines SET security_type = 'none' WHERE sales_order_number = $1`,
+        [salesOrderNumber]
+      );
+    }
     await client.query('COMMIT');
 
     const savedLines = await getSalesOrderLines(salesOrderNumber);
@@ -847,6 +878,14 @@ exports.storeDeliveryChallan = async (req, res) => {
     const quotationType = typeRes.rows[0]?.quotation_type || body.quotation_type || 'rental';
     const entityCode = entityForQuotationType(quotationType);
 
+    // Creating a DC with delivery info = the product is dispatched. Map the
+    // ship-by selection to the canonical dispatch mode.
+    const shipBy = body.ship_by || (body.dispatch_mode === 'inhouse' ? 'by_hand' : body.dispatch_mode);
+    const dispatchMode = shipBy === 'by_hand' ? 'inhouse'
+      : shipBy === 'by_porter' ? 'porter'
+        : shipBy === 'by_courier' ? 'courier'
+          : (body.dispatch_mode || 'courier');
+
     const dcNumber = body.challan_number || body.dc_number
       || (await nextDocumentNumber(entityDocType('delivery_challan', entityCode)));
     const shipping = parseJsonField(body.customer_shipping_address);
@@ -927,7 +966,7 @@ exports.storeDeliveryChallan = async (req, res) => {
               OR serial_id = ANY($2::int[])`,
           [serialNumbers, serialIds.length ? serialIds : [-1]]
         );
-        // Reserve each attached unit through the state machine (in_stock -> reserved).
+        // Creating the DC dispatches the unit: in_stock/reserved -> in_transit.
         for (let k = 0; k < serialList.length; k += 1) {
           const parts = String(serialList[k]).split('|');
           const sId = (parts[0] && /^\d+$/.test(parts[0])) ? Number(parts[0]) : null;
@@ -936,20 +975,21 @@ exports.storeDeliveryChallan = async (req, res) => {
           });
           if (!serialId) continue;
           try {
-            await inventorySM.reserveForDc(client, serialId, {
+            await inventorySM.markDispatched(client, serialId, {
               dcNumber,
               customerId: body.customer_id || null,
               entityCode,
+              dispatchMode,
               actorUserId: req.user?.user_id,
               actorName: req.user?.name,
             });
           } catch (rErr) {
-            // Non-canonical current state (e.g. already reserved/out): keep the
-            // legacy out_stock write below as a fallback so the DC still forms.
+            // Non-canonical current state: fallback so the DC still forms.
             await client.query(
-              `UPDATE vendor_serial_numbers SET inventory_status = 'reserved', updated_at = NOW()
+              `UPDATE vendor_serial_numbers SET inventory_status = 'in_transit', current_dc_number = $2,
+                      dispatch_mode = $3, dispatched_at = NOW(), updated_at = NOW()
                WHERE serial_id = $1`,
-              [serialId]
+              [serialId, dcNumber, dispatchMode]
             );
           }
         }
@@ -987,6 +1027,16 @@ exports.storeDeliveryChallan = async (req, res) => {
         [dcNumber]
       );
     }
+
+    // DC created with delivery info = dispatched. Mark the lines in_transit so
+    // there is no separate "dispatch" re-entry step. Courier/Porter then get
+    // "Mark Delivered"; technician DCs surface in the delivery-register bucket.
+    await client.query(
+      `UPDATE delivery_challan_lines
+         SET status = 'in_transit', dispatch_mode = $2, updated_at = NOW()
+       WHERE dc_number = $1 AND status = 'pending'`,
+      [dcNumber, dispatchMode]
+    );
 
     await client.query('COMMIT');
 
@@ -1331,6 +1381,40 @@ exports.getSoWithPayments = async (req, res) => {
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
+};
+
+// (Re)generate the branded PDF for a quotation / SO / DC and return its path.
+exports.regenerateQuotationPdf = async (req, res) => {
+  try {
+    const n = req.params.quotationNumber;
+    const lines = await getQuotationLines(n);
+    if (!lines.length) return res.status(404).json({ success: false, message: 'Quotation not found' });
+    const pdf = await generateDocumentPdf({ docType: 'quotation', docNumber: n, header: lines[0], lines });
+    await pool.query(`UPDATE sales_quotations SET pdf_path = $1 WHERE quotation_number = $2`, [pdf, n]);
+    res.json({ success: true, pdf_path: pdf });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+};
+
+exports.regenerateSalesOrderPdf = async (req, res) => {
+  try {
+    const n = req.params.salesOrderNumber;
+    const lines = await getSalesOrderLines(n);
+    if (!lines.length) return res.status(404).json({ success: false, message: 'Sales order not found' });
+    const pdf = await generateDocumentPdf({ docType: 'sales_order', docNumber: n, header: lines[0], lines });
+    await pool.query(`UPDATE sales_order_lines SET pdf_path = $1 WHERE sales_order_number = $2`, [pdf, n]);
+    res.json({ success: true, pdf_path: pdf });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+};
+
+exports.regenerateDcPdf = async (req, res) => {
+  try {
+    const n = req.params.dcNumber;
+    const lines = await getDeliveryChallanLines(n);
+    if (!lines.length) return res.status(404).json({ success: false, message: 'DC not found' });
+    const pdf = await generateDocumentPdf({ docType: 'delivery_challan', docNumber: n, header: lines[0], lines });
+    await pool.query(`UPDATE delivery_challan_lines SET pdf_path = $1 WHERE dc_number = $2`, [pdf, n]);
+    res.json({ success: true, pdf_path: pdf });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
 
 exports.createPreDispatchQcTicket = async (req, res) => {
