@@ -288,6 +288,146 @@ async function changeSparePartStatus(req, res) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// Customer Assets — laptops currently deployed WITH customers.
+// Derived live from vendor_serial_numbers (single source of truth):
+// any unit that has left the warehouse to a customer.
+// ─────────────────────────────────────────────────────────────
+const DEPLOYED_STATUSES = ['in_transit', 'rented', 'on_demo', 'sold'];
+
+const customerAssetsValidators = [
+  query('page').optional().isInt({ min: 1 }).toInt(),
+  query('limit').optional().isInt({ min: 1, max: 500 }).toInt(),
+  query('search').optional().isString().trim(),
+  query('status').optional().isString().trim()
+];
+
+async function customerAssets(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  const page = req.query.page || 1;
+  const limit = req.query.limit || 50;
+  const offset = (page - 1) * limit;
+  const search = (req.query.search || '').trim();
+  const status = (req.query.status || '').trim();
+
+  try {
+    const params = [];
+    let statusSql = '';
+    if (status && DEPLOYED_STATUSES.includes(status)) {
+      params.push(status);
+      statusSql = ` AND s.inventory_status = $${params.length}`;
+    } else {
+      params.push(DEPLOYED_STATUSES);
+      statusSql = ` AND s.inventory_status = ANY($${params.length})`;
+    }
+
+    let searchSql = '';
+    if (search) {
+      params.push(`%${search}%`);
+      const i = params.length;
+      searchSql = ` AND (
+        s.serial_number ILIKE $${i}
+        OR COALESCE(s.inventory_asset_code, '') ILIKE $${i}
+        OR COALESCE(c.name, '') ILIKE $${i}
+        OR COALESCE(c.company_name, '') ILIKE $${i}
+        OR COALESCE(s.extra->>'model', s.extra->>'model_name', '') ILIKE $${i}
+        OR COALESCE(s.current_dc_number, '') ILIKE $${i}
+      )`;
+    }
+
+    const fromSql = `
+      FROM vendor_serial_numbers s
+      LEFT JOIN customers c ON c.customer_id = s.current_customer_id
+      LEFT JOIN vendor_purchase_orders p ON p.po_id = s.po_id AND p.deleted_at IS NULL
+      WHERE s.deleted_at IS NULL
+      ${statusSql}
+      ${searchSql}
+    `;
+
+    const countR = await pool.query(`SELECT COUNT(*)::int AS total ${fromSql}`, params);
+    const total = countR.rows[0]?.total || 0;
+
+    // status breakdown (ignores the status filter so the tabs always show totals)
+    const breakdownParams = [DEPLOYED_STATUSES];
+    let breakdownSearch = '';
+    if (search) {
+      breakdownParams.push(`%${search}%`);
+      const i = breakdownParams.length;
+      breakdownSearch = ` AND (
+        s.serial_number ILIKE $${i}
+        OR COALESCE(s.inventory_asset_code, '') ILIKE $${i}
+        OR COALESCE(c.name, '') ILIKE $${i}
+        OR COALESCE(c.company_name, '') ILIKE $${i}
+        OR COALESCE(s.extra->>'model', s.extra->>'model_name', '') ILIKE $${i}
+        OR COALESCE(s.current_dc_number, '') ILIKE $${i}
+      )`;
+    }
+    const breakdownR = await pool.query(
+      `SELECT s.inventory_status, COUNT(*)::int AS c
+       FROM vendor_serial_numbers s
+       LEFT JOIN customers c ON c.customer_id = s.current_customer_id
+       WHERE s.deleted_at IS NULL AND s.inventory_status = ANY($1) ${breakdownSearch}
+       GROUP BY s.inventory_status`,
+      breakdownParams
+    );
+    const counts = { in_transit: 0, rented: 0, on_demo: 0, sold: 0, all: 0 };
+    breakdownR.rows.forEach((r) => { counts[r.inventory_status] = r.c; counts.all += r.c; });
+
+    const listParams = [...params, limit, offset];
+    const rowsR = await pool.query(
+      `SELECT s.serial_id, s.serial_number, s.inventory_asset_code, s.inventory_status,
+              s.current_dc_number, s.current_entity, s.dispatch_mode, s.dispatched_at,
+              s.delivered_at, s.rent_start_date, s.rent_monthly_rate, s.extra,
+              c.customer_id, c.name AS customer_name, c.company_name,
+              p.purchase_order_type
+       ${fromSql}
+       ORDER BY s.status_changed_at DESC NULLS LAST, s.updated_at DESC
+       LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+      listParams
+    );
+
+    const data = rowsR.rows.map((r) => {
+      const ex = parseExtra(r.extra) || {};
+      return {
+        serial_id: r.serial_id,
+        ttspl_id: r.inventory_asset_code || ex.ttspl_id || null,
+        serial_number: r.serial_number,
+        brand: ex.brand || null,
+        model: ex.model || ex.model_name || null,
+        processor: ex.processor || null,
+        generation: ex.generation || null,
+        ram: ex.ram || null,
+        storage: ex.storage || null,
+        inventory_status: r.inventory_status,
+        customer_id: r.customer_id,
+        customer_name: r.customer_name,
+        company_name: r.company_name,
+        dc_number: r.current_dc_number,
+        entity_code: r.current_entity,
+        dispatch_mode: r.dispatch_mode,
+        dispatched_at: r.dispatched_at,
+        delivered_at: r.delivered_at,
+        rent_start_date: r.rent_start_date,
+        rent_monthly_rate: r.rent_monthly_rate,
+        purchase_order_type: r.purchase_order_type
+      };
+    });
+
+    res.json({
+      success: true,
+      title: 'Customer Assets — Deployed Fleet',
+      counts,
+      data,
+      pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) }
+    });
+  } catch (e) {
+    console.error('customerAssets', e);
+    res.status(500).json({ success: false, message: e.message || 'Failed to load customer assets' });
+  }
+}
+
 const tagInventoryValidators = [
   param('id').isInt().toInt(),
   body('tag').isIn(['rental', 'sales'])
@@ -347,5 +487,7 @@ module.exports = {
   changeSparePartStatusValidators,
   changeSparePartStatus,
   tagInventoryValidators,
-  tagInventoryItem
+  tagInventoryItem,
+  customerAssetsValidators,
+  customerAssets
 };

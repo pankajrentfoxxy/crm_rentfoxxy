@@ -44,14 +44,14 @@ export const floorPipelineAccordionChildren = [
   { label: 'Body & Paint', path: '/floor-pipeline/tickets?stage=Body+%26+Paint', section: 'floor_pipeline' },
 ];
 
-/** Inventory accordion. Stock/Ready/Parts live under /inventory-management/*
- *  (guarded by 'inventory_management'); Customer Assets routes into
- *  /lead-crm/customers (guarded by 'customers'). Sections mirror the routes. */
+/** Inventory accordion. All pages live under /inventory-management/* (guarded by
+ *  'inventory_management'). 'Customer Assets' is the deployed-fleet view (laptops
+ *  currently out with customers), distinct from Master Data > Customers. */
 export const inventoryAccordionChildren = [
   { label: 'Stock Management', path: '/inventory-management/universal-search', section: 'inventory_management' },
   { label: 'Ready to Rent/Sell', path: '/inventory-management/ready-to-rent-or-sell', countKey: 'passed', section: 'inventory_management' },
   { label: 'Parts Inventory', path: '/inventory-management/parts', section: 'inventory_management' },
-  { label: 'Customer Assets', path: '/lead-crm/customers', section: 'customers' },
+  { label: 'Customer Assets', path: '/inventory-management/customer-assets', section: 'inventory_management' },
 ];
 
 /** Sales Pipeline. All pages live under /sales-pipeline/* (single
@@ -177,7 +177,7 @@ export const MENU_GROUPS = [
     items: [
       {
         type: 'inventoryAccordion',
-        sections: ['inventory_management', 'customers'],
+        sections: ['inventory_management'],
         section: 'inventory_management',
         icon: Package,
         label: 'Inventory',

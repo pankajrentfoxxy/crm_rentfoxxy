@@ -34,6 +34,7 @@ router.get('/', authorize, (req, res) =>
 );
 
 router.get('/lists/counts', authorize, inventoryList.getListCounts);
+router.get('/customer-assets', authorize, inventoryList.customerAssetsValidators, inventoryList.customerAssets);
 router.post(
   '/spare-parts/change-status',
   authorize,
