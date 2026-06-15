@@ -23,17 +23,13 @@ async function startWorkLog(db, { ticketId, userId, stageId }) {
  * @param {import('pg').Pool|import('pg').PoolClient} db
  * @param {{ ticket_id: number, status?: string, assigned_user_id: number|null, current_stage_id: number|null }} ticket
  */
+// Closes any open work segment for the ticket. We intentionally do NOT auto-open
+// a new segment here: a newly-assigned worker (or QC inspector after a handoff)
+// must explicitly verify the machine and start their own timer (scan-to-start).
+// Same-technician stage continuity is handled by the caller (moveToStage).
 async function syncWorkLogForTicketState(db, ticket) {
   if (!ticket?.ticket_id) return;
   await closeOpenWorkLogs(db, ticket.ticket_id);
-  if (ticket.status === 'completed') return;
-  if (ticket.assigned_user_id) {
-    await startWorkLog(db, {
-      ticketId: ticket.ticket_id,
-      userId: ticket.assigned_user_id,
-      stageId: ticket.current_stage_id
-    });
-  }
 }
 
 async function closeOpenWorkLogsForTickets(db, ticketIds) {

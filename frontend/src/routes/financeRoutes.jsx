@@ -10,9 +10,11 @@ const withLayout = (node) => <Layout>{node}</Layout>;
 
 export const financeRoutes = [
   {
+    // Umbrella: admit anyone who can open ANY customer-billing page; each page
+    // enforces its own section inside CustomerBillingApp (matches the backend).
     path: '/customer-billing/*',
     element: (
-      <ProtectedRoute section="customer_billing" action="view">
+      <ProtectedRoute sections={['customer_billing', 'credit_notes', 'security_deposits']} action="view">
         {withLayout(<CustomerBillingApp />)}
       </ProtectedRoute>
     ),
@@ -20,7 +22,7 @@ export const financeRoutes = [
   {
     path: '/vendor-billing/*',
     element: (
-      <ProtectedRoute section="vendor_billing_mgmt" action="view">
+      <ProtectedRoute sections={['vendor_billing_mgmt', 'debit_notes']} action="view">
         {withLayout(<VendorBillingApp />)}
       </ProtectedRoute>
     ),

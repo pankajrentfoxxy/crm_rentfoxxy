@@ -46,7 +46,19 @@ export const salesRoutes = [
       </ProtectedRoute>
     ),
   },
-  { path: '/sales-pipeline/*', element: guard('sales_pipeline', 'view', withLayout(<SalesPipelineApp />)) },
+  {
+    // Umbrella: admit anyone who can open ANY sales-pipeline document; each page
+    // enforces its own granular section inside SalesPipelineApp (matches backend).
+    path: '/sales-pipeline/*',
+    element: (
+      <ProtectedRoute
+        sections={['sales_quotations', 'sales_orders_doc', 'delivery_challans', 'return_dc', 'delivery_register_management']}
+        action="view"
+      >
+        {withLayout(<SalesPipelineApp />)}
+      </ProtectedRoute>
+    ),
+  },
   { path: '/leads', element: guard('leads', 'view', withLayout(<LeadList api={api} />)) },
   { path: '/leads/:id', element: guard('leads', 'view', withLayout(<LeadDetail api={api} />)) },
   { path: '/follow-ups', element: guard('follow_ups', 'view', withLayout(<FollowUps api={api} />)) },

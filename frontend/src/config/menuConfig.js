@@ -23,13 +23,11 @@ import {
   Headphones,
 } from 'lucide-react';
 
-/** Vendor Management accordion */
+/** Vendor Management accordion (procurement only — billing lives under Finance) */
 export const vendorAccordionChildren = [
   { label: 'Purchase Orders', path: '/vendor-management/purchase-orders' },
   { label: 'Spare Parts PO', path: '/vendor-management/spare-parts-po' },
   { label: 'GRN / Received', path: '/vendor-management/purchase-orders' },
-  { label: 'Vendor Billing', path: '/vendor-management/billing/vendor-overview' },
-  { label: 'Monthly Bills', path: '/vendor-management/billing/pending' },
 ];
 
 /** Production accordion (formerly Floor & Quality).
@@ -54,15 +52,16 @@ export const inventoryAccordionChildren = [
   { label: 'Customer Assets', path: '/inventory-management/customer-assets', section: 'inventory_management' },
 ];
 
-/** Sales Pipeline. All pages live under /sales-pipeline/* (single
- *  'sales_pipeline' guard) except Demo Agreements (its own 'demo_management'
- *  route), so sections match the route guards exactly. */
+/** Sales Pipeline. Each child uses the GRANULAR section its backend API enforces
+ *  (sales_quotations / sales_orders_doc / delivery_challans / ...), so a user only
+ *  sees the documents they can actually open — e.g. warehouse has delivery_challans
+ *  but not sales_quotations, so it sees only Delivery Challans. */
 export const salesPipelineAccordionChildren = [
-  { label: 'Quotations', path: '/sales-pipeline/quotations', section: 'sales_pipeline', countKey: 'quotations' },
-  { label: 'Sales Orders', path: '/sales-pipeline/sales-orders', section: 'sales_pipeline', countKey: 'sales_orders' },
-  { label: 'Delivery Challans', path: '/sales-pipeline/delivery-challans', section: 'sales_pipeline', countKey: 'delivery_challans' },
-  { label: 'Delivery Register', path: '/sales-pipeline/delivery-register', section: 'sales_pipeline' },
-  { label: 'Return DC', path: '/sales-pipeline/return-dc', section: 'sales_pipeline', countKey: 'return_dc' },
+  { label: 'Quotations', path: '/sales-pipeline/quotations', section: 'sales_quotations', countKey: 'quotations' },
+  { label: 'Sales Orders', path: '/sales-pipeline/sales-orders', section: 'sales_orders_doc', countKey: 'sales_orders' },
+  { label: 'Delivery Challans', path: '/sales-pipeline/delivery-challans', section: 'delivery_challans', countKey: 'delivery_challans' },
+  { label: 'Delivery Register', path: '/sales-pipeline/delivery-register', section: 'delivery_register_management' },
+  { label: 'Return DC', path: '/sales-pipeline/return-dc', section: 'return_dc', countKey: 'return_dc' },
   { label: 'Demo Agreements', path: '/sales-pipeline/demo', section: 'demo_management' },
 ];
 
@@ -78,17 +77,15 @@ export const reportsMenuItems = [
   { icon: Wrench, label: 'Technician', path: '/reports/technician', section: 'reports_access' },
 ];
 
-// Sections mirror the actual route guards: /customer-billing/* -> customer_billing,
-// /vendor-billing/* -> vendor_billing_mgmt, /finance/dashboard -> billing_dashboard,
-// /finance/einvoice-queue -> einvoice_ewb. (Credit/Security/Debit pages share their
-// module's guard, so they use the module section — not a separate granular one.)
+// Each section matches that page's REAL backend + route guard exactly, so a user
+// sees a finance item only if they can actually open it (no "permission denied").
 export const financeMenuItems = [
   { icon: LayoutDashboard, label: 'Finance Dashboard', path: '/finance/dashboard', section: 'billing_dashboard' },
   { icon: FileText, label: 'Customer Invoices', path: '/customer-billing/invoices', section: 'customer_billing', countKey: 'draft_invoices' },
-  { icon: CreditCard, label: 'Credit Notes', path: '/customer-billing/credit-notes', section: 'customer_billing' },
-  { icon: Shield, label: 'Security Deposits', path: '/customer-billing/security-deposits', section: 'customer_billing' },
+  { icon: CreditCard, label: 'Credit Notes', path: '/customer-billing/credit-notes', section: 'credit_notes' },
+  { icon: Shield, label: 'Security Deposits', path: '/customer-billing/security-deposits', section: 'security_deposits' },
   { icon: Building2, label: 'Vendor Bills', path: '/vendor-billing/bills', section: 'vendor_billing_mgmt' },
-  { icon: AlertCircle, label: 'Debit Notes', path: '/vendor-billing/debit-notes', section: 'vendor_billing_mgmt' },
+  { icon: AlertCircle, label: 'Debit Notes', path: '/vendor-billing/debit-notes', section: 'debit_notes' },
   { icon: Zap, label: 'E-Invoice Queue', path: '/finance/einvoice-queue', section: 'einvoice_ewb', countKey: 'einvoice_queue' },
 ];
 

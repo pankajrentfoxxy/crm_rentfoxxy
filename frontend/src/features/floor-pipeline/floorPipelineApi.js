@@ -95,3 +95,21 @@ export function addPartWithConfig(id, body) {
 export function logTicketNote(id, body) {
   return api.post(`${base}/${id}/log-note`, body);
 }
+
+// Work timer (scan-to-start gate)
+export function startWork(id, verify) {
+  return api.post(`${base}/${id}/work/start`, { verify });
+}
+
+export function getActiveWorkLog(id) {
+  return api.get(`${base}/${id}/work/active`);
+}
+
+// Stage task checklist (Assembly & Software, Final Testing, ...)
+export function getStageTask(id, stageId) {
+  return api.get(`${base}/${id}/stage-task`, { params: { stage_id: stageId } });
+}
+
+export function saveStageTask(id, body) {
+  return api.post(`${base}/${id}/stage-task`, body);
+}

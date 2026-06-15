@@ -20,7 +20,7 @@ export const canAccessCustomerInventory = (user) => {
 
 export const postLoginPath = (user) => {
     if (isSupportTechnician(user)) return '/support/my-tickets';
-    // Reports is now the primary landing; the /reports guard falls back to the
-    // floor dashboard for roles without analytics/reports access.
-    return '/reports';
+    // Land on "/" — HomeRedirect routes the user to their first accessible module
+    // (permission-aware), so no role ever lands on a blank or forbidden page.
+    return '/';
 };

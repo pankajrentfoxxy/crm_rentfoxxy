@@ -2,19 +2,18 @@
  * Inventory Management REST API — Laravel admin/inventory routes parity.
  */
 const express = require('express');
-const { authMiddleware, checkRoleOrPermission } = require('../middleware/auth');
+const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
 const inventoryList = require('../controllers/inventoryManagement/inventoryList.controller');
 const serialStatus = require('../controllers/inventoryManagement/serialStatus.controller');
 const universalSearch = require('../controllers/inventoryManagement/universalSearch.controller');
 
 const router = express.Router();
 
+// RBAC driven by the role_permissions matrix (single source of truth) — view
+// access to the Inventory Management module.
 const authorize = [
   authMiddleware,
-  checkRoleOrPermission(
-    ['admin', 'manager', 'floor_manager'],
-    ['inventory_read', 'inventory_write', 'inventory_access', 'inventory_management_access']
-  )
+  checkSectionPermission('inventory_management', 'view')
 ];
 
 router.get('/', authorize, (req, res) =>

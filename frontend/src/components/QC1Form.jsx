@@ -760,8 +760,9 @@ function ChecklistSection({ title, icon, items, checklist, setChecklist }) {
 
     const failures = items.filter(item => {
         const val = checklist[item.key];
-        if (!val) return false;
-        return negativeTokens.some(token => val.includes(token));
+        console.log('Checklist value for', val);
+        if (!Array.isArray(val)) return false;
+        return negativeTokens.some(token => val?.includes(token));
     });
     const completed = items.filter(item => checklist[item.key] !== null).length;
 

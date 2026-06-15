@@ -10,9 +10,12 @@ import {
   fetchTtsplHistory,
   floorManagerFail,
   getNextAssignee,
+  getActiveWorkLog,
+  getTeamMembers,
   markBodyPaint,
   markChipRepair,
-  moveTicketStage
+  moveTicketStage,
+  startWork
 } from '../floorPipelineApi';
 import {
   configSummary,
@@ -28,10 +31,23 @@ import ChipRepairPanel from '../components/ChipRepairPanel';
 import BodyPaintPanel from '../components/BodyPaintPanel';
 import PartsConfigPanel from '../components/PartsConfigPanel';
 import WorkNotesPanel from '../components/WorkNotesPanel';
+import StageTaskPanel from '../components/StageTaskPanel';
 import AssignmentModal from '../components/AssignmentModal';
 import TtsplHistoryDrawer from '../components/TtsplHistoryDrawer';
 
 const HW_WORK_STAGES = ['Assembly & Software', 'Final Testing', 'Chip Level Repair', 'Body & Paint'];
+// Stages where the assignee must scan/confirm the machine and run a work timer.
+const TIMED_WORK_STAGES = ['Diagnosis', 'Assembly & Software', 'Final Testing', 'Chip Level Repair', 'Body & Paint', 'QC1', 'QC2'];
+const STAGE_TASK_STAGES = ['Assembly & Software', 'Final Testing'];
+
+function fmtElapsed(ms) {
+  if (ms < 0) ms = 0;
+  const s = Math.floor(ms / 1000);
+  const hh = String(Math.floor(s / 3600)).padStart(2, '0');
+  const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
+  const ss = String(s % 60).padStart(2, '0');
+  return `${hh}:${mm}:${ss}`;
+}
 
 export default function TicketDetailPage() {
   const { id } = useParams();
@@ -46,6 +62,31 @@ export default function TicketDetailPage() {
   const [auditLog, setAuditLog] = useState([]);
   const [nextAssignee, setNextAssignee] = useState(null);
   const [nextAssigneeWarning, setNextAssigneeWarning] = useState(false);
+  const [activeLog, setActiveLog] = useState(null);
+  const [nowTs, setNowTs] = useState(Date.now());
+  const [verifyInput, setVerifyInput] = useState('');
+  const [starting, setStarting] = useState(false);
+  const [qcPickerOpen, setQcPickerOpen] = useState(false);
+  const [qcMembers, setQcMembers] = useState([]);
+  const [chosenAssignee, setChosenAssignee] = useState('');
+
+  const loadActiveLog = useCallback(async () => {
+    try {
+      const r = await getActiveWorkLog(id);
+      setActiveLog(r.data?.active ? r.data.log : null);
+    } catch {
+      setActiveLog(null);
+    }
+  }, [id]);
+
+  useEffect(() => { loadActiveLog(); }, [loadActiveLog]);
+
+  // tick the on-screen timer once a second while a segment is open
+  useEffect(() => {
+    if (!activeLog) return undefined;
+    const t = setInterval(() => setNowTs(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [activeLog]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -105,31 +146,79 @@ export default function TicketDetailPage() {
   const tech = isTechnicianRole(user?.role);
   const qc = isQcRole(user?.role);
 
+  // The CURRENT stage's task is always the first tab so the assignee sees their
+  // work first, then Overview / Work Log etc.
   const visibleTabs = useMemo(() => {
-    const tabs = [
+    const base = [
       { id: 'overview', label: 'Overview' },
       { id: 'worklog', label: 'Work Log' },
       { id: 'parts', label: 'Parts & Config' },
       { id: 'history', label: 'TTSPL History' }
     ];
-    if (stage === 'Diagnosis') tabs.splice(2, 0, { id: 'diagnosis', label: 'Diagnosis' });
-    if (HW_WORK_STAGES.includes(stage)) tabs.splice(stage === 'Diagnosis' ? 3 : 2, 0, { id: 'notes', label: 'Work Notes' });
-    if (['QC1', 'QC2'].includes(stage)) tabs.splice(2, 0, { id: 'qc', label: 'QC Checklist' });
+    let taskTab = null;
+    if (stage === 'Diagnosis') taskTab = { id: 'diagnosis', label: 'Diagnosis' };
+    else if (STAGE_TASK_STAGES.includes(stage)) taskTab = { id: 'task', label: `${stage} Task` };
+    else if (['QC1', 'QC2'].includes(stage)) taskTab = { id: 'qc', label: 'QC Checklist' };
+    const tabs = taskTab ? [taskTab, ...base] : base;
+    if (['Chip Level Repair', 'Body & Paint'].includes(stage)) tabs.push({ id: 'notes', label: 'Work Notes' });
     if (ticket?.chip_repair_required) tabs.push({ id: 'chip', label: 'Chip Repair' });
     if (ticket?.body_paint_required) tabs.push({ id: 'body', label: 'Body & Paint' });
     return tabs;
   }, [stage, ticket?.chip_repair_required, ticket?.body_paint_required]);
 
-  const move = async (toStage, reason) => {
+  // Default to the stage's task tab whenever the stage changes.
+  useEffect(() => {
+    const s = ticket?.stage_name;
+    if (!s) return;
+    if (s === 'Diagnosis') setTab('diagnosis');
+    else if (STAGE_TASK_STAGES.includes(s)) setTab('task');
+    else if (['QC1', 'QC2'].includes(s)) setTab('qc');
+    else setTab('overview');
+  }, [ticket?.stage_name]);
+
+  const isAssignee = !!(ticket?.assigned_user_id && user?.user_id
+    && Number(ticket.assigned_user_id) === Number(user.user_id));
+  const needsStart = TIMED_WORK_STAGES.includes(stage) && isAssignee && !activeLog;
+  const elapsedMs = activeLog?.start_time ? nowTs - new Date(activeLog.start_time).getTime() : 0;
+
+  const handleStartWork = async () => {
+    if (!verifyInput.trim()) { toast.error('Enter the TTSPL ID or Serial number'); return; }
+    setStarting(true);
+    try {
+      const { data: res } = await startWork(id, verifyInput.trim());
+      if (res.success) { toast.success(res.message); setVerifyInput(''); loadActiveLog(); }
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Could not start work');
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const openQcPicker = async () => {
+    setChosenAssignee(nextAssignee?.user_id ? String(nextAssignee.user_id) : '');
+    try {
+      const r = await getTeamMembers('QC1 Team');
+      setQcMembers(r.data?.members || r.data?.users || []);
+    } catch {
+      setQcMembers([]);
+    }
+    setQcPickerOpen(true);
+  };
+
+  const move = async (toStage, reason, assignedUserId) => {
     if (reason !== undefined && (!reason || reason.trim().length < 10)) {
       toast.error('Reason required (min 10 characters) for fail actions');
       return;
     }
     try {
-      const { data: res } = await moveTicketStage(id, { to_stage_name: toStage, reason, notes: reason });
+      const { data: res } = await moveTicketStage(id, {
+        to_stage_name: toStage, reason, notes: reason, assigned_user_id: assignedUserId
+      });
       if (res.success) {
         toast.success(res.message);
+        setQcPickerOpen(false);
         load();
+        loadActiveLog(); // timer stops on stage change
       }
     } catch (e) {
       toast.error(e.response?.data?.message || 'Move failed');
@@ -178,8 +267,12 @@ export default function TicketDetailPage() {
     );
   }
   if ((tech || fm) && HW_WORK_STAGES.includes(stage)) {
-    const next = stage === 'Assembly & Software' ? 'Final Testing' : stage === 'Final Testing' ? 'QC1' : 'Assembly & Software';
-    stageButtons.push({ label: stage === 'Final Testing' ? 'Move to QC1' : `Move to ${next}`, action: () => move(next), primary: true });
+    if (stage === 'Final Testing') {
+      stageButtons.push({ label: 'Submit to QC1', action: openQcPicker, primary: true });
+    } else {
+      const next = stage === 'Assembly & Software' ? 'Final Testing' : 'Assembly & Software';
+      stageButtons.push({ label: `Move to ${next}`, action: () => move(next), primary: true });
+    }
   }
   if ((qc || fm) && stage === 'QC1') {
     stageButtons.push(
@@ -214,6 +307,33 @@ export default function TicketDetailPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
         <div className="min-w-0">
+          {needsStart ? (
+            <div className="rounded-xl border-2 border-blue-200 bg-blue-50 p-5 mb-4">
+              <h3 className="font-semibold text-blue-900">Verify machine to start work</h3>
+              <p className="text-sm text-blue-800 mt-1">
+                Scan or type the <strong>TTSPL ID</strong> or <strong>Serial number</strong> of the laptop in front of you.
+                Your stage timer starts once it&apos;s verified.
+              </p>
+              <div className="flex gap-2 mt-3">
+                <input
+                  value={verifyInput}
+                  onChange={(e) => setVerifyInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleStartWork(); }}
+                  placeholder="TTSPL ID or Serial number"
+                  className="flex-1 border rounded-lg px-3 py-2 text-sm"
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  disabled={starting}
+                  onClick={handleStartWork}
+                  className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold disabled:opacity-50"
+                >
+                  Start work
+                </button>
+              </div>
+            </div>
+          ) : null}
           <div className="flex gap-1 overflow-x-auto border-b mb-4 pb-1">
             {visibleTabs.map((t) => (
               <button
@@ -284,6 +404,7 @@ export default function TicketDetailPage() {
             />
           )}
           {tab === 'diagnosis' && <DiagnosisForm api={api} ticket={ticket} onComplete={load} />}
+          {tab === 'task' && <StageTaskPanel ticket={ticket} stageName={stage} onSubmitted={load} />}
           {tab === 'notes' && (
             <WorkNotesPanel
               ticketId={ticket.ticket_id}
@@ -315,6 +436,13 @@ export default function TicketDetailPage() {
             <p><span className="text-slate-500">Stage:</span> {stage}</p>
             <p><span className="text-slate-500">Team:</span> {ticket.team_name || '—'}</p>
             <p><span className="text-slate-500">Assigned:</span> {ticket.assigned_user_name || 'Unassigned'}</p>
+
+            {activeLog ? (
+              <div className="mt-3 rounded-lg bg-emerald-50 border border-emerald-200 p-2 text-center">
+                <p className="text-[11px] uppercase tracking-wide text-emerald-700 font-semibold">Work timer running</p>
+                <p className="font-mono text-lg font-bold text-emerald-800">{fmtElapsed(elapsedMs)}</p>
+              </div>
+            ) : null}
 
             {(ticket.qc_fail_count || 0) > 0 ? (
               <div className="mt-3 rounded-lg bg-red-50 border border-red-100 p-2 text-xs text-red-800">
@@ -382,6 +510,38 @@ export default function TicketDetailPage() {
 
       <AssignmentModal ticket={ticket} open={assignOpen} onClose={() => setAssignOpen(false)} onAssigned={load} />
       <TtsplHistoryDrawer ttsplId={ticket.ttspl_id} open={historyOpen} onClose={() => setHistoryOpen(false)} />
+
+      {qcPickerOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <button type="button" className="absolute inset-0 bg-black/40" onClick={() => setQcPickerOpen(false)} aria-label="Close" />
+          <div className="relative bg-white rounded-xl shadow-xl max-w-sm w-full p-5 space-y-3">
+            <h3 className="font-semibold text-slate-900">Submit to QC1 — assign to</h3>
+            <p className="text-xs text-slate-500">Pick the QC1 inspector. The round-robin suggestion is pre-selected; change it if needed.</p>
+            <select
+              value={chosenAssignee}
+              onChange={(e) => setChosenAssignee(e.target.value)}
+              className="w-full border rounded-lg px-3 py-2 text-sm"
+            >
+              <option value="">(Auto — round-robin)</option>
+              {qcMembers.map((m) => (
+                <option key={m.user_id} value={m.user_id}>
+                  {m.name}{nextAssignee && Number(nextAssignee.user_id) === Number(m.user_id) ? ' — suggested' : ''}
+                </option>
+              ))}
+            </select>
+            <div className="flex justify-end gap-2 pt-1">
+              <button type="button" onClick={() => setQcPickerOpen(false)} className="px-4 py-2 border rounded-lg text-sm">Cancel</button>
+              <button
+                type="button"
+                onClick={() => move('QC1', undefined, chosenAssignee || undefined)}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold"
+              >
+                Assign &amp; Submit
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -3,7 +3,7 @@
  * Base path: /api/vendor-management (mounted from server.js)
  */
 const express = require('express');
-const { authMiddleware, checkRoleOrPermission } = require('../middleware/auth');
+const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
 const vendors = require('../controllers/vendorManagement/vendors.controller');
 const purchaseOrders = require('../controllers/vendorManagement/purchaseOrders.controller');
 const sparePo = require('../controllers/vendorManagement/sparePartsOrders.controller');
@@ -13,9 +13,12 @@ const replaced = require('../controllers/vendorManagement/replacedProducts.contr
 
 const router = express.Router();
 
+// RBAC driven by the role_permissions matrix (single source of truth) — view
+// access to the Vendor Management module. Write actions are gated by the UI's
+// can_create/can_edit flags; tighten per-action here later if needed.
 const authorize = [
   authMiddleware,
-  checkRoleOrPermission(['admin', 'manager', 'procurement'], ['vendor_management_access'])
+  checkSectionPermission('vendor_management', 'view')
 ];
 
 const upload = vendors.buildMulter();

@@ -1,6 +1,6 @@
 const pool = require('../config/db');
 const { pickNextAssigneeForTeamPool } = require('../services/qcRoundRobinService');
-const { syncWorkLogForTicketState } = require('../services/ticketWorkLogService');
+const { syncWorkLogForTicketState, closeOpenWorkLogs, startWorkLog } = require('../services/ticketWorkLogService');
 const { applyGrnVendorQcPassOnTicketComplete } = require('../services/grnTicketService');
 const ttsplAuditService = require('../services/ttsplAuditService');
 const { sendHighlightedTicketAlert } = require('../services/highlightedTicketAlertService');
@@ -213,6 +213,8 @@ exports.getFloorDashboard = async (req, res) => {
 exports.moveToStage = async (req, res) => {
   const { id } = req.params;
   const { to_stage_name, reason, notes } = req.body;
+  // Optional manual assignee (e.g. Final Testing -> QC1 picker). Overrides round-robin.
+  const overrideAssignee = req.body.assigned_user_id ? Number(req.body.assigned_user_id) : null;
 
   if (!to_stage_name) {
     return res.status(400).json({ success: false, message: 'to_stage_name is required' });
@@ -397,6 +399,11 @@ exports.moveToStage = async (req, res) => {
       assignedUserId = ticket.assigned_user_id;
     }
 
+    // Manual picker (e.g. Final Testing -> QC1) wins over round-robin/keep-same.
+    if (overrideAssignee) {
+      assignedUserId = overrideAssignee;
+    }
+
     updates.push(`current_stage_id = $${pi++}`); params.push(nextStage.stage_id);
     updates.push(`assigned_team_id = $${pi++}`); params.push(nextStage.team_id);
     updates.push(`assigned_user_id = $${pi++}`); params.push(assignedUserId);
@@ -413,7 +420,20 @@ exports.moveToStage = async (req, res) => {
       );
     }
 
-    await syncWorkLogForTicketState(client, newTicket);
+    // Stop the previous segment. Keep the timer running automatically only when
+    // the SAME technician carries the unit to the next stage (Diagnosis →
+    // Assembly & Software → Final Testing). A handoff to a new person (e.g. QC)
+    // leaves it stopped so they scan-to-start their own timer.
+    await closeOpenWorkLogs(client, newTicket.ticket_id);
+    const sameTech = assignedUserId && ticket.assigned_user_id
+      && Number(assignedUserId) === Number(ticket.assigned_user_id);
+    if (newTicket.status !== 'completed' && sameTech) {
+      await startWorkLog(client, {
+        ticketId: newTicket.ticket_id,
+        userId: assignedUserId,
+        stageId: nextStage.stage_id
+      });
+    }
 
     const activityNotes = notes || reason || `Moved to ${to_stage_name}`;
     await client.query(

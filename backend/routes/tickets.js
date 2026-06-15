@@ -19,6 +19,8 @@ const {
   startWork,
   endWork,
   getActiveWorkLog,
+  saveStageTask,
+  getStageTask,
   bulkMoveTickets,
   getFloorManagerQueue,
   getTeamMembers,
@@ -138,6 +140,10 @@ router.post('/:id/service-cost', addServiceCost);
 router.post('/:id/work/start', startWork);
 router.post('/:id/work/end', endWork);
 router.get('/:id/work/active', getActiveWorkLog);
+
+// Stage task checklist (Assembly & Software, Final Testing, ...)
+router.get('/:id/stage-task', getStageTask);
+router.post('/:id/stage-task', saveStageTask);
 
 // QC Routes
 router.get('/:id/qc', qcController.getQCData);

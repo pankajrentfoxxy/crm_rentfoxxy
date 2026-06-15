@@ -1232,40 +1232,104 @@ exports.updateGrade = async (req, res) => {
 // Start Work Timer
 exports.startWork = async (req, res) => {
   const { id } = req.params;
+  const { verify } = req.body; // TTSPL id or serial number the tech scans/types to confirm the machine
   const userId = req.user.user_id;
 
   try {
-    // Check if valid ticket
-    const ticketRes = await pool.query('SELECT current_stage_id FROM tickets WHERE ticket_id = $1', [id]);
-    if (ticketRes.rows.length === 0) return res.status(404).json({ success: false, message: 'Ticket not found' });
-    const stageId = ticketRes.rows[0].current_stage_id;
-
-    // Check if already active
-    const activeRes = await pool.query(
-      'SELECT log_id FROM work_logs WHERE ticket_id = $1 AND user_id = $2 AND end_time IS NULL',
-      [id, userId]
+    const ticketRes = await pool.query(
+      'SELECT current_stage_id, ttspl_id, serial_number FROM tickets WHERE ticket_id = $1',
+      [id]
     );
+    if (ticketRes.rows.length === 0) return res.status(404).json({ success: false, message: 'Ticket not found' });
+    const ticket = ticketRes.rows[0];
+    const stageId = ticket.current_stage_id;
 
-    if (activeRes.rows.length > 0) {
-      return res.status(400).json({ success: false, message: 'Work already started for this ticket' });
+    // Machine-identity gate: the tech must confirm the right laptop before the timer starts.
+    const entered = String(verify || '').trim().toLowerCase();
+    if (!entered) {
+      return res.status(400).json({ success: false, message: 'Enter the TTSPL ID or Serial number to start work' });
+    }
+    const valid = [ticket.ttspl_id, ticket.serial_number]
+      .filter(Boolean)
+      .map((x) => String(x).trim().toLowerCase());
+    if (!valid.includes(entered)) {
+      return res.status(400).json({ success: false, message: 'TTSPL ID / Serial number does not match this ticket' });
     }
 
-    // Insert Log
+    // Restart the stage timer from this moment: close any open segment, open a fresh one.
+    await pool.query(
+      `UPDATE work_logs SET end_time = CURRENT_TIMESTAMP WHERE ticket_id = $1 AND end_time IS NULL`,
+      [id]
+    );
     await pool.query(
       `INSERT INTO work_logs (ticket_id, user_id, stage_id) VALUES ($1, $2, $3)`,
       [id, userId, stageId]
     );
-
-    // Log Activity
     await pool.query(
-      `INSERT INTO activities (ticket_id, user_id, action, notes) VALUES ($1, $2, 'work_started', 'Started work timer')`,
+      `INSERT INTO activities (ticket_id, user_id, action, notes) VALUES ($1, $2, 'work_started', 'Verified machine & started work timer')`,
       [id, userId]
     );
 
-    res.json({ success: true, message: 'Work timer started' });
+    res.json({ success: true, message: 'Work started — timer running' });
   } catch (error) {
     console.error('Start work error:', error);
     res.status(500).json({ success: false, message: 'Server error starting work' });
+  }
+};
+
+// ── Stage task checklist (Assembly & Software, Final Testing, etc.) ──────────
+exports.saveStageTask = async (req, res) => {
+  const { id } = req.params;
+  const { stage_id, checklist_data, notes, completed } = req.body;
+  const userId = req.user.user_id;
+  if (!stage_id) return res.status(400).json({ success: false, message: 'stage_id is required' });
+  try {
+    const existing = await pool.query(
+      'SELECT id FROM ticket_checklist_progress WHERE ticket_id = $1 AND stage_id = $2 ORDER BY id DESC LIMIT 1',
+      [id, stage_id]
+    );
+    const payload = JSON.stringify(checklist_data || {});
+    if (existing.rows.length) {
+      await pool.query(
+        `UPDATE ticket_checklist_progress
+         SET checklist_data = $1::jsonb, completed_by = $2,
+             completed_at = CASE WHEN $3 THEN NOW() ELSE completed_at END
+         WHERE id = $4`,
+        [payload, userId, !!completed, existing.rows[0].id]
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO ticket_checklist_progress (ticket_id, stage_id, checklist_data, completed_by, completed_at)
+         VALUES ($1, $2, $3::jsonb, $4, CASE WHEN $5 THEN NOW() ELSE NULL END)`,
+        [id, stage_id, payload, userId, !!completed]
+      );
+    }
+    if (notes && String(notes).trim()) {
+      await pool.query(
+        `INSERT INTO activities (ticket_id, stage_id, user_id, action, notes) VALUES ($1, $2, $3, 'stage_work', $4)`,
+        [id, stage_id, userId, String(notes).trim()]
+      );
+    }
+    res.json({ success: true, message: completed ? 'Task completed' : 'Task progress saved' });
+  } catch (error) {
+    console.error('saveStageTask error:', error);
+    res.status(500).json({ success: false, message: 'Server error saving task' });
+  }
+};
+
+exports.getStageTask = async (req, res) => {
+  const { id } = req.params;
+  const { stage_id } = req.query;
+  if (!stage_id) return res.status(400).json({ success: false, message: 'stage_id is required' });
+  try {
+    const r = await pool.query(
+      'SELECT * FROM ticket_checklist_progress WHERE ticket_id = $1 AND stage_id = $2 ORDER BY id DESC LIMIT 1',
+      [id, stage_id]
+    );
+    res.json({ success: true, progress: r.rows[0] || null });
+  } catch (error) {
+    console.error('getStageTask error:', error);
+    res.status(500).json({ success: false, message: 'Server error fetching task' });
   }
 };
 
