@@ -10,6 +10,7 @@ import SerialNumberStatusPage from './pages/SerialNumberStatusPage';
 import UniversalSearchPage from './pages/UniversalSearchPage';
 import NpaAssetsPage from './pages/NpaAssetsPage';
 import PartsPage from './pages/PartsPage';
+import CustomerAssetsPage from './pages/CustomerAssetsPage';
 
 /**
  * Nested routes only — navigation lives in Layout sidebar (accordion).
@@ -39,6 +40,7 @@ export default function InventoryManagementApp() {
           }
         />
 
+        <Route path="customer-assets" element={<CustomerAssetsPage />} />
         <Route path="ready-to-rent-or-sell" element={<ReadyToRentOrSellPage />} />
         <Route path="rent-to-own" element={<RentToOwnPage />} />
         <Route path="rental-purchase" element={<RentalPurchasePage />} />

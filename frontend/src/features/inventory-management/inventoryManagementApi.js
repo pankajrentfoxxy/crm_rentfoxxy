@@ -18,6 +18,11 @@ export function fetchUniversalSearch(search) {
   return api.get(`${base}/universal-search`, { params: { search } });
 }
 
+/** Laptops currently deployed with customers (rented / on demo / in transit / sold) */
+export function fetchCustomerAssets(params) {
+  return api.get(`${base}/customer-assets`, { params });
+}
+
 export function fetchSparePartsList(params) {
   return api.get(`${base}/spare-parts`, { params });
 }
