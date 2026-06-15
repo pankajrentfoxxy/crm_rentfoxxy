@@ -1,0 +1,195 @@
+# Deploy MERN stack to Hostinger VPS (staging + portals)
+# Branch: new_crm_rentfoxxy
+# Docs: deploy/CI_CD_SETUP.md
+
+name: Deploy to Hostinger VPS
+
+on:
+  push:
+    branches:
+      - new_crm_rentfoxxy
+  workflow_dispatch:
+    inputs:
+      skip_git_pull:
+        description: Skip git fetch/reset (rebuild current checkout only)
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: deploy-new-crm-rentfoxxy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  DEPLOY_BRANCH: new_crm_rentfoxxy
+  PROJECT_ROOT: /var/www/crm_rentfoxxy
+  API_URL: https://staging.rentfoxxy.com/api
+  NODE_VERSION: "24"
+
+jobs:
+  preflight:
+    name: Validate dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+            customer-portal/package-lock.json
+            vendor-portal/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci --omit=dev
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install customer-portal dependencies
+        working-directory: customer-portal
+        run: npm ci
+
+      - name: Install vendor-portal dependencies
+        working-directory: vendor-portal
+        run: npm ci
+
+  deploy:
+    name: Deploy to VPS
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Configure SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
+
+      - name: Add VPS host key
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Sync code and deploy on VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          SKIP_GIT_PULL: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.skip_git_pull == true && 'true' || 'false' }}
+        run: |
+          ssh -o BatchMode=yes -o ConnectTimeout=30 "${VPS_USER}@${VPS_HOST}" \
+            "DEPLOY_BRANCH='${{ env.DEPLOY_BRANCH }}' \
+             PROJECT_ROOT='${{ env.PROJECT_ROOT }}' \
+             API_URL='${{ env.API_URL }}' \
+             SKIP_GIT_PULL='${SKIP_GIT_PULL}' \
+             bash -s" << 'REMOTE_SCRIPT'
+          set -euo pipefail
+
+          log() { printf '\n[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
+          die() { log "ERROR: $*"; exit 1; }
+
+          command -v git >/dev/null 2>&1 || die "git is not installed on VPS"
+          command -v npm >/dev/null 2>&1 || die "npm is not installed on VPS"
+          command -v pm2 >/dev/null 2>&1 || die "pm2 is not installed on VPS"
+
+          log "Starting deployment"
+          log "Project root: ${PROJECT_ROOT}"
+          log "Branch: ${DEPLOY_BRANCH}"
+
+          cd "${PROJECT_ROOT}" || die "Project directory not found: ${PROJECT_ROOT}"
+
+          if [[ "${SKIP_GIT_PULL}" != "true" ]]; then
+            log "Fetching latest code"
+            git fetch origin "${DEPLOY_BRANCH}"
+            git reset --hard "origin/${DEPLOY_BRANCH}"
+            git clean -fd -e '.env' -e 'backend/.env' -e '.npm-cache'
+          else
+            log "Skipping git fetch/reset (manual redeploy)"
+          fi
+
+          COMMIT_SHA="$(git rev-parse --short HEAD)"
+          log "Deploying commit: ${COMMIT_SHA}"
+
+          export NPM_CONFIG_CACHE="${PROJECT_ROOT}/.npm-cache"
+          export NPM_CONFIG_FUND=false
+          export NPM_CONFIG_AUDIT=false
+          mkdir -p "${NPM_CONFIG_CACHE}"
+
+          export REACT_APP_API_URL="${API_URL}"
+          export NODE_ENV=production
+          export CI=true
+
+          install_and_build() {
+            local dir="$1"
+            local label="$2"
+            local omit_dev="${3:-false}"
+
+            log "Installing dependencies: ${label}"
+            cd "${PROJECT_ROOT}/${dir}"
+
+            if [[ "${omit_dev}" == "true" ]]; then
+              npm ci --omit=dev --prefer-offline
+            else
+              npm ci --prefer-offline
+            fi
+
+            if [[ "${omit_dev}" != "true" ]]; then
+              log "Building: ${label}"
+              npm run build
+              [[ -d build ]] || die "Build output missing for ${label} (expected build/)"
+            fi
+          }
+
+          # Backend install only — PM2 restart happens after all builds succeed
+          install_and_build backend "backend" true
+
+          # Frontends — all must succeed before PM2 restart
+          install_and_build frontend "admin frontend" false
+          install_and_build customer-portal "customer portal" false
+          install_and_build vendor-portal "vendor portal" false
+
+          log "Restarting PM2 process: crm-backend"
+          cd "${PROJECT_ROOT}/backend"
+
+          if pm2 describe crm-backend >/dev/null 2>&1; then
+            pm2 reload crm-backend --update-env
+          else
+            pm2 start ecosystem.config.cjs --only crm-backend
+          fi
+
+          pm2 save
+
+          log "Post-deploy health check"
+          sleep 3
+          curl -fsS --max-time 30 "${API_URL%/api}/api/health" >/dev/null \
+            || die "API health check failed after deploy"
+
+          log "Deployment completed successfully (commit ${COMMIT_SHA})"
+          REMOTE_SCRIPT
+
+      - name: Deployment summary
+        if: success()
+        run: |
+          echo "### Deployment successful" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Branch:** \`${{ env.DEPLOY_BRANCH }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Commit:** \`${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Admin:** https://staging.rentfoxxy.com" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **API:** https://staging.rentfoxxy.com/api" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Customer portal:** https://customer.rentfoxxy.com" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Vendor portal:** https://vendor.rentfoxxy.com" >> "$GITHUB_STEP_SUMMARY"
