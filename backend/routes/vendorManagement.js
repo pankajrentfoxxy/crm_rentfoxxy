@@ -81,6 +81,24 @@ router.post(
   ...purchaseOrders.receivePoLineBulkValidators,
   purchaseOrders.receivePoLineBulk
 );
+router.post(
+  '/purchase-orders/:poId/product-received/receive-unit',
+  authorize,
+  ...purchaseOrders.receivePoLineUnitValidators,
+  purchaseOrders.receivePoLineUnit
+);
+const grnCapture = require('../controllers/grnSerialCapture.controller');
+router.post(
+  '/purchase-orders/:poId/grn-capture-tokens',
+  authorize,
+  ...grnCapture.createTokenValidators,
+  grnCapture.createGrnCaptureToken
+);
+router.get(
+  '/grn-capture-tokens/:token',
+  authorize,
+  grnCapture.getGrnCaptureTokenStatus
+);
 router.get(
   '/purchase-orders/:poId/generated-grn',
   authorize,

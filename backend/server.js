@@ -80,6 +80,7 @@ app.use('/api/reports', require('./routes/reports'));
 app.use('/api/diagnosis', require('./routes/diagnosis'));
 app.use('/api/chip-repair', require('./routes/chipLevel'));
 app.use('/api/quotation', require('./routes/quotationPublic'));
+app.use('/api/grn-capture', require('./routes/grnCapturePublic'));
 app.use('/api/leads', require('./routes/leads'));
 app.use('/api/customer-documents', require('./routes/customerDocuments'));
 app.use('/api/customer-inventory', require('./routes/customerInventory'));

@@ -16,12 +16,19 @@ import {
   Package,
   Phone,
   Plus,
+  ExternalLink,
+  Copy,
   UserCircle,
   X
 } from 'lucide-react';
 import { invalidateInventoryManagement } from '../../inventory-management/inventoryCountsEvents';
 import { invalidateQcCounts } from '../../qc-management/qcCountsEvents';
-import { fetchProductReceivedContext, receivePoLineBulk } from '../vendorManagementApi';
+import {
+  createGrnCaptureToken,
+  fetchGrnCaptureTokenStatus,
+  fetchProductReceivedContext,
+  receivePoLineUnit,
+} from '../vendorManagementApi';
 
 function formatWorkflowStatus(status) {
   const s = String(status || '').toLowerCase();
@@ -160,7 +167,14 @@ export default function ProductReceivedPage() {
   const [receiveStep, setReceiveStep] = useState('meta');
   const [rentalStartDate, setRentalStartDate] = useState('');
   const [bulkQtyStr, setBulkQtyStr] = useState('');
-  const [bulkSerials, setBulkSerials] = useState([]);
+  const [bulkQuantity, setBulkQuantity] = useState(0);
+  const [currentUnitIndex, setCurrentUnitIndex] = useState(0);
+  const [currentSerial, setCurrentSerial] = useState('');
+  const [completedUnits, setCompletedUnits] = useState([]);
+  const [activeGrnId, setActiveGrnId] = useState(null);
+  const [captureToken, setCaptureToken] = useState(null);
+  const [captureUrl, setCaptureUrl] = useState('');
+  const [captureLoading, setCaptureLoading] = useState(false);
   const [billStatus, setBillStatus] = useState('pending');
   const [billName, setBillName] = useState('');
   const [modalBusy, setModalBusy] = useState(false);
@@ -195,7 +209,13 @@ export default function ProductReceivedPage() {
     setReceiveStep('meta');
     setRentalStartDate('');
     setBulkQtyStr('');
-    setBulkSerials([]);
+    setBulkQuantity(0);
+    setCurrentUnitIndex(0);
+    setCurrentSerial('');
+    setCompletedUnits([]);
+    setActiveGrnId(null);
+    setCaptureToken(null);
+    setCaptureUrl('');
     setBillStatus('pending');
     setBillName('');
   }
@@ -228,7 +248,13 @@ export default function ProductReceivedPage() {
     setReceiveStep('meta');
     setRentalStartDate(new Date().toISOString().slice(0, 10));
     setBulkQtyStr('');
-    setBulkSerials([]);
+    setBulkQuantity(0);
+    setCurrentUnitIndex(0);
+    setCurrentSerial('');
+    setCompletedUnits([]);
+    setActiveGrnId(null);
+    setCaptureToken(null);
+    setCaptureUrl('');
   }
 
   function gotoSerialInputs() {
@@ -255,30 +281,75 @@ export default function ProductReceivedPage() {
       toast.error('Bill number is required when bill is marked as received');
       return;
     }
-    setBulkSerials(Array.from({ length: q }, () => ''));
+    setBulkQuantity(q);
+    setCurrentUnitIndex(0);
+    setCurrentSerial('');
+    setCompletedUnits([]);
+    setActiveGrnId(null);
+    setCaptureToken(null);
+    setCaptureUrl('');
     setReceiveStep('serials');
   }
 
-  function updateBulkSerialAt(i, value) {
-    setBulkSerials((prev) => {
-      const next = [...prev];
-      next[i] = value;
-      return next;
-    });
-  }
+  const refreshCaptureLink = useCallback(async () => {
+    if (receiveLineIndex === null || receiveStep !== 'serials' || bulkQuantity < 1) return;
+    setCaptureLoading(true);
+    try {
+      const { data } = await createGrnCaptureToken(poId, {
+        line_index: receiveLineIndex,
+        unit_index: currentUnitIndex,
+        total_units: bulkQuantity,
+      });
+      if (data.success) {
+        setCaptureToken(data.data.token);
+        setCaptureUrl(data.data.capture_url);
+      }
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Could not create capture link');
+    } finally {
+      setCaptureLoading(false);
+    }
+  }, [poId, receiveLineIndex, receiveStep, bulkQuantity, currentUnitIndex]);
 
-  async function submitBulkReceive() {
-    if (receiveLineIndex === null) return;
-    const q = bulkSerials.length;
-    const trimmed = bulkSerials.map((s) => String(s ?? '').trim().toUpperCase());
-    const emptyIdx = trimmed.findIndex((s) => !s);
-    if (emptyIdx >= 0) {
-      toast.error(`Enter serial number for row ${emptyIdx + 1}`);
+  useEffect(() => {
+    if (receiveStep !== 'serials' || bulkQuantity < 1) return undefined;
+    refreshCaptureLink();
+    return undefined;
+  }, [receiveStep, bulkQuantity, currentUnitIndex, refreshCaptureLink]);
+
+  useEffect(() => {
+    if (!captureToken || receiveStep !== 'serials' || modalBusy) return undefined;
+    const poll = setInterval(async () => {
+      try {
+        const { data } = await fetchGrnCaptureTokenStatus(captureToken);
+        if (data.success && data.data?.serial_number) {
+          setCurrentSerial(data.data.serial_number);
+        }
+      } catch {
+        /* ignore poll errors */
+      }
+    }, 2000);
+    return () => clearInterval(poll);
+  }, [captureToken, receiveStep, modalBusy]);
+
+  function openCaptureLink() {
+    if (!captureUrl) {
+      toast.error('Capture link not ready yet');
       return;
     }
-    const uniq = new Set(trimmed);
-    if (uniq.size !== trimmed.length) {
-      toast.error('Serial numbers must be unique within this batch');
+    window.open(captureUrl, '_blank', 'noopener,noreferrer');
+  }
+
+  function copyCaptureLink() {
+    if (!captureUrl) return;
+    navigator.clipboard.writeText(captureUrl).then(() => toast.success('Capture link copied'));
+  }
+
+  async function receiveCurrentUnit() {
+    if (receiveLineIndex === null) return;
+    const serial = String(currentSerial || '').trim().toUpperCase();
+    if (!serial) {
+      toast.error('Enter or capture the serial number first');
       return;
     }
 
@@ -287,34 +358,48 @@ export default function ProductReceivedPage() {
       const body = {
         line_index: receiveLineIndex,
         rental_start_date: rentalStartDate.trim(),
-        quantity: q,
-        serial_numbers: trimmed,
+        serial_number: serial,
+        apply_bill_settings: currentUnitIndex === 0,
         bill_status: billStatus,
-        bill_name: billStatus === 'received' ? billName.trim() : undefined
+        bill_name: billStatus === 'received' ? billName.trim() : undefined,
+        capture_token: captureToken || undefined,
       };
-      const { data } = await receivePoLineBulk(poId, body);
+      if (activeGrnId) body.grn_id = activeGrnId;
+
+      const { data } = await receivePoLineUnit(poId, body);
       if (data.success) {
-        const created = data.data?.created || [];
-        const tickets = (data.data?.tickets || []).filter((t) => t?.ok);
-        const example = created[0]?.inventory_asset_code;
-        const ticketNote =
-          tickets.length > 0
-            ? ` ${tickets.length} repair ticket(s) created for Floor Manager.`
-            : '';
-        toast.success(
-          (data.message ||
-            (example ? `Received ${created.length} unit(s). Codes include ${example}…` : 'Units received')) + ticketNote
-        );
-        resetReceiveWizardUi();
-        invalidateQcCounts();
-        invalidateInventoryManagement();
-        await load();
+        const created = data.data?.created;
+        const ttspl = created?.inventory_asset_code;
+        setCompletedUnits((prev) => [
+          ...prev,
+          { serial_number: serial, inventory_asset_code: ttspl, serial_id: created?.serial_id },
+        ]);
+        if (data.data?.grn_id) setActiveGrnId(data.data.grn_id);
+        toast.success(ttspl ? `Received — ${ttspl}` : 'Unit received');
+
+        const nextIndex = currentUnitIndex + 1;
+        if (nextIndex >= bulkQuantity) {
+          const ticketOk = data.data?.ticket?.ok;
+          toast.success(
+            `All ${bulkQuantity} unit(s) received.${ticketOk ? ' Floor tickets created.' : ''}`,
+            { duration: 5000 }
+          );
+          resetReceiveWizardUi();
+          invalidateQcCounts();
+          invalidateInventoryManagement();
+          await load();
+        } else {
+          setCurrentUnitIndex(nextIndex);
+          setCurrentSerial('');
+          setCaptureToken(null);
+          setCaptureUrl('');
+        }
       }
     } catch (e) {
       const msg =
         e.response?.data?.message ||
         (e.response?.data?.errors?.[0]?.msg ? String(e.response.data.errors[0].msg) : null);
-      toast.error(msg || 'Failed to save serials');
+      toast.error(msg || 'Failed to receive unit');
     } finally {
       setModalBusy(false);
     }
@@ -595,7 +680,7 @@ export default function ProductReceivedPage() {
         ) : null}
       </div>
 
-      {/* Receive wizard — rental date + quantity, then serials per unit (bulk API) */}
+      {/* Receive wizard — rental date + quantity, then one serial at a time with capture link */}
       {receiveLineIndex !== null ? (
         <div
           className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/50 overflow-y-auto"
@@ -617,7 +702,7 @@ export default function ProductReceivedPage() {
                   Step {receiveStep === 'meta' ? '1' : '2'} of 2
                 </p>
                 <h2 id="receive-modal-title" className="text-base font-semibold text-slate-900">
-                  {receiveStep === 'meta' ? 'Receive — details' : 'Enter serial numbers'}
+                  {receiveStep === 'meta' ? 'Receive — details' : `Serial capture — laptop ${currentUnitIndex + 1} of ${bulkQuantity}`}
                 </h2>
               </div>
               <button
@@ -636,10 +721,13 @@ export default function ProductReceivedPage() {
                 {lines[receiveLineIndex] ? <ItemDescriptionCard line={lines[receiveLineIndex]} /> : null}
                 <p className="text-xs text-slate-600 mt-2 tabular-nums">
                   Remaining to receive: <strong>{remainingOnLine(receiveLineIndex)}</strong>
-                  {receiveStep === 'serials' && bulkSerials.length ? (
+                  {receiveStep === 'serials' && bulkQuantity > 0 ? (
                     <span className="text-slate-500">
                       {' '}
-                      · Receiving <strong>{bulkSerials.length}</strong> unit(s)
+                      · Receiving <strong>{bulkQuantity}</strong> unit(s) one by one
+                      {completedUnits.length > 0 ? (
+                        <span> · <strong>{completedUnits.length}</strong> done</span>
+                      ) : null}
                     </span>
                   ) : null}
                 </p>
@@ -739,8 +827,8 @@ export default function ProductReceivedPage() {
                       onChange={(e) => setBulkQtyStr(e.target.value)}
                     />
                     <p className="text-[11px] text-slate-500 mt-1.5">
-                      Each unit gets a permanent <strong className="font-mono text-slate-700">TTSPL####</strong> code on
-                      save. Unique serial numbers are required for every row on the next step.
+                      Each laptop is received one at a time. A <strong className="font-mono text-slate-700">TTSPL####</strong>{' '}
+                      code and floor ticket are created per unit after its serial is captured.
                     </p>
                   </div>
                 </>
@@ -750,34 +838,66 @@ export default function ProductReceivedPage() {
                     <p className="text-xs text-slate-600 m-0">
                       Rental starts <strong>{rentalStartDate || '—'}</strong>
                     </p>
+                    <p className="text-xs font-semibold text-teal-800 m-0">
+                      Laptop {currentUnitIndex + 1} of {bulkQuantity}
+                    </p>
                   </div>
-                  <div
-                    className="max-h-[min(26rem,calc(100vh-20rem))] overflow-y-auto pr-1 space-y-3 rounded-lg border border-slate-100 p-3 bg-slate-50/40"
-                  >
-                    {bulkSerials.map((val, si) => (
-                      <div key={si}>
-                        <label
-                          className="block text-xs font-semibold text-slate-600 mb-1"
-                          htmlFor={`receive-serial-${si}`}
+
+                  {completedUnits.length > 0 ? (
+                    <ul className="text-xs space-y-1 rounded-lg border border-emerald-100 bg-emerald-50/60 p-2">
+                      {completedUnits.map((u) => (
+                        <li key={u.serial_id || u.inventory_asset_code} className="flex justify-between gap-2 font-mono text-emerald-900">
+                          <span>{u.serial_number}</span>
+                          <span className="font-semibold">{u.inventory_asset_code}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+
+                  <div className="rounded-lg border border-slate-200 bg-white p-3 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label className="text-xs font-semibold text-slate-600" htmlFor="receive-serial-current">
+                        Serial number <span className="text-rose-600">*</span>
+                      </label>
+                      <div className="flex flex-wrap gap-1.5">
+                        <button
+                          type="button"
+                          disabled={modalBusy || captureLoading || !captureUrl}
+                          onClick={openCaptureLink}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-teal-200 bg-teal-50 text-teal-800 text-xs font-semibold hover:bg-teal-100 disabled:opacity-50"
+                          title="Open on the laptop being received"
                         >
-                          Unit {si + 1} — serial number <span className="text-rose-600">*</span>
-                        </label>
-                        <input
-                          id={`receive-serial-${si}`}
-                          type="text"
-                          autoComplete="off"
-                          className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-teal-500 focus:border-teal-500 outline-none disabled:opacity-50"
-                          placeholder="Manual serial"
-                          value={val}
-                          disabled={modalBusy}
-                          onChange={(e) => updateBulkSerialAt(si, e.target.value)}
-                        />
+                          {captureLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <ExternalLink className="w-3 h-3" />}
+                          Open on laptop
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!captureUrl}
+                          onClick={copyCaptureLink}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 text-slate-600 text-xs font-medium hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          <Copy className="w-3 h-3" />
+                          Copy link
+                        </button>
                       </div>
-                    ))}
+                    </div>
+                    <input
+                      id="receive-serial-current"
+                      type="text"
+                      autoComplete="off"
+                      autoFocus
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-teal-500 focus:border-teal-500 outline-none disabled:opacity-50"
+                      placeholder="Auto-fills when capture link is used, or type manually"
+                      value={currentSerial}
+                      disabled={modalBusy}
+                      onChange={(e) => setCurrentSerial(e.target.value)}
+                    />
+                    <p className="text-[11px] text-slate-500 m-0 leading-relaxed">
+                      On the <strong>received laptop</strong>, open the capture link — it reads the hardware serial
+                      (Windows BIOS / Mac) and sends it here. Then click Receive to assign{' '}
+                      <span className="font-mono">TTSPL####</span> and create the floor ticket.
+                    </p>
                   </div>
-                  <p className="text-[11px] text-slate-500 m-0">
-                    Duplicate serials in this batch are not allowed; the server also rejects serials already in the database.
-                  </p>
                 </div>
               )}
 
@@ -786,9 +906,10 @@ export default function ProductReceivedPage() {
                   {receiveStep === 'serials' ? (
                     <button
                       type="button"
-                      disabled={modalBusy}
-                      className="px-4 py-2 rounded-lg border border-slate-200 text-slate-700 text-sm font-semibold hover:bg-slate-50"
+                      disabled={modalBusy || completedUnits.length > 0}
+                      className="px-4 py-2 rounded-lg border border-slate-200 text-slate-700 text-sm font-semibold hover:bg-slate-50 disabled:opacity-40"
                       onClick={() => setReceiveStep('meta')}
+                      title={completedUnits.length > 0 ? 'Cannot go back after units are received' : undefined}
                     >
                       Back
                     </button>
@@ -818,14 +939,12 @@ export default function ProductReceivedPage() {
                   ) : (
                     <button
                       type="button"
-                      disabled={
-                        modalBusy || bulkSerials.length === 0 || bulkSerials.some((s) => !String(s ?? '').trim())
-                      }
-                      onClick={() => submitBulkReceive()}
+                      disabled={modalBusy || !String(currentSerial || '').trim()}
+                      onClick={() => receiveCurrentUnit()}
                       className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold disabled:opacity-40"
                     >
                       {modalBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                      Receive {bulkSerials.length || ''} unit(s)
+                      {currentUnitIndex + 1 >= bulkQuantity ? 'Receive & finish' : 'Receive & next laptop'}
                     </button>
                   )}
                 </div>

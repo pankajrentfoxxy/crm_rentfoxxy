@@ -14,6 +14,7 @@ const {
   insertProductDetailsForPo
 } = require('../../services/purchaseOrderProductDetailsService');
 const { createTicketFromGrnReceive } = require('../../services/grnTicketService');
+const { markTokenUsed } = require('../../services/grnSerialCaptureService');
 const { generatePurchaseOrderPdf } = require('../../services/vendorPurchaseOrderPdfService');
 const {
   sendPurchaseOrderApprovedEmail,
@@ -685,6 +686,235 @@ async function receivePoLineBulk(req, res) {
       created: createdRows,
       lines: linesAfter,
       tickets: ticketResults
+    }
+  });
+}
+
+/** Single-unit receive (sequential GRN wizard) — one serial + TTSPL + ticket per call */
+const receivePoLineUnitValidators = [
+  param('poId').isInt().toInt(),
+  body('line_index').isInt({ min: 0 }).toInt(),
+  body('rental_start_date')
+    .notEmpty()
+    .matches(/^\d{4}-\d{2}-\d{2}$/)
+    .withMessage('rental_start_date must be YYYY-MM-DD'),
+  body('serial_number').trim().notEmpty(),
+  body('grn_id').optional({ nullable: true }).isInt().toInt(),
+  body('bill_status').optional().isIn(['pending', 'received']),
+  body('bill_name').optional({ nullable: true }).isString().trim().isLength({ max: 255 }),
+  body('apply_bill_settings').optional().isBoolean().toBoolean(),
+  body('capture_token').optional({ nullable: true }).isUUID(),
+];
+
+async function receivePoLineUnit(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  const poId = Number(req.params.poId);
+  const lineIndex = Number(req.body.line_index);
+  const rental_start_date = String(req.body.rental_start_date).trim();
+  const serial_number = String(req.body.serial_number || '').trim().toUpperCase();
+  const applyBill = req.body.apply_bill_settings === true || req.body.apply_bill_settings === 'true';
+  const captureToken = req.body.capture_token || null;
+
+  let grnId =
+    req.body.grn_id === '' || req.body.grn_id === undefined || req.body.grn_id === null
+      ? null
+      : Number(req.body.grn_id);
+
+  const r = await pool.query(`SELECT * FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL`, [
+    poId
+  ]);
+  if (!r.rows.length) return res.status(404).json({ success: false, message: 'Not found' });
+  const po = r.rows[0];
+  if (!receiveMutationAllowed(po)) {
+    const stPo = String(po.status || '').toLowerCase();
+    if (stPo === 'completed') {
+      return res.status(403).json({
+        success: false,
+        message: 'This purchase order is fully received; receipts are closed.'
+      });
+    }
+    return res.status(403).json({
+      success: false,
+      message:
+        'Receiving opens only once the PO is approved (invoice uploaded and Approved on the purchase order list).'
+    });
+  }
+
+  const qtyMapsBefore = await buildReceivedQtyMapsForPoIds([poId]);
+  const linesBefore = enrichLineItemsWithReceived(parseLineItemsJson(po.line_items), qtyMapsBefore.get(poId));
+  const line = linesBefore[lineIndex];
+  if (!line) {
+    return res.status(400).json({ success: false, message: 'Invalid line_index for this PO' });
+  }
+
+  const ordered = Number(line.quantity) || 0;
+  const currentReceived = Number(line.receivedQty) || 0;
+  if (currentReceived + 1 > ordered) {
+    return res.status(400).json({
+      success: false,
+      message: 'Cannot receive more units than ordered for this line.'
+    });
+  }
+
+  const pd = line.product_detail_id ?? line.product_id ?? line.pro_id ?? line.id;
+  const client = await pool.connect();
+  let finalGrnId;
+  let createdRow = null;
+
+  try {
+    await client.query('BEGIN');
+
+    const dup = await client.query(
+      `SELECT serial_number FROM vendor_serial_numbers
+       WHERE deleted_at IS NULL AND LOWER(serial_number) = LOWER($1)`,
+      [serial_number]
+    );
+    if (dup.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: `Serial already exists in inventory: ${dup.rows[0].serial_number}`
+      });
+    }
+
+    if (grnId != null && Number.isFinite(grnId)) {
+      const g = await client.query(
+        `SELECT grn_id FROM vendor_goods_received_notes WHERE grn_id = $1 AND po_id = $2 AND deleted_at IS NULL`,
+        [grnId, poId]
+      );
+      if (!g.rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: 'Invalid GRN for this purchase order.' });
+      }
+      finalGrnId = grnId;
+    } else {
+      const last = await client.query(
+        `SELECT grn_id FROM vendor_goods_received_notes WHERE po_id = $1 AND deleted_at IS NULL ORDER BY grn_id DESC LIMIT 1`,
+        [poId]
+      );
+      if (last.rows.length) finalGrnId = last.rows[0].grn_id;
+      else {
+        const insG = await client.query(
+          `INSERT INTO vendor_goods_received_notes (po_id, meta) VALUES ($1, '{}'::jsonb) RETURNING grn_id`,
+          [poId]
+        );
+        finalGrnId = insG.rows[0].grn_id;
+      }
+    }
+
+    if (applyBill) {
+      const billStatus = String(req.body.bill_status || 'pending').toLowerCase() === 'received' ? 'received' : 'pending';
+      const billName = billStatus === 'received' ? String(req.body.bill_name || '').trim() || null : null;
+
+      await client.query(
+        `UPDATE vendor_goods_received_notes
+         SET bill_status = $1, bill_name = COALESCE($2, bill_name), updated_at = NOW()
+         WHERE grn_id = $3`,
+        [billStatus, billName, finalGrnId]
+      );
+
+      if (billStatus === 'received' && billName) {
+        await client.query(
+          `UPDATE vendor_purchase_orders
+           SET bill_name = COALESCE(bill_name, $1), updated_at = NOW()
+           WHERE po_id = $2 AND deleted_at IS NULL`,
+          [billName, poId]
+        );
+      }
+    }
+
+    const assetCodes = await allocateTtsplCodes(client, 1);
+    const inventory_asset_code = assetCodes[0];
+    const extra = {
+      line_index: lineIndex,
+      rental_start_date,
+      unique_product_serial: inventory_asset_code
+    };
+    if (pd != null && String(pd).trim() !== '') extra.product_detail_id = String(pd);
+
+    const insS = await client.query(
+      `INSERT INTO vendor_serial_numbers (po_id, grn_id, serial_number, inventory_asset_code, rental_start_date, qc_status, extra)
+       VALUES ($1,$2,$3,$4,$5::date,'pending',$6::jsonb) RETURNING serial_id`,
+      [poId, finalGrnId, serial_number, inventory_asset_code, rental_start_date, JSON.stringify(extra)]
+    );
+    createdRow = {
+      serial_id: insS.rows[0].serial_id,
+      serial_number,
+      inventory_asset_code
+    };
+
+    await client.query('COMMIT');
+  } catch (e) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (_) {
+      /* ignore */
+    }
+    if (String(e.code) === '23505') {
+      return res.status(409).json({ success: false, message: 'Serial number or inventory code already exists' });
+    }
+    console.error(e);
+    return res.status(500).json({ success: false, message: e.message || 'Receive failed' });
+  } finally {
+    client.release();
+  }
+
+  if (captureToken) {
+    try {
+      await markTokenUsed(captureToken);
+    } catch (tokenErr) {
+      console.warn('markTokenUsed failed:', tokenErr.message);
+    }
+  }
+
+  await logVendorAudit({
+    actorUserId: req.user?.user_id,
+    vendorId: po.vendor_id || null,
+    entityType: 'serial_number',
+    entityId: String(createdRow.serial_id),
+    action: 'receive_unit_on_po_line',
+    payload: {
+      po_id: poId,
+      grn_id: finalGrnId,
+      line_index: lineIndex,
+      rental_start_date,
+      inventory_asset_code: createdRow.inventory_asset_code
+    }
+  });
+
+  await syncPoReceiveProgressStatus(poId, req.user?.user_id);
+
+  let ticketResult = null;
+  try {
+    ticketResult = await createTicketFromGrnReceive(pool, {
+      serialId: createdRow.serial_id,
+      serialNumber: createdRow.serial_number,
+      inventoryAssetCode: createdRow.inventory_asset_code,
+      po,
+      line,
+      actorUserId: req.user?.user_id
+    });
+  } catch (ticketErr) {
+    console.error('GRN ticket creation failed (unit receive):', ticketErr);
+    ticketResult = { ok: false, error: ticketErr.message };
+  }
+
+  const qtyMapsAfter = await buildReceivedQtyMapsForPoIds([poId]);
+  const linesAfter = enrichLineItemsWithReceived(parseLineItemsJson(po.line_items), qtyMapsAfter.get(poId));
+
+  res.status(201).json({
+    success: true,
+    message: ticketResult?.ok
+      ? `Unit received as ${createdRow.inventory_asset_code}. Repair ticket created for Floor Manager.`
+      : `Unit received as ${createdRow.inventory_asset_code}.`,
+    data: {
+      grn_id: finalGrnId,
+      rental_start_date,
+      created: createdRow,
+      lines: linesAfter,
+      ticket: ticketResult
     }
   });
 }
@@ -1662,6 +1892,8 @@ module.exports = {
   receiveProductSerial,
   receivePoLineBulkValidators,
   receivePoLineBulk,
+  receivePoLineUnitValidators,
+  receivePoLineUnit,
   generatedGrnValidators,
   getGeneratedGrnOverview,
   grnReceivedProductsValidators,

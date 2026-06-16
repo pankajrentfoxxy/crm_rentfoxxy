@@ -105,6 +105,21 @@ export function receivePoLineBulk(poId, body) {
   return api.post(`${base}/purchase-orders/${poId}/product-received/receive-bulk`, body);
 }
 
+/** Sequential receive — one unit at a time with TTSPL + ticket */
+export function receivePoLineUnit(poId, body) {
+  return api.post(`${base}/purchase-orders/${poId}/product-received/receive-unit`, body);
+}
+
+/** Create laptop-side capture link for auto serial read */
+export function createGrnCaptureToken(poId, body) {
+  return api.post(`${base}/purchase-orders/${poId}/grn-capture-tokens`, body);
+}
+
+/** Poll capture token until serial is submitted from laptop */
+export function fetchGrnCaptureTokenStatus(token) {
+  return api.get(`${base}/grn-capture-tokens/${token}`);
+}
+
 /** Laravel view_purchase_order_detail: vendor + KPIs + grouped GRNs */
 export function fetchGeneratedGrnOverview(poId) {
   return api.get(`${base}/purchase-orders/${poId}/generated-grn`);
