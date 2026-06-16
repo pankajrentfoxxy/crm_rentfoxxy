@@ -893,10 +893,19 @@ export default function ProductReceivedPage() {
                       onChange={(e) => setCurrentSerial(e.target.value)}
                     />
                     <p className="text-[11px] text-slate-500 m-0 leading-relaxed">
-                      On the <strong>received laptop</strong>, open the capture link — it reads the hardware serial
-                      (Windows BIOS / Mac) and sends it here. Then click Receive to assign{' '}
-                      <span className="font-mono">TTSPL####</span> and create the floor ticket.
+                      On the <strong>received laptop</strong>, open the capture link (or paste the copied link).
+                      Copy the PowerShell / Terminal command shown there and run it — serial auto-fills here within a few seconds.
+                      No CRM install needed on the laptop.
                     </p>
+                    {captureUrl && /localhost|127\.0\.0\.1/.test(captureUrl) ? (
+                      <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded-lg p-2 m-0">
+                        Dev mode: this link only works on the same PC. Use{' '}
+                        <strong>staging.rentfoxxy.com</strong> for real GRN on other laptops.
+                      </p>
+                    ) : null}
+                    {captureUrl && !/localhost|127\.0\.0\.1/.test(captureUrl) ? (
+                      <p className="text-[10px] text-slate-400 m-0 font-mono break-all">{captureUrl}</p>
+                    ) : null}
                   </div>
                 </div>
               )}

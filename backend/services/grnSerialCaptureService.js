@@ -3,8 +3,28 @@ const pool = require('../config/db');
 
 const TOKEN_TTL_MINUTES = 30;
 
-function frontendBaseUrl() {
+function resolvePublicFrontendUrl(req) {
+  if (process.env.GRN_CAPTURE_PUBLIC_URL) {
+    return String(process.env.GRN_CAPTURE_PUBLIC_URL).trim().replace(/\/$/, '');
+  }
+  const origin = req?.headers?.origin;
+  if (origin && /^https?:\/\//i.test(origin)) {
+    return origin.replace(/\/$/, '');
+  }
+  const referer = req?.headers?.referer;
+  if (referer) {
+    try {
+      return new URL(referer).origin;
+    } catch {
+      /* ignore */
+    }
+  }
   const raw = process.env.FRONTEND_URL || 'http://localhost:3000';
+  return String(raw).split(',')[0].trim().replace(/\/$/, '');
+}
+
+function frontendBaseUrl() {
+  const raw = process.env.GRN_CAPTURE_PUBLIC_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
   return String(raw).split(',')[0].trim().replace(/\/$/, '');
 }
 
@@ -25,6 +45,7 @@ async function createCaptureToken({
   unitIndex,
   totalUnits,
   createdBy,
+  req,
 }) {
   const tokenId = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + TOKEN_TTL_MINUTES * 60 * 1000);
@@ -34,7 +55,8 @@ async function createCaptureToken({
      VALUES ($1,$2,$3,$4,$5,$6,$7)`,
     [tokenId, poId, lineIndex, unitIndex, totalUnits, createdBy || null, expiresAt]
   );
-  const captureUrl = `${frontendBaseUrl()}/grn-capture/${tokenId}`;
+  const feBase = resolvePublicFrontendUrl(req);
+  const captureUrl = `${feBase}/grn-capture/${tokenId}`;
   return { token: tokenId, capture_url: captureUrl, expires_at: expiresAt.toISOString() };
 }
 
@@ -154,5 +176,6 @@ module.exports = {
   markTokenUsed,
   cancelPendingTokensForSlot,
   frontendBaseUrl,
+  resolvePublicFrontendUrl,
   apiBaseUrl,
 };

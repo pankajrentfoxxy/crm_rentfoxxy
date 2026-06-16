@@ -19,19 +19,23 @@ async function createGrnCaptureToken(req, res) {
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
 
   try {
+    const api = apiBaseUrl(req);
     const data = await createCaptureToken({
       poId: Number(req.params.poId),
       lineIndex: Number(req.body.line_index),
       unitIndex: Number(req.body.unit_index),
       totalUnits: Number(req.body.total_units),
       createdBy: req.user?.user_id,
+      req,
     });
+    const token = data.token;
+    const psCommand = `$s=(Get-CimInstance Win32_BIOS).SerialNumber.Trim().ToUpper(); Invoke-RestMethod -Uri "${api}/grn-capture/${token}" -Method Post -Body (@{serial_number=$s}|ConvertTo-Json) -ContentType "application/json"`;
     res.json({
       success: true,
       data: {
         ...data,
-        api_base_url: apiBaseUrl(req),
-        agent_url: 'http://127.0.0.1:19527',
+        api_base_url: api,
+        ps_command: psCommand,
       },
     });
   } catch (e) {
