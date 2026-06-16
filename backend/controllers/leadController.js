@@ -34,7 +34,7 @@ async function attachQuotationMeta(lead) {
   return lead;
 }
 
-const LEAD_STATUSES = ['Pending', 'Cold', 'Warm', 'Hot', 'Gone', 'Hold', 'Rejected', 'Call Back', 'Deal', 'Demo'];
+const LEAD_STATUSES = ['Pending', 'Cold', 'Warm', 'Hot', 'Gone', 'Hold', 'Rejected', 'Call Back', 'Deal', 'Demo', 'Repeat'];
 const LEAD_SOURCE_OPTIONS = ['Google', 'LinkedIn', 'Team', 'References', 'Apollo'];
 
 const csvEscape = (value) => {

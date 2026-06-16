@@ -176,7 +176,7 @@ exports.getTickets = async (req, res) => {
     const privilegedRoles = ['admin', 'floor_manager', 'manager'];
 
     if (req.user.role === 'qc' && !privilegedRoles.includes(req.user.role)) {
-      query += ` AND s.stage_name IN ('QC1', 'QC2')`;
+      query += ` AND s.stage_name IN ('QC1', 'QC2', 'Dispatch QC')`;
     }
 
     if (!privilegedRoles.includes(req.user.role)) {
@@ -325,14 +325,23 @@ exports.getTicketById = async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT t.*, 
+      `SELECT t.*,
               s.stage_name, s.stage_order,
               tm.team_name,
-              u.name as assigned_user_name
+              u.name as assigned_user_name,
+              COALESCE(vsn.extra->>'gpu', '') AS gpu,
+              COALESCE(vsn.extra->>'screen_size', '') AS screen_size,
+              COALESCE(vsn.extra->>'generation', '') AS generation,
+              COALESCE(vsn.extra->>'os', '') AS os,
+              COALESCE(vsn.extra->>'model', t.model) AS model_name,
+              COALESCE(vsn.extra->>'condition', '') AS condition,
+              COALESCE(vsn.inventory_asset_code, t.ttspl_id) AS ttspl_display,
+              vsn.extra AS vsn_extra
        FROM tickets t
        LEFT JOIN stages s ON t.current_stage_id = s.stage_id
        LEFT JOIN teams tm ON t.assigned_team_id = tm.team_id
        LEFT JOIN users u ON t.assigned_user_id = u.user_id
+       LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = t.vendor_serial_id
        WHERE t.ticket_id = $1`,
       [id]
     );

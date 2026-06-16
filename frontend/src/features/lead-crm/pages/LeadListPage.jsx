@@ -4,7 +4,7 @@ import { Download, LayoutGrid, List, Plus, Upload } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../../context/AuthContext';
 import PermissionGate from '../../../components/PermissionGate';
-import { LEAD_SOURCES, LEAD_STATUSES, STATUS_COLORS, INQUIRY_TYPES } from '../leadConstants';
+import { LEAD_SOURCES, LEAD_STATUSES, STAGES_BY_STATUS, STATUS_COLORS, INQUIRY_TYPES } from '../leadConstants';
 import {
   assignLeads, exportLeadsCsv, getLeads, getUsers, importLeadsCsv, updateLeadStatus,
 } from '../leadCrmApi';
@@ -13,6 +13,7 @@ import {
 } from '../leadCrmUtils';
 import LeadCard from '../components/LeadCard';
 import LeadFormDrawer from '../components/LeadFormDrawer';
+import QuickStatusUpdate from '../components/QuickStatusUpdate';
 
 const PAGE_SIZE = 25;
 const VIEW_KEY = 'lead_crm_view_mode';
@@ -102,6 +103,8 @@ export default function LeadListPage() {
     if (!dragLead || dragLead.status === status) return;
     try {
       const payload = { status, notes: `Moved via kanban to ${status}` };
+      const stages = STAGES_BY_STATUS[status] || [];
+      if (stages.length === 1) payload.lead_stage = stages[0];
       if (status === 'Deal' || status === 'Demo') {
         const gst = dragLead.gstNumber || dragLead.research?.gst;
         if (gst) payload.gst_number = gst;
@@ -144,7 +147,7 @@ export default function LeadListPage() {
   };
 
   const columnHeaderClass = (status) => {
-    if (['Deal', 'Demo'].includes(status)) return 'bg-green-50 text-green-800 border-green-100';
+    if (['Deal', 'Demo', 'Repeat'].includes(status)) return 'bg-green-50 text-green-800 border-green-100';
     if (['Gone', 'Rejected'].includes(status)) return 'bg-rose-50 text-rose-800 border-rose-100';
     return 'bg-gray-50 text-gray-800 border-gray-100';
   };
@@ -253,7 +256,7 @@ export default function LeadListPage() {
                 </div>
                 <div className="flex-1 overflow-y-auto max-h-[calc(100vh-220px)] space-y-2 p-2 bg-gray-50/80 border border-t-0 border-gray-100 rounded-b-xl">
                   {col.map((lead) => (
-                    <LeadCard key={lead.leadId} lead={lead}
+                    <LeadCard key={lead.leadId} lead={lead} onRefresh={load}
                       onDragStart={(_e, l) => setDragLead(l)} onDragEnd={() => setDragLead(null)} />
                   ))}
                 </div>
@@ -287,7 +290,6 @@ export default function LeadListPage() {
               <tbody>
                 {paged.map((lead, i) => {
                   const fu = followUpTone(lead.followUpDate);
-                  const st = STATUS_COLORS[lead.status] || STATUS_COLORS.Pending;
                   return (
                     <tr key={lead.leadId} className="border-t border-gray-100 hover:bg-gray-50/50">
                       <td className="p-3">
@@ -306,8 +308,10 @@ export default function LeadListPage() {
                       <td className="p-3 text-xs">{formatConfig(lead)}</td>
                       <td className="p-3">{lead.quantityRequired || '—'}</td>
                       <td className="p-3">{formatInquiry(lead.inquiryType)}</td>
-                      <td className="p-3"><span className={`px-2 py-0.5 rounded-full text-xs ${st.bg} ${st.text}`}>{lead.status}</span></td>
-                      <td className="p-3 text-xs">{lead.leadStage || '—'}</td>
+                      <td className="p-3">
+                        <QuickStatusUpdate lead={lead} onUpdated={load} />
+                      </td>
+                      <td className="p-3 text-xs text-gray-500">{lead.leadStage || '—'}</td>
                       <td className="p-3 text-xs">{lead.assignedUser?.name || '—'}</td>
                       <td className={`p-3 text-xs ${fu === 'overdue' ? 'text-red-600 font-medium' : fu === 'today' ? 'text-amber-600' : 'text-green-600'}`}>
                         {formatFollowUpDateTime(lead.followUpDate, lead.followUpTime)}

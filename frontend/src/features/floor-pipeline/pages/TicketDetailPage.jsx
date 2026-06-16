@@ -18,7 +18,7 @@ import {
   startWork
 } from '../floorPipelineApi';
 import {
-  configSummary,
+  configBadges,
   isFloorManagerRole,
   isQcRole,
   isTechnicianRole,
@@ -37,7 +37,7 @@ import TtsplHistoryDrawer from '../components/TtsplHistoryDrawer';
 
 const HW_WORK_STAGES = ['Assembly & Software', 'Final Testing', 'Chip Level Repair', 'Body & Paint'];
 // Stages where the assignee must scan/confirm the machine and run a work timer.
-const TIMED_WORK_STAGES = ['Diagnosis', 'Assembly & Software', 'Final Testing', 'Chip Level Repair', 'Body & Paint', 'QC1', 'QC2'];
+const TIMED_WORK_STAGES = ['Diagnosis', 'Assembly & Software', 'Final Testing', 'Chip Level Repair', 'Body & Paint', 'QC1', 'QC2', 'Dispatch QC'];
 const STAGE_TASK_STAGES = ['Assembly & Software', 'Final Testing'];
 
 function fmtElapsed(ms) {
@@ -117,7 +117,8 @@ export default function TicketDetailPage() {
     if (!ticket?.ticket_id) return;
     const currentStage = ticket.stage_name;
     if (currentStage === 'QC1') {
-      getNextAssignee(ticket.ticket_id, 'QC2')
+      const nextStage = ticket.ticket_type === 'sales_order_qc' ? 'Dispatch QC' : 'QC2';
+      getNextAssignee(ticket.ticket_id, nextStage)
         .then((r) => {
           setNextAssignee(r.data?.assignee || null);
           setNextAssigneeWarning(!!r.data?.team_has_no_members);
@@ -140,7 +141,7 @@ export default function TicketDetailPage() {
       setNextAssignee(null);
       setNextAssigneeWarning(false);
     }
-  }, [ticket?.ticket_id, ticket?.stage_name]);
+  }, [ticket?.ticket_id, ticket?.stage_name, ticket?.ticket_type]);
   const stage = ticket?.stage_name;
   const fm = isFloorManagerRole(user?.role);
   const tech = isTechnicianRole(user?.role);
@@ -158,7 +159,7 @@ export default function TicketDetailPage() {
     let taskTab = null;
     if (stage === 'Diagnosis') taskTab = { id: 'diagnosis', label: 'Diagnosis' };
     else if (STAGE_TASK_STAGES.includes(stage)) taskTab = { id: 'task', label: `${stage} Task` };
-    else if (['QC1', 'QC2'].includes(stage)) taskTab = { id: 'qc', label: 'QC Checklist' };
+    else if (['QC1', 'QC2', 'Dispatch QC'].includes(stage)) taskTab = { id: 'qc', label: 'QC Checklist' };
     const tabs = taskTab ? [taskTab, ...base] : base;
     if (['Chip Level Repair', 'Body & Paint'].includes(stage)) tabs.push({ id: 'notes', label: 'Work Notes' });
     if (ticket?.chip_repair_required) tabs.push({ id: 'chip', label: 'Chip Repair' });
@@ -172,7 +173,7 @@ export default function TicketDetailPage() {
     if (!s) return;
     if (s === 'Diagnosis') setTab('diagnosis');
     else if (STAGE_TASK_STAGES.includes(s)) setTab('task');
-    else if (['QC1', 'QC2'].includes(s)) setTab('qc');
+    else if (['QC1', 'QC2', 'Dispatch QC'].includes(s)) setTab('qc');
     else setTab('overview');
   }, [ticket?.stage_name]);
 
@@ -205,9 +206,9 @@ export default function TicketDetailPage() {
     setQcPickerOpen(true);
   };
 
-  const move = async (toStage, reason, assignedUserId) => {
-    if (reason !== undefined && (!reason || reason.trim().length < 10)) {
-      toast.error('Reason required (min 10 characters) for fail actions');
+  const move = async (toStage, reason, assignedUserId, { minReasonLen = 10 } = {}) => {
+    if (reason !== undefined && (!reason || reason.trim().length < minReasonLen)) {
+      toast.error(`Reason required (min ${minReasonLen} characters) for fail actions`);
       return;
     }
     try {
@@ -275,9 +276,24 @@ export default function TicketDetailPage() {
     }
   }
   if ((qc || fm) && stage === 'QC1') {
+    const nextQcStage = ticket.ticket_type === 'sales_order_qc' ? 'Dispatch QC' : 'QC2';
+    const nextLabel = ticket.ticket_type === 'sales_order_qc'
+      ? 'QC1 PASS — Move to Dispatch QC'
+      : 'QC1 PASS — Move to QC2';
     stageButtons.push(
-      { label: 'QC1 PASS — Move to QC2', action: () => move('QC2'), success: true },
+      { label: nextLabel, action: () => move(nextQcStage), success: true },
       { label: 'QC1 FAIL — Send back', action: () => move('Assembly & Software', failReason), danger: true, needsReason: true }
+    );
+  }
+  if ((qc || fm) && stage === 'Dispatch QC') {
+    stageButtons.push(
+      { label: 'DISPATCH QC PASS — Laptop Ready for DC', action: () => move('Inventory'), success: true },
+      {
+        label: 'DISPATCH QC FAIL — Send back to tech',
+        action: () => move('Assembly & Software', failReason, undefined, { minReasonLen: 5 }),
+        danger: true,
+        needsReason: true
+      }
     );
   }
   if ((qc || fm) && stage === 'QC2') {
@@ -295,45 +311,35 @@ export default function TicketDetailPage() {
 
   return (
     <div className="pb-10">
-      <div className="rounded-xl border border-gray-100 bg-white shadow-sm px-4 py-3 mb-4 flex flex-wrap items-center gap-3">
-        <Link to="/floor-pipeline/tickets" className="text-sm text-blue-600 hover:underline">← Back</Link>
-        <span className="text-slate-300">|</span>
-        <span className="font-mono font-bold">#{ticket.ticket_id}</span>
-        <span className="font-mono text-blue-700 font-semibold">{ticket.ttspl_id || '—'}</span>
-        <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold">{stage}</span>
-        <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${pri.className}`}>{pri.label}</span>
-        <span className="text-sm text-slate-600 hidden sm:inline">{configSummary(ticket)}</span>
+      <div className="rounded-xl border border-gray-100 bg-white shadow-sm px-4 py-3 mb-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <Link to="/floor-pipeline/tickets" className="text-sm text-blue-600 hover:underline">← Back</Link>
+          <span className="text-slate-300">|</span>
+          <span className="font-mono font-bold">#{ticket.ticket_id}</span>
+          <span className="font-mono text-blue-700 font-semibold">{ticket.ttspl_display || ticket.ttspl_id || '—'}</span>
+          <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold">{stage}</span>
+          <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${pri.className}`}>{pri.label}</span>
+          {ticket.ticket_type === 'sales_order_qc' ? (
+            <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-orange-100 text-orange-800 border border-orange-200">
+              Sales Order
+            </span>
+          ) : null}
+        </div>
+        <div className="flex flex-wrap gap-1 mt-2">
+          {configBadges(ticket).map((b) => (
+            <span
+              key={b.label}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-xs"
+            >
+              <span className="text-slate-400 text-[10px] uppercase tracking-wide">{b.label}:</span>
+              <span className="font-medium">{b.value}</span>
+            </span>
+          ))}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
         <div className="min-w-0">
-          {needsStart ? (
-            <div className="rounded-xl border-2 border-blue-200 bg-blue-50 p-5 mb-4">
-              <h3 className="font-semibold text-blue-900">Verify machine to start work</h3>
-              <p className="text-sm text-blue-800 mt-1">
-                Scan or type the <strong>TTSPL ID</strong> or <strong>Serial number</strong> of the laptop in front of you.
-                Your stage timer starts once it&apos;s verified.
-              </p>
-              <div className="flex gap-2 mt-3">
-                <input
-                  value={verifyInput}
-                  onChange={(e) => setVerifyInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') handleStartWork(); }}
-                  placeholder="TTSPL ID or Serial number"
-                  className="flex-1 border rounded-lg px-3 py-2 text-sm"
-                  autoFocus
-                />
-                <button
-                  type="button"
-                  disabled={starting}
-                  onClick={handleStartWork}
-                  className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold disabled:opacity-50"
-                >
-                  Start work
-                </button>
-              </div>
-            </div>
-          ) : null}
           <div className="flex gap-1 overflow-x-auto border-b mb-4 pb-1">
             {visibleTabs.map((t) => (
               <button
@@ -428,9 +434,20 @@ export default function TicketDetailPage() {
         <aside className="space-y-4">
           <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm text-sm sticky top-4">
             <h3 className="text-xs font-semibold uppercase text-slate-500 mb-2">TTSPL Info</h3>
-            <p className="font-mono font-bold text-blue-700">{ticket.ttspl_id || '—'}</p>
-            <p className="text-slate-600 mt-1">{configSummary(ticket)}</p>
-            <p className="text-xs text-slate-500 mt-2">{ticket.initial_condition || '—'}</p>
+            <div className="flex flex-col gap-1.5">
+              <p className="font-mono font-bold text-blue-700 text-sm">{ticket.ttspl_display || ticket.ttspl_id || '—'}</p>
+              <div className="flex flex-wrap gap-1">
+                {configBadges(ticket).map((b, i) => (
+                  <React.Fragment key={b.label}>
+                    {i > 0 ? <span className="text-slate-300">·</span> : null}
+                    <span className="text-xs text-slate-600">
+                      <span className="text-slate-400">{b.label}:</span> {b.value}
+                    </span>
+                  </React.Fragment>
+                ))}
+              </div>
+            </div>
+            <p className="text-xs text-slate-500 mt-2">{ticket.initial_condition || ticket.condition || '—'}</p>
 
             <h3 className="text-xs font-semibold uppercase text-slate-500 mt-4 mb-2">Current Assignment</h3>
             <p><span className="text-slate-500">Stage:</span> {stage}</p>
@@ -459,51 +476,86 @@ export default function TicketDetailPage() {
             </button>
 
             <h3 className="text-xs font-semibold uppercase text-slate-500 mt-4 mb-2">Stage Actions</h3>
-            {stageButtons.some((b) => b.needsReason) ? (
-              <textarea
-                className="w-full rounded-lg border text-xs p-2 min-h-[60px] mb-2"
-                placeholder="Reason (required for fail actions) — e.g. RAM mismatch, dead pixel…"
-                value={failReason}
-                onChange={(e) => setFailReason(e.target.value)}
-              />
-            ) : null}
-            <div className="space-y-2">
-              {stageButtons.map((btn) => (
-                <div key={btn.label}>
+            {needsStart ? (
+              <div className="rounded-xl border-2 border-blue-200 bg-blue-50 p-4 mb-3">
+                <h3 className="font-semibold text-blue-900 text-sm">Verify machine first</h3>
+                <p className="text-xs text-blue-800 mt-1">
+                  Enter the TTSPL ID or Serial number to start your work timer.
+                  Stage actions will unlock after verification.
+                </p>
+                <div className="flex gap-2 mt-2">
+                  <input
+                    value={verifyInput}
+                    onChange={(e) => setVerifyInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleStartWork(); }}
+                    placeholder="TTSPL ID or Serial number"
+                    className="flex-1 border rounded-lg px-2 py-1.5 text-xs"
+                    autoFocus
+                  />
                   <button
                     type="button"
-                    onClick={btn.action}
-                    className={`w-full py-2 rounded-lg text-xs font-semibold ${
-                      btn.primary ? 'bg-blue-600 text-white' :
-                      btn.success ? 'bg-green-600 text-white' :
-                      btn.danger || btn.destructive ? 'bg-red-700 text-white' :
-                      btn.warn ? 'bg-amber-500 text-white' :
-                      btn.pink ? 'bg-pink-500 text-white' :
-                      'bg-slate-100 text-slate-800'
-                    }`}
+                    disabled={starting}
+                    onClick={handleStartWork}
+                    className="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold disabled:opacity-50"
                   >
-                    {btn.label}
+                    Start
                   </button>
-                  {stage === 'QC1' && btn.label.includes('QC1 PASS') && nextAssignee ? (
-                    <p className="text-xs text-slate-500 mt-1 text-center">
-                      Will assign to:{' '}
-                      <span className="font-medium text-slate-700">{nextAssignee.name}</span>
-                    </p>
-                  ) : null}
-                  {stage === 'QC1' && btn.label.includes('QC1 PASS') && !nextAssignee && nextAssigneeWarning ? (
-                    <p className="text-xs text-amber-600 mt-1 text-center">
-                      QC2 team has no members — ticket will be unassigned
-                    </p>
-                  ) : null}
-                  {stage === 'Final Testing' && btn.label.includes('Move to QC1') && nextAssignee ? (
-                    <p className="text-xs text-slate-500 mt-1 text-center">
-                      Will assign to:{' '}
-                      <span className="font-medium text-slate-700">{nextAssignee.name}</span>
-                    </p>
-                  ) : null}
                 </div>
-              ))}
-            </div>
+              </div>
+            ) : (
+              <>
+                {stageButtons.some((b) => b.needsReason) ? (
+                  <textarea
+                    className="w-full rounded-lg border text-xs p-2 min-h-[60px] mb-2"
+                    placeholder="Reason (required for fail actions) — e.g. RAM mismatch, dead pixel…"
+                    value={failReason}
+                    onChange={(e) => setFailReason(e.target.value)}
+                  />
+                ) : null}
+                <div className="space-y-2">
+                  {stageButtons.map((btn) => (
+                    <div key={btn.label}>
+                      <button
+                        type="button"
+                        onClick={btn.action}
+                        className={`w-full py-2 rounded-lg text-xs font-semibold ${
+                          btn.primary ? 'bg-blue-600 text-white' :
+                          btn.success ? 'bg-green-600 text-white' :
+                          btn.danger || btn.destructive ? 'bg-red-700 text-white' :
+                          btn.warn ? 'bg-amber-500 text-white' :
+                          btn.pink ? 'bg-pink-500 text-white' :
+                          'bg-slate-100 text-slate-800'
+                        }`}
+                      >
+                        {btn.label}
+                      </button>
+                      {stage === 'QC1' && btn.label.includes('QC1 PASS') && nextAssignee ? (
+                        <p className="text-xs text-slate-500 mt-1 text-center">
+                          Will assign to:{' '}
+                          <span className="font-medium text-slate-700">{nextAssignee.name}</span>
+                        </p>
+                      ) : null}
+                      {stage === 'QC1' && btn.label.includes('QC1 PASS') && !nextAssignee && nextAssigneeWarning ? (
+                        <p className="text-xs text-amber-600 mt-1 text-center">
+                          {ticket.ticket_type === 'sales_order_qc' ? 'Dispatch QC' : 'QC2'} team has no members — ticket will be unassigned
+                        </p>
+                      ) : null}
+                      {stage === 'Final Testing' && btn.label.includes('Move to QC1') && nextAssignee ? (
+                        <p className="text-xs text-slate-500 mt-1 text-center">
+                          Will assign to:{' '}
+                          <span className="font-medium text-slate-700">{nextAssignee.name}</span>
+                        </p>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+                {STAGE_TASK_STAGES.includes(stage) ? (
+                  <p className="text-xs text-slate-400 mt-2 text-center">
+                    Complete the task checklist above, then click the move button to advance.
+                  </p>
+                ) : null}
+              </>
+            )}
           </div>
         </aside>
       </div>

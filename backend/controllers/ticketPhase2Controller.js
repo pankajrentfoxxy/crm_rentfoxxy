@@ -6,7 +6,7 @@ const ttsplAuditService = require('../services/ttsplAuditService');
 const { sendHighlightedTicketAlert } = require('../services/highlightedTicketAlertService');
 
 const PRIVILEGED_ROLES = ['admin', 'floor_manager', 'manager'];
-const QC_STAGES = ['QC1', 'QC2'];
+const QC_STAGES = ['QC1', 'QC2', 'Dispatch QC'];
 
 async function getStageByName(db, stageName) {
   const r = await db.query(
@@ -234,6 +234,19 @@ exports.moveToStage = async (req, res) => {
     const currentStageName = currentStage?.stage_name;
     const nextStage = await getStageByName(client, to_stage_name);
 
+    // Auto-end any open work log when moving stage
+    try {
+      await client.query(
+        `UPDATE work_logs
+         SET end_time = NOW(),
+             duration_minutes = EXTRACT(EPOCH FROM (NOW() - start_time)) / 60
+         WHERE ticket_id = $1 AND end_time IS NULL`,
+        [id]
+      );
+    } catch (wlErr) {
+      console.warn('Could not auto-end work log on stage move:', wlErr.message);
+    }
+
     if (!nextStage) {
       await client.query('ROLLBACK');
       return res.status(400).json({ success: false, message: 'Target stage not found' });
@@ -242,8 +255,11 @@ exports.moveToStage = async (req, res) => {
     let conditionHint = null;
     if (currentStageName === 'QC1' && to_stage_name === 'Assembly & Software') conditionHint = 'qc1_failed';
     if (currentStageName === 'QC1' && to_stage_name === 'QC2') conditionHint = 'qc1_passed';
+    if (currentStageName === 'QC1' && to_stage_name === 'Dispatch QC') conditionHint = 'qc1_passed_so';
     if (currentStageName === 'QC2' && to_stage_name === 'QC1') conditionHint = 'qc2_failed';
     if (currentStageName === 'QC2' && to_stage_name === 'Inventory') conditionHint = 'qc2_passed';
+    if (currentStageName === 'Dispatch QC' && to_stage_name === 'Inventory') conditionHint = 'dispatch_qc_passed';
+    if (currentStageName === 'Dispatch QC' && to_stage_name === 'Assembly & Software') conditionHint = 'dispatch_qc_failed';
 
     const privileged = PRIVILEGED_ROLES.includes(req.user.role);
     if (!privileged && req.user.role === 'qc' && !QC_STAGES.includes(currentStageName)) {
@@ -295,6 +311,44 @@ exports.moveToStage = async (req, res) => {
       highlightedReason = null;
     }
 
+    if (currentStageName === 'QC1' && to_stage_name === 'Dispatch QC') {
+      updates.push(`qc1_passed_at = NOW()`);
+      updates.push(`highlighted = FALSE`);
+      updates.push(`highlighted_reason = NULL`);
+      highlighted = false;
+      highlightedReason = null;
+    }
+
+    if (currentStageName === 'Dispatch QC' && to_stage_name === 'Assembly & Software') {
+      if (!reason?.trim() || reason.trim().length < 5) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: 'Dispatch QC fail reason is required (min 5 characters)' });
+      }
+      qcFailCount += 1;
+      updates.push(`qc_fail_count = $${pi++}`); params.push(qcFailCount);
+      highlighted = true;
+      highlightedReason = `Dispatch QC failed: ${reason.trim()}`;
+      updates.push(`highlighted = TRUE`);
+      updates.push(`highlighted_reason = $${pi++}`); params.push(highlightedReason);
+      await ttsplAuditService.logTtsplEvent({
+        ttsplId: ticket.ttspl_id,
+        vendorSerialId: ticket.vendor_serial_id,
+        eventType: 'qc1_failed',
+        description: highlightedReason,
+        metadata: { reason: reason.trim(), ticket_id: ticket.ticket_id, dispatch_qc: true },
+        actorUserId: req.user.user_id,
+        actorName: req.user.name,
+        db: client
+      });
+    }
+
+    if (currentStageName === 'Dispatch QC' && to_stage_name === 'Inventory') {
+      updates.push(`highlighted = FALSE`);
+      updates.push(`highlighted_reason = NULL`);
+      highlighted = false;
+      highlightedReason = null;
+    }
+
     if (currentStageName === 'QC2' && to_stage_name === 'QC1') {
       if (!reason?.trim()) {
         await client.query('ROLLBACK');
@@ -324,7 +378,7 @@ exports.moveToStage = async (req, res) => {
       updates.push(`highlighted_reason = $${pi++}`); params.push(highlightedReason);
     }
 
-    if (to_stage_name === 'Assembly & Software' && req.user.role === 'technician') {
+    if (to_stage_name === 'Assembly & Software' && ['technician', 'team_member', 'team_lead'].includes(req.user.role)) {
       updates.push(`highlighted = FALSE`);
       updates.push(`highlighted_reason = NULL`);
       highlighted = false;
@@ -379,11 +433,13 @@ exports.moveToStage = async (req, res) => {
       'Chip Level Repair→Assembly & Software',
       'Body & Paint→Assembly & Software',
       'QC1→Assembly & Software',
+      'Dispatch QC→Assembly & Software',
     ]);
 
     const ROUND_ROBIN_TRANSITIONS = new Set([
       'Final Testing→QC1',
       'QC1→QC2',
+      'QC1→Dispatch QC',
       'QC2→QC1',
     ]);
 

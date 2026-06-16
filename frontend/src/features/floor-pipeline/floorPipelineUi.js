@@ -13,6 +13,7 @@ export const KANBAN_STAGES = [
   'Body & Paint',
   'QC1',
   'QC2',
+  'Dispatch QC',
   'Inventory'
 ];
 
@@ -30,7 +31,7 @@ export const STAGE_GROUPS = [
   {
     label: 'QUALITY CONTROL',
     color: 'text-indigo-600',
-    stages: ['QC1', 'QC2']
+    stages: ['QC1', 'QC2', 'Dispatch QC']
   },
   {
     label: 'COMPLETE',
@@ -41,7 +42,7 @@ export const STAGE_GROUPS = [
 
 export function stageCategory(stageName) {
   if (stageName === 'Floor Manager') return 'Floor Manager';
-  if (['QC1', 'QC2'].includes(stageName)) return 'QC Team';
+  if (['QC1', 'QC2', 'Dispatch QC'].includes(stageName)) return 'QC Team';
   if (stageName === 'Inventory') return 'Complete';
   return 'Hardware & Software';
 }
@@ -57,6 +58,7 @@ export function stageCategoryBadge(stageName) {
 export const STAGE_COLUMN_STYLE = {
   QC1: 'border-indigo-300 bg-indigo-50/40',
   QC2: 'border-indigo-300 bg-indigo-50/40',
+  'Dispatch QC': 'border-orange-200 bg-orange-50',
   'Chip Level Repair': 'border-amber-300 bg-amber-50/40',
   'Body & Paint': 'border-pink-300 bg-pink-50/40',
   default: 'border-gray-100 bg-slate-50/50'
@@ -75,11 +77,30 @@ export function priorityBadge(priority) {
 export function configSummary(ticket) {
   const parts = [
     ticket.brand,
+    ticket.model_name || ticket.model || null,
     ticket.processor,
+    ticket.generation || null,
     ticket.ram ? `${ticket.ram} RAM` : null,
-    ticket.storage
+    ticket.storage || null,
+    ticket.gpu && ticket.gpu !== 'Integrated' ? ticket.gpu : null,
+    ticket.screen_size ? `${ticket.screen_size}"` : null,
+    ticket.os ? `OS: ${ticket.os}` : null,
   ].filter(Boolean);
   return parts.join(' | ') || '—';
+}
+
+export function configBadges(ticket) {
+  return [
+    { label: 'Brand', value: ticket.brand },
+    { label: 'Model', value: ticket.model_name || ticket.model },
+    { label: 'CPU', value: [ticket.processor, ticket.generation].filter(Boolean).join(' ') },
+    { label: 'RAM', value: ticket.ram },
+    { label: 'Storage', value: ticket.storage },
+    { label: 'GPU', value: ticket.gpu && ticket.gpu !== 'Integrated' ? ticket.gpu : null },
+    { label: 'Screen', value: ticket.screen_size ? `${ticket.screen_size}"` : null },
+    { label: 'OS', value: ticket.os },
+    { label: 'Condition', value: ticket.condition },
+  ].filter((b) => b.value);
 }
 
 export function ticketAgeDays(createdAt) {
@@ -100,7 +121,7 @@ export function isQcRole(role) {
 }
 
 export function isTechnicianRole(role) {
-  return role === 'technician';
+  return ['team_member', 'team_lead', 'technician'].includes(role);
 }
 
 export const EVENT_ICONS = {

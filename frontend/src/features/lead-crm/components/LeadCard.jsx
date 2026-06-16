@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { GripVertical } from 'lucide-react';
 import { STATUS_COLORS } from '../leadConstants';
 import { formatConfig, formatCurrency, formatFollowUpDateTime, formatInquiry, followUpTone, relativeTime } from '../leadCrmUtils';
+import QuickStatusUpdate from './QuickStatusUpdate';
 
-export default function LeadCard({ lead, onDragStart, onDragEnd }) {
+export default function LeadCard({ lead, onDragStart, onDragEnd, onRefresh }) {
   const navigate = useNavigate();
   const statusStyle = STATUS_COLORS[lead.status] || STATUS_COLORS.Pending;
   const fuTone = followUpTone(lead.followUpDate);
@@ -57,6 +58,10 @@ export default function LeadCard({ lead, onDragStart, onDragEnd }) {
           <p className="text-xs text-gray-400 mt-0.5">
             🕐 {relativeTime(lead.lastActivityAt || lead.updatedAt)}
           </p>
+          <div className="mt-2 pt-2 border-t border-gray-100 flex items-center justify-between" onClick={(e) => e.stopPropagation()}>
+            <QuickStatusUpdate lead={lead} onUpdated={onRefresh} />
+            <span className="text-xs text-gray-400">{lead.leadStage || ''}</span>
+          </div>
         </div>
       </div>
     </div>
