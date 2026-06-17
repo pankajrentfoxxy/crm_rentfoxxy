@@ -127,7 +127,9 @@ export default function TicketDetailPage() {
 
   /** After QC submit / stage move: reload if user still has access, else return to list. */
   const handleWorkflowComplete = useCallback(async (meta = {}) => {
-    const { nextStage, fromStageMove } = meta;
+    const { nextStage } = meta;
+    const prevStage = stage;
+    const prevAssignedUserId = data?.ticket?.assigned_user_id;
 
     try {
       setLoading(true);
@@ -136,16 +138,44 @@ export default function TicketDetailPage() {
 
       const stillMine = privileged
         || Number(res.ticket?.assigned_user_id) === Number(user?.user_id);
-      const moved = stage && res.ticket?.stage_name !== stage;
+      const moved = prevStage && res.ticket?.stage_name !== prevStage;
+      const sameUserContinuity = moved
+        && Number(prevAssignedUserId) > 0
+        && Number(prevAssignedUserId) === Number(res.ticket?.assigned_user_id)
+        && Number(res.ticket?.assigned_user_id) === Number(user?.user_id);
 
-      if (!privileged && (!stillMine || (fromStageMove && moved))) {
+      // Keep the user on this page when the next stage is still assigned to them.
+      // Redirect only when ownership changed (or access is denied).
+      if (!privileged && !stillMine) {
         toast.success(`Ticket moved to ${res.ticket?.stage_name || nextStage || 'next stage'}`);
         navigate('/floor-pipeline/tickets');
         return;
       }
 
+      if (moved) {
+        toast.success(`Moved to ${res.ticket?.stage_name}`);
+      }
+
       setData(res);
       await reloadTicketHistory(res.ticket?.ttspl_id);
+
+      // Continuity safeguard:
+      // if stage moved to another timed stage for the SAME user and the timer is not
+      // running (rare race / backend miss), auto-start it to avoid verify blocking.
+      if (sameUserContinuity && TIMED_WORK_STAGES.includes(res.ticket?.stage_name)) {
+        try {
+          const activeRes = await getActiveWorkLog(id);
+          if (!activeRes.data?.active) {
+            const verifyValue = res.ticket?.ttspl_id || res.ticket?.ttspl_display || res.ticket?.serial_number;
+            if (verifyValue) {
+              await startWork(id, String(verifyValue));
+            }
+          }
+        } catch {
+          // Non-fatal: if auto-start fails, user can still verify manually.
+        }
+      }
+
       await loadActiveLog();
     } catch (e) {
       if (e.response?.status === 403) {
@@ -157,7 +187,7 @@ export default function TicketDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [id, stage, user?.user_id, privileged, navigate, reloadTicketHistory, loadActiveLog]);
+  }, [id, stage, data?.ticket?.assigned_user_id, user?.user_id, privileged, navigate, reloadTicketHistory, loadActiveLog]);
 
   const ticket = data?.ticket;
 
