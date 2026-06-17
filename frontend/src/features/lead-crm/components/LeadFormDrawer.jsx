@@ -4,6 +4,7 @@ import {
   COMPANY_TYPES, GENERATIONS, INQUIRY_TYPES, LAPTOP_BRANDS, LEAD_SOURCES,
   PROCESSORS, RAM_OPTIONS, STORAGE_OPTIONS, USE_CASES,
 } from '../leadConstants';
+import { INDIAN_STATES } from '../../../constants/indianStates';
 import { createLead, getUsers, updateLeadBasic, updateLeadProfile } from '../leadCrmApi';
 import toast from 'react-hot-toast';
 
@@ -183,7 +184,7 @@ export default function LeadFormDrawer({ open, lead, onClose, onSaved }) {
               {field('source', 'Source', { type: 'select', options: LEAD_SOURCES, required: true })}
               {field('inquiry_type', 'Inquiry Type', { type: 'select', options: INQUIRY_TYPES, required: true })}
               {field('city', 'City')}
-              {field('state', 'State')}
+              {field('state', 'State', { type: 'select', options: INDIAN_STATES })}
               {field('pincode', 'Pincode')}
             </div>
           </section>

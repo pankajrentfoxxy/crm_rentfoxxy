@@ -75,6 +75,25 @@ export function priorityBadge(priority) {
 }
 
 export function configSummary(ticket) {
+  const firstValue = (...keys) => {
+    for (const key of keys) {
+      const value = ticket?.[key];
+      if (value !== null && value !== undefined && String(value).trim() !== '') {
+        return String(value).trim();
+      }
+    }
+    return null;
+  };
+
+  const model = firstValue('model', 'model_name', 'new_model_name');
+  const displaySize = firstValue('screen_size', 'new_screen_size', 'display_size');
+  const processor = firstValue('processor', 'cpu', 'new_processor');
+  const generation = firstValue('generation', 'cpu_generation', 'new_generation');
+  const ram = firstValue('ram', 'new_ram');
+  const storage = firstValue('storage', 'new_storage');
+  const gpu = firstValue('gpu', 'graphics', 'new_gpu');
+  const brand = firstValue('brand', 'brand_name');
+
   const parts = [
     ticket.brand,
     ticket.model_name || ticket.model || null,
@@ -85,6 +104,13 @@ export function configSummary(ticket) {
     ticket.gpu && ticket.gpu !== 'Integrated' ? ticket.gpu : null,
     ticket.screen_size ? `${ticket.screen_size}"` : null,
     ticket.os ? `OS: ${ticket.os}` : null,
+    model ? (brand ? `${brand} - ${model}` : model) : brand,
+    displaySize ? `${displaySize}` : null,
+    processor,
+    generation,
+    ram ? `${ram} RAM` : null,
+    storage,
+    gpu
   ].filter(Boolean);
   return parts.join(' | ') || '—';
 }
