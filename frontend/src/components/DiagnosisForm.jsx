@@ -327,7 +327,7 @@ export default function DiagnosisForm({ api, ticket, onClose, onComplete, readOn
             alert('Diagnosis Submitted!');
             setShowRoutingModal(false);
             setRoutingStep(null);
-            if (onComplete) onComplete();
+            if (onComplete) onComplete({ fromStageMove: true });
         } catch (e) {
             alert('Error: ' + (e.response?.data?.message || e.message));
         } finally {

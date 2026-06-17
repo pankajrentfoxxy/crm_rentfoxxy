@@ -95,22 +95,14 @@ export function configSummary(ticket) {
   const brand = firstValue('brand', 'brand_name');
 
   const parts = [
-    ticket.brand,
-    ticket.model_name || ticket.model || null,
-    ticket.processor,
-    ticket.generation || null,
-    ticket.ram ? `${ticket.ram} RAM` : null,
-    ticket.storage || null,
-    ticket.gpu && ticket.gpu !== 'Integrated' ? ticket.gpu : null,
-    ticket.screen_size ? `${ticket.screen_size}"` : null,
-    ticket.os ? `OS: ${ticket.os}` : null,
     model ? (brand ? `${brand} - ${model}` : model) : brand,
     displaySize ? `${displaySize}` : null,
     processor,
     generation,
     ram ? `${ram} RAM` : null,
     storage,
-    gpu
+    gpu && gpu !== 'Integrated' ? gpu : null,
+    firstValue('os', 'new_os') ? `OS: ${firstValue('os', 'new_os')}` : null
   ].filter(Boolean);
   return parts.join(' | ') || '—';
 }

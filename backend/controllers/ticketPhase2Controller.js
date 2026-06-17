@@ -234,19 +234,6 @@ exports.moveToStage = async (req, res) => {
     const currentStageName = currentStage?.stage_name;
     const nextStage = await getStageByName(client, to_stage_name);
 
-    // Auto-end any open work log when moving stage
-    try {
-      await client.query(
-        `UPDATE work_logs
-         SET end_time = NOW(),
-             duration_minutes = EXTRACT(EPOCH FROM (NOW() - start_time)) / 60
-         WHERE ticket_id = $1 AND end_time IS NULL`,
-        [id]
-      );
-    } catch (wlErr) {
-      console.warn('Could not auto-end work log on stage move:', wlErr.message);
-    }
-
     if (!nextStage) {
       await client.query('ROLLBACK');
       return res.status(400).json({ success: false, message: 'Target stage not found' });

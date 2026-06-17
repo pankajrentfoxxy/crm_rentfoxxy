@@ -1,7 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { CheckCircle2, Circle, Loader2 } from 'lucide-react';
-import { getStageTask, saveStageTask } from '../floorPipelineApi';
+import { getStageTask, moveTicketStage, saveStageTask } from '../floorPipelineApi';
+
+const NEXT_STAGE_ON_COMPLETE = {
+  'Assembly & Software': 'Final Testing',
+  'Final Testing': 'QC1',
+};
 
 // Recommended refurb checklists. These are intentionally simple constants now and
 // can be moved to the editable stage_checklists table later.
@@ -62,9 +67,26 @@ export default function StageTaskPanel({ ticket, stageName, onSubmitted }) {
         notes,
         completed: complete,
       });
+
+      const nextStage = complete ? NEXT_STAGE_ON_COMPLETE[stageName] : null;
+      if (nextStage) {
+        const { data: moveRes } = await moveTicketStage(ticket.ticket_id, {
+          to_stage_name: nextStage,
+        });
+        if (!moveRes?.success) {
+          toast.error(moveRes?.message || 'Task saved but stage move failed');
+          onSubmitted?.();
+          return;
+        }
+        toast.success(`Task complete — moved to ${nextStage}`);
+        setNotes('');
+        onSubmitted?.({ nextStage });
+        return;
+      }
+
       setNotes('');
       toast.success(complete ? 'Task marked complete' : 'Progress saved');
-      onSubmitted && onSubmitted();
+      onSubmitted?.();
     } catch (e) {
       toast.error(e.response?.data?.message || 'Save failed');
     } finally {
@@ -126,7 +148,7 @@ export default function StageTaskPanel({ ticket, stageName, onSubmitted }) {
           Mark task complete
         </button>
       </div>
-      {!allDone && <p className="text-xs text-slate-400">Complete all checklist items to enable “Mark task complete”, then submit to the next stage from the right panel.</p>}
+      {!allDone && <p className="text-xs text-slate-400">Complete all checklist items to enable “Mark task complete”. Assembly tasks auto-advance to Final Testing.</p>}
     </div>
   );
 }

@@ -172,15 +172,20 @@ exports.getTickets = async (req, res) => {
       paramCount++;
     }
 
-    // Role-based visibility: Admin & Floor Manager see all; Team members see only tickets assigned to them
+    // Role-based visibility: Admin/Floor Manager/Manager see all.
+    // QC users can also see unassigned tickets in their QC team bucket.
     const privilegedRoles = ['admin', 'floor_manager', 'manager'];
+    const userTeamIds = (req.user.team_ids && req.user.team_ids.length > 0
+      ? req.user.team_ids
+      : (req.user.team_id != null ? [req.user.team_id] : []))
+      .map((v) => Number(v))
+      .filter((v) => Number.isInteger(v) && v > 0);
 
     if (req.user.role === 'qc' && !privilegedRoles.includes(req.user.role)) {
       query += ` AND s.stage_name IN ('QC1', 'QC2', 'Dispatch QC')`;
     }
 
     if (!privilegedRoles.includes(req.user.role)) {
-      // Team members: See ONLY tickets assigned to them (never unassigned tickets)
       if (view === 'completed') {
         query += ` AND (t.assigned_user_id = $${paramCount} OR EXISTS (
           SELECT 1 FROM activities a WHERE a.ticket_id = t.ticket_id AND a.user_id = $${paramCount}
@@ -189,10 +194,20 @@ exports.getTickets = async (req, res) => {
         params.push(req.user.user_id);
         paramCount++;
       } else {
-        // In-progress: must be assigned to this user (exclude NULL explicitly)
-        query += ` AND t.assigned_user_id IS NOT NULL AND t.assigned_user_id = $${paramCount}`;
-        params.push(req.user.user_id);
-        paramCount++;
+        if (req.user.role === 'qc' && userTeamIds.length > 0) {
+          // QC queue: include tickets assigned to me OR currently unassigned in my QC team bucket.
+          query += ` AND (
+            t.assigned_user_id = $${paramCount}
+            OR (t.assigned_user_id IS NULL AND t.assigned_team_id = ANY($${paramCount + 1}::int[]))
+          )`;
+          params.push(req.user.user_id, userTeamIds);
+          paramCount += 2;
+        } else {
+          // Other non-privileged users: only tickets assigned to them.
+          query += ` AND t.assigned_user_id IS NOT NULL AND t.assigned_user_id = $${paramCount}`;
+          params.push(req.user.user_id);
+          paramCount++;
+        }
       }
     } else {
       // Admins/Floor Managers: can filter by team_id if provided
@@ -355,11 +370,23 @@ exports.getTicketById = async (req, res) => {
 
     const ticket = result.rows[0];
 
-    // Team members can only view tickets assigned to them
+    // Team members can only view tickets assigned to them.
+    // QC users can additionally open unassigned tickets in their QC team bucket.
     const privilegedRoles = ['admin', 'floor_manager', 'manager'];
     if (!privilegedRoles.includes(req.user.role)) {
       const assignedToMe = Number(ticket.assigned_user_id) === Number(req.user.user_id);
-      if (!assignedToMe) {
+      const userTeamIds = (req.user.team_ids && req.user.team_ids.length > 0
+        ? req.user.team_ids
+        : (req.user.team_id != null ? [req.user.team_id] : []))
+        .map((v) => Number(v))
+        .filter((v) => Number.isInteger(v) && v > 0);
+      const qcStage = ['QC1', 'QC2', 'Dispatch QC'].includes(ticket.stage_name);
+      const inMyQcBucket = req.user.role === 'qc'
+        && qcStage
+        && ticket.assigned_user_id == null
+        && userTeamIds.includes(Number(ticket.assigned_team_id));
+
+      if (!assignedToMe && !inMyQcBucket) {
         return res.status(403).json({
           success: false,
           message: 'Access denied: you can only view tickets assigned to you'
