@@ -716,9 +716,12 @@ exports.getAddDeliveryChallanMeta = async (req, res) => {
       `SELECT dc_number FROM delivery_challan_lines WHERE sales_order_number = $1 LIMIT 1`,
       [salesOrderNumber]
     );
-    const [dcNumber, deliveryPersons, catalog] = await Promise.all([
+    const [dcNumber, deliveryPersons, deliveryTechnicians, catalog] = await Promise.all([
       existingDc.rows[0]?.dc_number || nextDocumentNumber('delivery_challan'),
       pool.query(`SELECT user_id, name, email FROM users WHERE status = 'active' ORDER BY name ASC LIMIT 100`),
+      pool.query(`SELECT technician_id, user_id, first_name, last_name, phone, email, is_active
+                    FROM delivery_technicians WHERE is_active = TRUE
+                   ORDER BY first_name, last_name`).catch(() => ({ rows: [] })),
       fetchCatalogAttributeOptions(),
     ]);
 
@@ -726,7 +729,7 @@ exports.getAddDeliveryChallanMeta = async (req, res) => {
     // generated from these — no re-selection of serials.
     const attachedRes = await pool.query(
       `SELECT sos.allocation_id, sos.line_id, sos.serial_id, sos.ttspl_id, sos.serial_number,
-              sos.qc_status, sos.status,
+              sos.qc_status, sos.status, sos.delivery_address, sos.is_wfh, sos.delivery_notes,
               COALESCE(vsn.extra->>'brand', vpd.brand) AS brand,
               COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', vpd.model) AS model,
               COALESCE(vsn.extra->>'processor', vpd.processor) AS processor,
@@ -769,6 +772,7 @@ exports.getAddDeliveryChallanMeta = async (req, res) => {
         id: u.user_id,
         name: u.name || u.email,
       })),
+      delivery_technicians: deliveryTechnicians.rows,
       catalog,
     });
   } catch (error) {
@@ -1616,25 +1620,38 @@ exports.updateDcDispatch = async (req, res) => {
         [dcNumber]
       );
       const statuses = cur.rows.map((r) => r.status);
-      if (statuses.some((s) => ['delivered', 'in_transit'].includes(s))) {
+      if (statuses.some((s) => ['delivered', 'in_transit', 'shipped', 'reached'].includes(s))) {
         await client.query('ROLLBACK');
         return res.status(409).json({ success: false, message: `DC already ${statuses.join('/')}` });
       }
+
+      // Courier/Porter ride external logistics -> 'shipped'. Inhouse technician
+      // picks up and carries -> 'in_transit' (lands in the technician bucket).
+      const newStatus = dispatchMode === 'inhouse' ? 'in_transit' : 'shipped';
+      const shipByValue = dispatchMode === 'inhouse' ? 'by_hand'
+        : dispatchMode === 'porter' ? 'by_porter' : 'by_courier';
 
       await client.query(
         `UPDATE delivery_challan_lines SET
           dispatch_mode = $1, ship_by = $2, courier_name = $3, awb_number = $4,
           porter_booking_id = $5, delivery_person_id = $6, estimated_delivery = $7,
-          status = 'in_transit', updated_at = NOW()
-         WHERE dc_number = $8`,
+          porter_tracking_id = $8, porter_order_id = $9, porter_booking_url = $10,
+          courier_tracking_url = $11, dispatched_at = NOW(),
+          status = $12, updated_at = NOW()
+         WHERE dc_number = $13`,
         [
           dispatchMode,
-          dispatchMode === 'inhouse' ? 'by_hand' : 'by_courier',
+          shipByValue,
           body.courier_name || null,
           body.awb_number || null,
-          body.porter_booking_id || null,
+          body.porter_booking_id || body.porter_tracking_id || null,
           toNullableInt(body.delivery_person_id),
           body.estimated_delivery || null,
+          body.porter_tracking_id || null,
+          body.porter_order_id || null,
+          body.porter_booking_url || null,
+          body.courier_tracking_url || null,
+          newStatus,
           dcNumber,
         ]
       );
@@ -1655,19 +1672,108 @@ exports.updateDcDispatch = async (req, res) => {
         });
       }
 
+      // Reflect dispatch on the SO serial allocations.
+      await client.query(
+        `UPDATE sales_order_serials SET status = 'dispatched', dc_number = $1, updated_at = NOW()
+          WHERE dc_number = $1 OR serial_id IN (
+            SELECT serial_id FROM vendor_serial_numbers
+             WHERE current_dc_number = $1 AND deleted_at IS NULL
+          )`,
+        [dcNumber]
+      ).catch(() => {});
+
       await client.query('COMMIT');
+      res.json({ success: true, message: 'Dispatch updated', status: newStatus });
+      return;
     } catch (txErr) {
       await client.query('ROLLBACK').catch(() => {});
       throw txErr;
     } finally {
       client.release();
     }
-
-    res.json({ success: true, message: 'Dispatch updated', status: 'in_transit' });
   } catch (error) {
     console.error('updateDcDispatch:', error);
     res.status(500).json({ success: false, message: error.message });
   }
+};
+
+/**
+ * Run the inventory + billing + demo side-effects of a delivery, inside an open
+ * transaction (caller owns BEGIN/COMMIT). Shared by markDcDelivered and the
+ * Phase-13 POD/admin-override delivery endpoints so all paths stay consistent:
+ *   reserved/in_transit asset -> on_rent | on_demo | out_stock
+ *   rent_start_date / monthly rate captured for rentals
+ *   demo deliveries open a demo_agreements record (delivery + 7d decision)
+ * Also marks sales_order_serials.status = 'dispatched'.
+ */
+exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}) => {
+  const ctx = await getDcContext(client, dcNumber);
+  const quotationType = ctx.quotation_type || 'rental';
+  const serials = await collectDcSerials(dcNumber);
+  const deliveredAt = new Date();
+  const demoRows = [];
+
+  for (const s of serials) {
+    const serialId = await resolveSerialId(client, s);
+    if (!serialId) continue;
+    const sr = await client.query(
+      `SELECT dispatch_mode, dispatched_at, inventory_asset_code AS ttspl_id
+         FROM vendor_serial_numbers WHERE serial_id = $1`,
+      [serialId]
+    );
+    const row = sr.rows[0] || {};
+    const rateRes = await client.query(
+      `SELECT sol.rate
+         FROM delivery_challan_lines dcl
+         JOIN sales_order_lines sol ON sol.sales_order_number = dcl.sales_order_number
+        WHERE dcl.dc_number = $1
+        ORDER BY (sol.brand = dcl.brand) DESC NULLS LAST
+        LIMIT 1`,
+      [dcNumber]
+    );
+    const rentMonthlyRate = quotationType === 'rental'
+      ? parseFloat(rateRes.rows[0]?.rate || 0) || null
+      : null;
+    const result = await inventorySM.markDelivered(client, serialId, {
+      quotationType,
+      dcNumber,
+      customerId: ctx.customer_id || null,
+      entityCode: ctx.entity_code || null,
+      dispatchMode: row.dispatch_mode || ctx.dispatch_mode || 'courier',
+      dispatchedAt: row.dispatched_at || null,
+      deliveredAt,
+      rentMonthlyRate,
+      actorUserId: actor.user_id,
+      actorName: actor.name,
+    });
+    if (result.to === inventorySM.STATUS.ON_DEMO) {
+      demoRows.push({ serialId, ttsplId: row.ttspl_id });
+    }
+  }
+
+  if (demoRows.length && ctx.customer_id) {
+    const decisionDue = new Date(deliveredAt);
+    decisionDue.setDate(decisionDue.getDate() + 7);
+    for (const d of demoRows) {
+      await client.query(
+        `INSERT INTO demo_agreements
+           (sales_order_number, dc_number, customer_id, serial_id, ttspl_id,
+            delivered_at, decision_due_at, decision)
+         VALUES (
+           (SELECT sales_order_number FROM delivery_challan_lines WHERE dc_number=$2 LIMIT 1),
+           $2, $3, $4, $5, $6, $7, 'pending')`,
+        [null, dcNumber, ctx.customer_id, d.serialId, d.ttsplId, deliveredAt, decisionDue]
+      );
+    }
+  }
+
+  await client.query(
+    `UPDATE sales_order_serials SET status = 'dispatched', dc_number = $1, updated_at = NOW()
+      WHERE dc_number = $1`,
+    [dcNumber]
+  ).catch(() => {});
+
+  return { ctx, deliveredAt };
 };
 
 exports.markDcDelivered = async (req, res) => {
@@ -1686,68 +1792,7 @@ exports.markDcDelivered = async (req, res) => {
       [req.user.user_id, body.delivery_location || null, body.pod_image_url || null, dcNumber]
     );
 
-    const ctx = await getDcContext(client, dcNumber);
-    const quotationType = ctx.quotation_type || 'rental';
-    const serials = await collectDcSerials(dcNumber);
-    const deliveredAt = new Date();
-    const demoRows = [];
-
-    for (const s of serials) {
-      const serialId = await resolveSerialId(client, s);
-      if (!serialId) continue;
-      // Read dispatch context recorded at dispatch time for rent-start math.
-      const sr = await client.query(
-        `SELECT dispatch_mode, dispatched_at, inventory_asset_code AS ttspl_id
-           FROM vendor_serial_numbers WHERE serial_id = $1`,
-        [serialId]
-      );
-      const row = sr.rows[0] || {};
-      // Capture the agreed monthly rate from the SO line for this DC (best match).
-      const rateRes = await client.query(
-        `SELECT sol.rate
-           FROM delivery_challan_lines dcl
-           JOIN sales_order_lines sol ON sol.sales_order_number = dcl.sales_order_number
-          WHERE dcl.dc_number = $1
-          ORDER BY (sol.brand = dcl.brand) DESC NULLS LAST
-          LIMIT 1`,
-        [dcNumber]
-      );
-      const rentMonthlyRate = quotationType === 'rental'
-        ? parseFloat(rateRes.rows[0]?.rate || 0) || null
-        : null;
-      const result = await inventorySM.markDelivered(client, serialId, {
-        quotationType,
-        dcNumber,
-        customerId: ctx.customer_id || null,
-        entityCode: ctx.entity_code || null,
-        dispatchMode: row.dispatch_mode || ctx.dispatch_mode || 'courier',
-        dispatchedAt: row.dispatched_at || null,
-        deliveredAt,
-        rentMonthlyRate,
-        actorUserId: req.user.user_id,
-        actorName: req.user.name,
-      });
-      if (result.to === inventorySM.STATUS.ON_DEMO) {
-        demoRows.push({ serialId, ttsplId: row.ttspl_id });
-      }
-    }
-
-    // Demo deliveries: open a demo_agreements record with a delivery+7d decision date.
-    if (demoRows.length && ctx.customer_id) {
-      const decisionDue = new Date(deliveredAt);
-      decisionDue.setDate(decisionDue.getDate() + 7);
-      for (const d of demoRows) {
-        await client.query(
-          `INSERT INTO demo_agreements
-             (sales_order_number, dc_number, customer_id, serial_id, ttspl_id,
-              delivered_at, decision_due_at, decision)
-           VALUES (
-             (SELECT sales_order_number FROM delivery_challan_lines WHERE dc_number=$2 LIMIT 1),
-             $2, $3, $4, $5, $6, $7, 'pending')`,
-          [null, dcNumber, ctx.customer_id, d.serialId, d.ttsplId, deliveredAt, decisionDue]
-        );
-      }
-    }
+    await exports.finalizeDeliveryInventory(client, dcNumber, req.user);
 
     await client.query('COMMIT');
     res.json({ success: true, message: 'Marked as delivered' });
@@ -1800,6 +1845,97 @@ exports.markDcRejected = async (req, res) => {
   } catch (error) {
     console.error('markDcRejected:', error);
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ----------------------------------------------------------------------------
+// PHASE 13 — Per-serial delivery addresses on the Sales Order
+// ----------------------------------------------------------------------------
+
+function sanitizeDeliveryAddress(raw) {
+  const a = parseJsonField(raw) || {};
+  if (typeof a !== 'object') return null;
+  return {
+    name: a.name || '',
+    phone: a.phone || '',
+    address: a.address || '',
+    city: a.city || '',
+    state: a.state || '',
+    pincode: a.pincode || a.zip_code || '',
+    landmark: a.landmark || '',
+    employee_name: a.employee_name || '',
+    employee_phone: a.employee_phone || '',
+  };
+}
+
+// PATCH /so-serials/:allocationId/address
+exports.updateSoSerialAddress = async (req, res) => {
+  try {
+    const allocationId = parseInt(req.params.allocationId, 10);
+    if (!allocationId) {
+      return res.status(400).json({ success: false, message: 'Invalid allocation id' });
+    }
+    const body = req.body || {};
+    const address = sanitizeDeliveryAddress(body.delivery_address);
+    const isWfh = body.is_wfh === true || body.is_wfh === 'true';
+    const notes = body.delivery_notes != null ? String(body.delivery_notes) : null;
+
+    const r = await pool.query(
+      `UPDATE sales_order_serials
+          SET delivery_address = $1::jsonb,
+              is_wfh = $2,
+              delivery_notes = $3,
+              updated_at = NOW()
+        WHERE allocation_id = $4
+        RETURNING allocation_id, delivery_address`,
+      [address ? JSON.stringify(address) : null, isWfh, notes, allocationId]
+    );
+    if (!r.rows.length) {
+      return res.status(404).json({ success: false, message: 'Allocation not found' });
+    }
+    res.json({ success: true, allocation_id: allocationId, delivery_address: r.rows[0].delivery_address });
+  } catch (error) {
+    console.error('updateSoSerialAddress:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// PATCH /sales-orders/:soNumber/serial-addresses
+exports.bulkUpdateSoSerialAddresses = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const soNumber = req.params.soNumber;
+    const addresses = Array.isArray(req.body?.addresses) ? req.body.addresses : [];
+    if (!addresses.length) {
+      return res.status(400).json({ success: false, message: 'addresses array is required' });
+    }
+    await client.query('BEGIN');
+    let updated = 0;
+    for (const item of addresses) {
+      const allocationId = parseInt(item.allocation_id, 10);
+      if (!allocationId) continue;
+      const address = sanitizeDeliveryAddress(item.delivery_address);
+      const isWfh = item.is_wfh === true || item.is_wfh === 'true';
+      const notes = item.delivery_notes != null ? String(item.delivery_notes) : null;
+      const r = await client.query(
+        `UPDATE sales_order_serials
+            SET delivery_address = $1::jsonb,
+                is_wfh = $2,
+                delivery_notes = $3,
+                updated_at = NOW()
+          WHERE allocation_id = $4 AND sales_order_number = $5`,
+        [address ? JSON.stringify(address) : null, isWfh, notes, allocationId, soNumber]
+      );
+      updated += r.rowCount;
+    }
+    await client.query('COMMIT');
+    res.json({ success: true, updated });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('bulkUpdateSoSerialAddresses:', error);
+    res.status(500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
   }
 };
 

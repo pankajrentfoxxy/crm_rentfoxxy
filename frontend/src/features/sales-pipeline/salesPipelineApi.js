@@ -42,6 +42,23 @@ export const getAvailableSerials = (p) => api.get(`${base}/inventory/available-s
 export const listSoSerials = (so) => api.get(`${base}/sales-orders/${so}/serials`);
 export const attachSoSerial = (so, d) => api.post(`${base}/sales-orders/${so}/serials`, d);
 export const detachSoSerial = (so, allocId) => api.delete(`${base}/sales-orders/${so}/serials/${allocId}`);
+
+// Phase 13 — per-serial delivery addresses
+export const updateSoSerialAddress = (allocationId, d) =>
+  api.patch(`${base}/so-serials/${allocationId}/address`, d);
+export const bulkUpdateSoSerialAddresses = (so, d) =>
+  api.patch(`${base}/sales-orders/${so}/serial-addresses`, d);
+
+// Phase 13 — delivery flow
+export const listDeliveryFlow = (params) => api.get(`${base}/delivery-flow`, { params });
+export const getMyDeliveries = () => api.get(`${base}/my-deliveries`);
+export const markReached = (dcNumber, d) => api.patch(`${base}/delivery-challans/${dcNumber}/reached`, d);
+export const verifySerialAndGenerateOtp = (dcNumber, d) =>
+  api.post(`${base}/delivery-challans/${dcNumber}/verify-serial`, d);
+export const submitDeliveryWithPod = (dcNumber, formData) =>
+  api.post(`${base}/delivery-challans/${dcNumber}/deliver`, formData);
+export const adminDeliverOverride = (dcNumber, d) =>
+  api.patch(`${base}/delivery-challans/${dcNumber}/admin-deliver`, d);
 export const getOperationCounts = () => api.get(`${base}/counts`);
 export const saveCustomerShippingAddress = (id, d) => api.post(`${base}/customers/${id}/shipping-address`, d);
 export const getCustomerDetail = (customerId) => api.get(`/customer-management/customers/${customerId}`);

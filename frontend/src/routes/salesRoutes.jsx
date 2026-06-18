@@ -52,7 +52,7 @@ export const salesRoutes = [
     path: '/sales-pipeline/*',
     element: (
       <ProtectedRoute
-        sections={['sales_quotations', 'sales_orders_doc', 'delivery_challans', 'return_dc', 'delivery_register_management']}
+        sections={['sales_quotations', 'sales_orders_doc', 'delivery_challans', 'return_dc', 'delivery_register_management', 'technician_bucket']}
         action="view"
       >
         {withLayout(<SalesPipelineApp />)}

@@ -410,17 +410,18 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
   return relativePath;
 }
 
-async function emailDocument({ to, subject, text, pdfRelativePath, cc }) {
+async function emailDocument({ to, subject, text, html, pdfRelativePath, cc }) {
   const transport = getMailTransport();
   if (!transport || !to) return false;
-  const abs = path.join(__dirname, '..', pdfRelativePath);
+  const abs = pdfRelativePath ? path.join(__dirname, '..', pdfRelativePath) : null;
   const mail = {
     from: process.env.SMTP_FROM || process.env.SMTP_USER,
     to,
     subject,
     text,
-    attachments: fs.existsSync(abs) ? [{ filename: path.basename(abs), path: abs }] : [],
+    attachments: abs && fs.existsSync(abs) ? [{ filename: path.basename(abs), path: abs }] : [],
   };
+  if (html) mail.html = html;
   if (cc) mail.cc = cc;
   await transport.sendMail(mail);
   return true;

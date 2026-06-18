@@ -5,6 +5,7 @@ import PermissionGate from '../../../components/PermissionGate';
 import PaymentModal from '../components/PaymentModal';
 import DCForm from '../components/DCForm';
 import SoSerialPanel from '../components/SoSerialPanel';
+import SoDeliveryAddressPanel from '../components/SoDeliveryAddressPanel';
 import { getQuotation, getSalesOrderFull, listPayments, regenerateSalesOrderPdf } from '../salesPipelineApi';
 import { getBackendOrigin } from '../../../utils/api';
 import { formatConfig, formatCurrency, formatDate, lineTotal, TYPE_STYLES, typeLabel } from '../salesPipelineUtils';
@@ -15,7 +16,7 @@ function pdfUrl(p) {
   return `${getBackendOrigin().replace(/\/$/, '')}/${p.replace(/^\//, '')}`;
 }
 
-const TABS = ['overview', 'laptops', 'payments', 'dcs', 'quote'];
+const TABS = ['overview', 'laptops', 'addresses', 'payments', 'dcs', 'quote'];
 
 export default function SalesOrderDetailPage() {
   const { soNumber } = useParams();
@@ -81,7 +82,7 @@ export default function SalesOrderDetailPage() {
       <div className="flex gap-2 border-b mb-4 overflow-x-auto">
         {TABS.map((t) => (
           <button key={t} type="button" onClick={() => setTab(t)} className={`px-4 py-2 text-sm capitalize border-b-2 -mb-px ${tab === t ? 'border-blue-600 text-blue-700 font-medium' : 'border-transparent text-gray-500'}`}>
-            {t === 'dcs' ? 'Delivery Challans' : t === 'quote' ? 'Linked Quotation' : t === 'laptops' ? 'Laptops & QC' : t}
+            {t === 'dcs' ? 'Delivery Challans' : t === 'quote' ? 'Linked Quotation' : t === 'laptops' ? 'Laptops & QC' : t === 'addresses' ? 'Delivery Addresses' : t}
           </button>
         ))}
       </div>
@@ -129,6 +130,8 @@ export default function SalesOrderDetailPage() {
       )}
 
       {tab === 'laptops' && <SoSerialPanel soNumber={soNumber} />}
+
+      {tab === 'addresses' && <SoDeliveryAddressPanel soNumber={soNumber} />}
 
       {tab === 'payments' && (
         <div className="bg-white border rounded-xl p-4">

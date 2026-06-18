@@ -1,7 +1,31 @@
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
 const router = express.Router();
 const { authMiddleware, checkSectionPermission, checkRole } = require('../middleware/auth');
 const cp = checkSectionPermission;
+
+// POD photo uploads -> backend/uploads/pod (served at /uploads/pod/...)
+const podStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(__dirname, '../uploads/pod');
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname) || '.jpg';
+    cb(null, `pod_${req.params.dcNumber}_${Date.now()}${ext}`);
+  },
+});
+const uploadPod = multer({
+  storage: podStorage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype.startsWith('image/')) return cb(new Error('Only image files allowed'));
+    cb(null, true);
+  },
+});
 // Section guards
 const quoteView = cp('sales_quotations', 'view');
 const quoteCreate = cp('sales_quotations', 'create');
@@ -15,8 +39,11 @@ const payView = cp('payment_records', 'view');
 const payCreate = cp('payment_records', 'create');
 const rdcView = cp('return_dc', 'view');
 const rdcEdit = cp('return_dc', 'edit');
+const tbView = cp('technician_bucket', 'view');
+const tbEdit = cp('technician_bucket', 'edit');
 const ctrl = require('../controllers/salesManagementController');
 const sosCtrl = require('../controllers/salesOrderSerialController');
+const flowCtrl = require('../controllers/deliveryFlowController');
 
 router.use(authMiddleware);
 
@@ -24,6 +51,18 @@ router.use(authMiddleware);
 router.get('/sales-orders/:soNumber/serials', dcView, sosCtrl.listSerials);
 router.post('/sales-orders/:soNumber/serials', dcEdit, sosCtrl.attachSerial);
 router.delete('/sales-orders/:soNumber/serials/:allocId', dcEdit, sosCtrl.detachSerial);
+
+// Phase 13 — per-serial delivery addresses on the SO
+router.patch('/so-serials/:allocationId/address', dcEdit, ctrl.updateSoSerialAddress);
+router.patch('/sales-orders/:soNumber/serial-addresses', dcEdit, ctrl.bulkUpdateSoSerialAddresses);
+
+// Phase 13 — delivery flow (technician bucket / my deliveries / OTP / POD)
+router.get('/delivery-flow', tbView, flowCtrl.listDeliveryFlow);
+router.get('/my-deliveries', tbView, flowCtrl.getMyDeliveries);
+router.patch('/delivery-challans/:dcNumber/reached', tbEdit, flowCtrl.markTechReached);
+router.post('/delivery-challans/:dcNumber/verify-serial', tbEdit, flowCtrl.verifySerialAndGenerateOtp);
+router.post('/delivery-challans/:dcNumber/deliver', tbEdit, uploadPod.single('pod_photo'), flowCtrl.submitDeliveryWithPod);
+router.patch('/delivery-challans/:dcNumber/admin-deliver', checkRole('admin', 'manager', 'super_admin'), flowCtrl.adminDeliverOverride);
 
 router.get('/counts', quoteView, ctrl.getOperationCounts);
 router.get('/inventory/available-serials', dcView, ctrl.getAvailableSerials);

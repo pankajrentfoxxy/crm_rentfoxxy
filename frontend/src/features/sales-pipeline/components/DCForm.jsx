@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { X } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { BillingAddressPanel, ShippingAddressPanel } from '../../operation-management/components/CustomerAddressPanels';
+import { BillingAddressPanel } from '../../operation-management/components/CustomerAddressPanels';
 import SearchableMultiSelect from '../../operation-management/components/SearchableMultiSelect';
 import { createDC, getAvailableSerials, getDCMeta, listSalesOrders } from '../salesPipelineApi';
 
@@ -16,6 +16,10 @@ export default function DCForm({ open, onClose, prefillSo }) {
   const [shipBy, setShipBy] = useState('');
   const [courierName, setCourierName] = useState('');
   const [awbNumber, setAwbNumber] = useState('');
+  const [courierTrackingUrl, setCourierTrackingUrl] = useState('');
+  const [porterTrackingId, setPorterTrackingId] = useState('');
+  const [porterOrderId, setPorterOrderId] = useState('');
+  const [porterBookingUrl, setPorterBookingUrl] = useState('');
   const [deliveryPersonId, setDeliveryPersonId] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -80,6 +84,21 @@ export default function DCForm({ open, onClose, prefillSo }) {
     setLineStates((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)));
   };
 
+  // Delivery address(es) set on the attached serials (Phase 13). When all serials
+  // share one address we use it for the DC; differing addresses get a warning.
+  const { deliveryAddress, addressMismatch } = useMemo(() => {
+    const attached = (meta?.attached_serials || []).filter((a) => a.delivery_address);
+    if (!attached.length) {
+      return { deliveryAddress: meta?.shipping_address || null, addressMismatch: false };
+    }
+    const key = (a) => JSON.stringify(a.delivery_address || {});
+    const distinct = new Set(attached.map(key));
+    return {
+      deliveryAddress: attached[0].delivery_address,
+      addressMismatch: distinct.size > 1,
+    };
+  }, [meta]);
+
   const badSerials = lineStates.flatMap((line) =>
     (line.serials || []).map((s) => {
       const opt = (line.serialOptions || []).find((o) => o.value === s || o.serial_number === s);
@@ -111,6 +130,14 @@ export default function DCForm({ open, onClose, prefillSo }) {
       toast.error('Select ship by mode');
       return;
     }
+    if (shipBy === 'by_porter' && !porterTrackingId.trim()) {
+      toast.error('Enter the Porter Tracking / Booking ID');
+      return;
+    }
+    if (shipBy === 'by_hand' && !deliveryPersonId) {
+      toast.error('Select a delivery technician');
+      return;
+    }
     setSaving(true);
     try {
       const res = await createDC({
@@ -129,6 +156,10 @@ export default function DCForm({ open, onClose, prefillSo }) {
         ship_by: shipBy,
         courier_name: shipBy === 'by_courier' ? courierName : null,
         awb_number: shipBy === 'by_courier' ? awbNumber : null,
+        courier_tracking_url: shipBy === 'by_courier' ? courierTrackingUrl : null,
+        porter_tracking_id: shipBy === 'by_porter' ? porterTrackingId : null,
+        porter_order_id: shipBy === 'by_porter' ? porterOrderId : null,
+        porter_booking_url: shipBy === 'by_porter' ? porterBookingUrl : null,
         delivery_person_id: shipBy === 'by_hand' ? deliveryPersonId : null,
         brand: lineStates.map((l) => l.brand || ''),
         Model: lineStates.map((l) => l.model_name),
@@ -144,7 +175,7 @@ export default function DCForm({ open, onClose, prefillSo }) {
         battery_charger_warranty: lineStates.map((l) => l.battery_charger_warranty || ''),
         serial_number: lineStates.map((l) => l.serials),
         remarks: lineStates.map((l) => l.remark || ''),
-        customer_shipping_address: meta?.shipping_address,
+        customer_shipping_address: deliveryAddress || meta?.shipping_address,
         customer_billing_address: meta?.billing_address,
       });
       const dc = res.data?.dc_number || meta?.dc_number;
@@ -233,37 +264,77 @@ export default function DCForm({ open, onClose, prefillSo }) {
                   {b.serial} is not QC passed (status: {b.status}). Remove before proceeding.
                 </p>
               ))}
-              <div className="grid grid-cols-2 gap-3">
-                <select className="border rounded-lg px-3 py-2 text-sm" value={shipBy} onChange={(e) => setShipBy(e.target.value)}>
+              <div className="space-y-3">
+                <select className="w-full border rounded-lg px-3 py-2 text-sm" value={shipBy} onChange={(e) => setShipBy(e.target.value)}>
                   <option value="">Ship By *</option>
                   <option value="by_courier">Courier</option>
                   <option value="by_porter">Porter</option>
                   <option value="by_hand">Inhouse Technician</option>
                 </select>
                 {shipBy === 'by_courier' && (
-                  <>
+                  <div className="grid grid-cols-2 gap-3">
                     <input className="border rounded-lg px-3 py-2 text-sm" placeholder="Courier Name" value={courierName} onChange={(e) => setCourierName(e.target.value)} />
-                    <input className="border rounded-lg px-3 py-2 text-sm" placeholder="AWB" value={awbNumber} onChange={(e) => setAwbNumber(e.target.value)} />
-                  </>
+                    <input className="border rounded-lg px-3 py-2 text-sm" placeholder="AWB Number" value={awbNumber} onChange={(e) => setAwbNumber(e.target.value)} />
+                    <input className="border rounded-lg px-3 py-2 text-sm col-span-2" placeholder="Tracking URL (optional)" value={courierTrackingUrl} onChange={(e) => setCourierTrackingUrl(e.target.value)} />
+                  </div>
+                )}
+                {shipBy === 'by_porter' && (
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Porter Tracking ID / Booking ID*</label>
+                      <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="e.g. PRT-2025060001" value={porterTrackingId} onChange={(e) => setPorterTrackingId(e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Porter Order ID (optional)</label>
+                      <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Porter platform order ID" value={porterOrderId} onChange={(e) => setPorterOrderId(e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Booking URL / Tracking Link (optional)</label>
+                      <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="https://porter.in/track/..." value={porterBookingUrl} onChange={(e) => setPorterBookingUrl(e.target.value)} />
+                    </div>
+                  </div>
                 )}
                 {shipBy === 'by_hand' && (
-                  <select className="border rounded-lg px-3 py-2 text-sm" value={deliveryPersonId} onChange={(e) => setDeliveryPersonId(e.target.value)}>
-                    <option value="">Delivery Technician *</option>
-                    {(meta.delivery_persons || meta.delivery_technicians || []).map((t) => (
-                      <option key={t.id || t.user_id} value={t.id || t.user_id}>{t.name}</option>
-                    ))}
-                  </select>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Assign to Delivery Technician*</label>
+                    <select className="w-full border rounded-lg px-3 py-2 text-sm" value={deliveryPersonId} onChange={(e) => setDeliveryPersonId(e.target.value)}>
+                      <option value="">Select technician…</option>
+                      {(meta.delivery_technicians || []).filter((t) => t.is_active).map((t) => (
+                        <option key={t.technician_id} value={t.technician_id}>
+                          {t.first_name} {t.last_name || ''} {t.phone ? `— ${t.phone}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    {!(meta.delivery_technicians || []).length && (
+                      <p className="text-xs text-amber-600 mt-1">
+                        No delivery technicians registered. Add via Delivery Register → Technicians.
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
+
+              <div className="mt-1 p-3 bg-blue-50 rounded-lg border border-blue-100">
+                <h4 className="text-xs font-semibold text-blue-900 uppercase mb-2">Delivery Address</h4>
+                {deliveryAddress ? (
+                  <div className="text-sm text-blue-800">
+                    {deliveryAddress.name && <p className="font-medium">{deliveryAddress.name}</p>}
+                    {deliveryAddress.phone && <p>{deliveryAddress.phone}</p>}
+                    {deliveryAddress.address && <p>{deliveryAddress.address}</p>}
+                    <p>{[deliveryAddress.city, deliveryAddress.state, deliveryAddress.pincode || deliveryAddress.zip_code].filter(Boolean).join(', ')}</p>
+                    {deliveryAddress.landmark && <p className="text-xs text-blue-600">📍 {deliveryAddress.landmark}</p>}
+                  </div>
+                ) : (
+                  <p className="text-xs text-amber-700">No delivery address set. Using billing address.</p>
+                )}
+                {addressMismatch && (
+                  <p className="text-xs text-amber-700 mt-2">
+                    ⚠ These laptops have different delivery addresses. Consider creating a separate DC for each address.
+                  </p>
+                )}
+              </div>
+
               <BillingAddressPanel billing={meta.billing_address} gstNumber={meta.gst_number} />
-              <ShippingAddressPanel
-                shippingAddresses={[meta.shipping_address].filter(Boolean)}
-                selectedIndex={0}
-                onSelectIndex={() => {}}
-                onAddClick={() => {}}
-                selectedAddress={meta.shipping_address}
-                readOnly
-              />
             </>
           )}
         </div>
