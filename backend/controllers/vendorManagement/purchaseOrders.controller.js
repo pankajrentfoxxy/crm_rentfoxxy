@@ -21,6 +21,36 @@ const {
   sendPoPendingApprovalEmailToManagers,
 } = require('../../services/vendorPoEmailService');
 
+/**
+ * Extract the laptop configuration from a PO line so it can be persisted on the
+ * received serial's `extra`. The floor ticket detail view reads gpu / screen_size
+ * / generation / os from `vendor_serial_numbers.extra`, so we capture the full
+ * config at GRN receive time (otherwise those fields render blank on the ticket).
+ * Returns only the non-empty fields to keep `extra` clean.
+ */
+function buildConfigExtraFromLine(line) {
+  if (!line || typeof line !== 'object') return {};
+  const pick = (...keys) => {
+    for (const k of keys) {
+      const v = line[k];
+      if (v != null && String(v).trim() !== '') return String(v).trim();
+    }
+    return '';
+  };
+  const config = {
+    brand: pick('brand', 'Brand', 'brand_name'),
+    model: pick('model', 'Model', 'product_name', 'model_name'),
+    processor: pick('processor', 'Processor', 'cpu'),
+    generation: pick('generation', 'Generation'),
+    ram: pick('ram', 'RAM'),
+    storage: pick('storage', 'Storage'),
+    gpu: pick('gpu', 'GPU', 'graphics'),
+    screen_size: pick('screen_size', 'Screen size', 'screen_size_inches', 'screen', 'display_size'),
+    os: pick('os', 'OS', 'operating_system'),
+  };
+  return Object.fromEntries(Object.entries(config).filter(([, v]) => v !== ''));
+}
+
 /** Normalize JSONB/array/string line_items → array */
 function parseLineItemsJson(raw) {
   if (raw == null) return [];
@@ -343,7 +373,7 @@ async function receiveProductSerial(req, res) {
   }
 
   const pd = line.product_detail_id ?? line.product_id ?? line.pro_id ?? line.id;
-  const extra = { line_index: lineIndex };
+  const extra = { line_index: lineIndex, ...buildConfigExtraFromLine(line) };
   if (pd != null && String(pd).trim() !== '') extra.product_detail_id = String(pd);
 
   const client = await pool.connect();
@@ -602,7 +632,8 @@ async function receivePoLineBulk(req, res) {
       const extra = {
         line_index: lineIndex,
         rental_start_date,
-        unique_product_serial: inventory_asset_code
+        unique_product_serial: inventory_asset_code,
+        ...buildConfigExtraFromLine(line)
       };
       if (pd != null && String(pd).trim() !== '') extra.product_detail_id = String(pd);
 
@@ -830,7 +861,8 @@ async function receivePoLineUnit(req, res) {
     const extra = {
       line_index: lineIndex,
       rental_start_date,
-      unique_product_serial: inventory_asset_code
+      unique_product_serial: inventory_asset_code,
+      ...buildConfigExtraFromLine(line)
     };
     if (pd != null && String(pd).trim() !== '') extra.product_detail_id = String(pd);
 

@@ -111,10 +111,11 @@ export function configBadges(ticket) {
   return [
     { label: 'Brand', value: ticket.brand },
     { label: 'Model', value: ticket.model_name || ticket.model },
-    { label: 'CPU', value: [ticket.processor, ticket.generation].filter(Boolean).join(' ') },
+    { label: 'CPU', value: ticket.processor },
+    { label: 'Gen', value: ticket.generation },
     { label: 'RAM', value: ticket.ram },
     { label: 'Storage', value: ticket.storage },
-    { label: 'GPU', value: ticket.gpu && ticket.gpu !== 'Integrated' ? ticket.gpu : null },
+    { label: 'GPU', value: ticket.gpu },
     { label: 'Screen', value: ticket.screen_size ? `${ticket.screen_size}"` : null },
     { label: 'OS', value: ticket.os },
     { label: 'Condition', value: ticket.condition },

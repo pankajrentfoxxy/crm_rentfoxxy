@@ -430,7 +430,18 @@ exports.moveToStage = async (req, res) => {
       'QC2→QC1',
     ]);
 
+    // All Hardware & Software stages — moving between any two of these keeps the
+    // same technician so their work timer stays ongoing across the whole HW/SW flow.
+    const HW_SW_STAGES = new Set([
+      'Diagnosis',
+      'Assembly & Software',
+      'Final Testing',
+      'Chip Level Repair',
+      'Body & Paint',
+    ]);
+
     const transitionKey = `${currentStageName}→${to_stage_name}`;
+    const bothHwSw = HW_SW_STAGES.has(currentStageName) && HW_SW_STAGES.has(to_stage_name);
 
     if (ROUND_ROBIN_TRANSITIONS.has(transitionKey) && nextStage.team_id) {
       try {
@@ -438,7 +449,7 @@ exports.moveToStage = async (req, res) => {
       } catch {
         assignedUserId = null;
       }
-    } else if (KEEP_SAME_TECH_TRANSITIONS.has(transitionKey)) {
+    } else if (KEEP_SAME_TECH_TRANSITIONS.has(transitionKey) || bothHwSw) {
       assignedUserId = ticket.assigned_user_id;
     }
 

@@ -266,7 +266,12 @@ export default function TicketDetailPage() {
     else setTab('overview');
   }, [ticket?.stage_name, workTabsLocked]);
 
-  const elapsedMs = activeLog?.start_time ? nowTs - new Date(activeLog.start_time).getTime() : 0;
+  // For Hardware & Software stages the timer is one ongoing total across all
+  // those stages (session_start_epoch), so it doesn't reset on each stage move.
+  // Other stages fall back to the current segment's start time.
+  const elapsedMs = activeLog?.session_start_epoch != null
+    ? nowTs - Number(activeLog.session_start_epoch)
+    : (activeLog?.start_time ? nowTs - new Date(activeLog.start_time).getTime() : 0);
 
   const handleStartWork = async () => {
     if (!verifyInput.trim()) { toast.error('Enter the TTSPL ID or Serial number'); return; }
@@ -348,8 +353,16 @@ export default function TicketDetailPage() {
   if ((tech || fm) && stage === 'Diagnosis') {
     stageButtons.push(
       { label: 'Move to Assembly & Software', action: () => move('Assembly & Software'), primary: true },
-      { label: 'Mark Chip Repair Required', action: () => markChipRepair(id).then(load), warn: true },
-      { label: 'Mark Body & Paint Required', action: () => markBodyPaint(id).then(load), pink: true }
+      {
+        label: 'Mark Chip Repair Required',
+        action: () => markChipRepair(id).then(() => handleWorkflowComplete({ nextStage: 'Chip Level Repair', fromStageMove: true })),
+        warn: true
+      },
+      {
+        label: 'Mark Body & Paint Required',
+        action: () => markBodyPaint(id).then(() => handleWorkflowComplete({ nextStage: 'Body & Paint', fromStageMove: true })),
+        pink: true
+      }
     );
   }
   if ((tech || fm) && HW_WORK_STAGES.includes(stage)) {
