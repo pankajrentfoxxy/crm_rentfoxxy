@@ -339,41 +339,6 @@ export default function DCForm({ open, onClose, prefillSo }) {
               </div>
 
               <BillingAddressPanel billing={meta.billing_address} gstNumber={meta.gst_number} />
-              {hasSerials && (
-                <div className="grid grid-cols-2 gap-3">
-                  <select className="border rounded-lg px-3 py-2 text-sm" value={shipBy} onChange={(e) => setShipBy(e.target.value)}>
-                    <option value="">Ship By *</option>
-                    <option value="by_courier">Courier</option>
-                    <option value="by_porter">Porter</option>
-                    <option value="by_hand">Inhouse Technician</option>
-                  </select>
-                  {shipBy === 'by_courier' && (
-                    <>
-                      <input className="border rounded-lg px-3 py-2 text-sm" placeholder="Courier Name" value={courierName} onChange={(e) => setCourierName(e.target.value)} />
-                      <input className="border rounded-lg px-3 py-2 text-sm" placeholder="AWB" value={awbNumber} onChange={(e) => setAwbNumber(e.target.value)} />
-                    </>
-                  )}
-                  {shipBy === 'by_hand' && (
-                    <select className="border rounded-lg px-3 py-2 text-sm" value={deliveryPersonId} onChange={(e) => setDeliveryPersonId(e.target.value)}>
-                      <option value="">Delivery Technician *</option>
-                      {(meta.delivery_persons || meta.delivery_technicians || []).map((t) => (
-                        <option key={t.id || t.user_id} value={t.id || t.user_id}>{t.name}</option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-              )}
-              <div className="grid grid-cols-1 gap-3">
-                <BillingAddressPanel billing={meta.billing_address} gstNumber={meta.gst_number} />
-                <ShippingAddressPanel
-                  shippingAddresses={[meta.shipping_address].filter(Boolean)}
-                  selectedIndex={0}
-                  onSelectIndex={() => {}}
-                  onAddClick={() => {}}
-                  selectedAddress={meta.shipping_address}
-                  readOnly
-                />
-              </div>
             </>
           )}
         </div>
