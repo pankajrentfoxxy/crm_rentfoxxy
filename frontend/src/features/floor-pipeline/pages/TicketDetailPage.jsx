@@ -518,7 +518,19 @@ export default function TicketDetailPage() {
             />
           )}
           {tab === 'diagnosis' && <DiagnosisForm api={api} ticket={ticket} onComplete={handleWorkflowComplete} />}
-          {tab === 'task' && <StageTaskPanel ticket={ticket} stageName={stage} onSubmitted={handleWorkflowComplete} />}
+          {tab === 'task' && (
+            <StageTaskPanel
+              ticket={ticket}
+              stageName={stage}
+              onSubmitted={(meta) => {
+                if (meta?.requestAssigneePicker) {
+                  openQcPicker();
+                  return;
+                }
+                handleWorkflowComplete(meta);
+              }}
+            />
+          )}
           {tab === 'notes' && (
             <WorkNotesPanel
               ticketId={ticket.ticket_id}

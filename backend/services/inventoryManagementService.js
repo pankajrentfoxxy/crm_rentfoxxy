@@ -10,6 +10,8 @@ const {
 
 const LIST_SEGMENT_MAP = {
   passed: { mode: 'status', status: 'passed' },
+  // Laptops still in the QC pipeline — everything whose QC status is not yet 'passed'.
+  qc_process: { mode: 'status_not', status: 'passed' },
   rent_to_own: { mode: 'po_passed', poType: 'rent_to_own' },
   rental_purchase: { mode: 'po_passed', poType: 'rental_purchase' },
   direct_purchase: { mode: 'po_passed', poType: 'direct_purchase' },
@@ -22,6 +24,7 @@ const LIST_SEGMENT_MAP = {
 
 const ROUTE_TO_SEGMENT = {
   'ready-to-rent-or-sell': 'passed',
+  'qc-process': 'qc_process',
   'rent-to-own': 'rent_to_own',
   'rental-purchase': 'rental_purchase',
   'direct-purchase': 'direct_purchase',
@@ -39,6 +42,7 @@ function normalizeListSegment(input) {
 function listTitleForSegment(segment) {
   const titles = {
     passed: 'Ready to Rent or Sell',
+    qc_process: 'QC Process Laptops',
     rent_to_own: 'Rent To Own',
     rental_purchase: 'Rental Purchase',
     direct_purchase: 'Direct Purchase',
@@ -84,6 +88,15 @@ function buildListWhere(segment, params, alias = 's') {
         ${alias}.inventory_status = $${i}
         OR COALESCE(NULLIF(TRIM(${alias}.extra->>'status2'), ''), '') = $${i}
       )`,
+      params
+    };
+  }
+
+  if (cfg.mode === 'status_not') {
+    params.push(cfg.status);
+    const i = params.length;
+    return {
+      sql: ` AND ${alias}.po_id IS NOT NULL AND ${effectiveStatusSql(alias)} <> $${i}`,
       params
     };
   }

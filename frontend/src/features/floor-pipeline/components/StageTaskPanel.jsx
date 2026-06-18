@@ -5,6 +5,11 @@ import { getStageTask, moveTicketStage, saveStageTask } from '../floorPipelineAp
 
 const NEXT_STAGE_ON_COMPLETE = {
   'Assembly & Software': 'Final Testing',
+};
+
+// Stages whose completion must hand off to a person on another team — the page
+// opens an assignee picker (round-robin pre-selected) instead of auto-moving.
+const REQUIRES_ASSIGNEE_ON_COMPLETE = {
   'Final Testing': 'QC1',
 };
 
@@ -67,6 +72,16 @@ export default function StageTaskPanel({ ticket, stageName, onSubmitted }) {
         notes,
         completed: complete,
       });
+
+      // Final Testing → QC1 is a hand-off to the QC team: don't auto-move, let the
+      // page open the QC1 picker (round-robin suggestion pre-selected).
+      const assigneeStage = complete ? REQUIRES_ASSIGNEE_ON_COMPLETE[stageName] : null;
+      if (assigneeStage) {
+        setNotes('');
+        toast.success(`Task complete — choose the ${assigneeStage} inspector`);
+        onSubmitted?.({ requestAssigneePicker: true, nextStage: assigneeStage });
+        return;
+      }
 
       const nextStage = complete ? NEXT_STAGE_ON_COMPLETE[stageName] : null;
       if (nextStage) {

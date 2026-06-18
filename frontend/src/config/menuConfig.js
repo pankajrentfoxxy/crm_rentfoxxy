@@ -47,6 +47,7 @@ export const floorPipelineAccordionChildren = [
  *  currently out with customers), distinct from Master Data > Customers. */
 export const inventoryAccordionChildren = [
   { label: 'Stock Management', path: '/inventory-management/universal-search', section: 'inventory_management' },
+  { label: 'QC Process Laptops', path: '/inventory-management/qc-process', countKey: 'qc_process', section: 'inventory_management' },
   { label: 'Ready to Rent/Sell', path: '/inventory-management/ready-to-rent-or-sell', countKey: 'passed', section: 'inventory_management' },
   { label: 'Parts Inventory', path: '/inventory-management/parts', section: 'inventory_management' },
   { label: 'Customer Assets', path: '/inventory-management/customer-assets', section: 'inventory_management' },

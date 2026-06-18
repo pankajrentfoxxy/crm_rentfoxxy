@@ -522,20 +522,50 @@ exports.getCustomerLaptops = async (req, res) => {
               vsn.extra->>'generation' AS generation,
               vsn.extra->>'ram' AS ram,
               vsn.extra->>'storage' AS storage,
+              vsn.extra->>'gpu' AS gpu,
+              vsn.extra->>'screen_size' AS screen_size,
               vsn.inventory_status AS status,
               vsn.current_entity AS entity_code,
               vsn.current_dc_number AS dc_number,
               vsn.delivered_at AS dispatch_date,
+              COALESCE(vsn.delivered_at, pod.delivery_completed_at) AS delivered_at,
               vsn.rent_start_date,
-              vsn.rent_monthly_rate
+              vsn.rent_monthly_rate,
+              pod.file_path AS pod_file_path,
+              pod.pod_image_url AS pod_image_url
          FROM vendor_serial_numbers vsn
+         LEFT JOIN LATERAL (
+           SELECT dcl.file_path, dcl.pod_image_url, dcl.delivery_completed_at
+           FROM delivery_challan_lines dcl
+           WHERE dcl.dc_number = vsn.current_dc_number
+             AND (dcl.file_path IS NOT NULL OR dcl.pod_image_url IS NOT NULL)
+           ORDER BY dcl.delivery_completed_at DESC NULLS LAST, dcl.id DESC
+           LIMIT 1
+         ) pod ON TRUE
         WHERE vsn.current_customer_id = $1
           AND vsn.deleted_at IS NULL
           AND vsn.inventory_status IN ('rented','on_demo','sold')
         ORDER BY vsn.delivered_at DESC NULLS LAST`,
       [customerId]
     );
-    res.json({ success: true, laptops: rows });
+
+    const laptops = rows.map((r) => {
+      const podFiles = [];
+      if (r.pod_file_path) {
+        try {
+          const parsed = typeof r.pod_file_path === 'string' ? JSON.parse(r.pod_file_path) : r.pod_file_path;
+          if (Array.isArray(parsed)) podFiles.push(...parsed.filter(Boolean));
+          else if (parsed) podFiles.push(String(parsed));
+        } catch {
+          podFiles.push(r.pod_file_path);
+        }
+      }
+      if (r.pod_image_url) podFiles.push(r.pod_image_url);
+      const { pod_file_path, ...rest } = r;
+      return { ...rest, pod_files: podFiles };
+    });
+
+    res.json({ success: true, laptops });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

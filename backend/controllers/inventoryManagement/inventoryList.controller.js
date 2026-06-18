@@ -162,7 +162,7 @@ async function listInventory(req, res) {
 
 async function getListCounts(req, res) {
   try {
-    const keys = ['passed', 'rent_to_own', 'rental_purchase', 'direct_purchase', 'out_for_repare', 'spare_parts'];
+    const keys = ['passed', 'qc_process', 'rent_to_own', 'rental_purchase', 'direct_purchase', 'out_for_repare', 'spare_parts'];
     const counts = {};
     for (const seg of keys) {
       const params = [];
