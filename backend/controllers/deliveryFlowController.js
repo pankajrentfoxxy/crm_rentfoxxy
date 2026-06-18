@@ -71,7 +71,7 @@ async function buildDcFlow(where, params, { includeOtp = false } = {}) {
   const rowsRes = await pool.query(
     `SELECT d.*,
             COALESCE(NULLIF(TRIM(CONCAT(dt.first_name,' ',COALESCE(dt.last_name,''))),''), u.name, u.email) AS technician_name,
-            COALESCE(dt.phone, u.phone) AS technician_phone,
+            COALESCE(dt.phone, u.mobile_no) AS technician_phone,
             dt.user_id AS technician_user_id,
             c.phone AS customer_phone, c.name AS customer_real_name
        FROM delivery_challan_lines d
