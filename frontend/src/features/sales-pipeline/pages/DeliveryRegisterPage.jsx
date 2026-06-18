@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { KeyRound, Map as MapIcon, CheckCircle2, ExternalLink, Image as ImageIcon } from 'lucide-react';
-import { listDeliveryFlow, adminDeliverOverride } from '../salesPipelineApi';
+import { listDeliveryFlow } from '../salesPipelineApi';
 import { DISPATCH_MODE_STYLES, formatDateTime, statusLabel } from '../salesPipelineUtils';
 import { getBackendOrigin } from '../../../utils/api';
+import AdminDeliverModal from '../components/AdminDeliverModal';
 
 const TABS = [
   { id: 'all', label: 'All' },
@@ -25,8 +26,6 @@ export default function DeliveryRegisterPage() {
   const [loading, setLoading] = useState(true);
   const [otpModal, setOtpModal] = useState(null);
   const [deliverModal, setDeliverModal] = useState(null);
-  const [reason, setReason] = useState('');
-  const [notes, setNotes] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -41,17 +40,6 @@ export default function DeliveryRegisterPage() {
   }, [tab]);
 
   useEffect(() => { load(); }, [load]);
-
-  const submitOverride = async () => {
-    try {
-      await adminDeliverOverride(deliverModal.dc_number, { reason, notes });
-      toast.success('Delivery confirmed (override)');
-      setDeliverModal(null); setReason(''); setNotes('');
-      load();
-    } catch (e) {
-      toast.error(e.response?.data?.message || 'Override failed');
-    }
-  };
 
   const isDelivered = tab === 'delivered';
 
@@ -165,16 +153,11 @@ export default function DeliveryRegisterPage() {
       )}
 
       {deliverModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <button type="button" className="absolute inset-0 bg-black/40" onClick={() => setDeliverModal(null)} aria-label="Close" />
-          <div className="relative bg-white rounded-xl p-6 w-full max-w-sm">
-            <h3 className="font-semibold mb-1">Mark Delivered — {deliverModal.dc_number}</h3>
-            <p className="text-xs text-gray-500 mb-3">Admin override skips the OTP / POD flow.</p>
-            <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason*" className="w-full border rounded-lg px-3 py-2 mb-2 text-sm" />
-            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} placeholder="Notes (optional)" className="w-full border rounded-lg px-3 py-2 mb-3 text-sm" />
-            <button type="button" disabled={!reason.trim()} onClick={submitOverride} className="w-full py-2 bg-emerald-600 text-white rounded-lg text-sm font-semibold disabled:opacity-50">Confirm Delivery</button>
-          </div>
-        </div>
+        <AdminDeliverModal
+          dc={deliverModal}
+          onClose={() => setDeliverModal(null)}
+          onDelivered={load}
+        />
       )}
     </div>
   );

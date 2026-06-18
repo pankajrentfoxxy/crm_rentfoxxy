@@ -19,6 +19,8 @@ export const recordPayment = (n, d) => api.post(`${base}/sales-orders/${n}/payme
 export const listDCs = (p) => api.get(`${base}/delivery-challans`, { params: p });
 export const getDC = (n) => api.get(`${base}/delivery-challans/${n}`);
 export const createDC = (d) => api.post(`${base}/delivery-challans`, d);
+// Phase 15 — create one DC per delivery-address group
+export const createDcsByAddress = (data) => api.post(`${base}/create-dcs-by-address`, data);
 export const updateDC = (n, d) => api.patch(`${base}/delivery-challans/${n}`, d);
 export const regenerateDcPdf = (n) => api.post(`${base}/delivery-challans/${n}/pdf`);
 export const regenerateQuotationPdf = (n) => api.post(`${base}/quotations/${n}/pdf`);
@@ -48,6 +50,9 @@ export const updateSoSerialAddress = (allocationId, d) =>
   api.patch(`${base}/so-serials/${allocationId}/address`, d);
 export const bulkUpdateSoSerialAddresses = (so, d) =>
   api.patch(`${base}/sales-orders/${so}/serial-addresses`, d);
+// Phase 14 — line-level delivery address (before serials attached)
+export const updateSoLineAddress = (lineId, d) =>
+  api.patch(`${base}/so-lines/${lineId}/address`, d);
 
 // Phase 13 — delivery flow
 export const listDeliveryFlow = (params) => api.get(`${base}/delivery-flow`, { params });
@@ -57,8 +62,10 @@ export const verifySerialAndGenerateOtp = (dcNumber, d) =>
   api.post(`${base}/delivery-challans/${dcNumber}/verify-serial`, d);
 export const submitDeliveryWithPod = (dcNumber, formData) =>
   api.post(`${base}/delivery-challans/${dcNumber}/deliver`, formData);
-export const adminDeliverOverride = (dcNumber, d) =>
-  api.patch(`${base}/delivery-challans/${dcNumber}/admin-deliver`, d);
+export const adminDeliverOverride = (dcNumber, formData) =>
+  api.patch(`${base}/delivery-challans/${dcNumber}/admin-deliver`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
 export const getOperationCounts = () => api.get(`${base}/counts`);
 export const saveCustomerShippingAddress = (id, d) => api.post(`${base}/customers/${id}/shipping-address`, d);
 export const getCustomerDetail = (customerId) => api.get(`/customer-management/customers/${customerId}`);

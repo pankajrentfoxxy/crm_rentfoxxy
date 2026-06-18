@@ -910,6 +910,31 @@ exports.storeDeliveryChallan = async (req, res) => {
     const shipping = parseJsonField(body.customer_shipping_address);
     const billing = parseJsonField(body.customer_billing_address);
 
+    // Pro-rata security: the SO security_amount is the TOTAL across all laptops on
+    // the order. A DC for a subset of laptops only carries its share, so the
+    // customer is not over-charged when a single SO is split into multiple DCs.
+    let thisDcSerialCount = 0;
+    for (let i = 0; i < count; i++) {
+      const s = (body.serial_number || [])[i];
+      const list = Array.isArray(s) ? s : (s ? [s] : []);
+      thisDcSerialCount += list.length;
+    }
+    let dcSecurity = Number(body.security_amount || 0);
+    if (body.sales_order_number) {
+      const secRes = await pool.query(
+        `SELECT MAX(sol.security_amount) AS security_amount,
+                (SELECT COUNT(*) FROM sales_order_serials sos
+                  WHERE sos.sales_order_number = $1 AND sos.status <> 'removed') AS total_attached
+           FROM sales_order_lines sol WHERE sol.sales_order_number = $1`,
+        [body.sales_order_number]
+      );
+      const totalSecurity = Number(secRes.rows[0]?.security_amount || body.security_amount || 0);
+      const totalAttached = Number(secRes.rows[0]?.total_attached || 0);
+      dcSecurity = (totalAttached > 0 && thisDcSerialCount > 0)
+        ? Math.round((totalSecurity / totalAttached) * thisDcSerialCount * 100) / 100
+        : totalSecurity;
+    }
+
     await client.query('BEGIN');
     let inserted = 0;
     for (let i = 0; i < count; i++) {
@@ -933,8 +958,9 @@ exports.storeDeliveryChallan = async (req, res) => {
           dc_number, sales_order_number, quotation_number, customer_id, customer_name, email, gst_number,
           supply_state, security_amount, shiping_charges, branch, entity_code, customer_billing_address,
           customer_shipping_address, brand, model_name, quantity, main_qty, serial_number, ship_by,
-          courier_name, awb_number, delivery_person_id, remarks, status, created_by
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,'pending',$25)`,
+          courier_name, awb_number, delivery_person_id, remarks, status, created_by,
+          courier_tracking_url, porter_tracking_id, porter_order_id, porter_booking_url
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,'pending',$25,$26,$27,$28,$29)`,
         [
           dcNumber,
           body.sales_order_number,
@@ -944,7 +970,7 @@ exports.storeDeliveryChallan = async (req, res) => {
           body.email || body.customer_email,
           body.GST_number || body.gst_number,
           body.supply_state,
-          body.security_amount || 0,
+          dcSecurity,
           body.shiping_charges || 0,
           body.branch || entityCode,
           entityCode,
@@ -961,6 +987,10 @@ exports.storeDeliveryChallan = async (req, res) => {
           toNullableInt(body.delivery_person_id),
           (body.remarks || body.remark || [])[i] || null,
           req.user?.user_id,
+          shipBy === 'by_courier' ? (body.courier_tracking_url || null) : null,
+          shipBy === 'by_porter' ? (body.porter_tracking_id || null) : null,
+          shipBy === 'by_porter' ? (body.porter_order_id || null) : null,
+          shipBy === 'by_porter' ? (body.porter_booking_url || null) : null,
         ]
       );
       inserted += 1;
@@ -1052,7 +1082,8 @@ exports.storeDeliveryChallan = async (req, res) => {
     // "Mark Delivered"; technician DCs surface in the delivery-register bucket.
     await client.query(
       `UPDATE delivery_challan_lines
-         SET status = 'in_transit', dispatch_mode = $2, updated_at = NOW()
+         SET status = 'in_transit', dispatch_mode = $2,
+             dispatched_at = COALESCE(dispatched_at, NOW()), updated_at = NOW()
        WHERE dc_number = $1 AND status = 'pending'`,
       [dcNumber, dispatchMode]
     );
@@ -1079,6 +1110,270 @@ exports.storeDeliveryChallan = async (req, res) => {
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('storeDeliveryChallan:', error);
+    res.status(500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
+  }
+};
+
+/**
+ * POST /api/sales-management/create-dcs-by-address  (Phase 15)
+ * Creates ONE DC per delivery-address group from QC-passed attached serials.
+ * Business rule: one DC = one delivery address = one shipment.
+ */
+exports.createDcsByAddress = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const body = req.body || {};
+    const { sales_order_number, ship_by, dc_groups } = body;
+
+    if (!sales_order_number) {
+      return res.status(400).json({ success: false, message: 'sales_order_number required' });
+    }
+    if (!Array.isArray(dc_groups) || !dc_groups.length) {
+      return res.status(400).json({ success: false, message: 'dc_groups required' });
+    }
+    if (!['by_courier', 'by_porter', 'by_hand'].includes(ship_by)) {
+      return res.status(400).json({ success: false, message: 'Invalid or missing ship_by' });
+    }
+
+    // Rule: one serial cannot appear in two groups.
+    const seen = new Set();
+    for (const g of dc_groups) {
+      for (const id of (g.allocation_ids || [])) {
+        if (seen.has(id)) {
+          return res.status(400).json({
+            success: false,
+            message: `Laptop allocation ${id} appears in multiple DC groups. Each laptop can only be in one DC.`,
+          });
+        }
+        seen.add(id);
+      }
+    }
+
+    const allAllocationIds = dc_groups.flatMap((g) => (g.allocation_ids || []).map((n) => Number(n)));
+    if (!allAllocationIds.length) {
+      return res.status(400).json({ success: false, message: 'No laptops selected' });
+    }
+
+    // Validate allocations: attached to this SO and QC-passed.
+    const allocRes = await client.query(
+      `SELECT sos.allocation_id, sos.serial_id, sos.qc_status, sos.status, sos.qc_ticket_id,
+              sos.ttspl_id, sos.serial_number,
+              vsn.serial_number AS vsn_serial, vsn.inventory_asset_code AS ttspl_id_vsn,
+              COALESCE(vsn.extra->>'brand', vpd.brand, '') AS brand,
+              COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', vpd.model, '') AS model,
+              COALESCE(vsn.extra->>'processor', vpd.processor, '') AS processor,
+              COALESCE(vsn.extra->>'generation', vpd.generation, '') AS generation,
+              COALESCE(vsn.extra->>'ram', vpd.ram, '') AS ram,
+              COALESCE(vsn.extra->>'storage', vpd.storage, '') AS storage
+         FROM sales_order_serials sos
+         LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = sos.serial_id
+         LEFT JOIN vendor_product_details vpd ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id','')::int
+        WHERE sos.allocation_id = ANY($1::int[])
+          AND sos.sales_order_number = $2
+          AND sos.status = 'attached'`,
+      [allAllocationIds, sales_order_number]
+    );
+
+    if (allocRes.rows.length !== allAllocationIds.length) {
+      const found = allocRes.rows.map((r) => r.allocation_id);
+      const missing = allAllocationIds.filter((id) => !found.includes(id));
+      return res.status(400).json({
+        success: false,
+        message: `Some laptops are not attached or already dispatched: ${missing.join(', ')}`,
+      });
+    }
+    const notPassed = allocRes.rows.filter((r) => r.qc_status !== 'passed');
+    if (notPassed.length) {
+      return res.status(400).json({
+        success: false,
+        message: `Laptops must pass Dispatch QC before DC creation: ${notPassed.map((r) => r.ttspl_id || r.serial_number).join(', ')}`,
+      });
+    }
+
+    const soLines = await getSalesOrderLines(sales_order_number);
+    if (!soLines.length) {
+      return res.status(404).json({ success: false, message: 'Sales order not found' });
+    }
+    const soHead = soLines[0];
+    const entityCode = soHead.entity_code || entityForQuotationType(soHead.quotation_type || 'rental');
+    const dispatchMode = ship_by === 'by_hand' ? 'inhouse'
+      : ship_by === 'by_porter' ? 'porter' : 'courier';
+
+    // Billing address (snapshot or resolved from customer).
+    let billing = parseJsonSafe(soHead.customer_billing_address);
+    if ((!billing || !billing.address) && soHead.customer_id) {
+      const cRes = await client.query(
+        `SELECT billing_address, billing_city, billing_state, billing_pincode,
+                name, company_name, phone, gst_no
+           FROM customers WHERE customer_id = $1`,
+        [soHead.customer_id]
+      );
+      if (cRes.rows.length) {
+        const c = cRes.rows[0];
+        billing = {
+          name: c.company_name || c.name, phone: c.phone, address: c.billing_address,
+          city: c.billing_city, state: c.billing_state, pincode: c.billing_pincode, gst_number: c.gst_no,
+        };
+      }
+    }
+
+    // Pro-rata security uses the SO's TOTAL laptops (attached + already dispatched)
+    // so each laptop's share is stable across partial dispatches.
+    const totalRes = await client.query(
+      `SELECT COUNT(*)::int AS n FROM sales_order_serials
+        WHERE sales_order_number = $1 AND status <> 'removed'`,
+      [sales_order_number]
+    );
+    const totalSoUnits = Number(totalRes.rows[0]?.n || allAllocationIds.length) || 1;
+    const totalSecurity = soLines.reduce((s, l) => s + Number(l.security_amount || 0), 0);
+
+    const allocMap = {};
+    allocRes.rows.forEach((r) => { allocMap[r.allocation_id] = r; });
+
+    const createdDcNumbers = [];
+    await client.query('BEGIN');
+
+    for (const group of dc_groups) {
+      const ids = (group.allocation_ids || []).map((n) => Number(n));
+      if (!ids.length) continue;
+
+      const dcNumber = await nextDocumentNumber(entityDocType('delivery_challan', entityCode));
+      const groupSerials = ids.map((id) => allocMap[id]).filter(Boolean);
+      const deliveryAddress = group.delivery_address
+        || parseJsonSafe(soHead.customer_shipping_address) || billing || null;
+
+      const groupSize = ids.length;
+      const groupSecurity = Math.round((totalSecurity / totalSoUnits) * groupSize * 100) / 100;
+
+      const groupAwb = group.awb_number || body.awb_number || null;
+      const groupDeliveryPersonId = group.delivery_person_id || body.delivery_person_id || null;
+
+      const serialTokens = groupSerials.map((s) =>
+        `${s.serial_id || ''}|${s.serial_number || s.vsn_serial || ''}|${s.ttspl_id || s.ttspl_id_vsn || ''}`
+      );
+
+      await client.query(
+        `INSERT INTO delivery_challan_lines (
+          dc_number, sales_order_number, quotation_number, customer_id, customer_name,
+          email, gst_number, supply_state, security_amount, shiping_charges, branch,
+          entity_code, customer_billing_address, customer_shipping_address,
+          brand, model_name, quantity, main_qty, serial_number,
+          ship_by, courier_name, awb_number, courier_tracking_url,
+          porter_tracking_id, porter_order_id, porter_booking_url,
+          delivery_person_id, dispatch_mode, dispatched_at,
+          status, created_by
+        ) VALUES (
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
+          $15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,NOW(),
+          'in_transit',$29
+        )`,
+        [
+          dcNumber, sales_order_number, soHead.quotation_number, soHead.customer_id || null,
+          soHead.customer_name, soHead.customer_email, soHead.gst_number, soHead.supply_state,
+          groupSecurity, 0, entityCode, entityCode,
+          billing ? JSON.stringify(billing) : null,
+          deliveryAddress ? JSON.stringify(deliveryAddress) : null,
+          groupSerials[0]?.brand || '', groupSerials[0]?.model || '',
+          groupSize, groupSize, JSON.stringify(serialTokens),
+          ship_by,
+          ship_by === 'by_courier' ? (body.courier_name || null) : null,
+          ship_by === 'by_courier' ? groupAwb : null,
+          ship_by === 'by_courier' ? (body.courier_tracking_url || null) : null,
+          ship_by === 'by_porter' ? (group.porter_tracking_id || body.porter_tracking_id || null) : null,
+          ship_by === 'by_porter' ? (group.porter_order_id || body.porter_order_id || null) : null,
+          ship_by === 'by_porter' ? (group.porter_booking_url || body.porter_booking_url || null) : null,
+          ship_by === 'by_hand' && groupDeliveryPersonId ? Number(groupDeliveryPersonId) : null,
+          dispatchMode, req.user?.user_id,
+        ]
+      );
+
+      // Commit the SO allocations to this DC.
+      await client.query(
+        `UPDATE sales_order_serials
+            SET status = 'dispatched', dc_number = $1, updated_at = NOW()
+          WHERE allocation_id = ANY($2::int[])`,
+        [dcNumber, ids]
+      );
+
+      // Reflect dispatch in legacy product inventory view.
+      const groupSerialIds = groupSerials.map((s) => s.serial_id).filter(Boolean);
+      const groupSerialNos = groupSerials.map((s) => s.serial_number || s.vsn_serial).filter(Boolean);
+      if (groupSerialIds.length || groupSerialNos.length) {
+        await client.query(
+          `UPDATE vendor_product_inventory
+              SET status = 'out_stock', updated_at = NOW()
+            WHERE serial_id = ANY($1::int[]) OR serial_number = ANY($2::text[])`,
+          [groupSerialIds.length ? groupSerialIds : [-1], groupSerialNos.length ? groupSerialNos : ['']]
+        );
+      }
+
+      // Dispatch each unit through the inventory state machine (fallback: direct).
+      for (const s of groupSerials) {
+        if (!s.serial_id) continue;
+        try {
+          await inventorySM.markDispatched(client, s.serial_id, {
+            dcNumber, customerId: soHead.customer_id || null, entityCode, dispatchMode,
+            actorUserId: req.user?.user_id, actorName: req.user?.name,
+          });
+        } catch (rErr) {
+          await client.query(
+            `UPDATE vendor_serial_numbers
+                SET inventory_status = 'in_transit', current_dc_number = $1,
+                    dispatch_mode = $2, dispatched_at = NOW(), updated_at = NOW()
+              WHERE serial_id = $3`,
+            [dcNumber, dispatchMode, s.serial_id]
+          );
+        }
+      }
+
+      // Mirror QC into dc_qc_tickets so the DC's QC gate reflects done QC.
+      await client.query(
+        `INSERT INTO dc_qc_tickets (dc_number, sales_order_number, ticket_id, ttspl_id, serial_id, status)
+         SELECT $1::text, sos.sales_order_number, sos.qc_ticket_id, sos.ttspl_id, sos.serial_id, 'qc_passed'
+           FROM sales_order_serials sos
+          WHERE sos.allocation_id = ANY($2::int[])
+            AND sos.qc_ticket_id IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM dc_qc_tickets d WHERE d.dc_number = $1 AND d.serial_id = sos.serial_id
+            )`,
+        [dcNumber, ids]
+      );
+
+      createdDcNumbers.push(dcNumber);
+    }
+
+    if (!createdDcNumbers.length) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: 'No DCs were created' });
+    }
+
+    await client.query('COMMIT');
+
+    // Generate branded PDFs (best-effort, after commit).
+    for (const dcNumber of createdDcNumbers) {
+      try {
+        const dcLines = await getDeliveryChallanLines(dcNumber);
+        const pdfPath = await generateDocumentPdf({
+          docType: 'delivery_challan', docNumber: dcNumber, header: dcLines[0] || {}, lines: dcLines,
+        });
+        await pool.query(`UPDATE delivery_challan_lines SET pdf_path = $1 WHERE dc_number = $2`, [pdfPath, dcNumber]);
+      } catch (pdfErr) {
+        console.error(`DC PDF generation failed (${dcNumber}):`, pdfErr.message);
+      }
+    }
+
+    res.status(201).json({
+      success: true,
+      dc_numbers: createdDcNumbers,
+      dcs_created: createdDcNumbers.length,
+      first_dc: createdDcNumbers[0],
+      message: `${createdDcNumbers.length} DC(s) created: ${createdDcNumbers.join(', ')}`,
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('createDcsByAddress:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
     client.release();
@@ -1168,6 +1463,8 @@ exports.getAvailableSerials = async (req, res) => {
       model_name: req.query.model_name || req.query.model,
       processor: req.query.processor,
       generation: req.query.generation,
+      ram: req.query.ram,
+      storage: req.query.storage,
       quotation_type: req.query.quotation_type,
       search: req.query.search,
       limit: req.query.limit,
@@ -1382,7 +1679,9 @@ exports.getSoWithPayments = async (req, res) => {
        FROM delivery_challan_lines WHERE sales_order_number = $1 ORDER BY dc_number, id DESC`,
       [soNumber]
     );
-    const totalValue = lines.reduce((s, l) => s + Number(l.rate || 0) * Number(l.quantity || 0), 0);
+    const totalValue = lines.reduce(
+      (s, l) => s + Number(l.rate || 0) * Number(l.main_qty || l.quantity || 0), 0
+    );
     const totalPaid = payRes.rows.reduce((s, p) => s + Number(p.amount || 0), 0);
     res.json({
       success: true,
@@ -1912,6 +2211,51 @@ exports.updateSoSerialAddress = async (req, res) => {
   } catch (error) {
     console.error('updateSoSerialAddress:', error);
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// PATCH /so-lines/:lineId/address  (Phase 14)
+// Stores a planned delivery address on a sales_order_lines row and propagates it
+// to any serials already attached to that line.
+exports.updateSoLineAddress = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const lineId = parseInt(req.params.lineId, 10);
+    if (!lineId) {
+      return res.status(400).json({ success: false, message: 'Invalid line id' });
+    }
+    const body = req.body || {};
+    const address = sanitizeDeliveryAddress(body.delivery_address);
+    const isWfh = body.is_wfh === true || body.is_wfh === 'true';
+    const notes = body.delivery_notes != null ? String(body.delivery_notes) : null;
+
+    await client.query('BEGIN');
+    const r = await client.query(
+      `UPDATE sales_order_lines
+          SET delivery_address = $1::jsonb, is_wfh = $2, delivery_notes = $3, updated_at = NOW()
+        WHERE id = $4
+        RETURNING id`,
+      [address ? JSON.stringify(address) : null, isWfh, notes, lineId]
+    );
+    if (!r.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Sales order line not found' });
+    }
+    // Propagate to serials already attached to this line.
+    await client.query(
+      `UPDATE sales_order_serials
+          SET delivery_address = $1::jsonb, is_wfh = $2, delivery_notes = $3, updated_at = NOW()
+        WHERE line_id = $4 AND status <> 'removed'`,
+      [address ? JSON.stringify(address) : null, isWfh, notes, lineId]
+    );
+    await client.query('COMMIT');
+    res.json({ success: true, message: 'Address saved' });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('updateSoLineAddress:', error);
+    res.status(500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
   }
 };
 

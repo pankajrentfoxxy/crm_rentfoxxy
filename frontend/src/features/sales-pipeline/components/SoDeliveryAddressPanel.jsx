@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { MapPin, X } from 'lucide-react';
 import {
-  listSoSerials, getDCMeta, updateSoSerialAddress, bulkUpdateSoSerialAddresses,
+  listSoSerials, getSalesOrderFull, getDCMeta,
+  updateSoSerialAddress, updateSoLineAddress, bulkUpdateSoSerialAddresses,
 } from '../salesPipelineApi';
 
 const emptyAddress = {
@@ -15,16 +16,12 @@ function addressLine(a) {
   return [a.address, a.city, a.state, a.pincode].filter(Boolean).join(', ');
 }
 
-function EditDrawer({ row, customer, onClose, onSaved }) {
-  const [form, setForm] = useState({
-    ...emptyAddress,
-    ...(row.delivery_address || {}),
-  });
-  const [isWfh, setIsWfh] = useState(Boolean(row.is_wfh));
-  const [notes, setNotes] = useState(row.delivery_notes || '');
+function EditDrawer({ title, subtitle, initial, customer, onClose, onSave }) {
+  const [form, setForm] = useState({ ...emptyAddress, ...(initial.delivery_address || {}) });
+  const [isWfh, setIsWfh] = useState(Boolean(initial.is_wfh));
+  const [notes, setNotes] = useState(initial.delivery_notes || '');
   const [saving, setSaving] = useState(false);
 
-  // Pre-fill contact from customer when blank.
   useEffect(() => {
     setForm((f) => ({
       ...f,
@@ -55,13 +52,8 @@ function EditDrawer({ row, customer, onClose, onSaved }) {
     }
     setSaving(true);
     try {
-      await updateSoSerialAddress(row.allocation_id, {
-        delivery_address: form,
-        is_wfh: isWfh,
-        delivery_notes: notes,
-      });
+      await onSave({ delivery_address: form, is_wfh: isWfh, delivery_notes: notes });
       toast.success('Delivery address saved');
-      onSaved();
       onClose();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Save failed');
@@ -75,9 +67,10 @@ function EditDrawer({ row, customer, onClose, onSaved }) {
       <button type="button" className="absolute inset-0 bg-black/40" onClick={onClose} aria-label="Close" />
       <aside className="relative w-full max-w-md bg-white shadow-xl flex flex-col max-h-full">
         <div className="flex items-center justify-between border-b px-4 py-3">
-          <h3 className="font-semibold text-gray-900 text-sm">
-            Delivery Address — {row.ttspl_id || row.serial_number}
-          </h3>
+          <div>
+            <h3 className="font-semibold text-gray-900 text-sm">{title}</h3>
+            {subtitle && <p className="text-xs text-gray-500">{subtitle}</p>}
+          </div>
           <button type="button" onClick={onClose} className="p-1 rounded hover:bg-gray-100"><X className="w-5 h-5" /></button>
         </div>
         <div className="flex-1 overflow-y-auto p-4 space-y-3 text-sm">
@@ -131,19 +124,28 @@ function Field({ label, value, onChange, textarea }) {
   );
 }
 
+function configStr(o) {
+  return [o.brand, o.model_name, o.processor, o.generation, o.ram, o.storage].filter(Boolean).join(' · ');
+}
+
 export default function SoDeliveryAddressPanel({ soNumber }) {
-  const [rows, setRows] = useState([]);
+  const [serialRows, setSerialRows] = useState([]);
+  const [soLines, setSoLines] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [editRow, setEditRow] = useState(null);
+  const [editSerial, setEditSerial] = useState(null);
+  const [editLine, setEditLine] = useState(null);
   const [customer, setCustomer] = useState(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await listSoSerials(soNumber);
+      const [serialRes, soRes] = await Promise.all([
+        listSoSerials(soNumber),
+        getSalesOrderFull(soNumber).catch(() => ({ data: {} })),
+      ]);
       const flat = [];
-      (r.data?.lines || []).forEach((line) => {
+      (serialRes.data?.lines || []).forEach((line) => {
         (line.allocations || []).forEach((a) => {
           flat.push({
             ...a,
@@ -155,9 +157,10 @@ export default function SoDeliveryAddressPanel({ soNumber }) {
           });
         });
       });
-      setRows(flat);
+      setSerialRows(flat);
+      setSoLines(soRes.data?.lines || []);
     } catch {
-      toast.error('Failed to load attached laptops');
+      toast.error('Failed to load delivery addresses');
     } finally {
       setLoading(false);
     }
@@ -182,6 +185,8 @@ export default function SoDeliveryAddressPanel({ soNumber }) {
     }).catch(() => {});
   }, [soNumber]);
 
+  const hasSerials = serialRows.length > 0;
+
   const sameForAll = async () => {
     const b = customer?.billing;
     if (!b || !b.address) {
@@ -192,7 +197,7 @@ export default function SoDeliveryAddressPanel({ soNumber }) {
     setBusy(true);
     try {
       await bulkUpdateSoSerialAddresses(soNumber, {
-        addresses: rows.map((row) => ({
+        addresses: serialRows.map((row) => ({
           allocation_id: row.allocation_id,
           delivery_address: {
             name: b.name || customer.name, phone: b.phone || customer.phone,
@@ -210,22 +215,81 @@ export default function SoDeliveryAddressPanel({ soNumber }) {
     }
   };
 
-  const assignedCount = useMemo(() => rows.filter((r) => r.delivery_address?.address).length, [rows]);
+  const assignedCount = useMemo(
+    () => serialRows.filter((r) => r.delivery_address?.address).length,
+    [serialRows],
+  );
 
   if (loading) return <div className="text-gray-400 text-sm">Loading…</div>;
-  if (!rows.length) {
+
+  // PRE-ATTACH VIEW — plan addresses per order line before laptops are attached.
+  if (!hasSerials) {
     return (
-      <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-lg p-4 text-sm">
-        Attach laptops to this sales order first (Laptops &amp; QC tab). Delivery addresses can be set once units are attached.
+      <div className="space-y-4">
+        <div className="bg-blue-50 border border-blue-100 text-blue-800 rounded-lg p-3 text-sm">
+          Set a delivery address per laptop configuration now. When the warehouse attaches
+          serials, each unit inherits its line's address (you can fine-tune per-TTSPL later).
+        </div>
+        {soLines.length === 0 ? (
+          <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-lg p-4 text-sm">
+            This sales order has no line items.
+          </div>
+        ) : soLines.map((line) => (
+          <div key={line.id} className="border rounded-xl p-4 bg-white">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="font-medium text-sm">{configStr(line) || line.brand || '—'}</p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {(line.main_qty || line.quantity || 0)} unit(s)
+                  {line.rate ? ` · ₹${Number(line.rate).toLocaleString('en-IN')}` : ''}
+                </p>
+              </div>
+              <button type="button" onClick={() => setEditLine(line)}
+                className="text-xs text-blue-600 border border-blue-200 px-3 py-1 rounded-lg hover:bg-blue-50 whitespace-nowrap">
+                {line.delivery_address ? 'Edit Address' : 'Set Address'}
+              </button>
+            </div>
+            {line.delivery_address ? (
+              <div className="mt-2 text-xs text-gray-600 bg-gray-50 rounded-lg p-2">
+                <p className="font-medium">{line.delivery_address.name}</p>
+                <p>{addressLine(line.delivery_address)}</p>
+                {line.is_wfh && (
+                  <span className="inline-block mt-1 px-2 py-0.5 bg-teal-50 text-teal-700 rounded text-[10px] font-medium">
+                    🏠 WFH Delivery
+                  </span>
+                )}
+              </div>
+            ) : (
+              <p className="mt-2 text-xs text-amber-600">
+                ⚠ No address set. This will default to the customer billing address.
+              </p>
+            )}
+          </div>
+        ))}
+
+        {editLine && (
+          <EditDrawer
+            title={`Delivery Address — ${configStr(editLine) || editLine.brand}`}
+            subtitle={`${editLine.main_qty || editLine.quantity || 0} unit(s) on this line`}
+            initial={editLine}
+            customer={customer}
+            onClose={() => setEditLine(null)}
+            onSave={async (payload) => {
+              await updateSoLineAddress(editLine.id, payload);
+              await load();
+            }}
+          />
+        )}
       </div>
     );
   }
 
+  // POST-ATTACH VIEW — per-TTSPL addresses (pre-filled from line inheritance).
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-gray-600">
-          {assignedCount}/{rows.length} laptops have a delivery address.
+          {assignedCount}/{serialRows.length} laptops have a delivery address.
         </p>
         <div className="flex gap-2">
           <button type="button" onClick={sameForAll} disabled={busy}
@@ -247,7 +311,7 @@ export default function SoDeliveryAddressPanel({ soNumber }) {
             </tr>
           </thead>
           <tbody className="divide-y">
-            {rows.map((row) => (
+            {serialRows.map((row) => (
               <tr key={row.allocation_id}>
                 <td className="px-4 py-2 font-mono text-xs text-blue-700">{row.ttspl_id || row.serial_number}</td>
                 <td className="px-4 py-2 text-gray-600">
@@ -264,7 +328,7 @@ export default function SoDeliveryAddressPanel({ soNumber }) {
                   {row.is_wfh ? <span className="px-2 py-0.5 rounded-full text-xs bg-purple-100 text-purple-700">WFH</span> : 'No'}
                 </td>
                 <td className="px-4 py-2 text-right">
-                  <button type="button" onClick={() => setEditRow(row)}
+                  <button type="button" onClick={() => setEditSerial(row)}
                     className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline">
                     <MapPin className="w-3.5 h-3.5" /> {addressLine(row.delivery_address) ? 'Edit' : 'Set'}
                   </button>
@@ -275,12 +339,16 @@ export default function SoDeliveryAddressPanel({ soNumber }) {
         </table>
       </div>
 
-      {editRow && (
+      {editSerial && (
         <EditDrawer
-          row={editRow}
+          title={`Delivery Address — ${editSerial.ttspl_id || editSerial.serial_number}`}
+          initial={editSerial}
           customer={customer}
-          onClose={() => setEditRow(null)}
-          onSaved={load}
+          onClose={() => setEditSerial(null)}
+          onSave={async (payload) => {
+            await updateSoSerialAddress(editSerial.allocation_id, payload);
+            await load();
+          }}
         />
       )}
     </div>

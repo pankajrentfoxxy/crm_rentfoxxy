@@ -26,6 +26,12 @@ function dcPdfUrl(path) {
   return `${getBackendOrigin().replace(/\/$/, '')}/${path.replace(/^\//, '')}`;
 }
 
+function uploadUrl(p) {
+  if (!p) return null;
+  if (p.startsWith('http')) return p;
+  return `${getBackendOrigin().replace(/\/$/, '')}/uploads/${p.replace(/^\/?uploads\//, '')}`;
+}
+
 export default function DeliveryChallanDetailPage() {
   const { dcNumber } = useParams();
   const { user } = useAuth();
@@ -208,8 +214,35 @@ export default function DeliveryChallanDetailPage() {
                 </table>
               </div>
               <div className="p-4 text-sm border-t space-y-1">
-                <p>Courier: {head.courier_name || '—'} · AWB: {head.awb_number || '—'}</p>
+                {(head.ship_by === 'by_courier' || head.dispatch_mode === 'courier') && (
+                  <p>
+                    Courier: <strong>{head.courier_name || '—'}</strong>
+                    {' · '}AWB: <strong>{head.awb_number || '—'}</strong>
+                    {head.courier_tracking_url && (
+                      <> · <a href={head.courier_tracking_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline text-xs ml-1">Track</a></>
+                    )}
+                  </p>
+                )}
+                {(head.ship_by === 'by_porter' || head.dispatch_mode === 'porter') && (
+                  <p>
+                    Porter ID: <strong>{head.porter_tracking_id || '—'}</strong>
+                    {head.porter_order_id && <> · Order: <strong>{head.porter_order_id}</strong></>}
+                    {head.porter_booking_url && (
+                      <> · <a href={head.porter_booking_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline text-xs ml-1">Track</a></>
+                    )}
+                  </p>
+                )}
+                {(head.ship_by === 'by_hand' || head.dispatch_mode === 'inhouse') && (
+                  <p>
+                    Delivery Technician:{' '}
+                    <strong>{head.delivery_person_name || head.technician_name || 'Not assigned'}</strong>
+                    {head.delivery_person_phone && <> · {head.delivery_person_phone}</>}
+                  </p>
+                )}
                 <p>Security: {formatCurrency(head.security_amount)} · Shipping: {formatCurrency(head.shiping_charges)}</p>
+                <p className="text-xs text-gray-400">
+                  Security per laptop: {formatCurrency((Number(head.security_amount) || 0) / (Number(head.quantity) || 1))}
+                </p>
               </div>
             </div>
           )}
@@ -289,10 +322,30 @@ export default function DeliveryChallanDetailPage() {
                 </div>
               )}
               {head.status === 'delivered' && (
-                <div className="text-sm">
+                <div className="text-sm space-y-1">
                   <p>Delivered at: {formatDateTime(head.delivered_at)}</p>
-                  <p>Location: {head.delivery_location || '—'}</p>
-                  {head.pod_image_url && <img src={head.pod_image_url} alt="POD" className="mt-2 h-32 rounded border" />}
+                  {head.delivery_notes && <p className="text-gray-600">Notes: {head.delivery_notes}</p>}
+                  <div className="flex flex-wrap gap-4 mt-2">
+                    {uploadUrl(head.pod_photo_url) && (
+                      <div>
+                        <p className="text-xs text-gray-500 mb-1">POD Photo</p>
+                        <a href={uploadUrl(head.pod_photo_url)} target="_blank" rel="noreferrer">
+                          <img src={uploadUrl(head.pod_photo_url)} alt="POD" className="h-32 rounded border" />
+                        </a>
+                      </div>
+                    )}
+                    {uploadUrl(head.esign_url) && (
+                      <div>
+                        <p className="text-xs text-gray-500 mb-1">Customer Signature</p>
+                        <a href={uploadUrl(head.esign_url)} target="_blank" rel="noreferrer">
+                          <img src={uploadUrl(head.esign_url)} alt="E-Sign" className="h-32 rounded border bg-white" />
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                  {!head.pod_photo_url && !head.esign_url && (
+                    <p className="text-xs text-gray-400">POD type: {head.pod_type || '—'}</p>
+                  )}
                 </div>
               )}
               {head.status === 'rejected' && (

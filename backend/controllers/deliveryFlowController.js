@@ -366,14 +366,15 @@ exports.submitDeliveryWithPod = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid OTP' });
     }
 
-    const podType = body.pod_type || 'none';
     let podPhotoUrl = null;
     let esignUrl = null;
-    if (podType === 'photo' && req.file) {
+    if (req.file) {
       podPhotoUrl = `pod/${req.file.filename}`;
-    } else if (podType === 'esign' && body.esign_data) {
+    }
+    if (body.esign_data) {
       esignUrl = saveEsign(dcNumber, body.esign_data);
     }
+    const podType = body.pod_type || (esignUrl ? 'esign' : podPhotoUrl ? 'photo' : 'none');
 
     await client.query('BEGIN');
     await client.query(
@@ -415,12 +416,20 @@ exports.submitDeliveryWithPod = async (req, res) => {
   }
 };
 
-// PATCH /delivery-challans/:dcNumber/admin-deliver  { notes, reason }  (admin/manager)
+// PATCH /delivery-challans/:dcNumber/admin-deliver  (multipart: pod_photo*, notes, reason)
+// Admin override still requires a POD photo of the delivered laptop.
 exports.adminDeliverOverride = async (req, res) => {
   const client = await pool.connect();
   try {
     const dcNumber = req.params.dcNumber;
     const body = req.body || {};
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'POD photo is required. Please upload a photo of the delivered laptop.',
+      });
+    }
+    const podPhotoUrl = `pod/${req.file.filename}`;
     const r = await client.query(
       `SELECT status FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
       [dcNumber]
@@ -436,11 +445,11 @@ exports.adminDeliverOverride = async (req, res) => {
     await client.query(
       `UPDATE delivery_challan_lines
           SET status = 'delivered', delivered_at = NOW(), delivery_completed_at = NOW(),
-              pod_type = 'admin_override', pod_submitted_at = NOW(), pod_submitted_by = $1,
-              delivered_by = $1,
-              delivery_notes = $2, updated_at = NOW()
-        WHERE dc_number = $3`,
-      [req.user.user_id, [body.reason, body.notes].filter(Boolean).join(' — ') || null, dcNumber]
+              pod_type = 'admin_override', pod_photo_url = $1,
+              pod_submitted_at = NOW(), pod_submitted_by = $2, delivered_by = $2,
+              delivery_notes = $3, updated_at = NOW()
+        WHERE dc_number = $4`,
+      [podPhotoUrl, req.user.user_id, [body.reason, body.notes].filter(Boolean).join(' — ') || null, dcNumber]
     );
     await sm.finalizeDeliveryInventory(client, dcNumber, req.user);
     await client.query('COMMIT');

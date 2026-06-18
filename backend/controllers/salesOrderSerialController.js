@@ -202,6 +202,20 @@ exports.attachSerial = async (req, res) => {
        ticket.ok ? ticket.ticket_id : null, entityCode, req.user.user_id]
     );
 
+    // Phase 14: inherit the delivery address planned on the parent SO line (if any).
+    await client.query(
+      `UPDATE sales_order_serials sos
+          SET delivery_address = sol.delivery_address,
+              is_wfh = sol.is_wfh,
+              delivery_notes = sol.delivery_notes,
+              updated_at = NOW()
+         FROM sales_order_lines sol
+        WHERE sos.allocation_id = $1
+          AND sol.id = sos.line_id
+          AND sol.delivery_address IS NOT NULL`,
+      [ins.rows[0].allocation_id]
+    );
+
     await client.query('COMMIT');
     res.status(201).json({
       success: true,

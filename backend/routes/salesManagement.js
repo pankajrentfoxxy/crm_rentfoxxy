@@ -55,6 +55,8 @@ router.delete('/sales-orders/:soNumber/serials/:allocId', dcEdit, sosCtrl.detach
 // Phase 13 — per-serial delivery addresses on the SO
 router.patch('/so-serials/:allocationId/address', dcEdit, ctrl.updateSoSerialAddress);
 router.patch('/sales-orders/:soNumber/serial-addresses', dcEdit, ctrl.bulkUpdateSoSerialAddresses);
+// Phase 14 — line-level delivery address (before serials are attached)
+router.patch('/so-lines/:lineId/address', dcEdit, ctrl.updateSoLineAddress);
 
 // Phase 13 — delivery flow (technician bucket / my deliveries / OTP / POD)
 router.get('/delivery-flow', tbView, flowCtrl.listDeliveryFlow);
@@ -62,7 +64,7 @@ router.get('/my-deliveries', tbView, flowCtrl.getMyDeliveries);
 router.patch('/delivery-challans/:dcNumber/reached', tbEdit, flowCtrl.markTechReached);
 router.post('/delivery-challans/:dcNumber/verify-serial', tbEdit, flowCtrl.verifySerialAndGenerateOtp);
 router.post('/delivery-challans/:dcNumber/deliver', tbEdit, uploadPod.single('pod_photo'), flowCtrl.submitDeliveryWithPod);
-router.patch('/delivery-challans/:dcNumber/admin-deliver', checkRole('admin', 'manager', 'super_admin'), flowCtrl.adminDeliverOverride);
+router.patch('/delivery-challans/:dcNumber/admin-deliver', checkRole('admin', 'manager', 'super_admin'), uploadPod.single('pod_photo'), flowCtrl.adminDeliverOverride);
 
 router.get('/counts', quoteView, ctrl.getOperationCounts);
 router.get('/inventory/available-serials', dcView, ctrl.getAvailableSerials);
@@ -88,6 +90,8 @@ router.get('/delivery-challans', dcView, ctrl.listDeliveryChallans);
 router.get('/delivery-challans/:dcNumber', dcView, ctrl.getDeliveryChallan);
 router.post('/delivery-challans/:dcNumber/pdf', dcView, ctrl.regenerateDcPdf);
 router.post('/delivery-challans', dcCreate, ctrl.storeDeliveryChallan);
+// Phase 15 — create one DC per delivery-address group from QC-passed serials
+router.post('/create-dcs-by-address', dcCreate, ctrl.createDcsByAddress);
 // Edit an existing DC in place — Super Admin only.
 router.patch('/delivery-challans/:dcNumber', checkRole('super_admin'), ctrl.updateDeliveryChallan);
 router.post('/delivery-challans/:dcNumber/send-otp', dcEdit, ctrl.sendDeliveryOtp);

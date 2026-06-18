@@ -8,7 +8,7 @@ import SoSerialPanel from '../components/SoSerialPanel';
 import SoDeliveryAddressPanel from '../components/SoDeliveryAddressPanel';
 import { getQuotation, getSalesOrderFull, listPayments, regenerateSalesOrderPdf } from '../salesPipelineApi';
 import { getBackendOrigin } from '../../../utils/api';
-import { formatConfig, formatCurrency, formatDate, lineTotal, TYPE_STYLES, typeLabel } from '../salesPipelineUtils';
+import { formatConfig, formatCurrency, formatDate, TYPE_STYLES, typeLabel } from '../salesPipelineUtils';
 
 function ConfigCard({ line }) {
   const title = [line.brand, line.model_name || line.model].filter(Boolean).join(' - ');
@@ -132,9 +132,9 @@ export default function SalesOrderDetailPage() {
                   <tr key={i}>
                     <td className="px-4 py-2">{l.brand}</td>
                     <td className="px-4 py-2"><ConfigCard line={l} /></td>
-                    <td className="px-4 py-2 text-right">{l.quantity}</td>
+                    <td className="px-4 py-2 text-right">{l.main_qty || l.quantity}</td>
                     <td className="px-4 py-2 text-right">{formatCurrency(l.rate)}</td>
-                    <td className="px-4 py-2 text-right">{formatCurrency(lineTotal(l))}</td>
+                    <td className="px-4 py-2 text-right">{formatCurrency((l.main_qty || l.quantity || 0) * (l.rate || 0))}</td>
                   </tr>
                 ))}
               </tbody>

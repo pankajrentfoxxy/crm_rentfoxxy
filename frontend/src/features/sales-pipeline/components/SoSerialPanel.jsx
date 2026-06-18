@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import { Package } from 'lucide-react';
 import PermissionGate from '../../../components/PermissionGate';
 import { attachSoSerial, detachSoSerial, getAvailableSerials, listSoSerials } from '../salesPipelineApi';
 
@@ -28,11 +29,14 @@ function AttachPicker({ soNumber, line, onAttached }) {
     setOpen(true);
     setLoading(true);
     try {
+      // Phase 14: match by processor + generation + RAM + storage (model optional).
       const r = await getAvailableSerials({
         brand: line.brand,
         model_name: line.model_name,
         processor: line.processor,
         generation: line.generation,
+        ram: line.ram,
+        storage: line.storage,
       });
       setOptions(r.data?.serials || []);
     } catch {
@@ -41,6 +45,13 @@ function AttachPicker({ soNumber, line, onAttached }) {
       setLoading(false);
     }
   };
+
+  const specChips = [
+    { label: 'Processor', value: line.processor },
+    { label: 'Gen', value: line.generation },
+    { label: 'RAM', value: line.ram },
+    { label: 'Storage', value: line.storage },
+  ].filter((f) => f.value);
 
   const attach = async (serialId) => {
     setBusy(true);
@@ -65,6 +76,18 @@ function AttachPicker({ soNumber, line, onAttached }) {
         </button>
       ) : (
         <div className="border rounded-lg p-2 bg-gray-50">
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            {specChips.map((f) => (
+              <span key={f.label} className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded-full text-[11px] font-medium">
+                {f.label}: {f.value}
+              </span>
+            ))}
+            {!loading && (
+              <span className="px-2 py-0.5 bg-green-50 text-green-700 rounded-full text-[11px] font-medium">
+                {filtered.length} laptop(s) match
+              </span>
+            )}
+          </div>
           <input
             type="search"
             value={query}
@@ -75,7 +98,16 @@ function AttachPicker({ soNumber, line, onAttached }) {
           {loading ? (
             <p className="text-xs text-gray-400">Loading available units…</p>
           ) : options.length === 0 ? (
-            <p className="text-xs text-gray-400">No QC-passed stock matching this config.</p>
+            <div className="text-center py-5 text-amber-700 bg-amber-50 rounded-lg">
+              <Package className="w-7 h-7 mx-auto mb-1.5 text-amber-400" />
+              <p className="text-sm font-medium">No matching laptops in inventory</p>
+              <p className="text-[11px] mt-1">
+                Looking for: {[line.processor, line.generation, line.ram, line.storage].filter(Boolean).join(' · ') || 'this config'}
+              </p>
+              <p className="text-[11px] text-gray-400 mt-1">
+                Ensure laptops matching this spec have passed QC.
+              </p>
+            </div>
           ) : filtered.length === 0 ? (
             <p className="text-xs text-gray-400">No units match “{query}”.</p>
           ) : (

@@ -1,3 +1,367 @@
+# RENTFOXXY CRM — PHASE 15 BUILD PROMPT
+## DC Creation: One DC Per Address — Complete Address-to-DC Flow
+### Branch: new_crm_rentfoxxy
+
+---
+
+## THE RULE (carved in stone — never break this)
+
+```
+ONE DC = ONE delivery address = ONE shipment
+A delivery challan is a physical shipping document.
+It cannot have multiple delivery addresses.
+
+For N laptops going to N different addresses → N DCs must be created.
+For N laptops going to same address → 1 DC with all N laptops.
+```
+
+---
+
+## COMPLETE SCENARIO MATRIX
+
+| Scenario | Laptops | Addresses | Result |
+|---|---|---|---|
+| S1: All same address | 5 | 1 (office) | 1 DC · 5 serials |
+| S2: All different | 5 | 5 (WFH) | 5 DCs · 1 serial each |
+| S3: Mixed | 6 | 3 distinct | 3 DCs · 2 serials each |
+| S4: No address set | 5 | 0 (fallback) | 1 DC · all serials · billing address |
+| S5: Partial dispatch | 10 QC-passed | user picks 4 | 1 DC for those 4 · rest later |
+| S6: Different dispatch modes | 4 | courier 2, inhouse 2 | 2 DCs per mode group |
+| S7: Partial QC-passed | 3 of 5 passed | — | only 3 selectable, 2 blocked |
+| S8: Single SO, multi-line | 2 configs, mixed addr | 3 | 3 DCs grouped by address |
+
+---
+
+## ROOT CAUSE (existing code)
+
+### DCForm.jsx (frontend)
+The `submit()` function sends ALL attached serials in ONE `createDC` call.
+`customer_shipping_address` is set to `deliveryAddress` which takes
+`attached[0].delivery_address` — just the FIRST serial's address.
+
+### storeDeliveryChallan (backend)
+Uses ONE `dc_number` for the entire submission.
+ONE `customer_shipping_address` inserted per DC row.
+All serials from all lines → same DC → same address.
+
+### The fix
+The DCForm must:
+1. Group QC-passed attached serials by their `delivery_address`
+2. Confirm with the user: "This will create N DC(s)" 
+3. Call `createDC` once per address-group
+4. Each call creates one DC with one address and its specific serials
+
+---
+
+## SECTION 1 — BACKEND: createMultipleDcs endpoint
+
+### 1A — New endpoint in salesManagementController.js
+
+```javascript
+/**
+ * POST /api/sales-management/create-dcs-by-address
+ * Creates one DC per delivery-address group from QC-passed attached serials.
+ *
+ * Body:
+ * {
+ *   sales_order_number: 'SO-000031',
+ *   ship_by: 'by_courier' | 'by_porter' | 'by_hand',
+ *   courier_name: '...',       // if courier
+ *   awb_number: '...',         // if courier (per DC or same for all)
+ *   courier_tracking_url: '...',
+ *   porter_tracking_id: '...',
+ *   porter_order_id: '...',
+ *   porter_booking_url: '...',
+ *   delivery_person_id: N,     // if inhouse
+ *   dc_groups: [               // one entry per DC to create
+ *     {
+ *       delivery_address: { name, phone, address, city, state, pincode, ... },
+ *       allocation_ids: [1, 2, 3],   // sales_order_serials.allocation_id
+ *       // per-DC overrides (courier can be different per DC):
+ *       awb_number?: '...',
+ *       delivery_person_id?: N,
+ *     }
+ *   ]
+ * }
+ *
+ * Response:
+ * {
+ *   success: true,
+ *   dc_numbers: ['DC-000014', 'DC-000015'],
+ *   dcs_created: 2,
+ *   first_dc: 'DC-000014'
+ * }
+ */
+exports.createDcsByAddress = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const body = req.body;
+    const { sales_order_number, ship_by, dc_groups } = body;
+
+    if (!sales_order_number) {
+      return res.status(400).json({ success: false, message: 'sales_order_number required' });
+    }
+    if (!Array.isArray(dc_groups) || !dc_groups.length) {
+      return res.status(400).json({ success: false, message: 'dc_groups required' });
+    }
+    if (!ship_by) {
+      return res.status(400).json({ success: false, message: 'ship_by required' });
+    }
+
+    // Validate all allocation_ids exist and are QC-passed for this SO
+    const allAllocationIds = dc_groups.flatMap((g) => g.allocation_ids || []);
+    if (!allAllocationIds.length) {
+      return res.status(400).json({ success: false, message: 'No laptops selected' });
+    }
+
+    const allocRes = await pool.query(
+      `SELECT sos.*, 
+              vsn.serial_number AS vsn_serial, vsn.inventory_asset_code AS ttspl_id_vsn,
+              COALESCE(vsn.extra->>'brand', '') AS brand,
+              COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', '') AS model,
+              COALESCE(vsn.extra->>'processor', '') AS processor,
+              COALESCE(vsn.extra->>'generation', '') AS generation,
+              COALESCE(vsn.extra->>'ram', '') AS ram,
+              COALESCE(vsn.extra->>'storage', '') AS storage,
+              vsn.serial_id
+       FROM sales_order_serials sos
+       LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = sos.serial_id
+       WHERE sos.allocation_id = ANY($1::int[])
+         AND sos.sales_order_number = $2
+         AND sos.status = 'attached'`,
+      [allAllocationIds, sales_order_number]
+    );
+
+    if (allocRes.rows.length !== allAllocationIds.length) {
+      const found = allocRes.rows.map((r) => r.allocation_id);
+      const missing = allAllocationIds.filter((id) => !found.includes(id));
+      return res.status(400).json({
+        success: false,
+        message: `Some laptops are not attached or already dispatched: ${missing.join(', ')}`
+      });
+    }
+
+    const notPassed = allocRes.rows.filter((r) => r.qc_status !== 'passed');
+    if (notPassed.length) {
+      return res.status(400).json({
+        success: false,
+        message: `Laptops must pass Dispatch QC before DC creation: ${notPassed.map((r) => r.ttspl_id || r.serial_number).join(', ')}`
+      });
+    }
+
+    // Get SO meta for common fields
+    const soLines = await getSalesOrderLines(sales_order_number);
+    if (!soLines.length) {
+      return res.status(404).json({ success: false, message: 'Sales order not found' });
+    }
+    const soHead = soLines[0];
+    const entityCode = entityForQuotationType(soHead.quotation_type || 'rental');
+    const dispatchMode = ship_by === 'by_hand' ? 'inhouse'
+      : ship_by === 'by_porter' ? 'porter' : 'courier';
+
+    // Get billing address
+    let billing = parseJsonSafe(soHead.customer_billing_address);
+    if ((!billing || !billing.address) && soHead.customer_id) {
+      const cRes = await pool.query(
+        `SELECT billing_address, billing_city, billing_state, billing_pincode, 
+                name, company_name, phone, gst_no
+         FROM customers WHERE customer_id = $1`, [soHead.customer_id]
+      );
+      if (cRes.rows.length) {
+        const c = cRes.rows[0];
+        billing = {
+          name: c.company_name || c.name,
+          phone: c.phone,
+          address: c.billing_address,
+          city: c.billing_city,
+          state: c.billing_state,
+          pincode: c.billing_pincode,
+          gst_number: c.gst_no,
+        };
+      }
+    }
+
+    // Build lookup: allocation_id → serial row
+    const allocMap = {};
+    allocRes.rows.forEach((r) => { allocMap[r.allocation_id] = r; });
+
+    const createdDcNumbers = [];
+
+    await client.query('BEGIN');
+
+    for (const group of dc_groups) {
+      if (!group.allocation_ids?.length) continue;
+
+      const dcNumber = await nextDocumentNumber(
+        entityDocType('delivery_challan', entityCode)
+      );
+
+      const groupSerials = group.allocation_ids.map((id) => allocMap[id]).filter(Boolean);
+      const deliveryAddress = group.delivery_address || parseJsonSafe(soHead.customer_shipping_address) || billing;
+
+      // Pro-rata security: group size / total attached
+      const totalAttached = allAllocationIds.length;
+      const groupSize = group.allocation_ids.length;
+      const totalSecurity = Number(soHead.security_amount || 0);
+      const groupSecurity = totalAttached > 0
+        ? Math.round((totalSecurity / totalAttached) * groupSize * 100) / 100
+        : 0;
+
+      // Per-DC dispatch details (awb_number can differ per DC for courier)
+      const groupAwb = group.awb_number || body.awb_number || null;
+      const groupDeliveryPersonId = group.delivery_person_id || body.delivery_person_id || null;
+
+      // Build serial list: "serialId|serialNumber|ttsplId"
+      const serialTokens = groupSerials.map((s) =>
+        `${s.serial_id || ''}|${s.serial_number || s.vsn_serial || ''}|${s.ttspl_id || s.ttspl_id_vsn || ''}`
+      );
+
+      // Insert ONE delivery_challan_lines row per DC
+      await client.query(
+        `INSERT INTO delivery_challan_lines (
+          dc_number, sales_order_number, quotation_number, customer_id, customer_name,
+          email, gst_number, supply_state, security_amount, shiping_charges, branch,
+          entity_code, customer_billing_address, customer_shipping_address,
+          brand, model_name, quantity, main_qty, serial_number,
+          ship_by, courier_name, awb_number, courier_tracking_url,
+          porter_tracking_id, porter_order_id, porter_booking_url,
+          delivery_person_id, dispatch_mode,
+          status, created_by
+        ) VALUES (
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
+          $15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,
+          'in_transit',$29
+        )`,
+        [
+          dcNumber,
+          sales_order_number,
+          soHead.quotation_number,
+          soHead.customer_id || null,
+          soHead.customer_name,
+          soHead.customer_email,
+          soHead.gst_number,
+          soHead.supply_state,
+          groupSecurity,
+          0, // shiping_charges
+          entityCode,
+          entityCode,
+          billing ? JSON.stringify(billing) : null,
+          JSON.stringify(deliveryAddress),
+          groupSerials[0]?.brand || '',
+          groupSerials[0]?.model || '',
+          groupSize,
+          groupSize,
+          JSON.stringify(serialTokens),
+          ship_by,
+          body.courier_name || null,
+          groupAwb,
+          body.courier_tracking_url || null,
+          body.porter_tracking_id || null,
+          body.porter_order_id || null,
+          body.porter_booking_url || null,
+          groupDeliveryPersonId ? Number(groupDeliveryPersonId) : null,
+          dispatchMode,
+          req.user?.user_id,
+        ]
+      );
+
+      // Mark each serial as dispatched in sales_order_serials
+      await client.query(
+        `UPDATE sales_order_serials
+         SET status = 'dispatched', dc_number = $1, updated_at = NOW()
+         WHERE allocation_id = ANY($2::int[])`,
+        [dcNumber, group.allocation_ids]
+      );
+
+      // Update vendor_serial_numbers inventory status
+      const serialIds = groupSerials.map((s) => s.serial_id).filter(Boolean);
+      if (serialIds.length) {
+        await client.query(
+          `UPDATE vendor_serial_numbers
+           SET inventory_status = 'in_transit', current_dc_number = $1,
+               dispatch_mode = $2, dispatched_at = NOW(), updated_at = NOW()
+           WHERE serial_id = ANY($3::int[])`,
+          [dcNumber, dispatchMode, serialIds]
+        );
+      }
+
+      // Mirror QC into dc_qc_tickets
+      await client.query(
+        `INSERT INTO dc_qc_tickets (dc_number, sales_order_number, ticket_id, ttspl_id, serial_id, status)
+         SELECT $1, sos.sales_order_number, sos.qc_ticket_id, sos.ttspl_id, sos.serial_id, 'qc_passed'
+         FROM sales_order_serials sos
+         WHERE sos.allocation_id = ANY($2::int[])
+           AND NOT EXISTS (
+             SELECT 1 FROM dc_qc_tickets d WHERE d.dc_number = $1 AND d.serial_id = sos.serial_id
+           )`,
+        [dcNumber, group.allocation_ids]
+      );
+
+      createdDcNumbers.push(dcNumber);
+    }
+
+    await client.query('COMMIT');
+
+    res.status(201).json({
+      success: true,
+      dc_numbers: createdDcNumbers,
+      dcs_created: createdDcNumbers.length,
+      first_dc: createdDcNumbers[0],
+      message: `${createdDcNumbers.length} DC(s) created: ${createdDcNumbers.join(', ')}`,
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('createDcsByAddress:', error);
+    res.status(500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
+  }
+};
+```
+
+### 1B — Add route to backend/routes/salesManagement.js
+
+```javascript
+router.post('/create-dcs-by-address',
+  authMiddleware,
+  checkRole('admin','manager','sales','dispatch','warehouse'),
+  ctrl.createDcsByAddress
+);
+```
+
+### 1C — Add to salesPipelineApi.js
+
+```javascript
+export const createDcsByAddress = (data) =>
+  api.post('/api/sales-management/create-dcs-by-address', data);
+```
+
+---
+
+## SECTION 2 — FRONTEND: DCForm complete rebuild
+
+### Overview of the new DCForm flow
+
+```
+STEP 1: Select Sales Order
+  ↓
+STEP 2: Review QC-passed laptops grouped by delivery address
+  Each group = proposed DC
+  User can: split, merge, edit address, deselect laptops
+  ↓
+STEP 3: Select dispatch mode (per group OR global)
+  ↓
+STEP 4: Preview "N DC(s) will be created" + confirm
+  ↓
+STEP 5: createDcsByAddress() → N DCs created
+```
+
+### Complete new DCForm.jsx
+
+Replace the entire content of
+`frontend/src/features/sales-pipeline/components/DCForm.jsx`:
+
+```jsx
 /**
  * DCForm — Create Delivery Challan(s)
  *
@@ -11,36 +375,36 @@
  *  3. Choose dispatch mode
  *  4. Confirm + Create
  */
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  X, Package, MapPin, ChevronDown, ChevronUp, AlertTriangle, Edit2,
+  X, Package, MapPin, Truck, ChevronDown, ChevronUp,
+  AlertTriangle, CheckCircle2, Plus, Minus, Edit2
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { createDcsByAddress, getDCMeta, listSalesOrders } from '../salesPipelineApi';
+import {
+  createDcsByAddress, getDCMeta, listSalesOrders
+} from '../salesPipelineApi';
 import { BillingAddressPanel } from '../../operation-management/components/CustomerAddressPanels';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-const parseAddr = (addr) => {
-  if (!addr) return null;
-  if (typeof addr !== 'string') return addr;
-  try { return JSON.parse(addr); } catch { return null; }
-};
-
 /** Stable key for comparing addresses */
 const addrKey = (addr) => {
-  const a = parseAddr(addr);
-  if (!a) return '__NO_ADDRESS__';
-  return `${(a.address || '').trim().toLowerCase()}|${(a.pincode || a.zip_code || '').toString().trim()}|${(a.city || '').trim().toLowerCase()}`;
+  if (!addr) return '__NO_ADDRESS__';
+  const a = typeof addr === 'string' ? JSON.parse(addr) : addr;
+  return `${(a.address||'').trim().toLowerCase()}|${(a.pincode||a.zip_code||'').trim()}|${(a.city||'').trim().toLowerCase()}`;
 };
 
 /** Short display of address */
 const addrLine = (addr) => {
-  const a = parseAddr(addr);
-  if (!a) return 'No address set';
+  if (!addr) return 'No address set';
+  const a = typeof addr === 'string' ? JSON.parse(addr) : addr;
   return [a.address, a.city, a.state, a.pincode || a.zip_code].filter(Boolean).join(', ');
 };
+
+/** Format currency */
+const inr = (n) => `₹${Number(n||0).toLocaleString('en-IN')}`;
 
 // ── AddressEditDrawer ─────────────────────────────────────────────────────────
 
@@ -48,7 +412,7 @@ function AddressEditDrawer({ address, onSave, onClose }) {
   const [form, setForm] = useState({
     name: '', phone: '', address: '', city: '',
     state: '', pincode: '', landmark: '',
-    ...(parseAddr(address) || {}),
+    ...address,
   });
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -63,13 +427,13 @@ function AddressEditDrawer({ address, onSave, onClose }) {
         </div>
         <div className="space-y-3">
           {[
-            ['Contact Name', 'name', 'text'],
-            ['Phone', 'phone', 'tel'],
-            ['Address*', 'address', 'text'],
-            ['City*', 'city', 'text'],
-            ['State*', 'state', 'text'],
-            ['Pincode*', 'pincode', 'text'],
-            ['Landmark', 'landmark', 'text'],
+            ['Contact Name',   'name',     'text', false],
+            ['Phone',          'phone',    'tel',  false],
+            ['Address*',       'address',  'text', true],
+            ['City*',          'city',     'text', false],
+            ['State*',         'state',    'text', false],
+            ['Pincode*',       'pincode',  'text', false],
+            ['Landmark',       'landmark', 'text', false],
           ].map(([label, key, type]) => (
             <div key={key}>
               <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
@@ -150,7 +514,7 @@ function DispatchFields({ shipBy, fields, onChange, deliveryTechnicians = [] }) 
 
 function DcGroupCard({
   groupIndex, group, meta, shipBy, dispatchFields, onDispatchChange,
-  onAddressEdit, onToggleSerial,
+  onAddressEdit, onToggleSerial, onSplitGroup, isOnly,
 }) {
   const [expanded, setExpanded] = useState(true);
   const [editingAddress, setEditingAddress] = useState(false);
@@ -169,7 +533,7 @@ function DcGroupCard({
             <span className="text-sm font-semibold text-gray-900">
               DC #{groupIndex + 1}
               {group.is_wfh && (
-                <span className="ml-2 px-1.5 py-0.5 bg-teal-100 text-teal-700 rounded text-[10px] font-medium">WFH</span>
+                <span className="ml-2 px-1.5 py-0.5 bg-teal-100 text-teal-700 rounded text-[10px] font-medium">🏠 WFH</span>
               )}
             </span>
             <span className="ml-auto text-xs text-gray-500">{group.serials.length} laptop(s)</span>
@@ -179,7 +543,7 @@ function DcGroupCard({
             <p className="text-xs font-medium text-gray-700 mt-0.5 ml-6">{group.address.name}</p>
           )}
           {group.address?.phone && (
-            <p className="text-xs text-gray-500 ml-6">{group.address.phone}</p>
+            <p className="text-xs text-gray-500 ml-6">📞 {group.address.phone}</p>
           )}
         </div>
         <div className="flex items-center gap-1 ml-2 flex-shrink-0">
@@ -203,8 +567,8 @@ function DcGroupCard({
                 s.qc_status !== 'passed' ? 'bg-red-50' : ''
               }`}>
               <div className="flex items-center gap-3">
+                {/* Checkbox to include/exclude from this DC */}
                 <input type="checkbox" checked={s.selected !== false}
-                  disabled={s.qc_status !== 'passed'}
                   onChange={() => onToggleSerial(groupIndex, s.allocation_id)}
                   className="rounded" />
                 <div>
@@ -221,7 +585,7 @@ function DcGroupCard({
                     ? 'bg-emerald-100 text-emerald-700'
                     : 'bg-red-100 text-red-700'
                 }`}>
-                  {s.qc_status === 'passed' ? 'QC Passed' : `QC ${s.qc_status}`}
+                  {s.qc_status === 'passed' ? '✓ QC Passed' : `⚠ QC ${s.qc_status}`}
                 </span>
               </div>
             </div>
@@ -230,7 +594,7 @@ function DcGroupCard({
           {someNotPassed && (
             <div className="px-4 py-2 bg-red-50">
               <p className="text-xs text-red-700">
-                Laptops that haven't passed QC cannot be dispatched and will be skipped.
+                ⚠ Laptops that haven't passed QC cannot be dispatched and will be skipped.
               </p>
             </div>
           )}
@@ -238,7 +602,7 @@ function DcGroupCard({
       )}
 
       {/* Dispatch details for this group */}
-      {expanded && shipBy && (
+      {expanded && (
         <div className="px-4 py-3 border-t bg-gray-50">
           <p className="text-xs font-semibold text-gray-500 uppercase mb-2">Dispatch Details</p>
           <DispatchFields
@@ -266,26 +630,52 @@ function DcGroupCard({
 export default function DCForm({ open, onClose, prefillSo }) {
   const navigate = useNavigate();
 
+  // Step 1: SO selection
   const [salesOrders, setSalesOrders] = useState([]);
   const [soNumber, setSoNumber] = useState(prefillSo || '');
 
+  // Step 2: meta + groups
   const [meta, setMeta] = useState(null);
   const [loadingMeta, setLoadingMeta] = useState(false);
 
+  // DC groups: each group → one DC
   const [dcGroups, setDcGroups] = useState([]);
 
+  // Step 3: dispatch mode (global — same for all DCs)
   const [shipBy, setShipBy] = useState('');
+  // Per-group dispatch fields (awb can differ per DC for courier)
   const [groupDispatch, setGroupDispatch] = useState({});
 
+  // UI
   const [saving, setSaving] = useState(false);
+  const [step, setStep] = useState(1); // 1=select SO, 2=groups, 3=confirm
 
   // ── Load SOs ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!open) return;
-    listSalesOrders({ limit: 200 })
+    listSalesOrders({ limit: 200, status: 'processing' })
       .then((res) => setSalesOrders(res.data?.sales_orders || []))
       .catch(() => {});
   }, [open]);
+
+  // ── Load meta + build groups when SO selected ─────────────────────────────
+  useEffect(() => {
+    if (!open || !soNumber) return;
+    setLoadingMeta(true);
+    setMeta(null);
+    setDcGroups([]);
+    setStep(1);
+
+    getDCMeta(soNumber)
+      .then((res) => {
+        const data = res.data;
+        setMeta(data);
+        buildGroups(data);
+        setStep(2);
+      })
+      .catch(() => toast.error('Failed to load SO data'))
+      .finally(() => setLoadingMeta(false));
+  }, [open, soNumber]);
 
   useEffect(() => {
     if (prefillSo && open) setSoNumber(prefillSo);
@@ -296,15 +686,21 @@ export default function DCForm({ open, onClose, prefillSo }) {
     const attached = (data.attached_serials || []);
 
     if (!attached.length) {
+      // No serials attached yet — show empty state
       setDcGroups([]);
-      setGroupDispatch({});
       return;
     }
 
+    // Group by delivery_address key
     const groupMap = new Map();
 
     for (const serial of attached) {
-      const addr = parseAddr(serial.delivery_address);
+      const addr = serial.delivery_address
+        ? (typeof serial.delivery_address === 'string'
+            ? JSON.parse(serial.delivery_address)
+            : serial.delivery_address)
+        : null;
+
       const key = addrKey(addr);
 
       if (!groupMap.has(key)) {
@@ -317,46 +713,27 @@ export default function DCForm({ open, onClose, prefillSo }) {
       }
       groupMap.get(key).serials.push({
         ...serial,
-        selected: serial.qc_status === 'passed',
+        selected: true, // all selected by default
       });
     }
 
     const groups = Array.from(groupMap.values());
 
-    // If NO addresses were set on serials, fall back to the SO shipping/billing address.
+    // If NO addresses were set on serials, put everything in one group
+    // using the SO shipping address
     if (groups.length === 1 && groups[0].key === '__NO_ADDRESS__') {
-      groups[0].address = data.shipping_address || data.billing_address || null;
+      groups[0].address = data.shipping_address
+        || data.billing_address
+        || null;
     }
 
     setDcGroups(groups);
 
+    // Initialize per-group dispatch state
     const initDispatch = {};
     groups.forEach((_, i) => { initDispatch[i] = {}; });
     setGroupDispatch(initDispatch);
   };
-
-  // ── Load meta + build groups when SO selected ─────────────────────────────
-  useEffect(() => {
-    if (!open || !soNumber) {
-      setMeta(null);
-      setDcGroups([]);
-      return;
-    }
-    setLoadingMeta(true);
-    setMeta(null);
-    setDcGroups([]);
-    setShipBy('');
-
-    getDCMeta(soNumber)
-      .then((res) => {
-        const data = res.data;
-        setMeta(data);
-        buildGroups(data);
-      })
-      .catch(() => toast.error('Failed to load SO data'))
-      .finally(() => setLoadingMeta(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, soNumber]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
@@ -387,6 +764,7 @@ export default function DCForm({ open, onClose, prefillSo }) {
     const warnings = [];
 
     if (!dcGroups.length) {
+      errors.push('No laptops attached to this SO yet.');
       return { errors, warnings, valid: false, dcCount: 0, totalLaptops: 0 };
     }
 
@@ -402,29 +780,29 @@ export default function DCForm({ open, onClose, prefillSo }) {
       errors.push('Select dispatch mode (Courier / Porter / Inhouse).');
     }
 
-    activeDcGroups.forEach((g) => {
-      const idx = dcGroups.indexOf(g);
-      const gd = groupDispatch[idx] || {};
+    // Validate dispatch fields per group
+    activeDcGroups.forEach((g, i) => {
+      const gd = groupDispatch[dcGroups.indexOf(g)] || {};
       if (shipBy === 'by_courier' && !gd.courier_name?.trim()) {
-        errors.push(`DC #${idx + 1}: Courier name is required.`);
+        errors.push(`DC #${i + 1}: Courier name is required.`);
       }
       if (shipBy === 'by_porter' && !gd.porter_tracking_id?.trim()) {
-        errors.push(`DC #${idx + 1}: Porter tracking ID is required.`);
+        errors.push(`DC #${i + 1}: Porter tracking ID is required.`);
       }
       if (shipBy === 'by_hand' && !gd.delivery_person_id) {
-        errors.push(`DC #${idx + 1}: Select a delivery technician.`);
+        errors.push(`DC #${i + 1}: Select a delivery technician.`);
       }
     });
 
-    activeDcGroups.forEach((g) => {
-      const idx = dcGroups.indexOf(g);
+    // Address warnings
+    activeDcGroups.forEach((g, i) => {
       if (!g.address) {
-        warnings.push(`DC #${idx + 1}: No delivery address set — will use billing address.`);
+        warnings.push(`DC #${i + 1}: No delivery address set — will use billing address.`);
       }
     });
 
     const notPassed = dcGroups.flatMap((g) =>
-      g.serials.filter((s) => s.qc_status !== 'passed')
+      g.serials.filter((s) => s.selected && s.qc_status !== 'passed')
     );
     if (notPassed.length) {
       warnings.push(`${notPassed.length} laptop(s) haven't passed QC — they will be skipped.`);
@@ -452,6 +830,7 @@ export default function DCForm({ open, onClose, prefillSo }) {
 
     setSaving(true);
     try {
+      // Build dc_groups payload
       const groups = dcGroups
         .map((g, i) => {
           const passedSelected = g.serials.filter(
@@ -459,7 +838,7 @@ export default function DCForm({ open, onClose, prefillSo }) {
           );
           if (!passedSelected.length) return null;
           return {
-            delivery_address: g.address || meta?.billing_address || null,
+            delivery_address: g.address || meta?.billing_address,
             is_wfh: g.is_wfh,
             allocation_ids: passedSelected.map((s) => s.allocation_id),
             ...groupDispatch[i],
@@ -470,8 +849,6 @@ export default function DCForm({ open, onClose, prefillSo }) {
       const res = await createDcsByAddress({
         sales_order_number: soNumber,
         ship_by: shipBy,
-        courier_name: groups[0]?.courier_name,
-        courier_tracking_url: groups[0]?.courier_tracking_url,
         dc_groups: groups,
       });
 
@@ -518,7 +895,7 @@ export default function DCForm({ open, onClose, prefillSo }) {
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Sales Order</label>
             <select className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-              value={soNumber} onChange={(e) => setSoNumber(e.target.value)}>
+              value={soNumber} onChange={(e) => { setSoNumber(e.target.value); setStep(1); }}>
               <option value="">Select Sales Order…</option>
               {salesOrders.map((so) => (
                 <option key={so.sales_order_number} value={so.sales_order_number}>
@@ -535,7 +912,7 @@ export default function DCForm({ open, onClose, prefillSo }) {
             </div>
           )}
 
-          {meta && !loadingMeta && !dcGroups.length && (
+          {meta && !dcGroups.length && (
             <div className="text-center py-8 bg-amber-50 rounded-xl border border-amber-100">
               <Package className="w-10 h-10 text-amber-400 mx-auto mb-2" />
               <p className="text-sm font-medium text-amber-800">No laptops attached to this SO yet</p>
@@ -558,7 +935,8 @@ export default function DCForm({ open, onClose, prefillSo }) {
                 </p>
                 {dcGroups.length > 1 && (
                   <p className="text-xs mt-0.5">
-                    Laptops have {dcGroups.length} different delivery addresses → {dcGroups.length} separate DCs.
+                    Laptops have {dcGroups.length} different delivery addresses →
+                    {dcGroups.length} separate DCs.
                   </p>
                 )}
               </div>
@@ -571,14 +949,15 @@ export default function DCForm({ open, onClose, prefillSo }) {
                 <select className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
                   value={shipBy} onChange={(e) => {
                     setShipBy(e.target.value);
+                    // Reset per-group dispatch fields when mode changes
                     const init = {};
                     dcGroups.forEach((_, i) => { init[i] = {}; });
                     setGroupDispatch(init);
                   }}>
                   <option value="">Select dispatch mode…</option>
-                  <option value="by_courier">Courier (Bluedart, Delhivery etc.)</option>
-                  <option value="by_porter">Porter / Last-mile service</option>
-                  <option value="by_hand">Inhouse Delivery Technician</option>
+                  <option value="by_courier">🚚 Courier (Bluedart, Delhivery etc.)</option>
+                  <option value="by_porter">🛵 Porter / Last-mile service</option>
+                  <option value="by_hand">👤 Inhouse Delivery Technician</option>
                 </select>
               </div>
 
@@ -595,6 +974,7 @@ export default function DCForm({ open, onClose, prefillSo }) {
                     onDispatchChange={(fields) => handleGroupDispatchChange(i, fields)}
                     onAddressEdit={handleAddressEdit}
                     onToggleSerial={handleToggleSerial}
+                    isOnly={dcGroups.length === 1}
                   />
                 ))}
               </div>
@@ -660,3 +1040,94 @@ export default function DCForm({ open, onClose, prefillSo }) {
     </div>
   );
 }
+```
+
+---
+
+## SECTION 3 — VALIDATION RULES (backend)
+
+In `createDcsByAddress`, enforce these rules strictly:
+
+```javascript
+// Rule 1: Each group must have a distinct address
+// (Already enforced by frontend grouping, but verify server-side)
+
+// Rule 2: One serial cannot appear in two groups
+const seen = new Set();
+for (const g of dc_groups) {
+  for (const id of (g.allocation_ids || [])) {
+    if (seen.has(id)) {
+      return res.status(400).json({
+        success: false,
+        message: `Laptop allocation ${id} appears in multiple DC groups. Each laptop can only be in one DC.`
+      });
+    }
+    seen.add(id);
+  }
+}
+
+// Rule 3: All serials must be QC-passed (status = 'passed')
+// Already checked above
+
+// Rule 4: All serials must be 'attached' to this SO (not dispatched/removed)
+// Already checked above
+
+// Rule 5: Dispatch mode required and valid
+if (!['by_courier','by_porter','by_hand'].includes(ship_by)) {
+  return res.status(400).json({ success: false, message: 'Invalid ship_by value' });
+}
+```
+
+---
+
+## SECTION 4 — SCENARIO HANDLING MATRIX
+
+| Scenario | How handled |
+|---|---|
+| All same address | buildGroups() creates 1 group → 1 DC |
+| All different addresses (WFH) | buildGroups() creates N groups → N DCs |
+| Mixed (some same, some different) | buildGroups() groups by address key → M DCs |
+| No addresses set on serials | 1 group with SO shipping address → 1 DC |
+| Some not QC-passed | Warning shown, skipped in submit |
+| User deselects a laptop | Checkbox removes from group, excluded from DC |
+| User wants different courier per DC | DispatchFields per group → different AWB per DC |
+| User wants different technician per DC | DispatchFields per group → different delivery_person_id |
+| Wrong address on a group | Edit button → AddressEditDrawer → address updated in group state |
+| 10 WFH + 1 office | 11 groups → 11 DCs (10 WFH, 1 office) |
+| Partial dispatch (3 of 5 now) | User unchecks 2 → submit creates DC for 3, rest remain attached |
+| No serials attached | Empty state with link to Laptops & QC tab |
+| DC already exists for some serials | Backend rejects: status != 'attached' |
+
+---
+
+## SECTION 5 — BUILD ORDER
+
+1. Backend: Add `createDcsByAddress` to `salesManagementController.js`
+2. Backend: Add route `POST /api/sales-management/create-dcs-by-address`
+3. Frontend: Add `createDcsByAddress` to `salesPipelineApi.js`
+4. Frontend: Replace entire `DCForm.jsx` with the new version above
+5. Test all 8 scenarios from the matrix
+
+---
+
+## SECTION 6 — QUALITY CHECKLIST
+
+  [ ] SO with 2 laptops, 2 different addresses → Submit creates 2 DCs
+  [ ] SO with 2 laptops, same address → Submit creates 1 DC
+  [ ] SO with 10 WFH laptops → 10 groups shown → "Create 10 DCs" button
+  [ ] Each DC group card shows: address, contact name, phone, laptop list
+  [ ] QC-not-passed laptops shown in group card but unchecked / disabled
+  [ ] Warning: "N laptops haven't passed QC — skipped"
+  [ ] User can uncheck individual laptop → excluded from DC
+  [ ] User can edit address per group → AddressEditDrawer opens
+  [ ] Global dispatch mode applies to all DCs
+  [ ] For courier: AWB field per DC group (different AWB per shipment)
+  [ ] For inhouse: different technician selectable per DC group
+  [ ] "No laptops attached" empty state shown when no serials on SO
+  [ ] Backend rejects if same allocation_id in two groups
+  [ ] Backend rejects if laptop not QC-passed
+  [ ] Backend rejects if laptop not 'attached' to this SO
+  [ ] Security amount split proportionally across DCs
+  [ ] After creation: toast shows "N DCs created: DC-X, DC-Y, ..."
+  [ ] After creation: navigates to first DC's detail page
+  [ ] Old `createDC` API still works for legacy/manual DC creation without SO

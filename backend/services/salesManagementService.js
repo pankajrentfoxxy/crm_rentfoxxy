@@ -265,7 +265,15 @@ async function listDeliveryChallansGrouped({ page = 1, limit = 20, search = '' }
 
 async function getDeliveryChallanLines(dcNumber) {
   const result = await pool.query(
-    `SELECT * FROM delivery_challan_lines WHERE dc_number = $1 ORDER BY id ASC`,
+    `SELECT dcl.*,
+       COALESCE(NULLIF(TRIM(dt.first_name || ' ' || COALESCE(dt.last_name, '')), ''), u.name) AS delivery_person_name,
+       COALESCE(dt.phone, u.mobile_no) AS delivery_person_phone,
+       dt.email AS delivery_person_email
+     FROM delivery_challan_lines dcl
+     LEFT JOIN delivery_technicians dt ON dt.technician_id = dcl.delivery_person_id
+     LEFT JOIN users u ON u.user_id = COALESCE(dt.user_id, dcl.delivery_person_id)
+     WHERE dcl.dc_number = $1
+     ORDER BY dcl.id ASC`,
     [dcNumber]
   );
   return result.rows;
@@ -357,24 +365,24 @@ function mapInventorySerialRow(row) {
   };
 }
 
-function filterSpecRows(rows, { model_name, processor, generation, isSale }) {
+function filterSpecRows(rows, { model_name, processor, generation, ram, storage, isSale }) {
+  // Model is OPTIONAL (Phase 14): when provided it must match, otherwise we match
+  // purely on processor + generation + RAM + storage so equivalent laptops with
+  // a different model label still surface.
   const model = model_name?.trim();
-  if (!model) return [];
+  const matchFn = isSale ? partialSpecMatch : exactSpecMatch;
 
   return rows.filter((row) => {
     const pdModel = row.pd_model || row.product_model_name || '';
 
-    if (isSale) {
-      if (!partialSpecMatch(pdModel, model) && !partialSpecMatch(row.product_model_name, model)) return false;
-      if (!partialSpecMatch(row.processor, processor)) return false;
-      if (!partialSpecMatch(row.generation, generation)) return false;
-      if (!row.po_id) return false;
-      return true;
+    if (model) {
+      if (!matchFn(pdModel, model) && !matchFn(row.product_model_name, model)) return false;
     }
-
-    if (!exactSpecMatch(pdModel, model) && !exactSpecMatch(row.product_model_name, model)) return false;
-    if (!exactSpecMatch(row.processor, processor)) return false;
-    if (!exactSpecMatch(row.generation, generation)) return false;
+    if (!matchFn(row.processor, processor)) return false;
+    if (!matchFn(row.generation, generation)) return false;
+    if (!matchFn(row.ram, ram)) return false;
+    if (!matchFn(row.storage, storage)) return false;
+    if (isSale && !row.po_id) return false;
     return true;
   });
 }
@@ -388,12 +396,14 @@ async function searchAvailableInventory({
   model_name,
   processor,
   generation,
+  ram,
+  storage,
   quotation_type,
   search,
   limit = 200,
 }) {
+  // Phase 14: model is no longer mandatory — match by specs even without a model.
   const model = model_name?.trim();
-  if (!model) return [];
 
   const qt = String(quotation_type || '').toLowerCase();
   const isSale = qt === 'sale' || qt === 'sales';
@@ -444,7 +454,7 @@ async function searchAvailableInventory({
     params
   );
 
-  let rows = filterSpecRows(result.rows, { model_name: model, processor, generation, isSale });
+  let rows = filterSpecRows(result.rows, { model_name: model, processor, generation, ram, storage, isSale });
 
   if (!rows.length) {
     const fallback = await pool.query(
@@ -461,6 +471,8 @@ async function searchAvailableInventory({
          vpd.model AS pd_model,
          vpd.processor,
          vpd.generation,
+         vpd.ram,
+         vpd.storage,
          vpd.brand
        FROM vendor_serial_numbers vsn
        INNER JOIN vendor_purchase_orders p ON p.po_id = vsn.po_id AND p.deleted_at IS NULL
@@ -489,6 +501,8 @@ async function searchAvailableInventory({
           pd_model: line?.model ?? line?.product_name ?? row.pd_model,
           processor: line?.processor ?? row.processor ?? '',
           generation: line?.generation ?? row.generation ?? '',
+          ram: line?.ram ?? row.ram ?? '',
+          storage: line?.storage ?? row.storage ?? '',
           brand: line?.brand ?? row.brand ?? '',
           po_id: row.po_id,
           inventory_asset_code: row.inventory_asset_code,
@@ -496,11 +510,12 @@ async function searchAvailableInventory({
         };
       })
       .filter((row) => {
+        if (!model) return true;
         const hay = String(row.product_model_name || row.pd_model || '').toLowerCase();
         return hay === model.toLowerCase() || (isSale && hay.includes(model.toLowerCase()));
       });
 
-    rows = filterSpecRows(rows, { model_name: model, processor, generation, isSale });
+    rows = filterSpecRows(rows, { model_name: model, processor, generation, ram, storage, isSale });
   }
 
   if (brand) {
