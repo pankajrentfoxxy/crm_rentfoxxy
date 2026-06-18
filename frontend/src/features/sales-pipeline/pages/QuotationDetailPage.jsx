@@ -12,6 +12,13 @@ function pdfUrl(p) {
   return `${getBackendOrigin().replace(/\/$/, '')}/${p.replace(/^\//, '')}`;
 }
 
+function lockMonths(v) {
+  if (v == null || v === '') return '—';
+  const n = Number(v);
+  if (Number.isNaN(n)) return String(v);
+  return `${n} Month${n === 1 ? '' : 's'}`;
+}
+
 export default function QuotationDetailPage() {
   const { quotationNumber } = useParams();
   const navigate = useNavigate();
@@ -25,7 +32,11 @@ export default function QuotationDetailPage() {
   }, [quotationNumber]);
 
   const head = lines[0] || {};
-  const total = lines.reduce((s, l) => s + lineTotal(l), 0);
+  const subTotal = lines.reduce((s, l) => s + lineTotal(l), 0);
+  const shipping = Number(head.shiping_charges) || 0;
+  const security = Number(head.security_amount) || 0;
+  const grandTotal = subTotal + shipping + security;
+  const isSale = ['sale', 'sales'].includes(String(head.quotation_type || '').toLowerCase());
 
   const changeStatus = async (status) => {
     try {
@@ -80,6 +91,7 @@ export default function QuotationDetailPage() {
             <tr>
               <th className="px-4 py-3 text-left">Brand</th>
               <th className="px-4 py-3 text-left">Config</th>
+              {!isSale && <th className="px-4 py-3 text-center">Lock-in</th>}
               <th className="px-4 py-3 text-right">Qty</th>
               <th className="px-4 py-3 text-right">Rate</th>
               <th className="px-4 py-3 text-right">Total</th>
@@ -90,19 +102,34 @@ export default function QuotationDetailPage() {
               <tr key={i}>
                 <td className="px-4 py-3">{l.brand}</td>
                 <td className="px-4 py-3 text-gray-600">{formatConfig(l)}</td>
+                {!isSale && <td className="px-4 py-3 text-center text-gray-600">{lockMonths(l.locking_period)}</td>}
                 <td className="px-4 py-3 text-right">{l.quantity}</td>
                 <td className="px-4 py-3 text-right">{formatCurrency(l.rate)}</td>
                 <td className="px-4 py-3 text-right font-medium">{formatCurrency(lineTotal(l))}</td>
               </tr>
             ))}
           </tbody>
-          <tfoot>
-            <tr className="bg-gray-50 font-semibold">
-              <td colSpan={4} className="px-4 py-3 text-right">Total</td>
-              <td className="px-4 py-3 text-right">{formatCurrency(total)}</td>
-            </tr>
-          </tfoot>
         </table>
+        <div className="border-t bg-gray-50 px-4 py-3 flex justify-end">
+          <dl className="w-full max-w-xs text-sm space-y-1.5">
+            <div className="flex justify-between text-gray-600">
+              <dt>Sub Total</dt>
+              <dd className="font-medium text-gray-900">{formatCurrency(subTotal)}</dd>
+            </div>
+            <div className="flex justify-between text-gray-600">
+              <dt>Shipping Charges</dt>
+              <dd className="font-medium text-gray-900">{formatCurrency(shipping)}</dd>
+            </div>
+            <div className="flex justify-between text-gray-600">
+              <dt>Security Amount</dt>
+              <dd className="font-medium text-gray-900">{formatCurrency(security)}</dd>
+            </div>
+            <div className="flex justify-between border-t pt-1.5 text-base font-semibold text-gray-900">
+              <dt>Total</dt>
+              <dd>{formatCurrency(grandTotal)}</dd>
+            </div>
+          </dl>
+        </div>
       </div>
     </div>
   );

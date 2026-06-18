@@ -55,7 +55,9 @@ function parseJson(v, fallback = null) {
   if (typeof v === 'object') return v;
   try { return JSON.parse(v); } catch { return fallback; }
 }
-const money = (n) => `₹ ${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+// Note: PDFKit's built-in Helvetica has no glyph for the ₹ rupee sign (it
+// renders as a stray superscript "1"), so use the ASCII-safe "Rs." prefix.
+const money = (n) => `Rs. ${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const dash = (v) => (v == null || v === '' ? 'N/A' : String(v));
 
 // Resolve per-serial spec rows for a DC (one product row per laptop).
@@ -283,7 +285,7 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
     // ── Product table ────────────────────────────────────────────────────
     // Columns depend on type.
     let cols;
-    if (isSale || isDemo) {
+    if (isSale) {
       cols = [
         { key: 'product', label: 'Product', w: 200, align: 'left' },
         { key: 'tech', label: 'Tech. Wty.', w: 70, align: 'center' },
