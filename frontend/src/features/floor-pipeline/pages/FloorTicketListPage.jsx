@@ -4,6 +4,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../../context/AuthContext';
 import { fetchFloorTickets } from '../floorPipelineApi';
+import useAutoRefresh from '../hooks/useAutoRefresh';
 import TicketCard from '../components/TicketCard';
 import AssignmentModal from '../components/AssignmentModal';
 import {
@@ -59,6 +60,7 @@ export default function FloorTicketListPage() {
   }, [search, priorityFilter, typeFilter, stageFilter]);
 
   useEffect(() => { load(); }, [load]);
+  useAutoRefresh(load);
 
   const setViewMode = (v) => {
     setView(v);

@@ -34,6 +34,7 @@ import WorkNotesPanel from '../components/WorkNotesPanel';
 import StageTaskPanel from '../components/StageTaskPanel';
 import AssignmentModal from '../components/AssignmentModal';
 import TtsplHistoryDrawer from '../components/TtsplHistoryDrawer';
+import useAutoRefresh from '../hooks/useAutoRefresh';
 
 const HW_WORK_STAGES = ['Assembly & Software', 'Final Testing', 'Chip Level Repair', 'Body & Paint'];
 // Stages where the assignee must scan/confirm the machine and run a work timer.
@@ -111,6 +112,12 @@ export default function TicketDetailPage() {
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
+
+  const refresh = useCallback(() => {
+    load();
+    loadActiveLog();
+  }, [load, loadActiveLog]);
+  useAutoRefresh(refresh);
 
   const privileged = isFloorManagerRole(user?.role) || ['admin', 'manager'].includes(user?.role);
 
