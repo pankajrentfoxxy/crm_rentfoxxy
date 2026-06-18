@@ -314,6 +314,7 @@ export default function InventoryListTable({ routeKey }) {
   if (!meta) return <p className="text-sm text-red-600">Unknown inventory route.</p>;
 
   const showOutForRepareExtras = routeKey === 'out-for-repare';
+  const showTicketId = routeKey === 'qc-process';
   const showReadyToRentAction = routeKey === 'ready-to-rent-or-sell';
   const showPassedStatus = showReadyToRentAction || ['rent-to-own', 'rental-purchase', 'direct-purchase'].includes(routeKey);
   const showTagColumn = showReadyToRentAction || routeKey === 'ready-to-rent-or-sell';
@@ -400,6 +401,7 @@ export default function InventoryListTable({ routeKey }) {
               {showReadyToRentAction ? <th className="px-3 py-3 w-8" /> : null}
               <th className="px-3 py-3">S.No</th>
               {!isSpare ? <th className="px-3 py-3">TTSPL</th> : null}
+              {showTicketId ? <th className="px-3 py-3">Ticket ID</th> : null}
               {showOutForRepareExtras ? (
                 <>
                   <th className="px-3 py-3">Added Date</th>
@@ -487,6 +489,20 @@ export default function InventoryListTable({ routeKey }) {
                       <span className="text-slate-400 text-xs">—</span>
                     )}
                   </td>
+                  {showTicketId ? (
+                    <td className="px-3 py-3">
+                      {row.ticket_id ? (
+                        <Link
+                          to={`/floor-pipeline/tickets/${row.ticket_id}`}
+                          className="font-mono text-xs font-semibold text-blue-700 hover:underline"
+                        >
+                          #{row.ticket_id}
+                        </Link>
+                      ) : (
+                        <span className="text-slate-400 text-xs">—</span>
+                      )}
+                    </td>
+                  ) : null}
                   {showOutForRepareExtras ? (
                     <>
                       <td className="px-3 py-3 text-xs text-slate-600">

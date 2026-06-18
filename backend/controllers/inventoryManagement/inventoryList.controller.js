@@ -141,7 +141,10 @@ async function listInventory(req, res) {
          s.extra, s.created_at AS serial_created_at, s.updated_at AS serial_updated_at,
          s.rental_start_date, s.grn_id, s.inventory_status,
          p.po_id, p.purchase_order_number, p.purchase_order_type, p.vendor_id, p.line_items,
-         v.business_name, v.first_name || ' ' || v.last_name AS vendor_name
+         v.business_name, v.first_name || ' ' || v.last_name AS vendor_name,
+         (SELECT t.ticket_id FROM tickets t
+            WHERE t.vendor_serial_id = s.serial_id
+            ORDER BY t.created_at DESC LIMIT 1) AS ticket_id
        ${fromSql}
        ORDER BY s.updated_at DESC
        LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,

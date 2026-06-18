@@ -161,7 +161,7 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
     setForm((prev) => ({
       ...prev,
       customer_id: customerId,
-      customer_name: customer?.name || '',
+      customer_name: customer?.company_name || customer?.name || '',
       email: customer?.email || '',
       customer_mobile: customer?.phone || '',
       GST_number: customer?.gst_no || '',
@@ -281,7 +281,7 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
               <label className="text-xs font-medium text-gray-600">Customer *</label>
               <select className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" value={form.customer_id} onChange={(e) => onCustomerChange(e.target.value)}>
                 <option value="">Select customer</option>
-                {customers.map((c) => <option key={c.customer_id} value={c.customer_id}>{c.name}</option>)}
+                {customers.map((c) => <option key={c.customer_id} value={c.customer_id}>{c.company_name || c.name}</option>)}
               </select>
             </div>
             <div>
