@@ -1,6 +1,7 @@
 import React from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import ReadyToRentOrSellPage from './pages/ReadyToRentOrSellPage';
+import QcProcessPage from './pages/QcProcessPage';
 import RentToOwnPage from './pages/RentToOwnPage';
 import RentalPurchasePage from './pages/RentalPurchasePage';
 import DirectPurchasePage from './pages/DirectPurchasePage';
@@ -42,6 +43,7 @@ export default function InventoryManagementApp() {
 
         <Route path="customer-assets" element={<CustomerAssetsPage />} />
         <Route path="ready-to-rent-or-sell" element={<ReadyToRentOrSellPage />} />
+        <Route path="qc-process" element={<QcProcessPage />} />
         <Route path="rent-to-own" element={<RentToOwnPage />} />
         <Route path="rental-purchase" element={<RentalPurchasePage />} />
         <Route path="direct-purchase" element={<DirectPurchasePage />} />

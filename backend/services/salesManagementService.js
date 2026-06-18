@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const pool = require('../config/db');
 const { resolveLineItem } = require('./qcManagementService');
+const columnExistsCache = new Map();
 
 const DOC_TYPES = {
   quotation: { prefix: 'EST-', pad: 6 },
@@ -91,6 +92,23 @@ async function getSalesOrderRemainingQty(salesOrderNumber) {
   return result.rows[0]?.qty || 0;
 }
 
+async function tableColumnExists(tableName, columnName) {
+  const cacheKey = `${tableName}.${columnName}`;
+  if (columnExistsCache.has(cacheKey)) return columnExistsCache.get(cacheKey);
+  const result = await pool.query(
+    `SELECT 1
+       FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = $1
+        AND column_name = $2
+      LIMIT 1`,
+    [tableName, columnName]
+  );
+  const exists = result.rows.length > 0;
+  columnExistsCache.set(cacheKey, exists);
+  return exists;
+}
+
 async function listQuotationsGrouped({ page = 1, limit = 20, search = '', status, source_lead_id }) {
   const params = [];
   const conditions = [];
@@ -151,6 +169,8 @@ async function getQuotationLines(quotationNumber) {
 }
 
 async function listSalesOrdersGrouped({ page = 1, limit = 20, search = '' }) {
+  const hasEntityCode = await tableColumnExists('sales_order_lines', 'entity_code');
+  const entitySelect = hasEntityCode ? 'entity_code' : `'rentfoxxy' AS entity_code`;
   const params = [];
   let where = '';
   if (search) {
@@ -173,7 +193,7 @@ async function listSalesOrdersGrouped({ page = 1, limit = 20, search = '' }) {
      FROM (
        SELECT DISTINCT ON (sales_order_number)
          id, sales_order_number, quotation_number, customer_id, customer_name, gst_number,
-         quotation_type, entity_code, pdf_path, created_at
+        quotation_type, ${entitySelect}, pdf_path, created_at
        FROM sales_order_lines
        ${where}
        ORDER BY sales_order_number, id DESC

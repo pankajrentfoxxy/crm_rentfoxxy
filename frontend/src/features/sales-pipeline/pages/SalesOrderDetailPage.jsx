@@ -10,6 +10,20 @@ import { getQuotation, getSalesOrderFull, listPayments, regenerateSalesOrderPdf 
 import { getBackendOrigin } from '../../../utils/api';
 import { formatConfig, formatCurrency, formatDate, lineTotal, TYPE_STYLES, typeLabel } from '../salesPipelineUtils';
 
+function ConfigCard({ line }) {
+  const title = [line.brand, line.model_name || line.model].filter(Boolean).join(' - ');
+  const specs = [line.processor, line.generation, line.ram, line.storage, line.gpu].filter(Boolean).join(' | ');
+  return (
+    <div className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm min-w-[220px]">
+      <h5 className="font-semibold text-gray-900 leading-snug">
+        {title || '—'}
+        {line.screen_size ? <span className="font-normal text-gray-600"> | {line.screen_size}</span> : null}
+      </h5>
+      {specs ? <p className="mt-1 text-xs text-gray-600">{specs}</p> : null}
+    </div>
+  );
+}
+
 function pdfUrl(p) {
   if (!p) return null;
   if (p.startsWith('http')) return p;
@@ -117,7 +131,7 @@ export default function SalesOrderDetailPage() {
                 {lines.map((l, i) => (
                   <tr key={i}>
                     <td className="px-4 py-2">{l.brand}</td>
-                    <td className="px-4 py-2 text-gray-600">{formatConfig(l)}</td>
+                    <td className="px-4 py-2"><ConfigCard line={l} /></td>
                     <td className="px-4 py-2 text-right">{l.quantity}</td>
                     <td className="px-4 py-2 text-right">{formatCurrency(l.rate)}</td>
                     <td className="px-4 py-2 text-right">{formatCurrency(lineTotal(l))}</td>

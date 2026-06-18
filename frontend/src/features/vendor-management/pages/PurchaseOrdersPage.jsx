@@ -1711,6 +1711,24 @@ export default function PurchaseOrdersPage() {
                 </table>
               </div>
             </div>
+
+            <div className="flex items-center justify-end gap-2 px-5 py-3 border-t bg-slate-50 shrink-0">
+              <button
+                type="button"
+                onClick={() => setCreatePreviewOpen(false)}
+                className="px-4 py-2 rounded-lg border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-white bg-slate-100/80"
+              >
+                Back to form
+              </button>
+              <button
+                type="button"
+                disabled={metaLoading}
+                onClick={submitModal}
+                className="px-5 py-2 rounded-lg bg-orange-600 text-white text-sm font-semibold hover:bg-orange-700 disabled:opacity-50"
+              >
+                Save
+              </button>
+            </div>
           </div>
         </div>
       )}

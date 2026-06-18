@@ -75,16 +75,34 @@ export function priorityBadge(priority) {
 }
 
 export function configSummary(ticket) {
+  const firstValue = (...keys) => {
+    for (const key of keys) {
+      const value = ticket?.[key];
+      if (value !== null && value !== undefined && String(value).trim() !== '') {
+        return String(value).trim();
+      }
+    }
+    return null;
+  };
+
+  const model = firstValue('model', 'model_name', 'new_model_name');
+  const displaySize = firstValue('screen_size', 'new_screen_size', 'display_size');
+  const processor = firstValue('processor', 'cpu', 'new_processor');
+  const generation = firstValue('generation', 'cpu_generation', 'new_generation');
+  const ram = firstValue('ram', 'new_ram');
+  const storage = firstValue('storage', 'new_storage');
+  const gpu = firstValue('gpu', 'graphics', 'new_gpu');
+  const brand = firstValue('brand', 'brand_name');
+
   const parts = [
-    ticket.brand,
-    ticket.model_name || ticket.model || null,
-    ticket.processor,
-    ticket.generation || null,
-    ticket.ram ? `${ticket.ram} RAM` : null,
-    ticket.storage || null,
-    ticket.gpu && ticket.gpu !== 'Integrated' ? ticket.gpu : null,
-    ticket.screen_size ? `${ticket.screen_size}"` : null,
-    ticket.os ? `OS: ${ticket.os}` : null,
+    model ? (brand ? `${brand} - ${model}` : model) : brand,
+    displaySize ? `${displaySize}` : null,
+    processor,
+    generation,
+    ram ? `${ram} RAM` : null,
+    storage,
+    gpu && gpu !== 'Integrated' ? gpu : null,
+    firstValue('os', 'new_os') ? `OS: ${firstValue('os', 'new_os')}` : null
   ].filter(Boolean);
   return parts.join(' | ') || '—';
 }
@@ -93,10 +111,11 @@ export function configBadges(ticket) {
   return [
     { label: 'Brand', value: ticket.brand },
     { label: 'Model', value: ticket.model_name || ticket.model },
-    { label: 'CPU', value: [ticket.processor, ticket.generation].filter(Boolean).join(' ') },
+    { label: 'CPU', value: ticket.processor },
+    { label: 'Gen', value: ticket.generation },
     { label: 'RAM', value: ticket.ram },
     { label: 'Storage', value: ticket.storage },
-    { label: 'GPU', value: ticket.gpu && ticket.gpu !== 'Integrated' ? ticket.gpu : null },
+    { label: 'GPU', value: ticket.gpu },
     { label: 'Screen', value: ticket.screen_size ? `${ticket.screen_size}"` : null },
     { label: 'OS', value: ticket.os },
     { label: 'Condition', value: ticket.condition },

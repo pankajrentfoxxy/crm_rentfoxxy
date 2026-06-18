@@ -23,6 +23,8 @@ export default function DCForm({ open, onClose, prefillSo }) {
   const [deliveryPersonId, setDeliveryPersonId] = useState('');
   const [saving, setSaving] = useState(false);
 
+  console.log("lineStates",lineStates)
+
   useEffect(() => {
     if (!open) return;
     listSalesOrders({ limit: 100 }).then((res) => setSalesOrders(res.data?.sales_orders || [])).catch(() => {});
@@ -108,6 +110,8 @@ export default function DCForm({ open, onClose, prefillSo }) {
       return null;
     }).filter(Boolean)
   );
+
+  const hasSerials = lineStates.some((l) => (l.serials || []).length > 0);
 
   const submit = async () => {
     if (!soNumber) {
@@ -245,7 +249,7 @@ export default function DCForm({ open, onClose, prefillSo }) {
                       label="Serial Numbers (QC passed)"
                       options={(line.serialOptions || []).map((s) => ({
                         value: s.serial_id ? `${s.serial_id}|${s.serial_number}|${s.inventory_asset_code || ''}` : s.serial_number,
-                        label: `${s.inventory_asset_code || s.serial_number} — ${[s.processor, s.ram, s.storage].filter(Boolean).join(' / ') || s.brand || ''}`,
+                        label: s.label,
                       }))}
                       value={line.serials}
                       onChange={(serials) => updateLine(index, { serials })}
@@ -335,12 +339,47 @@ export default function DCForm({ open, onClose, prefillSo }) {
               </div>
 
               <BillingAddressPanel billing={meta.billing_address} gstNumber={meta.gst_number} />
+              {hasSerials && (
+                <div className="grid grid-cols-2 gap-3">
+                  <select className="border rounded-lg px-3 py-2 text-sm" value={shipBy} onChange={(e) => setShipBy(e.target.value)}>
+                    <option value="">Ship By *</option>
+                    <option value="by_courier">Courier</option>
+                    <option value="by_porter">Porter</option>
+                    <option value="by_hand">Inhouse Technician</option>
+                  </select>
+                  {shipBy === 'by_courier' && (
+                    <>
+                      <input className="border rounded-lg px-3 py-2 text-sm" placeholder="Courier Name" value={courierName} onChange={(e) => setCourierName(e.target.value)} />
+                      <input className="border rounded-lg px-3 py-2 text-sm" placeholder="AWB" value={awbNumber} onChange={(e) => setAwbNumber(e.target.value)} />
+                    </>
+                  )}
+                  {shipBy === 'by_hand' && (
+                    <select className="border rounded-lg px-3 py-2 text-sm" value={deliveryPersonId} onChange={(e) => setDeliveryPersonId(e.target.value)}>
+                      <option value="">Delivery Technician *</option>
+                      {(meta.delivery_persons || meta.delivery_technicians || []).map((t) => (
+                        <option key={t.id || t.user_id} value={t.id || t.user_id}>{t.name}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              )}
+              <div className="grid grid-cols-1 gap-3">
+                <BillingAddressPanel billing={meta.billing_address} gstNumber={meta.gst_number} />
+                <ShippingAddressPanel
+                  shippingAddresses={[meta.shipping_address].filter(Boolean)}
+                  selectedIndex={0}
+                  onSelectIndex={() => {}}
+                  onAddClick={() => {}}
+                  selectedAddress={meta.shipping_address}
+                  readOnly
+                />
+              </div>
             </>
           )}
         </div>
         <div className="border-t p-4 flex justify-end gap-2">
           <button type="button" onClick={onClose} className="px-4 py-2 text-sm border rounded-lg">Cancel</button>
-          <button type="button" disabled={saving || !meta} onClick={submit} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">Create DC</button>
+          <button type="button" disabled={saving || !meta || !hasSerials || !shipBy} onClick={submit} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">Create DC</button>
         </div>
       </aside>
     </div>

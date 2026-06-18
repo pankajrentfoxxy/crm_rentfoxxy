@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, CheckCircle2, Loader2, Package, TrendingUp } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../../context/AuthContext';
 import { fetchFloorDashboard, getFloorManagerQueue, getTeamMembers } from '../floorPipelineApi';
 import { configSummary, isFloorManagerRole, priorityBadge } from '../floorPipelineUi';
+import useAutoRefresh from '../hooks/useAutoRefresh';
 import AssignmentModal from '../components/AssignmentModal';
 
 function BarChart({ data, valueKey = 'count' }) {
@@ -36,14 +37,14 @@ export default function FloorDashboardPage() {
   const [assignTicket, setAssignTicket] = useState(null);
   const [teamWorkload, setTeamWorkload] = useState({ hw: [], qc1: [], qc2: [] });
 
-  const loadQueue = () => {
+  const loadQueue = useCallback(() => {
     if (!fm) return;
     getFloorManagerQueue()
       .then(({ data: res }) => { if (res.success) setQueue(res.tickets || []); })
       .catch(() => setQueue([]));
-  };
+  }, [fm]);
 
-  useEffect(() => {
+  const loadDashboard = useCallback(() => {
     fetchFloorDashboard()
       .then(({ data: res }) => {
         if (res.success) setData(res);
@@ -66,7 +67,10 @@ export default function FloorDashboardPage() {
         });
       })
       .catch(() => setTeamWorkload({ hw: [], qc1: [], qc2: [] }));
-  }, [fm]);
+  }, [loadQueue]);
+
+  useEffect(() => { loadDashboard(); }, [loadDashboard]);
+  useAutoRefresh(loadDashboard);
 
   if (loading) {
     return <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>;

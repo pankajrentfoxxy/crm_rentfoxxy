@@ -50,6 +50,7 @@ import {
   ClipboardCheck,
   Wrench,
   DollarSign,
+  Search,
 } from 'lucide-react';
 
 import { isSupportUser } from '../utils/supportAccess';
@@ -84,6 +85,7 @@ import {
   isLeadCrmChildVisible,
   isFloorPipelineChildVisible,
   isInventoryChildVisible,
+  masterDataMenuItems,
 } from '../config/menuConfig';
 
 
@@ -91,6 +93,8 @@ import {
 export default function Layout({ children }) {
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const [menuQuery, setMenuQuery] = useState('');
 
   const location = useLocation();
 
@@ -320,6 +324,48 @@ export default function Layout({ children }) {
     return isMenuItemVisible(item, canView);
   }
 
+  // Flat list of every permission-visible page, used by the sidebar search box so
+  // users can jump straight to any route without opening the right accordion.
+  const allSearchRoutes = [];
+  const seenSearchRoutes = new Set();
+  const addSearchRoute = (label, routePath, groupLabel) => {
+    if (!label || !routePath) return;
+    const key = `${label}|${routePath}`;
+    if (seenSearchRoutes.has(key)) return;
+    seenSearchRoutes.add(key);
+    allSearchRoutes.push({ label, path: routePath, group: groupLabel });
+  };
+  [
+    ['Reports & Analytics', reportsVisibleChildren],
+    ['Lead & Sales CRM', leadCrmVisibleChildren],
+    ['Sales Pipeline', salesVisibleChildren],
+    ['Production', floorVisibleChildren],
+    ['Inventory', inventoryVisibleChildren],
+    ['Finance', financeVisibleChildren],
+    ['Settings', settingsVisibleChildren],
+  ].forEach(([groupLabel, children]) =>
+    (children || []).forEach((child) => addSearchRoute(child.label, child.path, groupLabel))
+  );
+  if (showVendorAccordion) {
+    vendorAccordionChildren
+      .filter((child) => child.type !== 'subheader')
+      .forEach((child) => addSearchRoute(child.label, child.path, 'Vendor Management'));
+  }
+  masterDataMenuItems.forEach((child) => {
+    if (isMenuItemVisible(child, canView)) addSearchRoute(child.label, child.path, 'Master Data');
+  });
+  if (showSupportNav2) addSearchRoute('Support', '/support', 'Support');
+
+  const trimmedMenuQuery = menuQuery.trim().toLowerCase();
+  const searchResults = trimmedMenuQuery
+    ? allSearchRoutes.filter(
+        (r) =>
+          r.label.toLowerCase().includes(trimmedMenuQuery)
+          || r.path.toLowerCase().includes(trimmedMenuQuery)
+          || r.group.toLowerCase().includes(trimmedMenuQuery)
+      )
+    : [];
+
 
 
   return (
@@ -378,7 +424,58 @@ export default function Layout({ children }) {
 
         <nav className="p-3 space-y-0.5 overflow-y-auto max-h-[calc(100vh-8rem)]">
 
-          {menuItems.filter(itemAllowed).map((item) => {
+          <div className="sticky top-0 z-10 bg-white pb-2 mb-1">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+              <input
+                type="text"
+                value={menuQuery}
+                onChange={(e) => setMenuQuery(e.target.value)}
+                placeholder="Search menu…"
+                aria-label="Search menu"
+                className="w-full rounded-md border border-gray-200 bg-gray-50 pl-8 pr-7 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-300"
+              />
+              {menuQuery ? (
+                <button
+                  type="button"
+                  onClick={() => setMenuQuery('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  aria-label="Clear search"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          {trimmedMenuQuery ? (
+            <div className="space-y-0.5">
+              {searchResults.length === 0 ? (
+                <p className="px-3 py-4 text-xs text-gray-400">No matching pages.</p>
+              ) : (
+                searchResults.map((r) => (
+                  <NavLink
+                    key={`${r.label}-${r.path}`}
+                    to={r.path}
+                    onClick={() => { setSidebarOpen(false); setMenuQuery(''); }}
+                    className={({ isActive }) =>
+                      [
+                        'flex items-center justify-between gap-2 px-3 py-2 rounded-md text-sm transition-colors',
+                        isActive
+                          ? 'bg-blue-100 text-blue-900 font-semibold'
+                          : 'text-gray-700 hover:bg-gray-100',
+                      ].join(' ')
+                    }
+                  >
+                    <span className="truncate">{r.label}</span>
+                    <span className="text-[10px] text-gray-400 shrink-0 uppercase tracking-wide">{r.group}</span>
+                  </NavLink>
+                ))
+              )}
+            </div>
+          ) : null}
+
+          {!trimmedMenuQuery && menuItems.filter(itemAllowed).map((item) => {
 
             if (item.type === 'section') {
 

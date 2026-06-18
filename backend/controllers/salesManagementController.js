@@ -88,6 +88,7 @@ function normalizeCustomerForQuotation(row) {
   return {
     customer_id: row.customer_id,
     name: row.name,
+    company_name: row.company_name || null,
     email: row.email,
     phone: row.phone,
     gst_no: row.gst_no,
@@ -273,7 +274,7 @@ const normalizeLineItems = (body) => {
 exports.getAddQuotationMeta = async (req, res) => {
   try {
     const [customersRes, quotationNumber, catalog] = await Promise.all([
-      pool.query(`SELECT customer_id, name, email, phone, gst_no, address, details FROM customers ORDER BY name ASC LIMIT 500`),
+      pool.query(`SELECT customer_id, name, company_name, email, phone, gst_no, address, details FROM customers ORDER BY company_name ASC NULLS LAST, name ASC LIMIT 500`),
       nextDocumentNumber('quotation'),
       fetchCatalogAttributeOptions(),
     ]);
@@ -507,7 +508,7 @@ exports.getAddSalesOrderMeta = async (req, res) => {
       quotationLines = await getQuotationLines(quotationNumber);
     }
     const [customersRes, catalog] = await Promise.all([
-      pool.query(`SELECT customer_id, name, email, phone, gst_no, address, details FROM customers ORDER BY name ASC LIMIT 500`),
+      pool.query(`SELECT customer_id, name, company_name, email, phone, gst_no, address, details FROM customers ORDER BY company_name ASC NULLS LAST, name ASC LIMIT 500`),
       fetchCatalogAttributeOptions(),
     ]);
     res.json({
@@ -566,6 +567,20 @@ exports.storeSalesOrder = async (req, res) => {
     const quotationNumber = body.is_without_quotation ? 'N/A' : (body.quotation_number || 'N/A');
     const shipping = parseJsonField(body.customer_shipping_address);
     const billing = parseJsonField(body.customer_billing_address);
+    const customerId = toNullableInt(body.customer_id);
+
+    if (customerId) {
+      const customerExists = await pool.query(
+        `SELECT 1 FROM customers WHERE customer_id = $1 LIMIT 1`,
+        [customerId]
+      );
+      if (!customerExists.rows.length) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid customer_id (${customerId}). Please reselect customer and try again.`,
+        });
+      }
+    }
 
     await client.query('BEGIN');
     for (const item of lineItems) {
@@ -580,7 +595,7 @@ exports.storeSalesOrder = async (req, res) => {
         [
           salesOrderNumber,
           quotationNumber,
-          body.customer_id,
+          customerId,
           body.customer_name,
           body.email || body.customer_email,
           body.customer_mobile,
@@ -1954,7 +1969,7 @@ exports.storeCustomerShippingAddress = async (req, res) => {
     shipping.push({ name, phone, country: 'India', state, city, zip_code, address });
     details.shipping_address = shipping;
     await pool.query(`UPDATE customers SET details = $1, updated_at = NOW() WHERE customer_id = $2`, [JSON.stringify(details), req.params.customerId]);
-    const customers = await pool.query(`SELECT customer_id, name, email, phone, gst_no, address, details FROM customers WHERE customer_id = $1`, [req.params.customerId]);
+    const customers = await pool.query(`SELECT customer_id, name, company_name, email, phone, gst_no, address, details FROM customers WHERE customer_id = $1`, [req.params.customerId]);
     res.json({
       success: true,
       message: 'Shipping address added',

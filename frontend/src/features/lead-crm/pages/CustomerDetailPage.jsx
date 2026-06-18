@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Copy } from 'lucide-react';
+import { ArrowLeft, Copy, FileText } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
@@ -8,10 +8,26 @@ import {
   getCustomer, getCustomerLaptops, updateCustomer, verifyCustomerKyc, enableCustomerPortal,
 } from '../leadCrmApi';
 import { formatCurrency } from '../leadCrmUtils';
+import { getBackendOrigin } from '../../../utils/api';
 import CustomerDocuments from '../components/CustomerDocuments';
 import CustomerFormDrawer from '../components/CustomerFormDrawer';
 
 const TABS = ['Profile', 'Documents', 'Assets', 'Orders', 'Lead Origin', 'Portal Access'];
+
+function podFileUrl(path) {
+  if (!path) return '';
+  if (/^https?:\/\//i.test(path)) return path;
+  const origin = getBackendOrigin().replace(/\/$/, '');
+  const clean = String(path).replace(/^\/+/, '');
+  if (clean.startsWith('uploads/')) return `${origin}/${clean}`;
+  return `${origin}/uploads/${clean}`;
+}
+
+function laptopConfig(lap) {
+  return [lap.processor, lap.generation, lap.ram, lap.storage, lap.gpu, lap.screen_size]
+    .filter(Boolean)
+    .join(' · ');
+}
 
 function KycBadge({ status }) {
   const map = {
@@ -178,12 +194,12 @@ export default function CustomerDetailPage() {
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-xs text-gray-500 text-left">
               <tr>
-                {['TTSPL ID', 'Model', 'Config', 'Entity', 'Dispatch', 'Monthly Rate', 'Status'].map((h) => <th key={h} className="p-3">{h}</th>)}
+                {['TTSPL ID', 'Model', 'Config', 'Entity', 'DC Number', 'Delivered Date', 'Monthly Rate', 'POD', 'Status'].map((h) => <th key={h} className="p-3">{h}</th>)}
               </tr>
             </thead>
             <tbody>
               {laptops.length === 0 ? (
-                <tr><td colSpan={7} className="p-6 text-center text-gray-400">No assets currently with this customer</td></tr>
+                <tr><td colSpan={9} className="p-6 text-center text-gray-400">No assets currently with this customer</td></tr>
               ) : laptops.map((lap) => (
                 <tr key={lap.serial_id || lap.ttspl_id} className="border-t border-gray-100">
                   <td className="p-3">
@@ -193,14 +209,35 @@ export default function CustomerDetailPage() {
                     </button>
                   </td>
                   <td className="p-3">{lap.model_name || '—'}</td>
-                  <td className="p-3 text-xs">{[lap.processor, lap.ram, lap.storage].filter(Boolean).join(' · ')}</td>
+                  <td className="p-3 text-xs">{laptopConfig(lap) || '—'}</td>
                   <td className="p-3 text-xs">
                     {lap.entity_code === 'gorefurbo'
                       ? <span className="px-2 py-0.5 rounded bg-purple-100 text-purple-700">Gorefurbo</span>
                       : <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-700">Rentfoxxy</span>}
                   </td>
-                  <td className="p-3 text-xs">{lap.dispatch_date ? new Date(lap.dispatch_date).toLocaleDateString('en-IN') : '—'}</td>
+                  <td className="p-3 text-xs font-mono">{lap.dc_number || '—'}</td>
+                  <td className="p-3 text-xs">{(lap.delivered_at || lap.dispatch_date) ? new Date(lap.delivered_at || lap.dispatch_date).toLocaleDateString('en-IN') : '—'}</td>
                   <td className="p-3 text-xs">{lap.rent_monthly_rate ? formatCurrency(lap.rent_monthly_rate) : '—'}</td>
+                  <td className="p-3 text-xs">
+                    {Array.isArray(lap.pod_files) && lap.pod_files.length > 0 ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        {lap.pod_files.map((p, idx) => (
+                          <a
+                            key={`${lap.serial_id}-pod-${idx}`}
+                            href={podFileUrl(p)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-blue-200 text-blue-600 hover:bg-blue-50"
+                          >
+                            <FileText className="w-3 h-3" />
+                            {lap.pod_files.length > 1 ? `View ${idx + 1}` : 'View POD'}
+                          </a>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-gray-400">—</span>
+                    )}
+                  </td>
                   <td className="p-3"><span className="px-2 py-0.5 rounded-full bg-gray-100 text-xs">{lap.status || '—'}</span></td>
                 </tr>
               ))}

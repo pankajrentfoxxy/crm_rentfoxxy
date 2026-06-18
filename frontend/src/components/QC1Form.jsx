@@ -178,7 +178,11 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
 
             if (res.data.success) {
                 alert(`${qcStage} submitted successfully!\nResult: ${res.data.result}\nNext Stage: ${res.data.nextStage}`);
-                onComplete();
+                onComplete?.({
+                    nextStage: res.data.nextStage,
+                    result: res.data.result,
+                    fromStageMove: true,
+                });
             }
         } catch (error) {
             console.error('Submit QC error:', error);

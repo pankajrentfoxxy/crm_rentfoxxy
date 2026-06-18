@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { X } from 'lucide-react';
+import { X, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import AssetDetailsForm, { emptyLineItem, lineItemsToPayload } from '../../operation-management/components/AssetDetailsForm';
 import { BillingAddressPanel, ShippingAddressPanel } from '../../operation-management/components/CustomerAddressPanels';
@@ -161,7 +161,7 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
     setForm((prev) => ({
       ...prev,
       customer_id: customerId,
-      customer_name: customer?.name || '',
+      customer_name: customer?.company_name || customer?.name || '',
       email: customer?.email || '',
       customer_mobile: customer?.phone || '',
       GST_number: customer?.gst_no || '',
@@ -281,7 +281,7 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
               <label className="text-xs font-medium text-gray-600">Customer *</label>
               <select className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" value={form.customer_id} onChange={(e) => onCustomerChange(e.target.value)}>
                 <option value="">Select customer</option>
-                {customers.map((c) => <option key={c.customer_id} value={c.customer_id}>{c.name}</option>)}
+                {customers.map((c) => <option key={c.customer_id} value={c.customer_id}>{c.company_name || c.name}</option>)}
               </select>
             </div>
             <div>
@@ -394,9 +394,15 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
           </div>
         </div>
         <div className="border-t p-4 flex justify-end gap-2">
-          <button type="button" onClick={onClose} className="px-4 py-2 text-sm border rounded-lg">Cancel</button>
-          <button type="button" disabled={saving} onClick={() => submit(false)} className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50">Save Draft</button>
-          <button type="button" disabled={saving} onClick={() => submit(true)} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">Save & Send</button>
+          <button type="button" disabled={saving} onClick={onClose} className="px-4 py-2 text-sm border rounded-lg disabled:opacity-50">Cancel</button>
+          <button type="button" disabled={saving} onClick={() => submit(false)} className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50 disabled:opacity-50 inline-flex items-center gap-2">
+            {saving && <Loader2 className="w-4 h-4 animate-spin" />}
+            Save Draft
+          </button>
+          <button type="button" disabled={saving} onClick={() => submit(true)} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 inline-flex items-center gap-2">
+            {saving && <Loader2 className="w-4 h-4 animate-spin" />}
+            {saving ? 'Saving…' : 'Save & Send'}
+          </button>
         </div>
       </aside>
     </div>

@@ -15,6 +15,7 @@ export const READY_TO_RENT_SALE_ACTIONS = [
 /** CRM route segment → Laravel admin.inventory.inventoryList segment */
 export const INVENTORY_SEGMENT_BY_ROUTE = {
   'ready-to-rent-or-sell': 'passed',
+  'qc-process': 'qc_process',
   'rent-to-own': 'rent_to_own',
   'rental-purchase': 'rental_purchase',
   'direct-purchase': 'direct_purchase',
@@ -31,6 +32,12 @@ export const INVENTORY_PAGE_META = {
     erpSegment: 'passed',
     countKey: 'passed',
     description: 'QC passed assets ready for rent or sale (Laravel inventory-list/passed).'
+  },
+  'qc-process': {
+    title: 'QC Process Laptops',
+    erpSegment: 'qc_process',
+    countKey: 'qc_process',
+    description: 'Laptops still in the QC pipeline — QC status is not yet passed.'
   },
   'rent-to-own': {
     title: 'Rent To Own',

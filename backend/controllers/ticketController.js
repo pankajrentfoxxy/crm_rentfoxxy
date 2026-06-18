@@ -8,6 +8,50 @@ const {
 const { applyGrnVendorQcPassOnTicketComplete } = require('../services/grnTicketService');
 const ttsplAuditService = require('../services/ttsplAuditService');
 
+// Replace legacy "user/team/stage ID: N" tokens in activity notes with names.
+// New activity logs already store names; this keeps historical entries readable.
+async function resolveActivityNoteIds(rows = []) {
+  const patterns = [
+    { re: /user ID: (\d+)/gi, table: 'users', col: 'name', key: 'user_id' },
+    { re: /team ID: (\d+)/gi, table: 'teams', col: 'team_name', key: 'team_id' },
+    { re: /stage ID: (\d+)/gi, table: 'stages', col: 'stage_name', key: 'stage_id' }
+  ];
+
+  const idsByType = { users: new Set(), teams: new Set(), stages: new Set() };
+  for (const row of rows) {
+    if (!row?.notes) continue;
+    for (const p of patterns) {
+      for (const m of row.notes.matchAll(p.re)) idsByType[p.table].add(Number(m[1]));
+    }
+  }
+
+  const nameMaps = { users: {}, teams: {}, stages: {} };
+  await Promise.all(
+    patterns.map(async (p) => {
+      const ids = [...idsByType[p.table]];
+      if (!ids.length) return;
+      const result = await pool.query(
+        `SELECT ${p.key} AS id, ${p.col} AS name FROM ${p.table} WHERE ${p.key} = ANY($1::int[])`,
+        [ids]
+      );
+      result.rows.forEach((r) => { nameMaps[p.table][r.id] = r.name; });
+    })
+  );
+
+  for (const row of rows) {
+    if (!row?.notes) continue;
+    let notes = row.notes;
+    for (const p of patterns) {
+      notes = notes.replace(p.re, (full, idStr) => {
+        const name = nameMaps[p.table][Number(idStr)];
+        if (!name) return full;
+        return p.table === 'users' ? name : `${name}${p.table === 'teams' ? ' team' : ''}`;
+      });
+    }
+    row.notes = notes;
+  }
+}
+
 // Create Ticket
 exports.createTicket = async (req, res) => {
   const {
@@ -172,15 +216,20 @@ exports.getTickets = async (req, res) => {
       paramCount++;
     }
 
-    // Role-based visibility: Admin & Floor Manager see all; Team members see only tickets assigned to them
+    // Role-based visibility: Admin/Floor Manager/Manager see all.
+    // QC users can also see unassigned tickets in their QC team bucket.
     const privilegedRoles = ['admin', 'floor_manager', 'manager'];
+    const userTeamIds = (req.user.team_ids && req.user.team_ids.length > 0
+      ? req.user.team_ids
+      : (req.user.team_id != null ? [req.user.team_id] : []))
+      .map((v) => Number(v))
+      .filter((v) => Number.isInteger(v) && v > 0);
 
     if (req.user.role === 'qc' && !privilegedRoles.includes(req.user.role)) {
       query += ` AND s.stage_name IN ('QC1', 'QC2', 'Dispatch QC')`;
     }
 
     if (!privilegedRoles.includes(req.user.role)) {
-      // Team members: See ONLY tickets assigned to them (never unassigned tickets)
       if (view === 'completed') {
         query += ` AND (t.assigned_user_id = $${paramCount} OR EXISTS (
           SELECT 1 FROM activities a WHERE a.ticket_id = t.ticket_id AND a.user_id = $${paramCount}
@@ -189,10 +238,20 @@ exports.getTickets = async (req, res) => {
         params.push(req.user.user_id);
         paramCount++;
       } else {
-        // In-progress: must be assigned to this user (exclude NULL explicitly)
-        query += ` AND t.assigned_user_id IS NOT NULL AND t.assigned_user_id = $${paramCount}`;
-        params.push(req.user.user_id);
-        paramCount++;
+        if (req.user.role === 'qc' && userTeamIds.length > 0) {
+          // QC queue: include tickets assigned to me OR currently unassigned in my QC team bucket.
+          query += ` AND (
+            t.assigned_user_id = $${paramCount}
+            OR (t.assigned_user_id IS NULL AND t.assigned_team_id = ANY($${paramCount + 1}::int[]))
+          )`;
+          params.push(req.user.user_id, userTeamIds);
+          paramCount += 2;
+        } else {
+          // Other non-privileged users: only tickets assigned to them.
+          query += ` AND t.assigned_user_id IS NOT NULL AND t.assigned_user_id = $${paramCount}`;
+          params.push(req.user.user_id);
+          paramCount++;
+        }
       }
     } else {
       // Admins/Floor Managers: can filter by team_id if provided
@@ -355,11 +414,23 @@ exports.getTicketById = async (req, res) => {
 
     const ticket = result.rows[0];
 
-    // Team members can only view tickets assigned to them
+    // Team members can only view tickets assigned to them.
+    // QC users can additionally open unassigned tickets in their QC team bucket.
     const privilegedRoles = ['admin', 'floor_manager', 'manager'];
     if (!privilegedRoles.includes(req.user.role)) {
       const assignedToMe = Number(ticket.assigned_user_id) === Number(req.user.user_id);
-      if (!assignedToMe) {
+      const userTeamIds = (req.user.team_ids && req.user.team_ids.length > 0
+        ? req.user.team_ids
+        : (req.user.team_id != null ? [req.user.team_id] : []))
+        .map((v) => Number(v))
+        .filter((v) => Number.isInteger(v) && v > 0);
+      const qcStage = ['QC1', 'QC2', 'Dispatch QC'].includes(ticket.stage_name);
+      const inMyQcBucket = req.user.role === 'qc'
+        && qcStage
+        && ticket.assigned_user_id == null
+        && userTeamIds.includes(Number(ticket.assigned_team_id));
+
+      if (!assignedToMe && !inMyQcBucket) {
         return res.status(403).json({
           success: false,
           message: 'Access denied: you can only view tickets assigned to you'
@@ -377,6 +448,10 @@ exports.getTicketById = async (req, res) => {
        ORDER BY a.created_at DESC`,
       [id]
     );
+
+    // Older activity notes stored raw IDs ("Assigned to user ID: 15. Moved to
+    // stage ID: 3."). Resolve them to names so the work log reads naturally.
+    await resolveActivityNoteIds(activities.rows);
 
     // Get photos
     const photos = await pool.query(
@@ -713,7 +788,9 @@ exports.assignTicket = async (req, res) => {
       updateQuery += `assigned_user_id = $${paramCount}, `;
       params.push(user_id);
       paramCount++;
-      logMessage += `Assigned to user ID: ${user_id}. `;
+      const userRes = await pool.query('SELECT name FROM users WHERE user_id = $1', [user_id]);
+      const userName = userRes.rows[0]?.name || `user #${user_id}`;
+      logMessage += `Assigned to ${userName}. `;
     } else if (user_id === null) {
       updateQuery += `assigned_user_id = NULL, `;
       logMessage += `Unassigned user. `;
@@ -723,7 +800,9 @@ exports.assignTicket = async (req, res) => {
       updateQuery += `assigned_team_id = $${paramCount}, `;
       params.push(team_id);
       paramCount++;
-      logMessage += `Assigned to team ID: ${team_id}. `;
+      const teamRes = await pool.query('SELECT team_name FROM teams WHERE team_id = $1', [team_id]);
+      const teamName = teamRes.rows[0]?.team_name || `team #${team_id}`;
+      logMessage += `Assigned to ${teamName} team. `;
     }
 
     // Remove trailing comma and space
@@ -735,11 +814,11 @@ exports.assignTicket = async (req, res) => {
 
     if (target_stage_id) {
       // Floor manager priority assign: user + stage specified
-      const stageRes = await pool.query('SELECT stage_id, team_id FROM stages WHERE stage_id = $1', [target_stage_id]);
+      const stageRes = await pool.query('SELECT stage_id, team_id, stage_name FROM stages WHERE stage_id = $1', [target_stage_id]);
       if (stageRes.rows.length > 0) {
         targetStageId = stageRes.rows[0].stage_id;
         targetTeamId = stageRes.rows[0].team_id;
-        logMessage += `Moved to stage ID: ${targetStageId}. `;
+        logMessage += `Moved to ${stageRes.rows[0].stage_name || `stage #${targetStageId}`}. `;
       }
     } else if (user_id) {
       // Get all teams for this user (primary team_id + user_teams)
@@ -753,7 +832,7 @@ exports.assignTicket = async (req, res) => {
 
       if (userTeamIds.length > 0) {
         const stageRes = await pool.query(
-          `SELECT s.stage_id, s.team_id FROM stages s
+          `SELECT s.stage_id, s.team_id, s.stage_name FROM stages s
            WHERE s.team_id = ANY($1::int[])
            ORDER BY s.stage_order ASC LIMIT 1`,
           [userTeamIds]
@@ -761,19 +840,19 @@ exports.assignTicket = async (req, res) => {
         if (stageRes.rows.length > 0) {
           targetStageId = stageRes.rows[0].stage_id;
           targetTeamId = stageRes.rows[0].team_id;
-          logMessage += `Moved to stage ID: ${targetStageId}. `;
+          logMessage += `Moved to ${stageRes.rows[0].stage_name || `stage #${targetStageId}`}. `;
         }
       }
     } else if (team_id) {
       // When assigning to team only, move to that team's first stage
       const stageRes = await pool.query(
-        'SELECT stage_id, team_id FROM stages WHERE team_id = $1 ORDER BY stage_order ASC LIMIT 1',
+        'SELECT stage_id, team_id, stage_name FROM stages WHERE team_id = $1 ORDER BY stage_order ASC LIMIT 1',
         [team_id]
       );
       if (stageRes.rows.length > 0) {
         targetStageId = stageRes.rows[0].stage_id;
         targetTeamId = stageRes.rows[0].team_id;
-        logMessage += `Moved to stage ID: ${targetStageId}. `;
+        logMessage += `Moved to ${stageRes.rows[0].stage_name || `stage #${targetStageId}`}. `;
       }
     }
 
@@ -1391,19 +1470,59 @@ exports.endWork = async (req, res) => {
 };
 
 // Get Active Work Log
+// Hardware & Software stages. The work timer should run as ONE continuous,
+// ongoing timer across all of these for the same technician — it must not reset
+// when the unit moves between Diagnosis → Assembly & Software → Final Testing →
+// Chip Level Repair → Body & Paint.
+const HW_SW_STAGE_NAMES = [
+  'Diagnosis',
+  'Assembly & Software',
+  'Final Testing',
+  'Chip Level Repair',
+  'Body & Paint'
+];
+
 exports.getActiveWorkLog = async (req, res) => {
   const { id } = req.params;
   const userId = req.user.user_id;
 
   try {
     const result = await pool.query(
-      `SELECT *, (EXTRACT(EPOCH FROM start_time) * 1000) as start_time_epoch FROM work_logs WHERE ticket_id = $1 AND user_id = $2 AND end_time IS NULL`,
+      `SELECT w.*, (EXTRACT(EPOCH FROM w.start_time) * 1000) AS start_time_epoch, s.stage_name
+       FROM work_logs w
+       LEFT JOIN stages s ON s.stage_id = w.stage_id
+       WHERE w.ticket_id = $1 AND w.user_id = $2 AND w.end_time IS NULL`,
       [id, userId]
     );
 
     if (result.rows.length > 0) {
-      // Calculate duration logic if needed, but client can do it based on start_time
-      res.json({ success: true, active: true, log: result.rows[0] });
+      const log = result.rows[0];
+      log.session_start_epoch = Number(log.start_time_epoch);
+      log.session_elapsed_ms = null;
+
+      // When the open segment is a Hardware & Software stage, accumulate the
+      // technician's total time across every HW/SW segment on this ticket (closed
+      // + the currently-open one) so the on-screen timer keeps counting across
+      // stage moves instead of restarting each stage. QC / other stages keep
+      // their own per-stage timer.
+      if (HW_SW_STAGE_NAMES.includes(log.stage_name)) {
+        const totalRes = await pool.query(
+          `SELECT COALESCE(
+             SUM(EXTRACT(EPOCH FROM (COALESCE(w.end_time, CURRENT_TIMESTAMP) - w.start_time)) * 1000),
+             0
+           ) AS session_elapsed_ms
+           FROM work_logs w
+           JOIN stages s ON s.stage_id = w.stage_id
+           WHERE w.ticket_id = $1 AND w.user_id = $2 AND s.stage_name = ANY($3::text[])`,
+          [id, userId, HW_SW_STAGE_NAMES]
+        );
+        const sessionElapsedMs = Number(totalRes.rows[0]?.session_elapsed_ms) || 0;
+        log.session_elapsed_ms = sessionElapsedMs;
+        // Reference start the client subtracts from its own clock to keep ticking.
+        log.session_start_epoch = Date.now() - sessionElapsedMs;
+      }
+
+      res.json({ success: true, active: true, log });
     } else {
       res.json({ success: true, active: false });
     }

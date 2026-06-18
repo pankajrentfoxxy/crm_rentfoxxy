@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { AlertTriangle, History, Loader2 } from 'lucide-react';
 import api from '../../../utils/api';
@@ -34,6 +34,7 @@ import WorkNotesPanel from '../components/WorkNotesPanel';
 import StageTaskPanel from '../components/StageTaskPanel';
 import AssignmentModal from '../components/AssignmentModal';
 import TtsplHistoryDrawer from '../components/TtsplHistoryDrawer';
+import useAutoRefresh from '../hooks/useAutoRefresh';
 
 const HW_WORK_STAGES = ['Assembly & Software', 'Final Testing', 'Chip Level Repair', 'Body & Paint'];
 // Stages where the assignee must scan/confirm the machine and run a work timer.
@@ -51,6 +52,7 @@ function fmtElapsed(ms) {
 
 export default function TicketDetailPage() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState(null);
@@ -111,6 +113,89 @@ export default function TicketDetailPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  const refresh = useCallback(() => {
+    load();
+    loadActiveLog();
+  }, [load, loadActiveLog]);
+  useAutoRefresh(refresh);
+
+  const privileged = isFloorManagerRole(user?.role) || ['admin', 'manager'].includes(user?.role);
+
+  const reloadTicketHistory = useCallback(async (ttsplId) => {
+    if (!ttsplId) return;
+    const h = await fetchTtsplHistory(ttsplId);
+    if (h.data.success) {
+      setConfigHistory(h.data.configHistory || []);
+      setAuditLog(h.data.auditLog || []);
+    }
+  }, []);
+
+  const stage = data?.ticket?.stage_name;
+
+  /** After QC submit / stage move: reload if user still has access, else return to list. */
+  const handleWorkflowComplete = useCallback(async (meta = {}) => {
+    const { nextStage } = meta;
+    const prevStage = stage;
+    const prevAssignedUserId = data?.ticket?.assigned_user_id;
+
+    try {
+      setLoading(true);
+      const { data: res } = await fetchTicketDetail(id);
+      if (!res.success) return;
+
+      const stillMine = privileged
+        || Number(res.ticket?.assigned_user_id) === Number(user?.user_id);
+      const moved = prevStage && res.ticket?.stage_name !== prevStage;
+      const sameUserContinuity = moved
+        && Number(prevAssignedUserId) > 0
+        && Number(prevAssignedUserId) === Number(res.ticket?.assigned_user_id)
+        && Number(res.ticket?.assigned_user_id) === Number(user?.user_id);
+
+      // Keep the user on this page when the next stage is still assigned to them.
+      // Redirect only when ownership changed (or access is denied).
+      if (!privileged && !stillMine) {
+        toast.success(`Ticket moved to ${res.ticket?.stage_name || nextStage || 'next stage'}`);
+        navigate('/floor-pipeline/tickets');
+        return;
+      }
+
+      if (moved) {
+        toast.success(`Moved to ${res.ticket?.stage_name}`);
+      }
+
+      setData(res);
+      await reloadTicketHistory(res.ticket?.ttspl_id);
+
+      // Continuity safeguard:
+      // if stage moved to another timed stage for the SAME user and the timer is not
+      // running (rare race / backend miss), auto-start it to avoid verify blocking.
+      if (sameUserContinuity && TIMED_WORK_STAGES.includes(res.ticket?.stage_name)) {
+        try {
+          const activeRes = await getActiveWorkLog(id);
+          if (!activeRes.data?.active) {
+            const verifyValue = res.ticket?.ttspl_id || res.ticket?.ttspl_display || res.ticket?.serial_number;
+            if (verifyValue) {
+              await startWork(id, String(verifyValue));
+            }
+          }
+        } catch {
+          // Non-fatal: if auto-start fails, user can still verify manually.
+        }
+      }
+
+      await loadActiveLog();
+    } catch (e) {
+      if (e.response?.status === 403) {
+        toast.success(nextStage ? `Ticket moved to ${nextStage}` : 'Ticket updated');
+        navigate('/floor-pipeline/tickets');
+        return;
+      }
+      toast.error(e.response?.data?.message || 'Failed to load ticket');
+    } finally {
+      setLoading(false);
+    }
+  }, [id, stage, data?.ticket?.assigned_user_id, user?.user_id, privileged, navigate, reloadTicketHistory, loadActiveLog]);
+
   const ticket = data?.ticket;
 
   useEffect(() => {
@@ -142,7 +227,6 @@ export default function TicketDetailPage() {
       setNextAssigneeWarning(false);
     }
   }, [ticket?.ticket_id, ticket?.stage_name, ticket?.ticket_type]);
-  const stage = ticket?.stage_name;
   const fm = isFloorManagerRole(user?.role);
   const tech = isTechnicianRole(user?.role);
   const qc = isQcRole(user?.role);
@@ -167,20 +251,27 @@ export default function TicketDetailPage() {
     return tabs;
   }, [stage, ticket?.chip_repair_required, ticket?.body_paint_required]);
 
-  // Default to the stage's task tab whenever the stage changes.
+  const isAssignee = !!(ticket?.assigned_user_id && user?.user_id
+    && Number(ticket.assigned_user_id) === Number(user.user_id));
+  const needsStart = TIMED_WORK_STAGES.includes(stage) && isAssignee && !activeLog;
+  const workTabsLocked = needsStart;
+
+  // Default to the stage's task tab whenever the stage changes (after verification).
   useEffect(() => {
     const s = ticket?.stage_name;
-    if (!s) return;
+    if (!s || workTabsLocked) return;
     if (s === 'Diagnosis') setTab('diagnosis');
     else if (STAGE_TASK_STAGES.includes(s)) setTab('task');
     else if (['QC1', 'QC2', 'Dispatch QC'].includes(s)) setTab('qc');
     else setTab('overview');
-  }, [ticket?.stage_name]);
+  }, [ticket?.stage_name, workTabsLocked]);
 
-  const isAssignee = !!(ticket?.assigned_user_id && user?.user_id
-    && Number(ticket.assigned_user_id) === Number(user.user_id));
-  const needsStart = TIMED_WORK_STAGES.includes(stage) && isAssignee && !activeLog;
-  const elapsedMs = activeLog?.start_time ? nowTs - new Date(activeLog.start_time).getTime() : 0;
+  // For Hardware & Software stages the timer is one ongoing total across all
+  // those stages (session_start_epoch), so it doesn't reset on each stage move.
+  // Other stages fall back to the current segment's start time.
+  const elapsedMs = activeLog?.session_start_epoch != null
+    ? nowTs - Number(activeLog.session_start_epoch)
+    : (activeLog?.start_time ? nowTs - new Date(activeLog.start_time).getTime() : 0);
 
   const handleStartWork = async () => {
     if (!verifyInput.trim()) { toast.error('Enter the TTSPL ID or Serial number'); return; }
@@ -218,8 +309,7 @@ export default function TicketDetailPage() {
       if (res.success) {
         toast.success(res.message);
         setQcPickerOpen(false);
-        load();
-        loadActiveLog(); // timer stops on stage change
+        handleWorkflowComplete({ nextStage: toStage, fromStageMove: true });
       }
     } catch (e) {
       toast.error(e.response?.data?.message || 'Move failed');
@@ -236,7 +326,7 @@ export default function TicketDetailPage() {
       const { data: res } = await floorManagerFail(id, { reason: failReason });
       if (res.success) {
         toast.success(res.message);
-        load();
+        handleWorkflowComplete({ fromStageMove: true });
       }
     } catch (e) {
       toast.error(e.response?.data?.message || 'Failed');
@@ -263,8 +353,16 @@ export default function TicketDetailPage() {
   if ((tech || fm) && stage === 'Diagnosis') {
     stageButtons.push(
       { label: 'Move to Assembly & Software', action: () => move('Assembly & Software'), primary: true },
-      { label: 'Mark Chip Repair Required', action: () => markChipRepair(id).then(load), warn: true },
-      { label: 'Mark Body & Paint Required', action: () => markBodyPaint(id).then(load), pink: true }
+      {
+        label: 'Mark Chip Repair Required',
+        action: () => markChipRepair(id).then(() => handleWorkflowComplete({ nextStage: 'Chip Level Repair', fromStageMove: true })),
+        warn: true
+      },
+      {
+        label: 'Mark Body & Paint Required',
+        action: () => markBodyPaint(id).then(() => handleWorkflowComplete({ nextStage: 'Body & Paint', fromStageMove: true })),
+        pink: true
+      }
     );
   }
   if ((tech || fm) && HW_WORK_STAGES.includes(stage)) {
@@ -340,6 +438,16 @@ export default function TicketDetailPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
         <div className="min-w-0">
+          {workTabsLocked ? (
+            <div className="rounded-xl border-2 border-blue-200 bg-blue-50 p-8 text-center">
+              <h3 className="font-semibold text-blue-900">Verify machine to unlock work tabs</h3>
+              <p className="text-sm text-blue-800 mt-2 max-w-md mx-auto">
+                Enter the TTSPL ID or Serial number in Stage Actions on the right, then click Start.
+                Diagnosis, QC, and other work tabs will appear after verification.
+              </p>
+            </div>
+          ) : (
+          <>
           <div className="flex gap-1 overflow-x-auto border-b mb-4 pb-1">
             {visibleTabs.map((t) => (
               <button
@@ -409,8 +517,20 @@ export default function TicketDetailPage() {
               onUpdated={load}
             />
           )}
-          {tab === 'diagnosis' && <DiagnosisForm api={api} ticket={ticket} onComplete={load} />}
-          {tab === 'task' && <StageTaskPanel ticket={ticket} stageName={stage} onSubmitted={load} />}
+          {tab === 'diagnosis' && <DiagnosisForm api={api} ticket={ticket} onComplete={handleWorkflowComplete} />}
+          {tab === 'task' && (
+            <StageTaskPanel
+              ticket={ticket}
+              stageName={stage}
+              onSubmitted={(meta) => {
+                if (meta?.requestAssigneePicker) {
+                  openQcPicker();
+                  return;
+                }
+                handleWorkflowComplete(meta);
+              }}
+            />
+          )}
           {tab === 'notes' && (
             <WorkNotesPanel
               ticketId={ticket.ticket_id}
@@ -419,7 +539,7 @@ export default function TicketDetailPage() {
               onLogged={load}
             />
           )}
-          {tab === 'qc' && <QcChecklistPanel ticket={ticket} stageName={stage} onSubmitted={load} />}
+          {tab === 'qc' && <QcChecklistPanel ticket={ticket} stageName={stage} onSubmitted={handleWorkflowComplete} />}
           {tab === 'chip' && (
             <ChipRepairPanel ticketId={ticket.ticket_id} partRequests={data.part_requests} ticketParts={data.parts} onUpdated={load} />
           )}
@@ -428,6 +548,8 @@ export default function TicketDetailPage() {
             <button type="button" onClick={() => setHistoryOpen(true)} className="text-blue-600 text-sm font-medium">
               Open full TTSPL history drawer
             </button>
+          )}
+          </>
           )}
         </div>
 

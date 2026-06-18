@@ -290,9 +290,12 @@ async function createSalesOrderQcTicket(db, {
     return { ok: false, skipped: true, reason: 'open_ticket', ticket_id: open.rows[0].ticket_id };
   }
 
-  // Pre-dispatch QC goes straight to QC2 (the unit is already GRN-QC-passed) with
-  // High priority and a bold "Sales Order" tag — no full refurb pipeline.
-  const stage = (await resolveStageByName(db, 'QC2'))
+  // Pre-dispatch QC for sales-order laptops goes to the dedicated "Dispatch QC"
+  // stage (the unit is already GRN-QC-passed) with High priority and a bold
+  // "Sales Order" tag — no full refurb pipeline. Falls back to QC2/QC1 only if
+  // the Dispatch QC stage hasn't been seeded.
+  const stage = (await resolveStageByName(db, 'Dispatch QC'))
+    || (await resolveStageByName(db, 'QC2'))
     || (await resolveStageByName(db, 'QC1'))
     || (await resolveFloorManagerStage(db));
   if (!stage) {

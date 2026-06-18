@@ -246,6 +246,7 @@ function enrichSerialRow(row) {
     rental_period: row.rental_start_date || line?.rental_period || null,
     product_warranty: line?.warranty_months ?? line?.product_warranty ?? null,
     inventory_tag: ex.inventory_tag || null,
+    ticket_id: row.ticket_id ?? null,
     extra: ex
   };
 }
