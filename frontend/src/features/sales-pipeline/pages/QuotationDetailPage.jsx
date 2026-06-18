@@ -4,12 +4,26 @@ import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import { getQuotation, updateQuotationStatus, regenerateQuotationPdf } from '../salesPipelineApi';
 import { getBackendOrigin } from '../../../utils/api';
-import { formatConfig, formatCurrency, formatDate, lineTotal, QUOTE_STATUS_STYLES, TYPE_STYLES, typeLabel } from '../salesPipelineUtils';
+import { formatCurrency, formatDate, lineTotal, QUOTE_STATUS_STYLES, TYPE_STYLES, typeLabel } from '../salesPipelineUtils';
 
 function pdfUrl(p) {
   if (!p) return null;
   if (p.startsWith('http')) return p;
   return `${getBackendOrigin().replace(/\/$/, '')}/${p.replace(/^\//, '')}`;
+}
+
+function ConfigCard({ line }) {
+  const title = [line.brand, line.model_name || line.model].filter(Boolean).join(' - ');
+  const specs = [line.processor, line.generation, line.ram, line.storage, line.gpu].filter(Boolean).join(' | ');
+  return (
+    <div className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm min-w-[220px]">
+      <h5 className="font-semibold text-gray-900 leading-snug">
+        {title || '—'}
+        {line.screen_size ? <span className="font-normal text-gray-600"> | {line.screen_size}</span> : null}
+      </h5>
+      {specs ? <p className="mt-1 text-xs text-gray-600">{specs}</p> : null}
+    </div>
+  );
 }
 
 function lockMonths(v) {
@@ -101,7 +115,7 @@ export default function QuotationDetailPage() {
             {lines.map((l, i) => (
               <tr key={i}>
                 <td className="px-4 py-3">{l.brand}</td>
-                <td className="px-4 py-3 text-gray-600">{formatConfig(l)}</td>
+                <td className="px-4 py-3"><ConfigCard line={l} /></td>
                 {!isSale && <td className="px-4 py-3 text-center text-gray-600">{lockMonths(l.locking_period)}</td>}
                 <td className="px-4 py-3 text-right">{l.quantity}</td>
                 <td className="px-4 py-3 text-right">{formatCurrency(l.rate)}</td>

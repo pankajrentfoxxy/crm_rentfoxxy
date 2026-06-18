@@ -90,7 +90,16 @@ export function sumLines(lines) {
 }
 
 export function formatConfig(line) {
-  return [line.brand, line.model_name || line.model, line.processor, line.ram, line.storage]
+  return [
+    line.brand,
+    line.model_name || line.model,
+    line.processor,
+    line.generation,
+    line.ram,
+    line.storage,
+    line.gpu,
+    line.screen_size,
+  ]
     .filter(Boolean)
     .join(' · ');
 }
