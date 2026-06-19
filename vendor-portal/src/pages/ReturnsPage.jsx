@@ -36,6 +36,8 @@ export default function ReturnsPage() {
                 <th className="p-3">Date</th>
                 <th className="p-3">Laptops</th>
                 <th className="p-3">Reason</th>
+                <th className="p-3">Ticket</th>
+                <th className="p-3">Debit Note</th>
                 <th className="p-3">Status</th>
               </tr>
             </thead>
@@ -67,11 +69,13 @@ export default function ReturnsPage() {
                       <td className="p-3 text-slate-600 max-w-xs truncate" title={r.reason}>
                         {r.reason || '—'}
                       </td>
+                      <td className="p-3 font-mono text-xs">{r.ticket_id ? `#${r.ticket_id}` : '—'}</td>
+                      <td className="p-3 font-mono text-xs">{r.debit_note_number || '—'}</td>
                       <td className="p-3 capitalize">{r.status || '—'}</td>
                     </tr>
                     {isOpen && ids.length > 0 ? (
                       <tr className="bg-slate-50/60">
-                        <td colSpan={6} className="px-6 py-3">
+                        <td colSpan={8} className="px-6 py-3">
                           <p className="text-xs font-semibold text-slate-500 uppercase mb-2">TTSPL IDs</p>
                           <div className="flex flex-wrap gap-2">
                             {ids.map((id) => (

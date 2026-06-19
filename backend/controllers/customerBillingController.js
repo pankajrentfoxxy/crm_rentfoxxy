@@ -19,6 +19,27 @@ async function nextCreditNoteNumber() {
   return res.rows[0].number;
 }
 
+// Format 'YYYY-MM-DD' (or a Date) as e.g. "15 May 2026".
+function fmtDate(d) {
+  if (!d) return '—';
+  let s;
+  if (typeof d === 'string') {
+    s = d.slice(0, 10);
+  } else {
+    // Use LOCAL components: a `date` column returns a JS Date at midnight;
+    // toISOString() would shift it back a day in IST.
+    const dt = new Date(d);
+    s = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+  }
+  const [y, m, day] = s.split('-');
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  if (!y || !m || !day) return s;
+  return `${parseInt(day, 10)} ${months[parseInt(m, 10) - 1]} ${y}`;
+}
+function fmtMoney(n) {
+  return `Rs ${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 async function generateInvoicePdf(invoice) {
   if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
   const fileName = `${invoice.invoice_number}_${Date.now()}.pdf`;
@@ -32,24 +53,75 @@ async function generateInvoicePdf(invoice) {
     const doc = new PDFDocument({ margin: 40, size: 'A4' });
     const stream = fs.createWriteStream(filePath);
     doc.pipe(stream);
-    doc.fontSize(18).text('Rentfoxxy — Customer Invoice', { align: 'center' });
-    doc.moveDown();
-    doc.fontSize(11).text(`Invoice No: ${invoice.invoice_number}`);
-    doc.text(`Customer: ${invoice.customer_name || invoice.customer_id}`);
-    doc.text(`Period: ${invoice.from_date} to ${invoice.to_date}`);
-    doc.moveDown();
+
+    // ── Header ────────────────────────────────────────────────
+    doc.fontSize(18).font('Helvetica-Bold').text('Rentfoxxy', { continued: true })
+       .font('Helvetica').fontSize(12).text('  Technologies Pvt Ltd');
+    doc.fontSize(15).font('Helvetica-Bold').text('Customer Invoice (Prepaid Rental)', { align: 'right' });
+    doc.moveDown(0.5);
+    doc.font('Helvetica').fontSize(10);
+    const topY = doc.y;
+    doc.text(`Invoice No: ${invoice.invoice_number}`, 40, topY);
+    doc.text(`Invoice Date: ${fmtDate(invoice.invoice_date)}`, 40);
+    doc.text(`Billing Period: ${fmtDate(invoice.from_date)}  to  ${fmtDate(invoice.to_date)}`, 40);
+    doc.text(`Customer: ${invoice.customer_name || invoice.customer_id}`, 320, topY);
+    if (invoice.gst_number) doc.text(`GSTIN: ${invoice.gst_number}`, 320);
+    doc.moveDown(1);
+
+    // ── Line item table ───────────────────────────────────────
+    const x = { idx: 40, asset: 64, item: 200, period: 330, days: 450, amount: 510 };
+    const drawHead = () => {
+      const y = doc.y;
+      doc.font('Helvetica-Bold').fontSize(9);
+      doc.text('#', x.idx, y);
+      doc.text('TTSPL / Serial', x.asset, y);
+      doc.text('Item', x.item, y);
+      doc.text('Period', x.period, y);
+      doc.text('Days', x.days, y, { width: 50, align: 'right' });
+      doc.text('Amount', x.amount, y, { width: 55, align: 'right' });
+      doc.moveTo(40, doc.y + 2).lineTo(565, doc.y + 2).stroke();
+      doc.moveDown(0.5);
+    };
+    drawHead();
+    doc.font('Helvetica').fontSize(9);
+
     lineItems.forEach((line, idx) => {
-      doc.fontSize(10).text(
-        `${idx + 1}. ${line.brand || ''} ${line.model || ''} | Days: ${line.days_in_month} | Amount: ₹${line.amount}`
-      );
+      if (doc.y > 740) { doc.addPage(); drawHead(); doc.font('Helvetica').fontSize(9); }
+      const y = doc.y;
+      doc.fillColor('#000').text(String(idx + 1), x.idx, y);
+      // TTSPL id with Serial Number directly below it
+      doc.font('Helvetica-Bold').text(line.ttspl_id || '—', x.asset, y, { width: 130 });
+      doc.font('Helvetica').fillColor('#555').fontSize(8)
+         .text(line.serial_number ? `SN: ${line.serial_number}` : '', x.asset, doc.y, { width: 130 });
+      doc.fillColor('#000').fontSize(9);
+      doc.text(`${line.brand || ''} ${line.model || ''}`.trim() || '—', x.item, y, { width: 125 });
+      doc.text(`${fmtDate(line.rent_start)} - ${fmtDate(line.rent_end)}${line.is_catchup ? '  (catch-up)' : ''}${line.returned ? '  (returned)' : ''}`,
+        x.period, y, { width: 118 });
+      doc.text(`${line.days_in_month}${line.month_days ? `/${line.month_days}` : ''}`, x.days, y, { width: 50, align: 'right' });
+      doc.text(fmtMoney(line.amount), x.amount, y, { width: 55, align: 'right' });
+      doc.moveDown(0.8);
     });
-    doc.moveDown();
-    doc.text(`Subtotal: ₹${invoice.subtotal}`);
-    doc.text(`GST (${invoice.gst_percent}%): ₹${invoice.gst_amount}`);
+
+    doc.moveTo(40, doc.y + 2).lineTo(565, doc.y + 2).stroke();
+    doc.moveDown(0.6);
+
+    // ── Totals ────────────────────────────────────────────────
+    const totRow = (label, val, opts = {}) => {
+      const y = doc.y;
+      doc.font(opts.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(opts.bold ? 11 : 10);
+      if (opts.color) doc.fillColor(opts.color);
+      doc.text(label, 360, y, { width: 120, align: 'right' });
+      doc.text(val, 485, y, { width: 80, align: 'right' });
+      doc.fillColor('#000');
+      doc.moveDown(0.4);
+    };
+    totRow('Subtotal', fmtMoney(invoice.subtotal));
+    totRow(`GST (${invoice.gst_percent}%)`, fmtMoney(invoice.gst_amount));
     if (parseFloat(invoice.credit_note_adjustment) > 0) {
-      doc.text(`Credit Adjustment: -₹${invoice.credit_note_adjustment}`);
+      totRow('Credit Notes', `- ${fmtMoney(invoice.credit_note_adjustment)}`, { color: '#b00' });
     }
-    doc.fontSize(12).text(`Grand Total: ₹${invoice.grand_total}`, { underline: true });
+    totRow('Grand Total', fmtMoney(invoice.grand_total), { bold: true });
+
     doc.end();
     stream.on('finish', resolve);
     stream.on('error', reject);
@@ -57,6 +129,9 @@ async function generateInvoicePdf(invoice) {
 
   return relativePath;
 }
+
+// Exposed for tests / scripts.
+exports._generateInvoicePdf = generateInvoicePdf;
 
 exports.ensureBillingEngineSchema = async () => {
   const sqlPath = path.join(__dirname, '../migrations/067_phase5_billing_engine.sql');
@@ -239,9 +314,12 @@ exports.markPaid = async (req, res) => {
 
 exports.downloadInvoicePdf = async (req, res) => {
   try {
-    const { id } = req.params;
+    // Route param is :invoiceId (older code read :id, which was always undefined
+    // and made every PDF download 404). Accept either for safety.
+    const id = req.params.invoiceId || req.params.id;
     const result = await pool.query(
-      `SELECT ci.*, c.company_name AS customer_name FROM customer_invoices ci
+      `SELECT ci.*, c.company_name AS customer_name, c.gst_no AS gst_number
+       FROM customer_invoices ci
        LEFT JOIN customers c ON c.customer_id = ci.customer_id
        WHERE ci.invoice_id = $1`,
       [id]

@@ -110,10 +110,10 @@ export default function InvoiceDetailPage() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
                 <tr>
-                  <th className="px-4 py-3 text-left">TTSPL ID</th>
+                  <th className="px-4 py-3 text-left">TTSPL / Serial</th>
                   <th className="px-4 py-3 text-left">Brand</th>
                   <th className="px-4 py-3 text-left">Model</th>
-                  <th className="px-4 py-3 text-left">Dispatch</th>
+                  <th className="px-4 py-3 text-left">Period</th>
                   <th className="px-4 py-3 text-right">Days</th>
                   <th className="px-4 py-3 text-right">Daily Rate</th>
                   <th className="px-4 py-3 text-right">Amount</th>
@@ -122,11 +122,24 @@ export default function InvoiceDetailPage() {
               <tbody className="divide-y">
                 {lineItems.map((line, idx) => (
                   <tr key={idx}>
-                    <td className="px-4 py-3">{line.ttspl_id || '—'}</td>
+                    <td className="px-4 py-3">
+                      <div className="font-medium">{line.ttspl_id || '—'}</div>
+                      {line.serial_number && (
+                        <div className="text-xs text-gray-500">SN: {line.serial_number}</div>
+                      )}
+                    </td>
                     <td className="px-4 py-3">{line.brand}</td>
                     <td className="px-4 py-3">{line.model}</td>
-                    <td className="px-4 py-3">{line.dispatch_date}</td>
-                    <td className="px-4 py-3 text-right">{line.days_in_month}</td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <div>{line.rent_start || '—'} → {line.rent_end || '—'}</div>
+                      {line.is_catchup && (
+                        <span className="inline-block mt-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">catch-up</span>
+                      )}
+                      {line.returned && (
+                        <span className="inline-block mt-0.5 ml-1 text-[10px] font-medium px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">returned</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right">{line.days_in_month}{line.month_days ? `/${line.month_days}` : ''}</td>
                     <td className="px-4 py-3 text-right">{fmt(line.daily_rate)}</td>
                     <td className="px-4 py-3 text-right">{fmt(line.amount)}</td>
                   </tr>

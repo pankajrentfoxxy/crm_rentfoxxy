@@ -126,10 +126,14 @@ async function transitionAsset(db, {
       if (rentEndDate !== null) add('rent_end_date', rentEndDate);
       break;
     case STATUS.IN_STOCK:
-      // Back to the shelf: clear customer holding context.
+      // Back to the shelf: clear customer holding context + billing anchors so a
+      // re-rental to a new customer starts a fresh prepaid cycle.
       add('current_customer_id', null);
       add('current_dc_number', null);
       add('current_entity', null);
+      add('rent_start_date', null);
+      add('rent_end_date', null);
+      add('rent_billed_until', null);
       break;
     default:
       break;

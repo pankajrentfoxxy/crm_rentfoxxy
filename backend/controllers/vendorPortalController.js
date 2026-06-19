@@ -569,7 +569,7 @@ async function listVendorDebitNotes(req, res) {
     const vendorId = req.vendor.vendor_id;
     const dataR = await pool.query(
       `SELECT dn.debit_note_id, dn.debit_note_number, dn.po_id, dn.reason, dn.description,
-              dn.amount, dn.status, dn.created_at, dn.adjusted_in_bill_id,
+              dn.amount, dn.status, dn.created_at, dn.adjusted_in_bill_id, dn.return_ticket_id,
               p.purchase_order_number AS po_number, mb.bill_number AS applied_bill_number
        FROM vendor_debit_notes dn
        LEFT JOIN vendor_purchase_orders p ON p.po_id = dn.po_id
@@ -634,6 +634,24 @@ async function listVendorReturns(req, res) {
     [vendorId]
   );
 
+  // Floor-driven returns: a Force-Fail (qc_failed_return_vendor) ticket sends a
+  // unit back to this vendor. Surface it with its linked return ticket + debit note.
+  const floorRows = await pool.query(
+    `SELECT t.ticket_id,
+            t.floor_manager_qc_failed_at AS return_date,
+            COALESCE(t.floor_manager_qc_fail_reason, t.highlighted_reason, 'Return to vendor') AS reason,
+            t.return_to_vendor_dc_number AS rdc_number,
+            COALESCE(t.ttspl_id, vsn.inventory_asset_code, t.serial_number) AS ttspl,
+            dn.debit_note_number
+       FROM tickets t
+       JOIN vendor_serial_numbers vsn ON vsn.serial_id = t.vendor_serial_id AND vsn.deleted_at IS NULL
+       JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id AND vpo.vendor_id = $1 AND vpo.deleted_at IS NULL
+       LEFT JOIN vendor_debit_notes dn ON dn.return_ticket_id = t.ticket_id
+      WHERE t.status = 'qc_failed_return_vendor'
+      ORDER BY t.floor_manager_qc_failed_at DESC NULLS LAST`,
+    [vendorId]
+  );
+
   const merged = [
     ...rdcRows.rows.map((row) => ({
       rdc_number: row.rdc_number,
@@ -641,7 +659,9 @@ async function listVendorReturns(req, res) {
       laptop_count: row.laptop_count,
       reason: row.reason,
       status: row.status,
-      ttspl_ids: Array.isArray(row.ttspl_ids) ? row.ttspl_ids : []
+      ttspl_ids: Array.isArray(row.ttspl_ids) ? row.ttspl_ids : [],
+      ticket_id: null,
+      debit_note_number: null
     })),
     ...replacedRows.rows.map((row) => ({
       rdc_number: row.rdc_number,
@@ -649,7 +669,19 @@ async function listVendorReturns(req, res) {
       laptop_count: row.laptop_count,
       reason: row.reason,
       status: row.status,
-      ttspl_ids: Array.isArray(row.ttspl_ids) ? row.ttspl_ids : []
+      ttspl_ids: Array.isArray(row.ttspl_ids) ? row.ttspl_ids : [],
+      ticket_id: null,
+      debit_note_number: null
+    })),
+    ...floorRows.rows.map((row) => ({
+      rdc_number: row.rdc_number || `TKT-${row.ticket_id}`,
+      return_date: row.return_date,
+      laptop_count: 1,
+      reason: row.reason,
+      status: row.status,
+      ttspl_ids: row.ttspl ? [row.ttspl] : [],
+      ticket_id: row.ticket_id,
+      debit_note_number: row.debit_note_number || null
     }))
   ].sort((a, b) => new Date(b.return_date || 0) - new Date(a.return_date || 0));
 

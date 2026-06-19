@@ -4,6 +4,7 @@ const { syncWorkLogForTicketState, closeOpenWorkLogs, startWorkLog } = require('
 const { applyGrnVendorQcPassOnTicketComplete } = require('../services/grnTicketService');
 const ttsplAuditService = require('../services/ttsplAuditService');
 const { sendHighlightedTicketAlert } = require('../services/highlightedTicketAlertService');
+const vendorBilling = require('./vendorBillingController');
 
 const PRIVILEGED_ROLES = ['admin', 'floor_manager', 'manager'];
 const QC_STAGES = ['QC1', 'QC2', 'Dispatch QC'];
@@ -623,10 +624,22 @@ exports.markQcFailed = async (req, res) => {
       actorName: req.user.name
     });
 
+    // Auto-raise a DRAFT vendor debit note linked to this return ticket (accounts
+    // fills the amount & approves; it then adjusts the next vendor bill).
+    let debitNote = null;
+    try {
+      debitNote = await vendorBilling.createReturnDebitNote(pool, {
+        ticket, reason: reason.trim(), actorUserId: req.user.user_id,
+      });
+    } catch (dnErr) {
+      console.error('[vendor-return] debit note auto-create failed for ticket', id, dnErr.message);
+    }
+
     res.json({
       success: true,
       message: 'Ticket marked for vendor return. Initiate vendor return DC from vendor management.',
-      instructions: 'Create a vendor return DC and link the serial to complete the return process.'
+      instructions: 'Create a vendor return DC and link the serial to complete the return process.',
+      debit_note: debitNote ? { debit_note_number: debitNote.debit_note_number, debit_note_id: debitNote.debit_note_id } : null,
     });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message || 'Failed' });

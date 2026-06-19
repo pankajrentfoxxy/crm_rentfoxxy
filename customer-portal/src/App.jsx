@@ -9,6 +9,7 @@ import LaptopsPage from './pages/LaptopsPage';
 import OrdersPage from './pages/OrdersPage';
 import InvoicesPage from './pages/InvoicesPage';
 import InvoiceDetailPage from './pages/InvoiceDetailPage';
+import CreditNotesPage from './pages/CreditNotesPage';
 import DeliveriesPage from './pages/DeliveriesPage';
 import SupportPage from './pages/SupportPage';
 import ProfilePage from './pages/ProfilePage';
@@ -34,6 +35,7 @@ export default function App() {
         <Route path="orders" element={<OrdersPage />} />
         <Route path="invoices" element={<InvoicesPage />} />
         <Route path="invoices/:invoiceId" element={<InvoiceDetailPage />} />
+        <Route path="credit-notes" element={<CreditNotesPage />} />
         <Route path="deliveries" element={<DeliveriesPage />} />
         <Route path="support" element={<SupportPage />} />
         <Route path="profile" element={<ProfilePage />} />

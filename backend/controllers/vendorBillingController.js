@@ -177,6 +177,55 @@ exports.listDebitNotes = async (req, res) => {
   }
 };
 
+/**
+ * Auto-create a DRAFT debit note when a floor ticket Force-Fails a unit back to
+ * the vendor. Amount starts at 0 for accounts to fill; linked to the return
+ * ticket + serial + PO. Idempotent per return ticket. Runs on the given db
+ * (pool or a caller's client).
+ * @returns {Promise<object|null>} the debit note row, or null if skipped.
+ */
+async function createReturnDebitNote(db, { ticket, reason, actorUserId = null }) {
+  const client = db || pool;
+  if (!ticket || !ticket.vendor_serial_id) return null;
+
+  const existing = await client.query(
+    `SELECT debit_note_id FROM vendor_debit_notes WHERE return_ticket_id = $1`,
+    [ticket.ticket_id]
+  );
+  if (existing.rows.length) return null; // already raised
+
+  const vp = await client.query(
+    `SELECT vpo.vendor_id, vpo.po_id,
+            COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id
+       FROM vendor_serial_numbers vsn
+       JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id
+      WHERE vsn.serial_id = $1`,
+    [ticket.vendor_serial_id]
+  );
+  if (!vp.rows.length || !vp.rows[0].vendor_id) return null;
+  const { vendor_id, po_id, ttspl_id } = vp.rows[0];
+
+  const dnNumber = await nextDebitNoteNumber();
+  const ins = await client.query(
+    `INSERT INTO vendor_debit_notes
+      (debit_note_number, vendor_id, po_id, reason, description, amount,
+       quantity, unit_rate, ttspl_ids, created_by, serial_id, return_ticket_id)
+     VALUES ($1,$2,$3,$4,$5,0,1,0,$6::jsonb,$7,$8,$9)
+     RETURNING *`,
+    [
+      dnNumber, vendor_id, po_id || null,
+      'Return to vendor',
+      `Unit ${ttspl_id || ticket.serial_number} returned to vendor via floor QC fail` +
+        `${reason ? ` — ${reason}` : ''}. Set amount and approve to adjust the next vendor bill.`,
+      JSON.stringify([ttspl_id].filter(Boolean)),
+      actorUserId, ticket.vendor_serial_id, ticket.ticket_id,
+    ]
+  );
+  console.log(`[vendor-return] Draft debit note ${dnNumber} for vendor ${vendor_id}, ticket ${ticket.ticket_id}`);
+  return ins.rows[0];
+}
+exports.createReturnDebitNote = createReturnDebitNote;
+
 exports.createDebitNote = async (req, res) => {
   try {
     const body = req.body || {};

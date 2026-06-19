@@ -301,7 +301,9 @@ exports.downloadInvoicePdf = async (req, res) => {
 exports.listCreditNotes = async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT credit_note_id, credit_note_number, reason, amount, status, created_at, from_date, to_date
+      `SELECT credit_note_id, credit_note_number, reason, description, amount, status,
+              created_at, from_date, to_date, quantity, unit_rate, ttspl_ids,
+              return_ticket_id, applied_in_invoice_id
        FROM customer_credit_notes
        WHERE customer_id = $1
        ORDER BY created_at DESC`,
@@ -347,6 +349,7 @@ exports.raiseTicket = async (req, res) => {
     const cust = custRes.rows[0];
 
     let dcNumber = null;
+    let specs = {};
     if (ttspl_id) {
       const dcRes = await client.query(
         `SELECT dc_number FROM delivery_challan_lines dcl
@@ -357,6 +360,18 @@ exports.raiseTicket = async (req, res) => {
         [customerId, ttspl_id]
       );
       dcNumber = dcRes.rows[0]?.dc_number || null;
+
+      // Pull specs so support (and the eventual return QC ticket) has device details.
+      const sRes = await client.query(
+        `SELECT extra FROM vendor_serial_numbers
+         WHERE deleted_at IS NULL
+           AND (inventory_asset_code = $1 OR serial_number = $1 OR extra->>'ttspl_id' = $1)
+         LIMIT 1`,
+        [ttspl_id]
+      );
+      const ex = sRes.rows[0]?.extra || {};
+      specs = { brand: ex.brand || null, model: ex.model || ex.model_name || null,
+                ram: ex.ram || null, storage: ex.storage || null, generation: ex.generation || null };
     }
 
     await client.query('BEGIN');
@@ -384,8 +399,9 @@ exports.raiseTicket = async (req, res) => {
     await client.query(
       `INSERT INTO support_ticket_items (
          ticket_id, serial_number, unique_serial_number, item_type,
-         issue_category_label, remarks, status, otp_code
-       ) VALUES ($1,$2,$3,$4,$5,$6,'open',$7)`,
+         issue_category_label, remarks, status, otp_code,
+         brand, model, ram, storage, generation
+       ) VALUES ($1,$2,$3,$4,$5,$6,'open',$7,$8,$9,$10,$11,$12)`,
       [
         ticketId,
         ttspl_id || null,
@@ -394,6 +410,7 @@ exports.raiseTicket = async (req, res) => {
         ticket_type || subject,
         description,
         Math.floor(100000 + Math.random() * 900000).toString(),
+        specs.brand, specs.model, specs.ram, specs.storage, specs.generation,
       ]
     );
 

@@ -54,7 +54,7 @@ export default function DebitNotesPage() {
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
               <tr>
-                {['DN #', 'Date', 'Related PO', 'Reason', 'Amount', 'Status', 'Bill Applied In'].map((h) => (
+                {['DN #', 'Date', 'Related PO', 'Reason', 'Return Ticket', 'Amount', 'Status', 'Bill Applied In'].map((h) => (
                   <th key={h} className="p-3">{h}</th>
                 ))}
               </tr>
@@ -66,6 +66,7 @@ export default function DebitNotesPage() {
                   <td className="p-3 text-xs">{r.created_at ? format(new Date(r.created_at), 'dd MMM yyyy') : '—'}</td>
                   <td className="p-3 font-mono text-xs">{r.po_number || r.po_id || '—'}</td>
                   <td className="p-3">{r.reason}</td>
+                  <td className="p-3 font-mono text-xs">{r.return_ticket_id ? `#${r.return_ticket_id}` : '—'}</td>
                   <td className="p-3 tabular-nums">{inr(r.amount)}</td>
                   <td className="p-3">
                     <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${statusBadge(r.status)}`}>

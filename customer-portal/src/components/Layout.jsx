@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
-  LayoutDashboard, Laptop, FileText, Receipt, Truck, Headphones, User, LogOut, Menu, X,
+  LayoutDashboard, Laptop, FileText, Receipt, ScrollText, Truck, Headphones, User, LogOut, Menu, X,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -10,6 +10,7 @@ const nav = [
   { to: '/laptops', label: 'My Laptops', icon: Laptop },
   { to: '/orders', label: 'Orders', icon: FileText },
   { to: '/invoices', label: 'Invoices', icon: Receipt },
+  { to: '/credit-notes', label: 'Credit Notes', icon: ScrollText },
   { to: '/deliveries', label: 'Deliveries', icon: Truck },
   { to: '/support', label: 'Support', icon: Headphones },
   { to: '/profile', label: 'Profile', icon: User },

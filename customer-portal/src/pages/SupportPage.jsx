@@ -25,8 +25,9 @@ export default function SupportPage() {
   const [laptops, setLaptops] = useState([]);
   const [tickets, setTickets] = useState([]);
   const [expanded, setExpanded] = useState(null);
-  const [subject, setSubject] = useState('');
-  const [ticketType, setTicketType] = useState(ISSUE_TYPES[0]);
+  const initialType = ISSUE_TYPES.includes(searchParams.get('type')) ? searchParams.get('type') : ISSUE_TYPES[0];
+  const [subject, setSubject] = useState(searchParams.get('type') === 'Return Request' ? 'Laptop return request' : '');
+  const [ticketType, setTicketType] = useState(initialType);
   const [ttsplId, setTtsplId] = useState(searchParams.get('ttspl') || '');
   const [description, setDescription] = useState('');
   const [busy, setBusy] = useState(false);
@@ -44,6 +45,8 @@ export default function SupportPage() {
   useEffect(() => {
     const t = searchParams.get('ttspl');
     if (t) setTtsplId(t);
+    const ty = searchParams.get('type');
+    if (ty && ISSUE_TYPES.includes(ty)) setTicketType(ty);
   }, [searchParams]);
 
   async function submit(e) {
