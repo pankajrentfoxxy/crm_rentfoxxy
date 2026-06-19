@@ -21,22 +21,60 @@ exports.getAllParts = async (req, res) => {
   }
 };
 
+function toBrandArray(val) {
+  if (val == null || val === '') return null;
+  if (Array.isArray(val)) return val.map((s) => String(s).trim()).filter(Boolean);
+  return String(val)
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 // Create Part
 exports.createPart = async (req, res) => {
-  const { part_name, part_type, quantity, vendor, cost, location_code } = req.body;
+  const {
+    part_name, part_type, quantity, vendor, cost, location_code,
+    category, description, part_sku, compatible_brands, is_consumable,
+    warranty_months, notes, min_threshold
+  } = req.body;
 
   try {
+    // category drives the spare-parts catalog link; default to part_type.
+    const cat = (category || part_type || 'general').toString();
     const result = await pool.query(
-      `INSERT INTO parts (part_name, part_type, quantity, vendor, cost, location_code)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO parts
+         (part_name, part_type, quantity, vendor, cost, location_code,
+          category, description, part_sku, compatible_brands, is_consumable,
+          warranty_months, notes, min_threshold)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
        RETURNING *`,
-      [part_name, part_type, quantity || 0, vendor, cost || 0, location_code]
+      [
+        part_name, part_type, quantity || 0, vendor, cost || 0, location_code,
+        cat, description || null, part_sku || null, toBrandArray(compatible_brands),
+        is_consumable === true || is_consumable === 'true',
+        Number(warranty_months) || 0, notes || null,
+        Number.isFinite(Number(min_threshold)) ? Number(min_threshold) : 5
+      ]
     );
+
+    const part = result.rows[0];
+
+    // Keep the spare-parts (SPO) catalog in sync so the part is orderable.
+    try {
+      await pool.query(
+        `INSERT INTO vendor_spare_parts_catalog (name, active, floor_part_id, category)
+         SELECT $1, true, $2, $3
+          WHERE NOT EXISTS (SELECT 1 FROM vendor_spare_parts_catalog WHERE floor_part_id = $2)`,
+        [part.part_name, part.part_id, cat]
+      );
+    } catch (e) {
+      console.warn('[createPart] catalog sync (non-fatal):', e.message);
+    }
 
     res.status(201).json({
       success: true,
       message: 'Part created successfully',
-      part: result.rows[0]
+      part
     });
   } catch (error) {
     console.error('Create part error:', error);
@@ -50,19 +88,40 @@ exports.createPart = async (req, res) => {
 // Update Part Details (Name, Location, Cost, etc.)
 exports.updatePart = async (req, res) => {
   const { id } = req.params;
-  const { part_name, part_type, vendor, cost, location_code } = req.body;
+  const {
+    part_name, part_type, vendor, cost, location_code,
+    category, description, part_sku, compatible_brands, is_consumable,
+    warranty_months, notes, min_threshold
+  } = req.body;
 
   try {
+    const brands = compatible_brands === undefined ? null : toBrandArray(compatible_brands);
     const result = await pool.query(
       `UPDATE parts 
        SET part_name = COALESCE($1, part_name),
            part_type = COALESCE($2, part_type),
            vendor = COALESCE($3, vendor),
            cost = COALESCE($4, cost),
-           location_code = COALESCE($5, location_code)
+           location_code = COALESCE($5, location_code),
+           category = COALESCE($7, category),
+           description = COALESCE($8, description),
+           part_sku = COALESCE($9, part_sku),
+           compatible_brands = COALESCE($10, compatible_brands),
+           is_consumable = COALESCE($11, is_consumable),
+           warranty_months = COALESCE($12, warranty_months),
+           notes = COALESCE($13, notes),
+           min_threshold = COALESCE($14, min_threshold),
+           updated_at = NOW()
        WHERE part_id = $6
        RETURNING *`,
-      [part_name, part_type, vendor, cost, location_code, id]
+      [
+        part_name, part_type, vendor, cost, location_code, id,
+        category || null, description || null, part_sku || null, brands,
+        typeof is_consumable === 'boolean' ? is_consumable : null,
+        warranty_months != null && warranty_months !== '' ? Number(warranty_months) : null,
+        notes || null,
+        min_threshold != null && min_threshold !== '' ? Number(min_threshold) : null
+      ]
     );
 
     if (result.rows.length === 0) {

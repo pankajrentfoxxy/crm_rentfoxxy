@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Loader2, X } from 'lucide-react';
 import { fetchTtsplHistory } from '../floorPipelineApi';
+import { getPartCostSummary } from '../partRequestsApi';
 import { EVENT_ICONS } from '../floorPipelineUi';
 
 export default function TtsplHistoryDrawer({ ttsplId, open, onClose }) {
@@ -8,18 +9,34 @@ export default function TtsplHistoryDrawer({ ttsplId, open, onClose }) {
   const [auditLog, setAuditLog] = useState([]);
   const [configHistory, setConfigHistory] = useState([]);
   const [costSummary, setCostSummary] = useState(null);
+  const [partsBreakdown, setPartsBreakdown] = useState([]);
 
   useEffect(() => {
     if (!open || !ttsplId) return;
     let cancelled = false;
     setLoading(true);
-    fetchTtsplHistory(ttsplId)
-      .then(({ data }) => {
+    Promise.all([
+      fetchTtsplHistory(ttsplId),
+      getPartCostSummary(ttsplId).catch(() => null),
+    ])
+      .then(([histRes, costRes]) => {
         if (cancelled) return;
-        if (data.success) {
+        const data = histRes?.data;
+        if (data?.success) {
           setAuditLog(data.auditLog || []);
           setConfigHistory(data.configHistory || []);
           setCostSummary(data.costSummary || null);
+        }
+        if (costRes?.data?.success) {
+          setPartsBreakdown(costRes.data.parts_breakdown || []);
+          setCostSummary((prev) => ({
+            base_cost: costRes.data.base_cost,
+            parts_cost: costRes.data.parts_cost,
+            total_cost: costRes.data.total_expense,
+            ...(prev || {}),
+            // prefer cost-summary endpoint values
+            ...costRes.data,
+          }));
         }
       })
       .finally(() => {
@@ -32,7 +49,7 @@ export default function TtsplHistoryDrawer({ ttsplId, open, onClose }) {
 
   const partsCost = costSummary?.parts_cost ?? configHistory.reduce((s, r) => s + (parseFloat(r.part_cost) || 0), 0);
   const baseCost = costSummary?.base_cost ?? 0;
-  const totalCost = costSummary?.total_cost ?? (partsCost + baseCost);
+  const totalCost = costSummary?.total_expense ?? costSummary?.total_cost ?? (partsCost + baseCost);
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
@@ -106,7 +123,36 @@ export default function TtsplHistoryDrawer({ ttsplId, open, onClose }) {
                 </section>
               ) : null}
               <section>
-                <h3 className="text-xs font-semibold uppercase text-slate-500 mb-2">Parts & Upgrades</h3>
+                <h3 className="text-xs font-semibold uppercase text-slate-500 mb-2">Parts installed (by PRT-ID)</h3>
+                {partsBreakdown.length ? (
+                  <div className="rounded-xl border overflow-hidden text-sm mb-4">
+                    <table className="min-w-full">
+                      <thead className="bg-slate-50 text-xs">
+                        <tr>
+                          <th className="px-2 py-2 text-left">PRT-ID</th>
+                          <th className="px-2 py-2 text-left">Part</th>
+                          <th className="px-2 py-2 text-left">Type</th>
+                          <th className="px-2 py-2 text-left">Date</th>
+                          <th className="px-2 py-2 text-right">Cost</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {partsBreakdown.map((b) => (
+                          <tr key={b.prt_id} className="border-t">
+                            <td className="px-2 py-2 font-mono text-[11px] text-emerald-700">{b.prt_id}</td>
+                            <td className="px-2 py-2">{b.part_name}</td>
+                            <td className="px-2 py-2 capitalize text-xs">{b.type}</td>
+                            <td className="px-2 py-2 text-xs">{b.installed_at ? new Date(b.installed_at).toLocaleDateString() : '—'}</td>
+                            <td className="px-2 py-2 text-right">₹{parseFloat(b.unit_cost || 0).toFixed(0)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-500 mb-3">No PRT-tracked parts installed</p>
+                )}
+                <h3 className="text-xs font-semibold uppercase text-slate-500 mb-2">Config Upgrades</h3>
                 {configHistory.length ? (
                   <div className="rounded-xl border overflow-hidden text-sm mb-3">
                     <table className="min-w-full">

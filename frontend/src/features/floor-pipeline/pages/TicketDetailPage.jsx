@@ -407,6 +407,16 @@ export default function TicketDetailPage() {
     );
   }
 
+  // Phase 16: when the ticket has open part requests, block stage progression.
+  // Stage buttons are hidden entirely (not just disabled). Only reassign stays.
+  const partsBlocked = (ticket.open_part_requests || 0) > 0;
+  if (partsBlocked) {
+    stageButtons.length = 0;
+    if (fm) {
+      stageButtons.push({ label: 'Reassign Technician', action: () => setAssignOpen(true), muted: true });
+    }
+  }
+
   return (
     <div className="pb-10">
       <div className="rounded-xl border border-gray-100 bg-white shadow-sm px-4 py-3 mb-4">
@@ -448,6 +458,20 @@ export default function TicketDetailPage() {
             </div>
           ) : (
           <>
+          {partsBlocked && (
+            <div className="mb-3 flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5">
+              <span className="text-lg">⛔</span>
+              <div>
+                <p className="text-sm font-semibold text-amber-900">
+                  Ticket blocked — {ticket.open_part_requests} part request(s) pending
+                </p>
+                <p className="text-xs text-amber-700">
+                  Parts must be attached before moving to next stage.
+                  <button type="button" onClick={() => setTab('parts')} className="ml-1 underline">View requests</button>
+                </p>
+              </div>
+            </div>
+          )}
           <div className="flex gap-1 overflow-x-auto border-b mb-4 pb-1">
             {visibleTabs.map((t) => (
               <button
@@ -514,6 +538,7 @@ export default function TicketDetailPage() {
               ticket={ticket}
               parts={data.parts}
               configHistory={configHistory}
+              partRequests={data.part_requests}
               onUpdated={load}
             />
           )}
@@ -626,6 +651,26 @@ export default function TicketDetailPage() {
               </div>
             ) : (
               <>
+                {partsBlocked && (
+                  <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 mb-2">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-amber-600 text-lg">⛔</span>
+                      <p className="font-semibold text-amber-900 text-sm">
+                        {ticket.open_part_requests} Part Request{ticket.open_part_requests !== 1 ? 's' : ''} Pending
+                      </p>
+                    </div>
+                    <p className="text-xs text-amber-700">
+                      Attach all requested parts before moving to the next stage.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setTab('parts')}
+                      className="mt-2 w-full py-1.5 text-xs text-amber-800 border border-amber-300 rounded-lg hover:bg-amber-100"
+                    >
+                      View Part Requests →
+                    </button>
+                  </div>
+                )}
                 {stageButtons.some((b) => b.needsReason) ? (
                   <textarea
                     className="w-full rounded-lg border text-xs p-2 min-h-[60px] mb-2"
@@ -641,6 +686,7 @@ export default function TicketDetailPage() {
                         type="button"
                         onClick={btn.action}
                         className={`w-full py-2 rounded-lg text-xs font-semibold ${
+                          btn.blocked ? 'bg-amber-100 text-amber-800 border border-amber-300' :
                           btn.primary ? 'bg-blue-600 text-white' :
                           btn.success ? 'bg-green-600 text-white' :
                           btn.danger || btn.destructive ? 'bg-red-700 text-white' :

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Eye, Plus } from 'lucide-react';
 import {
   fetchSpareOrders,
@@ -102,6 +102,7 @@ function formatBrandLabel(line) {
 }
 
 export default function SparePartsPoPage() {
+  const location = useLocation();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -111,6 +112,7 @@ export default function SparePartsPoPage() {
   const [search, setSearch] = useState('');
 
   const [modalOpen, setModalOpen] = useState(false);
+  const [formPrefill, setFormPrefill] = useState(null);
   const [preview, setPreview] = useState({ open: false, loading: false, detail: null });
   const [billView, setBillView] = useState({ open: false, bill_name: '', files: [], spoId: null });
   const [billUpload, setBillUpload] = useState({ open: false, spo: null, bill_name: '' });
@@ -134,6 +136,16 @@ export default function SparePartsPoPage() {
   useEffect(() => {
     loadList();
   }, [loadList]);
+
+  // Open the form pre-filled when navigated here from the Parts Approval page.
+  useEffect(() => {
+    if (location.state?.openForm) {
+      setFormPrefill(location.state.prefill || null);
+      setModalOpen(true);
+      window.history.replaceState({}, document.title);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function applySearch(e) {
     e.preventDefault();
@@ -233,7 +245,10 @@ export default function SparePartsPoPage() {
         </div>
         <button
           type="button"
-          onClick={() => setModalOpen(true)}
+          onClick={() => {
+            setFormPrefill(null);
+            setModalOpen(true);
+          }}
           className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-orange-600 text-white text-sm font-semibold shadow-sm hover:bg-orange-700 transition-colors"
         >
           <Plus className="w-5 h-5" />
@@ -459,7 +474,18 @@ export default function SparePartsPoPage() {
         </div>
       )}
 
-      <SparePartsPoFormModal open={modalOpen} onClose={() => setModalOpen(false)} onSaved={loadList} />
+      <SparePartsPoFormModal
+        open={modalOpen}
+        prefill={formPrefill}
+        onClose={() => {
+          setModalOpen(false);
+          setFormPrefill(null);
+        }}
+        onSaved={() => {
+          setFormPrefill(null);
+          loadList();
+        }}
+      />
 
       {preview.open && (
         <div

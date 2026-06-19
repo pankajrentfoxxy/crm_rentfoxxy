@@ -74,6 +74,7 @@ app.use('/api/warehouse', require('./routes/warehouse'));
 app.use('/api/stages', require('./routes/stages'));
 app.use('/api/teams', require('./routes/teams'));
 app.use('/api/parts', require('./routes/parts'));
+app.use('/api/part-requests', require('./routes/partRequests'));
 app.use('/api/inventory', require('./routes/inventory'));
 app.use('/api/analytics', require('./routes/analytics'));
 app.use('/api/reports', require('./routes/reports'));

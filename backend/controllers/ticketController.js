@@ -485,11 +485,15 @@ exports.getTicketById = async (req, res) => {
       [id]
     );
 
-    // Get part requests
+    // Get part requests (Phase 16: include catalog + reserved instance details)
     const partRequests = await pool.query(
-      `SELECT pr.*, u.name as requested_by_name
+      `SELECT pr.*, u.name as requested_by_name,
+              pi.prt_id, pi.location_code, pi.status AS instance_status,
+              p.category, p.quantity AS stock_qty, p.cost AS catalog_cost
        FROM part_requests pr
        LEFT JOIN users u ON pr.requested_by = u.user_id
+       LEFT JOIN part_instances pi ON pi.instance_id = pr.instance_id
+       LEFT JOIN parts p ON p.part_id = pr.part_id
        WHERE pr.ticket_id = $1
        ORDER BY pr.created_at DESC`,
       [id]
