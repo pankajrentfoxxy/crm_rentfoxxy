@@ -5,6 +5,7 @@ const {
   submitCapturedSerial,
   apiBaseUrl,
 } = require('../services/grnSerialCaptureService');
+const grnAccessService = require('../services/grnAccessService');
 
 /** Authenticated — create a capture link for one unit in a GRN receive batch */
 const createTokenValidators = [
@@ -30,12 +31,30 @@ async function createGrnCaptureToken(req, res) {
     });
     const token = data.token;
     const psCommand = `$s=(Get-CimInstance Win32_BIOS).SerialNumber.Trim().ToUpper(); Invoke-RestMethod -Uri "${api}/grn-capture/${token}" -Method Post -Body (@{serial_number=$s}|ConvertTo-Json) -ContentType "application/json"`;
+
+    // Mint a short numeric Access Number that maps to this capture URL so the
+    // receiver can authenticate from the public /access page without a password.
+    let accessNumber = null;
+    try {
+      const access = await grnAccessService.createAccessNumber({
+        captureUrl: data.capture_url,
+        captureToken: token,
+        poId: Number(req.params.poId),
+        createdBy: req.user?.user_id,
+        expiresAt: data.expires_at,
+      });
+      accessNumber = access.access_number;
+    } catch (accessErr) {
+      console.error('createAccessNumber:', accessErr.message);
+    }
+
     res.json({
       success: true,
       data: {
         ...data,
         api_base_url: api,
         ps_command: psCommand,
+        access_number: accessNumber,
       },
     });
   } catch (e) {

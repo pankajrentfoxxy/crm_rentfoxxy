@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const pool = require('../config/db');
+const grnAccessService = require('./grnAccessService');
 
 const TOKEN_TTL_MINUTES = 30;
 
@@ -142,6 +143,11 @@ async function submitCapturedSerial(tokenId, serialNumber) {
     [tokenId, serial]
   );
 
+  // The laptop side is done — burn the access number so it can't be reused.
+  try {
+    await grnAccessService.markUsedByToken(tokenId);
+  } catch (_) { /* never block capture on access bookkeeping */ }
+
   return {
     ok: true,
     serial_number: serial,
@@ -157,6 +163,9 @@ async function markTokenUsed(tokenId) {
      WHERE token_id = $1 AND status IN ('pending', 'captured')`,
     [tokenId]
   );
+  try {
+    await grnAccessService.markUsedByToken(tokenId);
+  } catch (_) { /* ignore */ }
 }
 
 async function cancelPendingTokensForSlot(poId, lineIndex, unitIndex) {

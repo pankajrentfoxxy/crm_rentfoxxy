@@ -19,6 +19,7 @@ import {
   ExternalLink,
   Copy,
   UserCircle,
+  KeyRound,
   X
 } from 'lucide-react';
 import { invalidateInventoryManagement } from '../../inventory-management/inventoryCountsEvents';
@@ -29,6 +30,7 @@ import {
   fetchProductReceivedContext,
   receivePoLineUnit,
 } from '../vendorManagementApi';
+import AccessNumbersAdmin from '../components/AccessNumbersAdmin';
 
 function formatWorkflowStatus(status) {
   const s = String(status || '').toLowerCase();
@@ -174,7 +176,9 @@ export default function ProductReceivedPage() {
   const [activeGrnId, setActiveGrnId] = useState(null);
   const [captureToken, setCaptureToken] = useState(null);
   const [captureUrl, setCaptureUrl] = useState('');
+  const [accessNumber, setAccessNumber] = useState(null);
   const [captureLoading, setCaptureLoading] = useState(false);
+  const [accessAdminOpen, setAccessAdminOpen] = useState(false);
   const [billStatus, setBillStatus] = useState('pending');
   const [billName, setBillName] = useState('');
   const [modalBusy, setModalBusy] = useState(false);
@@ -288,6 +292,7 @@ export default function ProductReceivedPage() {
     setActiveGrnId(null);
     setCaptureToken(null);
     setCaptureUrl('');
+    setAccessNumber(null);
     setReceiveStep('serials');
   }
 
@@ -303,6 +308,7 @@ export default function ProductReceivedPage() {
       if (data.success) {
         setCaptureToken(data.data.token);
         setCaptureUrl(data.data.capture_url);
+        setAccessNumber(data.data.access_number ?? null);
       }
     } catch (e) {
       toast.error(e.response?.data?.message || 'Could not create capture link');
@@ -452,13 +458,23 @@ export default function ProductReceivedPage() {
               Purchase Order list Items
             </h1>
           </div>
-          <Link
-            to={viewGrnHref}
-            className="inline-flex items-center gap-2 rounded-md bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold px-4 py-2 shadow-sm transition-colors"
-          >
-            <Eye className="w-4 h-4" />
-            View GRN
-          </Link>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setAccessAdminOpen(true)}
+              className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold px-4 py-2 shadow-sm transition-colors"
+            >
+              <KeyRound className="w-4 h-4 text-teal-600" />
+              Access Numbers
+            </button>
+            <Link
+              to={viewGrnHref}
+              className="inline-flex items-center gap-2 rounded-md bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold px-4 py-2 shadow-sm transition-colors"
+            >
+              <Eye className="w-4 h-4" />
+              View GRN
+            </Link>
+          </div>
         </div>
 
         {po ? (
@@ -854,6 +870,19 @@ export default function ProductReceivedPage() {
                     </ul>
                   ) : null}
 
+                  {accessNumber != null ? (
+                    <div className="rounded-lg border border-teal-200 bg-teal-50 p-3 flex items-center gap-3">
+                      <KeyRound className="w-5 h-5 text-teal-700 shrink-0" />
+                      <div className="min-w-0">
+                        <p className="text-[11px] uppercase tracking-wide text-teal-700 font-semibold m-0">Access Number</p>
+                        <p className="text-2xl font-bold text-teal-900 tabular-nums leading-tight m-0">{accessNumber}</p>
+                        <p className="text-[11px] text-teal-700 m-0 leading-snug">
+                          On the received laptop, open <strong>{(captureUrl || '').replace(/^https?:\/\//, '').split('/')[0] || 'rentfoxxy.com'}/access</strong> and enter this number.
+                        </p>
+                      </div>
+                    </div>
+                  ) : null}
+
                   <div className="rounded-lg border border-slate-200 bg-white p-3 space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <label className="text-xs font-semibold text-slate-600" htmlFor="receive-serial-current">
@@ -962,6 +991,8 @@ export default function ProductReceivedPage() {
           </div>
         </div>
       ) : null}
+
+      {accessAdminOpen ? <AccessNumbersAdmin onClose={() => setAccessAdminOpen(false)} /> : null}
     </div>
   );
 }

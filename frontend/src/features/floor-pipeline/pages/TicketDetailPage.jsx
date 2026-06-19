@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { AlertTriangle, History, Loader2 } from 'lucide-react';
@@ -297,22 +297,29 @@ export default function TicketDetailPage() {
     setQcPickerOpen(true);
   };
 
+  const movingRef = useRef(false);
   const move = async (toStage, reason, assignedUserId, { minReasonLen = 10 } = {}) => {
     if (reason !== undefined && (!reason || reason.trim().length < minReasonLen)) {
       toast.error(`Reason required (min ${minReasonLen} characters) for fail actions`);
       return;
     }
+    // Guard against duplicate submissions (double-click / re-render): only one
+    // move request in flight at a time.
+    if (movingRef.current) return;
+    movingRef.current = true;
     try {
       const { data: res } = await moveTicketStage(id, {
         to_stage_name: toStage, reason, notes: reason, assigned_user_id: assignedUserId
       });
       if (res.success) {
-        toast.success(res.message);
         setQcPickerOpen(false);
-        handleWorkflowComplete({ nextStage: toStage, fromStageMove: true });
+        // handleWorkflowComplete shows the single "Moved to <stage>" toast.
+        await handleWorkflowComplete({ nextStage: toStage, fromStageMove: true });
       }
     } catch (e) {
       toast.error(e.response?.data?.message || 'Move failed');
+    } finally {
+      movingRef.current = false;
     }
   };
 

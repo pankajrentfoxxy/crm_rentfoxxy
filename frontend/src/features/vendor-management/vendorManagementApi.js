@@ -120,6 +120,20 @@ export function fetchGrnCaptureTokenStatus(token) {
   return api.get(`${base}/grn-capture-tokens/${token}`);
 }
 
+// ── GRN Access Numbers (admin) ────────────────────────────────────
+export function listGrnAccessNumbers(params = {}) {
+  return api.get('/grn-access', { params });
+}
+export function fetchGrnAccessAttempts(params = {}) {
+  return api.get('/grn-access/attempts', { params });
+}
+export function expireGrnAccessNumber(id) {
+  return api.patch(`/grn-access/${id}/expire`);
+}
+export function deleteGrnAccessNumber(id) {
+  return api.delete(`/grn-access/${id}`);
+}
+
 /** Laravel view_purchase_order_detail: vendor + KPIs + grouped GRNs */
 export function fetchGeneratedGrnOverview(poId) {
   return api.get(`${base}/purchase-orders/${poId}/generated-grn`);
