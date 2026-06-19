@@ -1,14 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import axios from 'axios';
-import { CheckCircle2, Laptop, Loader2, AlertTriangle, Copy, Download } from 'lucide-react';
+import { CheckCircle2, XCircle, Laptop, Loader2, AlertTriangle, Copy, Download, Cpu } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { getApiUrl } from '../utils/api';
 
-/** Public capture page — always uses the same host the user opened (staging, prod, etc.) */
+/**
+ * Public capture page API base.
+ * Reuses the app's resolver so it targets the backend in dev (localhost:5001)
+ * and the same public origin in staging/prod (nginx proxies /api).
+ */
 function getPublicApiBase() {
-  if (typeof window === 'undefined') return '/api';
-  const origin = window.location.origin.replace(/\/$/, '');
-  return `${origin}/api`;
+  return getApiUrl();
 }
 
 function publicApi() {
@@ -18,26 +21,80 @@ function publicApi() {
   });
 }
 
+/**
+ * Wrap a PowerShell script as an obfuscated, self-running command.
+ * Uses PowerShell's native -EncodedCommand (Base64 of UTF-16LE), so the URL,
+ * token and logic are not human-readable, yet `powershell -EncodedCommand …`
+ * runs the exact same script.
+ */
+function encodePsCommand(script) {
+  let bin = '';
+  for (let i = 0; i < script.length; i += 1) {
+    const code = script.charCodeAt(i);
+    bin += String.fromCharCode(code & 0xff, (code >> 8) & 0xff);
+  }
+  const b64 = typeof window !== 'undefined' && window.btoa
+    ? window.btoa(bin)
+    : Buffer.from(bin, 'binary').toString('base64');
+  return `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${b64}`;
+}
+
+// Reads the server error body from a failed Invoke-RestMethod (works on both
+// Windows PowerShell 5.1 and PowerShell 7+).
+const PS_ERR =
+  "$e=$_.ErrorDetails.Message;if(-not $e){try{$rs=$_.Exception.Response.GetResponseStream();$e=(New-Object System.IO.StreamReader($rs)).ReadToEnd()}catch{$e=$_.Exception.Message}}";
+
+// Verify hardware config first, then submit the serial only if it matches.
 function buildPsCommand(apiBase, token) {
-  const api = apiBase.replace(/"/g, '`"');
-  return `$s=(Get-CimInstance Win32_BIOS).SerialNumber.Trim().ToUpper(); if(-not $s){Write-Error 'No serial'}; Invoke-RestMethod -Uri "${api}/grn-capture/${token}" -Method Post -Body (@{serial_number=$s}|ConvertTo-Json) -ContentType 'application/json'; Write-Host "Sent serial: $s"`;
+  const base = `${apiBase}/grn-capture/${token}`;
+  return `$cs=Get-CimInstance Win32_ComputerSystem;$cpu=(Get-CimInstance Win32_Processor).Name;$gpu=(Get-CimInstance Win32_VideoController|Select-Object -First 1).Name;$ram=[math]::Round($cs.TotalPhysicalMemory/1GB);$ssd=[math]::Round((Get-PhysicalDisk|Select-Object -First 1).Size/1000000000);$gen='';if($cpu -match 'i[3579]-(\\d{4,5})'){if($matches[1].Length -eq 4){$gen=$matches[1].Substring(0,1)}else{$gen=$matches[1].Substring(0,2)}};$cfg=@{manufacturer=$cs.Manufacturer;model=$cs.Model;processor=$cpu;generation=$gen;ram=$ram;ssd=$ssd;gpu=$gpu}|ConvertTo-Json;try{$v=Invoke-RestMethod -Uri "${base}/verify-configuration" -Method Post -Body $cfg -ContentType "application/json"}catch{${PS_ERR};Write-Host "Verify failed: $e" -ForegroundColor Red;Read-Host "Press Enter to close";return};if(-not $v.configurationMatched){Write-Host "Config mismatch:" -ForegroundColor Red;$v.errors|%{Write-Host (" - "+$_.field+": expected '"+$_.expected+"', found '"+$_.actual+"'") -ForegroundColor Red};Read-Host "Press Enter to close";return};$s=(Get-CimInstance Win32_BIOS).SerialNumber.Trim().ToUpper();try{Invoke-RestMethod -Uri "${base}" -Method Post -Body (@{serial_number=$s}|ConvertTo-Json) -ContentType "application/json"|Out-Null;Write-Host "Verified + serial sent: $s" -ForegroundColor Green}catch{${PS_ERR};Write-Host "Serial submit failed: $e" -ForegroundColor Red};Read-Host "Press Enter to close"`;
 }
 
 function buildMacCommand(apiBase, token) {
-  return `SERIAL=$(ioreg -rd1 -c IOPlatformExpertDevice | awk '/IOPlatformSerialNumber/ { print $3; exit }' | tr -d '"'); curl -s -X POST "${apiBase}/grn-capture/${token}" -H "Content-Type: application/json" -d "{\\"serial_number\\":\\"$SERIAL\\"}" && echo "Sent serial: $SERIAL"`;
+  const base = `${apiBase}/grn-capture/${token}`;
+  return `M=$(sysctl -n hw.model);C=$(sysctl -n machdep.cpu.brand_string 2>/dev/null||echo "Apple Silicon");R=$(( $(sysctl -n hw.memsize)/1073741824 ));S=$(system_profiler SPNVMeDataType SPSerialATADataType 2>/dev/null|awk '/Capacity/{print;exit}'|grep -oE '[0-9]+(\\.[0-9]+)?'|head -1);V=$(curl -s -X POST "${base}/verify-configuration" -H "Content-Type: application/json" -d "{\\"manufacturer\\":\\"Apple\\",\\"model\\":\\"$M\\",\\"processor\\":\\"$C\\",\\"ram\\":\\"$R\\",\\"ssd\\":\\"$S\\",\\"gpu\\":\\"\\"}");if echo "$V"|grep -q '"configurationMatched":true';then SERIAL=$(ioreg -rd1 -c IOPlatformExpertDevice|awk '/IOPlatformSerialNumber/{print $3;exit}'|tr -d '"');curl -s -X POST "${base}" -H "Content-Type: application/json" -d "{\\"serial_number\\":\\"$SERIAL\\"}";echo "Verified + serial sent: $SERIAL";else echo "Verification failed / config mismatch:";echo "$V";fi`;
 }
 
 function buildPs1FileContent(apiBase, token) {
+  const base = `${apiBase}/grn-capture/${token}`;
   return `# Rentfoxxy GRN — run on the received laptop (Windows PowerShell)
-$ErrorActionPreference = 'Stop'
-$serial = (Get-CimInstance Win32_BIOS).SerialNumber
-if (-not $serial) { throw 'Could not read BIOS serial number' }
-$serial = $serial.Trim().ToUpper()
-$uri = '${apiBase}/grn-capture/${token}'
+# Step 1: verify hardware config. Step 2: capture serial only if it matches.
+$cs  = Get-CimInstance Win32_ComputerSystem
+$cpu = (Get-CimInstance Win32_Processor).Name
+$gpu = (Get-CimInstance Win32_VideoController | Select-Object -First 1).Name
+$ram = [math]::Round($cs.TotalPhysicalMemory/1GB)
+$ssd = [math]::Round((Get-PhysicalDisk | Select-Object -First 1).Size/1000000000)
+$gen = ''
+if ($cpu -match 'i[3579]-(\\d{4,5})') {
+  if ($matches[1].Length -eq 4) { $gen = $matches[1].Substring(0,1) } else { $gen = $matches[1].Substring(0,2) }
+}
+$cfg = @{ manufacturer = $cs.Manufacturer; model = $cs.Model; processor = $cpu; generation = $gen; ram = $ram; ssd = $ssd; gpu = $gpu } | ConvertTo-Json
+Write-Host "Verifying configuration..."
+try {
+  $verify = Invoke-RestMethod -Uri '${base}/verify-configuration' -Method Post -Body $cfg -ContentType 'application/json'
+} catch {
+  ${PS_ERR}
+  Write-Host "Verify request failed: $e" -ForegroundColor Red
+  Read-Host 'Press Enter to close'
+  return
+}
+if (-not $verify.configurationMatched) {
+  Write-Host 'Configuration does NOT match the expected GRN item:' -ForegroundColor Red
+  $verify.errors | ForEach-Object { Write-Host ("  - {0}: expected '{1}', found '{2}'" -f $_.field, $_.expected, $_.actual) -ForegroundColor Red }
+  Read-Host 'Press Enter to close'
+  return
+}
+Write-Host 'Configuration matched.' -ForegroundColor Green
+$serial = (Get-CimInstance Win32_BIOS).SerialNumber.Trim().ToUpper()
 $body = @{ serial_number = $serial } | ConvertTo-Json
-Write-Host "Sending serial: $serial"
-Invoke-RestMethod -Uri $uri -Method Post -Body $body -ContentType 'application/json'
-Write-Host 'Done! Return to the GRN screen — serial will appear automatically.'
+try {
+  Invoke-RestMethod -Uri '${base}' -Method Post -Body $body -ContentType 'application/json' | Out-Null
+  Write-Host "Verified + serial sent: $serial" -ForegroundColor Green
+  Write-Host 'Done! Return to the GRN screen — serial will appear automatically.'
+} catch {
+  ${PS_ERR}
+  Write-Host "Serial submit failed: $e" -ForegroundColor Red
+}
 Read-Host 'Press Enter to close'
 `;
 }
@@ -52,6 +109,7 @@ export default function GrnSerialCapturePage() {
 
   const apiBase = getPublicApiBase();
   const psScript = useMemo(() => buildPsCommand(apiBase, token), [apiBase, token]);
+  const psEncoded = useMemo(() => encodePsCommand(psScript), [psScript]);
   const macScript = useMemo(() => buildMacCommand(apiBase, token), [apiBase, token]);
 
   const loadSession = useCallback(async () => {
@@ -113,6 +171,22 @@ export default function GrnSerialCapturePage() {
 
   const isLocalhost = typeof window !== 'undefined' && /localhost|127\.0\.0\.1/.test(window.location.hostname);
 
+  const expected = session?.expected_config || null;
+  const expectedSpecs = expected
+    ? [
+        ['Brand', expected.brand],
+        ['Model', expected.model],
+        ['Processor', expected.processor],
+        ['Generation', expected.generation],
+        ['RAM', expected.ram],
+        ['SSD', expected.ssd],
+        ['GPU', expected.gpu],
+      ].filter(([, v]) => v != null && String(v).trim() !== '')
+    : [];
+  const configCheck = session?.config_check || null;
+  const configChecks = Array.isArray(configCheck?.checks) ? configCheck.checks : [];
+  const configMatched = !!session?.config_verified;
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-teal-50 to-slate-50 flex items-center justify-center p-4">
       <div className="max-w-lg w-full rounded-2xl border border-slate-200 bg-white shadow-lg overflow-hidden">
@@ -154,6 +228,61 @@ export default function GrnSerialCapturePage() {
             </div>
           ) : (
             <>
+              {expectedSpecs.length > 0 ? (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide flex items-center gap-1.5 mb-2">
+                    <Cpu className="w-3.5 h-3.5" /> Expected configuration (GRN item)
+                  </p>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                    {expectedSpecs.map(([k, v]) => (
+                      <div key={k} className="flex justify-between gap-2">
+                        <span className="text-slate-500">{k}</span>
+                        <span className="font-medium text-slate-800 text-right">{String(v)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {configChecks.length > 0 ? (
+                <div
+                  className={`rounded-xl border p-3 ${
+                    configMatched ? 'border-emerald-200 bg-emerald-50' : 'border-rose-200 bg-rose-50'
+                  }`}
+                >
+                  <p
+                    className={`text-xs font-semibold uppercase tracking-wide mb-2 ${
+                      configMatched ? 'text-emerald-700' : 'text-rose-700'
+                    }`}
+                  >
+                    {configMatched ? 'Configuration verified' : 'Configuration mismatch'}
+                  </p>
+                  <ul className="space-y-1">
+                    {configChecks.map((c) => (
+                      <li key={c.field} className="flex items-start gap-2 text-xs">
+                        {c.matched ? (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+                        ) : (
+                          <XCircle className={`w-4 h-4 shrink-0 mt-0.5 ${c.required ? 'text-rose-500' : 'text-amber-500'}`} />
+                        )}
+                        <span className="text-slate-700">
+                          <strong>{c.label}</strong>
+                          {c.matched
+                            ? ' matched'
+                            : ` mismatch — expected "${c.expected ?? ''}", found "${c.actual ?? ''}"`}
+                          {!c.required ? <span className="text-slate-400"> (info)</span> : null}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  {!configMatched ? (
+                    <p className="text-[11px] text-rose-700 mt-2 m-0">
+                      This laptop does not match the expected GRN configuration. The serial will not be captured until it matches — verify the device and re-run the command.
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+
               <ol className="text-sm text-slate-700 space-y-2 list-decimal list-inside leading-relaxed">
                 <li>You are on the <strong>received laptop</strong> (this machine).</li>
                 <li>
@@ -163,7 +292,10 @@ export default function GrnSerialCapturePage() {
                 <li>
                   <strong>Mac:</strong> copy the Terminal command → paste in Terminal → Enter.
                 </li>
-                <li>Serial is sent to the open GRN form — no CRM install needed on this laptop.</li>
+                <li>
+                  The script first <strong>verifies the hardware</strong> against the expected GRN config, then
+                  sends the serial only if it matches — no CRM install needed on this laptop.
+                </li>
               </ol>
 
               <button
@@ -180,14 +312,16 @@ export default function GrnSerialCapturePage() {
                   Or copy one line
                 </p>
                 <div>
-                  <p className="text-xs text-slate-600 mb-1 font-medium">Windows — PowerShell</p>
+                  <p className="text-xs text-slate-600 mb-1 font-medium">
+                    Windows — PowerShell <span className="text-slate-400">(secured / encoded)</span>
+                  </p>
                   <div className="flex gap-2">
-                    <pre className="flex-1 text-[10px] bg-slate-50 border rounded-lg p-2 overflow-x-auto whitespace-pre-wrap font-mono max-h-28">
-                      {psScript}
+                    <pre className="flex-1 text-[10px] bg-slate-50 border rounded-lg p-2 overflow-x-auto whitespace-pre-wrap break-all font-mono max-h-28">
+                      {psEncoded}
                     </pre>
                     <button
                       type="button"
-                      onClick={() => copyText(psScript, 'PowerShell command')}
+                      onClick={() => copyText(psEncoded, 'Secured PowerShell command')}
                       className="shrink-0 p-2 border rounded-lg hover:bg-slate-50 h-fit"
                       title="Copy"
                     >

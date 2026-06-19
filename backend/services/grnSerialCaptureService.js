@@ -94,6 +94,9 @@ async function getTokenStatus(tokenId) {
     line_index: row.line_index,
     expires_at: row.expires_at,
     captured_at: row.captured_at,
+    config_verified: row.config_verified,
+    config_check: row.config_check,
+    actual_config: row.actual_config,
   };
 }
 
@@ -116,6 +119,15 @@ async function submitCapturedSerial(tokenId, serialNumber) {
       [tokenId]
     );
     return { ok: false, code: 410, message: 'Capture link expired — ask the receiver to generate a new link' };
+  }
+
+  // Hardware config must be verified (and matched) before the serial is accepted.
+  if (!row.config_verified) {
+    return {
+      ok: false,
+      code: 428,
+      message: 'Verify the laptop configuration before submitting the serial number',
+    };
   }
 
   const serial = String(serialNumber || '').trim().toUpperCase();
