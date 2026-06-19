@@ -2,10 +2,12 @@ const { validationResult, body, param } = require('express-validator');
 const {
   createCaptureToken,
   getTokenStatus,
+  getTokenRow,
   submitCapturedSerial,
   apiBaseUrl,
 } = require('../services/grnSerialCaptureService');
 const grnAccessService = require('../services/grnAccessService');
+const grnConfigService = require('../services/grnConfigService');
 
 /** Authenticated — create a capture link for one unit in a GRN receive batch */
 const createTokenValidators = [
@@ -80,6 +82,10 @@ async function getPublicCaptureSession(req, res) {
   try {
     const status = await getTokenStatus(req.params.token);
     if (!status) return res.status(404).json({ success: false, message: 'Link not found or expired' });
+    let expectedConfig = null;
+    try {
+      expectedConfig = await grnConfigService.loadExpectedConfig(status.po_id, status.line_index);
+    } catch (_) { /* expected config is best-effort */ }
     res.json({
       success: true,
       data: {
@@ -90,10 +96,60 @@ async function getPublicCaptureSession(req, res) {
         total_units: status.total_units,
         po_id: status.po_id,
         expires_at: status.expires_at,
+        config_verified: status.config_verified,
+        config_check: status.config_check,
+        actual_config: status.actual_config,
+        expected_config: expectedConfig,
       },
     });
   } catch (e) {
     console.error('getPublicCaptureSession:', e);
+    res.status(500).json({ success: false, message: e.message });
+  }
+}
+
+/** Public — verify the actual laptop config matches the expected GRN item config */
+const verifyConfigValidators = [param('token').isUUID()];
+
+async function verifyCaptureConfiguration(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  try {
+    const tokenRow = await getTokenRow(req.params.token);
+    if (!tokenRow) {
+      return res.status(404).json({ success: false, message: 'Capture link not found or expired' });
+    }
+    if (tokenRow.status !== 'pending') {
+      return res.status(409).json({ success: false, message: 'This capture link is no longer active' });
+    }
+    if (tokenRow.expires_at && new Date(tokenRow.expires_at) < new Date()) {
+      return res.status(410).json({ success: false, message: 'Capture link expired — ask the receiver to generate a new link' });
+    }
+
+    const body = req.body || {};
+    const actual = {
+      manufacturer: body.manufacturer ?? body.brand ?? '',
+      model: body.model ?? '',
+      processor: body.processor ?? '',
+      generation: body.generation ?? '',
+      ram: body.ram ?? '',
+      ssd: body.ssd ?? body.storage ?? '',
+      gpu: body.gpu ?? '',
+    };
+
+    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip;
+    const result = await grnConfigService.verifyConfiguration({ tokenRow, actual, ip });
+
+    return res.json({
+      success: result.configurationMatched,
+      configurationMatched: result.configurationMatched,
+      checks: result.checks,
+      errors: result.errors,
+      expected: result.expected,
+    });
+  } catch (e) {
+    console.error('verifyCaptureConfiguration:', e);
     res.status(500).json({ success: false, message: e.message });
   }
 }
@@ -129,6 +185,8 @@ module.exports = {
   createGrnCaptureToken,
   getGrnCaptureTokenStatus,
   getPublicCaptureSession,
+  verifyConfigValidators,
+  verifyCaptureConfiguration,
   submitCaptureValidators,
   submitPublicCaptureSerial,
 };
