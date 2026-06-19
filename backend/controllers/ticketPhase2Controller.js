@@ -260,19 +260,6 @@ exports.moveToStage = async (req, res) => {
       return res.status(400).json({ success: false, message: transition.message });
     }
 
-    // Block forward stage moves while open part requests exist. Backward/fail
-    // transitions (e.g. QC fail) and privileged roles may still move.
-    const isBackwardMove = transition.rule?.is_backward
-      || (conditionHint && String(conditionHint).includes('failed'));
-    const openPartRequests = Number(ticket.open_part_requests) || 0;
-    if (!privileged && !isBackwardMove && openPartRequests > 0) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({
-        success: false,
-        message: `Resolve ${openPartRequests} open part request(s) before moving to the next stage`,
-      });
-    }
-
     const updates = [];
     const params = [];
     let pi = 1;

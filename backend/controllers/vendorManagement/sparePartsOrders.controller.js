@@ -768,41 +768,6 @@ async function receiveSpareLineSerial(req, res) {
     payload: { spo_id: spoId, grn_id: finalGrnId, line_index: lineIndex }
   });
 
-  // Parts-management bridge (migration 088): when the SPO line is explicitly
-  // mapped to a floor parts-catalog entry (`parts_catalog_id`), mint a PRT
-  // instance into floor stock and auto-link the oldest open procurement request
-  // for that part. Best-effort: never block the vendor receive on failure.
-  try {
-    const partsCatalogId = line.parts_catalog_id ?? line.floor_part_id ?? null;
-    if (partsCatalogId != null && String(partsCatalogId).trim() !== '') {
-      const { createPartInstances } = require('../../services/partIdService');
-      const instances = await createPartInstances({
-        partId: Number(partsCatalogId),
-        quantity: 1,
-        unitCost: Number(line.unit_price ?? line.rate ?? 0),
-        locationCode: line.location_code || null,
-        spoId,
-        grnId: finalGrnId,
-        batchNumber: line.batch_number || null,
-        receivedBy: req.user?.user_id || null,
-      });
-      if (instances[0]) {
-        await pool.query(
-          `UPDATE part_requests
-              SET status='received', instance_id=$1, updated_at=NOW()
-            WHERE request_id = (
-              SELECT request_id FROM part_requests
-               WHERE part_id=$2 AND status IN ('escalated','ordered') AND instance_id IS NULL
-               ORDER BY created_at ASC LIMIT 1
-            )`,
-          [instances[0].instance_id, Number(partsCatalogId)]
-        );
-      }
-    }
-  } catch (bridgeErr) {
-    console.error('parts-management SPO receive bridge:', bridgeErr.message);
-  }
-
   const qtyMaps2 = await buildReceivedQtyMapsForSpoIds([spoId]);
   const lines2 = enrichSpareLinesWithReceived(parseLineItemsJson(spo.line_items), qtyMaps2.get(spoId));
 

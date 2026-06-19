@@ -92,54 +92,6 @@ export function addPartWithConfig(id, body) {
   return api.post(`${base}/${id}/parts-with-config`, body);
 }
 
-// ── Parts Management Flow (Phase 16) ──────────────────────────────
-const partReqBase = '/part-requests';
-
-export function listTicketPartRequests(ticketId) {
-  return api.get(partReqBase, { params: { ticket_id: ticketId } });
-}
-
-export function createPartRequest(body) {
-  return api.post(partReqBase, body);
-}
-
-export function attachPartToRequest(requestId, body) {
-  return api.post(`${partReqBase}/${requestId}/attach`, body);
-}
-
-export function cancelPartRequest(requestId) {
-  return api.patch(`${partReqBase}/${requestId}/cancel`);
-}
-
-export function fetchPartCostSummary(ttsplId) {
-  return api.get(`${partReqBase}/cost-summary/${encodeURIComponent(ttsplId)}`);
-}
-
-// Warehouse / procurement queues + actions
-export function fetchWarehousePartQueue() {
-  return api.get(`${partReqBase}/warehouse-queue`);
-}
-
-export function fetchProcurementPartQueue() {
-  return api.get(`${partReqBase}/procurement-queue`);
-}
-
-export function approvePartRequest(requestId, body) {
-  return api.patch(`${partReqBase}/${requestId}/approve`, body);
-}
-
-export function rejectPartRequest(requestId, body) {
-  return api.patch(`${partReqBase}/${requestId}/reject`, body);
-}
-
-export function escalatePartRequest(requestId, body) {
-  return api.patch(`${partReqBase}/${requestId}/escalate`, body);
-}
-
-export function linkPartRequestToSpo(requestId, body) {
-  return api.patch(`${partReqBase}/${requestId}/link-spo`, body);
-}
-
 export function logTicketNote(id, body) {
   return api.post(`${base}/${id}/log-note`, body);
 }
