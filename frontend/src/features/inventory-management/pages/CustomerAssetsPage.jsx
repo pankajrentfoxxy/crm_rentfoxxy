@@ -6,6 +6,7 @@ import { fetchCustomerAssets } from '../inventoryManagementApi';
 
 const STATUS_TABS = [
   { key: '', label: 'All' },
+  { key: 'reserved', label: 'Allocated' },
   { key: 'in_transit', label: 'In Transit' },
   { key: 'rented', label: 'On Rent' },
   { key: 'on_demo', label: 'On Demo' },
@@ -13,6 +14,7 @@ const STATUS_TABS = [
 ];
 
 const STATUS_STYLES = {
+  reserved: 'bg-slate-100 text-slate-700',
   in_transit: 'bg-amber-100 text-amber-800',
   rented: 'bg-blue-100 text-blue-800',
   on_demo: 'bg-violet-100 text-violet-800',
@@ -24,7 +26,7 @@ const fmtMoney = (n) => (n != null && n !== '' ? `₹${Number(n).toLocaleString(
 
 export default function CustomerAssetsPage() {
   const [rows, setRows] = useState([]);
-  const [counts, setCounts] = useState({ all: 0, in_transit: 0, rented: 0, on_demo: 0, sold: 0 });
+  const [counts, setCounts] = useState({ all: 0, reserved: 0, in_transit: 0, rented: 0, on_demo: 0, sold: 0 });
   const [status, setStatus] = useState('');
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);

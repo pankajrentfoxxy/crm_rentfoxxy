@@ -303,7 +303,9 @@ async function changeSparePartStatus(req, res) {
 // Derived live from vendor_serial_numbers (single source of truth):
 // any unit that has left the warehouse to a customer.
 // ─────────────────────────────────────────────────────────────
-const DEPLOYED_STATUSES = ['in_transit', 'rented', 'on_demo', 'sold'];
+// 'reserved' = attached to an order but not yet dispatched; it has left the
+// rentable shelf and is now allocated to a customer, so it belongs here.
+const DEPLOYED_STATUSES = ['reserved', 'in_transit', 'rented', 'on_demo', 'sold'];
 
 const customerAssetsValidators = [
   query('page').optional().isInt({ min: 1 }).toInt(),
@@ -382,7 +384,7 @@ async function customerAssets(req, res) {
        GROUP BY s.inventory_status`,
       breakdownParams
     );
-    const counts = { in_transit: 0, rented: 0, on_demo: 0, sold: 0, all: 0 };
+    const counts = { reserved: 0, in_transit: 0, rented: 0, on_demo: 0, sold: 0, all: 0 };
     breakdownR.rows.forEach((r) => { counts[r.inventory_status] = r.c; counts.all += r.c; });
 
     const listParams = [...params, limit, offset];
@@ -438,18 +440,22 @@ async function customerAssets(req, res) {
   }
 }
 
+// Disposition tag: 'rental' | 'sale' | 'both'. ('sales' kept for backward
+// compatibility with previously stored values; normalised to 'sale'.)
+const INVENTORY_TAGS = ['rental', 'sale', 'sales', 'both'];
+
 const tagInventoryValidators = [
   param('id').isInt().toInt(),
-  body('tag').isIn(['rental', 'sales'])
+  body('tag').isIn(INVENTORY_TAGS)
 ];
 
-/** Tag vendor serial as rental or sales (stored in extra.inventory_tag) */
+/** Tag a vendor serial as rental / sale / both (stored in extra.inventory_tag) */
 async function tagInventoryItem(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
 
   const serialId = req.params.id;
-  const tag = req.body.tag;
+  const tag = req.body.tag === 'sales' ? 'sale' : req.body.tag;
 
   try {
     const cur = await pool.query(
