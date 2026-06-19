@@ -186,6 +186,14 @@ async function getListCounts(req, res) {
       }
     }
     counts.npa = 0;
+    try {
+      const pr = await pool.query(
+        `SELECT COUNT(*)::int AS c FROM part_requests WHERE status IN ('pending','received')`
+      );
+      counts.parts_pending = pr.rows[0]?.c || 0;
+    } catch (_) {
+      counts.parts_pending = 0;
+    }
     res.json({ success: true, counts });
   } catch (e) {
     console.error('getListCounts', e);

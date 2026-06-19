@@ -11,6 +11,7 @@ import SerialNumberStatusPage from './pages/SerialNumberStatusPage';
 import UniversalSearchPage from './pages/UniversalSearchPage';
 import NpaAssetsPage from './pages/NpaAssetsPage';
 import PartsPage from './pages/PartsPage';
+import PartsApprovalPage from './pages/PartsApprovalPage';
 import CustomerAssetsPage from './pages/CustomerAssetsPage';
 
 /**
@@ -50,6 +51,7 @@ export default function InventoryManagementApp() {
         <Route path="out-for-repare" element={<OutForReparePage />} />
         <Route path="spare-parts" element={<SparePartsInventoryPage />} />
         <Route path="parts" element={<PartsPage />} />
+        <Route path="parts-approval" element={<PartsApprovalPage />} />
         <Route path="serial-number-status" element={<SerialNumberStatusPage />} />
         <Route path="universal-search" element={<UniversalSearchPage />} />
         <Route path="npa-assets" element={<NpaAssetsPage />} />

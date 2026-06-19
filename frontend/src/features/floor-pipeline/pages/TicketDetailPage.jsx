@@ -345,6 +345,7 @@ export default function TicketDetailPage() {
   if (!ticket) return <p className="text-red-600">Ticket not found</p>;
 
   const pri = priorityBadge(ticket.priority);
+  const hasOpenPartRequest = (ticket.open_part_requests || 0) > 0;
   const stageButtons = [];
 
   if (fm && stage === 'Floor Manager') {
@@ -514,6 +515,8 @@ export default function TicketDetailPage() {
               ticket={ticket}
               parts={data.parts}
               configHistory={configHistory}
+              partRequests={data.part_requests}
+              isAssignee={isAssignee}
               onUpdated={load}
             />
           )}
@@ -634,13 +637,26 @@ export default function TicketDetailPage() {
                     onChange={(e) => setFailReason(e.target.value)}
                   />
                 ) : null}
+                {hasOpenPartRequest ? (
+                  <div className="mb-3 flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-900">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-semibold">Blocked — {ticket.open_part_requests} part request(s) pending</p>
+                      <button type="button" onClick={() => setTab('parts')} className="underline mt-0.5">View &amp; resolve in Parts &amp; Config</button>
+                    </div>
+                  </div>
+                ) : null}
                 <div className="space-y-2">
-                  {stageButtons.map((btn) => (
+                  {stageButtons.map((btn) => {
+                    const blockedAdvance = hasOpenPartRequest && (btn.primary || btn.success);
+                    return (
                     <div key={btn.label}>
                       <button
                         type="button"
                         onClick={btn.action}
-                        className={`w-full py-2 rounded-lg text-xs font-semibold ${
+                        disabled={blockedAdvance}
+                        title={blockedAdvance ? 'Resolve pending part requests first' : undefined}
+                        className={`w-full py-2 rounded-lg text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed ${
                           btn.primary ? 'bg-blue-600 text-white' :
                           btn.success ? 'bg-green-600 text-white' :
                           btn.danger || btn.destructive ? 'bg-red-700 text-white' :
@@ -669,7 +685,8 @@ export default function TicketDetailPage() {
                         </p>
                       ) : null}
                     </div>
-                  ))}
+                  );
+                  })}
                 </div>
                 {STAGE_TASK_STAGES.includes(stage) ? (
                   <p className="text-xs text-slate-400 mt-2 text-center">

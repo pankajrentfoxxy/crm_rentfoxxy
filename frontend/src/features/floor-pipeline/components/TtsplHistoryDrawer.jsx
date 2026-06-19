@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Loader2, X } from 'lucide-react';
-import { fetchTtsplHistory } from '../floorPipelineApi';
+import { fetchTtsplHistory, fetchPartCostSummary } from '../floorPipelineApi';
 import { EVENT_ICONS } from '../floorPipelineUi';
 
 export default function TtsplHistoryDrawer({ ttsplId, open, onClose }) {
@@ -8,18 +8,30 @@ export default function TtsplHistoryDrawer({ ttsplId, open, onClose }) {
   const [auditLog, setAuditLog] = useState([]);
   const [configHistory, setConfigHistory] = useState([]);
   const [costSummary, setCostSummary] = useState(null);
+  const [partsBreakdown, setPartsBreakdown] = useState([]);
 
   useEffect(() => {
     if (!open || !ttsplId) return;
     let cancelled = false;
     setLoading(true);
-    fetchTtsplHistory(ttsplId)
-      .then(({ data }) => {
+    Promise.all([
+      fetchTtsplHistory(ttsplId),
+      fetchPartCostSummary(ttsplId).catch(() => ({ data: {} })),
+    ])
+      .then(([histRes, costRes]) => {
         if (cancelled) return;
-        if (data.success) {
-          setAuditLog(data.auditLog || []);
-          setConfigHistory(data.configHistory || []);
-          setCostSummary(data.costSummary || null);
+        if (histRes.data.success) {
+          setAuditLog(histRes.data.auditLog || []);
+          setConfigHistory(histRes.data.configHistory || []);
+          setCostSummary(histRes.data.costSummary || null);
+        }
+        if (costRes.data?.success) {
+          setPartsBreakdown(costRes.data.parts_breakdown || []);
+          setCostSummary((prev) => ({
+            parts_cost: costRes.data.parts_cost ?? prev?.parts_cost ?? 0,
+            base_cost: costRes.data.base_cost ?? prev?.base_cost ?? 0,
+            total_cost: costRes.data.total_expense ?? prev?.total_cost ?? 0,
+          }));
         }
       })
       .finally(() => {
@@ -136,9 +148,35 @@ export default function TtsplHistoryDrawer({ ttsplId, open, onClose }) {
                   <p className="text-sm text-slate-500 mb-3">No parts upgrades recorded</p>
                 )}
               </section>
-              <section className="rounded-xl border border-gray-100 bg-slate-50 p-4 text-sm space-y-1">
-                <h3 className="font-semibold text-slate-800 mb-2">Cost Summary</h3>
+              <section className="rounded-xl border border-gray-100 bg-slate-50 p-4 text-sm space-y-2">
+                <h3 className="font-semibold text-slate-800">Laptop Expense Summary</h3>
                 <p>Base cost (PO rate): ₹{baseCost.toFixed(2)}</p>
+                {partsBreakdown.length ? (
+                  <div className="rounded-lg border bg-white overflow-hidden">
+                    <table className="min-w-full text-xs">
+                      <thead className="bg-slate-50 text-slate-500">
+                        <tr>
+                          <th className="px-2 py-1.5 text-left">PRT-ID</th>
+                          <th className="px-2 py-1.5 text-left">Part</th>
+                          <th className="px-2 py-1.5 text-left">Type</th>
+                          <th className="px-2 py-1.5 text-left">Date</th>
+                          <th className="px-2 py-1.5 text-right">Cost</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {partsBreakdown.map((b) => (
+                          <tr key={b.prt_id} className="border-t">
+                            <td className="px-2 py-1.5 font-mono text-blue-700">{b.prt_id}</td>
+                            <td className="px-2 py-1.5">{b.part_name}</td>
+                            <td className="px-2 py-1.5 capitalize">{b.type || '—'}</td>
+                            <td className="px-2 py-1.5">{b.installed_at ? new Date(b.installed_at).toLocaleDateString() : '—'}</td>
+                            <td className="px-2 py-1.5 text-right">₹{parseFloat(b.unit_cost || 0).toFixed(0)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
                 <p>Parts cost: ₹{partsCost.toFixed(2)}</p>
                 <p className="font-semibold pt-1 border-t">Total cost of ownership: ₹{totalCost.toFixed(2)}</p>
               </section>
