@@ -149,9 +149,27 @@ function PassedStatusBadge() {
   );
 }
 
+const TAG_OPTIONS = [
+  { value: 'rental', label: 'Rental' },
+  { value: 'sale', label: 'Sale' },
+  { value: 'both', label: 'Both' }
+];
+
+// Legacy rows stored 'sales'; show it as 'sale'.
+function normalizeTag(tag) {
+  if (!tag) return null;
+  return tag === 'sales' ? 'sale' : tag;
+}
+
+const TAG_BADGE_STYLES = {
+  rental: 'bg-violet-100 text-violet-800',
+  sale: 'bg-emerald-100 text-emerald-800',
+  both: 'bg-sky-100 text-sky-800'
+};
+
 function InventoryTagButtons({ row, onUpdated }) {
   const [saving, setSaving] = useState(false);
-  const tag = row.inventory_tag || row.extra?.inventory_tag;
+  const tag = normalizeTag(row.inventory_tag || row.extra?.inventory_tag);
 
   const applyTag = async (next) => {
     setSaving(true);
@@ -172,19 +190,26 @@ function InventoryTagButtons({ row, onUpdated }) {
     <div className="flex flex-wrap gap-1 items-center">
       {tag ? (
         <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize ${
-          tag === 'rental' ? 'bg-violet-100 text-violet-800' : 'bg-emerald-100 text-emerald-800'
+          TAG_BADGE_STYLES[tag] || 'bg-slate-100 text-slate-700'
         }`}>
-          {tag}
+          {tag === 'both' ? 'Rental + Sale' : tag}
         </span>
       ) : (
         <span className="text-[10px] text-slate-400">Untagged</span>
       )}
-      <button type="button" disabled={saving} onClick={() => applyTag('rental')} className="text-[10px] px-2 py-0.5 rounded border hover:bg-slate-50">
-        Rental
-      </button>
-      <button type="button" disabled={saving} onClick={() => applyTag('sales')} className="text-[10px] px-2 py-0.5 rounded border hover:bg-slate-50">
-        Sales
-      </button>
+      {TAG_OPTIONS.map((opt) => (
+        <button
+          key={opt.value}
+          type="button"
+          disabled={saving || tag === opt.value}
+          onClick={() => applyTag(opt.value)}
+          className={`text-[10px] px-2 py-0.5 rounded border hover:bg-slate-50 disabled:opacity-40 ${
+            tag === opt.value ? 'border-slate-400 bg-slate-100 font-semibold' : ''
+          }`}
+        >
+          {opt.label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -356,12 +381,15 @@ export default function InventoryListTable({ routeKey }) {
         </div>
       ) : null}
       {showReadyToRentAction && selectedIds.length ? (
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => bulkTag('rental')} className="text-xs px-3 py-1.5 rounded-lg bg-violet-600 text-white">
             Tag as Rental ({selectedIds.length})
           </button>
-          <button type="button" onClick={() => bulkTag('sales')} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white">
-            Tag as Sales ({selectedIds.length})
+          <button type="button" onClick={() => bulkTag('sale')} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white">
+            Tag as Sale ({selectedIds.length})
+          </button>
+          <button type="button" onClick={() => bulkTag('both')} className="text-xs px-3 py-1.5 rounded-lg bg-sky-600 text-white">
+            Tag as Both ({selectedIds.length})
           </button>
         </div>
       ) : null}
