@@ -44,6 +44,61 @@ export const uploadBase = () => {
 
 export const podUrl = (path) => (path ? `${uploadBase()}/uploads/${path}` : null);
 
+// Client-side image compression so large phone-camera photos (often 5-15 MB)
+// are shrunk before upload and never trip the server's size limit. Resizes to a
+// max edge and re-encodes as JPEG, stepping quality down until under maxBytes.
+// Non-image files (e.g. PDF) and any failure fall back to the original file.
+export const compressImageFile = async (file, opts = {}) => {
+  const { maxDimension = 1600, quality = 0.7, maxBytes = 1.5 * 1024 * 1024 } = opts;
+  if (!file || !file.type || !file.type.startsWith('image/')) return file;
+
+  const readAsDataURL = (f) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(f);
+  });
+
+  const loadImage = (src) => new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+
+  const canvasToBlob = (canvas, q) => new Promise((resolve) => {
+    canvas.toBlob((b) => resolve(b), 'image/jpeg', q);
+  });
+
+  try {
+    const dataUrl = await readAsDataURL(file);
+    const img = await loadImage(dataUrl);
+    const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
+    const width = Math.max(1, Math.round(img.width * scale));
+    const height = Math.max(1, Math.round(img.height * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, width, height);
+
+    let q = quality;
+    let blob = await canvasToBlob(canvas, q);
+    while (blob && blob.size > maxBytes && q > 0.4) {
+      q -= 0.1;
+      // eslint-disable-next-line no-await-in-loop
+      blob = await canvasToBlob(canvas, q);
+    }
+    if (!blob) return file;
+
+    const baseName = (file.name || 'photo').replace(/\.[^.]+$/, '');
+    return new File([blob], `${baseName}.jpg`, { type: 'image/jpeg', lastModified: Date.now() });
+  } catch {
+    return file;
+  }
+};
+
 export const displayStatus = (ticket) => {
   if (ticket.status === 'closed') return { label: 'Closed', className: 'closed' };
   if (ticket.has_replacement_pending) return { label: 'Replacement pending', className: 'replacement' };

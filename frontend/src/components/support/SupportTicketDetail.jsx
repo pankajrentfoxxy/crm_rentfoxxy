@@ -19,7 +19,8 @@ import {
   formatAddress,
   initials,
   pickupMinScheduleDate,
-  podUrl as podUrlFor
+  podUrl as podUrlFor,
+  compressImageFile
 } from './utils';
 import './support.css';
 
@@ -321,7 +322,7 @@ function ItemCard({
             <p className="font-medium text-sm mb-2">Upload proof of completion</p>
             <label className="support-btn-outline inline-flex items-center justify-center cursor-pointer min-h-[44px]">
               Take photo / Upload file
-              <input type="file" accept="image/*,application/pdf" className="hidden" onChange={(e) => e.target.files?.[0] && run(() => { const fd = new FormData(); fd.append('pod', e.target.files[0]); return api.post(`/support/items/${item.id}/pod`, fd); })} />
+              <input type="file" accept="image/*,application/pdf" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) run(async () => { const compressed = await compressImageFile(file); const fd = new FormData(); fd.append('pod', compressed); return api.post(`/support/items/${item.id}/pod`, fd); }); }} />
             </label>
           </div>
         )}
@@ -408,7 +409,7 @@ function ItemCard({
             <p className="font-medium text-sm mb-2">Upload proof of completion after pickup</p>
             <label className="support-btn-outline inline-flex items-center justify-center cursor-pointer min-h-[44px]">
               Take photo / Upload file
-              <input type="file" accept="image/*,application/pdf" className="hidden" onChange={(e) => e.target.files?.[0] && run(() => { const fd = new FormData(); fd.append('pod', e.target.files[0]); return api.post(`/support/items/${item.id}/pod`, fd); })} />
+              <input type="file" accept="image/*,application/pdf" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) run(async () => { const compressed = await compressImageFile(file); const fd = new FormData(); fd.append('pod', compressed); return api.post(`/support/items/${item.id}/pod`, fd); }); }} />
             </label>
           </div>
         )}
