@@ -88,6 +88,7 @@ app.use('/api/leads', require('./routes/leads'));
 app.use('/api/customer-documents', require('./routes/customerDocuments'));
 app.use('/api/customer-inventory', require('./routes/customerInventory'));
 app.use('/api/support', require('./routes/support'));
+app.use('/api/support-parts', require('./routes/supportParts'));
 app.use('/api/vendor-management', require('./routes/vendorManagement'));
 app.use('/api/vendor-portal', require('./routes/vendorPortal'));
 app.use('/api/customer-portal', require('./routes/customerPortal'));

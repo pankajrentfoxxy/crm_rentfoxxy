@@ -216,6 +216,19 @@ export const MENU_GROUPS = [
         section: 'support_tickets',
         countKey: 'open_tickets',
       },
+      {
+        icon: ClipboardCheck,
+        label: 'Support Part Queue',
+        path: '/support-parts/queue',
+        section: 'support_part_challan',
+        countKey: 'support_part_requests',
+      },
+      {
+        icon: Package,
+        label: 'Technician Parts Bucket',
+        path: '/support-parts/tech-bucket',
+        section: 'support_part_requests',
+      },
     ],
   },
   {

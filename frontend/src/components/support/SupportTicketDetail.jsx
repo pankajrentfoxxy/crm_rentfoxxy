@@ -12,6 +12,7 @@ import TicketEditPanel from './components/TicketEditPanel';
 import DetailSidebar from './components/DetailSidebar';
 import ReplacementPanel from './components/ReplacementPanel';
 import AddWorkflowPhasePanel from './components/AddWorkflowPhasePanel';
+import RaisePartRequestForm from '../../features/support/components/RaisePartRequestForm';
 import {
   formatItemId,
   formatRelative,
@@ -192,6 +193,10 @@ function ItemCard({
             </p>
           )}
         </div>
+
+        {item.item_type === 'complaint' && canAct && !terminal && item.assigned_to && (
+          <RaisePartRequestForm ticket={ticket} item={item} />
+        )}
 
         {item.item_type === 'pickup' && item.loan_delivered_at && (
           <div className="support-pickup-notice !mx-0">

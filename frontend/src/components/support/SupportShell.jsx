@@ -24,6 +24,8 @@ const titles = {
   'my-tickets': 'My tickets',
   'my-resolved': 'Resolved by me',
   technicians: 'Technicians',
+  'tech-bucket': 'Parts bucket',
+  'parts-queue': 'Part queue',
   settings: 'Settings',
   new: 'New ticket'
 };
@@ -54,6 +56,7 @@ export default function SupportShell() {
     const path = location.pathname.replace(/^\/support\/?/, '');
     if (path.startsWith('tickets/new')) return titles.new;
     if (path.startsWith('tickets/')) return 'Ticket detail';
+    if (path.startsWith('challans/')) return 'Challan';
     const key = path.split('/')[0] || 'dashboard';
     return titles[key] || 'Support';
   }, [location.pathname]);
@@ -91,6 +94,7 @@ export default function SupportShell() {
               <div className="support-nav-label">Work</div>
               <NavItem to="/support/my-tickets" icon={ClipboardList} label="My tickets" badge={badges.my_open} badgeDanger />
               <NavItem to="/support/my-pickups" icon={Truck} label="My pickups" />
+              <NavItem to="/support/tech-bucket" icon={Package} label="My parts" />
               <NavItem to="/support/my-resolved" icon={CheckCircle2} label="Resolved by me" badge={badges.my_resolved} />
             </nav>
           ) : (
@@ -108,6 +112,10 @@ export default function SupportShell() {
               <NavItem to="/support/my-pickups" icon={Truck} label="My pickups" />
               <NavItem to="/support/complaints" icon={MessageSquare} label="Complaints" />
               <NavItem to="/support/my-resolved" icon={CheckCircle2} label="My resolved" badge={badges.my_resolved} />
+
+              <div className="support-nav-label">Parts</div>
+              <NavItem to="/support/parts-queue" icon={ClipboardList} label="Part queue" badge={badges.support_part_requests} badgeDanger />
+              <NavItem to="/support/tech-bucket" icon={Package} label="Parts bucket" />
 
               <div className="support-nav-label">Manage</div>
               {(user?.role === 'admin' || user?.role === 'manager' || user?.role === 'support_lead') && (

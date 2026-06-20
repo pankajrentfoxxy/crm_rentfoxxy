@@ -13,6 +13,9 @@ import SupportSettings from './SupportSettings';
 import SupportTechnicians from './SupportTechnicians';
 import MyDeliveriesPage from '../../features/sales-pipeline/pages/MyDeliveriesPage';
 import TechnicianBucketPage from '../../features/sales-pipeline/pages/TechnicianBucketPage';
+import SupportTechBucketPage from '../../features/support/pages/SupportTechBucketPage';
+import SupportPartsQueuePage from '../../features/support/pages/SupportPartsQueuePage';
+import ChallanViewPage from '../../features/support/pages/ChallanViewPage';
 
 function SupportHomeRedirect() {
   const { user } = useAuth();
@@ -42,6 +45,14 @@ function AdminOnly({ children }) {
   return children;
 }
 
+function PartsQueueOnly({ children }) {
+  const { user } = useAuth();
+  if (!['warehouse', 'admin', 'manager', 'support_lead', 'super_admin'].includes(user?.role)) {
+    return <Navigate to="/support/overview" replace />;
+  }
+  return children;
+}
+
 export default function SupportApp() {
   return (
     <Routes>
@@ -59,6 +70,9 @@ export default function SupportApp() {
         <Route path="my-pickups" element={<MyDeliveriesPage movement="return" />} />
         <Route path="pickup-bucket" element={<StatsOnly><TechnicianBucketPage movement="return" /></StatsOnly>} />
         <Route path="my-resolved" element={<SupportTicketsView view="my_resolved" showFilters />} />
+        <Route path="tech-bucket" element={<SupportTechBucketPage />} />
+        <Route path="parts-queue" element={<PartsQueueOnly><SupportPartsQueuePage /></PartsQueueOnly>} />
+        <Route path="challans/:challanId" element={<ChallanViewPage />} />
         <Route path="technicians" element={<LeadOnly><SupportTechnicians /></LeadOnly>} />
         <Route path="settings" element={<AdminOnly><SupportSettings /></AdminOnly>} />
         <Route path="tickets/new" element={<LeadOnly><SupportTicketCreate /></LeadOnly>} />
