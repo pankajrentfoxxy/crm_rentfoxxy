@@ -1428,16 +1428,6 @@ exports.logVisit = async (req, res) => {
         return res.status(403).json({ success: false, message: 'Not assigned to this item' });
     }
 
-    // Phase 18: technician must verify the laptop's TTSPL/serial before marking
-    // "reached" (only when the item actually carries an identifying code).
-    const expectedCode = (item.ttspl_id || item.unique_serial_number || item.serial_number || '').trim();
-    if (expectedCode && !item.ttspl_verified) {
-        return res.status(400).json({
-            success: false,
-            message: 'Verify the TTSPL ID / serial first before marking as reached'
-        });
-    }
-
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -1484,6 +1474,11 @@ exports.verifyTtspl = async (req, res) => {
     const item = itemRes.rows[0];
     if (item.assigned_to !== req.user.user_id && !isSupportLead(req.user)) {
         return res.status(403).json({ success: false, message: 'Not assigned to this item' });
+    }
+
+    // Step order: mark "reached" (capture GPS) before verifying the TTSPL ID.
+    if (!item.visited_at) {
+        return res.status(400).json({ success: false, message: 'Mark as reached first, then verify the TTSPL ID' });
     }
 
     const expectedTtspl = String(item.ttspl_id || item.unique_serial_number || '').trim().toUpperCase();

@@ -169,8 +169,8 @@ const isClosed = (item) => ['resolved', 'closed', 'inventory_updated'].includes(
 export const getItemStepperV3Complaint = (item) => {
   const es = item.effective_current_step || (item.assigned_to ? 'assigned' : 'unassigned');
   const steps = [
-    { key: 'verify', label: 'Verify' },
     { key: 'reached', label: 'Reached' },
+    { key: 'verify', label: 'Verify' },
     { key: 'outcome', label: 'Outcome' },
     { key: 'poc', label: 'Proof' },
     { key: 'otp', label: 'Customer OTP' },
@@ -178,8 +178,8 @@ export const getItemStepperV3Complaint = (item) => {
   ];
   const idxMap = {
     unassigned: 0,
-    verify_ttspl: 0,
-    assigned: 1,
+    assigned: 0,
+    verify_ttspl: 1,
     visited: 2,
     working: 2,
     replacement_required: 2,

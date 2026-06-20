@@ -19,13 +19,15 @@ const deriveComplaintStep = (item) => {
     return 'replacement_required';
   }
   if (!item.assigned_to) return 'unassigned';
-  if (!item.visited_at) {
-    // Phase 18: TTSPL/serial must be verified before the technician can mark reached.
-    // Only gates the pre-visit stage so items already visited keep progressing.
-    if (!item.ttspl_verified && (item.ttspl_id || item.unique_serial_number || item.serial_number)) {
-      return 'verify_ttspl';
-    }
-    return 'assigned';
+  // Step order: the technician first marks "reached" (capturing GPS), then
+  // verifies the laptop TTSPL/serial before recording an outcome.
+  if (!item.visited_at) return 'assigned';
+  if (
+    !item.ttspl_verified
+    && !item.outcome && !item.work_done_at && !item.pod_image_path
+    && (item.ttspl_id || item.unique_serial_number || item.serial_number)
+  ) {
+    return 'verify_ttspl';
   }
   if (item.outcome === 'working') return 'working';
   if (!item.outcome) {

@@ -204,7 +204,7 @@ function ItemCard({
 
         {item.item_type === 'complaint' && canAct && !terminal && st === 'verify_ttspl' && item.assigned_to && (
           <div className="space-y-2">
-            <p className="support-v3-section-label">Step 1 · Verify laptop TTSPL ID</p>
+            <p className="support-v3-section-label">Step 2 · Verify laptop TTSPL ID</p>
             <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
               Enter the TTSPL ID or serial number from the laptop label to confirm you are working on the correct machine.
             </p>
@@ -232,7 +232,7 @@ function ItemCard({
 
         {item.item_type === 'complaint' && canAct && !terminal && st === 'assigned' && item.assigned_to && (
           <div className="space-y-2">
-            <p className="support-v3-section-label">Step 2 · Mark as reached</p>
+            <p className="support-v3-section-label">Step 1 · Mark as reached</p>
             <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
               Tap when you arrive at the customer location. Your GPS location will be recorded.
             </p>
@@ -243,7 +243,7 @@ function ItemCard({
           </div>
         )}
 
-        {lead && item.visited_lat && item.visited_lng && (
+        {lead && !terminal && item.visited_lat && item.visited_lng && (
           <a
             href={`https://www.google.com/maps?q=${item.visited_lat},${item.visited_lng}`}
             target="_blank"
@@ -252,6 +252,34 @@ function ItemCard({
           >
             <MapPin className="w-3 h-3" /> View reached location
           </a>
+        )}
+
+        {/* Read-only proof & location for resolved/closed items (and any item with a POD). */}
+        {terminal && (podUrl || (item.visited_lat && item.visited_lng)) && (
+          <div className="support-v3-proof-view">
+            <p className="support-v3-section-label !mt-0">Proof of completion &amp; location</p>
+            <div className="support-v3-proof-row">
+              {item.visited_lat && item.visited_lng && (
+                <a
+                  href={`https://www.google.com/maps?q=${item.visited_lat},${item.visited_lng}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline min-h-[44px]"
+                >
+                  <MapPin className="w-4 h-4" /> View technician location
+                </a>
+              )}
+              {podUrl && (
+                <a href={podUrl} target="_blank" rel="noopener noreferrer" className="block">
+                  <img src={podUrl} alt="Proof of completion" className="support-v3-proof-thumb" />
+                  <span className="text-xs text-blue-600 hover:underline">Open full proof</span>
+                </a>
+              )}
+              {!podUrl && (
+                <span className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>No proof image was uploaded.</span>
+              )}
+            </div>
+          </div>
         )}
 
         {item.item_type === 'complaint' && st === 'picked_up_for_repair' && (

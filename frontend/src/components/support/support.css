@@ -609,6 +609,29 @@
   margin-top: 10px;
 }
 
+.support-v3-proof-view {
+  border: 0.5px solid var(--color-border, #e2e8f0);
+  background: var(--color-surface-muted, #f8fafc);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.support-v3-proof-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.support-v3-proof-thumb {
+  max-height: 140px;
+  max-width: 100%;
+  border-radius: 8px;
+  border: 0.5px solid var(--color-border, #e2e8f0);
+  display: block;
+  margin-bottom: 4px;
+}
+
 .support-v3-tabs {
   display: flex;
   width: 100%;
@@ -1221,6 +1244,53 @@
   /* Item card uses the full width on phones */
   .support-item-card.support-v3-card {
     border-radius: 16px;
+  }
+
+  /* Ticket detail: tighter cards so more content fits the viewport */
+  .support-v3-card {
+    padding: 12px;
+    border-radius: 14px;
+  }
+  .support-item-card.support-v3-card > div.p-4 {
+    padding: 12px;
+  }
+  .support-item-card-header {
+    padding: 10px 12px;
+  }
+  .support-ticket-title {
+    font-size: 17px;
+    line-height: 1.3;
+  }
+
+  /* Spec grid: two even columns instead of wide auto-fill tracks */
+  .support-v3-spec-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 10px;
+    padding: 10px;
+  }
+
+  /* Tabs fit as equal thirds without horizontal scrolling */
+  .support-v3-tabs {
+    gap: 6px;
+  }
+  .support-v3-tab {
+    min-width: 0;
+    font-size: 12px;
+    padding: 0 6px;
+  }
+
+  /* Item card header: keep the model name on its own line, pills below */
+  .support-item-card-header .support-pill {
+    font-size: 11px;
+  }
+
+  .support-v3-proof-thumb {
+    max-height: 120px;
+  }
+
+  /* Comfortable spacing between stacked action blocks */
+  .support-item-card.support-v3-card > div.p-4 > * + * {
+    margin-top: 12px;
   }
 }
 

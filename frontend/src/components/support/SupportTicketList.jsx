@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Loader2, Search, Plus, Download } from 'lucide-react';
+import { Loader2, Search, Download } from 'lucide-react';
 import api from '../../utils/api';
 import { isSupportLead } from '../../utils/supportAccess';
 import { useAuth } from '../../context/AuthContext';
-import { displayStatus, formatRelative, formatTicketId } from './utils';
+import { displayStatus, formatRelative, formatTicketId, podUrl } from './utils';
 import TtsplHistoryDrawer from '../../features/floor-pipeline/components/TtsplHistoryDrawer';
 
 const STATUS_TABS = [
@@ -188,15 +188,6 @@ export default function SupportTicketList() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <h1 className="text-xl font-bold text-slate-900">All tickets</h1>
-        {isSupportLead(user) && (
-          <Link to="/support/tickets/new" className="support-btn-primary inline-flex items-center gap-2">
-            <Plus className="w-4 h-4" /> New ticket
-          </Link>
-        )}
-      </div>
-
       <div className="flex flex-wrap gap-1 border-b border-slate-200 pb-1">
         {STATUS_TABS.map((tab) => {
           const count = tab.key === 'overdue' ? badges.overdue_tickets
@@ -360,6 +351,13 @@ export default function SupportTicketList() {
                     <td className="p-3">
                       <div className="flex flex-wrap gap-2">
                         <Link to={`/support/tickets/${ticket.id}`} className="text-blue-600 hover:underline text-xs">View</Link>
+                        {(() => {
+                          const podItem = (ticket.items || []).find((it) => it.proof_of_completion_path || it.pod_image_path);
+                          const url = podItem && podUrl(podItem.proof_of_completion_path || podItem.pod_image_path);
+                          return url ? (
+                            <a href={url} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline text-xs">POD</a>
+                          ) : null;
+                        })()}
                         {isSupportLead(user) && isUnassigned(ticket) && (
                           <select
                             className="text-xs border rounded px-1 py-0.5 max-w-[100px]"
