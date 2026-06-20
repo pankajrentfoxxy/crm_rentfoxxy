@@ -129,7 +129,17 @@ const ensureSupportTicketItemV3Columns = async (client) => {
             ADD COLUMN IF NOT EXISTS pickup_assigned_to INTEGER REFERENCES users (user_id),
             ADD COLUMN IF NOT EXISTS pickup_courier_name VARCHAR(200),
             ADD COLUMN IF NOT EXISTS pickup_awb VARCHAR(120),
-            ADD COLUMN IF NOT EXISTS pickup_completed_at TIMESTAMP WITH TIME ZONE
+            ADD COLUMN IF NOT EXISTS pickup_completed_at TIMESTAMP WITH TIME ZONE,
+            ADD COLUMN IF NOT EXISTS visited_lat VARCHAR(30),
+            ADD COLUMN IF NOT EXISTS visited_lng VARCHAR(30),
+            ADD COLUMN IF NOT EXISTS ttspl_id VARCHAR(120),
+            ADD COLUMN IF NOT EXISTS ttspl_verified BOOLEAN DEFAULT FALSE,
+            ADD COLUMN IF NOT EXISTS ttspl_verified_at TIMESTAMP WITH TIME ZONE,
+            ADD COLUMN IF NOT EXISTS ttspl_verified_by INTEGER REFERENCES users (user_id),
+            ADD COLUMN IF NOT EXISTS reached_warehouse_at TIMESTAMP WITH TIME ZONE,
+            ADD COLUMN IF NOT EXISTS warehouse_received_by INTEGER REFERENCES users (user_id),
+            ADD COLUMN IF NOT EXISTS floor_ticket_id INTEGER,
+            ADD COLUMN IF NOT EXISTS proof_of_completion_path TEXT
     `);
 };
 
@@ -782,7 +792,7 @@ exports.uploadPod = async (req, res) => {
             ? [itemId, relPath, generateOtp()]
             : [itemId, relPath];
         await client.query(
-            `UPDATE support_ticket_items SET pod_image_path = $2, updated_at = CURRENT_TIMESTAMP${item.item_type === 'pickup' ? ', pod_uploaded_at = CURRENT_TIMESTAMP, warehouse_otp_code = $3' : ', pod_uploaded_at = CURRENT_TIMESTAMP'} WHERE id = $1`,
+            `UPDATE support_ticket_items SET pod_image_path = $2, proof_of_completion_path = $2, updated_at = CURRENT_TIMESTAMP${item.item_type === 'pickup' ? ', pod_uploaded_at = CURRENT_TIMESTAMP, warehouse_otp_code = $3' : ', pod_uploaded_at = CURRENT_TIMESTAMP'} WHERE id = $1`,
             podParams
         );
         await logAudit(client, {
@@ -1410,18 +1420,311 @@ exports.updateTicket = async (req, res) => {
 
 exports.logVisit = async (req, res) => {
     const itemId = parseInt(req.params.itemId, 10);
+    const { latitude, longitude, address } = req.body || {};
     const itemRes = await pool.query('SELECT * FROM support_ticket_items WHERE id = $1', [itemId]);
     if (!itemRes.rows.length) return res.status(404).json({ success: false, message: 'Item not found' });
     const item = itemRes.rows[0];
     if (item.assigned_to !== req.user.user_id && !isSupportLead(req.user)) {
         return res.status(403).json({ success: false, message: 'Not assigned to this item' });
     }
-    await pool.query(
-        `UPDATE support_ticket_items SET visited_at = CURRENT_TIMESTAMP, status = 'visited', updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
-        [itemId]
-    );
+
+    // Phase 18: technician must verify the laptop's TTSPL/serial before marking
+    // "reached" (only when the item actually carries an identifying code).
+    const expectedCode = (item.ttspl_id || item.unique_serial_number || item.serial_number || '').trim();
+    if (expectedCode && !item.ttspl_verified) {
+        return res.status(400).json({
+            success: false,
+            message: 'Verify the TTSPL ID / serial first before marking as reached'
+        });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await ensureSupportTicketItemV3Columns(client);
+        await client.query(
+            `UPDATE support_ticket_items SET
+                visited_at = CURRENT_TIMESTAMP,
+                status = 'visited',
+                visited_lat = $2,
+                visited_lng = $3,
+                updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1`,
+            [itemId, latitude ? String(latitude) : null, longitude ? String(longitude) : null]
+        );
+        await logAudit(client, {
+            itemId,
+            ticketId: item.ticket_id,
+            userId: req.user.user_id,
+            action: 'tech_reached',
+            detail: { latitude: latitude || null, longitude: longitude || null, address: address || null }
+        });
+        await bumpTicketActivity(client, item.ticket_id);
+        await client.query('COMMIT');
+    } catch (e) {
+        await client.query('ROLLBACK');
+        console.error('support logVisit', e);
+        return res.status(500).json({ success: false, message: 'Failed to mark reached' });
+    } finally {
+        client.release();
+    }
     const data = await getTicketWithItems(item.ticket_id, req.user);
     res.json({ success: true, ...data });
+};
+
+exports.verifyTtspl = async (req, res) => {
+    const itemId = parseInt(req.params.itemId, 10);
+    const { ttspl_input: ttsplInput } = req.body || {};
+    if (!ttsplInput || !String(ttsplInput).trim()) {
+        return res.status(400).json({ success: false, message: 'Enter TTSPL ID or serial number' });
+    }
+
+    const itemRes = await pool.query('SELECT * FROM support_ticket_items WHERE id = $1', [itemId]);
+    if (!itemRes.rows.length) return res.status(404).json({ success: false, message: 'Item not found' });
+    const item = itemRes.rows[0];
+    if (item.assigned_to !== req.user.user_id && !isSupportLead(req.user)) {
+        return res.status(403).json({ success: false, message: 'Not assigned to this item' });
+    }
+
+    const expectedTtspl = String(item.ttspl_id || item.unique_serial_number || '').trim().toUpperCase();
+    const expectedSerial = String(item.serial_number || '').trim().toUpperCase();
+    const input = String(ttsplInput).trim().toUpperCase();
+    if (!expectedTtspl && !expectedSerial) {
+        return res.status(400).json({ success: false, message: 'This item has no TTSPL ID / serial on record to verify against' });
+    }
+    if (input !== expectedTtspl && input !== expectedSerial) {
+        return res.status(400).json({
+            success: false,
+            message: `TTSPL ID does not match this ticket. Expected ${expectedTtspl || expectedSerial}.`
+        });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await ensureSupportTicketItemV3Columns(client);
+        await client.query(
+            `UPDATE support_ticket_items SET
+                ttspl_verified = TRUE,
+                ttspl_verified_at = CURRENT_TIMESTAMP,
+                ttspl_verified_by = $2,
+                updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1`,
+            [itemId, req.user.user_id]
+        );
+        await logAudit(client, {
+            itemId,
+            ticketId: item.ticket_id,
+            userId: req.user.user_id,
+            action: 'ttspl_verified',
+            detail: { input }
+        });
+        await bumpTicketActivity(client, item.ticket_id);
+        await client.query('COMMIT');
+    } catch (e) {
+        await client.query('ROLLBACK');
+        console.error('support verifyTtspl', e);
+        return res.status(500).json({ success: false, message: 'Failed to verify TTSPL' });
+    } finally {
+        client.release();
+    }
+    const data = await getTicketWithItems(item.ticket_id, req.user);
+    res.json({ success: true, message: 'TTSPL verified', ...data });
+};
+
+// Phase 18: technician cannot fix at site -> picks up the laptop and carries it
+// to the warehouse. Creates a linked "pickup" item that tracks the return journey.
+exports.submitForPickup = async (req, res) => {
+    const itemId = parseInt(req.params.itemId, 10);
+    const { pickup_reason: pickupReason } = req.body || {};
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await ensureSupportTicketItemV3Columns(client);
+
+        const itemRes = await client.query('SELECT * FROM support_ticket_items WHERE id = $1', [itemId]);
+        if (!itemRes.rows.length) throw Object.assign(new Error('Item not found'), { status: 404 });
+        const item = itemRes.rows[0];
+        if (item.item_type !== 'complaint') {
+            throw Object.assign(new Error('Only complaint items can be picked up for warehouse repair'), { status: 400 });
+        }
+        if (item.assigned_to !== req.user.user_id && !isSupportLead(req.user)) {
+            throw Object.assign(new Error('Not assigned to this item'), { status: 403 });
+        }
+
+        await client.query(
+            `UPDATE support_ticket_items SET
+                status = 'picked_up',
+                picked_up_at = CURRENT_TIMESTAMP,
+                pickup_method = 'self_carry',
+                outcome = 'repair_required',
+                updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1`,
+            [itemId]
+        );
+
+        const reason = String(pickupReason || '').trim() || 'Laptop picked up for warehouse repair';
+        const pickupIns = await client.query(
+            `INSERT INTO support_ticket_items
+                (ticket_id, customer_inventory_id, serial_number, unique_serial_number,
+                 brand, model, ram, storage, generation, ttspl_id,
+                 item_type, remarks, status, assigned_to, source_item_id, otp_code)
+             SELECT ticket_id, customer_inventory_id, serial_number, unique_serial_number,
+                    brand, model, ram, storage, generation, ttspl_id,
+                    'pickup', $2, 'in_transit', assigned_to, $1, $3
+             FROM support_ticket_items WHERE id = $1
+             RETURNING id`,
+            [itemId, reason, generateOtp()]
+        );
+        const pickupItemId = pickupIns.rows[0].id;
+
+        await logAudit(client, {
+            itemId: pickupItemId,
+            ticketId: item.ticket_id,
+            userId: req.user.user_id,
+            action: 'laptop_picked_up',
+            detail: { pickup_reason: reason, method: 'self_carry', source_item_id: itemId }
+        });
+        await bumpTicketActivity(client, item.ticket_id);
+        await recomputeTicketStatus(client, item.ticket_id);
+        await client.query('COMMIT');
+
+        const data = await getTicketWithItems(item.ticket_id, req.user);
+        res.json({ success: true, pickup_item_id: pickupItemId, ...data });
+    } catch (e) {
+        await client.query('ROLLBACK');
+        console.error('support submitForPickup', e);
+        res.status(e.status || 500).json({ success: false, message: e.message || 'Failed to submit for pickup' });
+    } finally {
+        client.release();
+    }
+};
+
+// Phase 18: warehouse confirms receipt of a picked-up laptop. Creates a floor QC
+// ticket for repair and flips the authoritative inventory to "returned".
+exports.warehouseReceivedPickup = async (req, res) => {
+    const itemId = parseInt(req.params.itemId, 10);
+    const { notes } = req.body || {};
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await ensureSupportTicketItemV3Columns(client);
+
+        const itemRes = await client.query('SELECT * FROM support_ticket_items WHERE id = $1', [itemId]);
+        if (!itemRes.rows.length) throw Object.assign(new Error('Item not found'), { status: 404 });
+        const item = itemRes.rows[0];
+        if (item.item_type !== 'pickup') {
+            throw Object.assign(new Error('Only pickup items can be received at warehouse'), { status: 400 });
+        }
+
+        const stageRes = await client.query(
+            `SELECT stage_id FROM stages WHERE stage_name = 'Floor Manager' LIMIT 1`
+        );
+        const stageId = stageRes.rows[0]?.stage_id || null;
+
+        let floorTicketId = null;
+        if (stageId) {
+            const code = item.ttspl_id || item.unique_serial_number || item.serial_number;
+            const vsnRes = await client.query(
+                `SELECT serial_id, inventory_asset_code FROM vendor_serial_numbers
+                 WHERE (inventory_asset_code = $1 OR serial_number = $1)
+                   AND deleted_at IS NULL LIMIT 1`,
+                [code]
+            );
+            const vsn = vsnRes.rows[0];
+            if (vsn) {
+                const ftRes = await client.query(
+                    `INSERT INTO tickets
+                        (serial_number, ttspl_id, brand, model, processor, ram, storage,
+                         status, priority, ticket_type, current_stage_id,
+                         vendor_serial_id, initial_condition)
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,'in_progress','normal','grn_qc',$8,$9,$10)
+                     RETURNING ticket_id`,
+                    [
+                        item.serial_number,
+                        item.ttspl_id || item.unique_serial_number,
+                        item.brand, item.model,
+                        null, item.ram, item.storage,
+                        stageId, vsn.serial_id,
+                        `Returned from customer via support ticket. Reason: ${item.remarks || 'repair'}`
+                    ]
+                );
+                floorTicketId = ftRes.rows[0]?.ticket_id || null;
+                await client.query(
+                    `UPDATE vendor_serial_numbers SET
+                        inventory_status = 'returned',
+                        current_customer_id = NULL,
+                        status_changed_at = NOW(),
+                        updated_at = NOW()
+                     WHERE serial_id = $1`,
+                    [vsn.serial_id]
+                );
+            }
+        }
+
+        await client.query(
+            `UPDATE support_ticket_items SET
+                status = 'inventory_updated',
+                reached_warehouse_at = CURRENT_TIMESTAMP,
+                warehouse_received_by = $2,
+                floor_ticket_id = $3,
+                updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1`,
+            [itemId, req.user.user_id, floorTicketId]
+        );
+
+        if (item.customer_inventory_id) {
+            await client.query(
+                `UPDATE customer_inventory SET
+                    status = 'returned',
+                    passivated_at = NOW(),
+                    passivated_reason = 'Returned via support ticket for repair',
+                    updated_at = NOW()
+                 WHERE id = $1`,
+                [item.customer_inventory_id]
+            );
+        }
+
+        // The faulty laptop now lives in the floor repair pipeline, so the
+        // originating complaint on this support ticket is considered resolved.
+        if (item.source_item_id) {
+            await client.query(
+                `UPDATE support_ticket_items SET
+                    status = 'resolved',
+                    resolved_at = COALESCE(resolved_at, CURRENT_TIMESTAMP),
+                    updated_at = CURRENT_TIMESTAMP
+                 WHERE id = $1 AND status NOT IN ('resolved','closed','inventory_updated')`,
+                [item.source_item_id]
+            );
+        }
+
+        await logAudit(client, {
+            itemId,
+            ticketId: item.ticket_id,
+            userId: req.user.user_id,
+            action: 'warehouse_received',
+            detail: { floor_ticket_id: floorTicketId, notes: notes || null }
+        });
+        await bumpTicketActivity(client, item.ticket_id);
+        await recomputeTicketStatus(client, item.ticket_id);
+        await client.query('COMMIT');
+
+        const data = await getTicketWithItems(item.ticket_id, req.user);
+        res.json({
+            success: true,
+            floor_ticket_id: floorTicketId,
+            message: floorTicketId
+                ? `Received. Floor repair ticket #${floorTicketId} created.`
+                : 'Received at warehouse.',
+            ...data
+        });
+    } catch (e) {
+        await client.query('ROLLBACK');
+        console.error('support warehouseReceivedPickup', e);
+        res.status(e.status || 500).json({ success: false, message: e.message || 'Failed to receive at warehouse' });
+    } finally {
+        client.release();
+    }
 };
 
 exports.markVisited = exports.logVisit;
@@ -1533,32 +1836,76 @@ exports.initiateReplacement = async (req, res) => {
         return res.status(403).json({ success: false, message: 'Only team lead can initiate replacement' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
-    const { source_item_id, new_customer_inventory_id, reason } = req.body || {};
+    const { source_item_id, new_customer_inventory_id, new_serial_id, reason } = req.body || {};
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
         const srcRes = await client.query('SELECT * FROM support_ticket_items WHERE id = $1 AND ticket_id = $2', [source_item_id, ticketId]);
         if (!srcRes.rows.length) throw new Error('Source item not found');
         const src = srcRes.rows[0];
-        const newAssetRes = await client.query('SELECT * FROM customer_inventory WHERE id = $1', [new_customer_inventory_id]);
-        if (!newAssetRes.rows.length) throw new Error('Replacement asset not found');
-        const asset = newAssetRes.rows[0];
+
+        // Resolve the chosen replacement machine. Primary path: the authoritative
+        // inventory (vendor_serial_numbers, QC-passed + in stock). Legacy path:
+        // a deprecated customer_inventory row (kept for backward compatibility).
+        let asset; // normalized { customerInventoryId, serial_number, unique_serial_number, brand, model, ram, storage, generation }
+        if (new_serial_id) {
+            const vsnRes = await client.query(
+                `SELECT serial_id, serial_number, inventory_asset_code, inventory_status, qc_status, extra
+                 FROM vendor_serial_numbers WHERE serial_id = $1 AND deleted_at IS NULL`,
+                [new_serial_id]
+            );
+            if (!vsnRes.rows.length) throw new Error('Replacement machine not found');
+            const vsn = vsnRes.rows[0];
+            if (vsn.inventory_status !== 'in_stock') {
+                throw new Error('Selected machine is no longer available in stock');
+            }
+            const extra = vsn.extra || {};
+            const assetCode = vsn.inventory_asset_code || extra.ttspl_id || vsn.serial_number;
+            asset = {
+                customerInventoryId: null,
+                serial_number: vsn.serial_number,
+                unique_serial_number: assetCode,
+                brand: extra.brand || null,
+                model: extra.model || extra.model_name || null,
+                ram: extra.ram || null,
+                storage: extra.storage || null,
+                generation: extra.generation || null
+            };
+        } else if (new_customer_inventory_id) {
+            const newAssetRes = await client.query('SELECT * FROM customer_inventory WHERE id = $1', [new_customer_inventory_id]);
+            if (!newAssetRes.rows.length) throw new Error('Replacement asset not found');
+            const ci = newAssetRes.rows[0];
+            asset = {
+                customerInventoryId: ci.id,
+                serial_number: ci.serial_number,
+                unique_serial_number: ci.unique_serial_number,
+                brand: ci.model_name?.split(' ')[0] || null,
+                model: ci.model_name,
+                ram: ci.ram,
+                storage: ci.storage,
+                generation: ci.generation
+            };
+        } else {
+            throw new Error('Select a replacement machine');
+        }
+
         const otp = generateOtp();
         const itemIns = await client.query(
             `INSERT INTO support_ticket_items (
                 ticket_id, customer_inventory_id, serial_number, unique_serial_number, brand, model,
-                ram, storage, generation, item_type, remarks, status, otp_code, source_item_id
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'replacement',$10,'order_placed',$11,$12) RETURNING id`,
+                ram, storage, generation, ttspl_id, item_type, remarks, status, otp_code, source_item_id
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'replacement',$11,'order_placed',$12,$13) RETURNING id`,
             [
                 ticketId,
-                asset.id,
+                asset.customerInventoryId,
                 asset.serial_number,
                 asset.unique_serial_number,
-                asset.model_name?.split(' ')[0] || null,
-                asset.model_name,
+                asset.brand,
+                asset.model,
                 asset.ram,
                 asset.storage,
                 asset.generation,
+                asset.unique_serial_number,
                 reason || src.replacement_flag_reason || null,
                 otp,
                 source_item_id
@@ -1575,7 +1922,7 @@ exports.initiateReplacement = async (req, res) => {
                 replacementItemId,
                 source_item_id,
                 src.customer_inventory_id,
-                asset.id,
+                asset.customerInventoryId,
                 src.unique_serial_number || src.serial_number,
                 asset.unique_serial_number || asset.serial_number,
                 req.user.user_id,
@@ -1591,7 +1938,7 @@ exports.initiateReplacement = async (req, res) => {
             ticketId,
             userId: req.user.user_id,
             action: 'replacement_initiated',
-            detail: { source_item_id, new_customer_inventory_id }
+            detail: { source_item_id, new_serial_id: new_serial_id || null, new_customer_inventory_id: new_customer_inventory_id || null, new_machine_serial: asset.unique_serial_number }
         });
         await bumpTicketActivity(client, ticketId);
         await client.query('COMMIT');
@@ -1669,15 +2016,23 @@ exports.deliverReplacement = async (req, res) => {
         // Bridge into the authoritative inventory (vendor_serial_numbers):
         // return the faulty unit (stops billing) and rent out the replacement.
         try {
-            const codeRows = await client.query(
-                `SELECT
-                    (SELECT COALESCE(unique_serial_number, serial_number)
-                       FROM customer_inventory WHERE id = $1) AS old_code,
-                    (SELECT COALESCE(unique_serial_number, serial_number)
-                       FROM customer_inventory WHERE id = $2) AS new_code`,
-                [order.old_customer_inventory_id || null, order.new_customer_inventory_id || null]
-            );
-            const { old_code, new_code } = codeRows.rows[0] || {};
+            // Prefer the asset codes captured on the order (authoritative path for
+            // machines selected from vendor_serial_numbers). Fall back to the legacy
+            // customer_inventory lookup for orders created before this flow existed.
+            let old_code = order.old_machine_serial;
+            let new_code = order.new_machine_serial;
+            if ((!old_code && order.old_customer_inventory_id) || (!new_code && order.new_customer_inventory_id)) {
+                const codeRows = await client.query(
+                    `SELECT
+                        (SELECT COALESCE(unique_serial_number, serial_number)
+                           FROM customer_inventory WHERE id = $1) AS old_code,
+                        (SELECT COALESCE(unique_serial_number, serial_number)
+                           FROM customer_inventory WHERE id = $2) AS new_code`,
+                    [order.old_customer_inventory_id || null, order.new_customer_inventory_id || null]
+                );
+                old_code = old_code || codeRows.rows[0]?.old_code;
+                new_code = new_code || codeRows.rows[0]?.new_code;
+            }
             if (old_code || new_code) {
                 await inventorySM.bridgeSupportReplacement(client, {
                     oldCode: old_code,

@@ -275,6 +275,18 @@ async function bridgeSupportReplacement(db, {
   }
   const newRow = await findSerialByCode(db, newCode);
   if (newRow) {
+    // A spare in stock (or reserved) must pass through in_transit before it can
+    // become "rented" per the state machine's allowed transitions.
+    if (newRow.inventory_status === 'in_stock' || newRow.inventory_status === 'reserved') {
+      await markDispatched(db, newRow.serial_id, {
+        dcNumber,
+        customerId,
+        entityCode: oldRow?.current_entity || 'rentfoxxy',
+        dispatchMode: 'inhouse',
+        actorUserId,
+        actorName,
+      });
+    }
     await markDelivered(db, newRow.serial_id, {
       quotationType: 'rental',
       dcNumber,

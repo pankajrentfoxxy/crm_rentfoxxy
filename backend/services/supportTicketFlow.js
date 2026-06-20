@@ -7,6 +7,10 @@ const CLOSED = new Set(['resolved', 'closed', 'inventory_updated']);
 
 const deriveComplaintStep = (item) => {
   if (CLOSED.has(item.status)) return 'otp_verified';
+  // Phase 18: laptop carried away for warehouse repair supersedes the complaint.
+  if (item.status === 'picked_up' || item.outcome === 'repair_required') {
+    return 'picked_up_for_repair';
+  }
   if (
     item.outcome === 'replacement_required'
     || item.status === 'repair_failed'
@@ -15,7 +19,14 @@ const deriveComplaintStep = (item) => {
     return 'replacement_required';
   }
   if (!item.assigned_to) return 'unassigned';
-  if (!item.visited_at) return 'assigned';
+  if (!item.visited_at) {
+    // Phase 18: TTSPL/serial must be verified before the technician can mark reached.
+    // Only gates the pre-visit stage so items already visited keep progressing.
+    if (!item.ttspl_verified && (item.ttspl_id || item.unique_serial_number || item.serial_number)) {
+      return 'verify_ttspl';
+    }
+    return 'assigned';
+  }
   if (item.outcome === 'working') return 'working';
   if (!item.outcome) {
     if (item.work_done_at || item.status === 'awaiting_otp') {
@@ -35,6 +46,11 @@ const deriveComplaintStep = (item) => {
 
 const derivePickupStep = (item) => {
   if (CLOSED.has(item.status)) return 'otp_verified';
+  // Phase 18: self-carry pickup (technician carries faulty laptop to warehouse).
+  if (item.pickup_method === 'self_carry' || item.status === 'in_transit') {
+    if (item.reached_warehouse_at) return 'reached_warehouse';
+    return 'in_transit';
+  }
   if (!item.assigned_to) return 'unassigned';
   if (item.loan_delivered_at && !item.picked_up_at) {
     const min = new Date(item.loan_delivered_at).getTime() + 72 * 60 * 60 * 1000;

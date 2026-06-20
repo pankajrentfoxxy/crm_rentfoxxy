@@ -34,6 +34,9 @@ const {
     updateTicket,
     logVisit,
     markVisited,
+    verifyTtspl,
+    submitForPickup,
+    warehouseReceivedPickup,
     setOutcome,
     markPickedUp,
     initiateReplacement,
@@ -86,6 +89,9 @@ router.post('/items/:itemId/comments', addComment);
 router.post('/items/:itemId/work-done', markWorkDone);
 router.post('/items/:itemId/visit', logVisit);
 router.post('/items/:itemId/mark-visited', markVisited);
+router.post('/items/:itemId/verify-ttspl', verifyTtspl);
+router.post('/items/:itemId/submit-pickup', submitForPickup);
+router.post('/items/:itemId/warehouse-received', requireSupportLead, warehouseReceivedPickup);
 router.post('/items/:itemId/set-outcome', setOutcome);
 router.post('/items/:itemId/picked-up', markPickedUp);
 router.delete('/items/:itemId', requireSupportLead, removeTicketItem);

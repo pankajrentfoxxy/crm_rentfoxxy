@@ -1175,3 +1175,56 @@
 .support-filter-chip.complaint.active { background: #eff6ff; color: #1d4ed8; border-color: #93c5fd; }
 .support-filter-chip.pickup.active { background: #fff7ed; color: #c2410c; border-color: #fdba74; }
 .support-filter-chip.replacement.active { background: #fdf2f8; color: #be185d; border-color: #f9a8d4; }
+
+/* ============================================================
+   PHASE 18 — MOBILE-FIRST OVERRIDES (technician field view)
+   ============================================================ */
+@media (max-width: 640px) {
+  /* Larger touch targets for the primary support actions */
+  .support-btn-primary,
+  .support-btn-outline,
+  .support-btn-danger-outline,
+  button[class*="support-btn"] {
+    min-height: 48px;
+    font-size: 16px; /* prevents iOS auto-zoom */
+    border-radius: 14px;
+  }
+
+  /* Outcome buttons: full width, stacked, comfortable height */
+  .support-v3-outcome-row {
+    flex-direction: column;
+    gap: 12px;
+  }
+  .support-v3-outcome-row > button {
+    width: 100%;
+    min-height: 60px;
+    justify-content: flex-start;
+    padding: 0 16px;
+    font-size: 15px;
+  }
+
+  /* Form fields: 16px to prevent iOS zoom on focus */
+  .support-detail-layout input,
+  .support-detail-layout textarea,
+  .support-detail-layout select {
+    font-size: 16px;
+  }
+
+  /* Compact stepper so the wizard fits a 375px screen */
+  .support-stepper {
+    gap: 2px;
+  }
+  .support-stepper-label {
+    font-size: 10px;
+  }
+
+  /* Item card uses the full width on phones */
+  .support-item-card.support-v3-card {
+    border-radius: 16px;
+  }
+}
+
+/* Safe-area padding for notched phones */
+.support-detail-layout {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}

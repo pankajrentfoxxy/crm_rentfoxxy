@@ -1,5 +1,4 @@
 const pool = require('../config/db');
-const { ensureCustomerTables } = require('./customerInventoryErpSyncService');
 
 const passivateAsset = async (client, { inventoryId, reason }) => {
     await client.query(
@@ -50,24 +49,28 @@ const cloneAssetAsActive = async (client, sourceId, customerId) => {
     return ins.rows[0];
 };
 
-const getAvailableAssets = async (customerId, excludeItemIds = []) => {
-    await ensureCustomerTables();
-    const params = [customerId];
-    let excludeSql = '';
-    if (excludeItemIds.length) {
-        params.push(excludeItemIds);
-        excludeSql = ` AND ci.id NOT IN (
-            SELECT COALESCE(customer_inventory_id, 0) FROM support_ticket_items
-            WHERE customer_inventory_id IS NOT NULL AND status NOT IN ('resolved','closed')
-        )`;
-    }
+// Available replacement machines come from the authoritative inventory
+// (vendor_serial_numbers): QC-passed, in stock, not currently held by a customer.
+// Spare stock is a global pool, so it is NOT scoped to the ticket's customer.
+const getAvailableAssets = async (/* customerId */ _customerId, _excludeItemIds = []) => {
     const { rows } = await pool.query(
-        `SELECT ci.id, ci.serial_number, ci.unique_serial_number, ci.model_name, ci.generation,
-                ci.ram, ci.storage, ci.asset_bucket, ci.asset_kind
-         FROM customer_inventory ci
-         WHERE ci.customer_id = $1 AND ci.asset_bucket = 'live' ${excludeSql}
-         ORDER BY ci.model_name, ci.unique_serial_number`,
-        params
+        `SELECT vsn.serial_id AS id,
+                vsn.serial_number,
+                COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS unique_serial_number,
+                NULLIF(TRIM(CONCAT(COALESCE(vsn.extra->>'brand', ''), ' ',
+                                   COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', ''))), '') AS model_name,
+                vsn.extra->>'processor' AS processor,
+                vsn.extra->>'generation' AS generation,
+                vsn.extra->>'ram' AS ram,
+                vsn.extra->>'storage' AS storage,
+                vsn.inventory_status AS asset_bucket
+         FROM vendor_serial_numbers vsn
+         WHERE vsn.deleted_at IS NULL
+           AND vsn.inventory_status = 'in_stock'
+           AND vsn.qc_status IN ('passed', 'qc_passed')
+           AND vsn.current_customer_id IS NULL
+         ORDER BY COALESCE(vsn.inventory_asset_code, vsn.serial_number)
+         LIMIT 300`
     );
     return rows;
 };

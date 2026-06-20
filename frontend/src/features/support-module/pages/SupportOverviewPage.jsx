@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from 'recharts';
-import { Loader2 } from 'lucide-react';
+import { Loader2, MapPin } from 'lucide-react';
 import api from '../../../utils/api';
 import MetricCard from '../../reporting/components/MetricCard';
 import { formatRelative } from '../../../components/support/utils';
@@ -116,7 +116,7 @@ export default function SupportOverviewPage() {
             <thead>
               <tr className="text-left text-gray-500 border-b">
                 <th className="p-2">#</th><th className="p-2">Customer</th><th className="p-2">Type</th>
-                <th className="p-2">Status</th><th className="p-2">Age</th><th className="p-2">Assigned</th>
+                <th className="p-2">Status</th><th className="p-2">Age</th><th className="p-2">Assigned</th><th className="p-2">Location</th>
               </tr>
             </thead>
             <tbody>
@@ -124,6 +124,7 @@ export default function SupportOverviewPage() {
                 const type = t.ticket_category || t.items?.[0]?.item_type || 'complaint';
                 const tech = [...new Set((t.items || []).map((i) => i.assigned_to_name).filter(Boolean))].join(', ') || '—';
                 const ageH = t.hours_since_last_update || 0;
+                const located = (t.items || []).find((i) => i.visited_lat && i.visited_lng);
                 return (
                   <tr key={t.id} className="border-b border-gray-50 hover:bg-gray-50 cursor-pointer" onClick={() => navigate(`/support/tickets/${t.id}`)}>
                     <td className="p-2 font-mono text-xs">#{t.id}</td>
@@ -132,6 +133,19 @@ export default function SupportOverviewPage() {
                     <td className="p-2"><span className={`text-xs px-2 py-0.5 rounded-full ${t.status === 'closed' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>{t.status}</span></td>
                     <td className={`p-2 text-xs ${ageH > 48 ? 'text-red-600 font-medium' : ''}`}>{ageH < 24 ? `${Math.round(ageH)}h ago` : `${Math.round(ageH / 24)}d`}</td>
                     <td className="p-2 text-xs">{tech}</td>
+                    <td className="p-2 text-xs">
+                      {located ? (
+                        <a
+                          href={`https://www.google.com/maps?q=${located.visited_lat},${located.visited_lng}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="inline-flex items-center gap-1 text-blue-600 hover:underline"
+                        >
+                          <MapPin className="w-3 h-3" /> Map
+                        </a>
+                      ) : <span className="text-gray-300">—</span>}
+                    </td>
                   </tr>
                 );
               })}

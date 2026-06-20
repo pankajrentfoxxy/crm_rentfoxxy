@@ -59,6 +59,7 @@ function ItemCard({
   const { user } = useAuth();
   const [comment, setComment] = useState('');
   const [otp, setOtp] = useState('');
+  const [verifyInput, setVerifyInput] = useState('');
   const [loanSerial, setLoanSerial] = useState('');
   const [loanAt, setLoanAt] = useState('');
   const [pickupAt, setPickupAt] = useState('');
@@ -68,7 +69,8 @@ function ItemCard({
   const tech = isSupportTechnician(user);
   const st = item.effective_current_step || (item.assigned_to ? 'assigned' : 'unassigned');
   const canAct = lead || (tech && item.assigned_to === user.user_id);
-  const podUrl = podUrlFor(item.pod_image_path);
+  const podUrl = podUrlFor(item.proof_of_completion_path || item.pod_image_path);
+  const ttsplLabel = item.ttspl_id || item.unique_serial_number || item.serial_number;
   const minPickup = pickupMinScheduleDate(item.loan_delivered_at);
   const pickupBlocked = minPickup && Date.now() < minPickup.getTime();
   const terminal = ['resolved', 'closed', 'inventory_updated'].includes(item.status);
@@ -87,6 +89,28 @@ function ItemCard({
 
   const assignTech = (assignedTo) => run(() =>
     api.patch(`/support/items/${item.id}/assign`, { assigned_to: assignedTo ? Number(assignedTo) : null }));
+
+  // Phase 18: mark "reached" while capturing GPS coordinates (falls back gracefully).
+  const markReached = () => {
+    setBusy(true);
+    const doMark = (lat, lng) =>
+      api.post(`/support/items/${item.id}/visit`, {
+        latitude: lat != null ? String(lat) : null,
+        longitude: lng != null ? String(lng) : null
+      })
+        .then(() => onRefresh())
+        .catch((e) => alert(e.response?.data?.message || 'Failed to mark reached'))
+        .finally(() => setBusy(false));
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => doMark(pos.coords.latitude, pos.coords.longitude),
+        () => doMark(null, null),
+        { timeout: 10000 }
+      );
+    } else {
+      doMark(null, null);
+    }
+  };
 
   const showServiceAddress = item.item_type === 'complaint' || item.item_type === 'replacement';
   const showComments = !!item.assigned_to && st !== 'unassigned';
@@ -177,10 +201,63 @@ function ItemCard({
           </div>
         )}
 
+        {item.item_type === 'complaint' && canAct && !terminal && st === 'verify_ttspl' && item.assigned_to && (
+          <div className="space-y-2">
+            <p className="support-v3-section-label">Step 1 · Verify laptop TTSPL ID</p>
+            <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+              Enter the TTSPL ID or serial number from the laptop label to confirm you are working on the correct machine.
+            </p>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={verifyInput}
+                onChange={(e) => setVerifyInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && verifyInput.trim()) run(() => api.post(`/support/items/${item.id}/verify-ttspl`, { ttspl_input: verifyInput })); }}
+                placeholder={`Enter ${ttsplLabel || 'TTSPL ID or serial'}`}
+                className="flex-1 min-w-0 border rounded-lg px-3 py-3 min-h-[44px] text-base"
+                style={{ textTransform: 'uppercase' }}
+              />
+              <button
+                type="button"
+                className="support-btn-primary min-h-[44px]"
+                disabled={busy || !verifyInput.trim()}
+                onClick={() => run(() => api.post(`/support/items/${item.id}/verify-ttspl`, { ttspl_input: verifyInput }))}
+              >
+                {busy ? '…' : 'Verify'}
+              </button>
+            </div>
+          </div>
+        )}
+
         {item.item_type === 'complaint' && canAct && !terminal && st === 'assigned' && item.assigned_to && (
-          <button type="button" className="support-btn-primary w-full min-h-[44px]" disabled={busy} onClick={() => run(() => api.post(`/support/items/${item.id}/mark-visited`))}>
-            Mark as visited
-          </button>
+          <div className="space-y-2">
+            <p className="support-v3-section-label">Step 2 · Mark as reached</p>
+            <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>
+              Tap when you arrive at the customer location. Your GPS location will be recorded.
+            </p>
+            <button type="button" className="support-btn-primary w-full min-h-[44px] inline-flex items-center justify-center gap-2" disabled={busy} onClick={markReached}>
+              <MapPin className="w-5 h-5" />
+              {busy ? 'Getting location…' : 'I have reached the location'}
+            </button>
+          </div>
+        )}
+
+        {lead && item.visited_lat && item.visited_lng && (
+          <a
+            href={`https://www.google.com/maps?q=${item.visited_lat},${item.visited_lng}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
+          >
+            <MapPin className="w-3 h-3" /> View reached location
+          </a>
+        )}
+
+        {item.item_type === 'complaint' && st === 'picked_up_for_repair' && (
+          <div className="rounded-lg p-3 text-sm" style={{ border: '1.5px solid #f97316', background: '#FFF7ED', color: '#9a3412' }}>
+            <p className="font-semibold">Laptop picked up for warehouse repair</p>
+            <p className="text-xs mt-1">Track the return journey under the <b>Pickup</b> tab. A floor repair ticket is created once the warehouse confirms receipt.</p>
+          </div>
         )}
 
         {item.item_type === 'complaint' && canAct && !terminal && (st === 'visited' || st === 'working' || st === 'replacement_required') && (
@@ -207,6 +284,27 @@ function ItemCard({
           </div>
         )}
 
+        {item.item_type === 'complaint' && canAct && !terminal && st === 'replacement_required' && (
+          <div className="space-y-2">
+            <p className="support-v3-section-label">Cannot fix at site — choose how to proceed</p>
+            <button
+              type="button"
+              className="support-btn-outline w-full min-h-[44px] inline-flex items-center justify-center gap-2"
+              disabled={busy}
+              onClick={() => {
+                if (!window.confirm('Pick up this laptop and carry it to the warehouse for repair?')) return;
+                run(() => api.post(`/support/items/${item.id}/submit-pickup`, { pickup_reason: comment.trim() || undefined }));
+              }}
+            >
+              Pick up laptop (carry to warehouse)
+            </button>
+            <div className="rounded-lg p-3 text-xs" style={{ border: '1px solid #e9d5ff', background: '#FAF5FF', color: '#6b21a8' }}>
+              <p className="font-semibold">Or leave it with the customer for replacement</p>
+              <p className="mt-1">The support lead has been notified and can initiate a replacement order from this ticket.</p>
+            </div>
+          </div>
+        )}
+
         {showComments && (
           <CommentThread
             comments={item.comments}
@@ -220,7 +318,7 @@ function ItemCard({
         {item.item_type === 'complaint' && canAct && !terminal && st === 'fixed_pending_pod' && item.outcome === 'fixed' && (
           <div className="support-v3-pod-zone">
             <Camera className="w-8 h-8 mx-auto mb-2 opacity-60" />
-            <p className="font-medium text-sm mb-2">Upload proof of delivery</p>
+            <p className="font-medium text-sm mb-2">Upload proof of completion</p>
             <label className="support-btn-outline inline-flex items-center justify-center cursor-pointer min-h-[44px]">
               Take photo / Upload file
               <input type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => e.target.files?.[0] && run(() => { const fd = new FormData(); fd.append('pod', e.target.files[0]); return api.post(`/support/items/${item.id}/pod`, fd); })} />
@@ -250,6 +348,40 @@ function ItemCard({
           </div>
         )}
 
+        {item.item_type === 'pickup' && st === 'in_transit' && (
+          <div className="space-y-2">
+            <div className="rounded-lg p-3 text-sm" style={{ border: '1.5px solid #f97316', background: '#FFF7ED', color: '#9a3412' }}>
+              <p className="font-semibold">In transit to warehouse</p>
+              <p className="text-xs mt-1">
+                {lead ? 'Confirm receipt once the laptop reaches the warehouse — a floor repair ticket will be created automatically.'
+                  : 'Carry the laptop to the warehouse. A support lead / warehouse will confirm receipt.'}
+              </p>
+            </div>
+            {lead && (
+              <button
+                type="button"
+                className="support-btn-primary w-full min-h-[44px]"
+                disabled={busy}
+                onClick={() => {
+                  if (!window.confirm('Confirm the laptop has been received at the warehouse and create a floor repair ticket?')) return;
+                  run(() => api.post(`/support/items/${item.id}/warehouse-received`));
+                }}
+              >
+                Confirm warehouse receipt
+              </button>
+            )}
+          </div>
+        )}
+
+        {item.item_type === 'pickup' && st === 'reached_warehouse' && (
+          <div className="rounded-lg p-3 text-sm" style={{ border: '1.5px solid #16a34a', background: '#F0FDF4', color: '#166534' }}>
+            <p className="font-semibold inline-flex items-center gap-1"><CheckCircle2 className="w-4 h-4" /> Received at warehouse</p>
+            {item.floor_ticket_id && (
+              <p className="text-xs mt-1">Floor repair ticket #{item.floor_ticket_id} created.</p>
+            )}
+          </div>
+        )}
+
         {item.item_type === 'pickup' && canAct && !terminal && (st === 'assigned' || st === 'wait_72h' || st === 'pickup_action') && (
           <div className="space-y-2">
             <p className="text-sm font-medium">Loan (optional)</p>
@@ -273,7 +405,7 @@ function ItemCard({
 
         {item.item_type === 'pickup' && canAct && !terminal && st === 'fixed_pending_pod' && (
           <div className="support-v3-pod-zone">
-            <p className="font-medium text-sm mb-2">Upload POD after pickup</p>
+            <p className="font-medium text-sm mb-2">Upload proof of completion after pickup</p>
             <label className="support-btn-outline inline-flex items-center justify-center cursor-pointer min-h-[44px]">
               Take photo / Upload file
               <input type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => e.target.files?.[0] && run(() => { const fd = new FormData(); fd.append('pod', e.target.files[0]); return api.post(`/support/items/${item.id}/pod`, fd); })} />

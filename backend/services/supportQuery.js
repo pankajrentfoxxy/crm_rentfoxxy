@@ -49,6 +49,7 @@ const attachItems = async (tickets) => {
     const { rows } = await pool.query(
         `SELECT i.id, i.ticket_id, i.item_type, i.status, i.brand, i.model, i.serial_number, i.unique_serial_number,
                 i.assigned_to, i.loan_delivered_at, i.pickup_scheduled_at, i.updated_at, i.replacement_flag_reason,
+                i.visited_at, i.visited_lat, i.visited_lng, i.ttspl_verified, i.outcome,
                 ut.name AS assigned_to_name
          FROM support_ticket_items i
          LEFT JOIN users ut ON ut.user_id = i.assigned_to

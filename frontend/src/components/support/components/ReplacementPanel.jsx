@@ -16,7 +16,7 @@ export default function ReplacementPanel({ ticketId, sourceItem, customerId, onD
     try {
       await api.post(`/support/tickets/${ticketId}/replacements`, {
         source_item_id: sourceItem.id,
-        new_customer_inventory_id: Number(assetId),
+        new_serial_id: Number(assetId),
         reason
       });
       onDone();
@@ -30,9 +30,11 @@ export default function ReplacementPanel({ ticketId, sourceItem, customerId, onD
       <h3 className="font-semibold text-pink-900">Initiate replacement</h3>
       <p className="text-sm">{sourceItem.model} · {sourceItem.unique_serial_number || sourceItem.serial_number}</p>
       <select className="w-full border rounded-lg px-3 py-3 min-h-[44px] text-base" value={assetId} onChange={(e) => setAssetId(e.target.value)}>
-        <option value="">Select replacement machine</option>
+        <option value="">{assets.length ? 'Select replacement machine' : 'No QC-passed machines available in stock'}</option>
         {assets.map((a) => (
-          <option key={a.id} value={a.id}>{a.model_name} · {a.unique_serial_number || a.serial_number}</option>
+          <option key={a.id} value={a.id}>
+            {(a.unique_serial_number || a.serial_number)} · {[a.model_name, a.ram, a.storage].filter(Boolean).join(' · ')}
+          </option>
         ))}
       </select>
       <textarea className="w-full border rounded-lg p-3 min-h-[72px] text-base" value={reason} onChange={(e) => setReason(e.target.value)} />
