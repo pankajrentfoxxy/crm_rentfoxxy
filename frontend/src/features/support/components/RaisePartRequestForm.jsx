@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Wrench, ChevronDown } from 'lucide-react';
+import { Wrench, ChevronDown, PenLine } from 'lucide-react';
 import api from '../../../utils/api';
 import { raiseSupportPartRequest, listSupportPartRequests } from '../supportPartsApi';
 
@@ -94,17 +95,29 @@ export default function RaisePartRequestForm({ ticket, item }) {
         <div className="px-3 pb-3 space-y-3">
           {existing.length > 0 && (
             <div className="space-y-1">
-              {existing.map((req) => (
-                <div key={req.id} className="flex items-center justify-between text-xs bg-white rounded-lg border border-amber-100 px-2.5 py-2">
-                  <span className="min-w-0 truncate">
-                    <span className="font-mono text-amber-700">{req.request_number}</span>
-                    {' · '}{req.part_name} (x{req.quantity})
-                  </span>
-                  <span className="shrink-0 ml-2 text-amber-800 font-medium">
-                    {STATUS_LABEL[req.status] || req.status}
-                  </span>
-                </div>
-              ))}
+              {existing.map((req) => {
+                const needsSign = ['approved', 'challan_generated'].includes(req.status) && req.challan_id;
+                return (
+                  <div key={req.id} className="flex items-center justify-between text-xs bg-white rounded-lg border border-amber-100 px-2.5 py-2">
+                    <span className="min-w-0 truncate">
+                      <span className="font-mono text-amber-700">{req.request_number}</span>
+                      {' · '}{req.part_name} (x{req.quantity})
+                    </span>
+                    {needsSign ? (
+                      <Link
+                        to={`/support/challans/${req.challan_id}`}
+                        className="shrink-0 ml-2 inline-flex items-center gap-1 px-2 py-1 bg-[#534AB7] text-white rounded-md font-semibold"
+                      >
+                        <PenLine className="w-3 h-3" /> Sign challan
+                      </Link>
+                    ) : (
+                      <span className="shrink-0 ml-2 text-amber-800 font-medium">
+                        {STATUS_LABEL[req.status] || req.status}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
 

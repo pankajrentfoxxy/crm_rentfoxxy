@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Loader2, ClipboardList, MapPin, PackageCheck } from 'lucide-react';
 import { getSupportPartsWarehouseQueue, approveAndGenerateChallan } from '../supportPartsApi';
 import ESignChallanModal from '../components/ESignChallanModal';
 import { usePartsBase } from '../partsBase';
 
-function PendingTab({ requests, onAction }) {
+function PendingTab({ requests, onAction, base }) {
+  const navigate = useNavigate();
   const [selected, setSelected] = useState(new Set());
   const [busy, setBusy] = useState(false);
 
@@ -28,9 +29,10 @@ function PendingTab({ requests, onAction }) {
     setBusy(true);
     try {
       const { data } = await approveAndGenerateChallan(ids);
-      toast.success(`Challan ${data.challan_number} created`);
+      toast.success(`Challan ${data.challan_number} created - capture the technician's signature`);
       setSelected(new Set());
       onAction();
+      if (data.challan_id) navigate(`${base}/challans/${data.challan_id}`);
     } catch (e) {
       toast.error(e.response?.data?.message || 'Failed to approve');
     } finally {
@@ -54,7 +56,7 @@ function PendingTab({ requests, onAction }) {
       )}
 
       {requests.map((req) => {
-        const available = Number(req.instances_available || 0);
+        const available = Number(req.available ?? req.instances_available ?? req.stock_qty ?? 0);
         return (
           <div
             key={req.id}
@@ -189,7 +191,7 @@ export default function SupportPartsQueuePage() {
       {loading ? (
         <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-[#534AB7]" /></div>
       ) : tab === 'pending' ? (
-        <PendingTab requests={pending} onAction={load} />
+        <PendingTab requests={pending} onAction={load} base={base} />
       ) : (
         <ReturnsTab requests={returns} onAction={load} />
       )}

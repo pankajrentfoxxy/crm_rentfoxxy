@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Loader2, Package, FileText, Check, RotateCcw, Truck } from 'lucide-react';
+import { Loader2, Package, FileText, Check, RotateCcw, Truck, PenLine } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext';
 import { getTechnicianBucket, markPartUsed, returnPart } from '../supportPartsApi';
 import ESignChallanModal from '../components/ESignChallanModal';
@@ -128,6 +128,7 @@ export default function SupportTechBucketPage() {
   const { user } = useAuth();
   const base = usePartsBase();
   const [bucket, setBucket] = useState([]);
+  const [awaiting, setAwaiting] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
 
@@ -137,8 +138,12 @@ export default function SupportTechBucketPage() {
   const load = useCallback(() => {
     setLoading(true);
     getTechnicianBucket()
-      .then((r) => { setBucket(r.data.bucket || []); setTotal(r.data.total || 0); })
-      .catch(() => setBucket([]))
+      .then((r) => {
+        setBucket(r.data.bucket || []);
+        setAwaiting(r.data.awaiting || []);
+        setTotal(r.data.total || 0);
+      })
+      .catch(() => { setBucket([]); setAwaiting([]); })
       .finally(() => setLoading(false));
   }, []);
 
@@ -160,9 +165,46 @@ export default function SupportTechBucketPage() {
         <span className="ml-auto text-sm text-gray-500">{total} part{total === 1 ? '' : 's'} held</span>
       </div>
 
-      {bucket.length === 0 && (
+      {awaiting.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-amber-200">
+            <p className="font-semibold text-sm text-amber-900 inline-flex items-center gap-2">
+              <PenLine className="w-4 h-4" /> Awaiting signature
+            </p>
+            <p className="text-xs text-amber-700 mt-0.5">
+              {isTech
+                ? 'Go to the warehouse and sign these challans to collect your parts.'
+                : 'These challans are ready for the technician to sign before parts are issued.'}
+            </p>
+          </div>
+          <div className="divide-y divide-amber-100">
+            {awaiting.map((ch) => (
+              <div key={ch.challan_id} className="flex items-center justify-between gap-3 px-4 py-3">
+                <div className="min-w-0">
+                  <p className="font-mono text-xs text-[#534AB7]">{ch.challan_number}</p>
+                  <p className="text-sm font-medium text-gray-900">
+                    {(ch.items || []).map((it) => `${it.part_name} (x${it.quantity})`).join(', ')}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {ch.ticket_number}{ch.ttspl_id ? ` · ${ch.ttspl_id}` : ''}
+                    {!isTech ? ` · ${ch.tech_name}` : ''}
+                  </p>
+                </div>
+                <Link
+                  to={`${base}/challans/${ch.challan_id}`}
+                  className="shrink-0 inline-flex items-center gap-1 px-3 py-2 min-h-[40px] bg-[#534AB7] text-white rounded-lg text-xs font-semibold"
+                >
+                  <PenLine className="w-4 h-4" /> Open &amp; sign
+                </Link>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {bucket.length === 0 && awaiting.length === 0 && (
         <div className="bg-white rounded-2xl border p-8 text-center text-sm text-gray-500">
-          No parts currently held by technicians.
+          No parts currently held or awaiting signature.
         </div>
       )}
 

@@ -87,7 +87,9 @@ exports.raiseSupportPartRequest = async (req, res) => {
     const spr = rows[0];
 
     await client.query('COMMIT');
-    const available = Number(part.available || 0);
+    // Stock is "available" if we have tracked part_instances OR legacy catalog
+    // quantity (parts.quantity), since approval can issue from either source.
+    const available = Math.max(Number(part.available || 0), Number(part.quantity || 0));
     res.status(201).json({
       success: true,
       request: { ...spr, part_name: part.part_name, stock_available: available },
@@ -543,7 +545,36 @@ exports.getTechnicianBucket = async (req, res) => {
       grouped[key].parts.push(r);
     });
 
-    res.json({ success: true, bucket: Object.values(grouped), total: rows.length });
+    // Challans awaiting signature (approved/challan_generated -> not yet issued).
+    // Grouped by challan so the UI can show one "sign" card per challan.
+    const awaitingRows = (await pool.query(`
+      SELECT spr.challan_id, spr.assigned_to_tech,
+             u.name AS tech_name,
+             st.customer_name, ${TICKET_NUMBER_SQL} AS ticket_number,
+             spc.challan_number, spc.ttspl_id, spc.status AS challan_status,
+             json_agg(json_build_object(
+               'part_name', p.part_name, 'quantity', spr.quantity, 'prt_id', pi.prt_id
+             ) ORDER BY spr.id) AS items
+      FROM support_part_requests spr
+      JOIN parts p ON p.part_id = spr.part_id
+      LEFT JOIN part_instances pi ON pi.instance_id = spr.instance_id
+      JOIN users u ON u.user_id = spr.assigned_to_tech
+      JOIN support_tickets st ON st.id = spr.support_ticket_id
+      JOIN support_part_challans spc ON spc.id = spr.challan_id
+      WHERE spr.status IN ('approved','challan_generated')
+        AND spc.status IN ('draft')
+        ${techFilter}
+      GROUP BY spr.challan_id, spr.assigned_to_tech, u.name, st.customer_name, st.id,
+               spc.challan_number, spc.ttspl_id, spc.status
+      ORDER BY spr.challan_id DESC
+    `, params)).rows;
+
+    res.json({
+      success: true,
+      bucket: Object.values(grouped),
+      awaiting: awaitingRows,
+      total: rows.length,
+    });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message });
   }
@@ -588,6 +619,7 @@ exports.getWarehouseQueue = async (req, res) => {
              p.part_name, p.category, p.quantity AS stock_qty,
              p.location_code, p.cost AS unit_cost,
              COALESCE(pi_count.available, 0) AS instances_available,
+             GREATEST(COALESCE(pi_count.available, 0), COALESCE(p.quantity, 0))::int AS available,
              u.name AS tech_name,
              st.customer_name, ${TICKET_NUMBER_SQL} AS ticket_number
       FROM support_part_requests spr
