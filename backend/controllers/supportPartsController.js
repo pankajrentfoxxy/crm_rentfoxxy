@@ -636,8 +636,215 @@ exports.getWarehouseQueue = async (req, res) => {
 
     const pending = rows.filter((r) => r.status === 'pending');
     const returns = rows.filter((r) => r.status === 'return_requested');
-    res.json({ success: true, pending, returns, total: rows.length });
+
+    // Reassignment requests: part is still issued/held by the tech, but they
+    // asked to move it to a different ticket. Warehouse approves the move.
+    const reassignRes = await pool.query(`
+      SELECT spr.id, spr.request_number, spr.quantity, spr.status,
+             spr.reassign_reason, spr.reassign_requested_at,
+             spr.reassign_to_ticket_id, spr.reassign_to_ttspl_id, spr.reassign_to_serial,
+             p.part_name, pi.prt_id,
+             u.name AS tech_name,
+             ${TICKET_NUMBER_SQL} AS from_ticket_number, st.customer_name AS from_customer,
+             spr.ttspl_id AS from_ttspl_id,
+             ('STK-' || LPAD(stn.id::text, 4, '0')) AS to_ticket_number,
+             stn.customer_name AS to_customer
+      FROM support_part_requests spr
+      JOIN parts p ON p.part_id = spr.part_id
+      LEFT JOIN part_instances pi ON pi.instance_id = spr.instance_id
+      JOIN users u ON u.user_id = spr.assigned_to_tech
+      JOIN support_tickets st ON st.id = spr.support_ticket_id
+      LEFT JOIN support_tickets stn ON stn.id = spr.reassign_to_ticket_id
+      WHERE spr.reassign_requested_at IS NOT NULL
+        AND spr.status IN ('issued','return_requested')
+      ORDER BY spr.reassign_requested_at ASC
+    `);
+    const reassigns = reassignRes.rows;
+
+    res.json({
+      success: true,
+      pending,
+      returns,
+      reassigns,
+      total: rows.length + reassigns.length,
+    });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message });
   }
+};
+
+// ── PARTS MOVEMENT HISTORY (inventory ledger) ─────────────────────────────────
+// Full audit of parts that left the warehouse to a technician: who took it,
+// when, against which ticket/machine, the issue e-sign, and the return details.
+
+exports.getPartsHistory = async (req, res) => {
+  try {
+    const { search, status, tech_id, from, to } = req.query;
+    const params = [];
+    let where = `WHERE spr.status IN ('issued','used','return_requested','returned')`;
+
+    if (status) {
+      params.push(status);
+      where += ` AND spr.status = $${params.length}`;
+    }
+    if (tech_id) {
+      params.push(Number(tech_id));
+      where += ` AND spr.assigned_to_tech = $${params.length}`;
+    }
+    if (from) {
+      params.push(from);
+      where += ` AND spr.issued_at >= $${params.length}`;
+    }
+    if (to) {
+      params.push(to);
+      where += ` AND spr.issued_at <= ($${params.length}::date + INTERVAL '1 day')`;
+    }
+    if (search) {
+      params.push(`%${search}%`);
+      const i = params.length;
+      where += ` AND (
+        p.part_name ILIKE $${i}
+        OR spr.ttspl_id ILIKE $${i}
+        OR spr.serial_number ILIKE $${i}
+        OR spr.request_number ILIKE $${i}
+        OR u.name ILIKE $${i}
+        OR pi.prt_id ILIKE $${i}
+        OR CAST(spr.support_ticket_id AS TEXT) LIKE $${i}
+      )`;
+    }
+
+    const { rows } = await pool.query(`
+      SELECT spr.id, spr.request_number, spr.quantity, spr.status,
+             spr.ttspl_id, spr.serial_number,
+             spr.issued_at, spr.used_at, spr.returned_at, spr.return_requested_at,
+             ${TICKET_NUMBER_SQL} AS ticket_number, spr.support_ticket_id,
+             st.customer_name,
+             p.part_name, p.category, pi.prt_id,
+             u.name AS tech_name,
+             rb.name AS returned_to_name,
+             spc.challan_number, spc.tech_esign_url, spc.wh_esign_url,
+             spc.pdf_path, spc.return_pdf_path, spc.id AS challan_id
+      FROM support_part_requests spr
+      JOIN parts p ON p.part_id = spr.part_id
+      LEFT JOIN part_instances pi ON pi.instance_id = spr.instance_id
+      JOIN users u ON u.user_id = spr.assigned_to_tech
+      LEFT JOIN users rb ON rb.user_id = spr.returned_to
+      JOIN support_tickets st ON st.id = spr.support_ticket_id
+      LEFT JOIN support_part_challans spc ON spc.id = spr.challan_id
+      ${where}
+      ORDER BY spr.issued_at DESC NULLS LAST, spr.id DESC
+      LIMIT 500
+    `, params);
+
+    res.json({ success: true, history: rows });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+// ── TECHNICIAN: REQUEST REASSIGN TO ANOTHER TICKET ───────────────────────────
+
+exports.requestReassign = async (req, res) => {
+  const reqId = parseInt(req.params.requestId, 10);
+  const { to_ticket_id, to_item_id, to_ttspl_id, to_serial, reason } = req.body;
+
+  if (!to_ticket_id)
+    return res.status(400).json({ success: false, message: 'to_ticket_id is required' });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const r = await client.query(
+      'SELECT * FROM support_part_requests WHERE id = $1 FOR UPDATE', [reqId]
+    );
+    if (!r.rows.length) throw Object.assign(new Error('Request not found'), { status: 404 });
+    const spr = r.rows[0];
+
+    if (spr.assigned_to_tech !== req.user.user_id &&
+        !['admin', 'support_lead', 'manager', 'warehouse', 'super_admin'].includes(req.user.role))
+      throw Object.assign(new Error('Not authorised'), { status: 403 });
+    if (spr.status !== 'issued')
+      throw new Error(`Only parts currently in your bucket can be moved (status: ${spr.status})`);
+    if (spr.reassign_requested_at)
+      throw new Error('A reassignment request is already pending for this part');
+    if (Number(to_ticket_id) === Number(spr.support_ticket_id))
+      throw new Error('Part is already assigned to this ticket');
+
+    const tkt = await client.query('SELECT id FROM support_tickets WHERE id = $1', [Number(to_ticket_id)]);
+    if (!tkt.rows.length) throw Object.assign(new Error('Target ticket not found'), { status: 404 });
+
+    await client.query(
+      `UPDATE support_part_requests SET
+         reassign_to_ticket_id = $1, reassign_to_item_id = $2,
+         reassign_to_ttspl_id = $3, reassign_to_serial = $4,
+         reassign_reason = $5, reassign_requested_at = NOW(), reassign_requested_by = $6,
+         updated_at = NOW()
+       WHERE id = $7`,
+      [Number(to_ticket_id), to_item_id || null, to_ttspl_id || null,
+       to_serial || null, reason || null, req.user.user_id, reqId]
+    );
+
+    await client.query('COMMIT');
+    res.json({ success: true, message: 'Reassignment requested. Warehouse will confirm the move.' });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  } finally { client.release(); }
+};
+
+// ── WAREHOUSE: APPROVE / REJECT REASSIGN ─────────────────────────────────────
+
+exports.resolveReassign = async (req, res) => {
+  const reqId = parseInt(req.params.requestId, 10);
+  const { action } = req.body; // 'approve' | 'reject'
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const r = await client.query(
+      'SELECT * FROM support_part_requests WHERE id = $1 FOR UPDATE', [reqId]
+    );
+    if (!r.rows.length) throw Object.assign(new Error('Request not found'), { status: 404 });
+    const spr = r.rows[0];
+    if (!spr.reassign_requested_at)
+      throw new Error('No reassignment request is pending for this part');
+
+    if (action === 'reject') {
+      await client.query(
+        `UPDATE support_part_requests SET
+           notes = COALESCE(notes || E'\\n', '') || $1,
+           reassign_to_ticket_id = NULL, reassign_to_item_id = NULL,
+           reassign_to_ttspl_id = NULL, reassign_to_serial = NULL,
+           reassign_reason = NULL, reassign_requested_at = NULL, reassign_requested_by = NULL,
+           updated_at = NOW()
+         WHERE id = $2`,
+        [`Reassignment to ticket #${spr.reassign_to_ticket_id} rejected by ${req.user.email || 'warehouse'}.`, reqId]
+      );
+      await client.query('COMMIT');
+      return res.json({ success: true, message: 'Reassignment rejected. Part stays on the original ticket.' });
+    }
+
+    // approve -> re-point the request to the new ticket / machine
+    const note = `Part moved from ticket #${spr.support_ticket_id} to #${spr.reassign_to_ticket_id} (approved by ${req.user.email || 'warehouse'}).`;
+    await client.query(
+      `UPDATE support_part_requests SET
+         support_ticket_id = reassign_to_ticket_id,
+         support_item_id   = reassign_to_item_id,
+         ttspl_id          = COALESCE(reassign_to_ttspl_id, ttspl_id),
+         serial_number     = COALESCE(reassign_to_serial, serial_number),
+         notes = COALESCE(notes || E'\\n', '') || $1,
+         reassign_to_ticket_id = NULL, reassign_to_item_id = NULL,
+         reassign_to_ttspl_id = NULL, reassign_to_serial = NULL,
+         reassign_reason = NULL, reassign_requested_at = NULL, reassign_requested_by = NULL,
+         updated_at = NOW()
+       WHERE id = $2`,
+      [note, reqId]
+    );
+
+    await client.query('COMMIT');
+    res.json({ success: true, message: 'Part reassigned to the new ticket.' });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  } finally { client.release(); }
 };

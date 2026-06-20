@@ -1,16 +1,139 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Loader2, Package, FileText, Check, RotateCcw, Truck, PenLine } from 'lucide-react';
+import { Loader2, Package, FileText, Check, RotateCcw, Truck, PenLine, ArrowRightLeft, X } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext';
-import { getTechnicianBucket, markPartUsed, returnPart } from '../supportPartsApi';
+import api from '../../../utils/api';
+import { getTechnicianBucket, markPartUsed, returnPart, requestPartReassign } from '../supportPartsApi';
 import ESignChallanModal from '../components/ESignChallanModal';
 import { usePartsBase } from '../partsBase';
+
+function ReassignModal({ part, onClose, onDone }) {
+  const [tickets, setTickets] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [ticketId, setTicketId] = useState('');
+  const [itemId, setItemId] = useState('');
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.get('/support/tickets', { params: { view: 'my_open', limit: 100 } })
+      .then((r) => {
+        const list = (r.data.tickets || []).filter((t) => t.id !== part.support_ticket_id);
+        setTickets(list);
+      })
+      .catch(() => setTickets([]))
+      .finally(() => setLoading(false));
+  }, [part.support_ticket_id]);
+
+  const selectedTicket = tickets.find((t) => String(t.id) === String(ticketId));
+  const items = (selectedTicket?.items || []).filter((i) => i.item_type === 'complaint');
+
+  const submit = async () => {
+    if (!ticketId) return toast.error('Select a target ticket');
+    const item = items.find((i) => String(i.id) === String(itemId));
+    setBusy(true);
+    try {
+      const { data } = await requestPartReassign(part.id, {
+        to_ticket_id: Number(ticketId),
+        to_item_id: item ? item.id : undefined,
+        to_ttspl_id: item ? (item.unique_serial_number || item.serial_number || undefined) : undefined,
+        to_serial: item ? (item.serial_number || undefined) : undefined,
+        reason: reason.trim() || undefined,
+      });
+      toast.success(data.message || 'Reassignment requested');
+      onDone();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Failed to request reassignment');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-md p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-base font-semibold inline-flex items-center gap-2">
+            <ArrowRightLeft className="w-4 h-4 text-[#534AB7]" /> Move part to another ticket
+          </h3>
+          <button type="button" onClick={onClose}><X className="w-5 h-5 text-gray-400" /></button>
+        </div>
+
+        <div className="text-xs text-gray-500 bg-gray-50 rounded-lg p-2">
+          <span className="font-medium text-gray-700">{part.part_name}</span>
+          {' '}· currently on {part.ticket_number}
+        </div>
+
+        {loading ? (
+          <div className="flex justify-center py-6"><Loader2 className="w-6 h-6 animate-spin text-[#534AB7]" /></div>
+        ) : (
+          <>
+            <label className="block text-sm">
+              <span className="text-gray-600">Target ticket *</span>
+              <select
+                className="mt-1 w-full border rounded-lg px-3 py-2.5 min-h-[44px] text-base"
+                value={ticketId}
+                onChange={(e) => { setTicketId(e.target.value); setItemId(''); }}
+              >
+                <option value="">Select one of your tickets…</option>
+                {tickets.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    STK-{String(t.id).padStart(4, '0')} · {t.customer_name || 'Customer'}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {items.length > 0 && (
+              <label className="block text-sm">
+                <span className="text-gray-600">Target machine (optional)</span>
+                <select
+                  className="mt-1 w-full border rounded-lg px-3 py-2.5 min-h-[44px] text-base"
+                  value={itemId}
+                  onChange={(e) => setItemId(e.target.value)}
+                >
+                  <option value="">Select machine…</option>
+                  {items.map((i) => (
+                    <option key={i.id} value={i.id}>
+                      {i.unique_serial_number || i.serial_number || `${i.brand || ''} ${i.model || ''}`.trim() || `Item #${i.id}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+
+            <label className="block text-sm">
+              <span className="text-gray-600">Reason (optional)</span>
+              <textarea
+                className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                rows={2}
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder="Why move this part?"
+              />
+            </label>
+
+            <div className="flex gap-3 pt-1">
+              <button type="button" onClick={onClose} className="flex-1 border rounded-lg py-2.5 min-h-[44px] text-sm">Cancel</button>
+              <button type="button" onClick={submit} disabled={busy || !ticketId} className="flex-1 bg-[#534AB7] text-white rounded-lg py-2.5 min-h-[44px] text-sm font-semibold disabled:opacity-50">
+                {busy ? 'Requesting…' : 'Request move'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function PartRow({ part, onChanged, canManageReturn, base }) {
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState(false);
   const [signReq, setSignReq] = useState(null);
+  const [reassignOpen, setReassignOpen] = useState(false);
+  const reassignPending = !!part.reassign_requested_at;
 
   const run = async (fn, msg) => {
     setBusy(true);
@@ -45,11 +168,18 @@ function PartRow({ part, onChanged, canManageReturn, base }) {
             </Link>
           )}
         </div>
-        {isReturnRequested && (
-          <span className="shrink-0 text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-medium">
-            Pickup requested
-          </span>
-        )}
+        <div className="shrink-0 flex flex-col items-end gap-1">
+          {isReturnRequested && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-medium">
+              Pickup requested
+            </span>
+          )}
+          {reassignPending && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 font-medium">
+              Move requested
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-2">
@@ -72,6 +202,17 @@ function PartRow({ part, onChanged, canManageReturn, base }) {
             className="inline-flex items-center gap-1 px-3 py-2 min-h-[40px] rounded-lg border border-gray-300 text-gray-700 text-xs font-semibold disabled:opacity-50"
           >
             <RotateCcw className="w-4 h-4" /> Return
+          </button>
+        )}
+
+        {!isReturnRequested && !reassignPending && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setReassignOpen(true)}
+            className="inline-flex items-center gap-1 px-3 py-2 min-h-[40px] rounded-lg border border-purple-300 text-purple-700 text-xs font-semibold disabled:opacity-50"
+          >
+            <ArrowRightLeft className="w-4 h-4" /> Move to ticket
           </button>
         )}
 
@@ -118,6 +259,14 @@ function PartRow({ part, onChanged, canManageReturn, base }) {
           viaPickup={signReq.viaPickup}
           onSigned={() => { setSignReq(null); onChanged(); }}
           onClose={() => setSignReq(null)}
+        />
+      )}
+
+      {reassignOpen && (
+        <ReassignModal
+          part={part}
+          onClose={() => setReassignOpen(false)}
+          onDone={() => { setReassignOpen(false); onChanged(); }}
         />
       )}
     </div>

@@ -31,3 +31,12 @@ export const getTechnicianBucket = () =>
 
 export const getSupportPartsWarehouseQueue = () =>
   api.get(`${BASE}/warehouse-queue`);
+
+export const requestPartReassign = (requestId, data) =>
+  api.post(`${BASE}/requests/${requestId}/request-reassign`, data);
+
+export const resolvePartReassign = (requestId, action) =>
+  api.patch(`${BASE}/requests/${requestId}/resolve-reassign`, { action });
+
+export const getPartsHistory = (params) =>
+  api.get(`${BASE}/history`, { params });

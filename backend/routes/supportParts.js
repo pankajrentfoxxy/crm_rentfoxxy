@@ -23,6 +23,11 @@ router.post('/requests/approve-and-challan',      requireWarehouse,          ctr
 router.patch('/requests/:requestId/mark-used',    requireSupportOrWarehouse, ctrl.markPartUsed);
 router.post('/requests/:requestId/return',        requireSupportOrWarehouse, ctrl.returnPart);
 router.patch('/requests/:requestId/accept-return', requireWarehouse,         ctrl.acceptReturn);
+router.post('/requests/:requestId/request-reassign', requireSupportOrWarehouse, ctrl.requestReassign);
+router.patch('/requests/:requestId/resolve-reassign', requireWarehouse,        ctrl.resolveReassign);
+
+// Parts movement history (inventory ledger)
+router.get('/history',                             requireWarehouse, ctrl.getPartsHistory);
 
 // Challans
 router.get('/challans/:challanId',                 ctrl.getChallan);

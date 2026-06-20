@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Loader2, ClipboardList, MapPin, PackageCheck } from 'lucide-react';
-import { getSupportPartsWarehouseQueue, approveAndGenerateChallan } from '../supportPartsApi';
+import { Loader2, ClipboardList, MapPin, PackageCheck, ArrowRightLeft, Check, X } from 'lucide-react';
+import { getSupportPartsWarehouseQueue, approveAndGenerateChallan, resolvePartReassign } from '../supportPartsApi';
 import ESignChallanModal from '../components/ESignChallanModal';
 import { usePartsBase } from '../partsBase';
 
@@ -147,18 +147,91 @@ function ReturnsTab({ requests, onAction }) {
   );
 }
 
+function ReassignsTab({ requests, onAction }) {
+  const [busyId, setBusyId] = useState(null);
+
+  const resolve = async (id, action) => {
+    setBusyId(id);
+    try {
+      const { data } = await resolvePartReassign(id, action);
+      toast.success(data.message || 'Done');
+      onAction();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Failed');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  if (!requests.length) {
+    return <div className="bg-white rounded-2xl border p-8 text-center text-sm text-gray-500">No reassignment requests.</div>;
+  }
+
+  return (
+    <div className="space-y-3">
+      {requests.map((req) => (
+        <div key={req.id} className="bg-white border rounded-xl p-4">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-mono text-xs text-[#534AB7] font-medium">{req.request_number}</span>
+            {req.prt_id && <span className="font-mono text-xs bg-gray-100 px-2 py-0.5 rounded">{req.prt_id}</span>}
+          </div>
+          <p className="font-semibold text-gray-900 mt-1">{req.part_name} <span className="text-xs font-normal text-gray-500">· Qty {req.quantity}</span></p>
+          <div className="flex items-center gap-2 mt-2 text-sm">
+            <div className="min-w-0">
+              <p className="text-[11px] text-gray-400">From</p>
+              <p className="font-mono text-xs">{req.from_ticket_number}</p>
+              {req.from_ttspl_id && <p className="font-mono text-[11px] text-gray-500">{req.from_ttspl_id}</p>}
+            </div>
+            <ArrowRightLeft className="w-4 h-4 text-purple-500 shrink-0" />
+            <div className="min-w-0">
+              <p className="text-[11px] text-gray-400">To</p>
+              <p className="font-mono text-xs text-purple-700">{req.to_ticket_number || `#${req.reassign_to_ticket_id}`}</p>
+              {req.reassign_to_ttspl_id && <p className="font-mono text-[11px] text-gray-500">{req.reassign_to_ttspl_id}</p>}
+            </div>
+          </div>
+          <p className="text-xs text-gray-500 mt-2">By: {req.tech_name}</p>
+          {req.reassign_reason && <p className="text-xs text-gray-400 italic mt-0.5">&quot;{req.reassign_reason}&quot;</p>}
+          <div className="flex gap-2 mt-3">
+            <button
+              type="button"
+              disabled={busyId === req.id}
+              onClick={() => resolve(req.id, 'approve')}
+              className="inline-flex items-center gap-1 px-3 py-2 min-h-[40px] rounded-lg bg-[#534AB7] text-white text-xs font-semibold disabled:opacity-50"
+            >
+              <Check className="w-4 h-4" /> Approve move
+            </button>
+            <button
+              type="button"
+              disabled={busyId === req.id}
+              onClick={() => resolve(req.id, 'reject')}
+              className="inline-flex items-center gap-1 px-3 py-2 min-h-[40px] rounded-lg border border-gray-300 text-gray-700 text-xs font-semibold disabled:opacity-50"
+            >
+              <X className="w-4 h-4" /> Reject
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function SupportPartsQueuePage() {
   const base = usePartsBase();
   const [pending, setPending] = useState([]);
   const [returns, setReturns] = useState([]);
+  const [reassigns, setReassigns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('pending');
 
   const load = useCallback(() => {
     setLoading(true);
     getSupportPartsWarehouseQueue()
-      .then((r) => { setPending(r.data.pending || []); setReturns(r.data.returns || []); })
-      .catch(() => { setPending([]); setReturns([]); })
+      .then((r) => {
+        setPending(r.data.pending || []);
+        setReturns(r.data.returns || []);
+        setReassigns(r.data.reassigns || []);
+      })
+      .catch(() => { setPending([]); setReturns([]); setReassigns([]); })
       .finally(() => setLoading(false));
   }, []);
 
@@ -176,6 +249,7 @@ export default function SupportPartsQueuePage() {
         {[
           { id: 'pending', label: `Requests (${pending.length})` },
           { id: 'returns', label: `Returns (${returns.length})` },
+          { id: 'reassigns', label: `Moves (${reassigns.length})` },
         ].map((t) => (
           <button
             key={t.id}
@@ -192,8 +266,10 @@ export default function SupportPartsQueuePage() {
         <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-[#534AB7]" /></div>
       ) : tab === 'pending' ? (
         <PendingTab requests={pending} onAction={load} base={base} />
-      ) : (
+      ) : tab === 'returns' ? (
         <ReturnsTab requests={returns} onAction={load} />
+      ) : (
+        <ReassignsTab requests={reassigns} onAction={load} />
       )}
     </div>
   );
