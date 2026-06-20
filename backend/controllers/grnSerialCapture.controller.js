@@ -131,6 +131,8 @@ async function verifyCaptureConfiguration(req, res) {
     const actual = {
       manufacturer: body.manufacturer ?? body.brand ?? '',
       model: body.model ?? '',
+      model_version: body.model_version ?? '',
+      system_family: body.system_family ?? '',
       processor: body.processor ?? '',
       generation: body.generation ?? '',
       ram: body.ram ?? '',

@@ -146,12 +146,22 @@ function compareConfig(expected, actual) {
     checks.push({ field: 'brand', label: FIELD_LABELS.brand, required: true, matched, expected: expected.brand, actual: actual.manufacturer ?? actual.brand ?? '' });
   }
 
-  // Model — required, normalized contains-match.
+  // Model — required, normalized contains-match against EVERY identifier the OS
+  // exposes. Win32_ComputerSystem.Model is the friendly name on Dell ("Latitude
+  // 5420") but the machine-type code on Lenovo ("20TAS0E800"); the friendly name
+  // there lives in ComputerSystemProduct.Version / SystemFamily. So we accept a
+  // match on any of them.
   {
     const e = normModel(expected.model);
-    const a = normModel(actual.model);
-    const matched = !e || (a.length >= 2 && bothContain(a, e));
-    checks.push({ field: 'model', label: FIELD_LABELS.model, required: true, matched, expected: expected.model, actual: actual.model ?? '' });
+    const rawCandidates = [actual.model, actual.model_version, actual.system_family].filter(Boolean);
+    const candidates = rawCandidates.map(normModel).filter((c) => c.length >= 2);
+    const hit = candidates.find((c) => bothContain(c, e));
+    const matched = !e || Boolean(hit);
+    // Show the identifier that matched (friendly), else the primary model.
+    const matchedRaw = matched && e
+      ? rawCandidates[candidates.indexOf(hit)] || actual.model
+      : actual.model;
+    checks.push({ field: 'model', label: FIELD_LABELS.model, required: true, matched, expected: expected.model, actual: matchedRaw ?? actual.model ?? '' });
   }
 
   // Processor type — required.
@@ -175,11 +185,15 @@ function compareConfig(expected, actual) {
     });
   }
 
-  // RAM — required, exact GB.
+  // RAM — required, but tolerant. Win32_ComputerSystem.TotalPhysicalMemory is the
+  // OS-*usable* RAM: a 16 GB machine with an Intel Iris Xe iGPU reserves shared
+  // memory and reports ~15, so an exact compare wrongly fails. Accept the actual
+  // within [expected*0.9, expected+1] (the script now also reads the installed
+  // module capacity, which is exact, but this keeps older clients working).
   {
     const e = sizeNum(expected.ram);
     const a = sizeNum(actual.ram);
-    const matched = e == null || a === e;
+    const matched = e == null || a == null || (a >= e * 0.9 && a <= e + 1);
     checks.push({ field: 'ram', label: FIELD_LABELS.ram, required: true, matched, expected: expected.ram, actual: actual.ram ?? '' });
   }
 
