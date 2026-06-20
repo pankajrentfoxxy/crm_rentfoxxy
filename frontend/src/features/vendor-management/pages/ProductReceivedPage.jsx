@@ -234,6 +234,9 @@ export default function ProductReceivedPage() {
   }, [receiveLineIndex, modalBusy]);
 
   const po = ctx?.purchase_order;
+  // Direct purchase has no rental: the "start date" is just the goods receive date.
+  const isDirectPo = String(po?.purchase_order_type || '').toLowerCase() === 'direct_purchase';
+  const receiveDateLabel = isDirectPo ? 'Goods receive date' : 'Rental start date';
   const lines = ctx?.lines || [];
   const stats = ctx?.stats || statsFromLines(lines);
   const poStatusLower = String(po?.status || '').toLowerCase();
@@ -265,7 +268,7 @@ export default function ProductReceivedPage() {
     if (receiveLineIndex === null) return;
     const rem = remainingOnLine(receiveLineIndex);
     if (!rentalStartDate || !rentalStartDate.trim()) {
-      toast.error('Rental start date is required');
+      toast.error(`${receiveDateLabel} is required`);
       return;
     }
     const q = parseInt(String(bulkQtyStr).trim(), 10);
@@ -753,7 +756,7 @@ export default function ProductReceivedPage() {
                 <>
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1.5" htmlFor="receive-rental-start">
-                      Rental start date <span className="text-rose-600">*</span>
+                      {receiveDateLabel} <span className="text-rose-600">*</span>
                     </label>
                     <input
                       id="receive-rental-start"
@@ -852,7 +855,7 @@ export default function ProductReceivedPage() {
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-xs text-slate-600 m-0">
-                      Rental starts <strong>{rentalStartDate || '—'}</strong>
+                      {isDirectPo ? 'Received on' : 'Rental starts'} <strong>{rentalStartDate || '—'}</strong>
                     </p>
                     <p className="text-xs font-semibold text-teal-800 m-0">
                       Laptop {currentUnitIndex + 1} of {bulkQuantity}

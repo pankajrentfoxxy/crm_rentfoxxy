@@ -460,7 +460,8 @@ export default function PurchaseOrdersPage() {
       assetDraft.screen_size,
       assetDraft.quantity,
       assetDraft.rate,
-      assetDraft.period_months,
+      // Rent-to-own has no locking period field; Tenure stands in for it.
+      ...(!isRto ? [assetDraft.period_months] : []),
       ...(isRental ? [assetDraft.monthly_rental_amount] : []),
       ...(isRto ? [assetDraft.tenure_months] : [])
     ];
@@ -470,7 +471,8 @@ export default function PurchaseOrdersPage() {
     }
     const qty = Number(assetDraft.quantity);
     const rate = Number(assetDraft.rate);
-    const pm = Number(assetDraft.period_months);
+    // For rent-to-own, the locking/period value carried downstream is the Tenure.
+    const pm = isRto ? Number(assetDraft.tenure_months || 0) : Number(assetDraft.period_months);
     if (!(qty > 0) || !(Number.isFinite(rate) && rate >= 0) || !(Number.isFinite(pm) && pm >= 0)) {
       toast.error('Quantity must be > 0; rate and locking/warranty months must be valid');
       return;
@@ -1299,21 +1301,24 @@ export default function PurchaseOrdersPage() {
                         value={assetDraft.rate}
                         onChange={(v) => setAssetDraft((d) => ({ ...d, rate: v }))}
                       />
-                      <div className="lg:col-span-2">
-                        <AssetTextInput
-                          label={
-                            form.purchase_order_type === 'direct_purchase'
-                              ? 'Warranty (In Month)'
-                              : 'Locking Period (In Month)'
-                          }
-                          required
-                          type="number"
-                          min={0}
-                          placeholder="Enter value in month"
-                          value={assetDraft.period_months}
-                          onChange={(v) => setAssetDraft((d) => ({ ...d, period_months: v }))}
-                        />
-                      </div>
+                      {/* Rent-to-own uses Tenure only — no separate locking period. */}
+                      {form.purchase_order_type !== 'rent_to_own' && (
+                        <div className="lg:col-span-2">
+                          <AssetTextInput
+                            label={
+                              form.purchase_order_type === 'direct_purchase'
+                                ? 'Warranty (In Month)'
+                                : 'Locking Period (In Month)'
+                            }
+                            required
+                            type="number"
+                            min={0}
+                            placeholder="Enter value in month"
+                            value={assetDraft.period_months}
+                            onChange={(v) => setAssetDraft((d) => ({ ...d, period_months: v }))}
+                          />
+                        </div>
+                      )}
                       {['rental_purchase', 'rent_to_own'].includes(form.purchase_order_type) ? (
                         <AssetTextInput
                           label="Monthly Rental Amount"
