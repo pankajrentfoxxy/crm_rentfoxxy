@@ -357,27 +357,33 @@ exports.listTechnicians = async (req, res) => {
     }
 };
 
+// Support now reads the live CRM tables (customers + vendor_serial_numbers),
+// not the deprecated ERP tables (existing_customer / customer_inventory).
 exports.searchCustomers = async (req, res) => {
     try {
-        await ensureCustomerTables();
         const search = (req.query.search || '').trim();
         const limit = Math.min(parseInt(req.query.limit, 10) || 30, 50);
         const term = search ? `%${search}%` : null;
-        let where = 'WHERE 1=1';
         const params = [];
+        let where = 'WHERE 1=1';
         if (term) {
             params.push(term);
             where += ` AND (
-                ec.customer_name ILIKE $1 OR CAST(ec.customer_id AS TEXT) LIKE $1
-                OR ec.contact_person_number ILIKE $1 OR ec.customer_number ILIKE $1
+                COALESCE(c.company_name, '') ILIKE $1 OR c.name ILIKE $1
+                OR CAST(c.customer_id AS TEXT) LIKE $1
+                OR COALESCE(c.phone, '') ILIKE $1 OR COALESCE(c.whatsapp_number, '') ILIKE $1
             )`;
         }
         params.push(limit);
         const { rows } = await pool.query(
-            `SELECT ec.customer_id, ec.customer_name, ec.contact_person_name,
-                    ec.contact_person_number, ec.customer_number, ec.email
-             FROM existing_customer ec ${where}
-             ORDER BY ec.customer_name NULLS LAST LIMIT $${term ? 2 : 1}`,
+            `SELECT c.customer_id,
+                    COALESCE(c.company_name, c.name) AS customer_name,
+                    c.name AS contact_person_name,
+                    c.phone AS contact_person_number,
+                    c.phone AS customer_number,
+                    c.email
+             FROM customers c ${where}
+             ORDER BY COALESCE(c.company_name, c.name) NULLS LAST LIMIT $${term ? 2 : 1}`,
             params
         );
         res.json({ success: true, items: rows });
@@ -389,12 +395,17 @@ exports.searchCustomers = async (req, res) => {
 
 exports.getCustomerDetail = async (req, res) => {
     try {
-        await ensureCustomerTables();
         const customerId = parseInt(req.params.customerId, 10);
         const { rows } = await pool.query(
-            `SELECT customer_id, customer_name, contact_person_name, contact_person_number, customer_number,
-                    email, billing_address, shipping_address
-             FROM existing_customer WHERE customer_id = $1`,
+            `SELECT c.customer_id,
+                    COALESCE(c.company_name, c.name) AS customer_name,
+                    c.name AS contact_person_name,
+                    c.phone AS contact_person_number,
+                    c.phone AS customer_number,
+                    c.email,
+                    COALESCE(c.billing_address, c.address) AS billing_address,
+                    c.shipping_address
+             FROM customers c WHERE c.customer_id = $1`,
             [customerId]
         );
         if (!rows.length) {
@@ -402,22 +413,37 @@ exports.getCustomerDetail = async (req, res) => {
         }
         res.json({ success: true, customer: rows[0] });
     } catch (e) {
+        console.error('support getCustomerDetail', e);
         res.status(500).json({ success: false, message: 'Failed to load customer' });
     }
 };
 
+// A customer's deployed laptops, from the authoritative inventory.
 exports.getCustomerAssets = async (req, res) => {
     try {
-        await ensureCustomerTables();
         const customerId = parseInt(req.params.customerId, 10);
         const { rows } = await pool.query(
-            `SELECT id, serial_number, unique_serial_number, model_name, processor, generation,
-                    ram, storage, gpu, screen_size, asset_kind, asset_bucket
-             FROM customer_inventory WHERE customer_id = $1 ORDER BY id`,
+            `SELECT vsn.serial_id AS id,
+                    vsn.serial_number,
+                    COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS unique_serial_number,
+                    NULLIF(TRIM(CONCAT(COALESCE(vsn.extra->>'brand', ''), ' ',
+                                       COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', ''))), '') AS model_name,
+                    vsn.extra->>'processor' AS processor,
+                    vsn.extra->>'generation' AS generation,
+                    vsn.extra->>'ram' AS ram,
+                    vsn.extra->>'storage' AS storage,
+                    vsn.extra->>'gpu' AS gpu,
+                    vsn.extra->>'screen_size' AS screen_size,
+                    vsn.inventory_status AS asset_bucket
+             FROM vendor_serial_numbers vsn
+             WHERE vsn.current_customer_id = $1 AND vsn.deleted_at IS NULL
+               AND vsn.inventory_status IN ('rented', 'on_demo', 'sold')
+             ORDER BY vsn.inventory_asset_code`,
             [customerId]
         );
         res.json({ success: true, assets: rows });
     } catch (e) {
+        console.error('support getCustomerAssets', e);
         res.status(500).json({ success: false, message: 'Failed to load assets' });
     }
 };

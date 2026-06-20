@@ -633,7 +633,7 @@ async function fetchInventoryUtilisationData() {
               COUNT(*) FILTER (
                 WHERE serial_number IN (
                   SELECT serial_number FROM tickets
-                  WHERE status NOT IN ('completed', 'qc_failed_return_vendor')
+                  WHERE status NOT IN ('completed', 'qc_failed_return_vendor', 'cancelled')
                 )
               )::int AS in_repair
              FROM vendor_serial_numbers

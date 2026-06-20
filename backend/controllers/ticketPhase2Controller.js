@@ -138,7 +138,7 @@ exports.getFloorDashboard = async (req, res) => {
                COUNT(t.ticket_id)::int AS count,
                COUNT(t.ticket_id) FILTER (WHERE t.highlighted = TRUE)::int AS highlighted_count
         FROM stages s
-        LEFT JOIN tickets t ON t.current_stage_id = s.stage_id AND t.status NOT IN ('completed', 'qc_failed_return_vendor')
+        LEFT JOIN tickets t ON t.current_stage_id = s.stage_id AND t.status NOT IN ('completed', 'qc_failed_return_vendor', 'cancelled')
         GROUP BY s.stage_name, s.stage_order
         ORDER BY s.stage_order
       `),
@@ -147,14 +147,14 @@ exports.getFloorDashboard = async (req, res) => {
           COUNT(*) FILTER (WHERE priority = 'normal')::int AS normal,
           COUNT(*) FILTER (WHERE priority = 'high')::int AS high,
           COUNT(*) FILTER (WHERE priority = 'sales_order')::int AS sales_order
-        FROM tickets WHERE status NOT IN ('completed', 'qc_failed_return_vendor')
+        FROM tickets WHERE status NOT IN ('completed', 'qc_failed_return_vendor', 'cancelled')
       `),
       pool.query(`
         SELECT u.user_id, u.name,
                COUNT(t.ticket_id)::int AS active_tickets
         FROM users u
         LEFT JOIN tickets t ON t.assigned_user_id = u.user_id
-          AND t.status NOT IN ('completed', 'qc_failed_return_vendor')
+          AND t.status NOT IN ('completed', 'qc_failed_return_vendor', 'cancelled')
         WHERE u.active = TRUE AND u.role IN ('technician', 'floor_manager', 'qc')
         GROUP BY u.user_id, u.name
         HAVING COUNT(t.ticket_id) > 0

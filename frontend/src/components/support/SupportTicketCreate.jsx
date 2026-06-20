@@ -212,7 +212,7 @@ export default function SupportTicketCreate() {
         const serial = asset.unique_serial_number || asset.serial_number || '';
         try {
             const { data } = await api.get(
-                `/support/tickets/check-duplicate?customer_id=${customer.customer_id}&serial=${encodeURIComponent(serial)}&customer_inventory_id=${asset.id}`
+                `/support/tickets/check-duplicate?customer_id=${customer.customer_id}&serial=${encodeURIComponent(serial)}`
             );
             return data.duplicate;
         } catch {
@@ -258,7 +258,8 @@ export default function SupportTicketCreate() {
         selectedList.map(({ asset, remarks, issue_category_id }) => {
             const cat = categories.find((c) => String(c.id) === String(issue_category_id));
             return {
-                customer_inventory_id: asset.id,
+                // Deployed assets come from vendor_serial_numbers, not customer_inventory.
+                customer_inventory_id: null,
                 serial_number: asset.serial_number,
                 unique_serial_number: asset.unique_serial_number,
                 model: asset.model_name,

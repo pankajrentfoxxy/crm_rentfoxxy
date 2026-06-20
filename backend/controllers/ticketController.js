@@ -310,7 +310,11 @@ exports.getTickets = async (req, res) => {
         query += ` AND t.status = 'completed'`;
       }
     } else if (view === 'in_progress') {
-      query += ` AND t.status != 'completed'`;
+      query += ` AND t.status NOT IN ('completed', 'cancelled')`;
+    } else if (!status) {
+      // Default list never shows cancelled tickets (e.g. serial removed from SO),
+      // unless the caller explicitly filters by status.
+      query += ` AND t.status <> 'cancelled'`;
     }
 
     query += ' ORDER BY t.created_at DESC';
@@ -1642,7 +1646,7 @@ exports.getFloorManagerQueue = async (req, res) => {
        LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = t.vendor_serial_id
        LEFT JOIN users u ON u.user_id = t.assigned_user_id
        WHERE s.stage_name = 'Floor Manager'
-         AND t.status NOT IN ('completed', 'qc_failed_return_vendor')
+         AND t.status NOT IN ('completed', 'qc_failed_return_vendor', 'cancelled')
        ORDER BY
          CASE t.priority WHEN 'sales_order' THEN 0 WHEN 'high' THEN 1 ELSE 2 END,
          t.created_at ASC`
