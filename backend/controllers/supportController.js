@@ -775,6 +775,9 @@ exports.uploadPod = async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
+        // Self-heal: ensure pod_uploaded_at / warehouse_otp_code exist (envs that
+        // never ran the support v3 migration, e.g. staging, otherwise 500 here).
+        await ensureSupportTicketItemV3Columns(client);
         const podParams = item.item_type === 'pickup'
             ? [itemId, relPath, generateOtp()]
             : [itemId, relPath];

@@ -328,7 +328,9 @@ exports.submitQC = async (req, res) => {
         if (result === 'PASS') {
             if (qcStage === 'QC1') {
                 nextStage = 'QC2';
-            } else if (qcStage === 'QC2') {
+            } else if (qcStage === 'QC2' || qcStage === 'Dispatch QC') {
+                // QC2 and the pre-dispatch "Dispatch QC" both pass straight to Inventory
+                // (ready for DC). Dispatch QC never routes to QC2.
                 nextStage = 'Inventory';
             }
         } else {
