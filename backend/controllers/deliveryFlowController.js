@@ -117,6 +117,7 @@ async function buildDcFlow(where, params, { includeOtp = false } = {}) {
 
     out.push({
       dc_number: dcNumber,
+      movement_type: first.movement_type || 'outbound',
       sales_order_number: first.sales_order_number,
       customer_id: first.customer_id,
       customer_name: first.customer_name || first.customer_real_name,

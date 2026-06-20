@@ -7,8 +7,7 @@ const { ensureCustomerTables } = require('../services/customerInventoryErpSyncSe
 const supportQuery = require('../services/supportQuery');
 const supportInventoryService = require('../services/supportInventoryService');
 const inventorySM = require('../services/inventoryStateMachine');
-const billing = require('../services/billingSchedulerService');
-const { createTicketFromReturn } = require('../services/grnTicketService');
+const { processReturnedSerials } = require('../services/returnCompletionService');
 
 const ITEM_OPEN_STATUSES = new Set(['open', 'work_done', 'awaiting_otp']);
 const TICKET_OPEN = 'open';
@@ -834,86 +833,36 @@ exports.verifyOtp = async (req, res) => {
         // Pure pickup (return without replacement): stop billing on the unit by
         // marking it returned in the authoritative inventory. Replacement returns
         // are handled in deliverReplacement, so only act on standalone pickups.
+        // Pure pickup completed by support OTP (legacy path, no Return DC): run the
+        // shared return-completion flow for the single unit. (Return DCs run it via
+        // the delivery POD path instead.) This item is resolved by verifyOtp itself,
+        // so we pass supportTicketId=null.
         if (item.item_type === 'pickup') {
             try {
                 const code = item.ttspl_id || item.unique_serial_number || item.serial_number;
                 const serial = await inventorySM.findSerialByCode(client, code);
                 if (serial && ['rented', 'on_demo', 'sold'].includes(serial.inventory_status)) {
-                    const wasRented = serial.inventory_status === 'rented';
-                    const returnDate = new Date();
-                    await inventorySM.markReturned(client, serial.serial_id, {
-                        reason: `Picked up via support TKT-${String(item.ticket_id).padStart(3, '0')}`,
-                        rentEndDate: returnDate,
+                    const [out] = await processReturnedSerials(client, {
+                        serialIds: [serial.serial_id],
+                        supportTicketId: null,
                         actorUserId: req.user.user_id,
                         actorName: req.user.name,
                     });
-
-                    // Re-enter QC: reset qc_status so the returned unit surfaces in
-                    // "QC Process Laptops" (segment = qc_status <> 'passed').
-                    await client.query(
-                        `UPDATE vendor_serial_numbers SET qc_status = 'pending', updated_at = NOW() WHERE serial_id = $1`,
-                        [serial.serial_id]
-                    );
-
-                    // Labels + specs for the floor return ticket.
-                    const hdr = (await client.query(
-                        `SELECT customer_name, dc_number FROM support_tickets WHERE id = $1`, [item.ticket_id]
-                    )).rows[0] || {};
-                    const sd = (await client.query(
-                        `SELECT serial_number, inventory_asset_code, extra FROM vendor_serial_numbers WHERE serial_id = $1`,
-                        [serial.serial_id]
-                    )).rows[0] || {};
-                    const extra = sd.extra || {};
-
-                    // Auto-create the QC re-entry floor ticket (Floor Manager stage).
-                    let returnTicketId = null;
-                    const tk = await createTicketFromReturn(client, {
-                        serialId: serial.serial_id,
-                        serialNumber: sd.serial_number,
-                        inventoryAssetCode: sd.inventory_asset_code || extra.ttspl_id || code,
-                        customerLabel: hdr.customer_name || null,
-                        dcNumber: hdr.dc_number || item.dc_number || null,
-                        reason: item.issue_category_label || 'Customer return',
-                        specs: {
-                            brand: item.brand || extra.brand,
-                            model: item.model || extra.model,
-                            processor: item.processor || extra.processor,
-                            ram: item.ram || extra.ram,
-                            storage: item.storage || extra.storage,
-                        },
-                        actorUserId: req.user.user_id,
-                    });
-                    if (tk && tk.ok) {
-                        returnTicketId = tk.ticket_id;
+                    if (out?.returnTicketId) {
                         await logAudit(client, {
                             itemId, ticketId: item.ticket_id, userId: req.user.user_id,
-                            action: 'return_qc_ticket_created', detail: { ticket_id: returnTicketId },
+                            action: 'return_qc_ticket_created', detail: { ticket_id: out.returnTicketId },
                         });
                     }
-
-                    // Prepaid refund: if the customer paid past the return date, raise a
-                    // PENDING credit note (accounts approves; next invoice applies it),
-                    // linked to the unit + return ticket.
-                    if (wasRented) {
-                        const cn = await billing.createReturnCreditNote(client, {
-                            serialId: serial.serial_id,
-                            returnDate,
-                            returnTicketId,
-                            actorUserId: req.user.user_id,
+                    if (out?.creditNote) {
+                        await logAudit(client, {
+                            itemId, ticketId: item.ticket_id, userId: req.user.user_id,
+                            action: 'credit_note_raised', detail: { credit_note_number: out.creditNote },
                         });
-                        if (cn) {
-                            await logAudit(client, {
-                                itemId,
-                                ticketId: item.ticket_id,
-                                userId: req.user.user_id,
-                                action: 'credit_note_raised',
-                                detail: { credit_note_number: cn.credit_note_number, amount: cn.amount },
-                            });
-                        }
                     }
                 }
             } catch (bridgeErr) {
-                console.error('[support] pickup inventory bridge failed for item', itemId, bridgeErr.message);
+                console.error('[support] pickup return completion failed for item', itemId, bridgeErr.message);
             }
         }
 

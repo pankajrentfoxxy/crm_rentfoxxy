@@ -258,6 +258,31 @@ exports.submitPod = [
         );
       }
 
+      // Return DC completed by courier/porter (warehouse uploaded POD): fire the
+      // return lifecycle (mark returned -> QC re-entry -> credit note).
+      if (nextStatus === 'delivered') {
+        const mv = await client.query(
+          `SELECT movement_type, support_ticket_id FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
+          [dcNumber]
+        );
+        if (mv.rows[0]?.movement_type === 'return') {
+          const idsRes = await client.query(
+            `SELECT serial_id FROM vendor_serial_numbers
+              WHERE deleted_at IS NULL
+                AND (serial_number = ANY($1::text[]) OR inventory_asset_code = ANY($1::text[]))`,
+            [deliveredSerials.length ? deliveredSerials : ['']]
+          );
+          const returnSvc = require('../services/returnCompletionService');
+          await returnSvc.processReturnedSerials(client, {
+            serialIds: idsRes.rows.map((r) => r.serial_id),
+            dcNumber,
+            supportTicketId: mv.rows[0].support_ticket_id || null,
+            actorUserId: req.user?.user_id || null,
+            actorName: req.user?.name || null,
+          });
+        }
+      }
+
       await client.query('COMMIT');
       res.json({ success: true, message: 'Delivery status updated successfully' });
     } catch (e) {

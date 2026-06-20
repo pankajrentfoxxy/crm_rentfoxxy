@@ -11,6 +11,8 @@ import SupportTicketCreate from './SupportTicketCreate';
 import SupportTicketDetail from './SupportTicketDetail';
 import SupportSettings from './SupportSettings';
 import SupportTechnicians from './SupportTechnicians';
+import MyDeliveriesPage from '../../features/sales-pipeline/pages/MyDeliveriesPage';
+import TechnicianBucketPage from '../../features/sales-pipeline/pages/TechnicianBucketPage';
 
 function SupportHomeRedirect() {
   const { user } = useAuth();
@@ -54,6 +56,8 @@ export default function SupportApp() {
         <Route path="pickups" element={<SupportTicketsView view="pickups" showFilters />} />
         <Route path="complaints" element={<SupportTicketsView view="complaints" showFilters />} />
         <Route path="my-tickets" element={<SupportTicketsView view="my_open" showFilters />} />
+        <Route path="my-pickups" element={<MyDeliveriesPage movement="return" />} />
+        <Route path="pickup-bucket" element={<StatsOnly><TechnicianBucketPage movement="return" /></StatsOnly>} />
         <Route path="my-resolved" element={<SupportTicketsView view="my_resolved" showFilters />} />
         <Route path="technicians" element={<LeadOnly><SupportTechnicians /></LeadOnly>} />
         <Route path="settings" element={<AdminOnly><SupportSettings /></AdminOnly>} />

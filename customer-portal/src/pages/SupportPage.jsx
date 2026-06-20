@@ -31,6 +31,9 @@ export default function SupportPage() {
   const [ttsplId, setTtsplId] = useState(searchParams.get('ttspl') || '');
   const [description, setDescription] = useState('');
   const [busy, setBusy] = useState(false);
+  const emptyAddr = { name: '', phone: '', address: '', city: '', state: '', pincode: '', landmark: '' };
+  const [pickupAddr, setPickupAddr] = useState(emptyAddr);
+  const isReturn = ticketType === 'Return Request';
 
   const load = () => {
     api.get('/laptops')
@@ -39,6 +42,21 @@ export default function SupportPage() {
     api.get('/tickets')
       .then(({ data }) => setTickets(data.tickets || []))
       .catch(() => setTickets([]));
+    // Prefill pickup address from the customer's shipping/billing address.
+    api.get('/me')
+      .then(({ data }) => {
+        const useShip = data.shipping_address && data.shipping_same === false;
+        setPickupAddr((p) => (p.address ? p : {
+          name: data.company_name || data.name || '',
+          phone: data.phone || data.whatsapp_number || '',
+          address: (useShip ? data.shipping_address : data.billing_address) || data.billing_address || '',
+          city: (useShip ? data.shipping_city : data.billing_city) || data.billing_city || '',
+          state: (useShip ? data.shipping_state : data.billing_state) || data.billing_state || '',
+          pincode: (useShip ? data.shipping_pincode : data.billing_pincode) || data.billing_pincode || '',
+          landmark: '',
+        }));
+      })
+      .catch(() => {});
   };
 
   useEffect(() => { load(); }, []);
@@ -55,6 +73,10 @@ export default function SupportPage() {
       toast.error('Description must be at least 20 characters');
       return;
     }
+    if (isReturn && (!pickupAddr.address || !pickupAddr.city || !pickupAddr.pincode)) {
+      toast.error('Please provide the pickup address (address, city, pincode)');
+      return;
+    }
     setBusy(true);
     try {
       const { data } = await api.post('/tickets', {
@@ -62,6 +84,7 @@ export default function SupportPage() {
         description,
         ticket_type: ticketType,
         ttspl_id: ttsplId || undefined,
+        pickup_address: isReturn ? pickupAddr : undefined,
         photos: [],
       });
       toast.success(`Ticket ${data.ticket_number} created`);
@@ -100,6 +123,24 @@ export default function SupportPage() {
             ))}
           </select>
         </label>
+        {isReturn && (
+          <div className="border rounded-lg p-3 bg-amber-50/50 space-y-2">
+            <p className="text-sm font-semibold text-amber-800">Pickup Address</p>
+            <p className="text-xs text-slate-500">Our team will collect the laptop from this address.</p>
+            <div className="grid grid-cols-2 gap-2">
+              <input placeholder="Contact name" value={pickupAddr.name} onChange={(e) => setPickupAddr((a) => ({ ...a, name: e.target.value }))} className="border rounded-lg px-3 py-2 text-sm" />
+              <input placeholder="Phone" value={pickupAddr.phone} onChange={(e) => setPickupAddr((a) => ({ ...a, phone: e.target.value }))} className="border rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <input placeholder="Address *" value={pickupAddr.address} onChange={(e) => setPickupAddr((a) => ({ ...a, address: e.target.value }))} className="w-full border rounded-lg px-3 py-2 text-sm" />
+            <div className="grid grid-cols-3 gap-2">
+              <input placeholder="City *" value={pickupAddr.city} onChange={(e) => setPickupAddr((a) => ({ ...a, city: e.target.value }))} className="border rounded-lg px-3 py-2 text-sm" />
+              <input placeholder="State" value={pickupAddr.state} onChange={(e) => setPickupAddr((a) => ({ ...a, state: e.target.value }))} className="border rounded-lg px-3 py-2 text-sm" />
+              <input placeholder="Pincode *" value={pickupAddr.pincode} onChange={(e) => setPickupAddr((a) => ({ ...a, pincode: e.target.value }))} className="border rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <input placeholder="Landmark (optional)" value={pickupAddr.landmark} onChange={(e) => setPickupAddr((a) => ({ ...a, landmark: e.target.value }))} className="w-full border rounded-lg px-3 py-2 text-sm" />
+          </div>
+        )}
+
         <label className="block text-sm">
           Description * (min 20 chars)
           <textarea required minLength={20} value={description} onChange={(e) => setDescription(e.target.value)}

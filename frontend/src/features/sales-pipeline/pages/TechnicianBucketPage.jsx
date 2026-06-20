@@ -21,24 +21,27 @@ function STATUS_STYLE(s) {
   return s === 'reached' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700';
 }
 
-export default function TechnicianBucketPage() {
+export default function TechnicianBucketPage({ movement = null }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [techFilter, setTechFilter] = useState('all');
   const [otpModal, setOtpModal] = useState(null);
   const [deliverModal, setDeliverModal] = useState(null);
+  const isReturn = movement === 'return';
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const r = await listDeliveryFlow({ status: 'inhouse' });
-      setItems(r.data?.items || []);
+      let list = r.data?.items || [];
+      if (movement) list = list.filter((d) => (d.movement_type || 'outbound') === movement);
+      setItems(list);
     } catch {
-      toast.error('Failed to load technician bucket');
+      toast.error('Failed to load the bucket');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [movement]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -65,9 +68,9 @@ export default function TechnicianBucketPage() {
       <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
         <div>
           <h1 className="text-2xl font-semibold text-gray-900 flex items-center gap-2">
-            <Truck className="w-6 h-6 text-blue-600" /> Technician Delivery Bucket
+            <Truck className="w-6 h-6 text-blue-600" /> {isReturn ? 'Pickup Bucket' : 'Technician Delivery Bucket'}
           </h1>
-          <p className="text-sm text-gray-500">In-house deliveries currently with technicians</p>
+          <p className="text-sm text-gray-500">{isReturn ? 'In-house return pickups currently with technicians' : 'In-house deliveries currently with technicians'}</p>
         </div>
         <select value={techFilter} onChange={(e) => setTechFilter(e.target.value)}
           className="border rounded-lg px-3 py-2 text-sm">

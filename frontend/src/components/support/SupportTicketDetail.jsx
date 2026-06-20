@@ -334,6 +334,81 @@ function WorkflowActionsBar({ workflowActions, item }) {
     );
 }
 
+// Lead generates a Return DC for a pickup ticket and assigns a pickup mode
+// (technician / courier / porter). The unit then rides the delivery flow.
+function ReturnDcPanel({ ticket, technicians, isLead }) {
+  const [rdc, setRdc] = useState(ticket.return_dc_number || null);
+  const [mode, setMode] = useState('technician');
+  const [techId, setTechId] = useState('');
+  const [courier, setCourier] = useState('');
+  const [awb, setAwb] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const generate = async () => {
+    setBusy(true);
+    try {
+      const body = { pickup_mode: mode };
+      if (mode === 'technician') body.technician_user_id = techId || undefined;
+      if (mode === 'courier') { body.courier_name = courier || undefined; body.awb_number = awb || undefined; }
+      const { data } = await api.post(`/sales-management/return-dc/tickets/${ticket.id}/generate`, body);
+      setRdc(data.return_dc_number);
+    } catch (e) {
+      const msg = e.response?.data?.message || 'Failed to generate Return DC';
+      const m = /already generated \(([^)]+)\)/.exec(msg);
+      if (m) setRdc(m[1]); else alert(msg);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="support-v3-card">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="font-semibold text-sm">Return DC (Pickup)</h3>
+        {rdc && <span className="support-pill progress font-mono">{rdc}</span>}
+      </div>
+      {rdc ? (
+        <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
+          Return DC <b>{rdc}</b> generated. Track it under <b>Pickup Bucket</b> / <b>My Pickups</b> and the Delivery Register;
+          on POD completion the unit re-enters QC and a credit note is raised.
+        </p>
+      ) : !isLead ? (
+        <p className="text-sm" style={{ color: 'var(--color-text-tertiary)' }}>No Return DC generated yet.</p>
+      ) : (
+        <div className="space-y-2">
+          <p className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>Generate a Return DC and assign the pickup mode.</p>
+          <div className="flex gap-2">
+            {['technician', 'courier', 'porter'].map((m) => (
+              <button key={m} type="button" onClick={() => setMode(m)}
+                className={`flex-1 py-2 rounded-lg border text-sm capitalize ${mode === m ? 'border-[#534AB7] bg-[#534AB7]/10 text-[#534AB7] font-medium' : 'border-slate-200 text-slate-600'}`}>
+                {m}
+              </button>
+            ))}
+          </div>
+          {mode === 'technician' && (
+            <select value={techId} onChange={(e) => setTechId(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm">
+              <option value="">Select technician…</option>
+              {technicians.map((t) => (
+                <option key={t.user_id || t.id} value={t.user_id || t.id}>{t.name || t.full_name || t.email}</option>
+              ))}
+            </select>
+          )}
+          {mode === 'courier' && (
+            <div className="grid grid-cols-2 gap-2">
+              <input placeholder="Courier name" value={courier} onChange={(e) => setCourier(e.target.value)} className="border rounded-lg px-3 py-2 text-sm" />
+              <input placeholder="AWB number" value={awb} onChange={(e) => setAwb(e.target.value)} className="border rounded-lg px-3 py-2 text-sm" />
+            </div>
+          )}
+          <button type="button" disabled={busy || (mode === 'technician' && !techId)} onClick={generate}
+            className="support-btn-primary w-full min-h-[44px] disabled:opacity-50">
+            {busy ? 'Generating…' : 'Generate Return DC'}
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function SupportTicketDetail() {
   const { ticketId } = useParams();
   const { user } = useAuth();
@@ -570,6 +645,10 @@ export default function SupportTicketDetail() {
               </div>
             </div>
           </section>
+
+          {(pickups.length > 0 || ticket.ticket_category === 'pickup') && (
+            <ReturnDcPanel ticket={ticket} technicians={technicians} isLead={isSupportLead(user)} />
+          )}
 
           <section className="support-v3-card">
             <div className="support-v3-tabs mb-3">

@@ -18,6 +18,8 @@ const titles = {
   'pending-assign': 'Pending assign',
   overdue: 'Overdue',
   pickups: 'Pickups',
+  'pickup-bucket': 'Pickup Bucket',
+  'my-pickups': 'My Pickups',
   complaints: 'Complaints',
   'my-tickets': 'My tickets',
   'my-resolved': 'Resolved by me',
@@ -88,6 +90,7 @@ export default function SupportShell() {
             <nav>
               <div className="support-nav-label">Work</div>
               <NavItem to="/support/my-tickets" icon={ClipboardList} label="My tickets" badge={badges.my_open} badgeDanger />
+              <NavItem to="/support/my-pickups" icon={Truck} label="My pickups" />
               <NavItem to="/support/my-resolved" icon={CheckCircle2} label="Resolved by me" badge={badges.my_resolved} />
             </nav>
           ) : (
@@ -101,6 +104,8 @@ export default function SupportShell() {
               <NavItem to="/support/pending-assign" icon={UserCog} label="Pending assign" badge={badges.pending_assign} badgeDanger />
               <NavItem to="/support/overdue" icon={Clock} label="Overdue" badge={badges.overdue_tickets} badgeDanger />
               <NavItem to="/support/pickups" icon={Truck} label="Pickups" />
+              <NavItem to="/support/pickup-bucket" icon={Package} label="Pickup bucket" />
+              <NavItem to="/support/my-pickups" icon={Truck} label="My pickups" />
               <NavItem to="/support/complaints" icon={MessageSquare} label="Complaints" />
               <NavItem to="/support/my-resolved" icon={CheckCircle2} label="My resolved" badge={badges.my_resolved} />
 

@@ -112,7 +112,10 @@ function DeliveryCard({ dc, onChanged }) {
   return (
     <div className="bg-white border rounded-2xl shadow-sm overflow-hidden">
       <div className="flex items-center justify-between px-4 py-3 border-b">
-        <span className="font-mono font-semibold text-blue-700">{dc.dc_number}</span>
+        <span className="font-mono font-semibold text-blue-700 flex items-center gap-2">
+          {dc.dc_number}
+          {dc.movement_type === 'return' && <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700">PICKUP</span>}
+        </span>
         <StatusBadge status={dc.status} />
       </div>
       <div className="p-4 space-y-3">
@@ -228,21 +231,24 @@ function DeliveryCard({ dc, onChanged }) {
   );
 }
 
-export default function MyDeliveriesPage() {
+export default function MyDeliveriesPage({ movement = null }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
+  const isReturn = movement === 'return';
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const r = await getMyDeliveries();
-      setItems(r.data?.items || []);
+      let list = r.data?.items || [];
+      if (movement) list = list.filter((d) => (d.movement_type || 'outbound') === movement);
+      setItems(list);
     } catch {
-      toast.error('Failed to load your deliveries');
+      toast.error('Failed to load your assignments');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [movement]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -254,7 +260,7 @@ export default function MyDeliveriesPage() {
   return (
     <div className="p-4 max-w-xl mx-auto">
       <div className="mb-4">
-        <h1 className="text-xl font-semibold text-gray-900">My Deliveries</h1>
+        <h1 className="text-xl font-semibold text-gray-900">{isReturn ? 'My Pickups' : 'My Deliveries'}</h1>
         <div className="flex gap-2 mt-2">
           <span className="px-3 py-1 rounded-full text-xs bg-blue-50 text-blue-700">Today: {todayCount}</span>
           <span className="px-3 py-1 rounded-full text-xs bg-gray-100 text-gray-700">All Active: {items.length}</span>

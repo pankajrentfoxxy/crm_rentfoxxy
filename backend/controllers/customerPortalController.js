@@ -335,7 +335,7 @@ exports.listDeliveries = async (req, res) => {
 exports.raiseTicket = async (req, res) => {
   const client = await pool.connect();
   try {
-    const { subject, description, ticket_type, ttspl_id, photos } = req.body || {};
+    const { subject, description, ticket_type, ttspl_id, photos, pickup_address } = req.body || {};
     if (!subject || !description || description.length < 20) {
       return res.status(400).json({ success: false, message: 'Subject and description (min 20 chars) required' });
     }
@@ -379,8 +379,8 @@ exports.raiseTicket = async (req, res) => {
       `INSERT INTO support_tickets (
          customer_id, customer_name, customer_phone, status, last_activity_at,
          priority, top_level_remarks, ticket_email, ticket_category,
-         ttspl_id, dc_number, customer_portal_ticket, portal_customer_id
-       ) VALUES ($1,$2,$3,'open',NOW(),'normal',$4,$5,$6,$7,$8,TRUE,$9)
+         ttspl_id, dc_number, customer_portal_ticket, portal_customer_id, pickup_address
+       ) VALUES ($1,$2,$3,'open',NOW(),'normal',$4,$5,$6,$7,$8,TRUE,$9,$10::jsonb)
        RETURNING id`,
       [
         customerId,
@@ -392,6 +392,7 @@ exports.raiseTicket = async (req, res) => {
         ttspl_id || null,
         dcNumber,
         customerId,
+        pickup_address ? JSON.stringify(pickup_address) : null,
       ]
     );
     const ticketId = ticketRes.rows[0].id;
