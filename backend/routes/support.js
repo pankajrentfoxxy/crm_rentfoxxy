@@ -55,10 +55,53 @@ if (!fs.existsSync(supportUploadDir)) {
     fs.mkdirSync(supportUploadDir, { recursive: true });
 }
 
-const upload = multer({
-    dest: supportUploadDir,
-    limits: { fileSize: 8 * 1024 * 1024 }
+const MIME_EXT = {
+    'image/jpeg': 'jpg',
+    'image/jpg': 'jpg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+    'image/heic': 'heic',
+    'image/heif': 'heif',
+    'image/gif': 'gif',
+    'application/pdf': 'pdf'
+};
+
+const supportStorage = multer.diskStorage({
+    destination: supportUploadDir,
+    filename: (req, file, cb) => {
+        const ext = (path.extname(file.originalname || '').replace('.', '').toLowerCase())
+            || MIME_EXT[file.mimetype]
+            || 'jpg';
+        const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+        cb(null, `pod-${unique}.${ext}`);
+    }
 });
+
+const upload = multer({
+    storage: supportStorage,
+    // Phone camera photos are routinely larger than a few MB.
+    limits: { fileSize: 25 * 1024 * 1024 },
+    fileFilter: (req, file, cb) => {
+        if (file.mimetype && (file.mimetype.startsWith('image/') || file.mimetype === 'application/pdf')) {
+            return cb(null, true);
+        }
+        return cb(new Error('Only image or PDF files are allowed'));
+    }
+});
+
+// Wrap multer so its errors (size limit, file type) come back as JSON instead of
+// an unhandled 500 — otherwise the client just shows a generic "Action failed".
+const uploadPodFile = (req, res, next) => {
+    upload.single('pod')(req, res, (err) => {
+        if (err) {
+            const message = err.code === 'LIMIT_FILE_SIZE'
+                ? 'Image is too large. Please keep it under 25 MB.'
+                : (err.message || 'Upload failed');
+            return res.status(400).json({ success: false, message });
+        }
+        return next();
+    });
+};
 
 router.use(authMiddleware);
 router.use(requireSupportAccess);
@@ -95,7 +138,7 @@ router.post('/items/:itemId/warehouse-received', requireSupportLead, warehouseRe
 router.post('/items/:itemId/set-outcome', setOutcome);
 router.post('/items/:itemId/picked-up', markPickedUp);
 router.delete('/items/:itemId', requireSupportLead, removeTicketItem);
-router.post('/items/:itemId/pod', upload.single('pod'), uploadPod);
+router.post('/items/:itemId/pod', uploadPodFile, uploadPod);
 router.delete('/items/:itemId/pod', removePod);
 router.post('/items/:itemId/verify-otp', verifyOtp);
 router.post('/items/:itemId/verify-customer-otp', verifyOtp);
