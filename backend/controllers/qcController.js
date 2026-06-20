@@ -258,7 +258,7 @@ exports.submitQC = async (req, res) => {
         await client.query('BEGIN');
 
         const ticketMetaRes = await client.query(
-            `SELECT serial_number, machine_number, vendor_serial_id FROM tickets WHERE ticket_id = $1`,
+            `SELECT serial_number, machine_number, vendor_serial_id, ticket_type FROM tickets WHERE ticket_id = $1`,
             [id]
         );
         const ticketMeta = ticketMetaRes.rows[0] || {};
@@ -399,7 +399,36 @@ exports.submitQC = async (req, res) => {
                 );
             }
 
-            if (isCompleted && (serialNumber || machineNumber)) {
+            if (isCompleted && result === 'PASS' && ticketMeta.ticket_type === 'sales_order_qc') {
+                // Pre-dispatch "Dispatch QC" pass on a Sales Order laptop must mirror the
+                // stage-move path: mark the SO allocation / DC QC / vendor serial as passed
+                // and keep the unit RESERVED for its order (not generic ready stock),
+                // otherwise the laptop stays "pending" and keeps showing in the queue / blocks DC.
+                await client.query(
+                    `UPDATE dc_qc_tickets SET status = 'qc_passed', updated_at = NOW()
+                      WHERE ticket_id = $1`,
+                    [id]
+                );
+                await client.query(
+                    `UPDATE delivery_challan_lines
+                        SET pre_dispatch_qc_passed = TRUE, updated_at = NOW()
+                      WHERE pre_dispatch_qc_ticket_id = $1`,
+                    [id]
+                );
+                await client.query(
+                    `UPDATE sales_order_serials SET qc_status = 'passed', updated_at = NOW()
+                      WHERE qc_ticket_id = $1 AND status = 'attached'`,
+                    [id]
+                );
+                if (ticketMeta.vendor_serial_id) {
+                    await client.query(
+                        `UPDATE vendor_serial_numbers SET inventory_status = 'reserved', updated_at = NOW()
+                          WHERE serial_id = $1
+                            AND COALESCE(inventory_status,'in_stock') NOT IN ('rented','sold','on_demo','in_transit','returned')`,
+                        [ticketMeta.vendor_serial_id]
+                    );
+                }
+            } else if (isCompleted && (serialNumber || machineNumber)) {
                 await client.query(
                     `UPDATE inventory 
                      SET status = 'In Stock', stock_type = 'Ready', stage = 'Inventory'
