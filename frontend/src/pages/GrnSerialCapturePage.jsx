@@ -47,7 +47,7 @@ const PS_ERR =
 // Verify hardware config first, then submit the serial only if it matches.
 function buildPsCommand(apiBase, token) {
   const base = `${apiBase}/grn-capture/${token}`;
-  return `$cs=Get-CimInstance Win32_ComputerSystem;$cpu=(Get-CimInstance Win32_Processor).Name;$gpu=(Get-CimInstance Win32_VideoController|Select-Object -First 1).Name;$ram=[math]::Round($cs.TotalPhysicalMemory/1GB);$ssd=[math]::Round((Get-PhysicalDisk|Select-Object -First 1).Size/1000000000);$gen='';if($cpu -match 'i[3579]-(\\d{4,5})'){if($matches[1].Length -eq 4){$gen=$matches[1].Substring(0,1)}else{$gen=$matches[1].Substring(0,2)}};$cfg=@{manufacturer=$cs.Manufacturer;model=$cs.Model;processor=$cpu;generation=$gen;ram=$ram;ssd=$ssd;gpu=$gpu}|ConvertTo-Json;try{$v=Invoke-RestMethod -Uri "${base}/verify-configuration" -Method Post -Body $cfg -ContentType "application/json"}catch{${PS_ERR};Write-Host "Verify failed: $e" -ForegroundColor Red;Read-Host "Press Enter to close";return};if(-not $v.configurationMatched){Write-Host "Config mismatch:" -ForegroundColor Red;$v.errors|%{Write-Host (" - "+$_.field+": expected '"+$_.expected+"', found '"+$_.actual+"'") -ForegroundColor Red};Read-Host "Press Enter to close";return};$s=(Get-CimInstance Win32_BIOS).SerialNumber.Trim().ToUpper();try{Invoke-RestMethod -Uri "${base}" -Method Post -Body (@{serial_number=$s}|ConvertTo-Json) -ContentType "application/json"|Out-Null;Write-Host "Verified + serial sent: $s" -ForegroundColor Green}catch{${PS_ERR};Write-Host "Serial submit failed: $e" -ForegroundColor Red};Read-Host "Press Enter to close"`;
+  return `$cs=Get-CimInstance Win32_ComputerSystem;$cpu=(Get-CimInstance Win32_Processor).Name;$gpu=(Get-CimInstance Win32_VideoController|Select-Object -First 1).Name;$ram=[math]::Round($cs.TotalPhysicalMemory/1GB);$ssd=[math]::Round((Get-PhysicalDisk|Select-Object -First 1).Size/1000000000);$gen='';if($cpu -match '(\\d{1,2})(?:st|nd|rd|th)\\s*Gen'){$gen=$matches[1]}elseif($cpu -match 'i[3579][- ]?(\\d{3,5})'){$n=$matches[1];if($n.Length -ge 5){$gen=$n.Substring(0,2)}elseif($n.Length -eq 4){if($n.Substring(0,1) -eq '1'){$gen=$n.Substring(0,2)}else{$gen=$n.Substring(0,1)}}else{$gen=$n.Substring(0,1)}};$cfg=@{manufacturer=$cs.Manufacturer;model=$cs.Model;processor=$cpu;generation=$gen;ram=$ram;ssd=$ssd;gpu=$gpu}|ConvertTo-Json;try{$v=Invoke-RestMethod -Uri "${base}/verify-configuration" -Method Post -Body $cfg -ContentType "application/json"}catch{${PS_ERR};Write-Host "Verify failed: $e" -ForegroundColor Red;Read-Host "Press Enter to close";return};if(-not $v.configurationMatched){Write-Host "Config mismatch:" -ForegroundColor Red;$v.errors|%{Write-Host (" - "+$_.field+": expected '"+$_.expected+"', found '"+$_.actual+"'") -ForegroundColor Red};Read-Host "Press Enter to close";return};$s=(Get-CimInstance Win32_BIOS).SerialNumber.Trim().ToUpper();try{Invoke-RestMethod -Uri "${base}" -Method Post -Body (@{serial_number=$s}|ConvertTo-Json) -ContentType "application/json"|Out-Null;Write-Host "Verified + serial sent: $s" -ForegroundColor Green}catch{${PS_ERR};Write-Host "Serial submit failed: $e" -ForegroundColor Red};Read-Host "Press Enter to close"`;
 }
 
 function buildMacCommand(apiBase, token) {
@@ -65,8 +65,13 @@ $gpu = (Get-CimInstance Win32_VideoController | Select-Object -First 1).Name
 $ram = [math]::Round($cs.TotalPhysicalMemory/1GB)
 $ssd = [math]::Round((Get-PhysicalDisk | Select-Object -First 1).Size/1000000000)
 $gen = ''
-if ($cpu -match 'i[3579]-(\\d{4,5})') {
-  if ($matches[1].Length -eq 4) { $gen = $matches[1].Substring(0,1) } else { $gen = $matches[1].Substring(0,2) }
+if ($cpu -match '(\\d{1,2})(?:st|nd|rd|th)\\s*Gen') {
+  $gen = $matches[1]
+} elseif ($cpu -match 'i[3579][- ]?(\\d{3,5})') {
+  $n = $matches[1]
+  if ($n.Length -ge 5) { $gen = $n.Substring(0,2) }
+  elseif ($n.Length -eq 4) { if ($n.Substring(0,1) -eq '1') { $gen = $n.Substring(0,2) } else { $gen = $n.Substring(0,1) } }
+  else { $gen = $n.Substring(0,1) }
 }
 $cfg = @{ manufacturer = $cs.Manufacturer; model = $cs.Model; processor = $cpu; generation = $gen; ram = $ram; ssd = $ssd; gpu = $gpu } | ConvertTo-Json
 Write-Host "Verifying configuration..."

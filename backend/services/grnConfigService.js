@@ -52,6 +52,34 @@ function genNum(s) {
   return m ? parseInt(m[1], 10) : null;
 }
 
+/**
+ * Derive the Intel Core generation from the ACTUAL machine config. The receiver's
+ * script can't reliably compute this (a 4-digit model like i7-1165G7 is 11th gen,
+ * but i5-8250U is 8th — length alone is ambiguous), so we derive it here from the
+ * full CPU name, which is the single source of truth.
+ *   1) Prefer the explicit "Xth Gen" text Windows puts in the CPU name.
+ *   2) Else the model number after i3/i5/i7/i9:
+ *        5 digits          -> first two   (10210U -> 10, 12700H -> 12)
+ *        4 digits, "1..."  -> first two   (1165G7 -> 11, 1260P -> 12, 1360P -> 13)
+ *        4 digits, else    -> first one   (8550U -> 8, 9750H -> 9, 7200U -> 7)
+ *        3 digits          -> first one
+ *   3) Else any script-provided generation value.
+ * Returns null when it can't be determined (e.g. Ryzen / Apple) so it won't block.
+ */
+function genFromActual(actual = {}) {
+  const cpu = String(actual.processor || '');
+  let m = cpu.match(/(\d{1,2})\s*(?:st|nd|rd|th)\s*gen/i);
+  if (m) return parseInt(m[1], 10);
+  m = cpu.match(/i[3579][-\s]?(\d{3,5})/i);
+  if (m) {
+    const n = m[1];
+    if (n.length >= 5) return parseInt(n.slice(0, 2), 10);
+    if (n.length === 4) return n[0] === '1' ? parseInt(n.slice(0, 2), 10) : parseInt(n[0], 10);
+    return parseInt(n[0], 10);
+  }
+  return genNum(actual.generation);
+}
+
 /** First integer found, e.g. "256 GB SSD" → 256, "32GB" → 32. */
 function sizeNum(s) {
   if (typeof s === 'number') return Math.round(s);
@@ -134,12 +162,17 @@ function compareConfig(expected, actual) {
     checks.push({ field: 'processor', label: FIELD_LABELS.processor, required: true, matched, expected: expected.processor, actual: actual.processor ?? '' });
   }
 
-  // Generation — required when both sides are numeric; otherwise can't enforce.
+  // Generation — derived authoritatively from the actual CPU name (handles the
+  // 11th-gen "1165G7" case). Required only when both sides resolve to a number.
   {
     const e = genNum(expected.generation);
-    const a = genNum(actual.generation);
+    const a = genFromActual(actual);
     const matched = e == null || a == null || e === a;
-    checks.push({ field: 'generation', label: FIELD_LABELS.generation, required: true, matched, expected: expected.generation, actual: actual.generation ?? '' });
+    checks.push({
+      field: 'generation', label: FIELD_LABELS.generation, required: true, matched,
+      expected: expected.generation,
+      actual: a != null ? `${a}th Gen` : (actual.generation ?? ''),
+    });
   }
 
   // RAM — required, exact GB.
@@ -227,5 +260,6 @@ module.exports = {
   norm,
   cpuType,
   genNum,
+  genFromActual,
   sizeNum,
 };
