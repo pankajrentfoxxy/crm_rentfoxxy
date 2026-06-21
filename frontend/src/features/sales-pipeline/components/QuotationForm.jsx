@@ -21,18 +21,25 @@ function getField(obj, snake, camel) {
   return val || '';
 }
 
+function customerDisplayName(customer) {
+  if (!customer) return 'N/A';
+  return customer.company_name || customer.companyName || customer.name || customer.customer_name || 'N/A';
+}
+
 function buildBillingAddress(customer) {
   if (!customer) return null;
+  const displayName = customerDisplayName(customer);
   if (customer.billing_address && typeof customer.billing_address === 'object') {
     return {
       ...customer.billing_address,
+      name: displayName,
       gst_number: customer.billing_address.gst_number
         || getField(customer, 'gst_no', 'gstNo')
         || getField(customer, 'gst_number', 'gstNumber'),
     };
   }
   return {
-    name: customer.name || customer.company_name || customer.companyName || 'N/A',
+    name: displayName,
     phone: customer.phone || customer.customer_number || 'N/A',
     country: 'India',
     state: getField(customer, 'billing_state', 'billingState') || 'N/A',
@@ -482,7 +489,11 @@ function QuotationPreview({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <PreviewAddress title="Bill To" addr={billingAddress} gstNumber={form.GST_number} />
+            <PreviewAddress
+              title="Bill To"
+              addr={billingAddress ? { ...billingAddress, name: form.customer_name || billingAddress.name } : null}
+              gstNumber={form.GST_number}
+            />
             <PreviewAddress title="Ship To" addr={shippingAddress} />
           </div>
 
