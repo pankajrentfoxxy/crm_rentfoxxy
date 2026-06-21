@@ -36,10 +36,10 @@ export const vendorAccordionChildren = [
  *  sidebar in lock-step with what the route actually allows. */
 export const floorPipelineAccordionChildren = [
   { label: 'Floor Dashboard', path: '/floor-pipeline/dashboard', section: 'floor_pipeline' },
-  { label: 'All Tickets', path: '/floor-pipeline/tickets', section: 'floor_pipeline' },
-  { label: 'QC Queue', path: '/floor-pipeline/tickets?stage=QC1,QC2', section: 'floor_pipeline' },
-  { label: 'Chip Level Repair', path: '/floor-pipeline/tickets?stage=Chip+Level+Repair', section: 'floor_pipeline' },
-  { label: 'Body & Paint', path: '/floor-pipeline/tickets?stage=Body+%26+Paint', section: 'floor_pipeline' },
+  { label: 'All Tickets', path: '/floor-pipeline/tickets', section: 'floor_pipeline', countKey: 'all_tickets' },
+  { label: 'QC Queue', path: '/floor-pipeline/tickets?stage=QC1,QC2', section: 'floor_pipeline', countKey: 'qc_queue' },
+  { label: 'Chip Level Repair', path: '/floor-pipeline/tickets?stage=Chip+Level+Repair', section: 'floor_pipeline', countKey: 'chip_level' },
+  { label: 'Body & Paint', path: '/floor-pipeline/tickets?stage=Body+%26+Paint', section: 'floor_pipeline', countKey: 'body_paint' },
 ];
 
 /** Inventory accordion. All pages live under /inventory-management/* (guarded by

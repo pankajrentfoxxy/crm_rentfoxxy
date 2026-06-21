@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Loader2, Package, FileText, Check, RotateCcw, Truck, PenLine, ArrowRightLeft, X } from 'lucide-react';
+import { Loader2, Package, FileText, Check, RotateCcw, Truck, PenLine, ArrowRightLeft, X, Laptop } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext';
 import api from '../../../utils/api';
-import { getTechnicianBucket, markPartUsed, returnPart, requestPartReassign } from '../supportPartsApi';
+import { getTechnicianBucket, getTechnicianLaptopBucket, markPartUsed, returnPart, requestPartReassign } from '../supportPartsApi';
 import ESignChallanModal from '../components/ESignChallanModal';
 import { usePartsBase } from '../partsBase';
 
@@ -273,12 +273,56 @@ function PartRow({ part, onChanged, canManageReturn, base }) {
   );
 }
 
+function LaptopBucketCard({ item }) {
+  return (
+    <div className="bg-white rounded-2xl border p-4">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+            item.pickup_type === 'repair' ? 'bg-orange-100 text-orange-800' : 'bg-blue-100 text-blue-800'
+          }`}>
+            {item.pickup_type === 'repair' ? '🔧 Repair' : '🔄 Return'}
+          </span>
+          <p className="font-mono font-bold text-blue-700 mt-1">
+            {item.ttspl_id || item.unique_serial_number || item.serial_number}
+          </p>
+          <p className="text-sm text-gray-700">{item.brand} {item.model}</p>
+          <p className="text-xs text-gray-500">{[item.ram, item.storage].filter(Boolean).join(' · ')}</p>
+        </div>
+        <div className="text-right shrink-0">
+          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+            item.customer_otp_verified_at ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+          }`}>
+            {item.warehouse_received_at ? '✓ At warehouse' : item.customer_otp_verified_at ? '✓ Picked up' : 'In progress'}
+          </span>
+          {item.return_dc_number && (
+            <p className="text-xs text-gray-400 mt-1 font-mono">{item.return_dc_number}</p>
+          )}
+        </div>
+      </div>
+      <div className="mt-3 pt-3 border-t flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
+        <Link to={`/support/tickets/${item.ticket_id}`} className="text-[#534AB7] font-medium">
+          Ticket #{item.ticket_id} →
+        </Link>
+        <span>{item.customer_name}</span>
+        {item.visited_lat && item.visited_lng && (
+          <a href={`https://www.google.com/maps?q=${item.visited_lat},${item.visited_lng}`}
+            target="_blank" rel="noopener noreferrer" className="text-blue-600">🗺 Location</a>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function SupportTechBucketPage() {
   const { user } = useAuth();
   const base = usePartsBase();
+  const [tab, setTab] = useState('laptops');
   const [bucket, setBucket] = useState([]);
   const [awaiting, setAwaiting] = useState([]);
   const [total, setTotal] = useState(0);
+  const [laptopBucket, setLaptopBucket] = useState([]);
+  const [laptopTotal, setLaptopTotal] = useState(0);
   const [loading, setLoading] = useState(true);
 
   const isTech = user?.role === 'support_tech';
@@ -286,14 +330,21 @@ export default function SupportTechBucketPage() {
 
   const load = useCallback(() => {
     setLoading(true);
-    getTechnicianBucket()
-      .then((r) => {
-        setBucket(r.data.bucket || []);
-        setAwaiting(r.data.awaiting || []);
-        setTotal(r.data.total || 0);
-      })
-      .catch(() => { setBucket([]); setAwaiting([]); })
-      .finally(() => setLoading(false));
+    Promise.all([
+      getTechnicianBucket()
+        .then((r) => {
+          setBucket(r.data.bucket || []);
+          setAwaiting(r.data.awaiting || []);
+          setTotal(r.data.total || 0);
+        })
+        .catch(() => { setBucket([]); setAwaiting([]); setTotal(0); }),
+      getTechnicianLaptopBucket()
+        .then((r) => {
+          setLaptopBucket(r.data.bucket || []);
+          setLaptopTotal(r.data.total || 0);
+        })
+        .catch(() => { setLaptopBucket([]); setLaptopTotal(0); }),
+    ]).finally(() => setLoading(false));
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -306,11 +357,59 @@ export default function SupportTechBucketPage() {
     );
   }
 
+  const TABS = [
+    { id: 'laptops', label: 'Laptops', icon: Laptop, n: laptopTotal },
+    { id: 'parts', label: 'Parts', icon: Package, n: total },
+  ];
+
   return (
     <div className="max-w-3xl mx-auto p-4 space-y-4">
       <div className="flex items-center gap-2">
         <Package className="w-5 h-5 text-[#534AB7]" />
-        <h1 className="text-lg font-semibold m-0">{isTech ? 'My parts bucket' : 'Technician parts bucket'}</h1>
+        <h1 className="text-lg font-semibold m-0">{isTech ? 'My bucket' : 'Technician bucket'}</h1>
+      </div>
+
+      <div className="flex gap-2">
+        {TABS.map((t) => {
+          const Icon = t.icon;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setTab(t.id)}
+              className={`flex-1 inline-flex items-center justify-center gap-2 py-2.5 rounded-xl border text-sm font-medium ${
+                tab === t.id ? 'border-[#534AB7] bg-[#534AB7]/10 text-[#534AB7]' : 'border-slate-200 text-slate-600'
+              }`}
+            >
+              <Icon className="w-4 h-4" /> {t.label} ({t.n})
+            </button>
+          );
+        })}
+      </div>
+
+      {tab === 'laptops' && (
+        <div className="space-y-4">
+          {laptopBucket.length === 0 && (
+            <div className="bg-white rounded-2xl border p-8 text-center text-sm text-gray-500">
+              No laptops currently in the pickup bucket.
+            </div>
+          )}
+          {laptopBucket.map((group) => (
+            <div key={group.tech_id} className="space-y-3">
+              {!isTech && (
+                <p className="text-sm font-semibold text-gray-700 px-1">
+                  {group.tech_name || 'Unassigned'} · {group.laptops.length} laptop{group.laptops.length === 1 ? '' : 's'}
+                </p>
+              )}
+              {group.laptops.map((lap) => <LaptopBucketCard key={lap.id} item={lap} />)}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {tab === 'parts' && (
+      <>
+      <div className="flex items-center gap-2">
         <span className="ml-auto text-sm text-gray-500">{total} part{total === 1 ? '' : 's'} held</span>
       </div>
 
@@ -370,6 +469,8 @@ export default function SupportTechBucketPage() {
           </div>
         </div>
       ))}
+      </>
+      )}
     </div>
   );
 }

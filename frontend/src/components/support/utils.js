@@ -194,25 +194,33 @@ export const getItemStepperV3Complaint = (item) => {
 };
 
 export const getItemStepperV3Pickup = (item) => {
-  const es = item.effective_current_step || (item.assigned_to ? 'assigned' : 'unassigned');
+  const es = item.effective_current_step || (item.assigned_to || item.pickup_assigned_to ? 'assigned' : 'unassigned');
   const steps = [
     { key: 'assigned', label: 'Assigned' },
-    { key: 'pickup', label: 'Pickup' },
-    { key: 'pod', label: 'POD' },
-    { key: 'wh', label: 'Warehouse OTP' },
-    { key: 'closed', label: 'Closed' }
+    { key: 'reached', label: 'Reached' },
+    { key: 'pod', label: 'POD Photo' },
+    { key: 'customer_otp', label: 'Customer OTP' },
+    { key: 'warehouse_confirmed', label: 'Warehouse' },
+    { key: 'closed', label: 'Done' }
   ];
   const idxMap = {
     unassigned: 0,
     assigned: 0,
-    wait_72h: 0,
-    in_transit: 1,
-    pickup_action: 1,
-    reached_warehouse: 4,
-    fixed_pending_pod: 2,
+    in_transit: 0, // legacy
+    wait_72h: 0, // legacy
+    pickup_action: 0, // legacy
+    reached: 1,
+    visited: 1, // legacy alias
     pod_uploaded: 2,
-    warehouse_otp: 3,
-    otp_verified: 4
+    fixed_pending_pod: 2, // legacy alias
+    customer_otp: 3,
+    picked_up: 3, // legacy alias
+    warehouse_confirmed: 4,
+    reached_warehouse: 4, // legacy alias
+    inventory_updated: 5,
+    resolved: 5,
+    otp_verified: 5,
+    closed: 5
   };
   let currentIndex = idxMap[es] ?? 0;
   if (isClosed(item)) currentIndex = steps.length - 1;

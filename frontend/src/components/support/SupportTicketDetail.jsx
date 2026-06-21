@@ -13,13 +13,13 @@ import DetailSidebar from './components/DetailSidebar';
 import ReplacementPanel from './components/ReplacementPanel';
 import AddWorkflowPhasePanel from './components/AddWorkflowPhasePanel';
 import RaisePartRequestForm from '../../features/support/components/RaisePartRequestForm';
+import PickupItemCard from './components/PickupItemCard';
+import CreatePickupModal from './components/CreatePickupModal';
 import {
   formatItemId,
-  formatRelative,
   formatTicketId,
   formatAddress,
   initials,
-  pickupMinScheduleDate,
   podUrl as podUrlFor,
   compressImageFile
 } from './utils';
@@ -62,9 +62,6 @@ function ItemCard({
   const [comment, setComment] = useState('');
   const [otp, setOtp] = useState('');
   const [verifyInput, setVerifyInput] = useState('');
-  const [loanSerial, setLoanSerial] = useState('');
-  const [loanAt, setLoanAt] = useState('');
-  const [pickupAt, setPickupAt] = useState('');
   const [busy, setBusy] = useState(false);
 
   const lead = isSupportLead(user);
@@ -73,9 +70,13 @@ function ItemCard({
   const canAct = lead || (tech && item.assigned_to === user.user_id);
   const podUrl = podUrlFor(item.proof_of_completion_path || item.pod_image_path);
   const ttsplLabel = item.ttspl_id || item.unique_serial_number || item.serial_number;
-  const minPickup = pickupMinScheduleDate(item.loan_delivered_at);
-  const pickupBlocked = minPickup && Date.now() < minPickup.getTime();
   const terminal = ['resolved', 'closed', 'inventory_updated'].includes(item.status);
+  // Phase 20: pickup items render via the dedicated PickupItemCard. This is the
+  // default for every pickup; only the deprecated self-carry / loan-machine flow
+  // (explicitly marked) falls back to the legacy rendering.
+  const isLegacyPickup = item.item_type === 'pickup' && !item.pickup_type
+    && (item.pickup_method === 'self_carry' || item.loan_delivered_at);
+  const isNewPickup = item.item_type === 'pickup' && !isLegacyPickup;
 
   const run = async (fn) => {
     setBusy(true);
@@ -149,9 +150,13 @@ function ItemCard({
       <div className="p-4 space-y-3">
         <ItemStepper item={item} replacementOrder={replacementOrder} />
 
+        {isNewPickup ? (
+          <PickupItemCard item={item} ticket={ticket} onRefresh={onRefresh} />
+        ) : (
         <SpecGrid item={item} />
+        )}
 
-        {showServiceAddress && (
+        {!isNewPickup && showServiceAddress && (
           <div className="support-v3-address-bar">
             <p className="support-v3-section-label !mb-1 !mt-0">Service address</p>
             <p className="text-sm" style={{ color: 'var(--color-text-primary)' }}>{formatAddress(ticket.ticket_address)}</p>
@@ -169,6 +174,7 @@ function ItemCard({
           </div>
         )}
 
+        {!isNewPickup && (
         <div className="support-item-tech-row">
           {canAssign ? (
             <div className="flex flex-wrap items-center gap-2">
@@ -193,18 +199,10 @@ function ItemCard({
             </p>
           )}
         </div>
+        )}
 
         {item.item_type === 'complaint' && canAct && !terminal && item.assigned_to && (
           <RaisePartRequestForm ticket={ticket} item={item} />
-        )}
-
-        {item.item_type === 'pickup' && item.loan_delivered_at && (
-          <div className="support-pickup-notice !mx-0">
-            Loan laptop {item.loan_machine_serial || '—'} delivered {new Date(item.loan_delivered_at).toLocaleString()}
-            {pickupBlocked && minPickup && (
-              <span> · Pickup available after {minPickup.toLocaleString()}</span>
-            )}
-          </div>
         )}
 
         {item.item_type === 'complaint' && canAct && !terminal && st === 'verify_ttspl' && item.assigned_to && (
@@ -416,47 +414,6 @@ function ItemCard({
           </div>
         )}
 
-        {item.item_type === 'pickup' && canAct && !terminal && (st === 'assigned' || st === 'wait_72h' || st === 'pickup_action') && (
-          <div className="space-y-2">
-            <p className="text-sm font-medium">Loan (optional)</p>
-            <input className="w-full border rounded-lg px-3 py-3 min-h-[44px] text-base" placeholder="Loan machine serial" value={loanSerial} onChange={(e) => setLoanSerial(e.target.value)} />
-            <input type="datetime-local" className="w-full border rounded-lg px-3 py-3 min-h-[44px] text-base" value={loanAt} onChange={(e) => setLoanAt(e.target.value)} />
-            <button type="button" className="support-btn-outline w-full min-h-[44px]" disabled={busy || !loanSerial} onClick={() => run(() => api.post(`/support/items/${item.id}/loan-machine`, { loan_machine_serial: loanSerial, loan_delivered_at: loanAt || undefined }))}>
-              Log loan machine delivery
-            </button>
-            <button type="button" className="text-sm text-[#534AB7] min-h-[44px]" disabled={busy} onClick={() => run(() => api.post(`/support/items/${item.id}/picked-up`))}>
-              Proceed to mark pickup without loan
-            </button>
-            <input type="datetime-local" className="w-full border rounded-lg px-3 py-3 min-h-[44px] text-base" value={pickupAt} onChange={(e) => setPickupAt(e.target.value)} disabled={pickupBlocked} />
-            <button type="button" className="support-btn-outline w-full min-h-[44px]" disabled={busy || pickupBlocked || !pickupAt} onClick={() => run(() => api.post(`/support/items/${item.id}/schedule-pickup`, { pickup_scheduled_at: pickupAt }))}>
-              Schedule pickup
-            </button>
-            <button type="button" className="support-btn-primary w-full min-h-[44px]" disabled={busy || pickupBlocked} onClick={() => run(() => api.post(`/support/items/${item.id}/picked-up`))}>
-              Mark pickup completed
-            </button>
-          </div>
-        )}
-
-        {item.item_type === 'pickup' && canAct && !terminal && st === 'fixed_pending_pod' && (
-          <div className="support-v3-pod-zone">
-            <p className="font-medium text-sm mb-2">Upload proof of completion after pickup</p>
-            <label className="support-btn-outline inline-flex items-center justify-center cursor-pointer min-h-[44px]">
-              Take photo / Upload file
-              <input type="file" accept="image/*,application/pdf" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) run(async () => { const compressed = await compressImageFile(file); const fd = new FormData(); fd.append('pod', compressed); return api.post(`/support/items/${item.id}/pod`, fd); }); }} />
-            </label>
-          </div>
-        )}
-
-        {item.item_type === 'pickup' && canAct && !terminal && st === 'warehouse_otp' && (
-          <div className="space-y-2">
-            <p className="support-v3-section-label">Warehouse OTP</p>
-            <OtpInput value={otp} onChange={setOtp} disabled={busy} />
-            <button type="button" className="support-btn-primary w-full min-h-[44px]" disabled={busy || otp.replace(/\D/g, '').length !== 6} onClick={() => run(() => api.post(`/support/items/${item.id}/verify-warehouse-otp`, { otp }))}>
-              Confirm warehouse receipt
-            </button>
-          </div>
-        )}
-
         {item.item_type === 'replacement' && lead && replacementOrder && !terminal && (
           <div className="support-replacement-banner !mx-0">
             <p className="font-medium text-pink-900">Replacement order</p>
@@ -584,6 +541,7 @@ export default function SupportTicketDetail() {
   const [editing, setEditing] = useState(false);
   const [showReplacement, setShowReplacement] = useState(false);
   const [phasePanel, setPhasePanel] = useState(null);
+  const [pickupModal, setPickupModal] = useState(null);
   const [mobileDetails, setMobileDetails] = useState(false);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('complaint');
@@ -701,7 +659,11 @@ export default function SupportTicketDetail() {
   const workflowForItem = (item) => {
     if (!isSupportLead(user) || ticket.status === 'closed') return null;
     const resolved = ['resolved', 'closed'].includes(item.status);
-    const actions = { onAddPhase: (type) => setPhasePanel({ sourceItem: item, phaseType: type }) };
+    const actions = {
+      onAddPhase: (type) => (type === 'pickup'
+        ? setPickupModal({ sourceItem: item })
+        : setPhasePanel({ sourceItem: item, phaseType: type }))
+    };
     if (item.item_type === 'complaint' && (resolved || item.outcome === 'replacement_required')) {
       if (!hasLinkedPickup(item.id)) actions.showPickup = true;
       if (item.outcome === 'replacement_required' && !hasLinkedReplacement(item.id)) actions.showReplacement = true;
@@ -729,6 +691,9 @@ export default function SupportTicketDetail() {
               {canInitiateReplacement && (
                 <button type="button" className="support-btn-primary min-h-[44px]" onClick={() => setShowReplacement(true)}>Initiate replacement</button>
               )}
+              {!ticket.return_dc_number && (
+                <button type="button" className="support-btn-outline min-h-[44px]" onClick={() => setPickupModal({})}>+ Add pickup</button>
+              )}
               <button type="button" className="support-btn-outline min-h-[44px]" onClick={() => setEditing((v) => !v)}>{editing ? 'Close edit' : 'Edit ticket'}</button>
             </>
           )}
@@ -743,6 +708,15 @@ export default function SupportTicketDetail() {
           phaseType={phasePanel.phaseType}
           onDone={() => { setPhasePanel(null); load(); }}
           onCancel={() => setPhasePanel(null)}
+        />
+      )}
+
+      {pickupModal && (
+        <CreatePickupModal
+          ticket={ticket}
+          items={items}
+          onCreated={() => { setPickupModal(null); load(); }}
+          onClose={() => setPickupModal(null)}
         />
       )}
 

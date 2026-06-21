@@ -4,12 +4,18 @@ import { fetchDeliveryChallan } from '../../../utils/salesManagementApi';
 export default function DeliveryChallanDetailModal({ dcNumber, onClose }) {
   const [lines, setLines] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     if (!dcNumber) return;
     setLoading(true);
+    setError('');
     fetchDeliveryChallan(dcNumber)
       .then((data) => setLines(data.lines || []))
+      .catch(() => {
+        setLines([]);
+        setError('No details found for this challan.');
+      })
       .finally(() => setLoading(false));
   }, [dcNumber]);
 
@@ -37,12 +43,36 @@ export default function DeliveryChallanDetailModal({ dcNumber, onClose }) {
             <p className="text-gray-600 mt-1">SO: {header.sales_order_number || '—'} | Quotation: {header.quotation_number || '—'}</p>
           </div>
           {loading ? <p className="text-sm text-gray-500">Loading...</p> : null}
-          {lines.map((line, i) => (
-            <div key={line.id || i} className="border rounded-lg p-3 text-sm">
-              <p className="font-semibold">{line.model_name} — Qty {line.quantity}</p>
-              <p className="text-gray-600">{[line.processor, line.generation, line.ram, line.storage].filter(Boolean).join(' | ')}</p>
-            </div>
-          ))}
+          {!loading && error ? <p className="text-sm text-gray-500">{error}</p> : null}
+          {lines.map((line, i) => {
+            const units = Array.isArray(line.serials_detail) ? line.serials_detail : [];
+            return (
+              <div key={line.id || i} className="border rounded-lg p-3 text-sm space-y-2">
+                <p className="font-semibold">{line.model_name} — Qty {line.quantity}</p>
+                {units.length === 0 ? (
+                  <p className="text-gray-600">{[line.processor, line.generation, line.ram, line.storage].filter(Boolean).join(' | ') || 'No unit details'}</p>
+                ) : (
+                  units.map((u, ui) => {
+                    const config = [u.processor, u.generation, u.ram, u.storage, u.gpu, u.screen_size].filter(Boolean).join(' | ');
+                    return (
+                      <div key={u.ttspl || u.serial_number || ui} className="rounded-md bg-gray-50 border border-gray-100 px-3 py-2">
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                          <span className="font-mono font-semibold text-gray-900">{u.ttspl || '—'}</span>
+                          {u.serial_number && u.serial_number !== u.ttspl && (
+                            <span className="text-xs text-gray-500">SN: <span className="font-mono">{u.serial_number}</span></span>
+                          )}
+                          {u.status && (
+                            <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-gray-200 text-gray-600">{u.status}</span>
+                          )}
+                        </div>
+                        {config && <p className="text-gray-600 mt-0.5">{config}</p>}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>

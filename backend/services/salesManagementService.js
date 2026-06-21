@@ -279,29 +279,50 @@ async function getDeliveryChallanLines(dcNumber) {
   return result.rows;
 }
 
-/** Return DC list from support tickets */
+/** Return DC list — sourced from the actual Return DC rows
+ *  (delivery_challan_lines with movement_type='return'), one row per RDC. */
 async function listReturnDeliveryChallans() {
   const result = await pool.query(
     `SELECT
-       st.id AS ticket_id,
-       st.return_dc_number,
-       COALESCE(st.serial_number, sti.serial_number) AS serial_number,
-       COALESCE(st.unique_number, sti.unique_serial_number) AS unique_number,
-       st.status AS ticket_status,
-       st.complaint_type,
-       st.closed_at,
-       st.customer_name,
-       sti.pod_uploaded_at AS pod_closed_at
-     FROM support_tickets st
+       rl.dc_number              AS return_dc_number,
+       rl.dc_number              AS rdc_number,
+       rl.support_ticket_id      AS ticket_id,
+       rl.customer_id,
+       rl.customer_name,
+       rl.serial_number,
+       rl.brand,
+       rl.model_name,
+       rl.status,
+       rl.created_at,
+       COALESCE(rl.dispatched_at, rl.created_at) AS dispatched_at,
+       rl.delivered_at,
+       COALESCE(st.dc_number, vsn.current_dc_number) AS original_dc_number,
+       COALESCE(st.complaint_type, sti.pickup_type, 'return') AS reason,
+       sti.pickup_type,
+       COALESCE(sti.ttspl_id, vsn.inventory_asset_code, NULLIF(split_part(rl.serial_number->>0, '|', 3), '')) AS ttspl_id
+     FROM delivery_challan_lines rl
+     LEFT JOIN support_tickets st ON st.id = rl.support_ticket_id
      LEFT JOIN LATERAL (
-       SELECT serial_number, unique_serial_number, pod_uploaded_at
+       SELECT pickup_type, ttspl_id, unique_serial_number, serial_number
        FROM support_ticket_items
-       WHERE ticket_id = st.id
-       ORDER BY id ASC
+       WHERE return_dc_number = rl.dc_number AND item_type = 'pickup'
+       ORDER BY id DESC
        LIMIT 1
      ) sti ON true
-     WHERE st.return_dc_number IS NOT NULL
-     ORDER BY st.closed_at DESC NULLS LAST, st.updated_at DESC
+     LEFT JOIN LATERAL (
+       SELECT v.inventory_asset_code, v.current_dc_number
+       FROM vendor_serial_numbers v
+       WHERE v.deleted_at IS NULL
+         AND (
+           (sti.ttspl_id IS NOT NULL AND v.inventory_asset_code = sti.ttspl_id)
+           OR (sti.serial_number IS NOT NULL AND v.serial_number = sti.serial_number)
+           OR v.inventory_asset_code = NULLIF(split_part(rl.serial_number->>0, '|', 3), '')
+           OR v.serial_number = NULLIF(split_part(rl.serial_number->>0, '|', 2), '')
+         )
+       LIMIT 1
+     ) vsn ON true
+     WHERE rl.movement_type = 'return'
+     ORDER BY rl.created_at DESC NULLS LAST
      LIMIT 500`
   );
   return result.rows;
@@ -311,8 +332,8 @@ async function getOperationCounts() {
   const [q, so, dc, rdc] = await Promise.all([
     pool.query(`SELECT COUNT(DISTINCT quotation_number)::int AS c FROM sales_quotations`),
     pool.query(`SELECT COUNT(DISTINCT sales_order_number)::int AS c FROM sales_order_lines`),
-    pool.query(`SELECT COUNT(DISTINCT dc_number)::int AS c FROM delivery_challan_lines`),
-    pool.query(`SELECT COUNT(*)::int AS c FROM support_tickets WHERE return_dc_number IS NOT NULL`),
+    pool.query(`SELECT COUNT(DISTINCT dc_number)::int AS c FROM delivery_challan_lines WHERE COALESCE(movement_type, 'outbound') = 'outbound'`),
+    pool.query(`SELECT COUNT(DISTINCT dc_number)::int AS c FROM delivery_challan_lines WHERE movement_type = 'return'`),
   ]);
   return {
     quotations: q.rows[0]?.c || 0,

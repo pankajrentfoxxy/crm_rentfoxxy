@@ -29,6 +29,26 @@ function laptopConfig(lap) {
     .join(' · ');
 }
 
+function PodLinks({ files, keyPrefix }) {
+  if (!Array.isArray(files) || files.length === 0) return <span className="text-gray-400">—</span>;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {files.map((p, idx) => (
+        <a
+          key={`${keyPrefix}-pod-${idx}`}
+          href={podFileUrl(p)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-blue-200 text-blue-600 hover:bg-blue-50"
+        >
+          <FileText className="w-3 h-3" />
+          {files.length > 1 ? `View ${idx + 1}` : 'View POD'}
+        </a>
+      ))}
+    </div>
+  );
+}
+
 function KycBadge({ status }) {
   const map = {
     verified: 'bg-green-100 text-green-700',
@@ -69,6 +89,8 @@ export default function CustomerDetailPage() {
   const navigate = useNavigate();
   const [customer, setCustomer] = useState(null);
   const [laptops, setLaptops] = useState([]);
+  const [returnedLaptops, setReturnedLaptops] = useState([]);
+  const [assetView, setAssetView] = useState('active');
   const [tab, setTab] = useState(0);
   const [editOpen, setEditOpen] = useState(false);
   const [ttsplOpen, setTtsplOpen] = useState(null);
@@ -80,7 +102,8 @@ export default function CustomerDetailPage() {
       const res = await getCustomer(id);
       setCustomer(res.data?.customer);
       const lapRes = await getCustomerLaptops(id);
-      setLaptops(lapRes.data?.laptops || []);
+      setLaptops(lapRes.data?.active || lapRes.data?.laptops || []);
+      setReturnedLaptops(lapRes.data?.returned || []);
     } catch {
       toast.error('Failed to load customer');
     }
@@ -190,59 +213,92 @@ export default function CustomerDetailPage() {
       {tab === 1 && <CustomerDocuments customerId={customer.customer_id} />}
 
       {tab === 2 && (
-        <div className="rounded-xl border border-gray-100 bg-white shadow-sm overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-xs text-gray-500 text-left">
-              <tr>
-                {['TTSPL ID', 'Model', 'Config', 'Entity', 'DC Number', 'Delivered Date', 'Monthly Rate', 'POD', 'Status'].map((h) => <th key={h} className="p-3">{h}</th>)}
-              </tr>
-            </thead>
-            <tbody>
-              {laptops.length === 0 ? (
-                <tr><td colSpan={9} className="p-6 text-center text-gray-400">No assets currently with this customer</td></tr>
-              ) : laptops.map((lap) => (
-                <tr key={lap.serial_id || lap.ttspl_id} className="border-t border-gray-100">
-                  <td className="p-3">
-                    <button type="button" onClick={() => setTtsplOpen(lap.ttspl_id || lap.serial_number)}
-                      className="text-blue-600 hover:underline font-mono text-xs">
-                      {lap.ttspl_id || lap.serial_number}
-                    </button>
-                  </td>
-                  <td className="p-3">{lap.model_name || '—'}</td>
-                  <td className="p-3 text-xs">{laptopConfig(lap) || '—'}</td>
-                  <td className="p-3 text-xs">
-                    {lap.entity_code === 'gorefurbo'
-                      ? <span className="px-2 py-0.5 rounded bg-purple-100 text-purple-700">Gorefurbo</span>
-                      : <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-700">Rentfoxxy</span>}
-                  </td>
-                  <td className="p-3 text-xs font-mono">{lap.dc_number || '—'}</td>
-                  <td className="p-3 text-xs">{(lap.delivered_at || lap.dispatch_date) ? new Date(lap.delivered_at || lap.dispatch_date).toLocaleDateString('en-IN') : '—'}</td>
-                  <td className="p-3 text-xs">{lap.rent_monthly_rate ? formatCurrency(lap.rent_monthly_rate) : '—'}</td>
-                  <td className="p-3 text-xs">
-                    {Array.isArray(lap.pod_files) && lap.pod_files.length > 0 ? (
-                      <div className="flex flex-wrap gap-1.5">
-                        {lap.pod_files.map((p, idx) => (
-                          <a
-                            key={`${lap.serial_id}-pod-${idx}`}
-                            href={podFileUrl(p)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-blue-200 text-blue-600 hover:bg-blue-50"
-                          >
-                            <FileText className="w-3 h-3" />
-                            {lap.pod_files.length > 1 ? `View ${idx + 1}` : 'View POD'}
-                          </a>
-                        ))}
-                      </div>
-                    ) : (
-                      <span className="text-gray-400">—</span>
-                    )}
-                  </td>
-                  <td className="p-3"><span className="px-2 py-0.5 rounded-full bg-gray-100 text-xs">{lap.status || '—'}</span></td>
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3 sm:max-w-md">
+            <button
+              type="button"
+              onClick={() => setAssetView('active')}
+              className={`rounded-xl border p-4 text-left transition-colors ${
+                assetView === 'active' ? 'border-green-500 bg-green-50' : 'border-gray-100 bg-white hover:bg-gray-50'
+              }`}
+            >
+              <p className="text-xs text-gray-500">Active (on rent)</p>
+              <p className="text-2xl font-bold text-green-700">{laptops.length}</p>
+            </button>
+            <button
+              type="button"
+              onClick={() => setAssetView('returned')}
+              className={`rounded-xl border p-4 text-left transition-colors ${
+                assetView === 'returned' ? 'border-amber-500 bg-amber-50' : 'border-gray-100 bg-white hover:bg-gray-50'
+              }`}
+            >
+              <p className="text-xs text-gray-500">Returned</p>
+              <p className="text-2xl font-bold text-amber-700">{returnedLaptops.length}</p>
+            </button>
+          </div>
+
+          <div className="rounded-xl border border-gray-100 bg-white shadow-sm overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-xs text-gray-500 text-left">
+                <tr>
+                  {(assetView === 'active'
+                    ? ['TTSPL ID', 'Serial No', 'Model', 'Config', 'Entity', 'DC Number', 'Delivered Date', 'Monthly Rate', 'POD', 'Status']
+                    : ['TTSPL ID', 'Serial No', 'Model', 'Config', 'Return DC', 'Returned Date', 'Type', 'POD', 'Status']
+                  ).map((h) => <th key={h} className="p-3">{h}</th>)}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {assetView === 'active' ? (
+                  laptops.length === 0 ? (
+                    <tr><td colSpan={10} className="p-6 text-center text-gray-400">No assets currently with this customer</td></tr>
+                  ) : laptops.map((lap) => (
+                    <tr key={lap.serial_id || lap.ttspl_id} className="border-t border-gray-100">
+                      <td className="p-3">
+                        <button type="button" onClick={() => setTtsplOpen(lap.ttspl_id || lap.serial_number)}
+                          className="text-blue-600 hover:underline font-mono text-xs">
+                          {lap.ttspl_id || lap.serial_number}
+                        </button>
+                      </td>
+                      <td className="p-3 text-xs font-mono">{lap.serial_number || '—'}</td>
+                      <td className="p-3">{lap.model_name || '—'}</td>
+                      <td className="p-3 text-xs">{laptopConfig(lap) || '—'}</td>
+                      <td className="p-3 text-xs">
+                        {lap.entity_code === 'gorefurbo'
+                          ? <span className="px-2 py-0.5 rounded bg-purple-100 text-purple-700">Gorefurbo</span>
+                          : <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-700">Rentfoxxy</span>}
+                      </td>
+                      <td className="p-3 text-xs font-mono">{lap.dc_number || '—'}</td>
+                      <td className="p-3 text-xs">{(lap.delivered_at || lap.dispatch_date) ? new Date(lap.delivered_at || lap.dispatch_date).toLocaleDateString('en-IN') : '—'}</td>
+                      <td className="p-3 text-xs">{lap.rent_monthly_rate ? formatCurrency(lap.rent_monthly_rate) : '—'}</td>
+                      <td className="p-3 text-xs"><PodLinks files={lap.pod_files} keyPrefix={lap.serial_id || lap.ttspl_id} /></td>
+                      <td className="p-3"><span className="px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-xs">{lap.status || 'rented'}</span></td>
+                    </tr>
+                  ))
+                ) : (
+                  returnedLaptops.length === 0 ? (
+                    <tr><td colSpan={9} className="p-6 text-center text-gray-400">No returned laptops for this customer</td></tr>
+                  ) : returnedLaptops.map((lap, i) => (
+                    <tr key={lap.dc_number ? `${lap.dc_number}-${i}` : `ret-${i}`} className="border-t border-gray-100">
+                      <td className="p-3">
+                        <button type="button" onClick={() => setTtsplOpen(lap.ttspl_id || lap.serial_number)}
+                          className="text-blue-600 hover:underline font-mono text-xs">
+                          {lap.ttspl_id || lap.serial_number || '—'}
+                        </button>
+                      </td>
+                      <td className="p-3 text-xs font-mono">{lap.serial_number || '—'}</td>
+                      <td className="p-3">{lap.model_name || '—'}</td>
+                      <td className="p-3 text-xs">{laptopConfig(lap) || '—'}</td>
+                      <td className="p-3 text-xs font-mono">{lap.dc_number || '—'}</td>
+                      <td className="p-3 text-xs">{lap.delivered_at ? new Date(lap.delivered_at).toLocaleDateString('en-IN') : '—'}</td>
+                      <td className="p-3 text-xs capitalize">{lap.pickup_type || 'return'}</td>
+                      <td className="p-3 text-xs"><PodLinks files={lap.pod_files} keyPrefix={lap.dc_number || `ret-${i}`} /></td>
+                      <td className="p-3"><span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-xs">returned</span></td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 

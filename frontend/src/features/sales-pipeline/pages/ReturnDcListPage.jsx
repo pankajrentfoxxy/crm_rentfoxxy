@@ -55,7 +55,7 @@ export default function ReturnDcListPage() {
       {detail && (
         <DeliveryChallanDetailModal
           onClose={() => setDetail(null)}
-          dcNumber={detail.original_dc_number || detail.dc_number}
+          dcNumber={detail.return_dc_number || detail.rdc_number || detail.original_dc_number || detail.dc_number}
         />
       )}
     </div>

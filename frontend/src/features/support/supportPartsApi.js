@@ -40,3 +40,7 @@ export const resolvePartReassign = (requestId, action) =>
 
 export const getPartsHistory = (params) =>
   api.get(`${BASE}/history`, { params });
+
+// Phase 20 — technician laptop pickup bucket (lives under the support module).
+export const getTechnicianLaptopBucket = () =>
+  api.get('/support/tech-bucket/laptops');

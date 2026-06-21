@@ -47,6 +47,19 @@ const deriveComplaintStep = (item) => {
 };
 
 const derivePickupStep = (item) => {
+  // Phase 20: redesigned pickup flow is the default for every pickup item.
+  // Assigned -> Reached -> POD -> Customer OTP -> Warehouse confirmed.
+  // Only the deprecated Phase 18 self-carry / loan-machine flow is treated as
+  // legacy, and only when explicitly marked (so older tickets keep working).
+  const isLegacy = !item.pickup_type
+    && (item.pickup_method === 'self_carry' || item.loan_delivered_at);
+  if (!isLegacy) {
+    if (item.warehouse_received_at || CLOSED.has(item.status)) return 'warehouse_confirmed';
+    if (item.customer_otp_verified_at) return 'customer_otp';
+    if (item.pod_image_path || item.proof_of_completion_path) return 'pod_uploaded';
+    if (item.visited_at) return 'reached';
+    return 'assigned';
+  }
   if (CLOSED.has(item.status)) return 'otp_verified';
   // Phase 18: self-carry pickup (technician carries faulty laptop to warehouse).
   if (item.pickup_method === 'self_carry' || item.status === 'in_transit') {

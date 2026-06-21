@@ -334,6 +334,33 @@ exports.getTickets = async (req, res) => {
   }
 };
 
+// Floor pipeline sidebar counts (active tickets per queue)
+exports.getFloorNavCounts = async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE t.status IN ('in_progress','on_hold'))::int AS all_tickets,
+        COUNT(*) FILTER (WHERE t.status IN ('in_progress','on_hold') AND s.stage_name IN ('QC1','QC2'))::int AS qc_queue,
+        COUNT(*) FILTER (WHERE t.status IN ('in_progress','on_hold') AND s.stage_name = 'Chip Level Repair')::int AS chip_level,
+        COUNT(*) FILTER (WHERE t.status IN ('in_progress','on_hold') AND s.stage_name = 'Body & Paint')::int AS body_paint
+      FROM tickets t
+      LEFT JOIN stages s ON s.stage_id = t.current_stage_id
+    `);
+    const r = rows[0] || {};
+    res.json({
+      success: true,
+      counts: {
+        all_tickets: r.all_tickets || 0,
+        qc_queue: r.qc_queue || 0,
+        chip_level: r.chip_level || 0,
+        body_paint: r.body_paint || 0,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error fetching floor counts' });
+  }
+};
+
 // Get all stages
 exports.getAllStages = async (req, res) => {
   try {

@@ -1567,8 +1567,8 @@ exports.assignReturnDcNumber = async (req, res) => {
 
 exports.listReturnDeliveryChallans = async (req, res) => {
   try {
-    const orders = await listReturnDeliveryChallans();
-    res.json({ success: true, orders });
+    const rows = await listReturnDeliveryChallans();
+    res.json({ success: true, return_dcs: rows, rows, orders: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

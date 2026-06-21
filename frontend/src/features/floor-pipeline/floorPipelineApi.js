@@ -14,6 +14,10 @@ export function fetchFloorDashboard() {
   return api.get(`${base}/floor-dashboard`);
 }
 
+export function fetchFloorCounts() {
+  return api.get(`${base}/floor-counts`);
+}
+
 export function fetchTicketDetail(id) {
   return api.get(`${base}/${id}`);
 }

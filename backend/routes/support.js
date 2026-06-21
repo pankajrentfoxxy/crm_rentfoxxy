@@ -21,8 +21,6 @@ const {
     uploadPod,
     removePod,
     verifyOtp,
-    logLoanMachine,
-    schedulePickup,
     assignItem,
     getSettings,
     updateSettings,
@@ -37,6 +35,10 @@ const {
     verifyTtspl,
     submitForPickup,
     warehouseReceivedPickup,
+    createPickupWithReturnDc,
+    verifyPickupCustomerOtp,
+    confirmWarehouseReceipt,
+    getTechnicianLaptopBucket,
     setOutcome,
     markPickedUp,
     initiateReplacement,
@@ -104,6 +106,12 @@ const uploadPodFile = (req, res, next) => {
 };
 
 router.use(authMiddleware);
+
+// Warehouse receipt confirmation must be reachable by the warehouse / manager
+// roles too (they are not "support" roles), so it is registered before the
+// support-access gate. The controller enforces the allowed roles itself.
+router.post('/items/:itemId/warehouse-confirm', confirmWarehouseReceipt);
+
 router.use(requireSupportAccess);
 
 router.get('/categories', listCategories);
@@ -144,8 +152,13 @@ router.post('/items/:itemId/verify-otp', verifyOtp);
 router.post('/items/:itemId/verify-customer-otp', verifyOtp);
 router.post('/items/:itemId/verify-warehouse-otp', verifyOtp);
 router.patch('/items/:itemId/assign', requireSupportLead, assignItem);
-router.post('/items/:itemId/loan-machine', logLoanMachine);
-router.post('/items/:itemId/schedule-pickup', schedulePickup);
+
+// Phase 20 — pickup flow redesign
+router.post('/tickets/:ticketId/pickup', requireSupportLead, createPickupWithReturnDc);
+router.post('/items/:itemId/pickup-reached', logVisit);
+router.post('/items/:itemId/verify-pickup-otp', verifyPickupCustomerOtp);
+router.get('/tech-bucket/laptops', getTechnicianLaptopBucket);
+
 router.patch('/replacement-orders/:orderId', requireSupportLead, updateReplacementOrder);
 router.post('/replacement-orders/:orderId/deliver', requireSupportLead, deliverReplacement);
 

@@ -8,6 +8,7 @@ const supportQuery = require('../services/supportQuery');
 const supportInventoryService = require('../services/supportInventoryService');
 const inventorySM = require('../services/inventoryStateMachine');
 const { processReturnedSerials } = require('../services/returnCompletionService');
+const { nextDocumentNumber } = require('../services/salesManagementService');
 
 const ITEM_OPEN_STATUSES = new Set(['open', 'work_done', 'awaiting_otp']);
 const TICKET_OPEN = 'open';
@@ -82,8 +83,9 @@ const insertTicketItem = async (client, ticketId, item, userId, extra = {}) => {
         `INSERT INTO support_ticket_items (
             ticket_id, customer_inventory_id, serial_number, unique_serial_number,
             brand, model, ram, storage, generation, item_type,
-            issue_category_id, issue_category_label, remarks, assigned_to, status, otp_code, source_item_id
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'open',$15,$16)
+            issue_category_id, issue_category_label, remarks, assigned_to, status, otp_code, source_item_id,
+            pickup_type
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'open',$15,$16,$17)
         RETURNING id`,
         [
             ticketId,
@@ -101,7 +103,8 @@ const insertTicketItem = async (client, ticketId, item, userId, extra = {}) => {
             item.remarks || null,
             item.assigned_to || null,
             otp,
-            extra.source_item_id || item.source_item_id || null
+            extra.source_item_id || item.source_item_id || null,
+            item.pickup_type || null
         ]
     );
     await logAudit(client, {
@@ -139,7 +142,18 @@ const ensureSupportTicketItemV3Columns = async (client) => {
             ADD COLUMN IF NOT EXISTS reached_warehouse_at TIMESTAMP WITH TIME ZONE,
             ADD COLUMN IF NOT EXISTS warehouse_received_by INTEGER REFERENCES users (user_id),
             ADD COLUMN IF NOT EXISTS floor_ticket_id INTEGER,
-            ADD COLUMN IF NOT EXISTS proof_of_completion_path TEXT
+            ADD COLUMN IF NOT EXISTS proof_of_completion_path TEXT,
+            ADD COLUMN IF NOT EXISTS pickup_type VARCHAR(20),
+            ADD COLUMN IF NOT EXISTS customer_otp_code VARCHAR(6),
+            ADD COLUMN IF NOT EXISTS customer_otp_sent_at TIMESTAMP WITH TIME ZONE,
+            ADD COLUMN IF NOT EXISTS customer_otp_verified_at TIMESTAMP WITH TIME ZONE,
+            ADD COLUMN IF NOT EXISTS warehouse_received_at TIMESTAMP WITH TIME ZONE,
+            ADD COLUMN IF NOT EXISTS warehouse_esign_url TEXT,
+            ADD COLUMN IF NOT EXISTS warehouse_esign_at TIMESTAMP WITH TIME ZONE,
+            ADD COLUMN IF NOT EXISTS warehouse_esign_by INTEGER REFERENCES users (user_id),
+            ADD COLUMN IF NOT EXISTS porter_tracking_id VARCHAR(200),
+            ADD COLUMN IF NOT EXISTS porter_order_id VARCHAR(200),
+            ADD COLUMN IF NOT EXISTS return_dc_number VARCHAR(50)
     `);
 };
 
@@ -778,7 +792,17 @@ exports.uploadPod = async (req, res) => {
     if (item.assigned_to !== req.user.user_id && !isSupportLead(req.user)) {
         return res.status(403).json({ success: false, message: 'Not assigned to this item' });
     }
-    if (item.item_type === 'pickup' && !item.picked_up_at) {
+    // Phase 20 pickup flow: POD photo is taken at the customer site, after the
+    // technician marks "reached" but BEFORE the customer OTP / handover. Legacy
+    // pickups (loan flow) still require the laptop to be picked up first.
+    const isLegacyPickup = item.item_type === 'pickup'
+        && !item.pickup_type
+        && (item.pickup_method === 'self_carry' || item.loan_delivered_at);
+    const isNewPickup = item.item_type === 'pickup' && !isLegacyPickup;
+    if (isNewPickup && !item.visited_at) {
+        return res.status(400).json({ success: false, message: 'Mark as reached before uploading the pickup photo' });
+    }
+    if (isLegacyPickup && !item.picked_up_at) {
         return res.status(400).json({ success: false, message: 'Mark pickup completed before uploading POD' });
     }
 
@@ -788,11 +812,13 @@ exports.uploadPod = async (req, res) => {
         // Self-heal: ensure pod_uploaded_at / warehouse_otp_code exist (envs that
         // never ran the support v3 migration, e.g. staging, otherwise 500 here).
         await ensureSupportTicketItemV3Columns(client);
-        const podParams = item.item_type === 'pickup'
+        // Legacy pickups close via a warehouse OTP; the new flow uses customer OTP
+        // + warehouse e-sign, so we do not mint a warehouse OTP for them.
+        const podParams = isLegacyPickup
             ? [itemId, relPath, generateOtp()]
             : [itemId, relPath];
         await client.query(
-            `UPDATE support_ticket_items SET pod_image_path = $2, proof_of_completion_path = $2, updated_at = CURRENT_TIMESTAMP${item.item_type === 'pickup' ? ', pod_uploaded_at = CURRENT_TIMESTAMP, warehouse_otp_code = $3' : ', pod_uploaded_at = CURRENT_TIMESTAMP'} WHERE id = $1`,
+            `UPDATE support_ticket_items SET pod_image_path = $2, proof_of_completion_path = $2, updated_at = CURRENT_TIMESTAMP${isLegacyPickup ? ', pod_uploaded_at = CURRENT_TIMESTAMP, warehouse_otp_code = $3' : ', pod_uploaded_at = CURRENT_TIMESTAMP'} WHERE id = $1`,
             podParams
         );
         await logAudit(client, {
@@ -800,7 +826,7 @@ exports.uploadPod = async (req, res) => {
             ticketId: item.ticket_id,
             userId: req.user.user_id,
             action: 'pod_uploaded',
-            detail: { path: relPath, warehouse_otp: item.item_type === 'pickup' }
+            detail: { path: relPath, warehouse_otp: isLegacyPickup }
         });
         await bumpTicketActivity(client, item.ticket_id);
         await client.query('COMMIT');
@@ -1723,6 +1749,462 @@ exports.warehouseReceivedPickup = async (req, res) => {
 };
 
 exports.markVisited = exports.logVisit;
+
+// ============================================================
+// Phase 20 — Pickup flow redesign
+// Type selection (repair/return) -> dispatch (technician/courier/porter)
+// -> Return DC auto-created -> Reached -> POD -> Customer OTP ->
+// Warehouse receipt (e-sign).
+// ============================================================
+
+// Support lead creates a pickup item, generates the Return DC and a customer
+// OTP in one step. For a technician dispatch the item lands in their laptop
+// bucket; for courier/porter it is tracked via the delivery register.
+exports.createPickupWithReturnDc = async (req, res) => {
+    if (!isSupportLead(req.user)) {
+        return res.status(403).json({ success: false, message: 'Support lead only' });
+    }
+    const ticketId = parseInt(req.params.ticketId, 10);
+    const {
+        source_item_id,
+        pickup_type,
+        pickup_address,
+        dispatch_mode,
+        technician_user_id,
+        courier_name, awb_number,
+        porter_tracking_id, porter_order_id,
+    } = req.body || {};
+
+    if (!['repair', 'return'].includes(pickup_type)) {
+        return res.status(400).json({ success: false, message: 'pickup_type must be repair or return' });
+    }
+    if (!['technician', 'courier', 'porter'].includes(dispatch_mode)) {
+        return res.status(400).json({ success: false, message: 'Invalid dispatch_mode' });
+    }
+    if (dispatch_mode === 'technician' && !technician_user_id) {
+        return res.status(400).json({ success: false, message: 'Select a technician for this pickup' });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await ensureSupportTicketItemV3Columns(client);
+
+        const ticketRes = await client.query('SELECT * FROM support_tickets WHERE id = $1', [ticketId]);
+        if (!ticketRes.rows.length) throw Object.assign(new Error('Ticket not found'), { status: 404 });
+        const ticket = ticketRes.rows[0];
+        if (ticket.return_dc_number) {
+            throw Object.assign(new Error(`Return DC already exists for this ticket: ${ticket.return_dc_number}`), { status: 400 });
+        }
+
+        // Resolve laptop details from the linked complaint item, falling back to
+        // the ticket-level serial/ttspl when no source item is linked.
+        let serial = ticket.serial_number || null;
+        let ttsplId = ticket.ttspl_id || ticket.unique_number || null;
+        let brand = null, model = null, ram = null, storage = null, generation = null, custInvId = null;
+        const srcId = source_item_id ? parseInt(source_item_id, 10) : null;
+        if (srcId) {
+            const srcRes = await client.query(
+                'SELECT * FROM support_ticket_items WHERE id = $1 AND ticket_id = $2',
+                [srcId, ticketId]
+            );
+            if (srcRes.rows.length) {
+                const src = srcRes.rows[0];
+                serial = src.serial_number || serial;
+                ttsplId = src.ttspl_id || src.unique_serial_number || ttsplId;
+                brand = src.brand; model = src.model;
+                ram = src.ram; storage = src.storage; generation = src.generation;
+                custInvId = src.customer_inventory_id;
+            }
+        }
+
+        const customerOtp = generateOtp();
+
+        const pickupMethod = dispatch_mode;
+        const techId = dispatch_mode === 'technician' && technician_user_id
+            ? parseInt(technician_user_id, 10) : null;
+        const courierNameVal = dispatch_mode === 'courier' ? (courier_name || null) : null;
+        const awbVal = dispatch_mode === 'courier' ? (awb_number || null) : null;
+        const porterTrackingVal = dispatch_mode === 'porter' ? (porter_tracking_id || null) : null;
+        const porterOrderVal = dispatch_mode === 'porter' ? (porter_order_id || null) : null;
+
+        // Create the pickup item. For a technician dispatch we set both
+        // assigned_to and pickup_assigned_to so the existing per-technician
+        // guards (POD upload, reached, etc.) keep working.
+        const insertRes = await client.query(
+            `INSERT INTO support_ticket_items
+                (ticket_id, customer_inventory_id, serial_number, unique_serial_number,
+                 ttspl_id, brand, model, ram, storage, generation,
+                 item_type, pickup_type, status, source_item_id,
+                 assigned_to, pickup_method, pickup_assigned_to, pickup_courier_name, pickup_awb,
+                 porter_tracking_id, porter_order_id,
+                 otp_code, customer_otp_code, customer_otp_sent_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+                     'pickup',$11,'assigned',$12,
+                     $13,$14,$13,$15,$16,$17,$18,
+                     $19,$19,NOW())
+             RETURNING id`,
+            [
+                ticketId, custInvId, serial, ttsplId,
+                ttsplId, brand, model, ram, storage, generation,
+                pickup_type, srcId,
+                techId, pickupMethod, courierNameVal, awbVal,
+                porterTrackingVal, porterOrderVal,
+                customerOtp,
+            ]
+        );
+        const pickupItemId = insertRes.rows[0].id;
+
+        if (pickup_address) {
+            await client.query(
+                'UPDATE support_tickets SET pickup_address = $1::jsonb, updated_at = NOW() WHERE id = $2',
+                [JSON.stringify(pickup_address), ticketId]
+            );
+        }
+
+        // Generate the Return DC (a delivery_challan_lines row, movement_type='return').
+        const rdc = await nextDocumentNumber('return_dc');
+        const pickupAddr = pickup_address
+            || (typeof ticket.pickup_address === 'string' ? JSON.parse(ticket.pickup_address) : ticket.pickup_address)
+            || {};
+        const dcDispatchMode = dispatch_mode === 'technician' ? 'inhouse' : dispatch_mode;
+        const deliveryPersonId = techId;
+
+        const serialCode = ttsplId || serial;
+        let entries = [];
+        let firstSpec = {};
+        if (serialCode) {
+            const vsnRes = await client.query(
+                `SELECT serial_id, serial_number, inventory_asset_code, extra
+                   FROM vendor_serial_numbers
+                  WHERE deleted_at IS NULL
+                    AND (inventory_asset_code = $1 OR serial_number = $1 OR extra->>'ttspl_id' = $1)
+                  LIMIT 1`,
+                [serialCode]
+            );
+            const vsn = vsnRes.rows[0];
+            if (vsn) {
+                entries = [`${vsn.serial_id}|${vsn.serial_number}|${vsn.inventory_asset_code || serialCode}`];
+                firstSpec = vsn.extra || {};
+            } else {
+                entries = [`|${serialCode}|${serialCode}`];
+            }
+        }
+
+        await client.query(
+            `INSERT INTO delivery_challan_lines
+                (dc_number, movement_type, support_ticket_id, customer_id, customer_name, email,
+                 customer_shipping_address, brand, model_name, quantity, serial_number,
+                 dispatch_mode, delivery_person_id, courier_name, awb_number,
+                 porter_tracking_id, porter_order_id,
+                 status, dispatched_at, created_by, created_at, updated_at)
+             VALUES ($1,'return',$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16,
+                     'in_transit',NOW(),$17,NOW(),NOW())`,
+            [
+                rdc, ticketId, ticket.customer_id, ticket.customer_name, ticket.ticket_email || null,
+                JSON.stringify(pickupAddr), brand || firstSpec.brand || null,
+                model || firstSpec.model || firstSpec.model_name || null,
+                Math.max(1, entries.length), JSON.stringify(entries),
+                dcDispatchMode, deliveryPersonId, courierNameVal, awbVal,
+                porterTrackingVal, porterOrderVal, req.user.user_id,
+            ]
+        );
+
+        await client.query(
+            'UPDATE support_ticket_items SET return_dc_number = $1, updated_at = NOW() WHERE id = $2',
+            [rdc, pickupItemId]
+        );
+        await client.query(
+            `UPDATE support_tickets SET
+                return_dc_number = $1,
+                complaint_type = COALESCE(complaint_type, 'pickup'),
+                status = CASE WHEN status = 'open' THEN 'in_progress' ELSE status END,
+                updated_at = NOW()
+             WHERE id = $2`,
+            [rdc, ticketId]
+        );
+
+        await logAudit(client, {
+            itemId: pickupItemId, ticketId, userId: req.user.user_id,
+            action: 'pickup_created',
+            detail: { pickup_type, dispatch_mode, return_dc_number: rdc, ttspl_id: ttsplId }
+        });
+        await bumpTicketActivity(client, ticketId);
+        await client.query('COMMIT');
+
+        const data = await getTicketWithItems(ticketId, req.user);
+        res.status(201).json({
+            success: true,
+            pickup_item_id: pickupItemId,
+            return_dc_number: rdc,
+            dispatch_mode,
+            message: `Pickup created. Return DC: ${rdc}.`,
+            customer_otp_visible: customerOtp,
+            ...data,
+        });
+    } catch (e) {
+        await client.query('ROLLBACK');
+        console.error('createPickupWithReturnDc:', e);
+        res.status(e.status || 500).json({ success: false, message: e.message || 'Failed to create pickup' });
+    } finally {
+        client.release();
+    }
+};
+
+// Technician confirms the laptop handover by entering the customer's OTP. POD
+// photo must be uploaded first.
+exports.verifyPickupCustomerOtp = async (req, res) => {
+    const itemId = parseInt(req.params.itemId, 10);
+    const { otp } = req.body || {};
+
+    const itemRes = await pool.query('SELECT * FROM support_ticket_items WHERE id = $1', [itemId]);
+    if (!itemRes.rows.length) return res.status(404).json({ success: false, message: 'Item not found' });
+    const it = itemRes.rows[0];
+
+    if (it.item_type !== 'pickup') {
+        return res.status(400).json({ success: false, message: 'Only for pickup items' });
+    }
+    if (it.assigned_to !== req.user.user_id && it.pickup_assigned_to !== req.user.user_id && !isSupportLead(req.user)) {
+        return res.status(403).json({ success: false, message: 'Not assigned to this pickup' });
+    }
+    if (!it.pod_image_path && !it.proof_of_completion_path) {
+        return res.status(400).json({ success: false, message: 'Upload the pickup photo before verifying the OTP' });
+    }
+    const stored = it.customer_otp_code;
+    if (!stored || String(otp || '').trim() !== String(stored)) {
+        return res.status(400).json({ success: false, message: 'Invalid OTP. Ask the customer for the correct OTP.' });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await client.query(
+            `UPDATE support_ticket_items SET
+                customer_otp_verified_at = CURRENT_TIMESTAMP,
+                status = 'picked_up',
+                picked_up_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1`,
+            [itemId]
+        );
+        await logAudit(client, {
+            itemId, ticketId: it.ticket_id, userId: req.user.user_id,
+            action: 'pickup_otp_verified', detail: null
+        });
+        await bumpTicketActivity(client, it.ticket_id);
+        await client.query('COMMIT');
+    } catch (e) {
+        await client.query('ROLLBACK');
+        console.error('verifyPickupCustomerOtp:', e);
+        return res.status(500).json({ success: false, message: 'Failed to verify OTP' });
+    } finally {
+        client.release();
+    }
+    const data = await getTicketWithItems(it.ticket_id, req.user);
+    res.json({ success: true, message: 'OTP verified. Laptop picked up successfully.', ...data });
+};
+
+// Warehouse confirms receipt of the laptop with an e-signature. For a repair
+// pickup a floor QC ticket is auto-created; for a return pickup the unit is
+// marked returned. The Return DC is closed as delivered.
+exports.confirmWarehouseReceipt = async (req, res) => {
+    const itemId = parseInt(req.params.itemId, 10);
+    const { esign_data, signer_name } = req.body || {};
+
+    if (!['warehouse', 'admin', 'support_lead', 'manager'].includes(req.user.role)) {
+        return res.status(403).json({ success: false, message: 'Warehouse access required' });
+    }
+    if (!esign_data || !String(esign_data).startsWith('data:image')) {
+        return res.status(400).json({ success: false, message: 'Warehouse e-sign required' });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await ensureSupportTicketItemV3Columns(client);
+
+        const itemRes = await client.query('SELECT * FROM support_ticket_items WHERE id = $1', [itemId]);
+        if (!itemRes.rows.length) throw Object.assign(new Error('Item not found'), { status: 404 });
+        const it = itemRes.rows[0];
+
+        if (it.item_type !== 'pickup') throw Object.assign(new Error('Only for pickup items'), { status: 400 });
+        if (it.warehouse_received_at) throw Object.assign(new Error('Already confirmed at warehouse'), { status: 400 });
+
+        // Default to an in-house (technician) pickup unless explicitly courier/porter,
+        // so older items without a pickup_method still gate on the customer OTP.
+        const isInhouse = it.pickup_method !== 'courier' && it.pickup_method !== 'porter';
+        // Technician-carried pickups require the customer OTP handover first.
+        // Courier/porter returns arrive without an on-site OTP step.
+        if (isInhouse && !it.customer_otp_verified_at) {
+            throw Object.assign(new Error('Customer OTP must be verified before warehouse can confirm receipt'), { status: 400 });
+        }
+
+        // Persist the e-sign PNG.
+        const dir = path.join(__dirname, '..', 'uploads', 'support-pickups');
+        fs.mkdirSync(dir, { recursive: true });
+        const fname = `wh_esign_${it.id}_${Date.now()}.png`;
+        const b64 = String(esign_data).replace(/^data:image\/\w+;base64,/, '');
+        fs.writeFileSync(path.join(dir, fname), Buffer.from(b64, 'base64'));
+        const esignUrl = `uploads/support-pickups/${fname}`;
+
+        await client.query(
+            `UPDATE support_ticket_items SET
+                warehouse_received_at = CURRENT_TIMESTAMP,
+                reached_warehouse_at = COALESCE(reached_warehouse_at, CURRENT_TIMESTAMP),
+                warehouse_received_by = $3,
+                warehouse_esign_url = $2,
+                warehouse_esign_at = CURRENT_TIMESTAMP,
+                warehouse_esign_by = $3,
+                status = 'inventory_updated',
+                resolved_at = COALESCE(resolved_at, CURRENT_TIMESTAMP),
+                updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1`,
+            [itemId, esignUrl, req.user.user_id]
+        );
+
+        let floorTicketId = null;
+        const code = it.ttspl_id || it.unique_serial_number || it.serial_number;
+        const vsnRes = await client.query(
+            `SELECT serial_id, inventory_asset_code FROM vendor_serial_numbers
+              WHERE (inventory_asset_code = $1 OR serial_number = $1) AND deleted_at IS NULL LIMIT 1`,
+            [code]
+        );
+        const vsn = vsnRes.rows[0];
+
+        if (it.pickup_type === 'repair') {
+            const stageRes = await client.query(
+                `SELECT stage_id FROM stages WHERE stage_name = 'Floor Manager' LIMIT 1`
+            );
+            const stageId = stageRes.rows[0]?.stage_id || null;
+            if (stageId && vsn) {
+                const ftRes = await client.query(
+                    `INSERT INTO tickets
+                        (serial_number, ttspl_id, brand, model, processor, ram, storage,
+                         status, priority, ticket_type, current_stage_id,
+                         vendor_serial_id, initial_condition)
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,'in_progress','normal','grn_qc',$8,$9,$10)
+                     RETURNING ticket_id`,
+                    [
+                        it.serial_number, it.ttspl_id || it.unique_serial_number,
+                        it.brand, it.model, null, it.ram, it.storage,
+                        stageId, vsn.serial_id,
+                        'Returned from customer via support pickup for repair'
+                    ]
+                );
+                floorTicketId = ftRes.rows[0]?.ticket_id || null;
+                await client.query(
+                    'UPDATE support_ticket_items SET floor_ticket_id = $1 WHERE id = $2',
+                    [floorTicketId, itemId]
+                );
+            }
+        }
+
+        // Flip the authoritative inventory to "returned" for both repair and return.
+        if (vsn) {
+            await client.query(
+                `UPDATE vendor_serial_numbers SET
+                    inventory_status = 'returned',
+                    current_customer_id = NULL,
+                    status_changed_at = NOW(),
+                    updated_at = NOW()
+                 WHERE serial_id = $1`,
+                [vsn.serial_id]
+            );
+        }
+
+        if (it.customer_inventory_id) {
+            await client.query(
+                `UPDATE customer_inventory SET
+                    passivated_at = NOW(),
+                    passivated_reason = 'Returned by customer via support pickup',
+                    updated_at = NOW()
+                 WHERE id = $1`,
+                [it.customer_inventory_id]
+            );
+        }
+
+        // Close the originating complaint, if any.
+        if (it.source_item_id) {
+            await client.query(
+                `UPDATE support_ticket_items SET
+                    status = 'resolved',
+                    resolved_at = COALESCE(resolved_at, CURRENT_TIMESTAMP),
+                    updated_at = CURRENT_TIMESTAMP
+                 WHERE id = $1 AND status NOT IN ('resolved','closed','inventory_updated')`,
+                [it.source_item_id]
+            );
+        }
+
+        // Close the Return DC.
+        if (it.return_dc_number) {
+            await client.query(
+                `UPDATE delivery_challan_lines SET
+                    status = 'delivered', delivered_at = NOW(), updated_at = NOW()
+                 WHERE dc_number = $1 AND movement_type = 'return'`,
+                [it.return_dc_number]
+            );
+        }
+
+        await logAudit(client, {
+            itemId, ticketId: it.ticket_id, userId: req.user.user_id,
+            action: 'warehouse_receipt_confirmed',
+            detail: { pickup_type: it.pickup_type, floor_ticket_id: floorTicketId, signer_name: signer_name || null }
+        });
+        await bumpTicketActivity(client, it.ticket_id);
+        await recomputeTicketStatus(client, it.ticket_id);
+        await client.query('COMMIT');
+
+        const data = await getTicketWithItems(it.ticket_id, req.user);
+        res.json({
+            success: true,
+            floor_ticket_id: floorTicketId,
+            message: floorTicketId
+                ? `Warehouse receipt confirmed. Floor repair ticket #${floorTicketId} created.`
+                : 'Warehouse receipt confirmed.',
+            ...data,
+        });
+    } catch (e) {
+        await client.query('ROLLBACK');
+        console.error('confirmWarehouseReceipt:', e);
+        res.status(e.status || 500).json({ success: false, message: e.message || 'Failed to confirm warehouse receipt' });
+    } finally {
+        client.release();
+    }
+};
+
+// Technician laptop bucket: active pickup items dispatched in-house. Techs see
+// only their own; leads/managers see all, grouped by technician.
+exports.getTechnicianLaptopBucket = async (req, res) => {
+    const isTech = req.user.role === 'support_tech';
+    const params = [];
+    let techFilter = '';
+    if (isTech) {
+        params.push(req.user.user_id);
+        techFilter = `AND (sti.pickup_assigned_to = $1 OR sti.assigned_to = $1)`;
+    }
+
+    const { rows } = await pool.query(`
+        SELECT sti.*, st.customer_name, st.customer_phone,
+               u.name AS tech_name
+          FROM support_ticket_items sti
+          JOIN support_tickets st ON st.id = sti.ticket_id
+          LEFT JOIN users u ON u.user_id = COALESCE(sti.pickup_assigned_to, sti.assigned_to)
+         WHERE sti.item_type = 'pickup'
+           AND sti.pickup_method IN ('technician','inhouse')
+           AND sti.status NOT IN ('resolved','closed','inventory_updated')
+           ${techFilter}
+         ORDER BY sti.created_at DESC
+    `, params);
+
+    const grouped = {};
+    rows.forEach((r) => {
+        const key = r.pickup_assigned_to || r.assigned_to || 'unassigned';
+        if (!grouped[key]) grouped[key] = { tech_id: key, tech_name: r.tech_name || null, laptops: [] };
+        grouped[key].laptops.push(r);
+    });
+
+    res.json({ success: true, bucket: Object.values(grouped), total: rows.length });
+};
 
 exports.setOutcome = async (req, res) => {
     const itemId = parseInt(req.params.itemId, 10);

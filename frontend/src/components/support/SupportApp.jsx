@@ -33,7 +33,7 @@ function LeadOnly({ children }) {
 
 function StatsOnly({ children }) {
   const { user } = useAuth();
-  if (!['admin', 'manager', 'support_lead'].includes(user?.role)) {
+  if (!['super_admin', 'admin', 'manager', 'support_lead'].includes(user?.role)) {
     return <Navigate to="/support/overview" replace />;
   }
   return children;

@@ -62,6 +62,7 @@ import { useDeliveryRegisterCounts } from '../features/delivery-register-managem
 import { useLeadCrmCounts } from '../features/lead-crm/hooks/useLeadCrmCounts';
 import { useFinanceCounts } from '../features/finance-overview/hooks/useFinanceCounts';
 import { useSupportCounts } from '../features/support-module/hooks/useSupportCounts';
+import { useFloorCounts } from '../features/floor-pipeline/hooks/useFloorCounts';
 import {
   FLAT_MENU_ITEMS,
   vendorAccordionChildren,
@@ -141,6 +142,8 @@ export default function Layout({ children }) {
   const { counts: qcCounts } = useQcStatusCounts(showQcAccordion);
 
   const { counts: inventoryCounts } = useInventoryListCounts(showInventoryAccordion);
+
+  const { counts: floorCounts } = useFloorCounts(canView('floor_pipeline'));
 
   const showLeadCrmAccordion = canView('leads') || canView('follow_ups') || canView('customers');
   const { counts: leadCrmCounts } = useLeadCrmCounts(showLeadCrmAccordion);
@@ -732,7 +735,13 @@ export default function Layout({ children }) {
 
                     <div className="mt-1 ml-2 pl-3 border-l border-blue-100 space-y-0.5">
 
-                      {floorVisibleChildren.map((child) => (
+                      {floorVisibleChildren.map((child) => {
+
+                        const badge = child.countKey && floorCounts && floorCounts[child.countKey] != null
+                          ? floorCounts[child.countKey]
+                          : null;
+
+                        return (
 
                         <NavLink
 
@@ -746,7 +755,7 @@ export default function Layout({ children }) {
 
                             [
 
-                              'block px-2 py-1.5 rounded-md text-xs transition-colors',
+                              'flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-xs transition-colors',
 
                               isActive
 
@@ -760,11 +769,19 @@ export default function Layout({ children }) {
 
                         >
 
-                          {child.label}
+                          <span>{child.label}</span>
+
+                          {badge != null ? (
+                            <span className="shrink-0 rounded-full bg-sky-100 text-sky-800 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums">
+                              {badge}
+                            </span>
+                          ) : null}
 
                         </NavLink>
 
-                      ))}
+                        );
+
+                      })}
 
                     </div>
 
