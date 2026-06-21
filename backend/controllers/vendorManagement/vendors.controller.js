@@ -33,7 +33,8 @@ function saveUploadedFile(file) {
 
 function buildMulter() {
   const multer = require('multer');
-  return multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 } });
+  const { multerLimits } = require('../../config/uploadLimits');
+  return multer({ storage: multer.memoryStorage(), limits: multerLimits() });
 }
 
 const listValidators = [

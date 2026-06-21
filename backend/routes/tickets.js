@@ -1,4 +1,26 @@
 const express = require('express');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const { multerLimits, wrapMulter } = require('../config/uploadLimits');
+
+const qcPhotoDir = path.join('uploads', 'qc-photos');
+if (!fs.existsSync(qcPhotoDir)) fs.mkdirSync(qcPhotoDir, { recursive: true });
+
+const qcPhotoUpload = multer({
+  storage: multer.diskStorage({
+    destination: qcPhotoDir,
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname || '') || '.jpg';
+      cb(null, `qc-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`);
+    },
+  }),
+  limits: multerLimits(),
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype && file.mimetype.startsWith('image/')) return cb(null, true);
+    return cb(new Error('Only image files are allowed'));
+  },
+});
 const router = express.Router();
 const {
   createTicket,
@@ -149,7 +171,7 @@ router.post('/:id/stage-task', saveStageTask);
 router.get('/:id/qc', qcController.getQCData);
 router.post('/:id/qc/save', qcController.saveQC);
 router.post('/:id/qc/submit', qcController.submitQC);
-router.post('/qc/:qc_id/upload-photo', qcController.uploadPhoto);
+router.post('/qc/:qc_id/upload-photo', wrapMulter(qcPhotoUpload.single('photo')), qcController.uploadPhoto);
 router.get('/:ticket_id/qc/history', qcController.getQCHistory);
 
 

@@ -2,6 +2,7 @@ const { query, body, param, validationResult } = require('express-validator');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+const { multerLimits } = require('../../config/uploadLimits');
 const pool = require('../../config/db');
 const { getTotalAmountOfPurchaseOrder } = require('../../utils/purchaseOrderGst');
 const { nextSparePartsPurchaseOrderNumber } = require('../../services/vendorNumberService');
@@ -612,7 +613,7 @@ function createSpoBillsUpload() {
         cb(null, `${Date.now()}_${safe}`);
       }
     }),
-    limits: { fileSize: 25 * 1024 * 1024 }
+    limits: multerLimits()
   });
 }
 

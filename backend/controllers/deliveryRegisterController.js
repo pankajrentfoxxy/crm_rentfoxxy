@@ -1,6 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+const { multerLimits, wrapMulter } = require('../config/uploadLimits');
 const pool = require('../config/db');
 
 const {emailDocument} = require('../services/salesManagementPdfService');
@@ -30,7 +31,7 @@ const podUpload = multer({
     destination: (_req, _file, cb) => cb(null, podUploadDir),
     filename: safeFilename,
   }),
-  limits: { fileSize: 15 * 1024 * 1024, files: 10 },
+  limits: multerLimits(),
 });
 
 const technicianUploadDir = path.join(__dirname, '..', '..', 'uploads', technicianService.UPLOAD_SUBDIR);
@@ -43,7 +44,7 @@ const technicianUpload = multer({
     destination: (_req, _file, cb) => cb(null, technicianUploadDir),
     filename: safeFilename,
   }),
-  limits: { fileSize: 10 * 1024 * 1024, files: 6 },
+  limits: multerLimits({ files: 6 }),
 });
 
 function parseProductsField(raw) {
@@ -167,7 +168,7 @@ exports.verifyOtp = async (req, res) => {
 };
 
 exports.submitPod = [
-  podUpload.array('files', 10),
+  wrapMulter(podUpload.array('files', 10)),
   async (req, res) => {
     const client = await pool.connect();
     try {
@@ -330,10 +331,10 @@ exports.getTechnician = async (req, res) => {
 };
 
 exports.createTechnician = [
-  technicianUpload.fields([
+  wrapMulter(technicianUpload.fields([
     { name: 'image', maxCount: 1 },
     { name: 'identity_image', maxCount: 5 },
-  ]),
+  ])),
   async (req, res) => {
     try {
       const result = await technicianService.createTechnician(req.body, req.files || {});
@@ -360,10 +361,10 @@ exports.createTechnician = [
 ];
 
 exports.updateTechnician = [
-  technicianUpload.fields([
+  wrapMulter(technicianUpload.fields([
     { name: 'image', maxCount: 1 },
     { name: 'identity_image', maxCount: 5 },
-  ]),
+  ])),
   async (req, res) => {
     try {
       const result = await technicianService.updateTechnician(

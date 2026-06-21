@@ -3,6 +3,7 @@ const cors = require('cors');
 require('dotenv').config();
 
 const errorHandler = require('./middleware/errorHandler');
+const { BODY_PARSER_LIMIT } = require('./config/uploadLimits');
 const { startEmailQueueWorker } = require('./services/emailQueueService');
 const { startInventorySyncWorker } = require('./services/inventoryErpSyncService');
 const { startLeadEmailIngestionWorker } = require('./services/leadEmailIngestionService');
@@ -48,8 +49,8 @@ app.use(cors({
   },
   credentials: true
 }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: BODY_PARSER_LIMIT }));
+app.use(express.urlencoded({ extended: true, limit: BODY_PARSER_LIMIT }));
 app.use('/uploads', express.static('uploads'));
 
 // Test database connection

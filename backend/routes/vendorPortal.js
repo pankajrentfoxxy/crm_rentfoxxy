@@ -5,6 +5,7 @@
 const express = require('express');
 const portal = require('../controllers/vendorPortalController');
 const { vendorPortalAuth } = require('../middleware/vendorPortalAuth');
+const { wrapMulter } = require('../config/uploadLimits');
 
 const router = express.Router();
 
@@ -22,7 +23,7 @@ router.post(
   '/purchase-orders/:poId/upload-invoice',
   vendorPortalAuth,
   portal.poIdParam,
-  portal.createVendorInvoiceUpload().single('file'),
+  wrapMulter(portal.createVendorInvoiceUpload().single('file')),
   portal.uploadPurchaseOrderInvoice
 );
 

@@ -23,7 +23,8 @@ const {
 const { getInventoryStockSummary } = require('../controllers/inventoryStockSummary');
 
 const multer = require('multer');
-const upload = multer({ dest: 'uploads/' });
+const { multerLimits } = require('../config/uploadLimits');
+const upload = multer({ dest: 'uploads/', limits: multerLimits() });
 
 // Debug: trace model/source for a machine number (ERP sync investigation)
 router.get('/trace/:machineNumber', authMiddleware, traceMachineNumber);

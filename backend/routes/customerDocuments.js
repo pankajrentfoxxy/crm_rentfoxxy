@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
+const { multerLimits } = require('../config/uploadLimits');
 const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
 const ctrl = require('../controllers/customerDocumentController');
 
@@ -13,7 +14,7 @@ if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
 const upload = multer({
   dest: uploadDir,
-  limits: { fileSize: 8 * 1024 * 1024 },
+  limits: multerLimits(),
   fileFilter: (_req, file, cb) => {
     const allowed = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
     if (allowed.includes(file.mimetype)) cb(null, true);

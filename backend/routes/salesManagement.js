@@ -2,6 +2,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+const { multerLimits, wrapMulter } = require('../config/uploadLimits');
 const router = express.Router();
 const { authMiddleware, checkSectionPermission, checkRole } = require('../middleware/auth');
 const cp = checkSectionPermission;
@@ -20,7 +21,7 @@ const podStorage = multer.diskStorage({
 });
 const uploadPod = multer({
   storage: podStorage,
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: multerLimits(),
   fileFilter: (req, file, cb) => {
     if (!file.mimetype.startsWith('image/')) return cb(new Error('Only image files allowed'));
     cb(null, true);
@@ -63,8 +64,8 @@ router.get('/delivery-flow', tbView, flowCtrl.listDeliveryFlow);
 router.get('/my-deliveries', tbView, flowCtrl.getMyDeliveries);
 router.patch('/delivery-challans/:dcNumber/reached', tbEdit, flowCtrl.markTechReached);
 router.post('/delivery-challans/:dcNumber/verify-serial', tbEdit, flowCtrl.verifySerialAndGenerateOtp);
-router.post('/delivery-challans/:dcNumber/deliver', tbEdit, uploadPod.single('pod_photo'), flowCtrl.submitDeliveryWithPod);
-router.patch('/delivery-challans/:dcNumber/admin-deliver', checkRole('admin', 'manager', 'super_admin'), uploadPod.single('pod_photo'), flowCtrl.adminDeliverOverride);
+router.post('/delivery-challans/:dcNumber/deliver', tbEdit, wrapMulter(uploadPod.single('pod_photo')), flowCtrl.submitDeliveryWithPod);
+router.patch('/delivery-challans/:dcNumber/admin-deliver', checkRole('admin', 'manager', 'super_admin'), wrapMulter(uploadPod.single('pod_photo')), flowCtrl.adminDeliverOverride);
 
 router.get('/counts', quoteView, ctrl.getOperationCounts);
 router.get('/inventory/available-serials', dcView, ctrl.getAvailableSerials);

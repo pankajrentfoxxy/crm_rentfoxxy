@@ -2,6 +2,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+const { multerLimits, wrapMulter, multerErrorMessage, UPLOAD_MAX_FILE_MB } = require('../config/uploadLimits');
 const { authMiddleware } = require('../middleware/auth');
 const { requireSupportAccess, requireSupportLead } = require('../middleware/supportAccess');
 const {
@@ -79,8 +80,7 @@ const supportStorage = multer.diskStorage({
 
 const upload = multer({
     storage: supportStorage,
-    // Phone camera photos are routinely larger than a few MB.
-    limits: { fileSize: 25 * 1024 * 1024 },
+    limits: multerLimits(),
     fileFilter: (req, file, cb) => {
         if (file.mimetype && (file.mimetype.startsWith('image/') || file.mimetype === 'application/pdf')) {
             return cb(null, true);
@@ -95,8 +95,8 @@ const uploadPodFile = (req, res, next) => {
     upload.single('pod')(req, res, (err) => {
         if (err) {
             const message = err.code === 'LIMIT_FILE_SIZE'
-                ? 'Image is too large. Please keep it under 25 MB.'
-                : (err.message || 'Upload failed');
+                ? `Image is too large. Please keep it under ${UPLOAD_MAX_FILE_MB} MB.`
+                : multerErrorMessage(err);
             return res.status(400).json({ success: false, message });
         }
         return next();
