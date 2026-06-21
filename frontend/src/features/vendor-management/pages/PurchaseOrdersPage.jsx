@@ -863,7 +863,114 @@ export default function PurchaseOrdersPage() {
       {loading ? (
         <div className="p-8 rounded-lg border text-center text-slate-500 animate-pulse">Loading…</div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border bg-white shadow-sm">
+        <>
+        {/* Mobile cards */}
+        <div className="grid gap-3 md:hidden">
+          {rows.length === 0 ? (
+            <div className="p-8 rounded-lg border bg-white text-center text-slate-500">
+              No purchase orders match your filters.
+            </div>
+          ) : rows.map((r, i) => {
+            const st = String(r.status || '').toLowerCase();
+            const vendorName =
+              r.vendor_display_name || r.vendor_business_name || r.vendor_first_name || `Vendor #${r.vendor_id}`;
+            const showEye = showReceiveEye(r.status);
+            const showSubmit = canSubmitForApproval(r.status) && procurement;
+            const showManagerActions = isPendingManagerApproval(r.status) && manager;
+            const typeBadge = poTypeBadge(r.purchase_order_type);
+            const stBadge = poStatusBadge(r.status);
+            const billInfo = getPoBillInfo(r);
+            return (
+              <div key={r.po_id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-3">
+                <div className="flex items-start justify-between gap-2">
+                  <button
+                    type="button"
+                    className="text-left text-orange-600 font-bold hover:underline"
+                    onClick={() => openPreview(r.po_id)}
+                  >
+                    {r.purchase_order_number}
+                  </button>
+                  <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold ${stBadge.className}`}>
+                    {stBadge.label}
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+                  <span className={`inline-flex px-2 py-0.5 rounded-full font-semibold ${typeBadge.className}`}>{typeBadge.label}</span>
+                  <span>{r.purchase_order_date}</span>
+                </div>
+                <p className="text-sm text-slate-800 font-medium">{vendorName}</p>
+                {r.remarks ? <div className="text-xs text-slate-600"><RemarkCell text={r.remarks} /></div> : null}
+                {st === 'rejected' && r.rejection_reason ? (
+                  <p className="text-xs text-red-600">Rejected: {r.rejection_reason}</p>
+                ) : null}
+
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  {billInfo.billName ? (
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-slate-200 bg-slate-50 font-semibold text-slate-800"
+                      onClick={() => setBillView({ open: true, bill_name: billInfo.billName, files: billInfo.files, poId: r.po_id })}
+                    >
+                      View bill
+                    </button>
+                  ) : showEye ? (
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-orange-500 text-orange-600 font-semibold"
+                      onClick={() => openBillUpload(r)}
+                    >
+                      Upload bill
+                    </button>
+                  ) : (
+                    <span className="text-slate-400">Bill after approval</span>
+                  )}
+                </div>
+
+                {(showSubmit || showManagerActions || showEye) && (
+                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
+                    {showSubmit ? (
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1.5 h-9 px-3 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold"
+                        onClick={() => onStatusChange(r, 'pending_approval')}
+                      >
+                        Submit for Approval
+                      </button>
+                    ) : null}
+                    {showManagerActions ? (
+                      <>
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 h-9 px-3 rounded-lg bg-green-600 hover:bg-green-700 text-white text-xs font-semibold"
+                          onClick={() => onStatusChange(r, 'approved')}
+                        >
+                          <Check className="w-3.5 h-3.5" /> Approve
+                        </button>
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 h-9 px-3 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-semibold"
+                          onClick={() => setRejectModal({ open: true, po: r, reason: '' })}
+                        >
+                          Reject
+                        </button>
+                      </>
+                    ) : null}
+                    {showEye && !showSubmit ? (
+                      <Link
+                        to={`/vendor-management/purchase-orders/${r.po_id}/receive`}
+                        className="inline-flex items-center gap-1.5 h-9 px-3 rounded-lg border border-blue-200 text-blue-600 text-xs font-semibold hover:bg-blue-50"
+                      >
+                        <Eye className="w-4 h-4" /> {st === 'completed' ? 'View received' : 'Receive goods'}
+                      </Link>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="hidden md:block overflow-x-auto rounded-lg border bg-white shadow-sm">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-left text-xs font-semibold text-slate-600 uppercase tracking-wide">
               <tr>
@@ -1032,6 +1139,7 @@ export default function PurchaseOrdersPage() {
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       {!loading && rows.length > 0 && (

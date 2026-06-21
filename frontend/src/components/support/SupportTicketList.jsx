@@ -284,7 +284,60 @@ export default function SupportTicketList() {
           <p className="font-medium text-slate-700">No tickets match your filters</p>
         </div>
       ) : (
-        <div className="overflow-x-auto bg-white rounded-xl border border-slate-200">
+        <>
+        {/* Mobile: stacked cards (the 12-column table is desktop-only) */}
+        <div className="grid gap-3 sm:hidden">
+          {filtered.map((ticket) => {
+            const st = displayStatus(ticket);
+            const pType = primaryType(ticket);
+            const overdue = ticket.is_overdue || (ticket.hours_since_last_update >= 48);
+            const podItem = (ticket.items || []).find((it) => it.proof_of_completion_path || it.pod_image_path);
+            const url = podItem && podUrl(podItem.proof_of_completion_path || podItem.pod_image_path);
+            return (
+              <div key={ticket.id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-mono text-xs text-slate-400">{formatTicketId(ticket.id)}</p>
+                    <p className="font-semibold text-slate-900 truncate">{ticket.customer_name || '—'}</p>
+                  </div>
+                  <span className={`support-status-badge shrink-0 ${st.className}`}>{st.label}</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                  <span className={`text-xs px-2 py-0.5 rounded-full capitalize ${TYPE_BADGE[pType] || 'bg-slate-100'}`}>{pType}</span>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 capitalize">{ticket.priority || 'normal'}</span>
+                  {ticket.ttspl_id && (
+                    <button type="button" onClick={() => setHistoryTtspl(ticket.ttspl_id)} className="text-xs font-mono text-blue-600">
+                      {ticket.ttspl_id}
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center justify-between gap-2 mt-2 text-xs">
+                  <span className="text-slate-500 truncate">{primaryCategory(ticket)}</span>
+                  <span className={overdue ? 'text-red-600 font-medium' : 'text-slate-400'}>{formatRelative(ticket.created_at)}</span>
+                </div>
+                <p className="text-xs text-slate-400 mt-1">{assignedLabel(ticket)}</p>
+                <div className="flex flex-wrap items-center gap-3 mt-3 pt-3 border-t border-slate-100">
+                  <Link to={`/support/tickets/${ticket.id}`} className="text-sm font-semibold text-blue-600 min-h-[36px] inline-flex items-center">View</Link>
+                  {url && <a href={url} target="_blank" rel="noopener noreferrer" className="text-sm text-emerald-600 min-h-[36px] inline-flex items-center">POD</a>}
+                  {isSupportLead(user) && isUnassigned(ticket) && (
+                    <select
+                      className="text-xs border rounded-lg px-2 min-h-[36px] ml-auto"
+                      defaultValue=""
+                      onChange={(e) => { if (e.target.value) handleAssign(ticket.id, e.target.value); e.target.value = ''; }}
+                    >
+                      <option value="">Assign</option>
+                      {technicians.map((tech) => (<option key={tech.user_id} value={tech.user_id}>{tech.name}</option>))}
+                    </select>
+                  )}
+                  {isSupportLead(user) && ticket.status !== 'closed' && (
+                    <button type="button" onClick={() => handleClose(ticket.id)} className="text-sm text-red-600 min-h-[36px] inline-flex items-center">Close</button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="hidden sm:block overflow-x-auto bg-white rounded-xl border border-slate-200">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs text-slate-600 uppercase">
@@ -383,6 +436,7 @@ export default function SupportTicketList() {
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       <TtsplHistoryDrawer

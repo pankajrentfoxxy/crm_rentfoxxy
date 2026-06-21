@@ -54,7 +54,37 @@ export default function BillsPage() {
         <h1 className="text-xl font-bold text-slate-900">My bills</h1>
         <p className="text-sm text-slate-500 mt-1">Monthly vendor billing statements</p>
       </div>
-      <div className="bg-white rounded-xl border overflow-hidden shadow-sm">
+      {/* Mobile cards */}
+      <div className="grid gap-3 md:hidden">
+        {loading ? (
+          <p className="p-8 text-center text-slate-500 animate-pulse">Loading…</p>
+        ) : rows.length === 0 ? (
+          <p className="bg-white border rounded-xl p-8 text-center text-slate-500">
+            No bills yet. Bills are generated on the last day of each month.
+          </p>
+        ) : rows.map((r) => (
+          <button
+            key={r.bill_id}
+            type="button"
+            onClick={() => setSelectedId(selectedId === r.bill_id ? null : r.bill_id)}
+            className={`text-left bg-white border rounded-2xl p-4 shadow-sm space-y-2 ${selectedId === r.bill_id ? 'border-emerald-300 ring-1 ring-emerald-200' : 'border-slate-200'}`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-slate-900">{MONTHS[r.bill_month] || r.bill_month} {r.bill_year}</span>
+              <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${statusBadge(r.status)}`}>{r.status}</span>
+            </div>
+            <p className="text-xs text-slate-500">{r.period || `${r.from_date} – ${r.to_date}`}</p>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+              <span>{r.units ?? 0} units</span>
+              <span>Subtotal {inr(r.subtotal)}</span>
+              {Number(r.debit_note_adjustment || 0) > 0 && <span className="text-red-600">-₹{Number(r.debit_note_adjustment).toLocaleString('en-IN')}</span>}
+            </div>
+            <p className="text-base font-bold text-slate-900 pt-2 border-t border-slate-100">{inr(r.total_payable)} <span className="text-xs font-normal text-slate-500">payable</span></p>
+          </button>
+        ))}
+      </div>
+
+      <div className="hidden md:block bg-white rounded-xl border overflow-hidden shadow-sm">
         {loading ? (
           <p className="p-8 text-center text-slate-500 animate-pulse">Loading…</p>
         ) : rows.length === 0 ? (
@@ -118,29 +148,31 @@ export default function BillsPage() {
                 </div>
                 <span className={`px-2 py-1 rounded-full text-xs capitalize h-fit ${statusBadge(detail.status)}`}>{detail.status}</span>
               </div>
-              <table className="min-w-full text-sm">
-                <thead className="text-xs text-slate-500 text-left">
-                  <tr>
-                    {['TTSPL ID', 'Brand', 'Config', 'Received', 'Return', 'Days', 'Rate', 'Amount'].map((h) => (
-                      <th key={h} className="pb-2 pr-2">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {(detail.line_items || []).map((line, i) => (
-                    <tr key={i} className="border-t">
-                      <td className="py-2 font-mono text-xs">{line.ttspl_id || '—'}</td>
-                      <td className="py-2">{line.brand || '—'}</td>
-                      <td className="py-2 text-xs">{line.config || '—'}</td>
-                      <td className="py-2 text-xs">{line.received_date || '—'}</td>
-                      <td className="py-2 text-xs">{line.return_date || '—'}</td>
-                      <td className="py-2">{line.days || '—'}</td>
-                      <td className="py-2">{inr(line.rate || line.daily_rate)}</td>
-                      <td className="py-2">{inr(line.amount)}</td>
+              <div className="overflow-x-auto -mx-2">
+                <table className="min-w-full text-sm">
+                  <thead className="text-xs text-slate-500 text-left">
+                    <tr>
+                      {['TTSPL ID', 'Brand', 'Config', 'Received', 'Return', 'Days', 'Rate', 'Amount'].map((h) => (
+                        <th key={h} className="pb-2 px-2 whitespace-nowrap">{h}</th>
+                      ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {(detail.line_items || []).map((line, i) => (
+                      <tr key={i} className="border-t">
+                        <td className="py-2 px-2 font-mono text-xs">{line.ttspl_id || '—'}</td>
+                        <td className="py-2 px-2">{line.brand || '—'}</td>
+                        <td className="py-2 px-2 text-xs">{line.config || '—'}</td>
+                        <td className="py-2 px-2 text-xs whitespace-nowrap">{line.received_date || '—'}</td>
+                        <td className="py-2 px-2 text-xs whitespace-nowrap">{line.return_date || '—'}</td>
+                        <td className="py-2 px-2">{line.days || '—'}</td>
+                        <td className="py-2 px-2 whitespace-nowrap">{inr(line.rate || line.daily_rate)}</td>
+                        <td className="py-2 px-2 whitespace-nowrap">{inr(line.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
               <div className="text-sm space-y-1 border-t pt-4 max-w-xs ml-auto">
                 <p className="flex justify-between"><span>Subtotal</span><span>{inr(detail.subtotal)}</span></p>
                 <p className="flex justify-between"><span>GST</span><span>{inr(detail.gst_amount)}</span></p>

@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import InvoiceStatusBadge from '../components/InvoiceStatusBadge';
 import SendInvoiceModal from '../components/SendInvoiceModal';
+import { Button } from '../../../components/ui/primitives';
 import {
   downloadInvoicePdf, generateEInvoice, generateEWayBill,
   getInvoice, markInvoicePaid, sendEInvoiceEmail,
@@ -95,18 +96,38 @@ export default function InvoiceDetailPage() {
         </div>
         <div className="flex flex-wrap gap-2">
           <PermissionGate section="customer_billing" action="edit">
-            <button type="button" onClick={() => setSendOpen(true)} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg">Send to Customer</button>
+            <Button onClick={() => setSendOpen(true)}>Send to Customer</Button>
           </PermissionGate>
-          <button type="button" onClick={handleDownload} className="px-4 py-2 text-sm border rounded-lg">Download PDF</button>
+          <Button variant="secondary" onClick={handleDownload}>Download PDF</Button>
           <PermissionGate section="customer_billing" action="edit">
-            <button type="button" onClick={handleMarkPaid} className="px-4 py-2 text-sm border rounded-lg">Mark as Paid</button>
+            <Button variant="secondary" onClick={handleMarkPaid}>Mark as Paid</Button>
           </PermissionGate>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-4">
-          <div className="bg-white border rounded-xl overflow-x-auto">
+          {/* Mobile line-item cards */}
+          <div className="grid gap-3 sm:hidden">
+            {lineItems.map((line, idx) => (
+              <div key={idx} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium text-slate-900">{line.ttspl_id || '—'}</span>
+                  <span className="font-semibold text-slate-900">{fmt(line.amount)}</span>
+                </div>
+                {line.serial_number && <p className="text-xs text-slate-500">SN: {line.serial_number}</p>}
+                <p className="text-sm text-slate-700">{line.brand} {line.model}</p>
+                <p className="text-xs text-slate-500">{line.rent_start || '—'} → {line.rent_end || '—'}</p>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+                  <span>{line.days_in_month}{line.month_days ? `/${line.month_days}` : ''} days</span>
+                  <span>{fmt(line.daily_rate)}/day</span>
+                  {line.is_catchup && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">catch-up</span>}
+                  {line.returned && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">returned</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="hidden sm:block bg-white border rounded-xl overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
                 <tr>

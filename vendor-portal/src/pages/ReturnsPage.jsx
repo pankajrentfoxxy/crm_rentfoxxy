@@ -22,7 +22,40 @@ export default function ReturnsPage() {
         <h1 className="text-xl font-bold text-slate-900">Returns</h1>
         <p className="text-sm text-slate-500 mt-1">Laptops returned to you via RDC</p>
       </div>
-      <div className="bg-white rounded-xl border overflow-hidden shadow-sm">
+      {/* Mobile cards */}
+      <div className="grid gap-3 md:hidden">
+        {loading ? (
+          <p className="p-8 text-center text-slate-500 animate-pulse">Loading…</p>
+        ) : rows.length === 0 ? (
+          <p className="bg-white border rounded-xl p-8 text-center text-slate-500">No returns yet.</p>
+        ) : rows.map((r, idx) => {
+          const ids = Array.isArray(r.ttspl_ids) ? r.ttspl_ids.filter(Boolean) : [];
+          return (
+            <div key={`${r.rdc_number}-${idx}`} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-semibold text-brand-dark">{r.rdc_number}</span>
+                <span className="text-xs text-slate-600 capitalize">{r.status || '—'}</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+                <span>{r.return_date ? new Date(r.return_date).toLocaleDateString() : '—'}</span>
+                <span>{r.laptop_count ?? ids.length ?? 0} laptop(s)</span>
+                {r.ticket_id && <span className="font-mono">Ticket #{r.ticket_id}</span>}
+                {r.debit_note_number && <span className="font-mono">DN {r.debit_note_number}</span>}
+              </div>
+              {r.reason && <p className="text-sm text-slate-700">{r.reason}</p>}
+              {ids.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 pt-2 border-t border-slate-100">
+                  {ids.map((id) => (
+                    <span key={String(id)} className="inline-flex px-2 py-0.5 rounded-md bg-slate-50 border font-mono text-xs text-slate-800">{id}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="hidden md:block bg-white rounded-xl border overflow-hidden shadow-sm">
         {loading ? (
           <p className="p-8 text-center text-slate-500 animate-pulse">Loading…</p>
         ) : rows.length === 0 ? (

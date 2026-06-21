@@ -3,6 +3,7 @@ import { History, FileText, Image as ImageIcon, Search, Loader2 } from 'lucide-r
 import toast from 'react-hot-toast';
 import { getPartsHistory } from '../../support/supportPartsApi';
 import { uploadBase } from '../../../components/support/utils';
+import { PageHeader, StatCard } from '../../../components/ui/primitives';
 
 const fileUrl = (p) => (p ? `${uploadBase()}/${p}` : null);
 
@@ -89,28 +90,17 @@ export default function PartsMovementHistoryPage() {
 
   return (
     <div className="p-4 max-w-[1400px] mx-auto space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold text-gray-900 flex items-center gap-2">
-          <History className="w-6 h-6 text-blue-600" /> Parts Movement History
-        </h1>
-        <p className="text-sm text-gray-500 mt-1">
-          Full ledger of spare parts issued to support technicians — who took what, against which ticket and
-          machine, the signed challan, and the return record.
-        </p>
-      </div>
+      <PageHeader
+        title="Parts Movement History"
+        subtitle="Full ledger of spare parts issued to support technicians — who took what, against which ticket and machine, the signed challan, and the return record."
+        icon={History}
+      />
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        {[
-          { label: 'Total movements', value: counts.total, color: 'text-blue-700' },
-          { label: 'With technician', value: counts.held, color: 'text-indigo-700' },
-          { label: 'Used on machine', value: counts.used, color: 'text-green-700' },
-          { label: 'Returned', value: counts.returned, color: 'text-gray-700' },
-        ].map((c) => (
-          <div key={c.label} className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
-            <p className="text-xs text-gray-500">{c.label}</p>
-            <p className={`text-2xl font-bold ${c.color}`}>{c.value}</p>
-          </div>
-        ))}
+        <StatCard label="Total movements" value={counts.total} tone="blue" />
+        <StatCard label="With technician" value={counts.held} tone="purple" />
+        <StatCard label="Used on machine" value={counts.used} tone="green" />
+        <StatCard label="Returned" value={counts.returned} tone="gray" />
       </div>
 
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 flex flex-wrap gap-3 items-end">
@@ -145,7 +135,52 @@ export default function PartsMovementHistoryPage() {
         </button>
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-x-auto">
+      {/* Mobile cards */}
+      <div className="grid gap-3 sm:hidden">
+        {loading ? (
+          <div className="flex justify-center py-16"><Loader2 className="w-7 h-7 animate-spin text-blue-600" /></div>
+        ) : rows.length === 0 ? (
+          <p className="p-8 text-center text-sm text-gray-500">No parts movement recorded for these filters.</p>
+        ) : rows.map((r) => {
+          const uor = usedOrReturn(r.status);
+          return (
+            <div key={r.id} className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <p className="font-medium text-gray-900">{r.part_name}</p>
+                  <p className="font-mono text-[11px] text-gray-400">{r.prt_id || r.request_number} · Qty {r.quantity}</p>
+                </div>
+                <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${uor.cls}`}>{uor.label}</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
+                <span className="font-mono text-blue-600">{r.ticket_number}</span>
+                <span className="font-mono text-teal-700">{r.ttspl_id || r.serial_number || '—'}</span>
+                <span>{r.tech_name}</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-400">
+                <span>Out: {fmtDate(r.issued_at)}</span>
+                <span>Back: {fmtDate(r.returned_at)}</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-slate-100">
+                <EsignLink url={r.tech_esign_url} label="Tech sign" />
+                {r.pdf_path && (
+                  <a href={fileUrl(r.pdf_path)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-gray-500 hover:underline">
+                    <FileText className="w-3.5 h-3.5" /> {r.challan_number || 'Challan'}
+                  </a>
+                )}
+                <EsignLink url={r.wh_esign_url} label="WH sign" />
+                {r.return_pdf_path && (
+                  <a href={fileUrl(r.return_pdf_path)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-gray-500 hover:underline">
+                    <FileText className="w-3.5 h-3.5" /> Return doc
+                  </a>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="hidden sm:block bg-white rounded-xl border border-gray-100 shadow-sm overflow-x-auto">
         {loading ? (
           <div className="flex justify-center py-16"><Loader2 className="w-7 h-7 animate-spin text-blue-600" /></div>
         ) : rows.length === 0 ? (

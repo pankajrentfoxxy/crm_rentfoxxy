@@ -365,7 +365,13 @@ function TechnicianSignModal({ item, onSigned, onClose }) {
     let pad;
     import('signature_pad').then(({ default: SP }) => {
       if (canvasRef.current) {
-        pad = new SP(canvasRef.current, {
+        // Scale for high-DPI / touch screens so the pen tracks the finger exactly.
+        const canvas = canvasRef.current;
+        const ratio = Math.max(window.devicePixelRatio || 1, 1);
+        canvas.width = canvas.offsetWidth * ratio;
+        canvas.height = canvas.offsetHeight * ratio;
+        canvas.getContext('2d').scale(ratio, ratio);
+        pad = new SP(canvas, {
           backgroundColor: 'rgb(255,255,255)', penColor: '#1A1A2E', minWidth: 1.5, maxWidth: 3,
         });
         padRef.current = pad;
@@ -438,7 +444,13 @@ function WarehouseReceiptSignModal({ item, onSigned, onClose }) {
     let pad;
     import('signature_pad').then(({ default: SP }) => {
       if (canvasRef.current) {
-        pad = new SP(canvasRef.current, {
+        // Scale for high-DPI / touch screens so the pen tracks the finger exactly.
+        const canvas = canvasRef.current;
+        const ratio = Math.max(window.devicePixelRatio || 1, 1);
+        canvas.width = canvas.offsetWidth * ratio;
+        canvas.height = canvas.offsetHeight * ratio;
+        canvas.getContext('2d').scale(ratio, ratio);
+        pad = new SP(canvas, {
           backgroundColor: 'rgb(255,255,255)', penColor: '#1A1A2E', minWidth: 1.5, maxWidth: 3,
         });
         padRef.current = pad;

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
+import { Button } from '../../../components/ui/primitives';
 import { getQuotation, updateQuotationStatus, regenerateQuotationPdf } from '../salesPipelineApi';
 import { getBackendOrigin } from '../../../utils/api';
 import { formatCurrency, formatDate, lineTotal, QUOTE_STATUS_STYLES, TYPE_STYLES, typeLabel } from '../salesPipelineUtils';
@@ -78,21 +79,21 @@ export default function QuotationDetailPage() {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button type="button" onClick={async () => {
+          <Button variant="secondary" onClick={async () => {
             try {
               let url = pdfUrl(head.pdf_path);
               if (!url) { const r = await regenerateQuotationPdf(quotationNumber); url = pdfUrl(r.data?.pdf_path); }
               if (url) window.open(url, '_blank'); else toast.error('PDF not available');
             } catch { toast.error('Could not open PDF'); }
-          }} className="px-4 py-2 border rounded-lg text-sm">Download PDF</button>
+          }}>Download PDF</Button>
           <PermissionGate section="sales_quotations" action="edit">
             {head.status === 'approved' && (
-              <button type="button" onClick={() => navigate('/sales-pipeline/sales-orders', { state: { fromQuote: quotationNumber } })} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">Create SO</button>
+              <Button onClick={() => navigate('/sales-pipeline/sales-orders', { state: { fromQuote: quotationNumber } })}>Create SO</Button>
             )}
             {['pending', 'draft', 'sent'].includes(head.status) && (
               <>
-                <button type="button" onClick={() => changeStatus('approved')} className="px-3 py-2 text-sm border rounded-lg text-emerald-700">Approve</button>
-                <button type="button" onClick={() => changeStatus('rejected')} className="px-3 py-2 text-sm border rounded-lg text-red-700">Reject</button>
+                <Button variant="secondary" className="text-emerald-700" onClick={() => changeStatus('approved')}>Approve</Button>
+                <Button variant="secondary" className="text-red-700" onClick={() => changeStatus('rejected')}>Reject</Button>
               </>
             )}
           </PermissionGate>

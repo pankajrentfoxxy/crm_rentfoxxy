@@ -78,11 +78,42 @@ export default function CustomerAssetsPage() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search TTSPL, serial, customer, model, DC…"
-          className="ml-auto w-72 max-w-full border rounded-lg px-3 py-1.5 text-sm"
+          className="w-full sm:ml-auto sm:w-72 max-w-full border rounded-lg px-3 py-2 text-sm"
         />
       </div>
 
-      <div className="border rounded-xl overflow-x-auto">
+      {/* Mobile cards */}
+      <div className="grid gap-3 sm:hidden">
+        {loading ? (
+          <p className="px-3 py-8 text-center text-gray-400">Loading…</p>
+        ) : rows.length === 0 ? (
+          <p className="px-3 py-8 text-center text-gray-400">No assets currently with customers</p>
+        ) : rows.map((r) => (
+          <div key={r.serial_id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-gray-900">{r.ttspl_id || r.serial_number || '—'}</span>
+              <span className={['inline-block px-2 py-0.5 rounded-full text-[11px] font-medium capitalize', STATUS_STYLES[r.inventory_status] || 'bg-gray-100 text-gray-700'].join(' ')}>
+                {String(r.inventory_status || '').replace('_', ' ')}
+              </span>
+            </div>
+            <p className="text-sm text-gray-900">{r.brand} {r.model}</p>
+            <p className="text-[11px] text-gray-400">{[r.processor, r.generation, r.ram, r.storage].filter(Boolean).join(' · ')}</p>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
+              {r.customer_id ? (
+                <Link to={`/lead-crm/customers/${r.customer_id}`} className="text-blue-600 font-medium">{r.company_name || r.customer_name || `#${r.customer_id}`}</Link>
+              ) : <span>—</span>}
+              {r.dc_number && <span>DC {r.dc_number}</span>}
+              {r.entity_code && <span className="capitalize">{r.entity_code}</span>}
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 text-xs text-gray-500">
+              <span>Disp: {fmtDate(r.dispatched_at)} · Del: {fmtDate(r.delivered_at)}</span>
+              <span className="font-semibold text-gray-700">{r.purchase_order_type === 'direct_purchase' || r.inventory_status === 'sold' ? '—' : fmtMoney(r.rent_monthly_rate)}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="hidden sm:block border rounded-xl overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
             <tr>

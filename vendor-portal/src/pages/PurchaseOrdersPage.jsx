@@ -36,7 +36,32 @@ export default function PurchaseOrdersPage() {
         <h1 className="text-xl font-bold text-slate-900">Purchase orders</h1>
         <p className="text-sm text-slate-500 mt-1">Read-only view of orders sent to you by Rentfoxxy</p>
       </div>
-      <div className="bg-white rounded-xl border overflow-hidden shadow-sm">
+      {/* Mobile cards */}
+      <div className="grid gap-3 md:hidden">
+        {loading ? (
+          <p className="p-8 text-center text-slate-500 animate-pulse">Loading…</p>
+        ) : rows.length === 0 ? (
+          <p className="bg-white border rounded-xl p-8 text-center text-slate-500">No purchase orders yet.</p>
+        ) : rows.map((r) => (
+          <Link
+            key={r.po_id}
+            to={`/purchase-orders/${r.po_id}`}
+            className="block bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2 active:bg-slate-50"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-brand-dark">{r.purchase_order_number}</span>
+              <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${statusBadge(r.status)}`}>{formatType(r.status)}</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+              <span>{r.purchase_order_date}</span>
+              <span>{formatType(r.purchase_order_type)}</span>
+            </div>
+            <p className="text-base font-bold text-slate-900 pt-2 border-t border-slate-100">₹{Number(r.total_amount || 0).toLocaleString('en-IN')}</p>
+          </Link>
+        ))}
+      </div>
+
+      <div className="hidden md:block bg-white rounded-xl border overflow-hidden shadow-sm">
         {loading ? (
           <p className="p-8 text-center text-slate-500 animate-pulse">Loading…</p>
         ) : rows.length === 0 ? (

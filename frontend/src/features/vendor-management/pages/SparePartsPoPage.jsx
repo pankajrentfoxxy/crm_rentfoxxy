@@ -288,7 +288,89 @@ export default function SparePartsPoPage() {
       {loading ? (
         <div className="p-8 rounded-lg border text-center text-slate-500 animate-pulse">Loading…</div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border bg-white shadow-sm">
+        <>
+        {/* Mobile cards */}
+        <div className="grid gap-3 md:hidden">
+          {rows.length === 0 ? (
+            <div className="p-8 rounded-lg border bg-white text-center text-slate-500">
+              No spare parts purchase orders match your filters.
+            </div>
+          ) : rows.map((r) => {
+            const editable = statusRowEditable(r.status);
+            const st = String(r.status || '').toLowerCase();
+            const vendorName =
+              r.vendor_display_name || r.vendor_business_name || r.vendor_first_name || `Vendor #${r.vendor_id}`;
+            const showReceiveCue = st !== 'void' && st !== 'pending';
+            return (
+              <div key={r.spo_id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-3">
+                <div className="flex items-start justify-between gap-2">
+                  <button
+                    type="button"
+                    className="text-left text-orange-600 font-bold hover:underline"
+                    onClick={() => openPreview(r.spo_id)}
+                  >
+                    {r.purchase_order_number}
+                  </button>
+                  {!editable && <span className="text-xs font-semibold capitalize text-slate-700">{r.status || '—'}</span>}
+                </div>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+                  <span>{r.purchase_order_date}</span>
+                  <span className="text-slate-800 font-medium">{vendorName}</span>
+                </div>
+                {r.remarks ? <div className="text-xs text-slate-600"><RemarkCell text={r.remarks} /></div> : null}
+
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  {r.bill_name ? (
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-slate-200 bg-slate-50 font-semibold text-slate-800"
+                      onClick={() => setBillView({ open: true, bill_name: r.bill_name, files: parseBillFiles(r), spoId: r.spo_id })}
+                    >
+                      View bill
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-orange-500 text-orange-600 font-semibold"
+                      onClick={() => openBillUpload(r)}
+                    >
+                      Upload bill
+                    </button>
+                  )}
+                  {showReceiveCue ? (
+                    <Link
+                      to={`/vendor-management/spare-parts-po/${r.spo_id}/receive`}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-teal-600 text-teal-700 font-semibold hover:bg-teal-50"
+                    >
+                      <Eye className="w-4 h-4" /> Receive
+                    </Link>
+                  ) : null}
+                </div>
+
+                {editable ? (
+                  <div className="pt-2 border-t border-slate-100">
+                    <select
+                      className="w-full border border-slate-200 rounded-md px-2 py-2 text-sm bg-white"
+                      value={st === 'draft' ? 'draft' : st === 'pending' ? 'pending' : ''}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        if (!next || next === st || next === 'draft') return;
+                        onStatusChange(r, next);
+                      }}
+                    >
+                      <option value="">Please take action</option>
+                      {st === 'draft' ? <option value="draft">Draft</option> : null}
+                      <option value="pending">Pending</option>
+                      <option value="approved">Approve</option>
+                    </select>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="hidden md:block overflow-x-auto rounded-lg border bg-white shadow-sm">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-left text-xs font-semibold text-slate-600 uppercase tracking-wide">
               <tr>
@@ -444,6 +526,7 @@ export default function SparePartsPoPage() {
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       {!loading && rows.length > 0 && (

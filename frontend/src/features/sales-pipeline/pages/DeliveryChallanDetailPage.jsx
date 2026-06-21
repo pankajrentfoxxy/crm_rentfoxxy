@@ -155,14 +155,14 @@ export default function DeliveryChallanDetailPage() {
             <QcStatusBadge allPassed={qc?.all_passed} pendingCount={qc?.pending_count} failedCount={qc?.tickets?.filter((t) => t.status === 'qc_failed').length} totalCount={qc?.total_count} />
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {dcPdfUrl(head.pdf_path) && (
             <a href={dcPdfUrl(head.pdf_path)} target="_blank" rel="noreferrer"
-              className="px-3 py-1.5 text-sm border rounded-lg text-gray-700 hover:bg-gray-50">Download PDF</a>
+              className="inline-flex items-center px-4 min-h-[40px] text-sm font-semibold border border-slate-300 rounded-xl text-gray-700 hover:bg-gray-50">Download PDF</a>
           )}
           {isSuperAdmin && (
             <button type="button" onClick={() => setEditOpen(true)}
-              className="px-3 py-1.5 text-sm bg-amber-600 text-white rounded-lg">Edit DC</button>
+              className="inline-flex items-center px-4 min-h-[40px] text-sm font-semibold bg-amber-600 text-white rounded-xl hover:bg-amber-700">Edit DC</button>
           )}
         </div>
       </div>

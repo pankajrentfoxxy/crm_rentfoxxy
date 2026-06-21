@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus } from 'lucide-react';
+import { Plus, Truck } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
+import { PageHeader, StatCard, Button, Badge, ResponsiveTable } from '../../../components/ui/primitives';
 import DCForm from '../components/DCForm';
 import DispatchModal from '../components/DispatchModal';
 import QcStatusBadge from '../components/QcStatusBadge';
@@ -55,87 +56,108 @@ export default function DeliveryChallanListPage() {
     rejected: rows.filter((r) => r.status === 'rejected').length,
   }), [rows]);
 
+  const dispatchCell = (row) => {
+    const qc = qcMap[row.dc_number];
+    const canDispatch = (row.status === 'pending' || !row.status) && qc?.all_passed;
+    return (
+      <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
+        <button type="button" className="text-blue-600 text-sm font-semibold" onClick={() => navigate(`/sales-pipeline/delivery-challans/${row.dc_number}`)}>View</button>
+        {canDispatch && (
+          <PermissionGate section="dispatch_ops" action="edit">
+            <button type="button" className="text-sm text-teal-700 font-semibold" onClick={() => setDispatchDc(row.dc_number)}>Dispatch</button>
+          </PermissionGate>
+        )}
+      </div>
+    );
+  };
+
+  const columns = [
+    { key: 'dc_number', header: 'DC #', render: (r) => <span className="font-mono text-blue-700 font-semibold">{r.dc_number}</span> },
+    { key: 'date', header: 'Date', render: (r) => formatDate(r.created_at) },
+    { key: 'customer_name', header: 'Customer' },
+    { key: 'so', header: 'SO #', render: (r) => <span className="font-mono text-xs">{r.sales_order_number || '—'}</span> },
+    { key: 'dispatch', header: 'Dispatch', render: (r) => (r.dispatch_mode ? <span className={`px-2 py-0.5 rounded-full text-xs ${DISPATCH_MODE_STYLES[r.dispatch_mode]}`}>{r.dispatch_mode}</span> : '—') },
+    {
+      key: 'qc',
+      header: 'QC',
+      render: (r) => {
+        const qc = qcMap[r.dc_number];
+        return (
+          <QcStatusBadge
+            allPassed={qc?.all_passed}
+            pendingCount={qc?.pending_count}
+            failedCount={qc?.tickets?.filter((t) => t.status === 'qc_failed').length}
+            totalCount={qc?.total_count}
+          />
+        );
+      },
+    },
+    { key: 'status', header: 'Status', render: (r) => <span className={`px-2 py-0.5 rounded-full text-xs ${DC_STATUS_STYLES[r.status || 'pending']}`}>{statusLabel(r.status || 'pending')}</span> },
+    { key: 'actions', header: 'Actions', render: dispatchCell },
+  ];
+
+  const renderCard = (r) => {
+    const qc = qcMap[r.dc_number];
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="font-mono text-blue-700 font-semibold">{r.dc_number}</span>
+          <span className={`px-2 py-0.5 rounded-full text-xs ${DC_STATUS_STYLES[r.status || 'pending']}`}>{statusLabel(r.status || 'pending')}</span>
+        </div>
+        <p className="font-medium text-slate-800">{r.customer_name}</p>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+          <span>{formatDate(r.created_at)}</span>
+          {r.sales_order_number && <span className="font-mono">SO {r.sales_order_number}</span>}
+          {r.dispatch_mode && <span className={`px-2 py-0.5 rounded-full ${DISPATCH_MODE_STYLES[r.dispatch_mode]}`}>{r.dispatch_mode}</span>}
+        </div>
+        <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
+          <QcStatusBadge
+            allPassed={qc?.all_passed}
+            pendingCount={qc?.pending_count}
+            failedCount={qc?.tickets?.filter((t) => t.status === 'qc_failed').length}
+            totalCount={qc?.total_count}
+          />
+          {dispatchCell(r)}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="p-4 max-w-7xl mx-auto">
-      <div className="flex flex-wrap items-start justify-between gap-4 mb-6">
-        <div>
-          <h1 className="text-2xl font-semibold text-gray-900">Delivery Challans</h1>
-          <p className="text-sm text-gray-500">DC-* series</p>
-        </div>
-        <PermissionGate section="delivery_challans" action="create">
-          <button type="button" onClick={() => setDcDrawer(true)} className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">
-            <Plus className="w-4 h-4" /> Create DC
-          </button>
-        </PermissionGate>
-      </div>
+      <PageHeader
+        title="Delivery Challans"
+        subtitle="DC-* series"
+        icon={Truck}
+        actions={(
+          <PermissionGate section="delivery_challans" action="create">
+            <Button icon={Plus} onClick={() => setDcDrawer(true)}>Create DC</Button>
+          </PermissionGate>
+        )}
+      />
 
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
-        {[['Total', stats.total], ['Pending', stats.pending], ['In Transit', stats.in_transit], ['Delivered', stats.delivered], ['Rejected', stats.rejected]].map(([l, v]) => (
-          <div key={l} className="bg-white border rounded-lg p-3 text-center"><p className="text-xs text-gray-500">{l}</p><p className="text-lg font-semibold">{v}</p></div>
-        ))}
+        <StatCard label="Total" value={stats.total} tone="gray" />
+        <StatCard label="Pending" value={stats.pending} tone="amber" />
+        <StatCard label="In Transit" value={stats.in_transit} tone="blue" />
+        <StatCard label="Delivered" value={stats.delivered} tone="green" />
+        <StatCard label="Rejected" value={stats.rejected} tone="red" />
       </div>
 
       <div className="flex flex-wrap gap-2 mb-4">
         {TABS.map((t) => (
-          <button key={t} type="button" onClick={() => setTab(t)} className={`px-3 py-1.5 rounded-full text-xs font-medium capitalize ${tab === t ? 'bg-blue-600 text-white' : 'bg-gray-100'}`}>{t.replace('_', ' ')}</button>
+          <button key={t} type="button" onClick={() => setTab(t)} className={`px-3 min-h-[36px] rounded-full text-xs font-medium capitalize ${tab === t ? 'bg-blue-600 text-white' : 'bg-gray-100'}`}>{t.replace('_', ' ')}</button>
         ))}
       </div>
 
-      <div className="bg-white border rounded-xl overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-xs text-gray-500 uppercase text-left">
-            <tr>
-              <th className="px-4 py-3">DC #</th>
-              <th className="px-4 py-3">Date</th>
-              <th className="px-4 py-3">Customer</th>
-              <th className="px-4 py-3">SO #</th>
-              <th className="px-4 py-3">Dispatch</th>
-              <th className="px-4 py-3">QC</th>
-              <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y">
-            {loading ? (
-              <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-500">Loading…</td></tr>
-            ) : rows.map((row) => {
-              const qc = qcMap[row.dc_number];
-              return (
-                <tr key={row.dc_number} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 font-mono text-blue-700">{row.dc_number}</td>
-                  <td className="px-4 py-3">{formatDate(row.created_at)}</td>
-                  <td className="px-4 py-3">{row.customer_name}</td>
-                  <td className="px-4 py-3 font-mono text-xs">{row.sales_order_number}</td>
-                  <td className="px-4 py-3">
-                    {row.dispatch_mode ? (
-                      <span className={`px-2 py-0.5 rounded-full text-xs ${DISPATCH_MODE_STYLES[row.dispatch_mode]}`}>{row.dispatch_mode}</span>
-                    ) : '—'}
-                  </td>
-                  <td className="px-4 py-3">
-                    <QcStatusBadge
-                      allPassed={qc?.all_passed}
-                      pendingCount={qc?.pending_count}
-                      failedCount={qc?.tickets?.filter((t) => t.status === 'qc_failed').length}
-                      totalCount={qc?.total_count}
-                    />
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={`px-2 py-0.5 rounded-full text-xs ${DC_STATUS_STYLES[row.status || 'pending']}`}>{statusLabel(row.status || 'pending')}</span>
-                  </td>
-                  <td className="px-4 py-3 space-x-2">
-                    <button type="button" className="text-blue-600 text-xs" onClick={() => navigate(`/sales-pipeline/delivery-challans/${row.dc_number}`)}>View</button>
-                    {(row.status === 'pending' || !row.status) && qc?.all_passed && (
-                      <PermissionGate section="dispatch_ops" action="edit">
-                        <button type="button" className="text-xs text-teal-700" onClick={() => setDispatchDc(row.dc_number)}>Dispatch</button>
-                      </PermissionGate>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      <ResponsiveTable
+        columns={columns}
+        rows={rows}
+        keyField="dc_number"
+        loading={loading}
+        renderCard={renderCard}
+        onRowClick={(r) => navigate(`/sales-pipeline/delivery-challans/${r.dc_number}`)}
+      />
 
       <DCForm open={dcDrawer} onClose={() => setDcDrawer(false)} />
       <DispatchModal

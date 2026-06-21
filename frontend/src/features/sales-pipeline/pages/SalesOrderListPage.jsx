@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Plus } from 'lucide-react';
+import { Plus, ClipboardList } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
+import { PageHeader, StatCard, Button, ResponsiveTable } from '../../../components/ui/primitives';
 import PaymentModal from '../components/PaymentModal';
 import SalesOrderForm from '../components/SalesOrderForm';
 import DCForm from '../components/DCForm';
@@ -46,64 +47,71 @@ export default function SalesOrderListPage() {
     withDc: rows.filter((r) => r.dc_count > 0).length,
   }), [rows]);
 
+  const actionCell = (row) => (
+    <div className="flex flex-wrap items-center gap-3" onClick={(e) => e.stopPropagation()}>
+      <button type="button" className="text-blue-600 text-sm font-semibold" onClick={() => navigate(`/sales-pipeline/sales-orders/${row.sales_order_number}`)}>View</button>
+      <PermissionGate section="delivery_challans" action="create">
+        <button type="button" className="text-sm text-teal-700 font-semibold" onClick={() => { setPrefillSo(row.sales_order_number); setDcDrawer(true); }}>Create DC</button>
+      </PermissionGate>
+      <PermissionGate section="payment_records" action="create">
+        <button type="button" className="text-sm text-gray-700 font-semibold" onClick={() => setPaymentSo(row.sales_order_number)}>Record Payment</button>
+      </PermissionGate>
+    </div>
+  );
+
+  const columns = [
+    { key: 'sales_order_number', header: 'SO #', render: (r) => <span className="font-mono text-blue-700 font-semibold">{r.sales_order_number}</span> },
+    { key: 'date', header: 'Date', render: (r) => formatDate(r.created_at) },
+    { key: 'customer_name', header: 'Customer' },
+    { key: 'type', header: 'Type', render: (r) => <span className={`px-2 py-0.5 rounded-full text-xs ${TYPE_STYLES[r.quotation_type]}`}>{typeLabel(r.quotation_type)}</span> },
+    { key: 'total', header: 'Total', render: (r) => formatCurrency(r.total_value) },
+    { key: 'dc', header: 'DC', render: (r) => <span className="bg-gray-100 px-2 py-0.5 rounded-full text-xs">{r.dc_count || 0}</span> },
+    { key: 'actions', header: 'Actions', render: actionCell },
+  ];
+
+  const renderCard = (r) => (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-mono text-blue-700 font-semibold">{r.sales_order_number}</span>
+        <span className={`px-2 py-0.5 rounded-full text-xs ${TYPE_STYLES[r.quotation_type]}`}>{typeLabel(r.quotation_type)}</span>
+      </div>
+      <p className="font-medium text-slate-800">{r.customer_name}</p>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+        <span>{formatDate(r.created_at)}</span>
+        <span className="font-semibold text-slate-700">{formatCurrency(r.total_value)}</span>
+        <span>DC: {r.dc_count || 0}</span>
+      </div>
+      <div className="pt-2 border-t border-slate-100">{actionCell(r)}</div>
+    </div>
+  );
+
   return (
     <div className="p-4 max-w-7xl mx-auto">
-      <div className="flex flex-wrap items-start justify-between gap-4 mb-6">
-        <div>
-          <h1 className="text-2xl font-semibold text-gray-900">Sales Orders</h1>
-          <p className="text-sm text-gray-500">SO-* series</p>
-        </div>
-        <PermissionGate section="sales_orders_doc" action="create">
-          <button type="button" onClick={() => setSoDrawer(true)} className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">
-            <Plus className="w-4 h-4" /> Create Sales Order
-          </button>
-        </PermissionGate>
-      </div>
+      <PageHeader
+        title="Sales Orders"
+        subtitle="SO-* series"
+        icon={ClipboardList}
+        actions={(
+          <PermissionGate section="sales_orders_doc" action="create">
+            <Button icon={Plus} onClick={() => setSoDrawer(true)}>Create Sales Order</Button>
+          </PermissionGate>
+        )}
+      />
 
       <div className="grid grid-cols-3 gap-3 mb-4">
-        <div className="bg-white border rounded-lg p-3 text-center"><p className="text-xs text-gray-500">Total</p><p className="text-lg font-semibold">{stats.total}</p></div>
-        <div className="bg-white border rounded-lg p-3 text-center"><p className="text-xs text-gray-500">Awaiting DC</p><p className="text-lg font-semibold">{stats.pending}</p></div>
-        <div className="bg-white border rounded-lg p-3 text-center"><p className="text-xs text-gray-500">With DC</p><p className="text-lg font-semibold">{stats.withDc}</p></div>
+        <StatCard label="Total" value={stats.total} tone="gray" />
+        <StatCard label="Awaiting DC" value={stats.pending} tone="amber" />
+        <StatCard label="With DC" value={stats.withDc} tone="green" />
       </div>
 
-      <div className="bg-white border rounded-xl overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-xs text-gray-500 uppercase text-left">
-            <tr>
-              <th className="px-4 py-3">SO #</th>
-              <th className="px-4 py-3">Date</th>
-              <th className="px-4 py-3">Customer</th>
-              <th className="px-4 py-3">Type</th>
-              <th className="px-4 py-3">Total</th>
-              <th className="px-4 py-3">DC</th>
-              <th className="px-4 py-3">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y">
-            {loading ? (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-500">Loading…</td></tr>
-            ) : rows.map((row) => (
-              <tr key={row.sales_order_number} className="hover:bg-gray-50">
-                <td className="px-4 py-3 font-mono text-blue-700">{row.sales_order_number}</td>
-                <td className="px-4 py-3">{formatDate(row.created_at)}</td>
-                <td className="px-4 py-3">{row.customer_name}</td>
-                <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded-full text-xs ${TYPE_STYLES[row.quotation_type]}`}>{typeLabel(row.quotation_type)}</span></td>
-                <td className="px-4 py-3">{formatCurrency(row.total_value)}</td>
-                <td className="px-4 py-3"><span className="bg-gray-100 px-2 py-0.5 rounded-full text-xs">{row.dc_count || 0}</span></td>
-                <td className="px-4 py-3 space-x-2">
-                  <button type="button" className="text-blue-600 text-xs" onClick={() => navigate(`/sales-pipeline/sales-orders/${row.sales_order_number}`)}>View</button>
-                  <PermissionGate section="delivery_challans" action="create">
-                    <button type="button" className="text-xs text-teal-700" onClick={() => { setPrefillSo(row.sales_order_number); setDcDrawer(true); }}>Create DC</button>
-                  </PermissionGate>
-                  <PermissionGate section="payment_records" action="create">
-                    <button type="button" className="text-xs text-gray-700" onClick={() => setPaymentSo(row.sales_order_number)}>Record Payment</button>
-                  </PermissionGate>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <ResponsiveTable
+        columns={columns}
+        rows={rows}
+        keyField="sales_order_number"
+        loading={loading}
+        renderCard={renderCard}
+        onRowClick={(r) => navigate(`/sales-pipeline/sales-orders/${r.sales_order_number}`)}
+      />
 
       <SalesOrderForm open={soDrawer} onClose={() => setSoDrawer(false)} onSaved={load} prefillQuotation={prefillQuote} />
       <DCForm open={dcDrawer} onClose={() => { setDcDrawer(false); setPrefillSo(null); }} prefillSo={prefillSo} />

@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, CheckCircle2, Loader2, Package, TrendingUp } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Loader2, Package, TrendingUp, Factory } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { PageHeader, StatCard } from '../../../components/ui/primitives';
 import { useAuth } from '../../../context/AuthContext';
 import { fetchFloorDashboard, getFloorManagerQueue, getTeamMembers } from '../floorPipelineApi';
 import { configSummary, isFloorManagerRole, priorityBadge } from '../floorPipelineUi';
@@ -88,10 +89,7 @@ export default function FloorDashboardPage() {
 
   return (
     <div className="space-y-6 pb-10">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">Floor Dashboard</h1>
-        <p className="text-sm text-slate-500">Pipeline overview for floor managers</p>
-      </div>
+      <PageHeader title="Floor Dashboard" subtitle="Pipeline overview for floor managers" icon={Factory} />
 
       {fm ? (
         <section className="rounded-xl border border-amber-200 bg-amber-50/40 p-4 shadow-sm">
@@ -103,7 +101,26 @@ export default function FloorDashboardPage() {
           ) : (
             <>
               <p className="text-sm text-amber-800 mb-3">{queue.length} ticket(s) waiting in Floor Manager</p>
-              <div className="rounded-xl border bg-white overflow-x-auto">
+              {/* Mobile cards */}
+              <div className="grid gap-2 sm:hidden">
+                {queue.map((t) => {
+                  const pri = priorityBadge(t.priority);
+                  return (
+                    <div key={t.ticket_id} className="rounded-xl border bg-white p-3 shadow-sm space-y-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono font-semibold text-blue-700">{t.ttspl_id || '—'}</span>
+                        <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${pri.className}`}>{pri.label}</span>
+                      </div>
+                      <p className="text-xs text-slate-600">{configSummary(t)}</p>
+                      <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100">
+                        <span className="text-xs text-slate-400">{t.created_at ? new Date(t.created_at).toLocaleDateString() : '—'}</span>
+                        <button type="button" onClick={() => setAssignTicket(t)} className="text-sm font-semibold text-blue-600">Assign Now</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="hidden sm:block rounded-xl border bg-white overflow-x-auto">
                 <table className="min-w-full text-sm">
                   <thead className="bg-slate-50 text-xs uppercase text-slate-500">
                     <tr>
@@ -142,18 +159,10 @@ export default function FloorDashboardPage() {
       ) : null}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        {[
-          { label: 'Active Tickets', value: activeTotal, icon: TrendingUp, color: 'text-blue-600' },
-          { label: 'In QC', value: inQc, icon: Package, color: 'text-indigo-600' },
-          { label: 'Highlighted', value: highlighted, icon: AlertTriangle, color: 'text-amber-600' },
-          { label: 'Sales Order Priority', value: salesPri, icon: AlertTriangle, color: 'text-red-600' }
-        ].map((k) => (
-          <div key={k.label} className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-            <k.icon className={`w-5 h-5 ${k.color} mb-2`} />
-            <p className="text-2xl font-bold">{k.value}</p>
-            <p className="text-xs text-slate-500">{k.label}</p>
-          </div>
-        ))}
+        <StatCard label="Active Tickets" value={activeTotal} icon={TrendingUp} tone="blue" />
+        <StatCard label="In QC" value={inQc} icon={Package} tone="purple" />
+        <StatCard label="Highlighted" value={highlighted} icon={AlertTriangle} tone="amber" />
+        <StatCard label="Sales Order Priority" value={salesPri} icon={AlertTriangle} tone="red" />
       </div>
 
       <div className="grid lg:grid-cols-2 gap-4">

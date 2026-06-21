@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Copy, FileText } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
+import { Button } from '../../../components/ui/primitives';
 import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
 import {
   getCustomer, getCustomerLaptops, updateCustomer, verifyCustomerKyc, enableCustomerPortal,
@@ -145,13 +146,12 @@ export default function CustomerDetailPage() {
           <h1 className="text-2xl font-bold">{customer.company_name || customer.customer_name}</h1>
           <p className="text-gray-500 text-sm">Customer #{customer.customer_id}</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <KycBadge status={customer.kyc_status || (customer.kyc_verified ? 'verified' : 'pending')} />
-          <button type="button" onClick={() => setEditOpen(true)} className="px-3 py-1.5 text-sm border rounded-lg">Edit</button>
+          <Button variant="secondary" size="sm" onClick={() => setEditOpen(true)}>Edit</Button>
           <PermissionGate section="kyc_management" action="edit">
             {(customer.kyc_status !== 'verified' && !customer.kyc_verified) && (
-              <button type="button" onClick={handleVerifyKyc}
-                className="px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg">Verify KYC</button>
+              <Button variant="success" size="sm" onClick={handleVerifyKyc}>Verify KYC</Button>
             )}
           </PermissionGate>
         </div>
@@ -237,7 +237,55 @@ export default function CustomerDetailPage() {
             </button>
           </div>
 
-          <div className="rounded-xl border border-gray-100 bg-white shadow-sm overflow-x-auto">
+          {/* Mobile asset cards */}
+          <div className="grid gap-3 md:hidden">
+            {assetView === 'active' ? (
+              laptops.length === 0 ? (
+                <p className="p-6 text-center text-gray-400 text-sm">No assets currently with this customer</p>
+              ) : laptops.map((lap) => (
+                <div key={lap.serial_id || lap.ttspl_id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <button type="button" onClick={() => setTtsplOpen(lap.ttspl_id || lap.serial_number)} className="text-blue-600 font-mono text-sm font-semibold">{lap.ttspl_id || lap.serial_number}</button>
+                    <span className="px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-xs">{lap.status || 'rented'}</span>
+                  </div>
+                  <p className="text-sm text-slate-800">{lap.model_name || '—'}</p>
+                  <p className="text-xs text-slate-500">SN: {lap.serial_number || '—'}</p>
+                  <p className="text-xs text-slate-500">{laptopConfig(lap) || '—'}</p>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+                    {lap.entity_code === 'gorefurbo'
+                      ? <span className="px-2 py-0.5 rounded bg-purple-100 text-purple-700">Gorefurbo</span>
+                      : <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-700">Rentfoxxy</span>}
+                    {lap.dc_number && <span className="font-mono">DC {lap.dc_number}</span>}
+                    {(lap.delivered_at || lap.dispatch_date) && <span>{new Date(lap.delivered_at || lap.dispatch_date).toLocaleDateString('en-IN')}</span>}
+                    {lap.rent_monthly_rate && <span className="font-semibold text-slate-700">{formatCurrency(lap.rent_monthly_rate)}</span>}
+                  </div>
+                  <div className="pt-2 border-t border-slate-100"><PodLinks files={lap.pod_files} keyPrefix={lap.serial_id || lap.ttspl_id} /></div>
+                </div>
+              ))
+            ) : (
+              returnedLaptops.length === 0 ? (
+                <p className="p-6 text-center text-gray-400 text-sm">No returned laptops for this customer</p>
+              ) : returnedLaptops.map((lap, i) => (
+                <div key={lap.dc_number ? `${lap.dc_number}-${i}` : `ret-${i}`} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <button type="button" onClick={() => setTtsplOpen(lap.ttspl_id || lap.serial_number)} className="text-blue-600 font-mono text-sm font-semibold">{lap.ttspl_id || lap.serial_number || '—'}</button>
+                    <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-xs">returned</span>
+                  </div>
+                  <p className="text-sm text-slate-800">{lap.model_name || '—'}</p>
+                  <p className="text-xs text-slate-500">SN: {lap.serial_number || '—'}</p>
+                  <p className="text-xs text-slate-500">{laptopConfig(lap) || '—'}</p>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+                    {lap.dc_number && <span className="font-mono">Return DC {lap.dc_number}</span>}
+                    {lap.delivered_at && <span>{new Date(lap.delivered_at).toLocaleDateString('en-IN')}</span>}
+                    <span className="capitalize">{lap.pickup_type || 'return'}</span>
+                  </div>
+                  <div className="pt-2 border-t border-slate-100"><PodLinks files={lap.pod_files} keyPrefix={lap.dc_number || `ret-${i}`} /></div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="hidden md:block rounded-xl border border-gray-100 bg-white shadow-sm overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-xs text-gray-500 text-left">
                 <tr>

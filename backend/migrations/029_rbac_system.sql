@@ -69,6 +69,7 @@ ALTER TABLE public.users
       'qc',
       'dispatch',
       'warehouse',
+      'accounts',
       'support_lead',
       'support_tech',
       'customer',

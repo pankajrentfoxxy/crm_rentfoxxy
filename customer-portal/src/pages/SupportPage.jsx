@@ -151,7 +151,28 @@ export default function SupportPage() {
         </button>
       </form>
 
-      <div className="bg-white border rounded-xl overflow-hidden">
+      {/* Mobile ticket cards */}
+      <div className="md:hidden space-y-3">
+        <h2 className="font-semibold">My Tickets</h2>
+        {tickets.length === 0 ? (
+          <p className="bg-white border rounded-xl p-6 text-center text-slate-500">No tickets yet</p>
+        ) : tickets.map((t) => (
+          <div key={t.ticket_id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-mono text-xs font-semibold text-slate-900">T-{t.ticket_id}</span>
+              <span className={`px-2 py-0.5 rounded-full text-xs capitalize ${ticketStatusClass(t.status)}`}>{t.status}</span>
+            </div>
+            <p className="text-sm font-medium text-slate-900">{t.subject || '—'}</p>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+              {t.ttspl_id && <span className="font-mono">{t.ttspl_id}</span>}
+              <span>Created {t.created_at ? format(new Date(t.created_at), 'dd MMM yyyy') : '—'}</span>
+            </div>
+            {t.status === 'closed' && <p className="text-xs text-green-700 pt-1 border-t border-slate-100">This ticket has been resolved.</p>}
+          </div>
+        ))}
+      </div>
+
+      <div className="hidden md:block bg-white border rounded-xl overflow-hidden">
         <h2 className="font-semibold p-4 border-b">My Tickets</h2>
         <table className="min-w-full text-sm">
           <thead className="bg-slate-50 text-xs uppercase text-slate-500 text-left">

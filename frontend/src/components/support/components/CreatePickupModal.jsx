@@ -136,7 +136,7 @@ export default function CreatePickupModal({ ticket, items = [], onCreated, onClo
                   className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm"
                 />
               ))}
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {[['City', 'city'], ['State', 'state'], ['Pincode', 'pincode']].map(([label, key]) => (
                   <input
                     key={key}

@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { LayoutGrid, List, Loader2, Search } from 'lucide-react';
+import { LayoutGrid, List, Loader2, Search, Factory } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import { PageHeader } from '../../../components/ui/primitives';
 import { useAuth } from '../../../context/AuthContext';
 import { fetchFloorTickets } from '../floorPipelineApi';
 import useAutoRefresh from '../hooks/useAutoRefresh';
@@ -88,28 +89,29 @@ export default function FloorTicketListPage() {
 
   return (
     <div className="space-y-4 pb-8">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">Floor Pipeline</h1>
-          <p className="text-sm text-slate-500">{subtitle}</p>
-        </div>
-        <div className="flex rounded-lg border border-slate-200 overflow-hidden">
-          <button
-            type="button"
-            onClick={() => setViewMode('kanban')}
-            className={`px-3 py-2 text-sm flex items-center gap-1 ${view === 'kanban' ? 'bg-blue-600 text-white' : 'bg-white'}`}
-          >
-            <LayoutGrid className="w-4 h-4" /> Kanban
-          </button>
-          <button
-            type="button"
-            onClick={() => setViewMode('table')}
-            className={`px-3 py-2 text-sm flex items-center gap-1 ${view === 'table' ? 'bg-blue-600 text-white' : 'bg-white'}`}
-          >
-            <List className="w-4 h-4" /> Table
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title="Floor Pipeline"
+        subtitle={subtitle}
+        icon={Factory}
+        actions={(
+          <div className="flex rounded-lg border border-slate-200 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setViewMode('kanban')}
+              className={`px-3 min-h-[40px] text-sm flex items-center gap-1 ${view === 'kanban' ? 'bg-blue-600 text-white' : 'bg-white'}`}
+            >
+              <LayoutGrid className="w-4 h-4" /> Kanban
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('table')}
+              className={`px-3 min-h-[40px] text-sm flex items-center gap-1 ${view === 'table' ? 'bg-blue-600 text-white' : 'bg-white'}`}
+            >
+              <List className="w-4 h-4" /> Table
+            </button>
+          </div>
+        )}
+      />
 
       <div className="flex flex-wrap gap-2">
         <div className="relative flex-1 min-w-[200px] max-w-md">
@@ -177,7 +179,21 @@ export default function FloorTicketListPage() {
           ))}
         </div>
       ) : (
-        <div className="rounded-xl border border-gray-100 bg-white shadow-sm overflow-x-auto">
+        <>
+        {/* Mobile: cards */}
+        <div className="grid gap-3 sm:hidden">
+          {tickets.length === 0 ? (
+            <p className="text-center text-sm text-slate-500 py-8">No tickets</p>
+          ) : tickets.map((t) => (
+            <TicketCard
+              key={t.ticket_id}
+              ticket={t}
+              pendingParts={t.part_requests_pending}
+              onCardClick={fm && t.stage_name === 'Floor Manager' ? handleFloorManagerClick : undefined}
+            />
+          ))}
+        </div>
+        <div className="hidden sm:block rounded-xl border border-gray-100 bg-white shadow-sm overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500">
               <tr>
@@ -234,6 +250,7 @@ export default function FloorTicketListPage() {
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       <AssignmentModal

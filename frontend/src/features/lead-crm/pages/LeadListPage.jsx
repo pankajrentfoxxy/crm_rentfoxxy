@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Download, LayoutGrid, List, Plus, Upload } from 'lucide-react';
+import { Download, LayoutGrid, List, Plus, Upload, Users } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { PageHeader, StatCard } from '../../../components/ui/primitives';
 import { useAuth } from '../../../context/AuthContext';
 import PermissionGate from '../../../components/PermissionGate';
 import { LEAD_SOURCES, LEAD_STATUSES, STAGES_BY_STATUS, STATUS_COLORS, INQUIRY_TYPES } from '../leadConstants';
@@ -154,39 +155,35 @@ export default function LeadListPage() {
 
   return (
     <div className="p-4 md:p-6 max-w-[1600px] mx-auto">
-      <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Leads</h1>
-          <p className="text-gray-500 text-sm">Manage your sales pipeline</p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <button type="button" onClick={() => setDrawerOpen(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700">
-            <Plus className="w-4 h-4" /> Add Lead
-          </button>
-          <PermissionGate section="leads" action="create">
-            <label className="flex items-center gap-2 px-4 py-2 border border-gray-200 text-sm rounded-lg cursor-pointer hover:bg-gray-50">
-              <Upload className="w-4 h-4" /> Import CSV
-              <input type="file" accept=".csv" className="hidden" onChange={handleImport} />
-            </label>
-          </PermissionGate>
-          <button type="button" onClick={handleExport}
-            className="flex items-center gap-2 px-4 py-2 border border-gray-200 text-sm rounded-lg hover:bg-gray-50">
-            <Download className="w-4 h-4" /> Export CSV
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title="Leads"
+        subtitle="Manage your sales pipeline"
+        icon={Users}
+        actions={(
+          <>
+            <button type="button" onClick={() => setDrawerOpen(true)}
+              className="flex items-center gap-2 px-4 min-h-[44px] bg-blue-600 text-white text-sm font-semibold rounded-xl hover:bg-blue-700">
+              <Plus className="w-4 h-4" /> Add Lead
+            </button>
+            <PermissionGate section="leads" action="create">
+              <label className="flex items-center gap-2 px-4 min-h-[44px] border border-gray-200 text-sm font-semibold rounded-xl cursor-pointer hover:bg-gray-50">
+                <Upload className="w-4 h-4" /> Import CSV
+                <input type="file" accept=".csv" className="hidden" onChange={handleImport} />
+              </label>
+            </PermissionGate>
+            <button type="button" onClick={handleExport}
+              className="flex items-center gap-2 px-4 min-h-[44px] border border-gray-200 text-sm font-semibold rounded-xl hover:bg-gray-50">
+              <Download className="w-4 h-4" /> Export CSV
+            </button>
+          </>
+        )}
+      />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-        {[
-          ['Total Leads', stats.total], ['Active', stats.active],
-          ['Follow-up Today', stats.followToday], ['Converted', stats.converted],
-        ].map(([label, val]) => (
-          <div key={label} className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
-            <p className="text-xs text-gray-500">{label}</p>
-            <p className="text-2xl font-bold text-gray-900 mt-1">{val}</p>
-          </div>
-        ))}
+        <StatCard label="Total Leads" value={stats.total} tone="gray" />
+        <StatCard label="Active" value={stats.active} tone="blue" />
+        <StatCard label="Follow-up Today" value={stats.followToday} tone="amber" />
+        <StatCard label="Converted" value={stats.converted} tone="green" />
       </div>
 
       <div className="flex flex-wrap items-center gap-2 mb-4">
@@ -266,7 +263,15 @@ export default function LeadListPage() {
         </div>
       ) : (
         <>
-          <div className="rounded-xl border border-gray-100 bg-white shadow-sm overflow-x-auto">
+          {/* Mobile: cards */}
+          <div className="grid gap-3 sm:hidden">
+            {paged.length === 0 ? (
+              <p className="text-center text-sm text-gray-500 py-8">No leads</p>
+            ) : paged.map((lead) => (
+              <LeadCard key={lead.leadId} lead={lead} onRefresh={load} />
+            ))}
+          </div>
+          <div className="hidden sm:block rounded-xl border border-gray-100 bg-white shadow-sm overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-left text-xs text-gray-500">
                 <tr>

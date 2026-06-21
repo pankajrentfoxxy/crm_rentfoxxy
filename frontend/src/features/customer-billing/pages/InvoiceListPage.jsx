@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus } from 'lucide-react';
+import { Plus, Receipt } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import InvoiceStatusBadge from '../components/InvoiceStatusBadge';
+import { PageHeader, StatCard, Button } from '../../../components/ui/primitives';
 import { downloadInvoicePdf, generateInvoice, listInvoices, markInvoicePaid } from '../customerBillingApi';
 import api from '../../../utils/api';
 
@@ -101,33 +102,23 @@ export default function InvoiceListPage() {
 
   return (
     <div className="p-4 max-w-7xl mx-auto">
-      <div className="flex flex-wrap items-start justify-between gap-4 mb-6">
-        <div>
-          <h1 className="text-2xl font-semibold text-gray-900">Customer Invoices</h1>
-          <p className="text-sm text-gray-500">INV-* series</p>
-        </div>
-        <PermissionGate section="customer_billing" action="create">
-          <button type="button" onClick={() => setGenOpen(true)} className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">
-            <Plus className="w-4 h-4" /> Generate Invoice
-          </button>
-        </PermissionGate>
-      </div>
+      <PageHeader
+        title="Customer Invoices"
+        subtitle="INV-* series"
+        icon={Receipt}
+        actions={(
+          <PermissionGate section="customer_billing" action="create">
+            <Button icon={Plus} onClick={() => setGenOpen(true)}>Generate Invoice</Button>
+          </PermissionGate>
+        )}
+      />
 
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
-        {[
-          ['Draft', stats.draft.count, stats.draft.total],
-          ['Sent', stats.sent.count, stats.sent.total],
-          ['Paid', stats.paid.count, stats.paid.total],
-          ['Overdue', stats.overdue.count, stats.overdue.total],
-          ['Outstanding', '—', stats.outstanding],
-        ].map(([label, count, total]) => (
-          <div key={label} className="bg-white border rounded-lg p-3">
-            <p className="text-xs text-gray-500">{label}</p>
-            <p className="text-lg font-semibold">{count}</p>
-            {total !== '—' && <p className="text-xs text-gray-600">{fmt(total)}</p>}
-            {total === '—' && <p className="text-xs text-gray-600">{fmt(stats.outstanding)}</p>}
-          </div>
-        ))}
+        <StatCard label="Draft" value={stats.draft.count} hint={fmt(stats.draft.total)} tone="gray" />
+        <StatCard label="Sent" value={stats.sent.count} hint={fmt(stats.sent.total)} tone="blue" />
+        <StatCard label="Paid" value={stats.paid.count} hint={fmt(stats.paid.total)} tone="green" />
+        <StatCard label="Overdue" value={stats.overdue.count} hint={fmt(stats.overdue.total)} tone="red" />
+        <StatCard label="Outstanding" value={fmt(stats.outstanding)} tone="amber" />
       </div>
 
       <div className="flex flex-wrap gap-2 mb-3">
@@ -148,7 +139,41 @@ export default function InvoiceListPage() {
         ))}
       </div>
 
-      <div className="bg-white border rounded-xl overflow-x-auto">
+      {/* Mobile cards */}
+      <div className="grid gap-3 sm:hidden">
+        {loading ? (
+          <p className="text-center text-sm text-gray-500 py-8">Loading…</p>
+        ) : rows.length === 0 ? (
+          <p className="text-center text-sm text-gray-500 py-8">No invoices</p>
+        ) : rows.map((r) => (
+          <div key={r.invoice_id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <Link to={`/customer-billing/invoices/${r.invoice_id}`} className="text-blue-600 font-semibold">{r.invoice_number}</Link>
+              <InvoiceStatusBadge status={r.status} />
+            </div>
+            <p className="font-medium text-slate-800">{r.customer_name}</p>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+              <span>{MONTHS[r.invoice_month]} {r.invoice_year}</span>
+              <span>{r.laptop_count || 0} laptops</span>
+              {r.irn && <span className="text-green-700 font-medium">✓ IRN</span>}
+            </div>
+            <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
+              <span className="text-base font-bold text-slate-900">{fmt(r.grand_total)}</span>
+              <div className="flex flex-wrap items-center gap-3">
+                <Link to={`/customer-billing/invoices/${r.invoice_id}`} className="text-sm text-blue-600 font-semibold">View</Link>
+                {r.status === 'sent' && (
+                  <PermissionGate section="customer_billing" action="edit">
+                    <button type="button" onClick={() => handleMarkPaid(r.invoice_id)} className="text-sm text-green-600 font-semibold">Paid</button>
+                  </PermissionGate>
+                )}
+                <button type="button" onClick={() => handleDownload(r.invoice_id, r.invoice_number)} className="text-sm text-gray-600 font-semibold">PDF</button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="hidden sm:block bg-white border rounded-xl overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
             <tr>

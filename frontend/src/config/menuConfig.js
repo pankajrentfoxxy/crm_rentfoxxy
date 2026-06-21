@@ -23,11 +23,14 @@ import {
   Headphones,
 } from 'lucide-react';
 
-/** Vendor Management accordion (procurement only — billing lives under Finance) */
+/** Vendor Management accordion (procurement only — billing lives under Finance).
+ *  GRN / receiving happens inside the Purchase Orders page, so there is no
+ *  separate "GRN" item (that was a duplicate link to Purchase Orders). */
 export const vendorAccordionChildren = [
   { label: 'Purchase Orders', path: '/vendor-management/purchase-orders' },
   { label: 'Spare Parts PO', path: '/vendor-management/spare-parts-po' },
-  { label: 'GRN / Received', path: '/vendor-management/purchase-orders' },
+  { label: 'Serial Numbers', path: '/vendor-management/serial-numbers' },
+  { label: 'Replaced Products', path: '/vendor-management/replaced-products' },
 ];
 
 /** Production accordion (formerly Floor & Quality).
@@ -52,7 +55,7 @@ export const inventoryAccordionChildren = [
   { label: 'Parts Inventory', path: '/inventory-management/parts', section: 'inventory_management' },
   { label: 'Parts Movement History', path: '/inventory-management/parts-history', section: 'inventory_management' },
   { label: 'Parts Approval', path: '/inventory-management/parts-approval', countKey: 'parts_pending', section: 'inventory_management' },
-  { label: 'Customer Assets', path: '/inventory-management/customer-assets', section: 'inventory_management' },
+  { label: 'Deployed Fleet (All Customers)', path: '/inventory-management/customer-assets', section: 'inventory_management' },
 ];
 
 /** Sales Pipeline. Each child uses the GRANULAR section its backend API enforces

@@ -25,12 +25,34 @@ export default function SerialNumbersPage() {
         <input
           type="search"
           placeholder="Search TTSPL or serial…"
-          className="border rounded-lg px-3 py-2 text-sm w-64"
+          className="border rounded-lg px-3 py-2 text-sm w-full sm:w-64"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
       </div>
-      <div className="bg-white rounded-xl border overflow-hidden shadow-sm">
+
+      {/* Mobile cards */}
+      <div className="grid gap-3 md:hidden">
+        {loading ? (
+          <p className="p-8 text-center text-slate-500">Loading…</p>
+        ) : rows.length === 0 ? (
+          <p className="bg-white border rounded-xl p-8 text-center text-slate-500">No laptops on record.</p>
+        ) : rows.map((r) => (
+          <div key={r.serial_id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-mono font-semibold text-brand-dark">{r.inventory_asset_code}</span>
+              <span className="text-xs text-slate-600 capitalize">{r.qc_status || 'pending'}</span>
+            </div>
+            <p className="text-sm text-slate-700">Serial: <span className="font-mono">{r.serial_number}</span></p>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+              <span>PO {r.purchase_order_number}</span>
+              <span>GRN {r.created_at?.slice?.(0, 10) || '—'}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="hidden md:block bg-white rounded-xl border overflow-hidden shadow-sm">
         {loading ? (
           <p className="p-8 text-center text-slate-500">Loading…</p>
         ) : rows.length === 0 ? (

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
+import { Button } from '../../../components/ui/primitives';
 import PaymentModal from '../components/PaymentModal';
 import DCForm from '../components/DCForm';
 import SoSerialPanel from '../components/SoSerialPanel';
@@ -72,8 +73,8 @@ export default function SalesOrderDetailPage() {
           <p className="text-gray-600">{head.customer_name}</p>
           <span className={`inline-block mt-1 px-2 py-0.5 rounded-full text-xs ${TYPE_STYLES[head.quotation_type]}`}>{typeLabel(head.quotation_type)}</span>
         </div>
-        <div className="flex gap-2">
-          <button type="button" onClick={async () => {
+        <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" onClick={async () => {
             try {
               let url = pdfUrl(head.pdf_path);
               if (!url) {
@@ -83,12 +84,12 @@ export default function SalesOrderDetailPage() {
               if (url) window.open(url, '_blank');
               else toast.error('PDF not available');
             } catch { toast.error('Could not open PDF'); }
-          }} className="px-4 py-2 border rounded-lg text-sm">Download PDF</button>
+          }}>Download PDF</Button>
           <PermissionGate section="delivery_challans" action="create">
-            <button type="button" onClick={() => setDcOpen(true)} className="px-4 py-2 border rounded-lg text-sm">Create DC</button>
+            <Button variant="secondary" onClick={() => setDcOpen(true)}>Create DC</Button>
           </PermissionGate>
           <PermissionGate section="payment_records" action="create">
-            <button type="button" onClick={() => setPaymentOpen(true)} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">Record Payment</button>
+            <Button onClick={() => setPaymentOpen(true)}>Record Payment</Button>
           </PermissionGate>
         </div>
       </div>
