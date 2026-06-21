@@ -13,7 +13,7 @@ const pool = require('../config/db');
 const { emailDocument } = require('../services/salesManagementPdfService');
 const sm = require('./salesManagementController');
 
-const ADMIN_ROLES = ['admin', 'manager', 'super_admin'];
+const ADMIN_ROLES = ['admin', 'manager', 'super_admin', 'support_lead'];
 
 const podDir = path.join(__dirname, '..', 'uploads', 'pod');
 fs.mkdirSync(podDir, { recursive: true });
@@ -73,11 +73,20 @@ async function buildDcFlow(where, params, { includeOtp = false } = {}) {
             COALESCE(NULLIF(TRIM(CONCAT(dt.first_name,' ',COALESCE(dt.last_name,''))),''), u.name, u.email) AS technician_name,
             COALESCE(dt.phone, u.mobile_no) AS technician_phone,
             dt.user_id AS technician_user_id,
-            c.phone AS customer_phone, c.name AS customer_real_name
+            c.phone AS customer_phone, c.name AS customer_real_name,
+            sti.customer_otp_code AS support_otp_code,
+            sti.customer_otp_verified_at AS support_otp_verified_at,
+            sti.customer_otp_sent_at AS support_otp_sent_at
        FROM delivery_challan_lines d
        LEFT JOIN delivery_technicians dt ON dt.technician_id = d.delivery_person_id
        LEFT JOIN users u ON u.user_id = d.delivery_person_id
        LEFT JOIN customers c ON c.customer_id = d.customer_id
+       LEFT JOIN LATERAL (
+         SELECT customer_otp_code, customer_otp_verified_at, customer_otp_sent_at
+           FROM support_ticket_items
+          WHERE return_dc_number = d.dc_number AND item_type = 'pickup'
+          ORDER BY id DESC LIMIT 1
+       ) sti ON d.movement_type = 'return'
        ${where}
       ORDER BY d.dc_number DESC, d.id ASC`,
     params
@@ -143,10 +152,11 @@ async function buildDcFlow(where, params, { includeOtp = false } = {}) {
       tech_longitude: first.tech_longitude,
       serial_verified_at: first.serial_verified_at,
       serial_verified_no: first.serial_verified_no,
-      otp_sent_at: first.otp_sent_at,
-      otp_verified_at: first.otp_verified_at,
-      otp_code: includeOtp ? first.otp_code : undefined,
-      otp_pending: Boolean(first.otp_sent_at) && !first.otp_verified_at,
+      otp_sent_at: first.otp_sent_at || first.support_otp_sent_at,
+      otp_verified_at: first.otp_verified_at || first.support_otp_verified_at,
+      otp_code: includeOtp ? (first.otp_code || first.support_otp_code) : undefined,
+      otp_pending: Boolean(first.otp_sent_at || first.support_otp_sent_at)
+        && !(first.otp_verified_at || first.support_otp_verified_at),
       pod_type: first.pod_type,
       pod_photo_url: first.pod_photo_url,
       esign_url: first.esign_url,

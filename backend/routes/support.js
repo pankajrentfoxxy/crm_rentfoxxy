@@ -37,6 +37,7 @@ const {
     submitForPickup,
     warehouseReceivedPickup,
     createPickupWithReturnDc,
+    technicianSignPickup,
     verifyPickupCustomerOtp,
     confirmWarehouseReceipt,
     getTechnicianLaptopBucket,
@@ -156,6 +157,7 @@ router.patch('/items/:itemId/assign', requireSupportLead, assignItem);
 // Phase 20 — pickup flow redesign
 router.post('/tickets/:ticketId/pickup', requireSupportLead, createPickupWithReturnDc);
 router.post('/items/:itemId/pickup-reached', logVisit);
+router.post('/items/:itemId/technician-esign', technicianSignPickup);
 router.post('/items/:itemId/verify-pickup-otp', verifyPickupCustomerOtp);
 router.get('/tech-bucket/laptops', getTechnicianLaptopBucket);
 

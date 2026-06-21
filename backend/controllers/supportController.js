@@ -9,6 +9,102 @@ const supportInventoryService = require('../services/supportInventoryService');
 const inventorySM = require('../services/inventoryStateMachine');
 const { processReturnedSerials } = require('../services/returnCompletionService');
 const { nextDocumentNumber } = require('../services/salesManagementService');
+const { generateReturnDcPdf } = require('../services/salesManagementPdfService');
+
+// Build (or rebuild) the branded Return DC PDF for a pickup item and persist its
+// path on the delivery_challan_lines row. Embeds the technician sign-out and
+// warehouse-receipt signatures when available. Best-effort: never throws.
+const regenerateReturnDcPdf = async (db, item) => {
+    try {
+        if (!item || !item.return_dc_number) return null;
+        const dclRes = await db.query(
+            `SELECT dcl.*, st.entity_code, st.customer_phone
+               FROM delivery_challan_lines dcl
+               LEFT JOIN support_tickets st ON st.id = dcl.support_ticket_id
+              WHERE dcl.dc_number = $1 AND dcl.movement_type = 'return'
+              LIMIT 1`,
+            [item.return_dc_number]
+        );
+        const dcl = dclRes.rows[0] || {};
+
+        const code = item.ttspl_id || item.unique_serial_number || item.serial_number;
+        let spec = {};
+        if (code) {
+            const vsnRes = await db.query(
+                `SELECT vsn.serial_number, vsn.inventory_asset_code,
+                        COALESCE(vsn.extra->>'brand', vpd.brand) AS brand,
+                        COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', vpd.model) AS model,
+                        COALESCE(vsn.extra->>'processor', vpd.processor) AS processor,
+                        COALESCE(vsn.extra->>'generation', vpd.generation) AS generation,
+                        COALESCE(vsn.extra->>'ram', vpd.ram) AS ram,
+                        COALESCE(vsn.extra->>'storage', vpd.storage) AS storage
+                   FROM vendor_serial_numbers vsn
+                   LEFT JOIN vendor_product_details vpd ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id','')::int
+                  WHERE vsn.deleted_at IS NULL
+                    AND (vsn.inventory_asset_code = $1 OR vsn.serial_number = $1)
+                  LIMIT 1`,
+                [code]
+            );
+            spec = vsnRes.rows[0] || {};
+        }
+
+        const nameFor = async (uid) => {
+            if (!uid) return null;
+            try {
+                const r = await db.query('SELECT name FROM users WHERE user_id = $1', [uid]);
+                return r.rows[0]?.name || null;
+            } catch (_) { return null; }
+        };
+        const technicianName = await nameFor(item.technician_esign_by || item.pickup_assigned_to || item.assigned_to);
+        const warehouseName = await nameFor(item.warehouse_esign_by || item.warehouse_received_by);
+
+        const pdfPath = await generateReturnDcPdf({
+            returnDcNumber: item.return_dc_number,
+            header: {
+                entity_code: dcl.entity_code || null,
+                customer_name: dcl.customer_name || null,
+                customer_email: dcl.email || null,
+                customer_phone: dcl.customer_phone || null,
+                pickup_address: dcl.customer_shipping_address || null,
+                original_dc_number: dcl.original_dc_number || null,
+                sales_order_number: dcl.sales_order_number || null,
+                pickup_type: item.pickup_type || 'return',
+                dispatch_mode: dcl.dispatch_mode || item.pickup_method || null,
+                courier_name: dcl.courier_name || null,
+                awb_number: dcl.awb_number || null,
+            },
+            units: [{
+                brand: spec.brand || item.brand,
+                model: spec.model || item.model,
+                processor: spec.processor || null,
+                generation: spec.generation || item.generation,
+                ram: spec.ram || item.ram,
+                storage: spec.storage || item.storage,
+                ttspl: spec.inventory_asset_code || item.ttspl_id || item.unique_serial_number || code,
+                serial: spec.serial_number || item.serial_number,
+            }],
+            esign: {
+                technician_url: item.technician_esign_url || null,
+                technician_name: technicianName,
+                technician_at: item.technician_esign_at || null,
+                warehouse_url: item.warehouse_esign_url || null,
+                warehouse_name: warehouseName,
+                warehouse_at: item.warehouse_esign_at || item.warehouse_received_at || null,
+                customer_otp_verified: !!item.customer_otp_verified_at,
+            },
+        });
+
+        await db.query(
+            `UPDATE delivery_challan_lines SET pdf_path = $1, updated_at = NOW()
+              WHERE dc_number = $2 AND movement_type = 'return'`,
+            [pdfPath, item.return_dc_number]
+        );
+        return pdfPath;
+    } catch (e) {
+        console.error('[support] regenerateReturnDcPdf failed:', e.message);
+        return null;
+    }
+};
 
 const ITEM_OPEN_STATUSES = new Set(['open', 'work_done', 'awaiting_otp']);
 const TICKET_OPEN = 'open';
@@ -232,11 +328,20 @@ const getTicketWithItems = async (ticketId, user) => {
                ci.processor AS inv_processor, ci.model_name AS inv_model_name,
                ci.ram AS inv_ram, ci.storage AS inv_storage, ci.generation AS inv_generation,
                ci.gpu AS inv_gpu, ci.screen_size AS inv_screen_size,
-               ci.asset_bucket AS inv_asset_bucket, ci.customer_id AS inv_customer_id
+               ci.asset_bucket AS inv_asset_bucket, ci.customer_id AS inv_customer_id,
+               rdc.pdf_path AS return_dc_pdf_path,
+               rdc.sales_order_number AS return_so_number,
+               rdc.original_dc_number AS original_dc_number
         FROM support_ticket_items i
         LEFT JOIN users u ON u.user_id = i.assigned_to
         LEFT JOIN support_issue_categories c ON c.id = i.issue_category_id
         LEFT JOIN customer_inventory ci ON ci.id = i.customer_inventory_id
+        LEFT JOIN LATERAL (
+            SELECT pdf_path, sales_order_number, original_dc_number
+              FROM delivery_challan_lines
+             WHERE dc_number = i.return_dc_number AND movement_type = 'return'
+             LIMIT 1
+        ) rdc ON i.return_dc_number IS NOT NULL
         WHERE i.ticket_id = $1
     `;
     const params = [ticketId];
@@ -1871,6 +1976,32 @@ exports.createPickupWithReturnDc = async (req, res) => {
         const deliveryPersonId = techId;
 
         const serialCode = ttsplId || serial;
+
+        // Trace the originating outbound DC + Sales Order for this unit, so the
+        // Return DC can record where the laptop was shipped from and on which SO.
+        let originalDcNumber = null;
+        let salesOrderNumber = null;
+        if (serialCode || serial) {
+            try {
+                const outRes = await client.query(
+                    `SELECT dc_number, sales_order_number
+                       FROM delivery_challan_lines
+                      WHERE movement_type = 'outbound'
+                        AND (serial_number::text ILIKE '%' || $1 || '%'
+                             OR ($2 <> '' AND serial_number::text ILIKE '%' || $2 || '%'))
+                      ORDER BY created_at DESC NULLS LAST
+                      LIMIT 1`,
+                    [serialCode || serial, serial || '']
+                );
+                if (outRes.rows.length) {
+                    originalDcNumber = outRes.rows[0].dc_number || null;
+                    salesOrderNumber = outRes.rows[0].sales_order_number || null;
+                }
+            } catch (traceErr) {
+                console.warn('[support] outbound DC trace failed:', traceErr.message);
+            }
+        }
+
         let entries = [];
         let firstSpec = {};
         if (serialCode) {
@@ -1897,8 +2028,10 @@ exports.createPickupWithReturnDc = async (req, res) => {
                  customer_shipping_address, brand, model_name, quantity, serial_number,
                  dispatch_mode, delivery_person_id, courier_name, awb_number,
                  porter_tracking_id, porter_order_id,
+                 sales_order_number, original_dc_number,
                  status, dispatched_at, created_by, created_at, updated_at)
              VALUES ($1,'return',$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16,
+                     $18,$19,
                      'in_transit',NOW(),$17,NOW(),NOW())`,
             [
                 rdc, ticketId, ticket.customer_id, ticket.customer_name, ticket.ticket_email || null,
@@ -1907,6 +2040,7 @@ exports.createPickupWithReturnDc = async (req, res) => {
                 Math.max(1, entries.length), JSON.stringify(entries),
                 dcDispatchMode, deliveryPersonId, courierNameVal, awbVal,
                 porterTrackingVal, porterOrderVal, req.user.user_id,
+                salesOrderNumber, originalDcNumber,
             ]
         );
 
@@ -1932,6 +2066,14 @@ exports.createPickupWithReturnDc = async (req, res) => {
         await bumpTicketActivity(client, ticketId);
         await client.query('COMMIT');
 
+        // Generate the branded Return DC PDF (best-effort, after commit).
+        try {
+            const freshRes = await pool.query('SELECT * FROM support_ticket_items WHERE id = $1', [pickupItemId]);
+            if (freshRes.rows.length) await regenerateReturnDcPdf(pool, freshRes.rows[0]);
+        } catch (pdfErr) {
+            console.error('[support] return DC pdf (create):', pdfErr.message);
+        }
+
         const data = await getTicketWithItems(ticketId, req.user);
         res.status(201).json({
             success: true,
@@ -1949,6 +2091,76 @@ exports.createPickupWithReturnDc = async (req, res) => {
     } finally {
         client.release();
     }
+};
+
+// Technician signs the Return DC at the customer site BEFORE pickup. Captures the
+// e-signature, then regenerates the Return DC PDF to embed it.
+exports.technicianSignPickup = async (req, res) => {
+    const itemId = parseInt(req.params.itemId, 10);
+    const { esign_data, signer_name } = req.body || {};
+
+    const itemRes = await pool.query('SELECT * FROM support_ticket_items WHERE id = $1', [itemId]);
+    if (!itemRes.rows.length) return res.status(404).json({ success: false, message: 'Item not found' });
+    const it = itemRes.rows[0];
+
+    if (it.item_type !== 'pickup') {
+        return res.status(400).json({ success: false, message: 'Only for pickup items' });
+    }
+    const isMine = it.pickup_assigned_to === req.user.user_id || it.assigned_to === req.user.user_id;
+    if (!isMine && !isSupportLead(req.user)) {
+        return res.status(403).json({ success: false, message: 'Not assigned to this pickup' });
+    }
+    if (!it.visited_at) {
+        return res.status(400).json({ success: false, message: 'Mark as reached before signing the Return DC' });
+    }
+    if (!esign_data || !String(esign_data).startsWith('data:image')) {
+        return res.status(400).json({ success: false, message: 'Signature required' });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await ensureSupportTicketItemV3Columns(client);
+
+        const dir = path.join(__dirname, '..', 'uploads', 'support-pickups');
+        fs.mkdirSync(dir, { recursive: true });
+        const fname = `tech_esign_${it.id}_${Date.now()}.png`;
+        const b64 = String(esign_data).replace(/^data:image\/\w+;base64,/, '');
+        fs.writeFileSync(path.join(dir, fname), Buffer.from(b64, 'base64'));
+        const esignUrl = `uploads/support-pickups/${fname}`;
+
+        await client.query(
+            `UPDATE support_ticket_items SET
+                technician_esign_url = $2,
+                technician_esign_at = CURRENT_TIMESTAMP,
+                technician_esign_by = $3,
+                updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1`,
+            [itemId, esignUrl, req.user.user_id]
+        );
+        await logAudit(client, {
+            itemId, ticketId: it.ticket_id, userId: req.user.user_id,
+            action: 'technician_esign', detail: { signer_name: signer_name || null }
+        });
+        await bumpTicketActivity(client, it.ticket_id);
+        await client.query('COMMIT');
+    } catch (e) {
+        await client.query('ROLLBACK');
+        console.error('technicianSignPickup:', e);
+        return res.status(500).json({ success: false, message: 'Failed to save signature' });
+    } finally {
+        client.release();
+    }
+
+    try {
+        const fresh = await pool.query('SELECT * FROM support_ticket_items WHERE id = $1', [itemId]);
+        if (fresh.rows.length) await regenerateReturnDcPdf(pool, fresh.rows[0]);
+    } catch (pdfErr) {
+        console.error('[support] return DC pdf (tech esign):', pdfErr.message);
+    }
+
+    const data = await getTicketWithItems(it.ticket_id, req.user);
+    res.json({ success: true, message: 'Return DC signed.', ...data });
 };
 
 // Technician confirms the laptop handover by entering the customer's OTP. POD
@@ -2153,6 +2365,14 @@ exports.confirmWarehouseReceipt = async (req, res) => {
         await bumpTicketActivity(client, it.ticket_id);
         await recomputeTicketStatus(client, it.ticket_id);
         await client.query('COMMIT');
+
+        // Rebuild the Return DC PDF so it carries the warehouse-receipt signature.
+        try {
+            const fresh = await pool.query('SELECT * FROM support_ticket_items WHERE id = $1', [itemId]);
+            if (fresh.rows.length) await regenerateReturnDcPdf(pool, fresh.rows[0]);
+        } catch (pdfErr) {
+            console.error('[support] return DC pdf (warehouse confirm):', pdfErr.message);
+        }
 
         const data = await getTicketWithItems(it.ticket_id, req.user);
         res.json({

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { MapPin, Camera, CheckCircle2, PenLine, X } from 'lucide-react';
+import { MapPin, Camera, CheckCircle2, PenLine, X, FileText } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
@@ -14,6 +14,7 @@ import { uploadBase, podUrl as podUrlFor, compressImageFile } from '../utils';
 export default function PickupItemCard({ item, ticket, onRefresh }) {
   const { user } = useAuth();
   const [esignOpen, setEsignOpen] = useState(false);
+  const [techSignOpen, setTechSignOpen] = useState(false);
   const [otpInput, setOtpInput] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -39,6 +40,8 @@ export default function PickupItemCard({ item, ticket, onRefresh }) {
 
   const podUrl = podUrlFor(item.proof_of_completion_path || item.pod_image_path);
   const esignUrl = item.warehouse_esign_url ? `${uploadBase()}/${item.warehouse_esign_url}` : null;
+  const techSigned = !!item.technician_esign_url;
+  const returnDcPdfUrl = item.return_dc_pdf_path ? `${uploadBase()}/${item.return_dc_pdf_path.replace(/^\/?uploads\//, '')}` : null;
 
   const dispatchBadge = isCourier
     ? `🚚 Courier${item.pickup_courier_name ? ` — ${item.pickup_courier_name}` : ''}`
@@ -116,6 +119,23 @@ export default function PickupItemCard({ item, ticket, onRefresh }) {
         </div>
       </div>
 
+      {/* Return DC tracking + PDF */}
+      {(returnDcPdfUrl || item.original_dc_number || item.return_so_number) && (
+        <div className="mx-4 mt-3 p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between gap-3 flex-wrap">
+          <div className="text-xs text-slate-600 space-y-0.5">
+            {item.original_dc_number && <p>Original DC: <span className="font-mono font-semibold text-slate-800">{item.original_dc_number}</span></p>}
+            {item.return_so_number && <p>Sales Order: <span className="font-mono font-semibold text-slate-800">{item.return_so_number}</span></p>}
+            {item.return_dc_number && <p>Return DC: <span className="font-mono font-semibold text-slate-800">{item.return_dc_number}</span></p>}
+          </div>
+          {returnDcPdfUrl && (
+            <a href={returnDcPdfUrl} target="_blank" rel="noopener noreferrer"
+              className="shrink-0 inline-flex items-center gap-1.5 px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-100">
+              <FileText className="w-4 h-4" /> Return DC (PDF)
+            </a>
+          )}
+        </div>
+      )}
+
       {/* Customer OTP — admin / manager / support lead only, before verification.
           The technician never sees it: they type what the customer reads out. */}
       {lead && item.customer_otp_code && !otpVerified && (
@@ -178,8 +198,34 @@ export default function PickupItemCard({ item, ticket, onRefresh }) {
             </button>
           )}
 
-          {/* POD photo */}
-          {['reached', 'visited'].includes(es) && !podDone && canActTech && (
+          {/* Technician e-sign — sign the Return DC at the customer site, before pickup */}
+          {['reached', 'visited'].includes(es) && !techSigned && canActTech && (
+            <div className="rounded-2xl border border-orange-200 bg-orange-50 p-3">
+              <p className="text-sm font-semibold text-gray-900 mb-1 flex items-center gap-1.5">
+                <PenLine className="w-4 h-4 text-orange-600" /> Sign the Return DC (before pickup)
+              </p>
+              <p className="text-xs text-gray-500 mb-2">
+                Sign the Return Delivery Challan to take custody of the laptop, then verify the customer OTP.
+              </p>
+              <button
+                type="button" disabled={busy} onClick={() => setTechSignOpen(true)}
+                className="w-full py-3 bg-orange-600 text-white rounded-xl font-bold text-sm active:scale-[0.98] transition disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                <PenLine className="w-4 h-4" /> Sign Return DC
+              </button>
+            </div>
+          )}
+
+          {/* Technician signed confirmation */}
+          {['reached', 'visited'].includes(es) && techSigned && !podDone && (
+            <div className="rounded-xl border border-green-200 bg-green-50 px-3 py-2 flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-green-600" />
+              <span className="text-xs text-green-700 font-medium">Return DC signed by technician</span>
+            </div>
+          )}
+
+          {/* POD photo (after technician sign-out) */}
+          {['reached', 'visited'].includes(es) && techSigned && !podDone && canActTech && (
             <div>
               <p className="text-sm font-semibold text-gray-900 mb-2">📷 Take photo of laptop (at customer site)</p>
               <label className="cursor-pointer block">
@@ -297,6 +343,87 @@ export default function PickupItemCard({ item, ticket, onRefresh }) {
           onClose={() => setEsignOpen(false)}
         />
       )}
+
+      {techSignOpen && (
+        <TechnicianSignModal
+          item={item}
+          onSigned={() => { setTechSignOpen(false); onRefresh?.(); }}
+          onClose={() => setTechSignOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function TechnicianSignModal({ item, onSigned, onClose }) {
+  const canvasRef = useRef(null);
+  const padRef = useRef(null);
+  const [name, setName] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let pad;
+    import('signature_pad').then(({ default: SP }) => {
+      if (canvasRef.current) {
+        pad = new SP(canvasRef.current, {
+          backgroundColor: 'rgb(255,255,255)', penColor: '#1A1A2E', minWidth: 1.5, maxWidth: 3,
+        });
+        padRef.current = pad;
+      }
+    });
+    return () => { pad?.off?.(); };
+  }, []);
+
+  const handleSave = async () => {
+    if (!padRef.current || padRef.current.isEmpty()) { toast.error('Please sign'); return; }
+    setSaving(true);
+    try {
+      await api.post(`/support/items/${item.id}/technician-esign`, {
+        esign_data: padRef.current.toDataURL('image/png'),
+        signer_name: name.trim() || undefined,
+      });
+      toast.success('Return DC signed.');
+      onSigned();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Failed to save signature');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center bg-black/50 p-0 sm:p-4">
+      <div className="bg-white rounded-t-3xl sm:rounded-3xl w-full max-w-lg p-5">
+        <div className="flex items-center justify-between mb-3">
+          <p className="font-semibold text-gray-900">✍️ Sign Return DC {item.return_dc_number ? `(${item.return_dc_number})` : ''}</p>
+          <button type="button" onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <p className="text-xs text-gray-500 mb-3">
+          Laptop: <strong>{item.ttspl_id || item.unique_serial_number || item.serial_number}</strong>
+          {' · '}{item.pickup_type === 'repair' ? 'Repair pickup' : 'Return pickup'}
+        </p>
+        <input
+          type="text" value={name} onChange={(e) => setName(e.target.value)}
+          placeholder="Technician name (optional)"
+          className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm mb-3 focus:ring-2 focus:ring-orange-500 outline-none"
+        />
+        <div className="border-2 border-gray-200 rounded-xl overflow-hidden mb-3">
+          <p className="text-xs text-gray-400 px-3 pt-2 text-center">Sign to take custody of the laptop</p>
+          <canvas ref={canvasRef} width={500} height={140} className="w-full touch-none bg-white block" style={{ touchAction: 'none' }} />
+        </div>
+        <div className="flex gap-2">
+          <button type="button" onClick={() => padRef.current?.clear()} className="flex-1 py-3 border rounded-xl text-sm">Clear</button>
+          <button type="button" onClick={onClose} className="flex-1 py-3 border rounded-xl text-sm">Cancel</button>
+          <button
+            type="button" onClick={handleSave} disabled={saving}
+            className="flex-[2] py-3 bg-orange-600 text-white rounded-xl font-bold text-sm disabled:opacity-50"
+          >
+            {saving ? 'Saving…' : 'Sign & continue'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

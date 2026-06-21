@@ -412,6 +412,181 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
   return relativePath;
 }
 
+// ── Return DC PDF ────────────────────────────────────────────────────────────
+// A branded "Return Delivery Challan" used when a laptop (or part) is picked up
+// from the customer and brought back to the warehouse. It records the originating
+// outbound DC + Sales Order (so a unit is traceable end-to-end) and carries two
+// signature blocks: the technician signs at the customer site (sign-out) and the
+// warehouse signs on receipt.
+async function generateReturnDcPdf({ returnDcNumber, header = {}, units = [], esign = {} }) {
+  ensureUploadDir();
+  const fileName = `${String(returnDcNumber).replace(/[^\w-]/g, '_')}_${Date.now()}.pdf`;
+  const filePath = path.join(UPLOAD_DIR, fileName);
+  const relativePath = `uploads/sales-documents/${fileName}`;
+
+  const company = await loadCompany(header.entity_code);
+  const accent = company.code === 'gorefurbo' ? C.gorefurbo : C.rentfoxxy;
+  const pickupTypeLabel = header.pickup_type === 'repair' ? 'Repair Pickup' : 'Return Pickup';
+  const addr = parseJson(header.pickup_address, {}) || {};
+
+  const resolveSign = (url) => {
+    if (!url) return null;
+    const abs = path.join(__dirname, '..', String(url).replace(/^\//, ''));
+    return fs.existsSync(abs) ? abs : null;
+  };
+  const techSign = resolveSign(esign.technician_url);
+  const whSign = resolveSign(esign.warehouse_url);
+
+  await new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ margin: 36, size: 'A4' });
+    const stream = fs.createWriteStream(filePath);
+    doc.pipe(stream);
+    const L = 36; const R = 559; const W = R - L;
+    let y = 40;
+
+    // Header band
+    const logoAbs = company.logo_url ? path.join(__dirname, '..', company.logo_url.replace(/^\//, '')) : null;
+    let logoDrawn = false;
+    if (logoAbs && fs.existsSync(logoAbs)) {
+      try { doc.image(logoAbs, L, y, { height: 34 }); logoDrawn = true; } catch (_) { /* ignore */ }
+    }
+    if (!logoDrawn) doc.fillColor(accent).font('Helvetica-Bold').fontSize(22).text(company.code, L, y + 4);
+
+    doc.font('Helvetica-Bold').fontSize(16).fillColor(accent).text('RETURN DELIVERY CHALLAN', 250, y, { width: 273, align: 'right' });
+    doc.font('Helvetica').fontSize(8).fillColor(C.sub).text(pickupTypeLabel, 250, y + 20, { width: 273, align: 'right' });
+    y += 46;
+    doc.moveTo(L, y).lineTo(R, y).strokeColor(C.line).lineWidth(1).stroke();
+    y += 12;
+
+    // Tracking numbers cluster
+    const num = (label, value, x, color) => {
+      doc.font('Helvetica-Bold').fontSize(12).fillColor(color || C.ink).text(value || 'N/A', x, y, { width: 165, align: 'center' });
+      doc.font('Helvetica').fontSize(7).fillColor(C.sub).text(label, x, y + 17, { width: 165, align: 'center' });
+    };
+    num('Return DC Number', returnDcNumber, L, C.docNum);
+    num('Original DC Number', header.original_dc_number || 'N/A', L + 180, C.teal);
+    num('Sales Order Number', header.sales_order_number || 'N/A', L + 360, C.ink);
+    y += 38;
+    doc.moveTo(L, y).lineTo(R, y).strokeColor(C.line).lineWidth(1).stroke();
+    y += 12;
+
+    // Seller + date
+    doc.font('Helvetica').fontSize(9).fillColor(C.sub)
+      .text(`Date: ${header.dc_date || new Date().toLocaleDateString('en-GB')}`, L, y);
+    y += 14;
+    doc.font('Helvetica-Bold').fontSize(12).fillColor(accent).text(company.legal_name, L, y);
+    y += 16;
+    doc.font('Helvetica').fontSize(9).fillColor(C.ink);
+    if (company.gstin) { doc.text(`GSTIN: ${company.gstin}`, L, y); y += 12; }
+    if (company.address) { doc.text(`Address: ${company.address}`, L, y, { width: W }); y += doc.heightOfString(`Address: ${company.address}`, { width: W }); }
+    y += 8;
+
+    // Dispatch tags
+    const tags = [];
+    const mode = header.dispatch_mode;
+    if (mode === 'inhouse' || mode === 'technician') tags.push('By Hand / Technician');
+    else if (mode === 'courier') tags.push('By Courier');
+    else if (mode === 'porter') tags.push('By Porter');
+    if (header.delivery_person_name) tags.push(header.delivery_person_name);
+    if (header.courier_name) tags.push(header.courier_name);
+    if (header.awb_number) tags.push(header.awb_number);
+    let tx = L;
+    for (const t of tags) {
+      const w = doc.font('Helvetica').fontSize(8).widthOfString(t) + 16;
+      doc.roundedRect(tx, y, w, 16, 8).strokeColor(accent).lineWidth(0.8).stroke();
+      doc.fillColor(accent).text(t, tx + 8, y + 4);
+      tx += w + 6;
+    }
+    if (tags.length) y += 24; else y += 4;
+
+    // Pickup-from box
+    const boxTop = y;
+    let yy = boxTop + 8;
+    doc.font('Helvetica-Bold').fontSize(10).fillColor(C.ink).text(`Picked up from: ${header.customer_name || addr.name || 'Customer'}`, L + 10, yy, { width: W - 20 });
+    yy += 16;
+    doc.font('Helvetica').fontSize(8.5).fillColor(C.ink);
+    const row = (lab, val) => {
+      if (val == null || val === '') return;
+      doc.font('Helvetica-Bold').text(`${lab}: `, L + 10, yy, { continued: true, width: W - 20 })
+        .font('Helvetica').text(String(val));
+      yy = doc.y + 2;
+    };
+    row('Phone', header.customer_phone || addr.phone);
+    row('Email', header.customer_email);
+    row('Address', [addr.address, addr.city, addr.state, addr.pincode].filter(Boolean).join(', '));
+    const boxBottom = yy + 8;
+    doc.roundedRect(L, boxTop, W, boxBottom - boxTop, 6).strokeColor(C.line).lineWidth(1).stroke();
+    y = boxBottom + 14;
+
+    // Product table
+    const cols = [
+      { key: 'idx', label: '#', w: 28, align: 'center' },
+      { key: 'product', label: 'Laptop / Product', w: 280, align: 'left' },
+      { key: 'ttspl', label: 'Machine No.', w: 110, align: 'left' },
+      { key: 'serial', label: 'Serial No.', w: 105, align: 'left' },
+    ];
+    const drawHeader = (yh) => {
+      doc.rect(L, yh, W, 22).fill(C.teal);
+      let cx = L;
+      doc.fillColor(C.white).font('Helvetica-Bold').fontSize(9);
+      for (const c of cols) { doc.text(c.label, cx + 6, yh + 6, { width: c.w - 12, align: c.align }); cx += c.w; }
+      return yh + 22;
+    };
+    y = drawHeader(y);
+    doc.font('Helvetica').fontSize(8.5).fillColor(C.ink);
+    units.forEach((u, i) => {
+      const l1 = `${dash(u.brand)} ${dash(u.model || u.model_name)}`.trim();
+      const l2 = [u.processor, u.generation, u.ram, u.storage].filter(Boolean).join(' | ');
+      const rowH = Math.max(34, 14 + (l2 ? 11 : 0));
+      if (y + rowH > 720) { doc.addPage(); y = 40; y = drawHeader(y); }
+      let cx = L;
+      for (const c of cols) { doc.rect(cx, y, c.w, rowH).strokeColor(C.line).lineWidth(0.6).stroke(); cx += c.w; }
+      doc.font('Helvetica').fontSize(8.5).fillColor(C.ink).text(String(i + 1), L + 4, y + rowH / 2 - 5, { width: cols[0].w - 8, align: 'center' });
+      let px = L + cols[0].w + 6; let py = y + 6;
+      doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.ink).text(l1, px, py, { width: cols[1].w - 12 });
+      if (l2) { doc.font('Helvetica').fontSize(8).fillColor(C.sub).text(l2, px, py + 11, { width: cols[1].w - 12 }); }
+      doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.ink)
+        .text(dash(u.ttspl), L + cols[0].w + cols[1].w + 6, y + rowH / 2 - 5, { width: cols[2].w - 12 });
+      doc.font('Helvetica').fontSize(8.5).fillColor(C.ink)
+        .text(dash(u.serial), L + cols[0].w + cols[1].w + cols[2].w + 6, y + rowH / 2 - 5, { width: cols[3].w - 12 });
+      y += rowH;
+    });
+    y += 18;
+
+    // Signature blocks (technician sign-out + warehouse receipt)
+    if (y > 640) { doc.addPage(); y = 40; }
+    const half = (W - 12) / 2;
+    const signBox = (x, title, signAbs, name, at, note) => {
+      const h = 110;
+      doc.roundedRect(x, y, half, h, 6).strokeColor(C.line).lineWidth(1).stroke();
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink).text(title, x + 10, y + 8, { width: half - 20 });
+      if (signAbs) {
+        try { doc.image(signAbs, x + 12, y + 24, { fit: [half - 24, 44] }); } catch (_) { /* ignore */ }
+      } else {
+        doc.font('Helvetica').fontSize(8).fillColor(C.sub).text('Signature: ______________________', x + 10, y + 50);
+      }
+      doc.font('Helvetica').fontSize(8).fillColor(C.ink)
+        .text(`Name: ${name || '____________________'}`, x + 10, y + 76);
+      doc.font('Helvetica').fontSize(7.5).fillColor(C.sub)
+        .text(at ? `Date: ${new Date(at).toLocaleString('en-IN')}` : (note || ''), x + 10, y + 90, { width: half - 20 });
+    };
+    signBox(L, 'Technician (Sign-out at customer site)', techSign, esign.technician_name, esign.technician_at,
+      esign.customer_otp_verified ? 'Customer OTP verified at handover' : 'Pending customer OTP');
+    signBox(L + half + 12, 'Warehouse (Received)', whSign, esign.warehouse_name, esign.warehouse_at,
+      whSign ? '' : 'Pending warehouse confirmation');
+    y += 124;
+
+    doc.font('Helvetica').fontSize(7).fillColor(C.sub)
+      .text('This Return Delivery Challan is a system-generated document recording the movement of the above unit(s) from the customer back to the warehouse.', L, y, { width: W, align: 'center' });
+
+    doc.end();
+    stream.on('finish', resolve);
+    stream.on('error', reject);
+  });
+
+  return relativePath;
+}
+
 async function emailDocument({ to, subject, text, html, pdfRelativePath, cc }) {
   const transport = getMailTransport();
   if (!transport || !to) return false;
@@ -429,4 +604,4 @@ async function emailDocument({ to, subject, text, html, pdfRelativePath, cc }) {
   return true;
 }
 
-module.exports = { generateDocumentPdf, emailDocument };
+module.exports = { generateDocumentPdf, generateReturnDcPdf, emailDocument };

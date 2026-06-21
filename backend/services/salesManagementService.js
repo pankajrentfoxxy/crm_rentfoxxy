@@ -294,16 +294,23 @@ async function listReturnDeliveryChallans() {
        rl.model_name,
        rl.status,
        rl.created_at,
+       rl.pdf_path,
+       rl.dispatch_mode,
+       rl.sales_order_number,
        COALESCE(rl.dispatched_at, rl.created_at) AS dispatched_at,
        rl.delivered_at,
-       COALESCE(st.dc_number, vsn.current_dc_number) AS original_dc_number,
+       COALESCE(rl.original_dc_number, st.dc_number, vsn.current_dc_number) AS original_dc_number,
        COALESCE(st.complaint_type, sti.pickup_type, 'return') AS reason,
        sti.pickup_type,
+       sti.customer_otp_code,
+       sti.customer_otp_verified_at,
+       sti.warehouse_received_at,
        COALESCE(sti.ttspl_id, vsn.inventory_asset_code, NULLIF(split_part(rl.serial_number->>0, '|', 3), '')) AS ttspl_id
      FROM delivery_challan_lines rl
      LEFT JOIN support_tickets st ON st.id = rl.support_ticket_id
      LEFT JOIN LATERAL (
-       SELECT pickup_type, ttspl_id, unique_serial_number, serial_number
+       SELECT pickup_type, ttspl_id, unique_serial_number, serial_number,
+              customer_otp_code, customer_otp_verified_at, warehouse_received_at
        FROM support_ticket_items
        WHERE return_dc_number = rl.dc_number AND item_type = 'pickup'
        ORDER BY id DESC

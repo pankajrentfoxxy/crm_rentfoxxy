@@ -1,8 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
+import { FileText, KeyRound } from 'lucide-react';
 import DeliveryChallanDetailModal from '../../operation-management/components/DeliveryChallanDetailModal';
 import { listReturnDCs } from '../salesPipelineApi';
 import { formatDate } from '../salesPipelineUtils';
+import { getBackendOrigin } from '../../../utils/api';
+
+function pdfUrl(p) {
+  if (!p) return null;
+  if (p.startsWith('http')) return p;
+  return `${getBackendOrigin().replace(/\/$/, '')}/${p.replace(/^\/?/, '')}`;
+}
 
 export default function ReturnDcListPage() {
   const [rows, setRows] = useState([]);
@@ -29,23 +37,44 @@ export default function ReturnDcListPage() {
               <th className="px-4 py-3">Date</th>
               <th className="px-4 py-3">Customer</th>
               <th className="px-4 py-3">Original DC</th>
+              <th className="px-4 py-3">SO #</th>
+              <th className="px-4 py-3">OTP</th>
               <th className="px-4 py-3">Reason</th>
               <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">PDF</th>
             </tr>
           </thead>
           <tbody className="divide-y">
             {loading ? (
-              <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-500">Loading…</td></tr>
+              <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-500">Loading…</td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-500">No return DCs</td></tr>
+              <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-500">No return DCs</td></tr>
             ) : rows.map((row) => (
               <tr key={row.return_dc_number || row.rdc_number || row.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => setDetail(row)}>
                 <td className="px-4 py-3 font-mono">{row.return_dc_number || row.rdc_number}</td>
                 <td className="px-4 py-3">{formatDate(row.created_at)}</td>
                 <td className="px-4 py-3">{row.customer_name}</td>
-                <td className="px-4 py-3 font-mono text-xs">{row.original_dc_number || row.dc_number}</td>
+                <td className="px-4 py-3 font-mono text-xs">{row.original_dc_number || row.dc_number || '—'}</td>
+                <td className="px-4 py-3 font-mono text-xs">{row.sales_order_number || '—'}</td>
+                <td className="px-4 py-3">
+                  {row.customer_otp_verified_at ? (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">✓ Verified</span>
+                  ) : row.customer_otp_code ? (
+                    <span className="font-mono text-blue-700 inline-flex items-center gap-1"><KeyRound className="w-3.5 h-3.5" />{row.customer_otp_code}</span>
+                  ) : (
+                    <span className="text-xs text-gray-400">—</span>
+                  )}
+                </td>
                 <td className="px-4 py-3">{row.reason || row.return_reason || '—'}</td>
                 <td className="px-4 py-3">{row.status || '—'}</td>
+                <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                  {pdfUrl(row.pdf_path) ? (
+                    <a href={pdfUrl(row.pdf_path)} target="_blank" rel="noopener noreferrer"
+                      className="text-xs text-blue-600 inline-flex items-center gap-1"><FileText className="w-3.5 h-3.5" /> View</a>
+                  ) : (
+                    <span className="text-xs text-gray-400">—</span>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
