@@ -70,9 +70,9 @@ function normalizeCustomerForQuotation(row) {
   const details = parseJsonSafe(row.details, {}) || {};
   const billingRaw = details.billing_address || details.billing;
   const billing = typeof billingRaw === 'object' && billingRaw
-    ? billingRaw
+    ? { ...billingRaw, name: row.company_name || billingRaw.name || row.name }
     : {
-        name: row.name,
+        name: row.company_name || row.name,
         phone: row.phone,
         country: 'India',
         state: details.state || '',
@@ -339,7 +339,10 @@ exports.storeQuotation = async (req, res) => {
       || (await nextDocumentNumber(entityDocType('quotation', quoteEntity)));
     const token = generateToken();
     const shipping = parseJsonField(body.customer_shipping_address);
-    const billing = parseJsonField(body.customer_billing_address);
+    let billing = parseJsonField(body.customer_billing_address);
+    if (billing && body.customer_name) {
+      billing = { ...billing, name: body.customer_name };
+    }
 
     await client.query('BEGIN');
     for (const item of lineItems) {
@@ -566,7 +569,10 @@ exports.storeSalesOrder = async (req, res) => {
     const salesOrderNumber = body.sales_order_number || (await nextDocumentNumber('sales_order'));
     const quotationNumber = body.is_without_quotation ? 'N/A' : (body.quotation_number || 'N/A');
     const shipping = parseJsonField(body.customer_shipping_address);
-    const billing = parseJsonField(body.customer_billing_address);
+    let billing = parseJsonField(body.customer_billing_address);
+    if (billing && body.customer_name) {
+      billing = { ...billing, name: body.customer_name };
+    }
     const customerId = toNullableInt(body.customer_id);
 
     if (customerId) {

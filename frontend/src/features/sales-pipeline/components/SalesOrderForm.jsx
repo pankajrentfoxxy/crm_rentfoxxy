@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { X } from 'lucide-react';
+import { X, Eye } from 'lucide-react';
 import toast from 'react-hot-toast';
 import AssetDetailsForm, { emptyLineItem, lineItemsToPayload } from '../../operation-management/components/AssetDetailsForm';
 import { BillingAddressPanel, ShippingAddressPanel } from '../../operation-management/components/CustomerAddressPanels';
@@ -8,7 +8,9 @@ import { INDIAN_STATES, slugifyState } from '../../../constants/indianStates';
 import {
   createSalesOrder, getCustomerAddresses, getCustomerDetail, getQuotation, getSalesOrderMeta, listQuotations,
 } from '../salesPipelineApi';
-import { formatCurrency, sumLines } from '../salesPipelineUtils';
+import {
+  formatCurrency, sumLines, formatConfig, lineTotal, typeLabel, countLaptops,
+} from '../salesPipelineUtils';
 
 function getField(obj, snake, camel) {
   if (!obj) return '';
@@ -17,18 +19,25 @@ function getField(obj, snake, camel) {
   return val || '';
 }
 
+function customerDisplayName(customer) {
+  if (!customer) return 'N/A';
+  return customer.company_name || customer.companyName || customer.name || customer.customer_name || 'N/A';
+}
+
 function buildBillingAddress(customer) {
   if (!customer) return null;
+  const displayName = customerDisplayName(customer);
   if (customer.billing_address && typeof customer.billing_address === 'object') {
     return {
       ...customer.billing_address,
+      name: displayName,
       gst_number: customer.billing_address.gst_number
         || getField(customer, 'gst_no', 'gstNo')
         || getField(customer, 'gst_number', 'gstNumber'),
     };
   }
   return {
-    name: customer.name || customer.company_name || customer.companyName || 'N/A',
+    name: displayName,
     phone: customer.phone || customer.customer_number || 'N/A',
     country: 'India',
     state: getField(customer, 'billing_state', 'billingState') || 'N/A',
@@ -74,6 +83,7 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
   const [fromQuote, setFromQuote] = useState(Boolean(prefillQuotation));
   const [lines, setLines] = useState([emptyLineItem()]);
   const [saving, setSaving] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [advanceRequired, setAdvanceRequired] = useState(false);
   const [customerDetail, setCustomerDetail] = useState(null);
   const [billingAddress, setBillingAddress] = useState(null);
@@ -81,7 +91,7 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
   const [selectedShippingValue, setSelectedShippingValue] = useState('');
   const [manualShipping, setManualShipping] = useState(emptyManualShipping());
   const [form, setForm] = useState({
-    customer_id: '', quotation_number: prefillQuotation || '', quotation_type: 'rental',
+    customer_id: '', customer_name: '', quotation_number: prefillQuotation || '', quotation_type: 'rental',
     branch: 'rentfoxxy', supply_state: slugifyState('Haryana'),
     security_type: 'none', security_amount: '', shiping_charges: '', remarks: '',
     advance_amount: '', advance_due_date: '', GST_number: '',
@@ -409,10 +419,174 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
           </div>
         </div>
         <div className="border-t p-4 flex justify-end gap-2">
-          <button type="button" onClick={onClose} className="px-4 py-2 text-sm border rounded-lg">Cancel</button>
-          <button type="button" disabled={saving} onClick={submit} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">Create SO</button>
+          <button type="button" disabled={saving} onClick={onClose} className="px-4 py-2 text-sm border rounded-lg disabled:opacity-50">Cancel</button>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => setPreviewOpen(true)}
+            className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50 disabled:opacity-50 inline-flex items-center gap-2"
+          >
+            <Eye className="w-4 h-4" /> Preview
+          </button>
+          <button type="button" disabled={saving} onClick={submit} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">Create SO</button>
         </div>
       </aside>
+
+      {previewOpen && (
+        <SalesOrderPreview
+          onClose={() => setPreviewOpen(false)}
+          soNumber={meta?.sales_order_number}
+          form={form}
+          lines={lines}
+          billingAddress={billingAddress}
+          shippingAddress={selectedShippingAddress}
+          security={security}
+          advance={advance}
+          advanceRequired={advanceRequired}
+          collectBeforeDispatch={collectBeforeDispatch}
+          fromQuote={fromQuote}
+          isSaleType={isSaleType}
+        />
+      )}
+    </div>
+  );
+}
+
+function PreviewAddress({ title, addr, gstNumber }) {
+  return (
+    <div className="border rounded-lg p-3">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1">{title}</p>
+      {addr ? (
+        <div className="text-sm text-gray-700 space-y-0.5">
+          {addr.name ? <p className="font-medium text-gray-900">{addr.name}</p> : null}
+          {addr.address ? <p>{addr.address}</p> : null}
+          <p>
+            {[addr.city, addr.state, addr.zip_code].filter(Boolean).join(', ')}
+            {addr.country ? `, ${addr.country}` : ''}
+          </p>
+          {addr.phone ? <p>Phone: {addr.phone}</p> : null}
+          {gstNumber || addr.gst_number ? <p>GSTIN: {gstNumber || addr.gst_number}</p> : null}
+        </div>
+      ) : (
+        <p className="text-sm text-gray-400">Not selected</p>
+      )}
+    </div>
+  );
+}
+
+function SalesOrderPreview({
+  onClose, soNumber, form, lines, billingAddress, shippingAddress, security, advance,
+  advanceRequired, collectBeforeDispatch, fromQuote, isSaleType,
+}) {
+  const subtotal = sumLines(lines);
+  const shipping = Number(form.shiping_charges) || 0;
+  const showSecurity = !isSaleType && security > 0;
+  const validLines = (lines || []).filter((l) => l.brand || l.model_name || l.model || Number(l.quantity) > 0);
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <button type="button" className="absolute inset-0 bg-black/50" onClick={onClose} aria-label="Close preview" />
+      <div className="relative bg-white w-full max-w-3xl max-h-[90vh] rounded-xl shadow-2xl flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between border-b px-5 py-3 shrink-0">
+          <h3 className="font-semibold text-gray-900">Sales Order Preview</h3>
+          <button type="button" onClick={onClose} className="p-1 rounded hover:bg-gray-100"><X className="w-5 h-5" /></button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 space-y-5">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-xl font-bold text-gray-900">Rentfoxxy</h2>
+              <p className="text-xs text-gray-500 mt-0.5">{typeLabel(form.quotation_type)} Sales Order</p>
+            </div>
+            <div className="text-right text-sm">
+              <p className="font-semibold text-gray-900">{soNumber || 'Draft'}</p>
+              {fromQuote && form.quotation_number ? (
+                <p className="text-gray-500">From: {form.quotation_number}</p>
+              ) : null}
+              <p className="text-gray-500">Supply: {String(form.supply_state || '').replace(/-/g, ' ') || '—'}</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <PreviewAddress
+              title="Bill To"
+              addr={billingAddress ? { ...billingAddress, name: form.customer_name || billingAddress.name } : null}
+              gstNumber={form.GST_number}
+            />
+            <PreviewAddress title="Ship To" addr={shippingAddress} />
+          </div>
+
+          <div className="border rounded-lg overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-gray-600 text-xs">
+                <tr>
+                  <th className="text-left px-3 py-2 font-semibold">#</th>
+                  <th className="text-left px-3 py-2 font-semibold">Configuration</th>
+                  <th className="text-right px-3 py-2 font-semibold">Qty</th>
+                  <th className="text-right px-3 py-2 font-semibold">{isSaleType ? 'Unit Price' : 'Monthly Rate'}</th>
+                  <th className="text-right px-3 py-2 font-semibold">Amount</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {validLines.length ? validLines.map((l, i) => (
+                  <tr key={i}>
+                    <td className="px-3 py-2 text-gray-500">{i + 1}</td>
+                    <td className="px-3 py-2 text-gray-800">{formatConfig(l) || '—'}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{Number(l.quantity) || 0}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(l.rate)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(lineTotal(l))}</td>
+                  </tr>
+                )) : (
+                  <tr><td colSpan={5} className="px-3 py-6 text-center text-gray-400">No items added</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex justify-end">
+            <div className="w-full sm:w-72 text-sm space-y-1">
+              <div className="flex justify-between">
+                <span className="text-gray-600">Order Value{isSaleType ? '' : ' (monthly)'}</span>
+                <span className="tabular-nums">{formatCurrency(subtotal)}</span>
+              </div>
+              {showSecurity ? (
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Security Deposit</span>
+                  <span className="tabular-nums">{formatCurrency(security)}</span>
+                </div>
+              ) : null}
+              {advanceRequired && advance > 0 ? (
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Advance Required</span>
+                  <span className="tabular-nums">{formatCurrency(advance)}</span>
+                </div>
+              ) : null}
+              <div className="flex justify-between">
+                <span className="text-gray-600">Shipping Charges</span>
+                <span className="tabular-nums">{formatCurrency(shipping)}</span>
+              </div>
+              <div className="flex justify-between border-t pt-1 font-semibold text-blue-800">
+                <span>Total to collect before dispatch</span>
+                <span className="tabular-nums">{formatCurrency(collectBeforeDispatch)}</span>
+              </div>
+              <p className="text-[11px] text-gray-400 pt-1">
+                {countLaptops(lines)} unit(s){isSaleType ? '' : ' · monthly rental + security & advance as applicable'}. GST as applicable.
+              </p>
+            </div>
+          </div>
+
+          {form.remarks ? (
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1">Remarks</p>
+              <p className="text-sm text-gray-700 whitespace-pre-wrap">{form.remarks}</p>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="border-t px-5 py-3 shrink-0 flex justify-end">
+          <button type="button" onClick={onClose} className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50">Close</button>
+        </div>
+      </div>
     </div>
   );
 }

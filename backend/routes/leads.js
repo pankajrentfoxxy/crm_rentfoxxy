@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
+const { multerLimits } = require('../config/uploadLimits');
 const path = require('path');
 const fs = require('fs');
 const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
@@ -27,7 +28,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 }
+  limits: multerLimits()
 });
 
 router.use(authMiddleware);

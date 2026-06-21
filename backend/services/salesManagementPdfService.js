@@ -272,7 +272,7 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
       if (extra?.gst) row('GST', extra.gst);
       return yy;
     };
-    const custName = billing.name || header.customer_name || 'Customer';
+    const custName = header.customer_name || billing.name || 'Customer';
     const shipName = shippingAddr.name || custName;
     // measure heights by drawing into temp? Simpler: draw then compute box height after.
     const leftEnd = addrBlock(L, custName, custName, { ...billing, email: header.customer_email || billing.email, phone: header.customer_mobile || billing.phone }, { email: header.customer_email, phone: header.customer_mobile, gst: header.gst_number || billing.gst_number });

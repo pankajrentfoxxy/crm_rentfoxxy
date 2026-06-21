@@ -4,6 +4,7 @@
  */
 const express = require('express');
 const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
+const { wrapMulter } = require('../config/uploadLimits');
 const vendors = require('../controllers/vendorManagement/vendors.controller');
 const purchaseOrders = require('../controllers/vendorManagement/purchaseOrders.controller');
 const sparePo = require('../controllers/vendorManagement/sparePartsOrders.controller');
@@ -36,14 +37,14 @@ router.get('/vendors/:id', authorize, vendors.getValidators, vendors.getVendor);
 router.post(
   '/vendors',
   authorize,
-  vendorFiles,
+  wrapMulter(vendorFiles),
   ...vendors.createValidators(),
   vendors.createVendor
 );
 router.put(
   '/vendors/:id',
   authorize,
-  vendorFiles,
+  wrapMulter(vendorFiles),
   ...vendors.updateValidatorsFixed(),
   vendors.updateVendor
 );
@@ -119,14 +120,14 @@ router.patch('/purchase-orders/:id/status', authorize, purchaseOrders.statusVali
 router.post(
   '/purchase-orders/:id/bills',
   authorize,
-  poBillsUpload.array('files', 25),
+  wrapMulter(poBillsUpload.array('files', 25)),
   purchaseOrders.uploadBills
 );
 const grnBillsUpload = purchaseOrders.createGrnBillsUpload();
 router.post(
   '/purchase-orders/:poId/grns/:grnId/bills',
   authorize,
-  grnBillsUpload.array('files', 10),
+  wrapMulter(grnBillsUpload.array('files', 10)),
   purchaseOrders.grnBillParamValidators,
   purchaseOrders.uploadGrnBill
 );
@@ -156,7 +157,7 @@ const spoBillsUpload = sparePo.createSpoBillsUpload();
 router.post(
   '/spare-parts-orders/:id/bills',
   authorize,
-  spoBillsUpload.array('files', 25),
+  wrapMulter(spoBillsUpload.array('files', 25)),
   sparePo.uploadBills
 );
 router.get(

@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
+const { multerLimits } = require('../config/uploadLimits');
 const fs = require('fs');
 const { authMiddleware } = require('../middleware/auth');
 const {
@@ -132,7 +133,7 @@ const customerUploadDir = 'uploads/customers';
 if (!fs.existsSync(customerUploadDir)) fs.mkdirSync(customerUploadDir, { recursive: true });
 const upload = multer({
     dest: customerUploadDir,
-    limits: { fileSize: 5 * 1024 * 1024 }
+    limits: multerLimits()
 });
 
 router.post('/customers', authMiddleware, (req, res, next) => {

@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
+const { multerLimits } = require('../config/uploadLimits');
 const { body, param, query, validationResult } = require('express-validator');
 const pool = require('../config/db');
 const { generatePurchaseOrderPdf, formatPoType } = require('../services/vendorPurchaseOrderPdfService');
@@ -400,7 +401,7 @@ function createVendorInvoiceUpload() {
         cb(null, `${Date.now()}_${safe}`);
       }
     }),
-    limits: { fileSize: 8 * 1024 * 1024 },
+    limits: multerLimits(),
     fileFilter: (_req, file, cb) => {
       const ok =
         /pdf|image\/jpeg|image\/png|image\/gif|image\/webp/i.test(file.mimetype) ||
