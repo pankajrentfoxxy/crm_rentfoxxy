@@ -82,10 +82,16 @@ async function buildDcFlow(where, params, { includeOtp = false } = {}) {
        LEFT JOIN users u ON u.user_id = d.delivery_person_id
        LEFT JOIN customers c ON c.customer_id = d.customer_id
        LEFT JOIN LATERAL (
-         SELECT customer_otp_code, customer_otp_verified_at, customer_otp_sent_at
+         SELECT COALESCE(customer_otp_code, otp_code) AS customer_otp_code,
+                customer_otp_verified_at, customer_otp_sent_at
            FROM support_ticket_items
-          WHERE return_dc_number = d.dc_number AND item_type = 'pickup'
-          ORDER BY id DESC LIMIT 1
+          WHERE item_type = 'pickup'
+            AND (
+              return_dc_number = d.dc_number
+              OR (return_dc_number IS NULL AND ticket_id = d.support_ticket_id)
+            )
+          ORDER BY CASE WHEN return_dc_number = d.dc_number THEN 0 ELSE 1 END, id DESC
+          LIMIT 1
        ) sti ON d.movement_type = 'return'
        ${where}
       ORDER BY d.dc_number DESC, d.id ASC`,

@@ -1666,6 +1666,23 @@ exports.generateReturnDc = async (req, res) => {
         WHERE id = $2`,
       [rdc, ticketId]
     );
+    // Link pickup items and mint customer OTP (legacy generate path skipped this).
+    await client.query(
+      `UPDATE support_ticket_items SET
+         return_dc_number = $1,
+         customer_otp_code = COALESCE(
+           customer_otp_code, otp_code,
+           LPAD((floor(random() * 1000000))::int::text, 6, '0')
+         ),
+         customer_otp_sent_at = COALESCE(customer_otp_sent_at, NOW()),
+         pickup_type = COALESCE(pickup_type, 'return'),
+         pickup_method = COALESCE(NULLIF(pickup_method, ''), 'inhouse'),
+         pickup_assigned_to = COALESCE(pickup_assigned_to, assigned_to),
+         updated_at = NOW()
+       WHERE ticket_id = $2 AND item_type = 'pickup'
+         AND status NOT IN ('resolved', 'closed', 'inventory_updated')`,
+      [rdc, ticketId]
+    );
     await client.query('COMMIT');
 
     res.json({ success: true, return_dc_number: rdc, dispatch_mode: dispatchMode, delivery_person_id: deliveryPersonId });

@@ -175,13 +175,14 @@ const assertMachinesAvailable = async (client, customerId, items, excludeTicketI
 
 const insertTicketItem = async (client, ticketId, item, userId, extra = {}) => {
     const otp = generateOtp();
+    const isPickup = item.item_type === 'pickup';
     const ins = await client.query(
         `INSERT INTO support_ticket_items (
             ticket_id, customer_inventory_id, serial_number, unique_serial_number,
             brand, model, ram, storage, generation, item_type,
             issue_category_id, issue_category_label, remarks, assigned_to, status, otp_code, source_item_id,
-            pickup_type
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'open',$15,$16,$17)
+            pickup_type, customer_otp_code, customer_otp_sent_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'open',$15,$16,$17,$18,$19)
         RETURNING id`,
         [
             ticketId,
@@ -200,7 +201,9 @@ const insertTicketItem = async (client, ticketId, item, userId, extra = {}) => {
             item.assigned_to || null,
             otp,
             extra.source_item_id || item.source_item_id || null,
-            item.pickup_type || null
+            item.pickup_type || null,
+            isPickup ? otp : null,
+            isPickup ? new Date() : null,
         ]
     );
     await logAudit(client, {
@@ -402,6 +405,9 @@ const getTicketWithItems = async (ticketId, user) => {
         delete merged.inv_screen_size;
         delete merged.inv_asset_bucket;
         delete merged.inv_customer_id;
+        if (merged.item_type === 'pickup' && !merged.customer_otp_code && merged.otp_code) {
+            merged.customer_otp_code = merged.otp_code;
+        }
         return mapItemRow(merged, { showOtp: leadView, showWarehouseOtp: leadView });
     });
 
@@ -2182,7 +2188,7 @@ exports.verifyPickupCustomerOtp = async (req, res) => {
     if (!it.pod_image_path && !it.proof_of_completion_path) {
         return res.status(400).json({ success: false, message: 'Upload the pickup photo before verifying the OTP' });
     }
-    const stored = it.customer_otp_code;
+    const stored = it.customer_otp_code || it.otp_code;
     if (!stored || String(otp || '').trim() !== String(stored)) {
         return res.status(400).json({ success: false, message: 'Invalid OTP. Ask the customer for the correct OTP.' });
     }

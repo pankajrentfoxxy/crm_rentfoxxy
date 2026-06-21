@@ -282,6 +282,30 @@ async function getDeliveryChallanLines(dcNumber) {
 /** Return DC list — sourced from the actual Return DC rows
  *  (delivery_challan_lines with movement_type='return'), one row per RDC. */
 async function listReturnDeliveryChallans() {
+  // Self-heal legacy rows: link pickup items to their RDC and mint customer OTP.
+  await pool.query(`
+    UPDATE support_ticket_items sti
+       SET return_dc_number = dcl.dc_number, updated_at = NOW()
+      FROM delivery_challan_lines dcl
+     WHERE sti.item_type = 'pickup'
+       AND sti.return_dc_number IS NULL
+       AND dcl.movement_type = 'return'
+       AND dcl.support_ticket_id = sti.ticket_id
+  `).catch(() => {});
+  await pool.query(`
+    UPDATE support_ticket_items
+       SET customer_otp_code = COALESCE(
+             customer_otp_code, otp_code,
+             LPAD((floor(random() * 1000000))::int::text, 6, '0')
+           ),
+           customer_otp_sent_at = COALESCE(customer_otp_sent_at, NOW()),
+           updated_at = NOW()
+     WHERE item_type = 'pickup'
+       AND customer_otp_code IS NULL
+       AND customer_otp_verified_at IS NULL
+       AND warehouse_received_at IS NULL
+  `).catch(() => {});
+
   const result = await pool.query(
     `SELECT
        rl.dc_number              AS return_dc_number,
@@ -310,10 +334,15 @@ async function listReturnDeliveryChallans() {
      LEFT JOIN support_tickets st ON st.id = rl.support_ticket_id
      LEFT JOIN LATERAL (
        SELECT pickup_type, ttspl_id, unique_serial_number, serial_number,
-              customer_otp_code, customer_otp_verified_at, warehouse_received_at
+              COALESCE(customer_otp_code, otp_code) AS customer_otp_code,
+              customer_otp_verified_at, warehouse_received_at
        FROM support_ticket_items
-       WHERE return_dc_number = rl.dc_number AND item_type = 'pickup'
-       ORDER BY id DESC
+       WHERE item_type = 'pickup'
+         AND (
+           return_dc_number = rl.dc_number
+           OR (return_dc_number IS NULL AND ticket_id = rl.support_ticket_id)
+         )
+       ORDER BY CASE WHEN return_dc_number = rl.dc_number THEN 0 ELSE 1 END, id DESC
        LIMIT 1
      ) sti ON true
      LEFT JOIN LATERAL (
