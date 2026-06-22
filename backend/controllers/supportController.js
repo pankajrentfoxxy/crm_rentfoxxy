@@ -8,103 +8,9 @@ const supportQuery = require('../services/supportQuery');
 const supportInventoryService = require('../services/supportInventoryService');
 const inventorySM = require('../services/inventoryStateMachine');
 const { processReturnedSerials } = require('../services/returnCompletionService');
+const { createFloorTicketFromSupportPickup } = require('../services/grnTicketService');
 const { nextDocumentNumber } = require('../services/salesManagementService');
-const { generateReturnDcPdf } = require('../services/salesManagementPdfService');
-
-// Build (or rebuild) the branded Return DC PDF for a pickup item and persist its
-// path on the delivery_challan_lines row. Embeds the technician sign-out and
-// warehouse-receipt signatures when available. Best-effort: never throws.
-const regenerateReturnDcPdf = async (db, item) => {
-    try {
-        if (!item || !item.return_dc_number) return null;
-        const dclRes = await db.query(
-            `SELECT dcl.*, st.entity_code, st.customer_phone
-               FROM delivery_challan_lines dcl
-               LEFT JOIN support_tickets st ON st.id = dcl.support_ticket_id
-              WHERE dcl.dc_number = $1 AND dcl.movement_type = 'return'
-              LIMIT 1`,
-            [item.return_dc_number]
-        );
-        const dcl = dclRes.rows[0] || {};
-
-        const code = item.ttspl_id || item.unique_serial_number || item.serial_number;
-        let spec = {};
-        if (code) {
-            const vsnRes = await db.query(
-                `SELECT vsn.serial_number, vsn.inventory_asset_code,
-                        COALESCE(vsn.extra->>'brand', vpd.brand) AS brand,
-                        COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', vpd.model) AS model,
-                        COALESCE(vsn.extra->>'processor', vpd.processor) AS processor,
-                        COALESCE(vsn.extra->>'generation', vpd.generation) AS generation,
-                        COALESCE(vsn.extra->>'ram', vpd.ram) AS ram,
-                        COALESCE(vsn.extra->>'storage', vpd.storage) AS storage
-                   FROM vendor_serial_numbers vsn
-                   LEFT JOIN vendor_product_details vpd ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id','')::int
-                  WHERE vsn.deleted_at IS NULL
-                    AND (vsn.inventory_asset_code = $1 OR vsn.serial_number = $1)
-                  LIMIT 1`,
-                [code]
-            );
-            spec = vsnRes.rows[0] || {};
-        }
-
-        const nameFor = async (uid) => {
-            if (!uid) return null;
-            try {
-                const r = await db.query('SELECT name FROM users WHERE user_id = $1', [uid]);
-                return r.rows[0]?.name || null;
-            } catch (_) { return null; }
-        };
-        const technicianName = await nameFor(item.technician_esign_by || item.pickup_assigned_to || item.assigned_to);
-        const warehouseName = await nameFor(item.warehouse_esign_by || item.warehouse_received_by);
-
-        const pdfPath = await generateReturnDcPdf({
-            returnDcNumber: item.return_dc_number,
-            header: {
-                entity_code: dcl.entity_code || null,
-                customer_name: dcl.customer_name || null,
-                customer_email: dcl.email || null,
-                customer_phone: dcl.customer_phone || null,
-                pickup_address: dcl.customer_shipping_address || null,
-                original_dc_number: dcl.original_dc_number || null,
-                sales_order_number: dcl.sales_order_number || null,
-                pickup_type: item.pickup_type || 'return',
-                dispatch_mode: dcl.dispatch_mode || item.pickup_method || null,
-                courier_name: dcl.courier_name || null,
-                awb_number: dcl.awb_number || null,
-            },
-            units: [{
-                brand: spec.brand || item.brand,
-                model: spec.model || item.model,
-                processor: spec.processor || null,
-                generation: spec.generation || item.generation,
-                ram: spec.ram || item.ram,
-                storage: spec.storage || item.storage,
-                ttspl: spec.inventory_asset_code || item.ttspl_id || item.unique_serial_number || code,
-                serial: spec.serial_number || item.serial_number,
-            }],
-            esign: {
-                technician_url: item.technician_esign_url || null,
-                technician_name: technicianName,
-                technician_at: item.technician_esign_at || null,
-                warehouse_url: item.warehouse_esign_url || null,
-                warehouse_name: warehouseName,
-                warehouse_at: item.warehouse_esign_at || item.warehouse_received_at || null,
-                customer_otp_verified: !!item.customer_otp_verified_at,
-            },
-        });
-
-        await db.query(
-            `UPDATE delivery_challan_lines SET pdf_path = $1, updated_at = NOW()
-              WHERE dc_number = $2 AND movement_type = 'return'`,
-            [pdfPath, item.return_dc_number]
-        );
-        return pdfPath;
-    } catch (e) {
-        console.error('[support] regenerateReturnDcPdf failed:', e.message);
-        return null;
-    }
-};
+const { regenerateReturnDcPdf } = require('../services/returnDcPdfService');
 
 const ITEM_OPEN_STATUSES = new Set(['open', 'work_done', 'awaiting_otp']);
 const TICKET_OPEN = 'open';
@@ -252,7 +158,10 @@ const ensureSupportTicketItemV3Columns = async (client) => {
             ADD COLUMN IF NOT EXISTS warehouse_esign_by INTEGER REFERENCES users (user_id),
             ADD COLUMN IF NOT EXISTS porter_tracking_id VARCHAR(200),
             ADD COLUMN IF NOT EXISTS porter_order_id VARCHAR(200),
-            ADD COLUMN IF NOT EXISTS return_dc_number VARCHAR(50)
+            ADD COLUMN IF NOT EXISTS return_dc_number VARCHAR(50),
+            ADD COLUMN IF NOT EXISTS technician_esign_url TEXT,
+            ADD COLUMN IF NOT EXISTS technician_esign_at TIMESTAMP WITH TIME ZONE,
+            ADD COLUMN IF NOT EXISTS technician_esign_by INTEGER REFERENCES users (user_id)
     `);
 };
 
@@ -2218,6 +2127,12 @@ exports.verifyPickupCustomerOtp = async (req, res) => {
     } finally {
         client.release();
     }
+    try {
+        const fresh = await pool.query('SELECT * FROM support_ticket_items WHERE id = $1', [itemId]);
+        if (fresh.rows.length) await regenerateReturnDcPdf(pool, fresh.rows[0]);
+    } catch (pdfErr) {
+        console.error('[support] return DC pdf (otp verify):', pdfErr.message);
+    }
     const data = await getTicketWithItems(it.ticket_id, req.user);
     res.json({ success: true, message: 'OTP verified. Laptop picked up successfully.', ...data });
 };
@@ -2229,7 +2144,7 @@ exports.confirmWarehouseReceipt = async (req, res) => {
     const itemId = parseInt(req.params.itemId, 10);
     const { esign_data, signer_name } = req.body || {};
 
-    if (!['warehouse', 'admin', 'support_lead', 'manager'].includes(req.user.role)) {
+    if (!['warehouse', 'admin', 'support_lead', 'manager', 'floor_manager', 'super_admin'].includes(req.user.role)) {
         return res.status(403).json({ success: false, message: 'Warehouse access required' });
     }
     if (!esign_data || !String(esign_data).startsWith('data:image')) {
@@ -2281,41 +2196,33 @@ exports.confirmWarehouseReceipt = async (req, res) => {
         );
 
         let floorTicketId = null;
-        const code = it.ttspl_id || it.unique_serial_number || it.serial_number;
-        const vsnRes = await client.query(
-            `SELECT serial_id, inventory_asset_code FROM vendor_serial_numbers
-              WHERE (inventory_asset_code = $1 OR serial_number = $1) AND deleted_at IS NULL LIMIT 1`,
-            [code]
-        );
-        const vsn = vsnRes.rows[0];
+        const effectivePickupType = it.pickup_type
+            || (it.source_item_id ? 'repair' : 'return');
+        const needsFloorTicket = effectivePickupType === 'repair' || !!it.source_item_id;
 
-        if (it.pickup_type === 'repair') {
-            const stageRes = await client.query(
-                `SELECT stage_id FROM stages WHERE stage_name = 'Floor Manager' LIMIT 1`
-            );
-            const stageId = stageRes.rows[0]?.stage_id || null;
-            if (stageId && vsn) {
-                const ftRes = await client.query(
-                    `INSERT INTO tickets
-                        (serial_number, ttspl_id, brand, model, processor, ram, storage,
-                         status, priority, ticket_type, current_stage_id,
-                         vendor_serial_id, initial_condition)
-                     VALUES ($1,$2,$3,$4,$5,$6,$7,'in_progress','normal','grn_qc',$8,$9,$10)
-                     RETURNING ticket_id`,
-                    [
-                        it.serial_number, it.ttspl_id || it.unique_serial_number,
-                        it.brand, it.model, null, it.ram, it.storage,
-                        stageId, vsn.serial_id,
-                        'Returned from customer via support pickup for repair'
-                    ]
-                );
-                floorTicketId = ftRes.rows[0]?.ticket_id || null;
+        if (needsFloorTicket) {
+            const ftResult = await createFloorTicketFromSupportPickup(client, {
+                ...it,
+                pickup_type: effectivePickupType,
+            }, req.user.user_id);
+            floorTicketId = ftResult.ticket_id || null;
+            if (floorTicketId && !it.floor_ticket_id) {
                 await client.query(
-                    'UPDATE support_ticket_items SET floor_ticket_id = $1 WHERE id = $2',
-                    [floorTicketId, itemId]
+                    'UPDATE support_ticket_items SET floor_ticket_id = $1, pickup_type = COALESCE(pickup_type, $3) WHERE id = $2',
+                    [floorTicketId, itemId, effectivePickupType]
                 );
             }
         }
+
+        const code = it.ttspl_id || it.unique_serial_number || it.serial_number;
+        const vsnRes = await client.query(
+            `SELECT serial_id, inventory_asset_code FROM vendor_serial_numbers
+              WHERE deleted_at IS NULL
+                AND (inventory_asset_code = $1 OR serial_number = $1 OR extra->>'ttspl_id' = $1)
+              LIMIT 1`,
+            [code]
+        );
+        const vsn = vsnRes.rows[0];
 
         // Flip the authoritative inventory to "returned" for both repair and return.
         if (vsn) {

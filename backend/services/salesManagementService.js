@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const pool = require('../config/db');
+const { regenerateStaleReturnDcPdfs } = require('./returnDcPdfService');
 const { resolveLineItem } = require('./qcManagementService');
 const columnExistsCache = new Map();
 
@@ -294,6 +295,16 @@ async function listReturnDeliveryChallans() {
   `).catch(() => {});
   await pool.query(`
     UPDATE support_ticket_items
+       SET pickup_type = COALESCE(
+             pickup_type,
+             CASE WHEN source_item_id IS NOT NULL THEN 'repair' ELSE 'return' END
+           ),
+           updated_at = NOW()
+     WHERE item_type = 'pickup'
+       AND pickup_type IS NULL
+  `).catch(() => {});
+  await pool.query(`
+    UPDATE support_ticket_items
        SET customer_otp_code = COALESCE(
              customer_otp_code, otp_code,
              LPAD((floor(random() * 1000000))::int::text, 6, '0')
@@ -305,6 +316,7 @@ async function listReturnDeliveryChallans() {
        AND customer_otp_verified_at IS NULL
        AND warehouse_received_at IS NULL
   `).catch(() => {});
+  await regenerateStaleReturnDcPdfs(pool, 8);
 
   const result = await pool.query(
     `SELECT

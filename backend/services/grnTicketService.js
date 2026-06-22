@@ -495,10 +495,114 @@ async function recoverOrphanGrnTickets(db) {
   return { scanned: orphans.rows.length, created, errors };
 }
 
+/** Create a floor repair ticket when a support pickup arrives at the warehouse. */
+async function createFloorTicketFromSupportPickup(db, item, actorUserId) {
+  if (item.floor_ticket_id) {
+    return { ok: true, ticket_id: item.floor_ticket_id, skipped: true, reason: 'already_linked' };
+  }
+
+  const codes = [item.ttspl_id, item.unique_serial_number, item.serial_number].filter(Boolean);
+  let vsn = null;
+  for (const code of codes) {
+    const r = await db.query(
+      `SELECT serial_id, serial_number, inventory_asset_code, extra
+         FROM vendor_serial_numbers
+        WHERE deleted_at IS NULL
+          AND (inventory_asset_code = $1 OR serial_number = $1 OR extra->>'ttspl_id' = $1)
+        LIMIT 1`,
+      [code]
+    );
+    if (r.rows.length) { vsn = r.rows[0]; break; }
+  }
+  if (!vsn) return { ok: false, skipped: true, reason: 'no_vsn' };
+
+  const open = await db.query(
+    `SELECT ticket_id FROM tickets
+      WHERE serial_number = $1 AND status IN ('in_progress', 'on_hold')
+      LIMIT 1`,
+    [vsn.serial_number]
+  );
+  if (open.rows.length) {
+    return { ok: true, ticket_id: open.rows[0].ticket_id, skipped: true, reason: 'open_ticket' };
+  }
+
+  const stage = await resolveFloorManagerStage(db);
+  if (!stage) return { ok: false, skipped: true, reason: 'no_stage' };
+
+  const floorManagerUserId = await pickFloorManagerUser(db);
+  const extra = vsn.extra || {};
+  const brand = item.brand || extra.brand || null;
+  const model = item.model || extra.model || extra.model_name || null;
+  const processor = extra.processor || null;
+  const ram = item.ram || extra.ram || null;
+  const storage = item.storage || extra.storage || null;
+  const ttspl = vsn.inventory_asset_code || item.ttspl_id || item.unique_serial_number;
+
+  await ensureLegacyInventoryRow(db, {
+    serialNumber: vsn.serial_number,
+    machineNumber: ttspl,
+    brand, model, processor, ram, storage,
+    stageName: stage.stage_name,
+  });
+
+  const ins = await db.query(
+    `INSERT INTO tickets (
+       serial_number, ttspl_id, machine_number, brand, model, processor, ram, storage,
+       initial_condition, priority, ticket_type, current_stage_id, assigned_team_id, assigned_user_id,
+       vendor_serial_id
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'normal','grn_qc',$10,$11,$12,$13)
+     RETURNING ticket_id`,
+    [
+      vsn.serial_number,
+      ttspl,
+      ttspl,
+      brand, model, processor, ram, storage,
+      item.pickup_type === 'repair'
+        ? 'Returned from customer via support pickup for repair'
+        : 'Returned from customer via support pickup',
+      stage.stage_id,
+      stage.team_id,
+      floorManagerUserId,
+      vsn.serial_id,
+    ]
+  );
+  const ticketId = ins.rows[0].ticket_id;
+
+  await db.query(
+    `INSERT INTO activities (ticket_id, stage_id, user_id, action, notes)
+     VALUES ($1, $2, $3, 'created', $4)`,
+    [
+      ticketId,
+      stage.stage_id,
+      actorUserId,
+      `Auto-created from support pickup item #${item.id} (ticket #${item.ticket_id})`,
+    ]
+  );
+
+  if (floorManagerUserId) {
+    await startWorkLog(db, { ticketId, userId: floorManagerUserId, stageId: stage.stage_id });
+  }
+
+  if (ttspl) {
+    await logTtsplEvent({
+      ttsplId: ttspl,
+      vendorSerialId: vsn.serial_id,
+      eventType: 'ticket_created',
+      description: 'Floor repair ticket from support pickup warehouse receipt',
+      metadata: { ticket_id: ticketId, support_item_id: item.id, support_ticket_id: item.ticket_id },
+      actorUserId,
+      db,
+    });
+  }
+
+  return { ok: true, ticket_id: ticketId };
+}
+
 module.exports = {
   lineItemSpecs,
   createTicketFromGrnReceive,
   createTicketFromReturn,
+  createFloorTicketFromSupportPickup,
   applyGrnVendorQcPassOnTicketComplete,
   createSalesOrderQcTicket,
   recoverOrphanGrnTickets,

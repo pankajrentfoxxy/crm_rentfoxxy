@@ -23,6 +23,7 @@ const { emailDocument } = require('../services/salesManagementPdfService');
 const { createSalesOrderQcTicket } = require('../services/grnTicketService');
 const { logTtsplEvent } = require('../services/ttsplAuditService');
 const inventorySM = require('../services/inventoryStateMachine');
+const { regenerateReturnDcPdf } = require('../services/returnDcPdfService');
 
 /**
  * Resolve a vendor_serial_numbers.serial_id from a parsed DC serial entry,
@@ -1675,7 +1676,10 @@ exports.generateReturnDc = async (req, res) => {
            LPAD((floor(random() * 1000000))::int::text, 6, '0')
          ),
          customer_otp_sent_at = COALESCE(customer_otp_sent_at, NOW()),
-         pickup_type = COALESCE(pickup_type, 'return'),
+         pickup_type = COALESCE(
+           pickup_type,
+           CASE WHEN source_item_id IS NOT NULL THEN 'repair' ELSE 'return' END
+         ),
          pickup_method = COALESCE(NULLIF(pickup_method, ''), 'inhouse'),
          pickup_assigned_to = COALESCE(pickup_assigned_to, assigned_to),
          updated_at = NOW()
@@ -1684,6 +1688,18 @@ exports.generateReturnDc = async (req, res) => {
       [rdc, ticketId]
     );
     await client.query('COMMIT');
+
+    try {
+      const items = (await pool.query(
+        `SELECT * FROM support_ticket_items
+          WHERE ticket_id = $1 AND item_type = 'pickup' AND return_dc_number = $2
+          ORDER BY id DESC LIMIT 1`,
+        [ticketId, rdc]
+      )).rows;
+      if (items.length) await regenerateReturnDcPdf(pool, items[0]);
+    } catch (pdfErr) {
+      console.error('[sales] return DC pdf (generate):', pdfErr.message);
+    }
 
     res.json({ success: true, return_dc_number: rdc, dispatch_mode: dispatchMode, delivery_person_id: deliveryPersonId });
   } catch (error) {
