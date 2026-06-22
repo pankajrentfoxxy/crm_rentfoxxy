@@ -1665,6 +1665,31 @@ exports.getReports = async (req, res) => {
   }
 };
 
+/** Default To/CC layout for the lead quotation email UI. */
+exports.getQuotationEmailConfig = async (req, res) => {
+  try {
+    const { getDefaultQuotationCc, buildDefaultCcRecipients } = require('../services/leadQuotationService');
+    let senderEmail = String(req.user?.email || '').trim();
+    if (!senderEmail && req.user?.user_id) {
+      const ures = await pool.query('SELECT email FROM users WHERE user_id = $1', [req.user.user_id]);
+      senderEmail = String(ures.rows[0]?.email || '').trim();
+    }
+    const defaultCc = getDefaultQuotationCc();
+    const ccRecipients = buildDefaultCcRecipients(senderEmail);
+    res.json({
+      success: true,
+      to_hint: 'Customer email (editable in send form)',
+      default_cc: defaultCc,
+      cc_recipients: ccRecipients,
+      sender_email: senderEmail || null,
+      from_address: process.env.QUOTATION_FROM || process.env.EMAIL_FROM || process.env.SMTP_USER || null,
+    });
+  } catch (error) {
+    console.error('getQuotationEmailConfig:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.sendLeadQuotation = async (req, res) => {
   const { id } = req.params;
   const leadId = parseInt(id, 10);
@@ -1776,6 +1801,11 @@ exports.sendLeadQuotation = async (req, res) => {
 
     const acceptToken = crypto.randomBytes(24).toString('hex');
     const ccExtra = parseCcList(body.cc_emails);
+    const ccRecipients = Array.isArray(body.cc_recipients)
+      ? body.cc_recipients.map((e) => String(e).trim()).filter(Boolean)
+      : (body.cc_recipients
+        ? parseCcList(body.cc_recipients)
+        : null);
 
     const leadForQuote = applyQuotationConfigOne(lead, body.config_one || {});
 
@@ -1839,6 +1869,7 @@ exports.sendLeadQuotation = async (req, res) => {
       estimateDate: body.estimate_date || formatEstimateDate(new Date()),
       companyName: billTo.company_name,
       ccExtra,
+      ccRecipients: ccRecipients != null ? ccRecipients : null,
       acceptToken,
       emailConfig: {
         config1,

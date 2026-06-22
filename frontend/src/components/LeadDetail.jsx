@@ -245,7 +245,7 @@ export default function LeadDetail({ api }) {
         return [base, pc].filter(Boolean).join(', ');
     };
 
-    const openQuotationModal = () => {
+    const openQuotationModal = async () => {
         if (!lead) return;
         const research = lead.research || {};
         const gst = research.gst || research.GST || '';
@@ -255,6 +255,17 @@ export default function LeadDetail({ api }) {
         const first = addrs[0];
         const pref = billing || shipping || first;
         const addrLine = pref ? formatLeadAddressLine(pref) : '';
+
+        let ccEmails = '';
+        let fromAddress = '';
+        try {
+            const { data } = await api.get('/leads/quotation-email-config');
+            ccEmails = (data.cc_recipients || []).join(', ');
+            fromAddress = data.from_address || '';
+        } catch {
+            const fallback = ['pankaj@rentfoxxy.com', 'shivam@rentfoxxy.com', 'pradeep@rentfoxxy.com'];
+            ccEmails = [...fallback, user?.email].filter(Boolean).join(', ');
+        }
 
         setQuotation({
             to_email: lead.email || '',
@@ -283,7 +294,9 @@ export default function LeadDetail({ api }) {
             c1_processor: lead.processor || config.processor || '',
             c1_generation: lead.generation || config.generation || '',
             c1_ram: lead.ram || config.ram || '',
-            c1_storage: lead.storage || config.storage || ''
+            c1_storage: lead.storage || config.storage || '',
+            cc_emails: ccEmails,
+            mail_from: fromAddress,
         });
         setQuotationOpen(true);
     };
@@ -367,7 +380,10 @@ export default function LeadDetail({ api }) {
                     storage: quotation.c2_storage?.trim() || undefined,
                     monthly_rate: quotation.c2_monthly_rate ? parseFloat(quotation.c2_monthly_rate) : undefined
                 },
-                cc_emails: quotation.cc_emails?.trim() || undefined
+                cc_emails: quotation.cc_emails?.trim() || undefined,
+                cc_recipients: quotation.cc_emails
+                    ? quotation.cc_emails.split(/[,;]/).map((e) => e.trim()).filter(Boolean)
+                    : undefined,
             });
             alert('Quotation sent. PDF attached; CC includes team, you, and any extra addresses entered.');
             setQuotationOpen(false);
@@ -960,15 +976,17 @@ export default function LeadDetail({ api }) {
                             </label>
 
                             <label className="block">
-                                <span className="text-xs text-gray-600">Additional CC (optional)</span>
+                                <span className="text-xs text-gray-600">CC recipients</span>
                                 <input
                                     type="text"
                                     className="mt-0.5 w-full border rounded-lg px-3 py-2 text-sm"
                                     value={quotation.cc_emails}
                                     onChange={(e) => setQuotation((q) => ({ ...q, cc_emails: e.target.value }))}
-                                    placeholder="colleague@company.com, manager@company.com"
+                                    placeholder="team@rentfoxxy.com, you@rentfoxxy.com"
                                 />
-                                <span className="text-[10px] text-gray-500">Comma-separated. Team CC and your email are always included.</span>
+                                <span className="text-[10px] text-gray-500 block mt-1">
+                                    Pre-filled with default team CC and your login email. Remove any name you do not want copied on this send.
+                                </span>
                             </label>
 
                             <div className="border-t border-gray-100 pt-2 space-y-2">
@@ -1193,10 +1211,12 @@ export default function LeadDetail({ api }) {
                                 </label>
                             </div>
 
-                            <div className="text-[11px] text-gray-500">
-                                CC:&nbsp;pankaj@rentfoxxy.com, shivam@rentfoxxy.com, pradeep@rentfoxxy.com and you ({user?.email || 'your login email'}). Requires SMTP credentials on the server; From address should be&nbsp;
-                                <code className="text-gray-700">sales@rentfoxxy.com</code>&nbsp;(set&nbsp;
-                                <code>QUOTATION_FROM</code> / <code>EMAIL_FROM</code>).
+                            <div className="text-[11px] text-gray-500 rounded-lg border border-amber-100 bg-amber-50/50 p-2">
+                                <div><strong>To:</strong> customer email above</div>
+                                <div><strong>CC:</strong> {quotation.cc_emails || '—'}</div>
+                                {quotation.mail_from ? (
+                                    <div className="mt-1">From: <code className="text-gray-700">{quotation.mail_from}</code></div>
+                                ) : null}
                             </div>
 
                             <div className="flex justify-end gap-2 pt-1">

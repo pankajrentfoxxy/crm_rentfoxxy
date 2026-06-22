@@ -18,7 +18,23 @@ const SELLER_LINES = [
 
 const DEFAULT_HSN_SAC = '363684';
 
-const DEFAULT_CC = ['pankaj@rentfoxxy.com', 'shivam@rentfoxxy.com', 'pradeep@rentfoxxy.com'];
+const FALLBACK_QUOTATION_CC = ['pankaj@rentfoxxy.com', 'shivam@rentfoxxy.com', 'pradeep@rentfoxxy.com'];
+
+/** Team CC on quotation emails — override via QUOTATION_DEFAULT_CC (comma-separated). */
+function getDefaultQuotationCc() {
+  const fromEnv = process.env.QUOTATION_DEFAULT_CC;
+  if (fromEnv !== undefined && fromEnv !== null) {
+    return parseCcList(fromEnv);
+  }
+  return [...FALLBACK_QUOTATION_CC];
+}
+
+function buildDefaultCcRecipients(senderEmail) {
+  return uniqueEmails([...getDefaultQuotationCc(), senderEmail].filter(Boolean));
+}
+
+/** @deprecated use getDefaultQuotationCc() */
+const DEFAULT_CC = FALLBACK_QUOTATION_CC;
 
 /** Rentfoxxy branding — lighter orange accents on white */
 const BRAND_PRIMARY = '#fb923c';
@@ -320,7 +336,7 @@ async function sendQuotationAcceptedEmail({ toEmail, companyName, estimateNo, se
   await transporter.sendMail({
     from: fromAddress,
     to: toEmail,
-    cc: uniqueEmails([...DEFAULT_CC, senderEmail].filter(Boolean)).join(', ') || undefined,
+    cc: uniqueEmails(buildDefaultCcRecipients(senderEmail)).join(', ') || undefined,
     subject,
     text,
     html
@@ -593,6 +609,7 @@ async function buildQuotationPdfAndSend(params) {
     emailConfig,
     companyName,
     ccExtra,
+    ccRecipients,
     acceptToken
   } = params;
 
@@ -633,7 +650,9 @@ async function buildQuotationPdfAndSend(params) {
   }
 
   const fromAddress = process.env.QUOTATION_FROM || process.env.EMAIL_FROM || process.env.SMTP_USER;
-  const ccList = uniqueEmails([...DEFAULT_CC, senderEmail, ...parseCcList(ccExtra)].filter(Boolean));
+  const ccList = ccRecipients != null
+    ? uniqueEmails(ccRecipients)
+    : uniqueEmails([...getDefaultQuotationCc(), senderEmail, ...parseCcList(ccExtra)].filter(Boolean));
 
   const safeEstimate = String(estimateNo || 'EST').replace(/[^\w.-]+/g, '_');
   const companyLabel = (companyName || billTo?.company_name || '').trim() || 'Customer';
@@ -683,6 +702,8 @@ module.exports = {
   SELLER_LINES,
   DEFAULT_HSN_SAC,
   DEFAULT_CC,
+  getDefaultQuotationCc,
+  buildDefaultCcRecipients,
   BRAND_PRIMARY,
   LOGO_PATH,
   formatEstimateDate,

@@ -33,6 +33,7 @@ const upload = multer({
 
 router.use(authMiddleware);
 
+router.get('/quotation-email-config', leadsView, leadController.getQuotationEmailConfig);
 router.get('/export-csv', leadsView, leadController.exportLeadsCsv);
 router.get('/stages', leadsView, leadController.getLeadStages);
 router.get('/', leadsView, leadController.getLeads);

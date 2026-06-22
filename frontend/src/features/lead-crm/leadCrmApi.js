@@ -12,6 +12,7 @@ export const getLeadStages = () => api.get('/leads/stages');
 export const addLeadRemark = (id, data) => api.post(`/leads/${id}/remarks`, data);
 export const updateFollowUp = (id, data) => api.put(`/leads/${id}/follow-up`, data);
 export const sendLeadQuotation = (id, data) => api.post(`/leads/${id}/send-quotation`, data);
+export const fetchQuotationEmailConfig = () => api.get('/leads/quotation-email-config');
 export const getLeadAddresses = (id) => api.get(`/leads/${id}/addresses`);
 export const addLeadAddress = (id, data) => api.post(`/leads/${id}/addresses`, data);
 export const exportLeadsCsv = (params) => api.get('/leads/export-csv', { params, responseType: 'blob' });
