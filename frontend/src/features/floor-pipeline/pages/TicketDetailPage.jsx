@@ -21,6 +21,7 @@ import {
   configBadges,
   isFloorManagerRole,
   isQcRole,
+  isDispatchQcRole,
   isTechnicianRole,
   priorityBadge
 } from '../floorPipelineUi';
@@ -230,6 +231,7 @@ export default function TicketDetailPage() {
   const fm = isFloorManagerRole(user?.role);
   const tech = isTechnicianRole(user?.role);
   const qc = isQcRole(user?.role);
+  const dqc = isDispatchQcRole(user?.role);
 
   // The CURRENT stage's task is always the first tab so the assignee sees their
   // work first, then Overview / Work Log etc.
@@ -390,7 +392,7 @@ export default function TicketDetailPage() {
       { label: 'QC1 FAIL — Send back', action: () => move('Assembly & Software', failReason), danger: true, needsReason: true }
     );
   }
-  if ((qc || fm) && stage === 'Dispatch QC') {
+  if ((qc || fm || dqc) && stage === 'Dispatch QC') {
     stageButtons.push(
       { label: 'DISPATCH QC PASS — Laptop Ready for DC', action: () => move('Inventory'), success: true },
       {

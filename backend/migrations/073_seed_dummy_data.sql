@@ -24,7 +24,7 @@ ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (
   role IN (
     'super_admin', 'admin', 'manager', 'team_member', 'team_lead', 'sales',
     'floor_manager', 'procurement', 'qc', 'dispatch', 'warehouse', 'accounts',
-    'support_lead', 'support_tech', 'customer', 'vendor', 'technician'
+    'support_lead', 'support_tech', 'dispatch_qc', 'customer', 'vendor', 'technician'
   )
 );
 

@@ -139,6 +139,10 @@ export function isQcRole(role) {
   return role === 'qc';
 }
 
+export function isDispatchQcRole(role) {
+  return role === 'dispatch_qc';
+}
+
 export function isTechnicianRole(role) {
   return ['team_member', 'team_lead', 'technician'].includes(role);
 }

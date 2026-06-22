@@ -7,7 +7,7 @@ const { buildEffectivePermissionsForUser } = require('../services/permissionServ
 
 const MANAGEABLE_ROLES = [
   'team_member', 'team_lead', 'sales', 'floor_manager', 'procurement', 'qc', 'dispatch',
-  'manager', 'admin', 'support_lead', 'support_tech', 'accounts', 'warehouse',
+  'manager', 'admin', 'support_lead', 'support_tech', 'accounts', 'warehouse', 'dispatch_qc',
 ];
 const FLOOR_ROLES = ['team_member', 'team_lead', 'floor_manager', 'qc'];
 const CRM_EXCLUDED_ROLES = ['vendor', 'customer', 'technician'];
@@ -55,7 +55,7 @@ exports.register = async (req, res) => {
     let resolvedTeamIds = [];
     if (normalizedRole === 'procurement') {
       permissions = ['procurement_access'];
-    } else if (normalizedRole === 'qc') {
+    } else if (normalizedRole === 'qc' || normalizedRole === 'dispatch_qc') {
       permissions = ['qc_access'];
     } else if (normalizedRole === 'dispatch') {
       permissions = ['dispatch_access'];

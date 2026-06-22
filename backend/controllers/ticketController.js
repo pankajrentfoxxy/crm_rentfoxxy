@@ -229,6 +229,11 @@ exports.getTickets = async (req, res) => {
       query += ` AND s.stage_name IN ('QC1', 'QC2', 'Dispatch QC')`;
     }
 
+    // Dispatch QC role: only ever sees the Dispatch QC stage.
+    if (req.user.role === 'dispatch_qc' && !privilegedRoles.includes(req.user.role)) {
+      query += ` AND s.stage_name = 'Dispatch QC'`;
+    }
+
     if (!privilegedRoles.includes(req.user.role)) {
       if (view === 'completed') {
         query += ` AND (t.assigned_user_id = $${paramCount} OR EXISTS (
@@ -237,6 +242,9 @@ exports.getTickets = async (req, res) => {
         ))`;
         params.push(req.user.user_id);
         paramCount++;
+      } else if (req.user.role === 'dispatch_qc') {
+        // Dispatch QC sees ALL tickets currently in the Dispatch QC stage
+        // (stage already restricted above) — no per-user assignment filter.
       } else {
         if (req.user.role === 'qc' && userTeamIds.length > 0) {
           // QC queue: include tickets assigned to me OR currently unassigned in my QC team bucket.
@@ -460,8 +468,11 @@ exports.getTicketById = async (req, res) => {
         && qcStage
         && ticket.assigned_user_id == null
         && userTeamIds.includes(Number(ticket.assigned_team_id));
+      // Dispatch QC role can open any ticket currently in the Dispatch QC stage.
+      const dispatchQcAccess = req.user.role === 'dispatch_qc'
+        && ticket.stage_name === 'Dispatch QC';
 
-      if (!assignedToMe && !inMyQcBucket) {
+      if (!assignedToMe && !inMyQcBucket && !dispatchQcAccess) {
         return res.status(403).json({
           success: false,
           message: 'Access denied: you can only view tickets assigned to you'

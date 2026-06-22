@@ -204,12 +204,12 @@ exports.saveQC = async (req, res) => {
         );
 
         if (existing.rows.length > 0) {
-            // Update existing
+            // Update existing — a draft is always unlocked so it reloads on re-entry.
             await pool.query(
                 `UPDATE qc_results 
                  SET processor = $1, generation = $2, storage_type = $3, ram_size = $4,
                      checklist_data = $5, final_grade = $6, grade_notes = $7, remarks = $8,
-                     parts_replaced = $9, replaced_parts = $10, tested_by = $11
+                     parts_replaced = $9, replaced_parts = $10, tested_by = $11, is_locked = false
                  WHERE qc_id = $12`,
                 [
                     header.processor, header.generation, header.storage_type, header.ram_size,
@@ -334,8 +334,10 @@ exports.submitQC = async (req, res) => {
                 nextStage = 'Inventory';
             }
         } else {
-            // FAIL - return to Assembly & Software
-            nextStage = 'Assembly & Software';
+            // FAIL routing depends on the stage:
+            //  - QC2 fail        -> back to QC1 for full re-inspection (never Assembly/Software)
+            //  - QC1 / Dispatch  -> back to Assembly & Software for technician rework
+            nextStage = qcStage === 'QC2' ? 'QC1' : 'Assembly & Software';
         }
 
         // Get next stage ID

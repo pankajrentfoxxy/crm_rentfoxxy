@@ -108,27 +108,38 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
             if (res.data.success) {
                 const { ticket: ticketData, qcResult } = res.data;
 
-                // Auto-fill header from ticket/inventory
+                // Only prefill the inspection from an UNLOCKED draft of the current cycle.
+                // A locked result is a finalized submission from a previous QC pass/fail
+                // cycle — after a failure the form must open blank for a fresh inspection.
+                const draft = qcResult && !qcResult.is_locked ? qcResult : null;
+
+                // Header config can still come from the ticket/inventory (not a prior QC value).
                 setHeader({
-                    processor: qcResult?.processor || ticketData.processor || '',
-                    generation: qcResult?.generation || '',
-                    storage_type: qcResult?.storage_type || ticketData.storage_type || '',
-                    ram_size: qcResult?.ram_size || ticketData.ram_size || ''
+                    processor: draft?.processor || ticketData.processor || '',
+                    generation: draft?.generation || '',
+                    storage_type: draft?.storage_type || ticketData.storage_type || '',
+                    ram_size: draft?.ram_size || ticketData.ram_size || ''
                 });
 
-                if (qcResult) {
-                    setChecklist(qcResult.checklist_data || INITIAL_CHECKLIST);
+                if (draft) {
+                    setChecklist(draft.checklist_data || INITIAL_CHECKLIST);
                     setGrading({
-                        final_grade: qcResult.final_grade || '',
-                        grade_notes: qcResult.grade_notes || ''
+                        final_grade: draft.final_grade || '',
+                        grade_notes: draft.grade_notes || ''
                     });
-                    setRemarks(qcResult.remarks || '');
-                    if (qcResult.parts_replaced) {
+                    setRemarks(draft.remarks || '');
+                    if (draft.parts_replaced) {
                         setPartReplacement({
                             parts_replaced: true,
-                            replaced_parts: qcResult.replaced_parts || []
+                            replaced_parts: draft.replaced_parts || []
                         });
                     }
+                } else {
+                    // Finalized prior cycle (or nothing yet) → start from scratch.
+                    setChecklist(INITIAL_CHECKLIST);
+                    setGrading({ final_grade: '', grade_notes: '' });
+                    setRemarks('');
+                    setPartReplacement({ parts_replaced: false, replaced_parts: [] });
                 }
             }
         } catch (error) {

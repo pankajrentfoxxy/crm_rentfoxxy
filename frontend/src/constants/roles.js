@@ -14,11 +14,13 @@ export const CRM_ROLES = [
   'accounts',
   'support_lead',
   'support_tech',
+   'dispatch_qc'
 ];
 
 export const MANAGEABLE_ROLES = [
   'team_member', 'team_lead', 'sales', 'floor_manager', 'procurement', 'qc',
   'dispatch', 'manager', 'admin', 'support_lead', 'support_tech', 'accounts', 'warehouse',
+  'dispatch_qc'
 ];
 
 export const ROLE_DESCRIPTIONS = {
@@ -36,6 +38,7 @@ export const ROLE_DESCRIPTIONS = {
   accounts: 'Billing, invoices, e-invoice, credit/debit notes',
   support_lead: 'All support tickets, manage support team',
   support_tech: 'Own assigned support tickets',
+  dispatch_qc: 'Dispatch QC',
 };
 
 export const ROLE_DISPLAY_NAMES = {
@@ -53,6 +56,7 @@ export const ROLE_DISPLAY_NAMES = {
   accounts: 'Accounts',
   support_lead: 'Support Lead',
   support_tech: 'Support Technician',
+  dispatch_qc: 'Dispatch QC',
 };
 
 /** Roles that require team assignment */
@@ -73,4 +77,5 @@ export const ROLE_REFERENCE_ROWS = [
   { role: 'accounts', access: 'All billing, invoices, e-invoice', cannot: 'Floor, sales, vendors' },
   { role: 'support_lead', access: 'All support tickets, team mgmt', cannot: 'Billing, floor, sales' },
   { role: 'support_tech', access: 'Own support tickets', cannot: 'Everything else' },
+  { role: 'dispatch_qc', access: 'Dispatch QC', cannot: 'Everything else' },
 ];

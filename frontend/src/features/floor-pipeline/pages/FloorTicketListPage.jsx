@@ -14,6 +14,7 @@ import {
   configSummary,
   isFloorManagerRole,
   isQcRole,
+  isDispatchQcRole,
   priorityBadge,
   stageCategory,
   stageCategoryBadge,
@@ -39,6 +40,7 @@ export default function FloorTicketListPage() {
 
   const subtitle = useMemo(() => {
     if (fm) return 'All tickets';
+    if (isDispatchQcRole(user?.role)) return 'Dispatch QC queue';
     if (isQcRole(user?.role)) return 'QC queue';
     return 'My tickets';
   }, [user?.role, fm]);

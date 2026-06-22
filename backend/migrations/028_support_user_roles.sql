@@ -36,6 +36,7 @@ ALTER TABLE public.users
       'accounts',
       'support_lead',
       'support_tech',
+      'dispatch_qc',
       'customer',
       'vendor',
       'technician'
