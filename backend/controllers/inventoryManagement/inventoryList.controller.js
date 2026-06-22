@@ -236,15 +236,26 @@ async function updateReadyToRentAction(req, res) {
     }
 
     const extra = parseExtra(row.extra);
+    // The sale/rent disposition is NOT a lifecycle state — keep it in extra.status2
+    // only. Writing it into inventory_status previously corrupted the canonical
+    // state machine (e.g. 'normal_sale'), breaking later dispatch/delivery.
     extra.status2 = selected;
 
     await pool.query(
       `UPDATE vendor_serial_numbers
-       SET inventory_status = $1,
-           extra = $2::jsonb,
+       SET extra = $1::jsonb,
+           inventory_status = CASE
+             WHEN inventory_status IS NULL
+               OR inventory_status NOT IN (
+                 'reserved','in_transit','rented','on_demo','sold',
+                 'returned','in_repair','qc_failed','scrapped'
+               )
+             THEN 'in_stock'
+             ELSE inventory_status
+           END,
            updated_at = NOW()
-       WHERE serial_id = $3`,
-      [selected, JSON.stringify(extra), serialId]
+       WHERE serial_id = $2`,
+      [JSON.stringify(extra), serialId]
     );
 
     res.json({ success: true, message: 'Action taken successfully!' });

@@ -51,9 +51,16 @@ const ALLOWED = {
   scrapped:   [],
 };
 
+const CANONICAL_STATUSES = new Set(Object.values(STATUS));
+
 function isAllowed(from, to) {
   if (!from) return true;                 // first time / unknown current state
   if (from === to) return true;           // idempotent re-assertion
+  // Legacy / non-canonical values (e.g. a sale disposition like 'normal_sale'
+  // that older code wrote into inventory_status) are not real lifecycle states.
+  // Allow the move so the unit self-heals to a canonical status — it is still
+  // recorded in inventory_status_transitions + the TTSPL audit log.
+  if (!CANONICAL_STATUSES.has(from)) return true;
   return (ALLOWED[from] || []).includes(to);
 }
 
