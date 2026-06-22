@@ -107,6 +107,7 @@ router.patch('/delivery-challans/:dcNumber/rejected', dcEdit, ctrl.markDcRejecte
 
 router.get('/return-dc', rdcView, ctrl.listReturnDeliveryChallans);
 router.get('/return-dc/:rdcNumber/detail', rdcView, ctrl.getReturnDcDetail);
+router.post('/return-dc/:rdcNumber/pdf', rdcView, ctrl.regenerateReturnDcPdf);
 router.post('/return-dc/:rdcNumber/warehouse-confirm', rdcEdit, supportCtrl.confirmReturnDcWarehouseReceipt);
 router.post('/return-dc/tickets/:ticketId/assign-number', rdcEdit, ctrl.assignReturnDcNumber);
 router.post('/return-dc/tickets/:ticketId/generate', rdcEdit, ctrl.generateReturnDc);

@@ -383,7 +383,7 @@ async function listReturnDeliveryChallans() {
 /** Full Return DC detail — units, pickup items, POD, e-signatures, PDF. */
 async function getReturnDcDetail(rdcNumber) {
   const dclRes = await pool.query(
-    `SELECT dcl.*, st.entity_code, st.customer_phone, st.ticket_email
+    `SELECT dcl.*, st.customer_phone, st.ticket_email
        FROM delivery_challan_lines dcl
        LEFT JOIN support_tickets st ON st.id = dcl.support_ticket_id
       WHERE dcl.dc_number = $1 AND dcl.movement_type = 'return'
@@ -418,6 +418,20 @@ async function getReturnDcDetail(rdcNumber) {
     || pickupItems.find((i) => i.warehouse_received_at)
     || pickupItems[0];
 
+  let pdfPath = dcl.pdf_path;
+  const shouldRegenPdf = !pdfPath || pickupItems.some((i) =>
+    i.technician_esign_url || i.warehouse_esign_url || i.customer_otp_verified_at
+  );
+  if (shouldRegenPdf) {
+    try {
+      const { regenerateReturnDcPdfByRdc } = require('./returnDcPdfService');
+      const regen = await regenerateReturnDcPdfByRdc(pool, rdcNumber);
+      if (regen) pdfPath = regen;
+    } catch (e) {
+      console.error('[getReturnDcDetail] pdf regen:', e.message);
+    }
+  }
+
   return {
     return_dc_number: rdcNumber,
     ticket_id: dcl.support_ticket_id,
@@ -427,7 +441,7 @@ async function getReturnDcDetail(rdcNumber) {
     customer_phone: dcl.customer_phone,
     pickup_address: shipping,
     status: dcl.status,
-    pdf_path: dcl.pdf_path,
+    pdf_path: pdfPath,
     dispatch_mode: dcl.dispatch_mode,
     sales_order_number: dcl.sales_order_number,
     original_dc_number: dcl.original_dc_number,
@@ -459,6 +473,7 @@ async function getReturnDcDetail(rdcNumber) {
       customer_otp_verified_at: i.customer_otp_verified_at,
       floor_ticket_id: i.floor_ticket_id,
     })),
+    floor_ticket_ids: pickupItems.map((i) => i.floor_ticket_id).filter(Boolean),
     esign: {
       technician_url: techItem?.technician_esign_url || null,
       technician_name: techItem?.tech_name || null,

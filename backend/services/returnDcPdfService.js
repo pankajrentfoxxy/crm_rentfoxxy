@@ -88,7 +88,7 @@ async function regenerateReturnDcPdfByRdc(db, rdcNumber) {
   try {
     if (!rdcNumber) return null;
     const dclRes = await db.query(
-      `SELECT dcl.*, st.entity_code, st.customer_phone
+      `SELECT dcl.*, st.customer_phone
          FROM delivery_challan_lines dcl
          LEFT JOIN support_tickets st ON st.id = dcl.support_ticket_id
         WHERE dcl.dc_number = $1 AND dcl.movement_type = 'return'

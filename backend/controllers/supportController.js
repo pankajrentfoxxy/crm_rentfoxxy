@@ -2452,20 +2452,18 @@ const warehouseReceiveSinglePickupItem = async (client, it, userId, esignUrl, si
 
     let floorTicketId = null;
     const effectivePickupType = it.pickup_type || (it.source_item_id ? 'repair' : 'return');
-    const needsFloorTicket = effectivePickupType === 'repair' || !!it.source_item_id;
 
-    if (needsFloorTicket) {
-        const ftResult = await createFloorTicketFromSupportPickup(client, {
-            ...it,
-            pickup_type: effectivePickupType,
-        }, userId);
-        floorTicketId = ftResult.ticket_id || null;
-        if (floorTicketId && !it.floor_ticket_id) {
-            await client.query(
-                'UPDATE support_ticket_items SET floor_ticket_id = $1, pickup_type = COALESCE(pickup_type, $3) WHERE id = $2',
-                [floorTicketId, it.id, effectivePickupType]
-            );
-        }
+    // Every warehouse receipt (return or repair) creates a floor QC ticket for the floor manager.
+    const ftResult = await createFloorTicketFromSupportPickup(client, {
+        ...it,
+        pickup_type: effectivePickupType,
+    }, userId);
+    floorTicketId = ftResult.ticket_id || null;
+    if (floorTicketId && !it.floor_ticket_id) {
+        await client.query(
+            'UPDATE support_ticket_items SET floor_ticket_id = $1, pickup_type = COALESCE(pickup_type, $3) WHERE id = $2',
+            [floorTicketId, it.id, effectivePickupType]
+        );
     }
 
     const code = it.ttspl_id || it.unique_serial_number || it.serial_number;

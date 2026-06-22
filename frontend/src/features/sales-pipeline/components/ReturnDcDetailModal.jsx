@@ -85,14 +85,19 @@ function WarehouseSignPanel({ rdcNumber, onSigned }) {
 export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const r = await getReturnDcDetail(rdcNumber);
       setDetail(r.data);
-    } catch {
-      toast.error('Failed to load Return DC');
+    } catch (e) {
+      const msg = e.response?.data?.message || 'Failed to load Return DC';
+      setError(msg);
+      setDetail(null);
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
@@ -121,6 +126,8 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
         <div className="p-5 space-y-5">
           {loading ? (
             <p className="text-center text-gray-500 py-8">Loading…</p>
+          ) : error ? (
+            <p className="text-center text-red-600 py-8 text-sm">{error}</p>
           ) : !detail ? (
             <p className="text-center text-gray-500 py-8">Not found</p>
           ) : (
@@ -141,12 +148,33 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
                 ) : null}
               </div>
 
-              {pdfLink && (
-                <a href={pdfLink} target="_blank" rel="noopener noreferrer"
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-orange-50 text-orange-700 border border-orange-200 rounded-xl text-sm font-medium">
-                  <FileText className="w-4 h-4" />
-                  {detail.esign?.warehouse_url ? 'View signed Return DC PDF' : 'View Return DC PDF'}
-                </a>
+              <div className="rounded-xl border border-orange-200 bg-orange-50/60 p-4">
+                <p className="text-sm font-semibold text-gray-900 mb-2">Return DC PDF (e-signed challan)</p>
+                {pdfLink ? (
+                  <a href={pdfLink} target="_blank" rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-white text-orange-700 border border-orange-300 rounded-xl text-sm font-medium hover:bg-orange-50">
+                    <FileText className="w-4 h-4" />
+                    {detail.esign?.warehouse_url ? 'Open signed Return DC PDF' : 'Open Return DC PDF (partial signatures)'}
+                  </a>
+                ) : (
+                  <p className="text-xs text-gray-500">PDF is generated when the Return DC is created and updated as signatures are added.</p>
+                )}
+                <p className="text-xs text-gray-500 mt-2">Technician POD photos are shown below. The challan PDF embeds technician and warehouse e-signatures.</p>
+              </div>
+
+              {(detail.floor_ticket_ids?.length > 0) && (
+                <div className="text-sm">
+                  <p className="font-semibold text-gray-700 mb-1">Floor tickets</p>
+                  <p className="text-xs text-gray-500 mb-2">Assigned to floor manager after warehouse receipt.</p>
+                  <div className="flex flex-wrap gap-2">
+                    {detail.floor_ticket_ids.map((id) => (
+                      <a key={id} href={`/tickets/${id}`} target="_blank" rel="noreferrer"
+                        className="px-3 py-1 rounded-full bg-violet-100 text-violet-800 text-xs font-mono">
+                        Floor #{id}
+                      </a>
+                    ))}
+                  </div>
+                </div>
               )}
 
               <div>

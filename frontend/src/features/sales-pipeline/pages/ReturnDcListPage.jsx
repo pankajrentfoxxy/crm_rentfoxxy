@@ -49,7 +49,7 @@ export default function ReturnDcListPage() {
               <th className="px-4 py-3">OTP</th>
               <th className="px-4 py-3">Reason</th>
               <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3">PDF</th>
+              <th className="px-4 py-3">Signed PDF</th>
             </tr>
           </thead>
           <tbody className="divide-y">

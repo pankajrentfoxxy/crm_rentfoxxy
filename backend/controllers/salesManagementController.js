@@ -1591,7 +1591,23 @@ exports.getReturnDcDetail = async (req, res) => {
     }
     res.json({ success: true, ...detail });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error('getReturnDcDetail:', error);
+    res.status(500).json({ success: false, message: error.message || 'Failed to load Return DC detail' });
+  }
+};
+
+exports.regenerateReturnDcPdf = async (req, res) => {
+  try {
+    const rdcNumber = String(req.params.rdcNumber || '').trim();
+    const { regenerateReturnDcPdfByRdc } = require('../services/returnDcPdfService');
+    const pdfPath = await regenerateReturnDcPdfByRdc(pool, rdcNumber);
+    if (!pdfPath) {
+      return res.status(404).json({ success: false, message: 'Return DC not found or PDF could not be generated' });
+    }
+    res.json({ success: true, pdf_path: pdfPath, return_dc_number: rdcNumber });
+  } catch (error) {
+    console.error('regenerateReturnDcPdf:', error);
+    res.status(500).json({ success: false, message: error.message || 'Failed to regenerate PDF' });
   }
 };
 
