@@ -463,6 +463,151 @@ async function listParentOptions(entityKey) {
   return [];
 }
 
+/* ─────────────────────────── Parent ↔ Child mapping ───────────────────────────
+ * A "mapping" view groups a child entity (models / generations) under its parent
+ * (brands / processors) so an admin can manage the whole relationship at once
+ * instead of editing one child row at a time. Drives the cascading dropdowns. */
+
+function assertChildEntity(cfg) {
+  if (!cfg.parentKey) {
+    const err = new Error(`${cfg.label} has no parent to map`);
+    err.status = 400;
+    throw err;
+  }
+}
+
+/** Returns every parent with its mapped children: [{ id, name, status, children:[…] }]. */
+async function getMappingTree(childEntityKey) {
+  const cfg = getEntity(childEntityKey);
+  assertChildEntity(cfg);
+
+  const [parents, children] = await Promise.all([
+    pool.query(
+      `SELECT id, name, status FROM ${cfg.parentTable} WHERE deleted_at IS NULL ORDER BY name ASC`
+    ),
+    pool.query(
+      `SELECT id, name, status, ${cfg.parentKey} AS parent_id
+         FROM ${cfg.table} WHERE deleted_at IS NULL ORDER BY name ASC`
+    ),
+  ]);
+
+  const byParent = new Map();
+  for (const c of children.rows) {
+    if (!byParent.has(c.parent_id)) byParent.set(c.parent_id, []);
+    byParent.get(c.parent_id).push({ id: c.id, name: c.name, status: c.status });
+  }
+
+  return parents.rows.map((p) => ({
+    id: p.id,
+    name: p.name,
+    status: p.status,
+    children: byParent.get(p.id) || [],
+  }));
+}
+
+/** Create many children under one parent, skipping names that already exist there. */
+async function bulkCreateChildren(childEntityKey, parentId, names, userId) {
+  const cfg = getEntity(childEntityKey);
+  assertChildEntity(cfg);
+  const pid = parseInt(parentId, 10);
+  if (!pid) {
+    const err = new Error(`${cfg.parentKey.replace('_id', '')} is required`);
+    err.status = 400;
+    throw err;
+  }
+  await assertParentActive(cfg.parentTable, pid);
+
+  const clean = [...new Set((Array.isArray(names) ? names : [])
+    .map(normalizeName)
+    .filter(Boolean)
+    .map((n) => n))];
+
+  const created = [];
+  const skipped = [];
+  for (const name of clean) {
+    const dup = await pool.query(
+      `SELECT id FROM ${cfg.table}
+        WHERE deleted_at IS NULL AND ${cfg.parentKey} = $1 AND LOWER(TRIM(name)) = $2 LIMIT 1`,
+      [pid, name.toLowerCase()]
+    );
+    if (dup.rows.length) { skipped.push(name); continue; }
+    const r = await pool.query(
+      `INSERT INTO ${cfg.table} (${cfg.parentKey}, name, status, created_by, updated_by)
+       VALUES ($1, $2, 'active', $3, $3) RETURNING id, name, status`,
+      [pid, name, userId]
+    );
+    created.push(r.rows[0]);
+  }
+  return { created, skipped };
+}
+
+/** Move a set of children to a different parent (skips names that would collide). */
+async function reassignChildren(childEntityKey, ids, parentId, userId) {
+  const cfg = getEntity(childEntityKey);
+  assertChildEntity(cfg);
+  const pid = parseInt(parentId, 10);
+  if (!pid) {
+    const err = new Error(`${cfg.parentKey.replace('_id', '')} is required`);
+    err.status = 400;
+    throw err;
+  }
+  await assertParentActive(cfg.parentTable, pid);
+
+  const idList = (Array.isArray(ids) ? ids : []).map((n) => parseInt(n, 10)).filter(Boolean);
+  let moved = 0;
+  const conflicts = [];
+  for (const id of idList) {
+    const cur = await pool.query(
+      `SELECT name FROM ${cfg.table} WHERE id = $1 AND deleted_at IS NULL`, [id]
+    );
+    if (!cur.rows.length) continue;
+    const name = cur.rows[0].name;
+    const dup = await pool.query(
+      `SELECT id FROM ${cfg.table}
+        WHERE deleted_at IS NULL AND ${cfg.parentKey} = $1
+          AND LOWER(TRIM(name)) = LOWER(TRIM($2)) AND id <> $3 LIMIT 1`,
+      [pid, name, id]
+    );
+    if (dup.rows.length) { conflicts.push(name); continue; }
+    await pool.query(
+      `UPDATE ${cfg.table} SET ${cfg.parentKey} = $1, updated_by = $2, updated_at = NOW()
+        WHERE id = $3 AND deleted_at IS NULL`,
+      [pid, userId, id]
+    );
+    moved += 1;
+  }
+  return { moved, conflicts };
+}
+
+/** Soft-delete many children at once. */
+async function bulkDeleteChildren(childEntityKey, ids, userId) {
+  const cfg = getEntity(childEntityKey);
+  assertChildEntity(cfg);
+  const idList = (Array.isArray(ids) ? ids : []).map((n) => parseInt(n, 10)).filter(Boolean);
+  if (!idList.length) return { deleted: 0 };
+  const r = await pool.query(
+    `UPDATE ${cfg.table} SET deleted_at = NOW(), updated_by = $1, updated_at = NOW()
+      WHERE id = ANY($2::int[]) AND deleted_at IS NULL`,
+    [userId, idList]
+  );
+  return { deleted: r.rowCount };
+}
+
+/** Activate / deactivate many children at once. */
+async function bulkSetChildStatus(childEntityKey, ids, status, userId) {
+  const cfg = getEntity(childEntityKey);
+  assertChildEntity(cfg);
+  const s = status === 'inactive' ? 'inactive' : 'active';
+  const idList = (Array.isArray(ids) ? ids : []).map((n) => parseInt(n, 10)).filter(Boolean);
+  if (!idList.length) return { updated: 0 };
+  const r = await pool.query(
+    `UPDATE ${cfg.table} SET status = $1, updated_by = $2, updated_at = NOW()
+      WHERE id = ANY($3::int[]) AND deleted_at IS NULL`,
+    [s, userId, idList]
+  );
+  return { updated: r.rowCount };
+}
+
 module.exports = {
   ENTITIES,
   getEntity,
@@ -475,4 +620,9 @@ module.exports = {
   getAssetDropdownCatalog,
   getAssetCatalogForApi,
   listParentOptions,
+  getMappingTree,
+  bulkCreateChildren,
+  reassignChildren,
+  bulkDeleteChildren,
+  bulkSetChildStatus,
 };

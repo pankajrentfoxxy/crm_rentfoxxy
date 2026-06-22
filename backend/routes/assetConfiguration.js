@@ -18,6 +18,13 @@ router.get('/dropdowns', ctrl.getDropdownCatalog);
 router.get('/types', view, ctrl.listEntityTypes);
 router.get('/parents/:entity', view, ctrl.getParentOptions);
 
+// Parent ↔ child mapping (brand-models | processor-generations)
+router.get('/mappings/:type', view, ctrl.getMapping);
+router.post('/mappings/:type/bulk-create', create, ctrl.bulkCreateMapping);
+router.post('/mappings/:type/reassign', edit, ctrl.reassignMapping);
+router.post('/mappings/:type/bulk-delete', del, ctrl.bulkDeleteMapping);
+router.post('/mappings/:type/bulk-status', edit, ctrl.bulkStatusMapping);
+
 function crudRoutes(path, list, get, post, put, remove, patchStatus) {
   router.get(`/${path}`, view, list);
   router.get(`/${path}/:id`, view, get);

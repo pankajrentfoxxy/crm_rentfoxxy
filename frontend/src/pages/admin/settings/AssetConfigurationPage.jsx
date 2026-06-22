@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import ConfigEntityPanel from './components/ConfigEntityPanel';
+import AssetMappingPanel from './components/AssetMappingPanel';
 import {
   listBrands, createBrand, updateBrand, deleteBrand, setBrandStatus,
   listModels, createModel, updateModel, deleteModel, setModelStatus,
@@ -130,7 +131,45 @@ const TABS = [
       />
     ),
   },
+  {
+    id: 'mapping',
+    label: 'Mapping',
+    panel: <MappingTab />,
+  },
 ];
+
+function MappingTab() {
+  const [sub, setSub] = useState('brand-models');
+  const subs = [
+    { id: 'brand-models', label: 'Brand → Models', type: 'brand-models', parentLabel: 'Brand', childLabel: 'Model' },
+    { id: 'processor-generations', label: 'Processor → Generations', type: 'processor-generations', parentLabel: 'Processor', childLabel: 'Generation' },
+  ];
+  const active = subs.find((s) => s.id === sub) || subs[0];
+  return (
+    <div>
+      <div className="inline-flex p-1 bg-gray-100 rounded-lg mb-4">
+        {subs.map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            onClick={() => setSub(s.id)}
+            className={`px-3 py-1.5 text-sm font-medium rounded-md transition ${
+              sub === s.id ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-500 hover:text-gray-800'
+            }`}
+          >
+            {s.label}
+          </button>
+        ))}
+      </div>
+      <AssetMappingPanel
+        key={active.type}
+        type={active.type}
+        parentLabel={active.parentLabel}
+        childLabel={active.childLabel}
+      />
+    </div>
+  );
+}
 
 export default function AssetConfigurationPage() {
   const [tab, setTab] = useState('brands');

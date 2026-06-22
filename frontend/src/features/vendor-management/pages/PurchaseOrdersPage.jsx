@@ -30,6 +30,7 @@ import {
   isProcurementUser,
   mergeAssetCatalog,
   modelsForBrand,
+  generationsForProcessor,
   poStatusBadge,
   poTypeBadge
 } from '../vendorMgmtUi';
@@ -440,6 +441,11 @@ export default function PurchaseOrdersPage() {
   const modelOptions = useMemo(
     () => modelsForBrand(assetDraft.brand, catalog),
     [assetDraft.brand, catalog]
+  );
+
+  const generationOptions = useMemo(
+    () => generationsForProcessor(assetDraft.processor, catalog),
+    [assetDraft.processor, catalog]
   );
 
   function addAssetRow() {
@@ -1352,7 +1358,14 @@ export default function PurchaseOrdersPage() {
                         label="Processor"
                         required
                         value={assetDraft.processor}
-                        onChange={(v) => setAssetDraft((d) => ({ ...d, processor: v }))}
+                        onChange={(v) =>
+                          setAssetDraft((d) => {
+                            const nextGens = generationsForProcessor(v, catalog);
+                            const generation =
+                              d.generation && nextGens.includes(d.generation) ? d.generation : '';
+                            return { ...d, processor: v, generation };
+                          })
+                        }
                         options={catalog.processors}
                       />
                       <AssetSelect
@@ -1360,7 +1373,7 @@ export default function PurchaseOrdersPage() {
                         required
                         value={assetDraft.generation}
                         onChange={(v) => setAssetDraft((d) => ({ ...d, generation: v }))}
-                        options={catalog.generations}
+                        options={generationOptions}
                       />
                       <AssetSelect
                         label="Ram"

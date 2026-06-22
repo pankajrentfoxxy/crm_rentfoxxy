@@ -53,3 +53,14 @@ export const deleteScreenSize = (id) => api.delete(`${base}/screen-sizes/${id}`)
 export const setScreenSizeStatus = (id, status) => api.patch(`${base}/screen-sizes/${id}/status`, { status });
 
 export const fetchParentOptions = (entity) => api.get(`${base}/parents/${entity}`);
+
+// Parent ↔ child mapping (type = 'brand-models' | 'processor-generations')
+export const fetchMapping = (type) => api.get(`${base}/mappings/${type}`);
+export const bulkCreateMapping = (type, parentId, names) =>
+  api.post(`${base}/mappings/${type}/bulk-create`, { parent_id: parentId, names });
+export const reassignMapping = (type, ids, parentId) =>
+  api.post(`${base}/mappings/${type}/reassign`, { ids, parent_id: parentId });
+export const bulkDeleteMapping = (type, ids) =>
+  api.post(`${base}/mappings/${type}/bulk-delete`, { ids });
+export const bulkStatusMapping = (type, ids, status) =>
+  api.post(`${base}/mappings/${type}/bulk-status`, { ids, status });

@@ -8,7 +8,27 @@ const {
   setEntityStatus,
   getAssetCatalogForApi,
   listParentOptions,
+  getMappingTree,
+  bulkCreateChildren,
+  reassignChildren,
+  bulkDeleteChildren,
+  bulkSetChildStatus,
 } = require('../services/assetConfigurationService');
+
+// Mapping view types -> the child entity whose parent relationship is managed.
+const MAPPING_TYPES = {
+  'brand-models': { child: 'models', parentLabel: 'Brand', childLabel: 'Model' },
+  'processor-generations': { child: 'generations', parentLabel: 'Processor', childLabel: 'Generation' },
+};
+
+function mappingChild(req, res) {
+  const meta = MAPPING_TYPES[req.params.type];
+  if (!meta) {
+    res.status(404).json({ success: false, message: `Unknown mapping type: ${req.params.type}` });
+    return null;
+  }
+  return meta;
+}
 
 function entityHandler(entityKey) {
   return {
@@ -157,6 +177,61 @@ exports.getParentOptions = async (req, res) => {
     res.json({ success: true, options });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+exports.getMapping = async (req, res) => {
+  const meta = mappingChild(req, res);
+  if (!meta) return;
+  try {
+    const tree = await getMappingTree(meta.child);
+    res.json({ success: true, parentLabel: meta.parentLabel, childLabel: meta.childLabel, parents: tree });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};
+
+exports.bulkCreateMapping = async (req, res) => {
+  const meta = mappingChild(req, res);
+  if (!meta) return;
+  try {
+    const result = await bulkCreateChildren(meta.child, req.body.parent_id, req.body.names, req.user.user_id);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};
+
+exports.reassignMapping = async (req, res) => {
+  const meta = mappingChild(req, res);
+  if (!meta) return;
+  try {
+    const result = await reassignChildren(meta.child, req.body.ids, req.body.parent_id, req.user.user_id);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};
+
+exports.bulkDeleteMapping = async (req, res) => {
+  const meta = mappingChild(req, res);
+  if (!meta) return;
+  try {
+    const result = await bulkDeleteChildren(meta.child, req.body.ids, req.user.user_id);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};
+
+exports.bulkStatusMapping = async (req, res) => {
+  const meta = mappingChild(req, res);
+  if (!meta) return;
+  try {
+    const result = await bulkSetChildStatus(meta.child, req.body.ids, req.body.status, req.user.user_id);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
   }
 };
 
