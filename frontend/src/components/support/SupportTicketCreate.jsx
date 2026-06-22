@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, Check, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 import api from '../../utils/api';
 import { formatAddress } from './utils';
+import PickupSetupForm from './components/PickupSetupForm';
 import './support.css';
 
 const CATEGORIES = [
@@ -120,21 +121,23 @@ function AssetCard({ asset, isOn, block, onToggle }) {
     );
 }
 
-function CreateNav({ step, setStep, customer, saving, selectedCount }) {
+function CreateNav({ step, setStep, customer, saving, selectedCount, ticketCategory }) {
+    const isPickup = ticketCategory === 'pickup';
+    const lastStep = isPickup ? 2 : 2;
     return (
         <div className="support-create-nav">
             {step > 0 && (
                 <button type="button" onClick={() => setStep(step - 1)} className="support-btn-outline flex-1">Back</button>
             )}
-            {step < 2 ? (
+            {step < lastStep ? (
                 <button type="button" disabled={step === 0 && !customer} onClick={() => setStep(step + 1)} className="support-btn-primary flex-1">
                     Next
                 </button>
-            ) : (
+            ) : !isPickup ? (
                 <button type="submit" disabled={saving || !selectedCount} className="support-btn-primary flex-1">
                     {saving ? 'Saving…' : 'Create'}
                 </button>
-            )}
+            ) : null}
         </div>
     );
 }
@@ -240,6 +243,10 @@ export default function SupportTicketCreate() {
             setBlocked((prev) => ({ ...prev, [id]: dup }));
             return;
         }
+        if (ticketCategory === 'pickup') {
+            setSelected({ [id]: { asset, remarks: '', issue_category_id: '' } });
+            return;
+        }
         setSelected((prev) => ({
             ...prev,
             [id]: { asset, remarks: '', issue_category_id: '' }
@@ -253,6 +260,53 @@ export default function SupportTicketCreate() {
     const selectedList = useMemo(() => Object.values(selected), [selected]);
     const selectedCount = selectedList.length;
     const firstSelectedId = Object.keys(selected)[0];
+
+    const pickupTicketStub = useMemo(() => {
+        if (!customer) return null;
+        return {
+            customer_id: customer.customer_id,
+            customer_name: customer.customer_name,
+            customer_phone: ticketPhone,
+            display_phone: ticketPhone,
+            ticket_phone_override: ticketPhone,
+        };
+    }, [customer, ticketPhone]);
+
+    const submitPickupTicket = async (pickupPayload) => {
+        if (!customer || !selectedCount) {
+            alert('Select a laptop');
+            return;
+        }
+        const { asset } = selectedList[0];
+        setSaving(true);
+        try {
+            const { data } = await api.post('/support/tickets/pickup-ticket', {
+                customer_id: customer.customer_id,
+                customer_name: customer.customer_name,
+                customer_phone: ticketPhone,
+                priority,
+                ticket_phone_override: ticketPhone,
+                ticket_alt_phone: ticketAltPhone,
+                ticket_email: ticketEmail,
+                ticket_address: ticketAddress,
+                machine: {
+                    serial_number: asset.serial_number,
+                    unique_serial_number: asset.unique_serial_number,
+                    brand: asset.model_name?.split(' ')[0] || '',
+                    model: asset.model_name,
+                    ram: asset.ram,
+                    storage: asset.storage,
+                    generation: asset.generation,
+                },
+                ...pickupPayload,
+            });
+            navigate(`/support/tickets/${data.ticket.id}`);
+        } catch (err) {
+            alert(err.response?.data?.message || 'Failed to create pickup ticket');
+        } finally {
+            setSaving(false);
+        }
+    };
 
     const buildItems = () =>
         selectedList.map(({ asset, remarks, issue_category_id }) => {
@@ -277,6 +331,7 @@ export default function SupportTicketCreate() {
 
     const submit = async (e) => {
         e.preventDefault();
+        if (ticketCategory === 'pickup') return;
         if (!customer) {
             alert('Select a customer');
             return;
@@ -373,7 +428,7 @@ export default function SupportTicketCreate() {
                 <span className={`support-category-label ${ticketCategory}`}>{ticketCategory}</span>
             </div>
 
-            {selectedCount > 0 && (
+            {selectedCount > 0 && ticketCategory !== 'pickup' && (
                 <div className="support-bulk-bar support-bulk-bar-compact">
                     <label className="support-label-compact flex-1">
                         <span className="support-label-text">Technician</span>
@@ -433,7 +488,21 @@ export default function SupportTicketCreate() {
                             )}
                         </div>
                     )}
-                    <p className="support-selected-count">{selectedCount} selected</p>
+                    <p className="support-selected-count">{selectedCount} selected{ticketCategory === 'pickup' ? ' (one laptop per pickup ticket)' : ''}</p>
+                </div>
+            )}
+
+            {ticketCategory === 'pickup' && selectedCount === 1 && pickupTicketStub && (
+                <div className="mt-4 pt-4 border-t border-slate-100">
+                    <h3 className="support-create-section-title mb-3">Schedule pickup</h3>
+                    <PickupSetupForm
+                        ticket={pickupTicketStub}
+                        customerId={customer?.customer_id}
+                        selectedAsset={selectedList[0]?.asset}
+                        onSubmit={submitPickupTicket}
+                        saving={saving}
+                        submitLabel="Create Pickup Ticket + Return DC"
+                    />
                 </div>
             )}
         </section>
@@ -457,16 +526,30 @@ export default function SupportTicketCreate() {
                     {step === 0 && customerStep}
                     {step === 1 && categoryStep}
                     {step === 2 && machinesStep}
-                    <CreateNav step={step} setStep={setStep} customer={customer} saving={saving} selectedCount={selectedCount} />
+                    {isMobile && ticketCategory === 'pickup' && step === 2 && selectedCount === 1 && pickupTicketStub && (
+                        <div className="px-1 pb-2">
+                            <PickupSetupForm
+                                ticket={pickupTicketStub}
+                                customerId={customer?.customer_id}
+                                selectedAsset={selectedList[0]?.asset}
+                                onSubmit={submitPickupTicket}
+                                saving={saving}
+                                submitLabel="Create Pickup Ticket + Return DC"
+                            />
+                        </div>
+                    )}
+                    <CreateNav step={step} setStep={setStep} customer={customer} saving={saving} selectedCount={selectedCount} ticketCategory={ticketCategory} />
                 </>
             ) : (
                 <>
                     {customerStep}
                     {categoryStep}
                     {machinesStep}
-                    <button type="submit" disabled={saving || !customer || !selectedCount} className="support-btn-primary w-full sm:w-auto">
-                        {saving ? 'Creating…' : `Create ticket (${selectedCount})`}
-                    </button>
+                    {ticketCategory !== 'pickup' && (
+                        <button type="submit" disabled={saving || !customer || !selectedCount} className="support-btn-primary w-full sm:w-auto">
+                            {saving ? 'Creating…' : `Create ticket (${selectedCount})`}
+                        </button>
+                    )}
                 </>
             )}
         </form>

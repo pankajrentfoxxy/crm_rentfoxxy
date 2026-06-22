@@ -37,6 +37,8 @@ const {
     submitForPickup,
     warehouseReceivedPickup,
     createPickupWithReturnDc,
+    createPickupTicket,
+    getPickupDeliveryContext,
     technicianSignPickup,
     verifyPickupCustomerOtp,
     confirmWarehouseReceipt,
@@ -120,6 +122,7 @@ router.get('/technicians', listTechnicians);
 router.get('/customers', searchCustomers);
 router.get('/customers/:customerId', getCustomerDetail);
 router.get('/customers/:customerId/assets', getCustomerAssets);
+router.get('/customers/:customerId/pickup-context', getPickupDeliveryContext);
 router.get('/dashboard', getDashboard);
 router.get('/badges', getNavBadges);
 router.get('/settings', getSettings);
@@ -129,6 +132,7 @@ router.delete('/categories/:categoryId', deleteCategory);
 router.get('/tickets', listTickets);
 router.get('/tickets/export', exportTickets);
 router.get('/tickets/check-duplicate', checkDuplicateTicket);
+router.post('/tickets/pickup-ticket', requireSupportLead, createPickupTicket);
 router.post('/tickets', createTicket);
 router.get('/tickets/:ticketId', getTicket);
 router.patch('/tickets/:ticketId', requireSupportLead, updateTicket);
