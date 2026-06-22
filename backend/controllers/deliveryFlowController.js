@@ -365,17 +365,27 @@ exports.submitDeliveryWithPod = async (req, res) => {
     const body = req.body || {};
     const otp = String(body.otp || '').trim();
 
-    const r = await client.query(
-      `SELECT otp_code, otp_verified_at, status FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
+    // Aggregate across all DC lines: only "already delivered" when every line is
+    // delivered. Pull the OTP from a line that still needs delivering.
+    const agg = await client.query(
+      `SELECT COUNT(*)::int AS total,
+              COUNT(*) FILTER (WHERE status = 'delivered')::int AS delivered
+         FROM delivery_challan_lines WHERE dc_number = $1`,
       [dcNumber]
     );
-    if (!r.rows.length) {
+    if (!agg.rows[0].total) {
       return res.status(404).json({ success: false, message: 'Delivery challan not found' });
     }
-    const dc = r.rows[0];
-    if (dc.status === 'delivered') {
+    if (agg.rows[0].delivered === agg.rows[0].total) {
       return res.status(409).json({ success: false, message: 'DC already delivered' });
     }
+    const otpRes = await client.query(
+      `SELECT otp_code, otp_verified_at, status FROM delivery_challan_lines
+        WHERE dc_number = $1 AND status <> 'delivered'
+        ORDER BY id ASC LIMIT 1`,
+      [dcNumber]
+    );
+    const dc = otpRes.rows[0] || {};
     if (!dc.otp_code) {
       return res.status(400).json({ success: false, message: 'Verify the laptop serial to generate an OTP first' });
     }
@@ -402,7 +412,7 @@ exports.submitDeliveryWithPod = async (req, res) => {
               esign_url = COALESCE($3, esign_url),
               pod_submitted_at = NOW(), pod_submitted_by = $4,
               delivery_notes = $5, delivered_by = $4, updated_at = NOW()
-        WHERE dc_number = $6`,
+        WHERE dc_number = $6 AND status <> 'delivered'`,
       [podType, podPhotoUrl, esignUrl, req.user.user_id, body.notes || null, dcNumber]
     );
 
@@ -447,25 +457,32 @@ exports.adminDeliverOverride = async (req, res) => {
       });
     }
     const podPhotoUrl = `pod/${req.file.filename}`;
+    // A DC can have multiple lines; only treat it as fully delivered when EVERY
+    // line is delivered. A LIMIT 1 check would falsely report "already delivered"
+    // for a partially-delivered DC (some lines still in transit).
     const r = await client.query(
-      `SELECT status FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
+      `SELECT COUNT(*)::int AS total,
+              COUNT(*) FILTER (WHERE status = 'delivered')::int AS delivered
+         FROM delivery_challan_lines WHERE dc_number = $1`,
       [dcNumber]
     );
-    if (!r.rows.length) {
+    if (!r.rows[0].total) {
       return res.status(404).json({ success: false, message: 'Delivery challan not found' });
     }
-    if (r.rows[0].status === 'delivered') {
+    if (r.rows[0].delivered === r.rows[0].total) {
       return res.status(409).json({ success: false, message: 'DC already delivered' });
     }
 
     await client.query('BEGIN');
+    // Only mark the lines that are not yet delivered so already-delivered lines
+    // keep their original POD / timestamps.
     await client.query(
       `UPDATE delivery_challan_lines
           SET status = 'delivered', delivered_at = NOW(), delivery_completed_at = NOW(),
               pod_type = 'admin_override', pod_photo_url = $1,
               pod_submitted_at = NOW(), pod_submitted_by = $2, delivered_by = $2,
               delivery_notes = $3, updated_at = NOW()
-        WHERE dc_number = $4`,
+        WHERE dc_number = $4 AND status <> 'delivered'`,
       [podPhotoUrl, req.user.user_id, [body.reason, body.notes].filter(Boolean).join(' — ') || null, dcNumber]
     );
     await sm.finalizeDeliveryInventory(client, dcNumber, req.user);

@@ -2260,13 +2260,18 @@ exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}) => {
     const decisionDue = new Date(deliveredAt);
     decisionDue.setDate(decisionDue.getDate() + 7);
     for (const d of demoRows) {
+      // Guard against duplicates when a partially-delivered DC is finalized again.
       await client.query(
         `INSERT INTO demo_agreements
            (sales_order_number, dc_number, customer_id, serial_id, ttspl_id,
             delivered_at, decision_due_at, decision)
-         VALUES (
+         SELECT
            (SELECT sales_order_number FROM delivery_challan_lines WHERE dc_number=$2 LIMIT 1),
-           $2, $3, $4, $5, $6, $7, 'pending')`,
+           $2, $3, $4, $5, $6, $7, 'pending'
+         WHERE NOT EXISTS (
+           SELECT 1 FROM demo_agreements
+            WHERE dc_number = $2 AND serial_id = $4 AND decision = 'pending'
+         )`,
         [null, dcNumber, ctx.customer_id, d.serialId, d.ttsplId, deliveredAt, decisionDue]
       );
     }
