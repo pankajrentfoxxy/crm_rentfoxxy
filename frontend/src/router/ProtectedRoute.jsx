@@ -1,7 +1,7 @@
 import React from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useLocation, Navigate } from 'react-router-dom';
-import { isSupportTechnician, canAccessCustomerInventory } from '../utils/supportAccess';
+import { isSupportTechnician, supportTechnicianMayAccessPath } from '../utils/supportAccess';
 import { hasPermission as checkPermission } from '../utils/permissionHelper';
 
 /**
@@ -48,9 +48,8 @@ export default function ProtectedRoute({
   }
 
   if (isSupportTechnician(user)) {
-    const customerInvOk =
-      location.pathname.startsWith('/customer-inventory') && canAccessCustomerInventory(user);
-    if (!location.pathname.startsWith('/support') && !customerInvOk) {
+    const canViewSection = (s) => checkPermission(user, effectivePermissions, s, 'view');
+    if (!supportTechnicianMayAccessPath(location.pathname, canViewSection)) {
       return <Navigate to="/support/my-tickets" replace />;
     }
   }

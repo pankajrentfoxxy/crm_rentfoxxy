@@ -14,6 +14,10 @@ const LANDING_ORDER = [
   ['leads', '/lead-crm/leads'],
   ['floor_pipeline', '/floor-pipeline/tickets'],
   ['inventory_management', '/inventory-management/universal-search'],
+  ['technician_bucket', '/sales-pipeline/my-deliveries'],
+  ['delivery_register_management', '/sales-pipeline/delivery-register'],
+  ['delivery_challans', '/sales-pipeline/delivery-challans'],
+  ['return_dc', '/sales-pipeline/return-dc'],
   ['sales_pipeline', '/sales-pipeline/quotations'],
   ['vendor_management', '/vendor-management/purchase-orders'],
   ['customer_billing', '/customer-billing/invoices'],
@@ -32,8 +36,11 @@ export default function HomeRedirect() {
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
   }
-  // Support technicians work entirely inside the support module.
+  // Support technicians: land on delivery module when granted, else support tickets.
   if (user?.role === 'support_tech') {
+    if (canView('technician_bucket')) return <Navigate to="/sales-pipeline/my-deliveries" replace />;
+    if (canView('delivery_register_management')) return <Navigate to="/sales-pipeline/delivery-register" replace />;
+    if (canView('delivery_challans')) return <Navigate to="/sales-pipeline/delivery-challans" replace />;
     return <Navigate to="/support/my-tickets" replace />;
   }
   for (const [section, path] of LANDING_ORDER) {

@@ -4,6 +4,16 @@
 // included so admins are never bounced out of a module the matrix grants them.
 export const SUPPORT_ROLES = ['super_admin', 'admin', 'manager', 'support_lead', 'support_tech'];
 
+/** Sales / delivery sections a support_tech may open outside /support when granted. */
+export const SUPPORT_TECH_DELIVERY_SECTIONS = [
+  'technician_bucket',
+  'delivery_challans',
+  'delivery_register_management',
+  'return_dc',
+  'sales_quotations',
+  'sales_orders_doc',
+];
+
 export const isSupportUser = (user) => user && SUPPORT_ROLES.includes(user.role);
 
 export const isSupportTechnician = (user) => user?.role === 'support_tech';
@@ -18,9 +28,18 @@ export const canAccessCustomerInventory = (user) => {
     return perms.includes('customer_inventory_access');
 };
 
-export const postLoginPath = (user) => {
-    if (isSupportTechnician(user)) return '/support/my-tickets';
-    // Land on "/" — HomeRedirect routes the user to their first accessible module
-    // (permission-aware), so no role ever lands on a blank or forbidden page.
-    return '/';
-};
+/** True when a support_tech may leave the /support shell for this path (permission-aware). */
+export function supportTechnicianMayAccessPath(pathname, canView) {
+  if (!pathname) return false;
+  if (pathname.startsWith('/support')) return true;
+  if (pathname.startsWith('/customer-inventory') && canView('customer_inventory')) return true;
+  if (pathname.startsWith('/sales-pipeline')) {
+    return SUPPORT_TECH_DELIVERY_SECTIONS.some((s) => canView(s));
+  }
+  if (pathname.startsWith('/delivery-register-management')) {
+    return canView('delivery_register_management');
+  }
+  return false;
+}
+
+export const postLoginPath = () => '/';

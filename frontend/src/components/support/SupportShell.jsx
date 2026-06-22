@@ -7,6 +7,7 @@ import {
 import api from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
 import { canAccessCustomerInventory, isSupportLead, isSupportTechnician } from '../../utils/supportAccess';
+import usePermission from '../../hooks/usePermission';
 import { initials } from './utils';
 import './support.css';
 
@@ -42,11 +43,13 @@ function NavItem({ to, icon: Icon, label, badge, badgeDanger }) {
 
 export default function SupportShell() {
   const { user } = useAuth();
+  const { canView } = usePermission();
   const location = useLocation();
   const navigate = useNavigate();
   const [badges, setBadges] = useState({});
   const techOnly = isSupportTechnician(user) && !isSupportLead(user);
   const canCreate = isSupportLead(user);
+  const showMyDeliveries = canView('technician_bucket');
 
   useEffect(() => {
     api.get('/support/badges').then((r) => setBadges(r.data.badges || {})).catch(() => setBadges({}));
@@ -93,6 +96,9 @@ export default function SupportShell() {
             <nav>
               <div className="support-nav-label">Work</div>
               <NavItem to="/support/my-tickets" icon={ClipboardList} label="My tickets" badge={badges.my_open} badgeDanger />
+              {showMyDeliveries && (
+                <NavItem to="/sales-pipeline/my-deliveries" icon={Truck} label="My deliveries" />
+              )}
               <NavItem to="/support/my-pickups" icon={Truck} label="My pickups" />
               <NavItem to="/support/tech-bucket" icon={Package} label="My parts" />
               <NavItem to="/support/my-resolved" icon={CheckCircle2} label="Resolved by me" badge={badges.my_resolved} />
@@ -143,6 +149,11 @@ export default function SupportShell() {
             <NavLink to="/support/my-tickets" className={({ isActive }) => (isActive ? 'active' : '')}>
               <ClipboardList className="w-5 h-5" /> My tickets
             </NavLink>
+            {showMyDeliveries && (
+              <NavLink to="/sales-pipeline/my-deliveries" className={({ isActive }) => (isActive ? 'active' : '')}>
+                <Truck className="w-5 h-5" /> Deliveries
+              </NavLink>
+            )}
             <NavLink to="/support/my-resolved" className={({ isActive }) => (isActive ? 'active' : '')}>
               <CheckCircle2 className="w-5 h-5" /> Resolved
             </NavLink>
