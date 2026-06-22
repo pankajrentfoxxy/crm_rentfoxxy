@@ -223,7 +223,7 @@ function ItemCard({
               />
               <button
                 type="button"
-                className="support-btn-primary min-h-[44px]"
+                className="support-btn-primary min-h-[44px] shrink-0 whitespace-nowrap"
                 disabled={busy || !verifyInput.trim()}
                 onClick={() => run(() => api.post(`/support/items/${item.id}/verify-ttspl`, { ttspl_input: verifyInput }))}
               >

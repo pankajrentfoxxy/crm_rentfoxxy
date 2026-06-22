@@ -264,18 +264,18 @@ export default function PickupItemCard({ item, ticket, onRefresh }) {
             <div>
               <p className="text-sm font-semibold text-gray-900 mb-1">Enter customer OTP</p>
               <p className="text-xs text-gray-500 mb-2">Ask the customer for their OTP to confirm handover.</p>
-              <div className="flex gap-2">
+              <div className="flex gap-2 items-stretch">
                 <input
                   type="tel" inputMode="numeric" maxLength={6}
                   value={otpInput}
                   onChange={(e) => setOtpInput(e.target.value.replace(/\D/g, ''))}
                   placeholder="6-digit OTP"
-                  className="flex-1 border border-gray-200 rounded-xl px-4 py-3 text-center text-2xl font-mono font-bold tracking-widest focus:ring-2 focus:ring-orange-500 outline-none"
+                  className="flex-1 min-w-0 border border-gray-200 rounded-xl px-3 py-3 text-center text-xl sm:text-2xl font-mono font-bold tracking-widest focus:ring-2 focus:ring-orange-500 outline-none"
                   autoComplete="one-time-code"
                 />
                 <button
                   type="button" disabled={busy || otpInput.length < 6} onClick={handleVerifyOtp}
-                  className="px-5 py-3 bg-orange-600 text-white rounded-xl font-semibold disabled:opacity-50"
+                  className="shrink-0 whitespace-nowrap px-4 sm:px-5 py-3 bg-orange-600 text-white rounded-xl font-semibold disabled:opacity-50"
                 >
                   Verify
                 </button>

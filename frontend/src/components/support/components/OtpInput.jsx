@@ -12,7 +12,7 @@ export default function OtpInput({ value, onChange, disabled }) {
   };
 
   return (
-    <div className="flex gap-2" role="group" aria-label="OTP">
+    <div className="flex gap-1.5 sm:gap-2 w-full" role="group" aria-label="OTP">
       {digits.map((digit, index) => (
         <input
           key={index}
@@ -28,7 +28,7 @@ export default function OtpInput({ value, onChange, disabled }) {
           onKeyDown={(e) => {
             if (e.key === 'Backspace' && !digit.trim() && index > 0) refs.current[index - 1]?.focus();
           }}
-          className="w-11 h-12 text-center text-lg border border-slate-300 rounded-lg min-h-[44px] min-w-[44px]"
+          className="flex-1 min-w-0 max-w-[3.25rem] h-12 text-center text-lg border border-slate-300 rounded-lg min-h-[44px]"
         />
       ))}
     </div>
