@@ -63,6 +63,7 @@ const ROLE_ROW_DEFAULTS = {
   dispatch: [
     ['dashboard', false, false, false], ['dispatch', false, true, false], ['dispatch_ops', false, true, false],
     ['delivery_challans', false, true, false], ['delivery_register_management', false, true, false],
+    ['technician_bucket', false, true, false],
     ['einvoice_ewb', false, false, false], ['customers', false, false, false],
   ],
   accounts: [
@@ -75,10 +76,12 @@ const ROLE_ROW_DEFAULTS = {
   ],
   support_lead: [
     ['dashboard', false, false, false], ['support_tickets', true, true, false], ['support_settings', false, true, false],
+    ['support_technician', false, true, false], ['technician_bucket', false, true, false],
     ['customers', false, false, false], ['customer_inventory', false, false, false], ['ttspl_history', false, false, false],
   ],
   support_tech: [
     ['dashboard', false, false, false], ['support_tickets', true, true, false],
+    ['support_technician', false, true, false], ['technician_bucket', false, true, false],
     ['customers', false, false, false], ['customer_inventory', false, false, false],
   ],
 };

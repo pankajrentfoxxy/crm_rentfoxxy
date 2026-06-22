@@ -10,6 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
+const { ensureLinkedDeliveryTechnician } = require('../services/deliveryTechnicianService');
 const { emailDocument } = require('../services/salesManagementPdfService');
 const sm = require('./salesManagementController');
 
@@ -213,8 +214,9 @@ exports.listDeliveryFlow = async (req, res) => {
   }
 };
 
-/** Resolve the delivery_technicians.technician_id for the logged-in dispatch user. */
+/** Resolve the delivery_technicians.technician_id for the logged-in dispatch/support user. */
 async function resolveTechnicianId(userId) {
+  await ensureLinkedDeliveryTechnician(userId).catch(() => null);
   const r = await pool.query(
     `SELECT technician_id FROM delivery_technicians WHERE user_id = $1 AND is_active = TRUE LIMIT 1`,
     [userId]

@@ -100,102 +100,10 @@ function normalizeCustomerForQuotation(row) {
   };
 }
 
-const FALLBACK_BRANDS = [
-  'Dell', 'HP', 'Lenovo', 'Apple', 'Asus', 'Acer',
-  'MSI', 'Samsung', 'Toshiba', 'Other',
-];
-const FALLBACK_MODELS = {
-  Dell: ['Latitude 3410', 'Latitude 3510', 'Latitude 5410', 'Latitude 5510',
-    'Inspiron 14', 'Inspiron 15', 'Vostro 3400', 'Vostro 3500', 'XPS 13', 'Other'],
-  HP: ['ProBook 440', 'ProBook 450', 'EliteBook 840', 'Pavilion 14',
-    'Pavilion 15', 'Laptop 15s', '250 G8', '255 G8', 'Other'],
-  Lenovo: ['ThinkPad E14', 'ThinkPad E15', 'ThinkPad T14', 'IdeaPad 3',
-    'IdeaPad 5', 'V14', 'V15', 'Legion 5', 'Other'],
-  Apple: ['MacBook Air M1', 'MacBook Air M2', 'MacBook Pro 13',
-    'MacBook Pro 14', 'MacBook Pro 16', 'Other'],
-  Asus: ['VivoBook 14', 'VivoBook 15', 'ZenBook 14', 'ExpertBook B1', 'Other'],
-  Acer: ['Aspire 5', 'Aspire 7', 'Swift 3', 'TravelMate P2', 'Other'],
-  Other: ['Other'],
-};
-const FALLBACK_PROCESSORS = [
-  'Intel Core i3', 'Intel Core i5', 'Intel Core i7', 'Intel Core i9',
-  'AMD Ryzen 3', 'AMD Ryzen 5', 'AMD Ryzen 7',
-  'Apple M1', 'Apple M2', 'Apple M3',
-];
-const FALLBACK_GENERATIONS = [
-  '6th Gen', '7th Gen', '8th Gen', '9th Gen', '10th Gen',
-  '11th Gen', '12th Gen', '13th Gen', '14th Gen',
-];
-const FALLBACK_RAM = ['4 GB', '8 GB', '12 GB', '16 GB', '24 GB', '32 GB', '64 GB'];
-const FALLBACK_STORAGE = [
-  '128 GB SSD', '256 GB SSD', '512 GB SSD', '1 TB SSD',
-  '256 GB HDD', '512 GB HDD', '1 TB HDD', '2 TB HDD',
-];
-const FALLBACK_GPU = [
-  'Integrated', 'NVIDIA GTX 1650', 'NVIDIA RTX 3050',
-  'NVIDIA RTX 3060', 'NVIDIA RTX 4060', 'AMD Radeon RX', 'Other Dedicated',
-];
-const FALLBACK_SCREEN_SIZES = ['11.6"', '13.3"', '14"', '15.6"', '16"', '17.3"'];
-
-function applyCatalogFallbacks(catalog) {
-  const result = { ...catalog };
-  if (!result.brands?.length) result.brands = FALLBACK_BRANDS;
-  if (!result.models?.length) result.models = FALLBACK_MODELS;
-  if (!result.processors?.length) result.processors = FALLBACK_PROCESSORS;
-  if (!result.generations?.length) result.generations = FALLBACK_GENERATIONS;
-  if (!result.rams?.length) result.rams = FALLBACK_RAM;
-  if (!result.storages?.length) result.storages = FALLBACK_STORAGE;
-  if (!result.gpus?.length) result.gpus = FALLBACK_GPU;
-  if (!result.screen_sizes?.length) result.screen_sizes = FALLBACK_SCREEN_SIZES;
-  return result;
-}
-
+/** Asset dropdowns from Settings → Asset Configuration (DB), plus legacy procured rows. */
 async function fetchCatalogAttributeOptions() {
-  const defaults = {
-    processors: [],
-    generations: [],
-    rams: [],
-    storages: [],
-    gpus: [],
-    screen_sizes: [],
-    brands: [],
-    models: [],
-    catalog_rows: [],
-  };
-  try {
-    // Config options come from the ACTUAL procured/received product specs
-    // (vendor_product_details) UNION the optional laptop_catalog master, so any
-    // item received via a PO/GRN is immediately selectable for quotations & SOs.
-    const [catalog, gpuRes, screenRes] = await Promise.all([
-      pool.query(
-        `SELECT DISTINCT brand, model, processor, generation, ram, storage FROM (
-           SELECT brand, model, processor, generation, ram, storage
-             FROM vendor_product_details
-            WHERE COALESCE(model, '') <> ''
-           UNION
-           SELECT brand, model, processor, generation, ram, storage
-             FROM laptop_catalog WHERE active = true
-         ) c
-         ORDER BY brand, model`
-      ),
-      pool.query(`SELECT DISTINCT gpu FROM inventory WHERE gpu IS NOT NULL AND gpu != '' ORDER BY gpu`).catch(() => ({ rows: [] })),
-      pool.query(`SELECT DISTINCT screen_size FROM inventory WHERE screen_size IS NOT NULL AND screen_size != '' ORDER BY screen_size`).catch(() => ({ rows: [] })),
-    ]);
-    const rows = catalog.rows || [];
-    return applyCatalogFallbacks({
-      brands: [...new Set(rows.map((r) => r.brand).filter(Boolean))],
-      models: [...new Set(rows.map((r) => r.model).filter(Boolean))],
-      processors: [...new Set(rows.map((r) => r.processor).filter(Boolean))],
-      generations: [...new Set(rows.map((r) => r.generation).filter(Boolean))],
-      rams: [...new Set(rows.map((r) => r.ram).filter(Boolean))],
-      storages: [...new Set(rows.map((r) => r.storage).filter(Boolean))],
-      gpus: gpuRes.rows.map((r) => r.gpu),
-      screen_sizes: screenRes.rows.map((r) => r.screen_size),
-      catalog_rows: rows,
-    });
-  } catch {
-    return applyCatalogFallbacks(defaults);
-  }
+  const { getAssetCatalogForApi } = require('../services/assetConfigurationService');
+  return getAssetCatalogForApi({ includeLegacyRows: true });
 }
 
 const parseJsonField = (value) => {

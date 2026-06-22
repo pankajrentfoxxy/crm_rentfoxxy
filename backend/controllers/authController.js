@@ -107,6 +107,14 @@ exports.register = async (req, res) => {
 
     const user = result.rows[0];
 
+    // Link support/dispatch CRM users to delivery_technicians for DC assignment + My Deliveries
+    if (['support_tech', 'support_lead', 'dispatch', 'dispatch_qc'].includes(normalizedRole)) {
+      const { ensureLinkedDeliveryTechnician } = require('../services/deliveryTechnicianService');
+      ensureLinkedDeliveryTechnician(user.user_id).catch((err) => {
+        console.warn('ensureLinkedDeliveryTechnician:', err.message);
+      });
+    }
+
     // Insert user_teams for multi-team support
     if (resolvedTeamIds.length > 0) {
       for (const tid of resolvedTeamIds) {

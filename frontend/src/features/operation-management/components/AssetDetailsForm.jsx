@@ -1,8 +1,8 @@
-import React from 'react';
 import {
-  FALLBACK_BRANDS, FALLBACK_MODELS, FALLBACK_PROCESSORS, FALLBACK_GENERATIONS,
-  FALLBACK_RAM, FALLBACK_STORAGE, FALLBACK_GPU, FALLBACK_SCREEN_SIZES,
-} from '../../sales-pipeline/salesPipelineUtils';
+  modelsForBrand,
+  generationsForProcessor,
+  EMPTY_ASSET_CATALOG,
+} from '../../../utils/assetCatalogUtils';
 import { emptyLineItem, lineItemsToPayload } from './DocumentLineItemsForm';
 import SearchableSelect from './SearchableSelect';
 
@@ -56,29 +56,18 @@ function pickOptions(catalogRows, line, field, fallback = []) {
   return filtered.length ? filtered : fallback;
 }
 
-function modelOptionsForBrand(catalog, brand) {
-  const models = catalog?.models;
-  if (Array.isArray(models) && models.length) return models;
-  if (models && typeof models === 'object' && brand && models[brand]?.length) {
-    return models[brand];
-  }
-  return brand ? (FALLBACK_MODELS[brand] || ['Other']) : [];
-}
-
 export default function AssetDetailsForm({ lines, onChange, catalog, quotationType }) {
   const showRentalFields = quotationType === 'rental' || quotationType === 'demo';
-  const catalogRows = catalog?.catalog_rows || [];
-  const globalOptions = {
-    gpu: catalog?.gpus?.length ? catalog.gpus : FALLBACK_GPU,
-    screen_size: catalog?.screen_sizes?.length ? catalog.screen_sizes : FALLBACK_SCREEN_SIZES,
-  };
+  const cfg = catalog?.brands?.length ? catalog : EMPTY_ASSET_CATALOG;
+  const catalogRows = cfg.catalog_rows || [];
+  const useConfig = cfg.from_asset_config !== false;
 
   const updateLine = (index, field, value) => {
     const next = lines.map((row, i) => {
       if (i !== index) return row;
       const updated = { ...row, [field]: value };
 
-      if (CATALOG_FIELDS.includes(field)) {
+      if (!useConfig && CATALOG_FIELDS.includes(field)) {
         dependentFieldsAfter(field).forEach((depField) => {
           const options = optionsForField(catalogRows, updated, depField);
           if (updated[depField] && !options.includes(updated[depField])) {
@@ -89,23 +78,31 @@ export default function AssetDetailsForm({ lines, onChange, catalog, quotationTy
 
       if (field === 'brand' && value) {
         updated.model_name = '';
-        updated.processor = '';
-        updated.generation = '';
-        updated.ram = '';
-        updated.storage = '';
+        if (!useConfig) {
+          updated.processor = '';
+          updated.generation = '';
+          updated.ram = '';
+          updated.storage = '';
+        }
       }
 
-      if (field === 'model_name' && value) {
+      if (field === 'processor' && value) {
+        updated.generation = '';
+      }
+
+      if (field === 'model_name' && value && !useConfig) {
         const modelRow = catalogRows.find(
           (row) => row.model === value && (!updated.brand || row.brand === updated.brand)
         ) || catalogRows.find((row) => row.model === value);
         if (modelRow) updated.brand = modelRow.brand || updated.brand;
       }
 
-      const match = matchCatalogRow(catalogRows, updated);
-      if (match) {
-        updated.model_name = match.model || updated.model_name;
-        updated.brand = match.brand || updated.brand;
+      if (!useConfig) {
+        const match = matchCatalogRow(catalogRows, updated);
+        if (match) {
+          updated.model_name = match.model || updated.model_name;
+          updated.brand = match.brand || updated.brand;
+        }
       }
 
       return updated;
@@ -119,24 +116,24 @@ export default function AssetDetailsForm({ lines, onChange, catalog, quotationTy
   return (
     <div className="space-y-4">
       {lines.map((line, index) => {
-        const brandOptions = pickOptions(
-          catalogRows, line, 'brand', catalog?.brands?.length ? catalog.brands : FALLBACK_BRANDS
-        );
-        const modelOptions = pickOptions(
-          catalogRows, line, 'model_name', modelOptionsForBrand(catalog, line.brand)
-        );
-        const processorOptions = pickOptions(
-          catalogRows, line, 'processor', catalog?.processors?.length ? catalog.processors : FALLBACK_PROCESSORS
-        );
-        const generationOptions = pickOptions(
-          catalogRows, line, 'generation', catalog?.generations?.length ? catalog.generations : FALLBACK_GENERATIONS
-        );
-        const ramOptions = pickOptions(
-          catalogRows, line, 'ram', catalog?.rams?.length ? catalog.rams : FALLBACK_RAM
-        );
-        const storageOptions = pickOptions(
-          catalogRows, line, 'storage', catalog?.storages?.length ? catalog.storages : FALLBACK_STORAGE
-        );
+        const brandOptions = useConfig
+          ? (cfg.brands || [])
+          : pickOptions(catalogRows, line, 'brand', cfg.brands);
+        const modelOptions = useConfig
+          ? modelsForBrand(line.brand, cfg)
+          : pickOptions(catalogRows, line, 'model_name', modelsForBrand(line.brand, cfg));
+        const processorOptions = useConfig
+          ? (cfg.processors || [])
+          : pickOptions(catalogRows, line, 'processor', cfg.processors);
+        const generationOptions = useConfig
+          ? generationsForProcessor(line.processor, cfg)
+          : pickOptions(catalogRows, line, 'generation', generationsForProcessor(line.processor, cfg));
+        const ramOptions = useConfig
+          ? (cfg.rams || [])
+          : pickOptions(catalogRows, line, 'ram', cfg.rams);
+        const storageOptions = useConfig
+          ? (cfg.storages || [])
+          : pickOptions(catalogRows, line, 'storage', cfg.storages);
 
         return (
         <div key={index} className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
@@ -168,6 +165,7 @@ export default function AssetDetailsForm({ lines, onChange, catalog, quotationTy
               value={line.model_name}
               onChange={(v) => updateLine(index, 'model_name', v)}
               options={modelOptions}
+              disabled={useConfig && !line.brand}
             />
             <SearchableSelect
               id={`asset-processor-${index}`}
@@ -184,6 +182,7 @@ export default function AssetDetailsForm({ lines, onChange, catalog, quotationTy
               value={line.generation}
               onChange={(v) => updateLine(index, 'generation', v)}
               options={generationOptions}
+              disabled={useConfig && !line.processor}
             />
             <SearchableSelect
               id={`asset-ram-${index}`}
@@ -207,7 +206,7 @@ export default function AssetDetailsForm({ lines, onChange, catalog, quotationTy
               required
               value={line.gpu}
               onChange={(v) => updateLine(index, 'gpu', v)}
-              options={globalOptions.gpu}
+              options={cfg.gpus || []}
             />
             <SearchableSelect
               id={`asset-screen-${index}`}
@@ -215,7 +214,7 @@ export default function AssetDetailsForm({ lines, onChange, catalog, quotationTy
               required
               value={line.screen_size}
               onChange={(v) => updateLine(index, 'screen_size', v)}
-              options={globalOptions.screen_size}
+              options={cfg.screen_sizes || []}
             />
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">

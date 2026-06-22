@@ -303,6 +303,56 @@ async function deleteTechnician(id) {
   return { ok: true };
 }
 
+const DELIVERY_TECH_LINK_ROLES = new Set(['support_tech', 'support_lead', 'dispatch', 'dispatch_qc']);
+
+function splitUserName(full) {
+  const t = String(full || '').trim();
+  if (!t) return { first: 'Field', last: 'Technician' };
+  const i = t.indexOf(' ');
+  if (i < 0) return { first: t, last: 'Technician' };
+  return { first: t.slice(0, i), last: t.slice(i + 1).trim() || 'Technician' };
+}
+
+/** Ensure a CRM support/dispatch user has a linked delivery_technicians row (for DC dropdown + My Deliveries). */
+async function ensureLinkedDeliveryTechnician(userId) {
+  if (!userId) return null;
+  const uRes = await pool.query(
+    `SELECT user_id, name, email, mobile_no, role, active, status
+       FROM users WHERE user_id = $1`,
+    [userId]
+  );
+  const u = uRes.rows[0];
+  if (!u || !u.active || String(u.status || 'active') !== 'active') return null;
+  if (!DELIVERY_TECH_LINK_ROLES.has(u.role)) return null;
+
+  const linked = await pool.query(
+    `SELECT technician_id, user_id FROM delivery_technicians
+      WHERE user_id = $1 OR LOWER(email) = LOWER($2)
+      ORDER BY CASE WHEN user_id = $1 THEN 0 ELSE 1 END
+      LIMIT 1`,
+    [userId, u.email]
+  );
+  if (linked.rows[0]) {
+    if (!linked.rows[0].user_id) {
+      await pool.query(
+        `UPDATE delivery_technicians SET user_id = $1, updated_at = NOW() WHERE technician_id = $2`,
+        [userId, linked.rows[0].technician_id]
+      );
+    }
+    return linked.rows[0].technician_id;
+  }
+
+  const { first, last } = splitUserName(u.name);
+  const phone = String(u.mobile_no || '').trim() || `9${String(userId).padStart(9, '0').slice(-9)}`;
+  const ins = await pool.query(
+    `INSERT INTO delivery_technicians (user_id, first_name, last_name, phone, email, country_code, is_active)
+     VALUES ($1, $2, $3, $4, $5, '91', TRUE)
+     RETURNING technician_id`,
+    [userId, first, last, phone, u.email]
+  );
+  return ins.rows[0]?.technician_id || null;
+}
+
 module.exports = {
   UPLOAD_SUBDIR,
   generatePassword,
@@ -313,4 +363,5 @@ module.exports = {
   updateTechnician,
   updateTechnicianStatus,
   deleteTechnician,
+  ensureLinkedDeliveryTechnician,
 };

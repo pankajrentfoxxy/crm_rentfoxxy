@@ -138,7 +138,7 @@ function DispatchFields({ shipBy, fields, onChange, deliveryTechnicians = [] }) 
       </select>
       {!deliveryTechnicians.length && (
         <p className="text-xs text-amber-600 mt-1">
-          No delivery technicians found. Add via Delivery Register → Technicians.
+          No delivery technicians found. Add via Sales Pipeline → Delivery Technicians.
         </p>
       )}
     </div>

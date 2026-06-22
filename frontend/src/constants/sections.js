@@ -12,6 +12,9 @@ export const APPLICATION_SECTIONS = [
   'delivery_challans',
   'return_dc',
   'delivery_register_management',
+  'technician_bucket',
+  'support_technician',
+  'technicians_bucket_list',
   'payment_records',
   'vendor_management',
   'procurement',
@@ -48,6 +51,8 @@ export const APPLICATION_SECTIONS = [
   'roles',
   'role_permissions',
   'user_permissions',
+  'company_settings',
+  'asset_configuration',
 ];
 
 export const SECTION_LABELS = {
@@ -63,6 +68,9 @@ export const SECTION_LABELS = {
   delivery_challans: 'Delivery Challans',
   return_dc: 'Return DC',
   delivery_register_management: 'Delivery Register',
+  technician_bucket: 'Delivery Technician',
+  support_technician: 'Support Technician (Field)',
+  technicians_bucket_list: 'Technicians Bucket (Admin)',
   payment_records: 'Payment Records',
   vendor_management: 'Vendor Management',
   procurement: 'Procurement',
@@ -99,6 +107,8 @@ export const SECTION_LABELS = {
   roles: 'Role Management',
   role_permissions: 'Role Permissions',
   user_permissions: 'User Permissions',
+  company_settings: 'Company Settings',
+  asset_configuration: 'Asset Configuration',
 };
 
 export const SECTION_GROUPS = {
@@ -106,7 +116,7 @@ export const SECTION_GROUPS = {
   'Lead & Sales CRM': [
     'leads', 'lead_follow_ups', 'lead_conversion', 'customers', 'customer_documents',
     'sales_quotations', 'sales_orders_doc', 'delivery_challans', 'return_dc',
-    'delivery_register_management', 'payment_records',
+    'delivery_register_management', 'technician_bucket', 'technicians_bucket_list', 'payment_records',
   ],
   'Vendor & Procurement': ['vendor_management', 'procurement', 'sales_pipeline'],
   'Floor & Quality': ['floor_pipeline', 'floor_tickets', 'chip_level_repair', 'qc_management', 'tickets'],
@@ -118,9 +128,9 @@ export const SECTION_GROUPS = {
     'customer_billing', 'vendor_billing_mgmt', 'credit_notes', 'debit_notes',
     'security_deposits', 'billing_dashboard', 'einvoice_ewb',
   ],
-  Support: ['support_tickets', 'support_settings'],
+  Support: ['support_tickets', 'support_settings', 'support_technician'],
   'Reports & Analytics': ['reports', 'reports_access', 'reports_export', 'manager_dashboard'],
-  'Settings & Admin': ['users', 'teams', 'roles', 'role_permissions', 'user_permissions'],
+  'Settings & Admin': ['users', 'teams', 'roles', 'role_permissions', 'user_permissions', 'company_settings', 'asset_configuration'],
 };
 
 export const GROUP_COLORS = {

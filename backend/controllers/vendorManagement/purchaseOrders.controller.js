@@ -1214,93 +1214,23 @@ async function nextNumber(req, res) {
   res.json({ success: true, purchase_order_number: num });
 }
 
-/** Dropdown source for Laravel-style PO asset rows (`laptop_catalog` + inventory fallbacks). */
+/** Dropdown source for PO asset rows — Settings → Asset Configuration (DB). */
 async function fetchPoAssetCatalogOptions() {
-  const out = {
-    brands: [],
-    models: [],
-    processors: [],
-    generations: [],
-    rams: [],
-    storages: [],
-    gpus: [],
-    screen_sizes: []
+  const { getAssetCatalogForApi } = require('../../services/assetConfigurationService');
+  const cat = await getAssetCatalogForApi({ includeLegacyRows: true });
+  return {
+    brands: cat.brands,
+    models: cat.models_flat,
+    models_by_brand: cat.models_by_brand,
+    processors: cat.processors,
+    generations: cat.generations_flat,
+    generations_by_processor: cat.generations_by_processor,
+    rams: cat.rams,
+    storages: cat.storages,
+    gpus: cat.gpus,
+    screen_sizes: cat.screen_sizes,
+    from_asset_config: cat.from_asset_config,
   };
-  try {
-    const [brands, models, processors, generations, rams, storages] = await Promise.all([
-      pool.query(
-        `SELECT DISTINCT brand FROM laptop_catalog
-         WHERE COALESCE(active, TRUE) AND brand IS NOT NULL AND TRIM(brand) != ''
-         ORDER BY brand LIMIT 500`
-      ),
-      pool.query(
-        `SELECT DISTINCT model FROM laptop_catalog
-         WHERE COALESCE(active, TRUE) AND model IS NOT NULL AND TRIM(model) != ''
-         ORDER BY model LIMIT 2000`
-      ),
-      pool.query(
-        `SELECT DISTINCT processor FROM laptop_catalog
-         WHERE COALESCE(active, TRUE) AND processor IS NOT NULL AND TRIM(processor) != ''
-         ORDER BY processor LIMIT 500`
-      ),
-      pool.query(
-        `SELECT DISTINCT generation FROM laptop_catalog
-         WHERE COALESCE(active, TRUE) AND generation IS NOT NULL AND TRIM(generation) != ''
-         ORDER BY generation LIMIT 500`
-      ),
-      pool.query(
-        `SELECT DISTINCT ram FROM laptop_catalog
-         WHERE COALESCE(active, TRUE) AND ram IS NOT NULL AND TRIM(ram) != ''
-         ORDER BY ram LIMIT 200`
-      ),
-      pool.query(
-        `SELECT DISTINCT storage FROM laptop_catalog
-         WHERE COALESCE(active, TRUE) AND storage IS NOT NULL AND TRIM(storage) != ''
-         ORDER BY storage LIMIT 400`
-      )
-    ]);
-    out.brands = brands.rows.map((r) => r.brand);
-    out.models = models.rows.map((r) => r.model);
-    out.processors = processors.rows.map((r) => r.processor);
-    out.generations = generations.rows.map((r) => r.generation);
-    out.rams = rams.rows.map((r) => r.ram);
-    out.storages = storages.rows.map((r) => r.storage);
-  } catch (e) {
-    console.warn('[formMeta] laptop_catalog unavailable:', e.message || e);
-  }
-
-  try {
-    const gpu = await pool.query(
-      `SELECT DISTINCT gpu FROM inventory
-       WHERE gpu IS NOT NULL AND TRIM(gpu) != ''
-       ORDER BY gpu LIMIT 300`
-    );
-    out.gpus = gpu.rows.map((r) => r.gpu);
-    const ss = await pool.query(
-      `SELECT DISTINCT screen_size FROM inventory
-       WHERE screen_size IS NOT NULL AND TRIM(screen_size) != ''
-       ORDER BY screen_size LIMIT 120`
-    );
-    out.screen_sizes = ss.rows.map((r) => r.screen_size);
-  } catch (e) {
-    console.warn('[formMeta] inventory spec columns unavailable:', e.message || e);
-  }
-
-  if (!out.screen_sizes.length) {
-    out.screen_sizes = ['11"', '11.6"', '12"', '13"', '14"', '14-inch', '15"', '15.6"', '16"', '17"'];
-  }
-  if (!out.gpus.length) {
-    out.gpus = [
-      'Intel UHD Graphics',
-      'Intel Iris Xe',
-      'Integrated',
-      'NVIDIA GeForce',
-      'NVIDIA RTX',
-      'AMD Radeon'
-    ];
-  }
-
-  return out;
 }
 
 /** Next PO number + approved vendors for create form (Laravel PO form parity) */
