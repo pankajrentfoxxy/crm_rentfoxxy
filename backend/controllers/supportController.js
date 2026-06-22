@@ -10,7 +10,7 @@ const inventorySM = require('../services/inventoryStateMachine');
 const { processReturnedSerials } = require('../services/returnCompletionService');
 const { createFloorTicketFromSupportPickup } = require('../services/grnTicketService');
 const { nextDocumentNumber } = require('../services/salesManagementService');
-const { regenerateReturnDcPdf } = require('../services/returnDcPdfService');
+const { regenerateReturnDcPdf, regenerateReturnDcPdfByRdc } = require('../services/returnDcPdfService');
 
 const ITEM_OPEN_STATUSES = new Set(['open', 'work_done', 'awaiting_otp']);
 const TICKET_OPEN = 'open';
@@ -89,6 +89,19 @@ const assertNoActivePickup = async (client, ticketId, sourceItemId = null) => {
     }
 };
 
+const normalizeMachine = (m, ticket) => ({
+    serial_number: m.serial_number || ticket?.serial_number || null,
+    unique_serial_number: m.unique_serial_number || m.ttspl_id || ticket?.ttspl_id || ticket?.unique_number || null,
+    ttspl_id: m.ttspl_id || m.unique_serial_number || ticket?.ttspl_id || null,
+    brand: m.brand || null,
+    model: m.model || null,
+    ram: m.ram || null,
+    storage: m.storage || null,
+    generation: m.generation || null,
+    customer_inventory_id: m.customer_inventory_id || null,
+    source_item_id: m.source_item_id ? parseInt(m.source_item_id, 10) : null,
+});
+
 /** Core pickup + Return DC creation (single entry point for all pickup flows). */
 const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts) => {
     const {
@@ -102,6 +115,7 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
         serial_number, unique_serial_number, ttspl_id,
         brand, model, ram, storage, generation,
         customer_inventory_id,
+        machines: machinesRaw,
     } = opts;
 
     await ensureSupportTicketItemV3Columns(client);
@@ -109,77 +123,101 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
         throw Object.assign(new Error(`Return DC already exists: ${ticket.return_dc_number}`), { status: 400 });
     }
 
-    const srcId = source_item_id ? parseInt(source_item_id, 10) : null;
-    await assertNoActivePickup(client, ticketId, srcId);
+    let machines = Array.isArray(machinesRaw) && machinesRaw.length
+        ? machinesRaw.map((m) => normalizeMachine(m, ticket))
+        : [normalizeMachine({
+            serial_number, unique_serial_number, ttspl_id, brand, model, ram, storage, generation,
+            customer_inventory_id, source_item_id,
+        }, ticket)];
 
-    let serial = serial_number || ticket.serial_number || null;
-    let ttsplId = ttspl_id || unique_serial_number || ticket.ttspl_id || ticket.unique_number || null;
-    let brandVal = brand || null;
-    let modelVal = model || null;
-    let ramVal = ram || null;
-    let storageVal = storage || null;
-    let generationVal = generation || null;
-    let custInvId = customer_inventory_id || null;
-
-    if (srcId) {
-        const srcRes = await client.query(
-            'SELECT * FROM support_ticket_items WHERE id = $1 AND ticket_id = $2',
-            [srcId, ticketId]
-        );
-        if (srcRes.rows.length) {
-            const src = srcRes.rows[0];
-            serial = src.serial_number || serial;
-            ttsplId = src.ttspl_id || src.unique_serial_number || ttsplId;
-            brandVal = src.brand || brandVal;
-            modelVal = src.model || modelVal;
-            ramVal = src.ram || ramVal;
-            storageVal = src.storage || storageVal;
-            generationVal = src.generation || generationVal;
-            custInvId = src.customer_inventory_id || custInvId;
+    // Resolve linked complaint/replacement source items.
+    for (let i = 0; i < machines.length; i += 1) {
+        const m = machines[i];
+        const srcId = m.source_item_id || (i === 0 && source_item_id ? parseInt(source_item_id, 10) : null);
+        if (srcId) {
+            const srcRes = await client.query(
+                'SELECT * FROM support_ticket_items WHERE id = $1 AND ticket_id = $2',
+                [srcId, ticketId]
+            );
+            if (srcRes.rows.length) {
+                const src = srcRes.rows[0];
+                machines[i] = {
+                    ...m,
+                    source_item_id: srcId,
+                    serial_number: src.serial_number || m.serial_number,
+                    unique_serial_number: src.ttspl_id || src.unique_serial_number || m.unique_serial_number,
+                    ttspl_id: src.ttspl_id || src.unique_serial_number || m.ttspl_id,
+                    brand: src.brand || m.brand,
+                    model: src.model || m.model,
+                    ram: src.ram || m.ram,
+                    storage: src.storage || m.storage,
+                    generation: src.generation || m.generation,
+                    customer_inventory_id: src.customer_inventory_id || m.customer_inventory_id,
+                };
+            }
         }
     }
 
-    if (!serial && !ttsplId) {
-        throw Object.assign(new Error('Select a laptop for this pickup'), { status: 400 });
+    machines = machines.filter((m) => m.serial_number || m.ttspl_id || m.unique_serial_number);
+    if (!machines.length) {
+        throw Object.assign(new Error('Select at least one laptop for this pickup'), { status: 400 });
+    }
+
+    await assertNoActivePickup(client, ticketId, null);
+    for (const m of machines) {
+        if (!m.source_item_id) continue;
+        const linked = await client.query(
+            `SELECT id FROM support_ticket_items
+              WHERE source_item_id = $1 AND item_type = 'pickup'
+                AND status NOT IN ('resolved', 'closed', 'inventory_updated')
+              LIMIT 1`,
+            [m.source_item_id]
+        );
+        if (linked.rows.length) {
+            throw Object.assign(new Error('A pickup is already scheduled for one of the selected machines.'), { status: 400 });
+        }
     }
 
     let pickupAddr = pickup_address || parseAddressJson(ticket.pickup_address);
     if (!pickupAddr?.address) {
-        const ctx = await resolvePickupDeliveryContext(client, ticket.customer_id, ttsplId || serial);
+        const firstCode = machines[0].ttspl_id || machines[0].unique_serial_number || machines[0].serial_number;
+        const ctx = await resolvePickupDeliveryContext(client, ticket.customer_id, firstCode);
         if (ctx?.pickup_address) pickupAddr = ctx.pickup_address;
     }
 
     const customerOtp = generateOtp();
-    const pickupMethod = dispatch_mode;
     const techId = dispatch_mode === 'technician' && technician_user_id
         ? parseInt(technician_user_id, 10) : null;
 
-    const insertRes = await client.query(
-        `INSERT INTO support_ticket_items
-            (ticket_id, customer_inventory_id, serial_number, unique_serial_number,
-             ttspl_id, brand, model, ram, storage, generation,
-             item_type, pickup_type, status, source_item_id,
-             assigned_to, pickup_method, pickup_assigned_to, pickup_courier_name, pickup_awb,
-             porter_tracking_id, porter_order_id,
-             otp_code, customer_otp_code, customer_otp_sent_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
-                 'pickup',$11,'assigned',$12,
-                 $13,$14,$13,$15,$16,$17,$18,
-                 $19,$19,NOW())
-         RETURNING id`,
-        [
-            ticketId, custInvId, serial, ttsplId,
-            ttsplId, brandVal, modelVal, ramVal, storageVal, generationVal,
-            pickup_type, srcId,
-            techId, pickupMethod,
-            dispatch_mode === 'courier' ? (courier_name || null) : null,
-            dispatch_mode === 'courier' ? (awb_number || null) : null,
-            dispatch_mode === 'porter' ? (porter_tracking_id || null) : null,
-            dispatch_mode === 'porter' ? (porter_order_id || null) : null,
-            customerOtp,
-        ]
-    );
-    const pickupItemId = insertRes.rows[0].id;
+    const pickupItemIds = [];
+    for (const m of machines) {
+        const insertRes = await client.query(
+            `INSERT INTO support_ticket_items
+                (ticket_id, customer_inventory_id, serial_number, unique_serial_number,
+                 ttspl_id, brand, model, ram, storage, generation,
+                 item_type, pickup_type, status, source_item_id,
+                 assigned_to, pickup_method, pickup_assigned_to, pickup_courier_name, pickup_awb,
+                 porter_tracking_id, porter_order_id,
+                 otp_code, customer_otp_code, customer_otp_sent_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+                     'pickup',$11,'assigned',$12,
+                     $13,$14,$13,$15,$16,$17,$18,
+                     $19,$19,NOW())
+             RETURNING id`,
+            [
+                ticketId, m.customer_inventory_id, m.serial_number, m.ttspl_id || m.unique_serial_number,
+                m.ttspl_id || m.unique_serial_number, m.brand, m.model, m.ram, m.storage, m.generation,
+                pickup_type, m.source_item_id,
+                techId, dispatch_mode,
+                dispatch_mode === 'courier' ? (courier_name || null) : null,
+                dispatch_mode === 'courier' ? (awb_number || null) : null,
+                dispatch_mode === 'porter' ? (porter_tracking_id || null) : null,
+                dispatch_mode === 'porter' ? (porter_order_id || null) : null,
+                customerOtp,
+            ]
+        );
+        pickupItemIds.push(insertRes.rows[0].id);
+    }
 
     if (pickupAddr && Object.keys(pickupAddr).length) {
         await client.query(
@@ -190,35 +228,15 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
 
     const rdc = await nextDocumentNumber('return_dc');
     const dcDispatchMode = dispatch_mode === 'technician' ? 'inhouse' : dispatch_mode;
-    const serialCode = ttsplId || serial;
 
+    const entries = [];
+    let firstSpec = {};
     let originalDcNumber = null;
     let salesOrderNumber = null;
-    if (serialCode || serial) {
-        try {
-            const outRes = await client.query(
-                `SELECT dc_number, sales_order_number
-                   FROM delivery_challan_lines
-                  WHERE movement_type = 'outbound'
-                    AND customer_id = $1
-                    AND (serial_number::text ILIKE '%' || $2 || '%'
-                         OR ($3 <> '' AND serial_number::text ILIKE '%' || $3 || '%'))
-                  ORDER BY created_at DESC NULLS LAST
-                  LIMIT 1`,
-                [ticket.customer_id, serialCode || serial, serial || '']
-            );
-            if (outRes.rows.length) {
-                originalDcNumber = outRes.rows[0].dc_number || null;
-                salesOrderNumber = outRes.rows[0].sales_order_number || null;
-            }
-        } catch (traceErr) {
-            console.warn('[support] outbound DC trace failed:', traceErr.message);
-        }
-    }
 
-    let entries = [];
-    let firstSpec = {};
-    if (serialCode) {
+    for (const m of machines) {
+        const serialCode = m.ttspl_id || m.unique_serial_number || m.serial_number;
+        if (!serialCode) continue;
         const vsnRes = await client.query(
             `SELECT serial_id, serial_number, inventory_asset_code, extra
                FROM vendor_serial_numbers
@@ -229,13 +247,32 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
         );
         const vsn = vsnRes.rows[0];
         if (vsn) {
-            entries = [`${vsn.serial_id}|${vsn.serial_number}|${vsn.inventory_asset_code || serialCode}`];
-            firstSpec = vsn.extra || {};
+            entries.push(`${vsn.serial_id}|${vsn.serial_number}|${vsn.inventory_asset_code || serialCode}`);
+            if (!firstSpec.brand) firstSpec = vsn.extra || {};
         } else {
-            entries = [`|${serialCode}|${serialCode}`];
+            entries.push(`|${serialCode}|${serialCode}`);
+        }
+        if (!originalDcNumber || !salesOrderNumber) {
+            try {
+                const outRes = await client.query(
+                    `SELECT dc_number, sales_order_number
+                       FROM delivery_challan_lines
+                      WHERE movement_type = 'outbound'
+                        AND customer_id = $1
+                        AND serial_number::text ILIKE '%' || $2 || '%'
+                      ORDER BY created_at DESC NULLS LAST
+                      LIMIT 1`,
+                    [ticket.customer_id, serialCode]
+                );
+                if (outRes.rows.length) {
+                    originalDcNumber = originalDcNumber || outRes.rows[0].dc_number || null;
+                    salesOrderNumber = salesOrderNumber || outRes.rows[0].sales_order_number || null;
+                }
+            } catch (_) { /* ignore */ }
         }
     }
 
+    const firstMachine = machines[0];
     await client.query(
         `INSERT INTO delivery_challan_lines
             (dc_number, movement_type, support_ticket_id, customer_id, customer_name, email,
@@ -249,8 +286,9 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
                  'in_transit',NOW(),$17,NOW(),NOW())`,
         [
             rdc, ticketId, ticket.customer_id, ticket.customer_name, ticket.ticket_email || null,
-            JSON.stringify(pickupAddr || {}), brandVal || firstSpec.brand || null,
-            modelVal || firstSpec.model || firstSpec.model_name || null,
+            JSON.stringify(pickupAddr || {}),
+            firstMachine.brand || firstSpec.brand || null,
+            firstMachine.model || firstSpec.model || firstSpec.model_name || null,
             Math.max(1, entries.length), JSON.stringify(entries),
             dcDispatchMode, techId,
             dispatch_mode === 'courier' ? (courier_name || null) : null,
@@ -263,8 +301,9 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
     );
 
     await client.query(
-        'UPDATE support_ticket_items SET return_dc_number = $1, updated_at = NOW() WHERE id = $2',
-        [rdc, pickupItemId]
+        `UPDATE support_ticket_items SET return_dc_number = $1, updated_at = NOW()
+          WHERE id = ANY($2::int[])`,
+        [rdc, pickupItemIds]
     );
     await client.query(
         `UPDATE support_tickets SET
@@ -278,17 +317,21 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
             status = CASE WHEN status = 'open' THEN 'in_progress' ELSE status END,
             updated_at = NOW()
          WHERE id = $2`,
-        [rdc, ticketId, ttsplId, serial, originalDcNumber, salesOrderNumber]
+        [rdc, ticketId, firstMachine.ttspl_id, firstMachine.serial_number, originalDcNumber, salesOrderNumber]
     );
 
     await logAudit(client, {
-        itemId: pickupItemId, ticketId, userId,
+        itemId: pickupItemIds[0], ticketId, userId,
         action: 'pickup_created',
-        detail: { pickup_type, dispatch_mode, return_dc_number: rdc, ttspl_id: ttsplId }
+        detail: {
+            pickup_type, dispatch_mode, return_dc_number: rdc,
+            unit_count: machines.length,
+            ttspl_ids: machines.map((m) => m.ttspl_id || m.unique_serial_number).filter(Boolean),
+        }
     });
     await bumpTicketActivity(client, ticketId);
 
-    return { pickupItemId, rdc, customerOtp, ttsplId };
+    return { pickupItemIds, pickupItemId: pickupItemIds[0], rdc, customerOtp, machines };
 };
 
 const VALID_ITEM_TYPES = new Set(['complaint', 'pickup', 'replacement']);
@@ -2092,10 +2135,7 @@ exports.createPickupWithReturnDc = async (req, res) => {
         const result = await executePickupWithReturnDc(client, ticket, ticketId, req.user.user_id, body);
         await client.query('COMMIT');
 
-        try {
-            const freshRes = await pool.query('SELECT * FROM support_ticket_items WHERE id = $1', [result.pickupItemId]);
-            if (freshRes.rows.length) await regenerateReturnDcPdf(pool, freshRes.rows[0]);
-        } catch (pdfErr) {
+        try { await regenerateReturnDcPdfByRdc(pool, result.rdc); } catch (pdfErr) {
             console.error('[support] return DC pdf (create):', pdfErr.message);
         }
 
@@ -2103,9 +2143,11 @@ exports.createPickupWithReturnDc = async (req, res) => {
         res.status(201).json({
             success: true,
             pickup_item_id: result.pickupItemId,
+            pickup_item_ids: result.pickupItemIds,
             return_dc_number: result.rdc,
             dispatch_mode: body.dispatch_mode,
-            message: `Pickup created. Return DC: ${result.rdc}.`,
+            unit_count: result.machines.length,
+            message: `Pickup scheduled for ${result.machines.length} laptop(s). Return DC: ${result.rdc}.`,
             customer_otp_visible: result.customerOtp,
             ...data,
         });
@@ -2128,13 +2170,21 @@ exports.createPickupTicket = async (req, res) => {
         priority, top_level_remarks,
         ticket_phone_override, ticket_alt_phone, ticket_email, ticket_address,
         machine = {},
+        machines: machinesRaw,
         pickup_type, pickup_address, dispatch_mode,
         technician_user_id, courier_name, awb_number,
         porter_tracking_id, porter_order_id,
     } = req.body || {};
 
+    const machinesList = Array.isArray(machinesRaw) && machinesRaw.length
+        ? machinesRaw
+        : (machine?.serial_number || machine?.unique_serial_number || machine?.ttspl_id ? [machine] : []);
+
     if (!customer_id) {
         return res.status(400).json({ success: false, message: 'customer_id is required' });
+    }
+    if (!machinesList.length) {
+        return res.status(400).json({ success: false, message: 'Select at least one laptop for pickup' });
     }
     if (!['repair', 'return'].includes(pickup_type)) {
         return res.status(400).json({ success: false, message: 'pickup_type must be repair or return' });
@@ -2149,12 +2199,13 @@ exports.createPickupTicket = async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        await assertMachinesAvailable(client, customer_id, [{
-            serial_number: machine.serial_number,
-            unique_serial_number: machine.unique_serial_number || machine.ttspl_id,
-        }]);
+        await assertMachinesAvailable(client, customer_id, machinesList.map((m) => ({
+            serial_number: m.serial_number,
+            unique_serial_number: m.unique_serial_number || m.ttspl_id,
+        })));
 
-        const ttspl = machine.unique_serial_number || machine.ttspl_id || null;
+        const firstMachine = machinesList[0];
+        const ttspl = firstMachine.unique_serial_number || firstMachine.ttspl_id || null;
         const ticketRes = await client.query(
             `INSERT INTO support_tickets (
                 customer_id, customer_name, customer_phone, status, created_by, last_activity_at,
@@ -2173,35 +2224,25 @@ exports.createPickupTicket = async (req, res) => {
                 ticket_email || null,
                 ticket_address || null,
                 ttspl,
-                machine.serial_number || null,
+                firstMachine.serial_number || null,
             ]
         );
         const ticket = ticketRes.rows[0];
         await logAudit(client, {
             itemId: null, ticketId: ticket.id, userId: req.user.user_id,
-            action: 'ticket_created', detail: { customer_id, ticket_category: 'pickup' }
+            action: 'ticket_created', detail: { customer_id, ticket_category: 'pickup', unit_count: machinesList.length }
         });
 
         const result = await executePickupWithReturnDc(client, ticket, ticket.id, req.user.user_id, {
             pickup_type, pickup_address, dispatch_mode,
             technician_user_id, courier_name, awb_number,
             porter_tracking_id, porter_order_id,
-            serial_number: machine.serial_number,
-            unique_serial_number: machine.unique_serial_number,
-            ttspl_id: ttspl,
-            brand: machine.brand,
-            model: machine.model,
-            ram: machine.ram,
-            storage: machine.storage,
-            generation: machine.generation,
+            machines: machinesList,
         });
 
         await client.query('COMMIT');
 
-        try {
-            const freshRes = await pool.query('SELECT * FROM support_ticket_items WHERE id = $1', [result.pickupItemId]);
-            if (freshRes.rows.length) await regenerateReturnDcPdf(pool, freshRes.rows[0]);
-        } catch (pdfErr) {
+        try { await regenerateReturnDcPdfByRdc(pool, result.rdc); } catch (pdfErr) {
             console.error('[support] return DC pdf (pickup ticket):', pdfErr.message);
         }
 
@@ -2209,9 +2250,11 @@ exports.createPickupTicket = async (req, res) => {
         res.status(201).json({
             success: true,
             pickup_item_id: result.pickupItemId,
+            pickup_item_ids: result.pickupItemIds,
             return_dc_number: result.rdc,
             customer_otp_visible: result.customerOtp,
-            message: `Pickup ticket created. Return DC: ${result.rdc}.`,
+            unit_count: result.machines.length,
+            message: `Pickup ticket created with ${result.machines.length} laptop(s). Return DC: ${result.rdc}.`,
             ...data,
         });
     } catch (e) {
@@ -2282,8 +2325,14 @@ exports.technicianSignPickup = async (req, res) => {
                 technician_esign_at = CURRENT_TIMESTAMP,
                 technician_esign_by = $3,
                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = $1`,
-            [itemId, esignUrl, req.user.user_id]
+             WHERE id = $1
+                OR (
+                  return_dc_number IS NOT NULL
+                  AND return_dc_number = $4
+                  AND item_type = 'pickup'
+                  AND technician_esign_url IS NULL
+                )`,
+            [itemId, esignUrl, req.user.user_id, it.return_dc_number]
         );
         await logAudit(client, {
             itemId, ticketId: it.ticket_id, userId: req.user.user_id,
@@ -2300,8 +2349,7 @@ exports.technicianSignPickup = async (req, res) => {
     }
 
     try {
-        const fresh = await pool.query('SELECT * FROM support_ticket_items WHERE id = $1', [itemId]);
-        if (fresh.rows.length) await regenerateReturnDcPdf(pool, fresh.rows[0]);
+        if (it.return_dc_number) await regenerateReturnDcPdfByRdc(pool, it.return_dc_number);
     } catch (pdfErr) {
         console.error('[support] return DC pdf (tech esign):', pdfErr.message);
     }
@@ -2343,8 +2391,14 @@ exports.verifyPickupCustomerOtp = async (req, res) => {
                 status = 'picked_up',
                 picked_up_at = CURRENT_TIMESTAMP,
                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = $1`,
-            [itemId]
+             WHERE id = $1
+                OR (
+                  return_dc_number IS NOT NULL
+                  AND return_dc_number = $2
+                  AND item_type = 'pickup'
+                  AND customer_otp_verified_at IS NULL
+                )`,
+            [itemId, it.return_dc_number]
         );
         await logAudit(client, {
             itemId, ticketId: it.ticket_id, userId: req.user.user_id,
@@ -2360,8 +2414,7 @@ exports.verifyPickupCustomerOtp = async (req, res) => {
         client.release();
     }
     try {
-        const fresh = await pool.query('SELECT * FROM support_ticket_items WHERE id = $1', [itemId]);
-        if (fresh.rows.length) await regenerateReturnDcPdf(pool, fresh.rows[0]);
+        if (it.return_dc_number) await regenerateReturnDcPdfByRdc(pool, it.return_dc_number);
     } catch (pdfErr) {
         console.error('[support] return DC pdf (otp verify):', pdfErr.message);
     }
@@ -2372,6 +2425,144 @@ exports.verifyPickupCustomerOtp = async (req, res) => {
 // Warehouse confirms receipt of the laptop with an e-signature. For a repair
 // pickup a floor QC ticket is auto-created; for a return pickup the unit is
 // marked returned. The Return DC is closed as delivered.
+const saveWarehouseEsignPng = (itemId, esign_data) => {
+    const dir = path.join(__dirname, '..', 'uploads', 'support-pickups');
+    fs.mkdirSync(dir, { recursive: true });
+    const fname = `wh_esign_${itemId}_${Date.now()}.png`;
+    const b64 = String(esign_data).replace(/^data:image\/\w+;base64,/, '');
+    fs.writeFileSync(path.join(dir, fname), Buffer.from(b64, 'base64'));
+    return `uploads/support-pickups/${fname}`;
+};
+
+const warehouseReceiveSinglePickupItem = async (client, it, userId, esignUrl, signerName) => {
+    await client.query(
+        `UPDATE support_ticket_items SET
+            warehouse_received_at = CURRENT_TIMESTAMP,
+            reached_warehouse_at = COALESCE(reached_warehouse_at, CURRENT_TIMESTAMP),
+            warehouse_received_by = $3,
+            warehouse_esign_url = $2,
+            warehouse_esign_at = CURRENT_TIMESTAMP,
+            warehouse_esign_by = $3,
+            status = 'inventory_updated',
+            resolved_at = COALESCE(resolved_at, CURRENT_TIMESTAMP),
+            updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1`,
+        [it.id, esignUrl, userId]
+    );
+
+    let floorTicketId = null;
+    const effectivePickupType = it.pickup_type || (it.source_item_id ? 'repair' : 'return');
+    const needsFloorTicket = effectivePickupType === 'repair' || !!it.source_item_id;
+
+    if (needsFloorTicket) {
+        const ftResult = await createFloorTicketFromSupportPickup(client, {
+            ...it,
+            pickup_type: effectivePickupType,
+        }, userId);
+        floorTicketId = ftResult.ticket_id || null;
+        if (floorTicketId && !it.floor_ticket_id) {
+            await client.query(
+                'UPDATE support_ticket_items SET floor_ticket_id = $1, pickup_type = COALESCE(pickup_type, $3) WHERE id = $2',
+                [floorTicketId, it.id, effectivePickupType]
+            );
+        }
+    }
+
+    const code = it.ttspl_id || it.unique_serial_number || it.serial_number;
+    const vsnRes = await client.query(
+        `SELECT serial_id, inventory_asset_code FROM vendor_serial_numbers
+          WHERE deleted_at IS NULL
+            AND (inventory_asset_code = $1 OR serial_number = $1 OR extra->>'ttspl_id' = $1)
+          LIMIT 1`,
+        [code]
+    );
+    const vsn = vsnRes.rows[0];
+    if (vsn) {
+        await client.query(
+            `UPDATE vendor_serial_numbers SET
+                inventory_status = 'returned',
+                current_customer_id = NULL,
+                status_changed_at = NOW(),
+                updated_at = NOW()
+             WHERE serial_id = $1`,
+            [vsn.serial_id]
+        );
+    }
+
+    if (it.customer_inventory_id) {
+        await client.query(
+            `UPDATE customer_inventory SET
+                passivated_at = NOW(),
+                passivated_reason = 'Returned by customer via support pickup',
+                updated_at = NOW()
+             WHERE id = $1`,
+            [it.customer_inventory_id]
+        );
+    }
+
+    if (it.source_item_id) {
+        await client.query(
+            `UPDATE support_ticket_items SET
+                status = 'resolved',
+                resolved_at = COALESCE(resolved_at, CURRENT_TIMESTAMP),
+                updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1 AND status NOT IN ('resolved','closed','inventory_updated')`,
+            [it.source_item_id]
+        );
+    }
+
+    await logAudit(client, {
+        itemId: it.id, ticketId: it.ticket_id, userId,
+        action: 'warehouse_receipt_confirmed',
+        detail: { pickup_type: it.pickup_type, floor_ticket_id: floorTicketId, signer_name: signerName || null }
+    });
+
+    return { floorTicketId };
+};
+
+const warehouseReceiveReturnDcBatch = async (client, triggerItem, userId, esignUrl, signerName) => {
+    let siblings = [triggerItem];
+    if (triggerItem.return_dc_number) {
+        const sibRes = await client.query(
+            `SELECT * FROM support_ticket_items
+              WHERE return_dc_number = $1 AND item_type = 'pickup' AND warehouse_received_at IS NULL
+              ORDER BY id ASC`,
+            [triggerItem.return_dc_number]
+        );
+        if (sibRes.rows.length) siblings = sibRes.rows;
+    }
+
+    for (const s of siblings) {
+        const isInhouse = s.pickup_method !== 'courier' && s.pickup_method !== 'porter';
+        if (isInhouse && !s.customer_otp_verified_at) {
+            throw Object.assign(
+                new Error('Customer OTP must be verified for all units before warehouse can confirm receipt'),
+                { status: 400 }
+            );
+        }
+    }
+
+    const floorTicketIds = [];
+    for (const s of siblings) {
+        const { floorTicketId } = await warehouseReceiveSinglePickupItem(client, s, userId, esignUrl, signerName);
+        if (floorTicketId) floorTicketIds.push(floorTicketId);
+    }
+
+    if (triggerItem.return_dc_number) {
+        await client.query(
+            `UPDATE delivery_challan_lines SET
+                status = 'delivered', delivered_at = NOW(), updated_at = NOW()
+             WHERE dc_number = $1 AND movement_type = 'return'`,
+            [triggerItem.return_dc_number]
+        );
+    }
+
+    await bumpTicketActivity(client, triggerItem.ticket_id);
+    await recomputeTicketStatus(client, triggerItem.ticket_id);
+
+    return { floorTicketIds, unitCount: siblings.length };
+};
+
 exports.confirmWarehouseReceipt = async (req, res) => {
     const itemId = parseInt(req.params.itemId, 10);
     const { esign_data, signer_name } = req.body || {};
@@ -2395,142 +2586,90 @@ exports.confirmWarehouseReceipt = async (req, res) => {
         if (it.item_type !== 'pickup') throw Object.assign(new Error('Only for pickup items'), { status: 400 });
         if (it.warehouse_received_at) throw Object.assign(new Error('Already confirmed at warehouse'), { status: 400 });
 
-        // Default to an in-house (technician) pickup unless explicitly courier/porter,
-        // so older items without a pickup_method still gate on the customer OTP.
-        const isInhouse = it.pickup_method !== 'courier' && it.pickup_method !== 'porter';
-        // Technician-carried pickups require the customer OTP handover first.
-        // Courier/porter returns arrive without an on-site OTP step.
-        if (isInhouse && !it.customer_otp_verified_at) {
-            throw Object.assign(new Error('Customer OTP must be verified before warehouse can confirm receipt'), { status: 400 });
-        }
-
-        // Persist the e-sign PNG.
-        const dir = path.join(__dirname, '..', 'uploads', 'support-pickups');
-        fs.mkdirSync(dir, { recursive: true });
-        const fname = `wh_esign_${it.id}_${Date.now()}.png`;
-        const b64 = String(esign_data).replace(/^data:image\/\w+;base64,/, '');
-        fs.writeFileSync(path.join(dir, fname), Buffer.from(b64, 'base64'));
-        const esignUrl = `uploads/support-pickups/${fname}`;
-
-        await client.query(
-            `UPDATE support_ticket_items SET
-                warehouse_received_at = CURRENT_TIMESTAMP,
-                reached_warehouse_at = COALESCE(reached_warehouse_at, CURRENT_TIMESTAMP),
-                warehouse_received_by = $3,
-                warehouse_esign_url = $2,
-                warehouse_esign_at = CURRENT_TIMESTAMP,
-                warehouse_esign_by = $3,
-                status = 'inventory_updated',
-                resolved_at = COALESCE(resolved_at, CURRENT_TIMESTAMP),
-                updated_at = CURRENT_TIMESTAMP
-             WHERE id = $1`,
-            [itemId, esignUrl, req.user.user_id]
+        const esignUrl = saveWarehouseEsignPng(it.id, esign_data);
+        const { floorTicketIds, unitCount } = await warehouseReceiveReturnDcBatch(
+            client, it, req.user.user_id, esignUrl, signer_name
         );
-
-        let floorTicketId = null;
-        const effectivePickupType = it.pickup_type
-            || (it.source_item_id ? 'repair' : 'return');
-        const needsFloorTicket = effectivePickupType === 'repair' || !!it.source_item_id;
-
-        if (needsFloorTicket) {
-            const ftResult = await createFloorTicketFromSupportPickup(client, {
-                ...it,
-                pickup_type: effectivePickupType,
-            }, req.user.user_id);
-            floorTicketId = ftResult.ticket_id || null;
-            if (floorTicketId && !it.floor_ticket_id) {
-                await client.query(
-                    'UPDATE support_ticket_items SET floor_ticket_id = $1, pickup_type = COALESCE(pickup_type, $3) WHERE id = $2',
-                    [floorTicketId, itemId, effectivePickupType]
-                );
-            }
-        }
-
-        const code = it.ttspl_id || it.unique_serial_number || it.serial_number;
-        const vsnRes = await client.query(
-            `SELECT serial_id, inventory_asset_code FROM vendor_serial_numbers
-              WHERE deleted_at IS NULL
-                AND (inventory_asset_code = $1 OR serial_number = $1 OR extra->>'ttspl_id' = $1)
-              LIMIT 1`,
-            [code]
-        );
-        const vsn = vsnRes.rows[0];
-
-        // Flip the authoritative inventory to "returned" for both repair and return.
-        if (vsn) {
-            await client.query(
-                `UPDATE vendor_serial_numbers SET
-                    inventory_status = 'returned',
-                    current_customer_id = NULL,
-                    status_changed_at = NOW(),
-                    updated_at = NOW()
-                 WHERE serial_id = $1`,
-                [vsn.serial_id]
-            );
-        }
-
-        if (it.customer_inventory_id) {
-            await client.query(
-                `UPDATE customer_inventory SET
-                    passivated_at = NOW(),
-                    passivated_reason = 'Returned by customer via support pickup',
-                    updated_at = NOW()
-                 WHERE id = $1`,
-                [it.customer_inventory_id]
-            );
-        }
-
-        // Close the originating complaint, if any.
-        if (it.source_item_id) {
-            await client.query(
-                `UPDATE support_ticket_items SET
-                    status = 'resolved',
-                    resolved_at = COALESCE(resolved_at, CURRENT_TIMESTAMP),
-                    updated_at = CURRENT_TIMESTAMP
-                 WHERE id = $1 AND status NOT IN ('resolved','closed','inventory_updated')`,
-                [it.source_item_id]
-            );
-        }
-
-        // Close the Return DC.
-        if (it.return_dc_number) {
-            await client.query(
-                `UPDATE delivery_challan_lines SET
-                    status = 'delivered', delivered_at = NOW(), updated_at = NOW()
-                 WHERE dc_number = $1 AND movement_type = 'return'`,
-                [it.return_dc_number]
-            );
-        }
-
-        await logAudit(client, {
-            itemId, ticketId: it.ticket_id, userId: req.user.user_id,
-            action: 'warehouse_receipt_confirmed',
-            detail: { pickup_type: it.pickup_type, floor_ticket_id: floorTicketId, signer_name: signer_name || null }
-        });
-        await bumpTicketActivity(client, it.ticket_id);
-        await recomputeTicketStatus(client, it.ticket_id);
         await client.query('COMMIT');
 
-        // Rebuild the Return DC PDF so it carries the warehouse-receipt signature.
         try {
-            const fresh = await pool.query('SELECT * FROM support_ticket_items WHERE id = $1', [itemId]);
-            if (fresh.rows.length) await regenerateReturnDcPdf(pool, fresh.rows[0]);
+            if (it.return_dc_number) await regenerateReturnDcPdfByRdc(pool, it.return_dc_number);
         } catch (pdfErr) {
             console.error('[support] return DC pdf (warehouse confirm):', pdfErr.message);
         }
 
         const data = await getTicketWithItems(it.ticket_id, req.user);
+        const floorTicketId = floorTicketIds[0] || null;
         res.json({
             success: true,
             floor_ticket_id: floorTicketId,
-            message: floorTicketId
-                ? `Warehouse receipt confirmed. Floor repair ticket #${floorTicketId} created.`
-                : 'Warehouse receipt confirmed.',
+            floor_ticket_ids: floorTicketIds,
+            units_received: unitCount,
+            message: floorTicketIds.length
+                ? `Warehouse receipt confirmed for ${unitCount} unit(s). Floor ticket(s): ${floorTicketIds.join(', ')}.`
+                : `Warehouse receipt confirmed for ${unitCount} unit(s).`,
             ...data,
         });
     } catch (e) {
         await client.query('ROLLBACK');
         console.error('confirmWarehouseReceipt:', e);
+        res.status(e.status || 500).json({ success: false, message: e.message || 'Failed to confirm warehouse receipt' });
+    } finally {
+        client.release();
+    }
+};
+
+/** Warehouse e-sign for an entire Return DC (all pending pickup units). */
+exports.confirmReturnDcWarehouseReceipt = async (req, res) => {
+    const rdcNumber = String(req.params.rdcNumber || '').trim();
+    const { esign_data, signer_name } = req.body || {};
+
+    if (!['warehouse', 'admin', 'support_lead', 'manager', 'floor_manager', 'super_admin'].includes(req.user.role)) {
+        return res.status(403).json({ success: false, message: 'Warehouse access required' });
+    }
+    if (!rdcNumber) {
+        return res.status(400).json({ success: false, message: 'Return DC number required' });
+    }
+    if (!esign_data || !String(esign_data).startsWith('data:image')) {
+        return res.status(400).json({ success: false, message: 'Warehouse e-sign required' });
+    }
+
+    const pendingRes = await pool.query(
+        `SELECT * FROM support_ticket_items
+          WHERE return_dc_number = $1 AND item_type = 'pickup' AND warehouse_received_at IS NULL
+          ORDER BY id ASC LIMIT 1`,
+        [rdcNumber]
+    );
+    if (!pendingRes.rows.length) {
+        return res.status(400).json({ success: false, message: 'All units on this Return DC are already received' });
+    }
+    const trigger = pendingRes.rows[0];
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await ensureSupportTicketItemV3Columns(client);
+        const esignUrl = saveWarehouseEsignPng(trigger.id, esign_data);
+        const { floorTicketIds, unitCount } = await warehouseReceiveReturnDcBatch(
+            client, trigger, req.user.user_id, esignUrl, signer_name
+        );
+        await client.query('COMMIT');
+
+        try { await regenerateReturnDcPdfByRdc(pool, rdcNumber); } catch (pdfErr) {
+            console.error('[support] return DC pdf (RDC warehouse confirm):', pdfErr.message);
+        }
+
+        res.json({
+            success: true,
+            return_dc_number: rdcNumber,
+            units_received: unitCount,
+            floor_ticket_ids: floorTicketIds,
+            pdf_regenerated: true,
+            message: `Warehouse receipt confirmed for ${unitCount} unit(s) on ${rdcNumber}.`,
+        });
+    } catch (e) {
+        await client.query('ROLLBACK');
+        console.error('confirmReturnDcWarehouseReceipt:', e);
         res.status(e.status || 500).json({ success: false, message: e.message || 'Failed to confirm warehouse receipt' });
     } finally {
         client.release();

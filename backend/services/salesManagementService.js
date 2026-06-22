@@ -225,10 +225,11 @@ async function getSalesOrderLines(salesOrderNumber) {
 
 async function listDeliveryChallansGrouped({ page = 1, limit = 20, search = '' }) {
   const params = [];
-  let where = '';
+  const baseFilter = `COALESCE(d.movement_type, 'outbound') = 'outbound'`;
+  let where = `WHERE ${baseFilter}`;
   if (search) {
     params.push(`%${search}%`);
-    where = `WHERE d.dc_number ILIKE $1 OR d.sales_order_number ILIKE $1 OR d.customer_name ILIKE $1 OR d.gst_number ILIKE $1`;
+    where += ` AND (d.dc_number ILIKE $1 OR d.sales_order_number ILIKE $1 OR d.customer_name ILIKE $1 OR d.gst_number ILIKE $1)`;
   }
   const countResult = await pool.query(
     `SELECT COUNT(DISTINCT dc_number)::int AS total FROM delivery_challan_lines d ${where}`,
@@ -335,6 +336,9 @@ async function listReturnDeliveryChallans() {
        rl.sales_order_number,
        COALESCE(rl.dispatched_at, rl.created_at) AS dispatched_at,
        rl.delivered_at,
+       COALESCE(rl.quantity, 1) AS quantity,
+       (SELECT COUNT(*)::int FROM support_ticket_items pi
+         WHERE pi.return_dc_number = rl.dc_number AND pi.item_type = 'pickup') AS unit_count,
        COALESCE(rl.original_dc_number, st.dc_number, vsn.current_dc_number) AS original_dc_number,
        COALESCE(st.complaint_type, sti.pickup_type, 'return') AS reason,
        sti.pickup_type,
@@ -374,6 +378,101 @@ async function listReturnDeliveryChallans() {
      LIMIT 500`
   );
   return result.rows;
+}
+
+/** Full Return DC detail — units, pickup items, POD, e-signatures, PDF. */
+async function getReturnDcDetail(rdcNumber) {
+  const dclRes = await pool.query(
+    `SELECT dcl.*, st.entity_code, st.customer_phone, st.ticket_email
+       FROM delivery_challan_lines dcl
+       LEFT JOIN support_tickets st ON st.id = dcl.support_ticket_id
+      WHERE dcl.dc_number = $1 AND dcl.movement_type = 'return'
+      LIMIT 1`,
+    [rdcNumber]
+  );
+  const dcl = dclRes.rows[0];
+  if (!dcl) return null;
+
+  const itemsRes = await pool.query(
+    `SELECT sti.*,
+            u1.name AS tech_name,
+            u2.name AS warehouse_receiver_name
+       FROM support_ticket_items sti
+       LEFT JOIN users u1 ON u1.user_id = COALESCE(sti.pickup_assigned_to, sti.assigned_to)
+       LEFT JOIN users u2 ON u2.user_id = sti.warehouse_received_by
+      WHERE sti.return_dc_number = $1 AND sti.item_type = 'pickup'
+      ORDER BY sti.id ASC`,
+    [rdcNumber]
+  );
+  const pickupItems = itemsRes.rows;
+
+  const { buildUnitsForRdc } = require('./returnDcPdfService');
+  const units = await buildUnitsForRdc(pool, dcl, pickupItems);
+
+  const shipping = typeof dcl.customer_shipping_address === 'object'
+    ? dcl.customer_shipping_address
+    : (() => { try { return JSON.parse(dcl.customer_shipping_address); } catch { return {}; } })();
+
+  const techItem = pickupItems.find((i) => i.technician_esign_url) || pickupItems[0];
+  const whItem = pickupItems.find((i) => i.warehouse_esign_url)
+    || pickupItems.find((i) => i.warehouse_received_at)
+    || pickupItems[0];
+
+  return {
+    return_dc_number: rdcNumber,
+    ticket_id: dcl.support_ticket_id,
+    customer_id: dcl.customer_id,
+    customer_name: dcl.customer_name,
+    customer_email: dcl.email,
+    customer_phone: dcl.customer_phone,
+    pickup_address: shipping,
+    status: dcl.status,
+    pdf_path: dcl.pdf_path,
+    dispatch_mode: dcl.dispatch_mode,
+    sales_order_number: dcl.sales_order_number,
+    original_dc_number: dcl.original_dc_number,
+    created_at: dcl.created_at,
+    dispatched_at: dcl.dispatched_at,
+    delivered_at: dcl.delivered_at,
+    unit_count: pickupItems.length || dcl.quantity || 1,
+    units,
+    customer_otp_code: pickupItems[0]?.customer_otp_code || pickupItems[0]?.otp_code || null,
+    customer_otp_verified_at: pickupItems.length && pickupItems.every((i) => i.customer_otp_verified_at)
+      ? pickupItems.find((i) => i.customer_otp_verified_at)?.customer_otp_verified_at
+      : null,
+    pickup_items: pickupItems.map((i) => ({
+      id: i.id,
+      serial_number: i.serial_number,
+      ttspl_id: i.ttspl_id || i.unique_serial_number,
+      brand: i.brand,
+      model: i.model,
+      pickup_type: i.pickup_type,
+      status: i.status,
+      pod_image_path: i.pod_image_path || i.proof_of_completion_path,
+      technician_esign_url: i.technician_esign_url,
+      technician_esign_at: i.technician_esign_at,
+      tech_name: i.tech_name,
+      warehouse_esign_url: i.warehouse_esign_url,
+      warehouse_esign_at: i.warehouse_esign_at,
+      warehouse_received_at: i.warehouse_received_at,
+      warehouse_receiver_name: i.warehouse_receiver_name,
+      customer_otp_verified_at: i.customer_otp_verified_at,
+      floor_ticket_id: i.floor_ticket_id,
+    })),
+    esign: {
+      technician_url: techItem?.technician_esign_url || null,
+      technician_name: techItem?.tech_name || null,
+      technician_at: techItem?.technician_esign_at || null,
+      warehouse_url: whItem?.warehouse_esign_url || null,
+      warehouse_name: whItem?.warehouse_receiver_name || null,
+      warehouse_at: whItem?.warehouse_esign_at || whItem?.warehouse_received_at || null,
+    },
+    can_warehouse_confirm: pickupItems.some((i) => !i.warehouse_received_at)
+      && pickupItems.filter((i) => !i.warehouse_received_at).every((i) => {
+        const isInhouse = i.pickup_method !== 'courier' && i.pickup_method !== 'porter';
+        return !isInhouse || i.customer_otp_verified_at;
+      }),
+  };
 }
 
 async function getOperationCounts() {
@@ -609,6 +708,7 @@ module.exports = {
   listDeliveryChallansGrouped,
   getDeliveryChallanLines,
   listReturnDeliveryChallans,
+  getReturnDcDetail,
   getOperationCounts,
   searchAvailableInventory,
 };

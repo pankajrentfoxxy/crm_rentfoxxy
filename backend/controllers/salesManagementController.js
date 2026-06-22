@@ -13,6 +13,7 @@ const {
   listDeliveryChallansGrouped,
   getDeliveryChallanLines,
   listReturnDeliveryChallans,
+  getReturnDcDetail,
   getQuotationRemainingQty,
   getSalesOrderRemainingQty,
   getOperationCounts,
@@ -1576,6 +1577,19 @@ exports.listReturnDeliveryChallans = async (req, res) => {
   try {
     const rows = await listReturnDeliveryChallans();
     res.json({ success: true, return_dcs: rows, rows, orders: rows });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getReturnDcDetail = async (req, res) => {
+  try {
+    const rdcNumber = String(req.params.rdcNumber || '').trim();
+    const detail = await getReturnDcDetail(rdcNumber);
+    if (!detail) {
+      return res.status(404).json({ success: false, message: 'Return DC not found' });
+    }
+    res.json({ success: true, ...detail });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

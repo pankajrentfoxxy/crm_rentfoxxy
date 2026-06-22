@@ -45,6 +45,7 @@ const tbEdit = cp('technician_bucket', 'edit');
 const ctrl = require('../controllers/salesManagementController');
 const sosCtrl = require('../controllers/salesOrderSerialController');
 const flowCtrl = require('../controllers/deliveryFlowController');
+const supportCtrl = require('../controllers/supportController');
 
 router.use(authMiddleware);
 
@@ -105,6 +106,8 @@ router.patch('/delivery-challans/:dcNumber/delivered', dcEdit, ctrl.markDcDelive
 router.patch('/delivery-challans/:dcNumber/rejected', dcEdit, ctrl.markDcRejected);
 
 router.get('/return-dc', rdcView, ctrl.listReturnDeliveryChallans);
+router.get('/return-dc/:rdcNumber/detail', rdcView, ctrl.getReturnDcDetail);
+router.post('/return-dc/:rdcNumber/warehouse-confirm', rdcEdit, supportCtrl.confirmReturnDcWarehouseReceipt);
 router.post('/return-dc/tickets/:ticketId/assign-number', rdcEdit, ctrl.assignReturnDcNumber);
 router.post('/return-dc/tickets/:ticketId/generate', rdcEdit, ctrl.generateReturnDc);
 

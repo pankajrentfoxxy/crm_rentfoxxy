@@ -274,12 +274,21 @@ export default function SupportTicketCreate() {
 
     const submitPickupTicket = async (pickupPayload) => {
         if (!customer || !selectedCount) {
-            alert('Select a laptop');
+            alert('Select at least one laptop');
             return;
         }
-        const { asset } = selectedList[0];
         setSaving(true);
         try {
+            const machines = selectedList.map(({ asset }) => ({
+                serial_number: asset.serial_number,
+                unique_serial_number: asset.unique_serial_number,
+                ttspl_id: asset.unique_serial_number,
+                brand: asset.model_name?.split(' ')[0] || '',
+                model: asset.model_name,
+                ram: asset.ram,
+                storage: asset.storage,
+                generation: asset.generation,
+            }));
             const { data } = await api.post('/support/tickets/pickup-ticket', {
                 customer_id: customer.customer_id,
                 customer_name: customer.customer_name,
@@ -289,15 +298,7 @@ export default function SupportTicketCreate() {
                 ticket_alt_phone: ticketAltPhone,
                 ticket_email: ticketEmail,
                 ticket_address: ticketAddress,
-                machine: {
-                    serial_number: asset.serial_number,
-                    unique_serial_number: asset.unique_serial_number,
-                    brand: asset.model_name?.split(' ')[0] || '',
-                    model: asset.model_name,
-                    ram: asset.ram,
-                    storage: asset.storage,
-                    generation: asset.generation,
-                },
+                machines,
                 ...pickupPayload,
             });
             navigate(`/support/tickets/${data.ticket.id}`);
@@ -488,20 +489,26 @@ export default function SupportTicketCreate() {
                             )}
                         </div>
                     )}
-                    <p className="support-selected-count">{selectedCount} selected{ticketCategory === 'pickup' ? ' (one laptop per pickup ticket)' : ''}</p>
+                    <p className="support-selected-count">{selectedCount} selected{ticketCategory === 'pickup' ? ' — one Return DC for all selected laptops' : ''}</p>
                 </div>
             )}
 
-            {ticketCategory === 'pickup' && selectedCount === 1 && pickupTicketStub && (
+            {ticketCategory === 'pickup' && selectedCount >= 1 && pickupTicketStub && (
                 <div className="mt-4 pt-4 border-t border-slate-100">
                     <h3 className="support-create-section-title mb-3">Schedule pickup</h3>
                     <PickupSetupForm
                         ticket={pickupTicketStub}
                         customerId={customer?.customer_id}
-                        selectedAsset={selectedList[0]?.asset}
+                        selectedMachines={selectedList.map(({ asset }) => ({
+                            serial_number: asset.serial_number,
+                            unique_serial_number: asset.unique_serial_number,
+                            ttspl_id: asset.unique_serial_number,
+                            brand: asset.model_name?.split(' ')[0] || '',
+                            model: asset.model_name,
+                        }))}
                         onSubmit={submitPickupTicket}
                         saving={saving}
-                        submitLabel="Create Pickup Ticket + Return DC"
+                        submitLabel={`Create Pickup Ticket + Return DC${selectedCount > 1 ? ` (${selectedCount} units)` : ''}`}
                     />
                 </div>
             )}

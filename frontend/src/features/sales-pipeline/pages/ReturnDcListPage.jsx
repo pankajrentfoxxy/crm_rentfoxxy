@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { FileText, KeyRound } from 'lucide-react';
-import DeliveryChallanDetailModal from '../../operation-management/components/DeliveryChallanDetailModal';
+import ReturnDcDetailModal from '../components/ReturnDcDetailModal';
 import { listReturnDCs } from '../salesPipelineApi';
 import { formatDate } from '../salesPipelineUtils';
 import { getBackendOrigin } from '../../../utils/api';
@@ -15,19 +15,26 @@ function pdfUrl(p) {
 export default function ReturnDcListPage() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [detail, setDetail] = useState(null);
+  const [detailRdc, setDetailRdc] = useState(null);
 
-  useEffect(() => {
-    listReturnDCs()
-      .then((res) => setRows(res.data?.return_dcs || res.data?.rows || []))
-      .catch(() => toast.error('Failed to load return DCs'))
-      .finally(() => setLoading(false));
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await listReturnDCs();
+      setRows(res.data?.return_dcs || res.data?.rows || []);
+    } catch {
+      toast.error('Failed to load return DCs');
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => { load(); }, [load]);
 
   return (
     <div className="p-4 max-w-7xl mx-auto">
       <h1 className="text-2xl font-semibold text-gray-900 mb-1">Return DC</h1>
-      <p className="text-sm text-gray-500 mb-6">RDC series</p>
+      <p className="text-sm text-gray-500 mb-6">Return pickup challans (RDC series)</p>
 
       <div className="bg-white border rounded-xl overflow-x-auto">
         <table className="w-full text-sm">
@@ -36,6 +43,7 @@ export default function ReturnDcListPage() {
               <th className="px-4 py-3">RDC #</th>
               <th className="px-4 py-3">Date</th>
               <th className="px-4 py-3">Customer</th>
+              <th className="px-4 py-3">Units</th>
               <th className="px-4 py-3">Original DC</th>
               <th className="px-4 py-3">SO #</th>
               <th className="px-4 py-3">OTP</th>
@@ -46,45 +54,50 @@ export default function ReturnDcListPage() {
           </thead>
           <tbody className="divide-y">
             {loading ? (
-              <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-500">Loading…</td></tr>
+              <tr><td colSpan={10} className="px-4 py-8 text-center text-gray-500">Loading…</td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-500">No return DCs</td></tr>
-            ) : rows.map((row) => (
-              <tr key={row.return_dc_number || row.rdc_number || row.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => setDetail(row)}>
-                <td className="px-4 py-3 font-mono">{row.return_dc_number || row.rdc_number}</td>
-                <td className="px-4 py-3">{formatDate(row.created_at)}</td>
-                <td className="px-4 py-3">{row.customer_name}</td>
-                <td className="px-4 py-3 font-mono text-xs">{row.original_dc_number || row.dc_number || '—'}</td>
-                <td className="px-4 py-3 font-mono text-xs">{row.sales_order_number || '—'}</td>
-                <td className="px-4 py-3">
-                  {row.customer_otp_verified_at ? (
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">✓ Verified</span>
-                  ) : row.customer_otp_code ? (
-                    <span className="font-mono text-blue-700 inline-flex items-center gap-1"><KeyRound className="w-3.5 h-3.5" />{row.customer_otp_code}</span>
-                  ) : (
-                    <span className="text-xs text-gray-400">—</span>
-                  )}
-                </td>
-                <td className="px-4 py-3">{row.reason || row.return_reason || '—'}</td>
-                <td className="px-4 py-3">{row.status || '—'}</td>
-                <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                  {pdfUrl(row.pdf_path) ? (
-                    <a href={pdfUrl(row.pdf_path)} target="_blank" rel="noopener noreferrer"
-                      className="text-xs text-blue-600 inline-flex items-center gap-1"><FileText className="w-3.5 h-3.5" /> View</a>
-                  ) : (
-                    <span className="text-xs text-gray-400">—</span>
-                  )}
-                </td>
-              </tr>
-            ))}
+              <tr><td colSpan={10} className="px-4 py-8 text-center text-gray-500">No return DCs</td></tr>
+            ) : rows.map((row) => {
+              const rdc = row.return_dc_number || row.rdc_number;
+              return (
+                <tr key={rdc || row.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => setDetailRdc(rdc)}>
+                  <td className="px-4 py-3 font-mono">{rdc}</td>
+                  <td className="px-4 py-3">{formatDate(row.created_at)}</td>
+                  <td className="px-4 py-3">{row.customer_name}</td>
+                  <td className="px-4 py-3">{row.unit_count || row.quantity || 1}</td>
+                  <td className="px-4 py-3 font-mono text-xs">{row.original_dc_number || '—'}</td>
+                  <td className="px-4 py-3 font-mono text-xs">{row.sales_order_number || '—'}</td>
+                  <td className="px-4 py-3">
+                    {row.customer_otp_verified_at ? (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">✓ Verified</span>
+                    ) : row.customer_otp_code ? (
+                      <span className="font-mono text-blue-700 inline-flex items-center gap-1"><KeyRound className="w-3.5 h-3.5" />{row.customer_otp_code}</span>
+                    ) : (
+                      <span className="text-xs text-gray-400">—</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">{row.reason || row.return_reason || '—'}</td>
+                  <td className="px-4 py-3">{row.status || '—'}</td>
+                  <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                    {pdfUrl(row.pdf_path) ? (
+                      <a href={pdfUrl(row.pdf_path)} target="_blank" rel="noopener noreferrer"
+                        className="text-xs text-blue-600 inline-flex items-center gap-1"><FileText className="w-3.5 h-3.5" /> View</a>
+                    ) : (
+                      <span className="text-xs text-gray-400">—</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
 
-      {detail && (
-        <DeliveryChallanDetailModal
-          onClose={() => setDetail(null)}
-          dcNumber={detail.return_dc_number || detail.rdc_number || detail.original_dc_number || detail.dc_number}
+      {detailRdc && (
+        <ReturnDcDetailModal
+          rdcNumber={detailRdc}
+          onClose={() => setDetailRdc(null)}
+          onUpdated={load}
         />
       )}
     </div>

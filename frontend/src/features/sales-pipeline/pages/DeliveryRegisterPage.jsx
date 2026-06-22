@@ -5,6 +5,7 @@ import { listDeliveryFlow } from '../salesPipelineApi';
 import { DISPATCH_MODE_STYLES, formatDateTime, statusLabel } from '../salesPipelineUtils';
 import { getBackendOrigin } from '../../../utils/api';
 import AdminDeliverModal from '../components/AdminDeliverModal';
+import ReturnWarehouseReceiveModal from '../components/ReturnWarehouseReceiveModal';
 
 const TABS = [
   { id: 'all', label: 'All' },
@@ -26,6 +27,7 @@ export default function DeliveryRegisterPage() {
   const [loading, setLoading] = useState(true);
   const [otpModal, setOtpModal] = useState(null);
   const [deliverModal, setDeliverModal] = useState(null);
+  const [receiveModal, setReceiveModal] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -80,7 +82,12 @@ export default function DeliveryRegisterPage() {
               <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-500">No deliveries in this view.</td></tr>
             ) : rows.map((row) => (
               <tr key={row.dc_number}>
-                <td className="px-4 py-3 font-mono text-blue-700">{row.dc_number}</td>
+                <td className="px-4 py-3 font-mono text-blue-700">
+                  {row.dc_number}
+                  {row.movement_type === 'return' && (
+                    <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-700">RDC</span>
+                  )}
+                </td>
                 <td className="px-4 py-3">
                   <p>{row.customer_name}</p>
                   <p className="text-xs text-gray-400">{row.customer_phone}</p>
@@ -130,7 +137,11 @@ export default function DeliveryRegisterPage() {
                       {(row.tech_latitude && row.tech_longitude) && (
                         <a href={`https://www.google.com/maps?q=${row.tech_latitude},${row.tech_longitude}`} target="_blank" rel="noreferrer" className="text-xs text-gray-600 inline-flex items-center gap-1"><MapIcon className="w-3.5 h-3.5" /> Map</a>
                       )}
-                      <button type="button" onClick={() => setDeliverModal(row)} className="text-xs text-emerald-700 inline-flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" /> Deliver</button>
+                      {row.movement_type === 'return' ? (
+                        <button type="button" onClick={() => setReceiveModal(row)} className="text-xs text-blue-700 inline-flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" /> Warehouse receive</button>
+                      ) : (
+                        <button type="button" onClick={() => setDeliverModal(row)} className="text-xs text-emerald-700 inline-flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" /> Deliver</button>
+                      )}
                     </div>
                   )}
                 </td>
@@ -157,6 +168,14 @@ export default function DeliveryRegisterPage() {
           dc={deliverModal}
           onClose={() => setDeliverModal(null)}
           onDelivered={load}
+        />
+      )}
+
+      {receiveModal && (
+        <ReturnWarehouseReceiveModal
+          dc={receiveModal}
+          onClose={() => setReceiveModal(null)}
+          onReceived={load}
         />
       )}
     </div>

@@ -4,13 +4,43 @@ import toast from 'react-hot-toast';
 import api from '../../../utils/api';
 import PickupSetupForm from './PickupSetupForm';
 
+function machineFromSourceItem(item) {
+  return {
+    source_item_id: item.id,
+    serial_number: item.serial_number,
+    unique_serial_number: item.ttspl_id || item.unique_serial_number,
+    ttspl_id: item.ttspl_id || item.unique_serial_number,
+    brand: item.brand,
+    model: item.model,
+    ram: item.ram,
+    storage: item.storage,
+    generation: item.generation,
+    customer_inventory_id: item.customer_inventory_id,
+  };
+}
+
+function machineFromAsset(asset) {
+  return {
+    serial_number: asset.serial_number,
+    unique_serial_number: asset.unique_serial_number,
+    ttspl_id: asset.unique_serial_number,
+    brand: asset.model_name?.split(' ')[0] || '',
+    model: asset.model_name,
+    ram: asset.ram,
+    storage: asset.storage,
+    generation: asset.generation,
+  };
+}
+
 /**
- * Schedule a pickup on an existing ticket — creates pickup item + Return DC + assignment.
+ * Schedule a pickup on an existing ticket — creates pickup item(s) + Return DC + assignment.
+ * Supports multiple laptops on one visit (same customer, location, technician).
  */
 export default function CreatePickupModal({ ticket, items = [], sourceItem: sourceItemProp, onCreated, onClose }) {
   const [saving, setSaving] = useState(false);
   const [assets, setAssets] = useState([]);
-  const [assetId, setAssetId] = useState('');
+  const [selectedAssetIds, setSelectedAssetIds] = useState(new Set());
+  const [selectedSourceIds, setSelectedSourceIds] = useState(new Set());
 
   const sourceItem = sourceItemProp ?? null;
   const activePickupSourceIds = new Set(
@@ -19,6 +49,12 @@ export default function CreatePickupModal({ ticket, items = [], sourceItem: sour
       .map((i) => i.source_item_id)
       .filter(Boolean)
   );
+
+  useEffect(() => {
+    if (sourceItem) {
+      setSelectedSourceIds(new Set([String(sourceItem.id)]));
+    }
+  }, [sourceItem]);
 
   useEffect(() => {
     if (sourceItem || !ticket?.customer_id) return;
@@ -32,36 +68,49 @@ export default function CreatePickupModal({ ticket, items = [], sourceItem: sour
       && !activePickupSourceIds.has(i.id)
   );
 
-  const selectedAsset = !sourceItem && assetId
-    ? assets.find((a) => String(a.id) === String(assetId))
-    : null;
+  const toggleAsset = (id) => {
+    setSelectedAssetIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
-  const effectiveSource = sourceItem
-    || (linkableItems.length === 1 ? linkableItems[0] : null);
+  const toggleSource = (id) => {
+    setSelectedSourceIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectedMachines = sourceItem
+    ? [machineFromSourceItem(sourceItem)]
+    : linkableItems.length
+      ? linkableItems
+          .filter((i) => selectedSourceIds.has(String(i.id)))
+          .map(machineFromSourceItem)
+      : assets
+          .filter((a) => selectedAssetIds.has(String(a.id)))
+          .map(machineFromAsset);
 
   const submit = async (payload) => {
-    if (!effectiveSource && !selectedAsset) {
-      toast.error('Select a laptop for this pickup');
+    if (!selectedMachines.length) {
+      toast.error('Select at least one laptop for this pickup');
       return;
     }
     setSaving(true);
     try {
       const body = {
         ...payload,
-        source_item_id: effectiveSource?.id || null,
+        machines: selectedMachines,
+        source_item_id: selectedMachines.length === 1 ? selectedMachines[0].source_item_id : null,
       };
-      if (selectedAsset) {
-        body.serial_number = selectedAsset.serial_number;
-        body.unique_serial_number = selectedAsset.unique_serial_number;
-        body.ttspl_id = selectedAsset.unique_serial_number;
-        body.brand = selectedAsset.model_name?.split(' ')[0] || '';
-        body.model = selectedAsset.model_name;
-        body.ram = selectedAsset.ram;
-        body.storage = selectedAsset.storage;
-        body.generation = selectedAsset.generation;
-      }
       const { data } = await api.post(`/support/tickets/${ticket.id}/pickup`, body);
-      toast.success(`Pickup scheduled. Return DC ${data.return_dc_number}`);
+      const n = data.unit_count || selectedMachines.length;
+      toast.success(`Pickup scheduled for ${n} laptop(s). Return DC ${data.return_dc_number}`);
       onCreated?.(data);
       onClose?.();
     } catch (e) {
@@ -81,44 +130,65 @@ export default function CreatePickupModal({ ticket, items = [], sourceItem: sour
           </button>
         </div>
         <div className="p-4 space-y-4">
-          {!effectiveSource && linkableItems.length > 1 && (
-            <div>
-              <label className="text-sm font-semibold text-gray-700 block mb-2">Link to ticket item*</label>
-              <select
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm"
-                value={effectiveSource?.id || ''}
-                onChange={() => {}}
-                disabled
-              >
-                <option value="">Select from complaint tab items via &quot;Schedule pickup for this machine&quot;</option>
-              </select>
+          {sourceItem ? (
+            <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 text-sm">
+              <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">Laptop</p>
+              <p className="font-mono font-semibold">{sourceItem.ttspl_id || sourceItem.unique_serial_number}</p>
             </div>
-          )}
-          {!effectiveSource && (
+          ) : linkableItems.length > 0 ? (
             <div>
-              <label className="text-sm font-semibold text-gray-700 block mb-2">Laptop*</label>
-              <select
-                value={assetId}
-                onChange={(e) => setAssetId(e.target.value)}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm"
-              >
-                <option value="">Select customer laptop…</option>
-                {assets.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.unique_serial_number || a.serial_number} — {a.model_name}
-                  </option>
+              <label className="text-sm font-semibold text-gray-700 block mb-2">
+                Select laptop(s) from ticket*
+              </label>
+              <div className="space-y-2 max-h-40 overflow-y-auto border rounded-xl p-2">
+                {linkableItems.map((item) => (
+                  <label key={item.id} className="flex items-start gap-2 p-2 rounded-lg hover:bg-gray-50 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selectedSourceIds.has(String(item.id))}
+                      onChange={() => toggleSource(String(item.id))}
+                      className="mt-1"
+                    />
+                    <div className="text-sm">
+                      <p className="font-mono font-medium">{item.ttspl_id || item.unique_serial_number || item.serial_number}</p>
+                      <p className="text-xs text-gray-500">{[item.brand, item.model].filter(Boolean).join(' ')}</p>
+                    </div>
+                  </label>
                 ))}
-              </select>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">{selectedSourceIds.size} selected — one Return DC for all</p>
+            </div>
+          ) : (
+            <div>
+              <label className="text-sm font-semibold text-gray-700 block mb-2">Select laptop(s)*</label>
+              <div className="space-y-2 max-h-40 overflow-y-auto border rounded-xl p-2">
+                {assets.map((a) => (
+                  <label key={a.id} className="flex items-start gap-2 p-2 rounded-lg hover:bg-gray-50 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selectedAssetIds.has(String(a.id))}
+                      onChange={() => toggleAsset(String(a.id))}
+                      className="mt-1"
+                    />
+                    <div className="text-sm">
+                      <p className="font-mono font-medium">{a.unique_serial_number || a.serial_number}</p>
+                      <p className="text-xs text-gray-500">{a.model_name}</p>
+                    </div>
+                  </label>
+                ))}
+              </div>
+              {!assets.length && <p className="text-sm text-gray-400">No customer laptops found.</p>}
+              <p className="text-xs text-gray-500 mt-1">{selectedAssetIds.size} selected — one Return DC for all</p>
             </div>
           )}
+
           <PickupSetupForm
             ticket={ticket}
             customerId={ticket?.customer_id}
-            sourceItem={effectiveSource}
-            selectedAsset={selectedAsset}
+            selectedMachines={selectedMachines}
             onSubmit={submit}
             saving={saving}
-            submitLabel="Schedule Pickup + Return DC"
+            submitLabel={`Schedule Pickup + Return DC${selectedMachines.length > 1 ? ` (${selectedMachines.length} units)` : ''}`}
           />
         </div>
       </div>

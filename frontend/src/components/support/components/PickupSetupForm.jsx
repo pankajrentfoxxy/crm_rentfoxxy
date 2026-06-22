@@ -10,6 +10,7 @@ export default function PickupSetupForm({
   customerId,
   sourceItem = null,
   selectedAsset = null,
+  selectedMachines = null,
   onSubmit,
   saving = false,
   submitLabel = 'Create Pickup + Return DC',
@@ -26,11 +27,13 @@ export default function PickupSetupForm({
   const [loadingAddr, setLoadingAddr] = useState(false);
   const [dcRef, setDcRef] = useState(null);
 
-  const machineCode = sourceItem?.ttspl_id
-    || sourceItem?.unique_serial_number
-    || sourceItem?.serial_number
-    || selectedAsset?.unique_serial_number
-    || selectedAsset?.serial_number
+  const machines = selectedMachines?.length
+    ? selectedMachines
+    : (sourceItem || selectedAsset ? [sourceItem || selectedAsset] : []);
+
+  const machineCode = machines[0]?.ttspl_id
+    || machines[0]?.unique_serial_number
+    || machines[0]?.serial_number
     || ticket?.ttspl_id;
 
   useEffect(() => {
@@ -89,13 +92,23 @@ export default function PickupSetupForm({
 
   return (
     <div className="space-y-5">
-      {(sourceItem || selectedAsset) && (
+      {machines.length > 0 && !selectedMachines && (
         <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 text-sm">
           <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">Laptop</p>
           <p className="font-mono font-semibold text-slate-800">{machineCode}</p>
-          <p className="text-slate-600">
-            {[sourceItem?.brand || selectedAsset?.brand, sourceItem?.model || selectedAsset?.model_name].filter(Boolean).join(' ')}
-          </p>
+        </div>
+      )}
+
+      {selectedMachines?.length > 1 && (
+        <div className="rounded-xl bg-orange-50 border border-orange-200 p-3 text-sm">
+          <p className="text-xs text-orange-600 uppercase tracking-wide mb-1">{selectedMachines.length} laptops — one visit</p>
+          <ul className="space-y-1">
+            {selectedMachines.map((m, i) => (
+              <li key={m.ttspl_id || m.unique_serial_number || i} className="font-mono text-xs text-slate-700">
+                {m.ttspl_id || m.unique_serial_number || m.serial_number}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

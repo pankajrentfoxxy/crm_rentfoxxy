@@ -33,6 +33,9 @@ export const markDelivered = (n, d) => api.patch(`${base}/delivery-challans/${n}
 export const markRejected = (n, d) => api.patch(`${base}/delivery-challans/${n}/rejected`, d);
 
 export const listReturnDCs = (p) => api.get(`${base}/return-dc`, { params: p });
+export const getReturnDcDetail = (rdcNumber) => api.get(`${base}/return-dc/${encodeURIComponent(rdcNumber)}/detail`);
+export const confirmReturnDcWarehouse = (rdcNumber, data) =>
+  api.post(`${base}/return-dc/${encodeURIComponent(rdcNumber)}/warehouse-confirm`, data);
 
 export const getDeliveryCounts = () => api.get('/delivery-register-management/counts');
 export const listByStatus = (status, p) => api.get(`/delivery-register-management/${status}`, { params: p });

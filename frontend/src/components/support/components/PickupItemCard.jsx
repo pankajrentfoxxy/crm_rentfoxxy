@@ -464,11 +464,13 @@ function WarehouseReceiptSignModal({ item, onSigned, onClose }) {
     if (!name.trim()) { toast.error('Enter your name'); return; }
     setSaving(true);
     try {
-      await api.post(`/support/items/${item.id}/warehouse-confirm`, {
+      const { data } = await api.post(`/support/items/${item.id}/warehouse-confirm`, {
         esign_data: padRef.current.toDataURL('image/png'),
         signer_name: name.trim(),
       });
-      toast.success('Receipt confirmed. Laptop back in warehouse.');
+      toast.success(data.units_received > 1
+        ? `Receipt confirmed for ${data.units_received} laptops on this Return DC.`
+        : 'Receipt confirmed. Laptop back in warehouse.');
       onSigned();
     } catch (e) {
       toast.error(e.response?.data?.message || 'Failed to confirm');
