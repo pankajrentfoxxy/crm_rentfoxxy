@@ -37,7 +37,7 @@ export default function SalesPipelineApp() {
       <Route path="sales-orders" element={g('sales_orders_doc', <SalesOrderListPage />)} />
       <Route path="sales-orders/*" element={g('sales_orders_doc', <SalesOrderDetailPage />)} />
       <Route path="delivery-challans" element={g('delivery_challans', <DeliveryChallanListPage />)} />
-      <Route path="delivery-challans/:dcNumber" element={g('delivery_challans', <DeliveryChallanDetailPage />)} />
+      <Route path="delivery-challans/*" element={g('delivery_challans', <DeliveryChallanDetailPage />)} />
       <Route path="return-dc" element={g('return_dc', <ReturnDcListPage />)} />
       <Route path="delivery-register" element={g('delivery_register_management', <DeliveryRegisterPage />)} />
       <Route path="technician-bucket" element={g('technician_bucket', <TechnicianBucketPage />)} />

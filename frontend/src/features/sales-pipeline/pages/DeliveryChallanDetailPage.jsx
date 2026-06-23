@@ -18,6 +18,15 @@ import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
 import DcEditModal from '../components/DcEditModal';
 
+function resolveDcNumber(params) {
+  const raw = params['*'] ?? params.dcNumber ?? '';
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 const TABS = ['details', 'qc', 'dispatch', 'einvoice'];
 
 function dcPdfUrl(path) {
@@ -33,7 +42,8 @@ function uploadUrl(p) {
 }
 
 export default function DeliveryChallanDetailPage() {
-  const { dcNumber } = useParams();
+  const params = useParams();
+  const dcNumber = resolveDcNumber(params);
   const { user } = useAuth();
   const isSuperAdmin = user?.role === 'super_admin';
   const [tab, setTab] = useState('details');

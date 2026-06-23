@@ -8,7 +8,7 @@ import DCForm from '../components/DCForm';
 import DispatchModal from '../components/DispatchModal';
 import QcStatusBadge from '../components/QcStatusBadge';
 import { getDcQcStatus, listDCs } from '../salesPipelineApi';
-import { DC_STATUS_STYLES, DISPATCH_MODE_STYLES, formatDate, statusLabel } from '../salesPipelineUtils';
+import { DC_STATUS_STYLES, DISPATCH_MODE_STYLES, formatDate, statusLabel, deliveryChallanDetailPath } from '../salesPipelineUtils';
 
 const TABS = ['all', 'pending', 'in_transit', 'delivered', 'rejected'];
 
@@ -61,7 +61,7 @@ export default function DeliveryChallanListPage() {
     const canDispatch = (row.status === 'pending' || !row.status) && qc?.all_passed;
     return (
       <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
-        <button type="button" className="text-blue-600 text-sm font-semibold" onClick={() => navigate(`/sales-pipeline/delivery-challans/${row.dc_number}`)}>View</button>
+        <button type="button" className="text-blue-600 text-sm font-semibold" onClick={() => navigate(deliveryChallanDetailPath(row.dc_number))}>View</button>
         {canDispatch && (
           <PermissionGate section="dispatch_ops" action="edit">
             <button type="button" className="text-sm text-teal-700 font-semibold" onClick={() => setDispatchDc(row.dc_number)}>Dispatch</button>
@@ -156,7 +156,7 @@ export default function DeliveryChallanListPage() {
         keyField="dc_number"
         loading={loading}
         renderCard={renderCard}
-        onRowClick={(r) => navigate(`/sales-pipeline/delivery-challans/${r.dc_number}`)}
+        onRowClick={(r) => navigate(deliveryChallanDetailPath(r.dc_number))}
       />
 
       <DCForm open={dcDrawer} onClose={() => setDcDrawer(false)} />

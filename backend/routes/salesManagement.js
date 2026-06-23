@@ -47,6 +47,7 @@ const sosCtrl = require('../controllers/salesOrderSerialController');
 const flowCtrl = require('../controllers/deliveryFlowController');
 const supportCtrl = require('../controllers/supportController');
 const { soRoute, bindSoNumber, bindSoSerialDetach } = require('../middleware/soNumberRoutes');
+const { dcRoute, bindDcNumber } = require('../middleware/dcNumberRoutes');
 
 router.use(authMiddleware);
 
@@ -64,10 +65,10 @@ router.patch('/so-lines/:lineId/address', dcEdit, ctrl.updateSoLineAddress);
 // Phase 13 — delivery flow (technician bucket / my deliveries / OTP / POD)
 router.get('/delivery-flow', tbView, flowCtrl.listDeliveryFlow);
 router.get('/my-deliveries', tbView, flowCtrl.getMyDeliveries);
-router.patch('/delivery-challans/:dcNumber/reached', tbEdit, flowCtrl.markTechReached);
-router.post('/delivery-challans/:dcNumber/verify-serial', tbEdit, flowCtrl.verifySerialAndGenerateOtp);
-router.post('/delivery-challans/:dcNumber/deliver', tbEdit, wrapMulter(uploadPod.single('pod_photo')), flowCtrl.submitDeliveryWithPod);
-router.patch('/delivery-challans/:dcNumber/admin-deliver', checkRole('admin', 'manager', 'super_admin'), wrapMulter(uploadPod.single('pod_photo')), flowCtrl.adminDeliverOverride);
+router.patch(...dcRoute('/reached', tbEdit, flowCtrl.markTechReached));
+router.post(...dcRoute('/verify-serial', tbEdit, flowCtrl.verifySerialAndGenerateOtp));
+router.post(...dcRoute('/deliver', tbEdit, wrapMulter(uploadPod.single('pod_photo')), flowCtrl.submitDeliveryWithPod));
+router.patch(...dcRoute('/admin-deliver', checkRole('admin', 'manager', 'super_admin'), wrapMulter(uploadPod.single('pod_photo')), flowCtrl.adminDeliverOverride));
 
 router.get('/counts', quoteView, ctrl.getOperationCounts);
 router.get('/inventory/available-serials', dcView, ctrl.getAvailableSerials);
@@ -90,21 +91,21 @@ router.post('/sales-orders', soCreate, ctrl.storeSalesOrder);
 
 router.get('/delivery-challans/meta/add', dcView, ctrl.getAddDeliveryChallanMeta);
 router.get('/delivery-challans', dcView, ctrl.listDeliveryChallans);
-router.get('/delivery-challans/:dcNumber', dcView, ctrl.getDeliveryChallan);
-router.post('/delivery-challans/:dcNumber/pdf', dcView, ctrl.regenerateDcPdf);
+router.get(/^\/delivery-challans\/(.+)$/, bindDcNumber, dcView, ctrl.getDeliveryChallan);
+router.post(...dcRoute('/pdf', dcView, ctrl.regenerateDcPdf));
 router.post('/delivery-challans', dcCreate, ctrl.storeDeliveryChallan);
 // Phase 15 — create one DC per delivery-address group from QC-passed serials
 router.post('/create-dcs-by-address', dcCreate, ctrl.createDcsByAddress);
 // Edit an existing DC in place — Super Admin only.
-router.patch('/delivery-challans/:dcNumber', checkRole('super_admin'), ctrl.updateDeliveryChallan);
-router.post('/delivery-challans/:dcNumber/send-otp', dcEdit, ctrl.sendDeliveryOtp);
-router.post('/delivery-challans/:dcNumber/verify-otp', dcEdit, ctrl.verifyDeliveryOtp);
-router.post('/delivery-challans/:dcNumber/delivery-register', dcEdit, ctrl.submitDeliveryRegister);
-router.post('/delivery-challans/:dcNumber/qc-ticket', dcEdit, ctrl.createPreDispatchQcTicket);
-router.get('/delivery-challans/:dcNumber/qc-status', dcView, ctrl.getDcQcStatus);
-router.patch('/delivery-challans/:dcNumber/dispatch', dcEdit, ctrl.updateDcDispatch);
-router.patch('/delivery-challans/:dcNumber/delivered', dcEdit, ctrl.markDcDelivered);
-router.patch('/delivery-challans/:dcNumber/rejected', dcEdit, ctrl.markDcRejected);
+router.patch(/^\/delivery-challans\/(.+)$/, bindDcNumber, checkRole('super_admin'), ctrl.updateDeliveryChallan);
+router.post(...dcRoute('/send-otp', dcEdit, ctrl.sendDeliveryOtp));
+router.post(...dcRoute('/verify-otp', dcEdit, ctrl.verifyDeliveryOtp));
+router.post(...dcRoute('/delivery-register', dcEdit, ctrl.submitDeliveryRegister));
+router.post(...dcRoute('/qc-ticket', dcEdit, ctrl.createPreDispatchQcTicket));
+router.get(...dcRoute('/qc-status', dcView, ctrl.getDcQcStatus));
+router.patch(...dcRoute('/dispatch', dcEdit, ctrl.updateDcDispatch));
+router.patch(...dcRoute('/delivered', dcEdit, ctrl.markDcDelivered));
+router.patch(...dcRoute('/rejected', dcEdit, ctrl.markDcRejected));
 
 router.get('/return-dc', rdcView, ctrl.listReturnDeliveryChallans);
 router.get('/return-dc/:rdcNumber/detail', rdcView, ctrl.getReturnDcDetail);

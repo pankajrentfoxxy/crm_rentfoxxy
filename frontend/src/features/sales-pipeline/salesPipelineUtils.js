@@ -50,6 +50,12 @@ export function salesOrderDetailPath(soNumber) {
   return `/sales-pipeline/sales-orders/${encodeURIComponent(soNumber)}`;
 }
 
+/** CRM route — DC numbers may contain slashes (e.g. DC/26-27/0765). */
+export function deliveryChallanDetailPath(dcNumber) {
+  if (!dcNumber) return '/sales-pipeline/delivery-challans';
+  return `/sales-pipeline/delivery-challans/${encodeURIComponent(dcNumber)}`;
+}
+
 export function formatDateTime(d) {
   if (!d) return '—';
   return new Date(d).toLocaleString('en-IN', {

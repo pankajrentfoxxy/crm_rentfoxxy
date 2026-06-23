@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { createDcsByAddress, getDCMeta, listSalesOrders } from '../salesPipelineApi';
+import { deliveryChallanDetailPath } from '../salesPipelineUtils';
 import { BillingAddressPanel } from '../../operation-management/components/CustomerAddressPanels';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -484,7 +485,7 @@ export default function DCForm({ open, onClose, prefillSo }) {
       }
 
       onClose();
-      if (first_dc) navigate(`/sales-pipeline/delivery-challans/${first_dc}`);
+      if (first_dc) navigate(deliveryChallanDetailPath(first_dc));
     } catch (err) {
       toast.error(err.response?.data?.message || 'Create failed');
     } finally {

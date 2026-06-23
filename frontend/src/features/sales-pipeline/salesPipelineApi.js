@@ -3,6 +3,7 @@ import api from '../../utils/api';
 const base = '/sales-management';
 
 const encSo = (n) => encodeURIComponent(n);
+const encDc = (n) => encodeURIComponent(n);
 
 export const listQuotations = (p) => api.get(`${base}/quotations`, { params: p });
 export const getQuotation = (n) => api.get(`${base}/quotations/${n}`);
@@ -19,20 +20,20 @@ export const listPayments = (n) => api.get(`${base}/sales-orders/${encSo(n)}/pay
 export const recordPayment = (n, d) => api.post(`${base}/sales-orders/${encSo(n)}/payments`, d);
 
 export const listDCs = (p) => api.get(`${base}/delivery-challans`, { params: p });
-export const getDC = (n) => api.get(`${base}/delivery-challans/${n}`);
+export const getDC = (n) => api.get(`${base}/delivery-challans/${encDc(n)}`);
 export const createDC = (d) => api.post(`${base}/delivery-challans`, d);
 // Phase 15 — create one DC per delivery-address group
 export const createDcsByAddress = (data) => api.post(`${base}/create-dcs-by-address`, data);
-export const updateDC = (n, d) => api.patch(`${base}/delivery-challans/${n}`, d);
-export const regenerateDcPdf = (n) => api.post(`${base}/delivery-challans/${n}/pdf`);
+export const updateDC = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}`, d);
+export const regenerateDcPdf = (n) => api.post(`${base}/delivery-challans/${encDc(n)}/pdf`);
 export const regenerateQuotationPdf = (n) => api.post(`${base}/quotations/${n}/pdf`);
 export const regenerateSalesOrderPdf = (n) => api.post(`${base}/sales-orders/${encSo(n)}/pdf`);
 export const getDCMeta = (so) => api.get(`${base}/delivery-challans/meta/add`, { params: { sales_order_number: so } });
-export const getDcQcStatus = (n) => api.get(`${base}/delivery-challans/${n}/qc-status`);
-export const createDcQcTickets = (n) => api.post(`${base}/delivery-challans/${n}/qc-ticket`);
-export const dispatchDC = (n, d) => api.patch(`${base}/delivery-challans/${n}/dispatch`, d);
-export const markDelivered = (n, d) => api.patch(`${base}/delivery-challans/${n}/delivered`, d);
-export const markRejected = (n, d) => api.patch(`${base}/delivery-challans/${n}/rejected`, d);
+export const getDcQcStatus = (n) => api.get(`${base}/delivery-challans/${encDc(n)}/qc-status`);
+export const createDcQcTickets = (n) => api.post(`${base}/delivery-challans/${encDc(n)}/qc-ticket`);
+export const dispatchDC = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}/dispatch`, d);
+export const markDelivered = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}/delivered`, d);
+export const markRejected = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}/rejected`, d);
 
 export const listReturnDCs = (p) => api.get(`${base}/return-dc`, { params: p });
 export const getReturnDcDetail = (rdcNumber) => api.get(`${base}/return-dc/${encodeURIComponent(rdcNumber)}/detail`);
@@ -42,8 +43,8 @@ export const confirmReturnDcWarehouse = (rdcNumber, data) =>
 
 export const getDeliveryCounts = () => api.get('/delivery-register-management/counts');
 export const listByStatus = (status, p) => api.get(`/delivery-register-management/${status}`, { params: p });
-export const sendDeliveryOtp = (dcNumber, d) => api.post(`${base}/delivery-challans/${dcNumber}/send-otp`, d || {});
-export const verifyDeliveryOtp = (dcNumber, d) => api.post(`${base}/delivery-challans/${dcNumber}/verify-otp`, d);
+export const sendDeliveryOtp = (dcNumber, d) => api.post(`${base}/delivery-challans/${encDc(dcNumber)}/send-otp`, d || {});
+export const verifyDeliveryOtp = (dcNumber, d) => api.post(`${base}/delivery-challans/${encDc(dcNumber)}/verify-otp`, d);
 export const getAvailableSerials = (p) => api.get(`${base}/inventory/available-serials`, { params: p });
 
 // SO-level serial allocation (attach laptops -> QC ticket each)
@@ -63,13 +64,13 @@ export const updateSoLineAddress = (lineId, d) =>
 // Phase 13 — delivery flow
 export const listDeliveryFlow = (params) => api.get(`${base}/delivery-flow`, { params });
 export const getMyDeliveries = () => api.get(`${base}/my-deliveries`);
-export const markReached = (dcNumber, d) => api.patch(`${base}/delivery-challans/${dcNumber}/reached`, d);
+export const markReached = (dcNumber, d) => api.patch(`${base}/delivery-challans/${encDc(dcNumber)}/reached`, d);
 export const verifySerialAndGenerateOtp = (dcNumber, d) =>
-  api.post(`${base}/delivery-challans/${dcNumber}/verify-serial`, d);
+  api.post(`${base}/delivery-challans/${encDc(dcNumber)}/verify-serial`, d);
 export const submitDeliveryWithPod = (dcNumber, formData) =>
-  api.post(`${base}/delivery-challans/${dcNumber}/deliver`, formData);
+  api.post(`${base}/delivery-challans/${encDc(dcNumber)}/deliver`, formData);
 export const adminDeliverOverride = (dcNumber, formData) =>
-  api.patch(`${base}/delivery-challans/${dcNumber}/admin-deliver`, formData, {
+  api.patch(`${base}/delivery-challans/${encDc(dcNumber)}/admin-deliver`, formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   });
 export const getOperationCounts = () => api.get(`${base}/counts`);

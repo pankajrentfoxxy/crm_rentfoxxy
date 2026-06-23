@@ -9,7 +9,7 @@ import SoSerialPanel from '../components/SoSerialPanel';
 import SoDeliveryAddressPanel from '../components/SoDeliveryAddressPanel';
 import { getQuotation, getSalesOrderFull, listPayments, regenerateSalesOrderPdf } from '../salesPipelineApi';
 import { getBackendOrigin } from '../../../utils/api';
-import { formatConfig, formatCurrency, formatDate, TYPE_STYLES, typeLabel } from '../salesPipelineUtils';
+import { formatConfig, formatCurrency, formatDate, TYPE_STYLES, typeLabel, deliveryChallanDetailPath } from '../salesPipelineUtils';
 
 function resolveSoNumber(params) {
   const raw = params['*'] ?? params.soNumber ?? '';
@@ -209,13 +209,13 @@ export default function SalesOrderDetailPage() {
               {dcs.map((dc) => (
                 <tr key={dc.dc_number}>
                   <td className="px-4 py-2 font-mono text-blue-700">
-                    <Link to={`/sales-pipeline/delivery-challans/${dc.dc_number}`}>{dc.dc_number}</Link>
+                    <Link to={deliveryChallanDetailPath(dc.dc_number)}>{dc.dc_number}</Link>
                   </td>
                   <td className="px-4 py-2">{formatDate(dc.created_at)}</td>
                   <td className="px-4 py-2">{dc.dispatch_mode || '—'}</td>
                   <td className="px-4 py-2">{dc.status || 'pending'}</td>
                   <td className="px-4 py-2">
-                    <Link to={`/sales-pipeline/delivery-challans/${dc.dc_number}`} className="text-blue-600 text-xs">View</Link>
+                    <Link to={deliveryChallanDetailPath(dc.dc_number)} className="text-blue-600 text-xs">View</Link>
                   </td>
                 </tr>
               ))}
