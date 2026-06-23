@@ -70,7 +70,7 @@ model Lead {
   billingAddress        String?              @map("billing_address")
   shippingSameAsBilling Boolean              @default(true) @map("shipping_same_as_billing")
   shippingAddress       String?              @map("shipping_address")
-  followUpTime          String?              @map("follow_up_time")
+  followUpTime          DateTime?            @map("follow_up_time") @db.Time(0)
   convertedAt           DateTime?            @map("converted_at")
   convertedBy           Int?                 @map("converted_by")
   customerId            Int?                 @map("customer_id")

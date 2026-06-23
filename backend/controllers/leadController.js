@@ -8,6 +8,64 @@ const { getNextAutoAssignee, updateAutoAssignConfig } = require('../services/lea
 
 const { STATUSES_WITHOUT_STAGE_CHOICE, STAGES_BY_STATUS, stagesForStatus } = require('../constants/leadStages');
 
+function currentUserId(user) {
+  const id = user?.user_id ?? user?.userId;
+  return id != null && !Number.isNaN(parseInt(id, 10)) ? parseInt(id, 10) : null;
+}
+
+function hasSalesAccess(user) {
+  if (!user) return false;
+  if (user.role === 'sales') return true;
+  return Array.isArray(user.permissions) && user.permissions.includes('sales_access');
+}
+
+/** Sales / sales_access users operate on their own lead queue only. */
+function isSalesLeadOperator(user) {
+  if (!user) return false;
+  if (user.role === 'sales') return true;
+  if (['admin', 'manager', 'super_admin'].includes(user.role)) return false;
+  return hasSalesAccess(user);
+}
+
+function sameUserId(a, b) {
+  if (a == null || b == null) return false;
+  return parseInt(a, 10) === parseInt(b, 10);
+}
+
+/** DB `follow_up_time` is TIME — format as HH:mm for API consumers. */
+function formatFollowUpTime(value) {
+  if (value == null || value === '') return null;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    const h = String(value.getUTCHours()).padStart(2, '0');
+    const m = String(value.getUTCMinutes()).padStart(2, '0');
+    return `${h}:${m}`;
+  }
+  const s = String(value).trim();
+  const m = s.match(/(\d{1,2}):(\d{2})/);
+  if (m) return `${m[1].padStart(2, '0')}:${m[2]}`;
+  return s.length >= 5 ? s.slice(0, 5) : s;
+}
+
+/** Parse HTML time input / API string into PostgreSQL TIME literal. */
+function normalizeFollowUpTimeForDb(value) {
+  if (value == null || value === '') return null;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    const h = String(value.getUTCHours()).padStart(2, '0');
+    const m = String(value.getUTCMinutes()).padStart(2, '0');
+    return `${h}:${m}:00`;
+  }
+  const s = String(value).trim();
+  const m = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (!m) return null;
+  return `${m[1].padStart(2, '0')}:${m[2]}:${m[3] || '00'}`;
+}
+
+function serializeLeadFollowUpTime(lead) {
+  if (!lead || lead.followUpTime === undefined) return lead;
+  lead.followUpTime = formatFollowUpTime(lead.followUpTime);
+  return lead;
+}
+
 async function ensureLeadQuotationColumns() {
   await pool.query(`
     ALTER TABLE leads
@@ -70,12 +128,23 @@ function buildPrismaWhereForLeads(req) {
     }
   }
 
-  if (req.user.role === 'sales') {
-    andConditions.push({ assignedUserId: req.user.user_id });
+  if (isSalesLeadOperator(req.user)) {
+    const uid = currentUserId(req.user);
+    if (uid != null) {
+      // Primary: assigned queue. Fallback: created by this user but assignee
+      // column missing (legacy / Prisma client drift on assigned_user_id).
+      andConditions.push({
+        OR: [
+          { assignedUserId: uid },
+          { AND: [{ assignedById: uid }, { assignedUserId: null }] },
+        ],
+      });
+    }
   } else if (assigned_to) {
     const parts = normalizeArrayField(assigned_to);
     if (parts.some((p) => String(p).toLowerCase() === 'me')) {
-      andConditions.push({ assignedUserId: req.user.user_id });
+      const uid = currentUserId(req.user);
+      if (uid != null) andConditions.push({ assignedUserId: uid });
     } else {
     const hasUnassigned = parts.some((p) => String(p).toLowerCase() === 'unassigned');
     const userIds = parts
@@ -128,7 +197,13 @@ const getDomainFromEmail = (email) => {
 const canEditLead = (user, lead) => {
   if (!user || !lead) return false;
   if (['admin', 'manager'].includes(user.role)) return true;
-  if (user.role === 'sales') return lead.assignedUserId === user.user_id;
+  if (isSalesLeadOperator(user)) {
+    const uid = currentUserId(user);
+    const assignedUserId = lead.assignedUserId ?? lead.assigned_user_id;
+    const assignedById = lead.assignedById ?? lead.assigned_by;
+    return sameUserId(assignedUserId, uid)
+      || (assignedUserId == null && sameUserId(assignedById, uid));
+  }
   return false;
 };
 
@@ -347,7 +422,7 @@ async function enrichLeadsPhase3(leads) {
       billingAddress: ex.billing_address,
       shippingSameAsBilling: ex.shipping_same_as_billing,
       shippingAddress: ex.shipping_address,
-      followUpTime: ex.follow_up_time,
+      followUpTime: formatFollowUpTime(ex.follow_up_time),
       convertedAt: ex.converted_at,
       convertedBy: ex.converted_by,
       customerId: ex.customer_id,
@@ -535,7 +610,7 @@ exports.getLeadById = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Lead not found' });
     }
 
-    if (req.user.role === 'sales' && lead.assignedUserId !== req.user.user_id) {
+    if (isSalesLeadOperator(req.user) && !canEditLead(req.user, lead)) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
@@ -735,12 +810,10 @@ exports.createLead = async (req, res) => {
       if (existing) duplicateOf = existing.leadId;
     }
 
-    const hasSalesAccess = Array.isArray(req.user.permissions) && req.user.permissions.includes('sales_access');
-    const isSalesOperator = req.user.role === 'sales' || (!['admin', 'manager'].includes(req.user.role) && hasSalesAccess);
-
+    const uid = currentUserId(req.user);
     let assignData = {};
-    if (isSalesOperator) {
-      assignData = { assignedUserId: req.user.user_id, assignedById: req.user.user_id, assignedAt: new Date() };
+    if (isSalesLeadOperator(req.user) && uid) {
+      assignData = { assignedUserId: uid, assignedById: uid, assignedAt: new Date() };
     } else {
       let autoAssignee = null;
       try {
@@ -749,13 +822,14 @@ exports.createLead = async (req, res) => {
         console.error('Auto-assign lookup failed:', assignErr.message);
       }
       if (autoAssignee) {
-        assignData = { assignedUserId: autoAssignee, assignedById: req.user.user_id, assignedAt: new Date() };
+        assignData = { assignedUserId: autoAssignee, assignedById: uid, assignedAt: new Date() };
       }
     }
 
     const body = req.body || {};
     const personalRemarks = body.personal_remarks ?? body.personalRemarks;
     const inquiryType = body.inquiry_type ?? body.inquiryType ?? 'rental';
+    const normalizedInquiry = ['rental', 'sales', 'both'].includes(inquiryType) ? inquiryType : 'rental';
 
     const lead = await prisma.lead.create({
       data: {
@@ -767,7 +841,6 @@ exports.createLead = async (req, res) => {
         ram: body.ram || null,
         storage: body.storage || null,
         personalRemarks: personalRemarks ? String(personalRemarks).trim() : null,
-        inquiryType: ['rental', 'sales', 'both'].includes(inquiryType) ? inquiryType : 'rental',
         status: 'Pending',
         createdAt: new Date(),
         ...assignData,
@@ -776,14 +849,43 @@ exports.createLead = async (req, res) => {
       }
     });
 
+    // Persist assignee via SQL — some deployed Prisma clients fail to write
+    // assigned_user_id on create even when assigned_by is set.
+    if (assignData.assignedUserId) {
+      await pool.query(
+        `UPDATE leads
+            SET assigned_user_id = $1,
+                assigned_by = COALESCE($2, assigned_by),
+                assigned_at = COALESCE(assigned_at, NOW())
+          WHERE lead_id = $3`,
+        [assignData.assignedUserId, assignData.assignedById || uid, lead.leadId]
+      );
+      lead.assignedUserId = assignData.assignedUserId;
+      lead.assignedById = assignData.assignedById || uid;
+    }
+
+    await pool.query('UPDATE leads SET inquiry_type = $1 WHERE lead_id = $2', [normalizedInquiry, lead.leadId]);
+    lead.inquiryType = normalizedInquiry;
+
     await prisma.leadActivity.create({
       data: {
         leadId: lead.leadId,
-        userId: req.user.user_id,
+        userId: uid,
         action: 'lead_created',
         notes: 'Lead created'
       }
     });
+
+    if (assignData.assignedUserId) {
+      await prisma.leadAssignment.create({
+        data: {
+          leadId: lead.leadId,
+          assignedTo: assignData.assignedUserId,
+          assignedBy: assignData.assignedById || uid,
+          assignedAt: assignData.assignedAt || new Date()
+        }
+      }).catch((err) => console.warn('lead_assignment insert skipped:', err.message));
+    }
 
     // Trigger research in background (don't block response)
     ensureResearch(lead).catch((err) => console.error('Lead research error:', err));
@@ -791,7 +893,7 @@ exports.createLead = async (req, res) => {
     res.status(201).json({ success: true, lead });
   } catch (error) {
     console.error('Create lead error:', error);
-    res.status(500).json({ success: false, message: 'Server error creating lead' });
+    res.status(500).json({ success: false, message: error.message || 'Server error creating lead' });
   }
 };
 
@@ -1037,7 +1139,7 @@ exports.updateLeadStatus = async (req, res) => {
     });
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
 
-    if (req.user.role === 'sales' && lead.assignedUserId !== req.user.user_id) {
+    if (isSalesLeadOperator(req.user) && !canEditLead(req.user, lead)) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
@@ -1145,23 +1247,24 @@ exports.updateFollowUp = async (req, res) => {
   try {
     const lead = await prisma.lead.findUnique({ where: { leadId: parseInt(id, 10) } });
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
-    if (req.user.role === 'sales' && lead.assignedUserId !== req.user.user_id) {
+    if (isSalesLeadOperator(req.user) && !canEditLead(req.user, lead)) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
     const leadId = parseInt(id, 10);
-    const followUpTime = req.body.follow_up_time || null;
+    const followUpTime = normalizeFollowUpTimeForDb(req.body.follow_up_time);
 
     await pool.query(
       `UPDATE leads SET
         follow_up_date = $1,
-        follow_up_time = $2,
+        follow_up_time = $2::time,
         updated_at = NOW()
        WHERE lead_id = $3`,
       [follow_up_date ? new Date(follow_up_date) : null, followUpTime, leadId]
     );
 
     const updated = await prisma.lead.findUnique({ where: { leadId } });
+    serializeLeadFollowUpTime(updated);
 
     const timeNote = followUpTime ? ` at ${followUpTime}` : '';
     await prisma.leadActivity.create({
@@ -1185,8 +1288,9 @@ exports.getFollowUps = async (req, res) => {
     const now = new Date();
     const endOfDay = new Date(now);
     endOfDay.setHours(23, 59, 59, 999);
-    const baseWhere = req.user.role === 'sales'
-      ? { assignedUserId: req.user.user_id }
+    const uid = currentUserId(req.user);
+    const baseWhere = isSalesLeadOperator(req.user) && uid != null
+      ? { assignedUserId: uid }
       : {};
 
     const overdue = await prisma.lead.findMany({
@@ -1222,7 +1326,7 @@ exports.runResearch = async (req, res) => {
   try {
     const lead = await prisma.lead.findUnique({ where: { leadId: parseInt(id, 10) } });
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
-    if (req.user.role === 'sales' && lead.assignedUserId !== req.user.user_id) {
+    if (isSalesLeadOperator(req.user) && !canEditLead(req.user, lead)) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
@@ -1243,7 +1347,7 @@ exports.updateResearchDetails = async (req, res) => {
   try {
     const lead = await prisma.lead.findUnique({ where: { leadId: parseInt(id, 10) } });
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
-    if (req.user.role === 'sales' && lead.assignedUserId !== req.user.user_id) {
+    if (isSalesLeadOperator(req.user) && !canEditLead(req.user, lead)) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
@@ -1313,7 +1417,7 @@ exports.createLeadOrder = async (req, res) => {
     if (lead.status !== 'Deal') {
       return res.status(400).json({ success: false, message: 'Order can be created only for Deal status' });
     }
-    if (req.user.role === 'sales' && lead.assignedUserId !== req.user.user_id) {
+    if (isSalesLeadOperator(req.user) && !canEditLead(req.user, lead)) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
@@ -1586,8 +1690,9 @@ exports.getLeadOrders = async (req, res) => {
 
   try {
     const where = status ? { orderStatus: status } : {};
-    if (req.user.role === 'sales') {
-      where.lead = { assignedUserId: req.user.user_id };
+    const uid = currentUserId(req.user);
+    if (isSalesLeadOperator(req.user) && uid != null) {
+      where.lead = { assignedUserId: uid };
     }
     const orders = await prisma.leadOrder.findMany({
       where,
@@ -2013,7 +2118,13 @@ exports.updateLeadFullProfile = async (req, res) => {
     }
 
     if (pick('follow_up_time', 'followUpTime') !== undefined) {
-      addField('follow_up_time', pick('follow_up_time', 'followUpTime') || null, 'follow-up time', existing.followUpTime);
+      const t = normalizeFollowUpTimeForDb(pick('follow_up_time', 'followUpTime'));
+      setClauses.push(`follow_up_time = $${idx}::time`);
+      params.push(t);
+      idx += 1;
+      const prev = formatFollowUpTime(existing.followUpTime) ?? '';
+      const next = formatFollowUpTime(t) ?? '';
+      if (prev !== next) changes.push('follow-up time');
     }
 
     if (!setClauses.length) {
@@ -2031,6 +2142,7 @@ exports.updateLeadFullProfile = async (req, res) => {
       where: { leadId },
       include: { assignedUser: { select: { userId: true, name: true, role: true } } }
     });
+    serializeLeadFollowUpTime(updated);
 
     await prisma.leadActivity.create({
       data: {
@@ -2069,7 +2181,7 @@ exports.convertToCustomer = async (req, res) => {
       });
     }
 
-    if (req.user.role === 'sales' && lead.assigned_user_id !== req.user.user_id) {
+    if (isSalesLeadOperator(req.user) && !canEditLead(req.user, lead)) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
