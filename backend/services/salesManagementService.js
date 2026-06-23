@@ -281,10 +281,7 @@ async function getDeliveryChallanLines(dcNumber) {
   return result.rows;
 }
 
-/** Return DC list — sourced from the actual Return DC rows
- *  (delivery_challan_lines with movement_type='return'), one row per RDC. */
-async function listReturnDeliveryChallans() {
-  // Self-heal legacy rows: link pickup items to their RDC and mint customer OTP.
+async function healReturnDcPickupLinks() {
   await pool.query(`
     UPDATE support_ticket_items sti
        SET return_dc_number = dcl.dc_number, updated_at = NOW()
@@ -317,7 +314,53 @@ async function listReturnDeliveryChallans() {
        AND customer_otp_verified_at IS NULL
        AND warehouse_received_at IS NULL
   `).catch(() => {});
+}
+
+/** Return DC list — sourced from the actual Return DC rows
+ *  (delivery_challan_lines with movement_type='return'), one row per RDC. */
+async function listReturnDeliveryChallans({ page = 1, limit = 25, search = '' } = {}) {
+  await healReturnDcPickupLinks();
   await regenerateStaleReturnDcPdfs(pool, 8);
+
+  const params = [];
+  let searchSql = '';
+  if (search) {
+    params.push(`%${search}%`);
+    const n = params.length;
+    searchSql = ` AND (
+      rl.dc_number ILIKE $${n}
+      OR rl.customer_name ILIKE $${n}
+      OR rl.sales_order_number ILIKE $${n}
+      OR rl.original_dc_number ILIKE $${n}
+      OR st.return_dc_number ILIKE $${n}
+      OR COALESCE(sti.ttspl_id, '') ILIKE $${n}
+      OR COALESCE(sti.serial_number, '') ILIKE $${n}
+    )`;
+  }
+
+  const countResult = await pool.query(
+    `SELECT COUNT(*)::int AS total
+       FROM delivery_challan_lines rl
+       LEFT JOIN support_tickets st ON st.id = rl.support_ticket_id
+       LEFT JOIN LATERAL (
+         SELECT ttspl_id, serial_number
+           FROM support_ticket_items
+          WHERE item_type = 'pickup'
+            AND (
+              return_dc_number = rl.dc_number
+              OR (return_dc_number IS NULL AND ticket_id = rl.support_ticket_id)
+            )
+          ORDER BY CASE WHEN return_dc_number = rl.dc_number THEN 0 ELSE 1 END, id DESC
+          LIMIT 1
+       ) sti ON true
+      WHERE rl.movement_type = 'return'${searchSql}`,
+    params
+  );
+
+  const offset = (page - 1) * limit;
+  const listParams = [...params, limit, offset];
+  const limitIdx = listParams.length - 1;
+  const offsetIdx = listParams.length;
 
   const result = await pool.query(
     `SELECT
@@ -373,11 +416,22 @@ async function listReturnDeliveryChallans() {
          )
        LIMIT 1
      ) vsn ON true
-     WHERE rl.movement_type = 'return'
+     WHERE rl.movement_type = 'return'${searchSql}
      ORDER BY rl.created_at DESC NULLS LAST
-     LIMIT 500`
+     LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+    listParams
   );
-  return result.rows;
+
+  const total = countResult.rows[0]?.total || 0;
+  return {
+    return_dcs: result.rows,
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    },
+  };
 }
 
 /** Full Return DC detail — units, pickup items, POD, e-signatures, PDF. */

@@ -44,6 +44,12 @@ export function formatDate(d) {
   return new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
+/** CRM route — SO numbers may contain slashes (e.g. SO/26-27/0590). */
+export function salesOrderDetailPath(soNumber) {
+  if (!soNumber) return '/sales-pipeline/sales-orders';
+  return `/sales-pipeline/sales-orders/${encodeURIComponent(soNumber)}`;
+}
+
 export function formatDateTime(d) {
   if (!d) return '—';
   return new Date(d).toLocaleString('en-IN', {

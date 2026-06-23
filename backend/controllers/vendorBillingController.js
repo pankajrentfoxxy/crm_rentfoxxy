@@ -13,7 +13,17 @@ async function nextDebitNoteNumber() {
 
 exports.listVendorBills = async (req, res) => {
   try {
-    const { vendor_id, month, year, status, page = 1, limit = 50 } = req.query;
+    const {
+      vendor_id,
+      month,
+      year,
+      status,
+      search,
+      page = 1,
+      limit = 25,
+    } = req.query;
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const pageSize = Math.min(parseInt(limit, 10) || 25, 100);
     const params = [];
     const where = ['1=1'];
     if (vendor_id) {
@@ -32,38 +42,67 @@ exports.listVendorBills = async (req, res) => {
       params.push(status);
       where.push(`vb.status = $${params.length}`);
     }
-    const offset = (Math.max(1, parseInt(page, 10)) - 1) * parseInt(limit, 10);
-    params.push(parseInt(limit, 10), offset);
+    const qSearch = String(search || '').trim();
+    if (qSearch) {
+      params.push(`%${qSearch}%`);
+      const n = params.length;
+      where.push(`(
+        vb.bill_number ILIKE $${n}
+        OR COALESCE(v.business_name, '') ILIKE $${n}
+        OR COALESCE(v.first_name, '') ILIKE $${n}
+        OR COALESCE(v.last_name, '') ILIKE $${n}
+        OR COALESCE(vb.notes, '') ILIKE $${n}
+      )`);
+    }
+    const whereSql = where.join(' AND ');
+    const offset = (pageNum - 1) * pageSize;
+    const listParams = [...params, pageSize, offset];
 
-    const [listRes, summaryRes] = await Promise.all([
+    const [listRes, countRes, summaryRes] = await Promise.all([
       pool.query(
         `SELECT vb.*, COALESCE(v.business_name, v.first_name) AS vendor_name,
-                jsonb_array_length(vb.line_items) AS unit_count
+                jsonb_array_length(COALESCE(vb.line_items, '[]'::jsonb)) AS unit_count
          FROM vendor_monthly_bills vb
          LEFT JOIN vendors v ON v.vendor_id = vb.vendor_id
-         WHERE ${where.join(' AND ')}
-         ORDER BY vb.bill_year DESC, vb.bill_month DESC
-         LIMIT $${params.length - 1} OFFSET $${params.length}`,
+         WHERE ${whereSql}
+         ORDER BY vb.bill_year DESC, vb.bill_month DESC, vb.bill_id DESC
+         LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+        listParams
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS total
+         FROM vendor_monthly_bills vb
+         LEFT JOIN vendors v ON v.vendor_id = vb.vendor_id
+         WHERE ${whereSql}`,
         params
       ),
       pool.query(
         `SELECT
-           COUNT(*) FILTER (WHERE status = 'generated')::int AS generated_count,
-           COALESCE(SUM(total_payable) FILTER (WHERE status = 'generated'), 0) AS generated_total,
-           COUNT(*) FILTER (WHERE status = 'approved')::int AS approved_count,
-           COALESCE(SUM(total_payable) FILTER (WHERE status = 'approved'), 0) AS approved_total,
-           COUNT(*) FILTER (WHERE status = 'paid')::int AS paid_count,
-           COALESCE(SUM(total_payable) FILTER (WHERE status = 'paid'), 0) AS paid_total
+           COUNT(*) FILTER (WHERE vb.status = 'generated')::int AS generated_count,
+           COALESCE(SUM(vb.total_payable) FILTER (WHERE vb.status = 'generated'), 0) AS generated_total,
+           COUNT(*) FILTER (WHERE vb.status = 'approved')::int AS approved_count,
+           COALESCE(SUM(vb.total_payable) FILTER (WHERE vb.status = 'approved'), 0) AS approved_total,
+           COUNT(*) FILTER (WHERE vb.status = 'paid')::int AS paid_count,
+           COALESCE(SUM(vb.total_payable) FILTER (WHERE vb.status = 'paid'), 0) AS paid_total
          FROM vendor_monthly_bills vb
-         WHERE ${where.join(' AND ')}`,
-        params.slice(0, params.length - 2)
+         LEFT JOIN vendors v ON v.vendor_id = vb.vendor_id
+         WHERE ${whereSql}`,
+        params
       ),
     ]);
+
+    const total = countRes.rows[0]?.total || 0;
 
     res.json({
       success: true,
       bills: listRes.rows,
       summary: summaryRes.rows[0] || {},
+      pagination: {
+        page: pageNum,
+        limit: pageSize,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      },
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

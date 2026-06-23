@@ -503,7 +503,7 @@ export default function DCForm({ open, onClose, prefillSo }) {
         {/* Header */}
         <div className="flex items-center justify-between border-b px-4 py-3">
           <div>
-            <h2 className="font-semibold text-gray-900">Create Delivery Challan</h2>
+          <h2 className="font-semibold text-gray-900">Create Delivery Challan</h2>
             <p className="text-xs text-gray-400 mt-0.5">One DC per delivery address</p>
           </div>
           <button type="button" onClick={onClose} className="p-1 rounded hover:bg-gray-100">
@@ -542,7 +542,7 @@ export default function DCForm({ open, onClose, prefillSo }) {
               <p className="text-xs text-amber-600 mt-1">
                 Go to Sales Order → Laptops & QC to attach and pass QC first.
               </p>
-            </div>
+                  </div>
           )}
 
           {dcGroups.length > 0 && (
@@ -580,7 +580,7 @@ export default function DCForm({ open, onClose, prefillSo }) {
                   <option value="by_porter">Porter / Last-mile service</option>
                   <option value="by_hand">Inhouse Delivery Technician</option>
                 </select>
-              </div>
+                        </div>
 
               {/* DC Group Cards */}
               <div className="space-y-3">
@@ -596,8 +596,8 @@ export default function DCForm({ open, onClose, prefillSo }) {
                     onAddressEdit={handleAddressEdit}
                     onToggleSerial={handleToggleSerial}
                   />
-                ))}
-              </div>
+                      ))}
+                    </div>
 
               {/* Billing address (always shown) */}
               {meta?.billing_address && (
@@ -624,8 +624,8 @@ export default function DCForm({ open, onClose, prefillSo }) {
                   {validation.warnings.map((w, i) => (
                     <p key={i} className="text-xs text-amber-700 flex items-start gap-1">
                       <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />{w}
-                    </p>
-                  ))}
+                </p>
+              ))}
                 </div>
               )}
             </>

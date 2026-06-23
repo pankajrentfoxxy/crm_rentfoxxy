@@ -85,17 +85,12 @@ function lineSummaryForSerial(lineItems, extraRaw) {
 
 /**
  * Laravel inventoryList($status === 'replace'): serial_numbers.status2 = 'replace'
- * CRM: column inventory_status or extra.status2 / extra.inventory_status
+ * CRM: inventory_status column and/or extra.status2 / extra.inventory_status
  */
 const INVENTORY_REPLACE_SQL = `(
   s.inventory_status = 'replace'
-  OR (
-    (s.inventory_status IS NULL OR TRIM(COALESCE(s.inventory_status, '')) = '')
-    AND (
-      COALESCE(NULLIF(TRIM(s.extra->>'inventory_status'), ''), '') = 'replace'
-      OR COALESCE(NULLIF(TRIM(s.extra->>'status2'), ''), '') = 'replace'
-    )
-  )
+  OR COALESCE(NULLIF(TRIM(s.extra->>'inventory_status'), ''), '') = 'replace'
+  OR COALESCE(NULLIF(TRIM(s.extra->>'status2'), ''), '') = 'replace'
 )`;
 
 const listInventoryValidators = [

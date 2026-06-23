@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, FileText } from 'lucide-react';
+import { Plus, FileText, Search } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import VendorBillStatusBadge from '../components/VendorBillStatusBadge';
@@ -9,6 +9,7 @@ import { approveVendorBill, generateVendorBill, listVendorBills, markVendorBillP
 import api from '../../../utils/api';
 
 const MONTHS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const PAGE_SIZE = 25;
 
 function fmt(n) {
   return `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
@@ -18,33 +19,43 @@ export default function VendorBillListPage() {
   const [rows, setRows] = useState([]);
   const [summary, setSummary] = useState({});
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [status, setStatus] = useState('');
   const [vendorId, setVendorId] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const [searchDebounced, setSearchDebounced] = useState('');
   const [vendors, setVendors] = useState([]);
   const [genOpen, setGenOpen] = useState(false);
   const [genForm, setGenForm] = useState({ vendor_id: '', month: String(new Date().getMonth() + 1), year: String(new Date().getFullYear()) });
 
   useEffect(() => {
+    const t = setTimeout(() => setSearchDebounced(searchInput.trim()), 320);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
+  useEffect(() => {
     api.get('/vendor-management/vendors', { params: { limit: 200 } })
-      .then((r) => setVendors(r.data?.vendors || r.data?.rows || []))
+      .then((r) => setVendors(r.data?.vendors || r.data?.rows || r.data?.data || []))
       .catch(() => setVendors([]));
   }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const params = { limit: 100 };
+      const params = { page, limit: PAGE_SIZE, search: searchDebounced || undefined };
       if (status) params.status = status;
       if (vendorId) params.vendor_id = vendorId;
       const res = await listVendorBills(params);
       setRows(res.data?.bills || []);
       setSummary(res.data?.summary || {});
+      setPagination(res.data?.pagination || { page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
     } catch {
       toast.error('Failed to load bills');
     } finally {
       setLoading(false);
     }
-  }, [status, vendorId]);
+  }, [status, vendorId, page, searchDebounced]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -111,11 +122,21 @@ export default function VendorBillListPage() {
       </div>
 
       <div className="flex flex-wrap gap-2 mb-4">
-        <select value={vendorId} onChange={(e) => setVendorId(e.target.value)} className="border rounded-lg px-2 py-1.5 text-sm">
+        <div className="relative flex-1 min-w-[220px]">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+          <input
+            type="search"
+            placeholder="Search bill #, vendor, notes…"
+            value={searchInput}
+            onChange={(e) => { setSearchInput(e.target.value); setPage(1); }}
+            className="w-full border rounded-lg pl-9 pr-3 py-2 text-sm"
+          />
+        </div>
+        <select value={vendorId} onChange={(e) => { setVendorId(e.target.value); setPage(1); }} className="border rounded-lg px-2 py-1.5 text-sm min-w-[10rem]">
           <option value="">All vendors</option>
-          {vendors.map((v) => <option key={v.vendor_id} value={v.vendor_id}>{v.vendor_name}</option>)}
+          {vendors.map((v) => <option key={v.vendor_id} value={v.vendor_id}>{v.vendor_name || v.business_name || v.first_name}</option>)}
         </select>
-        <select value={status} onChange={(e) => setStatus(e.target.value)} className="border rounded-lg px-2 py-1.5 text-sm">
+        <select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }} className="border rounded-lg px-2 py-1.5 text-sm">
           <option value="">All statuses</option>
           {['generated', 'approved', 'paid', 'disputed'].map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
@@ -210,6 +231,19 @@ export default function VendorBillListPage() {
           </tbody>
         </table>
       </div>
+
+      {pagination.total > 0 && (
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mt-4">
+          <p className="text-sm text-gray-500">
+            Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, pagination.total)} of {pagination.total}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" disabled={page <= 1 || loading} onClick={() => setPage((p) => p - 1)}>Prev</Button>
+            <span className="text-sm text-gray-600 py-2">Page {page} of {pagination.totalPages}</span>
+            <Button variant="secondary" disabled={page >= pagination.totalPages || loading} onClick={() => setPage((p) => p + 1)}>Next</Button>
+          </div>
+        </div>
+      )}
 
       {genOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">

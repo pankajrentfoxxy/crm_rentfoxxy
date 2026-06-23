@@ -8,7 +8,7 @@ import PaymentModal from '../components/PaymentModal';
 import SalesOrderForm from '../components/SalesOrderForm';
 import DCForm from '../components/DCForm';
 import { listSalesOrders } from '../salesPipelineApi';
-import { formatCurrency, formatDate, TYPE_STYLES, typeLabel } from '../salesPipelineUtils';
+import { formatCurrency, formatDate, TYPE_STYLES, typeLabel, salesOrderDetailPath } from '../salesPipelineUtils';
 
 export default function SalesOrderListPage() {
   const navigate = useNavigate();
@@ -49,7 +49,7 @@ export default function SalesOrderListPage() {
 
   const actionCell = (row) => (
     <div className="flex flex-wrap items-center gap-3" onClick={(e) => e.stopPropagation()}>
-      <button type="button" className="text-blue-600 text-sm font-semibold" onClick={() => navigate(`/sales-pipeline/sales-orders/${row.sales_order_number}`)}>View</button>
+      <button type="button" className="text-blue-600 text-sm font-semibold" onClick={() => navigate(salesOrderDetailPath(row.sales_order_number))}>View</button>
       <PermissionGate section="delivery_challans" action="create">
         <button type="button" className="text-sm text-teal-700 font-semibold" onClick={() => { setPrefillSo(row.sales_order_number); setDcDrawer(true); }}>Create DC</button>
       </PermissionGate>
@@ -110,7 +110,7 @@ export default function SalesOrderListPage() {
         keyField="sales_order_number"
         loading={loading}
         renderCard={renderCard}
-        onRowClick={(r) => navigate(`/sales-pipeline/sales-orders/${r.sales_order_number}`)}
+        onRowClick={(r) => navigate(salesOrderDetailPath(r.sales_order_number))}
       />
 
       <SalesOrderForm open={soDrawer} onClose={() => setSoDrawer(false)} onSaved={load} prefillQuotation={prefillQuote} />

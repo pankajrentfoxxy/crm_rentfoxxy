@@ -46,17 +46,18 @@ const ctrl = require('../controllers/salesManagementController');
 const sosCtrl = require('../controllers/salesOrderSerialController');
 const flowCtrl = require('../controllers/deliveryFlowController');
 const supportCtrl = require('../controllers/supportController');
+const { soRoute, bindSoNumber, bindSoSerialDetach } = require('../middleware/soNumberRoutes');
 
 router.use(authMiddleware);
 
 // SO-level serial allocation (warehouse attaches laptops -> 1 QC ticket each)
-router.get('/sales-orders/:soNumber/serials', dcView, sosCtrl.listSerials);
-router.post('/sales-orders/:soNumber/serials', dcEdit, sosCtrl.attachSerial);
-router.delete('/sales-orders/:soNumber/serials/:allocId', dcEdit, sosCtrl.detachSerial);
+router.get(...soRoute('/serials', dcView, sosCtrl.listSerials));
+router.post(...soRoute('/serials', dcEdit, sosCtrl.attachSerial));
+router.delete(/^\/sales-orders\/(.+)\/serials\/([^/]+)$/, bindSoSerialDetach, dcEdit, sosCtrl.detachSerial);
 
 // Phase 13 — per-serial delivery addresses on the SO
 router.patch('/so-serials/:allocationId/address', dcEdit, ctrl.updateSoSerialAddress);
-router.patch('/sales-orders/:soNumber/serial-addresses', dcEdit, ctrl.bulkUpdateSoSerialAddresses);
+router.patch(...soRoute('/serial-addresses', dcEdit, ctrl.bulkUpdateSoSerialAddresses));
 // Phase 14 — line-level delivery address (before serials are attached)
 router.patch('/so-lines/:lineId/address', dcEdit, ctrl.updateSoLineAddress);
 
@@ -80,11 +81,11 @@ router.patch('/quotations/:quotationNumber/status', quoteEdit, ctrl.updateQuotat
 
 router.get('/sales-orders/meta/add', soView, ctrl.getAddSalesOrderMeta);
 router.get('/sales-orders', soView, ctrl.listSalesOrders);
-router.get('/sales-orders/:salesOrderNumber', soView, ctrl.getSalesOrder);
-router.post('/sales-orders/:salesOrderNumber/pdf', soView, ctrl.regenerateSalesOrderPdf);
-router.get('/sales-orders/:soNumber/payments', payView, ctrl.listPayments);
-router.post('/sales-orders/:soNumber/payments', payCreate, ctrl.recordPayment);
-router.get('/sales-orders/:soNumber/full', soView, ctrl.getSoWithPayments);
+router.get(...soRoute('/full', soView, ctrl.getSoWithPayments));
+router.get(...soRoute('/payments', payView, ctrl.listPayments));
+router.post(...soRoute('/payments', payCreate, ctrl.recordPayment));
+router.post(...soRoute('/pdf', soView, ctrl.regenerateSalesOrderPdf));
+router.get(/^\/sales-orders\/(.+)$/, bindSoNumber, soView, ctrl.getSalesOrder);
 router.post('/sales-orders', soCreate, ctrl.storeSalesOrder);
 
 router.get('/delivery-challans/meta/add', dcView, ctrl.getAddDeliveryChallanMeta);

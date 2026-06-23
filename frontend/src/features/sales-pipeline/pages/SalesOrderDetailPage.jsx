@@ -11,6 +11,15 @@ import { getQuotation, getSalesOrderFull, listPayments, regenerateSalesOrderPdf 
 import { getBackendOrigin } from '../../../utils/api';
 import { formatConfig, formatCurrency, formatDate, TYPE_STYLES, typeLabel } from '../salesPipelineUtils';
 
+function resolveSoNumber(params) {
+  const raw = params['*'] ?? params.soNumber ?? '';
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 function ConfigCard({ line }) {
   const title = [line.brand, line.model_name || line.model].filter(Boolean).join(' - ');
   const specs = [line.processor, line.generation, line.ram, line.storage, line.gpu].filter(Boolean).join(' | ');
@@ -34,7 +43,8 @@ function pdfUrl(p) {
 const TABS = ['overview', 'laptops', 'addresses', 'payments', 'dcs', 'quote'];
 
 export default function SalesOrderDetailPage() {
-  const { soNumber } = useParams();
+  const params = useParams();
+  const soNumber = resolveSoNumber(params);
   const [tab, setTab] = useState('overview');
   const [data, setData] = useState(null);
   const [payments, setPayments] = useState([]);

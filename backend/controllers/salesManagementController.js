@@ -1483,8 +1483,17 @@ exports.assignReturnDcNumber = async (req, res) => {
 
 exports.listReturnDeliveryChallans = async (req, res) => {
   try {
-    const rows = await listReturnDeliveryChallans();
-    res.json({ success: true, return_dcs: rows, rows, orders: rows });
+    const data = await listReturnDeliveryChallans({
+      page: parseInt(req.query.page, 10) || 1,
+      limit: Math.min(parseInt(req.query.limit, 10) || 25, 100),
+      search: req.query.search || '',
+    });
+    res.json({
+      success: true,
+      ...data,
+      rows: data.return_dcs,
+      orders: data.return_dcs,
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

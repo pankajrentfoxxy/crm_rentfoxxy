@@ -10,22 +10,23 @@ import toast from 'react-hot-toast';
 export default function CustomerListPage() {
   const navigate = useNavigate();
   const [customers, setCustomers] = useState([]);
-  const [pagination, setPagination] = useState({ page: 1, totalPages: 1 });
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
   const [search, setSearch] = useState('');
   const [kycFilter, setKycFilter] = useState('');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editCustomer, setEditCustomer] = useState(null);
   const [activeOrderCounts, setActiveOrderCounts] = useState({});
 
-  const load = useCallback(async (page = 1) => {
+  const load = useCallback(async () => {
     try {
       const res = await getCustomers({ page, limit: 25, search: search || undefined });
       setCustomers(res.data?.customers || []);
-      setPagination(res.data?.pagination || { page: 1, totalPages: 1 });
+      setPagination(res.data?.pagination || { page: 1, totalPages: 1, total: 0 });
     } catch {
       toast.error('Failed to load customers');
     }
-  }, [search]);
+  }, [page, search]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -52,10 +53,10 @@ export default function CustomerListPage() {
   }, [customers, kycFilter]);
 
   const stats = useMemo(() => ({
-    total: customers.length,
+    total: pagination.total || customers.length,
     kyc: customers.filter((c) => c.kyc_verified).length,
     portal: customers.filter((c) => c.portal_enabled).length,
-  }), [customers]);
+  }), [customers, pagination.total]);
 
   const actionCell = (c) => (
     <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
@@ -117,7 +118,7 @@ export default function CustomerListPage() {
       </div>
 
       <div className="flex flex-wrap gap-3 mb-4">
-        <input placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)}
+        <input placeholder="Search..." value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }}
           className="border border-gray-200 rounded-lg px-3 py-2 text-sm flex-1 min-w-[200px]" />
         <select value={kycFilter} onChange={(e) => setKycFilter(e.target.value)}
           className="border border-gray-200 rounded-lg px-3 py-2 text-sm">
@@ -135,7 +136,20 @@ export default function CustomerListPage() {
         onRowClick={(c) => navigate(`/lead-crm/customers/${c.customer_id}`)}
       />
 
-      <CustomerFormDrawer open={drawerOpen} customer={editCustomer} onClose={() => setDrawerOpen(false)} onSaved={() => load(pagination.page)} />
+      {pagination.totalPages > 1 && (
+        <div className="flex items-center justify-between mt-4">
+          <p className="text-sm text-gray-500">
+            Showing {(page - 1) * 25 + 1}–{Math.min(page * 25, pagination.total)} of {pagination.total}
+          </p>
+          <div className="flex gap-2">
+            <Button variant="secondary" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Prev</Button>
+            <span className="text-sm text-gray-600 py-2">Page {page} of {pagination.totalPages}</span>
+            <Button variant="secondary" disabled={page >= pagination.totalPages} onClick={() => setPage((p) => p + 1)}>Next</Button>
+          </div>
+        </div>
+      )}
+
+      <CustomerFormDrawer open={drawerOpen} customer={editCustomer} onClose={() => setDrawerOpen(false)} onSaved={() => load()} />
     </div>
   );
 }

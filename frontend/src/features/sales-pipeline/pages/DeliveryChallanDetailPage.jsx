@@ -12,7 +12,7 @@ import {
 } from '../salesPipelineApi';
 import {
   DC_STATUS_STYLES, formatConfig, formatCurrency, formatDateTime,
-  parseSerials, statusLabel,
+  parseSerials, salesOrderDetailPath, statusLabel,
 } from '../salesPipelineUtils';
 import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
@@ -144,7 +144,7 @@ export default function DeliveryChallanDetailPage() {
         <div>
           <Link to="/sales-pipeline/delivery-challans" className="text-sm text-blue-600">← Back</Link>
           <h1 className="text-2xl font-semibold font-mono mt-1">{dcNumber}</h1>
-          <p className="text-gray-600">{head.customer_name || '—'} · SO: <Link className="text-blue-600" to={`/sales-pipeline/sales-orders/${head.sales_order_number}`}>{head.sales_order_number}</Link></p>
+          <p className="text-gray-600">{head.customer_name || '—'} · SO: <Link className="text-blue-600" to={salesOrderDetailPath(head.sales_order_number)}>{head.sales_order_number}</Link></p>
           <div className="flex flex-wrap gap-2 mt-2 items-center">
             <span className={`px-2 py-0.5 rounded-full text-xs ${DC_STATUS_STYLES[head.status || 'pending']}`}>{statusLabel(head.status || 'pending')}</span>
             {head.entity_code && (

@@ -2,6 +2,8 @@ import api from '../../utils/api';
 
 const base = '/sales-management';
 
+const encSo = (n) => encodeURIComponent(n);
+
 export const listQuotations = (p) => api.get(`${base}/quotations`, { params: p });
 export const getQuotation = (n) => api.get(`${base}/quotations/${n}`);
 export const createQuotation = (d) => api.post(`${base}/quotations`, d);
@@ -9,12 +11,12 @@ export const updateQuotationStatus = (n, d) => api.patch(`${base}/quotations/${n
 export const getQuotationMeta = () => api.get(`${base}/quotations/meta/add`);
 
 export const listSalesOrders = (p) => api.get(`${base}/sales-orders`, { params: p });
-export const getSalesOrder = (n) => api.get(`${base}/sales-orders/${n}`);
-export const getSalesOrderFull = (n) => api.get(`${base}/sales-orders/${n}/full`);
+export const getSalesOrder = (n) => api.get(`${base}/sales-orders/${encSo(n)}`);
+export const getSalesOrderFull = (n) => api.get(`${base}/sales-orders/${encSo(n)}/full`);
 export const createSalesOrder = (d) => api.post(`${base}/sales-orders`, d);
 export const getSalesOrderMeta = (p) => api.get(`${base}/sales-orders/meta/add`, { params: p });
-export const listPayments = (n) => api.get(`${base}/sales-orders/${n}/payments`);
-export const recordPayment = (n, d) => api.post(`${base}/sales-orders/${n}/payments`, d);
+export const listPayments = (n) => api.get(`${base}/sales-orders/${encSo(n)}/payments`);
+export const recordPayment = (n, d) => api.post(`${base}/sales-orders/${encSo(n)}/payments`, d);
 
 export const listDCs = (p) => api.get(`${base}/delivery-challans`, { params: p });
 export const getDC = (n) => api.get(`${base}/delivery-challans/${n}`);
@@ -24,7 +26,7 @@ export const createDcsByAddress = (data) => api.post(`${base}/create-dcs-by-addr
 export const updateDC = (n, d) => api.patch(`${base}/delivery-challans/${n}`, d);
 export const regenerateDcPdf = (n) => api.post(`${base}/delivery-challans/${n}/pdf`);
 export const regenerateQuotationPdf = (n) => api.post(`${base}/quotations/${n}/pdf`);
-export const regenerateSalesOrderPdf = (n) => api.post(`${base}/sales-orders/${n}/pdf`);
+export const regenerateSalesOrderPdf = (n) => api.post(`${base}/sales-orders/${encSo(n)}/pdf`);
 export const getDCMeta = (so) => api.get(`${base}/delivery-challans/meta/add`, { params: { sales_order_number: so } });
 export const getDcQcStatus = (n) => api.get(`${base}/delivery-challans/${n}/qc-status`);
 export const createDcQcTickets = (n) => api.post(`${base}/delivery-challans/${n}/qc-ticket`);
@@ -45,15 +47,15 @@ export const verifyDeliveryOtp = (dcNumber, d) => api.post(`${base}/delivery-cha
 export const getAvailableSerials = (p) => api.get(`${base}/inventory/available-serials`, { params: p });
 
 // SO-level serial allocation (attach laptops -> QC ticket each)
-export const listSoSerials = (so) => api.get(`${base}/sales-orders/${so}/serials`);
-export const attachSoSerial = (so, d) => api.post(`${base}/sales-orders/${so}/serials`, d);
-export const detachSoSerial = (so, allocId) => api.delete(`${base}/sales-orders/${so}/serials/${allocId}`);
+export const listSoSerials = (so) => api.get(`${base}/sales-orders/${encSo(so)}/serials`);
+export const attachSoSerial = (so, d) => api.post(`${base}/sales-orders/${encSo(so)}/serials`, d);
+export const detachSoSerial = (so, allocId) => api.delete(`${base}/sales-orders/${encSo(so)}/serials/${allocId}`);
 
 // Phase 13 — per-serial delivery addresses
 export const updateSoSerialAddress = (allocationId, d) =>
   api.patch(`${base}/so-serials/${allocationId}/address`, d);
 export const bulkUpdateSoSerialAddresses = (so, d) =>
-  api.patch(`${base}/sales-orders/${so}/serial-addresses`, d);
+  api.patch(`${base}/sales-orders/${encSo(so)}/serial-addresses`, d);
 // Phase 14 — line-level delivery address (before serials attached)
 export const updateSoLineAddress = (lineId, d) =>
   api.patch(`${base}/so-lines/${lineId}/address`, d);
