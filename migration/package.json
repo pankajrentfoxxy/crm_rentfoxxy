@@ -1,0 +1,18 @@
+{
+  "name": "crm-erp-migration",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ERP MySQL → CRM PostgreSQL migration toolkit",
+  "scripts": {
+    "extract": "node tools/extract-schemas.js && node tools/generate-docs.js",
+    "migrate": "node migrate-all.js",
+    "migrate:force": "node migrate-all.js --force",
+    "validate": "node validate-migration.js",
+    "validate:baseline": "node validate-migration.js --baseline"
+  },
+  "dependencies": {
+    "dotenv": "^16.3.1",
+    "mysql2": "^3.11.0",
+    "pg": "^8.11.3"
+  }
+}

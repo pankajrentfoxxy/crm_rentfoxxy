@@ -3,3 +3,11 @@ node_modules/
 .DS_Store
 coverage/
 *.log
+
+
+migration/logs/*.tar.gz
+migration/logs/*.zip
+
+
+migration/logs/
+*.tar.gz

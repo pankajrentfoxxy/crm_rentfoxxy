@@ -1,4 +1,9 @@
 const pool = require('../config/db');
+const {
+  normalizeEntityName,
+  compareKey,
+  collapseSpaces,
+} = require('../utils/assetConfigNormalize');
 
 /** Entity registry — table metadata for generic CRUD. */
 const ENTITIES = {
@@ -95,7 +100,19 @@ function getEntity(key) {
 }
 
 function normalizeName(name) {
-  return String(name || '').trim();
+  return collapseSpaces(name);
+}
+
+async function resolveNormalizedName(entityKey, name, parentId = null) {
+  let context = {};
+  if (entityKey === 'models' && parentId) {
+    const b = await pool.query(
+      `SELECT name FROM asset_config_brands WHERE id = $1 AND deleted_at IS NULL`,
+      [parentId]
+    );
+    context.brandName = b.rows[0]?.name || '';
+  }
+  return normalizeEntityName(entityKey, name, context);
 }
 
 async function assertParentActive(parentTable, parentId) {
@@ -111,9 +128,19 @@ async function assertParentActive(parentTable, parentId) {
   }
 }
 
-async function assertUnique(cfg, { name, parentId, excludeId }) {
-  const params = [normalizeName(name).toLowerCase()];
-  let sql = `SELECT id FROM ${cfg.table} t WHERE deleted_at IS NULL AND LOWER(TRIM(t.name)) = $1`;
+async function assertUnique(entityKey, cfg, { name, parentId, excludeId }) {
+  const normalized = await resolveNormalizedName(entityKey, name, parentId);
+  let context = {};
+  if (entityKey === 'models' && parentId) {
+    const b = await pool.query(
+      `SELECT name FROM asset_config_brands WHERE id = $1 AND deleted_at IS NULL`,
+      [parentId]
+    );
+    context.brandName = b.rows[0]?.name || '';
+  }
+
+  const params = [];
+  let sql = `SELECT id, name FROM ${cfg.table} t WHERE deleted_at IS NULL`;
   if (cfg.parentKey && parentId) {
     params.push(parentId);
     sql += ` AND t.${cfg.parentKey} = $${params.length}`;
@@ -122,9 +149,10 @@ async function assertUnique(cfg, { name, parentId, excludeId }) {
     params.push(excludeId);
     sql += ` AND t.id <> $${params.length}`;
   }
-  sql += ' LIMIT 1';
-  const dup = await pool.query(sql, params);
-  if (dup.rows.length) {
+
+  const existing = await pool.query(sql, params);
+  const newKey = compareKey(entityKey, normalized, context);
+  if (existing.rows.some((row) => compareKey(entityKey, row.name, context) === newKey)) {
     const scope = cfg.parentKey ? ` for this ${cfg.parentKey.replace('_id', '')}` : '';
     const err = new Error(`${cfg.label} name must be unique${scope}`);
     err.status = 409;
@@ -196,21 +224,21 @@ async function getEntityById(entityKey, id) {
 
 async function createEntity(entityKey, body, userId) {
   const cfg = getEntity(entityKey);
-  const name = normalizeName(body.name);
-  if (!name) {
-    const err = new Error('Name is required');
-    err.status = 400;
-    throw err;
-  }
-
   const parentId = cfg.parentKey ? parseInt(body[cfg.parentKey], 10) : null;
   if (cfg.parentKey && !parentId) {
     const err = new Error(`${cfg.parentKey.replace('_id', '')} is required`);
     err.status = 400;
     throw err;
   }
+  const name = await resolveNormalizedName(entityKey, body.name, parentId);
+  if (!name) {
+    const err = new Error('Name is required');
+    err.status = 400;
+    throw err;
+  }
+
   if (parentId) await assertParentActive(cfg.parentTable, parentId);
-  await assertUnique(cfg, { name, parentId });
+  await assertUnique(entityKey, cfg, { name, parentId });
 
   const status = body.status === 'inactive' ? 'inactive' : 'active';
   const cols = ['name', 'status', 'created_by', 'updated_by'];
@@ -237,13 +265,6 @@ async function updateEntity(entityKey, id, body, userId) {
     throw err;
   }
 
-  const name = body.name != null ? normalizeName(body.name) : existing.name;
-  if (!name) {
-    const err = new Error('Name is required');
-    err.status = 400;
-    throw err;
-  }
-
   const parentId = cfg.parentKey
     ? parseInt(body[cfg.parentKey] ?? existing[cfg.parentKey], 10)
     : null;
@@ -252,8 +273,18 @@ async function updateEntity(entityKey, id, body, userId) {
     err.status = 400;
     throw err;
   }
+
+  const name = body.name != null
+    ? await resolveNormalizedName(entityKey, body.name, parentId)
+    : existing.name;
+  if (!name) {
+    const err = new Error('Name is required');
+    err.status = 400;
+    throw err;
+  }
+
   if (parentId) await assertParentActive(cfg.parentTable, parentId);
-  await assertUnique(cfg, { name, parentId, excludeId: id });
+  await assertUnique(entityKey, cfg, { name, parentId, excludeId: id });
 
   const status = body.status === 'inactive' ? 'inactive' : (body.status === 'active' ? 'active' : existing.status);
 
@@ -517,20 +548,36 @@ async function bulkCreateChildren(childEntityKey, parentId, names, userId) {
   }
   await assertParentActive(cfg.parentTable, pid);
 
-  const clean = [...new Set((Array.isArray(names) ? names : [])
-    .map(normalizeName)
-    .filter(Boolean)
-    .map((n) => n))];
+  let brandName = '';
+  if (childEntityKey === 'models') {
+    const b = await pool.query(
+      `SELECT name FROM asset_config_brands WHERE id = $1 AND deleted_at IS NULL`, [pid]
+    );
+    brandName = b.rows[0]?.name || '';
+  }
+
+  const clean = [];
+  const seen = new Set();
+  for (const raw of (Array.isArray(names) ? names : [])) {
+    const n = childEntityKey === 'models'
+      ? normalizeEntityName('models', raw, { brandName })
+      : normalizeEntityName(childEntityKey, raw);
+    if (!n) continue;
+    const key = compareKey(childEntityKey, n, { brandName });
+    if (seen.has(key)) continue;
+    seen.add(key);
+    clean.push(n);
+  }
 
   const created = [];
   const skipped = [];
   for (const name of clean) {
-    const dup = await pool.query(
-      `SELECT id FROM ${cfg.table}
-        WHERE deleted_at IS NULL AND ${cfg.parentKey} = $1 AND LOWER(TRIM(name)) = $2 LIMIT 1`,
-      [pid, name.toLowerCase()]
-    );
-    if (dup.rows.length) { skipped.push(name); continue; }
+    try {
+      await assertUnique(childEntityKey, cfg, { name, parentId: pid });
+    } catch (e) {
+      if (e.status === 409) { skipped.push(name); continue; }
+      throw e;
+    }
     const r = await pool.query(
       `INSERT INTO ${cfg.table} (${cfg.parentKey}, name, status, created_by, updated_by)
        VALUES ($1, $2, 'active', $3, $3) RETURNING id, name, status`,

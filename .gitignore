@@ -7,11 +7,11 @@ coverage/
 build/
 dist/
 
-/migration
+# /migration
 # Local uploads (PO PDFs, vendor docs)
 backend/uploads/
 
 # Migration runtime artifacts
-migration/logs/
-migration/.env
-migration/migration-validation-baseline.json
+# migration/logs/
+# migration/.env
+# migration/migration-validation-baseline.json
