@@ -12,6 +12,6 @@ dist/
 backend/uploads/
 
 # Migration runtime artifacts
-# migration/logs/
-# migration/.env
-# migration/migration-validation-baseline.json
+migration/logs/
+migration/.env
+migration/migration-validation-baseline.json
