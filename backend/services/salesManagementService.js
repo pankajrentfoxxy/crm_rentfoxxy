@@ -223,13 +223,19 @@ async function getSalesOrderLines(salesOrderNumber) {
   return result.rows;
 }
 
-async function listDeliveryChallansGrouped({ page = 1, limit = 20, search = '' }) {
+async function listDeliveryChallansGrouped({ page = 1, limit = 20, search = '', status = '' }) {
   const params = [];
   const baseFilter = `COALESCE(d.movement_type, 'outbound') = 'outbound'`;
   let where = `WHERE ${baseFilter}`;
   if (search) {
     params.push(`%${search}%`);
-    where += ` AND (d.dc_number ILIKE $1 OR d.sales_order_number ILIKE $1 OR d.customer_name ILIKE $1 OR d.gst_number ILIKE $1)`;
+    where += ` AND (d.dc_number ILIKE $${params.length} OR d.sales_order_number ILIKE $${params.length} OR d.customer_name ILIKE $${params.length} OR d.gst_number ILIKE $${params.length})`;
+  }
+  if (status === 'pending') {
+    where += ` AND (d.status IS NULL OR d.status = 'pending')`;
+  } else if (status && status !== 'all') {
+    params.push(status);
+    where += ` AND d.status = $${params.length}`;
   }
   const countResult = await pool.query(
     `SELECT COUNT(DISTINCT dc_number)::int AS total FROM delivery_challan_lines d ${where}`,

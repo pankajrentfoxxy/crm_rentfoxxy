@@ -2,6 +2,7 @@ import React from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import VendorMgmtMobileNav from './components/VendorMgmtMobileNav';
 import VendorsPage from './pages/VendorsPage';
+import VendorDetailPage from './pages/VendorDetailPage';
 import PurchaseOrdersPage from './pages/PurchaseOrdersPage';
 import ProductReceivedPage from './pages/ProductReceivedPage';
 import GeneratedGrnDetailPage from './pages/GeneratedGrnDetailPage';
@@ -43,6 +44,7 @@ export default function VendorManagementApp() {
 
         <Route path="vendors/new" element={<Navigate to="/vendor-management/vendors" replace />} />
         <Route path="vendors/:id/edit" element={<Navigate to="/vendor-management/vendors" replace />} />
+        <Route path="vendors/:id" element={<VendorDetailPage />} />
         <Route path="vendors" element={<VendorsPage />} />
 
         <Route path="purchase-orders" element={<PurchaseOrdersPage />} />

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Search, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
 
 /**
  * Shared design-system primitives for a consistent, professional, mobile-first CRM.
@@ -153,6 +153,7 @@ export function SectionLoader({ label = 'Loading…' }) {
 export function ResponsiveTable({
   columns = [], rows = [], keyField = 'id', renderCard, onRowClick,
   loading = false, empty, className = '',
+  sortKey, sortDirection, onSort,
 }) {
   if (loading) return <SectionLoader />;
   if (!rows.length) {
@@ -161,6 +162,31 @@ export function ResponsiveTable({
 
   const align = (a) => (a === 'right' ? 'text-right' : a === 'center' ? 'text-center' : 'text-left');
   const keyOf = (row, i) => row[keyField] ?? i;
+
+  const renderSortIcon = (col) => {
+    const colKey = col.sortKey || col.key;
+    if (sortKey !== colKey) return <ChevronsUpDown className="w-3.5 h-3.5 opacity-40" />;
+    return sortDirection === 'asc'
+      ? <ChevronUp className="w-3.5 h-3.5" />
+      : <ChevronDown className="w-3.5 h-3.5" />;
+  };
+
+  const renderHeader = (c) => {
+    if (c.sortable && onSort) {
+      const colKey = c.sortKey || c.key;
+      return (
+        <button
+          type="button"
+          onClick={() => onSort(colKey)}
+          className="inline-flex items-center gap-1 hover:text-slate-800 transition-colors uppercase tracking-wide"
+        >
+          {c.header}
+          {renderSortIcon(c)}
+        </button>
+      );
+    }
+    return c.header;
+  };
 
   const defaultCard = (row) => (
     <div className="space-y-1.5">
@@ -197,7 +223,7 @@ export function ResponsiveTable({
           <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase tracking-wide">
             <tr>
               {columns.map((c) => (
-                <th key={c.key} className={`px-4 py-3 font-semibold ${align(c.align)}`}>{c.header}</th>
+                <th key={c.key} className={`px-4 py-3 font-semibold ${align(c.align)}`}>{renderHeader(c)}</th>
               ))}
             </tr>
           </thead>
@@ -222,6 +248,49 @@ export function ResponsiveTable({
   );
 }
 
+/* ── SearchField ─────────────────────────────────────────────────────────── */
+export function SearchField({ value, onChange, placeholder, className = '' }) {
+  return (
+    <div className={`relative flex-1 min-w-[220px] max-w-md ${className}`}>
+      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+      <input
+        type="search"
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        className="w-full border border-slate-200 rounded-lg pl-9 pr-3 py-2 text-sm min-h-[44px]"
+      />
+    </div>
+  );
+}
+
+/* ── ListPagination ──────────────────────────────────────────────────────── */
+export function ListPagination({ page, totalPages, total, pageSize, onPageChange }) {
+  if (!total && totalPages <= 1) return null;
+  const from = total ? (page - 1) * pageSize + 1 : 0;
+  const to = Math.min(page * pageSize, total || 0);
+
+  return (
+    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mt-4">
+      <p className="text-sm text-slate-500">
+        {total ? `Showing ${from}–${to} of ${total}` : 'No results'}
+      </p>
+      {totalPages > 1 ? (
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" size="sm" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
+            Prev
+          </Button>
+          <span className="text-sm text-slate-600 py-2">Page {page} of {totalPages}</span>
+          <Button variant="secondary" size="sm" disabled={page >= totalPages} onClick={() => onPageChange(page + 1)}>
+            Next
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default {
   Button, Badge, PageHeader, Card, StatCard, EmptyState, SectionLoader, ResponsiveTable,
+  ListPagination, SearchField,
 };

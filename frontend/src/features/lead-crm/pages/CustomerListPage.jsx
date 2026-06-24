@@ -13,6 +13,7 @@ export default function CustomerListPage() {
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
   const [search, setSearch] = useState('');
+  const [sortDir, setSortDir] = useState('asc');
   const [kycFilter, setKycFilter] = useState('');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editCustomer, setEditCustomer] = useState(null);
@@ -20,13 +21,19 @@ export default function CustomerListPage() {
 
   const load = useCallback(async () => {
     try {
-      const res = await getCustomers({ page, limit: 25, search: search || undefined });
+      const res = await getCustomers({
+        page,
+        limit: 25,
+        search: search || undefined,
+        sort_by: 'customer_id',
+        sort_dir: sortDir,
+      });
       setCustomers(res.data?.customers || []);
       setPagination(res.data?.pagination || { page: 1, totalPages: 1, total: 0 });
     } catch {
       toast.error('Failed to load customers');
     }
-  }, [page, search]);
+  }, [page, search, sortDir]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -71,8 +78,13 @@ export default function CustomerListPage() {
     </span>
   );
 
+  const toggleSort = () => {
+    setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    setPage(1);
+  };
+
   const columns = [
-    { key: 'id', header: 'ID', render: (c) => `#${c.customer_id}` },
+    { key: 'id', header: 'ID', sortable: true, sortKey: 'customer_id', render: (c) => `#${c.customer_id}` },
     { key: 'company', header: 'Company', render: (c) => <span className="font-medium">{c.company_name || c.customer_name}</span> },
     { key: 'contact', header: 'Contact', render: (c) => c.contact_person_name || c.customer_name },
     { key: 'phone', header: 'Phone', render: (c) => c.customer_number || c.phone },
@@ -134,6 +146,9 @@ export default function CustomerListPage() {
         keyField="customer_id"
         renderCard={renderCard}
         onRowClick={(c) => navigate(`/lead-crm/customers/${c.customer_id}`)}
+        sortKey="customer_id"
+        sortDirection={sortDir}
+        onSort={toggleSort}
       />
 
       {pagination.totalPages > 1 && (

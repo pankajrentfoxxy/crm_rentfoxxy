@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
-import { Clock, ExternalLink, FileImage, FileText, History, Loader2, RefreshCw, Search } from 'lucide-react';
+import { Clock, ExternalLink, FileImage, FileText, History, Loader2, RefreshCw } from 'lucide-react';
+import { SearchField, ListPagination } from '../../../components/ui/primitives';
+import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import {
   fetchInventoryList,
   fetchInventoryListCounts,
@@ -19,7 +21,7 @@ import { INVENTORY_LIST_INVALIDATE } from '../inventoryCountsEvents';
 import ReturnRepareActionModal from '../../qc-management/components/ReturnRepareActionModal';
 import { getBackendOrigin } from '../../../utils/api';
 
-const PAGE_SIZE = 100;
+const PAGE_SIZE = 25;
 
 function fileUrl(path) {
   if (!path) return '';
@@ -284,30 +286,31 @@ export default function InventoryListTable({ routeKey }) {
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [searchInput, setSearchInput] = useState('');
-  const [search, setSearch] = useState('');
+  const search = useDebouncedValue(searchInput.trim(), 320);
   const [listCounts, setListCounts] = useState(null);
   const [historyTtspl, setHistoryTtspl] = useState(null);
   const [selectedIds, setSelectedIds] = useState([]);
 
-  useEffect(() => {
-    const t = setTimeout(() => setSearch(searchInput.trim()), 300);
-    return () => clearTimeout(t);
-  }, [searchInput]);
+  useEffect(() => { setPage(1); }, [search]);
+
+  const total = pagination.total || 0;
 
   const load = useCallback(async () => {
     if (!apiSegment) return;
     setLoading(true);
     try {
       const { data } = await fetchInventoryList(apiSegment, {
-        page: 1,
+        page,
         limit: PAGE_SIZE,
         search: search || undefined
       });
       if (data.success) {
         setRows(data.data || []);
-        setTotal(data.pagination?.total ?? (data.data || []).length);
+        setPagination(data.pagination || { page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
+        setSelectedIds([]);
       } else {
         toast.error(data.message || 'Failed to load');
       }
@@ -316,7 +319,7 @@ export default function InventoryListTable({ routeKey }) {
     } finally {
       setLoading(false);
     }
-  }, [apiSegment, search]);
+  }, [apiSegment, search, page]);
 
   useEffect(() => {
     load();
@@ -411,14 +414,11 @@ export default function InventoryListTable({ routeKey }) {
         </button>
       </div>
 
-      <div className="relative max-w-md">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-        <input
-          type="search"
+      <div className="mb-2">
+        <SearchField
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
           placeholder="Search TTSPL, serial, PO, vendor…"
-          className="w-full rounded-lg border border-slate-200 pl-9 pr-3 py-2 text-sm"
         />
       </div>
 
@@ -475,7 +475,7 @@ export default function InventoryListTable({ routeKey }) {
                 </td>
               </tr>
             ) : isSpare ? (
-              rows.map((row, idx) => <SparePartRow key={row.serial_id} row={{ ...row, _index: idx + 1 }} />)
+              rows.map((row, idx) => <SparePartRow key={row.serial_id} row={{ ...row, _index: (page - 1) * PAGE_SIZE + idx + 1 }} />)
             ) : (
               rows.map((row, idx) => (
                 <tr key={row.serial_id} className="hover:bg-slate-50/60 align-top">
@@ -494,7 +494,7 @@ export default function InventoryListTable({ routeKey }) {
                       />
                     </td>
                   ) : null}
-                  <td className="px-3 py-3">{idx + 1}</td>
+                  <td className="px-3 py-3">{(page - 1) * PAGE_SIZE + idx + 1}</td>
                   <td className="px-3 py-3">
                     {row.unique_product_serial || row.inventory_asset_code ? (
                       <div className="flex flex-col gap-1">
@@ -623,6 +623,15 @@ export default function InventoryListTable({ routeKey }) {
           </tbody>
         </table>
       </div>
+
+      <ListPagination
+        page={page}
+        totalPages={pagination.totalPages || 1}
+        total={pagination.total || 0}
+        pageSize={PAGE_SIZE}
+        onPageChange={setPage}
+      />
+
       <TtsplHistoryDrawer
         ttsplId={historyTtspl}
         open={Boolean(historyTtspl)}

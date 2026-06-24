@@ -3,14 +3,16 @@ import { useNavigate } from 'react-router-dom';
 import { Plus, Truck } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
-import { PageHeader, StatCard, Button, Badge, ResponsiveTable } from '../../../components/ui/primitives';
+import { PageHeader, StatCard, Button, ResponsiveTable, SearchField, ListPagination } from '../../../components/ui/primitives';
 import DCForm from '../components/DCForm';
 import DispatchModal from '../components/DispatchModal';
 import QcStatusBadge from '../components/QcStatusBadge';
 import { getDcQcStatus, listDCs } from '../salesPipelineApi';
 import { DC_STATUS_STYLES, DISPATCH_MODE_STYLES, formatDate, statusLabel, deliveryChallanDetailPath } from '../salesPipelineUtils';
+import useDebouncedValue from '../../../hooks/useDebouncedValue';
 
 const TABS = ['all', 'pending', 'in_transit', 'delivered', 'rejected'];
+const PAGE_SIZE = 25;
 
 export default function DeliveryChallanListPage() {
   const navigate = useNavigate();
@@ -18,18 +20,29 @@ export default function DeliveryChallanListPage() {
   const [qcMap, setQcMap] = useState({});
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('all');
+  const [page, setPage] = useState(1);
+  const [searchInput, setSearchInput] = useState('');
+  const search = useDebouncedValue(searchInput.trim(), 320);
+  const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [dcDrawer, setDcDrawer] = useState(false);
   const [dispatchDc, setDispatchDc] = useState(null);
+
+  useEffect(() => { setPage(1); }, [search, tab]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await listDCs({ limit: 100 });
-      let list = res.data?.delivery_challans || [];
-      if (tab !== 'all') list = list.filter((r) => (r.status || 'pending') === tab);
+      const res = await listDCs({
+        page,
+        limit: PAGE_SIZE,
+        search: search || undefined,
+        status: tab !== 'all' ? tab : undefined,
+      });
+      const list = res.data?.delivery_challans || [];
       setRows(list);
+      setPagination(res.data?.pagination || { page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
       const qcEntries = await Promise.all(
-        list.slice(0, 30).map(async (r) => {
+        list.map(async (r) => {
           try {
             const q = await getDcQcStatus(r.dc_number);
             return [r.dc_number, q.data];
@@ -44,17 +57,17 @@ export default function DeliveryChallanListPage() {
     } finally {
       setLoading(false);
     }
-  }, [tab]);
+  }, [tab, page, search]);
 
   useEffect(() => { load(); }, [load]);
 
   const stats = useMemo(() => ({
-    total: rows.length,
+    total: pagination.total || rows.length,
     pending: rows.filter((r) => !r.status || r.status === 'pending').length,
     in_transit: rows.filter((r) => r.status === 'in_transit').length,
     delivered: rows.filter((r) => r.status === 'delivered').length,
     rejected: rows.filter((r) => r.status === 'rejected').length,
-  }), [rows]);
+  }), [rows, pagination.total]);
 
   const dispatchCell = (row) => {
     const qc = qcMap[row.dc_number];
@@ -138,16 +151,24 @@ export default function DeliveryChallanListPage() {
 
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
         <StatCard label="Total" value={stats.total} tone="gray" />
-        <StatCard label="Pending" value={stats.pending} tone="amber" />
-        <StatCard label="In Transit" value={stats.in_transit} tone="blue" />
-        <StatCard label="Delivered" value={stats.delivered} tone="green" />
-        <StatCard label="Rejected" value={stats.rejected} tone="red" />
+        <StatCard label="Pending (page)" value={stats.pending} tone="amber" />
+        <StatCard label="In Transit (page)" value={stats.in_transit} tone="blue" />
+        <StatCard label="Delivered (page)" value={stats.delivered} tone="green" />
+        <StatCard label="Rejected (page)" value={stats.rejected} tone="red" />
       </div>
 
       <div className="flex flex-wrap gap-2 mb-4">
         {TABS.map((t) => (
           <button key={t} type="button" onClick={() => setTab(t)} className={`px-3 min-h-[36px] rounded-full text-xs font-medium capitalize ${tab === t ? 'bg-blue-600 text-white' : 'bg-gray-100'}`}>{t.replace('_', ' ')}</button>
         ))}
+      </div>
+
+      <div className="mb-4">
+        <SearchField
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          placeholder="Search DC #, SO #, customer, GST…"
+        />
       </div>
 
       <ResponsiveTable
@@ -157,6 +178,14 @@ export default function DeliveryChallanListPage() {
         loading={loading}
         renderCard={renderCard}
         onRowClick={(r) => navigate(deliveryChallanDetailPath(r.dc_number))}
+      />
+
+      <ListPagination
+        page={page}
+        totalPages={pagination.totalPages || 1}
+        total={pagination.total || 0}
+        pageSize={PAGE_SIZE}
+        onPageChange={setPage}
       />
 
       <DCForm open={dcDrawer} onClose={() => setDcDrawer(false)} />

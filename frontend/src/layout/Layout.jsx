@@ -89,7 +89,16 @@ import {
   masterDataMenuItems,
 } from '../config/menuConfig';
 
+/** Lead CRM accordion routes only (Customers live under Master Data). */
+function isLeadCrmAccordionRoute(pathname) {
+  return pathname.startsWith('/lead-crm/leads') || pathname.startsWith('/lead-crm/follow-ups');
+}
 
+/** Match list + detail routes without false positives (e.g. /support vs /support-parts). */
+function isNavPathActive(menuPath, pathname) {
+  if (pathname === menuPath) return true;
+  return pathname.startsWith(`${menuPath}/`);
+}
 
 export default function Layout({ children }) {
 
@@ -150,7 +159,7 @@ export default function Layout({ children }) {
   const { counts: leadCrmCounts } = useLeadCrmCounts(showLeadCrmAccordion);
 
   const [leadCrmAccordionOpen, setLeadCrmAccordionOpen] = useState(() =>
-    location.pathname.startsWith('/lead-crm')
+    isLeadCrmAccordionRoute(location.pathname)
   );
 
   const [vendorAccordionOpen, setVendorAccordionOpen] = useState(() =>
@@ -209,7 +218,7 @@ export default function Layout({ children }) {
 
   useEffect(() => {
 
-    if (location.pathname.startsWith('/lead-crm')) {
+    if (isLeadCrmAccordionRoute(location.pathname)) {
       setLeadCrmAccordionOpen(true);
     }
 
@@ -509,7 +518,7 @@ export default function Layout({ children }) {
 
                     onClick={() => setLeadCrmAccordionOpen((o) => !o)}
 
-                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors text-left hover:bg-gray-100 ${location.pathname.startsWith('/lead-crm') ? 'text-blue-700 bg-blue-50/60' : 'text-gray-800'
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors text-left hover:bg-gray-100 ${isLeadCrmAccordionRoute(location.pathname) ? 'text-blue-700 bg-blue-50/60' : 'text-gray-800'
 
                       }`}
 
@@ -1251,7 +1260,7 @@ export default function Layout({ children }) {
 
             return (
 
-              <Link
+              <NavLink
 
                 key={path}
 
@@ -1259,7 +1268,16 @@ export default function Layout({ children }) {
 
                 onClick={() => setSidebarOpen(false)}
 
-                className="flex items-center gap-3 px-3 py-1.5 rounded-md hover:bg-gray-100 transition-colors text-sm"
+                isActive={({ location: loc }) => isNavPathActive(path, loc.pathname)}
+
+                className={({ isActive }) =>
+                  [
+                    'flex items-center gap-3 px-3 py-1.5 rounded-md transition-colors text-sm',
+                    isActive
+                      ? 'bg-blue-100 text-blue-900 font-semibold'
+                      : 'text-gray-700 hover:bg-gray-100',
+                  ].join(' ')
+                }
 
               >
 
@@ -1273,7 +1291,7 @@ export default function Layout({ children }) {
                   </span>
                 ) : null}
 
-              </Link>
+              </NavLink>
 
             );
 

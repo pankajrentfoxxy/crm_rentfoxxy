@@ -12,130 +12,98 @@ import {
   listScreenSizes, createScreenSize, updateScreenSize, deleteScreenSize, setScreenSizeStatus,
 } from '../../../utils/assetConfigurationApi';
 
-const TABS = [
+const ENTITY_TABS = [
   {
     id: 'brands',
     label: 'Brand',
-    panel: (
-      <ConfigEntityPanel
-        label="Brand"
-        listFn={listBrands}
-        createFn={createBrand}
-        updateFn={updateBrand}
-        deleteFn={deleteBrand}
-        setStatusFn={setBrandStatus}
-      />
-    ),
+    labelSingular: 'Brand',
+    listFn: listBrands,
+    createFn: createBrand,
+    updateFn: updateBrand,
+    deleteFn: deleteBrand,
+    setStatusFn: setBrandStatus,
   },
   {
     id: 'models',
     label: 'Model',
-    panel: (
-      <ConfigEntityPanel
-        label="Model"
-        parentEntity="models"
-        parentKey="brand_id"
-        parentLabel="Brand"
-        listFn={listModels}
-        createFn={createModel}
-        updateFn={updateModel}
-        deleteFn={deleteModel}
-        setStatusFn={setModelStatus}
-      />
-    ),
+    labelSingular: 'Model',
+    parentEntity: 'models',
+    parentKey: 'brand_id',
+    parentLabel: 'Brand',
+    listFn: listModels,
+    createFn: createModel,
+    updateFn: updateModel,
+    deleteFn: deleteModel,
+    setStatusFn: setModelStatus,
   },
   {
     id: 'processors',
     label: 'Processor',
-    panel: (
-      <ConfigEntityPanel
-        label="Processor"
-        listFn={listProcessors}
-        createFn={createProcessor}
-        updateFn={updateProcessor}
-        deleteFn={deleteProcessor}
-        setStatusFn={setProcessorStatus}
-      />
-    ),
+    labelSingular: 'Processor',
+    listFn: listProcessors,
+    createFn: createProcessor,
+    updateFn: updateProcessor,
+    deleteFn: deleteProcessor,
+    setStatusFn: setProcessorStatus,
   },
   {
     id: 'generations',
     label: 'Generation',
-    panel: (
-      <ConfigEntityPanel
-        label="Generation"
-        parentEntity="generations"
-        parentKey="processor_id"
-        parentLabel="Processor"
-        listFn={listGenerations}
-        createFn={createGeneration}
-        updateFn={updateGeneration}
-        deleteFn={deleteGeneration}
-        setStatusFn={setGenerationStatus}
-      />
-    ),
+    labelSingular: 'Generation',
+    parentEntity: 'generations',
+    parentKey: 'processor_id',
+    parentLabel: 'Processor',
+    listFn: listGenerations,
+    createFn: createGeneration,
+    updateFn: updateGeneration,
+    deleteFn: deleteGeneration,
+    setStatusFn: setGenerationStatus,
   },
   {
     id: 'ram',
     label: 'RAM',
-    panel: (
-      <ConfigEntityPanel
-        label="RAM"
-        listFn={listRam}
-        createFn={createRam}
-        updateFn={updateRam}
-        deleteFn={deleteRam}
-        setStatusFn={setRamStatus}
-      />
-    ),
+    labelSingular: 'RAM',
+    listFn: listRam,
+    createFn: createRam,
+    updateFn: updateRam,
+    deleteFn: deleteRam,
+    setStatusFn: setRamStatus,
   },
   {
     id: 'storage',
     label: 'Storage',
-    panel: (
-      <ConfigEntityPanel
-        label="Storage"
-        listFn={listStorage}
-        createFn={createStorage}
-        updateFn={updateStorage}
-        deleteFn={deleteStorage}
-        setStatusFn={setStorageStatus}
-      />
-    ),
+    labelSingular: 'Storage',
+    listFn: listStorage,
+    createFn: createStorage,
+    updateFn: updateStorage,
+    deleteFn: deleteStorage,
+    setStatusFn: setStorageStatus,
   },
   {
     id: 'gpus',
     label: 'GPU',
-    panel: (
-      <ConfigEntityPanel
-        label="GPU"
-        listFn={listGpus}
-        createFn={createGpu}
-        updateFn={updateGpu}
-        deleteFn={deleteGpu}
-        setStatusFn={setGpuStatus}
-      />
-    ),
+    labelSingular: 'GPU',
+    listFn: listGpus,
+    createFn: createGpu,
+    updateFn: updateGpu,
+    deleteFn: deleteGpu,
+    setStatusFn: setGpuStatus,
   },
   {
     id: 'screen-sizes',
     label: 'Screen Size',
-    panel: (
-      <ConfigEntityPanel
-        label="Screen Size"
-        listFn={listScreenSizes}
-        createFn={createScreenSize}
-        updateFn={updateScreenSize}
-        deleteFn={deleteScreenSize}
-        setStatusFn={setScreenSizeStatus}
-      />
-    ),
+    labelSingular: 'Screen Size',
+    listFn: listScreenSizes,
+    createFn: createScreenSize,
+    updateFn: updateScreenSize,
+    deleteFn: deleteScreenSize,
+    setStatusFn: setScreenSizeStatus,
   },
-  {
-    id: 'mapping',
-    label: 'Mapping',
-    panel: <MappingTab />,
-  },
+];
+
+const TABS = [
+  ...ENTITY_TABS,
+  { id: 'mapping', label: 'Mapping' },
 ];
 
 function MappingTab() {
@@ -173,7 +141,7 @@ function MappingTab() {
 
 export default function AssetConfigurationPage() {
   const [tab, setTab] = useState('brands');
-  const active = TABS.find((t) => t.id === tab) || TABS[0];
+  const entityTab = ENTITY_TABS.find((t) => t.id === tab);
 
   return (
     <div className="p-4 md:p-6 max-w-6xl mx-auto">
@@ -200,7 +168,22 @@ export default function AssetConfigurationPage() {
         ))}
       </div>
 
-      {active.panel}
+      {entityTab ? (
+        <ConfigEntityPanel
+          key={entityTab.id}
+          label={entityTab.labelSingular}
+          parentEntity={entityTab.parentEntity}
+          parentKey={entityTab.parentKey}
+          parentLabel={entityTab.parentLabel}
+          listFn={entityTab.listFn}
+          createFn={entityTab.createFn}
+          updateFn={entityTab.updateFn}
+          deleteFn={entityTab.deleteFn}
+          setStatusFn={entityTab.setStatusFn}
+        />
+      ) : (
+        <MappingTab key="mapping" />
+      )}
     </div>
   );
 }

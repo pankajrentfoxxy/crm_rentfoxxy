@@ -717,6 +717,7 @@ exports.listDeliveryChallans = async (req, res) => {
       page: parseInt(req.query.page, 10) || 1,
       limit: Math.min(parseInt(req.query.limit, 10) || 20, 100),
       search: req.query.search || '',
+      status: req.query.status || '',
     });
     res.json({ success: true, ...data });
   } catch (error) {

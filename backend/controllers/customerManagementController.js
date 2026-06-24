@@ -113,6 +113,14 @@ exports.listCustomers = async (req, res) => {
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
     const limit = Math.min(parseInt(req.query.limit, 10) || 10, 100);
     const search = (req.query.search || '').trim();
+    const sortByRaw = (req.query.sort_by || 'customer_id').trim();
+    const sortDirRaw = (req.query.sort_dir || 'asc').toLowerCase();
+    const SORT_COLUMNS = {
+      customer_id: 'c.customer_id',
+      updated_at: 'c.updated_at',
+    };
+    const orderBy = SORT_COLUMNS[sortByRaw] || SORT_COLUMNS.customer_id;
+    const orderDir = sortDirRaw === 'desc' ? 'DESC' : 'ASC';
     const params = [];
     const conditions = ['c.status = 1'];
 
@@ -142,7 +150,7 @@ exports.listCustomers = async (req, res) => {
         ), 0) AS total_security_amount
        FROM customers c
        ${where}
-       ORDER BY c.updated_at DESC
+       ORDER BY ${orderBy} ${orderDir}
        LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
       listParams
     );

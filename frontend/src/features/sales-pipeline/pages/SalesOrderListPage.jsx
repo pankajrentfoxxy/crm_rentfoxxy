@@ -3,35 +3,49 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { Plus, ClipboardList } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
-import { PageHeader, StatCard, Button, ResponsiveTable } from '../../../components/ui/primitives';
+import { PageHeader, StatCard, Button, ResponsiveTable, SearchField, ListPagination } from '../../../components/ui/primitives';
 import PaymentModal from '../components/PaymentModal';
 import SalesOrderForm from '../components/SalesOrderForm';
 import DCForm from '../components/DCForm';
 import { listSalesOrders } from '../salesPipelineApi';
 import { formatCurrency, formatDate, TYPE_STYLES, typeLabel, salesOrderDetailPath } from '../salesPipelineUtils';
+import useDebouncedValue from '../../../hooks/useDebouncedValue';
+
+const PAGE_SIZE = 25;
 
 export default function SalesOrderListPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [searchInput, setSearchInput] = useState('');
+  const search = useDebouncedValue(searchInput.trim(), 320);
+  const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [soDrawer, setSoDrawer] = useState(false);
   const [dcDrawer, setDcDrawer] = useState(false);
   const [paymentSo, setPaymentSo] = useState(null);
   const [prefillQuote, setPrefillQuote] = useState(location.state?.fromQuote || null);
   const [prefillSo, setPrefillSo] = useState(null);
 
+  useEffect(() => { setPage(1); }, [search]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await listSalesOrders({ limit: 100 });
+      const res = await listSalesOrders({
+        page,
+        limit: PAGE_SIZE,
+        search: search || undefined,
+      });
       setRows(res.data?.sales_orders || []);
+      setPagination(res.data?.pagination || { page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
     } catch {
       toast.error('Failed to load sales orders');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [page, search]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -42,10 +56,10 @@ export default function SalesOrderListPage() {
   }, [location.state]);
 
   const stats = useMemo(() => ({
-    total: rows.length,
+    total: pagination.total || rows.length,
     pending: rows.filter((r) => !r.dc_count).length,
     withDc: rows.filter((r) => r.dc_count > 0).length,
-  }), [rows]);
+  }), [rows, pagination.total]);
 
   const actionCell = (row) => (
     <div className="flex flex-wrap items-center gap-3" onClick={(e) => e.stopPropagation()}>
@@ -100,8 +114,16 @@ export default function SalesOrderListPage() {
 
       <div className="grid grid-cols-3 gap-3 mb-4">
         <StatCard label="Total" value={stats.total} tone="gray" />
-        <StatCard label="Awaiting DC" value={stats.pending} tone="amber" />
-        <StatCard label="With DC" value={stats.withDc} tone="green" />
+        <StatCard label="Awaiting DC (page)" value={stats.pending} tone="amber" />
+        <StatCard label="With DC (page)" value={stats.withDc} tone="green" />
+      </div>
+
+      <div className="mb-4">
+        <SearchField
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          placeholder="Search SO #, customer, GST…"
+        />
       </div>
 
       <ResponsiveTable
@@ -111,6 +133,14 @@ export default function SalesOrderListPage() {
         loading={loading}
         renderCard={renderCard}
         onRowClick={(r) => navigate(salesOrderDetailPath(r.sales_order_number))}
+      />
+
+      <ListPagination
+        page={page}
+        totalPages={pagination.totalPages || 1}
+        total={pagination.total || 0}
+        pageSize={PAGE_SIZE}
+        onPageChange={setPage}
       />
 
       <SalesOrderForm open={soDrawer} onClose={() => setSoDrawer(false)} onSaved={load} prefillQuotation={prefillQuote} />

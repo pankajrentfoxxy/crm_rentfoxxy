@@ -2,7 +2,11 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import InventoryPageShell from '../components/InventoryPageShell';
+import { SearchField, ListPagination } from '../../../components/ui/primitives';
+import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import { fetchCustomerAssets } from '../inventoryManagementApi';
+
+const PAGE_SIZE = 25;
 
 const STATUS_TABS = [
   { key: '', label: 'All' },
@@ -28,33 +32,41 @@ export default function CustomerAssetsPage() {
   const [rows, setRows] = useState([]);
   const [counts, setCounts] = useState({ all: 0, reserved: 0, in_transit: 0, rented: 0, on_demo: 0, sold: 0 });
   const [status, setStatus] = useState('');
-  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [searchInput, setSearchInput] = useState('');
+  const search = useDebouncedValue(searchInput.trim(), 320);
+  const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => { setPage(1); }, [search, status]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetchCustomerAssets({ status: status || undefined, search: search || undefined, limit: 200 });
+      const res = await fetchCustomerAssets({
+        status: status || undefined,
+        search: search || undefined,
+        page,
+        limit: PAGE_SIZE,
+      });
       setRows(res.data?.data || []);
       if (res.data?.counts) setCounts(res.data.counts);
+      setPagination(res.data?.pagination || { page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to load customer assets');
     } finally {
       setLoading(false);
     }
-  }, [status, search]);
+  }, [status, search, page]);
 
-  useEffect(() => {
-    const t = setTimeout(load, 250); // debounce search
-    return () => clearTimeout(t);
-  }, [load]);
+  useEffect(() => { load(); }, [load]);
 
   return (
     <InventoryPageShell
       title="Customer Assets — Deployed Fleet"
       description="Every laptop currently out with customers — derived live from inventory (vendor serial numbers). Use this to see what is in the field; click a customer to open their full asset list."
     >
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 mb-4">
         {STATUS_TABS.map((t) => {
           const c = t.key ? counts[t.key] : counts.all;
           const active = status === t.key;
@@ -73,12 +85,13 @@ export default function CustomerAssetsPage() {
             </button>
           );
         })}
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
+      </div>
+
+      <div className="mb-4">
+        <SearchField
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
           placeholder="Search TTSPL, serial, customer, model, DC…"
-          className="w-full sm:ml-auto sm:w-72 max-w-full border rounded-lg px-3 py-2 text-sm"
         />
       </div>
 
@@ -164,6 +177,14 @@ export default function CustomerAssetsPage() {
           </tbody>
         </table>
       </div>
+
+      <ListPagination
+        page={page}
+        totalPages={pagination.totalPages || 1}
+        total={pagination.total || 0}
+        pageSize={PAGE_SIZE}
+        onPageChange={setPage}
+      />
     </InventoryPageShell>
   );
 }

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
-import { Building2, Key, Pencil, Plus, Search } from 'lucide-react';
+import { Building2, Eye, Key, Pencil, Plus, Search } from 'lucide-react';
 import {
   fetchAllPurchaseOrders,
   fetchAllVendors,
@@ -401,6 +401,13 @@ export default function VendorsPage() {
                           </td>
                           <td className="px-4 py-3">
                             <div className="flex items-center justify-end gap-1">
+                              <Link
+                                to={`/vendor-management/vendors/${row.vendor_id}`}
+                                title="View"
+                                className="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-gray-200 text-blue-600 hover:bg-blue-50"
+                              >
+                                <Eye className="w-4 h-4" />
+                              </Link>
                               <button
                                 type="button"
                                 title="Edit"
@@ -489,6 +496,12 @@ export default function VendorsPage() {
                     <span className="font-mono">{row.gst_number || '—'}</span>
                   </div>
                   <div className="flex gap-2">
+                    <Link
+                      to={`/vendor-management/vendors/${row.vendor_id}`}
+                      className="flex-1 h-9 inline-flex items-center justify-center rounded-lg border border-gray-200 text-sm font-medium text-blue-600"
+                    >
+                      View
+                    </Link>
                     <button
                       type="button"
                       onClick={() => openEdit(row)}
