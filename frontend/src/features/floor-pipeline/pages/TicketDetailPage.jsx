@@ -23,7 +23,8 @@ import {
   isQcRole,
   isDispatchQcRole,
   isTechnicianRole,
-  priorityBadge
+  priorityBadge,
+  resolveTicketTtspl
 } from '../floorPipelineUi';
 import StageTimeline from '../components/StageTimeline';
 import WorkLogFeed from '../components/WorkLogFeed';
@@ -97,8 +98,9 @@ export default function TicketDetailPage() {
       const { data: res } = await fetchTicketDetail(id);
       if (res.success) {
         setData(res);
-        if (res.ticket?.ttspl_id) {
-          const h = await fetchTtsplHistory(res.ticket.ttspl_id);
+        const ttspl = resolveTicketTtspl(res.ticket);
+        if (ttspl) {
+          const h = await fetchTtsplHistory(ttspl);
           if (h.data.success) {
             setConfigHistory(h.data.configHistory || []);
             setAuditLog(h.data.auditLog || []);
@@ -165,7 +167,7 @@ export default function TicketDetailPage() {
       }
 
       setData(res);
-      await reloadTicketHistory(res.ticket?.ttspl_id);
+      await reloadTicketHistory(resolveTicketTtspl(res.ticket));
 
       // Continuity safeguard:
       // if stage moved to another timed stage for the SAME user and the timer is not
@@ -174,7 +176,7 @@ export default function TicketDetailPage() {
         try {
           const activeRes = await getActiveWorkLog(id);
           if (!activeRes.data?.active) {
-            const verifyValue = res.ticket?.ttspl_id || res.ticket?.ttspl_display || res.ticket?.serial_number;
+            const verifyValue = resolveTicketTtspl(res.ticket) || res.ticket?.serial_number;
             if (verifyValue) {
               await startWork(id, String(verifyValue));
             }
@@ -433,7 +435,7 @@ export default function TicketDetailPage() {
           <Link to="/floor-pipeline/tickets" className="text-sm text-blue-600 hover:underline">← Back</Link>
           <span className="text-slate-300">|</span>
           <span className="font-mono font-bold">#{ticket.ticket_id}</span>
-          <span className="font-mono text-blue-700 font-semibold">{ticket.ttspl_display || ticket.ttspl_id || '—'}</span>
+          <span className="font-mono text-blue-700 font-semibold">{resolveTicketTtspl(ticket) || '—'}</span>
           <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold">{stage}</span>
           <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${pri.className}`}>{pri.label}</span>
           {ticket.ticket_type === 'sales_order_qc' ? (
@@ -591,7 +593,7 @@ export default function TicketDetailPage() {
           <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm text-sm sticky top-4">
             <h3 className="text-xs font-semibold uppercase text-slate-500 mb-2">TTSPL Info</h3>
             <div className="flex flex-col gap-1.5">
-              <p className="font-mono font-bold text-blue-700 text-sm">{ticket.ttspl_display || ticket.ttspl_id || '—'}</p>
+              <p className="font-mono font-bold text-blue-700 text-sm">{resolveTicketTtspl(ticket) || '—'}</p>
               <div className="flex flex-wrap gap-1">
                 {configBadges(ticket).map((b, i) => (
                   <React.Fragment key={b.label}>
@@ -738,7 +740,7 @@ export default function TicketDetailPage() {
       </div>
 
       <AssignmentModal ticket={ticket} open={assignOpen} onClose={() => setAssignOpen(false)} onAssigned={load} />
-      <TtsplHistoryDrawer ttsplId={ticket.ttspl_id} open={historyOpen} onClose={() => setHistoryOpen(false)} />
+      <TtsplHistoryDrawer ttsplId={resolveTicketTtspl(ticket)} open={historyOpen} onClose={() => setHistoryOpen(false)} />
 
       {qcPickerOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">

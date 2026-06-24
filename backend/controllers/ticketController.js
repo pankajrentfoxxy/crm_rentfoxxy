@@ -193,7 +193,12 @@ exports.getTickets = async (req, res) => {
              s.stage_name, s.stage_order,
              tm.team_name,
              tm.team_name AS assigned_team_name,
-             u.name as assigned_user_name
+             u.name as assigned_user_name,
+             COALESCE(
+               NULLIF(TRIM(t.ttspl_id), ''),
+               (regexp_match(t.machine_number, 'TTSPL[0-9]+', 'i'))[1],
+               NULLIF(TRIM(t.machine_number), '')
+             ) AS ttspl_display
       FROM tickets t
       LEFT JOIN stages s ON t.current_stage_id = s.stage_id
       LEFT JOIN teams tm ON t.assigned_team_id = tm.team_id
@@ -327,13 +332,38 @@ exports.getTickets = async (req, res) => {
 
     query += ' ORDER BY t.created_at DESC';
 
+    const page = Math.max(1, parseInt(req.query.page, 10) || 0);
+    const limitRaw = parseInt(req.query.limit, 10) || 0;
+    const limit = limitRaw > 0 ? Math.min(100, Math.max(1, limitRaw)) : 0;
+    const paginate = page > 0 && limit > 0;
+
+    let total;
+    let totalPages = 1;
+
+    if (paginate) {
+      const whereStart = query.indexOf('FROM tickets t');
+      const orderStart = query.indexOf(' ORDER BY');
+      const fromWhere = query.slice(whereStart, orderStart);
+      const countResult = await pool.query(`SELECT COUNT(*)::int AS total ${fromWhere}`, params);
+      total = countResult.rows[0]?.total || 0;
+      totalPages = Math.max(1, Math.ceil(total / limit));
+      query += ` LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
+      params.push(limit, (page - 1) * limit);
+    }
+
     const result = await pool.query(query, params);
 
-    res.json({
+    const payload = {
       success: true,
+      tickets: result.rows,
       count: result.rows.length,
-      tickets: result.rows
-    });
+    };
+
+    if (paginate) {
+      payload.pagination = { page, limit, total, totalPages };
+    }
+
+    res.json(payload);
   } catch (error) {
     res.status(500).json({
       success: false,
@@ -433,7 +463,12 @@ exports.getTicketById = async (req, res) => {
               COALESCE(vsn.extra->>'os', '') AS os,
               COALESCE(vsn.extra->>'model', t.model) AS model_name,
               COALESCE(vsn.extra->>'condition', '') AS condition,
-              COALESCE(vsn.inventory_asset_code, t.ttspl_id) AS ttspl_display,
+              COALESCE(
+                NULLIF(TRIM(t.ttspl_id), ''),
+                vsn.inventory_asset_code,
+                (regexp_match(t.machine_number, 'TTSPL[0-9]+', 'i'))[1],
+                NULLIF(TRIM(t.machine_number), '')
+              ) AS ttspl_display,
               vsn.extra AS vsn_extra
        FROM tickets t
        LEFT JOIN stages s ON t.current_stage_id = s.stage_id

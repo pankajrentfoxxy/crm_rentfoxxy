@@ -3,6 +3,10 @@ const path = require('path');
 const bcrypt = require('bcryptjs');
 const pool = require('../config/db');
 const { sendCustomerPortalWelcome } = require('../services/emailQueueService');
+const {
+  DEPLOYED_WITH_CUSTOMER_STATUSES,
+  displayDeployedStatus,
+} = require('../services/customerDeployedAssets');
 
 function parseDetails(value) {
   if (value == null) return {};
@@ -515,152 +519,274 @@ exports.verifyCustomerKyc = async (req, res) => {
   }
 };
 
+function podFromFilePath(raw) {
+  const out = [];
+  if (!raw) return out;
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (Array.isArray(parsed)) out.push(...parsed.filter(Boolean));
+    else if (parsed) out.push(String(parsed));
+  } catch {
+    out.push(raw);
+  }
+  return out;
+}
+
+function mapActiveAssetRow(r) {
+  const podFiles = [
+    ...podFromFilePath(r.pod_file_path),
+    r.pod_image_url,
+    r.pod_photo_url,
+    r.pod_esign_url,
+  ].filter(Boolean);
+  const { pod_file_path, pod_image_url, pod_photo_url, pod_esign_url, ...rest } = r;
+  return {
+    ...rest,
+    status: displayDeployedStatus(rest.status),
+    lifecycle: 'active',
+    pod_files: [...new Set(podFiles)],
+  };
+}
+
+function mapReturnedAssetRow(r) {
+  const podFiles = [
+    r.proof_of_completion_path,
+    r.pod_image_path,
+    r.warehouse_esign_url,
+  ].filter(Boolean);
+  const { proof_of_completion_path, pod_image_path, warehouse_esign_url, ...rest } = r;
+  return {
+    ...rest,
+    status: 'returned',
+    lifecycle: 'returned',
+    pod_files: [...new Set(podFiles)],
+  };
+}
+
+function buildActiveSearchSql(search, params) {
+  if (!search) return '';
+  params.push(`%${search}%`);
+  const i = params.length;
+  return ` AND (
+    vsn.serial_number ILIKE $${i}
+    OR COALESCE(vsn.inventory_asset_code, '') ILIKE $${i}
+    OR COALESCE(vsn.extra->>'ttspl_id', '') ILIKE $${i}
+    OR COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', inv.model, '') ILIKE $${i}
+    OR COALESCE(vsn.extra->>'brand', inv.brand, '') ILIKE $${i}
+    OR COALESCE(vsn.current_dc_number, '') ILIKE $${i}
+  )`;
+}
+
+function buildReturnedSearchSql(search, params) {
+  if (!search) return '';
+  params.push(`%${search}%`);
+  const i = params.length;
+  return ` AND (
+    COALESCE(rl.dc_number, '') ILIKE $${i}
+    OR COALESCE(sti.ttspl_id, '') ILIKE $${i}
+    OR COALESCE(sti.unique_serial_number, '') ILIKE $${i}
+    OR COALESCE(sti.serial_number, vsn.serial_number, '') ILIKE $${i}
+    OR COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', rl.model_name, '') ILIKE $${i}
+    OR COALESCE(vsn.extra->>'brand', rl.brand, '') ILIKE $${i}
+  )`;
+}
+
+const ACTIVE_FROM_SQL = `
+  FROM vendor_serial_numbers vsn
+  LEFT JOIN inventory inv ON (
+    inv.machine_number = vsn.inventory_asset_code
+    OR inv.serial_number = vsn.serial_number
+  )
+  LEFT JOIN LATERAL (
+    SELECT dcl.file_path, dcl.pod_image_url, dcl.pod_photo_url, dcl.esign_url, dcl.delivery_completed_at
+    FROM delivery_challan_lines dcl
+    WHERE dcl.dc_number = vsn.current_dc_number
+      AND COALESCE(dcl.movement_type, 'outbound') = 'outbound'
+      AND (dcl.file_path IS NOT NULL OR dcl.pod_image_url IS NOT NULL
+           OR dcl.pod_photo_url IS NOT NULL OR dcl.esign_url IS NOT NULL)
+    ORDER BY dcl.delivery_completed_at DESC NULLS LAST, dcl.id DESC
+    LIMIT 1
+  ) pod ON TRUE
+  WHERE vsn.current_customer_id = $1
+    AND vsn.deleted_at IS NULL
+    AND vsn.inventory_status = ANY($2::text[])
+`;
+
+const ACTIVE_SELECT_SQL = `
+  SELECT vsn.serial_id,
+         COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
+         vsn.serial_number,
+         COALESCE(vsn.extra->>'brand', inv.brand) AS brand,
+         COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', inv.model) AS model_name,
+         COALESCE(vsn.extra->>'processor', inv.processor) AS processor,
+         vsn.extra->>'generation' AS generation,
+         COALESCE(vsn.extra->>'ram', inv.ram) AS ram,
+         COALESCE(vsn.extra->>'storage', inv.storage) AS storage,
+         vsn.extra->>'gpu' AS gpu,
+         vsn.extra->>'screen_size' AS screen_size,
+         vsn.inventory_status AS status,
+         vsn.current_entity AS entity_code,
+         vsn.current_dc_number AS dc_number,
+         vsn.delivered_at AS dispatch_date,
+         COALESCE(vsn.delivered_at, pod.delivery_completed_at) AS delivered_at,
+         vsn.rent_start_date,
+         vsn.rent_monthly_rate,
+         pod.file_path AS pod_file_path,
+         pod.pod_image_url AS pod_image_url,
+         pod.pod_photo_url AS pod_photo_url,
+         pod.esign_url AS pod_esign_url
+`;
+
+const RETURNED_FROM_SQL = `
+  FROM delivery_challan_lines rl
+  LEFT JOIN LATERAL (
+    SELECT ttspl_id, unique_serial_number, serial_number, pickup_type,
+           proof_of_completion_path, pod_image_path, warehouse_esign_url, warehouse_received_at
+    FROM support_ticket_items
+    WHERE return_dc_number = rl.dc_number AND item_type = 'pickup'
+    ORDER BY id DESC
+    LIMIT 1
+  ) sti ON TRUE
+  LEFT JOIN LATERAL (
+    SELECT v.serial_number, v.inventory_asset_code, v.extra, v.current_entity, v.rent_monthly_rate
+    FROM vendor_serial_numbers v
+    WHERE v.deleted_at IS NULL
+      AND (
+        (sti.ttspl_id IS NOT NULL AND v.inventory_asset_code = sti.ttspl_id)
+        OR (sti.unique_serial_number IS NOT NULL AND v.inventory_asset_code = sti.unique_serial_number)
+        OR (sti.serial_number IS NOT NULL AND v.serial_number = sti.serial_number)
+        OR v.inventory_asset_code = NULLIF(split_part(rl.serial_number->>0, '|', 3), '')
+        OR v.serial_number = NULLIF(split_part(rl.serial_number->>0, '|', 2), '')
+      )
+    LIMIT 1
+  ) vsn ON TRUE
+  WHERE rl.movement_type = 'return'
+    AND rl.customer_id = $1
+`;
+
+const RETURNED_SELECT_SQL = `
+  SELECT rl.dc_number AS dc_number,
+         rl.created_at,
+         COALESCE(rl.delivered_at, sti.warehouse_received_at, rl.created_at) AS delivered_at,
+         COALESCE(sti.ttspl_id, sti.unique_serial_number, vsn.inventory_asset_code,
+                  vsn.extra->>'ttspl_id', NULLIF(split_part(rl.serial_number->>0, '|', 3), '')) AS ttspl_id,
+         COALESCE(sti.serial_number, vsn.serial_number,
+                  NULLIF(split_part(rl.serial_number->>0, '|', 2), '')) AS serial_number,
+         COALESCE(vsn.extra->>'brand', rl.brand) AS brand,
+         COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', rl.model_name) AS model_name,
+         vsn.extra->>'processor' AS processor,
+         vsn.extra->>'generation' AS generation,
+         vsn.extra->>'ram' AS ram,
+         vsn.extra->>'storage' AS storage,
+         vsn.extra->>'gpu' AS gpu,
+         vsn.extra->>'screen_size' AS screen_size,
+         vsn.current_entity AS entity_code,
+         vsn.rent_monthly_rate,
+         sti.pickup_type,
+         sti.proof_of_completion_path,
+         sti.pod_image_path,
+         sti.warehouse_esign_url
+`;
+
+async function countCustomerActiveAssets(customerId) {
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS total ${ACTIVE_FROM_SQL}`,
+    [customerId, DEPLOYED_WITH_CUSTOMER_STATUSES]
+  );
+  return rows[0]?.total || 0;
+}
+
+async function countCustomerReturnedAssets(customerId) {
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS total ${RETURNED_FROM_SQL}`,
+    [customerId]
+  );
+  return rows[0]?.total || 0;
+}
+
+async function queryCustomerActiveAssets(customerId, { search = '', limit, offset } = {}) {
+  const params = [customerId, DEPLOYED_WITH_CUSTOMER_STATUSES];
+  const searchSql = buildActiveSearchSql(search, params);
+  const fromWhere = `${ACTIVE_FROM_SQL}${searchSql}`;
+
+  const countR = await pool.query(`SELECT COUNT(*)::int AS total ${fromWhere}`, params);
+  const total = countR.rows[0]?.total || 0;
+
+  let listSql = `${ACTIVE_SELECT_SQL} ${fromWhere} ORDER BY vsn.delivered_at DESC NULLS LAST`;
+  const listParams = [...params];
+  if (limit != null) {
+    listParams.push(limit, offset || 0);
+    listSql += ` LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`;
+  }
+
+  const { rows } = await pool.query(listSql, listParams);
+  return { rows: rows.map(mapActiveAssetRow), total };
+}
+
+async function queryCustomerReturnedAssets(customerId, { search = '', limit, offset } = {}) {
+  const params = [customerId];
+  const searchSql = buildReturnedSearchSql(search, params);
+  const fromWhere = `${RETURNED_FROM_SQL}${searchSql}`;
+
+  const countR = await pool.query(`SELECT COUNT(*)::int AS total ${fromWhere}`, params);
+  const total = countR.rows[0]?.total || 0;
+
+  let listSql = `${RETURNED_SELECT_SQL} ${fromWhere} ORDER BY rl.created_at DESC`;
+  const listParams = [...params];
+  if (limit != null) {
+    listParams.push(limit, offset || 0);
+    listSql += ` LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`;
+  }
+
+  const { rows } = await pool.query(listSql, listParams);
+  return { rows: rows.map(mapReturnedAssetRow), total };
+}
+
 // "Assets with Customer" — derived from the authoritative inventory
 // (vendor_serial_numbers), replacing the deprecated customer_inventory table.
 exports.getCustomerLaptops = async (req, res) => {
   try {
     const customerId = parseInt(req.params.customerId, 10);
+    const page = Math.max(1, parseInt(req.query.page, 10) || 0);
+    const limitRaw = parseInt(req.query.limit, 10) || 0;
+    const limit = limitRaw > 0 ? Math.min(100, Math.max(1, limitRaw)) : 0;
+    const paginate = page > 0 && limit > 0;
+    const lifecycle = req.query.lifecycle === 'returned' ? 'returned' : 'active';
+    const search = (req.query.search || '').trim();
 
-    // ── Active assets (currently out with the customer) ──────────────────
-    // POD is sourced from the OUTBOUND delivery challan line for the unit's
-    // current DC. Different delivery flows persist POD to different columns
-    // (file_path / pod_image_url / pod_photo_url / esign_url) so we read all.
-    const activeRes = await pool.query(
-      `SELECT vsn.serial_id,
-              COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
-              vsn.serial_number,
-              vsn.extra->>'brand' AS brand,
-              COALESCE(vsn.extra->>'model', vsn.extra->>'model_name') AS model_name,
-              vsn.extra->>'processor' AS processor,
-              vsn.extra->>'generation' AS generation,
-              vsn.extra->>'ram' AS ram,
-              vsn.extra->>'storage' AS storage,
-              vsn.extra->>'gpu' AS gpu,
-              vsn.extra->>'screen_size' AS screen_size,
-              vsn.inventory_status AS status,
-              vsn.current_entity AS entity_code,
-              vsn.current_dc_number AS dc_number,
-              vsn.delivered_at AS dispatch_date,
-              COALESCE(vsn.delivered_at, pod.delivery_completed_at) AS delivered_at,
-              vsn.rent_start_date,
-              vsn.rent_monthly_rate,
-              pod.file_path AS pod_file_path,
-              pod.pod_image_url AS pod_image_url,
-              pod.pod_photo_url AS pod_photo_url,
-              pod.esign_url AS pod_esign_url
-         FROM vendor_serial_numbers vsn
-         LEFT JOIN LATERAL (
-           SELECT dcl.file_path, dcl.pod_image_url, dcl.pod_photo_url, dcl.esign_url, dcl.delivery_completed_at
-           FROM delivery_challan_lines dcl
-           WHERE dcl.dc_number = vsn.current_dc_number
-             AND COALESCE(dcl.movement_type, 'outbound') = 'outbound'
-             AND (dcl.file_path IS NOT NULL OR dcl.pod_image_url IS NOT NULL
-                  OR dcl.pod_photo_url IS NOT NULL OR dcl.esign_url IS NOT NULL)
-           ORDER BY dcl.delivery_completed_at DESC NULLS LAST, dcl.id DESC
-           LIMIT 1
-         ) pod ON TRUE
-        WHERE vsn.current_customer_id = $1
-          AND vsn.deleted_at IS NULL
-          AND vsn.inventory_status IN ('rented','on_demo','sold')
-        ORDER BY vsn.delivered_at DESC NULLS LAST`,
-      [customerId]
-    );
-
-    const podFromFilePath = (raw) => {
-      const out = [];
-      if (!raw) return out;
-      try {
-        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-        if (Array.isArray(parsed)) out.push(...parsed.filter(Boolean));
-        else if (parsed) out.push(String(parsed));
-      } catch {
-        out.push(raw);
-      }
-      return out;
+    const counts = {
+      active: await countCustomerActiveAssets(customerId),
+      returned: await countCustomerReturnedAssets(customerId),
     };
 
-    const active = activeRes.rows.map((r) => {
-      const podFiles = [
-        ...podFromFilePath(r.pod_file_path),
-        r.pod_image_url,
-        r.pod_photo_url,
-        r.pod_esign_url,
-      ].filter(Boolean);
-      const { pod_file_path, pod_image_url, pod_photo_url, pod_esign_url, ...rest } = r;
-      return { ...rest, lifecycle: 'active', pod_files: [...new Set(podFiles)] };
-    });
+    if (!paginate) {
+      const { rows: active } = await queryCustomerActiveAssets(customerId);
+      const { rows: returned } = await queryCustomerReturnedAssets(customerId);
+      return res.json({
+        success: true,
+        laptops: active,
+        active,
+        returned,
+        counts,
+      });
+    }
 
-    // ── Returned assets (sent back via a Return DC) ─────────────────────
-    // Return DCs live in delivery_challan_lines with movement_type='return'.
-    // POD for a return = the pickup proof photo + the warehouse e-sign that
-    // are captured on the linked support_ticket_items row.
-    const returnedRes = await pool.query(
-      `SELECT rl.dc_number AS dc_number,
-              rl.created_at,
-              COALESCE(rl.delivered_at, sti.warehouse_received_at, rl.created_at) AS delivered_at,
-              COALESCE(sti.ttspl_id, sti.unique_serial_number, vsn.inventory_asset_code,
-                       vsn.extra->>'ttspl_id', NULLIF(split_part(rl.serial_number->>0, '|', 3), '')) AS ttspl_id,
-              COALESCE(sti.serial_number, vsn.serial_number,
-                       NULLIF(split_part(rl.serial_number->>0, '|', 2), '')) AS serial_number,
-              COALESCE(vsn.extra->>'brand', rl.brand) AS brand,
-              COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', rl.model_name) AS model_name,
-              vsn.extra->>'processor' AS processor,
-              vsn.extra->>'generation' AS generation,
-              vsn.extra->>'ram' AS ram,
-              vsn.extra->>'storage' AS storage,
-              vsn.extra->>'gpu' AS gpu,
-              vsn.extra->>'screen_size' AS screen_size,
-              vsn.current_entity AS entity_code,
-              vsn.rent_monthly_rate,
-              sti.pickup_type,
-              sti.proof_of_completion_path,
-              sti.pod_image_path,
-              sti.warehouse_esign_url
-         FROM delivery_challan_lines rl
-         LEFT JOIN LATERAL (
-           SELECT ttspl_id, unique_serial_number, serial_number, pickup_type,
-                  proof_of_completion_path, pod_image_path, warehouse_esign_url, warehouse_received_at
-           FROM support_ticket_items
-           WHERE return_dc_number = rl.dc_number AND item_type = 'pickup'
-           ORDER BY id DESC
-           LIMIT 1
-         ) sti ON TRUE
-         LEFT JOIN LATERAL (
-           SELECT v.serial_number, v.inventory_asset_code, v.extra, v.current_entity, v.rent_monthly_rate
-           FROM vendor_serial_numbers v
-           WHERE v.deleted_at IS NULL
-             AND (
-               (sti.ttspl_id IS NOT NULL AND v.inventory_asset_code = sti.ttspl_id)
-               OR (sti.unique_serial_number IS NOT NULL AND v.inventory_asset_code = sti.unique_serial_number)
-               OR (sti.serial_number IS NOT NULL AND v.serial_number = sti.serial_number)
-               OR v.inventory_asset_code = NULLIF(split_part(rl.serial_number->>0, '|', 3), '')
-               OR v.serial_number = NULLIF(split_part(rl.serial_number->>0, '|', 2), '')
-             )
-           LIMIT 1
-         ) vsn ON TRUE
-        WHERE rl.movement_type = 'return'
-          AND rl.customer_id = $1
-        ORDER BY rl.created_at DESC`,
-      [customerId]
-    );
+    const offset = (page - 1) * limit;
+    const result = lifecycle === 'returned'
+      ? await queryCustomerReturnedAssets(customerId, { search, limit, offset })
+      : await queryCustomerActiveAssets(customerId, { search, limit, offset });
 
-    const returned = returnedRes.rows.map((r) => {
-      const podFiles = [
-        r.proof_of_completion_path,
-        r.pod_image_path,
-        r.warehouse_esign_url,
-      ].filter(Boolean);
-      const { proof_of_completion_path, pod_image_path, warehouse_esign_url, ...rest } = r;
-      return { ...rest, status: 'returned', lifecycle: 'returned', pod_files: [...new Set(podFiles)] };
-    });
-
-    res.json({
+    return res.json({
       success: true,
-      // `laptops` kept for backward compatibility (active assets only)
-      laptops: active,
-      active,
-      returned,
-      counts: { active: active.length, returned: returned.length },
+      lifecycle,
+      data: result.rows,
+      pagination: {
+        page,
+        limit,
+        total: result.total,
+        totalPages: Math.max(1, Math.ceil(result.total / limit)),
+      },
+      counts,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

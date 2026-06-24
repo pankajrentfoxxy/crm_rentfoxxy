@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import InventoryPageShell from '../components/InventoryPageShell';
 import { SearchField, ListPagination } from '../../../components/ui/primitives';
@@ -29,9 +29,10 @@ const fmtDate = (d) => (d ? String(d).slice(0, 10) : '—');
 const fmtMoney = (n) => (n != null && n !== '' ? `₹${Number(n).toLocaleString('en-IN')}` : '—');
 
 export default function CustomerAssetsPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const status = searchParams.get('status') || '';
   const [rows, setRows] = useState([]);
   const [counts, setCounts] = useState({ all: 0, reserved: 0, in_transit: 0, rented: 0, on_demo: 0, sold: 0 });
-  const [status, setStatus] = useState('');
   const [page, setPage] = useState(1);
   const [searchInput, setSearchInput] = useState('');
   const search = useDebouncedValue(searchInput.trim(), 320);
@@ -39,6 +40,11 @@ export default function CustomerAssetsPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => { setPage(1); }, [search, status]);
+
+  const selectStatus = (key) => {
+    if (key) setSearchParams({ status: key });
+    else setSearchParams({});
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -74,7 +80,7 @@ export default function CustomerAssetsPage() {
             <button
               key={t.key || 'all'}
               type="button"
-              onClick={() => setStatus(t.key)}
+              onClick={() => selectStatus(t.key)}
               className={[
                 'px-3 py-1.5 rounded-lg text-sm border transition-colors',
                 active ? 'bg-sky-600 text-white border-sky-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50',

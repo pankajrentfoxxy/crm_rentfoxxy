@@ -17,6 +17,19 @@ function str(val, maxLen, fallback = '') {
   return maxLen ? s.slice(0, maxLen) : s;
 }
 
+/** Extract TTSPL#### from ttspl_id, machine_number, or composite values like 1428/TTSPL2735 */
+function extractTtsplCode(raw) {
+  const s = str(raw, 255, '');
+  if (!s) return null;
+  const match = s.match(/TTSPL\d+/i);
+  if (match) return match[0].toUpperCase();
+  return s.length <= 100 ? s : s.slice(0, 100);
+}
+
+function resolveTicketTtsplId(row) {
+  return extractTtsplCode(row?.ttspl_id) || extractTtsplCode(row?.machine_number) || null;
+}
+
 function parseJson(val, fallback = null) {
   if (val == null || val === '') return fallback;
   if (typeof val === 'object') return val;
@@ -138,6 +151,8 @@ module.exports = {
   normalizeEmail,
   normalizeGst,
   str,
+  extractTtsplCode,
+  resolveTicketTtsplId,
   parseJson,
   extractAddressText,
   findExistingByEmailOrGst,

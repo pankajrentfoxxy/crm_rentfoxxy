@@ -1,6 +1,6 @@
 const { query, validationResult } = require('express-validator');
 const pool = require('../../config/db');
-const { enrichSerialRow } = require('../../services/inventoryManagementService');
+const { enrichSerialRowsBatch } = require('../../services/inventoryManagementService');
 
 const searchValidators = [query('serial_number').notEmpty().trim()];
 
@@ -17,10 +17,13 @@ async function serialNumberStatus(req, res) {
          s.extra, s.created_at AS serial_created_at, s.updated_at AS serial_updated_at,
          s.rental_start_date, s.grn_id, s.inventory_status,
          p.po_id, p.purchase_order_number, p.purchase_order_type, p.vendor_id, p.line_items,
-         v.business_name, v.first_name || ' ' || v.last_name AS vendor_name
+         p.product_details_legacy_ids,
+         v.business_name, v.first_name || ' ' || v.last_name AS vendor_name,
+         g.meta->>'product_id' AS grn_product_id
        FROM vendor_serial_numbers s
        LEFT JOIN vendor_purchase_orders p ON p.po_id = s.po_id AND p.deleted_at IS NULL
        LEFT JOIN vendors v ON v.vendor_id = p.vendor_id AND v.deleted_at IS NULL
+       LEFT JOIN vendor_goods_received_notes g ON g.grn_id = s.grn_id AND g.deleted_at IS NULL
        WHERE s.deleted_at IS NULL
          AND (
            s.serial_number ILIKE $1
@@ -30,7 +33,7 @@ async function serialNumberStatus(req, res) {
       [`%${serial}%`]
     );
 
-    const serialRows = rowsR.rows.map(enrichSerialRow);
+    const serialRows = await enrichSerialRowsBatch(pool, rowsR.rows);
 
     const inwardR = await pool.query(
       `SELECT * FROM allocation_logs WHERE serial_number ILIKE $1 AND in_ward = 'active' ORDER BY id DESC`,

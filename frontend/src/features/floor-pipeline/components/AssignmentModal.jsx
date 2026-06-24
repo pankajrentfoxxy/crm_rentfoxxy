@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Loader2, Star, User, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { assignTicket, getTeamMembers } from '../floorPipelineApi';
-import { configSummary, priorityBadge } from '../floorPipelineUi';
+import { configSummary, priorityBadge, resolveTicketTtspl } from '../floorPipelineUi';
 
 function getRelevantTeams(stageName) {
   if (stageName === 'Floor Manager') {
@@ -86,7 +86,7 @@ export default function AssignmentModal({ ticket, open, onClose, onAssigned }) {
         <div className="flex items-start justify-between border-b px-4 py-3">
           <div>
             <h2 className="font-semibold text-slate-900">Assign Ticket</h2>
-            <p className="font-mono text-sm text-blue-700">{ticket.ttspl_id || `#${ticket.ticket_id}`}</p>
+            <p className="font-mono text-sm text-blue-700">{resolveTicketTtspl(ticket) || `#${ticket.ticket_id}`}</p>
             <p className="text-xs text-slate-500 mt-0.5">{configSummary(ticket)}</p>
             <span className={`inline-block mt-1 rounded-full px-2 py-0.5 text-xs font-semibold ${pri.className}`}>
               {pri.label}

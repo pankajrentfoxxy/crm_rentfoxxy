@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Copy, FileText } from 'lucide-react';
+import { ArrowLeft, Copy, FileText, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
-import { Button } from '../../../components/ui/primitives';
+import { Button, SearchField, ListPagination } from '../../../components/ui/primitives';
+import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
 import {
   getCustomer, getCustomerLaptops, updateCustomer, verifyCustomerKyc, enableCustomerPortal,
@@ -14,6 +15,7 @@ import CustomerDocuments from '../components/CustomerDocuments';
 import CustomerFormDrawer from '../components/CustomerFormDrawer';
 
 const TABS = ['Profile', 'Documents', 'Assets', 'Orders', 'Lead Origin', 'Portal Access'];
+const ASSET_PAGE_SIZE = 25;
 
 function podFileUrl(path) {
   if (!path) return '';
@@ -89,28 +91,66 @@ export default function CustomerDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [customer, setCustomer] = useState(null);
-  const [laptops, setLaptops] = useState([]);
-  const [returnedLaptops, setReturnedLaptops] = useState([]);
+  const [assetRows, setAssetRows] = useState([]);
+  const [assetCounts, setAssetCounts] = useState({ active: 0, returned: 0 });
   const [assetView, setAssetView] = useState('active');
+  const [assetPage, setAssetPage] = useState(1);
+  const [assetSearchInput, setAssetSearchInput] = useState('');
+  const assetSearch = useDebouncedValue(assetSearchInput.trim(), 320);
+  const [assetPagination, setAssetPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: ASSET_PAGE_SIZE });
+  const [assetsLoading, setAssetsLoading] = useState(false);
   const [tab, setTab] = useState(0);
   const [editOpen, setEditOpen] = useState(false);
   const [ttsplOpen, setTtsplOpen] = useState(null);
   const [portalBusy, setPortalBusy] = useState(false);
   const [newPassword, setNewPassword] = useState(null);
 
-  const load = React.useCallback(async () => {
+  const loadCustomer = useCallback(async () => {
     try {
       const res = await getCustomer(id);
       setCustomer(res.data?.customer);
-      const lapRes = await getCustomerLaptops(id);
-      setLaptops(lapRes.data?.active || lapRes.data?.laptops || []);
-      setReturnedLaptops(lapRes.data?.returned || []);
     } catch {
       toast.error('Failed to load customer');
     }
   }, [id]);
 
-  React.useEffect(() => { load(); }, [load]);
+  const loadAssets = useCallback(async () => {
+    setAssetsLoading(true);
+    try {
+      const lapRes = await getCustomerLaptops(id, {
+        lifecycle: assetView,
+        page: assetPage,
+        limit: ASSET_PAGE_SIZE,
+        search: assetSearch || undefined,
+      });
+      setAssetRows(lapRes.data?.data || []);
+      if (lapRes.data?.counts) setAssetCounts(lapRes.data.counts);
+      setAssetPagination(lapRes.data?.pagination || {
+        page: assetPage,
+        totalPages: 1,
+        total: lapRes.data?.data?.length || 0,
+        limit: ASSET_PAGE_SIZE,
+      });
+    } catch {
+      toast.error('Failed to load customer assets');
+    } finally {
+      setAssetsLoading(false);
+    }
+  }, [id, assetView, assetPage, assetSearch]);
+
+  useEffect(() => { loadCustomer(); }, [loadCustomer]);
+
+  useEffect(() => {
+    if (tab !== 2) return;
+    loadAssets();
+  }, [tab, loadAssets]);
+
+  useEffect(() => { setAssetPage(1); }, [assetSearch, assetView]);
+
+  const load = useCallback(async () => {
+    await loadCustomer();
+    if (tab === 2) await loadAssets();
+  }, [loadCustomer, loadAssets, tab]);
 
   if (!customer) return <div className="p-6 text-center text-gray-400">Loading...</div>;
 
@@ -217,32 +257,42 @@ export default function CustomerDetailPage() {
           <div className="grid grid-cols-2 gap-3 sm:max-w-md">
             <button
               type="button"
-              onClick={() => setAssetView('active')}
+              onClick={() => { setAssetPage(1); setAssetView('active'); }}
               className={`rounded-xl border p-4 text-left transition-colors ${
                 assetView === 'active' ? 'border-green-500 bg-green-50' : 'border-gray-100 bg-white hover:bg-gray-50'
               }`}
             >
               <p className="text-xs text-gray-500">Active (on rent)</p>
-              <p className="text-2xl font-bold text-green-700">{laptops.length}</p>
+              <p className="text-2xl font-bold text-green-700">{assetCounts.active ?? 0}</p>
             </button>
             <button
               type="button"
-              onClick={() => setAssetView('returned')}
+              onClick={() => { setAssetPage(1); setAssetView('returned'); }}
               className={`rounded-xl border p-4 text-left transition-colors ${
                 assetView === 'returned' ? 'border-amber-500 bg-amber-50' : 'border-gray-100 bg-white hover:bg-gray-50'
               }`}
             >
               <p className="text-xs text-gray-500">Returned</p>
-              <p className="text-2xl font-bold text-amber-700">{returnedLaptops.length}</p>
+              <p className="text-2xl font-bold text-amber-700">{assetCounts.returned ?? 0}</p>
             </button>
           </div>
 
-          {/* Mobile asset cards */}
+          <SearchField
+            value={assetSearchInput}
+            onChange={(e) => setAssetSearchInput(e.target.value)}
+            placeholder="Search TTSPL, serial, model, DC number…"
+            className="max-w-md"
+          />
+
+          {assetsLoading ? (
+            <div className="flex justify-center py-12"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>
+          ) : (
+          <>
           <div className="grid gap-3 md:hidden">
             {assetView === 'active' ? (
-              laptops.length === 0 ? (
+              assetRows.length === 0 ? (
                 <p className="p-6 text-center text-gray-400 text-sm">No assets currently with this customer</p>
-              ) : laptops.map((lap) => (
+              ) : assetRows.map((lap) => (
                 <div key={lap.serial_id || lap.ttspl_id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
                   <div className="flex items-center justify-between gap-2">
                     <button type="button" onClick={() => setTtsplOpen(lap.ttspl_id || lap.serial_number)} className="text-blue-600 font-mono text-sm font-semibold">{lap.ttspl_id || lap.serial_number}</button>
@@ -263,9 +313,9 @@ export default function CustomerDetailPage() {
                 </div>
               ))
             ) : (
-              returnedLaptops.length === 0 ? (
+              assetRows.length === 0 ? (
                 <p className="p-6 text-center text-gray-400 text-sm">No returned laptops for this customer</p>
-              ) : returnedLaptops.map((lap, i) => (
+              ) : assetRows.map((lap, i) => (
                 <div key={lap.dc_number ? `${lap.dc_number}-${i}` : `ret-${i}`} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
                   <div className="flex items-center justify-between gap-2">
                     <button type="button" onClick={() => setTtsplOpen(lap.ttspl_id || lap.serial_number)} className="text-blue-600 font-mono text-sm font-semibold">{lap.ttspl_id || lap.serial_number || '—'}</button>
@@ -290,17 +340,18 @@ export default function CustomerDetailPage() {
               <thead className="bg-gray-50 text-xs text-gray-500 text-left">
                 <tr>
                   {(assetView === 'active'
-                    ? ['TTSPL ID', 'Serial No', 'Model', 'Config', 'Entity', 'DC Number', 'Delivered Date', 'Monthly Rate', 'POD', 'Status']
-                    : ['TTSPL ID', 'Serial No', 'Model', 'Config', 'Return DC', 'Returned Date', 'Type', 'POD', 'Status']
+                    ? ['#', 'TTSPL ID', 'Serial No', 'Model', 'Config', 'Entity', 'DC Number', 'Delivered Date', 'Monthly Rate', 'POD', 'Status']
+                    : ['#', 'TTSPL ID', 'Serial No', 'Model', 'Config', 'Return DC', 'Returned Date', 'Type', 'POD', 'Status']
                   ).map((h) => <th key={h} className="p-3">{h}</th>)}
                 </tr>
               </thead>
               <tbody>
                 {assetView === 'active' ? (
-                  laptops.length === 0 ? (
-                    <tr><td colSpan={10} className="p-6 text-center text-gray-400">No assets currently with this customer</td></tr>
-                  ) : laptops.map((lap) => (
+                  assetRows.length === 0 ? (
+                    <tr><td colSpan={11} className="p-6 text-center text-gray-400">No assets currently with this customer</td></tr>
+                  ) : assetRows.map((lap, i) => (
                     <tr key={lap.serial_id || lap.ttspl_id} className="border-t border-gray-100">
+                      <td className="p-3 text-xs text-gray-400">{(assetPage - 1) * ASSET_PAGE_SIZE + i + 1}</td>
                       <td className="p-3">
                         <button type="button" onClick={() => setTtsplOpen(lap.ttspl_id || lap.serial_number)}
                           className="text-blue-600 hover:underline font-mono text-xs">
@@ -323,10 +374,11 @@ export default function CustomerDetailPage() {
                     </tr>
                   ))
                 ) : (
-                  returnedLaptops.length === 0 ? (
-                    <tr><td colSpan={9} className="p-6 text-center text-gray-400">No returned laptops for this customer</td></tr>
-                  ) : returnedLaptops.map((lap, i) => (
+                  assetRows.length === 0 ? (
+                    <tr><td colSpan={10} className="p-6 text-center text-gray-400">No returned laptops for this customer</td></tr>
+                  ) : assetRows.map((lap, i) => (
                     <tr key={lap.dc_number ? `${lap.dc_number}-${i}` : `ret-${i}`} className="border-t border-gray-100">
+                      <td className="p-3 text-xs text-gray-400">{(assetPage - 1) * ASSET_PAGE_SIZE + i + 1}</td>
                       <td className="p-3">
                         <button type="button" onClick={() => setTtsplOpen(lap.ttspl_id || lap.serial_number)}
                           className="text-blue-600 hover:underline font-mono text-xs">
@@ -347,6 +399,16 @@ export default function CustomerDetailPage() {
               </tbody>
             </table>
           </div>
+
+          <ListPagination
+            page={assetPage}
+            totalPages={assetPagination.totalPages || 1}
+            total={assetPagination.total || 0}
+            pageSize={ASSET_PAGE_SIZE}
+            onPageChange={setAssetPage}
+          />
+          </>
+          )}
         </div>
       )}
 

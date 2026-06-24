@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
+const { DEPLOYED_WITH_CUSTOMER_STATUSES } = require('../services/customerDeployedAssets');
 
 const PORTAL_ITEM_TYPE_MAP = {
   'Replacement Request': 'replacement',
@@ -145,9 +146,9 @@ exports.listLaptops = async (req, res) => {
            FROM vendor_serial_numbers vsn
           WHERE vsn.current_customer_id = $1
             AND vsn.deleted_at IS NULL
-            AND vsn.inventory_status IN ('rented','on_demo','sold')
+            AND vsn.inventory_status = ANY($2::text[])
           ORDER BY vsn.delivered_at DESC NULLS LAST`,
-        [customerId]
+        [customerId, DEPLOYED_WITH_CUSTOMER_STATUSES]
       );
       rows = held.rows;
     } catch (heldErr) {

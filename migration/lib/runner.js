@@ -1,7 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
-const { getErpPool, getCrmPool, closePools } = require('./db');
+const { createErpSource } = require('./erpSource');
+const { getCrmPool, closePools } = require('./db');
 const { ensureIdMapTable } = require('./id-map');
 const { writeLog } = require('./logger');
 const { AUTH_PROTECTED, SYSTEM_PROTECTED } = require('./preserve');
@@ -61,7 +62,7 @@ async function markModuleFailed(crm, moduleId, err) {
  * Module signature: async ({ erp, crm, batchSize, helpers }) => { rowsMigrated }
  */
 async function runModule(moduleDef, { force = false } = {}) {
-  const erp = await getErpPool();
+  const erp = await createErpSource();
   const crm = getCrmPool();
   const client = await crm.connect();
 
@@ -98,6 +99,7 @@ async function runModule(moduleDef, { force = false } = {}) {
     throw err;
   } finally {
     client.release();
+    if (erp?.close) await erp.close().catch(() => {});
   }
 }
 
@@ -126,4 +128,9 @@ module.exports = {
   runModule,
   loadModules,
   closePools,
+  ensureMigrationRunsTable,
+  getModuleStatus,
+  markModuleStart,
+  markModuleDone,
+  markModuleFailed,
 };

@@ -7,6 +7,7 @@ const { ensureCustomerTables } = require('../services/customerInventoryErpSyncSe
 const supportQuery = require('../services/supportQuery');
 const supportInventoryService = require('../services/supportInventoryService');
 const inventorySM = require('../services/inventoryStateMachine');
+const { DEPLOYED_WITH_CUSTOMER_STATUSES } = require('../services/customerDeployedAssets');
 const { processReturnedSerials } = require('../services/returnCompletionService');
 const { createFloorTicketFromSupportPickup } = require('../services/grnTicketService');
 const { nextDocumentNumber } = require('../services/salesManagementService');
@@ -796,9 +797,9 @@ exports.getCustomerAssets = async (req, res) => {
                     vsn.inventory_status AS asset_bucket
              FROM vendor_serial_numbers vsn
              WHERE vsn.current_customer_id = $1 AND vsn.deleted_at IS NULL
-               AND vsn.inventory_status IN ('rented', 'on_demo', 'sold')
+               AND vsn.inventory_status = ANY($2::text[])
              ORDER BY vsn.inventory_asset_code`,
-            [customerId]
+            [customerId, DEPLOYED_WITH_CUSTOMER_STATUSES]
         );
         res.json({ success: true, assets: rows });
     } catch (e) {

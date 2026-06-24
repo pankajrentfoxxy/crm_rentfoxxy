@@ -59,7 +59,7 @@ const { getCrmPool, getErpPool, closePools } = require('../lib/db');
     const crmActive = await crm.query(
       `SELECT COUNT(*)::int c FROM vendor_serial_numbers
         WHERE current_customer_id = $1 AND deleted_at IS NULL
-          AND inventory_status IN ('rented','on_demo','sold')`,
+          AND inventory_status IN ('rented','on_demo','sold','reserved','in_transit','out_stock')`,
       [crmId]
     );
     const crmAnyCustomer = await crm.query(

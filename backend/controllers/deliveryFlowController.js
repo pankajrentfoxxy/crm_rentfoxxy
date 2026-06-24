@@ -176,7 +176,7 @@ async function buildDcFlow(where, params, { includeOtp = false } = {}) {
   return out;
 }
 
-// GET /delivery-flow?status=in_transit|reached|shipped|delivered|all&technician_id=
+// GET /delivery-flow?status=in_transit|reached|shipped|delivered|all&technician_id=&page=&limit=
 exports.listDeliveryFlow = async (req, res) => {
   try {
     const status = String(req.query.status || 'active').toLowerCase();
@@ -206,6 +206,45 @@ exports.listDeliveryFlow = async (req, res) => {
     }
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const page = Math.max(1, parseInt(req.query.page, 10) || 0);
+    const limitRaw = parseInt(req.query.limit, 10) || 0;
+    const limit = limitRaw > 0 ? Math.min(100, Math.max(1, limitRaw)) : 0;
+    const paginate = page > 0 && limit > 0;
+
+    if (paginate) {
+      const countRes = await pool.query(
+        `SELECT COUNT(DISTINCT d.dc_number)::int AS total FROM delivery_challan_lines d ${where}`,
+        params
+      );
+      const total = countRes.rows[0]?.total || 0;
+      const offset = (page - 1) * limit;
+      const dcRes = await pool.query(
+        `SELECT DISTINCT d.dc_number
+           FROM delivery_challan_lines d
+           ${where}
+          ORDER BY d.dc_number DESC
+          LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+        [...params, limit, offset]
+      );
+      const dcNumbers = dcRes.rows.map((r) => r.dc_number);
+      if (!dcNumbers.length) {
+        return res.json({
+          success: true,
+          items: [],
+          pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
+        });
+      }
+      const pageParams = [...params, dcNumbers];
+      const pageWhere = `${where} AND d.dc_number = ANY($${pageParams.length}::text[])`;
+      const items = await buildDcFlow(pageWhere, pageParams, { includeOtp: isAdmin });
+      return res.json({
+        success: true,
+        items,
+        pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
+      });
+    }
+
     const items = await buildDcFlow(where, params, { includeOtp: isAdmin });
     res.json({ success: true, items });
   } catch (error) {

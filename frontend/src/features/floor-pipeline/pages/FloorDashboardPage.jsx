@@ -5,7 +5,7 @@ import toast from 'react-hot-toast';
 import { PageHeader, StatCard } from '../../../components/ui/primitives';
 import { useAuth } from '../../../context/AuthContext';
 import { fetchFloorDashboard, getFloorManagerQueue, getTeamMembers } from '../floorPipelineApi';
-import { configSummary, isFloorManagerRole, priorityBadge } from '../floorPipelineUi';
+import { configSummary, isFloorManagerRole, priorityBadge, resolveTicketTtspl } from '../floorPipelineUi';
 import useAutoRefresh from '../hooks/useAutoRefresh';
 import AssignmentModal from '../components/AssignmentModal';
 
@@ -108,7 +108,7 @@ export default function FloorDashboardPage() {
                   return (
                     <div key={t.ticket_id} className="rounded-xl border bg-white p-3 shadow-sm space-y-1.5">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="font-mono font-semibold text-blue-700">{t.ttspl_id || '—'}</span>
+                        <span className="font-mono font-semibold text-blue-700">{resolveTicketTtspl(t) || '—'}</span>
                         <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${pri.className}`}>{pri.label}</span>
                       </div>
                       <p className="text-xs text-slate-600">{configSummary(t)}</p>
@@ -137,7 +137,7 @@ export default function FloorDashboardPage() {
                       const pri = priorityBadge(t.priority);
                       return (
                         <tr key={t.ticket_id} className="border-t">
-                          <td className="px-3 py-2 font-mono font-semibold text-blue-700">{t.ttspl_id || '—'}</td>
+                          <td className="px-3 py-2 font-mono font-semibold text-blue-700">{resolveTicketTtspl(t) || '—'}</td>
                           <td className="px-3 py-2 text-xs">{configSummary(t)}</td>
                           <td className="px-3 py-2"><span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${pri.className}`}>{pri.label}</span></td>
                           <td className="px-3 py-2 text-xs">{t.ticket_type || 'grn_qc'}</td>
@@ -247,7 +247,7 @@ export default function FloorDashboardPage() {
             {(data.partsAlerts || []).map((p) => (
               <li key={p.request_id}>
                 <Link to={`/floor-pipeline/tickets/${p.ticket_id}`} className="text-blue-600 hover:underline">
-                  {p.ttspl_id || `#${p.ticket_id}`}
+                  {resolveTicketTtspl(p) || `#${p.ticket_id}`}
                 </Link>
                 {' — '}{p.part_name}
               </li>
@@ -260,7 +260,7 @@ export default function FloorDashboardPage() {
             {(data.recentCompletions || []).map((t) => (
               <li key={t.ticket_id}>
                 <Link to={`/floor-pipeline/tickets/${t.ticket_id}`} className="font-mono text-blue-700">
-                  {t.ttspl_id}
+                  {resolveTicketTtspl(t) || '—'}
                 </Link>
                 <span className="text-slate-500 ml-2 text-xs">
                   {t.completed_at ? new Date(t.completed_at).toLocaleTimeString() : ''}

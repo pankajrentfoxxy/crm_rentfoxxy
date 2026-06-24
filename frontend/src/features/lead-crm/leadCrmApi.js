@@ -27,7 +27,7 @@ export const getCustomer = (id) => api.get(`/customer-management/customers/${id}
 export const createCustomer = (data) => api.post('/customer-management/customers', data);
 export const updateCustomer = (id, data) => api.put(`/customer-management/customers/${id}`, data);
 export const verifyCustomerKyc = (id) => api.put(`/customer-management/customers/${id}/verify-kyc`);
-export const getCustomerLaptops = (id) => api.get(`/customer-management/customers/${id}/laptops`);
+export const getCustomerLaptops = (id, params) => api.get(`/customer-management/customers/${id}/laptops`, { params });
 export const getCustomerAddresses = (id) => api.get(`/customer-management/customers/${id}/addresses`);
 export const addCustomerAddress = (id, data) => api.post(`/customer-management/customers/${id}/addresses`, data);
 export const deleteCustomerAddress = (id, addressId) => api.delete(`/customer-management/customers/${id}/addresses/${addressId}`);

@@ -7,6 +7,7 @@ const {
   listTitleForSegment,
   buildListWhere,
   enrichSerialRow,
+  enrichSerialRowsBatch,
   enrichSparePartRow,
   normalizeSpareTab,
   spareStatusForTab,
@@ -14,6 +15,7 @@ const {
   fetchSparePartTabCounts,
   SPARE_STATUS_VALUES
 } = require('../../services/inventoryManagementService');
+const { DEPLOYED_WITH_CUSTOMER_STATUSES, displayDeployedStatus } = require('../../services/customerDeployedAssets');
 
 const READY_TO_RENT_SALE_VALUES = [
   'normal_sale',
@@ -128,6 +130,7 @@ async function listInventory(req, res) {
       FROM vendor_serial_numbers s
       INNER JOIN vendor_purchase_orders p ON p.po_id = s.po_id AND p.deleted_at IS NULL
       LEFT JOIN vendors v ON v.vendor_id = p.vendor_id AND v.deleted_at IS NULL
+      LEFT JOIN vendor_goods_received_notes g ON g.grn_id = s.grn_id AND g.deleted_at IS NULL
       WHERE s.deleted_at IS NULL
       ${segmentSql}
       ${searchSql}
@@ -141,7 +144,9 @@ async function listInventory(req, res) {
          s.extra, s.created_at AS serial_created_at, s.updated_at AS serial_updated_at,
          s.rental_start_date, s.grn_id, s.inventory_status,
          p.po_id, p.purchase_order_number, p.purchase_order_type, p.vendor_id, p.line_items,
+         p.product_details_legacy_ids,
          v.business_name, v.first_name || ' ' || v.last_name AS vendor_name,
+         g.meta->>'product_id' AS grn_product_id,
          (SELECT t.ticket_id FROM tickets t
             WHERE t.vendor_serial_id = s.serial_id
             ORDER BY t.created_at DESC LIMIT 1) AS ticket_id
@@ -150,11 +155,12 @@ async function listInventory(req, res) {
        LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
       listParams
     );
+    const data = await enrichSerialRowsBatch(pool, rowsR.rows);
     res.json({
       success: true,
       segment,
       title: listTitleForSegment(segment),
-      data: rowsR.rows.map(enrichSerialRow),
+      data,
       pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) }
     });
   } catch (e) {
@@ -165,7 +171,7 @@ async function listInventory(req, res) {
 
 async function getListCounts(req, res) {
   try {
-    const keys = ['passed', 'qc_process', 'rent_to_own', 'rental_purchase', 'direct_purchase', 'out_for_repare', 'spare_parts'];
+    const keys = ['passed', 'qc_process', 'rent_to_own', 'rental_purchase', 'direct_purchase', 'out_for_repare', 'failed', 'spare_parts'];
     const counts = {};
     for (const seg of keys) {
       const params = [];
@@ -185,6 +191,22 @@ async function getListCounts(req, res) {
         counts[seg] = r.rows[0]?.c || 0;
       }
     }
+
+    const deployedR = await pool.query(
+      `SELECT inventory_status, COUNT(*)::int AS c
+         FROM vendor_serial_numbers
+        WHERE deleted_at IS NULL
+          AND inventory_status = ANY($1::text[])
+        GROUP BY inventory_status`,
+      [['reserved', 'in_transit', 'rented', 'on_demo', 'sold']]
+    );
+    counts.rented = 0;
+    counts.sold = 0;
+    for (const row of deployedR.rows) {
+      if (row.inventory_status === 'rented') counts.rented = row.c;
+      if (row.inventory_status === 'sold') counts.sold = row.c;
+    }
+
     counts.npa = 0;
     // Phase 16: pending part requests awaiting warehouse action.
     try {
@@ -316,7 +338,7 @@ async function changeSparePartStatus(req, res) {
 // ─────────────────────────────────────────────────────────────
 // 'reserved' = attached to an order but not yet dispatched; it has left the
 // rentable shelf and is now allocated to a customer, so it belongs here.
-const DEPLOYED_STATUSES = ['reserved', 'in_transit', 'rented', 'on_demo', 'sold'];
+const DEPLOYED_STATUSES = [...DEPLOYED_WITH_CUSTOMER_STATUSES];
 
 const customerAssetsValidators = [
   query('page').optional().isInt({ min: 1 }).toInt(),
@@ -396,7 +418,11 @@ async function customerAssets(req, res) {
       breakdownParams
     );
     const counts = { reserved: 0, in_transit: 0, rented: 0, on_demo: 0, sold: 0, all: 0 };
-    breakdownR.rows.forEach((r) => { counts[r.inventory_status] = r.c; counts.all += r.c; });
+    breakdownR.rows.forEach((r) => {
+      const key = displayDeployedStatus(r.inventory_status);
+      if (counts[key] !== undefined) counts[key] += r.c;
+      counts.all += r.c;
+    });
 
     const listParams = [...params, limit, offset];
     const rowsR = await pool.query(
@@ -423,7 +449,7 @@ async function customerAssets(req, res) {
         generation: ex.generation || null,
         ram: ex.ram || null,
         storage: ex.storage || null,
-        inventory_status: r.inventory_status,
+        inventory_status: displayDeployedStatus(r.inventory_status),
         customer_id: r.customer_id,
         customer_name: r.customer_name,
         company_name: r.company_name,

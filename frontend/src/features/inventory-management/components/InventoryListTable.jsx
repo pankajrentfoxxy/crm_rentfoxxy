@@ -23,6 +23,45 @@ import { getBackendOrigin } from '../../../utils/api';
 
 const PAGE_SIZE = 25;
 
+/** Dashboard stat cards on Ready to Rent/Sell — link to the list that owns each bucket. */
+const READY_TO_RENT_STAT_CARDS = [
+  { label: 'QC Passed Available', countKey: 'passed' },
+  { label: 'Currently Rented', countKey: 'rented', to: '/inventory-management/customer-assets?status=rented' },
+  { label: 'Sold', countKey: 'sold', to: '/inventory-management/customer-assets?status=sold' },
+  { label: 'In Repair', countKey: 'out_for_repare', to: '/inventory-management/out-for-repare' },
+  { label: 'In QC', countKey: 'qc_process', to: '/inventory-management/qc-process' },
+  { label: 'QC Failed', countKey: 'failed', to: '/qc-management/failed' }
+];
+
+function InventoryStatCard({ label, value, to }) {
+  const content = (
+    <>
+      <p className="text-lg font-bold text-slate-900">{value}</p>
+      <p className="text-[10px] text-slate-500 leading-tight">{label}</p>
+      {to ? (
+        <p className="text-[10px] text-sky-600 font-medium mt-1 group-hover:underline">View list →</p>
+      ) : null}
+    </>
+  );
+
+  if (to) {
+    return (
+      <Link
+        to={to}
+        className="group rounded-xl border border-gray-100 bg-white p-3 shadow-sm hover:border-sky-200 hover:bg-sky-50/40 transition-colors"
+      >
+        {content}
+      </Link>
+    );
+  }
+
+  return (
+    <div className="rounded-xl border border-gray-100 bg-white p-3 shadow-sm">
+      {content}
+    </div>
+  );
+}
+
 function fileUrl(path) {
   if (!path) return '';
   if (path.startsWith('http://') || path.startsWith('https://')) return path;
@@ -362,24 +401,19 @@ export default function InventoryListTable({ routeKey }) {
     }
   };
 
-  const statCards = listCounts ? [
-    { label: 'QC Passed Available', value: listCounts.passed ?? listCounts.ready ?? 0 },
-    { label: 'Currently Rented', value: listCounts.rent_to_own ?? 0 },
-    { label: 'Sold', value: listCounts.direct_purchase ?? 0 },
-    { label: 'In Repair', value: listCounts.out_for_repare ?? 0 },
-    { label: 'In QC', value: listCounts.pending ?? 0 },
-    { label: 'QC Failed', value: listCounts.failed ?? 0 }
-  ] : null;
+  const statCards = listCounts && showReadyToRentAction
+    ? READY_TO_RENT_STAT_CARDS.map((card) => ({
+        ...card,
+        value: listCounts[card.countKey] ?? 0
+      }))
+    : null;
 
   return (
     <div className="space-y-4">
       {statCards ? (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
           {statCards.map((c) => (
-            <div key={c.label} className="rounded-xl border border-gray-100 bg-white p-3 shadow-sm">
-              <p className="text-lg font-bold text-slate-900">{c.value}</p>
-              <p className="text-[10px] text-slate-500 leading-tight">{c.label}</p>
-            </div>
+            <InventoryStatCard key={c.label} label={c.label} value={c.value} to={c.to} />
           ))}
         </div>
       ) : null}

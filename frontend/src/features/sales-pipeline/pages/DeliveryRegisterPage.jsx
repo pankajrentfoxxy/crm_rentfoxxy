@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { KeyRound, Map as MapIcon, CheckCircle2, ExternalLink, Image as ImageIcon, Users } from 'lucide-react';
+import { ListPagination } from '../../../components/ui/primitives';
 import { listDeliveryFlow } from '../salesPipelineApi';
 import { DISPATCH_MODE_STYLES, formatDateTime, statusLabel } from '../salesPipelineUtils';
 import { getBackendOrigin } from '../../../utils/api';
@@ -16,6 +17,8 @@ const TABS = [
   { id: 'delivered', label: 'Delivered' },
 ];
 
+const DELIVERED_PAGE_SIZE = 25;
+
 function uploadUrl(p) {
   if (!p) return null;
   if (p.startsWith('http')) return p;
@@ -26,25 +29,49 @@ export default function DeliveryRegisterPage() {
   const [tab, setTab] = useState('all');
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [deliveredPage, setDeliveredPage] = useState(1);
+  const [deliveredPagination, setDeliveredPagination] = useState({
+    page: 1, totalPages: 1, total: 0, limit: DELIVERED_PAGE_SIZE,
+  });
   const [otpModal, setOtpModal] = useState(null);
   const [deliverModal, setDeliverModal] = useState(null);
   const [receiveModal, setReceiveModal] = useState(null);
 
+  const isDelivered = tab === 'delivered';
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await listDeliveryFlow({ status: tab });
+      const params = { status: tab };
+      if (isDelivered) {
+        params.page = deliveredPage;
+        params.limit = DELIVERED_PAGE_SIZE;
+      }
+      const r = await listDeliveryFlow(params);
       setRows(r.data?.items || []);
+      if (isDelivered && r.data?.pagination) {
+        setDeliveredPagination(r.data.pagination);
+      } else {
+        setDeliveredPagination({
+          page: 1,
+          totalPages: 1,
+          total: r.data?.items?.length || 0,
+          limit: DELIVERED_PAGE_SIZE,
+        });
+      }
     } catch {
       toast.error('Failed to load delivery register');
     } finally {
       setLoading(false);
     }
-  }, [tab]);
+  }, [tab, isDelivered, deliveredPage]);
 
   useEffect(() => { load(); }, [load]);
 
-  const isDelivered = tab === 'delivered';
+  const selectTab = (id) => {
+    setTab(id);
+    if (id === 'delivered') setDeliveredPage(1);
+  };
 
   return (
     <div className="p-4 max-w-7xl mx-auto">
@@ -64,12 +91,18 @@ export default function DeliveryRegisterPage() {
 
       <div className="flex gap-2 mb-4 flex-wrap">
         {TABS.map((t) => (
-          <button key={t.id} type="button" onClick={() => setTab(t.id)}
+          <button key={t.id} type="button" onClick={() => selectTab(t.id)}
             className={`px-3 py-1.5 rounded-full text-xs font-medium ${tab === t.id ? 'bg-blue-600 text-white' : 'bg-gray-100'}`}>
             {t.label}
           </button>
         ))}
       </div>
+
+      {isDelivered && !loading && deliveredPagination.total > 0 ? (
+        <p className="text-sm text-gray-500 mb-3">
+          {deliveredPagination.total} delivered challan{deliveredPagination.total === 1 ? '' : 's'}
+        </p>
+      ) : null}
 
       <div className="bg-white border rounded-xl overflow-x-auto">
         <table className="w-full text-sm">
@@ -160,6 +193,16 @@ export default function DeliveryRegisterPage() {
           </tbody>
         </table>
       </div>
+
+      {isDelivered ? (
+        <ListPagination
+          page={deliveredPage}
+          totalPages={deliveredPagination.totalPages || 1}
+          total={deliveredPagination.total || 0}
+          pageSize={DELIVERED_PAGE_SIZE}
+          onPageChange={setDeliveredPage}
+        />
+      ) : null}
 
       {otpModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">

@@ -74,6 +74,18 @@ export function priorityBadge(priority) {
   return { label: 'Normal', className: 'bg-slate-100 text-slate-700' };
 }
 
+/** TTSPL id for display — API may send ttspl_display; refurb data often stored TTSPL in machine_number */
+export function resolveTicketTtspl(ticket) {
+  const direct = ticket?.ttspl_display || ticket?.ttspl_id;
+  if (direct != null && String(direct).trim()) return String(direct).trim();
+  const machine = ticket?.machine_number;
+  if (!machine) return null;
+  const match = String(machine).match(/TTSPL\d+/i);
+  if (match) return match[0].toUpperCase();
+  const trimmed = String(machine).trim();
+  return trimmed || null;
+}
+
 export function configSummary(ticket) {
   const firstValue = (...keys) => {
     for (const key of keys) {

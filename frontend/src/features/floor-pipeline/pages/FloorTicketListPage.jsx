@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { LayoutGrid, List, Loader2, Search, Factory } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { PageHeader } from '../../../components/ui/primitives';
+import { PageHeader, ListPagination } from '../../../components/ui/primitives';
+import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import { useAuth } from '../../../context/AuthContext';
 import { fetchFloorTickets } from '../floorPipelineApi';
 import useAutoRefresh from '../hooks/useAutoRefresh';
@@ -18,10 +19,12 @@ import {
   priorityBadge,
   stageCategory,
   stageCategoryBadge,
-  ticketAgeDays
+  ticketAgeDays,
+  resolveTicketTtspl
 } from '../floorPipelineUi';
 
 const VIEW_KEY = 'floor_pipeline_view';
+const PAGE_SIZE = 25;
 
 export default function FloorTicketListPage() {
   const navigate = useNavigate();
@@ -31,6 +34,9 @@ export default function FloorTicketListPage() {
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search.trim(), 320);
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [stageFilter, setStageFilter] = useState(searchParams.get('stage') || '');
   const [priorityFilter, setPriorityFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
@@ -49,18 +55,31 @@ export default function FloorTicketListPage() {
     setLoading(true);
     try {
       const params = { view: 'in_progress' };
-      if (search.trim()) params.search = search.trim();
+      if (debouncedSearch) params.search = debouncedSearch;
       if (priorityFilter) params.priority = priorityFilter;
       if (typeFilter) params.ticket_type = typeFilter;
       if (stageFilter) params.stage_names = stageFilter;
+      if (view === 'table') {
+        params.page = page;
+        params.limit = PAGE_SIZE;
+      }
       const { data } = await fetchFloorTickets(params);
-      if (data.success) setTickets(data.tickets || []);
+      if (data.success) {
+        setTickets(data.tickets || []);
+        if (view === 'table' && data.pagination) {
+          setPagination(data.pagination);
+        } else {
+          setPagination({ page: 1, totalPages: 1, total: data.tickets?.length || 0, limit: PAGE_SIZE });
+        }
+      }
     } catch (e) {
       toast.error(e.response?.data?.message || 'Failed to load tickets');
     } finally {
       setLoading(false);
     }
-  }, [search, priorityFilter, typeFilter, stageFilter]);
+  }, [debouncedSearch, priorityFilter, typeFilter, stageFilter, view, page]);
+
+  useEffect(() => { setPage(1); }, [debouncedSearch, priorityFilter, typeFilter, stageFilter, view]);
 
   useEffect(() => { load(); }, [load]);
   useAutoRefresh(load);
@@ -99,14 +118,14 @@ export default function FloorTicketListPage() {
           <div className="flex rounded-lg border border-slate-200 overflow-hidden">
             <button
               type="button"
-              onClick={() => setViewMode('kanban')}
+              onClick={() => { setPage(1); setViewMode('kanban'); }}
               className={`px-3 min-h-[40px] text-sm flex items-center gap-1 ${view === 'kanban' ? 'bg-blue-600 text-white' : 'bg-white'}`}
             >
               <LayoutGrid className="w-4 h-4" /> Kanban
             </button>
             <button
               type="button"
-              onClick={() => setViewMode('table')}
+              onClick={() => { setPage(1); setViewMode('table'); }}
               className={`px-3 min-h-[40px] text-sm flex items-center gap-1 ${view === 'table' ? 'bg-blue-600 text-white' : 'bg-white'}`}
             >
               <List className="w-4 h-4" /> Table
@@ -125,17 +144,17 @@ export default function FloorTicketListPage() {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <select className="rounded-lg border px-3 py-2 text-sm" value={stageFilter} onChange={(e) => setStageFilter(e.target.value)}>
+        <select className="rounded-lg border px-3 py-2 text-sm" value={stageFilter} onChange={(e) => { setPage(1); setStageFilter(e.target.value); }}>
           <option value="">All stages</option>
           {STAGE_GROUPS.flatMap((g) => g.stages).map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
-        <select className="rounded-lg border px-3 py-2 text-sm" value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}>
+        <select className="rounded-lg border px-3 py-2 text-sm" value={priorityFilter} onChange={(e) => { setPage(1); setPriorityFilter(e.target.value); }}>
           <option value="">All priorities</option>
           <option value="normal">Normal</option>
           <option value="high">High</option>
           <option value="sales_order">Sales Order</option>
         </select>
-        <select className="rounded-lg border px-3 py-2 text-sm" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+        <select className="rounded-lg border px-3 py-2 text-sm" value={typeFilter} onChange={(e) => { setPage(1); setTypeFilter(e.target.value); }}>
           <option value="">All types</option>
           <option value="grn_qc">GRN QC</option>
           <option value="sales_order_qc">Sales Order QC</option>
@@ -212,16 +231,23 @@ export default function FloorTicketListPage() {
               </tr>
             </thead>
             <tbody>
-              {tickets.map((t, i) => {
+              {tickets.length === 0 ? (
+                <tr>
+                  <td colSpan={fm ? 10 : 9} className="px-3 py-8 text-center text-slate-500">No tickets</td>
+                </tr>
+              ) : tickets.map((t, i) => {
                 const pri = priorityBadge(t.priority);
                 const cat = stageCategory(t.stage_name);
+                const rowNum = (page - 1) * PAGE_SIZE + i + 1;
+                const ttspl = resolveTicketTtspl(t);
                 return (
                   <tr key={t.ticket_id} className="border-t hover:bg-slate-50">
-                    <td className="px-3 py-3">{i + 1}</td>
+                    <td className="px-3 py-3">{rowNum}</td>
                     <td className="px-3 py-3">
                       <Link to={`/floor-pipeline/tickets/${t.ticket_id}`} className="font-mono font-semibold text-blue-700">
-                        {t.ttspl_id || '—'}
+                        {ttspl || '—'}
                       </Link>
+                      <p className="text-[10px] text-slate-400 font-mono mt-0.5">#{t.ticket_id}</p>
                       {t.highlighted ? <span className="ml-1" title={t.highlighted_reason}>⚠</span> : null}
                     </td>
                     <td className="px-3 py-3 text-xs">{configSummary(t)}</td>
@@ -252,6 +278,13 @@ export default function FloorTicketListPage() {
             </tbody>
           </table>
         </div>
+        <ListPagination
+          page={page}
+          totalPages={pagination.totalPages || 1}
+          total={pagination.total || 0}
+          pageSize={PAGE_SIZE}
+          onPageChange={setPage}
+        />
         </>
       )}
 

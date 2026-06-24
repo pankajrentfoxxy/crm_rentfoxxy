@@ -5,13 +5,15 @@ const {
   EFFECTIVE_STATUS_SQL,
   parseExtra,
   parseLineItems,
-  enrichSerialRow
+  enrichSerialRow,
+  enrichSerialRowsBatch
 } = require('./qcManagementService');
 
 const LIST_SEGMENT_MAP = {
   passed: { mode: 'status', status: 'passed' },
-  // Laptops still in the QC pipeline — everything whose QC status is not yet 'passed'.
-  qc_process: { mode: 'status_not', status: 'passed' },
+  // ERP "QC Processing List" (/admin/qc/orders/qc-orders/pending) — status = 'pending' only.
+  // Other non-passed statuses (failed, out_for_repare, dead, …) have their own inventory tabs.
+  qc_process: { mode: 'status', status: 'pending' },
   rent_to_own: { mode: 'po_passed', poType: 'rent_to_own' },
   rental_purchase: { mode: 'po_passed', poType: 'rental_purchase' },
   direct_purchase: { mode: 'po_passed', poType: 'direct_purchase' },
@@ -257,6 +259,7 @@ module.exports = {
   listTitleForSegment,
   buildListWhere,
   enrichSerialRow,
+  enrichSerialRowsBatch,
   enrichSparePartRow,
   fetchSparePartTabCounts,
   parseExtra,

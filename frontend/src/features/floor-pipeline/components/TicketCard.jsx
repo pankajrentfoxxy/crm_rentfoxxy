@@ -1,7 +1,7 @@
 import React from 'react';
 import { AlertTriangle, Clock, User, Wrench } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { configSummary, priorityBadge, ticketAgeDays } from '../floorPipelineUi';
+import { configSummary, priorityBadge, ticketAgeDays, resolveTicketTtspl } from '../floorPipelineUi';
 
 export default function TicketCard({ ticket, pendingParts, onCardClick }) {
   const pri = priorityBadge(ticket.priority);
@@ -16,7 +16,7 @@ export default function TicketCard({ ticket, pendingParts, onCardClick }) {
           {ticket.stage_name}
         </span>
       </div>
-      <p className="font-mono font-bold text-slate-900 text-sm">{ticket.ttspl_id || ticket.machine_number || '—'}</p>
+      <p className="font-mono font-bold text-slate-900 text-sm">{resolveTicketTtspl(ticket) || '—'}</p>
       <p className="text-xs text-slate-600 mt-1 line-clamp-2">{configSummary(ticket)}</p>
       {ticket.highlighted ? (
         <div className="mt-2 flex gap-1.5 rounded-lg bg-amber-50 border border-amber-200 px-2 py-1.5 text-xs text-amber-900">
