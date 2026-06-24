@@ -15,10 +15,10 @@ function guard(section, element, action = 'view') {
 // /sales-pipeline/delivery-register and /sales-pipeline/technician-bucket, so
 // they now redirect. The technician master-data CRUD pages are unique and stay.
 export const deliveryRegisterManagementRoutes = [
-  { path: '/delivery-register-management', element: <Navigate to="/sales-pipeline/delivery-register" replace /> },
-  { path: '/delivery-register-management/in-transit', element: <Navigate to="/sales-pipeline/delivery-register" replace /> },
-  { path: '/delivery-register-management/delivered', element: <Navigate to="/sales-pipeline/delivery-register" replace /> },
-  { path: '/delivery-register-management/rejected', element: <Navigate to="/sales-pipeline/delivery-register" replace /> },
+  { path: '/delivery-register-management', element: <Navigate to="/sales-pipeline/delivery-register/in-transit" replace /> },
+  { path: '/delivery-register-management/in-transit', element: <Navigate to="/sales-pipeline/delivery-register/in-transit" replace /> },
+  { path: '/delivery-register-management/delivered', element: <Navigate to="/sales-pipeline/delivery-register/delivered" replace /> },
+  { path: '/delivery-register-management/rejected', element: <Navigate to="/sales-pipeline/delivery-register/rejected" replace /> },
   { path: '/delivery-register-management/bucket-list', element: <Navigate to="/sales-pipeline/technician-bucket" replace /> },
   {
     path: '/delivery-register-management/technicians',

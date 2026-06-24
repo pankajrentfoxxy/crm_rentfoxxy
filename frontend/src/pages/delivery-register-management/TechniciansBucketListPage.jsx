@@ -7,6 +7,8 @@ import {
   fetchTechniciansBucketMeta,
 } from '../../utils/techniciansBucketApi';
 
+const PAGE_SIZES = [10, 25, 50, 100];
+
 const TYPE_COLORS = {
   danger: 'bg-red-100 text-red-800',
   warning: 'bg-amber-100 text-amber-800',
@@ -51,6 +53,7 @@ export default function TechniciansBucketListPage() {
   const [technicianId, setTechnicianId] = useState('all');
   const [tab, setTab] = useState('assets');
   const [rows, setRows] = useState([]);
+  const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 0 });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
@@ -71,15 +74,18 @@ export default function TechniciansBucketListPage() {
         technician_id: technicianId,
         type: tab,
         search,
+        page: pagination.page,
+        limit: pagination.limit,
       });
       setRows(data.items || []);
+      if (data.pagination) setPagination((prev) => ({ ...prev, ...data.pagination }));
     } catch (e) {
       setError(e.response?.data?.message || 'Failed to load bucket list');
       setRows([]);
     } finally {
       setLoading(false);
     }
-  }, [technicianId, tab, search]);
+  }, [technicianId, tab, search, pagination.page, pagination.limit]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -89,6 +95,15 @@ export default function TechniciansBucketListPage() {
     else window.alert('PDF not available');
   };
 
+  const applySearch = () => {
+    setPagination((p) => ({ ...p, page: 1 }));
+    setSearch(searchInput.trim());
+  };
+
+  const from = rows.length ? (pagination.page - 1) * pagination.limit + 1 : 0;
+  const to = (pagination.page - 1) * pagination.limit + rows.length;
+  const rowOffset = (pagination.page - 1) * pagination.limit;
+
   return (
     <div className="max-w-[1400px] mx-auto p-4">
       <div className="flex flex-wrap items-center gap-3 mb-6">
@@ -96,9 +111,12 @@ export default function TechniciansBucketListPage() {
           <User className="w-6 h-6 text-teal-700" />
           Technician Bucket List
         </h1>
-        <button type="button" onClick={load} className="p-1.5 text-gray-500 hover:text-teal-700">
+        <button type="button" onClick={load} className="p-1.5 text-gray-500 hover:text-teal-700" title="Refresh">
           <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
         </button>
+        <span className="inline-flex items-center justify-center min-w-[2rem] h-7 px-2 rounded-full bg-gray-800 text-white text-sm font-medium">
+          {pagination.total}
+        </span>
       </div>
 
       <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 mb-4">
@@ -106,7 +124,10 @@ export default function TechniciansBucketListPage() {
         <select
           className="mt-1 w-full max-w-md border rounded-lg px-3 py-2 text-sm"
           value={technicianId}
-          onChange={(e) => setTechnicianId(e.target.value)}
+          onChange={(e) => {
+            setTechnicianId(e.target.value);
+            setPagination((p) => ({ ...p, page: 1 }));
+          }}
         >
           <option value="all">-- All Technicians --</option>
           {technicians.map((t) => (
@@ -123,7 +144,10 @@ export default function TechniciansBucketListPage() {
           <button
             key={t.key}
             type="button"
-            onClick={() => setTab(t.key)}
+            onClick={() => {
+              setTab(t.key);
+              setPagination((p) => ({ ...p, page: 1 }));
+            }}
             className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
               tab === t.key
                 ? 'border-teal-600 text-teal-700'
@@ -136,19 +160,44 @@ export default function TechniciansBucketListPage() {
       </div>
 
       <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-        <div className="px-4 py-3 border-b flex justify-end">
+        <div className="p-4 border-b flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-sm text-gray-600">
+            <span>Show</span>
+            <select
+              className="border rounded px-2 py-1"
+              value={pagination.limit}
+              onChange={(e) => setPagination((p) => ({ ...p, limit: Number(e.target.value), page: 1 }))}
+            >
+              {PAGE_SIZES.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <span>Entries</span>
+          </div>
           <label className="text-sm text-gray-600 flex items-center gap-2">
             Search:
             <input
               type="search"
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && setSearch(searchInput)}
-              className="border rounded px-2 py-1 text-sm w-52"
+              onKeyDown={(e) => e.key === 'Enter' && applySearch()}
+              placeholder="Challan, serial, customer, technician..."
+              className="border rounded px-2 py-1 text-sm w-56"
             />
-            <button type="button" onClick={() => setSearch(searchInput)} className="px-3 py-1 border rounded text-xs">
+            <button type="button" onClick={applySearch} className="px-3 py-1 border rounded text-xs">
               Go
             </button>
+            {search ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchInput('');
+                  setPagination((p) => ({ ...p, page: 1 }));
+                  setSearch('');
+                }}
+                className="px-3 py-1 border rounded text-xs text-gray-500"
+              >
+                Clear
+              </button>
+            ) : null}
           </label>
         </div>
 
@@ -178,7 +227,7 @@ export default function TechniciansBucketListPage() {
                   <tr><td colSpan={10} className="px-4 py-10 text-center text-gray-500">No records found</td></tr>
                 ) : rows.map((row, i) => (
                   <tr key={row.dc_number} className="hover:bg-gray-50/80 align-top">
-                    <td className="px-4 py-3">{i + 1}</td>
+                    <td className="px-4 py-3">{rowOffset + i + 1}</td>
                     <td className="px-4 py-3">
                       <ul className="space-y-1">
                         {(row.serial_items || []).map((s, idx) => (
@@ -286,7 +335,7 @@ export default function TechniciansBucketListPage() {
                   <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-500">No records found</td></tr>
                 ) : rows.map((row, i) => (
                   <tr key={`${row.complaint_id}-${row.serial_number_raw}-${i}`} className="hover:bg-gray-50/80">
-                    <td className="px-4 py-3">{i + 1}</td>
+                    <td className="px-4 py-3">{rowOffset + i + 1}</td>
                     <td className="px-4 py-3">
                       <span className="text-xs px-2 py-1 rounded-full bg-indigo-50 text-indigo-800 capitalize">
                         {row.part_name}
@@ -329,8 +378,27 @@ export default function TechniciansBucketListPage() {
           )}
         </div>
 
-        <div className="px-4 py-3 border-t text-sm text-gray-600">
-          Showing {rows.length} entries
+        <div className="px-4 py-3 border-t flex flex-wrap items-center justify-between gap-3 text-sm text-gray-600">
+          <span>Showing {from} to {to} of {pagination.total} entries</span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={pagination.page <= 1}
+              onClick={() => setPagination((p) => ({ ...p, page: p.page - 1 }))}
+              className="px-3 py-1 border rounded disabled:opacity-40"
+            >
+              Previous
+            </button>
+            <span className="px-2">{pagination.page} / {pagination.totalPages}</span>
+            <button
+              type="button"
+              disabled={pagination.page >= pagination.totalPages}
+              onClick={() => setPagination((p) => ({ ...p, page: p.page + 1 }))}
+              className="px-3 py-1 border rounded disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
         </div>
       </div>
     </div>

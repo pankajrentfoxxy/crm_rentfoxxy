@@ -1,0 +1,43 @@
+{
+  "generated_at": "2026-06-24T18:49:51.668Z",
+  "erp_live": null,
+  "erp_dump": {
+    "source": "dump",
+    "purchase_orders": 139,
+    "qc_pending": 72,
+    "qc_passed": 526,
+    "sales_orders_distinct": 4263,
+    "sales_order_lines": 4665,
+    "delivery_challans": 4494,
+    "return_dc_pairs": 1087,
+    "dr_in_transit": 26,
+    "dr_delivered": 4124,
+    "technician_bucket": 798
+  },
+  "crm": {
+    "source": "crm",
+    "purchase_orders": 139,
+    "qc_pending": 72,
+    "qc_passed": 526,
+    "sales_orders_distinct": 4263,
+    "sales_order_lines": 4665,
+    "delivery_challans": 4494,
+    "return_dc_pairs": 1087,
+    "dr_in_transit": 26,
+    "dr_delivered": 4124,
+    "technician_bucket": 798
+  },
+  "technician_bucket_fix": {
+    "root_cause": "CRM stored raw ERP delivery_man IDs; bucket service matched CRM technician_id. Invalid ERP ids (by_courier, unmapped) were counted incorrectly.",
+    "fixes": [
+      "039_delivery_person_remap.js",
+      "040_delivery_person_erp_sync.js",
+      "020_delivery_challans.js remap on insert",
+      "techniciansBucketService.js all-technician filter + outbound scope"
+    ],
+    "final_count": {
+      "erp": 798,
+      "crm": 798
+    }
+  }
+}

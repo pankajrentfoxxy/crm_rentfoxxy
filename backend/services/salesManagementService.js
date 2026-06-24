@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const pool = require('../config/db');
 const { regenerateStaleReturnDcPdfs } = require('./returnDcPdfService');
 const { resolveLineItem } = require('./qcManagementService');
+const { parseJsonArray } = require('./deliveryRegisterService');
 const columnExistsCache = new Map();
 
 const DOC_TYPES = {
@@ -233,31 +234,29 @@ async function listDeliveryChallansGrouped({ page = 1, limit = 20, search = '', 
   }
   if (status === 'pending') {
     where += ` AND (d.status IS NULL OR d.status = 'pending')`;
+  } else if (status === 'in_transit') {
+    // ERP delivery register "in_transit" route uses delivery_challans.status = 'pending'.
+    where += ` AND d.status IN ('pending', 'in_transit', 'shipped', 'reached')`;
   } else if (status && status !== 'all') {
     params.push(status);
     where += ` AND d.status = $${params.length}`;
   }
   const countResult = await pool.query(
-    `SELECT COUNT(DISTINCT dc_number)::int AS total FROM delivery_challan_lines d ${where}`,
+    `SELECT COUNT(*)::int AS total FROM delivery_challan_lines d ${where}`,
     params
   );
   const offset = (page - 1) * limit;
   const listParams = [...params, limit, offset];
   const listResult = await pool.query(
-    `SELECT g.*,
-       COALESCE(u.name, u.email, '') AS delivery_person_name
-     FROM (
-       SELECT DISTINCT ON (d.dc_number)
-         d.id, d.dc_number, d.sales_order_number, d.quotation_number, d.customer_id, d.customer_name,
-         d.gst_number, d.status, d.pdf_path, d.file_path, d.ship_by, d.delivery_person_id,
-         d.courier_name, d.awb_number, d.created_at, d.updated_at
+    `SELECT d.id, d.dc_number, d.sales_order_number, d.quotation_number, d.customer_id, d.customer_name,
+            d.gst_number, d.status, d.pdf_path, d.file_path, d.ship_by, d.delivery_person_id,
+            d.courier_name, d.awb_number, d.model_name, d.created_at, d.updated_at,
+            COALESCE(u.name, u.email, '') AS delivery_person_name
        FROM delivery_challan_lines d
+       LEFT JOIN users u ON u.user_id = d.delivery_person_id
        ${where}
-       ORDER BY d.dc_number, d.id DESC
-     ) g
-     LEFT JOIN users u ON u.user_id = g.delivery_person_id
-     ORDER BY g.created_at DESC
-     LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+       ORDER BY d.id DESC
+       LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
     listParams
   );
   return {
@@ -550,18 +549,37 @@ async function getReturnDcDetail(rdcNumber) {
   };
 }
 
+async function countReturnDcPickupPairs() {
+  const r = await pool.query(`
+    SELECT pickuped_serial_numbers
+      FROM delivery_challan_lines
+     WHERE COALESCE(movement_type, 'outbound') = 'outbound'
+       AND COALESCE(jsonb_array_length(pickuped_serial_numbers), 0) > 0
+  `);
+  const pairs = new Set();
+  for (const row of r.rows) {
+    for (const item of parseJsonArray(row.pickuped_serial_numbers)) {
+      const parts = String(item).split('|');
+      if (parts[1] && parts[2]) pairs.add(`${parts[1]}-${parts[2]}`);
+    }
+  }
+  return pairs.size;
+}
+
 async function getOperationCounts() {
-  const [q, so, dc, rdc] = await Promise.all([
+  const [q, so, dc, rdcPairs, rdcLines] = await Promise.all([
     pool.query(`SELECT COUNT(DISTINCT quotation_number)::int AS c FROM sales_quotations`),
     pool.query(`SELECT COUNT(DISTINCT sales_order_number)::int AS c FROM sales_order_lines`),
-    pool.query(`SELECT COUNT(DISTINCT dc_number)::int AS c FROM delivery_challan_lines WHERE COALESCE(movement_type, 'outbound') = 'outbound'`),
+    pool.query(`SELECT COUNT(*)::int AS c FROM delivery_challan_lines WHERE COALESCE(movement_type, 'outbound') = 'outbound'`),
+    countReturnDcPickupPairs(),
     pool.query(`SELECT COUNT(DISTINCT dc_number)::int AS c FROM delivery_challan_lines WHERE movement_type = 'return'`),
   ]);
   return {
     quotations: q.rows[0]?.c || 0,
     sales_orders: so.rows[0]?.c || 0,
     delivery_challans: dc.rows[0]?.c || 0,
-    return_dc: rdc.rows[0]?.c || 0,
+    return_dc: rdcPairs || 0,
+    return_dc_lines: rdcLines.rows[0]?.c || 0,
   };
 }
 

@@ -116,6 +116,17 @@ module.exports = {
       const poNumber = str(row.purchase_order_number, 64, `PO-ERP-${row.id}`);
       let crmPoId = await findExistingPoByNumber(crm, poNumber);
 
+      // Same PO number in ERP can refer to different ERP rows — keep a distinct CRM row per erp id.
+      if (crmPoId) {
+        const mappedErp = await crm.query(
+          `SELECT erp_id FROM erp_id_map WHERE entity = 'purchase_orders' AND crm_id = $1 LIMIT 1`,
+          [String(crmPoId)]
+        );
+        if (mappedErp.rows[0]?.erp_id && mappedErp.rows[0].erp_id !== String(row.id)) {
+          crmPoId = null;
+        }
+      }
+
       if (crmPoId) {
         await setCrmId(crm, {
           entity: 'purchase_orders',

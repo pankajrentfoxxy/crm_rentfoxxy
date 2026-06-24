@@ -48,34 +48,24 @@ function cleanPodFiles(filePath) {
 }
 
 async function resolveTechnicianPersonIds(technicianId) {
+  // ERP joins delivery_men.id = delivery_challans.delivery_person_id only (not user_id).
   if (technicianId === 'all' || !technicianId) {
-    const r = await pool.query(
-      `SELECT technician_id, user_id FROM delivery_technicians WHERE is_active = TRUE`
-    );
-    const personIds = new Set();
-    for (const row of r.rows) {
-      if (row.user_id) personIds.add(row.user_id);
-      personIds.add(row.technician_id);
-    }
-    return [...personIds];
+    const r = await pool.query(`SELECT technician_id FROM delivery_technicians`);
+    return r.rows.map((row) => Number(row.technician_id));
   }
 
   const r = await pool.query(
-    `SELECT technician_id, user_id FROM delivery_technicians WHERE technician_id = $1`,
+    `SELECT technician_id FROM delivery_technicians WHERE technician_id = $1`,
     [Number(technicianId)]
   );
   if (!r.rows.length) return [];
-  const row = r.rows[0];
-  const ids = new Set([row.technician_id]);
-  if (row.user_id) ids.add(row.user_id);
-  return [...ids];
+  return [Number(r.rows[0].technician_id)];
 }
 
 async function listBucketTechnicians() {
   const r = await pool.query(
-    `SELECT technician_id, first_name, last_name, user_id
+    `SELECT technician_id, first_name, last_name, user_id, is_active
      FROM delivery_technicians
-     WHERE is_active = TRUE
      ORDER BY first_name, last_name`
   );
   return r.rows.map((t) => ({
@@ -151,12 +141,9 @@ async function fetchAssetsBucket({ technicianId, search = '' }) {
   const linesR = await pool.query(
     `SELECT
        d.*,
-       COALESCE(dt.first_name || ' ' || dt.last_name, u.name, '') AS delivery_person_name
+       COALESCE(dt.first_name || ' ' || dt.last_name, '') AS delivery_person_name
      FROM delivery_challan_lines d
-     LEFT JOIN delivery_technicians dt ON (
-       dt.user_id = d.delivery_person_id OR dt.technician_id = d.delivery_person_id
-     )
-     LEFT JOIN users u ON u.user_id = d.delivery_person_id
+     INNER JOIN delivery_technicians dt ON dt.technician_id = d.delivery_person_id
      WHERE d.delivery_person_id = ANY($1::int[])
        AND (
          COALESCE(jsonb_array_length(d.rejected_serial_numbers), 0) > 0
@@ -303,9 +290,7 @@ async function fetchPartsBucket({ technicianId, search = '' }) {
        st.updated_at,
        COALESCE(dt.first_name || ' ' || dt.last_name, '') AS delivery_person_name
      FROM support_tickets st
-     LEFT JOIN delivery_technicians dt ON (
-       dt.technician_id = st.delivery_person_id OR dt.user_id = st.delivery_person_id
-     )
+     INNER JOIN delivery_technicians dt ON dt.technician_id = st.delivery_person_id
      WHERE st.delivery_person_id = ANY($1::int[])
        AND (
          COALESCE(jsonb_array_length(st.assigned_parts), 0) > 0
@@ -333,11 +318,26 @@ async function fetchPartsBucket({ technicianId, search = '' }) {
   return items;
 }
 
-async function fetchBucketDetails({ technicianId, type = 'assets', search = '' }) {
-  if (type === 'parts') {
-    return fetchPartsBucket({ technicianId, search });
-  }
-  return fetchAssetsBucket({ technicianId, search });
+function paginateItems(items, page = 1, limit = 10) {
+  const total = items.length;
+  const safeLimit = Math.min(Math.max(1, Number(limit) || 10), 100);
+  const safePage = Math.max(1, Number(page) || 1);
+  const totalPages = Math.max(1, Math.ceil(total / safeLimit));
+  const offset = (safePage - 1) * safeLimit;
+  return {
+    items: items.slice(offset, offset + safeLimit),
+    total,
+    page: safePage,
+    limit: safeLimit,
+    totalPages,
+  };
+}
+
+async function fetchBucketDetails({ technicianId, type = 'assets', search = '', page = 1, limit = 10 }) {
+  const allItems = type === 'parts'
+    ? await fetchPartsBucket({ technicianId, search })
+    : await fetchAssetsBucket({ technicianId, search });
+  return paginateItems(allItems, page, limit);
 }
 
 module.exports = {

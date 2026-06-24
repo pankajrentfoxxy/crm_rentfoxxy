@@ -73,6 +73,13 @@ function parseOptionalInt(raw) {
   return Number.isFinite(n) ? n : null;
 }
 
+async function resolveCrmDeliveryPersonId(crm, erpDeliveryPersonId) {
+  const erpId = parseOptionalInt(erpDeliveryPersonId);
+  if (erpId == null) return null;
+  const mapped = await getCrmId(crm, 'delivery_men', erpId);
+  return mapped != null ? Number(mapped) : null;
+}
+
 function mapShipBy(shipBy) {
   const s = str(shipBy, 20, '').toLowerCase();
   if (s === 'by_hand' || s === 'by_courier') return s;
@@ -306,6 +313,8 @@ module.exports = {
         ? parseJsonArray(row.serial_number)
         : parseJsonArray(row.delivered_serial_numbers);
 
+      const crmDeliveryPersonId = await resolveCrmDeliveryPersonId(crm, row.delivery_person_id);
+
       const { rows: ins } = await crm.query(
         `INSERT INTO delivery_challan_lines (
            dc_number, sales_order_number, quotation_number, customer_id, customer_name, email,
@@ -352,7 +361,7 @@ module.exports = {
           mapShipBy(row.ship_by),
           str(row.courier_name, 255, null),
           str(row.awb_number, 100, null),
-          parseOptionalInt(row.delivery_person_id),
+          crmDeliveryPersonId,
           str(row.remarks, 10000, null),
           dcStatus,
           str(row.pdf_path, 2000, null),

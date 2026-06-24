@@ -64,7 +64,7 @@ export default function DeliveryChallanListPage() {
   const stats = useMemo(() => ({
     total: pagination.total || rows.length,
     pending: rows.filter((r) => !r.status || r.status === 'pending').length,
-    in_transit: rows.filter((r) => r.status === 'in_transit').length,
+    in_transit: rows.filter((r) => ['pending', 'in_transit', 'shipped', 'reached'].includes(r.status)).length,
     delivered: rows.filter((r) => r.status === 'delivered').length,
     rejected: rows.filter((r) => r.status === 'rejected').length,
   }), [rows, pagination.total]);

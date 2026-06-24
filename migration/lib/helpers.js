@@ -33,10 +33,15 @@ function resolveTicketTtsplId(row) {
 function parseJson(val, fallback = null) {
   if (val == null || val === '') return fallback;
   if (typeof val === 'object') return val;
+  const s = String(val);
   try {
-    return JSON.parse(val);
+    return JSON.parse(s);
   } catch {
-    return fallback;
+    try {
+      return JSON.parse(s.replace(/\\"/g, '"'));
+    } catch {
+      return fallback;
+    }
   }
 }
 

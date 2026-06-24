@@ -124,7 +124,8 @@ export default function Layout({ children }) {
     canView('delivery_challans') ||
     canView('return_dc') ||
     canView('delivery_register_management') ||
-    canView('technician_bucket');
+    canView('technician_bucket') ||
+    canView('technicians_bucket_list');
 
   const showDeliveryRegisterAccordion =
     canView('delivery_register_management') || canView('technicians_bucket_list');

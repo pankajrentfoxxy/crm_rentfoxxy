@@ -14,7 +14,12 @@ function parseJsonArray(raw) {
       const p = JSON.parse(raw);
       return Array.isArray(p) ? p : [];
     } catch {
-      return raw.trim() ? [raw] : [];
+      try {
+        const p = JSON.parse(raw.replace(/\\"/g, '"'));
+        return Array.isArray(p) ? p : [];
+      } catch {
+        return raw.trim() ? [raw] : [];
+      }
     }
   }
   return [];
@@ -130,17 +135,19 @@ function aggregateDcGroup(lines) {
 }
 
 async function getDeliveryRegisterCounts() {
+  const outbound = `COALESCE(movement_type, 'outbound') = 'outbound'`;
   const [inTransit, delivered, rejected, technicians] = await Promise.all([
     pool.query(
-      `SELECT COUNT(DISTINCT dc_number)::int AS c FROM delivery_challan_lines WHERE status = 'pending'`
+      `SELECT COUNT(*)::int AS c FROM delivery_challan_lines WHERE ${outbound} AND status = 'pending'`
     ),
     pool.query(
-      `SELECT COUNT(DISTINCT dc_number)::int AS c FROM delivery_challan_lines WHERE status = 'delivered'`
+      `SELECT COUNT(DISTINCT dc_number)::int AS c FROM delivery_challan_lines WHERE ${outbound} AND status = 'delivered'`
     ),
     pool.query(
       `SELECT COUNT(DISTINCT dc_number)::int AS c
        FROM delivery_challan_lines
-       WHERE status IN ('delivered', 'rejected')
+       WHERE ${outbound}
+         AND status IN ('delivered', 'rejected')
          AND COALESCE(jsonb_array_length(rejected_serial_numbers), 0) > 0`
     ),
     pool.query(`SELECT COUNT(*)::int AS c FROM delivery_technicians WHERE is_active = TRUE`),
