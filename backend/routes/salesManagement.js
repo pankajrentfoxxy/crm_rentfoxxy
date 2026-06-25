@@ -33,6 +33,7 @@ const quoteCreate = cp('sales_quotations', 'create');
 const quoteEdit = cp('sales_quotations', 'edit');
 const soView = cp('sales_orders_doc', 'view');
 const soCreate = cp('sales_orders_doc', 'create');
+const soEdit = cp('sales_orders_doc', 'edit');
 const dcView = cp('delivery_challans', 'view');
 const dcCreate = cp('delivery_challans', 'create');
 const dcEdit = cp('delivery_challans', 'edit');
@@ -86,6 +87,7 @@ router.get(...soRoute('/full', soView, ctrl.getSoWithPayments));
 router.get(...soRoute('/payments', payView, ctrl.listPayments));
 router.post(...soRoute('/payments', payCreate, ctrl.recordPayment));
 router.post(...soRoute('/pdf', soView, ctrl.regenerateSalesOrderPdf));
+router.patch(...soRoute('/cancel', soEdit, ctrl.cancelSalesOrder));
 router.get(/^\/sales-orders\/(.+)$/, bindSoNumber, soView, ctrl.getSalesOrder);
 router.post('/sales-orders', soCreate, ctrl.storeSalesOrder);
 

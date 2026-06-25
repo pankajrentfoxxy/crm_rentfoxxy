@@ -3,8 +3,9 @@ const path = require('path');
 const pool = require('../config/db');
 const {
   nextDocumentNumber,
+  nextFinancialYearNumber,
+  peekFinancialYearNumber,
   entityForQuotationType,
-  entityDocType,
   generateToken,
   listQuotationsGrouped,
   getQuotationLines,
@@ -414,7 +415,7 @@ exports.updateQuotationStatus = async (req, res) => {
 
 exports.getAddSalesOrderMeta = async (req, res) => {
   try {
-    const salesOrderNumber = await nextDocumentNumber('sales_order');
+    const salesOrderNumber = await peekFinancialYearNumber('sales_order');
     const quotationNumber = req.query.quotation_number;
     let quotationLines = [];
     if (quotationNumber) {
@@ -476,7 +477,7 @@ exports.storeSalesOrder = async (req, res) => {
       return res.status(400).json({ success: false, message: 'At least one line item is required' });
     }
 
-    const salesOrderNumber = body.sales_order_number || (await nextDocumentNumber('sales_order'));
+    const salesOrderNumber = await nextFinancialYearNumber('sales_order');
     const quotationNumber = body.is_without_quotation ? 'N/A' : (body.quotation_number || 'N/A');
     const shipping = parseJsonField(body.customer_shipping_address);
     let billing = parseJsonField(body.customer_billing_address);
@@ -648,7 +649,7 @@ exports.getAddDeliveryChallanMeta = async (req, res) => {
       [salesOrderNumber]
     );
     const [dcNumber, deliveryPersons, deliveryTechnicians, catalog] = await Promise.all([
-      existingDc.rows[0]?.dc_number || nextDocumentNumber('delivery_challan'),
+      existingDc.rows[0]?.dc_number || peekFinancialYearNumber('delivery_challan'),
       pool.query(`SELECT user_id, name, email FROM users WHERE status = 'active' ORDER BY name ASC LIMIT 100`),
       pool.query(`SELECT technician_id, user_id, first_name, last_name, phone, email, is_active
                     FROM delivery_technicians WHERE is_active = TRUE
@@ -802,6 +803,19 @@ exports.storeDeliveryChallan = async (req, res) => {
       return res.status(400).json({ success: false, message: 'At least one line is required' });
     }
 
+    if (body.sales_order_number) {
+      const soCancelled = await pool.query(
+        `SELECT 1 FROM sales_order_lines WHERE sales_order_number = $1 AND status = 'cancelled' LIMIT 1`,
+        [body.sales_order_number]
+      );
+      if (soCancelled.rows.length) {
+        return res.status(409).json({
+          success: false,
+          message: 'This sales order is cancelled. A delivery challan cannot be created.',
+        });
+      }
+    }
+
     // Determine the owning entity from the linked SO/quotation type.
     const typeRes = await pool.query(
       `SELECT COALESCE(sol.quotation_type, sq.quotation_type, 'rental') AS quotation_type
@@ -823,7 +837,7 @@ exports.storeDeliveryChallan = async (req, res) => {
           : (body.dispatch_mode || 'courier');
 
     const dcNumber = body.challan_number || body.dc_number
-      || (await nextDocumentNumber(entityDocType('delivery_challan', entityCode)));
+      || (await nextFinancialYearNumber('delivery_challan'));
     const shipping = parseJsonField(body.customer_shipping_address);
     const billing = parseJsonField(body.customer_billing_address);
 
@@ -1113,6 +1127,12 @@ exports.createDcsByAddress = async (req, res) => {
     if (!soLines.length) {
       return res.status(404).json({ success: false, message: 'Sales order not found' });
     }
+    if (soLines.every((l) => String(l.status).toLowerCase() === 'cancelled')) {
+      return res.status(409).json({
+        success: false,
+        message: 'This sales order is cancelled. A delivery challan cannot be created.',
+      });
+    }
     const soHead = soLines[0];
     const entityCode = soHead.entity_code || entityForQuotationType(soHead.quotation_type || 'rental');
     const dispatchMode = ship_by === 'by_hand' ? 'inhouse'
@@ -1156,7 +1176,7 @@ exports.createDcsByAddress = async (req, res) => {
       const ids = (group.allocation_ids || []).map((n) => Number(n));
       if (!ids.length) continue;
 
-      const dcNumber = await nextDocumentNumber(entityDocType('delivery_challan', entityCode));
+      const dcNumber = await nextFinancialYearNumber('delivery_challan', client);
       const groupSerials = ids.map((id) => allocMap[id]).filter(Boolean);
       const deliveryAddress = group.delivery_address
         || parseJsonSafe(soHead.customer_shipping_address) || billing || null;
@@ -1768,9 +1788,13 @@ exports.getSoWithPayments = async (req, res) => {
       (s, l) => s + Number(l.rate || 0) * Number(l.main_qty || l.quantity || 0), 0
     );
     const totalPaid = payRes.rows.reduce((s, p) => s + Number(p.amount || 0), 0);
+    const soStatus = lines.every((l) => String(l.status).toLowerCase() === 'cancelled')
+      ? 'cancelled'
+      : (lines[0].status || 'pending');
     res.json({
       success: true,
       sales_order_number: soNumber,
+      status: soStatus,
       lines,
       payments: payRes.rows,
       delivery_challans: dcRes.rows,
@@ -1779,9 +1803,49 @@ exports.getSoWithPayments = async (req, res) => {
         total_paid: totalPaid,
         balance_due: Math.max(0, totalValue - totalPaid),
         security_amount: Number(lines[0].security_amount || 0),
+        status: soStatus,
       },
     });
   } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Cancel a sales order. Sets every line's status to 'cancelled' so the SO is
+// excluded from the downstream workflow (DC creation is blocked while cancelled).
+// Refused once any delivery challan exists for the SO (already dispatched).
+exports.cancelSalesOrder = async (req, res) => {
+  try {
+    const soNumber = req.params.soNumber;
+    const existing = await pool.query(
+      `SELECT status FROM sales_order_lines WHERE sales_order_number = $1`,
+      [soNumber]
+    );
+    if (!existing.rows.length) {
+      return res.status(404).json({ success: false, message: 'Sales order not found' });
+    }
+    if (existing.rows.every((r) => String(r.status).toLowerCase() === 'cancelled')) {
+      return res.status(409).json({ success: false, message: 'Sales order is already cancelled' });
+    }
+
+    const dcRes = await pool.query(
+      `SELECT COUNT(DISTINCT dc_number)::int AS c FROM delivery_challan_lines WHERE sales_order_number = $1`,
+      [soNumber]
+    );
+    if (Number(dcRes.rows[0]?.c || 0) > 0) {
+      return res.status(409).json({
+        success: false,
+        message: 'Cannot cancel: a delivery challan has already been created for this sales order.',
+      });
+    }
+
+    await pool.query(
+      `UPDATE sales_order_lines SET status = 'cancelled' WHERE sales_order_number = $1`,
+      [soNumber]
+    );
+    res.json({ success: true, message: 'Sales order cancelled', status: 'cancelled' });
+  } catch (error) {
+    console.error('cancelSalesOrder:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };

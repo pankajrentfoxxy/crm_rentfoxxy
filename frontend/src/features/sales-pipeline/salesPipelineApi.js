@@ -15,6 +15,7 @@ export const listSalesOrders = (p) => api.get(`${base}/sales-orders`, { params: 
 export const getSalesOrder = (n) => api.get(`${base}/sales-orders/${encSo(n)}`);
 export const getSalesOrderFull = (n) => api.get(`${base}/sales-orders/${encSo(n)}/full`);
 export const createSalesOrder = (d) => api.post(`${base}/sales-orders`, d);
+export const cancelSalesOrder = (n) => api.patch(`${base}/sales-orders/${encSo(n)}/cancel`);
 export const getSalesOrderMeta = (p) => api.get(`${base}/sales-orders/meta/add`, { params: p });
 export const listPayments = (n) => api.get(`${base}/sales-orders/${encSo(n)}/payments`);
 export const recordPayment = (n, d) => api.post(`${base}/sales-orders/${encSo(n)}/payments`, d);

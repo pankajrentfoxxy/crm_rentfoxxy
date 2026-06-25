@@ -7,7 +7,7 @@ import { PageHeader, StatCard, Button, ResponsiveTable, SearchField, ListPaginat
 import PaymentModal from '../components/PaymentModal';
 import SalesOrderForm from '../components/SalesOrderForm';
 import DCForm from '../components/DCForm';
-import { listSalesOrders } from '../salesPipelineApi';
+import { cancelSalesOrder, listSalesOrders } from '../salesPipelineApi';
 import { formatCurrency, formatDate, TYPE_STYLES, typeLabel, salesOrderDetailPath } from '../salesPipelineUtils';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 
@@ -61,20 +61,48 @@ export default function SalesOrderListPage() {
     withDc: rows.filter((r) => r.dc_count > 0).length,
   }), [rows, pagination.total]);
 
-  const actionCell = (row) => (
-    <div className="flex flex-wrap items-center gap-3" onClick={(e) => e.stopPropagation()}>
-      <button type="button" className="text-blue-600 text-sm font-semibold" onClick={() => navigate(salesOrderDetailPath(row.sales_order_number))}>View</button>
-      <PermissionGate section="delivery_challans" action="create">
-        <button type="button" className="text-sm text-teal-700 font-semibold" onClick={() => { setPrefillSo(row.sales_order_number); setDcDrawer(true); }}>Create DC</button>
-      </PermissionGate>
-      <PermissionGate section="payment_records" action="create">
-        <button type="button" className="text-sm text-gray-700 font-semibold" onClick={() => setPaymentSo(row.sales_order_number)}>Record Payment</button>
-      </PermissionGate>
-    </div>
-  );
+  const handleCancel = useCallback(async (soNumber) => {
+    if (!window.confirm(`Cancel sales order ${soNumber}? This cannot be undone and the order will not proceed to delivery.`)) return;
+    try {
+      await cancelSalesOrder(soNumber);
+      toast.success('Sales order cancelled');
+      load();
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Failed to cancel sales order');
+    }
+  }, [load]);
+
+  const actionCell = (row) => {
+    const cancelled = String(row.status || '').toLowerCase() === 'cancelled';
+    return (
+      <div className="flex flex-wrap items-center gap-3" onClick={(e) => e.stopPropagation()}>
+        <button type="button" className="text-blue-600 text-sm font-semibold" onClick={() => navigate(salesOrderDetailPath(row.sales_order_number))}>View</button>
+        {!cancelled && (
+          <>
+            <PermissionGate section="delivery_challans" action="create">
+              <button type="button" className="text-sm text-teal-700 font-semibold" onClick={() => { setPrefillSo(row.sales_order_number); setDcDrawer(true); }}>Create DC</button>
+            </PermissionGate>
+            <PermissionGate section="payment_records" action="create">
+              <button type="button" className="text-sm text-gray-700 font-semibold" onClick={() => setPaymentSo(row.sales_order_number)}>Record Payment</button>
+            </PermissionGate>
+            <PermissionGate section="sales_orders_doc" action="edit">
+              <button type="button" className="text-sm text-red-600 font-semibold" onClick={() => handleCancel(row.sales_order_number)}>Cancel</button>
+            </PermissionGate>
+          </>
+        )}
+      </div>
+    );
+  };
 
   const columns = [
-    { key: 'sales_order_number', header: 'SO #', render: (r) => <span className="font-mono text-blue-700 font-semibold">{r.sales_order_number}</span> },
+    { key: 'sales_order_number', header: 'SO #', render: (r) => (
+      <span className="flex items-center gap-2">
+        <span className="font-mono text-blue-700 font-semibold">{r.sales_order_number}</span>
+        {String(r.status || '').toLowerCase() === 'cancelled' && (
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-100 text-red-700">Cancelled</span>
+        )}
+      </span>
+    ) },
     { key: 'date', header: 'Date', render: (r) => formatDate(r.created_at) },
     { key: 'customer_name', header: 'Customer' },
     { key: 'type', header: 'Type', render: (r) => <span className={`px-2 py-0.5 rounded-full text-xs ${TYPE_STYLES[r.quotation_type]}`}>{typeLabel(r.quotation_type)}</span> },
@@ -86,7 +114,12 @@ export default function SalesOrderListPage() {
   const renderCard = (r) => (
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <span className="font-mono text-blue-700 font-semibold">{r.sales_order_number}</span>
+        <span className="flex items-center gap-2">
+          <span className="font-mono text-blue-700 font-semibold">{r.sales_order_number}</span>
+          {String(r.status || '').toLowerCase() === 'cancelled' && (
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-100 text-red-700">Cancelled</span>
+          )}
+        </span>
         <span className={`px-2 py-0.5 rounded-full text-xs ${TYPE_STYLES[r.quotation_type]}`}>{typeLabel(r.quotation_type)}</span>
       </div>
       <p className="font-medium text-slate-800">{r.customer_name}</p>

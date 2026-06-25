@@ -7,7 +7,7 @@ import PaymentModal from '../components/PaymentModal';
 import DCForm from '../components/DCForm';
 import SoSerialPanel from '../components/SoSerialPanel';
 import SoDeliveryAddressPanel from '../components/SoDeliveryAddressPanel';
-import { getQuotation, getSalesOrderFull, listPayments, regenerateSalesOrderPdf } from '../salesPipelineApi';
+import { cancelSalesOrder, getQuotation, getSalesOrderFull, listPayments, regenerateSalesOrderPdf } from '../salesPipelineApi';
 import { getBackendOrigin } from '../../../utils/api';
 import { formatConfig, formatCurrency, formatDate, TYPE_STYLES, typeLabel, deliveryChallanDetailPath } from '../salesPipelineUtils';
 
@@ -73,6 +73,18 @@ export default function SalesOrderDetailPage() {
   const head = lines[0] || {};
   const summary = data?.summary || {};
   const dcs = data?.delivery_challans || [];
+  const isCancelled = String(data?.status || head.status || '').toLowerCase() === 'cancelled';
+
+  const handleCancel = useCallback(async () => {
+    if (!window.confirm(`Cancel sales order ${soNumber}? This cannot be undone and the order will not proceed to delivery.`)) return;
+    try {
+      await cancelSalesOrder(soNumber);
+      toast.success('Sales order cancelled');
+      load();
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Failed to cancel sales order');
+    }
+  }, [soNumber, load]);
 
   return (
     <div className="p-4 max-w-6xl mx-auto">
@@ -81,7 +93,12 @@ export default function SalesOrderDetailPage() {
           <Link to="/sales-pipeline/sales-orders" className="text-sm text-blue-600">← Back</Link>
           <h1 className="text-2xl font-semibold font-mono mt-1">{soNumber}</h1>
           <p className="text-gray-600">{head.customer_name}</p>
-          <span className={`inline-block mt-1 px-2 py-0.5 rounded-full text-xs ${TYPE_STYLES[head.quotation_type]}`}>{typeLabel(head.quotation_type)}</span>
+          <div className="flex flex-wrap items-center gap-2 mt-1">
+            <span className={`inline-block px-2 py-0.5 rounded-full text-xs ${TYPE_STYLES[head.quotation_type]}`}>{typeLabel(head.quotation_type)}</span>
+            {isCancelled && (
+              <span className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">Cancelled</span>
+            )}
+          </div>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="secondary" onClick={async () => {
@@ -95,12 +112,19 @@ export default function SalesOrderDetailPage() {
               else toast.error('PDF not available');
             } catch { toast.error('Could not open PDF'); }
           }}>Download PDF</Button>
-          <PermissionGate section="delivery_challans" action="create">
-            <Button variant="secondary" onClick={() => setDcOpen(true)}>Create DC</Button>
-          </PermissionGate>
+          {!isCancelled && (
+            <PermissionGate section="delivery_challans" action="create">
+              <Button variant="secondary" onClick={() => setDcOpen(true)}>Create DC</Button>
+            </PermissionGate>
+          )}
           <PermissionGate section="payment_records" action="create">
             <Button onClick={() => setPaymentOpen(true)}>Record Payment</Button>
           </PermissionGate>
+          {!isCancelled && (
+            <PermissionGate section="sales_orders_doc" action="edit">
+              <Button variant="danger" onClick={handleCancel}>Cancel SO</Button>
+            </PermissionGate>
+          )}
         </div>
       </div>
 
@@ -192,9 +216,15 @@ export default function SalesOrderDetailPage() {
 
       {tab === 'dcs' && (
         <div>
-          <PermissionGate section="delivery_challans" action="create">
-            <button type="button" onClick={() => setDcOpen(true)} className="mb-4 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">+ Create DC</button>
-          </PermissionGate>
+          {isCancelled ? (
+            <p className="mb-4 rounded-lg bg-red-50 border border-red-200 px-4 py-2 text-sm text-red-700">
+              This sales order is cancelled. New delivery challans cannot be created.
+            </p>
+          ) : (
+            <PermissionGate section="delivery_challans" action="create">
+              <button type="button" onClick={() => setDcOpen(true)} className="mb-4 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">+ Create DC</button>
+            </PermissionGate>
+          )}
           <table className="w-full text-sm bg-white border rounded-xl overflow-hidden">
             <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
               <tr>

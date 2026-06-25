@@ -74,6 +74,106 @@ async function nextDocumentNumber(docType) {
   }
 }
 
+// Financial-year document numbers: SO/26-27/0779 and DC/26-27/0778.
+// Indian FY runs Apr 1 -> Mar 31. The sequence is stored in
+// sm_document_sequences.last_value encoded as (fyCode * 10000 + seq), e.g.
+// 26270779 == FY 26-27, seq 0779. The seq is reconciled against the actual
+// data max on each allocation so it always continues from the latest record
+// (including the ERP-migrated SO/DC numbers) and resets when the FY rolls over.
+const FY_DOC_TYPES = {
+  sales_order: { docType: 'so_rentfoxxy', prefix: 'SO', table: 'sales_order_lines', column: 'sales_order_number' },
+  delivery_challan: { docType: 'dc_rentfoxxy', prefix: 'DC', table: 'delivery_challan_lines', column: 'dc_number' },
+};
+const FY_SEQ_PAD = 4;
+
+function currentFinancialYear(date = new Date()) {
+  const year = date.getFullYear();
+  const month = date.getMonth() + 1; // 1-12
+  const startYear = month >= 4 ? year : year - 1;
+  const a = String(startYear % 100).padStart(2, '0');
+  const b = String((startYear + 1) % 100).padStart(2, '0');
+  return { code: Number(`${a}${b}`), label: `${a}-${b}` };
+}
+
+async function maxFySeqFromData(db, conf, fyLabel) {
+  const pattern = `^${conf.prefix}/${fyLabel}/[0-9]+$`;
+  const r = await db.query(
+    `SELECT COALESCE(MAX((split_part(${conf.column}, '/', 3))::int), 0) AS n
+       FROM ${conf.table}
+      WHERE ${conf.column} ~ $1`,
+    [pattern]
+  );
+  return Number(r.rows[0]?.n || 0);
+}
+
+function formatFyNumber(conf, fyLabel, seq) {
+  return `${conf.prefix}/${fyLabel}/${String(seq).padStart(FY_SEQ_PAD, '0')}`;
+}
+
+/**
+ * Reserve and return the next FY-formatted SO/DC number. Pass an open client to
+ * hold the sequence row lock inside the caller's transaction; otherwise a
+ * short-lived transaction reserves (and commits) the number immediately.
+ */
+async function nextFinancialYearNumber(kind, client = null) {
+  const conf = FY_DOC_TYPES[kind];
+  if (!conf) throw new Error(`Unknown financial-year doc kind: ${kind}`);
+  const ownTx = !client;
+  const db = client || (await pool.connect());
+  try {
+    if (ownTx) await db.query('BEGIN');
+    const seqRes = await db.query(
+      `SELECT last_value FROM sm_document_sequences WHERE doc_type = $1 FOR UPDATE`,
+      [conf.docType]
+    );
+    const { code: fyCode, label: fyLabel } = currentFinancialYear();
+    let storedSeqForFy = 0;
+    if (seqRes.rows.length) {
+      const last = Number(seqRes.rows[0].last_value) || 0;
+      if (Math.floor(last / 10000) === fyCode) storedSeqForFy = last % 10000;
+    }
+    const dataMax = await maxFySeqFromData(db, conf, fyLabel);
+    const seq = Math.max(storedSeqForFy, dataMax) + 1;
+    const newLast = fyCode * 10000 + seq;
+    if (seqRes.rows.length) {
+      await db.query(
+        `UPDATE sm_document_sequences SET last_value = $1, updated_at = NOW() WHERE doc_type = $2`,
+        [newLast, conf.docType]
+      );
+    } else {
+      await db.query(
+        `INSERT INTO sm_document_sequences (doc_type, last_value, prefix) VALUES ($1, $2, $3)`,
+        [conf.docType, newLast, `${conf.prefix}-`]
+      );
+    }
+    if (ownTx) await db.query('COMMIT');
+    return formatFyNumber(conf, fyLabel, seq);
+  } catch (e) {
+    if (ownTx) await db.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    if (ownTx) db.release();
+  }
+}
+
+/** Preview the next SO/DC number without reserving it (for add-form metadata). */
+async function peekFinancialYearNumber(kind) {
+  const conf = FY_DOC_TYPES[kind];
+  if (!conf) throw new Error(`Unknown financial-year doc kind: ${kind}`);
+  const { code: fyCode, label: fyLabel } = currentFinancialYear();
+  const seqRes = await pool.query(
+    `SELECT last_value FROM sm_document_sequences WHERE doc_type = $1`,
+    [conf.docType]
+  );
+  let storedSeqForFy = 0;
+  if (seqRes.rows.length) {
+    const last = Number(seqRes.rows[0].last_value) || 0;
+    if (Math.floor(last / 10000) === fyCode) storedSeqForFy = last % 10000;
+  }
+  const dataMax = await maxFySeqFromData(pool, conf, fyLabel);
+  return formatFyNumber(conf, fyLabel, Math.max(storedSeqForFy, dataMax) + 1);
+}
+
 function generateToken() {
   return crypto.randomBytes(16).toString('hex');
 }
@@ -191,7 +291,10 @@ async function listSalesOrdersGrouped({ page = 1, limit = 20, search = '' }) {
        (SELECT COALESCE(SUM(quantity), 0) FROM sales_order_lines sol WHERE sol.sales_order_number = g.sales_order_number) AS remaining_qty,
        (SELECT COALESCE(SUM(COALESCE(rate,0) * COALESCE(quantity,0)), 0) FROM sales_order_lines sol WHERE sol.sales_order_number = g.sales_order_number) AS total_value,
        (SELECT COALESCE(SUM(COALESCE(rate,0) * COALESCE(quantity,0)), 0) FROM sales_order_lines sol WHERE sol.sales_order_number = g.sales_order_number) AS total_amount,
-       (SELECT COUNT(DISTINCT dcl.dc_number) FROM delivery_challan_lines dcl WHERE dcl.sales_order_number = g.sales_order_number) AS dc_count
+       (SELECT COUNT(DISTINCT dcl.dc_number) FROM delivery_challan_lines dcl WHERE dcl.sales_order_number = g.sales_order_number) AS dc_count,
+       (SELECT CASE WHEN COUNT(*) > 0 AND COUNT(*) FILTER (WHERE sol.status = 'cancelled') = COUNT(*)
+                    THEN 'cancelled' ELSE 'pending' END
+          FROM sales_order_lines sol WHERE sol.sales_order_number = g.sales_order_number) AS status
      FROM (
        SELECT DISTINCT ON (sales_order_number)
          id, sales_order_number, quotation_number, customer_id, customer_name, gst_number,
@@ -789,6 +892,9 @@ async function searchAvailableInventory({
 
 module.exports = {
   nextDocumentNumber,
+  nextFinancialYearNumber,
+  peekFinancialYearNumber,
+  currentFinancialYear,
   entityForQuotationType,
   entityDocType,
   generateToken,
