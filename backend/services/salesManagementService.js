@@ -338,28 +338,35 @@ async function listDeliveryChallansGrouped({ page = 1, limit = 20, search = '', 
   if (status === 'pending') {
     where += ` AND (d.status IS NULL OR d.status = 'pending')`;
   } else if (status === 'in_transit') {
-    // ERP delivery register "in_transit" route uses delivery_challans.status = 'pending'.
-    where += ` AND d.status IN ('pending', 'in_transit', 'shipped', 'reached')`;
+    // Strictly dispatched-but-not-delivered units (exclude 'pending', which has
+    // its own tab).
+    where += ` AND d.status IN ('in_transit', 'shipped', 'reached')`;
   } else if (status && status !== 'all') {
     params.push(status);
     where += ` AND d.status = $${params.length}`;
   }
+  // A DC can have several line items; list/count one row per DC (not per line)
+  // so multi-laptop challans don't appear duplicated.
   const countResult = await pool.query(
-    `SELECT COUNT(*)::int AS total FROM delivery_challan_lines d ${where}`,
+    `SELECT COUNT(DISTINCT d.dc_number)::int AS total FROM delivery_challan_lines d ${where}`,
     params
   );
   const offset = (page - 1) * limit;
   const listParams = [...params, limit, offset];
   const listResult = await pool.query(
-    `SELECT d.id, d.dc_number, d.sales_order_number, d.quotation_number, d.customer_id, d.customer_name,
+    `SELECT * FROM (
+       SELECT DISTINCT ON (d.dc_number)
+            d.id, d.dc_number, d.sales_order_number, d.quotation_number, d.customer_id, d.customer_name,
             d.gst_number, d.status, d.pdf_path, d.file_path, d.ship_by, d.delivery_person_id,
             d.courier_name, d.awb_number, d.model_name, d.created_at, d.updated_at,
             COALESCE(u.name, u.email, '') AS delivery_person_name
        FROM delivery_challan_lines d
        LEFT JOIN users u ON u.user_id = d.delivery_person_id
        ${where}
-       ORDER BY d.id DESC
-       LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+       ORDER BY d.dc_number, d.id DESC
+     ) sub
+     ORDER BY sub.id DESC
+     LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
     listParams
   );
   return {

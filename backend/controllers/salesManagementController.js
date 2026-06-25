@@ -844,7 +844,8 @@ exports.storeDeliveryChallan = async (req, res) => {
 
     // Determine the owning entity from the linked SO/quotation type.
     const typeRes = await pool.query(
-      `SELECT COALESCE(sol.quotation_type, sq.quotation_type, 'rental') AS quotation_type
+      `SELECT COALESCE(sol.quotation_type, sq.quotation_type, 'rental') AS quotation_type,
+              sol.shiping_charges
          FROM sales_order_lines sol
          LEFT JOIN sales_quotations sq ON sq.quotation_number = sol.quotation_number
         WHERE sol.sales_order_number = $1
@@ -853,6 +854,10 @@ exports.storeDeliveryChallan = async (req, res) => {
     );
     const quotationType = typeRes.rows[0]?.quotation_type || body.quotation_type || 'rental';
     const entityCode = entityForQuotationType(quotationType);
+    // Carry the SO's shipping onto the DC when the form didn't supply one.
+    const dcShipping = body.shiping_charges != null && body.shiping_charges !== ''
+      ? Number(body.shiping_charges) || 0
+      : Number(typeRes.rows[0]?.shiping_charges || 0);
 
     // Creating a DC with delivery info = the product is dispatched. Map the
     // ship-by selection to the canonical dispatch mode.
@@ -928,7 +933,7 @@ exports.storeDeliveryChallan = async (req, res) => {
           body.GST_number || body.gst_number,
           body.supply_state,
           dcSecurity,
-          body.shiping_charges || 0,
+          dcShipping,
           body.branch || entityCode,
           entityCode,
           billing ? JSON.stringify(billing) : null,
@@ -1191,6 +1196,10 @@ exports.createDcsByAddress = async (req, res) => {
     );
     const totalSoUnits = Number(totalRes.rows[0]?.n || allAllocationIds.length) || 1;
     const totalSecurity = soLines.reduce((s, l) => s + Number(l.security_amount || 0), 0);
+    // Shipping is a header-level charge on the SO (same value replicated on each
+    // line) — carry it to the DC, pro-rated by unit share across split DCs so the
+    // total shipping across all DCs equals the SO's shipping (no double-charge).
+    const totalShipping = Number(soHead.shiping_charges || 0);
 
     const allocMap = {};
     allocRes.rows.forEach((r) => { allocMap[r.allocation_id] = r; });
@@ -1209,6 +1218,7 @@ exports.createDcsByAddress = async (req, res) => {
 
       const groupSize = ids.length;
       const groupSecurity = Math.round((totalSecurity / totalSoUnits) * groupSize * 100) / 100;
+      const groupShipping = Math.round((totalShipping / totalSoUnits) * groupSize * 100) / 100;
 
       const groupAwb = group.awb_number || body.awb_number || null;
       const groupDeliveryPersonId = group.delivery_person_id || body.delivery_person_id || null;
@@ -1235,7 +1245,7 @@ exports.createDcsByAddress = async (req, res) => {
         [
           dcNumber, sales_order_number, soHead.quotation_number, soHead.customer_id || null,
           soHead.customer_name, soHead.customer_email, soHead.gst_number, soHead.supply_state,
-          groupSecurity, 0, entityCode, entityCode,
+          groupSecurity, groupShipping, entityCode, entityCode,
           billing ? JSON.stringify(billing) : null,
           deliveryAddress ? JSON.stringify(deliveryAddress) : null,
           groupSerials[0]?.brand || '', groupSerials[0]?.model || '',

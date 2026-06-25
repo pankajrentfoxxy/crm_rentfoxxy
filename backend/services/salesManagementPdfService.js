@@ -55,6 +55,18 @@ function parseJson(v, fallback = null) {
   if (typeof v === 'object') return v;
   try { return JSON.parse(v); } catch { return fallback; }
 }
+
+// Resolve a stored signature/POD path (e.g. "pod/esign_DC_..._.png" or
+// "uploads/pod/...") to an absolute file path, or null if it isn't on disk.
+function resolveSignFile(url) {
+  if (!url) return null;
+  const clean = String(url).replace(/^\//, '');
+  const candidates = [
+    path.join(__dirname, '..', clean),
+    path.join(__dirname, '..', 'uploads', clean),
+  ];
+  return candidates.find((p) => fs.existsSync(p)) || null;
+}
 // Note: PDFKit's built-in Helvetica has no glyph for the ₹ rupee sign (it
 // renders as a stray superscript "1"), so use the ASCII-safe "Rs." prefix.
 const money = (n) => `Rs. ${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -418,7 +430,20 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
       .text('Received the above item(s) in good condition.', L + 10, y + 22);
     doc.fillColor(C.ink).font('Helvetica').fontSize(9);
     doc.text('Received by: _________________________', L + 10, y + 42);
-    doc.text('Signature: ______________', L + 300, y + 42);
+    // Populate the Signature field with the technician's saved e-signature when
+    // one exists (captured at delivery from My Deliveries). Layout is unchanged:
+    // the label stays put and the blank line is only replaced by the image.
+    const esignAbs = resolveSignFile(header.esign_url || lines[0]?.esign_url);
+    if (esignAbs) {
+      doc.text('Signature:', L + 300, y + 42);
+      try {
+        doc.image(esignAbs, L + 348, y + 24, { fit: [72, 30], align: 'left' });
+      } catch (_) {
+        doc.text('______________', L + 348, y + 42);
+      }
+    } else {
+      doc.text('Signature: ______________', L + 300, y + 42);
+    }
     doc.text('Date: ____________', L + 430, y + 42);
 
     doc.end();

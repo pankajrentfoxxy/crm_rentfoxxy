@@ -96,13 +96,10 @@ router.post('/sales-orders', soCreate, ctrl.storeSalesOrder);
 
 router.get('/delivery-challans/meta/add', dcView, ctrl.getAddDeliveryChallanMeta);
 router.get('/delivery-challans', dcView, ctrl.listDeliveryChallans);
-router.get(/^\/delivery-challans\/(.+)$/, bindDcNumber, dcView, ctrl.getDeliveryChallan);
 router.post(...dcRoute('/pdf', dcView, ctrl.regenerateDcPdf));
 router.post('/delivery-challans', dcCreate, ctrl.storeDeliveryChallan);
 // Phase 15 — create one DC per delivery-address group from QC-passed serials
 router.post('/create-dcs-by-address', dcCreate, ctrl.createDcsByAddress);
-// Edit an existing DC in place — Super Admin only.
-router.patch(/^\/delivery-challans\/(.+)$/, bindDcNumber, checkRole('super_admin'), ctrl.updateDeliveryChallan);
 router.post(...dcRoute('/send-otp', dcEdit, ctrl.sendDeliveryOtp));
 router.post(...dcRoute('/verify-otp', dcEdit, ctrl.verifyDeliveryOtp));
 router.post(...dcRoute('/delivery-register', dcEdit, ctrl.submitDeliveryRegister));
@@ -111,6 +108,11 @@ router.get(...dcRoute('/qc-status', dcView, ctrl.getDcQcStatus));
 router.patch(...dcRoute('/dispatch', dcEdit, ctrl.updateDcDispatch));
 router.patch(...dcRoute('/delivered', dcEdit, ctrl.markDcDelivered));
 router.patch(...dcRoute('/rejected', dcEdit, ctrl.markDcRejected));
+// Catch-all DC routes MUST be registered last: their greedy (.+) pattern would
+// otherwise swallow specific sub-paths like /qc-status, /dispatch, /delivered.
+router.get(/^\/delivery-challans\/(.+)$/, bindDcNumber, dcView, ctrl.getDeliveryChallan);
+// Edit an existing DC in place — Super Admin only.
+router.patch(/^\/delivery-challans\/(.+)$/, bindDcNumber, checkRole('super_admin'), ctrl.updateDeliveryChallan);
 
 router.get('/return-dc', rdcView, ctrl.listReturnDeliveryChallans);
 router.get('/return-dc/:rdcNumber/detail', rdcView, ctrl.getReturnDcDetail);

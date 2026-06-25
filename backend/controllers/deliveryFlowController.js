@@ -11,8 +11,28 @@ const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
 const { ensureLinkedDeliveryTechnician } = require('../services/deliveryTechnicianService');
-const { emailDocument } = require('../services/salesManagementPdfService');
+const { emailDocument, generateDocumentPdf } = require('../services/salesManagementPdfService');
+const { getDeliveryChallanLines } = require('../services/salesManagementService');
 const sm = require('./salesManagementController');
+
+// Rebuild the branded DC PDF so freshly-saved data (e.g. the technician's
+// e-signature) is reflected in the stored document. Best-effort: never block
+// the delivery response on PDF generation.
+async function regenerateDcPdfSafe(dcNumber) {
+  try {
+    const dcLines = await getDeliveryChallanLines(dcNumber);
+    if (!dcLines.length) return;
+    const pdfPath = await generateDocumentPdf({
+      docType: 'delivery_challan', docNumber: dcNumber, header: dcLines[0], lines: dcLines,
+    });
+    await pool.query(
+      `UPDATE delivery_challan_lines SET pdf_path = $1 WHERE dc_number = $2`,
+      [pdfPath, dcNumber]
+    );
+  } catch (e) {
+    console.error(`DC PDF regen after delivery failed for ${dcNumber}:`, e.message);
+  }
+}
 
 const ADMIN_ROLES = ['admin', 'manager', 'super_admin', 'support_lead'];
 
@@ -462,6 +482,10 @@ exports.submitDeliveryWithPod = async (req, res) => {
 
     await sm.finalizeDeliveryInventory(client, dcNumber, req.user);
     await client.query('COMMIT');
+
+    // Rebuild the DC PDF so the just-captured e-signature shows in its
+    // Signature section.
+    await regenerateDcPdfSafe(dcNumber);
 
     const salesEmail = process.env.SMTP_FROM || process.env.SMTP_USER;
     if (salesEmail) {
