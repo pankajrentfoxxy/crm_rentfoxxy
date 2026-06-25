@@ -15,6 +15,7 @@ const { emailDocument } = require('../services/salesManagementPdfService');
 const sm = require('./salesManagementController');
 
 const ADMIN_ROLES = ['admin', 'manager', 'super_admin', 'support_lead'];
+const DELIVERY_MANAGER_ROLES = ['admin', 'manager', 'super_admin'];
 
 const podDir = path.join(__dirname, '..', 'uploads', 'pod');
 fs.mkdirSync(podDir, { recursive: true });
@@ -263,6 +264,39 @@ async function resolveTechnicianId(userId) {
   return r.rows[0]?.technician_id || null;
 }
 
+function canManageAnyDelivery(user) {
+  return DELIVERY_MANAGER_ROLES.includes(user?.role);
+}
+
+async function checkAssignedDeliveryAccess(db, dcNumber, user) {
+  if (canManageAnyDelivery(user)) {
+    return { allowed: true };
+  }
+
+  const techId = await resolveTechnicianId(user.user_id);
+  const r = await db.query(
+    `SELECT COUNT(*)::int AS total,
+            COUNT(*) FILTER (
+              WHERE d.delivery_person_id = $3
+                 OR dt.user_id = $2
+                 OR (dt.technician_id IS NULL AND d.delivery_person_id = $2)
+            )::int AS assigned
+       FROM delivery_challan_lines d
+       LEFT JOIN delivery_technicians dt ON dt.technician_id = d.delivery_person_id
+      WHERE d.dc_number = $1`,
+    [dcNumber, user.user_id, techId || -1]
+  );
+
+  const total = r.rows[0]?.total || 0;
+  if (!total) {
+    return { allowed: false, status: 404, message: 'Delivery challan not found' };
+  }
+  if (r.rows[0].assigned === total) {
+    return { allowed: true };
+  }
+  return { allowed: false, status: 403, message: 'You are not assigned to this delivery challan' };
+}
+
 // GET /my-deliveries — the logged-in dispatch technician's active DCs.
 exports.getMyDeliveries = async (req, res) => {
   try {
@@ -271,7 +305,17 @@ exports.getMyDeliveries = async (req, res) => {
     // delivery_person_id stored the user id directly).
     const params = [techId || -1, req.user.user_id];
     const where = `WHERE d.status IN ('in_transit','reached')
-                     AND (d.delivery_person_id = $1 OR d.delivery_person_id = $2)`;
+                     AND (
+                       d.delivery_person_id = $1
+                       OR (
+                         d.delivery_person_id = $2
+                         AND NOT EXISTS (
+                           SELECT 1
+                             FROM delivery_technicians legacy_dt
+                            WHERE legacy_dt.technician_id = d.delivery_person_id
+                         )
+                       )
+                     )`;
     const items = await buildDcFlow(where, params, { includeOtp: false });
     res.json({ success: true, technician_id: techId, items });
   } catch (error) {
@@ -284,6 +328,11 @@ exports.getMyDeliveries = async (req, res) => {
 exports.markTechReached = async (req, res) => {
   try {
     const dcNumber = req.params.dcNumber;
+    const access = await checkAssignedDeliveryAccess(pool, dcNumber, req.user);
+    if (!access.allowed) {
+      return res.status(access.status).json({ success: false, message: access.message });
+    }
+
     const { latitude, longitude } = req.body || {};
     const upd = await pool.query(
       `UPDATE delivery_challan_lines
@@ -306,6 +355,11 @@ exports.markTechReached = async (req, res) => {
 exports.verifySerialAndGenerateOtp = async (req, res) => {
   try {
     const dcNumber = req.params.dcNumber;
+    const access = await checkAssignedDeliveryAccess(pool, dcNumber, req.user);
+    if (!access.allowed) {
+      return res.status(access.status).json({ success: false, message: access.message });
+    }
+
     const input = String(req.body?.serial_number || '').trim();
     if (!input) {
       return res.status(400).json({ success: false, message: 'serial_number is required' });
@@ -405,6 +459,11 @@ exports.submitDeliveryWithPod = async (req, res) => {
     const dcNumber = req.params.dcNumber;
     const body = req.body || {};
     const otp = String(body.otp || '').trim();
+
+    const access = await checkAssignedDeliveryAccess(client, dcNumber, req.user);
+    if (!access.allowed) {
+      return res.status(access.status).json({ success: false, message: access.message });
+    }
 
     // Aggregate across all DC lines: only "already delivered" when every line is
     // delivered. Pull the OTP from a line that still needs delivering.
