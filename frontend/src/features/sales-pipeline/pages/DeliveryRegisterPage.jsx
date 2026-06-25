@@ -2,9 +2,10 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { KeyRound, Map as MapIcon, CheckCircle2, ExternalLink, Image as ImageIcon, Users } from 'lucide-react';
-import { ListPagination } from '../../../components/ui/primitives';
+import { ListPagination, SearchField } from '../../../components/ui/primitives';
 import { listDeliveryFlow } from '../salesPipelineApi';
 import { DISPATCH_MODE_STYLES, formatDateTime, statusLabel } from '../salesPipelineUtils';
+import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import { getBackendOrigin } from '../../../utils/api';
 import AdminDeliverModal from '../components/AdminDeliverModal';
 import ReturnWarehouseReceiveModal from '../components/ReturnWarehouseReceiveModal';
@@ -17,7 +18,7 @@ const TABS = [
   { id: 'delivered', label: 'Delivered' },
 ];
 
-const DELIVERED_PAGE_SIZE = 25;
+const PAGE_SIZE = 25;
 
 function uploadUrl(p) {
   if (!p) return null;
@@ -29,9 +30,11 @@ export default function DeliveryRegisterPage() {
   const [tab, setTab] = useState('all');
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [deliveredPage, setDeliveredPage] = useState(1);
-  const [deliveredPagination, setDeliveredPagination] = useState({
-    page: 1, totalPages: 1, total: 0, limit: DELIVERED_PAGE_SIZE,
+  const [page, setPage] = useState(1);
+  const [searchInput, setSearchInput] = useState('');
+  const search = useDebouncedValue(searchInput.trim(), 320);
+  const [pagination, setPagination] = useState({
+    page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE,
   });
   const [otpModal, setOtpModal] = useState(null);
   const [deliverModal, setDeliverModal] = useState(null);
@@ -39,39 +42,32 @@ export default function DeliveryRegisterPage() {
 
   const isDelivered = tab === 'delivered';
 
+  useEffect(() => { setPage(1); }, [tab, search]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const params = { status: tab };
-      if (isDelivered) {
-        params.page = deliveredPage;
-        params.limit = DELIVERED_PAGE_SIZE;
-      }
-      const r = await listDeliveryFlow(params);
+      const r = await listDeliveryFlow({
+        status: tab,
+        movement: 'outbound', // delivery register = outbound DCs only (no RDC)
+        search: search || undefined,
+        page,
+        limit: PAGE_SIZE,
+      });
       setRows(r.data?.items || []);
-      if (isDelivered && r.data?.pagination) {
-        setDeliveredPagination(r.data.pagination);
-      } else {
-        setDeliveredPagination({
-          page: 1,
-          totalPages: 1,
-          total: r.data?.items?.length || 0,
-          limit: DELIVERED_PAGE_SIZE,
-        });
-      }
+      setPagination(r.data?.pagination || {
+        page: 1, totalPages: 1, total: r.data?.items?.length || 0, limit: PAGE_SIZE,
+      });
     } catch {
       toast.error('Failed to load delivery register');
     } finally {
       setLoading(false);
     }
-  }, [tab, isDelivered, deliveredPage]);
+  }, [tab, page, search]);
 
   useEffect(() => { load(); }, [load]);
 
-  const selectTab = (id) => {
-    setTab(id);
-    if (id === 'delivered') setDeliveredPage(1);
-  };
+  const selectTab = (id) => setTab(id);
 
   return (
     <div className="p-4 max-w-7xl mx-auto">
@@ -98,9 +94,17 @@ export default function DeliveryRegisterPage() {
         ))}
       </div>
 
-      {isDelivered && !loading && deliveredPagination.total > 0 ? (
+      <div className="mb-4">
+        <SearchField
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          placeholder="Search DC #, customer, SO #, GST…"
+        />
+      </div>
+
+      {!loading && pagination.total > 0 ? (
         <p className="text-sm text-gray-500 mb-3">
-          {deliveredPagination.total} delivered challan{deliveredPagination.total === 1 ? '' : 's'}
+          {pagination.total} {isDelivered ? 'delivered ' : ''}challan{pagination.total === 1 ? '' : 's'}
         </p>
       ) : null}
 
@@ -194,15 +198,13 @@ export default function DeliveryRegisterPage() {
         </table>
       </div>
 
-      {isDelivered ? (
-        <ListPagination
-          page={deliveredPage}
-          totalPages={deliveredPagination.totalPages || 1}
-          total={deliveredPagination.total || 0}
-          pageSize={DELIVERED_PAGE_SIZE}
-          onPageChange={setDeliveredPage}
-        />
-      ) : null}
+      <ListPagination
+        page={page}
+        totalPages={pagination.totalPages || 1}
+        total={pagination.total || 0}
+        pageSize={PAGE_SIZE}
+        onPageChange={setPage}
+      />
 
       {otpModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">

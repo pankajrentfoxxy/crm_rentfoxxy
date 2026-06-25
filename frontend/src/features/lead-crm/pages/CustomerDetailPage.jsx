@@ -32,7 +32,21 @@ function laptopConfig(lap) {
     .join(' · ');
 }
 
-function PodLinks({ files, keyPrefix }) {
+function PodLinks({ pdfPath, files, keyPrefix }) {
+  // Prefer the full Delivery Challan PDF (it already embeds the e-signature).
+  if (pdfPath) {
+    return (
+      <a
+        href={podFileUrl(pdfPath)}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-blue-200 text-blue-600 hover:bg-blue-50"
+      >
+        <FileText className="w-3 h-3" />
+        View DC PDF
+      </a>
+    );
+  }
   if (!Array.isArray(files) || files.length === 0) return <span className="text-gray-400">—</span>;
   return (
     <div className="flex flex-wrap gap-1.5">
@@ -309,7 +323,7 @@ export default function CustomerDetailPage() {
                     {(lap.delivered_at || lap.dispatch_date) && <span>{new Date(lap.delivered_at || lap.dispatch_date).toLocaleDateString('en-IN')}</span>}
                     {lap.rent_monthly_rate && <span className="font-semibold text-slate-700">{formatCurrency(lap.rent_monthly_rate)}</span>}
                   </div>
-                  <div className="pt-2 border-t border-slate-100"><PodLinks files={lap.pod_files} keyPrefix={lap.serial_id || lap.ttspl_id} /></div>
+                  <div className="pt-2 border-t border-slate-100"><PodLinks pdfPath={lap.dc_pdf_path} files={lap.pod_files} keyPrefix={lap.serial_id || lap.ttspl_id} /></div>
                 </div>
               ))
             ) : (
@@ -369,7 +383,7 @@ export default function CustomerDetailPage() {
                       <td className="p-3 text-xs font-mono">{lap.dc_number || '—'}</td>
                       <td className="p-3 text-xs">{(lap.delivered_at || lap.dispatch_date) ? new Date(lap.delivered_at || lap.dispatch_date).toLocaleDateString('en-IN') : '—'}</td>
                       <td className="p-3 text-xs">{lap.rent_monthly_rate ? formatCurrency(lap.rent_monthly_rate) : '—'}</td>
-                      <td className="p-3 text-xs"><PodLinks files={lap.pod_files} keyPrefix={lap.serial_id || lap.ttspl_id} /></td>
+                      <td className="p-3 text-xs"><PodLinks pdfPath={lap.dc_pdf_path} files={lap.pod_files} keyPrefix={lap.serial_id || lap.ttspl_id} /></td>
                       <td className="p-3"><span className="px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-xs">{lap.status || 'rented'}</span></td>
                     </tr>
                   ))

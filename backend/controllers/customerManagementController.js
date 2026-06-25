@@ -598,12 +598,11 @@ const ACTIVE_FROM_SQL = `
     OR inv.serial_number = vsn.serial_number
   )
   LEFT JOIN LATERAL (
-    SELECT dcl.file_path, dcl.pod_image_url, dcl.pod_photo_url, dcl.esign_url, dcl.delivery_completed_at
+    SELECT dcl.file_path, dcl.pod_image_url, dcl.pod_photo_url, dcl.esign_url,
+           dcl.pdf_path, dcl.delivery_completed_at
     FROM delivery_challan_lines dcl
     WHERE dcl.dc_number = vsn.current_dc_number
       AND COALESCE(dcl.movement_type, 'outbound') = 'outbound'
-      AND (dcl.file_path IS NOT NULL OR dcl.pod_image_url IS NOT NULL
-           OR dcl.pod_photo_url IS NOT NULL OR dcl.esign_url IS NOT NULL)
     ORDER BY dcl.delivery_completed_at DESC NULLS LAST, dcl.id DESC
     LIMIT 1
   ) pod ON TRUE
@@ -634,7 +633,8 @@ const ACTIVE_SELECT_SQL = `
          pod.file_path AS pod_file_path,
          pod.pod_image_url AS pod_image_url,
          pod.pod_photo_url AS pod_photo_url,
-         pod.esign_url AS pod_esign_url
+         pod.esign_url AS pod_esign_url,
+         pod.pdf_path AS dc_pdf_path
 `;
 
 const RETURNED_FROM_SQL = `

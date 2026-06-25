@@ -225,6 +225,20 @@ exports.listDeliveryFlow = async (req, res) => {
       conditions.push(`d.delivery_person_id = $${params.length}`);
     }
 
+    // Restrict to outbound (DC) deliveries only — exclude Return DCs (RDC).
+    if (String(req.query.movement || '').toLowerCase() === 'outbound') {
+      conditions.push(`COALESCE(d.movement_type, 'outbound') = 'outbound'`);
+    }
+
+    // Free-text search across DC #, customer, SO # and GST.
+    if (req.query.search && String(req.query.search).trim()) {
+      params.push(`%${String(req.query.search).trim()}%`);
+      conditions.push(`(d.dc_number ILIKE $${params.length}
+        OR d.customer_name ILIKE $${params.length}
+        OR d.sales_order_number ILIKE $${params.length}
+        OR d.gst_number ILIKE $${params.length})`);
+    }
+
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const page = Math.max(1, parseInt(req.query.page, 10) || 0);
