@@ -5,7 +5,7 @@ const multer = require('multer');
 const { multerLimits } = require('../../config/uploadLimits');
 const pool = require('../../config/db');
 const { getTotalAmountOfPurchaseOrder } = require('../../utils/purchaseOrderGst');
-const { nextPurchaseOrderNumber } = require('../../services/vendorNumberService');
+const { peekNextPurchaseOrderNumber, allocatePurchaseOrderNumber } = require('../../services/vendorNumberService');
 const { logVendorAudit } = require('../../services/vendorAuditLogService');
 const { allocateTtsplCodes } = require('../../services/vendorInventoryAssetCodeService');
 const {
@@ -1210,7 +1210,7 @@ async function list(req, res) {
 }
 
 async function nextNumber(req, res) {
-  const num = await nextPurchaseOrderNumber();
+  const num = await peekNextPurchaseOrderNumber();
   res.json({ success: true, purchase_order_number: num });
 }
 
@@ -1236,7 +1236,7 @@ async function fetchPoAssetCatalogOptions() {
 /** Next PO number + approved vendors for create form (Laravel PO form parity) */
 async function formMeta(req, res) {
   try {
-    const purchase_order_number = await nextPurchaseOrderNumber();
+    const purchase_order_number = await peekNextPurchaseOrderNumber();
     const vendors = await pool.query(
       `SELECT vendor_id, first_name, business_name, email, phone, address, state
        FROM vendors
@@ -1344,18 +1344,10 @@ async function create(req, res) {
   const sub_total_amount = body.sub_total_amount ?? lineSubtotalFromRows(rawLines);
   const total_amount = getTotalAmountOfPurchaseOrder(sub_total_amount, !!is_same_state);
 
-  const purchase_order_number =
+  const preferredPoNumber =
     body.purchase_order_number && String(body.purchase_order_number).trim()
       ? String(body.purchase_order_number).trim()
-      : await nextPurchaseOrderNumber();
-
-  const dup = await pool.query(
-    `SELECT 1 FROM vendor_purchase_orders WHERE purchase_order_number = $1 AND deleted_at IS NULL`,
-    [purchase_order_number]
-  );
-  if (dup.rows.length) {
-    return res.status(409).json({ success: false, message: 'PO number already exists' });
-  }
+      : null;
 
   const assets_details =
     body.assets_details != null ? body.assets_details : buildAssetsDetailsFromLines(rawLines);
@@ -1363,6 +1355,8 @@ async function create(req, res) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+
+    const purchase_order_number = await allocatePurchaseOrderNumber(client, preferredPoNumber);
 
     const { insertedIds, enrichedLines } = await insertProductDetailsForPo(
       client,

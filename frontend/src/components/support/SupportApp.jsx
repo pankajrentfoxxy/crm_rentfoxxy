@@ -12,7 +12,7 @@ import SupportTicketDetail from './SupportTicketDetail';
 import SupportSettings from './SupportSettings';
 import SupportTechnicians from './SupportTechnicians';
 import MyDeliveriesPage from '../../features/sales-pipeline/pages/MyDeliveriesPage';
-import TechnicianBucketPage from '../../features/sales-pipeline/pages/TechnicianBucketPage';
+import TechnicianDeliveryBucketPage from '../../features/sales-pipeline/pages/TechnicianDeliveryBucketPage';
 import SupportTechBucketPage from '../../features/support/pages/SupportTechBucketPage';
 import SupportPartsQueuePage from '../../features/support/pages/SupportPartsQueuePage';
 import ChallanViewPage from '../../features/support/pages/ChallanViewPage';
@@ -68,7 +68,7 @@ export default function SupportApp() {
         <Route path="complaints" element={<SupportTicketsView view="complaints" showFilters />} />
         <Route path="my-tickets" element={<SupportTicketsView view="my_open" showFilters />} />
         <Route path="my-pickups" element={<MyDeliveriesPage movement="return" />} />
-        <Route path="pickup-bucket" element={<StatsOnly><TechnicianBucketPage movement="return" /></StatsOnly>} />
+        <Route path="pickup-bucket" element={<StatsOnly><TechnicianDeliveryBucketPage movement="return" /></StatsOnly>} />
         <Route path="my-resolved" element={<SupportTicketsView view="my_resolved" showFilters />} />
         <Route path="tech-bucket" element={<SupportTechBucketPage />} />
         <Route path="parts-queue" element={<PartsQueueOnly><SupportPartsQueuePage /></PartsQueueOnly>} />

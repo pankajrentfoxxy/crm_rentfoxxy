@@ -1,5 +1,5 @@
 /**
- * ERP Technician Bucket List — /admin/technicians-bucket-list/view-bucket-list parity.
- * (Rejected / returned / pickuped serials + pending DCs per technician.)
+ * In-house delivery bucket — grouped by technician, OTP / mark delivered.
+ * (Sales pipeline field dispatch view; not the ERP admin bucket table.)
  */
-export { default } from '../../../pages/delivery-register-management/TechniciansBucketListPage';
+export { default } from './TechnicianDeliveryBucketPage';

@@ -12,9 +12,9 @@ import {
 const PAGE_SIZES = [10, 25, 50, 100];
 
 const STATUS_TABS = [
-  { key: 'in-transit', label: 'In Transit' },
-  { key: 'delivered', label: 'Delivered' },
-  { key: 'rejected', label: 'Rejected' },
+  { key: 'in-transit', label: 'In Transit', path: '/sales-pipeline/delivery-register' },
+  { key: 'delivered', label: 'Delivered', path: '/sales-pipeline/delivery-register/delivered' },
+  { key: 'rejected', label: 'Rejected', path: '/sales-pipeline/delivery-register/rejected' },
 ];
 
 const STATUS_META = {
@@ -221,7 +221,7 @@ export default function DeliveryRegisterListPage() {
         {STATUS_TABS.map((t) => (
           <Link
             key={t.key}
-            to={`/sales-pipeline/delivery-register/${t.key}`}
+            to={t.path}
             className={`px-4 py-2 text-sm font-medium rounded-lg border transition-colors ${
               routeStatus === t.key
                 ? 'bg-teal-700 text-white border-teal-700'
