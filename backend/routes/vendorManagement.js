@@ -33,6 +33,7 @@ const vendorFiles = upload.fields([
 // ---------- Vendors (Laravel VendorController equivalents) ----------------------------
 router.get('/vendors/info', authorize, vendors.lookupValidators, vendors.lookupVendor);
 router.get('/vendors', authorize, vendors.listValidators, vendors.listVendors);
+router.get('/vendors/:id/laptops', authorize, vendors.laptopsValidators, vendors.listVendorLaptops);
 router.get('/vendors/:id', authorize, vendors.getValidators, vendors.getVendor);
 router.post(
   '/vendors',

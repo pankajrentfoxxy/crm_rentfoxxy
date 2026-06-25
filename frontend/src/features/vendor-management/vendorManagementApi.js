@@ -44,6 +44,11 @@ export function fetchVendorLookup(vendor_id) {
   return api.get(`${base}/vendors/info`, { params: { vendor_id } });
 }
 
+/** All laptops (serial units) supplied by a vendor + Active/Returned counts. */
+export function fetchVendorLaptops(id, params) {
+  return api.get(`${base}/vendors/${id}/laptops`, { params });
+}
+
 export function createVendor(formData) {
   return api.post(`${base}/vendors`, formData);
 }

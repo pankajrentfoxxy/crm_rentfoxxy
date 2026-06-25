@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Building2, Pencil } from 'lucide-react';
+import { ArrowLeft, Building2, Pencil, Laptop } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { PageHeader, Button, SectionLoader } from '../../../components/ui/primitives';
 import { fetchVendor } from '../vendorManagementApi';
 import VendorFormModal from '../components/VendorFormModal';
+import VendorLaptopsModal from '../components/VendorLaptopsModal';
 import {
   formatStateLabel,
   paymentTermsLabel,
@@ -36,6 +37,7 @@ export default function VendorDetailPage() {
   const [vendor, setVendor] = useState(null);
   const [loading, setLoading] = useState(true);
   const [editOpen, setEditOpen] = useState(false);
+  const [laptopsOpen, setLaptopsOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -83,6 +85,7 @@ export default function VendorDetailPage() {
         icon={Building2}
         actions={(
           <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" icon={Laptop} onClick={() => setLaptopsOpen(true)}>View Laptops</Button>
             <Link to={`/vendor-management/purchase-orders?vendor_id=${vendor.vendor_id}`}>
               <Button variant="secondary">View POs</Button>
             </Link>
@@ -157,6 +160,13 @@ export default function VendorDetailPage() {
           setEditOpen(false);
           load();
         }}
+      />
+
+      <VendorLaptopsModal
+        open={laptopsOpen}
+        vendorId={vendor.vendor_id}
+        vendorName={vendor.business_name || vendor.f_name || `Vendor #${vendor.vendor_id}`}
+        onClose={() => setLaptopsOpen(false)}
       />
     </div>
   );

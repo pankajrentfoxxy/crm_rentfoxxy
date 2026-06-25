@@ -5,6 +5,10 @@ const fs = require('fs');
 const { body, param, query, validationResult } = require('express-validator');
 const pool = require('../../config/db');
 const { logVendorAudit } = require('../../services/vendorAuditLogService');
+const {
+  DEPLOYED_WITH_CUSTOMER_STATUSES,
+  displayDeployedStatus,
+} = require('../../services/customerDeployedAssets');
 
 /** PO bulk receive + TTSPL: `purchaseOrders.controller` (`receivePoLineBulk`). Spare PO bulk: `sparePartsOrders.controller` (`receiveSpareLineBulk`). */
 
@@ -717,6 +721,133 @@ async function loginAsVendor(req, res) {
   });
 }
 
+// ---------- Vendor laptops (serials supplied by this vendor) -----------------
+const laptopsValidators = [
+  param('id').isInt({ min: 1 }).toInt(),
+  query('page').optional().isInt({ min: 1 }).toInt(),
+  query('limit').optional().isInt({ min: 1, max: 200 }).toInt(),
+  query('search').optional().isString().trim(),
+  query('lifecycle').optional().isIn(['all', 'active', 'returned', 'in_stock']),
+];
+
+/**
+ * GET /vendors/:id/laptops
+ * All laptops (serial units) supplied by a vendor, derived from the authoritative
+ * inventory (vendor_serial_numbers -> vendor_purchase_orders.vendor_id). Returns
+ * overall Active / Returned counts plus a paginated, searchable list.
+ */
+async function listVendorLaptops(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  const vendorId = parseInt(req.params.id, 10);
+  const page = req.query.page || 1;
+  const limit = req.query.limit || 25;
+  const offset = (page - 1) * limit;
+  const search = (req.query.search || '').trim();
+  const lifecycle = req.query.lifecycle || 'all';
+
+  // Overall counts (independent of search/lifecycle filters).
+  const countR = await pool.query(
+    `SELECT COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE vsn.inventory_status = ANY($2::text[]))::int AS active,
+            COUNT(*) FILTER (WHERE vsn.inventory_status = 'returned')::int AS returned
+       FROM vendor_serial_numbers vsn
+       JOIN vendor_purchase_orders po ON po.po_id = vsn.po_id
+      WHERE po.vendor_id = $1 AND vsn.deleted_at IS NULL`,
+    [vendorId, DEPLOYED_WITH_CUSTOMER_STATUSES]
+  );
+
+  const fromJoins = `
+    FROM vendor_serial_numbers vsn
+    JOIN vendor_purchase_orders po ON po.po_id = vsn.po_id
+    LEFT JOIN customers c ON c.customer_id = vsn.current_customer_id
+    LEFT JOIN inventory inv ON (
+      inv.machine_number = vsn.inventory_asset_code OR inv.serial_number = vsn.serial_number
+    )`;
+
+  const params = [vendorId];
+  let where = ` WHERE po.vendor_id = $1 AND vsn.deleted_at IS NULL`;
+
+  if (lifecycle === 'active' || lifecycle === 'in_stock') {
+    params.push(DEPLOYED_WITH_CUSTOMER_STATUSES);
+    const di = params.length;
+    where += lifecycle === 'active'
+      ? ` AND vsn.inventory_status = ANY($${di}::text[])`
+      : ` AND NOT (vsn.inventory_status = ANY($${di}::text[])) AND vsn.inventory_status <> 'returned'`;
+  } else if (lifecycle === 'returned') {
+    where += ` AND vsn.inventory_status = 'returned'`;
+  }
+
+  if (search) {
+    params.push(`%${search}%`);
+    const i = params.length;
+    where += ` AND (
+      COALESCE(vsn.inventory_asset_code, '') ILIKE $${i}
+      OR COALESCE(vsn.extra->>'ttspl_id', '') ILIKE $${i}
+      OR COALESCE(vsn.serial_number, '') ILIKE $${i}
+      OR COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', inv.model, '') ILIKE $${i}
+      OR COALESCE(vsn.extra->>'brand', inv.brand, '') ILIKE $${i}
+      OR COALESCE(c.name, '') ILIKE $${i}
+      OR COALESCE(vsn.current_dc_number, '') ILIKE $${i}
+    )`;
+  }
+
+  const filteredR = await pool.query(`SELECT COUNT(*)::int AS total ${fromJoins}${where}`, params);
+  const filteredTotal = filteredR.rows[0]?.total || 0;
+
+  const listParams = [...params, limit, offset];
+  const listR = await pool.query(
+    `SELECT vsn.serial_id,
+            COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
+            vsn.serial_number,
+            COALESCE(vsn.extra->>'brand', inv.brand) AS brand,
+            COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', inv.model) AS model_name,
+            COALESCE(vsn.extra->>'processor', inv.processor) AS processor,
+            vsn.extra->>'generation' AS generation,
+            COALESCE(vsn.extra->>'ram', inv.ram) AS ram,
+            COALESCE(vsn.extra->>'storage', inv.storage) AS storage,
+            vsn.inventory_status,
+            vsn.current_customer_id,
+            c.name AS customer_name,
+            vsn.current_dc_number,
+            po.purchase_order_number
+     ${fromJoins}${where}
+     ORDER BY vsn.updated_at DESC NULLS LAST, vsn.serial_id DESC
+     LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+    listParams
+  );
+
+  const laptops = listR.rows.map((r) => {
+    const lc = r.inventory_status === 'returned'
+      ? 'returned'
+      : DEPLOYED_WITH_CUSTOMER_STATUSES.includes(r.inventory_status)
+        ? 'active'
+        : 'in_stock';
+    return {
+      ...r,
+      rental_status: displayDeployedStatus(r.inventory_status),
+      lifecycle: lc,
+    };
+  });
+
+  res.json({
+    success: true,
+    counts: {
+      total: countR.rows[0]?.total || 0,
+      active: countR.rows[0]?.active || 0,
+      returned: countR.rows[0]?.returned || 0,
+    },
+    laptops,
+    pagination: {
+      page,
+      limit,
+      total: filteredTotal,
+      totalPages: Math.max(1, Math.ceil(filteredTotal / limit)),
+    },
+  });
+}
+
 module.exports = {
   buildMulter,
   listValidators,
@@ -732,5 +863,7 @@ module.exports = {
   deleteVendor,
   loginAsVendor,
   portalAccessValidators,
-  updatePortalAccess
+  updatePortalAccess,
+  laptopsValidators,
+  listVendorLaptops
 };
