@@ -382,6 +382,24 @@ exports.updateTechnician = [
   },
 ];
 
+exports.changeTechnicianPassword = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { password, confirm_password: confirmPassword } = req.body;
+    if (!password) return res.status(400).json({ success: false, message: 'Password is required' });
+    if (confirmPassword !== undefined && password !== confirmPassword) {
+      return res.status(400).json({ success: false, message: 'Passwords do not match' });
+    }
+    const result = await technicianService.changeTechnicianPassword(id, password);
+    if (!result.ok) {
+      return res.status(result.status || 400).json({ success: false, message: result.message });
+    }
+    res.json({ success: true, message: 'Password changed successfully' });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
 exports.updateTechnicianStatus = async (req, res) => {
   try {
     const { id, status } = req.body;

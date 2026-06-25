@@ -60,6 +60,21 @@ function parseJson(v, fallback = null) {
 const money = (n) => `Rs. ${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const dash = (v) => (v == null || v === '' ? 'N/A' : String(v));
 
+// delivery_challan_lines has no rate column; price each DC line from the linked
+// sales order so the PDF shows correct Rate/Amount/GST.
+async function attachDcLineRates(lines) {
+  const { getSalesOrderRateMap, rateForDcLine } = require('./salesManagementService');
+  const cache = new Map();
+  for (const line of lines) {
+    if (line.rate != null && Number(line.rate) > 0) continue;
+    const son = line.sales_order_number;
+    if (!son) continue;
+    if (!cache.has(son)) cache.set(son, await getSalesOrderRateMap(son));
+    line.rate = rateForDcLine(line, cache.get(son));
+  }
+  return lines;
+}
+
 // Resolve per-serial spec rows for a DC (one product row per laptop).
 async function resolveDcUnitRows(lines) {
   const rows = [];
@@ -161,7 +176,7 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
 
   // Product rows
   const rows = docType === 'delivery_challan'
-    ? await resolveDcUnitRows(lines)
+    ? await resolveDcUnitRows(await attachDcLineRates(lines))
     : lines.map((l) => ({
       brand: l.brand, model_name: l.model_name, processor: l.processor, generation: l.generation,
       ram: l.ram, storage: l.storage, gpu: l.gpu, screen_size: l.screen_size,
@@ -174,14 +189,16 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
   const goods = rows.reduce((s, r) => s + (Number(r.rate || 0) * Number(r.qty || 1)), 0);
   const shipping = Number(header.shiping_charges || lines[0]?.shiping_charges || 0);
   const security = Number(header.security_amount || lines[0]?.security_amount || 0);
-  const taxable = goods + shipping;
-  // GST: intra-state (CGST+SGST) if buyer state matches seller, else IGST.
+  // GST applies to the goods subtotal only (matches ERP). Shipping and security
+  // are added after tax. Intra-state (buyer == seller, Haryana) -> CGST+SGST,
+  // else IGST.
+  const subtotal = +goods.toFixed(2);
   const sellerState = String(company.state_code || '06').toLowerCase();
   const buyerState = String(header.supply_state || '').toLowerCase();
-  const intra = buyerState && (buyerState === sellerState || buyerState.includes('haryana') || buyerState === '06');
+  const intra = !buyerState || buyerState === sellerState || buyerState.includes('haryana') || buyerState === '06';
   const gstRate = 18;
-  const gstAmount = +(taxable * gstRate / 100).toFixed(2);
-  const total = +(taxable + gstAmount + security).toFixed(2);
+  const gstAmount = +(subtotal * gstRate / 100).toFixed(2);
+  const total = +(subtotal + gstAmount + shipping + security).toFixed(2);
 
   const billing = parseJson(header.customer_billing_address, {}) || {};
   const shippingAddr = parseJson(header.customer_shipping_address, {}) || {};
@@ -371,15 +388,15 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
       doc.font('Helvetica-Bold').fillColor(C.ink).text(value, tx2 + tw - 90, y, { width: 90, align: 'right' });
       y += 16;
     };
+    totRow('Sub Total:', money(subtotal));
     totRow('Shipping Charges:', money(shipping));
-    totRow('Sub Total:', money(taxable));
-    totRow('Security Amount:', money(security));
     if (intra) {
       totRow(`CGST (${gstRate / 2}%):`, money(gstAmount / 2));
       totRow(`SGST (${gstRate / 2}%):`, money(gstAmount / 2));
     } else {
       totRow(`IGST (${gstRate}%):`, money(gstAmount));
     }
+    totRow('Security Amount:', money(security));
     doc.moveTo(tx2, y).lineTo(R, y).strokeColor(C.line).stroke(); y += 6;
     totRow('Total:', money(total), true);
     y += 10;

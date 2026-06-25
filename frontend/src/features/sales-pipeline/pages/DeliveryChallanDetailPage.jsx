@@ -48,6 +48,7 @@ export default function DeliveryChallanDetailPage() {
   const isSuperAdmin = user?.role === 'super_admin';
   const [tab, setTab] = useState('details');
   const [lines, setLines] = useState([]);
+  const [totals, setTotals] = useState(null);
   const [qc, setQc] = useState(null);
   const [paymentSummary, setPaymentSummary] = useState(null);
   const [dispatchOpen, setDispatchOpen] = useState(false);
@@ -74,6 +75,7 @@ export default function DeliveryChallanDetailPage() {
     try {
       const res = await getDC(dcNumber);
       setLines(res.data?.lines || []);
+      setTotals(res.data?.totals || null);
       if (res.data?.lines?.[0]?.sales_order_number) {
         const soRes = await getSalesOrderFull(res.data.lines[0].sales_order_number);
         setPaymentSummary(soRes.data?.summary);
@@ -188,6 +190,7 @@ export default function DeliveryChallanDetailPage() {
           </div>
 
           {tab === 'details' && (
+            <>
             <div className="bg-white border rounded-xl overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -255,6 +258,53 @@ export default function DeliveryChallanDetailPage() {
                 </p>
               </div>
             </div>
+
+            <div className="bg-white border rounded-xl overflow-hidden">
+              <h3 className="px-4 pt-4 font-semibold text-sm">Billing Summary</h3>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm mt-2">
+                  <thead className="bg-gray-50 text-xs uppercase text-gray-500">
+                    <tr>
+                      <th className="px-4 py-2 text-left">Item</th>
+                      <th className="px-4 py-2 text-right">Qty</th>
+                      <th className="px-4 py-2 text-right">Rate</th>
+                      <th className="px-4 py-2 text-right">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {lines.map((l, i) => (
+                      <tr key={i}>
+                        <td className="px-4 py-2">{[l.brand, l.model_name].filter(Boolean).join(' ') || '—'}</td>
+                        <td className="px-4 py-2 text-right">{l.quantity || l.main_qty || 1}</td>
+                        <td className="px-4 py-2 text-right">{formatCurrency(l.rate)}</td>
+                        <td className="px-4 py-2 text-right">{formatCurrency(l.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {totals && (
+                <div className="border-t p-4 text-sm space-y-1.5 max-w-xs ml-auto">
+                  <div className="flex justify-between"><span className="text-gray-500">Subtotal</span><strong>{formatCurrency(totals.subtotal)}</strong></div>
+                  {totals.gst_type === 'inter' ? (
+                    <div className="flex justify-between"><span className="text-gray-500">IGST ({totals.gst_rate || 18}%)</span><strong>{formatCurrency(totals.igst)}</strong></div>
+                  ) : (
+                    <>
+                      <div className="flex justify-between"><span className="text-gray-500">CGST ({(Number(totals.gst_rate) || 18) / 2}%)</span><strong>{formatCurrency(totals.cgst)}</strong></div>
+                      <div className="flex justify-between"><span className="text-gray-500">SGST ({(Number(totals.gst_rate) || 18) / 2}%)</span><strong>{formatCurrency(totals.sgst)}</strong></div>
+                    </>
+                  )}
+                  {Number(totals.shipping) > 0 && (
+                    <div className="flex justify-between"><span className="text-gray-500">Shipping Charges</span><strong>{formatCurrency(totals.shipping)}</strong></div>
+                  )}
+                  {Number(totals.security) > 0 && (
+                    <div className="flex justify-between"><span className="text-gray-500">Security Amount</span><strong>{formatCurrency(totals.security)}</strong></div>
+                  )}
+                  <div className="flex justify-between border-t pt-1.5 mt-1"><span className="font-semibold text-gray-900">Total</span><strong>{formatCurrency(totals.grand_total)}</strong></div>
+                </div>
+              )}
+            </div>
+            </>
           )}
 
           {tab === 'qc' && (

@@ -393,7 +393,10 @@ function saveEsign(dcNumber, dataUrl) {
   const m = /^data:image\/(png|jpeg|jpg);base64,(.+)$/i.exec(String(dataUrl || ''));
   if (!m) return null;
   const ext = m[1].toLowerCase() === 'jpeg' ? 'jpg' : m[1].toLowerCase();
-  const filename = `esign_${dcNumber}_${Date.now()}.${ext}`;
+  // DC numbers contain slashes (DC/26-27/0779) — sanitize so we don't create
+  // phantom sub-directories / ENOENT when writing the file.
+  const safeDc = String(dcNumber || 'dc').replace(/[^\w-]+/g, '_');
+  const filename = `esign_${safeDc}_${Date.now()}.${ext}`;
   fs.writeFileSync(path.join(podDir, filename), Buffer.from(m[2], 'base64'));
   return `pod/${filename}`;
 }

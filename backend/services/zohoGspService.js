@@ -175,7 +175,8 @@ async function generateEInvoice({ dcNumber, customer, lineItems, totalAmount, us
     const qrBuffer = await QRCode.toBuffer(irnData.SignedQRCode, { type: 'png', width: 200, margin: 1 });
     const dir = path.join(__dirname, '..', 'uploads', 'einvoice-qr');
     fs.mkdirSync(dir, { recursive: true });
-    const filename = `qr_${dcNumber}_${Date.now()}.png`;
+    const safeDc = String(dcNumber || 'dc').replace(/[^\w-]+/g, '_');
+    const filename = `qr_${safeDc}_${Date.now()}.png`;
     fs.writeFileSync(path.join(dir, filename), qrBuffer);
     qrCodeUrl = `/uploads/einvoice-qr/${filename}`;
   }

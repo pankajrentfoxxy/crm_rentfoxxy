@@ -890,11 +890,79 @@ async function searchAvailableInventory({
   return rows.map(mapInventorySerialRow);
 }
 
+// ---------------------------------------------------------------------------
+// GST / amount calculation (shared by SO/DC detail endpoints + PDF service).
+// Mirrors the ERP logic: GST applies to the goods subtotal only. Intra-state
+// (buyer state == seller state, Haryana) splits into CGST 9% + SGST 9%; inter-
+// state charges IGST 18%. Shipping and security are added after tax (untaxed).
+// ---------------------------------------------------------------------------
+const SELLER_STATE_CODE = '06'; // Rentfoxxy / Gorefurbo are registered in Haryana.
+const GST_RATE = 18;
+
+function isIntraState(supplyState, sellerStateCode = SELLER_STATE_CODE) {
+  const s = String(supplyState || '').trim().toLowerCase();
+  if (!s) return true; // Unknown buyer state -> assume intra (seller's own state).
+  return s === String(sellerStateCode).toLowerCase() || s === '06' || s.includes('haryana');
+}
+
+function computeGstBreakdown({
+  subtotal = 0, shipping = 0, security = 0, supplyState = '',
+  sellerStateCode = SELLER_STATE_CODE, gstRate = GST_RATE,
+} = {}) {
+  const sub = +Number(subtotal || 0).toFixed(2);
+  const ship = +Number(shipping || 0).toFixed(2);
+  const sec = +Number(security || 0).toFixed(2);
+  const gstTotal = +(sub * gstRate / 100).toFixed(2);
+  const intra = isIntraState(supplyState, sellerStateCode);
+  const half = +(gstTotal / 2).toFixed(2);
+  return {
+    subtotal: sub,
+    gst_rate: gstRate,
+    gst_type: intra ? 'intra' : 'inter',
+    cgst: intra ? half : 0,
+    sgst: intra ? +(gstTotal - half).toFixed(2) : 0,
+    igst: intra ? 0 : gstTotal,
+    gst_total: gstTotal,
+    shipping: ship,
+    security: sec,
+    grand_total: +(sub + gstTotal + ship + sec).toFixed(2),
+  };
+}
+
+// Build a per-config rate lookup from a sales order's lines, used to price a DC
+// (delivery_challan_lines has no rate column — the rate lives on the SO).
+async function getSalesOrderRateMap(salesOrderNumber) {
+  const r = await pool.query(
+    `SELECT brand, model_name, rate FROM sales_order_lines WHERE sales_order_number = $1`,
+    [salesOrderNumber]
+  );
+  const map = new Map();
+  for (const row of r.rows) {
+    const key = `${String(row.brand || '').trim().toLowerCase()}|${String(row.model_name || '').trim().toLowerCase()}`;
+    if (!map.has(key)) map.set(key, Number(row.rate || 0));
+  }
+  return { map, single: r.rows.length === 1 ? Number(r.rows[0].rate || 0) : null };
+}
+
+function rateForDcLine(line, rateMap) {
+  if (!rateMap) return 0;
+  const model = String(line.model_name || '').trim().toLowerCase();
+  const key = `${String(line.brand || '').trim().toLowerCase()}|${model}`;
+  if (rateMap.map.has(key)) return rateMap.map.get(key);
+  for (const [k, v] of rateMap.map) {
+    if (model && k.endsWith(`|${model}`)) return v;
+  }
+  return rateMap.single != null ? rateMap.single : 0;
+}
+
 module.exports = {
   nextDocumentNumber,
   nextFinancialYearNumber,
   peekFinancialYearNumber,
   currentFinancialYear,
+  computeGstBreakdown,
+  getSalesOrderRateMap,
+  rateForDcLine,
   entityForQuotationType,
   entityDocType,
   generateToken,

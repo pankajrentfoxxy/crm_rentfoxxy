@@ -72,7 +72,9 @@ export default function SalesOrderDetailPage() {
   const lines = data?.lines || [];
   const head = lines[0] || {};
   const summary = data?.summary || {};
+  const totals = data?.totals || {};
   const dcs = data?.delivery_challans || [];
+  const halfGst = (Number(totals.gst_rate) || 18) / 2;
   const isCancelled = String(data?.status || head.status || '').toLowerCase() === 'cancelled';
 
   const handleCancel = useCallback(async () => {
@@ -143,13 +145,25 @@ export default function SalesOrderDetailPage() {
             <p><span className="text-gray-500">Supply State:</span> {head.supply_state}</p>
             <p><span className="text-gray-500">Remarks:</span> {head.remarks || '—'}</p>
           </div>
-          <div className="bg-white border rounded-xl p-4 text-sm space-y-2">
-            <p>Total Order Value: <strong>{formatCurrency(summary.total_value)}</strong></p>
-            <p>Security Deposit: <strong>{formatCurrency(summary.security_amount)}</strong></p>
-            <p>Total Collected: <strong>{formatCurrency(summary.total_paid)}</strong></p>
-            <p className={summary.balance_due > 0 ? 'text-red-600 font-semibold' : 'text-emerald-700 font-semibold'}>
-              Balance Due: {formatCurrency(summary.balance_due)}
-            </p>
+          <div className="bg-white border rounded-xl p-4 text-sm space-y-1.5">
+            <div className="flex justify-between"><span className="text-gray-500">Subtotal</span><strong>{formatCurrency(totals.subtotal)}</strong></div>
+            {totals.gst_type === 'inter' ? (
+              <div className="flex justify-between"><span className="text-gray-500">IGST ({totals.gst_rate || 18}%)</span><strong>{formatCurrency(totals.igst)}</strong></div>
+            ) : (
+              <>
+                <div className="flex justify-between"><span className="text-gray-500">CGST ({halfGst}%)</span><strong>{formatCurrency(totals.cgst)}</strong></div>
+                <div className="flex justify-between"><span className="text-gray-500">SGST ({halfGst}%)</span><strong>{formatCurrency(totals.sgst)}</strong></div>
+              </>
+            )}
+            {Number(totals.shipping) > 0 && (
+              <div className="flex justify-between"><span className="text-gray-500">Shipping Charges</span><strong>{formatCurrency(totals.shipping)}</strong></div>
+            )}
+            <div className="flex justify-between"><span className="text-gray-500">Security Deposit</span><strong>{formatCurrency(totals.security ?? summary.security_amount)}</strong></div>
+            <div className="flex justify-between border-t pt-1.5 mt-1"><span className="font-semibold text-gray-900">Grand Total</span><strong>{formatCurrency(totals.grand_total)}</strong></div>
+            <div className="flex justify-between"><span className="text-gray-500">Total Collected</span><strong>{formatCurrency(summary.total_paid)}</strong></div>
+            <div className={`flex justify-between ${summary.balance_due > 0 ? 'text-red-600 font-semibold' : 'text-emerald-700 font-semibold'}`}>
+              <span>Balance Due</span><span>{formatCurrency(summary.balance_due)}</span>
+            </div>
           </div>
           <div className="lg:col-span-2 bg-white border rounded-xl overflow-hidden">
             <table className="w-full text-sm">

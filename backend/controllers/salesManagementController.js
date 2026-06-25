@@ -5,6 +5,9 @@ const {
   nextDocumentNumber,
   nextFinancialYearNumber,
   peekFinancialYearNumber,
+  computeGstBreakdown,
+  getSalesOrderRateMap,
+  rateForDcLine,
   entityForQuotationType,
   generateToken,
   listQuotationsGrouped,
@@ -783,7 +786,30 @@ exports.getDeliveryChallan = async (req, res) => {
       });
     }
 
-    res.json({ success: true, dc_number: req.params.dcNumber, lines });
+    // Price the DC from the linked SO (delivery_challan_lines has no rate column)
+    // and compute the GST breakdown so the UI/PDF can show accurate amounts.
+    const rateMapCache = new Map();
+    let subtotal = 0;
+    for (const line of lines) {
+      const son = line.sales_order_number;
+      if (son && !rateMapCache.has(son)) {
+        rateMapCache.set(son, await getSalesOrderRateMap(son));
+      }
+      const qty = Number(line.quantity || line.main_qty || 1) || 1;
+      const rate = son ? rateForDcLine(line, rateMapCache.get(son)) : 0;
+      line.rate = rate;
+      line.amount = +(rate * qty).toFixed(2);
+      subtotal += line.amount;
+    }
+    const head = lines[0];
+    const totals = computeGstBreakdown({
+      subtotal,
+      shipping: head.shiping_charges,
+      security: head.security_amount,
+      supplyState: head.supply_state,
+    });
+
+    res.json({ success: true, dc_number: req.params.dcNumber, lines, totals });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1784,10 +1810,19 @@ exports.getSoWithPayments = async (req, res) => {
        FROM delivery_challan_lines WHERE sales_order_number = $1 ORDER BY dc_number, id DESC`,
       [soNumber]
     );
-    const totalValue = lines.reduce(
-      (s, l) => s + Number(l.rate || 0) * Number(l.main_qty || l.quantity || 0), 0
-    );
+    let totalValue = 0;
+    lines.forEach((l) => {
+      const qty = Number(l.main_qty || l.quantity || 0) || 0;
+      l.amount = +(Number(l.rate || 0) * qty).toFixed(2);
+      totalValue += l.amount;
+    });
     const totalPaid = payRes.rows.reduce((s, p) => s + Number(p.amount || 0), 0);
+    const totals = computeGstBreakdown({
+      subtotal: totalValue,
+      shipping: lines[0].shiping_charges,
+      security: lines[0].security_amount,
+      supplyState: lines[0].supply_state,
+    });
     const soStatus = lines.every((l) => String(l.status).toLowerCase() === 'cancelled')
       ? 'cancelled'
       : (lines[0].status || 'pending');
@@ -1798,12 +1833,14 @@ exports.getSoWithPayments = async (req, res) => {
       lines,
       payments: payRes.rows,
       delivery_challans: dcRes.rows,
+      totals,
       summary: {
         total_value: totalValue,
         total_paid: totalPaid,
         balance_due: Math.max(0, totalValue - totalPaid),
         security_amount: Number(lines[0].security_amount || 0),
         status: soStatus,
+        ...totals,
       },
     });
   } catch (error) {

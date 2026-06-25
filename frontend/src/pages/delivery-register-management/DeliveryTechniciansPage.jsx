@@ -1,15 +1,23 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { LogIn, Mail, Pencil, Plus, RefreshCw, Trash2, User } from 'lucide-react';
+import { KeyRound, LogIn, Mail, Pencil, Plus, RefreshCw, Trash2, User, X } from 'lucide-react';
 import { useCanLoginAsTechnician } from '../../hooks/useCanLoginAsTechnician';
 import { getBackendOrigin } from '../../utils/api';
 import {
+  changeDeliveryTechnicianPassword,
   deleteDeliveryTechnician,
   fetchDeliveryTechnicians,
   loginAsTechnician,
   updateDeliveryTechnicianStatus,
 } from '../../utils/deliveryRegisterApi';
+
+function generatePassword(length = 10) {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  let out = '';
+  for (let i = 0; i < length; i += 1) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+}
 
 const PAGE_SIZE = 25;
 
@@ -29,6 +37,11 @@ export default function DeliveryTechniciansPage() {
   const [success, setSuccess] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
+  const [passwordTarget, setPasswordTarget] = useState(null);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [savingPassword, setSavingPassword] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -79,6 +92,44 @@ export default function DeliveryTechniciansPage() {
       toast.error(msg);
     } finally {
       setImpersonatingId(null);
+    }
+  };
+
+  const openPasswordModal = (row) => {
+    setPasswordTarget(row);
+    setNewPassword('');
+    setConfirmPassword('');
+    setShowPassword(false);
+  };
+
+  const closePasswordModal = () => {
+    setPasswordTarget(null);
+    setNewPassword('');
+    setConfirmPassword('');
+    setSavingPassword(false);
+  };
+
+  const handleChangePassword = async (e) => {
+    e.preventDefault();
+    if (newPassword.length < 8) {
+      toast.error('Password must be at least 8 characters');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast.error('Passwords do not match');
+      return;
+    }
+    setSavingPassword(true);
+    try {
+      await changeDeliveryTechnicianPassword(passwordTarget.technician_id, {
+        password: newPassword,
+        confirm_password: confirmPassword,
+      });
+      toast.success('Password changed successfully');
+      closePasswordModal();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to change password');
+      setSavingPassword(false);
     }
   };
 
@@ -218,6 +269,14 @@ export default function DeliveryTechniciansPage() {
                         </Link>
                         <button
                           type="button"
+                          onClick={() => openPasswordModal(row)}
+                          className="inline-flex items-center justify-center w-8 h-8 border border-amber-500 text-amber-600 rounded hover:bg-amber-50"
+                          title="Change Password"
+                        >
+                          <KeyRound className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => handleDelete(row)}
                           className="inline-flex items-center justify-center w-8 h-8 border border-red-400 text-red-600 rounded hover:bg-red-50"
                           title="Delete"
@@ -268,6 +327,98 @@ export default function DeliveryTechniciansPage() {
           </div>
         </div>
       </div>
+
+      {passwordTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/40"
+            onClick={closePasswordModal}
+            aria-label="Close"
+          />
+          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <button
+              type="button"
+              onClick={closePasswordModal}
+              className="absolute top-3 right-3 text-gray-400 hover:text-gray-600"
+              aria-label="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+              <KeyRound className="w-5 h-5 text-amber-600" />
+              Change Password
+            </h2>
+            <p className="text-sm text-gray-500 mt-1">
+              {[passwordTarget.first_name, passwordTarget.last_name].filter(Boolean).join(' ')}
+              {passwordTarget.email ? ` · ${passwordTarget.email}` : ''}
+            </p>
+
+            <form onSubmit={handleChangePassword} className="mt-4 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">New Password</label>
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="w-full border rounded-lg px-3 py-2 text-sm"
+                  placeholder="Minimum 8 characters"
+                  autoComplete="new-password"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Confirm Password</label>
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  className="w-full border rounded-lg px-3 py-2 text-sm"
+                  placeholder="Re-enter password"
+                  autoComplete="new-password"
+                />
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <label className="inline-flex items-center gap-2 text-gray-600">
+                  <input
+                    type="checkbox"
+                    checked={showPassword}
+                    onChange={(e) => setShowPassword(e.target.checked)}
+                  />
+                  Show password
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const pwd = generatePassword();
+                    setNewPassword(pwd);
+                    setConfirmPassword(pwd);
+                    setShowPassword(true);
+                  }}
+                  className="text-teal-700 font-medium hover:underline"
+                >
+                  Generate
+                </button>
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={closePasswordModal}
+                  className="px-4 py-2 border rounded-lg text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingPassword}
+                  className="px-4 py-2 bg-teal-700 text-white rounded-lg text-sm hover:bg-teal-800 disabled:opacity-50"
+                >
+                  {savingPassword ? 'Saving...' : 'Change Password'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

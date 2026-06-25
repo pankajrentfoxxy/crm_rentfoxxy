@@ -20,6 +20,7 @@ router.post('/technicians/login-as', edit, ctrl.loginAsTechnician);
 router.post('/technicians/status', edit, ctrl.updateTechnicianStatus);
 router.get('/technicians/:id', view, ctrl.getTechnician);
 router.patch('/technicians/:id', edit, ctrl.updateTechnician);
+router.post('/technicians/:id/password', edit, ctrl.changeTechnicianPassword);
 router.delete('/technicians/:id', del, ctrl.deleteTechnician);
 router.get('/:status', view, ctrl.listByStatus);
 router.post('/change-delivery-person', edit, ctrl.changeDeliveryPerson);

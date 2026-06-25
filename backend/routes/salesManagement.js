@@ -16,7 +16,10 @@ const podStorage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     const ext = path.extname(file.originalname) || '.jpg';
-    cb(null, `pod_${req.params.dcNumber}_${Date.now()}${ext}`);
+    // DC numbers contain slashes (DC/26-27/0779) — sanitize so we don't create
+    // phantom sub-directories / ENOENT when writing the file.
+    const safeDc = String(req.params.dcNumber || 'dc').replace(/[^\w-]+/g, '_');
+    cb(null, `pod_${safeDc}_${Date.now()}${ext}`);
   },
 });
 const uploadPod = multer({

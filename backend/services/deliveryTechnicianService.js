@@ -279,6 +279,21 @@ async function updateTechnician(id, body, files = {}) {
   return { ok: true, data: formatTechnician(r.rows[0]) };
 }
 
+async function changeTechnicianPassword(id, newPassword) {
+  const password = String(newPassword || '');
+  if (password.length < 8) {
+    return { ok: false, message: 'Password must be at least 8 characters' };
+  }
+  const passwordHash = await bcrypt.hash(password, 10);
+  const r = await pool.query(
+    `UPDATE delivery_technicians SET password_hash = $1, updated_at = NOW()
+     WHERE technician_id = $2 RETURNING *`,
+    [passwordHash, id]
+  );
+  if (!r.rows.length) return { ok: false, message: 'Technician not found', status: 404 };
+  return { ok: true, data: formatTechnician(r.rows[0]) };
+}
+
 async function updateTechnicianStatus(id, status) {
   const isActive = status === 1 || status === '1' || status === true;
   const r = await pool.query(
@@ -361,6 +376,7 @@ module.exports = {
   getTechnicianById,
   createTechnician,
   updateTechnician,
+  changeTechnicianPassword,
   updateTechnicianStatus,
   deleteTechnician,
   ensureLinkedDeliveryTechnician,
