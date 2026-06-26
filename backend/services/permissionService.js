@@ -70,7 +70,7 @@ async function getUserRole(userId) {
 
 async function getRolePermissionRow(role, section) {
   const result = await pool.query(
-    `SELECT can_view, can_create, can_edit, can_delete
+    `SELECT can_view, can_create, can_edit, can_delete, data_scope
      FROM role_permissions
      WHERE role = $1 AND section = $2`,
     [role, section]
@@ -80,7 +80,7 @@ async function getRolePermissionRow(role, section) {
 
 async function getUserPermissionRow(userId, section) {
   const result = await pool.query(
-    `SELECT can_view, can_create, can_edit, can_delete
+    `SELECT can_view, can_create, can_edit, can_delete, data_scope
      FROM user_permissions
      WHERE user_id = $1 AND section = $2`,
     [userId, section]
@@ -122,7 +122,7 @@ async function hasPermission(userId, role, section, action, cache) {
 
 async function listRolePermissions(role) {
   const result = await pool.query(
-    `SELECT role, section, can_view, can_create, can_edit, can_delete
+    `SELECT role, section, can_view, can_create, can_edit, can_delete, data_scope
      FROM role_permissions
      WHERE role = $1
      ORDER BY section ASC`,
@@ -133,7 +133,7 @@ async function listRolePermissions(role) {
 
 async function listAllRolePermissions() {
   const result = await pool.query(
-    `SELECT role, section, can_view, can_create, can_edit, can_delete
+    `SELECT role, section, can_view, can_create, can_edit, can_delete, data_scope
      FROM role_permissions
      ORDER BY role ASC, section ASC`
   );
@@ -142,7 +142,8 @@ async function listAllRolePermissions() {
 
 async function listUserPermissionOverrides(userId) {
   const result = await pool.query(
-    `SELECT id, user_id, section, can_view, can_create, can_edit, can_delete, granted_by, granted_at
+    `SELECT id, user_id, section, can_view, can_create, can_edit, can_delete,
+            data_scope, granted_by, granted_at
      FROM user_permissions
      WHERE user_id = $1
      ORDER BY section ASC`,
@@ -184,6 +185,11 @@ async function buildUserPermissionsPayload(userId) {
         effective[section][action] = roleMap[section]?.[action] === true;
       }
     }
+    const userScope = userMap[section]?.data_scope;
+    const roleScope = roleMap[section]?.data_scope;
+    effective[section].data_scope = userScope === 'all' || userScope === 'assigned'
+      ? userScope
+      : (roleScope === 'assigned' ? 'assigned' : 'all');
   }
 
   return {
@@ -198,19 +204,21 @@ async function buildUserPermissionsPayload(userId) {
 async function upsertRolePermissions(role, permissions) {
   const results = [];
   for (const perm of permissions) {
-    const { section, can_view, can_create, can_edit, can_delete } = perm;
+    const { section, can_view, can_create, can_edit, can_delete, data_scope } = perm;
     if (!section) continue;
+    const scope = data_scope === 'assigned' ? 'assigned' : 'all';
     const result = await pool.query(
-      `INSERT INTO role_permissions (role, section, can_view, can_create, can_edit, can_delete)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO role_permissions (role, section, can_view, can_create, can_edit, can_delete, data_scope)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (role, section)
        DO UPDATE SET
          can_view = EXCLUDED.can_view,
          can_create = EXCLUDED.can_create,
          can_edit = EXCLUDED.can_edit,
-         can_delete = EXCLUDED.can_delete
-       RETURNING role, section, can_view, can_create, can_edit, can_delete`,
-      [role, section, !!can_view, !!can_create, !!can_edit, !!can_delete]
+         can_delete = EXCLUDED.can_delete,
+         data_scope = EXCLUDED.data_scope
+       RETURNING role, section, can_view, can_create, can_edit, can_delete, data_scope`,
+      [role, section, !!can_view, !!can_create, !!can_edit, !!can_delete, scope]
     );
     results.push(result.rows[0]);
   }
@@ -220,21 +228,25 @@ async function upsertRolePermissions(role, permissions) {
 async function upsertUserPermissions(userId, permissions, grantedBy) {
   const results = [];
   for (const perm of permissions) {
-    const { section, can_view, can_create, can_edit, can_delete } = perm;
+    const { section, can_view, can_create, can_edit, can_delete, data_scope } = perm;
     if (!section) continue;
+    const scope = data_scope === 'all' || data_scope === 'assigned' ? data_scope : null;
     const result = await pool.query(
-      `INSERT INTO user_permissions (user_id, section, can_view, can_create, can_edit, can_delete, granted_by, granted_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+      `INSERT INTO user_permissions
+        (user_id, section, can_view, can_create, can_edit, can_delete, data_scope, granted_by, granted_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
        ON CONFLICT (user_id, section)
        DO UPDATE SET
          can_view = EXCLUDED.can_view,
          can_create = EXCLUDED.can_create,
          can_edit = EXCLUDED.can_edit,
          can_delete = EXCLUDED.can_delete,
+         data_scope = EXCLUDED.data_scope,
          granted_by = EXCLUDED.granted_by,
          granted_at = NOW()
-       RETURNING id, user_id, section, can_view, can_create, can_edit, can_delete, granted_by, granted_at`,
-      [userId, section, can_view ?? null, can_create ?? null, can_edit ?? null, can_delete ?? null, grantedBy]
+       RETURNING id, user_id, section, can_view, can_create, can_edit, can_delete, data_scope,
+                 granted_by, granted_at`,
+      [userId, section, can_view ?? null, can_create ?? null, can_edit ?? null, can_delete ?? null, scope, grantedBy]
     );
     results.push(result.rows[0]);
   }
@@ -251,6 +263,7 @@ async function buildEffectivePermissionsForUser(userId, role) {
         can_create: true,
         can_edit: true,
         can_delete: true,
+        data_scope: 'all',
       };
     }
     return effective;
@@ -273,6 +286,8 @@ module.exports = {
   normalizeAction,
   getPermissionSections,
   getUserRole,
+  getRolePermissionRow,
+  getUserPermissionRow,
   getEffectivePermission,
   hasPermission,
   listRolePermissions,

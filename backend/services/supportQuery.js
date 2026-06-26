@@ -1,5 +1,6 @@
 const pool = require('../config/db');
-const { isSupportLead, isSupportTechnician } = require('../middleware/supportAccess');
+const { isSupportLead } = require('../middleware/supportAccess');
+const { appendSupportAssignedFilter, scopeUserId } = require('./dataScopeService');
 
 const DEFAULT_OVERDUE_HOURS = 48;
 
@@ -70,11 +71,11 @@ const attachItems = async (tickets) => {
     }));
 };
 
-const applyViewFilter = (view, params, user, overdueHours) => {
+const applyViewFilter = (view, params, user, overdueHours, { assignedOnly = false } = {}) => {
     let extra = '';
-    if (isSupportTechnician(user) && !isSupportLead(user)) {
-        params.push(user.user_id);
-        extra += ` AND EXISTS (SELECT 1 FROM support_ticket_items sti WHERE sti.ticket_id = t.id AND sti.assigned_to = $${params.length})`;
+    const userId = scopeUserId(user);
+    if (assignedOnly && userId) {
+        extra += appendSupportAssignedFilter(userId, params);
     }
     switch (view) {
         case 'pending_assign':
@@ -120,11 +121,11 @@ const applyViewFilter = (view, params, user, overdueHours) => {
     return extra;
 };
 
-const listTicketsEnriched = async ({ user, view = 'active', search = '', type = '', limit = 50, offset = 0, closedDays = 30 }) => {
+const listTicketsEnriched = async ({ user, view = 'active', search = '', type = '', limit = 50, offset = 0, closedDays = 30, assignedOnly = false }) => {
     const settings = await getSettings();
     const params = [];
     let where = 'WHERE 1=1';
-    where += applyViewFilter(view, params, user, settings.overdue_threshold_hours);
+    where += applyViewFilter(view, params, user, settings.overdue_threshold_hours, { assignedOnly });
 
     if (search) {
         params.push(`%${search}%`);

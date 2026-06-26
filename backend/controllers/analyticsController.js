@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { isRestrictedToAssigned } = require('../services/dataScopeService');
 
 // Get Dashboard Statistics
 exports.getDashboardStats = async (req, res) => {
@@ -329,14 +330,15 @@ exports.getManagerDashboard = async (req, res) => {
 exports.getSalesDashboard = async (req, res) => {
   try {
     const userId = req.user.user_id;
-    const isSalesOnly = req.user.role === 'sales';
-    const leadFilter = isSalesOnly ? 'AND l.assigned_user_id = $1' : '';
-    const leadParams = isSalesOnly ? [userId] : [];
+    const assignedOnly = await isRestrictedToAssigned(req, 'leads')
+      || await isRestrictedToAssigned(req, 'follow_ups');
+    const leadFilter = assignedOnly ? 'AND l.assigned_user_id = $1' : '';
+    const leadParams = assignedOnly ? [userId] : [];
 
-    const quotFilter = isSalesOnly
+    const quotFilter = assignedOnly
       ? `AND (sq.created_by = $1 OR l.assigned_user_id = $1)`
       : '';
-    const quotParams = isSalesOnly ? [userId] : [];
+    const quotParams = assignedOnly ? [userId] : [];
 
     const [
       leadsStatusRes,

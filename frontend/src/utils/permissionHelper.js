@@ -137,3 +137,20 @@ export function canViewParentModule(user, effectivePermissions, parentSection) {
     canViewSection(user, effectivePermissions, child)
   );
 }
+
+export function getDataScope(user, effectivePermissions, section) {
+  if (!user) return 'all';
+  if (user.role === 'super_admin') return 'all';
+  if (!effectivePermissions || !Object.keys(effectivePermissions).length) {
+    return 'all';
+  }
+  for (const key of sectionsToCheck(section)) {
+    const scope = effectivePermissions?.[key]?.data_scope;
+    if (scope === 'assigned') return 'assigned';
+  }
+  return 'all';
+}
+
+export function isAssignedDataOnly(user, effectivePermissions, section) {
+  return getDataScope(user, effectivePermissions, section) === 'assigned';
+}

@@ -29,6 +29,7 @@ const { createSalesOrderQcTicket } = require('../services/grnTicketService');
 const { logTtsplEvent } = require('../services/ttsplAuditService');
 const inventorySM = require('../services/inventoryStateMachine');
 const { regenerateReturnDcPdf } = require('../services/returnDcPdfService');
+const { isRestrictedToAssigned, scopeUserId } = require('../services/dataScopeService');
 
 /**
  * Resolve a vendor_serial_numbers.serial_id from a parsed DC serial entry,
@@ -443,10 +444,13 @@ exports.getAddSalesOrderMeta = async (req, res) => {
 
 exports.listSalesOrders = async (req, res) => {
   try {
+    const assignedOnly = await isRestrictedToAssigned(req, 'sales_orders');
+    const assignedUserId = assignedOnly ? scopeUserId(req.user) : null;
     const data = await listSalesOrdersGrouped({
       page: parseInt(req.query.page, 10) || 1,
       limit: Math.min(parseInt(req.query.limit, 10) || 20, 100),
       search: req.query.search || '',
+      assignedUserId,
     });
     res.json({ success: true, ...data });
   } catch (error) {
@@ -717,11 +721,15 @@ exports.getAddDeliveryChallanMeta = async (req, res) => {
 
 exports.listDeliveryChallans = async (req, res) => {
   try {
+    const assignedOnly = await isRestrictedToAssigned(req, 'dispatch')
+      || await isRestrictedToAssigned(req, 'delivery_challans');
+    const assignedUserId = assignedOnly ? scopeUserId(req.user) : null;
     const data = await listDeliveryChallansGrouped({
       page: parseInt(req.query.page, 10) || 1,
       limit: Math.min(parseInt(req.query.limit, 10) || 20, 100),
       search: req.query.search || '',
       status: req.query.status || '',
+      assignedUserId,
     });
     res.json({ success: true, ...data });
   } catch (error) {

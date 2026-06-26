@@ -186,7 +186,8 @@ export default function UserPermissionsPage() {
 
         <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
           Permissions start from the user&apos;s role defaults. Checkboxes show the effective access;
-          sections marked <strong>Modified</strong> differ from their role. Saving stores only user-specific overrides.
+          sections marked <strong>Modified</strong> differ from their role. Use <strong>Data Scope</strong> to
+          limit each module to all records or assigned records only. Saving stores only user-specific overrides.
         </div>
 
         <div className="flex flex-col sm:flex-row gap-4 mb-6">
@@ -283,6 +284,7 @@ export default function UserPermissionsPage() {
             matrix={matrix}
             baselineMatrix={roleDefaultsMatrix}
             onChange={(section, values) => updateSection(section, values)}
+            showDataScope
           />
         ) : null}
 

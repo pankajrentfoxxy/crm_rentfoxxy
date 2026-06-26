@@ -56,6 +56,9 @@ const phase2 = require('../controllers/ticketPhase2Controller');
 const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
 const ftView = checkSectionPermission('floor_tickets', 'view');
 const ftEdit = checkSectionPermission('floor_tickets', 'edit');
+const floorPipelineView = checkSectionPermission('floor_pipeline', 'view');
+const { checkAnySectionPermission } = require('../middleware/checkPermission');
+const floorQueueView = checkAnySectionPermission(['floor_pipeline', 'floor_tickets'], 'view');
 const ttsplHistoryView = checkSectionPermission('ttspl_history', 'view');
 
 // All routes require authentication
@@ -91,10 +94,10 @@ router.get('/qc/qc2-assignees', qcController.getQC2Assignees);
 
 // Phase 2 — floor pipeline (must be before /:id)
 router.get('/floor-counts', getFloorNavCounts);
-router.get('/floor-dashboard', phase2.getFloorDashboard);
+router.get('/floor-dashboard', floorPipelineView, phase2.getFloorDashboard);
 router.get(
   '/floor-manager-queue',
-  ftView,
+  floorQueueView,
   getFloorManagerQueue
 );
 router.get('/team-members', getTeamMembers);

@@ -55,7 +55,7 @@ function fmtElapsed(ms) {
 export default function TicketDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, isAssignedDataOnly } = useAuth();
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState(null);
   const [tab, setTab] = useState('overview');
@@ -122,7 +122,11 @@ export default function TicketDetailPage() {
   }, [load, loadActiveLog]);
   useAutoRefresh(refresh);
 
-  const privileged = isFloorManagerRole(user?.role) || ['admin', 'manager'].includes(user?.role);
+  const assignedOnlyScope = isAssignedDataOnly('floor_tickets')
+    || isAssignedDataOnly('floor_pipeline')
+    || isAssignedDataOnly('tickets');
+  const privileged = !assignedOnlyScope
+    && (isFloorManagerRole(user?.role) || ['admin', 'manager'].includes(user?.role));
 
   const reloadTicketHistory = useCallback(async (ttsplId) => {
     if (!ttsplId) return;

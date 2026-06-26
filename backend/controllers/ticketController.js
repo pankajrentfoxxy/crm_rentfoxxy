@@ -7,6 +7,12 @@ const {
 } = require('../services/ticketWorkLogService');
 const { applyGrnVendorQcPassOnTicketComplete } = require('../services/grnTicketService');
 const ttsplAuditService = require('../services/ttsplAuditService');
+const {
+  resolveTicketListScope,
+  buildTicketListAssignmentClause,
+  canAccessTicketRecord,
+  isRestrictedToAssignedAny,
+} = require('../services/dataScopeService');
 
 // Replace legacy "user/team/stage ID: N" tokens in activity notes with names.
 // New activity logs already store names; this keeps historical entries readable.
@@ -221,58 +227,23 @@ exports.getTickets = async (req, res) => {
       paramCount++;
     }
 
-    // Role-based visibility: Admin/Floor Manager/Manager see all.
-    // QC users can also see unassigned tickets in their QC team bucket.
-    const privilegedRoles = ['admin', 'floor_manager', 'manager'];
-    const userTeamIds = (req.user.team_ids && req.user.team_ids.length > 0
-      ? req.user.team_ids
-      : (req.user.team_id != null ? [req.user.team_id] : []))
-      .map((v) => Number(v))
-      .filter((v) => Number.isInteger(v) && v > 0);
-
-    if (req.user.role === 'qc' && !privilegedRoles.includes(req.user.role)) {
+    if (req.user.role === 'qc') {
       query += ` AND s.stage_name IN ('QC1', 'QC2', 'Dispatch QC')`;
     }
 
-    // Dispatch QC role: only ever sees the Dispatch QC stage.
-    if (req.user.role === 'dispatch_qc' && !privilegedRoles.includes(req.user.role)) {
+    if (req.user.role === 'dispatch_qc') {
       query += ` AND s.stage_name = 'Dispatch QC'`;
     }
 
-    if (!privilegedRoles.includes(req.user.role)) {
-      if (view === 'completed') {
-        query += ` AND (t.assigned_user_id = $${paramCount} OR EXISTS (
-          SELECT 1 FROM activities a WHERE a.ticket_id = t.ticket_id AND a.user_id = $${paramCount}
-          AND a.action IN ('stage_changed','stage_jumped')
-        ))`;
-        params.push(req.user.user_id);
-        paramCount++;
-      } else if (req.user.role === 'dispatch_qc') {
-        // Dispatch QC sees ALL tickets currently in the Dispatch QC stage
-        // (stage already restricted above) — no per-user assignment filter.
-      } else {
-        if (req.user.role === 'qc' && userTeamIds.length > 0) {
-          // QC queue: include tickets assigned to me OR currently unassigned in my QC team bucket.
-          query += ` AND (
-            t.assigned_user_id = $${paramCount}
-            OR (t.assigned_user_id IS NULL AND t.assigned_team_id = ANY($${paramCount + 1}::int[]))
-          )`;
-          params.push(req.user.user_id, userTeamIds);
-          paramCount += 2;
-        } else {
-          // Other non-privileged users: only tickets assigned to them.
-          query += ` AND t.assigned_user_id IS NOT NULL AND t.assigned_user_id = $${paramCount}`;
-          params.push(req.user.user_id);
-          paramCount++;
-        }
-      }
-    } else {
-      // Admins/Floor Managers: can filter by team_id if provided
-      if (team_id) {
-        query += ` AND t.assigned_team_id = $${paramCount}`;
-        params.push(team_id);
-        paramCount++;
-      }
+    const ticketScope = await resolveTicketListScope(req);
+    const assignmentFilter = buildTicketListAssignmentClause(ticketScope, paramCount, params);
+    query += assignmentFilter.clause;
+    paramCount = assignmentFilter.paramCount;
+
+    if (ticketScope.mode === 'all' && team_id) {
+      query += ` AND t.assigned_team_id = $${paramCount}`;
+      params.push(team_id);
+      paramCount++;
     }
 
     if (priority) {
@@ -488,31 +459,12 @@ exports.getTicketById = async (req, res) => {
 
     const ticket = result.rows[0];
 
-    // Team members can only view tickets assigned to them.
-    // QC users can additionally open unassigned tickets in their QC team bucket.
-    const privilegedRoles = ['admin', 'floor_manager', 'manager'];
-    if (!privilegedRoles.includes(req.user.role)) {
-      const assignedToMe = Number(ticket.assigned_user_id) === Number(req.user.user_id);
-      const userTeamIds = (req.user.team_ids && req.user.team_ids.length > 0
-        ? req.user.team_ids
-        : (req.user.team_id != null ? [req.user.team_id] : []))
-        .map((v) => Number(v))
-        .filter((v) => Number.isInteger(v) && v > 0);
-      const qcStage = ['QC1', 'QC2', 'Dispatch QC'].includes(ticket.stage_name);
-      const inMyQcBucket = req.user.role === 'qc'
-        && qcStage
-        && ticket.assigned_user_id == null
-        && userTeamIds.includes(Number(ticket.assigned_team_id));
-      // Dispatch QC role can open any ticket currently in the Dispatch QC stage.
-      const dispatchQcAccess = req.user.role === 'dispatch_qc'
-        && ticket.stage_name === 'Dispatch QC';
-
-      if (!assignedToMe && !inMyQcBucket && !dispatchQcAccess) {
-        return res.status(403).json({
-          success: false,
-          message: 'Access denied: you can only view tickets assigned to you'
-        });
-      }
+    const allowed = await canAccessTicketRecord(req, ticket);
+    if (!allowed) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied: you can only view tickets assigned to you'
+      });
     }
 
     // Get activities
@@ -1702,9 +1654,6 @@ exports.bulkMoveTickets = async (req, res) => {
 
 /** GET /api/tickets/floor-manager-queue */
 exports.getFloorManagerQueue = async (req, res) => {
-  if (!['admin', 'manager', 'floor_manager'].includes(req.user.role)) {
-    return res.status(403).json({ success: false, message: 'Floor manager access required' });
-  }
   try {
     const { search } = req.query;
     const params = [];
@@ -1724,6 +1673,11 @@ exports.getFloorManagerQueue = async (req, res) => {
        LEFT JOIN users u ON u.user_id = t.assigned_user_id
        WHERE s.stage_name = 'Floor Manager'
          AND t.status NOT IN ('completed', 'qc_failed_return_vendor', 'cancelled')`;
+
+    const ticketScope = await resolveTicketListScope(req);
+    const assignmentFilter = buildTicketListAssignmentClause(ticketScope, paramCount, params);
+    query += assignmentFilter.clause;
+    paramCount = assignmentFilter.paramCount;
 
     if (search) {
       query += ` AND (

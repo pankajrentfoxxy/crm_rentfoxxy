@@ -270,7 +270,7 @@ async function getQuotationLines(quotationNumber) {
   return result.rows;
 }
 
-async function listSalesOrdersGrouped({ page = 1, limit = 20, search = '' }) {
+async function listSalesOrdersGrouped({ page = 1, limit = 20, search = '', assignedUserId = null }) {
   const hasEntityCode = await tableColumnExists('sales_order_lines', 'entity_code');
   const entitySelect = hasEntityCode ? 'entity_code' : `'rentfoxxy' AS entity_code`;
   const params = [];
@@ -278,6 +278,10 @@ async function listSalesOrdersGrouped({ page = 1, limit = 20, search = '' }) {
   if (search) {
     params.push(`%${search}%`);
     where = `WHERE sales_order_number ILIKE $1 OR customer_name ILIKE $1 OR gst_number ILIKE $1`;
+  }
+  if (assignedUserId) {
+    params.push(assignedUserId);
+    where += where ? ` AND created_by = $${params.length}` : `WHERE created_by = $${params.length}`;
   }
   const countResult = await pool.query(
     `SELECT COUNT(DISTINCT sales_order_number)::int AS total FROM sales_order_lines ${where}`,
@@ -357,13 +361,17 @@ async function getDcQcStatusSummaries(dcNumbers) {
   return out;
 }
 
-async function listDeliveryChallansGrouped({ page = 1, limit = 20, search = '', status = '' }) {
+async function listDeliveryChallansGrouped({ page = 1, limit = 20, search = '', status = '', assignedUserId = null }) {
   const params = [];
   const baseFilter = `COALESCE(d.movement_type, 'outbound') = 'outbound'`;
   let where = `WHERE ${baseFilter}`;
   if (search) {
     params.push(`%${search}%`);
     where += ` AND (d.dc_number ILIKE $${params.length} OR d.sales_order_number ILIKE $${params.length} OR d.customer_name ILIKE $${params.length} OR d.gst_number ILIKE $${params.length})`;
+  }
+  if (assignedUserId) {
+    params.push(assignedUserId);
+    where += ` AND d.delivery_person_id = $${params.length}`;
   }
   if (status === 'pending') {
     where += ` AND (d.status IS NULL OR d.status = 'pending')`;

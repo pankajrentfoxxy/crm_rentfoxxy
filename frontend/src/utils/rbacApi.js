@@ -96,7 +96,13 @@ export async function resetUserPermissions(userId) {
 }
 
 export function emptyPermissionRow() {
-  return { can_view: false, can_create: false, can_edit: false, can_delete: false };
+  return {
+    can_view: false,
+    can_create: false,
+    can_edit: false,
+    can_delete: false,
+    data_scope: 'all',
+  };
 }
 
 export function permissionsArrayToMatrix(permissions, sections = RBAC_SECTIONS) {
@@ -111,6 +117,7 @@ export function permissionsArrayToMatrix(permissions, sections = RBAC_SECTIONS) 
       can_create: !!row.can_create,
       can_edit: !!row.can_edit,
       can_delete: !!row.can_delete,
+      data_scope: row.data_scope === 'assigned' ? 'assigned' : 'all',
     };
   });
   return matrix;
@@ -123,6 +130,7 @@ export function matrixToPermissionsArray(matrix) {
     can_create: !!values.can_create,
     can_edit: !!values.can_edit,
     can_delete: !!values.can_delete,
+    data_scope: values.data_scope === 'assigned' ? 'assigned' : 'all',
   }));
 }
 
@@ -145,12 +153,14 @@ export function buildOverrideMatrix(rolePermissions, userPermissions, sections =
       can_create: !!roleMap[section]?.can_create,
       can_edit: !!roleMap[section]?.can_edit,
       can_delete: !!roleMap[section]?.can_delete,
+      data_scope: roleMap[section]?.data_scope === 'assigned' ? 'assigned' : 'all',
     };
     overrides[section] = {
       can_view: userMap[section]?.can_view ?? null,
       can_create: userMap[section]?.can_create ?? null,
       can_edit: userMap[section]?.can_edit ?? null,
       can_delete: userMap[section]?.can_delete ?? null,
+      data_scope: userMap[section]?.data_scope ?? null,
     };
   });
 
@@ -175,6 +185,7 @@ export function effectiveObjectToMatrix(effective, sections = RBAC_SECTIONS) {
       can_create: !!row.can_create,
       can_edit: !!row.can_edit,
       can_delete: !!row.can_delete,
+      data_scope: row.data_scope === 'assigned' ? 'assigned' : 'all',
     };
   });
   return matrix;
@@ -185,14 +196,16 @@ export function matrixDiffToOverridePayload(matrix, roleDefaultsMatrix) {
   return Object.entries(matrix)
     .map(([section, values]) => {
       const role = roleDefaultsMatrix[section] || emptyPermissionRow();
-      const differs = RBAC_ACTIONS.some((action) => !!values[action] !== !!role[action]);
-      if (!differs) return null;
+      const permDiffers = RBAC_ACTIONS.some((action) => !!values[action] !== !!role[action]);
+      const scopeDiffers = (values.data_scope || 'all') !== (role.data_scope || 'all');
+      if (!permDiffers && !scopeDiffers) return null;
       return {
         section,
         can_view: !!values.can_view,
         can_create: !!values.can_create,
         can_edit: !!values.can_edit,
         can_delete: !!values.can_delete,
+        data_scope: values.data_scope === 'assigned' ? 'assigned' : 'all',
       };
     })
     .filter(Boolean);
@@ -204,6 +217,9 @@ export function countMatrixChanges(matrix, baseline) {
     RBAC_ACTIONS.forEach((action) => {
       if (!!matrix[section]?.[action] !== !!baseline[section]?.[action]) n += 1;
     });
+    if ((matrix[section]?.data_scope || 'all') !== (baseline[section]?.data_scope || 'all')) {
+      n += 1;
+    }
   });
   return n;
 }

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useContext, useCallback, useMemo } from 'react';
 import api from '../utils/api';
-import { hasPermission as checkPermission } from '../utils/permissionHelper';
+import { hasPermission as checkPermission, isAssignedDataOnly as checkAssignedScope } from '../utils/permissionHelper';
 
 export const AuthContext = React.createContext();
 
@@ -55,6 +55,11 @@ export function AuthProvider({ children }) {
     [user, effectivePermissions]
   );
 
+  const isAssignedDataOnly = useCallback(
+    (section) => checkAssignedScope(user, effectivePermissions, section),
+    [user, effectivePermissions]
+  );
+
   const value = useMemo(
     () => ({
       user,
@@ -64,9 +69,10 @@ export function AuthProvider({ children }) {
       isAuthenticated: !!user,
       effectivePermissions,
       hasPermission,
+      isAssignedDataOnly,
       refreshPermissions,
     }),
-    [user, loading, effectivePermissions, hasPermission, refreshPermissions]
+    [user, loading, effectivePermissions, hasPermission, isAssignedDataOnly, refreshPermissions]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

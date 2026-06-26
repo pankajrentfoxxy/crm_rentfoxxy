@@ -5,6 +5,7 @@ const prisma = require('../prisma/client');
 const pool = require('../config/db');
 const { ensureResearch } = require('../services/leadResearchService');
 const { getNextAutoAssignee, updateAutoAssignConfig } = require('../services/leadAutoAssignService');
+const { isRestrictedToAssignedAny } = require('../services/dataScopeService');
 
 const { STATUSES_WITHOUT_STAGE_CHOICE, STAGES_BY_STATUS, stagesForStatus } = require('../constants/leadStages');
 
@@ -102,7 +103,7 @@ const csvEscape = (value) => {
 };
 
 /** Shared Prisma where for list + CSV export */
-function buildPrismaWhereForLeads(req) {
+function buildPrismaWhereForLeads(req, { assignedOnly = false } = {}) {
   const { status, assigned_to, source, date_from, date_to, search, include_duplicates } = req.query;
   const andConditions = [];
 
@@ -128,11 +129,9 @@ function buildPrismaWhereForLeads(req) {
     }
   }
 
-  if (isSalesLeadOperator(req.user)) {
+  if (assignedOnly) {
     const uid = currentUserId(req.user);
     if (uid != null) {
-      // Primary: assigned queue. Fallback: created by this user but assignee
-      // column missing (legacy / Prisma client drift on assigned_user_id).
       andConditions.push({
         OR: [
           { assignedUserId: uid },
@@ -194,17 +193,19 @@ const getDomainFromEmail = (email) => {
   if (!normalized || !normalized.includes('@')) return null;
   return normalized.split('@')[1] || null;
 };
-const canEditLead = (user, lead) => {
+async function leadsAssignedOnly(req) {
+  return isRestrictedToAssignedAny(req, ['leads', 'follow_ups', 'lead_orders']);
+}
+
+const canEditLead = (user, lead, { assignedOnly = false } = {}) => {
   if (!user || !lead) return false;
-  if (['admin', 'manager'].includes(user.role)) return true;
-  if (isSalesLeadOperator(user)) {
-    const uid = currentUserId(user);
-    const assignedUserId = lead.assignedUserId ?? lead.assigned_user_id;
-    const assignedById = lead.assignedById ?? lead.assigned_by;
-    return sameUserId(assignedUserId, uid)
-      || (assignedUserId == null && sameUserId(assignedById, uid));
-  }
-  return false;
+  if (['admin', 'manager', 'super_admin'].includes(user.role)) return true;
+  if (!assignedOnly && !isSalesLeadOperator(user)) return true;
+  const uid = currentUserId(user);
+  const assignedUserId = lead.assignedUserId ?? lead.assigned_user_id;
+  const assignedById = lead.assignedById ?? lead.assigned_by;
+  return sameUserId(assignedUserId, uid)
+    || (assignedUserId == null && sameUserId(assignedById, uid));
 };
 
 const pickField = (row, keys) => {
@@ -467,7 +468,8 @@ function applyLeadListFilters(leads, req) {
 
 exports.getLeads = async (req, res) => {
   try {
-    const where = buildPrismaWhereForLeads(req);
+    const assignedOnly = await leadsAssignedOnly(req);
+    const where = buildPrismaWhereForLeads(req, { assignedOnly });
 
     let leads = await prisma.lead.findMany({
       where,
@@ -490,7 +492,8 @@ exports.getLeads = async (req, res) => {
 
 exports.exportLeadsCsv = async (req, res) => {
   try {
-    const where = buildPrismaWhereForLeads(req);
+    const assignedOnly = await leadsAssignedOnly(req);
+    const where = buildPrismaWhereForLeads(req, { assignedOnly });
     const leads = await prisma.lead.findMany({
       where,
       orderBy: { createdAt: 'desc' },

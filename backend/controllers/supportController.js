@@ -5,6 +5,7 @@ const { isSupportLead, isSupportTechnician } = require('../middleware/supportAcc
 const { deriveItemCurrentStep } = require('../services/supportTicketFlow');
 const { ensureCustomerTables } = require('../services/customerInventoryErpSyncService');
 const supportQuery = require('../services/supportQuery');
+const { isRestrictedToAssigned } = require('../services/dataScopeService');
 const supportInventoryService = require('../services/supportInventoryService');
 const inventorySM = require('../services/inventoryStateMachine');
 const { DEPLOYED_WITH_CUSTOMER_STATUSES } = require('../services/customerDeployedAssets');
@@ -816,6 +817,7 @@ exports.listTickets = async (req, res) => {
         const view = (req.query.view || 'active').trim();
         const type = (req.query.type || '').trim();
         const closedDays = Math.min(parseInt(req.query.closed_days, 10) || 30, 365);
+        const assignedOnly = await isRestrictedToAssigned(req, 'support_tickets');
         const data = await supportQuery.listTicketsEnriched({
             user: req.user,
             view,
@@ -823,7 +825,8 @@ exports.listTickets = async (req, res) => {
             type,
             limit,
             offset,
-            closedDays
+            closedDays,
+            assignedOnly,
         });
         res.json({ success: true, ...data });
     } catch (e) {

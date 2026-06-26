@@ -39,6 +39,7 @@ export default function GroupedPermissionMatrix({
   onChange,
   baselineMatrix,
   disabled = false,
+  showDataScope = false,
 }) {
   const [collapsed, setCollapsed] = useState({});
 
@@ -48,7 +49,7 @@ export default function GroupedPermissionMatrix({
 
   const handleChange = (section, action, value) => {
     const current = matrix[section] || {
-      can_view: false, can_create: false, can_edit: false, can_delete: false,
+      can_view: false, can_create: false, can_edit: false, can_delete: false, data_scope: 'all',
     };
     const next = applyCheckboxRules(section, action, value, current);
     onChange(section, next);
@@ -56,10 +57,21 @@ export default function GroupedPermissionMatrix({
 
   const isModified = (section) => {
     if (!baselineMatrix?.[section]) return false;
-    return PERMISSION_ACTIONS.some(
+    const scopeChanged = showDataScope
+      && (matrix[section]?.data_scope || 'all') !== (baselineMatrix[section]?.data_scope || 'all');
+    return scopeChanged || PERMISSION_ACTIONS.some(
       (action) => !!matrix[section]?.[action] !== !!baselineMatrix[section]?.[action]
     );
   };
+
+  const handleScopeChange = (section, dataScope) => {
+    const current = matrix[section] || emptyPermissionRow();
+    onChange(section, { ...current, data_scope: dataScope });
+  };
+
+  const emptyPermissionRow = () => ({
+    can_view: false, can_create: false, can_edit: false, can_delete: false, data_scope: 'all',
+  });
 
   return (
     <div className="space-y-4">
@@ -94,6 +106,11 @@ export default function GroupedPermissionMatrix({
                           {ACTION_LABELS[action]}
                         </th>
                       ))}
+                      {showDataScope ? (
+                        <th className="px-3 py-2 text-center text-xs font-medium uppercase text-violet-600">
+                          Data Scope
+                        </th>
+                      ) : null}
                     </tr>
                   </thead>
                   <tbody>
@@ -122,6 +139,19 @@ export default function GroupedPermissionMatrix({
                             />
                           </td>
                         ))}
+                        {showDataScope ? (
+                          <td className="px-3 py-2.5 text-center">
+                            <select
+                              value={matrix[section]?.data_scope || 'all'}
+                              disabled={disabled}
+                              onChange={(e) => handleScopeChange(section, e.target.value)}
+                              className="text-xs border border-gray-300 rounded-md px-2 py-1 bg-white max-w-[140px]"
+                            >
+                              <option value="all">All Data</option>
+                              <option value="assigned">Assigned Only</option>
+                            </select>
+                          </td>
+                        ) : null}
                       </tr>
                     ))}
                   </tbody>

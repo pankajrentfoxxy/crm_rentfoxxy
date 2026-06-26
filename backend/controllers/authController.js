@@ -3,7 +3,7 @@ const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
-const { buildEffectivePermissionsForUser } = require('../services/permissionService');
+const { buildEffectivePermissionsForUser, upsertUserPermissions: upsertUserPermissionsService } = require('../services/permissionService');
 
 const MANAGEABLE_ROLES = [
   'team_member', 'team_lead', 'sales', 'floor_manager', 'procurement', 'qc', 'dispatch',
@@ -157,29 +157,8 @@ exports.ensureUserSchema = async () => {
 
 const hasRbacUserMgmtAccess = (user) => ['admin', 'super_admin'].includes(user?.role);
 
-const upsertUserPermissionRows = async (userId, permissions, grantedBy) => {
-  const results = [];
-  for (const perm of permissions) {
-    const { section, can_view, can_create, can_edit, can_delete } = perm;
-    if (!section) continue;
-    const result = await pool.query(
-      `INSERT INTO user_permissions (user_id, section, can_view, can_create, can_edit, can_delete, granted_by, granted_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-       ON CONFLICT (user_id, section)
-       DO UPDATE SET
-         can_view = EXCLUDED.can_view,
-         can_create = EXCLUDED.can_create,
-         can_edit = EXCLUDED.can_edit,
-         can_delete = EXCLUDED.can_delete,
-         granted_by = EXCLUDED.granted_by,
-         granted_at = NOW()
-       RETURNING id, user_id, section, can_view, can_create, can_edit, can_delete, granted_by, granted_at`,
-      [userId, section, can_view ?? null, can_create ?? null, can_edit ?? null, can_delete ?? null, grantedBy]
-    );
-    results.push(result.rows[0]);
-  }
-  return results;
-};
+const upsertUserPermissionRows = async (userId, permissions, grantedBy) =>
+  upsertUserPermissionsService(userId, permissions, grantedBy);
 
 // Helper: get user's team_ids (from user_teams, fallback to team_id)
 const getUserTeamIds = async (userId, fallbackTeamId) => {

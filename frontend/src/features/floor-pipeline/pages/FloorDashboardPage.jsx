@@ -4,9 +4,9 @@ import { AlertTriangle, CheckCircle2, Loader2, Package, Search, TrendingUp, Fact
 import toast from 'react-hot-toast';
 import { PageHeader, StatCard, ListPagination } from '../../../components/ui/primitives';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
-import { useAuth } from '../../../context/AuthContext';
+import usePermission from '../../../hooks/usePermission';
 import { fetchFloorDashboard, getFloorManagerQueue, getTeamMembers } from '../floorPipelineApi';
-import { configSummary, isFloorManagerRole, priorityBadge, resolveTicketTtspl } from '../floorPipelineUi';
+import { configSummary, priorityBadge, resolveTicketTtspl } from '../floorPipelineUi';
 import useAutoRefresh from '../hooks/useAutoRefresh';
 import AssignmentModal from '../components/AssignmentModal';
 
@@ -33,8 +33,8 @@ function BarChart({ data, valueKey = 'count' }) {
 }
 
 export default function FloorDashboardPage() {
-  const { user } = useAuth();
-  const fm = isFloorManagerRole(user?.role);
+  const { canEdit } = usePermission();
+  const canManageQueue = canEdit('floor_pipeline') || canEdit('floor_tickets');
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [queue, setQueue] = useState([]);
@@ -46,7 +46,7 @@ export default function FloorDashboardPage() {
   const [queuePagination, setQueuePagination] = useState({ page: 1, totalPages: 1, total: 0, limit: QUEUE_PAGE_SIZE });
 
   const loadQueue = useCallback(() => {
-    if (!fm) return;
+    if (!canManageQueue) return;
     getFloorManagerQueue({
       search: debouncedQueueSearch || undefined,
       page: queuePage,
@@ -59,7 +59,7 @@ export default function FloorDashboardPage() {
         }
       })
       .catch(() => setQueue([]));
-  }, [fm, debouncedQueueSearch, queuePage]);
+  }, [canManageQueue, debouncedQueueSearch, queuePage]);
 
   const loadDashboard = useCallback(() => {
     fetchFloorDashboard()
@@ -111,9 +111,9 @@ export default function FloorDashboardPage() {
 
   return (
     <div className="space-y-6 pb-10">
-      <PageHeader title="Floor Dashboard" subtitle="Pipeline overview for floor managers" icon={Factory} />
+      <PageHeader title="Floor Dashboard" subtitle="Pipeline overview" icon={Factory} />
 
-      {fm ? (
+      {canManageQueue ? (
         <section className="rounded-xl border border-amber-200 bg-amber-50/40 p-4 shadow-sm">
           <h2 className="font-semibold text-slate-900 mb-2">Needs Assignment</h2>
           <div className="relative max-w-md mb-3">

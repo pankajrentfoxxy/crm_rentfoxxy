@@ -128,9 +128,6 @@ exports.getTtsplHistory = async (req, res) => {
 };
 
 exports.getFloorDashboard = async (req, res) => {
-  if (!PRIVILEGED_ROLES.includes(req.user.role)) {
-    return res.status(403).json({ success: false, message: 'Floor dashboard requires manager or floor manager access' });
-  }
   try {
     const [byStage, priority, techLoad, avgDur, partsAlerts, recent, qcFail] = await Promise.all([
       pool.query(`
