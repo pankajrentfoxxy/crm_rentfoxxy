@@ -8,7 +8,7 @@
  */
 const pool = require('../config/db');
 const { generatePrqNumber, generatePrtId } = require('../services/partIdService');
-const { logTtsplEvent, logConfigChange } = require('../services/ttsplAuditService');
+const { logTtsplEvent, logConfigChange, resolveTtsplAsset } = require('../services/ttsplAuditService');
 
 const FULL_SELECT = `
   SELECT pr.*,
@@ -586,6 +586,19 @@ exports.getProcurementQueue = async (req, res) => {
 exports.getPartCostSummary = async (req, res) => {
   try {
     const { ttsplId } = req.params;
+    const ctx = await resolveTtsplAsset(ttsplId);
+    if (!ctx) {
+      return res.json({
+        success: true,
+        ttspl_id: ttsplId,
+        base_cost: 0,
+        parts_cost: 0,
+        total_expense: 0,
+        parts_breakdown: []
+      });
+    }
+
+    const aliasArr = ctx.aliases.length ? ctx.aliases : [ctx.canonicalTtspl];
 
     const breakdown = await pool.query(
       `SELECT pi.prt_id, p.part_name, pi.unit_cost, pi.installed_at,
@@ -594,36 +607,45 @@ exports.getPartCostSummary = async (req, res) => {
          JOIN parts p ON p.part_id = pi.part_id
          LEFT JOIN part_requests pr ON pr.instance_id = pi.instance_id
          LEFT JOIN ticket_parts tp ON tp.part_id = pi.part_id AND tp.ticket_id = pi.installed_ticket_id
-        WHERE pi.installed_ttspl_id = $1 AND pi.status = 'installed'
+        WHERE UPPER(COALESCE(pi.installed_ttspl_id, '')) = ANY($1::text[])
+          AND pi.status = 'installed'
         ORDER BY pi.installed_at ASC`,
-      [ttsplId]
+      [aliasArr]
     );
 
-    // Total parts cost from ticket_parts (covers consumables/direct attaches too).
     const totals = await pool.query(
       `SELECT COALESCE(SUM(tp.quantity_used * COALESCE(tp.unit_cost, p.cost, 0)),0)::numeric AS parts_cost
          FROM tickets t
          JOIN ticket_parts tp ON tp.ticket_id = t.ticket_id
          LEFT JOIN parts p ON p.part_id = tp.part_id
-        WHERE t.ttspl_id = $1`,
-      [ttsplId]
+        WHERE ($1::int IS NOT NULL AND t.vendor_serial_id = $1)
+           OR UPPER(COALESCE(t.ttspl_id, '')) = ANY($2::text[])
+           OR UPPER(COALESCE(t.serial_number, '')) = ANY($2::text[])`,
+      [ctx.serialId, aliasArr]
     );
 
-    const baseRes = await pool.query(
-      `SELECT COALESCE(MAX(vpd.rate),0)::numeric AS base_cost
-         FROM tickets t
-         JOIN vendor_serial_numbers vsn ON vsn.serial_id = t.vendor_serial_id
-         LEFT JOIN vendor_product_details vpd ON vpd.po_id = vsn.po_id
-        WHERE t.ttspl_id = $1`,
-      [ttsplId]
-    );
+    const baseRes = ctx.serialId
+      ? await pool.query(
+        `SELECT COALESCE(MAX(vpd.rate),0)::numeric AS base_cost
+           FROM vendor_serial_numbers vsn
+           LEFT JOIN vendor_product_details vpd ON vpd.po_id = vsn.po_id
+          WHERE vsn.serial_id = $1`,
+        [ctx.serialId]
+      )
+      : await pool.query(
+        `SELECT COALESCE(MAX(vpd.rate),0)::numeric AS base_cost
+           FROM vendor_serial_numbers vsn
+           LEFT JOIN vendor_product_details vpd ON vpd.po_id = vsn.po_id
+          WHERE UPPER(COALESCE(vsn.inventory_asset_code, '')) = ANY($1::text[])`,
+        [aliasArr]
+      );
 
     const partsCost = parseFloat(totals.rows[0]?.parts_cost || 0);
     const baseCost = parseFloat(baseRes.rows[0]?.base_cost || 0);
 
     res.json({
       success: true,
-      ttspl_id: ttsplId,
+      ttspl_id: ctx.canonicalTtspl,
       base_cost: baseCost,
       parts_cost: partsCost,
       total_expense: partsCost + baseCost,

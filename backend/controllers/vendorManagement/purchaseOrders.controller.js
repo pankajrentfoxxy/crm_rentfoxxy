@@ -15,6 +15,7 @@ const {
   insertProductDetailsForPo
 } = require('../../services/purchaseOrderProductDetailsService');
 const { createTicketFromGrnReceive } = require('../../services/grnTicketService');
+const { logGrnReceive } = require('../../services/ttsplAuditService');
 const { markTokenUsed } = require('../../services/grnSerialCaptureService');
 const { generatePurchaseOrderPdf } = require('../../services/vendorPurchaseOrderPdfService');
 const {
@@ -440,6 +441,18 @@ async function receiveProductSerial(req, res) {
     payload: { po_id: poId, grn_id: finalGrnId, line_index: lineIndex }
   });
 
+  try {
+    await logGrnReceive({
+      ttsplId: serial_number,
+      vendorSerialId: serialId,
+      serialNumber: serial_number,
+      poLabel: po.purchase_order_number || String(po.po_id),
+      actorUserId: req.user?.user_id
+    });
+  } catch (auditErr) {
+    console.error('GRN audit log failed (single receive):', auditErr);
+  }
+
   await syncPoReceiveProgressStatus(poId, req.user?.user_id);
 
   let ticketResult = null;
@@ -682,6 +695,21 @@ async function receivePoLineBulk(req, res) {
     }
   });
 
+  const poLabel = po.purchase_order_number || String(po.po_id);
+  for (const row of createdRows) {
+    try {
+      await logGrnReceive({
+        ttsplId: row.inventory_asset_code || row.serial_number,
+        vendorSerialId: row.serial_id,
+        serialNumber: row.serial_number,
+        poLabel,
+        actorUserId: req.user?.user_id
+      });
+    } catch (auditErr) {
+      console.error('GRN audit log failed (bulk receive):', row.serial_number, auditErr);
+    }
+  }
+
   await syncPoReceiveProgressStatus(poId, req.user?.user_id);
 
   const ticketResults = [];
@@ -916,6 +944,18 @@ async function receivePoLineUnit(req, res) {
       inventory_asset_code: createdRow.inventory_asset_code
     }
   });
+
+  try {
+    await logGrnReceive({
+      ttsplId: createdRow.inventory_asset_code || createdRow.serial_number,
+      vendorSerialId: createdRow.serial_id,
+      serialNumber: createdRow.serial_number,
+      poLabel: po.purchase_order_number || String(po.po_id),
+      actorUserId: req.user?.user_id
+    });
+  } catch (auditErr) {
+    console.error('GRN audit log failed (unit receive):', auditErr);
+  }
 
   await syncPoReceiveProgressStatus(poId, req.user?.user_id);
 

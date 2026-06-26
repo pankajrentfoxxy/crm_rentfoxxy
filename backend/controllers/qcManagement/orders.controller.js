@@ -15,6 +15,7 @@ const {
   insertAllocationLog,
   addToInventory
 } = require('../../services/qcCheckService');
+const { logTtsplEvent } = require('../../services/ttsplAuditService');
 
 const listValidators = [
   param('status').isString().trim(),
@@ -328,6 +329,29 @@ async function qcCheck(req, res) {
         );
       }
     }
+
+    const ttsplLabel = updateResult.row?.inventory_asset_code
+      || details?.unique_product_serial
+      || serialNumber;
+    const qcEventMap = {
+      passed: 'qc2_passed',
+      failed: 'qc1_failed',
+      dead: 'qc1_failed',
+      pending: 'qc_started',
+      require_for_parts: 'parts_used',
+      send_to_qc_check: 'qc_started'
+    };
+    await logTtsplEvent({
+      ttsplId: ttsplLabel,
+      vendorSerialId: serialId,
+      eventType: qcEventMap[selected] || 'config_updated',
+      description: selected === 'passed'
+        ? 'Vendor QC passed — unit ready for inventory'
+        : `Vendor QC: ${selected}${remark ? ` — ${remark}` : ''}`,
+      metadata: { qc_status: selected, remark },
+      actorUserId: userId,
+      db: client
+    });
 
     await client.query('COMMIT');
     res.json({ success: true, message: 'QC check updated successfully' });
