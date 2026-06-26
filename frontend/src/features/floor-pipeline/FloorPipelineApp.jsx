@@ -1,26 +1,38 @@
 import React from 'react';
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { Navigate, Route, Routes, useSearchParams } from 'react-router-dom';
 import ProtectedRoute from '../../router/ProtectedRoute';
 import usePermission from '../../hooks/usePermission';
 import FloorTicketListPage from './pages/FloorTicketListPage';
 import FloorDashboardPage from './pages/FloorDashboardPage';
 import TicketDetailPage from './pages/TicketDetailPage';
+import {
+  canAccessFloorStageFilter,
+  FLOOR_DASHBOARD_SECTIONS,
+  FLOOR_TICKETS_BASE_SECTIONS,
+  firstAllowedFloorTicketsPath,
+} from './floorPipelineAccess';
 
 const g = (sections, node) => (
   <ProtectedRoute sections={sections} action="view">{node}</ProtectedRoute>
 );
 
-const FLOOR_TICKETS = ['floor_pipeline', 'floor_tickets'];
-const CHIP_REPAIR = ['floor_pipeline', 'chip_level_repair', 'floor_tickets'];
+function FloorStageFilterGuard({ children }) {
+  const [searchParams] = useSearchParams();
+  const { canView } = usePermission();
+  const stageFilter = searchParams.get('stage') || '';
+
+  if (!canAccessFloorStageFilter(stageFilter, canView)) {
+    const fallback = firstAllowedFloorTicketsPath(canView) || '/dashboard';
+    return <Navigate to={fallback} replace />;
+  }
+
+  return children;
+}
 
 function FloorIndexRedirect() {
   const { canView } = usePermission();
-  if (canView('floor_tickets') || canView('floor_pipeline')) {
-    return <Navigate to="tickets" replace />;
-  }
-  if (canView('chip_level_repair')) {
-    return <Navigate to="tickets?stage=Chip+Level+Repair" replace />;
-  }
+  const path = firstAllowedFloorTicketsPath(canView);
+  if (path) return <Navigate to={path.replace('/floor-pipeline/', '')} replace />;
   return <Navigate to="/dashboard" replace />;
 }
 
@@ -28,9 +40,15 @@ export default function FloorPipelineApp() {
   return (
     <Routes>
       <Route index element={<FloorIndexRedirect />} />
-      <Route path="dashboard" element={g(FLOOR_TICKETS, <FloorDashboardPage />)} />
-      <Route path="tickets" element={g(CHIP_REPAIR, <FloorTicketListPage />)} />
-      <Route path="tickets/:id" element={g(CHIP_REPAIR, <TicketDetailPage />)} />
+      <Route path="dashboard" element={g(FLOOR_DASHBOARD_SECTIONS, <FloorDashboardPage />)} />
+      <Route
+        path="tickets"
+        element={g(
+          FLOOR_TICKETS_BASE_SECTIONS,
+          <FloorStageFilterGuard><FloorTicketListPage /></FloorStageFilterGuard>
+        )}
+      />
+      <Route path="tickets/:id" element={g(FLOOR_TICKETS_BASE_SECTIONS, <TicketDetailPage />)} />
       <Route path="*" element={<FloorIndexRedirect />} />
     </Routes>
   );

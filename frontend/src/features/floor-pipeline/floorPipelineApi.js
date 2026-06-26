@@ -78,8 +78,8 @@ export function tagInventoryItem(serialId, tag) {
   return api.patch(`/inventory-management/${serialId}/tag`, { tag });
 }
 
-export function getFloorManagerQueue() {
-  return api.get(`${base}/floor-manager-queue`);
+export function getFloorManagerQueue(params = {}) {
+  return api.get(`${base}/floor-manager-queue`, { params });
 }
 
 export function getTeamMembers(teamName) {

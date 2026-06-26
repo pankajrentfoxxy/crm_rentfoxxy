@@ -1706,8 +1706,12 @@ exports.getFloorManagerQueue = async (req, res) => {
     return res.status(403).json({ success: false, message: 'Floor manager access required' });
   }
   try {
-    const { rows } = await pool.query(
-      `SELECT t.*, s.stage_name,
+    const { search } = req.query;
+    const params = [];
+    let paramCount = 1;
+
+    let query = `
+      SELECT t.*, s.stage_name,
               COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id', t.ttspl_id) AS ttspl_id,
               vsn.extra->>'brand' AS brand,
               vsn.extra->>'processor' AS processor,
@@ -1719,12 +1723,52 @@ exports.getFloorManagerQueue = async (req, res) => {
        LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = t.vendor_serial_id
        LEFT JOIN users u ON u.user_id = t.assigned_user_id
        WHERE s.stage_name = 'Floor Manager'
-         AND t.status NOT IN ('completed', 'qc_failed_return_vendor', 'cancelled')
+         AND t.status NOT IN ('completed', 'qc_failed_return_vendor', 'cancelled')`;
+
+    if (search) {
+      query += ` AND (
+        t.serial_number ILIKE $${paramCount}
+        OR t.model ILIKE $${paramCount}
+        OR COALESCE(t.ttspl_id, '') ILIKE $${paramCount}
+        OR COALESCE(t.machine_number, '') ILIKE $${paramCount}
+        OR COALESCE(vsn.inventory_asset_code, '') ILIKE $${paramCount}
+        OR COALESCE(vsn.extra->>'ttspl_id', '') ILIKE $${paramCount}
+      )`;
+      params.push(`%${search}%`);
+      paramCount++;
+    }
+
+    query += `
        ORDER BY
          CASE t.priority WHEN 'sales_order' THEN 0 WHEN 'high' THEN 1 ELSE 2 END,
-         t.created_at ASC`
-    );
-    res.json({ success: true, tickets: rows });
+         t.created_at ASC`;
+
+    const page = Math.max(1, parseInt(req.query.page, 10) || 0);
+    const limitRaw = parseInt(req.query.limit, 10) || 0;
+    const limit = limitRaw > 0 ? Math.min(100, Math.max(1, limitRaw)) : 0;
+    const paginate = page > 0 && limit > 0;
+
+    let total;
+    let totalPages = 1;
+
+    if (paginate) {
+      const whereStart = query.indexOf('FROM tickets t');
+      const orderStart = query.indexOf(' ORDER BY');
+      const fromWhere = query.slice(whereStart, orderStart);
+      const countResult = await pool.query(`SELECT COUNT(*)::int AS total ${fromWhere}`, params);
+      total = countResult.rows[0]?.total || 0;
+      totalPages = Math.max(1, Math.ceil(total / limit));
+      query += ` LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
+      params.push(limit, (page - 1) * limit);
+    }
+
+    const { rows } = await pool.query(query, params);
+
+    const payload = { success: true, tickets: rows };
+    if (paginate) {
+      payload.pagination = { page, limit, total, totalPages };
+    }
+    res.json(payload);
   } catch (error) {
     console.error('getFloorManagerQueue:', error);
     res.status(500).json({ success: false, message: 'Failed to load floor manager queue' });

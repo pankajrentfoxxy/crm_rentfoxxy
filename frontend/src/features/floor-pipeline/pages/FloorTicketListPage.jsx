@@ -59,14 +59,12 @@ export default function FloorTicketListPage() {
       if (priorityFilter) params.priority = priorityFilter;
       if (typeFilter) params.ticket_type = typeFilter;
       if (stageFilter) params.stage_names = stageFilter;
-      if (view === 'table') {
-        params.page = page;
-        params.limit = PAGE_SIZE;
-      }
+      params.page = page;
+      params.limit = PAGE_SIZE;
       const { data } = await fetchFloorTickets(params);
       if (data.success) {
         setTickets(data.tickets || []);
-        if (view === 'table' && data.pagination) {
+        if (data.pagination) {
           setPagination(data.pagination);
         } else {
           setPagination({ page: 1, totalPages: 1, total: data.tickets?.length || 0, limit: PAGE_SIZE });
@@ -77,7 +75,7 @@ export default function FloorTicketListPage() {
     } finally {
       setLoading(false);
     }
-  }, [debouncedSearch, priorityFilter, typeFilter, stageFilter, view, page]);
+  }, [debouncedSearch, priorityFilter, typeFilter, stageFilter, page]);
 
   useEffect(() => { setPage(1); }, [debouncedSearch, priorityFilter, typeFilter, stageFilter, view]);
 
@@ -106,6 +104,31 @@ export default function FloorTicketListPage() {
     } else {
       navigate(`/floor-pipeline/tickets/${ticket.ticket_id}`);
     }
+  };
+
+  const renderFmAction = (ticket) => {
+    if (!fm) return null;
+    if (ticket.stage_name === 'Floor Manager') {
+      return (
+        <button
+          type="button"
+          onClick={() => setAssignTicket(ticket)}
+          className="text-xs text-blue-600 font-semibold hover:underline"
+        >
+          Assign
+        </button>
+      );
+    }
+    if (ticket.stage_name === 'Inventory') return '—';
+    return (
+      <button
+        type="button"
+        onClick={() => setAssignTicket(ticket)}
+        className="text-xs text-slate-600 font-semibold hover:underline"
+      >
+        Reassign
+      </button>
+    );
   };
 
   return (
@@ -166,6 +189,7 @@ export default function FloorTicketListPage() {
       {loading ? (
         <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>
       ) : view === 'kanban' ? (
+        <>
         <div className="flex gap-4 overflow-x-auto pb-2 min-h-[420px]">
           {STAGE_GROUPS.map((group) => (
             <div key={group.label} className="flex gap-3 shrink-0">
@@ -185,12 +209,24 @@ export default function FloorTicketListPage() {
                     </div>
                     <div className="space-y-2 flex-1">
                       {col.map((t) => (
-                        <TicketCard
-                          key={t.ticket_id}
-                          ticket={t}
-                          pendingParts={t.part_requests_pending}
-                          onCardClick={fm && stage === 'Floor Manager' ? handleFloorManagerClick : undefined}
-                        />
+                        <div key={t.ticket_id}>
+                          <TicketCard
+                            ticket={t}
+                            pendingParts={t.part_requests_pending}
+                            onCardClick={fm && stage === 'Floor Manager' ? handleFloorManagerClick : undefined}
+                          />
+                          {fm && stage !== 'Floor Manager' && stage !== 'Inventory' ? (
+                            <div className="mt-1 flex justify-end px-1">
+                              <button
+                                type="button"
+                                onClick={() => setAssignTicket(t)}
+                                className="text-[11px] text-slate-600 font-semibold hover:underline"
+                              >
+                                Reassign
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
                       ))}
                     </div>
                   </div>
@@ -199,6 +235,14 @@ export default function FloorTicketListPage() {
             </div>
           ))}
         </div>
+        <ListPagination
+          page={page}
+          totalPages={pagination.totalPages || 1}
+          total={pagination.total || 0}
+          pageSize={PAGE_SIZE}
+          onPageChange={setPage}
+        />
+        </>
       ) : (
         <>
         {/* Mobile: cards */}
@@ -206,12 +250,18 @@ export default function FloorTicketListPage() {
           {tickets.length === 0 ? (
             <p className="text-center text-sm text-slate-500 py-8">No tickets</p>
           ) : tickets.map((t) => (
-            <TicketCard
-              key={t.ticket_id}
-              ticket={t}
-              pendingParts={t.part_requests_pending}
-              onCardClick={fm && t.stage_name === 'Floor Manager' ? handleFloorManagerClick : undefined}
-            />
+            <div key={t.ticket_id} className="relative">
+              <TicketCard
+                ticket={t}
+                pendingParts={t.part_requests_pending}
+                onCardClick={fm && t.stage_name === 'Floor Manager' ? handleFloorManagerClick : undefined}
+              />
+              {fm && t.stage_name !== 'Inventory' ? (
+                <div className="mt-1 flex justify-end px-1">
+                  {renderFmAction(t)}
+                </div>
+              ) : null}
+            </div>
           ))}
         </div>
         <div className="hidden sm:block rounded-xl border border-gray-100 bg-white shadow-sm overflow-x-auto">
@@ -261,17 +311,9 @@ export default function FloorTicketListPage() {
                     <td className="px-3 py-3">{t.assigned_user_name || '—'}</td>
                     <td className="px-3 py-3">{t.qc_fail_count || 0}</td>
                     <td className="px-3 py-3">{ticketAgeDays(t.created_at)}</td>
-                    {fm && t.stage_name === 'Floor Manager' ? (
-                      <td className="px-3 py-3">
-                        <button
-                          type="button"
-                          onClick={() => setAssignTicket(t)}
-                          className="text-xs text-blue-600 font-semibold hover:underline"
-                        >
-                          Assign
-                        </button>
-                      </td>
-                    ) : fm ? <td className="px-3 py-3">—</td> : null}
+                    {fm ? (
+                      <td className="px-3 py-3">{renderFmAction(t)}</td>
+                    ) : null}
                   </tr>
                 );
               })}

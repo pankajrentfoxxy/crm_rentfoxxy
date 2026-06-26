@@ -34,14 +34,14 @@ export const vendorAccordionChildren = [
 ];
 
 /** Production accordion (formerly Floor & Quality).
- *  Each child uses the granular section its page/API enforces. Users with the
- *  legacy floor_pipeline parent grant still see all production pages. */
+ *  Each child uses the granular RBAC section its page enforces — parent floor_pipeline
+ *  does NOT unlock children (see sectionHierarchy.js). */
 export const floorPipelineAccordionChildren = [
-  { label: 'Floor Dashboard', path: '/floor-pipeline/dashboard', section: 'floor_tickets' },
+  { label: 'Floor Dashboard', path: '/floor-pipeline/dashboard', section: 'floor_pipeline' },
   { label: 'All Tickets', path: '/floor-pipeline/tickets', section: 'floor_tickets', countKey: 'all_tickets' },
-  { label: 'QC Queue', path: '/floor-pipeline/tickets?stage=QC1,QC2', section: 'floor_tickets', countKey: 'qc_queue' },
+  { label: 'QC Queue', path: '/floor-pipeline/tickets?stage=QC1,QC2', section: 'qc_management', countKey: 'qc_queue' },
   { label: 'Chip Level Repair', path: '/floor-pipeline/tickets?stage=Chip+Level+Repair', section: 'chip_level_repair', countKey: 'chip_level' },
-  { label: 'Body & Paint', path: '/floor-pipeline/tickets?stage=Body+%26+Paint', section: 'floor_tickets', countKey: 'body_paint' },
+  { label: 'Body & Paint', path: '/floor-pipeline/tickets?stage=Body+%26+Paint', section: 'floor_pipeline', countKey: 'body_paint' },
 ];
 
 /** Inventory accordion — each child maps to the RBAC section the route/API enforces. */
@@ -293,10 +293,16 @@ export function isMenuItemVisible(item, canView) {
     return item.section ? canView(item.section) : false;
   }
 
+  if (item.type === 'floorPipelineAccordion') {
+    return floorPipelineAccordionChildren.some((child) => isFloorPipelineChildVisible(child, canView));
+  }
+
+  if (item.type === 'leadCrmAccordion') {
+    return leadCrmAccordionChildren.some((child) => isLeadCrmChildVisible(child, canView));
+  }
+
   if (
     item.type === 'vendorAccordion'
-    || item.type === 'floorPipelineAccordion'
-    || item.type === 'leadCrmAccordion'
     || item.type === 'salesPipelineAccordion'
     || item.type === 'financeAccordion'
     || item.type === 'reportsAccordion'
@@ -361,7 +367,6 @@ export function isDeliveryRegisterChildVisible(child, canView) {
 }
 
 export function isFloorPipelineChildVisible(child, canView) {
-  if (canView('floor_pipeline')) return true;
   if (child.section) return canView(child.section);
   return false;
 }

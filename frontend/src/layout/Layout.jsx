@@ -156,7 +156,8 @@ export default function Layout({ children }) {
   const showFloorCounts =
     canView('floor_pipeline') ||
     canView('floor_tickets') ||
-    canView('chip_level_repair');
+    canView('chip_level_repair') ||
+    canView('qc_management');
   const { counts: floorCounts } = useFloorCounts(showFloorCounts);
 
   const showLeadCrmAccordion = canView('leads') || canView('follow_ups') || canView('customers');

@@ -1,13 +1,16 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, CheckCircle2, Loader2, Package, TrendingUp, Factory } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Loader2, Package, Search, TrendingUp, Factory } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { PageHeader, StatCard } from '../../../components/ui/primitives';
+import { PageHeader, StatCard, ListPagination } from '../../../components/ui/primitives';
+import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import { useAuth } from '../../../context/AuthContext';
 import { fetchFloorDashboard, getFloorManagerQueue, getTeamMembers } from '../floorPipelineApi';
 import { configSummary, isFloorManagerRole, priorityBadge, resolveTicketTtspl } from '../floorPipelineUi';
 import useAutoRefresh from '../hooks/useAutoRefresh';
 import AssignmentModal from '../components/AssignmentModal';
+
+const QUEUE_PAGE_SIZE = 10;
 
 function BarChart({ data, valueKey = 'count' }) {
   const max = Math.max(...data.map((d) => d[valueKey] || 0), 1);
@@ -37,13 +40,26 @@ export default function FloorDashboardPage() {
   const [queue, setQueue] = useState([]);
   const [assignTicket, setAssignTicket] = useState(null);
   const [teamWorkload, setTeamWorkload] = useState({ hw: [], qc1: [], qc2: [] });
+  const [queueSearch, setQueueSearch] = useState('');
+  const debouncedQueueSearch = useDebouncedValue(queueSearch.trim(), 320);
+  const [queuePage, setQueuePage] = useState(1);
+  const [queuePagination, setQueuePagination] = useState({ page: 1, totalPages: 1, total: 0, limit: QUEUE_PAGE_SIZE });
 
   const loadQueue = useCallback(() => {
     if (!fm) return;
-    getFloorManagerQueue()
-      .then(({ data: res }) => { if (res.success) setQueue(res.tickets || []); })
+    getFloorManagerQueue({
+      search: debouncedQueueSearch || undefined,
+      page: queuePage,
+      limit: QUEUE_PAGE_SIZE,
+    })
+      .then(({ data: res }) => {
+        if (res.success) {
+          setQueue(res.tickets || []);
+          if (res.pagination) setQueuePagination(res.pagination);
+        }
+      })
       .catch(() => setQueue([]));
-  }, [fm]);
+  }, [fm, debouncedQueueSearch, queuePage]);
 
   const loadDashboard = useCallback(() => {
     fetchFloorDashboard()
@@ -53,7 +69,6 @@ export default function FloorDashboardPage() {
       })
       .catch((e) => toast.error(e.response?.data?.message || 'Dashboard failed'))
       .finally(() => setLoading(false));
-    loadQueue();
 
     Promise.all([
       getTeamMembers('Hardware & Software'),
@@ -68,10 +83,17 @@ export default function FloorDashboardPage() {
         });
       })
       .catch(() => setTeamWorkload({ hw: [], qc1: [], qc2: [] }));
-  }, [loadQueue]);
+  }, []);
+
+  const refresh = useCallback(() => {
+    loadDashboard();
+    loadQueue();
+  }, [loadDashboard, loadQueue]);
 
   useEffect(() => { loadDashboard(); }, [loadDashboard]);
-  useAutoRefresh(loadDashboard);
+  useEffect(() => { loadQueue(); }, [loadQueue]);
+  useEffect(() => { setQueuePage(1); }, [debouncedQueueSearch]);
+  useAutoRefresh(refresh);
 
   if (loading) {
     return <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>;
@@ -94,13 +116,26 @@ export default function FloorDashboardPage() {
       {fm ? (
         <section className="rounded-xl border border-amber-200 bg-amber-50/40 p-4 shadow-sm">
           <h2 className="font-semibold text-slate-900 mb-2">Needs Assignment</h2>
-          {queue.length === 0 ? (
+          <div className="relative max-w-md mb-3">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <input
+              className="w-full rounded-lg border bg-white pl-9 pr-3 py-2 text-sm"
+              placeholder="TTSPL ID, serial, model…"
+              value={queueSearch}
+              onChange={(e) => setQueueSearch(e.target.value)}
+            />
+          </div>
+          {queue.length === 0 && !debouncedQueueSearch ? (
             <div className="flex items-center gap-2 text-green-700 text-sm bg-green-50 border border-green-200 rounded-lg px-3 py-2">
               <CheckCircle2 className="w-4 h-4" /> All tickets assigned
             </div>
+          ) : queue.length === 0 ? (
+            <p className="text-sm text-slate-500 py-4 text-center">No tickets match your search</p>
           ) : (
             <>
-              <p className="text-sm text-amber-800 mb-3">{queue.length} ticket(s) waiting in Floor Manager</p>
+              <p className="text-sm text-amber-800 mb-3">
+                {queuePagination.total || queue.length} ticket(s) waiting in Floor Manager
+              </p>
               {/* Mobile cards */}
               <div className="grid gap-2 sm:hidden">
                 {queue.map((t) => {
@@ -153,6 +188,13 @@ export default function FloorDashboardPage() {
                   </tbody>
                 </table>
               </div>
+              <ListPagination
+                page={queuePage}
+                totalPages={queuePagination.totalPages || 1}
+                total={queuePagination.total || 0}
+                pageSize={QUEUE_PAGE_SIZE}
+                onPageChange={setQueuePage}
+              />
             </>
           )}
         </section>
@@ -275,7 +317,7 @@ export default function FloorDashboardPage() {
         ticket={assignTicket}
         open={!!assignTicket}
         onClose={() => setAssignTicket(null)}
-        onAssigned={loadQueue}
+        onAssigned={refresh}
       />
     </div>
   );

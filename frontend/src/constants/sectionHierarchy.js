@@ -25,7 +25,7 @@ export const MODULE_CHILDREN = {
     'technicians_bucket_list',
     'payment_records',
   ],
-  floor_pipeline: ['floor_tickets', 'chip_level_repair'],
+  floor_pipeline: ['floor_tickets', 'chip_level_repair', 'qc_management'],
   inventory_management: ['parts', 'parts_inventory', 'customer_inventory', 'ttspl_history'],
 };
 
@@ -64,4 +64,5 @@ export const FLOOR_UMBRELLA_SECTIONS = [
   'floor_pipeline',
   'floor_tickets',
   'chip_level_repair',
+  'qc_management',
 ];

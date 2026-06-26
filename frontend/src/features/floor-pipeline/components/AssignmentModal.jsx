@@ -85,7 +85,9 @@ export default function AssignmentModal({ ticket, open, onClose, onAssigned }) {
       <div className="relative w-full max-w-md bg-white rounded-t-2xl sm:rounded-2xl shadow-xl max-h-[85vh] flex flex-col">
         <div className="flex items-start justify-between border-b px-4 py-3">
           <div>
-            <h2 className="font-semibold text-slate-900">Assign Ticket</h2>
+            <h2 className="font-semibold text-slate-900">
+              {stageName === 'Floor Manager' ? 'Assign Ticket' : 'Reassign Technician'}
+            </h2>
             <p className="font-mono text-sm text-blue-700">{resolveTicketTtspl(ticket) || `#${ticket.ticket_id}`}</p>
             <p className="text-xs text-slate-500 mt-0.5">{configSummary(ticket)}</p>
             <span className={`inline-block mt-1 rounded-full px-2 py-0.5 text-xs font-semibold ${pri.className}`}>
