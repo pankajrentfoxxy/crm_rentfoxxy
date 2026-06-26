@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, Check, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
+import { AlertTriangle, Check, ChevronDown, ChevronUp, Loader2, Search } from 'lucide-react';
 import api from '../../utils/api';
 import { formatAddress } from './utils';
 import PickupSetupForm from './components/PickupSetupForm';
@@ -166,6 +166,7 @@ export default function SupportTicketCreate() {
     const [ticketEmail, setTicketEmail] = useState('');
     const [ticketAddress, setTicketAddress] = useState('');
     const [blocked, setBlocked] = useState({});
+    const [machineSearch, setMachineSearch] = useState('');
 
     useEffect(() => {
         api.get('/support/categories').then((r) => setCategories(r.data.categories || [])).catch(() => setCategories([]));
@@ -195,6 +196,7 @@ export default function SupportTicketCreate() {
         setCustomers([]);
         setSelected({});
         setBlocked({});
+        setMachineSearch('');
         setShowRemarks(false);
         setShowContactExtra(false);
         const [detailRes, assetsRes] = await Promise.all([
@@ -260,6 +262,25 @@ export default function SupportTicketCreate() {
     const selectedList = useMemo(() => Object.values(selected), [selected]);
     const selectedCount = selectedList.length;
     const firstSelectedId = Object.keys(selected)[0];
+
+    const filteredAssets = useMemo(() => {
+        const q = machineSearch.trim().toLowerCase();
+        if (!q) return assets;
+        return assets.filter((asset) => {
+            const haystack = [
+                asset.unique_serial_number,
+                asset.serial_number,
+                asset.model_name,
+                asset.ram,
+                asset.storage,
+                asset.generation,
+            ]
+                .filter(Boolean)
+                .join(' ')
+                .toLowerCase();
+            return haystack.includes(q);
+        });
+    }, [assets, machineSearch]);
 
     const pickupTicketStub = useMemo(() => {
         if (!customer) return null;
@@ -409,6 +430,7 @@ export default function SupportTicketCreate() {
                         setCustomer(null);
                         setSelected({});
                         setBlocked({});
+                        setMachineSearch('');
                     }}
                 />
             )}
@@ -443,10 +465,26 @@ export default function SupportTicketCreate() {
                 </div>
             )}
 
+            {assets.length > 0 && (
+                <div className="relative mb-3">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                    <input
+                        type="search"
+                        value={machineSearch}
+                        onChange={(e) => setMachineSearch(e.target.value)}
+                        className="support-field support-field-compact w-full pl-9"
+                        placeholder="Search TTSPL, serial, model…"
+                    />
+                </div>
+            )}
+
             {!assets.length && <p className="support-empty-msg">No machines for this customer.</p>}
+            {assets.length > 0 && !filteredAssets.length && (
+                <p className="support-empty-msg">No machines match your search.</p>
+            )}
 
             <div className="support-asset-grid support-asset-grid-compact">
-                {assets.map((asset) => {
+                {filteredAssets.map((asset) => {
                     const id = String(asset.id);
                     return (
                         <AssetCard

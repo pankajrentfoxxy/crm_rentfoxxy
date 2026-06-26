@@ -164,3 +164,46 @@ export function overridesToPayload(overrides) {
       RBAC_ACTIONS.some((action) => row[action] === true || row[action] === false)
     );
 }
+
+/** Build editable matrix from API effective permissions object. */
+export function effectiveObjectToMatrix(effective, sections = RBAC_SECTIONS) {
+  const matrix = {};
+  sections.forEach((section) => {
+    const row = effective?.[section] || {};
+    matrix[section] = {
+      can_view: !!row.can_view,
+      can_create: !!row.can_create,
+      can_edit: !!row.can_edit,
+      can_delete: !!row.can_delete,
+    };
+  });
+  return matrix;
+}
+
+/** User overrides to persist — only sections/actions that differ from role defaults. */
+export function matrixDiffToOverridePayload(matrix, roleDefaultsMatrix) {
+  return Object.entries(matrix)
+    .map(([section, values]) => {
+      const role = roleDefaultsMatrix[section] || emptyPermissionRow();
+      const differs = RBAC_ACTIONS.some((action) => !!values[action] !== !!role[action]);
+      if (!differs) return null;
+      return {
+        section,
+        can_view: !!values.can_view,
+        can_create: !!values.can_create,
+        can_edit: !!values.can_edit,
+        can_delete: !!values.can_delete,
+      };
+    })
+    .filter(Boolean);
+}
+
+export function countMatrixChanges(matrix, baseline) {
+  let n = 0;
+  Object.keys(matrix).forEach((section) => {
+    RBAC_ACTIONS.forEach((action) => {
+      if (!!matrix[section]?.[action] !== !!baseline[section]?.[action]) n += 1;
+    });
+  });
+  return n;
+}

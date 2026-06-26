@@ -685,16 +685,27 @@ exports.updateUserStatus = async (req, res) => {
       return res.status(400).json({ success: false, message: 'You cannot change your own status' });
     }
 
+    const userId = parseInt(req.params.id, 10);
+    const actorId = parseInt(req.user.user_id, 10);
+    const isActive = status === 'active';
+
     await pool.query(
       `UPDATE users SET
          status = $1,
-         active = ($1 = 'active'),
-         deactivated_at = CASE WHEN $1 != 'active' THEN NOW() ELSE NULL END,
-         deactivated_by = CASE WHEN $1 != 'active' THEN $2 ELSE NULL END,
-         deactivation_reason = CASE WHEN $1 != 'active' THEN $3 ELSE NULL END,
+         active = $2,
+         deactivated_at = $3,
+         deactivated_by = $4,
+         deactivation_reason = $5,
          updated_at = NOW()
-       WHERE user_id = $4`,
-      [status, req.user.user_id, reason || null, req.params.id]
+       WHERE user_id = $6`,
+      [
+        status,
+        isActive,
+        isActive ? null : new Date(),
+        isActive ? null : actorId,
+        isActive ? null : (reason || null),
+        userId,
+      ]
     );
 
     res.json({ success: true, status });
