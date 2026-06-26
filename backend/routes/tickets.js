@@ -56,6 +56,7 @@ const phase2 = require('../controllers/ticketPhase2Controller');
 const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
 const ftView = checkSectionPermission('floor_tickets', 'view');
 const ftEdit = checkSectionPermission('floor_tickets', 'edit');
+const ttsplHistoryView = checkSectionPermission('ttspl_history', 'view');
 
 // All routes require authentication
 router.use(authMiddleware);
@@ -98,7 +99,7 @@ router.get(
 );
 router.get('/team-members', getTeamMembers);
 router.get('/:id/next-assignee', getNextAssignee);
-router.get('/ttspl/:ttsplId/history', phase2.getTtsplHistory);
+router.get('/ttspl/:ttsplId/history', ttsplHistoryView, phase2.getTtsplHistory);
 router.get('/ttspl/:ttsplId', phase2.getTicketsByTtsplId);
 router.post('/:id/move-stage', phase2.moveToStage);
 router.patch('/:id/chip-repair', phase2.markChipRepairRequired);

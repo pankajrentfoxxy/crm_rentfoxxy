@@ -115,10 +115,9 @@ export default function Layout({ children }) {
 
   const showQcAccordion = canView('qc_management');
 
-  const showInventoryAccordion = canView('inventory_management');
+  const showInventoryCounts = canView('inventory_management');
 
   const showSalesPipelineAccordion =
-    canView('sales_pipeline') ||
     canView('sales_quotations') ||
     canView('sales_orders_doc') ||
     canView('delivery_challans') ||
@@ -152,9 +151,13 @@ export default function Layout({ children }) {
 
   const { counts: qcCounts } = useQcStatusCounts(showQcAccordion);
 
-  const { counts: inventoryCounts } = useInventoryListCounts(showInventoryAccordion);
+  const { counts: inventoryCounts } = useInventoryListCounts(showInventoryCounts);
 
-  const { counts: floorCounts } = useFloorCounts(canView('floor_pipeline'));
+  const showFloorCounts =
+    canView('floor_pipeline') ||
+    canView('floor_tickets') ||
+    canView('chip_level_repair');
+  const { counts: floorCounts } = useFloorCounts(showFloorCounts);
 
   const showLeadCrmAccordion = canView('leads') || canView('follow_ups') || canView('customers');
   const { counts: leadCrmCounts } = useLeadCrmCounts(showLeadCrmAccordion);
@@ -306,7 +309,7 @@ export default function Layout({ children }) {
     master_data: canView('customers') || canView('vendor_management'),
     lead_crm: showLeadCrmAccordion && leadCrmVisibleChildren.length > 0,
     sales_pipeline: showSalesPipelineAccordion && salesVisibleChildren.length > 0,
-    floor_quality: canView('floor_pipeline') && floorVisibleChildren.length > 0,
+    floor_quality: floorVisibleChildren.length > 0,
     inventory: inventoryVisibleChildren.length > 0,
     vendor: showVendorAccordion,
     finance: showFinanceAccordion && financeVisibleChildren.length > 0,

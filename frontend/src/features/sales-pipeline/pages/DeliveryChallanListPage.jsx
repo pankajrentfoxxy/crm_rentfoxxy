@@ -7,7 +7,7 @@ import { PageHeader, StatCard, Button, ResponsiveTable, SearchField, ListPaginat
 import DCForm from '../components/DCForm';
 import DispatchModal from '../components/DispatchModal';
 import QcStatusBadge from '../components/QcStatusBadge';
-import { getDcQcStatus, listDCs } from '../salesPipelineApi';
+import { listDCs } from '../salesPipelineApi';
 import { DC_STATUS_STYLES, DISPATCH_MODE_STYLES, formatDate, statusLabel, deliveryChallanDetailPath } from '../salesPipelineUtils';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 
@@ -17,7 +17,6 @@ const PAGE_SIZE = 25;
 export default function DeliveryChallanListPage() {
   const navigate = useNavigate();
   const [rows, setRows] = useState([]);
-  const [qcMap, setQcMap] = useState({});
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('all');
   const [page, setPage] = useState(1);
@@ -41,17 +40,6 @@ export default function DeliveryChallanListPage() {
       const list = res.data?.delivery_challans || [];
       setRows(list);
       setPagination(res.data?.pagination || { page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
-      const qcEntries = await Promise.all(
-        list.map(async (r) => {
-          try {
-            const q = await getDcQcStatus(r.dc_number);
-            return [r.dc_number, q.data];
-          } catch {
-            return [r.dc_number, null];
-          }
-        })
-      );
-      setQcMap(Object.fromEntries(qcEntries));
     } catch {
       toast.error('Failed to load delivery challans');
     } finally {
@@ -70,7 +58,7 @@ export default function DeliveryChallanListPage() {
   }), [rows, pagination.total]);
 
   const dispatchCell = (row) => {
-    const qc = qcMap[row.dc_number];
+    const qc = row.qc_status;
     const canDispatch = (row.status === 'pending' || !row.status) && qc?.all_passed;
     return (
       <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
@@ -94,12 +82,12 @@ export default function DeliveryChallanListPage() {
       key: 'qc',
       header: 'QC',
       render: (r) => {
-        const qc = qcMap[r.dc_number];
+        const qc = r.qc_status;
         return (
           <QcStatusBadge
             allPassed={qc?.all_passed}
             pendingCount={qc?.pending_count}
-            failedCount={qc?.tickets?.filter((t) => t.status === 'qc_failed').length}
+            failedCount={qc?.failed_count}
             totalCount={qc?.total_count}
           />
         );
@@ -110,7 +98,7 @@ export default function DeliveryChallanListPage() {
   ];
 
   const renderCard = (r) => {
-    const qc = qcMap[r.dc_number];
+    const qc = r.qc_status;
     return (
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-2">
@@ -127,7 +115,7 @@ export default function DeliveryChallanListPage() {
           <QcStatusBadge
             allPassed={qc?.all_passed}
             pendingCount={qc?.pending_count}
-            failedCount={qc?.tickets?.filter((t) => t.status === 'qc_failed').length}
+            failedCount={qc?.failed_count}
             totalCount={qc?.total_count}
           />
           {dispatchCell(r)}
@@ -135,6 +123,8 @@ export default function DeliveryChallanListPage() {
       </div>
     );
   };
+
+  const dispatchQc = dispatchDc ? rows.find((r) => r.dc_number === dispatchDc)?.qc_status : null;
 
   return (
     <div className="p-4 max-w-7xl mx-auto">
@@ -192,7 +182,7 @@ export default function DeliveryChallanListPage() {
       <DispatchModal
         open={Boolean(dispatchDc)}
         dcNumber={dispatchDc}
-        qcBlocked={dispatchDc && !qcMap[dispatchDc]?.all_passed}
+        qcBlocked={dispatchDc && !dispatchQc?.all_passed}
         onClose={() => setDispatchDc(null)}
         onDispatched={load}
       />

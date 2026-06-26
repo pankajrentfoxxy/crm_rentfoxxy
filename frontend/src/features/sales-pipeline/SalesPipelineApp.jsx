@@ -26,7 +26,7 @@ function SalesIndexRedirect() {
   if (canView('delivery_register_management')) return <Navigate to="delivery-register" replace />;
   if (canView('return_dc')) return <Navigate to="return-dc" replace />;
   if (canView('technician_bucket')) return <Navigate to="my-deliveries" replace />;
-  return <Navigate to="delivery-challans" replace />;
+  return <Navigate to="/dashboard" replace />;
 }
 
 export default function SalesPipelineApp() {

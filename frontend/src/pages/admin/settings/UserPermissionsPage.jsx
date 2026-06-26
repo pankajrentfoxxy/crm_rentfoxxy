@@ -4,6 +4,7 @@ import RoleBadge from '../../../components/ui/RoleBadge';
 import { ToastContainer, useToast } from '../../../components/ui/Toast';
 import { ROLE_DISPLAY_NAMES } from '../../../constants/roles';
 import { SECTION_LABELS } from '../../../constants/sections';
+import { useAuth } from '../../../context/AuthContext';
 import {
   RBAC_ACTIONS,
   RBAC_CRM_ROLES,
@@ -167,6 +168,7 @@ function UserPermissionSectionCard({
 }
 
 export default function UserPermissionsPage() {
+  const { user, refreshPermissions } = useAuth();
   const { toasts, setToasts, showToast } = useToast();
   const showToastRef = useRef(showToast);
   showToastRef.current = showToast;
@@ -300,6 +302,9 @@ export default function UserPermissionsPage() {
       setEditingSection(null);
       setDraftOverrides(null);
       await loadUserPermissions(selectedUserId);
+      if (String(user?.user_id) === String(selectedUserId)) {
+        await refreshPermissions();
+      }
     } catch (err) {
       showToastRef.current(err.response?.data?.message || 'Save failed', 'error');
     } finally {
@@ -314,6 +319,9 @@ export default function UserPermissionsPage() {
       await resetUserPermissions(selectedUserId);
       showToastRef.current('Reset to role defaults', 'success');
       await loadUserPermissions(selectedUserId);
+      if (String(user?.user_id) === String(selectedUserId)) {
+        await refreshPermissions();
+      }
     } catch (err) {
       showToastRef.current(err.response?.data?.message || 'Reset failed', 'error');
     } finally {

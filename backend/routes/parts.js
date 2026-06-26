@@ -10,18 +10,18 @@ router.use(authMiddleware);
 // @route   GET /api/parts
 // @desc    Get all parts
 // @access  Private
-router.get('/', getAllParts);
+router.get('/', cp('parts_inventory', 'view'), getAllParts);
 
 // @route   GET /api/parts/grouped
 // @desc    Get parts grouped by category
-router.get('/grouped', getPartsGrouped);
+router.get('/grouped', cp('parts_inventory', 'view'), getPartsGrouped);
 
 // @route   POST /api/parts
 // @desc    Create a new part
 // @access  Private (Manager, Admin)
 router.post('/', cp('parts_inventory', 'create'), createPart);
 
-router.get('/:id/usage', getPartUsage);
+router.get('/:id/usage', cp('parts_inventory', 'view'), getPartUsage);
 
 // @route   PUT /api/parts/:id
 // @desc    Update part details

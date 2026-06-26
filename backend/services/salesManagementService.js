@@ -327,6 +327,36 @@ async function getSalesOrderLines(salesOrderNumber) {
   return result.rows;
 }
 
+/** Aggregate pre-dispatch QC status for many DCs in one query (list page). */
+async function getDcQcStatusSummaries(dcNumbers) {
+  const numbers = [...new Set((dcNumbers || []).filter(Boolean))];
+  if (!numbers.length) return {};
+
+  const { rows } = await pool.query(
+    `SELECT dc_number,
+            COUNT(*)::int AS total_count,
+            COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_count,
+            COUNT(*) FILTER (WHERE status = 'qc_failed')::int AS failed_count,
+            COUNT(*) FILTER (WHERE status = 'qc_passed')::int AS passed_count
+       FROM dc_qc_tickets
+      WHERE dc_number = ANY($1::text[])
+      GROUP BY dc_number`,
+    [numbers]
+  );
+
+  const out = {};
+  for (const r of rows) {
+    out[r.dc_number] = {
+      all_passed: r.total_count > 0 && r.passed_count === r.total_count,
+      any_failed: r.failed_count > 0,
+      pending_count: r.pending_count,
+      failed_count: r.failed_count,
+      total_count: r.total_count,
+    };
+  }
+  return out;
+}
+
 async function listDeliveryChallansGrouped({ page = 1, limit = 20, search = '', status = '' }) {
   const params = [];
   const baseFilter = `COALESCE(d.movement_type, 'outbound') = 'outbound'`;
@@ -369,8 +399,19 @@ async function listDeliveryChallansGrouped({ page = 1, limit = 20, search = '', 
      LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
     listParams
   );
+  const qcSummaries = await getDcQcStatusSummaries(listResult.rows.map((r) => r.dc_number));
+  const emptyQc = {
+    all_passed: false,
+    any_failed: false,
+    pending_count: 0,
+    failed_count: 0,
+    total_count: 0,
+  };
   return {
-    delivery_challans: listResult.rows,
+    delivery_challans: listResult.rows.map((row) => ({
+      ...row,
+      qc_status: qcSummaries[row.dc_number] || emptyQc,
+    })),
     pagination: {
       page,
       limit,

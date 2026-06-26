@@ -736,23 +736,31 @@ exports.getDeliveryChallan = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Delivery challan not found' });
     }
 
-    // Resolve full laptop specs for every attached serial from the authoritative
-    // source (vendor_serial_numbers + vendor_product_details), since the DC line
-    // itself only stores brand/model.
+    // Resolve full laptop specs for every attached serial. Migrated units often
+    // have empty extra/vendor_product_details, so fall back to the inventory
+    // table (the authoritative spec store for legacy stock).
     const specSelect = `
       SELECT vsn.serial_id, vsn.serial_number, vsn.inventory_asset_code,
-             COALESCE(vsn.extra->>'brand', vpd.brand) AS brand,
-             COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', vpd.model) AS model,
-             COALESCE(vsn.extra->>'processor', vpd.processor) AS processor,
-             COALESCE(vsn.extra->>'generation', vpd.generation) AS generation,
-             COALESCE(vsn.extra->>'ram', vpd.ram) AS ram,
-             COALESCE(vsn.extra->>'storage', vpd.storage) AS storage,
-             COALESCE(vsn.extra->>'gpu', vpd.gpu) AS gpu,
-             COALESCE(vsn.extra->>'screen_size', vpd.screen_size) AS screen_size,
+             COALESCE(vsn.extra->>'brand', vpd.brand, inv.brand) AS brand,
+             COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', vpd.model, inv.model) AS model,
+             COALESCE(vsn.extra->>'processor', vpd.processor, inv.processor) AS processor,
+             COALESCE(vsn.extra->>'generation', vpd.generation, inv.generation) AS generation,
+             COALESCE(vsn.extra->>'ram', vpd.ram, inv.ram) AS ram,
+             COALESCE(vsn.extra->>'storage', vpd.storage, inv.storage) AS storage,
+             COALESCE(vsn.extra->>'gpu', vpd.gpu, inv.gpu) AS gpu,
+             COALESCE(vsn.extra->>'screen_size', vpd.screen_size, inv.screen_size) AS screen_size,
              vsn.inventory_status
       FROM vendor_serial_numbers vsn
       LEFT JOIN vendor_product_details vpd
         ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id', '')::int
+      LEFT JOIN LATERAL (
+        SELECT i.brand, i.model, i.processor, i.generation, i.ram, i.storage, i.gpu, i.screen_size
+        FROM inventory i
+        WHERE i.serial_number = vsn.serial_number
+           OR i.machine_number = vsn.serial_number
+           OR i.machine_number = vsn.inventory_asset_code
+        LIMIT 1
+      ) inv ON TRUE
       WHERE vsn.deleted_at IS NULL
         AND (vsn.serial_id = ANY($1::int[]) OR vsn.serial_number = ANY($2::text[]) OR vsn.inventory_asset_code = ANY($2::text[]))`;
 

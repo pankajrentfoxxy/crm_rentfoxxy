@@ -11,6 +11,7 @@ import {
   loginAsTechnician,
   updateDeliveryTechnicianStatus,
 } from '../../utils/deliveryRegisterApi';
+import PermissionGate from '../../components/PermissionGate';
 
 function generatePassword(length = 10) {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
@@ -162,12 +163,14 @@ export default function DeliveryTechniciansPage() {
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
         </h1>
-        <Link
-          to="/delivery-register-management/technicians/add"
-          className="inline-flex items-center gap-1 px-4 py-2 bg-teal-700 text-white rounded-lg text-sm hover:bg-teal-800"
-        >
-          <Plus className="w-4 h-4" /> Add Technician
-        </Link>
+        <PermissionGate section="technician_bucket" action="create">
+          <Link
+            to="/delivery-register-management/technicians/add"
+            className="inline-flex items-center gap-1 px-4 py-2 bg-teal-700 text-white rounded-lg text-sm hover:bg-teal-800"
+          >
+            <Plus className="w-4 h-4" /> Add Technician
+          </Link>
+        </PermissionGate>
       </div>
 
       {error ? <p className="text-red-600 text-sm mb-3">{error}</p> : null}
@@ -248,41 +251,47 @@ export default function DeliveryTechniciansPage() {
                       </div>
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <label className="inline-flex items-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          className="sr-only peer"
-                          checked={row.is_active}
-                          onChange={(e) => handleStatusToggle(row, e.target.checked)}
-                        />
-                        <span className="w-10 h-5 bg-gray-300 rounded-full peer peer-checked:bg-teal-600 relative transition-colors after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:w-4 after:h-4 after:bg-white after:rounded-full after:transition-transform peer-checked:after:translate-x-5" />
-                      </label>
+                      <PermissionGate section="technician_bucket" action="edit">
+                        <label className="inline-flex items-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="sr-only peer"
+                            checked={row.is_active}
+                            onChange={(e) => handleStatusToggle(row, e.target.checked)}
+                          />
+                          <span className="w-10 h-5 bg-gray-300 rounded-full peer peer-checked:bg-teal-600 relative transition-colors after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:w-4 after:h-4 after:bg-white after:rounded-full after:transition-transform peer-checked:after:translate-x-5" />
+                        </label>
+                      </PermissionGate>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-center gap-2">
-                        <Link
-                          to={`/delivery-register-management/technicians/${row.technician_id}/edit`}
-                          className="inline-flex items-center justify-center w-8 h-8 border border-cyan-600 text-cyan-700 rounded hover:bg-cyan-50"
-                          title="Edit"
-                        >
-                          <Pencil className="w-4 h-4" />
-                        </Link>
-                        <button
-                          type="button"
-                          onClick={() => openPasswordModal(row)}
-                          className="inline-flex items-center justify-center w-8 h-8 border border-amber-500 text-amber-600 rounded hover:bg-amber-50"
-                          title="Change Password"
-                        >
-                          <KeyRound className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDelete(row)}
-                          className="inline-flex items-center justify-center w-8 h-8 border border-red-400 text-red-600 rounded hover:bg-red-50"
-                          title="Delete"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        <PermissionGate section="technician_bucket" action="edit">
+                          <Link
+                            to={`/delivery-register-management/technicians/${row.technician_id}/edit`}
+                            className="inline-flex items-center justify-center w-8 h-8 border border-cyan-600 text-cyan-700 rounded hover:bg-cyan-50"
+                            title="Edit"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </Link>
+                          <button
+                            type="button"
+                            onClick={() => openPasswordModal(row)}
+                            className="inline-flex items-center justify-center w-8 h-8 border border-amber-500 text-amber-600 rounded hover:bg-amber-50"
+                            title="Change Password"
+                          >
+                            <KeyRound className="w-4 h-4" />
+                          </button>
+                        </PermissionGate>
+                        <PermissionGate section="technician_bucket" action="delete">
+                          <button
+                            type="button"
+                            onClick={() => handleDelete(row)}
+                            className="inline-flex items-center justify-center w-8 h-8 border border-red-400 text-red-600 rounded hover:bg-red-50"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </PermissionGate>
                         {canLoginAsTechnician ? (
                           <button
                             type="button"

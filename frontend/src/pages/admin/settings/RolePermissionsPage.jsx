@@ -3,6 +3,7 @@ import GroupedPermissionMatrix from '../../../components/admin/GroupedPermission
 import RoleBadge from '../../../components/ui/RoleBadge';
 import { ToastContainer, useToast } from '../../../components/ui/Toast';
 import { ROLE_DESCRIPTIONS } from '../../../constants/roles';
+import { useAuth } from '../../../context/AuthContext';
 import {
   RBAC_SECTIONS,
   applyRoleDefaults,
@@ -24,6 +25,7 @@ function countChanges(matrix, baseline) {
 }
 
 export default function RolePermissionsPage() {
+  const { user, refreshPermissions } = useAuth();
   const { toasts, setToasts, showToast } = useToast();
   const showToastRef = useRef(showToast);
   showToastRef.current = showToast;
@@ -103,6 +105,9 @@ export default function RolePermissionsPage() {
       const loaded = permissionsArrayToMatrix(data.permissions, sectionList);
       setMatrix(loaded);
       setBaselineMatrix(JSON.parse(JSON.stringify(loaded)));
+      if (user?.role === selectedRole) {
+        await refreshPermissions();
+      }
       showToast('Role defaults applied', 'success');
     } catch (err) {
       showToast(err.response?.data?.message || 'Failed to apply defaults', 'error');
@@ -117,6 +122,9 @@ export default function RolePermissionsPage() {
     try {
       await saveRolePermissions(selectedRole, matrixToPermissionsArray(matrix));
       setBaselineMatrix(JSON.parse(JSON.stringify(matrix)));
+      if (user?.role === selectedRole) {
+        await refreshPermissions();
+      }
       showToast('Permissions saved', 'success');
     } catch (err) {
       showToast(err.response?.data?.message || 'Save failed', 'error');

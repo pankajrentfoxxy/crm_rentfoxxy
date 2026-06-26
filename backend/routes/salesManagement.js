@@ -4,8 +4,9 @@ const fs = require('fs');
 const multer = require('multer');
 const { multerLimits, wrapMulter } = require('../config/uploadLimits');
 const router = express.Router();
-const { authMiddleware, checkSectionPermission, checkRole } = require('../middleware/auth');
+const { authMiddleware, checkSectionPermission, checkAnySectionPermission, checkRole } = require('../middleware/auth');
 const cp = checkSectionPermission;
+const cpAny = checkAnySectionPermission;
 
 // POD photo uploads -> backend/uploads/pod (served at /uploads/pod/...)
 const podStorage = multer.diskStorage({
@@ -46,6 +47,7 @@ const rdcView = cp('return_dc', 'view');
 const rdcEdit = cp('return_dc', 'edit');
 const tbView = cp('technician_bucket', 'view');
 const tbEdit = cp('technician_bucket', 'edit');
+const drView = cpAny(['delivery_register_management', 'technician_bucket'], 'view');
 const ctrl = require('../controllers/salesManagementController');
 const sosCtrl = require('../controllers/salesOrderSerialController');
 const flowCtrl = require('../controllers/deliveryFlowController');
@@ -67,7 +69,7 @@ router.patch(...soRoute('/serial-addresses', dcEdit, ctrl.bulkUpdateSoSerialAddr
 router.patch('/so-lines/:lineId/address', dcEdit, ctrl.updateSoLineAddress);
 
 // Phase 13 — delivery flow (technician bucket / my deliveries / OTP / POD)
-router.get('/delivery-flow', tbView, flowCtrl.listDeliveryFlow);
+router.get('/delivery-flow', drView, flowCtrl.listDeliveryFlow);
 router.get('/my-deliveries', tbView, flowCtrl.getMyDeliveries);
 router.patch(...dcRoute('/reached', tbEdit, flowCtrl.markTechReached));
 router.post(...dcRoute('/verify-serial', tbEdit, flowCtrl.verifySerialAndGenerateOtp));

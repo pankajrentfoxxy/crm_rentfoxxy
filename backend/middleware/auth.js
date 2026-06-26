@@ -90,10 +90,16 @@ const checkSectionPermission = (section, action = 'view') => {
   return sectionCheck(section, action);
 };
 
+const checkAnySectionPermission = (sections, action = 'view') => {
+  const { checkAnySectionPermission: anyCheck } = require('./checkPermission');
+  return anyCheck(sections, action);
+};
+
 module.exports = {
   authMiddleware,
   checkRole,
   checkPermission,
   checkRoleOrPermission,
   checkSectionPermission,
+  checkAnySectionPermission,
 };

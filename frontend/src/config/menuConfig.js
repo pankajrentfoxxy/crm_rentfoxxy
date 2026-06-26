@@ -34,28 +34,26 @@ export const vendorAccordionChildren = [
 ];
 
 /** Production accordion (formerly Floor & Quality).
- *  All pages live under /floor-pipeline/* which is guarded by a single
- *  'floor_pipeline' section, so every child uses that section to keep the
- *  sidebar in lock-step with what the route actually allows. */
+ *  Each child uses the granular section its page/API enforces. Users with the
+ *  legacy floor_pipeline parent grant still see all production pages. */
 export const floorPipelineAccordionChildren = [
-  { label: 'Floor Dashboard', path: '/floor-pipeline/dashboard', section: 'floor_pipeline' },
-  { label: 'All Tickets', path: '/floor-pipeline/tickets', section: 'floor_pipeline', countKey: 'all_tickets' },
-  { label: 'QC Queue', path: '/floor-pipeline/tickets?stage=QC1,QC2', section: 'floor_pipeline', countKey: 'qc_queue' },
-  { label: 'Chip Level Repair', path: '/floor-pipeline/tickets?stage=Chip+Level+Repair', section: 'floor_pipeline', countKey: 'chip_level' },
-  { label: 'Body & Paint', path: '/floor-pipeline/tickets?stage=Body+%26+Paint', section: 'floor_pipeline', countKey: 'body_paint' },
+  { label: 'Floor Dashboard', path: '/floor-pipeline/dashboard', section: 'floor_tickets' },
+  { label: 'All Tickets', path: '/floor-pipeline/tickets', section: 'floor_tickets', countKey: 'all_tickets' },
+  { label: 'QC Queue', path: '/floor-pipeline/tickets?stage=QC1,QC2', section: 'floor_tickets', countKey: 'qc_queue' },
+  { label: 'Chip Level Repair', path: '/floor-pipeline/tickets?stage=Chip+Level+Repair', section: 'chip_level_repair', countKey: 'chip_level' },
+  { label: 'Body & Paint', path: '/floor-pipeline/tickets?stage=Body+%26+Paint', section: 'floor_tickets', countKey: 'body_paint' },
 ];
 
-/** Inventory accordion. All pages live under /inventory-management/* (guarded by
- *  'inventory_management'). 'Customer Assets' is the deployed-fleet view (laptops
- *  currently out with customers), distinct from Master Data > Customers. */
+/** Inventory accordion — each child maps to the RBAC section the route/API enforces. */
 export const inventoryAccordionChildren = [
   { label: 'Stock Management', path: '/inventory-management/universal-search', section: 'inventory_management' },
   { label: 'QC Process Laptops', path: '/inventory-management/qc-process', countKey: 'qc_process', section: 'inventory_management' },
   { label: 'Ready to Rent/Sell', path: '/inventory-management/ready-to-rent-or-sell', countKey: 'passed', section: 'inventory_management' },
-  { label: 'Parts Inventory', path: '/inventory-management/parts', section: 'inventory_management' },
-  { label: 'Parts Movement History', path: '/inventory-management/parts-history', section: 'inventory_management' },
-  { label: 'Parts Approval', path: '/inventory-management/parts-approval', countKey: 'parts_pending', section: 'inventory_management' },
-  { label: 'Deployed Fleet (All Customers)', path: '/inventory-management/customer-assets', section: 'inventory_management' },
+  { label: 'Parts Inventory', path: '/inventory-management/parts', section: 'parts_inventory' },
+  { label: 'Parts Movement History', path: '/inventory-management/parts-history', section: 'parts_inventory' },
+  { label: 'Parts Approval', path: '/inventory-management/parts-approval', countKey: 'parts_pending', section: 'parts_inventory' },
+  { label: 'Deployed Fleet (All Customers)', path: '/inventory-management/customer-assets', section: 'customer_inventory' },
+  { label: 'TTSPL History', path: '/inventory-management/ttspl-history', section: 'ttspl_history' },
 ];
 
 /** Sales Pipeline. Each child uses the GRANULAR section its backend API enforces
@@ -67,7 +65,7 @@ export const salesPipelineAccordionChildren = [
   { label: 'Sales Orders', path: '/sales-pipeline/sales-orders', section: 'sales_orders_doc', countKey: 'sales_orders' },
   { label: 'Delivery Challans', path: '/sales-pipeline/delivery-challans', section: 'delivery_challans', countKey: 'delivery_challans' },
   { label: 'Delivery Register', path: '/sales-pipeline/delivery-register', section: 'delivery_register_management' },
-  { label: 'Delivery Technicians', path: '/delivery-register-management/technicians', section: 'delivery_register_management' },
+  { label: 'Delivery Technicians', path: '/delivery-register-management/technicians', section: 'technician_bucket' },
   { label: 'Technician Bucket', path: '/sales-pipeline/technician-bucket', section: 'technician_bucket' },
   { label: 'My Deliveries', path: '/sales-pipeline/my-deliveries', section: 'technician_bucket' },
   { label: 'Return DC', path: '/sales-pipeline/return-dc', section: 'return_dc', countKey: 'return_dc' },
@@ -184,7 +182,7 @@ export const MENU_GROUPS = [
     items: [
       {
         type: 'inventoryAccordion',
-        sections: ['inventory_management'],
+        sections: ['inventory', 'inventory_management', 'parts', 'parts_inventory', 'customer_inventory', 'ttspl_history'],
         section: 'inventory_management',
         icon: Package,
         label: 'Inventory',
@@ -273,17 +271,15 @@ export function isMenuItemVisible(item, canView) {
   }
 
   if (item.type === 'salesPipelineAccordion') {
-    if (item.section && canView(item.section)) return true;
-    return (item.children || []).some((child) => (child.section ? canView(child.section) : true));
+    return (item.children || []).some((child) => isSalesPipelineChildVisible(child, canView));
   }
 
   if (item.type === 'financeAccordion') {
-    if (item.section && canView(item.section)) return true;
-    return (item.children || []).some((child) => (child.section ? canView(child.section) : true));
+    return (item.children || []).some((child) => isFinanceChildVisible(child, canView));
   }
 
   if (item.type === 'reportsAccordion') {
-    return (item.children || []).some((child) => (child.section ? canView(child.section) : true));
+    return (item.children || []).some((child) => isReportsChildVisible(child, canView));
   }
 
   if (item.type === 'deliveryRegisterAccordion') {
@@ -319,25 +315,25 @@ export function isMenuItemVisible(item, canView) {
 
 export function isLeadCrmChildVisible(child, canView) {
   if (child.section) return canView(child.section);
-  return true;
+  return false;
 }
 
 export function isOperationChildVisible(child, canView) {
   if (child.section) return canView(child.section);
-  return true;
+  return false;
 }
 
 export function isSalesPipelineChildVisible(child, canView) {
   if (child.section) return canView(child.section);
-  return true;
+  return false;
 }
 
 export function isFinanceChildVisible(child, canView) {
   if (child.section) return canView(child.section);
-  return true;
+  return false;
 }
 
-export function isReportsChildVisible(child, canView, userRole) {
+export function isReportsChildVisible(child, canView, userRole = null) {
   if (child.path === '/reports/manager-dashboard' && userRole === 'sales') return false;
   if (child.path === '/reports/sales-dashboard' && !['admin', 'manager', 'sales'].includes(userRole)) {
     return canView(child.section);
@@ -346,25 +342,26 @@ export function isReportsChildVisible(child, canView, userRole) {
     return canView('reports_access') || canView('reports');
   }
   if (child.section) return canView(child.section);
-  return true;
+  return false;
 }
 
 export function isSettingsChildVisible(child, canView) {
   if (child.section) return canView(child.section);
-  return true;
+  return false;
 }
 
 export function isInventoryChildVisible(child, canView) {
   if (child.section) return canView(child.section);
-  return true;
+  return false;
 }
 
 export function isDeliveryRegisterChildVisible(child, canView) {
   if (child.section) return canView(child.section);
-  return true;
+  return false;
 }
 
 export function isFloorPipelineChildVisible(child, canView) {
+  if (canView('floor_pipeline')) return true;
   if (child.section) return canView(child.section);
-  return true;
+  return false;
 }

@@ -23,14 +23,14 @@ export const deliveryRegisterManagementRoutes = [
   { path: '/delivery-register-management/bucket-list', element: guard('technicians_bucket_list', withLayout(<TechniciansBucketListPage />)) },
   {
     path: '/delivery-register-management/technicians',
-    element: guard('delivery_register_management', withLayout(<DeliveryTechniciansPage />)),
+    element: guard('technician_bucket', withLayout(<DeliveryTechniciansPage />)),
   },
   {
     path: '/delivery-register-management/technicians/add',
-    element: guard('delivery_register_management', withLayout(<DeliveryTechnicianFormPage />), 'create'),
+    element: guard('technician_bucket', withLayout(<DeliveryTechnicianFormPage />), 'create'),
   },
   {
     path: '/delivery-register-management/technicians/:id/edit',
-    element: guard('delivery_register_management', withLayout(<DeliveryTechnicianFormPage />), 'edit'),
+    element: guard('technician_bucket', withLayout(<DeliveryTechnicianFormPage />), 'edit'),
   },
 ];

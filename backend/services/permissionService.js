@@ -2,6 +2,31 @@ const pool = require('../config/db');
 
 const VALID_ACTIONS = new Set(['can_view', 'can_create', 'can_edit', 'can_delete']);
 
+const SECTION_ALIASES = {
+  reports_access: ['reports_access', 'reports'],
+  reports: ['reports', 'reports_access'],
+  follow_ups: ['follow_ups', 'lead_follow_ups'],
+  lead_follow_ups: ['follow_ups', 'lead_follow_ups'],
+  sales_orders: ['sales_orders', 'sales_orders_doc'],
+  sales_orders_doc: ['sales_orders', 'sales_orders_doc'],
+};
+
+function sectionsToCheck(section) {
+  return SECTION_ALIASES[section] || [section];
+}
+
+async function getEffectivePermissionForKey(userId, role, section, normalizedAction) {
+  const userRow = await getUserPermissionRow(userId, section);
+  if (userRow && userRow[normalizedAction] !== null && userRow[normalizedAction] !== undefined) {
+    return userRow[normalizedAction] === true;
+  }
+
+  const roleRow = await getRolePermissionRow(role, section);
+  if (roleRow && roleRow[normalizedAction] === true) return true;
+
+  return false;
+}
+
 const DEFAULT_SECTIONS = [
   'dashboard', 'inventory', 'tickets', 'leads', 'sales_orders', 'follow_ups', 'lead_orders',
   'customers', 'manager_dashboard', 'reports', 'parts', 'procurement', 'vendor_management',
@@ -64,19 +89,17 @@ async function getUserPermissionRow(userId, section) {
 }
 
 /**
- * Resolve effective permission: user override (if non-null) ?? role default ?? false
+ * Resolve effective permission: user override (if non-null) ?? role default ?? false.
+ * Checks section aliases (e.g. follow_ups / lead_follow_ups).
  */
 async function getEffectivePermission(userId, role, section, action) {
   const normalizedAction = normalizeAction(action);
   if (!normalizedAction) return false;
 
-  const userRow = await getUserPermissionRow(userId, section);
-  if (userRow && userRow[normalizedAction] !== null && userRow[normalizedAction] !== undefined) {
-    return userRow[normalizedAction] === true;
+  for (const key of sectionsToCheck(section)) {
+    const allowed = await getEffectivePermissionForKey(userId, role, key, normalizedAction);
+    if (allowed) return true;
   }
-
-  const roleRow = await getRolePermissionRow(role, section);
-  if (roleRow && roleRow[normalizedAction] === true) return true;
 
   return false;
 }
