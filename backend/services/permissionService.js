@@ -217,12 +217,12 @@ async function upsertRolePermissions(role, permissions) {
   return results;
 }
 
-async function upsertUserPermissions(userId, permissions, grantedBy) {
+async function upsertUserPermissions(userId, permissions, grantedBy, db = pool) {
   const results = [];
   for (const perm of permissions) {
     const { section, can_view, can_create, can_edit, can_delete } = perm;
     if (!section) continue;
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO user_permissions (user_id, section, can_view, can_create, can_edit, can_delete, granted_by, granted_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
        ON CONFLICT (user_id, section)
@@ -239,6 +239,22 @@ async function upsertUserPermissions(userId, permissions, grantedBy) {
     results.push(result.rows[0]);
   }
   return results;
+}
+
+async function replaceUserPermissions(userId, permissions, grantedBy) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM user_permissions WHERE user_id = $1', [userId]);
+    const results = await upsertUserPermissions(userId, permissions, grantedBy, client);
+    await client.query('COMMIT');
+    return results;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function buildEffectivePermissionsForUser(userId, role) {
@@ -281,6 +297,7 @@ module.exports = {
   buildUserPermissionsPayload,
   upsertRolePermissions,
   upsertUserPermissions,
+  replaceUserPermissions,
   buildEffectivePermissionsForUser,
   resetUserPermissions,
 };

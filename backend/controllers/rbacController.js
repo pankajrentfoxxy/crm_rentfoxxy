@@ -9,7 +9,7 @@ const {
   listAllRolePermissions,
   buildUserPermissionsPayload,
   upsertRolePermissions,
-  upsertUserPermissions,
+  replaceUserPermissions,
   resetUserPermissions,
 } = require('../services/permissionService');
 
@@ -421,7 +421,7 @@ exports.updateUserPermissionsById = async (req, res) => {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    const updatedPermissions = await upsertUserPermissions(userId, permissions, req.user.user_id);
+    const updatedPermissions = await replaceUserPermissions(userId, permissions, req.user.user_id);
 
     await logPermissionAudit({
       actorUserId: req.user.user_id,

@@ -65,7 +65,7 @@ export const salesPipelineAccordionChildren = [
   { label: 'Sales Orders', path: '/sales-pipeline/sales-orders', section: 'sales_orders_doc', countKey: 'sales_orders' },
   { label: 'Delivery Challans', path: '/sales-pipeline/delivery-challans', section: 'delivery_challans', countKey: 'delivery_challans' },
   { label: 'Delivery Register', path: '/sales-pipeline/delivery-register', section: 'delivery_register_management' },
-  { label: 'Delivery Technicians', path: '/delivery-register-management/technicians', section: 'technician_bucket' },
+  { label: 'Delivery Technicians', path: '/delivery-register-management/technicians', section: 'delivery_register_management' },
   { label: 'Technician Bucket', path: '/sales-pipeline/technician-bucket', section: 'technician_bucket' },
   { label: 'My Deliveries', path: '/sales-pipeline/my-deliveries', section: 'technician_bucket' },
   { label: 'Return DC', path: '/sales-pipeline/return-dc', section: 'return_dc', countKey: 'return_dc' },

@@ -59,12 +59,14 @@ export default function FloorTicketListPage() {
       if (priorityFilter) params.priority = priorityFilter;
       if (typeFilter) params.ticket_type = typeFilter;
       if (stageFilter) params.stage_names = stageFilter;
-      params.page = page;
-      params.limit = PAGE_SIZE;
+      if (view === 'table') {
+        params.page = page;
+        params.limit = PAGE_SIZE;
+      }
       const { data } = await fetchFloorTickets(params);
       if (data.success) {
         setTickets(data.tickets || []);
-        if (data.pagination) {
+        if (view === 'table' && data.pagination) {
           setPagination(data.pagination);
         } else {
           setPagination({ page: 1, totalPages: 1, total: data.tickets?.length || 0, limit: PAGE_SIZE });
@@ -75,7 +77,7 @@ export default function FloorTicketListPage() {
     } finally {
       setLoading(false);
     }
-  }, [debouncedSearch, priorityFilter, typeFilter, stageFilter, page]);
+  }, [debouncedSearch, priorityFilter, typeFilter, stageFilter, view, page]);
 
   useEffect(() => { setPage(1); }, [debouncedSearch, priorityFilter, typeFilter, stageFilter, view]);
 

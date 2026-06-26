@@ -77,7 +77,7 @@ export default function DeliveryRegisterPage() {
           <h1 className="text-2xl font-semibold text-gray-900">Delivery Register</h1>
           <p className="text-sm text-gray-500">Track dispatched, in-transit and delivered challans</p>
         </div>
-        <PermissionGate section="technician_bucket" action="view">
+        <PermissionGate section="delivery_register_management" action="view">
           <Link
             to="/delivery-register-management/technicians"
             className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-teal-800 bg-teal-50 border border-teal-200 rounded-lg hover:bg-teal-100"

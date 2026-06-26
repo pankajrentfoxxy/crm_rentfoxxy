@@ -163,7 +163,7 @@ export default function DeliveryTechniciansPage() {
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
         </h1>
-        <PermissionGate section="technician_bucket" action="create">
+        <PermissionGate section="delivery_register_management" action="create">
           <Link
             to="/delivery-register-management/technicians/add"
             className="inline-flex items-center gap-1 px-4 py-2 bg-teal-700 text-white rounded-lg text-sm hover:bg-teal-800"
@@ -251,7 +251,7 @@ export default function DeliveryTechniciansPage() {
                       </div>
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <PermissionGate section="technician_bucket" action="edit">
+                      <PermissionGate section="delivery_register_management" action="edit">
                         <label className="inline-flex items-center cursor-pointer">
                           <input
                             type="checkbox"
@@ -265,7 +265,7 @@ export default function DeliveryTechniciansPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-center gap-2">
-                        <PermissionGate section="technician_bucket" action="edit">
+                        <PermissionGate section="delivery_register_management" action="edit">
                           <Link
                             to={`/delivery-register-management/technicians/${row.technician_id}/edit`}
                             className="inline-flex items-center justify-center w-8 h-8 border border-cyan-600 text-cyan-700 rounded hover:bg-cyan-50"
@@ -282,7 +282,7 @@ export default function DeliveryTechniciansPage() {
                             <KeyRound className="w-4 h-4" />
                           </button>
                         </PermissionGate>
-                        <PermissionGate section="technician_bucket" action="delete">
+                        <PermissionGate section="delivery_register_management" action="delete">
                           <button
                             type="button"
                             onClick={() => handleDelete(row)}

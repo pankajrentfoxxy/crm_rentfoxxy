@@ -133,10 +133,7 @@ export default function UserPermissionsPage() {
     setSaving(true);
     try {
       const overrides = matrixDiffToOverridePayload(matrix, roleDefaultsMatrix);
-      await resetUserPermissions(selectedUserId);
-      if (overrides.length) {
-        await saveUserPermissions(selectedUserId, overrides);
-      }
+      await saveUserPermissions(selectedUserId, overrides);
       setSavedMatrix(JSON.parse(JSON.stringify(matrix)));
       if (String(user?.user_id) === String(selectedUserId)) {
         await refreshPermissions();
