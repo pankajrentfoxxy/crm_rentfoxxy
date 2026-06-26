@@ -2,14 +2,16 @@
  * Inventory Management REST API — Laravel admin/inventory routes parity.
  */
 const express = require('express');
-const { authMiddleware, checkSectionPermission, checkAnySectionPermission } = require('../middleware/auth');
+const { authMiddleware, checkRole, checkSectionPermission, checkAnySectionPermission } = require('../middleware/auth');
 const inventoryList = require('../controllers/inventoryManagement/inventoryList.controller');
+const qcProcess = require('../controllers/inventoryManagement/qcProcess.controller');
 const serialStatus = require('../controllers/inventoryManagement/serialStatus.controller');
 const universalSearch = require('../controllers/inventoryManagement/universalSearch.controller');
 
 const router = express.Router();
 
 const invView = [authMiddleware, checkSectionPermission('inventory_management', 'view')];
+const invAdmin = [authMiddleware, checkRole('admin'), checkSectionPermission('inventory_management', 'edit')];
 const custInvView = [authMiddleware, checkSectionPermission('customer_inventory', 'view')];
 const moduleEntry = [
   authMiddleware,
@@ -29,9 +31,24 @@ router.get('/', moduleEntry, (req, res) =>
       '/serial-number-status',
       '/universal-search',
       '/spare-parts',
-      '/ready-to-rent-action'
+      '/ready-to-rent-action',
+      '/qc-process/add-laptop',
+      '/qc-process/move-from-passed'
     ]
   })
+);
+
+router.post(
+  '/qc-process/add-laptop',
+  invAdmin,
+  qcProcess.addLaptopValidators,
+  qcProcess.addLaptop
+);
+router.post(
+  '/qc-process/move-from-passed',
+  invAdmin,
+  qcProcess.moveToQcValidators,
+  qcProcess.moveToQcProcess
 );
 
 router.get('/lists/counts', invView, inventoryList.getListCounts);

@@ -12,11 +12,11 @@
  * Usage:
  *   cd migration
  *   npm run reconcile:leads-tickets          # before
- *   npm run migrate:leads-tickets:force     # run 033 + 034
+ *   npm run migrate:leads-tickets:force     # run 033 + 034 + 035
  *   npm run reconcile:leads-tickets          # after
  *
  * Options:
- *   --only=033|034
+ *   --only=033|034|035
  *   --force
  *   --skip-reconcile
  */
@@ -29,6 +29,7 @@ const { writeLog } = require('./lib/logger');
 
 const mod033 = require('./scripts/033_refurb_leads');
 const mod034 = require('./scripts/034_refurb_tickets');
+const mod035 = require('./scripts/035_lead_assignments_resync');
 
 function runReconcile(label) {
   console.log(`\n--- Reconciliation (${label}) ---`);
@@ -56,7 +57,7 @@ async function main() {
 
   await initRefurbMigrationInfrastructure();
 
-  const modules = [mod033, mod034].filter((m) => !onlyId || m.id === onlyId);
+  const modules = [mod033, mod034, mod035].filter((m) => !onlyId || m.id === onlyId);
   if (!modules.length) throw new Error(`Module ${onlyId} not found`);
 
   let total = 0;

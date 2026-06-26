@@ -1,6 +1,7 @@
 const { query, validationResult } = require('express-validator');
 const pool = require('../../config/db');
 const { enrichSerialRowsBatch } = require('../../services/inventoryManagementService');
+const { loadErpSerialHistory } = require('../../services/erpSerialHistoryService');
 
 const searchValidators = [query('serial_number').notEmpty().trim()];
 
@@ -28,36 +29,29 @@ async function serialNumberStatus(req, res) {
          AND (
            s.serial_number ILIKE $1
            OR COALESCE(s.inventory_asset_code, '') ILIKE $1
+           OR COALESCE(s.extra->>'unique_product_serial', '') ILIKE $1
          )
        ORDER BY s.serial_id DESC`,
       [`%${serial}%`]
     );
 
     const serialRows = await enrichSerialRowsBatch(pool, rowsR.rows);
-
-    const inwardR = await pool.query(
-      `SELECT * FROM allocation_logs WHERE serial_number ILIKE $1 AND in_ward = 'active' ORDER BY id DESC`,
-      [`%${serial}%`]
-    );
-    const outwardR = await pool.query(
-      `SELECT * FROM allocation_logs WHERE serial_number ILIKE $1 AND out_ward = 'active' ORDER BY id DESC`,
-      [`%${serial}%`]
-    );
-    const txR = await pool.query(
-      `SELECT * FROM inward_outward
-       WHERE product_type IS DISTINCT FROM 'parts'
-         AND (serial_number ILIKE $1 OR unique_number ILIKE $1)
-       ORDER BY id DESC`,
-      [`%${serial}%`]
-    );
+    const erpHistory = await loadErpSerialHistory(pool, serial);
 
     res.json({
       success: true,
       serial_number: serial,
       serials: serialRows,
-      inward: inwardR.rows,
-      outward: outwardR.rows,
-      transactions: txR.rows
+      /** @deprecated Use erp_history_* — kept for backward compatibility */
+      inward: erpHistory.erp_history_inward,
+      outward: erpHistory.erp_history_outward,
+      transactions: erpHistory.erp_history_summary,
+      erp_history: erpHistory.erp_history,
+      erp_history_inward: erpHistory.erp_history_inward,
+      erp_history_outward: erpHistory.erp_history_outward,
+      erp_history_summary: erpHistory.erp_history_summary,
+      erp_history_count: erpHistory.erp_history_count,
+      has_migrated_serial: erpHistory.has_migrated_serial
     });
   } catch (e) {
     console.error('serialNumberStatus', e);

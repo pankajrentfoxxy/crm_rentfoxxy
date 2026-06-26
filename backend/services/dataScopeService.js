@@ -35,10 +35,14 @@ function scopeUserId(user) {
 async function getEffectiveDataScope(userId, role, section, cache) {
   if (role === 'super_admin') return DATA_SCOPE_ALL;
 
-  for (const key of sectionsToCheck(section)) {
+  const keys = sectionsToCheck(section);
+
+  // Pass 1: user overrides on any section alias win over role defaults.
+  for (const key of keys) {
     const cacheKey = `${key}:scope`;
     if (cache && Object.prototype.hasOwnProperty.call(cache, cacheKey)) {
       if (cache[cacheKey] === DATA_SCOPE_ASSIGNED) return DATA_SCOPE_ASSIGNED;
+      if (cache[cacheKey] === DATA_SCOPE_ALL) return DATA_SCOPE_ALL;
       continue;
     }
 
@@ -49,9 +53,13 @@ async function getEffectiveDataScope(userId, role, section, cache) {
     }
     if (userRow?.data_scope === DATA_SCOPE_ALL) {
       if (cache) cache[cacheKey] = DATA_SCOPE_ALL;
-      continue;
+      return DATA_SCOPE_ALL;
     }
+  }
 
+  // Pass 2: inherit role default when no user override on any alias.
+  for (const key of keys) {
+    const cacheKey = `${key}:scope`;
     const roleRow = await getRolePermissionRow(role, key);
     const roleScope = roleRow?.data_scope === DATA_SCOPE_ASSIGNED
       ? DATA_SCOPE_ASSIGNED

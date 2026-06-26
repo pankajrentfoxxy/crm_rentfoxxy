@@ -7,6 +7,7 @@ const {
 } = require('../services/ticketWorkLogService');
 const { applyGrnVendorQcPassOnTicketComplete } = require('../services/grnTicketService');
 const ttsplAuditService = require('../services/ttsplAuditService');
+const { hasPermission } = require('../services/permissionService');
 const {
   resolveTicketListScope,
   buildTicketListAssignmentClause,
@@ -343,26 +344,54 @@ exports.getTickets = async (req, res) => {
   }
 };
 
-// Floor pipeline sidebar counts (active tickets per queue)
+// Floor pipeline sidebar counts — scoped to the same tickets the user can list.
 exports.getFloorNavCounts = async (req, res) => {
   try {
-    const { rows } = await pool.query(`
-      SELECT
-        COUNT(*) FILTER (WHERE t.status IN ('in_progress','on_hold'))::int AS all_tickets,
-        COUNT(*) FILTER (WHERE t.status IN ('in_progress','on_hold') AND s.stage_name IN ('QC1','QC2'))::int AS qc_queue,
-        COUNT(*) FILTER (WHERE t.status IN ('in_progress','on_hold') AND s.stage_name = 'Chip Level Repair')::int AS chip_level,
-        COUNT(*) FILTER (WHERE t.status IN ('in_progress','on_hold') AND s.stage_name = 'Body & Paint')::int AS body_paint
+    const params = [];
+    let paramCount = 1;
+    let where = `WHERE t.status NOT IN ('completed', 'cancelled')`;
+
+    if (req.user.role === 'qc') {
+      where += ` AND s.stage_name IN ('QC1', 'QC2', 'Dispatch QC')`;
+    }
+
+    if (req.user.role === 'dispatch_qc') {
+      where += ` AND s.stage_name = 'Dispatch QC'`;
+    }
+
+    const ticketScope = await resolveTicketListScope(req);
+    const assignmentFilter = buildTicketListAssignmentClause(ticketScope, paramCount, params);
+    where += assignmentFilter.clause;
+    paramCount = assignmentFilter.paramCount;
+
+    const { rows } = await pool.query(
+      `SELECT
+        COUNT(*)::int AS all_tickets,
+        COUNT(*) FILTER (WHERE s.stage_name IN ('QC1','QC2'))::int AS qc_queue,
+        COUNT(*) FILTER (WHERE s.stage_name = 'Chip Level Repair')::int AS chip_level,
+        COUNT(*) FILTER (WHERE s.stage_name = 'Body & Paint')::int AS body_paint
       FROM tickets t
       LEFT JOIN stages s ON s.stage_id = t.current_stage_id
-    `);
+      ${where}`,
+      params
+    );
     const r = rows[0] || {};
+    const cache = {};
+    const userId = req.user.user_id;
+    const role = req.user.role;
+
+    const canViewSection = async (section) => {
+      if (role === 'super_admin') return true;
+      return hasPermission(userId, role, section, 'can_view', cache);
+    };
+
     res.json({
       success: true,
       counts: {
-        all_tickets: r.all_tickets || 0,
-        qc_queue: r.qc_queue || 0,
-        chip_level: r.chip_level || 0,
-        body_paint: r.body_paint || 0,
+        all_tickets: (await canViewSection('floor_tickets')) ? (r.all_tickets || 0) : 0,
+        qc_queue: (await canViewSection('qc_management')) ? (r.qc_queue || 0) : 0,
+        chip_level: (await canViewSection('chip_level_repair')) ? (r.chip_level || 0) : 0,
+        body_paint: (await canViewSection('floor_pipeline')) ? (r.body_paint || 0) : 0,
       },
     });
   } catch (error) {

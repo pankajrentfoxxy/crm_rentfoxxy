@@ -34,6 +34,7 @@ async function runRefurbModule(moduleDef, { force = false } = {}) {
       source,
       crm: client,
       batchSize: config.batchSize,
+      forceAssign: force,
     });
     await client.query('COMMIT');
 

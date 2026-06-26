@@ -2,7 +2,12 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { MapPin, Phone, KeyRound, Map as MapIcon, CheckCircle2, Truck } from 'lucide-react';
 import { listDeliveryFlow } from '../salesPipelineApi';
-import { formatDateTime, statusLabel } from '../salesPipelineUtils';
+import {
+  deliveryAddressPhone,
+  formatDateTime,
+  formatDeliveryAddressLine,
+  statusLabel,
+} from '../salesPipelineUtils';
 import AdminDeliverModal from '../components/AdminDeliverModal';
 
 function timeSince(dateStr) {
@@ -103,8 +108,8 @@ export default function TechnicianDeliveryBucketPage({ movement = null }) {
               </h2>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                 {dcs.map((dc) => {
-                  const addr = dc.delivery_address || {};
-                  const addrText = [addr.address, addr.city, addr.state, addr.pincode].filter(Boolean).join(', ');
+                  const addrText = formatDeliveryAddressLine(dc.delivery_address);
+                  const phone = deliveryAddressPhone(dc.delivery_address, dc.customer_phone);
                   const mapsUrl = (dc.tech_latitude && dc.tech_longitude)
                     ? `https://www.google.com/maps?q=${dc.tech_latitude},${dc.tech_longitude}`
                     : null;
@@ -121,12 +126,12 @@ export default function TechnicianDeliveryBucketPage({ movement = null }) {
                         <MapPin className="w-4 h-4 text-gray-400 mt-0.5 shrink-0" />
                         {addrText || '-'}
                       </p>
-                      {(addr.phone || dc.customer_phone) && (
+                      {phone ? (
                         <p className="text-sm text-gray-600 flex items-center gap-1.5">
                           <Phone className="w-4 h-4 text-gray-400" />
-                          {addr.phone || dc.customer_phone}
+                          {phone}
                         </p>
-                      )}
+                      ) : null}
                       <div className="border-t pt-2 space-y-1">
                         {dc.serials.map((s, i) => (
                           <p key={i} className="text-xs text-gray-600">

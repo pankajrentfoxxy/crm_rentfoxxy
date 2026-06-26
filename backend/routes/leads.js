@@ -41,6 +41,7 @@ router.get('/follow-ups', leadsView, leadController.getFollowUps);
 router.get('/orders', leadsView, leadController.getLeadOrders);
 router.get('/reports', leadsView, leadController.getReports);
 router.get('/auto-assign-config', leadsView, leadController.getAutoAssignConfig);
+router.get('/assignable-users', leadsEdit, leadController.getAssignableSalesUsers);
 router.get('/sample', leadsView, leadController.getSampleCsv);
 router.get('/:id', leadsView, leadController.getLeadById);
 

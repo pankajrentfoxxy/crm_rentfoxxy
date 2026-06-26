@@ -1,5 +1,5 @@
 const pool = require('../config/db');
-const { isSupportLead } = require('../middleware/supportAccess');
+const { isSupportLead, isSupportTechnician } = require('../middleware/supportAccess');
 const { appendSupportAssignedFilter, scopeUserId } = require('./dataScopeService');
 
 const DEFAULT_OVERDUE_HOURS = 48;

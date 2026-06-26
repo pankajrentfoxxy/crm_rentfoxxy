@@ -112,16 +112,8 @@ function buildListWhere(segment, params, alias = 's') {
 
   params.push(cfg.status);
   const i = params.length;
-  let extraSql = '';
-  // "Ready to Rent or Sell" must only show units still on the shelf. Once a unit
-  // is attached to an order / dispatched / delivered (inventory_status moves to an
-  // off-shelf value) it drops out of this bucket and into Customer Assets.
-  if (segment === 'passed') {
-    params.push(OFF_SHELF_STATUSES);
-    extraSql = ` AND COALESCE(NULLIF(TRIM(${alias}.inventory_status), ''), 'in_stock') <> ALL($${params.length}::text[])`;
-  }
   return {
-    sql: ` AND ${alias}.po_id IS NOT NULL AND ${effectiveStatusSql(alias)} = $${i}${extraSql}`,
+    sql: ` AND ${alias}.po_id IS NOT NULL AND ${effectiveStatusSql(alias)} = $${i}`,
     params
   };
 }

@@ -26,12 +26,12 @@ export function moveTicketStage(id, body) {
   return api.post(`${base}/${id}/move-stage`, body);
 }
 
-export function markChipRepair(id) {
-  return api.patch(`${base}/${id}/chip-repair`);
+export function markChipRepair(id, body = {}) {
+  return api.patch(`${base}/${id}/chip-repair`, body);
 }
 
-export function markBodyPaint(id) {
-  return api.patch(`${base}/${id}/body-paint`);
+export function markBodyPaint(id, body = {}) {
+  return api.patch(`${base}/${id}/body-paint`, body);
 }
 
 export function floorManagerFail(id, body) {

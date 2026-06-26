@@ -45,6 +45,8 @@ function parseJson(value, fallback = null) {
   try { return JSON.parse(value); } catch { return fallback; }
 }
 
+const { normalizeDeliveryAddress } = require('../utils/deliveryAddressUtils');
+
 /** Parse a DC line serial entry ("id|serial|ttspl") into structured parts. */
 function parseSerialEntry(entry) {
   const parts = String(entry).split('|');
@@ -149,7 +151,7 @@ async function buildDcFlow(where, params, { includeOtp = false } = {}) {
       };
     });
 
-    const shipping = parseJson(first.customer_shipping_address, null);
+    const shipping = normalizeDeliveryAddress(first.customer_shipping_address);
 
     out.push({
       dc_number: dcNumber,
@@ -387,8 +389,8 @@ exports.verifySerialAndGenerateOtp = async (req, res) => {
     const ttspl = spec.inventory_asset_code || matched.ttsplId || matched.serialNumber;
     const config = [spec.brand, spec.model, spec.processor, spec.generation, spec.ram, spec.storage]
       .filter(Boolean).join(' ');
-    const shipping = parseJson(first.customer_shipping_address, {}) || {};
-    const addressText = [shipping.address, shipping.city, shipping.state, shipping.pincode]
+    const shipping = normalizeDeliveryAddress(first.customer_shipping_address) || {};
+    const addressText = [shipping.address, shipping.city, shipping.state, shipping.pincode || shipping.zip_code]
       .filter(Boolean).join(', ');
 
     const salesEmail = process.env.SMTP_FROM || process.env.SMTP_USER;

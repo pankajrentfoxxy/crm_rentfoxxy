@@ -93,11 +93,20 @@ async function migrate({ erp, crm, batchSize }) {
     const cur = existing[0];
     const nextQc = mapQcStatus(row.status);
     const nextInv = mapInventoryStatus(row.status, row.status2);
-    const extra = mergeExtra(parseJson(cur.extra, {}), row);
+    const prevExtra = parseJson(cur.extra, {});
+    const extra = mergeExtra(prevExtra, row);
+    extra.status = nextQc;
     const nextRemark = str(row.remark, 5000, cur.remark);
 
-    const curEffective = str(cur.qc_status, 64, '') || str(extra.status, 64, 'pending');
-    if (curEffective === nextQc && str(cur.inventory_status, 64, '') === (nextInv || '')) {
+    const curQc = str(cur.qc_status, 64, 'pending').toLowerCase();
+    const curInv = str(cur.inventory_status, 64, '');
+    const curExtraStatus = str(prevExtra.status, 64, '').toLowerCase();
+    const needsUpdate =
+      curQc !== nextQc
+      || curExtraStatus !== nextQc
+      || (nextInv != null && curInv !== nextInv);
+
+    if (!needsUpdate) {
       unchanged += 1;
     } else {
       await backupSerialRow(crm, crmSerialId, cur.qc_status, cur.inventory_status, parseJson(cur.extra, {}));

@@ -5,7 +5,7 @@ const prisma = require('../prisma/client');
 const pool = require('../config/db');
 const { ensureResearch } = require('../services/leadResearchService');
 const { getNextAutoAssignee, updateAutoAssignConfig } = require('../services/leadAutoAssignService');
-const { isRestrictedToAssignedAny } = require('../services/dataScopeService');
+const { isRestrictedToAssigned } = require('../services/dataScopeService');
 
 const { STATUSES_WITHOUT_STAGE_CHOICE, STAGES_BY_STATUS, stagesForStatus } = require('../constants/leadStages');
 
@@ -194,13 +194,22 @@ const getDomainFromEmail = (email) => {
   return normalized.split('@')[1] || null;
 };
 async function leadsAssignedOnly(req) {
-  return isRestrictedToAssignedAny(req, ['leads', 'follow_ups', 'lead_orders']);
+  return isRestrictedToAssigned(req, 'leads');
+}
+
+async function denyUnlessCanEditLead(req, res, lead) {
+  const assignedOnly = await leadsAssignedOnly(req);
+  if (assignedOnly && !canEditLead(req.user, lead, { assignedOnly: true })) {
+    res.status(403).json({ success: false, message: 'Access denied' });
+    return true;
+  }
+  return false;
 }
 
 const canEditLead = (user, lead, { assignedOnly = false } = {}) => {
   if (!user || !lead) return false;
   if (['admin', 'manager', 'super_admin'].includes(user.role)) return true;
-  if (!assignedOnly && !isSalesLeadOperator(user)) return true;
+  if (!assignedOnly) return true;
   const uid = currentUserId(user);
   const assignedUserId = lead.assignedUserId ?? lead.assigned_user_id;
   const assignedById = lead.assignedById ?? lead.assigned_by;
@@ -613,9 +622,7 @@ exports.getLeadById = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Lead not found' });
     }
 
-    if (isSalesLeadOperator(req.user) && !canEditLead(req.user, lead)) {
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
+    if (await denyUnlessCanEditLead(req, res, lead)) return;
 
     const addressRes = await pool.query(
       `SELECT address_id, concern_person, mobile_no, address, pincode, address_type, created_at
@@ -995,6 +1002,23 @@ exports.getSampleCsv = async (req, res) => {
   res.send(csvContent);
 };
 
+exports.getAssignableSalesUsers = async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT user_id, name, email, role
+         FROM users
+        WHERE role = 'sales'
+          AND active = true
+          AND COALESCE(status, 'active') = 'active'
+        ORDER BY name ASC`
+    );
+    res.json({ success: true, users: rows });
+  } catch (error) {
+    console.error('getAssignableSalesUsers error:', error);
+    res.status(500).json({ success: false, message: 'Failed to load assignable users' });
+  }
+};
+
 exports.assignLeads = async (req, res) => {
   const { lead_ids, sales_user_id, sales_user_ids, assign_unassigned_only } = req.body;
 
@@ -1142,9 +1166,7 @@ exports.updateLeadStatus = async (req, res) => {
     });
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
 
-    if (isSalesLeadOperator(req.user) && !canEditLead(req.user, lead)) {
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
+    if (await denyUnlessCanEditLead(req, res, lead)) return;
 
     let resolvedStage = null;
     if (STATUSES_WITHOUT_STAGE_CHOICE.includes(status)) {
@@ -1250,9 +1272,7 @@ exports.updateFollowUp = async (req, res) => {
   try {
     const lead = await prisma.lead.findUnique({ where: { leadId: parseInt(id, 10) } });
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
-    if (isSalesLeadOperator(req.user) && !canEditLead(req.user, lead)) {
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
+    if (await denyUnlessCanEditLead(req, res, lead)) return;
 
     const leadId = parseInt(id, 10);
     const followUpTime = normalizeFollowUpTimeForDb(req.body.follow_up_time);
@@ -1291,10 +1311,9 @@ exports.getFollowUps = async (req, res) => {
     const now = new Date();
     const endOfDay = new Date(now);
     endOfDay.setHours(23, 59, 59, 999);
+    const assignedOnly = await leadsAssignedOnly(req);
     const uid = currentUserId(req.user);
-    const baseWhere = isSalesLeadOperator(req.user) && uid != null
-      ? { assignedUserId: uid }
-      : {};
+    const baseWhere = assignedOnly && uid != null ? { assignedUserId: uid } : {};
 
     const overdue = await prisma.lead.findMany({
       where: {
@@ -1329,9 +1348,7 @@ exports.runResearch = async (req, res) => {
   try {
     const lead = await prisma.lead.findUnique({ where: { leadId: parseInt(id, 10) } });
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
-    if (isSalesLeadOperator(req.user) && !canEditLead(req.user, lead)) {
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
+    if (await denyUnlessCanEditLead(req, res, lead)) return;
 
     // Force refresh so API re-searches and updates all research fields
     await ensureResearch(lead, { force: true });
@@ -1350,9 +1367,7 @@ exports.updateResearchDetails = async (req, res) => {
   try {
     const lead = await prisma.lead.findUnique({ where: { leadId: parseInt(id, 10) } });
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
-    if (isSalesLeadOperator(req.user) && !canEditLead(req.user, lead)) {
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
+    if (await denyUnlessCanEditLead(req, res, lead)) return;
 
     const existing = await prisma.leadCompanyResearch.findUnique({
       where: { leadId: lead.leadId }
@@ -1420,9 +1435,7 @@ exports.createLeadOrder = async (req, res) => {
     if (lead.status !== 'Deal') {
       return res.status(400).json({ success: false, message: 'Order can be created only for Deal status' });
     }
-    if (isSalesLeadOperator(req.user) && !canEditLead(req.user, lead)) {
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
+    if (await denyUnlessCanEditLead(req, res, lead)) return;
 
     const order = await prisma.leadOrder.create({
       data: {
@@ -1694,7 +1707,8 @@ exports.getLeadOrders = async (req, res) => {
   try {
     const where = status ? { orderStatus: status } : {};
     const uid = currentUserId(req.user);
-    if (isSalesLeadOperator(req.user) && uid != null) {
+    const assignedOnly = await isRestrictedToAssigned(req, 'lead_orders');
+    if (assignedOnly && uid != null) {
       where.lead = { assignedUserId: uid };
     }
     const orders = await prisma.leadOrder.findMany({
@@ -2184,9 +2198,7 @@ exports.convertToCustomer = async (req, res) => {
       });
     }
 
-    if (isSalesLeadOperator(req.user) && !canEditLead(req.user, lead)) {
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
+    if (await denyUnlessCanEditLead(req, res, lead)) return;
 
     const body = req.body || {};
     const billingAddress = body.billing_address || lead.billing_address || null;

@@ -81,6 +81,17 @@ const emptyForm = () => ({
   autoPassword: true,
 });
 
+function dedupeTeamsByName(list) {
+  const map = new Map();
+  for (const t of list || []) {
+    const key = String(t.team_name || '').trim().toLowerCase();
+    if (!key) continue;
+    const existing = map.get(key);
+    if (!existing || Number(t.team_id) < Number(existing.team_id)) map.set(key, t);
+  }
+  return [...map.values()].sort((a, b) => String(a.team_name).localeCompare(String(b.team_name)));
+}
+
 export default function UserManagementPage() {
   const { user: currentUser } = useAuth();
   const { toasts, setToasts, showToast } = useToast();
@@ -146,7 +157,7 @@ export default function UserManagementPage() {
 
   useEffect(() => {
     fetchAuthTeams()
-      .then((data) => setTeams(data.teams || []))
+      .then((data) => setTeams(dedupeTeamsByName(data.teams || [])))
       .catch(() => setTeams([]));
   }, []);
 

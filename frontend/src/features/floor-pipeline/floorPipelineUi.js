@@ -147,6 +147,11 @@ export function isFloorManagerRole(role) {
   return ['admin', 'manager', 'floor_manager'].includes(role);
 }
 
+/** Diagnosis → Assembly & Software — admin / floor manager only (not technicians or warehouse). */
+export function canMoveDiagnosisToAssembly(role) {
+  return role === 'super_admin' || isFloorManagerRole(role);
+}
+
 export function isQcRole(role) {
   return role === 'qc';
 }
@@ -157,6 +162,11 @@ export function isDispatchQcRole(role) {
 
 export function isTechnicianRole(role) {
   return ['team_member', 'team_lead', 'technician'].includes(role);
+}
+
+/** Stage moves / repair routing in the sidebar — not for floor technicians. */
+export function canRunStageRoutingActions(role) {
+  return ['admin', 'super_admin', 'floor_manager', 'warehouse', 'manager'].includes(role);
 }
 
 export const EVENT_ICONS = {

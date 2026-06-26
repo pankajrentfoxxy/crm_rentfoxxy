@@ -7,7 +7,35 @@ const { sendHighlightedTicketAlert } = require('../services/highlightedTicketAle
 const vendorBilling = require('./vendorBillingController');
 
 const PRIVILEGED_ROLES = ['admin', 'floor_manager', 'manager'];
+const STAGE_ROUTING_ROLES = ['admin', 'floor_manager', 'manager', 'warehouse'];
+const TECHNICIAN_ROLES = ['technician', 'team_member', 'team_lead'];
+const DIAGNOSIS_REPAIR_STAGES = ['Chip Level Repair', 'Body & Paint'];
 const QC_STAGES = ['QC1', 'QC2', 'Dispatch QC'];
+
+const MANAGER_ROUTING_FROM = {
+  Diagnosis: ['Assembly & Software', 'Chip Level Repair', 'Body & Paint'],
+};
+
+function isStageRouter(user) {
+  if (!user) return false;
+  if (user.role === 'super_admin') return true;
+  return STAGE_ROUTING_ROLES.includes(user.role);
+}
+
+function isAssignedTechnician(user, ticket) {
+  const userId = Number(user?.user_id);
+  const assigneeId = Number(ticket?.assigned_user_id);
+  return userId > 0 && assigneeId > 0 && userId === assigneeId
+    && TECHNICIAN_ROLES.includes(user?.role);
+}
+
+async function canMarkDiagnosisRepair(req, ticket, targetStageName) {
+  if (isStageRouter(req.user)) return true;
+  if (!DIAGNOSIS_REPAIR_STAGES.includes(targetStageName)) return false;
+  if (!isAssignedTechnician(req.user, ticket)) return false;
+  const currentStage = await getStageById(pool, ticket.current_stage_id);
+  return currentStage?.stage_name === 'Diagnosis';
+}
 
 async function getStageByName(db, stageName) {
   const r = await db.query(
@@ -250,6 +278,31 @@ exports.moveToStage = async (req, res) => {
     if (!privileged && req.user.role === 'qc' && !QC_STAGES.includes(currentStageName)) {
       await client.query('ROLLBACK');
       return res.status(403).json({ success: false, message: 'QC team can only act on QC stages' });
+    }
+
+    const managerRoutes = MANAGER_ROUTING_FROM[currentStageName];
+    if (managerRoutes?.includes(to_stage_name) && !isStageRouter(req.user)) {
+      const techRepairOk = await canMarkDiagnosisRepair(req, ticket, to_stage_name);
+      if (!techRepairOk) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({
+          success: false,
+          message: 'Only floor manager, warehouse, or admin can route tickets from this stage',
+        });
+      }
+    }
+
+    if (
+      currentStageName === 'Diagnosis'
+      && to_stage_name === 'Assembly & Software'
+      && req.user.role !== 'super_admin'
+      && !PRIVILEGED_ROLES.includes(req.user.role)
+    ) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({
+        success: false,
+        message: 'Only admin or floor manager can move tickets from Diagnosis to Assembly & Software',
+      });
     }
 
     const transition = await validateTransition(currentStageName, to_stage_name, conditionHint);
@@ -532,6 +585,14 @@ async function moveToNamedStage(req, res, stageName, flags = {}) {
     return res.status(404).json({ success: false, message: 'Ticket not found' });
   }
   const ticket = ticketRes.rows[0];
+
+  const allowed = await canMarkDiagnosisRepair(req, ticket, stageName);
+  if (!allowed) {
+    return res.status(403).json({
+      success: false,
+      message: 'Only the assigned technician (Diagnosis) or floor manager can route to repair stages',
+    });
+  }
 
   if (flags.chip_repair_required) {
     await pool.query(`UPDATE tickets SET chip_repair_required = TRUE WHERE ticket_id = $1`, [req.params.id]);

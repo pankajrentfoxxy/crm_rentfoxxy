@@ -20,7 +20,9 @@ export const importLeadsCsv = (formData) => api.post('/leads/upload', formData);
 export const assignLeads = (data) => api.post('/leads/assign', data);
 export const runResearch = (id) => api.post(`/leads/${id}/research`);
 export const getFollowUps = (params) => api.get('/leads/follow-ups', { params });
-export const getUsers = () => api.get('/users');
+export const getAssignableUsers = () => api.get('/leads/assignable-users');
+/** @deprecated use getAssignableUsers */
+export const getUsers = () => getAssignableUsers();
 
 export const getCustomers = (params) => api.get('/customer-management/customers', { params });
 export const getCustomer = (id) => api.get(`/customer-management/customers/${id}`);

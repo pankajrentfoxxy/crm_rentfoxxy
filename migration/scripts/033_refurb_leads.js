@@ -80,9 +80,9 @@ async function upsertLead(crm, row, userMap, leadIdMap) {
        source = EXCLUDED.source,
        status = EXCLUDED.status,
        lead_stage = EXCLUDED.lead_stage,
-       assigned_user_id = EXCLUDED.assigned_user_id,
-       assigned_by = EXCLUDED.assigned_by,
-       assigned_at = EXCLUDED.assigned_at,
+       assigned_user_id = COALESCE(leads.assigned_user_id, EXCLUDED.assigned_user_id),
+       assigned_by = COALESCE(leads.assigned_by, EXCLUDED.assigned_by),
+       assigned_at = COALESCE(leads.assigned_at, EXCLUDED.assigned_at),
        follow_up_date = EXCLUDED.follow_up_date,
        is_duplicate = EXCLUDED.is_duplicate,
        duplicate_of = EXCLUDED.duplicate_of,
@@ -186,7 +186,16 @@ module.exports = {
   async run({ source, crm, batchSize }) {
     await ensureBackupTable(crm);
     const userMap = await buildUserIdMap(source, crm);
-    writeLog('migration', `033 user map: ${userMap.size} source users matched by email`);
+    writeLog('migration', `033 user map: ${userMap.size} source users matched by email/name`);
+    if (userMap.unmappedUsers?.length) {
+      writeLog(
+        'migration',
+        `033 unmapped source users (${userMap.unmappedUsers.length}): ${userMap.unmappedUsers
+          .slice(0, 8)
+          .map((u) => `#${u.sourceId}<${u.email || u.name}>`)
+          .join(', ')}`
+      );
+    }
 
     const [countRows] = await source.query('SELECT COUNT(*)::int AS cnt FROM leads');
     const total = Number(countRows[0].cnt);

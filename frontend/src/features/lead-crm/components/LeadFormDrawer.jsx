@@ -5,7 +5,7 @@ import {
   PROCESSORS, RAM_OPTIONS, STORAGE_OPTIONS, USE_CASES,
 } from '../leadConstants';
 import { INDIAN_STATES } from '../../../constants/indianStates';
-import { createLead, getUsers, updateLeadBasic, updateLeadProfile } from '../leadCrmApi';
+import { createLead, getAssignableUsers, updateLeadBasic, updateLeadProfile } from '../leadCrmApi';
 import toast from 'react-hot-toast';
 
 const emptyForm = () => ({
@@ -26,7 +26,7 @@ export default function LeadFormDrawer({ open, lead, onClose, onSaved }) {
 
   useEffect(() => {
     if (open) {
-      getUsers().then((r) => setUsers((r.data?.users || r.data || []).filter((u) => ['sales', 'manager', 'admin'].includes(u.role)))).catch(() => {});
+      getAssignableUsers().then((r) => setUsers(r.data?.users || [])).catch(() => {});
     }
   }, [open]);
 

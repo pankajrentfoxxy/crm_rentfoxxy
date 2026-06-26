@@ -122,6 +122,35 @@ function extractSqlRows(valuesSection) {
   return rows;
 }
 
+function findStatementEnd(sql, start) {
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < sql.length; i += 1) {
+    const c = sql[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (inString) {
+      if (c === '\\') escape = true;
+      else if (c === "'") {
+        if (sql[i + 1] === "'") {
+          i += 1;
+          continue;
+        }
+        inString = false;
+      }
+      continue;
+    }
+    if (c === "'") {
+      inString = true;
+      continue;
+    }
+    if (c === ';') return i;
+  }
+  return sql.length;
+}
+
 function parseInsertBlocks(sql, tableName) {
   const re = new RegExp(`INSERT INTO \`${tableName}\`\\s*\\(([^)]+)\\)\\s*VALUES`, 'gi');
   const columnsByBlock = [];
@@ -131,7 +160,7 @@ function parseInsertBlocks(sql, tableName) {
     const cols = m[1].split(',').map((c) => c.trim().replace(/`/g, ''));
     columnsByBlock.push(cols);
     const start = m.index + m[0].length;
-    const end = sql.indexOf(';', start);
+    const end = findStatementEnd(sql, start);
     blocks.push(sql.slice(start, end));
   }
   return { columnsByBlock, blocks };
@@ -194,8 +223,14 @@ class ErpSqlDumpSource {
         out = out.filter((r) => String(r.status || '').toLowerCase() === 'passed');
       } else if (s.includes("status <> 'passed'") || s.includes("status != 'passed'")) {
         out = out.filter((r) => String(r.status || '').toLowerCase() !== 'passed');
-      } else if (s.includes("status2 = 'replace'") || s.includes("status = 'replace'")) {
+      } else       if (s.includes("status2 = 'replace'") || s.includes("status = 'replace'")) {
         out = out.filter((r) => r.status2 === 'replace' || r.status === 'replace');
+      }
+      if (s.includes("product_type <> 'parts'") || s.includes("product_type != 'parts'")) {
+        out = out.filter((r) => String(r.product_type || '').toLowerCase() !== 'parts');
+      }
+      if (s.includes('product_type is null')) {
+        out = out.filter((r) => r.product_type == null || String(r.product_type).trim() === '');
       }
       if (s.includes('where id =')) {
         const id = params[0] ?? params[0];
@@ -264,7 +299,7 @@ class ErpSqlDumpSource {
 
     if (normalized.includes('count(')) {
       const tbl = tableFrom(normalized);
-      if (tbl && ['purchase_orders', 'sales_orders', 'delivery_challans', 'serial_numbers', 'complaints_ticket', 'pod_submissions'].includes(tbl)) {
+      if (tbl && ['purchase_orders', 'sales_orders', 'delivery_challans', 'serial_numbers', 'complaints_ticket', 'pod_submissions', 'inward_outward', 'allocation_logs'].includes(tbl)) {
         let rows = this.getTableRows(tbl);
         rows = filterRows(rows, normalized);
         const key = normalized.includes('count(distinct') ? 'c' : 'cnt';
@@ -292,6 +327,16 @@ class ErpSqlDumpSource {
       }
       if (normalized.includes('goods_received_notes_parts')) {
         return [[{ cnt: this.getTableRows('goods_received_notes_parts').length }]];
+      }
+      if (normalized.includes('inward_outward')) {
+        let rows = this.getTableRows('inward_outward');
+        rows = filterRows(rows, normalized);
+        return [[{ cnt: rows.length, c: rows.length }]];
+      }
+      if (normalized.includes('allocation_logs')) {
+        let rows = this.getTableRows('allocation_logs');
+        rows = filterRows(rows, normalized);
+        return [[{ cnt: rows.length, c: rows.length }]];
       }
     }
 
@@ -375,6 +420,12 @@ class ErpSqlDumpSource {
     }
     if (normalized.includes('from goods_received_notes_parts')) {
       return [this.getTableRows('goods_received_notes_parts')];
+    }
+    if (normalized.includes('from inward_outward')) {
+      return [filterRows(this.getTableRows('inward_outward'), normalized)];
+    }
+    if (normalized.includes('from allocation_logs')) {
+      return [filterRows(this.getTableRows('allocation_logs'), normalized)];
     }
     if (normalized.includes('from brands')) {
       return [this.getTableRows('brands')];

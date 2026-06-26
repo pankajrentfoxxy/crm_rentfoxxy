@@ -1,6 +1,5 @@
 const crypto = require('crypto');
 const pool = require('../config/db');
-const { regenerateStaleReturnDcPdfs } = require('./returnDcPdfService');
 const { resolveLineItem } = require('./qcManagementService');
 const { parseJsonArray } = require('./deliveryRegisterService');
 const columnExistsCache = new Map();
@@ -483,9 +482,6 @@ async function healReturnDcPickupLinks() {
 /** Return DC list — sourced from the actual Return DC rows
  *  (delivery_challan_lines with movement_type='return'), one row per RDC. */
 async function listReturnDeliveryChallans({ page = 1, limit = 25, search = '' } = {}) {
-  await healReturnDcPickupLinks();
-  await regenerateStaleReturnDcPdfs(pool, 8);
-
   const params = [];
   let searchSql = '';
   if (search) {
@@ -497,8 +493,18 @@ async function listReturnDeliveryChallans({ page = 1, limit = 25, search = '' } 
       OR rl.sales_order_number ILIKE $${n}
       OR rl.original_dc_number ILIKE $${n}
       OR st.return_dc_number ILIKE $${n}
-      OR COALESCE(sti.ttspl_id, '') ILIKE $${n}
-      OR COALESCE(sti.serial_number, '') ILIKE $${n}
+      OR EXISTS (
+        SELECT 1 FROM support_ticket_items sti_s
+         WHERE sti_s.item_type = 'pickup'
+           AND (
+             sti_s.return_dc_number = rl.dc_number
+             OR (sti_s.return_dc_number IS NULL AND sti_s.ticket_id = rl.support_ticket_id)
+           )
+           AND (
+             COALESCE(sti_s.ttspl_id, '') ILIKE $${n}
+             OR COALESCE(sti_s.serial_number, '') ILIKE $${n}
+           )
+      )
     )`;
   }
 
@@ -506,17 +512,6 @@ async function listReturnDeliveryChallans({ page = 1, limit = 25, search = '' } 
     `SELECT COUNT(*)::int AS total
        FROM delivery_challan_lines rl
        LEFT JOIN support_tickets st ON st.id = rl.support_ticket_id
-       LEFT JOIN LATERAL (
-         SELECT ttspl_id, serial_number
-           FROM support_ticket_items
-          WHERE item_type = 'pickup'
-            AND (
-              return_dc_number = rl.dc_number
-              OR (return_dc_number IS NULL AND ticket_id = rl.support_ticket_id)
-            )
-          ORDER BY CASE WHEN return_dc_number = rl.dc_number THEN 0 ELSE 1 END, id DESC
-          LIMIT 1
-       ) sti ON true
       WHERE rl.movement_type = 'return'${searchSql}`,
     params
   );
@@ -527,7 +522,31 @@ async function listReturnDeliveryChallans({ page = 1, limit = 25, search = '' } 
   const offsetIdx = listParams.length;
 
   const result = await pool.query(
-    `SELECT
+    `WITH pickup_counts AS (
+       SELECT return_dc_number, COUNT(*)::int AS unit_count
+         FROM support_ticket_items
+        WHERE item_type = 'pickup' AND return_dc_number IS NOT NULL
+        GROUP BY return_dc_number
+     ),
+     pickup_by_rdc AS (
+       SELECT DISTINCT ON (return_dc_number)
+              return_dc_number, pickup_type, ttspl_id, serial_number,
+              COALESCE(customer_otp_code, otp_code) AS customer_otp_code,
+              customer_otp_verified_at, warehouse_received_at
+         FROM support_ticket_items
+        WHERE item_type = 'pickup' AND return_dc_number IS NOT NULL
+        ORDER BY return_dc_number, id DESC
+     ),
+     pickup_by_ticket AS (
+       SELECT DISTINCT ON (ticket_id)
+              ticket_id, pickup_type, ttspl_id, serial_number,
+              COALESCE(customer_otp_code, otp_code) AS customer_otp_code,
+              customer_otp_verified_at, warehouse_received_at
+         FROM support_ticket_items
+        WHERE item_type = 'pickup' AND return_dc_number IS NULL
+        ORDER BY ticket_id, id DESC
+     )
+     SELECT
        rl.dc_number              AS return_dc_number,
        rl.dc_number              AS rdc_number,
        rl.support_ticket_id      AS ticket_id,
@@ -544,42 +563,24 @@ async function listReturnDeliveryChallans({ page = 1, limit = 25, search = '' } 
        COALESCE(rl.dispatched_at, rl.created_at) AS dispatched_at,
        rl.delivered_at,
        COALESCE(rl.quantity, 1) AS quantity,
-       (SELECT COUNT(*)::int FROM support_ticket_items pi
-         WHERE pi.return_dc_number = rl.dc_number AND pi.item_type = 'pickup') AS unit_count,
-       COALESCE(rl.original_dc_number, st.dc_number, vsn.current_dc_number) AS original_dc_number,
-       COALESCE(st.complaint_type, sti.pickup_type, 'return') AS reason,
-       sti.pickup_type,
-       sti.customer_otp_code,
-       sti.customer_otp_verified_at,
-       sti.warehouse_received_at,
-       COALESCE(sti.ttspl_id, vsn.inventory_asset_code, NULLIF(split_part(rl.serial_number->>0, '|', 3), '')) AS ttspl_id
+       COALESCE(pc.unit_count, COALESCE(rl.quantity, 1)) AS unit_count,
+       COALESCE(rl.original_dc_number, st.dc_number) AS original_dc_number,
+       COALESCE(st.complaint_type, sti_rdc.pickup_type, sti_tkt.pickup_type, 'return') AS reason,
+       COALESCE(sti_rdc.pickup_type, sti_tkt.pickup_type) AS pickup_type,
+       COALESCE(sti_rdc.customer_otp_code, sti_tkt.customer_otp_code) AS customer_otp_code,
+       COALESCE(sti_rdc.customer_otp_verified_at, sti_tkt.customer_otp_verified_at) AS customer_otp_verified_at,
+       COALESCE(sti_rdc.warehouse_received_at, sti_tkt.warehouse_received_at) AS warehouse_received_at,
+       COALESCE(
+         sti_rdc.ttspl_id,
+         sti_tkt.ttspl_id,
+         NULLIF(split_part(rl.serial_number->>0, '|', 3), '')
+       ) AS ttspl_id
      FROM delivery_challan_lines rl
      LEFT JOIN support_tickets st ON st.id = rl.support_ticket_id
-     LEFT JOIN LATERAL (
-       SELECT pickup_type, ttspl_id, unique_serial_number, serial_number,
-              COALESCE(customer_otp_code, otp_code) AS customer_otp_code,
-              customer_otp_verified_at, warehouse_received_at
-       FROM support_ticket_items
-       WHERE item_type = 'pickup'
-         AND (
-           return_dc_number = rl.dc_number
-           OR (return_dc_number IS NULL AND ticket_id = rl.support_ticket_id)
-         )
-       ORDER BY CASE WHEN return_dc_number = rl.dc_number THEN 0 ELSE 1 END, id DESC
-       LIMIT 1
-     ) sti ON true
-     LEFT JOIN LATERAL (
-       SELECT v.inventory_asset_code, v.current_dc_number
-       FROM vendor_serial_numbers v
-       WHERE v.deleted_at IS NULL
-         AND (
-           (sti.ttspl_id IS NOT NULL AND v.inventory_asset_code = sti.ttspl_id)
-           OR (sti.serial_number IS NOT NULL AND v.serial_number = sti.serial_number)
-           OR v.inventory_asset_code = NULLIF(split_part(rl.serial_number->>0, '|', 3), '')
-           OR v.serial_number = NULLIF(split_part(rl.serial_number->>0, '|', 2), '')
-         )
-       LIMIT 1
-     ) vsn ON true
+     LEFT JOIN pickup_counts pc ON pc.return_dc_number = rl.dc_number
+     LEFT JOIN pickup_by_rdc sti_rdc ON sti_rdc.return_dc_number = rl.dc_number
+     LEFT JOIN pickup_by_ticket sti_tkt
+       ON sti_tkt.ticket_id = rl.support_ticket_id AND sti_rdc.return_dc_number IS NULL
      WHERE rl.movement_type = 'return'${searchSql}
      ORDER BY rl.created_at DESC NULLS LAST
      LIMIT $${limitIdx} OFFSET $${offsetIdx}`,

@@ -7,6 +7,7 @@ import {
   getMyDeliveries, markReached, verifySerialAndGenerateOtp, submitDeliveryWithPod,
 } from '../salesPipelineApi';
 import SignaturePadComponent from '../components/SignaturePad';
+import { deliveryAddressPhone, formatDeliveryAddressLine, parseDeliveryAddress } from '../salesPipelineUtils';
 
 function StatusBadge({ status }) {
   const map = {
@@ -39,8 +40,9 @@ function DeliveryCard({ dc, onChanged }) {
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const addr = dc.delivery_address || {};
-  const addrText = [addr.address, addr.city, addr.state, addr.pincode].filter(Boolean).join(', ');
+  const addr = parseDeliveryAddress(dc.delivery_address) || {};
+  const addrText = formatDeliveryAddressLine(dc.delivery_address);
+  const phone = deliveryAddressPhone(dc.delivery_address, dc.customer_phone);
   const mapsUrl = (dc.tech_latitude && dc.tech_longitude)
     ? `https://www.google.com/maps?q=${dc.tech_latitude},${dc.tech_longitude}`
     : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addrText || dc.customer_name || '')}`;
@@ -121,11 +123,11 @@ function DeliveryCard({ dc, onChanged }) {
       <div className="p-4 space-y-3">
         <div className="space-y-1">
           <p className="text-sm font-medium flex items-center gap-1.5"><User className="w-4 h-4 text-gray-400" /> {addr.name || dc.customer_name}</p>
-          {(addr.phone || dc.customer_phone) && (
-            <a href={`tel:${addr.phone || dc.customer_phone}`} className="text-sm text-blue-600 flex items-center gap-1.5">
-              <Phone className="w-4 h-4" /> {addr.phone || dc.customer_phone}
+          {phone ? (
+            <a href={`tel:${phone}`} className="text-sm text-blue-600 flex items-center gap-1.5">
+              <Phone className="w-4 h-4" /> {phone}
             </a>
-          )}
+          ) : null}
           <p className="text-sm text-gray-600 flex items-start gap-1.5"><MapPin className="w-4 h-4 text-gray-400 mt-0.5" /> {addrText || '—'}</p>
           {addr.landmark && <p className="text-xs text-gray-500 ml-5">📍 {addr.landmark}</p>}
           {addr.is_wfh && <span className="ml-5 inline-block px-2 py-0.5 rounded-full text-xs bg-purple-100 text-purple-700">WFH delivery</span>}

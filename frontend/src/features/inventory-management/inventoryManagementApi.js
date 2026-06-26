@@ -41,3 +41,13 @@ export function updateReadyToRentSaleAction(body) {
 export function tagInventorySerial(serialId, tag) {
   return api.patch(`${base}/${serialId}/tag`, { tag });
 }
+
+/** Admin — add laptop directly into QC Process (pending) + floor ticket */
+export function addLaptopToQcProcess(body) {
+  return api.post(`${base}/qc-process/add-laptop`, body);
+}
+
+/** Admin — move QC passed serial back to QC Process + floor ticket if needed */
+export function movePassedToQcProcess(body) {
+  return api.post(`${base}/qc-process/move-from-passed`, body);
+}

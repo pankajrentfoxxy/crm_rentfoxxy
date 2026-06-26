@@ -19,6 +19,8 @@ import {
 } from '../floorPipelineApi';
 import {
   configBadges,
+  canRunStageRoutingActions,
+  canMoveDiagnosisToAssembly,
   isFloorManagerRole,
   isQcRole,
   isDispatchQcRole,
@@ -60,6 +62,7 @@ export default function TicketDetailPage() {
   const [data, setData] = useState(null);
   const [tab, setTab] = useState('overview');
   const [failReason, setFailReason] = useState('');
+  const [repairReason, setRepairReason] = useState('');
   const [historyOpen, setHistoryOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const [configHistory, setConfigHistory] = useState([]);
@@ -100,10 +103,14 @@ export default function TicketDetailPage() {
         setData(res);
         const ttspl = resolveTicketTtspl(res.ticket);
         if (ttspl) {
-          const h = await fetchTtsplHistory(ttspl);
-          if (h.data.success) {
-            setConfigHistory(h.data.configHistory || []);
-            setAuditLog(h.data.auditLog || []);
+          try {
+            const h = await fetchTtsplHistory(ttspl);
+            if (h.data.success) {
+              setConfigHistory(h.data.configHistory || []);
+              setAuditLog(h.data.auditLog || []);
+            }
+          } catch {
+            // History is optional on the detail page — do not block the ticket view.
           }
         }
       }
@@ -235,9 +242,12 @@ export default function TicketDetailPage() {
     }
   }, [ticket?.ticket_id, ticket?.stage_name, ticket?.ticket_type]);
   const fm = isFloorManagerRole(user?.role);
+  const stageRouting = canRunStageRoutingActions(user?.role);
+  const canDiagnosisToAssembly = canMoveDiagnosisToAssembly(user?.role);
   const tech = isTechnicianRole(user?.role);
   const qc = isQcRole(user?.role);
   const dqc = isDispatchQcRole(user?.role);
+  const canSeeStageRouting = canDiagnosisToAssembly || stageRouting;
 
   // The CURRENT stage's task is always the first tab so the assignee sees their
   // work first, then Overview / Work Log etc.
@@ -263,6 +273,16 @@ export default function TicketDetailPage() {
     && Number(ticket.assigned_user_id) === Number(user.user_id));
   const needsStart = TIMED_WORK_STAGES.includes(stage) && isAssignee && !activeLog;
   const workTabsLocked = needsStart;
+  const techCanSeeDiagnosisRepair = tech && isAssignee && stage === 'Diagnosis';
+  const canDiagnosisRepairMark = stageRouting || techCanSeeDiagnosisRepair;
+  const repairReasonBody = () => {
+    const trimmed = repairReason.trim();
+    return trimmed ? { reason: trimmed, notes: trimmed } : {};
+  };
+  const runMarkChipRepair = () => markChipRepair(id, repairReasonBody())
+    .then(() => handleWorkflowComplete({ nextStage: 'Chip Level Repair', fromStageMove: true }));
+  const runMarkBodyPaint = () => markBodyPaint(id, repairReasonBody())
+    .then(() => handleWorkflowComplete({ nextStage: 'Body & Paint', fromStageMove: true }));
 
   // Default to the stage's task tab whenever the stage changes (after verification).
   useEffect(() => {
@@ -357,7 +377,7 @@ export default function TicketDetailPage() {
   if (loading) {
     return <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>;
   }
-  if (!ticket) return <p className="text-red-600">Ticket not found</p>;
+  if (!ticket) return <p className="text-red-600">Ticket not found or you do not have access to view it.</p>;
 
   const pri = priorityBadge(ticket.priority);
   const stageButtons = [];
@@ -365,22 +385,30 @@ export default function TicketDetailPage() {
   if (fm && stage === 'Floor Manager') {
     stageButtons.push({ label: 'Assign to Technician', action: () => setAssignOpen(true), primary: true });
   }
-  if ((tech || fm) && stage === 'Diagnosis') {
-    stageButtons.push(
-      { label: 'Move to Assembly & Software', action: () => move('Assembly & Software'), primary: true },
-      {
-        label: 'Mark Chip Repair Required',
-        action: () => markChipRepair(id).then(() => handleWorkflowComplete({ nextStage: 'Chip Level Repair', fromStageMove: true })),
-        warn: true
-      },
-      {
-        label: 'Mark Body & Paint Required',
-        action: () => markBodyPaint(id).then(() => handleWorkflowComplete({ nextStage: 'Body & Paint', fromStageMove: true })),
-        pink: true
-      }
-    );
+  if (stage === 'Diagnosis') {
+    if (canDiagnosisToAssembly) {
+      stageButtons.push(
+        { label: 'Move to Assembly & Software', action: () => move('Assembly & Software'), primary: true }
+      );
+    }
+    if (canDiagnosisRepairMark) {
+      stageButtons.push(
+        {
+          label: 'Mark Chip Repair Required',
+          action: runMarkChipRepair,
+          warn: true,
+          disabled: needsStart
+        },
+        {
+          label: 'Mark Body & Paint Required',
+          action: runMarkBodyPaint,
+          pink: true,
+          disabled: needsStart
+        }
+      );
+    }
   }
-  if ((tech || fm) && HW_WORK_STAGES.includes(stage)) {
+  if (stageRouting && HW_WORK_STAGES.includes(stage)) {
     if (stage === 'Final Testing') {
       stageButtons.push({ label: 'Submit to QC1', action: openQcPicker, primary: true });
     } else {
@@ -431,6 +459,20 @@ export default function TicketDetailPage() {
       stageButtons.push({ label: 'Reassign Technician', action: () => setAssignOpen(true), muted: true });
     }
   }
+
+  const showVerifyBlock = needsStart;
+  const showDiagnosisRepairMarks = stage === 'Diagnosis' && canDiagnosisRepairMark;
+  const showOtherRouting = (canSeeStageRouting || qc || dqc)
+    && (!needsStart || canSeeStageRouting)
+    && stageButtons.some((b) => !b.label.startsWith('Mark '));
+  const showRoutingButtons = showDiagnosisRepairMarks || showOtherRouting;
+  const showStageActionsSection = showVerifyBlock || showRoutingButtons;
+  const visibleStageButtons = stageButtons.filter((btn) => {
+    const isMark = btn.label.startsWith('Mark ');
+    if (isMark) return showDiagnosisRepairMarks;
+    return showOtherRouting;
+  });
+  const showRepairReasonInput = showDiagnosisRepairMarks && techCanSeeDiagnosisRepair;
 
   return (
     <div className="pb-10">
@@ -557,7 +599,19 @@ export default function TicketDetailPage() {
               onUpdated={load}
             />
           )}
-          {tab === 'diagnosis' && <DiagnosisForm api={api} ticket={ticket} onComplete={handleWorkflowComplete} />}
+          {tab === 'diagnosis' && (
+            <DiagnosisForm
+              api={api}
+              ticket={ticket}
+              onComplete={handleWorkflowComplete}
+              showRepairRouting={canDiagnosisRepairMark}
+              repairRoutingDisabled={needsStart}
+              repairReason={repairReason}
+              onRepairReasonChange={setRepairReason}
+              onMarkChipRepair={runMarkChipRepair}
+              onMarkBodyPaint={runMarkBodyPaint}
+            />
+          )}
           {tab === 'task' && (
             <StageTaskPanel
               ticket={ticket}
@@ -637,108 +691,122 @@ export default function TicketDetailPage() {
               <History className="w-4 h-4" /> View TTSPL history
             </button>
 
-            <h3 className="text-xs font-semibold uppercase text-slate-500 mt-4 mb-2">Stage Actions</h3>
-            {needsStart ? (
-              <div className="rounded-xl border-2 border-blue-200 bg-blue-50 p-4 mb-3">
-                <h3 className="font-semibold text-blue-900 text-sm">Verify machine first</h3>
-                <p className="text-xs text-blue-800 mt-1">
-                  Enter the TTSPL ID or Serial number to start your work timer.
-                  Stage actions will unlock after verification.
-                </p>
-                <div className="flex gap-2 mt-2">
-                  <input
-                    value={verifyInput}
-                    onChange={(e) => setVerifyInput(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') handleStartWork(); }}
-                    placeholder="TTSPL ID or Serial number"
-                    className="flex-1 border rounded-lg px-2 py-1.5 text-xs"
-                    autoFocus
-                  />
-                  <button
-                    type="button"
-                    disabled={starting}
-                    onClick={handleStartWork}
-                    className="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold disabled:opacity-50"
-                  >
-                    Start
-                  </button>
-                </div>
-              </div>
-            ) : (
+            {showStageActionsSection ? (
               <>
-                {partsBlocked && (
-                  <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 mb-2">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-amber-600 text-lg">⛔</span>
-                      <p className="font-semibold text-amber-900 text-sm">
-                        {ticket.open_part_requests} Part Request{ticket.open_part_requests !== 1 ? 's' : ''} Pending
-                      </p>
-                    </div>
-                    <p className="text-xs text-amber-700">
-                      Attach all requested parts before moving to the next stage.
+                <h3 className="text-xs font-semibold uppercase text-slate-500 mt-4 mb-2">Stage Actions</h3>
+                {showVerifyBlock ? (
+                  <div className="rounded-xl border-2 border-blue-200 bg-blue-50 p-4 mb-3">
+                    <h3 className="font-semibold text-blue-900 text-sm">Verify machine first</h3>
+                    <p className="text-xs text-blue-800 mt-1">
+                      Enter the TTSPL ID or Serial number to start your work timer.
+                      Your work tabs will unlock after verification.
                     </p>
-                    <button
-                      type="button"
-                      onClick={() => setTab('parts')}
-                      className="mt-2 w-full py-1.5 text-xs text-amber-800 border border-amber-300 rounded-lg hover:bg-amber-100"
-                    >
-                      View Part Requests →
-                    </button>
-                  </div>
-                )}
-                {stageButtons.some((b) => b.needsReason) ? (
-                  <textarea
-                    className="w-full rounded-lg border text-xs p-2 min-h-[60px] mb-2"
-                    placeholder="Reason (required for fail actions) — e.g. RAM mismatch, dead pixel…"
-                    value={failReason}
-                    onChange={(e) => setFailReason(e.target.value)}
-                  />
-                ) : null}
-                <div className="space-y-2">
-                  {stageButtons.map((btn) => (
-                    <div key={btn.label}>
+                    <div className="flex gap-2 mt-2">
+                      <input
+                        value={verifyInput}
+                        onChange={(e) => setVerifyInput(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') handleStartWork(); }}
+                        placeholder="TTSPL ID or Serial number"
+                        className="flex-1 border rounded-lg px-2 py-1.5 text-xs"
+                        autoFocus
+                      />
                       <button
                         type="button"
-                        onClick={btn.action}
-                        className={`w-full py-2 rounded-lg text-xs font-semibold ${
-                          btn.blocked ? 'bg-amber-100 text-amber-800 border border-amber-300' :
-                          btn.primary ? 'bg-blue-600 text-white' :
-                          btn.success ? 'bg-green-600 text-white' :
-                          btn.danger || btn.destructive ? 'bg-red-700 text-white' :
-                          btn.warn ? 'bg-amber-500 text-white' :
-                          btn.pink ? 'bg-pink-500 text-white' :
-                          'bg-slate-100 text-slate-800'
-                        }`}
+                        disabled={starting}
+                        onClick={handleStartWork}
+                        className="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold disabled:opacity-50"
                       >
-                        {btn.label}
+                        Start
                       </button>
-                      {stage === 'QC1' && btn.label.includes('QC1 PASS') && nextAssignee ? (
-                        <p className="text-xs text-slate-500 mt-1 text-center">
-                          Will assign to:{' '}
-                          <span className="font-medium text-slate-700">{nextAssignee.name}</span>
-                        </p>
-                      ) : null}
-                      {stage === 'QC1' && btn.label.includes('QC1 PASS') && !nextAssignee && nextAssigneeWarning ? (
-                        <p className="text-xs text-amber-600 mt-1 text-center">
-                          {ticket.ticket_type === 'sales_order_qc' ? 'Dispatch QC' : 'QC2'} team has no members — ticket will be unassigned
-                        </p>
-                      ) : null}
-                      {stage === 'Final Testing' && btn.label.includes('Move to QC1') && nextAssignee ? (
-                        <p className="text-xs text-slate-500 mt-1 text-center">
-                          Will assign to:{' '}
-                          <span className="font-medium text-slate-700">{nextAssignee.name}</span>
-                        </p>
-                      ) : null}
                     </div>
-                  ))}
-                </div>
-                {STAGE_TASK_STAGES.includes(stage) ? (
-                  <p className="text-xs text-slate-400 mt-2 text-center">
-                    Complete the task checklist above, then click the move button to advance.
-                  </p>
+                  </div>
+                ) : null}
+                {showRoutingButtons ? (
+                  <>
+                    {partsBlocked && (
+                      <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 mb-2">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-amber-600 text-lg">⛔</span>
+                          <p className="font-semibold text-amber-900 text-sm">
+                            {ticket.open_part_requests} Part Request{ticket.open_part_requests !== 1 ? 's' : ''} Pending
+                          </p>
+                        </div>
+                        <p className="text-xs text-amber-700">
+                          Attach all requested parts before moving to the next stage.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setTab('parts')}
+                          className="mt-2 w-full py-1.5 text-xs text-amber-800 border border-amber-300 rounded-lg hover:bg-amber-100"
+                        >
+                          View Part Requests →
+                        </button>
+                      </div>
+                    )}
+                    {showRepairReasonInput ? (
+                      <textarea
+                        className="w-full rounded-lg border text-xs p-2 min-h-[60px] mb-2"
+                        placeholder="Reason for repair routing — e.g. GPU dead, lid damage…"
+                        value={repairReason}
+                        onChange={(e) => setRepairReason(e.target.value)}
+                      />
+                    ) : null}
+                    {visibleStageButtons.some((b) => b.needsReason) ? (
+                      <textarea
+                        className="w-full rounded-lg border text-xs p-2 min-h-[60px] mb-2"
+                        placeholder="Reason (required for fail actions) — e.g. RAM mismatch, dead pixel…"
+                        value={failReason}
+                        onChange={(e) => setFailReason(e.target.value)}
+                      />
+                    ) : null}
+                    <div className="space-y-2">
+                      {visibleStageButtons.map((btn) => (
+                        <div key={btn.label}>
+                          <button
+                            type="button"
+                            disabled={btn.disabled}
+                            onClick={btn.action}
+                            className={`w-full py-2 rounded-lg text-xs font-semibold disabled:opacity-50 ${
+                              btn.blocked ? 'bg-amber-100 text-amber-800 border border-amber-300' :
+                              btn.primary ? 'bg-blue-600 text-white' :
+                              btn.success ? 'bg-green-600 text-white' :
+                              btn.danger || btn.destructive ? 'bg-red-700 text-white' :
+                              btn.warn ? 'bg-amber-500 text-white' :
+                              btn.pink ? 'bg-pink-500 text-white' :
+                              'bg-slate-100 text-slate-800'
+                            }`}
+                          >
+                            {btn.label}
+                          </button>
+                          {stage === 'QC1' && btn.label.includes('QC1 PASS') && nextAssignee ? (
+                            <p className="text-xs text-slate-500 mt-1 text-center">
+                              Will assign to:{' '}
+                              <span className="font-medium text-slate-700">{nextAssignee.name}</span>
+                            </p>
+                          ) : null}
+                          {stage === 'QC1' && btn.label.includes('QC1 PASS') && !nextAssignee && nextAssigneeWarning ? (
+                            <p className="text-xs text-amber-600 mt-1 text-center">
+                              {ticket.ticket_type === 'sales_order_qc' ? 'Dispatch QC' : 'QC2'} team has no members — ticket will be unassigned
+                            </p>
+                          ) : null}
+                          {stage === 'Final Testing' && btn.label.includes('Move to QC1') && nextAssignee ? (
+                            <p className="text-xs text-slate-500 mt-1 text-center">
+                              Will assign to:{' '}
+                              <span className="font-medium text-slate-700">{nextAssignee.name}</span>
+                            </p>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                    {STAGE_TASK_STAGES.includes(stage) ? (
+                      <p className="text-xs text-slate-400 mt-2 text-center">
+                        Complete the task checklist above, then click the move button to advance.
+                      </p>
+                    ) : null}
+                  </>
                 ) : null}
               </>
-            )}
+            ) : null}
           </div>
         </aside>
       </div>

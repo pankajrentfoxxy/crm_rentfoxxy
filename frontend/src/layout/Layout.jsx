@@ -550,8 +550,8 @@ export default function Layout({ children }) {
                       {leadCrmAccordionChildren.filter((child) => isLeadCrmChildVisible(child, canView)).map((child) => {
 
                         const badge =
-                          child.countKey && leadCrmCounts && leadCrmCounts[child.countKey] != null
-                            ? leadCrmCounts[child.countKey]
+                          child.countKey && child.section && canView(child.section)
+                            ? (leadCrmCounts?.[child.countKey] ?? 0)
                             : null;
 
                         return (
@@ -752,8 +752,8 @@ export default function Layout({ children }) {
 
                       {floorVisibleChildren.map((child) => {
 
-                        const badge = child.countKey && floorCounts && floorCounts[child.countKey] != null
-                          ? floorCounts[child.countKey]
+                        const badge = child.countKey && child.section && canView(child.section)
+                          ? (floorCounts?.[child.countKey] ?? 0)
                           : null;
 
                         return (
@@ -944,8 +944,8 @@ export default function Layout({ children }) {
                       {inventoryVisibleChildren.map((child) => {
 
                         const badge =
-                          child.countKey && inventoryCounts && inventoryCounts[child.countKey] != null
-                            ? inventoryCounts[child.countKey]
+                          child.countKey && child.section && canView(child.section)
+                            ? (inventoryCounts?.[child.countKey] ?? 0)
                             : null;
 
                         return (
@@ -1075,8 +1075,8 @@ export default function Layout({ children }) {
                   {salesPipelineAccordionOpen && (
                     <div className="mt-1 ml-2 pl-3 border-l border-blue-100 space-y-0.5">
                       {salesPipelineAccordionChildren.filter((child) => isSalesPipelineChildVisible(child, canView)).map((child) => {
-                        const badge = child.countKey && operationCounts[child.countKey] != null
-                          ? operationCounts[child.countKey]
+                        const badge = child.countKey && child.section && canView(child.section)
+                          ? (operationCounts?.[child.countKey] ?? 0)
                           : null;
                         return (
                           <NavLink
@@ -1181,8 +1181,8 @@ export default function Layout({ children }) {
                   {financeAccordionOpen && (
                     <div className="mt-1 ml-2 pl-3 border-l border-emerald-100 space-y-0.5">
                       {financeMenuItems.filter((child) => isFinanceChildVisible(child, canView)).map((child) => {
-                        const badge = child.countKey && financeCounts[child.countKey] != null
-                          ? financeCounts[child.countKey]
+                        const badge = child.countKey && child.section && canView(child.section)
+                          ? (financeCounts?.[child.countKey] ?? 0)
                           : null;
                         const Icon = child.icon;
                         return (

@@ -19,9 +19,15 @@ export default function ReturnDcListPage() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
+  const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [detailRdc, setDetailRdc] = useState(null);
+
+  useEffect(() => {
+    const id = setTimeout(() => setSearch(searchInput.trim()), 300);
+    return () => clearTimeout(id);
+  }, [searchInput]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -167,8 +173,8 @@ export default function ReturnDcListPage() {
           <input
             type="search"
             placeholder="Search RDC #, customer, SO #, original DC, serial…"
-            value={search}
-            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+            value={searchInput}
+            onChange={(e) => { setSearchInput(e.target.value); setPage(1); }}
             className="w-full border border-gray-200 rounded-lg pl-9 pr-3 py-2 text-sm"
           />
         </div>

@@ -18,25 +18,38 @@ async function erpQcPending(erp) {
   return Number(rows[0].cnt);
 }
 
-async function erpNonPassed(erp) {
-  const [rows] = await erp.query(
-    "SELECT COUNT(*) AS cnt FROM `serial_numbers` WHERE status <> 'passed'"
-  );
-  return Number(rows[0]?.cnt ?? 0);
-}
 
 async function crmQcProcess(crm) {
   const r = await crm.query(CRM_QC_PROCESS_COUNT_SQL);
   return r.rows[0].c;
 }
 
-async function crmNonPassed(crm) {
+async function erpQcPassed(erp) {
+  const [rows] = await erp.query(
+    "SELECT COUNT(*) AS cnt FROM `serial_numbers` WHERE status = 'passed'"
+  );
+  return Number(rows[0].cnt);
+}
+
+async function crmQcPassed(crm) {
   const r = await crm.query(`
     SELECT COUNT(*)::int AS c
     FROM vendor_serial_numbers s
     INNER JOIN vendor_purchase_orders p ON p.po_id = s.po_id AND p.deleted_at IS NULL
     WHERE s.deleted_at IS NULL AND s.po_id IS NOT NULL
-      AND COALESCE(NULLIF(TRIM(s.qc_status), ''), NULLIF(TRIM(s.extra->>'status'), ''), 'pending') <> 'passed'
+      AND COALESCE(NULLIF(TRIM(s.qc_status), ''), NULLIF(TRIM(s.extra->>'status'), ''), 'pending') = 'passed'
+  `);
+  return r.rows[0].c;
+}
+
+async function crmQcPassedErpMapped(crm) {
+  const r = await crm.query(`
+    SELECT COUNT(*)::int AS c
+    FROM vendor_serial_numbers s
+    INNER JOIN vendor_purchase_orders p ON p.po_id = s.po_id AND p.deleted_at IS NULL
+    INNER JOIN erp_id_map m ON m.entity = 'serial_numbers' AND m.crm_id = s.serial_id
+    WHERE s.deleted_at IS NULL AND s.po_id IS NOT NULL
+      AND COALESCE(NULLIF(TRIM(s.qc_status), ''), NULLIF(TRIM(s.extra->>'status'), ''), 'pending') = 'passed'
   `);
   return r.rows[0].c;
 }
@@ -49,15 +62,21 @@ async function main() {
   console.log('ERP source:', erp.mode, erp.dumpPath || '(MySQL)');
 
   const erpPending = await erpQcPending(erp);
-  const erpNotPassed = await erpNonPassed(erp);
-  const crmBefore = await crmQcProcess(crm);
-  const crmOldBucket = await crmNonPassed(crm);
+  const erpPassed = await erpQcPassed(erp);
+  const crmPending = await crmQcProcess(crm);
+  const crmPassed = await crmQcPassed(crm);
+  const crmPassedMapped = await crmQcPassedErpMapped(crm);
 
   console.log('ERP QC Processing (status=pending):     ', erpPending);
-  console.log('ERP all non-passed serials:             ', erpNotPassed);
-  console.log('CRM QC Process bucket (pending only):   ', crmBefore);
-  console.log('CRM old bucket (all non-passed):        ', crmOldBucket);
-  console.log('Match ERP pending?', erpPending === crmBefore ? 'YES' : 'NO — run module 031 + deploy filter fix');
+  console.log('CRM QC Process bucket (pending only):   ', crmPending);
+  console.log('Match ERP pending?', erpPending === crmPending ? 'YES' : 'NO — run module 031');
+  console.log('ERP QC Passed (status=passed):          ', erpPassed);
+  console.log('CRM passed bucket (all):                ', crmPassed);
+  console.log('CRM passed (ERP-migrated rows only):    ', crmPassedMapped);
+  console.log('Match ERP passed (migrated)?', erpPassed === crmPassedMapped ? 'YES' : 'NO — run module 031');
+  if (crmPassed !== crmPassedMapped) {
+    console.log('CRM-only passed rows (post-migration):  ', crmPassed - crmPassedMapped);
+  }
 
   console.log('\n=== Spare Parts Reconciliation ===');
   const [erpSpo] = await erp.query('SELECT COUNT(*) AS cnt FROM spare_parts_po');

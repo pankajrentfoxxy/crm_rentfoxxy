@@ -124,7 +124,8 @@ async function createTicketFromGrnReceive(db, {
   inventoryAssetCode,
   po,
   line,
-  actorUserId
+  actorUserId,
+  initialConditionOverride
 }) {
   const open = await db.query(
     `SELECT ticket_id FROM tickets WHERE serial_number = $1 AND status IN ('in_progress', 'on_hold')`,
@@ -151,9 +152,9 @@ async function createTicketFromGrnReceive(db, {
     stageName: stage.stage_name
   });
 
-  const initialCondition = poLabel
-    ? `GRN receive — PO ${poLabel}`
-    : 'GRN receive — vendor purchase order';
+  const initialCondition =
+    initialConditionOverride ||
+    (poLabel ? `GRN receive — PO ${poLabel}` : 'GRN receive — vendor purchase order');
 
   const ins = await db.query(
     `INSERT INTO tickets (

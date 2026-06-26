@@ -228,7 +228,19 @@ function PartsManager({ parts, readOnly, isProcurementStage, onAssign, ticketId 
 }
 
 // Main Diagnosis Form
-export default function DiagnosisForm({ api, ticket, onClose, onComplete, readOnly = false }) {
+export default function DiagnosisForm({
+  api,
+  ticket,
+  onClose,
+  onComplete,
+  readOnly = false,
+  showRepairRouting = false,
+  repairRoutingDisabled = false,
+  repairReason = '',
+  onRepairReasonChange,
+  onMarkChipRepair,
+  onMarkBodyPaint,
+}) {
     const [sections, setSections] = useState({});
     const [data, setData] = useState({});
     const [groupedParts, setGroupedParts] = useState({});
@@ -248,7 +260,6 @@ export default function DiagnosisForm({ api, ticket, onClose, onComplete, readOn
     const loadData = React.useCallback(async () => {
         setLoading(true);
         try {
-            // Fetch Sections & Diagnosis
             const { data: diagRes } = await api.get(`/diagnosis/ticket/${ticket.ticket_id}`);
             setSections(diagRes.sections || {});
 
@@ -264,19 +275,24 @@ export default function DiagnosisForm({ api, ticket, onClose, onComplete, readOn
             }
             if (diagRes.parts) setExistingParts(diagRes.parts);
             if (diagRes.images) setImages(diagRes.images);
+        } catch (e) {
+            console.error('Failed to load diagnosis:', e);
+            alert('Error loading diagnosis: ' + (e.response?.data?.message || e.message));
+            setLoading(false);
+            return;
+        }
 
-            // Fetch Grouped Parts (only if editable)
-            if (!readOnly) {
+        if (!readOnly) {
+            try {
                 const { data: partRes } = await api.get('/parts/grouped');
                 setGroupedParts(partRes.parts || {});
+            } catch (e) {
+                console.warn('Parts catalog unavailable for diagnosis picker:', e.response?.data?.message || e.message);
+                setGroupedParts({});
             }
-
-        } catch (e) {
-            console.error('Failed to load:', e);
-            alert('Error loading data: ' + (e.response?.data?.message || e.message));
-        } finally {
-            setLoading(false);
         }
+
+        setLoading(false);
     }, [api, ticket.ticket_id, readOnly]);
 
     useEffect(() => {
@@ -455,6 +471,42 @@ export default function DiagnosisForm({ api, ticket, onClose, onComplete, readOn
                     </div>
                 </div>
             </div>
+
+            {!readOnly && showRepairRouting ? (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-2">
+                <h3 className="text-sm font-semibold text-amber-900">Repair routing</h3>
+                <p className="text-xs text-amber-800">
+                  {repairRoutingDisabled
+                    ? 'Verify the machine in Stage Actions (sidebar) before routing to repair.'
+                    : 'Send this unit to chip repair or body & paint when needed.'}
+                </p>
+                <textarea
+                  className="w-full rounded-lg border text-xs p-2 min-h-[60px]"
+                  placeholder="Reason for repair routing — e.g. GPU dead, lid damage…"
+                  value={repairReason}
+                  onChange={(e) => onRepairReasonChange?.(e.target.value)}
+                  disabled={repairRoutingDisabled}
+                />
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <button
+                    type="button"
+                    disabled={repairRoutingDisabled}
+                    onClick={onMarkChipRepair}
+                    className="flex-1 py-2.5 rounded-lg bg-amber-500 text-white text-sm font-semibold disabled:opacity-50"
+                  >
+                    Mark Chip Repair Required
+                  </button>
+                  <button
+                    type="button"
+                    disabled={repairRoutingDisabled}
+                    onClick={onMarkBodyPaint}
+                    className="flex-1 py-2.5 rounded-lg bg-pink-500 text-white text-sm font-semibold disabled:opacity-50"
+                  >
+                    Mark Body &amp; Paint Required
+                  </button>
+                </div>
+              </div>
+            ) : null}
 
             {!readOnly && (
                 <div className="flex gap-3 sticky bottom-0 bg-white/90 backdrop-blur-sm p-4 border-t z-10">

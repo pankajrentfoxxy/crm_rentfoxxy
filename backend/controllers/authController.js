@@ -4,6 +4,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
 const { buildEffectivePermissionsForUser, upsertUserPermissions: upsertUserPermissionsService } = require('../services/permissionService');
+const { getDisplayTeams, normalizeTeamIds } = require('../utils/teamUtils');
 
 const MANAGEABLE_ROLES = [
   'team_member', 'team_lead', 'sales', 'floor_manager', 'procurement', 'qc', 'dispatch',
@@ -66,9 +67,9 @@ exports.register = async (req, res) => {
     } else {
       // team_member, team_lead, floor_manager: support multiple teams
       if (Array.isArray(team_ids) && team_ids.length > 0) {
-        resolvedTeamIds = team_ids.map((id) => parseInt(id)).filter((id) => !isNaN(id) && id > 0);
+        resolvedTeamIds = await normalizeTeamIds(team_ids);
       } else if (team_id && team_id !== 'null' && team_id !== '') {
-        resolvedTeamIds = [parseInt(team_id)];
+        resolvedTeamIds = await normalizeTeamIds([team_id]);
       }
     }
     const primaryTeamId = resolvedTeamIds[0] || null; // First team as primary for backward compat
@@ -168,12 +169,12 @@ const getUserTeamIds = async (userId, fallbackTeamId) => {
       [userId]
     );
     if (utRes.rows.length > 0) {
-      return utRes.rows.map((r) => r.team_id);
+      return normalizeTeamIds(utRes.rows.map((r) => r.team_id));
     }
   } catch (e) {
     // user_teams table may not exist before migration
   }
-  return fallbackTeamId != null ? [fallbackTeamId] : [];
+  return fallbackTeamId != null ? normalizeTeamIds([fallbackTeamId]) : [];
 };
 
 // Login User
@@ -428,10 +429,8 @@ exports.updateBarcode = async (req, res) => {
 
 exports.getTeams = async (req, res) => {
   try {
-    const result = await pool.query(
-      'SELECT team_id, team_name FROM teams ORDER BY team_name ASC'
-    );
-    res.json({ success: true, teams: result.rows });
+    const teams = await getDisplayTeams();
+    res.json({ success: true, teams });
   } catch (error) {
     console.error('getTeams error:', error);
     res.status(500).json({ success: false, message: 'Server error fetching teams' });
@@ -522,8 +521,8 @@ exports.getAllUsers = async (req, res) => {
           [u.user_id]
         );
         u.team_ids = utRes.rows.length > 0
-          ? utRes.rows.map((r) => r.team_id)
-          : (u.team_id != null ? [u.team_id] : []);
+          ? await normalizeTeamIds(utRes.rows.map((r) => r.team_id))
+          : (u.team_id != null ? await normalizeTeamIds([u.team_id]) : []);
       } catch (e) {
         u.team_ids = u.team_id != null ? [u.team_id] : [];
       }
@@ -606,7 +605,7 @@ exports.updateUser = async (req, res) => {
       : target.rows[0].role;
 
     if (Array.isArray(team_ids) && FLOOR_ROLES.includes(effectiveRole)) {
-      const validTeamIds = team_ids.map((tid) => parseInt(tid, 10)).filter((tid) => !Number.isNaN(tid) && tid > 0);
+      const validTeamIds = await normalizeTeamIds(team_ids);
       await pool.query('DELETE FROM user_teams WHERE user_id = $1', [id]);
       for (const tid of validTeamIds) {
         await pool.query(
@@ -754,7 +753,7 @@ exports.updateUserTeams = async (req, res) => {
       return res.status(403).json({ success: false, message: 'You cannot modify this user' });
     }
 
-    const validTeamIds = team_ids.map((tid) => parseInt(tid)).filter((tid) => !isNaN(tid) && tid > 0);
+    const validTeamIds = await normalizeTeamIds(team_ids);
 
     await pool.query('DELETE FROM user_teams WHERE user_id = $1', [id]);
     for (const tid of validTeamIds) {

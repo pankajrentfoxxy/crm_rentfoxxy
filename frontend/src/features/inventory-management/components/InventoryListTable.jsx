@@ -1,22 +1,28 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
-import { Clock, ExternalLink, FileImage, FileText, History, Loader2, RefreshCw } from 'lucide-react';
+import { Clock, ExternalLink, FileImage, FileText, History, Loader2, Plus, RefreshCw } from 'lucide-react';
 import { SearchField, ListPagination } from '../../../components/ui/primitives';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
+import { useAuth } from '../../../context/AuthContext';
 import {
   fetchInventoryList,
   fetchInventoryListCounts,
+  movePassedToQcProcess,
   tagInventorySerial,
   updateReadyToRentSaleAction
 } from '../inventoryManagementApi';
 import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
+import AddLaptopToQcModal from './AddLaptopToQcModal';
 import {
   INVENTORY_API_SEGMENT_BY_ROUTE,
   INVENTORY_PAGE_META,
+  MOVE_TO_QC_PROCESS_ACTION,
   OUT_FOR_REPAIR_INVENTORY_ACTIONS,
   READY_TO_RENT_SALE_ACTIONS
 } from '../inventoryStatusConfig';
+import { invalidateInventoryManagement } from '../inventoryCountsEvents';
+import { invalidateQcCounts } from '../../qc-management/qcCountsEvents';
 import { INVENTORY_LIST_INVALIDATE } from '../inventoryCountsEvents';
 import ReturnRepareActionModal from '../../qc-management/components/ReturnRepareActionModal';
 import { getBackendOrigin } from '../../../utils/api';
@@ -255,26 +261,45 @@ function InventoryTagButtons({ row, onUpdated }) {
   );
 }
 
-function ReadyToRentActionSelect({ row, onUpdated }) {
+function ReadyToRentActionSelect({ row, onUpdated, showMoveToQc }) {
   const [saving, setSaving] = useState(false);
   const current = READY_TO_RENT_SALE_ACTIONS.some((o) => o.value === row.status2) ? row.status2 : '';
+  const actionOptions = showMoveToQc
+    ? [...READY_TO_RENT_SALE_ACTIONS, MOVE_TO_QC_PROCESS_ACTION]
+    : READY_TO_RENT_SALE_ACTIONS;
 
   const handleChange = async (e) => {
     const selected = e.target.value;
     if (!selected || saving) return;
     setSaving(true);
     try {
-      const { data } = await updateReadyToRentSaleAction({
-        serial_number_id: row.serial_id,
-        serial_number: row.serial_number,
-        selected_value: selected
-      });
-      if (data.success) {
-        toast.success(data.message || 'Action taken successfully!');
-        onUpdated?.();
+      if (selected === MOVE_TO_QC_PROCESS_ACTION.value) {
+        const { data } = await movePassedToQcProcess({
+          serial_number_id: row.serial_id,
+          serial_number: row.serial_number
+        });
+        if (data.success) {
+          toast.success(data.message || 'Moved to QC Process');
+          invalidateInventoryManagement();
+          invalidateQcCounts();
+          onUpdated?.();
+        } else {
+          toast.error(data.message || 'Failed to move to QC Process');
+          e.target.value = current;
+        }
       } else {
-        toast.error(data.message || 'Failed to update');
-        e.target.value = current;
+        const { data } = await updateReadyToRentSaleAction({
+          serial_number_id: row.serial_id,
+          serial_number: row.serial_number,
+          selected_value: selected
+        });
+        if (data.success) {
+          toast.success(data.message || 'Action taken successfully!');
+          onUpdated?.();
+        } else {
+          toast.error(data.message || 'Failed to update');
+          e.target.value = current;
+        }
       }
     } catch (err) {
       toast.error(err.response?.data?.message || err.message || 'Failed to update');
@@ -293,7 +318,7 @@ function ReadyToRentActionSelect({ row, onUpdated }) {
       className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs min-w-[10rem] disabled:opacity-60"
     >
       <option value="">Take Action</option>
-      {READY_TO_RENT_SALE_ACTIONS.map((opt) => (
+      {actionOptions.map((opt) => (
         <option key={opt.value} value={opt.value}>
           {opt.label}
         </option>
@@ -319,9 +344,12 @@ function SparePartRow({ row }) {
 }
 
 export default function InventoryListTable({ routeKey }) {
+  const { user } = useAuth();
+  const isInventoryAdmin = ['admin', 'super_admin'].includes(user?.role);
   const meta = INVENTORY_PAGE_META[routeKey];
   const apiSegment = INVENTORY_API_SEGMENT_BY_ROUTE[routeKey];
   const isSpare = routeKey === 'spare-parts';
+  const showQcAddLaptop = routeKey === 'qc-process' && isInventoryAdmin;
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -332,6 +360,7 @@ export default function InventoryListTable({ routeKey }) {
   const [listCounts, setListCounts] = useState(null);
   const [historyTtspl, setHistoryTtspl] = useState(null);
   const [selectedIds, setSelectedIds] = useState([]);
+  const [showAddLaptopModal, setShowAddLaptopModal] = useState(false);
 
   useEffect(() => { setPage(1); }, [search]);
 
@@ -437,15 +466,27 @@ export default function InventoryListTable({ routeKey }) {
             {total}
           </span>
         </h2>
-        <button
-          type="button"
-          onClick={load}
-          disabled={loading}
-          className="ml-auto inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm hover:bg-slate-50"
-        >
-          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-          Refresh
-        </button>
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {showQcAddLaptop ? (
+            <button
+              type="button"
+              onClick={() => setShowAddLaptopModal(true)}
+              className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700"
+            >
+              <Plus className="w-4 h-4" />
+              Add Laptop
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={load}
+            disabled={loading}
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm hover:bg-slate-50"
+          >
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+            Refresh
+          </button>
+        </div>
       </div>
 
       <div className="mb-2">
@@ -636,7 +677,11 @@ export default function InventoryListTable({ routeKey }) {
                   ) : null}
                   {showReadyToRentAction ? (
                     <td className="px-3 py-3">
-                      <ReadyToRentActionSelect row={row} onUpdated={load} />
+                      <ReadyToRentActionSelect
+                        row={row}
+                        onUpdated={load}
+                        showMoveToQc={isInventoryAdmin}
+                      />
                     </td>
                   ) : null}
                   {showTagColumn ? (
@@ -670,6 +715,12 @@ export default function InventoryListTable({ routeKey }) {
         ttsplId={historyTtspl}
         open={Boolean(historyTtspl)}
         onClose={() => setHistoryTtspl(null)}
+      />
+
+      <AddLaptopToQcModal
+        open={showAddLaptopModal}
+        onClose={() => setShowAddLaptopModal(false)}
+        onSuccess={() => load()}
       />
     </div>
   );

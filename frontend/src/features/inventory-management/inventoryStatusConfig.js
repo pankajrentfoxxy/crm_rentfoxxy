@@ -4,13 +4,19 @@ export const OUT_FOR_REPAIR_INVENTORY_ACTIONS = [
   { value: 'replace', label: 'Replace' }
 ];
 
-/** Laravel inventory-list/passed — status2 sale routing (ReturnAndRepareCheckXYZ) */
+/** Laravel ReturnAndRepareCheckXYZ — sets serial status2 for ready-to-rent list */
 export const READY_TO_RENT_SALE_ACTIONS = [
   { value: 'normal_sale', label: 'Normal Sale' },
   { value: 'clearance_sale', label: 'Clearance Sale' },
   { value: 'rent', label: 'Rent Sale' },
   { value: 'rent_or_normal_sale', label: 'Rent or Normal Sale' }
 ];
+
+/** Admin-only — move QC passed unit back into QC Process pipeline */
+export const MOVE_TO_QC_PROCESS_ACTION = {
+  value: '__move_to_qc_process__',
+  label: 'Move to QC Process'
+};
 
 /** CRM route segment → Laravel admin.inventory.inventoryList segment */
 export const INVENTORY_SEGMENT_BY_ROUTE = {

@@ -60,15 +60,29 @@ async function closeRefurbPool() {
 }
 
 async function createRefurbSource() {
-  const cfg = getRefurbConfig();
-  const pool = getRefurbPool();
-  const { rows } = await pool.query('SELECT current_database() AS db');
-  return {
-    config: cfg,
-    database: rows[0]?.db,
-    query,
-    close: closeRefurbPool,
-  };
+  try {
+    const cfg = getRefurbConfig();
+    const pool = getRefurbPool();
+    const { rows } = await pool.query('SELECT current_database() AS db');
+    return {
+      mode: 'postgres',
+      config: cfg,
+      database: rows[0]?.db,
+      query,
+      close: closeRefurbPool,
+    };
+  } catch (err) {
+    const { createRefurbSqlDumpSource, defaultDumpPath } = require('./refurbSqlDump');
+    const dumpPath = defaultDumpPath();
+    const dump = createRefurbSqlDumpSource(dumpPath);
+    writeLogFallback(err, dumpPath);
+    return dump;
+  }
+}
+
+function writeLogFallback(err, dumpPath) {
+  if (process.env.MIGRATION_QUIET === 'true') return;
+  console.warn(`Refurb PostgreSQL unavailable (${err.message}); using SQL dump ${dumpPath}`);
 }
 
 module.exports = {

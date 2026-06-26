@@ -1,8 +1,16 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Loader2, Search } from 'lucide-react';
+import { History, Loader2, Search } from 'lucide-react';
 import { fetchSerialNumberStatus } from '../inventoryManagementApi';
+import ErpSerialHistoryTable from '../components/ErpSerialHistoryTable';
+
+const TABS = [
+  { key: 'detail', label: 'Detail' },
+  { key: 'inward', label: 'Inward' },
+  { key: 'outward', label: 'Outward' },
+  { key: 'transactions', label: 'Transactions' }
+];
 
 export default function SerialNumberStatusPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -40,9 +48,21 @@ export default function SerialNumberStatusPage() {
     if (initial) runSearch(initial);
   }, []);
 
+  const historyRows =
+    tab === 'inward'
+      ? result?.erp_history_inward || result?.inward || []
+      : tab === 'outward'
+        ? result?.erp_history_outward || result?.outward || []
+        : tab === 'transactions'
+          ? result?.erp_history_summary || result?.transactions || []
+          : [];
+
   return (
     <div className="space-y-4">
-      <h2 className="text-2xl font-bold text-slate-900">Serial Number Status</h2>
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="text-2xl font-bold text-slate-900">Serial Number Status</h2>
+        <span className="text-xs text-slate-500">Migrated ERP history — separate from TTSPL History</span>
+      </div>
 
       <div className="rounded-xl border bg-white p-6 shadow-sm">
         <form
@@ -58,7 +78,7 @@ export default function SerialNumberStatusPage() {
               className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm uppercase"
               value={input}
               onChange={(e) => setInput(e.target.value.toUpperCase())}
-              placeholder="Serial or unique ID"
+              placeholder="Serial or TTSPL / unique ID"
             />
           </div>
           <button
@@ -73,16 +93,27 @@ export default function SerialNumberStatusPage() {
 
         {result ? (
           <div className="mt-6 flex flex-wrap gap-2">
-            {['detail', 'inward', 'outward', 'transactions'].map((t) => (
+            {TABS.map((t) => (
               <button
-                key={t}
+                key={t.key}
                 type="button"
-                onClick={() => setTab(t)}
-                className={`rounded-lg px-3 py-1.5 text-xs font-medium capitalize ${
-                  tab === t ? 'bg-sky-100 text-sky-900' : 'bg-slate-100 text-slate-600'
+                onClick={() => setTab(t.key)}
+                className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
+                  tab === t.key ? 'bg-sky-100 text-sky-900' : 'bg-slate-100 text-slate-600'
                 }`}
               >
-                {t}
+                {t.label}
+                {t.key !== 'detail' && result.erp_history_count != null ? (
+                  <span className="ml-1 opacity-70">
+                    (
+                    {t.key === 'inward'
+                      ? (result.erp_history_inward || []).length
+                      : t.key === 'outward'
+                        ? (result.erp_history_outward || []).length
+                        : result.erp_history_count}
+                    )
+                  </span>
+                ) : null}
               </button>
             ))}
           </div>
@@ -94,16 +125,20 @@ export default function SerialNumberStatusPage() {
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500">
               <tr>
-                <th className="px-3 py-2 text-left">Serial</th>
+                <th className="px-3 py-2 text-left">Serial / Unique</th>
                 <th className="px-3 py-2 text-left">PO</th>
                 <th className="px-3 py-2 text-left">Status</th>
                 <th className="px-3 py-2 text-left">Vendor</th>
+                <th className="px-3 py-2 text-left">Model</th>
               </tr>
             </thead>
             <tbody>
               {(result.serials || []).map((r) => (
-                <tr key={r.serial_id} className="border-t">
-                  <td className="px-3 py-2 font-mono text-xs">{r.serial_number}</td>
+                <tr key={r.serial_id} className="border-t align-top">
+                  <td className="px-3 py-2 font-mono text-xs">
+                    <div className="text-orange-800 font-semibold">{r.serial_number}</div>
+                    <div className="text-sky-800">{r.unique_product_serial || r.inventory_asset_code || '—'}</div>
+                  </td>
                   <td className="px-3 py-2">
                     {r.po_id ? (
                       <Link to={`/vendor-management/purchase-orders/${r.po_id}/receive`} className="text-sky-700">
@@ -113,29 +148,41 @@ export default function SerialNumberStatusPage() {
                       '—'
                     )}
                   </td>
-                  <td className="px-3 py-2 capitalize">{r.qc_status}</td>
+                  <td className="px-3 py-2 capitalize">{r.qc_status?.replace(/_/g, ' ') || '—'}</td>
                   <td className="px-3 py-2">{r.vendor_name || '—'}</td>
+                  <td className="px-3 py-2 text-xs">{r.model || r.product_name || '—'}</td>
                 </tr>
               ))}
+              {!result.serials?.length ? (
+                <tr>
+                  <td colSpan={5} className="px-3 py-6 text-center text-slate-500">
+                    No serial records matched this search.
+                  </td>
+                </tr>
+              ) : null}
             </tbody>
           </table>
         </div>
       ) : null}
 
-      {result && tab === 'inward' ? (
-        <pre className="rounded-xl border bg-slate-50 p-4 text-xs overflow-auto">
-          {JSON.stringify(result.inward || [], null, 2)}
-        </pre>
-      ) : null}
-      {result && tab === 'outward' ? (
-        <pre className="rounded-xl border bg-slate-50 p-4 text-xs overflow-auto">
-          {JSON.stringify(result.outward || [], null, 2)}
-        </pre>
-      ) : null}
-      {result && tab === 'transactions' ? (
-        <pre className="rounded-xl border bg-slate-50 p-4 text-xs overflow-auto">
-          {JSON.stringify(result.transactions || [], null, 2)}
-        </pre>
+      {result && tab !== 'detail' ? (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 text-xs text-slate-600">
+            <History className="w-4 h-4" />
+            <span>
+              Showing {historyRows.length} migrated ERP event{historyRows.length === 1 ? '' : 's'} (oldest first).
+              New CRM workflow events appear in{' '}
+              <Link to="/inventory-management/ttspl-history" className="text-sky-700 hover:underline">
+                TTSPL History
+              </Link>
+              .
+            </span>
+          </div>
+          <ErpSerialHistoryTable
+            rows={historyRows}
+            emptyMessage="No migrated ERP history for this filter. Run migration module 041 if data is missing."
+          />
+        </div>
       ) : null}
     </div>
   );

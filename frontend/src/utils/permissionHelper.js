@@ -144,7 +144,12 @@ export function getDataScope(user, effectivePermissions, section) {
   if (!effectivePermissions || !Object.keys(effectivePermissions).length) {
     return 'all';
   }
-  for (const key of sectionsToCheck(section)) {
+  const keys = sectionsToCheck(section);
+  for (const key of keys) {
+    const scope = effectivePermissions?.[key]?.data_scope;
+    if (scope === 'all') return 'all';
+  }
+  for (const key of keys) {
     const scope = effectivePermissions?.[key]?.data_scope;
     if (scope === 'assigned') return 'assigned';
   }

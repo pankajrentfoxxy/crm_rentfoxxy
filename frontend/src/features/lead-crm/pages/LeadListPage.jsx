@@ -7,7 +7,7 @@ import { useAuth } from '../../../context/AuthContext';
 import PermissionGate from '../../../components/PermissionGate';
 import { LEAD_SOURCES, LEAD_STATUSES, STAGES_BY_STATUS, STATUS_COLORS, INQUIRY_TYPES } from '../leadConstants';
 import {
-  assignLeads, exportLeadsCsv, getLeads, getUsers, importLeadsCsv, updateLeadStatus,
+  assignLeads, exportLeadsCsv, getAssignableUsers, getLeads, importLeadsCsv, updateLeadStatus,
 } from '../leadCrmApi';
 import {
   formatConfig, formatFollowUpDateTime, formatInquiry, followUpTone, relativeTime,
@@ -20,7 +20,7 @@ const PAGE_SIZE = 25;
 const VIEW_KEY = 'lead_crm_view_mode';
 
 export default function LeadListPage() {
-  const { user } = useAuth();
+  const { user, isAssignedDataOnly, hasPermission } = useAuth();
   const navigate = useNavigate();
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -47,7 +47,7 @@ export default function LeadListPage() {
       if (filters.date_from) params.date_from = filters.date_from;
       if (filters.date_to) params.date_to = filters.date_to;
       if (filters.follow_up) params.follow_up = filters.follow_up;
-      if (user?.role === 'sales') params.assigned_to = 'me';
+      if (isAssignedDataOnly('leads')) params.assigned_to = 'me';
       else if (filters.assigned_to) params.assigned_to = filters.assigned_to;
       const res = await getLeads(params);
       setLeads(res.data?.leads || []);
@@ -56,14 +56,15 @@ export default function LeadListPage() {
     } finally {
       setLoading(false);
     }
-  }, [filters, user?.role]);
+  }, [filters, isAssignedDataOnly]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
-    if (user?.role !== 'sales') {
-      getUsers().then((r) => setUsers(r.data?.users || r.data || [])).catch(() => {});
-    }
-  }, [user?.role]);
+    if (!hasPermission('leads', 'edit')) return;
+    getAssignableUsers()
+      .then((r) => setUsers(r.data?.users || []))
+      .catch(() => toast.error('Failed to load sales users for assignment'));
+  }, [hasPermission]);
 
   const stats = useMemo(() => {
     const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -340,14 +341,21 @@ export default function LeadListPage() {
             </div>
           </div>
           {selected.size > 0 && (
-            <PermissionGate section="leads" action="create">
+            <PermissionGate section="leads" action="edit">
               <div className="mt-4 p-3 rounded-xl border border-blue-100 bg-blue-50 flex flex-wrap gap-2 items-center">
                 <span className="text-sm">{selected.size} selected</span>
                 <select className="text-sm border rounded-lg px-2 py-1" onChange={async (e) => {
                   const uid = e.target.value;
                   if (!uid) return;
-                  await assignLeads({ lead_ids: [...selected], sales_user_id: parseInt(uid, 10) });
-                  toast.success('Assigned'); load(); setSelected(new Set());
+                  try {
+                    await assignLeads({ lead_ids: [...selected], sales_user_id: parseInt(uid, 10) });
+                    toast.success('Assigned');
+                    load();
+                    setSelected(new Set());
+                  } catch (err) {
+                    toast.error(err.response?.data?.message || 'Assignment failed');
+                  }
+                  e.target.value = '';
                 }}>
                   <option value="">Assign to...</option>
                   {users.map((u) => <option key={u.user_id || u.userId} value={u.user_id || u.userId}>{u.name}</option>)}
