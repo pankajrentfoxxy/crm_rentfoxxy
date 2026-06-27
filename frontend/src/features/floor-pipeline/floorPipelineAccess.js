@@ -1,4 +1,12 @@
 /** Stage-filter shortcuts on /floor-pipeline/tickets — each maps to its RBAC section. */
+import {
+  canMoveDiagnosisToAssembly,
+  canRunStageRoutingActions,
+  isFloorManagerRole,
+} from './floorPipelineUi';
+
+export const FLOOR_TICKET_ASSIGN_SECTIONS = ['floor_tickets', 'floor_pipeline', 'tickets'];
+
 export const FLOOR_TICKET_STAGE_RULES = [
   {
     match: (stage) => /QC1|QC2/i.test(stage || ''),
@@ -36,4 +44,39 @@ export function firstAllowedFloorTicketsPath(canView) {
   if (canView('qc_management')) return '/floor-pipeline/tickets?stage=QC1,QC2';
   if (canView('floor_pipeline')) return '/floor-pipeline/dashboard';
   return null;
+}
+
+export function isFloorAssignedDataOnly(isAssignedDataOnly) {
+  return FLOOR_TICKET_ASSIGN_SECTIONS.some((section) => isAssignedDataOnly(section));
+}
+
+export function hasFloorTicketEdit(canEdit) {
+  return FLOOR_TICKET_ASSIGN_SECTIONS.some((section) => canEdit(section));
+}
+
+/** All-data scope + edit — manager-level control (assign, reassign, stage routing). */
+export function canManageFloorTickets(canEdit, isAssignedDataOnly) {
+  return hasFloorTicketEdit(canEdit) && !isFloorAssignedDataOnly(isAssignedDataOnly);
+}
+
+/** Assign / reassign — matches backend POST /tickets/:id/assign (floor_tickets edit). */
+export function canAssignFloorTickets(canEdit, isAssignedDataOnly) {
+  return canManageFloorTickets(canEdit, isAssignedDataOnly);
+}
+
+/** Keep user on ticket detail after workflow when they have all-data manager access. */
+export function isFloorTicketPrivileged(user, canEdit, isAssignedDataOnly) {
+  if (canManageFloorTickets(canEdit, isAssignedDataOnly)) return true;
+  if (isFloorAssignedDataOnly(isAssignedDataOnly)) return false;
+  return isFloorManagerRole(user?.role) || user?.role === 'super_admin';
+}
+
+export function canRunFloorStageRouting(user, canEdit, isAssignedDataOnly) {
+  if (canManageFloorTickets(canEdit, isAssignedDataOnly)) return true;
+  return canRunStageRoutingActions(user?.role);
+}
+
+export function canMoveDiagnosisToAssemblyForUser(user, canEdit, isAssignedDataOnly) {
+  if (canManageFloorTickets(canEdit, isAssignedDataOnly)) return true;
+  return canMoveDiagnosisToAssembly(user?.role);
 }

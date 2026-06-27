@@ -5,10 +5,15 @@ import toast from 'react-hot-toast';
 import { PageHeader, ListPagination } from '../../../components/ui/primitives';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import { useAuth } from '../../../context/AuthContext';
+import usePermission from '../../../hooks/usePermission';
 import { fetchFloorTickets } from '../floorPipelineApi';
 import useAutoRefresh from '../hooks/useAutoRefresh';
 import TicketCard from '../components/TicketCard';
 import AssignmentModal from '../components/AssignmentModal';
+import {
+  canAssignFloorTickets,
+  isFloorAssignedDataOnly,
+} from '../floorPipelineAccess';
 import {
   STAGE_GROUPS,
   STAGE_COLUMN_STYLE,
@@ -28,7 +33,10 @@ const PAGE_SIZE = 25;
 
 export default function FloorTicketListPage() {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, isAssignedDataOnly } = useAuth();
+  const { canEdit } = usePermission();
+  const canAssign = canAssignFloorTickets(canEdit, isAssignedDataOnly);
+  const allDataScope = !isFloorAssignedDataOnly(isAssignedDataOnly);
   const [searchParams] = useSearchParams();
   const [view, setView] = useState(() => localStorage.getItem(VIEW_KEY) || 'kanban');
   const [tickets, setTickets] = useState([]);
@@ -45,11 +53,11 @@ export default function FloorTicketListPage() {
   const fm = isFloorManagerRole(user?.role);
 
   const subtitle = useMemo(() => {
-    if (fm) return 'All tickets';
+    if (allDataScope && (canAssign || fm)) return 'All tickets';
     if (isDispatchQcRole(user?.role)) return 'Dispatch QC queue';
     if (isQcRole(user?.role)) return 'QC queue';
     return 'My tickets';
-  }, [user?.role, fm]);
+  }, [user?.role, fm, canAssign, allDataScope]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -99,15 +107,15 @@ export default function FloorTicketListPage() {
   }, [tickets]);
 
   const handleFloorManagerClick = (ticket) => {
-    if (fm && ticket.stage_name === 'Floor Manager') {
+    if (canAssign && ticket.stage_name === 'Floor Manager') {
       setAssignTicket(ticket);
     } else {
       navigate(`/floor-pipeline/tickets/${ticket.ticket_id}`);
     }
   };
 
-  const renderFmAction = (ticket) => {
-    if (!fm) return null;
+  const renderAssignAction = (ticket) => {
+    if (!canAssign) return null;
     if (ticket.stage_name === 'Floor Manager') {
       return (
         <button
@@ -213,9 +221,9 @@ export default function FloorTicketListPage() {
                           <TicketCard
                             ticket={t}
                             pendingParts={t.part_requests_pending}
-                            onCardClick={fm && stage === 'Floor Manager' ? handleFloorManagerClick : undefined}
+                            onCardClick={canAssign && stage === 'Floor Manager' ? handleFloorManagerClick : undefined}
                           />
-                          {fm && stage !== 'Floor Manager' && stage !== 'Inventory' ? (
+                          {canAssign && stage !== 'Floor Manager' && stage !== 'Inventory' ? (
                             <div className="mt-1 flex justify-end px-1">
                               <button
                                 type="button"
@@ -254,11 +262,11 @@ export default function FloorTicketListPage() {
               <TicketCard
                 ticket={t}
                 pendingParts={t.part_requests_pending}
-                onCardClick={fm && t.stage_name === 'Floor Manager' ? handleFloorManagerClick : undefined}
+                onCardClick={canAssign && t.stage_name === 'Floor Manager' ? handleFloorManagerClick : undefined}
               />
-              {fm && t.stage_name !== 'Inventory' ? (
+              {canAssign && t.stage_name !== 'Inventory' ? (
                 <div className="mt-1 flex justify-end px-1">
-                  {renderFmAction(t)}
+                  {renderAssignAction(t)}
                 </div>
               ) : null}
             </div>
@@ -277,13 +285,13 @@ export default function FloorTicketListPage() {
                 <th className="px-3 py-3 text-left">Assigned</th>
                 <th className="px-3 py-3 text-left">QC Fails</th>
                 <th className="px-3 py-3 text-left">Age</th>
-                {fm ? <th className="px-3 py-3 text-left">Actions</th> : null}
+                {canAssign ? <th className="px-3 py-3 text-left">Actions</th> : null}
               </tr>
             </thead>
             <tbody>
               {tickets.length === 0 ? (
                 <tr>
-                  <td colSpan={fm ? 10 : 9} className="px-3 py-8 text-center text-slate-500">No tickets</td>
+                  <td colSpan={canAssign ? 10 : 9} className="px-3 py-8 text-center text-slate-500">No tickets</td>
                 </tr>
               ) : tickets.map((t, i) => {
                 const pri = priorityBadge(t.priority);
@@ -311,8 +319,8 @@ export default function FloorTicketListPage() {
                     <td className="px-3 py-3">{t.assigned_user_name || '—'}</td>
                     <td className="px-3 py-3">{t.qc_fail_count || 0}</td>
                     <td className="px-3 py-3">{ticketAgeDays(t.created_at)}</td>
-                    {fm ? (
-                      <td className="px-3 py-3">{renderFmAction(t)}</td>
+                    {canAssign ? (
+                      <td className="px-3 py-3">{renderAssignAction(t)}</td>
                     ) : null}
                   </tr>
                 );

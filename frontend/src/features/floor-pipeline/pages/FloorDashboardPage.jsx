@@ -5,8 +5,10 @@ import toast from 'react-hot-toast';
 import { PageHeader, StatCard, ListPagination } from '../../../components/ui/primitives';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import usePermission from '../../../hooks/usePermission';
+import { useAuth } from '../../../context/AuthContext';
 import { fetchFloorDashboard, getFloorManagerQueue, getTeamMembers } from '../floorPipelineApi';
 import { configSummary, priorityBadge, resolveTicketTtspl } from '../floorPipelineUi';
+import { canManageFloorTickets } from '../floorPipelineAccess';
 import useAutoRefresh from '../hooks/useAutoRefresh';
 import AssignmentModal from '../components/AssignmentModal';
 
@@ -33,8 +35,9 @@ function BarChart({ data, valueKey = 'count' }) {
 }
 
 export default function FloorDashboardPage() {
+  const { isAssignedDataOnly } = useAuth();
   const { canEdit } = usePermission();
-  const canManageQueue = canEdit('floor_pipeline') || canEdit('floor_tickets');
+  const canManageQueue = canManageFloorTickets(canEdit, isAssignedDataOnly);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [queue, setQueue] = useState([]);

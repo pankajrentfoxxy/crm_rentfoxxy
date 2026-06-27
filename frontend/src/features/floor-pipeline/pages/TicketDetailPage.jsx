@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { AlertTriangle, History, Loader2 } from 'lucide-react';
 import api from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
+import usePermission from '../../../hooks/usePermission';
 import DiagnosisForm from '../../../components/DiagnosisForm';
 import {
   fetchTicketDetail,
@@ -19,15 +20,18 @@ import {
 } from '../floorPipelineApi';
 import {
   configBadges,
-  canRunStageRoutingActions,
-  canMoveDiagnosisToAssembly,
-  isFloorManagerRole,
   isQcRole,
   isDispatchQcRole,
   isTechnicianRole,
   priorityBadge,
   resolveTicketTtspl
 } from '../floorPipelineUi';
+import {
+  canManageFloorTickets,
+  canMoveDiagnosisToAssemblyForUser,
+  canRunFloorStageRouting,
+  isFloorTicketPrivileged,
+} from '../floorPipelineAccess';
 import StageTimeline from '../components/StageTimeline';
 import WorkLogFeed from '../components/WorkLogFeed';
 import QcChecklistPanel from '../components/QcChecklistPanel';
@@ -58,6 +62,8 @@ export default function TicketDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { user, isAssignedDataOnly } = useAuth();
+  const { canEdit } = usePermission();
+  const canManageTickets = canManageFloorTickets(canEdit, isAssignedDataOnly);
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState(null);
   const [tab, setTab] = useState('overview');
@@ -129,11 +135,7 @@ export default function TicketDetailPage() {
   }, [load, loadActiveLog]);
   useAutoRefresh(refresh);
 
-  const assignedOnlyScope = isAssignedDataOnly('floor_tickets')
-    || isAssignedDataOnly('floor_pipeline')
-    || isAssignedDataOnly('tickets');
-  const privileged = !assignedOnlyScope
-    && (isFloorManagerRole(user?.role) || ['admin', 'manager'].includes(user?.role));
+  const privileged = isFloorTicketPrivileged(user, canEdit, isAssignedDataOnly);
 
   const reloadTicketHistory = useCallback(async (ttsplId) => {
     if (!ttsplId) return;
@@ -241,9 +243,8 @@ export default function TicketDetailPage() {
       setNextAssigneeWarning(false);
     }
   }, [ticket?.ticket_id, ticket?.stage_name, ticket?.ticket_type]);
-  const fm = isFloorManagerRole(user?.role);
-  const stageRouting = canRunStageRoutingActions(user?.role);
-  const canDiagnosisToAssembly = canMoveDiagnosisToAssembly(user?.role);
+  const stageRouting = canRunFloorStageRouting(user, canEdit, isAssignedDataOnly);
+  const canDiagnosisToAssembly = canMoveDiagnosisToAssemblyForUser(user, canEdit, isAssignedDataOnly);
   const tech = isTechnicianRole(user?.role);
   const qc = isQcRole(user?.role);
   const dqc = isDispatchQcRole(user?.role);
@@ -382,7 +383,7 @@ export default function TicketDetailPage() {
   const pri = priorityBadge(ticket.priority);
   const stageButtons = [];
 
-  if (fm && stage === 'Floor Manager') {
+  if (canManageTickets && stage === 'Floor Manager') {
     stageButtons.push({ label: 'Assign to Technician', action: () => setAssignOpen(true), primary: true });
   }
   if (stage === 'Diagnosis') {
@@ -416,7 +417,7 @@ export default function TicketDetailPage() {
       stageButtons.push({ label: `Move to ${next}`, action: () => move(next), primary: true });
     }
   }
-  if ((qc || fm) && stage === 'QC1') {
+  if ((qc || canManageTickets) && stage === 'QC1') {
     const nextQcStage = ticket.ticket_type === 'sales_order_qc' ? 'Dispatch QC' : 'QC2';
     const nextLabel = ticket.ticket_type === 'sales_order_qc'
       ? 'QC1 PASS — Move to Dispatch QC'
@@ -426,7 +427,7 @@ export default function TicketDetailPage() {
       { label: 'QC1 FAIL — Send back', action: () => move('Assembly & Software', failReason), danger: true, needsReason: true }
     );
   }
-  if ((qc || fm || dqc) && stage === 'Dispatch QC') {
+  if ((qc || canManageTickets || dqc) && stage === 'Dispatch QC') {
     stageButtons.push(
       { label: 'DISPATCH QC PASS — Laptop Ready for DC', action: () => move('Inventory'), success: true },
       {
@@ -437,13 +438,13 @@ export default function TicketDetailPage() {
       }
     );
   }
-  if ((qc || fm) && stage === 'QC2') {
+  if ((qc || canManageTickets) && stage === 'QC2') {
     stageButtons.push(
       { label: 'QC2 PASS — Mark Inventory Ready', action: () => move('Inventory'), success: true },
       { label: 'QC2 FAIL — Send back to QC1', action: () => move('QC1', failReason), danger: true, needsReason: true }
     );
   }
-  if (fm) {
+  if (canManageTickets) {
     stageButtons.push(
       { label: 'Reassign Technician', action: () => setAssignOpen(true), muted: true },
       { label: 'Force Fail — Return to Vendor', action: forceFail, destructive: true, needsReason: true }
@@ -455,7 +456,7 @@ export default function TicketDetailPage() {
   const partsBlocked = (ticket.open_part_requests || 0) > 0;
   if (partsBlocked) {
     stageButtons.length = 0;
-    if (fm) {
+    if (canManageTickets) {
       stageButtons.push({ label: 'Reassign Technician', action: () => setAssignOpen(true), muted: true });
     }
   }

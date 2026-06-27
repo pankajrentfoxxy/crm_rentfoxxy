@@ -53,11 +53,11 @@ const {
 } = require('../controllers/ticketController');
 const qcController = require('../controllers/qcController');
 const phase2 = require('../controllers/ticketPhase2Controller');
-const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
+const { authMiddleware, checkSectionPermission, checkAnySectionPermission } = require('../middleware/auth');
 const ftView = checkSectionPermission('floor_tickets', 'view');
 const ftEdit = checkSectionPermission('floor_tickets', 'edit');
+const ftAssign = checkAnySectionPermission(['floor_tickets', 'floor_pipeline', 'tickets'], 'edit');
 const floorPipelineView = checkSectionPermission('floor_pipeline', 'view');
-const { checkAnySectionPermission } = require('../middleware/checkPermission');
 const floorQueueView = checkAnySectionPermission(['floor_pipeline', 'floor_tickets'], 'view');
 const ttsplHistoryView = checkSectionPermission('ttspl_history', 'view');
 
@@ -132,7 +132,7 @@ router.post('/:id/next-stage', moveToNextStage);
 // @route   POST /api/tickets/:id/assign
 // @desc    Assign ticket to a user
 // @access  Private (Team Lead, Manager, Floor Manager, Admin)
-router.post('/:id/assign', ftEdit, assignTicket);
+router.post('/:id/assign', ftAssign, assignTicket);
 
 // @route   POST /api/tickets/:id/claim
 // @desc    Claim an unassigned ticket for your team
