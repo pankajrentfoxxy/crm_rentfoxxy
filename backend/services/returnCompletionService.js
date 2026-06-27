@@ -11,6 +11,7 @@
  * credit note linked to the unit + ticket. Optionally resolves the support pickup.
  */
 const inventorySM = require('./inventoryStateMachine');
+const replacementFlow = require('./supportReplacementFlowService');
 const billing = require('./billingSchedulerService');
 const { createTicketFromReturn } = require('./grnTicketService');
 
@@ -87,26 +88,46 @@ async function processReturnedSerials(db, {
 
   // Resolve the originating support pickup ticket (if any) once all units processed.
   if (supportTicketId) {
-    await db.query(
-      `UPDATE support_ticket_items
-          SET status = 'resolved',
-              picked_up_at = COALESCE(picked_up_at, NOW()),
-              resolved_at  = COALESCE(resolved_at, NOW()),
-              updated_at = NOW()
-        WHERE ticket_id = $1 AND item_type = 'pickup'
-          AND status NOT IN ('resolved', 'closed', 'inventory_updated')`,
-      [supportTicketId]
-    );
-    await db.query(
-      `UPDATE support_tickets
-          SET status = CASE WHEN NOT EXISTS (
-                SELECT 1 FROM support_ticket_items
-                 WHERE ticket_id = $1 AND status NOT IN ('resolved', 'closed', 'inventory_updated')
-              ) THEN 'closed' ELSE status END,
-              last_activity_at = NOW(), updated_at = NOW()
-        WHERE id = $1`,
-      [supportTicketId]
-    );
+    const replRes = await replacementFlow.onReplacementReturnPickedUp(client, {
+      supportTicketId,
+      returnDcNumber: dcNumber,
+    });
+    if (!replRes.handled) {
+      await db.query(
+        `UPDATE support_ticket_items
+            SET status = 'resolved',
+                picked_up_at = COALESCE(picked_up_at, NOW()),
+                resolved_at  = COALESCE(resolved_at, NOW()),
+                updated_at = NOW()
+          WHERE ticket_id = $1 AND item_type = 'pickup'
+            AND status NOT IN ('resolved', 'closed', 'inventory_updated')`,
+        [supportTicketId]
+      );
+      await db.query(
+        `UPDATE support_tickets
+            SET status = CASE WHEN NOT EXISTS (
+                  SELECT 1 FROM support_ticket_items
+                   WHERE ticket_id = $1 AND status NOT IN ('resolved', 'closed', 'inventory_updated')
+                ) THEN 'closed' ELSE status END,
+                last_activity_at = NOW(), updated_at = NOW()
+          WHERE id = $1`,
+        [supportTicketId]
+      );
+    } else {
+      await db.query(
+        `UPDATE support_ticket_items
+            SET picked_up_at = COALESCE(picked_up_at, NOW()),
+                status = CASE WHEN status = 'inventory_updated' THEN status ELSE 'picked_up' END,
+                updated_at = NOW()
+          WHERE ticket_id = $1 AND item_type = 'pickup'
+            AND return_dc_number = $2`,
+        [supportTicketId, dcNumber]
+      );
+      await db.query(
+        `UPDATE support_tickets SET last_activity_at = NOW(), updated_at = NOW() WHERE id = $1`,
+        [supportTicketId]
+      );
+    }
   }
 
   return results;

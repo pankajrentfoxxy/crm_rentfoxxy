@@ -11,11 +11,13 @@ export default function PickupSetupForm({
   sourceItem = null,
   selectedAsset = null,
   selectedMachines = null,
+  fixedPickupType = null,
+  hidePickupType = false,
   onSubmit,
   saving = false,
   submitLabel = 'Create Pickup + Return DC',
 }) {
-  const [pickupType, setPickupType] = useState('');
+  const [pickupType, setPickupType] = useState(fixedPickupType || '');
   const [dispatchMode, setDispatchMode] = useState('');
   const [pickupAddress, setPickupAddress] = useState({
     name: '', phone: '', address: '', city: '', state: '', pincode: '',
@@ -72,13 +74,13 @@ export default function PickupSetupForm({
       .finally(() => setLoadingAddr(false));
   }, [customerId, ticket?.customer_id, machineCode]);
 
-  const canSubmit = pickupType && dispatchMode && pickupAddress.address.trim()
+  const canSubmit = (fixedPickupType || pickupType) && dispatchMode && pickupAddress.address.trim()
     && (dispatchMode !== 'technician' || technicianId);
 
   const handleSubmit = () => {
     if (!canSubmit || saving) return;
     onSubmit({
-      pickup_type: pickupType,
+      pickup_type: fixedPickupType || pickupType,
       source_item_id: sourceItem?.id || null,
       pickup_address: pickupAddress,
       dispatch_mode: dispatchMode,
@@ -112,6 +114,7 @@ export default function PickupSetupForm({
         </div>
       )}
 
+      {!hidePickupType && (
       <div>
         <label className="text-sm font-semibold text-gray-700 block mb-2">Pickup Type*</label>
         <div className="grid grid-cols-2 gap-2">
@@ -134,10 +137,11 @@ export default function PickupSetupForm({
           ))}
         </div>
       </div>
+      )}
 
       <div>
         <div className="flex items-center justify-between mb-2">
-          <label className="text-sm font-semibold text-gray-700">Pickup Address*</label>
+          <label className="text-sm font-semibold text-gray-700">{hidePickupType ? 'Delivery & pickup address*' : 'Pickup Address*'}</label>
           {loadingAddr && <span className="text-xs text-gray-400">Loading from DC…</span>}
         </div>
         {dcRef?.original_dc_number && (

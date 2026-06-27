@@ -116,7 +116,14 @@ function DeliveryCard({ dc, onChanged }) {
       <div className="flex items-center justify-between px-4 py-3 border-b">
         <span className="font-mono font-semibold text-blue-700 flex items-center gap-2">
           {dc.dc_number}
-          {dc.movement_type === 'return' && <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700">PICKUP</span>}
+          {dc.dc_purpose === 'replacement' && (
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-pink-100 text-pink-800">REPLACEMENT</span>
+          )}
+          {dc.movement_type === 'return' && (
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700">
+              {dc.dc_purpose === 'replacement' ? 'REPLACEMENT PICKUP' : 'PICKUP'}
+            </span>
+          )}
         </span>
         <StatusBadge status={dc.status} />
       </div>

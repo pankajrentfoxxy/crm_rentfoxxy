@@ -13,6 +13,7 @@ const { processReturnedSerials } = require('../services/returnCompletionService'
 const { createFloorTicketFromSupportPickup } = require('../services/grnTicketService');
 const { nextDocumentNumber } = require('../services/salesManagementService');
 const { regenerateReturnDcPdf, regenerateReturnDcPdfByRdc } = require('../services/returnDcPdfService');
+const replacementFlow = require('../services/supportReplacementFlowService');
 
 const ITEM_OPEN_STATUSES = new Set(['open', 'work_done', 'awaiting_otp']);
 const TICKET_OPEN = 'open';
@@ -118,6 +119,7 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
         brand, model, ram, storage, generation,
         customer_inventory_id,
         machines: machinesRaw,
+        dc_purpose,
     } = opts;
 
     await ensureSupportTicketItemV3Columns(client);
@@ -281,10 +283,10 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
              customer_shipping_address, brand, model_name, quantity, serial_number,
              dispatch_mode, delivery_person_id, courier_name, awb_number,
              porter_tracking_id, porter_order_id,
-             sales_order_number, original_dc_number,
+             sales_order_number, original_dc_number, dc_purpose,
              status, dispatched_at, created_by, created_at, updated_at)
          VALUES ($1,'return',$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16,
-                 $18,$19,
+                 $18,$19,COALESCE($20,'standard'),
                  'in_transit',NOW(),$17,NOW(),NOW())`,
         [
             rdc, ticketId, ticket.customer_id, ticket.customer_name, ticket.ticket_email || null,
@@ -299,6 +301,7 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
             dispatch_mode === 'porter' ? (porter_order_id || null) : null,
             userId,
             salesOrderNumber, originalDcNumber,
+            dc_purpose || 'standard',
         ]
     );
 
@@ -2559,6 +2562,14 @@ const warehouseReceiveReturnDcBatch = async (client, triggerItem, userId, esignU
         );
     }
 
+    for (const s of siblings) {
+        try {
+            await replacementFlow.onReplacementWarehouseReceived(client, s.id);
+        } catch (whErr) {
+            console.error('[support] replacement warehouse hook:', whErr.message);
+        }
+    }
+
     await bumpTicketActivity(client, triggerItem.ticket_id);
     await recomputeTicketStatus(client, triggerItem.ticket_id);
 
@@ -2814,125 +2825,370 @@ exports.markPickedUp = async (req, res) => {
     res.json({ success: true, ...data });
 };
 
+exports.getReplacementContext = async (req, res) => {
+    const ticketId = parseInt(req.params.ticketId, 10);
+    const sourceItemId = parseInt(req.query.source_item_id, 10);
+    if (!sourceItemId) {
+        return res.status(400).json({ success: false, message: 'source_item_id required' });
+    }
+    try {
+        const ticketRes = await pool.query('SELECT * FROM support_tickets WHERE id = $1', [ticketId]);
+        if (!ticketRes.rows.length) return res.status(404).json({ success: false, message: 'Ticket not found' });
+        const itemRes = await pool.query(
+            'SELECT * FROM support_ticket_items WHERE id = $1 AND ticket_id = $2',
+            [sourceItemId, ticketId]
+        );
+        if (!itemRes.rows.length) return res.status(404).json({ success: false, message: 'Source item not found' });
+        const context = await replacementFlow.buildReplacementContext(
+            pool,
+            ticketRes.rows[0],
+            itemRes.rows[0]
+        );
+        res.json({ success: true, ...context });
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message || 'Failed to load replacement context' });
+    }
+};
+
+exports.moveComplaintToReplacement = async (req, res) => {
+    if (!isSupportLead(req.user)) {
+        return res.status(403).json({ success: false, message: 'Only support lead can move to replacement' });
+    }
+    const itemId = parseInt(req.params.itemId, 10);
+    const { reason } = req.body || {};
+    const itemRes = await pool.query('SELECT * FROM support_ticket_items WHERE id = $1', [itemId]);
+    if (!itemRes.rows.length) return res.status(404).json({ success: false, message: 'Item not found' });
+    const item = itemRes.rows[0];
+    if (item.item_type !== 'complaint') {
+        return res.status(400).json({ success: false, message: 'Only complaint items can move to replacement' });
+    }
+    const flagReason = String(reason || '').trim() || item.replacement_flag_reason || 'Replacement required';
+    await pool.query(
+        `UPDATE support_ticket_items SET
+            outcome = 'replacement_required',
+            outcome_set_by = $2,
+            outcome_set_at = CURRENT_TIMESTAMP,
+            replacement_flagged_by = $2,
+            replacement_flag_reason = $3,
+            status = CASE WHEN status IN ('resolved','closed') THEN status ELSE 'repair_failed' END,
+            updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1`,
+        [itemId, req.user.user_id, flagReason]
+    );
+    await logAudit(pool, {
+        itemId,
+        ticketId: item.ticket_id,
+        userId: req.user.user_id,
+        action: 'moved_to_replacement',
+        detail: { reason: flagReason },
+    });
+    await bumpTicketActivity(pool, item.ticket_id);
+    const data = await getTicketWithItems(item.ticket_id, req.user);
+    res.json({ success: true, message: 'Complaint marked for replacement', ...data });
+};
+
 exports.initiateReplacement = async (req, res) => {
     if (!isSupportLead(req.user)) {
         return res.status(403).json({ success: false, message: 'Only team lead can initiate replacement' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
-    const { source_item_id, new_customer_inventory_id, new_serial_id, reason } = req.body || {};
+    const body = req.body || {};
+    const {
+        source_item_id,
+        new_serial_id,
+        new_customer_inventory_id,
+        reason,
+        contact_name,
+        contact_phone,
+        pickup_address,
+        dispatch_mode,
+        technician_user_id,
+        outbound_technician_user_id,
+        courier_name,
+        awb_number,
+        porter_tracking_id,
+        porter_order_id,
+    } = body;
+
     const client = await pool.connect();
+    let resultPayload = {};
     try {
         await client.query('BEGIN');
-        const srcRes = await client.query('SELECT * FROM support_ticket_items WHERE id = $1 AND ticket_id = $2', [source_item_id, ticketId]);
-        if (!srcRes.rows.length) throw new Error('Source item not found');
-        const src = srcRes.rows[0];
 
-        // Resolve the chosen replacement machine. Primary path: the authoritative
-        // inventory (vendor_serial_numbers, QC-passed + in stock). Legacy path:
-        // a deprecated customer_inventory row (kept for backward compatibility).
-        let asset; // normalized { customerInventoryId, serial_number, unique_serial_number, brand, model, ram, storage, generation }
-        if (new_serial_id) {
-            const vsnRes = await client.query(
-                `SELECT serial_id, serial_number, inventory_asset_code, inventory_status, qc_status, extra
-                 FROM vendor_serial_numbers WHERE serial_id = $1 AND deleted_at IS NULL`,
-                [new_serial_id]
-            );
-            if (!vsnRes.rows.length) throw new Error('Replacement machine not found');
-            const vsn = vsnRes.rows[0];
-            if (vsn.inventory_status !== 'in_stock') {
-                throw new Error('Selected machine is no longer available in stock');
-            }
-            const extra = vsn.extra || {};
-            const assetCode = vsn.inventory_asset_code || extra.ttspl_id || vsn.serial_number;
-            asset = {
-                customerInventoryId: null,
-                serial_number: vsn.serial_number,
-                unique_serial_number: assetCode,
-                brand: extra.brand || null,
-                model: extra.model || extra.model_name || null,
-                ram: extra.ram || null,
-                storage: extra.storage || null,
-                generation: extra.generation || null
-            };
-        } else if (new_customer_inventory_id) {
-            const newAssetRes = await client.query('SELECT * FROM customer_inventory WHERE id = $1', [new_customer_inventory_id]);
-            if (!newAssetRes.rows.length) throw new Error('Replacement asset not found');
-            const ci = newAssetRes.rows[0];
-            asset = {
-                customerInventoryId: ci.id,
-                serial_number: ci.serial_number,
-                unique_serial_number: ci.unique_serial_number,
-                brand: ci.model_name?.split(' ')[0] || null,
-                model: ci.model_name,
-                ram: ci.ram,
-                storage: ci.storage,
-                generation: ci.generation
-            };
-        } else {
-            throw new Error('Select a replacement machine');
+        const ticketRes = await client.query('SELECT * FROM support_tickets WHERE id = $1', [ticketId]);
+        if (!ticketRes.rows.length) throw Object.assign(new Error('Ticket not found'), { status: 404 });
+        const ticket = ticketRes.rows[0];
+
+        const srcRes = await client.query(
+            'SELECT * FROM support_ticket_items WHERE id = $1 AND ticket_id = $2',
+            [source_item_id, ticketId]
+        );
+        if (!srcRes.rows.length) throw Object.assign(new Error('Source item not found'), { status: 404 });
+        const src = srcRes.rows[0];
+        if (src.item_type !== 'complaint') {
+            throw Object.assign(new Error('Replacement must be linked to a complaint item'), { status: 400 });
         }
+
+        const dup = await client.query(
+            `SELECT id FROM support_replacement_orders
+              WHERE ticket_id = $1 AND source_item_id = $2
+                AND status NOT IN ('completed','cancelled')
+              LIMIT 1`,
+            [ticketId, source_item_id]
+        );
+        if (dup.rows.length) {
+            throw Object.assign(new Error('An active replacement order already exists for this complaint'), { status: 400 });
+        }
+
+        let newAsset;
+        if (new_serial_id) {
+            newAsset = await replacementFlow.loadNewStockSerial(client, Number(new_serial_id));
+        } else if (new_customer_inventory_id) {
+            throw Object.assign(new Error('Select a replacement machine from warehouse stock'), { status: 400 });
+        } else {
+            throw Object.assign(new Error('Select a replacement machine'), { status: 400 });
+        }
+
+        const oldSerial = await replacementFlow.loadOldDeployedSerial(client, src, ticket.customer_id);
+        const monthlyRate = oldSerial?.rent_monthly_rate != null
+            ? Number(oldSerial.rent_monthly_rate)
+            : 0;
+
+        const ctx = await replacementFlow.buildReplacementContext(client, ticket, src);
+        const defaults = ctx.delivery_defaults || {};
+        const addr = pickup_address && typeof pickup_address === 'object' ? pickup_address : {};
+        const shippingAddress = {
+            name: contact_name || addr.name || defaults.contact_name || ticket.customer_name || '',
+            phone: contact_phone || addr.phone || defaults.contact_phone || '',
+            address: addr.address || defaults.address || '',
+            city: addr.city || defaults.city || '',
+            state: addr.state || defaults.state || '',
+            pincode: addr.pincode || defaults.pincode || '',
+        };
+        if (!String(shippingAddress.address || '').trim()) {
+            throw Object.assign(new Error('Delivery / pickup address is required'), { status: 400 });
+        }
+
+        const custRes = await client.query(
+            `SELECT customer_id, name, company_name, email, phone, gst_no, billing_state,
+                    billing_address, billing_city, billing_state, billing_pincode
+               FROM customers WHERE customer_id = $1`,
+            [ticket.customer_id]
+        );
+        const cust = custRes.rows[0] || {};
+        const customerName = ticket.customer_name || cust.company_name || cust.name || '';
+        const billingAddress = {
+            name: customerName,
+            phone: cust.phone || shippingAddress.phone,
+            address: cust.billing_address || shippingAddress.address,
+            city: cust.billing_city || shippingAddress.city,
+            state: cust.billing_state || shippingAddress.state,
+            pincode: cust.billing_pincode || shippingAddress.pincode,
+            gst_number: cust.gst_no || null,
+        };
 
         const otp = generateOtp();
         const itemIns = await client.query(
             `INSERT INTO support_ticket_items (
-                ticket_id, customer_inventory_id, serial_number, unique_serial_number, brand, model,
+                ticket_id, serial_number, unique_serial_number, brand, model,
                 ram, storage, generation, ttspl_id, item_type, remarks, status, otp_code, source_item_id
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'replacement',$11,'order_placed',$12,$13) RETURNING id`,
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'replacement',$10,'order_placed',$11,$12) RETURNING id`,
             [
                 ticketId,
-                asset.customerInventoryId,
-                asset.serial_number,
-                asset.unique_serial_number,
-                asset.brand,
-                asset.model,
-                asset.ram,
-                asset.storage,
-                asset.generation,
-                asset.unique_serial_number,
+                newAsset.serial_number,
+                newAsset.asset_code,
+                newAsset.brand,
+                newAsset.model,
+                newAsset.ram,
+                newAsset.storage,
+                newAsset.generation,
+                newAsset.asset_code,
                 reason || src.replacement_flag_reason || null,
                 otp,
-                source_item_id
+                source_item_id,
             ]
         );
         const replacementItemId = itemIns.rows[0].id;
-        await client.query(
+
+        const orderIns = await client.query(
             `INSERT INTO support_replacement_orders (
-                ticket_id, item_id, source_item_id, old_customer_inventory_id, new_customer_inventory_id,
-                old_machine_serial, new_machine_serial, status, created_by, notes
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,'placed',$8,$9)`,
+                ticket_id, item_id, source_item_id, complaint_item_id,
+                old_customer_inventory_id, old_machine_serial, new_machine_serial,
+                new_serial_id, old_serial_id, old_rent_monthly_rate,
+                delivery_address, contact_name, contact_phone,
+                status, created_by, notes, approved_at
+            ) VALUES ($1,$2,$3,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,'placed',$13,$14,CURRENT_TIMESTAMP)
+            RETURNING id`,
             [
                 ticketId,
                 replacementItemId,
                 source_item_id,
                 src.customer_inventory_id,
-                asset.customerInventoryId,
                 src.unique_serial_number || src.serial_number,
-                asset.unique_serial_number || asset.serial_number,
+                newAsset.asset_code,
+                newAsset.serial_id,
+                oldSerial?.serial_id || null,
+                monthlyRate || null,
+                JSON.stringify(shippingAddress),
+                shippingAddress.name,
+                shippingAddress.phone,
                 req.user.user_id,
-                reason || src.replacement_flag_reason || null
+                reason || src.replacement_flag_reason || null,
             ]
         );
+        const replacementOrderId = orderIns.rows[0].id;
+
+        const shipBy = replacementFlow.normalizeShipBy(dispatch_mode);
+        const outboundTechId = outbound_technician_user_id || technician_user_id;
+
+        const { salesOrderNumber, lineId } = await replacementFlow.createReplacementSalesOrder(client, {
+            customerId: ticket.customer_id,
+            customerName,
+            customerEmail: ticket.ticket_email || cust.email,
+            customerMobile: shippingAddress.phone || cust.phone,
+            shippingAddress,
+            billingAddress,
+            gstNumber: cust.gst_no,
+            supplyState: cust.billing_state,
+            monthlyRate: monthlyRate || 0,
+            newAsset,
+            userId: req.user.user_id,
+        });
+
+        await replacementFlow.attachSerialToReplacementSo(client, {
+            salesOrderNumber,
+            lineId,
+            newAsset,
+            entityCode: 'rentfoxxy',
+            userId: req.user.user_id,
+        });
+
+        const soHead = {
+            customer_id: ticket.customer_id,
+            customer_name: customerName,
+            customer_email: ticket.ticket_email || cust.email,
+            gst_number: cust.gst_no,
+            supply_state: cust.billing_state,
+            customer_billing_address: JSON.stringify(billingAddress),
+            customer_shipping_address: JSON.stringify(shippingAddress),
+            entity_code: 'rentfoxxy',
+        };
+
+        const outboundDc = await replacementFlow.createReplacementOutboundDc(client, {
+            salesOrderNumber,
+            soHead,
+            newAsset,
+            shippingAddress,
+            shipBy,
+            deliveryPersonId: outboundTechId,
+            courierName: courier_name,
+            awbNumber: awb_number,
+            porterTrackingId: porter_tracking_id,
+            porterOrderId: porter_order_id,
+            ticketId,
+            replacementOrderId,
+            userId: req.user.user_id,
+        });
+
+        const pickupResult = await executePickupWithReturnDc(client, ticket, ticketId, req.user.user_id, {
+            source_item_id,
+            pickup_type: 'return',
+            pickup_address: shippingAddress,
+            dispatch_mode: dispatch_mode || 'technician',
+            technician_user_id,
+            courier_name,
+            awb_number,
+            porter_tracking_id,
+            porter_order_id,
+            serial_number: src.serial_number,
+            unique_serial_number: src.ttspl_id || src.unique_serial_number,
+            ttspl_id: src.ttspl_id || src.unique_serial_number,
+            brand: src.brand,
+            model: src.model,
+            ram: src.ram,
+            storage: src.storage,
+            generation: src.generation,
+            customer_inventory_id: src.customer_inventory_id,
+            dc_purpose: 'replacement',
+        });
+
         await client.query(
-            `UPDATE support_ticket_items SET replacement_approved_by = $2, replacement_approved_at = CURRENT_TIMESTAMP WHERE id = $1`,
+            `UPDATE support_replacement_orders SET
+                sales_order_number = $2,
+                dc_number = $3,
+                new_dc_number = $3,
+                return_dc_number = $4,
+                pickup_item_id = $5,
+                outbound_dispatch_mode = $6,
+                outbound_delivery_person_id = $7,
+                dispatched_at = CURRENT_TIMESTAMP,
+                status = 'dispatched'
+             WHERE id = $1`,
+            [
+                replacementOrderId,
+                salesOrderNumber,
+                outboundDc,
+                pickupResult.rdc,
+                pickupResult.pickupItemId,
+                replacementFlow.outboundDispatchMode(shipBy),
+                outboundTechId ? Number(outboundTechId) : null,
+            ]
+        );
+
+        await client.query(
+            `UPDATE support_ticket_items SET
+                replacement_approved_by = $2,
+                replacement_approved_at = CURRENT_TIMESTAMP,
+                status = 'dispatched',
+                updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1`,
             [source_item_id, req.user.user_id]
         );
+
+        await client.query(
+            `UPDATE support_tickets SET
+                ticket_category = COALESCE(ticket_category, 'replacement'),
+                sales_order_number = $2,
+                dc_number = $3,
+                return_dc_number = $4,
+                pickup_address = $5::jsonb,
+                status = CASE WHEN status = 'open' THEN 'in_progress' ELSE status END,
+                updated_at = NOW()
+             WHERE id = $1`,
+            [ticketId, salesOrderNumber, outboundDc, pickupResult.rdc, JSON.stringify(shippingAddress)]
+        );
+
         await logAudit(client, {
             itemId: replacementItemId,
             ticketId,
             userId: req.user.user_id,
             action: 'replacement_initiated',
-            detail: { source_item_id, new_serial_id: new_serial_id || null, new_customer_inventory_id: new_customer_inventory_id || null, new_machine_serial: asset.unique_serial_number }
+            detail: {
+                source_item_id,
+                new_serial_id: newAsset.serial_id,
+                sales_order_number: salesOrderNumber,
+                dc_number: outboundDc,
+                return_dc_number: pickupResult.rdc,
+            },
         });
         await bumpTicketActivity(client, ticketId);
         await client.query('COMMIT');
+
+        resultPayload = {
+            sales_order_number: salesOrderNumber,
+            dc_number: outboundDc,
+            return_dc_number: pickupResult.rdc,
+            customer_otp_visible: pickupResult.customerOtp,
+            replacement_order_id: replacementOrderId,
+        };
     } catch (e) {
         await client.query('ROLLBACK');
-        return res.status(400).json({ success: false, message: e.message || 'Failed to initiate replacement' });
+        return res.status(e.status || 400).json({ success: false, message: e.message || 'Failed to initiate replacement' });
     } finally {
         client.release();
     }
     const data = await getTicketWithItems(ticketId, req.user);
-    res.json({ success: true, ...data });
+    res.json({ success: true, ...resultPayload, ...data });
 };
 
 exports.updateReplacementOrder = async (req, res) => {
@@ -2978,6 +3234,13 @@ exports.deliverReplacement = async (req, res) => {
         return res.status(403).json({ success: false, message: 'Only team lead can complete replacement delivery' });
     }
     const orderId = parseInt(req.params.orderId, 10);
+    const orderCheck = await pool.query('SELECT sales_order_number, dc_number FROM support_replacement_orders WHERE id = $1', [orderId]);
+    if (orderCheck.rows[0]?.sales_order_number && orderCheck.rows[0]?.dc_number) {
+        return res.status(400).json({
+            success: false,
+            message: 'This replacement uses the sales delivery flow. Complete delivery via My Deliveries / Delivery Register on the outbound DC.',
+        });
+    }
     const client = await pool.connect();
     try {
         await client.query('BEGIN');

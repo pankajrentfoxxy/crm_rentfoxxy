@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Loader2, Phone, MapPin, CheckCircle2, Clock, RefreshCw, Camera, Laptop } from 'lucide-react';
+import toast from 'react-hot-toast';
 import TtsplHistoryDrawer from '../../features/floor-pipeline/components/TtsplHistoryDrawer';
 import api from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
@@ -420,6 +421,21 @@ function ItemCard({
             <p className="text-sm text-pink-900/90">{replacementOrder.notes || item.remarks}</p>
             <p className="text-sm">New serial: {replacementOrder.new_machine_serial || '—'}</p>
             <p className="text-sm">Status: {replacementOrder.status || item.status}</p>
+            {replacementOrder.sales_order_number && (
+              <div className="text-sm space-y-1 mt-2 rounded-lg bg-pink-50 border border-pink-100 p-2">
+                <p>SO: <span className="font-mono">{replacementOrder.sales_order_number}</span></p>
+                {replacementOrder.dc_number && (
+                  <p>Delivery DC: <span className="font-mono text-pink-800">{replacementOrder.dc_number}</span> <span className="text-xs bg-pink-200 px-1 rounded">REPLACEMENT</span></p>
+                )}
+                {replacementOrder.return_dc_number && (
+                  <p>Return DC: <span className="font-mono">{replacementOrder.return_dc_number}</span></p>
+                )}
+                <p className="text-xs text-pink-900/80 mt-1">
+                  Deliver the new laptop via My Deliveries. Pick up the old unit on the Return DC (same OTP/e-sign flow). Ticket closes after delivery + warehouse receipt.
+                </p>
+              </div>
+            )}
+            {!replacementOrder.sales_order_number && (
             <div className="flex flex-wrap gap-2 mt-2">
               {replacementOrder.status === 'placed' && (
                 <button type="button" className="support-btn-outline min-h-[44px]" disabled={busy} onClick={dispatchReplacement}>Mark dispatched</button>
@@ -428,6 +444,7 @@ function ItemCard({
                 <button type="button" className="support-btn-primary min-h-[44px]" disabled={busy} onClick={deliverReplacement}>Mark delivered & update inventory</button>
               )}
             </div>
+            )}
           </div>
         )}
 
@@ -604,8 +621,16 @@ export default function SupportTicketDetail() {
   const audit = Array.isArray(rawAudit) ? rawAudit : [];
   const resolvedCount = items.filter((i) => ['resolved', 'closed', 'inventory_updated'].includes(i.status)).length;
   const allResolved = items.length > 0 && resolvedCount === items.length;
-  const flaggedItem = items.find((i) => i.replacement_flag_reason && i.item_type === 'complaint');
-  const canInitiateReplacement = isSupportLead(user) && flaggedItem && !items.some((i) => i.item_type === 'replacement' && i.source_item_id === flaggedItem.id);
+  const flaggedItem = items.find(
+    (i) => i.item_type === 'complaint'
+      && (i.replacement_flag_reason || i.outcome === 'replacement_required')
+  );
+  const complaintForReplacement = items.find((i) => i.item_type === 'complaint' && !['resolved', 'closed'].includes(i.status));
+  const canInitiateReplacement = isSupportLead(user) && flaggedItem
+    && !items.some((i) => i.item_type === 'replacement' && i.source_item_id === flaggedItem.id);
+  const canMoveToReplacement = isSupportLead(user) && complaintForReplacement
+    && complaintForReplacement.outcome !== 'replacement_required'
+    && !complaintForReplacement.replacement_flag_reason;
 
   const complaints = items.filter((i) => i.item_type === 'complaint');
   const pickups = items.filter((i) => i.item_type === 'pickup');
@@ -651,6 +676,24 @@ export default function SupportTicketDetail() {
           <button type="button" className="support-btn-outline lg:hidden min-h-[44px]" onClick={() => setMobileDetails(true)}>Details</button>
           {isSupportLead(user) && (
             <>
+              {canMoveToReplacement && (
+                <button
+                  type="button"
+                  className="support-btn-outline min-h-[44px]"
+                  onClick={async () => {
+                    const reason = window.prompt('Reason for replacement (optional):') ?? '';
+                    try {
+                      await api.post(`/support/items/${complaintForReplacement.id}/move-to-replacement`, { reason });
+                      toast.success('Complaint moved to replacement');
+                      load();
+                    } catch (e) {
+                      toast.error(e.response?.data?.message || 'Failed');
+                    }
+                  }}
+                >
+                  Move to replacement
+                </button>
+              )}
               {canInitiateReplacement && (
                 <button type="button" className="support-btn-primary min-h-[44px]" onClick={() => setShowReplacement(true)}>Initiate replacement</button>
               )}
@@ -687,6 +730,7 @@ export default function SupportTicketDetail() {
       {showReplacement && flaggedItem && (
         <ReplacementPanel
           ticketId={ticket.id}
+          ticket={ticket}
           sourceItem={flaggedItem}
           customerId={ticket.customer_id}
           onDone={() => { setShowReplacement(false); load(); }}
