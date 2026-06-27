@@ -62,10 +62,10 @@ export default function SalesOrderListPage() {
   }), [rows, pagination.total]);
 
   const handleCancel = useCallback(async (soNumber) => {
-    if (!window.confirm(`Cancel sales order ${soNumber}? This cannot be undone and the order will not proceed to delivery.`)) return;
+    if (!window.confirm(`Cancel sales order ${soNumber}? Attached laptops will be released back to inventory. This cannot be undone.`)) return;
     try {
-      await cancelSalesOrder(soNumber);
-      toast.success('Sales order cancelled');
+      const res = await cancelSalesOrder(soNumber);
+      toast.success(res.data?.message || 'Sales order cancelled');
       load();
     } catch (err) {
       toast.error(err?.response?.data?.message || 'Failed to cancel sales order');
@@ -74,20 +74,26 @@ export default function SalesOrderListPage() {
 
   const actionCell = (row) => {
     const cancelled = String(row.status || '').toLowerCase() === 'cancelled';
+    const hasAttachedLaptops = Number(row.attached_count || 0) > 0;
+    const hasDc = Number(row.dc_count || 0) > 0;
     return (
       <div className="flex flex-wrap items-center gap-3" onClick={(e) => e.stopPropagation()}>
         <button type="button" className="text-blue-600 text-sm font-semibold" onClick={() => navigate(salesOrderDetailPath(row.sales_order_number))}>View</button>
         {!cancelled && (
           <>
-            <PermissionGate section={['sales_orders_doc', 'delivery_challans']} action="create">
-              <button type="button" className="text-sm text-teal-700 font-semibold" onClick={() => { setPrefillSo(row.sales_order_number); setDcDrawer(true); }}>Create DC</button>
-            </PermissionGate>
+            {hasAttachedLaptops && (
+              <PermissionGate section={['sales_orders_doc', 'delivery_challans']} action="create">
+                <button type="button" className="text-sm text-teal-700 font-semibold" onClick={() => { setPrefillSo(row.sales_order_number); setDcDrawer(true); }}>Create DC</button>
+              </PermissionGate>
+            )}
             <PermissionGate section="payment_records" action="create">
               <button type="button" className="text-sm text-gray-700 font-semibold" onClick={() => setPaymentSo(row.sales_order_number)}>Record Payment</button>
             </PermissionGate>
-            <PermissionGate section="sales_orders_doc" action="edit">
-              <button type="button" className="text-sm text-red-600 font-semibold" onClick={() => handleCancel(row.sales_order_number)}>Cancel</button>
-            </PermissionGate>
+            {!hasDc && (
+              <PermissionGate section="sales_orders_doc" action="edit">
+                <button type="button" className="text-sm text-red-600 font-semibold" onClick={() => handleCancel(row.sales_order_number)}>Cancel</button>
+              </PermissionGate>
+            )}
           </>
         )}
       </div>

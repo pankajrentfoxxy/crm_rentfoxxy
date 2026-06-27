@@ -301,6 +301,8 @@ async function listSalesOrdersGrouped({ page = 1, limit = 20, search = '', assig
        (SELECT COALESCE(SUM(COALESCE(rate,0) * COALESCE(quantity,0)), 0) FROM sales_order_lines sol WHERE sol.sales_order_number = g.sales_order_number) AS total_value,
        (SELECT COALESCE(SUM(COALESCE(rate,0) * COALESCE(quantity,0)), 0) FROM sales_order_lines sol WHERE sol.sales_order_number = g.sales_order_number) AS total_amount,
        (SELECT COUNT(DISTINCT dcl.dc_number) FROM delivery_challan_lines dcl WHERE dcl.sales_order_number = g.sales_order_number) AS dc_count,
+       (SELECT COUNT(*)::int FROM sales_order_serials sos
+          WHERE sos.sales_order_number = g.sales_order_number AND sos.status = 'attached') AS attached_count,
        (SELECT CASE WHEN COUNT(*) > 0 AND COUNT(*) FILTER (WHERE sol.status = 'cancelled') = COUNT(*)
                     THEN 'cancelled' ELSE 'pending' END
           FROM sales_order_lines sol WHERE sol.sales_order_number = g.sales_order_number) AS status
