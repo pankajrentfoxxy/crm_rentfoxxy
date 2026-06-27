@@ -17,6 +17,12 @@ const {
 const { createTicketFromGrnReceive } = require('../../services/grnTicketService');
 const { logGrnReceive } = require('../../services/ttsplAuditService');
 const { markTokenUsed } = require('../../services/grnSerialCaptureService');
+const {
+  resolveReceiveConfig,
+  mergeConfigIntoExtra,
+  loadGrnLineConfigsForPo,
+  applyGrnConfigToLine
+} = require('../../services/grnReceivedConfigService');
 const { generatePurchaseOrderPdf } = require('../../services/vendorPurchaseOrderPdfService');
 const {
   sendPurchaseOrderApprovedEmail,
@@ -144,15 +150,34 @@ function enrichLineItemsWithReceived(lineItems, info) {
   return out;
 }
 
-function attachProductDetails(poRow, qtyMaps) {
+function attachProductDetails(poRow, qtyMaps, grnLineConfigs = null) {
   const lines = parseLineItemsJson(poRow.line_items);
   const ri = qtyMaps.get(Number(poRow.po_id));
-  const enriched = enrichLineItemsWithReceived(lines, ri);
+  const legacyIds = parseLineItemsJson(poRow.product_details_legacy_ids);
+  const enriched = enrichLineItemsWithReceived(lines, ri).map((line, idx) =>
+    applyGrnConfigToLine(line, grnLineConfigs, idx)
+  );
   return {
     ...poRow,
     line_items: enriched,
     product_details: enriched
   };
+}
+
+async function attachProductDetailsWithGrn(db, poRow, qtyMaps) {
+  const legacyRaw = poRow.product_details_legacy_ids;
+  let legacyIds = [];
+  if (Array.isArray(legacyRaw)) legacyIds = legacyRaw;
+  else if (typeof legacyRaw === 'string') {
+    try {
+      const p = JSON.parse(legacyRaw);
+      if (Array.isArray(p)) legacyIds = p;
+    } catch {
+      legacyIds = [];
+    }
+  }
+  const grnLineConfigs = await loadGrnLineConfigsForPo(db, poRow.po_id, legacyIds);
+  return attachProductDetails(poRow, qtyMaps, grnLineConfigs);
 }
 
 /** Receive page opens after manager approval (incl. vendor accepted / in progress). */
@@ -271,7 +296,7 @@ async function getProductReceivedContext(req, res) {
   }
 
   const qtyMaps = await buildReceivedQtyMapsForPoIds([poId]);
-  const enriched = attachProductDetails(row, qtyMaps);
+  const enriched = await attachProductDetailsWithGrn(pool, row, qtyMaps);
   const lines = enriched.product_details || [];
 
   const grnsR = await pool.query(
@@ -822,6 +847,7 @@ async function receivePoLineUnit(req, res) {
   const client = await pool.connect();
   let finalGrnId;
   let createdRow = null;
+  let receiveConfig = buildConfigExtraFromLine(line);
 
   try {
     await client.query('BEGIN');
@@ -887,12 +913,21 @@ async function receivePoLineUnit(req, res) {
 
     const assetCodes = await allocateTtsplCodes(client, 1);
     const inventory_asset_code = assetCodes[0];
-    const extra = {
-      line_index: lineIndex,
-      rental_start_date,
-      unique_product_serial: inventory_asset_code,
-      ...buildConfigExtraFromLine(line)
-    };
+    receiveConfig =
+      (await resolveReceiveConfig(client, {
+        poId,
+        line,
+        captureToken,
+        productDetailId: pd
+      })) || buildConfigExtraFromLine(line);
+    const extra = mergeConfigIntoExtra(
+      {
+        line_index: lineIndex,
+        rental_start_date,
+        unique_product_serial: inventory_asset_code
+      },
+      receiveConfig
+    );
     if (pd != null && String(pd).trim() !== '') extra.product_detail_id = String(pd);
 
     const insS = await client.query(
@@ -961,12 +996,13 @@ async function receivePoLineUnit(req, res) {
 
   let ticketResult = null;
   try {
+    const receiveLine = { ...line, ...receiveConfig };
     ticketResult = await createTicketFromGrnReceive(pool, {
       serialId: createdRow.serial_id,
       serialNumber: createdRow.serial_number,
       inventoryAssetCode: createdRow.inventory_asset_code,
       po,
-      line,
+      line: receiveLine,
       actorUserId: req.user?.user_id
     });
   } catch (ticketErr) {
@@ -1019,7 +1055,7 @@ async function getGeneratedGrnOverview(req, res) {
 
   const row = r.rows[0];
   const qtyMaps = await buildReceivedQtyMapsForPoIds([poId]);
-  const enriched = attachProductDetails(row, qtyMaps);
+  const enriched = await attachProductDetailsWithGrn(pool, row, qtyMaps);
   const lines = enriched.product_details || [];
 
   let orderQty = 0;
@@ -1336,7 +1372,7 @@ async function getOne(req, res) {
   if (!r.rows.length) return res.status(404).json({ success: false, message: 'Not found' });
 
   const qtyMaps = await buildReceivedQtyMapsForPoIds([r.rows[0].po_id]);
-  const enriched = attachProductDetails(r.rows[0], qtyMaps);
+  const enriched = await attachProductDetailsWithGrn(pool, r.rows[0], qtyMaps);
 
   res.json({ success: true, data: enriched });
 }

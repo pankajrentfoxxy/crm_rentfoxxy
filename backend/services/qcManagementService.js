@@ -225,17 +225,18 @@ function resolveItemDescription(row, ctx = {}) {
   });
   const inv = lookupInventorySpec(row, ctx);
   const vpd = lookupVendorProductDetail(row, ctx);
+  // GRN-received config (VPD / inventory / serial extra) wins over PO line_items — legacy ERP PO rows are often wrong.
   const model = pickFirstNonEmpty(
-    line?.product_name,
-    line?.model,
     vpd?.model,
     inv?.model,
     ex.model,
     ex.model_name,
-    ex.product_model_name
+    ex.product_model_name,
+    line?.product_name,
+    line?.model
   );
   const brand = formatBrandDisplay(
-    pickFirstNonEmpty(line?.brand_name, line?.brand, vpd?.brand, inv?.brand, ex.brand),
+    pickFirstNonEmpty(vpd?.brand, inv?.brand, ex.brand, line?.brand_name, line?.brand),
     model,
     ctx.brandMap
   );
@@ -243,12 +244,12 @@ function resolveItemDescription(row, ctx = {}) {
   return {
     brand,
     model,
-    screen_size: pickFirstNonEmpty(line?.screen_size, vpd?.screen_size, inv?.screen_size, ex.screen_size),
-    processor: pickFirstNonEmpty(line?.processor, vpd?.processor, inv?.processor, ex.processor),
-    generation: pickFirstNonEmpty(line?.generation, vpd?.generation, inv?.generation, ex.generation),
-    ram: pickFirstNonEmpty(line?.ram, vpd?.ram, inv?.ram, ex.ram),
-    storage: pickFirstNonEmpty(line?.storage, vpd?.storage, inv?.storage, ex.storage),
-    gpu: pickFirstNonEmpty(line?.gpu, vpd?.gpu, inv?.gpu, ex.gpu)
+    screen_size: pickFirstNonEmpty(vpd?.screen_size, inv?.screen_size, ex.screen_size, line?.screen_size),
+    processor: pickFirstNonEmpty(vpd?.processor, inv?.processor, ex.processor, line?.processor),
+    generation: pickFirstNonEmpty(vpd?.generation, inv?.generation, ex.generation, line?.generation),
+    ram: pickFirstNonEmpty(vpd?.ram, inv?.ram, ex.ram, line?.ram),
+    storage: pickFirstNonEmpty(vpd?.storage, inv?.storage, ex.storage, line?.storage),
+    gpu: pickFirstNonEmpty(vpd?.gpu, inv?.gpu, ex.gpu, line?.gpu)
   };
 }
 
