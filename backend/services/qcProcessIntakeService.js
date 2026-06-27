@@ -6,7 +6,11 @@ const { allocatePurchaseOrderNumber } = require('./vendorNumberService');
 const { allocateTtsplCodes } = require('./vendorInventoryAssetCodeService');
 const { createTicketFromGrnReceive } = require('./grnTicketService');
 const { logGrnReceive } = require('./ttsplAuditService');
-const { parseExtra } = require('./qcManagementService');
+const {
+  parseExtra,
+  resolveItemDescription,
+  buildSerialSpecContext
+} = require('./qcManagementService');
 
 const PO_TYPES = ['rental_purchase', 'rent_to_own', 'direct_purchase'];
 const DEFAULT_PO_STATE = 'Maharashtra';
@@ -33,6 +37,67 @@ function buildConfigExtra(fields) {
   return Object.fromEntries(
     Object.entries(config).filter(([, v]) => v != null && String(v).trim() !== '')
   );
+}
+
+function mergeConfigIntoExtra(extra, itemDesc) {
+  const merged = { ...(extra || {}) };
+  for (const [key, value] of Object.entries(itemDesc || {})) {
+    if (value != null && String(value).trim() !== '') merged[key] = value;
+  }
+  return merged;
+}
+
+function itemDescToGrnLine(itemDesc) {
+  if (!itemDesc) return {};
+  return {
+    brand: itemDesc.brand,
+    model: itemDesc.model,
+    product_name: itemDesc.model,
+    processor: itemDesc.processor,
+    ram: itemDesc.ram,
+    storage: itemDesc.storage,
+    generation: itemDesc.generation,
+    gpu: itemDesc.gpu,
+    screen_size: itemDesc.screen_size,
+    os: itemDesc.os
+  };
+}
+
+/** Persist resolved hardware specs on ticket + vendor serial extra (generation/gpu/etc.). */
+async function syncTicketHardwareConfig(db, { ticketId, serialId, itemDesc }) {
+  if (!ticketId || !itemDesc) return;
+
+  const brand = String(itemDesc.brand || '').trim();
+  const model = String(itemDesc.model || '').trim();
+  const processor = String(itemDesc.processor || '').trim();
+  const ram = itemDesc.ram != null ? String(itemDesc.ram).trim() : '';
+  const storage = itemDesc.storage != null ? String(itemDesc.storage).trim() : '';
+  const hasAny = [brand, model, processor, ram, storage].some(Boolean);
+  if (!hasAny) return;
+
+  await db.query(
+    `UPDATE tickets
+        SET brand = COALESCE(NULLIF($1, ''), brand),
+            model = COALESCE(NULLIF($2, ''), model),
+            processor = COALESCE(NULLIF($3, ''), processor),
+            ram = COALESCE(NULLIF($4, ''), ram),
+            storage = COALESCE(NULLIF($5, ''), storage),
+            updated_at = NOW()
+      WHERE ticket_id = $6`,
+    [brand, model, processor, ram, storage, ticketId]
+  );
+
+  if (serialId) {
+    const cur = await db.query(
+      `SELECT extra FROM vendor_serial_numbers WHERE serial_id = $1`,
+      [serialId]
+    );
+    const extra = mergeConfigIntoExtra(parseExtra(cur.rows[0]?.extra), itemDesc);
+    await db.query(
+      `UPDATE vendor_serial_numbers SET extra = $1::jsonb, updated_at = NOW() WHERE serial_id = $2`,
+      [JSON.stringify(extra), serialId]
+    );
+  }
 }
 
 async function findActiveFloorTicket(db, { serialId, serialNumber }) {
@@ -332,12 +397,14 @@ async function movePassedSerialToQcProcess(db, { serialId, serialNumber }, actor
   const client = await db.connect();
   let row;
   let po;
+  let itemDesc;
 
   try {
     await client.query('BEGIN');
     const cur = await client.query(
       `SELECT s.serial_id, s.serial_number, s.inventory_asset_code, s.extra, s.qc_status, s.po_id,
-              p.purchase_order_number, p.purchase_order_type, p.vendor_id, p.line_items
+              p.purchase_order_number, p.purchase_order_type, p.vendor_id, p.line_items,
+              p.product_details_legacy_ids
          FROM vendor_serial_numbers s
          INNER JOIN vendor_purchase_orders p ON p.po_id = s.po_id AND p.deleted_at IS NULL
         WHERE s.serial_id = $1
@@ -370,8 +437,12 @@ async function movePassedSerialToQcProcess(db, { serialId, serialNumber }, actor
       };
     }
 
-    const extra = parseExtra(row.extra);
+    const specCtx = await buildSerialSpecContext(client, [row]);
+    itemDesc = resolveItemDescription(row, specCtx);
+
+    const extra = mergeConfigIntoExtra(parseExtra(row.extra), itemDesc);
     delete extra.status2;
+    extra.status = 'pending';
 
     await client.query(
       `UPDATE vendor_serial_numbers
@@ -403,16 +474,7 @@ async function movePassedSerialToQcProcess(db, { serialId, serialNumber }, actor
     client.release();
   }
 
-  const extra = parseExtra(row.extra);
-  const line = {
-    brand: extra.brand,
-    model: extra.model || extra.model_name,
-    product_name: extra.model || extra.model_name,
-    processor: extra.processor,
-    ram: extra.ram,
-    storage: extra.storage,
-    generation: extra.generation
-  };
+  const line = itemDescToGrnLine(itemDesc);
 
   const ticketResult = await ensureFloorTicketForQcSerial(db, {
     serialId: row.serial_id,
@@ -424,16 +486,132 @@ async function movePassedSerialToQcProcess(db, { serialId, serialNumber }, actor
     sourceNote: `Moved from Ready to Rent/Sale to QC Process — PO ${po.purchase_order_number || po.po_id}`
   });
 
+  const ticketId = ticketResult.ticket_id;
+  if (ticketId) {
+    await syncTicketHardwareConfig(db, {
+      ticketId,
+      serialId: row.serial_id,
+      itemDesc
+    });
+  }
+  const ticketNote = ticketId
+    ? (ticketResult.skipped ? ` Linked to floor ticket #${ticketId}.` : ` Floor ticket #${ticketId} created.`)
+    : '';
+
   return {
     ok: true,
-    message: ticketResult.skipped
-      ? 'Moved to QC Process (existing floor ticket linked)'
-      : 'Moved to QC Process and floor ticket created',
+    message: `Moved to QC Process.${ticketNote}`.trim(),
     data: {
       serial_id: row.serial_id,
       serial_number: row.serial_number,
       inventory_asset_code: row.inventory_asset_code,
+      qc_status: 'pending',
       ticket: ticketResult
+    }
+  };
+}
+
+/**
+ * Create a Production/Floor ticket for a serial already in QC Process (pending).
+ * Rejects when an active floor ticket already exists for the serial.
+ */
+async function createProductionTicketForQcSerial(db, { serialId, serialNumber }, actorUserId) {
+  const r = await db.query(
+    `SELECT s.serial_id, s.serial_number, s.inventory_asset_code, s.extra, s.qc_status, s.po_id,
+            p.purchase_order_number, p.purchase_order_type, p.vendor_id, p.line_items,
+            p.product_details_legacy_ids
+       FROM vendor_serial_numbers s
+       INNER JOIN vendor_purchase_orders p ON p.po_id = s.po_id AND p.deleted_at IS NULL
+      WHERE s.serial_id = $1
+        AND s.serial_number = $2
+        AND s.deleted_at IS NULL
+        AND s.po_id IS NOT NULL`,
+    [serialId, serialNumber]
+  );
+
+  if (!r.rows.length) {
+    return { ok: false, status: 404, message: 'Serial not found' };
+  }
+
+  const row = r.rows[0];
+  const effectiveQc = String(row.qc_status || parseExtra(row.extra).status || 'pending').trim();
+  if (effectiveQc !== 'pending') {
+    return {
+      ok: false,
+      status: 400,
+      message: 'Production tickets can only be created for laptops in QC Process (pending status)'
+    };
+  }
+
+  const existing = await findActiveFloorTicket(db, {
+    serialId: row.serial_id,
+    serialNumber: row.serial_number
+  });
+  if (existing) {
+    return {
+      ok: false,
+      status: 409,
+      message: `A Production ticket already exists (#${existing.ticket_id}).`,
+      data: { ticket_id: existing.ticket_id, serial_id: row.serial_id }
+    };
+  }
+
+  const specCtx = await buildSerialSpecContext(db, [row]);
+  const itemDesc = resolveItemDescription(row, specCtx);
+  const line = itemDescToGrnLine(itemDesc);
+  const po = {
+    po_id: row.po_id,
+    purchase_order_number: row.purchase_order_number,
+    purchase_order_type: row.purchase_order_type,
+    vendor_id: row.vendor_id
+  };
+  const ttspl = row.inventory_asset_code || parseExtra(row.extra).unique_product_serial || null;
+
+  const mergedExtra = mergeConfigIntoExtra(parseExtra(row.extra), itemDesc);
+  await db.query(
+    `UPDATE vendor_serial_numbers SET extra = $1::jsonb, updated_at = NOW() WHERE serial_id = $2`,
+    [JSON.stringify(mergedExtra), row.serial_id]
+  );
+
+  const ticketResult = await createTicketFromGrnReceive(db, {
+    serialId: row.serial_id,
+    serialNumber: row.serial_number,
+    inventoryAssetCode: ttspl,
+    po,
+    line,
+    actorUserId,
+    initialConditionOverride: `QC Process — PO ${po.purchase_order_number || po.po_id}`
+  });
+
+  if (!ticketResult.ok || !ticketResult.ticket_id) {
+    const reason = ticketResult.reason || 'unknown';
+    const msg =
+      reason === 'open_ticket'
+        ? 'A Production ticket already exists for this serial.'
+        : reason === 'no_stage'
+          ? 'Floor Manager stage is not configured.'
+          : 'Failed to create Production ticket.';
+    return {
+      ok: false,
+      status: reason === 'open_ticket' ? 409 : 500,
+      message: msg
+    };
+  }
+
+  await syncTicketHardwareConfig(db, {
+    ticketId: ticketResult.ticket_id,
+    serialId: row.serial_id,
+    itemDesc
+  });
+
+  return {
+    ok: true,
+    message: `Production ticket #${ticketResult.ticket_id} created.`,
+    data: {
+      serial_id: row.serial_id,
+      serial_number: row.serial_number,
+      inventory_asset_code: ttspl,
+      ticket_id: ticketResult.ticket_id
     }
   };
 }
@@ -442,6 +620,11 @@ module.exports = {
   PO_TYPES,
   addLaptopToQcProcess,
   movePassedSerialToQcProcess,
+  createProductionTicketForQcSerial,
   ensureFloorTicketForQcSerial,
-  findActiveFloorTicket
+  findActiveFloorTicket,
+  syncTicketHardwareConfig,
+  resolveItemDescription,
+  buildSerialSpecContext,
+  itemDescToGrnLine
 };

@@ -149,7 +149,11 @@ async function listInventory(req, res) {
          g.meta->>'product_id' AS grn_product_id,
          (SELECT t.ticket_id FROM tickets t
             WHERE t.vendor_serial_id = s.serial_id
-            ORDER BY t.created_at DESC LIMIT 1) AS ticket_id
+            ORDER BY t.created_at DESC LIMIT 1) AS ticket_id,
+         (SELECT t.ticket_id FROM tickets t
+            WHERE t.vendor_serial_id = s.serial_id
+              AND t.status IN ('in_progress', 'on_hold')
+            ORDER BY t.created_at DESC LIMIT 1) AS active_floor_ticket_id
        ${fromSql}
        ORDER BY s.updated_at DESC
        LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,

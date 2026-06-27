@@ -446,6 +446,7 @@ function enrichSerialRow(row, specContext = null) {
     product_warranty: line?.warranty_months ?? line?.product_warranty ?? null,
     inventory_tag: ex.inventory_tag || null,
     ticket_id: row.ticket_id ?? null,
+    active_floor_ticket_id: row.active_floor_ticket_id ?? null,
     extra: ex
   };
 }

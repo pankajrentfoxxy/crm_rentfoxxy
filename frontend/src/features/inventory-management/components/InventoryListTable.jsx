@@ -6,6 +6,7 @@ import { SearchField, ListPagination } from '../../../components/ui/primitives';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import { useAuth } from '../../../context/AuthContext';
 import {
+  createProductionTicket,
   fetchInventoryList,
   fetchInventoryListCounts,
   movePassedToQcProcess,
@@ -17,7 +18,6 @@ import AddLaptopToQcModal from './AddLaptopToQcModal';
 import {
   INVENTORY_API_SEGMENT_BY_ROUTE,
   INVENTORY_PAGE_META,
-  MOVE_TO_QC_PROCESS_ACTION,
   OUT_FOR_REPAIR_INVENTORY_ACTIONS,
   READY_TO_RENT_SALE_ACTIONS
 } from '../inventoryStatusConfig';
@@ -261,45 +261,136 @@ function InventoryTagButtons({ row, onUpdated }) {
   );
 }
 
-function ReadyToRentActionSelect({ row, onUpdated, showMoveToQc }) {
+async function moveSerialToQcProcess(row) {
+  const { data } = await movePassedToQcProcess({
+    serial_number_id: row.serial_id,
+    serial_number: row.serial_number
+  });
+  if (!data.success) {
+    throw new Error(data.message || 'Failed to move to QC Process');
+  }
+  invalidateInventoryManagement();
+  invalidateQcCounts();
+  return data;
+}
+
+function MoveToQcProcessButton({ row, onUpdated }) {
+  const [saving, setSaving] = useState(false);
+
+  const handleClick = async () => {
+    const ttspl = row.unique_product_serial || row.inventory_asset_code || row.serial_number;
+    if (!window.confirm(`Move ${ttspl} to QC Process?\n\nA Production/Floor ticket will be created if one does not already exist.`)) {
+      return;
+    }
+    setSaving(true);
+    try {
+      const data = await moveSerialToQcProcess(row);
+      toast.success(data.message || 'Moved to QC Process');
+      onUpdated?.();
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to move to QC Process');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      disabled={saving}
+      className="inline-flex items-center justify-center rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-[11px] font-semibold text-sky-800 hover:bg-sky-100 disabled:opacity-50 whitespace-nowrap"
+    >
+      {saving ? 'Moving…' : 'Move to QC Process'}
+    </button>
+  );
+}
+
+async function createProductionTicketForRow(row) {
+  const { data } = await createProductionTicket({
+    serial_number_id: row.serial_id,
+    serial_number: row.serial_number
+  });
+  if (!data.success) {
+    throw new Error(data.message || 'Failed to create Production ticket');
+  }
+  invalidateInventoryManagement();
+  invalidateQcCounts();
+  return data;
+}
+
+function CreateProductionTicketButton({ row, onUpdated }) {
+  const [saving, setSaving] = useState(false);
+  const activeTicketId = row.active_floor_ticket_id;
+
+  if (activeTicketId) {
+    return (
+      <span className="text-[11px] text-slate-500 whitespace-nowrap">
+        Ticket{' '}
+        <Link
+          to={`/floor-pipeline/tickets/${activeTicketId}`}
+          className="font-semibold text-blue-700 hover:underline"
+        >
+          #{activeTicketId}
+        </Link>{' '}
+        active
+      </span>
+    );
+  }
+
+  const handleClick = async () => {
+    const ttspl = row.unique_product_serial || row.inventory_asset_code || row.serial_number;
+    if (
+      !window.confirm(
+        `Create Production ticket for ${ttspl}?\n\nConfiguration will be copied from the PO line item.`
+      )
+    ) {
+      return;
+    }
+    setSaving(true);
+    try {
+      const data = await createProductionTicketForRow(row);
+      toast.success(data.message || 'Production ticket created');
+      onUpdated?.();
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to create Production ticket');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      disabled={saving}
+      className="inline-flex items-center justify-center rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-800 hover:bg-emerald-100 disabled:opacity-50 whitespace-nowrap"
+    >
+      {saving ? 'Creating…' : 'Create Production Ticket'}
+    </button>
+  );
+}
+
+function ReadyToRentActionSelect({ row, onUpdated }) {
   const [saving, setSaving] = useState(false);
   const current = READY_TO_RENT_SALE_ACTIONS.some((o) => o.value === row.status2) ? row.status2 : '';
-  const actionOptions = showMoveToQc
-    ? [...READY_TO_RENT_SALE_ACTIONS, MOVE_TO_QC_PROCESS_ACTION]
-    : READY_TO_RENT_SALE_ACTIONS;
 
   const handleChange = async (e) => {
     const selected = e.target.value;
     if (!selected || saving) return;
     setSaving(true);
     try {
-      if (selected === MOVE_TO_QC_PROCESS_ACTION.value) {
-        const { data } = await movePassedToQcProcess({
-          serial_number_id: row.serial_id,
-          serial_number: row.serial_number
-        });
-        if (data.success) {
-          toast.success(data.message || 'Moved to QC Process');
-          invalidateInventoryManagement();
-          invalidateQcCounts();
-          onUpdated?.();
-        } else {
-          toast.error(data.message || 'Failed to move to QC Process');
-          e.target.value = current;
-        }
+      const { data } = await updateReadyToRentSaleAction({
+        serial_number_id: row.serial_id,
+        serial_number: row.serial_number,
+        selected_value: selected
+      });
+      if (data.success) {
+        toast.success(data.message || 'Action taken successfully!');
+        onUpdated?.();
       } else {
-        const { data } = await updateReadyToRentSaleAction({
-          serial_number_id: row.serial_id,
-          serial_number: row.serial_number,
-          selected_value: selected
-        });
-        if (data.success) {
-          toast.success(data.message || 'Action taken successfully!');
-          onUpdated?.();
-        } else {
-          toast.error(data.message || 'Failed to update');
-          e.target.value = current;
-        }
+        toast.error(data.message || 'Failed to update');
+        e.target.value = current;
       }
     } catch (err) {
       toast.error(err.response?.data?.message || err.message || 'Failed to update');
@@ -318,7 +409,7 @@ function ReadyToRentActionSelect({ row, onUpdated, showMoveToQc }) {
       className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs min-w-[10rem] disabled:opacity-60"
     >
       <option value="">Take Action</option>
-      {actionOptions.map((opt) => (
+      {READY_TO_RENT_SALE_ACTIONS.map((opt) => (
         <option key={opt.value} value={opt.value}>
           {opt.label}
         </option>
@@ -411,6 +502,7 @@ export default function InventoryListTable({ routeKey }) {
 
   const showOutForRepareExtras = routeKey === 'out-for-repare';
   const showTicketId = routeKey === 'qc-process';
+  const showQcCreateTicket = routeKey === 'qc-process';
   const showReadyToRentAction = routeKey === 'ready-to-rent-or-sell';
   const showPassedStatus = showReadyToRentAction || ['rent-to-own', 'rental-purchase', 'direct-purchase'].includes(routeKey);
   const showTagColumn = showReadyToRentAction || routeKey === 'ready-to-rent-or-sell';
@@ -527,6 +619,7 @@ export default function InventoryListTable({ routeKey }) {
                     </>
                   ) : null}
                   {showReadyToRentAction ? <th className="px-3 py-3">Action</th> : null}
+                  {showQcCreateTicket ? <th className="px-3 py-3">Action</th> : null}
                   {showTagColumn ? <th className="px-3 py-3">Tagged As</th> : null}
                   <th className="px-3 py-3">Status</th>
                 </>
@@ -594,12 +687,12 @@ export default function InventoryListTable({ routeKey }) {
                   </td>
                   {showTicketId ? (
                     <td className="px-3 py-3">
-                      {row.ticket_id ? (
+                      {row.active_floor_ticket_id ? (
                         <Link
-                          to={`/floor-pipeline/tickets/${row.ticket_id}`}
+                          to={`/floor-pipeline/tickets/${row.active_floor_ticket_id}`}
                           className="font-mono text-xs font-semibold text-blue-700 hover:underline"
                         >
-                          #{row.ticket_id}
+                          #{row.active_floor_ticket_id}
                         </Link>
                       ) : (
                         <span className="text-slate-400 text-xs">—</span>
@@ -677,11 +770,17 @@ export default function InventoryListTable({ routeKey }) {
                   ) : null}
                   {showReadyToRentAction ? (
                     <td className="px-3 py-3">
-                      <ReadyToRentActionSelect
-                        row={row}
-                        onUpdated={load}
-                        showMoveToQc={isInventoryAdmin}
-                      />
+                      <div className="flex flex-col gap-2 min-w-[11rem]">
+                        <ReadyToRentActionSelect row={row} onUpdated={load} />
+                        {isInventoryAdmin ? (
+                          <MoveToQcProcessButton row={row} onUpdated={load} />
+                        ) : null}
+                      </div>
+                    </td>
+                  ) : null}
+                  {showQcCreateTicket ? (
+                    <td className="px-3 py-3">
+                      <CreateProductionTicketButton row={row} onUpdated={load} />
                     </td>
                   ) : null}
                   {showTagColumn ? (

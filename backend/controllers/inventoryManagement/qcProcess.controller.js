@@ -3,6 +3,7 @@ const pool = require('../../config/db');
 const {
   addLaptopToQcProcess,
   movePassedSerialToQcProcess,
+  createProductionTicketForQcSerial,
   PO_TYPES
 } = require('../../services/qcProcessIntakeService');
 
@@ -86,9 +87,43 @@ async function moveToQcProcess(req, res) {
   }
 }
 
+const createProductionTicketValidators = [
+  body('serial_number_id').isInt({ min: 1 }).toInt(),
+  body('serial_number').notEmpty().trim()
+];
+
+async function createProductionTicket(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  try {
+    const result = await createProductionTicketForQcSerial(
+      pool,
+      {
+        serialId: req.body.serial_number_id,
+        serialNumber: String(req.body.serial_number).trim()
+      },
+      req.user?.user_id
+    );
+    if (!result.ok) {
+      return res.status(result.status || 400).json({
+        success: false,
+        message: result.message,
+        data: result.data
+      });
+    }
+    res.status(201).json({ success: true, message: result.message, data: result.data });
+  } catch (e) {
+    console.error('createProductionTicket', e);
+    res.status(500).json({ success: false, message: e.message || 'Failed to create Production ticket' });
+  }
+}
+
 module.exports = {
   addLaptopValidators,
   addLaptop,
   moveToQcValidators,
-  moveToQcProcess
+  moveToQcProcess,
+  createProductionTicketValidators,
+  createProductionTicket
 };

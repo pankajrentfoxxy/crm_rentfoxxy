@@ -11,7 +11,11 @@ const universalSearch = require('../controllers/inventoryManagement/universalSea
 const router = express.Router();
 
 const invView = [authMiddleware, checkSectionPermission('inventory_management', 'view')];
-const invAdmin = [authMiddleware, checkRole('admin'), checkSectionPermission('inventory_management', 'edit')];
+const invAdmin = [
+  authMiddleware,
+  checkRole('admin', 'super_admin'),
+  checkSectionPermission('inventory_management', 'edit')
+];
 const custInvView = [authMiddleware, checkSectionPermission('customer_inventory', 'view')];
 const moduleEntry = [
   authMiddleware,
@@ -33,7 +37,8 @@ router.get('/', moduleEntry, (req, res) =>
       '/spare-parts',
       '/ready-to-rent-action',
       '/qc-process/add-laptop',
-      '/qc-process/move-from-passed'
+      '/qc-process/move-from-passed',
+      '/qc-process/create-production-ticket'
     ]
   })
 );
@@ -49,6 +54,12 @@ router.post(
   invAdmin,
   qcProcess.moveToQcValidators,
   qcProcess.moveToQcProcess
+);
+router.post(
+  '/qc-process/create-production-ticket',
+  invView,
+  qcProcess.createProductionTicketValidators,
+  qcProcess.createProductionTicket
 );
 
 router.get('/lists/counts', invView, inventoryList.getListCounts);

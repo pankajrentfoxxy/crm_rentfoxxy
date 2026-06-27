@@ -47,7 +47,12 @@ export function addLaptopToQcProcess(body) {
   return api.post(`${base}/qc-process/add-laptop`, body);
 }
 
-/** Admin — move QC passed serial back to QC Process + floor ticket if needed */
+/** Move QC passed serial back to QC Process + floor ticket if needed */
 export function movePassedToQcProcess(body) {
   return api.post(`${base}/qc-process/move-from-passed`, body);
+}
+
+/** Create Production/Floor ticket for a laptop in QC Process (pending) */
+export function createProductionTicket(body) {
+  return api.post(`${base}/qc-process/create-production-ticket`, body);
 }
