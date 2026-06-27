@@ -196,7 +196,7 @@ export default function SoSerialPanel({ soNumber }) {
                       <Link to={`/floor-pipeline/tickets/${a.qc_ticket_id}`} className="text-xs text-blue-600">QC #{a.qc_ticket_id}</Link>
                     )}
                     <span className={`px-2 py-0.5 rounded-full text-xs ${QC_BADGE[a.qc_status] || QC_BADGE.pending}`}>{a.qc_status}</span>
-                    <PermissionGate section="delivery_challans" action="edit">
+                    <PermissionGate section={['sales_orders_doc', 'delivery_challans']} action="edit">
                       {a.qc_status !== 'passed' && (
                         <button type="button" onClick={() => detach(a.allocation_id)} className="text-xs text-red-600 hover:underline">Remove</button>
                       )}
@@ -208,7 +208,7 @@ export default function SoSerialPanel({ soNumber }) {
           )}
 
           {line.remaining_qty > 0 && (
-            <PermissionGate section="delivery_challans" action="edit">
+            <PermissionGate section={['sales_orders_doc', 'delivery_challans']} action="edit">
               <AttachPicker soNumber={soNumber} line={line} onAttached={load} />
             </PermissionGate>
           )}

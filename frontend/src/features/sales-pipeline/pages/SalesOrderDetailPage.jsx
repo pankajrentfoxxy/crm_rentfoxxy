@@ -115,7 +115,7 @@ export default function SalesOrderDetailPage() {
             } catch { toast.error('Could not open PDF'); }
           }}>Download PDF</Button>
           {!isCancelled && (
-            <PermissionGate section="delivery_challans" action="create">
+            <PermissionGate section={['sales_orders_doc', 'delivery_challans']} action="create">
               <Button variant="secondary" onClick={() => setDcOpen(true)}>Create DC</Button>
             </PermissionGate>
           )}
@@ -235,7 +235,7 @@ export default function SalesOrderDetailPage() {
               This sales order is cancelled. New delivery challans cannot be created.
             </p>
           ) : (
-            <PermissionGate section="delivery_challans" action="create">
+            <PermissionGate section={['sales_orders_doc', 'delivery_challans']} action="create">
               <button type="button" onClick={() => setDcOpen(true)} className="mb-4 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">+ Create DC</button>
             </PermissionGate>
           )}

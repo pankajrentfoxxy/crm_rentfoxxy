@@ -6,7 +6,12 @@ import { usePermission } from '../hooks/usePermission';
  */
 export default function PermissionGate({ section, action = 'view', children, fallback = null }) {
   const { hasPermission } = usePermission();
-  if (!section || hasPermission(section, action)) {
+  const allowed = !section
+    ? true
+    : Array.isArray(section)
+      ? section.some((s) => hasPermission(s, action))
+      : hasPermission(section, action);
+  if (allowed) {
     return children;
   }
   return fallback;
