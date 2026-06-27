@@ -190,8 +190,10 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
     }
 
     const customerOtp = generateOtp();
-    const techId = dispatch_mode === 'technician' && technician_user_id
+    const hasDispatch = ['technician', 'courier', 'porter'].includes(String(dispatch_mode || ''));
+    const techId = hasDispatch && dispatch_mode === 'technician' && technician_user_id
         ? parseInt(technician_user_id, 10) : null;
+    const pickupStatus = hasDispatch ? 'assigned' : 'pending_dispatch';
 
     const pickupItemIds = [];
     for (const m of machines) {
@@ -204,19 +206,19 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
                  porter_tracking_id, porter_order_id,
                  otp_code, customer_otp_code, customer_otp_sent_at)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
-                     'pickup',$11,'assigned',$12,
-                     $13,$14,$13,$15,$16,$17,$18,
-                     $19,$19,NOW())
+                     'pickup',$11,$12,$13,
+                     $14,$15,$14,$16,$17,$18,$19,
+                     $20,$20,NOW())
              RETURNING id`,
             [
                 ticketId, m.customer_inventory_id, m.serial_number, m.ttspl_id || m.unique_serial_number,
                 m.ttspl_id || m.unique_serial_number, m.brand, m.model, m.ram, m.storage, m.generation,
-                pickup_type, m.source_item_id,
-                techId, dispatch_mode,
-                dispatch_mode === 'courier' ? (courier_name || null) : null,
-                dispatch_mode === 'courier' ? (awb_number || null) : null,
-                dispatch_mode === 'porter' ? (porter_tracking_id || null) : null,
-                dispatch_mode === 'porter' ? (porter_order_id || null) : null,
+                pickup_type, pickupStatus, m.source_item_id,
+                techId, hasDispatch ? dispatch_mode : null,
+                hasDispatch && dispatch_mode === 'courier' ? (courier_name || null) : null,
+                hasDispatch && dispatch_mode === 'courier' ? (awb_number || null) : null,
+                hasDispatch && dispatch_mode === 'porter' ? (porter_tracking_id || null) : null,
+                hasDispatch && dispatch_mode === 'porter' ? (porter_order_id || null) : null,
                 customerOtp,
             ]
         );
@@ -231,7 +233,10 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
     }
 
     const rdc = await nextDocumentNumber('return_dc');
-    const dcDispatchMode = dispatch_mode === 'technician' ? 'inhouse' : dispatch_mode;
+    const dcDispatchMode = hasDispatch
+        ? (dispatch_mode === 'technician' ? 'inhouse' : dispatch_mode)
+        : null;
+    const dcStatus = hasDispatch ? 'in_transit' : 'pending';
 
     const entries = [];
     let firstSpec = {};
@@ -286,8 +291,8 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
              sales_order_number, original_dc_number, dc_purpose,
              status, dispatched_at, created_by, created_at, updated_at)
          VALUES ($1,'return',$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16,
-                 $18,$19,COALESCE($20,'standard'),
-                 'in_transit',NOW(),$17,NOW(),NOW())`,
+                 $17,$18,COALESCE($19,'standard'),
+                 $20,CASE WHEN $21 THEN NOW() ELSE NULL END,$22,NOW(),NOW())`,
         [
             rdc, ticketId, ticket.customer_id, ticket.customer_name, ticket.ticket_email || null,
             JSON.stringify(pickupAddr || {}),
@@ -295,13 +300,15 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
             firstMachine.model || firstSpec.model || firstSpec.model_name || null,
             Math.max(1, entries.length), JSON.stringify(entries),
             dcDispatchMode, techId,
-            dispatch_mode === 'courier' ? (courier_name || null) : null,
-            dispatch_mode === 'courier' ? (awb_number || null) : null,
-            dispatch_mode === 'porter' ? (porter_tracking_id || null) : null,
-            dispatch_mode === 'porter' ? (porter_order_id || null) : null,
-            userId,
+            hasDispatch && dispatch_mode === 'courier' ? (courier_name || null) : null,
+            hasDispatch && dispatch_mode === 'courier' ? (awb_number || null) : null,
+            hasDispatch && dispatch_mode === 'porter' ? (porter_tracking_id || null) : null,
+            hasDispatch && dispatch_mode === 'porter' ? (porter_order_id || null) : null,
             salesOrderNumber, originalDcNumber,
             dc_purpose || 'standard',
+            dcStatus,
+            hasDispatch,
+            userId,
         ]
     );
 
@@ -2760,8 +2767,8 @@ exports.setOutcome = async (req, res) => {
                 outcome = $2::varchar(30),
                 outcome_set_by = $3::int,
                 outcome_set_at = CURRENT_TIMESTAMP,
-                replacement_flagged_by = CASE WHEN ($2::text) = 'replacement_required' THEN $3::int ELSE replacement_flagged_by END,
-                replacement_flag_reason = CASE WHEN ($2::text) = 'replacement_required' THEN $4::text ELSE replacement_flag_reason END,
+                replacement_flagged_by = CASE WHEN ($2::text) = 'replacement_required' THEN $3::int ELSE NULL END,
+                replacement_flag_reason = CASE WHEN ($2::text) = 'replacement_required' THEN $4::text ELSE NULL END,
                 status = CASE
                     WHEN ($2::text) = 'replacement_required' THEN 'repair_failed'::varchar(40)
                     WHEN ($2::text) = 'fixed' THEN 'visited'::varchar(40)
@@ -3075,7 +3082,7 @@ exports.initiateReplacement = async (req, res) => {
         const pickupResult = await executePickupWithReturnDc(client, ticket, ticketId, req.user.user_id, {
             pickup_type: 'return',
             pickup_address: shippingAddress,
-            dispatch_mode: dispatch_mode || 'technician',
+            dispatch_mode: dispatch_mode || null,
             technician_user_id,
             courier_name,
             awb_number,
@@ -3136,6 +3143,135 @@ exports.initiateReplacement = async (req, res) => {
     }
     const data = await getTicketWithItems(ticketId, req.user);
     res.json({ success: true, ...resultPayload, ...data });
+};
+
+/** Assign technician / courier / porter to an existing Return DC (created without dispatch). */
+exports.assignReturnPickupDispatch = async (req, res) => {
+    if (!isSupportLead(req.user)) {
+        return res.status(403).json({ success: false, message: 'Only support lead can assign pickup' });
+    }
+    const ticketId = parseInt(req.params.ticketId, 10);
+    const body = req.body || {};
+    const {
+        dispatch_mode,
+        technician_user_id,
+        courier_name,
+        awb_number,
+        porter_tracking_id,
+        porter_order_id,
+    } = body;
+
+    if (!['technician', 'courier', 'porter'].includes(dispatch_mode)) {
+        return res.status(400).json({ success: false, message: 'Select technician, courier, or porter' });
+    }
+    if (dispatch_mode === 'technician' && !technician_user_id) {
+        return res.status(400).json({ success: false, message: 'Select a technician' });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const ticketRes = await client.query('SELECT * FROM support_tickets WHERE id = $1', [ticketId]);
+        if (!ticketRes.rows.length) {
+            throw Object.assign(new Error('Ticket not found'), { status: 404 });
+        }
+        const ticket = ticketRes.rows[0];
+        if (!ticket.return_dc_number) {
+            throw Object.assign(new Error('No Return DC on this ticket'), { status: 400 });
+        }
+
+        const dcRes = await client.query(
+            `SELECT status, dispatch_mode FROM delivery_challan_lines
+              WHERE dc_number = $1 AND movement_type = 'return' LIMIT 1`,
+            [ticket.return_dc_number]
+        );
+        if (!dcRes.rows.length) {
+            throw Object.assign(new Error('Return DC not found'), { status: 404 });
+        }
+        const dcRow = dcRes.rows[0];
+        if (dcRow.dispatch_mode && !['pending', 'draft'].includes(String(dcRow.status || '').toLowerCase())) {
+            throw Object.assign(new Error('Pickup is already assigned for this Return DC'), { status: 400 });
+        }
+
+        const techId = dispatch_mode === 'technician' ? parseInt(technician_user_id, 10) : null;
+        const dcDispatchMode = dispatch_mode === 'technician' ? 'inhouse' : dispatch_mode;
+        const newStatus = dcDispatchMode === 'inhouse' ? 'in_transit' : 'shipped';
+
+        await client.query(
+            `UPDATE support_ticket_items SET
+                assigned_to = $2,
+                pickup_assigned_to = $2,
+                pickup_method = $3,
+                pickup_courier_name = $4,
+                pickup_awb = $5,
+                porter_tracking_id = $6,
+                porter_order_id = $7,
+                status = 'assigned',
+                updated_at = NOW()
+             WHERE ticket_id = $1 AND item_type = 'pickup' AND return_dc_number = $8`,
+            [
+                ticketId,
+                techId,
+                dispatch_mode,
+                dispatch_mode === 'courier' ? (courier_name || null) : null,
+                dispatch_mode === 'courier' ? (awb_number || null) : null,
+                dispatch_mode === 'porter' ? (porter_tracking_id || null) : null,
+                dispatch_mode === 'porter' ? (porter_order_id || null) : null,
+                ticket.return_dc_number,
+            ]
+        );
+
+        await client.query(
+            `UPDATE delivery_challan_lines SET
+                dispatch_mode = $2,
+                delivery_person_id = $3,
+                courier_name = $4,
+                awb_number = $5,
+                porter_tracking_id = $6,
+                porter_order_id = $7,
+                status = $8,
+                dispatched_at = NOW(),
+                updated_at = NOW()
+             WHERE dc_number = $1 AND movement_type = 'return'`,
+            [
+                ticket.return_dc_number,
+                dcDispatchMode,
+                techId,
+                dispatch_mode === 'courier' ? (courier_name || null) : null,
+                dispatch_mode === 'courier' ? (awb_number || null) : null,
+                dispatch_mode === 'porter' ? (porter_tracking_id || null) : null,
+                dispatch_mode === 'porter' ? (porter_order_id || null) : null,
+                newStatus,
+            ]
+        );
+
+        await logAudit(client, {
+            ticketId,
+            userId: req.user.user_id,
+            action: 'return_pickup_assigned',
+            detail: { return_dc_number: ticket.return_dc_number, dispatch_mode },
+        });
+        await bumpTicketActivity(client, ticketId);
+        await client.query('COMMIT');
+
+        try { await regenerateReturnDcPdfByRdc(pool, ticket.return_dc_number); } catch (pdfErr) {
+            console.error('[support] return DC pdf (assign):', pdfErr.message);
+        }
+
+        const data = await getTicketWithItems(ticketId, req.user);
+        res.json({
+            success: true,
+            message: 'Return pickup assigned',
+            return_dc_number: ticket.return_dc_number,
+            dispatch_mode,
+            ...data,
+        });
+    } catch (e) {
+        await client.query('ROLLBACK');
+        return res.status(e.status || 400).json({ success: false, message: e.message || 'Failed to assign pickup' });
+    } finally {
+        client.release();
+    }
 };
 
 exports.updateReplacementOrder = async (req, res) => {

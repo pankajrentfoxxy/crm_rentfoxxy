@@ -14,6 +14,8 @@ export default function PickupSetupForm({
   fixedPickupType = null,
   hidePickupType = false,
   hideMachinePreview = false,
+  dispatchOptional = false,
+  dispatchOnly = false,
   onSubmit,
   saving = false,
   submitLabel = 'Create Pickup + Return DC',
@@ -75,7 +77,11 @@ export default function PickupSetupForm({
       .finally(() => setLoadingAddr(false));
   }, [customerId, ticket?.customer_id, machineCode]);
 
-  const canSubmit = (fixedPickupType || pickupType) && dispatchMode && pickupAddress.address.trim()
+  const canSubmit = (dispatchOnly || fixedPickupType || pickupType)
+    && (dispatchOnly || pickupAddress.address.trim())
+    && (dispatchOptional || dispatchOnly || dispatchMode)
+    && (dispatchOptional || dispatchOnly || dispatchMode !== 'technician' || technicianId)
+    && (!dispatchOnly || dispatchMode)
     && (dispatchMode !== 'technician' || technicianId);
 
   const handleSubmit = () => {
@@ -84,7 +90,7 @@ export default function PickupSetupForm({
       pickup_type: fixedPickupType || pickupType,
       source_item_id: sourceItem?.id || null,
       pickup_address: pickupAddress,
-      dispatch_mode: dispatchMode,
+      dispatch_mode: dispatchMode || null,
       technician_user_id: dispatchMode === 'technician' ? technicianId : null,
       courier_name: dispatchMode === 'courier' ? courier.name : null,
       awb_number: dispatchMode === 'courier' ? courier.awb : null,
@@ -140,6 +146,7 @@ export default function PickupSetupForm({
       </div>
       )}
 
+      {!dispatchOnly && (
       <div>
         <div className="flex items-center justify-between mb-2">
           <label className="text-sm font-semibold text-gray-700">{hidePickupType ? 'Delivery & pickup address*' : 'Pickup Address*'}</label>
@@ -179,9 +186,15 @@ export default function PickupSetupForm({
           </div>
         </div>
       </div>
+      )}
 
       <div>
-        <label className="text-sm font-semibold text-gray-700 block mb-2">Dispatch Method*</label>
+        <label className="text-sm font-semibold text-gray-700 block mb-1">
+          {dispatchOnly ? 'Assign pickup*' : dispatchOptional ? 'Assign pickup now (optional)' : 'Dispatch Method*'}
+        </label>
+        {dispatchOptional && (
+          <p className="text-xs text-slate-500 mb-2">Skip if you don&apos;t have technician or tracking details yet — assign later from the ticket.</p>
+        )}
         <div className="grid grid-cols-3 gap-2">
           {[
             { value: 'technician', icon: '👤', label: 'Technician' },

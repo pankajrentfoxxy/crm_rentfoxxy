@@ -174,6 +174,16 @@ export default function PickupItemCard({ item, ticket, onRefresh }) {
         </div>
       )}
 
+      {/* Awaiting pickup assignment */}
+      {es === 'pending_dispatch' && (
+        <div className="mx-4 mt-3 p-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-900">
+          <p className="font-semibold">Awaiting pickup assignment</p>
+          <p className="text-xs mt-1 text-amber-800">
+            Return DC {item.return_dc_number || ''} is created. Support lead will assign a technician or courier when ready.
+          </p>
+        </div>
+      )}
+
       {/* Dispatch tracking info */}
       {(isCourier || isPorter) && (
         <div className="mx-4 mt-3 p-3 bg-blue-50 rounded-xl text-xs text-blue-800 space-y-0.5">
@@ -185,7 +195,7 @@ export default function PickupItemCard({ item, ticket, onRefresh }) {
       )}
 
       {/* Technician step wizard (inhouse) */}
-      {isInhouse && !whDone && (
+      {isInhouse && !whDone && es !== 'pending_dispatch' && (
         <div className="p-4 space-y-3">
           {/* Mark reached */}
           {(es === 'assigned' || es === 'in_transit') && canActTech && (

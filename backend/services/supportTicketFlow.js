@@ -11,11 +11,7 @@ const deriveComplaintStep = (item) => {
   if (item.status === 'picked_up' || item.outcome === 'repair_required') {
     return 'picked_up_for_repair';
   }
-  if (
-    item.outcome === 'replacement_required'
-    || item.status === 'repair_failed'
-    || (item.replacement_flag_reason && item.replacement_flagged_by)
-  ) {
+  if (item.outcome === 'replacement_required') {
     return 'replacement_required';
   }
   if (!item.assigned_to) return 'unassigned';
@@ -54,6 +50,9 @@ const derivePickupStep = (item) => {
   const isLegacy = !item.pickup_type
     && (item.pickup_method === 'self_carry' || item.loan_delivered_at);
   if (!isLegacy) {
+    if (item.status === 'pending_dispatch' || (item.return_dc_number && !item.pickup_method && !item.assigned_to && !item.pickup_assigned_to)) {
+      return 'pending_dispatch';
+    }
     if (item.warehouse_received_at || CLOSED.has(item.status)) return 'warehouse_confirmed';
     if (item.customer_otp_verified_at) return 'customer_otp';
     if (item.pod_image_path || item.proof_of_completion_path) return 'pod_uploaded';

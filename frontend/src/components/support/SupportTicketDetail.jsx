@@ -16,6 +16,7 @@ import AddWorkflowPhasePanel from './components/AddWorkflowPhasePanel';
 import RaisePartRequestForm from '../../features/support/components/RaisePartRequestForm';
 import PickupItemCard from './components/PickupItemCard';
 import CreatePickupModal from './components/CreatePickupModal';
+import PickupSetupForm from './components/PickupSetupForm';
 import {
   formatItemId,
   formatTicketId,
@@ -153,7 +154,7 @@ function ItemCard({
           </div>
         )}
 
-        {item.item_type === 'complaint' && st === 'replacement_required' && !ticket.sales_order_number && (
+        {item.item_type === 'complaint' && item.outcome === 'replacement_required' && !ticket.sales_order_number && (
           <div className="rounded-lg p-3 space-y-2" style={{ border: '1.5px solid #dc2626', background: '#FCEBEB', color: '#991b1b' }}>
             <p className="font-semibold text-sm">Replacement required</p>
             <p className="text-sm">Flagged{item.assigned_to_name ? ` by ${item.assigned_to_name}` : ''}. {item.replacement_flag_reason || '—'}</p>
@@ -306,7 +307,7 @@ function ItemCard({
           </div>
         )}
 
-        {item.item_type === 'complaint' && canAct && !terminal && st === 'replacement_required' && (
+        {item.item_type === 'complaint' && canAct && !terminal && item.outcome === 'replacement_required' && (
           <div className="space-y-2">
             <p className="support-v3-section-label">Next step</p>
             <p className="text-sm text-slate-600 rounded-lg border border-slate-200 bg-slate-50 p-3">
@@ -431,12 +432,40 @@ function WorkflowActionsBar({ workflowActions, item }) {
     );
 }
 
-function ReplacementOrderBanner({ ticket, replacementOrders }) {
+function ReplacementOrderBanner({ ticket, replacementOrders, pickups, ticketId, isLead, onRefresh }) {
+  const [showAssign, setShowAssign] = useState(false);
+  const [assignBusy, setAssignBusy] = useState(false);
+
   if (!ticket.sales_order_number) return null;
   const units = replacementOrders.filter((o) => o.sales_order_number === ticket.sales_order_number);
   const delivered = units.filter((o) => o.status === 'delivered' || o.new_machine_serial).length;
   const hasDeliveryDc = units.some((o) => o.dc_number);
   const soPath = `/sales-pipeline/sales-orders/${encodeURIComponent(ticket.sales_order_number)}`;
+  const pendingPickup = pickups.some(
+    (p) => p.return_dc_number === ticket.return_dc_number
+      && (p.status === 'pending_dispatch' || (!p.pickup_method && !p.assigned_to && !p.pickup_assigned_to))
+  );
+
+  const assignPickup = async (form) => {
+    setAssignBusy(true);
+    try {
+      await api.post(`/support/tickets/${ticketId}/assign-return-pickup`, {
+        dispatch_mode: form.dispatch_mode,
+        technician_user_id: form.technician_user_id,
+        courier_name: form.courier_name,
+        awb_number: form.awb_number,
+        porter_tracking_id: form.porter_tracking_id,
+        porter_order_id: form.porter_order_id,
+      });
+      toast.success('Return pickup assigned');
+      setShowAssign(false);
+      onRefresh?.();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Failed to assign pickup');
+    } finally {
+      setAssignBusy(false);
+    }
+  };
 
   return (
     <section className="support-v3-card border-pink-200 bg-pink-50/30">
@@ -452,6 +481,11 @@ function ReplacementOrderBanner({ ticket, replacementOrders }) {
         {ticket.return_dc_number && (
           <p>Return pickup DC: <span className="font-mono">{ticket.return_dc_number}</span></p>
         )}
+        {pendingPickup && (
+          <p className="text-xs rounded-lg border border-amber-200 bg-amber-50 text-amber-900 px-2 py-1.5">
+            Return DC created — assign a technician or add courier details when ready.
+          </p>
+        )}
         {!hasDeliveryDc ? (
           <ol className="list-decimal list-inside text-xs space-y-0.5 text-pink-900/90">
             <li>Attach QC-passed laptops on the sales order (one per line)</li>
@@ -463,6 +497,28 @@ function ReplacementOrderBanner({ ticket, replacementOrders }) {
             Delivery in progress ({delivered}/{units.length || 1} delivered). Ticket closes when all units are delivered and old laptops are received at warehouse.
           </p>
         )}
+        {isLead && pendingPickup && (
+          <div className="pt-2 border-t border-pink-100">
+            {!showAssign ? (
+              <button type="button" className="support-btn-outline min-h-[40px] text-sm" onClick={() => setShowAssign(true)}>
+                Assign return pickup
+              </button>
+            ) : (
+              <div className="rounded-lg border border-pink-100 bg-white p-3">
+                <PickupSetupForm
+                  ticket={ticket}
+                  dispatchOnly
+                  saving={assignBusy}
+                  submitLabel="Assign pickup"
+                  onSubmit={assignPickup}
+                />
+                <button type="button" className="support-btn-outline w-full min-h-[40px] mt-2 text-sm" onClick={() => setShowAssign(false)} disabled={assignBusy}>
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </section>
   );
@@ -470,6 +526,9 @@ function ReplacementOrderBanner({ ticket, replacementOrders }) {
 
 function PickupStatusBanner({ ticket, pickups }) {
   const active = pickups.find((p) => !['resolved', 'closed', 'inventory_updated'].includes(p.status));
+  const pendingAssign = pickups.some(
+    (p) => p.status === 'pending_dispatch' || (p.return_dc_number && !p.pickup_method && !p.assigned_to)
+  );
   if (!ticket.return_dc_number && !active) return null;
   return (
     <section className="support-v3-card">
@@ -479,7 +538,11 @@ function PickupStatusBanner({ ticket, pickups }) {
           <span className="support-pill progress font-mono">{ticket.return_dc_number}</span>
         )}
       </div>
-      {active ? (
+      {pendingAssign ? (
+        <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
+          Return DC <b>{ticket.return_dc_number}</b> created. Assign technician or courier from the replacement order section above when details are available.
+        </p>
+      ) : active ? (
         <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
           Pickup scheduled
           {active.pickup_type === 'repair' ? ' (repair)' : ' (return)'}
@@ -621,7 +684,7 @@ export default function SupportTicketDetail() {
   const complaintForReplacement = complaints.find((c) => !['resolved', 'closed'].includes(c.status));
 
   const eligibleForReplacement = complaints.filter(
-    (c) => (c.outcome === 'replacement_required' || c.replacement_flag_reason)
+    (c) => c.outcome === 'replacement_required'
       && !replacementOrders.some((o) => o.source_item_id === c.id && !['completed', 'cancelled'].includes(o.status))
   );
   const canInitiateReplacement = isSupportLead(user) && eligibleForReplacement.length > 0 && !ticket.return_dc_number;
@@ -792,7 +855,14 @@ export default function SupportTicketDetail() {
           </section>
 
           {ticket.sales_order_number && (
-            <ReplacementOrderBanner ticket={ticket} replacementOrders={replacementOrders} />
+            <ReplacementOrderBanner
+              ticket={ticket}
+              replacementOrders={replacementOrders}
+              pickups={pickups}
+              ticketId={ticket.id}
+              isLead={isSupportLead(user)}
+              onRefresh={load}
+            />
           )}
 
           {(pickups.length > 0 || ticket.return_dc_number) && (

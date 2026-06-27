@@ -164,6 +164,7 @@ export default function ReplacementPanel({ ticketId, ticket, customerId, onDone,
         fixedPickupType="return"
         hidePickupType
         hideMachinePreview
+        dispatchOptional
         saving={busy}
         submitLabel={`Create sales order + return DC (${selectedIds.size} laptop${selectedIds.size > 1 ? 's' : ''})`}
         onSubmit={submitReplacement}

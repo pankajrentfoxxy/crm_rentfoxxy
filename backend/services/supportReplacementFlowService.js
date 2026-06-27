@@ -97,7 +97,7 @@ async function listEligibleComplaintItems(client, ticketId) {
     `SELECT i.* FROM support_ticket_items i
       WHERE i.ticket_id = $1
         AND i.item_type = 'complaint'
-        AND (i.outcome = 'replacement_required' OR i.replacement_flag_reason IS NOT NULL)
+        AND i.outcome = 'replacement_required'
         AND i.status NOT IN ('resolved', 'closed')
         AND NOT EXISTS (
           SELECT 1 FROM support_replacement_orders ro

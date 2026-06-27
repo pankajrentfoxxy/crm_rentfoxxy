@@ -47,6 +47,7 @@ const {
     markPickedUp,
     initiateReplacement,
     getReplacementContext,
+    assignReturnPickupDispatch,
     moveComplaintToReplacement,
     updateReplacementOrder,
     deliverReplacement,
@@ -142,6 +143,7 @@ router.post('/tickets/:ticketId/phases', requireSupportLead, addWorkflowPhaseIte
 router.post('/tickets/:ticketId/assign-all', requireSupportLead, assignTicketBulk);
 router.post('/tickets/:ticketId/close', requireSupportLead, closeTicket);
 router.post('/tickets/:ticketId/replacements', requireSupportLead, initiateReplacement);
+router.post('/tickets/:ticketId/assign-return-pickup', requireSupportLead, assignReturnPickupDispatch);
 router.get('/tickets/:ticketId/replacement-context', requireSupportLead, getReplacementContext);
 router.post('/items/:itemId/move-to-replacement', requireSupportLead, moveComplaintToReplacement);
 router.get('/customers/:customerId/available-assets', getAvailableAssets);
