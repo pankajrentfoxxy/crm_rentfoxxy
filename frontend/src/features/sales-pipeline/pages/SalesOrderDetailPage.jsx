@@ -74,14 +74,17 @@ export default function SalesOrderDetailPage() {
   const summary = data?.summary || {};
   const totals = data?.totals || {};
   const dcs = data?.delivery_challans || [];
+  const attachedCount = Number(data?.attached_count || 0);
+  const hasAttachedLaptops = attachedCount > 0;
+  const hasDc = dcs.length > 0;
   const halfGst = (Number(totals.gst_rate) || 18) / 2;
   const isCancelled = String(data?.status || head.status || '').toLowerCase() === 'cancelled';
 
   const handleCancel = useCallback(async () => {
-    if (!window.confirm(`Cancel sales order ${soNumber}? This cannot be undone and the order will not proceed to delivery.`)) return;
+    if (!window.confirm(`Cancel sales order ${soNumber}? Attached laptops will be released back to inventory. This cannot be undone.`)) return;
     try {
-      await cancelSalesOrder(soNumber);
-      toast.success('Sales order cancelled');
+      const res = await cancelSalesOrder(soNumber);
+      toast.success(res.data?.message || 'Sales order cancelled');
       load();
     } catch (err) {
       toast.error(err?.response?.data?.message || 'Failed to cancel sales order');
@@ -114,7 +117,7 @@ export default function SalesOrderDetailPage() {
               else toast.error('PDF not available');
             } catch { toast.error('Could not open PDF'); }
           }}>Download PDF</Button>
-          {!isCancelled && (
+          {!isCancelled && hasAttachedLaptops && (
             <PermissionGate section={['sales_orders_doc', 'delivery_challans']} action="create">
               <Button variant="secondary" onClick={() => setDcOpen(true)}>Create DC</Button>
             </PermissionGate>
@@ -122,7 +125,7 @@ export default function SalesOrderDetailPage() {
           <PermissionGate section="payment_records" action="create">
             <Button onClick={() => setPaymentOpen(true)}>Record Payment</Button>
           </PermissionGate>
-          {!isCancelled && (
+          {!isCancelled && !hasDc && (
             <PermissionGate section="sales_orders_doc" action="edit">
               <Button variant="danger" onClick={handleCancel}>Cancel SO</Button>
             </PermissionGate>
@@ -234,10 +237,14 @@ export default function SalesOrderDetailPage() {
             <p className="mb-4 rounded-lg bg-red-50 border border-red-200 px-4 py-2 text-sm text-red-700">
               This sales order is cancelled. New delivery challans cannot be created.
             </p>
-          ) : (
+          ) : hasAttachedLaptops ? (
             <PermissionGate section={['sales_orders_doc', 'delivery_challans']} action="create">
               <button type="button" onClick={() => setDcOpen(true)} className="mb-4 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">+ Create DC</button>
             </PermissionGate>
+          ) : (
+            <p className="mb-4 rounded-lg bg-amber-50 border border-amber-200 px-4 py-2 text-sm text-amber-800">
+              Attach at least one laptop before creating a delivery challan.
+            </p>
           )}
           <table className="w-full text-sm bg-white border rounded-xl overflow-hidden">
             <thead className="bg-gray-50 text-xs text-gray-500 uppercase">

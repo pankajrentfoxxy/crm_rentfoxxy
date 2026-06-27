@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
+const inventorySM = require('../services/inventoryStateMachine');
 const {
   nextDocumentNumber,
   nextFinancialYearNumber,
@@ -27,7 +28,6 @@ const { generateDocumentPdf } = require('../services/salesManagementPdfService')
 const { emailDocument } = require('../services/salesManagementPdfService');
 const { createSalesOrderQcTicket } = require('../services/grnTicketService');
 const { logTtsplEvent } = require('../services/ttsplAuditService');
-const inventorySM = require('../services/inventoryStateMachine');
 const replacementFlow = require('../services/supportReplacementFlowService');
 const { regenerateReturnDcPdf } = require('../services/returnDcPdfService');
 const { isRestrictedToAssigned, scopeUserId } = require('../services/dataScopeService');
@@ -1837,6 +1837,11 @@ exports.getSoWithPayments = async (req, res) => {
        FROM delivery_challan_lines WHERE sales_order_number = $1 ORDER BY dc_number, id DESC`,
       [soNumber]
     );
+    const attachedRes = await pool.query(
+      `SELECT COUNT(*)::int AS c FROM sales_order_serials
+        WHERE sales_order_number = $1 AND status = 'attached'`,
+      [soNumber]
+    );
     let totalValue = 0;
     lines.forEach((l) => {
       const qty = Number(l.main_qty || l.quantity || 0) || 0;
@@ -1860,6 +1865,7 @@ exports.getSoWithPayments = async (req, res) => {
       lines,
       payments: payRes.rows,
       delivery_challans: dcRes.rows,
+      attached_count: Number(attachedRes.rows[0]?.c || 0),
       totals,
       summary: {
         total_value: totalValue,
@@ -1878,39 +1884,90 @@ exports.getSoWithPayments = async (req, res) => {
 // Cancel a sales order. Sets every line's status to 'cancelled' so the SO is
 // excluded from the downstream workflow (DC creation is blocked while cancelled).
 // Refused once any delivery challan exists for the SO (already dispatched).
+// Releases all attached laptops back to inventory when cancelled before DC creation.
 exports.cancelSalesOrder = async (req, res) => {
+  const client = await pool.connect();
   try {
     const soNumber = req.params.soNumber;
-    const existing = await pool.query(
+    await client.query('BEGIN');
+
+    const existing = await client.query(
       `SELECT status FROM sales_order_lines WHERE sales_order_number = $1`,
       [soNumber]
     );
     if (!existing.rows.length) {
+      await client.query('ROLLBACK');
       return res.status(404).json({ success: false, message: 'Sales order not found' });
     }
     if (existing.rows.every((r) => String(r.status).toLowerCase() === 'cancelled')) {
+      await client.query('ROLLBACK');
       return res.status(409).json({ success: false, message: 'Sales order is already cancelled' });
     }
 
-    const dcRes = await pool.query(
+    const dcRes = await client.query(
       `SELECT COUNT(DISTINCT dc_number)::int AS c FROM delivery_challan_lines WHERE sales_order_number = $1`,
       [soNumber]
     );
     if (Number(dcRes.rows[0]?.c || 0) > 0) {
+      await client.query('ROLLBACK');
       return res.status(409).json({
         success: false,
         message: 'Cannot cancel: a delivery challan has already been created for this sales order.',
       });
     }
 
-    await pool.query(
+    const attachedRes = await client.query(
+      `SELECT allocation_id, serial_id, qc_ticket_id, sales_order_number
+         FROM sales_order_serials
+        WHERE sales_order_number = $1 AND status = 'attached'
+        FOR UPDATE`,
+      [soNumber]
+    );
+
+    for (const alloc of attachedRes.rows) {
+      if (alloc.serial_id) {
+        try {
+          await inventorySM.backToStock(client, alloc.serial_id, {
+            reason: `Sales order ${soNumber} cancelled`,
+            actorUserId: req.user?.user_id,
+            actorName: req.user?.name,
+          });
+        } catch (_) { /* tolerate non-canonical inventory state */ }
+      }
+      if (alloc.qc_ticket_id) {
+        await client.query(
+          `UPDATE tickets SET status = 'cancelled', updated_at = NOW()
+            WHERE ticket_id = $1 AND status NOT IN ('completed','cancelled')`,
+          [alloc.qc_ticket_id]
+        );
+      }
+      await client.query(
+        `UPDATE sales_order_serials SET status = 'removed', updated_at = NOW() WHERE allocation_id = $1`,
+        [alloc.allocation_id]
+      );
+    }
+
+    await client.query(
       `UPDATE sales_order_lines SET status = 'cancelled' WHERE sales_order_number = $1`,
       [soNumber]
     );
-    res.json({ success: true, message: 'Sales order cancelled', status: 'cancelled' });
+    await client.query('COMMIT');
+
+    const released = attachedRes.rows.length;
+    res.json({
+      success: true,
+      message: released
+        ? `Sales order cancelled — ${released} laptop${released === 1 ? '' : 's'} released to inventory`
+        : 'Sales order cancelled',
+      status: 'cancelled',
+      released_serials: released,
+    });
   } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
     console.error('cancelSalesOrder:', error);
     res.status(500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
   }
 };
 
