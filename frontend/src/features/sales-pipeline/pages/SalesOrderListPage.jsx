@@ -79,7 +79,7 @@ export default function SalesOrderListPage() {
         <button type="button" className="text-blue-600 text-sm font-semibold" onClick={() => navigate(salesOrderDetailPath(row.sales_order_number))}>View</button>
         {!cancelled && (
           <>
-            <PermissionGate section="delivery_challans" action="create">
+            <PermissionGate section={['sales_orders_doc', 'delivery_challans']} action="create">
               <button type="button" className="text-sm text-teal-700 font-semibold" onClick={() => { setPrefillSo(row.sales_order_number); setDcDrawer(true); }}>Create DC</button>
             </PermissionGate>
             <PermissionGate section="payment_records" action="create">

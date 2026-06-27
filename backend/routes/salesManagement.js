@@ -41,6 +41,13 @@ const soEdit = cp('sales_orders_doc', 'edit');
 const dcView = cp('delivery_challans', 'view');
 const dcCreate = cp('delivery_challans', 'create');
 const dcEdit = cp('delivery_challans', 'edit');
+/** SO laptop attach/QC flow — sales users need sales_orders_doc; warehouse uses delivery_challans. */
+const soSerialsView = cpAny(['sales_orders_doc', 'delivery_challans'], 'view');
+const soSerialsEdit = cpAny(['sales_orders_doc', 'delivery_challans'], 'edit');
+/** DC from sales order — sales creates DCs for their SOs without full delivery_challans module access. */
+const soDcView = cpAny(['sales_orders_doc', 'delivery_challans'], 'view');
+const soDcCreate = cpAny(['sales_orders_doc', 'delivery_challans'], 'create');
+const soDcEdit = cpAny(['sales_orders_doc', 'delivery_challans'], 'edit');
 const payView = cp('payment_records', 'view');
 const payCreate = cp('payment_records', 'create');
 const rdcView = cp('return_dc', 'view');
@@ -58,15 +65,15 @@ const { dcRoute, bindDcNumber } = require('../middleware/dcNumberRoutes');
 router.use(authMiddleware);
 
 // SO-level serial allocation (warehouse attaches laptops -> 1 QC ticket each)
-router.get(...soRoute('/serials', dcView, sosCtrl.listSerials));
-router.post(...soRoute('/serials', dcEdit, sosCtrl.attachSerial));
-router.delete(/^\/sales-orders\/(.+)\/serials\/([^/]+)$/, bindSoSerialDetach, dcEdit, sosCtrl.detachSerial);
+router.get(...soRoute('/serials', soSerialsView, sosCtrl.listSerials));
+router.post(...soRoute('/serials', soSerialsEdit, sosCtrl.attachSerial));
+router.delete(/^\/sales-orders\/(.+)\/serials\/([^/]+)$/, bindSoSerialDetach, soSerialsEdit, sosCtrl.detachSerial);
 
 // Phase 13 — per-serial delivery addresses on the SO
-router.patch('/so-serials/:allocationId/address', dcEdit, ctrl.updateSoSerialAddress);
-router.patch(...soRoute('/serial-addresses', dcEdit, ctrl.bulkUpdateSoSerialAddresses));
+router.patch('/so-serials/:allocationId/address', soSerialsEdit, ctrl.updateSoSerialAddress);
+router.patch(...soRoute('/serial-addresses', soSerialsEdit, ctrl.bulkUpdateSoSerialAddresses));
 // Phase 14 — line-level delivery address (before serials are attached)
-router.patch('/so-lines/:lineId/address', dcEdit, ctrl.updateSoLineAddress);
+router.patch('/so-lines/:lineId/address', soSerialsEdit, ctrl.updateSoLineAddress);
 
 // Phase 13 — delivery flow (technician bucket / my deliveries / OTP / POD)
 router.get('/delivery-flow', drView, flowCtrl.listDeliveryFlow);
@@ -77,7 +84,7 @@ router.post(...dcRoute('/deliver', tbEdit, wrapMulter(uploadPod.single('pod_phot
 router.patch(...dcRoute('/admin-deliver', checkRole('admin', 'manager', 'super_admin'), wrapMulter(uploadPod.single('pod_photo')), flowCtrl.adminDeliverOverride));
 
 router.get('/counts', quoteView, ctrl.getOperationCounts);
-router.get('/inventory/available-serials', dcView, ctrl.getAvailableSerials);
+router.get('/inventory/available-serials', soSerialsView, ctrl.getAvailableSerials);
 
 router.get('/quotations/meta/add', quoteView, ctrl.getAddQuotationMeta);
 router.get('/quotations', quoteView, ctrl.listQuotations);
@@ -96,23 +103,23 @@ router.patch(...soRoute('/cancel', soEdit, ctrl.cancelSalesOrder));
 router.get(/^\/sales-orders\/(.+)$/, bindSoNumber, soView, ctrl.getSalesOrder);
 router.post('/sales-orders', soCreate, ctrl.storeSalesOrder);
 
-router.get('/delivery-challans/meta/add', dcView, ctrl.getAddDeliveryChallanMeta);
+router.get('/delivery-challans/meta/add', soDcView, ctrl.getAddDeliveryChallanMeta);
 router.get('/delivery-challans', dcView, ctrl.listDeliveryChallans);
-router.post(...dcRoute('/pdf', dcView, ctrl.regenerateDcPdf));
-router.post('/delivery-challans', dcCreate, ctrl.storeDeliveryChallan);
+router.post(...dcRoute('/pdf', soDcView, ctrl.regenerateDcPdf));
+router.post('/delivery-challans', soDcCreate, ctrl.storeDeliveryChallan);
 // Phase 15 — create one DC per delivery-address group from QC-passed serials
-router.post('/create-dcs-by-address', dcCreate, ctrl.createDcsByAddress);
+router.post('/create-dcs-by-address', soDcCreate, ctrl.createDcsByAddress);
 router.post(...dcRoute('/send-otp', dcEdit, ctrl.sendDeliveryOtp));
 router.post(...dcRoute('/verify-otp', dcEdit, ctrl.verifyDeliveryOtp));
 router.post(...dcRoute('/delivery-register', dcEdit, ctrl.submitDeliveryRegister));
 router.post(...dcRoute('/qc-ticket', dcEdit, ctrl.createPreDispatchQcTicket));
-router.get(...dcRoute('/qc-status', dcView, ctrl.getDcQcStatus));
-router.patch(...dcRoute('/dispatch', dcEdit, ctrl.updateDcDispatch));
-router.patch(...dcRoute('/delivered', dcEdit, ctrl.markDcDelivered));
-router.patch(...dcRoute('/rejected', dcEdit, ctrl.markDcRejected));
+router.get(...dcRoute('/qc-status', soDcView, ctrl.getDcQcStatus));
+router.patch(...dcRoute('/dispatch', soDcEdit, ctrl.updateDcDispatch));
+router.patch(...dcRoute('/delivered', soDcEdit, ctrl.markDcDelivered));
+router.patch(...dcRoute('/rejected', soDcEdit, ctrl.markDcRejected));
 // Catch-all DC routes MUST be registered last: their greedy (.+) pattern would
 // otherwise swallow specific sub-paths like /qc-status, /dispatch, /delivered.
-router.get(/^\/delivery-challans\/(.+)$/, bindDcNumber, dcView, ctrl.getDeliveryChallan);
+router.get(/^\/delivery-challans\/(.+)$/, bindDcNumber, soDcView, ctrl.getDeliveryChallan);
 // Edit an existing DC in place — Super Admin only.
 router.patch(/^\/delivery-challans\/(.+)$/, bindDcNumber, checkRole('super_admin'), ctrl.updateDeliveryChallan);
 
