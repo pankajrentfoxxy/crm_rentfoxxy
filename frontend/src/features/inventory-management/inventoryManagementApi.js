@@ -37,6 +37,11 @@ export function updateReadyToRentSaleAction(body) {
   return api.post(`${base}/ready-to-rent-action`, body);
 }
 
+/** Super admin — correct item description on Ready to Rent/Sell */
+export function updateInventoryItemDescription(serialId, body) {
+  return api.patch(`${base}/${serialId}/item-description`, body);
+}
+
 /** Phase 2 — tag serial as rental or sales */
 export function tagInventorySerial(serialId, tag) {
   return api.patch(`${base}/${serialId}/tag`, { tag });

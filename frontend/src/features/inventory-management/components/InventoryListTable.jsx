@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
-import { Clock, ExternalLink, FileImage, FileText, History, Loader2, Plus, RefreshCw } from 'lucide-react';
+import { Clock, ExternalLink, FileImage, FileText, History, Loader2, Pencil, Plus, RefreshCw, X } from 'lucide-react';
 import { SearchField, ListPagination } from '../../../components/ui/primitives';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import { useAuth } from '../../../context/AuthContext';
@@ -11,6 +11,7 @@ import {
   fetchInventoryListCounts,
   movePassedToQcProcess,
   tagInventorySerial,
+  updateInventoryItemDescription,
   updateReadyToRentSaleAction
 } from '../inventoryManagementApi';
 import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
@@ -175,6 +176,116 @@ function ItemDescriptionCard({ item }) {
         {[processor, generation, [ram, storage].filter(Boolean).join(' | '), gpu].filter(Boolean).join(' | ')}
       </p>
     </div>
+  );
+}
+
+function ItemDescriptionCell({ row, canEdit, onUpdated }) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const item = row.item_description || {};
+  const [form, setForm] = useState({
+    brand: item.brand || '',
+    model: item.model || '',
+    processor: item.processor || '',
+    generation: item.generation || '',
+    ram: item.ram || '',
+    storage: item.storage || '',
+    gpu: item.gpu || '',
+    screen_size: item.screen_size || '',
+  });
+
+  useEffect(() => {
+    if (!open) return;
+    setForm({
+      brand: item.brand || '',
+      model: item.model || '',
+      processor: item.processor || '',
+      generation: item.generation || '',
+      ram: item.ram || '',
+      storage: item.storage || '',
+      gpu: item.gpu || '',
+      screen_size: item.screen_size || '',
+    });
+  }, [open, item.brand, item.model, item.processor, item.generation, item.ram, item.storage, item.gpu, item.screen_size]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const { data } = await updateInventoryItemDescription(row.serial_id, form);
+      if (data.success) {
+        toast.success(data.message || 'Item description updated');
+        setOpen(false);
+        onUpdated?.();
+      }
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Update failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="relative">
+        <ItemDescriptionCard item={item} />
+        {canEdit ? (
+          <button
+            type="button"
+            className="absolute top-1 right-1 inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-teal-700"
+            title="Edit item description"
+            onClick={() => setOpen(true)}
+          >
+            <Pencil className="w-3.5 h-3.5" />
+          </button>
+        ) : null}
+      </div>
+
+      {open ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
+          <div className="w-full max-w-lg rounded-xl bg-white shadow-xl border border-slate-200">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+              <div>
+                <h3 className="font-semibold text-slate-900">Edit item description</h3>
+                <p className="text-xs text-slate-500 font-mono mt-0.5">{row.unique_product_serial || row.serial_number}</p>
+              </div>
+              <button type="button" className="p-2 rounded-lg hover:bg-slate-100" onClick={() => setOpen(false)}>
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[70vh] overflow-y-auto">
+              {[
+                ['Brand', 'brand'],
+                ['Model', 'model'],
+                ['Processor', 'processor'],
+                ['Generation', 'generation'],
+                ['RAM', 'ram'],
+                ['Storage', 'storage'],
+                ['GPU', 'gpu'],
+                ['Screen size', 'screen_size'],
+              ].map(([label, key]) => (
+                <label key={key} className="block text-sm">
+                  <span className="text-xs font-medium text-slate-600">{label}</span>
+                  <input
+                    type="text"
+                    value={form[key]}
+                    onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
+                    className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                  />
+                </label>
+              ))}
+            </div>
+            <div className="flex gap-2 px-4 py-3 border-t border-slate-100">
+              <button type="button" className="flex-1 rounded-lg border border-slate-200 py-2 text-sm" onClick={() => setOpen(false)} disabled={saving}>
+                Cancel
+              </button>
+              <button type="button" className="flex-1 rounded-lg bg-teal-700 text-white py-2 text-sm font-semibold disabled:opacity-50" onClick={save} disabled={saving}>
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -437,6 +548,7 @@ function SparePartRow({ row }) {
 export default function InventoryListTable({ routeKey }) {
   const { user } = useAuth();
   const isInventoryAdmin = ['admin', 'super_admin'].includes(user?.role);
+  const isSuperAdmin = user?.role === 'super_admin';
   const meta = INVENTORY_PAGE_META[routeKey];
   const apiSegment = INVENTORY_API_SEGMENT_BY_ROUTE[routeKey];
   const isSpare = routeKey === 'spare-parts';
@@ -735,7 +847,11 @@ export default function InventoryListTable({ routeKey }) {
                     <div className="text-slate-500 mt-1">{row.grn_number}</div>
                   </td>
                   <td className="px-3 py-3">
-                    <ItemDescriptionCard item={row.item_description} />
+                    <ItemDescriptionCell
+                      row={row}
+                      canEdit={showReadyToRentAction && isSuperAdmin}
+                      onUpdated={load}
+                    />
                   </td>
                   <td className="px-3 py-3">
                     <TimeBadge label={row.locking_period?.label} />

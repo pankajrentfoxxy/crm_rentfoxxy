@@ -535,6 +535,96 @@ async function tagInventoryItem(req, res) {
   }
 }
 
+const SPEC_FIELDS = ['brand', 'model', 'processor', 'generation', 'ram', 'storage', 'gpu', 'screen_size'];
+
+const itemDescriptionValidators = [
+  param('id').isInt().toInt(),
+  ...SPEC_FIELDS.map((field) => body(field).optional({ nullable: true }).isString().trim()),
+];
+
+/** Super admin — correct item description on Ready to Rent/Sell (stored on serial extra). */
+async function updateItemDescription(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  const serialId = req.params.id;
+  const payload = {};
+  for (const field of SPEC_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, field)) {
+      const val = req.body[field];
+      payload[field] = val == null ? '' : String(val).trim();
+    }
+  }
+  if (!Object.keys(payload).length) {
+    return res.status(400).json({ success: false, message: 'Provide at least one field to update' });
+  }
+
+  try {
+    const cur = await pool.query(
+      `SELECT serial_id, serial_number, inventory_asset_code, extra, qc_status, po_id, inventory_status
+         FROM vendor_serial_numbers
+        WHERE serial_id = $1 AND deleted_at IS NULL`,
+      [serialId]
+    );
+    if (!cur.rows.length) {
+      return res.status(404).json({ success: false, message: 'Serial not found' });
+    }
+    const row = cur.rows[0];
+    if (!row.po_id) {
+      return res.status(400).json({ success: false, message: 'Only PO laptop serials can be updated here' });
+    }
+
+    const effectiveQc = String(row.qc_status || parseExtra(row.extra).status || 'pending').trim();
+    if (effectiveQc !== 'passed') {
+      return res.status(400).json({
+        success: false,
+        message: 'Item description can only be edited on QC passed (Ready to Rent/Sell) units'
+      });
+    }
+    if (['rented', 'sold', 'in_transit', 'on_demo', 'reserved'].includes(String(row.inventory_status || ''))) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot edit description while unit is deployed or reserved'
+      });
+    }
+
+    const extra = parseExtra(row.extra);
+    for (const [key, val] of Object.entries(payload)) {
+      if (val) extra[key] = val;
+      else delete extra[key];
+      if (key === 'model') {
+        extra.model_name = val || undefined;
+        if (!val) delete extra.model_name;
+      }
+    }
+    extra.spec_source = 'super_admin_override';
+    extra.spec_corrected_at = new Date().toISOString();
+    extra.spec_corrected_by = req.user?.user_id || null;
+
+    await pool.query(
+      `UPDATE vendor_serial_numbers SET extra = $1::jsonb, updated_at = NOW() WHERE serial_id = $2`,
+      [JSON.stringify(extra), serialId]
+    );
+
+    const ttsplId = row.inventory_asset_code || row.serial_number;
+    if (ttsplId) {
+      await logTtsplEvent({
+        ttsplId,
+        vendorSerialId: serialId,
+        eventType: 'item_description_updated',
+        description: 'Item description corrected (super admin)',
+        metadata: payload,
+        actorUserId: req.user?.user_id,
+      });
+    }
+
+    res.json({ success: true, message: 'Item description updated', item_description: payload });
+  } catch (e) {
+    console.error('updateItemDescription', e);
+    res.status(500).json({ success: false, message: e.message || 'Failed to update item description' });
+  }
+}
+
 module.exports = {
   listValidators,
   listInventory,
@@ -545,6 +635,8 @@ module.exports = {
   changeSparePartStatus,
   tagInventoryValidators,
   tagInventoryItem,
+  itemDescriptionValidators,
+  updateItemDescription,
   customerAssetsValidators,
   customerAssets
 };

@@ -16,6 +16,7 @@ const invAdmin = [
   checkRole('admin', 'super_admin'),
   checkSectionPermission('inventory_management', 'edit')
 ];
+const superAdminOnly = [authMiddleware, checkRole('super_admin')];
 const custInvView = [authMiddleware, checkSectionPermission('customer_inventory', 'view')];
 const moduleEntry = [
   authMiddleware,
@@ -90,6 +91,12 @@ router.patch(
   invView,
   inventoryList.tagInventoryValidators,
   inventoryList.tagInventoryItem
+);
+router.patch(
+  '/:id/item-description',
+  superAdminOnly,
+  inventoryList.itemDescriptionValidators,
+  inventoryList.updateItemDescription
 );
 
 module.exports = router;
