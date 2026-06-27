@@ -2,6 +2,12 @@ const crypto = require('crypto');
 const pool = require('../config/db');
 const { resolveLineItem } = require('./qcManagementService');
 const { parseJsonArray } = require('./deliveryRegisterService');
+const {
+  partialSpecMatch,
+  normalizedSpecMatch,
+  normalizedModelMatch,
+  brandMatchesRow,
+} = require('../utils/soInventorySpecMatch');
 const columnExistsCache = new Map();
 
 const DOC_TYPES = {
@@ -743,16 +749,6 @@ async function getOperationCounts() {
   };
 }
 
-function partialSpecMatch(dbValue, inputValue) {
-  if (!inputValue) return true;
-  return String(dbValue || '').toLowerCase().includes(String(inputValue).toLowerCase());
-}
-
-function exactSpecMatch(dbValue, inputValue) {
-  if (!inputValue) return true;
-  return String(dbValue || '').toLowerCase() === String(inputValue).toLowerCase();
-}
-
 function mapInventorySerialRow(row) {
   const serialId = row.serial_id;
   const serialNumber = row.serial_number || '';
@@ -786,23 +782,30 @@ function mapInventorySerialRow(row) {
   };
 }
 
-function filterSpecRows(rows, { model_name, processor, generation, ram, storage, isSale }) {
+function filterSpecRows(rows, { brand, model_name, processor, generation, ram, storage, isSale }) {
   // Model is OPTIONAL (Phase 14): when provided it must match, otherwise we match
   // purely on processor + generation + RAM + storage so equivalent laptops with
   // a different model label still surface.
   const model = model_name?.trim();
-  const matchFn = isSale ? partialSpecMatch : exactSpecMatch;
 
   return rows.filter((row) => {
     const pdModel = row.pd_model || row.product_model_name || '';
+    const brandHint = brand || row.brand || '';
 
     if (model) {
-      if (!matchFn(pdModel, model) && !matchFn(row.product_model_name, model)) return false;
+      if (isSale) {
+        if (!partialSpecMatch(pdModel, model) && !partialSpecMatch(row.product_model_name, model)) {
+          return false;
+        }
+      } else if (!normalizedModelMatch(pdModel, model, brandHint) &&
+          !normalizedModelMatch(row.product_model_name, model, brandHint)) {
+        return false;
+      }
     }
-    if (!matchFn(row.processor, processor)) return false;
-    if (!matchFn(row.generation, generation)) return false;
-    if (!matchFn(row.ram, ram)) return false;
-    if (!matchFn(row.storage, storage)) return false;
+    if (!normalizedSpecMatch(row.processor, processor, 'processors')) return false;
+    if (!normalizedSpecMatch(row.generation, generation, 'generations')) return false;
+    if (!normalizedSpecMatch(row.ram, ram, 'ram')) return false;
+    if (!normalizedSpecMatch(row.storage, storage, 'storage')) return false;
     if (isSale && !row.po_id) return false;
     return true;
   });
@@ -828,6 +831,10 @@ async function searchAvailableInventory({
 
   const qt = String(quotation_type || '').toLowerCase();
   const isSale = qt === 'sale' || qt === 'sales';
+  const hasSpecFilter = Boolean(brand || model || processor || generation || ram || storage);
+  const responseLimit = Math.min(Number(limit) || 200, 500);
+  // Spec-based SO attach must scan the full QC-passed pool — not only the 500 newest serials.
+  const candidateLimit = hasSpecFilter ? 25000 : responseLimit;
 
   const params = [];
   let searchSql = '';
@@ -871,11 +878,19 @@ async function searchAvailableInventory({
        AND COALESCE(vsn.inventory_status, 'in_stock') = 'in_stock'
        ${searchSql}
      ORDER BY vsn.serial_id DESC
-     LIMIT ${Math.min(Number(limit) || 200, 500)}`,
+     LIMIT ${candidateLimit}`,
     params
   );
 
-  let rows = filterSpecRows(result.rows, { model_name: model, processor, generation, ram, storage, isSale });
+  let rows = filterSpecRows(result.rows, {
+    brand,
+    model_name: model,
+    processor,
+    generation,
+    ram,
+    storage,
+    isSale,
+  });
 
   if (!rows.length) {
     const fallback = await pool.query(
@@ -907,7 +922,7 @@ async function searchAvailableInventory({
            WHERE vpi2.serial_id = vsn.serial_id AND vpi2.status = 'out_stock'
          )
        ORDER BY vsn.serial_id DESC
-       LIMIT 500`
+       LIMIT ${candidateLimit}`
     );
 
     rows = fallback.rows
@@ -932,19 +947,28 @@ async function searchAvailableInventory({
       })
       .filter((row) => {
         if (!model) return true;
-        const hay = String(row.product_model_name || row.pd_model || '').toLowerCase();
-        return hay === model.toLowerCase() || (isSale && hay.includes(model.toLowerCase()));
+        return (
+          normalizedModelMatch(row.product_model_name || row.pd_model, model, brand || row.brand) ||
+          (isSale && partialSpecMatch(row.product_model_name || row.pd_model, model))
+        );
       });
 
-    rows = filterSpecRows(rows, { model_name: model, processor, generation, ram, storage, isSale });
+    rows = filterSpecRows(rows, {
+      brand,
+      model_name: model,
+      processor,
+      generation,
+      ram,
+      storage,
+      isSale,
+    });
   }
 
   if (brand) {
-    const b = brand.toLowerCase();
-    rows = rows.filter((r) => !r.brand || String(r.brand).toLowerCase().includes(b));
+    rows = rows.filter((r) => brandMatchesRow(r, brand));
   }
 
-  return rows.map(mapInventorySerialRow);
+  return rows.slice(0, responseLimit).map(mapInventorySerialRow);
 }
 
 // ---------------------------------------------------------------------------

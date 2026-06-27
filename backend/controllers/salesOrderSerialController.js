@@ -7,6 +7,10 @@ const pool = require('../config/db');
 const inventorySM = require('../services/inventoryStateMachine');
 const { createSalesOrderQcTicket } = require('../services/grnTicketService');
 const { entityForQuotationType } = require('../services/salesManagementService');
+const {
+  serialMatchesSoLine,
+  configMismatchMessage,
+} = require('../utils/soInventorySpecMatch');
 
 // Resolve a serial's full specs from the authoritative source.
 const SPEC_SELECT = `
@@ -125,9 +129,10 @@ exports.attachSerial = async (req, res) => {
       return res.status(409).json({ success: false, message: `Serial already attached to ${dup.rows[0].sales_order_number}` });
     }
 
-    // Resolve target line: explicit line_id, else match by model with remaining capacity.
+    // Resolve target line: explicit line_id, else match by normalized config with remaining capacity.
     const linesRes = await client.query(
-      `SELECT id AS line_id, model_name, processor, COALESCE(main_qty, quantity, 0) AS ordered_qty
+      `SELECT id AS line_id, brand, model_name, processor, generation, ram, storage, gpu, screen_size,
+              COALESCE(main_qty, quantity, 0) AS ordered_qty
          FROM sales_order_lines WHERE sales_order_number = $1 ORDER BY id ASC`,
       [soNumber]
     );
@@ -137,15 +142,16 @@ exports.attachSerial = async (req, res) => {
       [soNumber]
     );
     const countByLine = Object.fromEntries(attachedCounts.rows.map((r) => [r.line_id, r.n]));
-    const norm = (v) => String(v || '').trim().toLowerCase();
 
     let line = null;
     if (body.line_id) {
       line = linesRes.rows.find((l) => l.line_id === Number(body.line_id));
     } else {
-      line = linesRes.rows.find((l) =>
-        norm(l.model_name) === norm(serial.model)
-        && (countByLine[l.line_id] || 0) < Number(l.ordered_qty));
+      line = linesRes.rows.find(
+        (l) =>
+          serialMatchesSoLine(l, serial) &&
+          (countByLine[l.line_id] || 0) < Number(l.ordered_qty)
+      );
     }
     if (!line) {
       return res.status(400).json({ success: false, message: 'No matching order line with remaining capacity for this config' });
@@ -153,11 +159,10 @@ exports.attachSerial = async (req, res) => {
     if ((countByLine[line.line_id] || 0) >= Number(line.ordered_qty)) {
       return res.status(400).json({ success: false, message: 'This line is already fully allocated' });
     }
-    // Config guard (warn-level): block clearly mismatched model.
-    if (norm(line.model_name) !== norm(serial.model)) {
+    if (!serialMatchesSoLine(line, serial)) {
       return res.status(400).json({
         success: false,
-        message: `Config mismatch: line is ${line.model_name}, serial is ${serial.model}`,
+        message: configMismatchMessage(line, serial),
       });
     }
 
