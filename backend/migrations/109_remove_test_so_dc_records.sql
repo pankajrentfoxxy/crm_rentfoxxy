@@ -1,29 +1,71 @@
 -- ============================================================
--- Migration 109: Remove test / duplicate SO + DC records
---   SO/26-27/0780, SO-000060  (full sales order removal)
---   DC/26-27/0779             (delivery challan only — SO/26-27/0779 kept)
+-- Migration 109: Remove known FY test SO + DC records.
+--   Legacy SO numbers can collide with ERP-migrated production rows. In
+--   particular, SO-000060 exists as both a real ERP order and a later test
+--   duplicate, so this migration must never purge legacy numbers by document
+--   number alone.
 -- Idempotent: safe to re-run.
 -- ============================================================
 
 BEGIN;
 
 CREATE TEMP TABLE _purge_so (sales_order_number TEXT PRIMARY KEY) ON COMMIT DROP;
-INSERT INTO _purge_so (sales_order_number) VALUES
-  ('SO/26-27/0780'),
-  ('SO-000060')
+INSERT INTO _purge_so (sales_order_number)
+SELECT DISTINCT sol.sales_order_number
+  FROM sales_order_lines sol
+ WHERE sol.sales_order_number = 'SO/26-27/0780'
+   AND sol.quotation_number = 'EST-000040'
+   AND sol.customer_id = 288
+   AND sol.created_at >= '2026-06-25 00:00:00+00'::timestamptz
+   AND sol.created_at <  '2026-06-26 00:00:00+00'::timestamptz
 ON CONFLICT DO NOTHING;
 
 CREATE TEMP TABLE _purge_dc (dc_number TEXT PRIMARY KEY) ON COMMIT DROP;
 INSERT INTO _purge_dc (dc_number)
-SELECT DISTINCT dc_number FROM (
-  SELECT dcl.dc_number
-    FROM delivery_challan_lines dcl
-    JOIN _purge_so ps ON ps.sales_order_number = dcl.sales_order_number
-  UNION
-  SELECT 'DC/26-27/0779'
-) x
-WHERE dc_number IS NOT NULL AND TRIM(dc_number) <> ''
+SELECT DISTINCT dcl.dc_number
+  FROM delivery_challan_lines dcl
+  JOIN _purge_so ps ON ps.sales_order_number = dcl.sales_order_number
+ WHERE dcl.customer_id = 288
+   AND dcl.created_at >= '2026-06-25 00:00:00+00'::timestamptz
+   AND dcl.created_at <  '2026-06-26 00:00:00+00'::timestamptz
+   AND dcl.dc_number = 'DC/26-27/0779'
+   AND dcl.sales_order_number = 'SO/26-27/0780'
+   AND dcl.dc_number IS NOT NULL
+   AND TRIM(dcl.dc_number) <> ''
 ON CONFLICT DO NOTHING;
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+      FROM sales_order_lines sol
+     WHERE sol.sales_order_number IN (SELECT sales_order_number FROM _purge_so)
+       AND NOT (
+         sol.sales_order_number = 'SO/26-27/0780'
+         AND sol.quotation_number = 'EST-000040'
+         AND sol.customer_id = 288
+         AND sol.created_at >= '2026-06-25 00:00:00+00'::timestamptz
+         AND sol.created_at <  '2026-06-26 00:00:00+00'::timestamptz
+       )
+  ) THEN
+    RAISE EXCEPTION '109_remove_test_so_dc_records refused to purge: sales order number collision detected';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+      FROM delivery_challan_lines dcl
+     WHERE dcl.dc_number IN (SELECT dc_number FROM _purge_dc)
+       AND NOT (
+         dcl.dc_number = 'DC/26-27/0779'
+         AND dcl.sales_order_number = 'SO/26-27/0780'
+         AND dcl.customer_id = 288
+         AND dcl.created_at >= '2026-06-25 00:00:00+00'::timestamptz
+         AND dcl.created_at <  '2026-06-26 00:00:00+00'::timestamptz
+       )
+  ) THEN
+    RAISE EXCEPTION '109_remove_test_so_dc_records refused to purge: delivery challan number collision detected';
+  END IF;
+END $$;
 
 -- Return DC (RDC…) rows tied to purged outbound SO/DC
 INSERT INTO _purge_dc (dc_number)

@@ -16,10 +16,20 @@ async function main() {
     await client.query(sql);
     const check = await client.query(`
       SELECT
-        (SELECT COUNT(*)::int FROM sales_order_lines WHERE sales_order_number IN ('SO/26-27/0780','SO-000060')) AS so_lines_left,
+        (SELECT COUNT(*)::int FROM sales_order_lines
+          WHERE sales_order_number = 'SO/26-27/0780'
+            AND quotation_number = 'EST-000040'
+            AND customer_id = 288
+            AND created_at >= '2026-06-25 00:00:00+00'::timestamptz
+            AND created_at <  '2026-06-26 00:00:00+00'::timestamptz) AS test_so_lines_left,
         (SELECT COUNT(*)::int FROM delivery_challan_lines WHERE dc_number = 'DC/26-27/0779'
-            OR sales_order_number IN ('SO/26-27/0780','SO-000060')) AS dc_lines_left,
-        (SELECT COUNT(*)::int FROM sales_order_lines WHERE sales_order_number = 'SO/26-27/0779') AS so_0779_kept
+            AND sales_order_number = 'SO/26-27/0780'
+            AND customer_id = 288
+            AND created_at >= '2026-06-25 00:00:00+00'::timestamptz
+            AND created_at <  '2026-06-26 00:00:00+00'::timestamptz) AS test_dc_lines_left,
+        (SELECT COUNT(*)::int FROM sales_order_lines
+          WHERE sales_order_number = 'SO-000060'
+            AND customer_id = 1) AS protected_legacy_so_000060
     `);
     const nextSo = await peekFinancialYearNumber('sales_order');
     const nextDc = await peekFinancialYearNumber('delivery_challan');
