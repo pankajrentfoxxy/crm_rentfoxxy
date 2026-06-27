@@ -83,9 +83,57 @@ async function recordAssigneeForTeam(client, teamId, userId) {
     );
 }
 
+async function findLastStageWorker(client, ticketId, stageName) {
+    const r = await client.query(
+        `SELECT wl.user_id
+         FROM work_logs wl
+         INNER JOIN stages s ON s.stage_id = wl.stage_id
+         WHERE wl.ticket_id = $1 AND s.stage_name = $2
+         ORDER BY wl.start_time DESC
+         LIMIT 1`,
+        [ticketId, stageName]
+    );
+    return r.rows[0]?.user_id ?? null;
+}
+
+/**
+ * Pick a QC assignee inside the caller's transaction (avoids nested pool connections).
+ * Falls back to the ticket's previous worker at the target stage, then any team member.
+ */
+async function resolveQcAssignee(client, { teamId, ticketId, targetStageName, transitionKey }) {
+    if (teamId == null) return null;
+
+    let userId = null;
+    try {
+        userId = await pickNextAssigneeForTeam(client, teamId);
+    } catch (err) {
+        console.error('QC round-robin failed:', err.message);
+    }
+
+    if (!userId && transitionKey === 'QC2→QC1' && ticketId) {
+        userId = await findLastStageWorker(client, ticketId, 'QC1');
+    }
+
+    if (!userId && targetStageName) {
+        userId = await findLastStageWorker(client, ticketId, targetStageName);
+    }
+
+    if (!userId) {
+        const ids = await fetchOrderedMemberIds(client, teamId);
+        userId = ids[0] ?? null;
+        if (userId) {
+            await recordAssigneeForTeam(client, teamId, userId);
+        }
+    }
+
+    return userId;
+}
+
 module.exports = {
     fetchOrderedMemberIds,
     pickNextAssigneeForTeam,
     pickNextAssigneeForTeamPool,
-    recordAssigneeForTeam
+    recordAssigneeForTeam,
+    findLastStageWorker,
+    resolveQcAssignee
 };

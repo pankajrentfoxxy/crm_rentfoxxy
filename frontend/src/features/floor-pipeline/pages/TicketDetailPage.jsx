@@ -41,6 +41,7 @@ import PartsConfigPanel from '../components/PartsConfigPanel';
 import WorkNotesPanel from '../components/WorkNotesPanel';
 import StageTaskPanel from '../components/StageTaskPanel';
 import AssignmentModal from '../components/AssignmentModal';
+import Qc1ReworkAssignModal from '../components/Qc1ReworkAssignModal';
 import TtsplHistoryDrawer from '../components/TtsplHistoryDrawer';
 import useAutoRefresh from '../hooks/useAutoRefresh';
 
@@ -80,6 +81,8 @@ export default function TicketDetailPage() {
   const [verifyInput, setVerifyInput] = useState('');
   const [starting, setStarting] = useState(false);
   const [qcPickerOpen, setQcPickerOpen] = useState(false);
+  const [qc2FailPickerOpen, setQc2FailPickerOpen] = useState(false);
+  const [qc2FailConfirming, setQc2FailConfirming] = useState(false);
   const [qcMembers, setQcMembers] = useState([]);
   const [chosenAssignee, setChosenAssignee] = useState('');
 
@@ -176,7 +179,8 @@ export default function TicketDetailPage() {
       }
 
       if (moved) {
-        toast.success(`Moved to ${res.ticket?.stage_name}`);
+        const assignMsg = meta.assignedUserName ? ` — assigned to ${meta.assignedUserName}` : '';
+        toast.success(`Moved to ${res.ticket?.stage_name}${assignMsg}`);
       }
 
       setData(res);
@@ -326,6 +330,23 @@ export default function TicketDetailPage() {
     setQcPickerOpen(true);
   };
 
+  const openQc2FailPicker = () => {
+    if (!failReason.trim() || failReason.trim().length < 10) {
+      toast.error('Reason required (min 10 characters) for fail actions');
+      return;
+    }
+    setQc2FailPickerOpen(true);
+  };
+
+  const confirmQc2FailToQc1 = async (userId) => {
+    setQc2FailConfirming(true);
+    try {
+      await move('QC1', failReason, userId);
+    } finally {
+      setQc2FailConfirming(false);
+    }
+  };
+
   const movingRef = useRef(false);
   const move = async (toStage, reason, assignedUserId, { minReasonLen = 10 } = {}) => {
     if (reason !== undefined && (!reason || reason.trim().length < minReasonLen)) {
@@ -342,8 +363,12 @@ export default function TicketDetailPage() {
       });
       if (res.success) {
         setQcPickerOpen(false);
-        // handleWorkflowComplete shows the single "Moved to <stage>" toast.
-        await handleWorkflowComplete({ nextStage: toStage, fromStageMove: true });
+        setQc2FailPickerOpen(false);
+        await handleWorkflowComplete({
+          nextStage: toStage,
+          fromStageMove: true,
+          assignedUserName: res.assigned_user_name || null
+        });
       }
     } catch (e) {
       toast.error(e.response?.data?.message || 'Move failed');
@@ -441,7 +466,7 @@ export default function TicketDetailPage() {
   if ((qc || canManageTickets) && stage === 'QC2') {
     stageButtons.push(
       { label: 'QC2 PASS — Mark Inventory Ready', action: () => move('Inventory'), success: true },
-      { label: 'QC2 FAIL — Send back to QC1', action: () => move('QC1', failReason), danger: true, needsReason: true }
+      { label: 'QC2 FAIL — Send back to QC1', action: openQc2FailPicker, danger: true, needsReason: true }
     );
   }
   if (canManageTickets) {
@@ -813,6 +838,13 @@ export default function TicketDetailPage() {
       </div>
 
       <AssignmentModal ticket={ticket} open={assignOpen} onClose={() => setAssignOpen(false)} onAssigned={load} />
+      <Qc1ReworkAssignModal
+        ticket={ticket}
+        open={qc2FailPickerOpen}
+        onClose={() => setQc2FailPickerOpen(false)}
+        onConfirm={confirmQc2FailToQc1}
+        confirming={qc2FailConfirming}
+      />
       <TtsplHistoryDrawer ttsplId={resolveTicketTtspl(ticket)} open={historyOpen} onClose={() => setHistoryOpen(false)} />
 
       {qcPickerOpen ? (

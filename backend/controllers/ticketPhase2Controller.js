@@ -1,5 +1,5 @@
 const pool = require('../config/db');
-const { pickNextAssigneeForTeamPool } = require('../services/qcRoundRobinService');
+const { resolveQcAssignee, recordAssigneeForTeam, fetchOrderedMemberIds } = require('../services/qcRoundRobinService');
 const { syncWorkLogForTicketState, closeOpenWorkLogs, startWorkLog } = require('../services/ticketWorkLogService');
 const { applyGrnVendorQcPassOnTicketComplete } = require('../services/grnTicketService');
 const ttsplAuditService = require('../services/ttsplAuditService');
@@ -39,7 +39,10 @@ async function canMarkDiagnosisRepair(req, ticket, targetStageName) {
 
 async function getStageByName(db, stageName) {
   const r = await db.query(
-    `SELECT * FROM stages WHERE stage_name = $1 LIMIT 1`,
+    `SELECT * FROM stages
+     WHERE stage_name = $1
+     ORDER BY (team_id IS NULL), stage_id ASC
+     LIMIT 1`,
     [stageName]
   );
   return r.rows[0] || null;
@@ -392,6 +395,23 @@ exports.moveToStage = async (req, res) => {
         await client.query('ROLLBACK');
         return res.status(400).json({ success: false, message: 'QC2 fail reason is required' });
       }
+      if (!overrideAssignee) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'QC1 technician is required when failing from QC2 to QC1',
+        });
+      }
+      const qc1MemberIds = nextStage.team_id
+        ? await fetchOrderedMemberIds(client, nextStage.team_id)
+        : [];
+      if (!qc1MemberIds.includes(overrideAssignee)) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Selected user is not an active QC1 team member',
+        });
+      }
       updates.push(`qc2_failed_at = NOW()`);
       updates.push(`qc2_fail_reason = $${pi++}`); params.push(reason.trim());
       highlighted = true;
@@ -478,7 +498,6 @@ exports.moveToStage = async (req, res) => {
       'Final Testing→QC1',
       'QC1→QC2',
       'QC1→Dispatch QC',
-      'QC2→QC1',
     ]);
 
     // All Hardware & Software stages — moving between any two of these keeps the
@@ -495,18 +514,22 @@ exports.moveToStage = async (req, res) => {
     const bothHwSw = HW_SW_STAGES.has(currentStageName) && HW_SW_STAGES.has(to_stage_name);
 
     if (ROUND_ROBIN_TRANSITIONS.has(transitionKey) && nextStage.team_id) {
-      try {
-        assignedUserId = await pickNextAssigneeForTeamPool(client, nextStage.team_id);
-      } catch {
-        assignedUserId = null;
-      }
+      assignedUserId = await resolveQcAssignee(client, {
+        teamId: nextStage.team_id,
+        ticketId: ticket.ticket_id,
+        targetStageName: to_stage_name,
+        transitionKey
+      });
     } else if (KEEP_SAME_TECH_TRANSITIONS.has(transitionKey) || bothHwSw) {
       assignedUserId = ticket.assigned_user_id;
     }
 
-    // Manual picker (e.g. Final Testing -> QC1) wins over round-robin/keep-same.
+    // Manual picker (e.g. Final Testing -> QC1, QC2 fail -> QC1) wins over round-robin/keep-same.
     if (overrideAssignee) {
       assignedUserId = overrideAssignee;
+      if (currentStageName === 'QC2' && to_stage_name === 'QC1' && nextStage.team_id) {
+        await recordAssigneeForTeam(client, nextStage.team_id, overrideAssignee);
+      }
     }
 
     updates.push(`current_stage_id = $${pi++}`); params.push(nextStage.stage_id);
@@ -560,14 +583,27 @@ exports.moveToStage = async (req, res) => {
 
     await client.query('COMMIT');
 
+    let assignedUserName = null;
+    if (newTicket.assigned_user_id) {
+      const uRes = await pool.query(
+        'SELECT name FROM users WHERE user_id = $1',
+        [newTicket.assigned_user_id]
+      );
+      assignedUserName = uRes.rows[0]?.name || null;
+    }
+
     if (highlighted && highlightedReason) {
       notifyHighlightedTechnician({ ...newTicket, highlighted_reason: highlightedReason }, highlightedReason);
     }
 
+    const assignNote = assignedUserName ? ` — assigned to ${assignedUserName}` : '';
     res.json({
       success: true,
-      message: isCompleted ? 'Ticket completed — moved to Inventory' : `Moved to ${to_stage_name}`,
+      message: isCompleted
+        ? 'Ticket completed — moved to Inventory'
+        : `Moved to ${to_stage_name}${assignNote}`,
       ticket: newTicket,
+      assigned_user_name: assignedUserName,
       completed: isCompleted
     });
   } catch (e) {
