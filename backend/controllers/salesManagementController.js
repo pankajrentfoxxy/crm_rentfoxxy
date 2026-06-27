@@ -28,6 +28,7 @@ const { emailDocument } = require('../services/salesManagementPdfService');
 const { createSalesOrderQcTicket } = require('../services/grnTicketService');
 const { logTtsplEvent } = require('../services/ttsplAuditService');
 const inventorySM = require('../services/inventoryStateMachine');
+const replacementFlow = require('../services/supportReplacementFlowService');
 const { regenerateReturnDcPdf } = require('../services/returnDcPdfService');
 const { isRestrictedToAssigned, scopeUserId } = require('../services/dataScopeService');
 
@@ -2255,6 +2256,11 @@ exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}) => {
       actorName: actor.name,
     });
     return { returned: true, processed };
+  }
+
+  const replEarly = await replacementFlow.onReplacementOutboundDelivered(client, dcNumber, actor);
+  if (replEarly.handled) {
+    return { replacement: true, ...replEarly };
   }
 
   const ctx = await getDcContext(client, dcNumber);
