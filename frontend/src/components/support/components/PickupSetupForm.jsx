@@ -13,6 +13,7 @@ export default function PickupSetupForm({
   selectedMachines = null,
   fixedPickupType = null,
   hidePickupType = false,
+  hideMachinePreview = false,
   onSubmit,
   saving = false,
   submitLabel = 'Create Pickup + Return DC',
@@ -94,7 +95,7 @@ export default function PickupSetupForm({
 
   return (
     <div className="space-y-5">
-      {machines.length > 0 && !selectedMachines && (
+      {!hideMachinePreview && machines.length > 0 && !selectedMachines && (
         <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 text-sm">
           <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">Laptop</p>
           <p className="font-mono font-semibold text-slate-800">{machineCode}</p>

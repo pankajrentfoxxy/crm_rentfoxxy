@@ -122,17 +122,6 @@ function ItemCard({
   const typePill =
     item.item_type === 'complaint' ? 'progress' : item.item_type === 'pickup' ? 'open' : 'replacement';
 
-  const dispatchReplacement = () => {
-    if (!replacementOrder?.id) return;
-    run(() => api.patch(`/support/replacement-orders/${replacementOrder.id}`, { status: 'dispatched' }));
-  };
-
-  const deliverReplacement = () => {
-    if (!replacementOrder?.id) return;
-    if (!window.confirm('Activate the new machine in customer inventory and passivate the old one?')) return;
-    run(() => api.post(`/support/replacement-orders/${replacementOrder.id}/deliver`));
-  };
-
   return (
     <article className="support-item-card support-v3-card !p-0 overflow-hidden">
       <header className="support-item-card-header bg-slate-50 border-b border-slate-100">
@@ -164,14 +153,14 @@ function ItemCard({
           </div>
         )}
 
-        {item.item_type === 'complaint' && st === 'replacement_required' && (
+        {item.item_type === 'complaint' && st === 'replacement_required' && !ticket.sales_order_number && (
           <div className="rounded-lg p-3 space-y-2" style={{ border: '1.5px solid #dc2626', background: '#FCEBEB', color: '#991b1b' }}>
             <p className="font-semibold text-sm">Replacement required</p>
             <p className="text-sm">Flagged{item.assigned_to_name ? ` by ${item.assigned_to_name}` : ''}. {item.replacement_flag_reason || '—'}</p>
             {lead && (
-              <p className="text-xs opacity-90">Use &quot;Initiate replacement&quot; on the ticket to assign a machine from inventory.</p>
+              <p className="text-xs opacity-90">Click <b>Initiate replacement</b> above — creates one sales order (laptop config) and return pickup DC.</p>
             )}
-            {!lead && <p className="text-xs">Awaiting team lead to assign replacement hardware.</p>}
+            {!lead && <p className="text-xs">Awaiting support lead to create the replacement order.</p>}
           </div>
         )}
 
@@ -319,22 +308,10 @@ function ItemCard({
 
         {item.item_type === 'complaint' && canAct && !terminal && st === 'replacement_required' && (
           <div className="space-y-2">
-            <p className="support-v3-section-label">Cannot fix at site — choose how to proceed</p>
-            <button
-              type="button"
-              className="support-btn-outline w-full min-h-[44px] inline-flex items-center justify-center gap-2"
-              disabled={busy}
-              onClick={() => {
-                if (!window.confirm('Pick up this laptop and carry it to the warehouse for repair?')) return;
-                run(() => api.post(`/support/items/${item.id}/submit-pickup`, { pickup_reason: comment.trim() || undefined }));
-              }}
-            >
-              Pick up laptop (carry to warehouse)
-            </button>
-            <div className="rounded-lg p-3 text-xs" style={{ border: '1px solid #e9d5ff', background: '#FAF5FF', color: '#6b21a8' }}>
-              <p className="font-semibold">Or leave it with the customer for replacement</p>
-              <p className="mt-1">The support lead has been notified and can initiate a replacement order from this ticket.</p>
-            </div>
+            <p className="support-v3-section-label">Next step</p>
+            <p className="text-sm text-slate-600 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              Leave the laptop with the customer. Support lead will create a replacement sales order and schedule pickup of this unit.
+            </p>
           </div>
         )}
 
@@ -415,35 +392,15 @@ function ItemCard({
           </div>
         )}
 
-        {item.item_type === 'replacement' && lead && replacementOrder && !terminal && (
-          <div className="support-replacement-banner !mx-0">
-            <p className="font-medium text-pink-900">Replacement order</p>
-            <p className="text-sm text-pink-900/90">{replacementOrder.notes || item.remarks}</p>
-            <p className="text-sm">New serial: {replacementOrder.new_machine_serial || '—'}</p>
-            <p className="text-sm">Status: {replacementOrder.status || item.status}</p>
-            {replacementOrder.sales_order_number && (
-              <div className="text-sm space-y-1 mt-2 rounded-lg bg-pink-50 border border-pink-100 p-2">
-                <p>SO: <span className="font-mono">{replacementOrder.sales_order_number}</span></p>
-                {replacementOrder.dc_number && (
-                  <p>Delivery DC: <span className="font-mono text-pink-800">{replacementOrder.dc_number}</span> <span className="text-xs bg-pink-200 px-1 rounded">REPLACEMENT</span></p>
-                )}
-                {replacementOrder.return_dc_number && (
-                  <p>Return DC: <span className="font-mono">{replacementOrder.return_dc_number}</span></p>
-                )}
-                <p className="text-xs text-pink-900/80 mt-1">
-                  Deliver the new laptop via My Deliveries. Pick up the old unit on the Return DC (same OTP/e-sign flow). Ticket closes after delivery + warehouse receipt.
-                </p>
-              </div>
+        {item.item_type === 'replacement' && replacementOrder && !terminal && (
+          <div className="rounded-lg border border-pink-200 bg-pink-50/50 p-3 text-sm space-y-1">
+            <p className="font-medium text-pink-900">Replacing {replacementOrder.old_machine_serial || '—'}</p>
+            <p className="text-pink-900/80">{replacementOrder.notes || item.remarks}</p>
+            {replacementOrder.new_machine_serial && (
+              <p>New unit: <span className="font-mono">{replacementOrder.new_machine_serial}</span></p>
             )}
-            {!replacementOrder.sales_order_number && (
-            <div className="flex flex-wrap gap-2 mt-2">
-              {replacementOrder.status === 'placed' && (
-                <button type="button" className="support-btn-outline min-h-[44px]" disabled={busy} onClick={dispatchReplacement}>Mark dispatched</button>
-              )}
-              {['placed', 'dispatched', 'delivered'].includes(replacementOrder.status) && replacementOrder.status !== 'inventory_updated' && (
-                <button type="button" className="support-btn-primary min-h-[44px]" disabled={busy} onClick={deliverReplacement}>Mark delivered & update inventory</button>
-              )}
-            </div>
+            {replacementOrder.dc_number && (
+              <p>Delivery DC: <span className="font-mono">{replacementOrder.dc_number}</span></p>
             )}
           </div>
         )}
@@ -472,6 +429,43 @@ function WorkflowActionsBar({ workflowActions, item }) {
             )}
         </div>
     );
+}
+
+function ReplacementOrderBanner({ ticket, replacementOrders }) {
+  if (!ticket.sales_order_number) return null;
+  const units = replacementOrders.filter((o) => o.sales_order_number === ticket.sales_order_number);
+  const delivered = units.filter((o) => o.status === 'delivered' || o.new_machine_serial).length;
+  const hasDeliveryDc = units.some((o) => o.dc_number);
+  const soPath = `/sales-pipeline/sales-orders/${encodeURIComponent(ticket.sales_order_number)}`;
+
+  return (
+    <section className="support-v3-card border-pink-200 bg-pink-50/30">
+      <h3 className="font-semibold text-sm text-pink-900 mb-2">Replacement order</h3>
+      <div className="text-sm space-y-2 text-pink-950">
+        <p>
+          Sales order{' '}
+          <Link to={soPath} className="font-mono font-semibold text-pink-800 underline">
+            {ticket.sales_order_number}
+          </Link>
+          {units.length > 1 ? ` · ${units.length} laptops` : ''}
+        </p>
+        {ticket.return_dc_number && (
+          <p>Return pickup DC: <span className="font-mono">{ticket.return_dc_number}</span></p>
+        )}
+        {!hasDeliveryDc ? (
+          <ol className="list-decimal list-inside text-xs space-y-0.5 text-pink-900/90">
+            <li>Attach QC-passed laptops on the sales order (one per line)</li>
+            <li>Complete Dispatch QC → Create delivery DC → Assign delivery</li>
+            <li>Pick up faulty units on the Return DC (Pickup tab / My Deliveries)</li>
+          </ol>
+        ) : (
+          <p className="text-xs">
+            Delivery in progress ({delivered}/{units.length || 1} delivered). Ticket closes when all units are delivered and old laptops are received at warehouse.
+          </p>
+        )}
+      </div>
+    </section>
+  );
 }
 
 function PickupStatusBanner({ ticket, pickups }) {
@@ -621,20 +615,19 @@ export default function SupportTicketDetail() {
   const audit = Array.isArray(rawAudit) ? rawAudit : [];
   const resolvedCount = items.filter((i) => ['resolved', 'closed', 'inventory_updated'].includes(i.status)).length;
   const allResolved = items.length > 0 && resolvedCount === items.length;
-  const flaggedItem = items.find(
-    (i) => i.item_type === 'complaint'
-      && (i.replacement_flag_reason || i.outcome === 'replacement_required')
-  );
-  const complaintForReplacement = items.find((i) => i.item_type === 'complaint' && !['resolved', 'closed'].includes(i.status));
-  const canInitiateReplacement = isSupportLead(user) && flaggedItem
-    && !items.some((i) => i.item_type === 'replacement' && i.source_item_id === flaggedItem.id);
-  const canMoveToReplacement = isSupportLead(user) && complaintForReplacement
-    && complaintForReplacement.outcome !== 'replacement_required'
-    && !complaintForReplacement.replacement_flag_reason;
-
   const complaints = items.filter((i) => i.item_type === 'complaint');
   const pickups = items.filter((i) => i.item_type === 'pickup');
   const replacements = items.filter((i) => i.item_type === 'replacement');
+  const complaintForReplacement = complaints.find((c) => !['resolved', 'closed'].includes(c.status));
+
+  const eligibleForReplacement = complaints.filter(
+    (c) => (c.outcome === 'replacement_required' || c.replacement_flag_reason)
+      && !replacementOrders.some((o) => o.source_item_id === c.id && !['completed', 'cancelled'].includes(o.status))
+  );
+  const canInitiateReplacement = isSupportLead(user) && eligibleForReplacement.length > 0 && !ticket.return_dc_number;
+  const canMoveToReplacement = isSupportLead(user) && complaintForReplacement
+    && complaintForReplacement.outcome !== 'replacement_required'
+    && !complaintForReplacement.replacement_flag_reason;
 
   const tabItems = tab === 'complaint' ? complaints : tab === 'pickup' ? pickups : replacements;
 
@@ -652,9 +645,14 @@ export default function SupportTicketDetail() {
         ? setPickupModal({ sourceItem: item })
         : setPhasePanel({ sourceItem: item, phaseType: type }))
     };
-    if (item.item_type === 'complaint' && (resolved || item.outcome === 'replacement_required')) {
+    if (item.item_type === 'complaint' && item.outcome === 'replacement_required') {
+      if (!hasLinkedReplacement(item.id) && !ticket.return_dc_number) {
+        /* Lead uses header "Initiate replacement" — hide duplicate workflow buttons */
+      } else if (!hasActivePickup(item.id)) {
+        actions.showPickup = true;
+      }
+    } else if (item.item_type === 'complaint' && resolved) {
       if (!hasActivePickup(item.id)) actions.showPickup = true;
-      if (item.outcome === 'replacement_required' && !hasLinkedReplacement(item.id)) actions.showReplacement = true;
     }
     if (item.item_type === 'replacement' && item.status === 'inventory_updated' && !hasActivePickup(item.id)) {
       actions.showPickup = true;
@@ -697,7 +695,7 @@ export default function SupportTicketDetail() {
               {canInitiateReplacement && (
                 <button type="button" className="support-btn-primary min-h-[44px]" onClick={() => setShowReplacement(true)}>Initiate replacement</button>
               )}
-              {!activePickupExists && (
+              {!activePickupExists && !canInitiateReplacement && !ticket.return_dc_number && (
                 <button type="button" className="support-btn-outline min-h-[44px]" onClick={() => setPickupModal({})}>Schedule pickup</button>
               )}
               <button type="button" className="support-btn-outline min-h-[44px]" onClick={() => setEditing((v) => !v)}>{editing ? 'Close edit' : 'Edit ticket'}</button>
@@ -727,11 +725,10 @@ export default function SupportTicketDetail() {
         />
       )}
 
-      {showReplacement && flaggedItem && (
+      {showReplacement && (
         <ReplacementPanel
           ticketId={ticket.id}
           ticket={ticket}
-          sourceItem={flaggedItem}
           customerId={ticket.customer_id}
           onDone={() => { setShowReplacement(false); load(); }}
           onCancel={() => setShowReplacement(false)}
@@ -793,6 +790,10 @@ export default function SupportTicketDetail() {
               </div>
             </div>
           </section>
+
+          {ticket.sales_order_number && (
+            <ReplacementOrderBanner ticket={ticket} replacementOrders={replacementOrders} />
+          )}
 
           {(pickups.length > 0 || ticket.return_dc_number) && (
             <PickupStatusBanner ticket={ticket} pickups={pickups} />

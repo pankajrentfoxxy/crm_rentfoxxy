@@ -1332,6 +1332,7 @@ exports.createDcsByAddress = async (req, res) => {
       );
 
       createdDcNumbers.push(dcNumber);
+      await replacementFlow.tagReplacementOutboundDc(client, dcNumber, sales_order_number);
     }
 
     if (!createdDcNumbers.length) {
