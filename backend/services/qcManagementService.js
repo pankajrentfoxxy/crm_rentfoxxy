@@ -225,6 +225,7 @@ function resolveItemDescription(row, ctx = {}) {
   });
   const inv = lookupInventorySpec(row, ctx);
   const vpd = lookupVendorProductDetail(row, ctx);
+  // GRN-received config (VPD / inventory / serial extra) wins over PO line_items — legacy ERP PO rows are often wrong.
   const model = pickFirstNonEmpty(
     ex.model,
     ex.model_name,
