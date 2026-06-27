@@ -133,6 +133,136 @@ function indexProductDetailsRows(rows) {
   return map;
 }
 
+function parseSerialExtra(extraRaw) {
+  if (extraRaw && typeof extraRaw === 'object' && !Array.isArray(extraRaw)) return extraRaw;
+  if (typeof extraRaw === 'string') {
+    try {
+      const p = JSON.parse(extraRaw);
+      return p && typeof p === 'object' && !Array.isArray(p) ? p : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+/** Hardware config on vendor_serial_numbers.extra (GRN source of truth in CRM). */
+function configFieldsFromSerialExtra(extraRaw) {
+  const ex = parseSerialExtra(extraRaw);
+  return Object.fromEntries(
+    Object.entries({
+      brand: ex.brand || ex.brand_name,
+      model: ex.model || ex.model_name,
+      model_name: ex.model || ex.model_name,
+      processor: ex.processor,
+      generation: ex.generation,
+      ram: ex.ram,
+      storage: ex.storage,
+      gpu: ex.gpu,
+      screen_size: ex.screen_size,
+      os: ex.os,
+    }).filter(([, v]) => v != null && String(v).trim() !== '')
+  );
+}
+
+function hasHardwareConfig(config) {
+  return Object.keys(configFieldsFromSerialExtra(config)).length > 0;
+}
+
+/** Only fields explicitly present in GRN extra (partial updates safe). */
+function configPatchFromSerialExtra(extraRaw) {
+  return configFieldsFromSerialExtra(extraRaw);
+}
+
+function mergeInventoryWithConfigPatch(current, patch) {
+  const cur = current || {};
+  const p = patch || {};
+  return {
+    brand: p.brand != null && String(p.brand).trim() ? String(p.brand).trim() : cur.brand || 'Unknown',
+    model:
+      (p.model != null && String(p.model).trim() ? String(p.model).trim() : null) ||
+      (p.model_name != null && String(p.model_name).trim() ? String(p.model_name).trim() : null) ||
+      cur.model ||
+      'Unknown',
+    processor: p.processor != null ? String(p.processor).trim() : cur.processor ?? null,
+    generation: p.generation != null ? String(p.generation).trim() : cur.generation ?? null,
+    ram: p.ram != null ? String(p.ram).trim() : cur.ram ?? null,
+    storage: p.storage != null ? String(p.storage).trim() : cur.storage ?? null,
+    gpu: p.gpu != null ? String(p.gpu).trim() : cur.gpu ?? null,
+    screen_size: p.screen_size != null ? String(p.screen_size).trim() : cur.screen_size ?? null,
+  };
+}
+
+function mergeTicketWithConfigPatch(current, patch) {
+  const merged = mergeInventoryWithConfigPatch(current, patch);
+  return {
+    brand: merged.brand === 'Unknown' ? current?.brand ?? null : merged.brand,
+    model: merged.model === 'Unknown' ? current?.model ?? null : merged.model,
+    processor: merged.processor,
+    ram: merged.ram,
+    storage: merged.storage,
+  };
+}
+
+function inventoryUpdateFromConfig(config) {
+  const c = configFieldsFromSerialExtra(config);
+  return {
+    brand: String(c.brand || 'Unknown').trim() || 'Unknown',
+    model: String(c.model || c.model_name || 'Unknown').trim() || 'Unknown',
+    processor: c.processor != null ? String(c.processor).trim() : null,
+    generation: c.generation != null ? String(c.generation).trim() : null,
+    ram: c.ram != null ? String(c.ram).trim() : null,
+    storage: c.storage != null ? String(c.storage).trim() : null,
+    gpu: c.gpu != null ? String(c.gpu).trim() : null,
+    screen_size: c.screen_size != null ? String(c.screen_size).trim() : null,
+  };
+}
+
+function ticketUpdateFromConfig(config) {
+  const inv = inventoryUpdateFromConfig(config);
+  return {
+    brand: inv.brand === 'Unknown' ? null : inv.brand,
+    model: inv.model === 'Unknown' ? null : inv.model,
+    processor: inv.processor,
+    ram: inv.ram,
+    storage: inv.storage,
+  };
+}
+
+function mergeGrnConfigIntoExtra(existingExtra, config) {
+  const base = parseSerialExtra(existingExtra);
+  const hw = typeof config === 'object' && config !== null && !Array.isArray(config)
+    ? configFieldsFromSerialExtra(config)
+    : configFieldsFromSerialExtra(base);
+  return { ...base, ...hw };
+}
+
+function normalizeRamStorage(value) {
+  if (value == null || String(value).trim() === '') return null;
+  return String(value)
+    .trim()
+    .toUpperCase()
+    .replace(/\bGB\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim() || null;
+}
+
+function normalizeFieldMap(obj) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj || {})) {
+    if (v === undefined || v === null || String(v).trim() === '') out[k] = null;
+    else if (k === 'ram' || k === 'storage') out[k] = normalizeRamStorage(v);
+    else out[k] = String(v).trim();
+  }
+  return out;
+}
+
+function fieldMapsEqual(a, b, keys) {
+  const left = normalizeFieldMap(a);
+  const right = normalizeFieldMap(b);
+  return keys.every((k) => (left[k] ?? null) === (right[k] ?? null));
+}
+
 module.exports = {
   parseLegacyProductIds,
   buildBrandMapFromRows,
@@ -144,4 +274,15 @@ module.exports = {
   lineIndexForProductId,
   buildSerialConfigExtra,
   indexProductDetailsRows,
+  parseSerialExtra,
+  configFieldsFromSerialExtra,
+  hasHardwareConfig,
+  configPatchFromSerialExtra,
+  mergeInventoryWithConfigPatch,
+  mergeTicketWithConfigPatch,
+  inventoryUpdateFromConfig,
+  ticketUpdateFromConfig,
+  mergeGrnConfigIntoExtra,
+  normalizeFieldMap,
+  fieldMapsEqual,
 };
