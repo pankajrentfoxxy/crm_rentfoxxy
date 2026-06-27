@@ -14,6 +14,7 @@ const {
   lineSubtotalFromRows,
   insertProductDetailsForPo
 } = require('../../services/purchaseOrderProductDetailsService');
+const { resolveLineItem } = require('../../services/qcManagementService');
 const { createTicketFromGrnReceive } = require('../../services/grnTicketService');
 const { logGrnReceive } = require('../../services/ttsplAuditService');
 const { markTokenUsed } = require('../../services/grnSerialCaptureService');
@@ -1105,10 +1106,12 @@ async function getGrnReceivedProducts(req, res) {
   }
 
   const poR = await pool.query(
-    `SELECT line_items FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL`,
+    `SELECT line_items, product_details_legacy_ids
+       FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL`,
     [poId]
   );
   const lineItems = parseLineItemsJson(poR.rows[0]?.line_items);
+  const legacyIds = parseLineItemsJson(poR.rows[0]?.product_details_legacy_ids);
 
   const serials = await pool.query(
     `SELECT serial_id, serial_number, inventory_asset_code, rental_start_date, extra, created_at FROM vendor_serial_numbers
@@ -1120,8 +1123,8 @@ async function getGrnReceivedProducts(req, res) {
   const grn = g.rows[0];
   const items = serials.rows.map((s) => {
     const ex = s.extra && typeof s.extra === 'object' && s.extra !== null && !Array.isArray(s.extra) ? s.extra : {};
-    const li = Number(ex.line_index);
-    const line = Number.isFinite(li) && li >= 0 && lineItems[li] ? lineItems[li] : {};
+    const line = resolveLineItem(lineItems, ex, { legacyProductIds: legacyIds }) || {};
+    const config = { ...buildConfigExtraFromLine(line), ...buildConfigExtraFromLine(ex) };
     const rep = ex.is_replaced === true || ex.is_replaced === 1 || String(ex.is_replaced) === '1';
     const repa = ex.is_repaired === true || ex.is_repaired === 1 || String(ex.is_repaired) === '1';
     return {
@@ -1133,14 +1136,14 @@ async function getGrnReceivedProducts(req, res) {
         ex.unique_product_serial ?? ex.unique_number ?? s.inventory_asset_code ?? null,
       is_replaced: rep ? 1 : 0,
       is_repaired: repa ? 1 : 0,
-      brand: line.brand ?? null,
-      model: line.model ?? null,
-      processor: line.processor ?? null,
-      generation: line.generation ?? null,
-      ram: line.ram ?? null,
-      storage: line.storage ?? null,
-      gpu: line.gpu ?? null,
-      screen_size: line.screen_size ?? null,
+      brand: config.brand ?? null,
+      model: config.model ?? null,
+      processor: config.processor ?? null,
+      generation: config.generation ?? null,
+      ram: config.ram ?? null,
+      storage: config.storage ?? null,
+      gpu: config.gpu ?? null,
+      screen_size: config.screen_size ?? null,
       grn_date: grn.updated_at ?? grn.created_at
     };
   });

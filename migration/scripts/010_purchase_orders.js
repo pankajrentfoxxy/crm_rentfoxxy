@@ -4,7 +4,12 @@
  */
 const { progress, writeLog } = require('../lib/logger');
 const { mapRequired } = require('../lib/id-map');
-const { parseLaravelAssetsDetailsPayload } = require('../lib/laravelAssets');
+const {
+  buildBrandMapFromRows,
+  indexProductDetailsRows,
+  parseLegacyProductIds,
+  resolvePoLineItems,
+} = require('../lib/erpProductConfig');
 const {
   getCrmId,
   setCrmId,
@@ -49,12 +54,6 @@ function parseBillFiles(raw) {
   return [];
 }
 
-function parseLegacyProductIds(raw) {
-  const parsed = parseJson(raw, null);
-  if (Array.isArray(parsed)) return parsed;
-  return [];
-}
-
 function parseAssetsJson(raw) {
   const parsed = parseJson(raw, null);
   if (parsed == null) return null;
@@ -77,6 +76,15 @@ module.exports = {
   id: '010',
   name: 'purchase_orders',
   async run({ erp, crm, batchSize }) {
+    const [brandRows] = await erp.query('SELECT id, name FROM `brands`');
+    const brandMap = buildBrandMapFromRows(brandRows);
+    const [pdRows] = await erp.query(
+      `SELECT id, brand, model, processor, generation, ram, storage, gpu, screen_size,
+              quantity, rate, vendor_locking_period, warranty, remarks
+         FROM \`product_details\``
+    );
+    const productDetailsById = indexProductDetailsRows(pdRows);
+
     const [countRows] = await erp.query('SELECT COUNT(*) AS cnt FROM `purchase_orders`');
     const total = Number(countRows[0].cnt);
     let processed = 0;
@@ -138,8 +146,13 @@ module.exports = {
         mapped += 1;
       } else {
         const assetsRaw = parseAssetsJson(row.assets_details);
-        const lineItems = parseLaravelAssetsDetailsPayload(assetsRaw ?? row.assets_details);
         const legacyIds = parseLegacyProductIds(row.product_details_id);
+        const lineItems = resolvePoLineItems({
+          assetsRaw: assetsRaw ?? row.assets_details,
+          legacyIdsRaw: row.product_details_id,
+          productDetailsById,
+          brandMap,
+        });
         const billFiles = parseBillFiles(row.bill_files);
         const statusUpdatedBy =
           row.status_updated_by_id != null
