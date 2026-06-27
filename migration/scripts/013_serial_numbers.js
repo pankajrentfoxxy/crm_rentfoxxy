@@ -5,6 +5,12 @@
 const { progress, writeLog } = require('../lib/logger');
 const { mapRequired } = require('../lib/id-map');
 const {
+  buildBrandMapFromRows,
+  buildSerialConfigExtra,
+  indexProductDetailsRows,
+  parseLegacyProductIds,
+} = require('../lib/erpProductConfig');
+const {
   getCrmId,
   setCrmId,
   str,
@@ -228,6 +234,19 @@ async function bumpTtsplSequence(crm) {
 }
 
 async function migrateSerialNumbers({ erp, crm, batchSize }) {
+  const [brandRows] = await erp.query('SELECT id, name FROM `brands`');
+  const brandMap = buildBrandMapFromRows(brandRows);
+  const [pdRows] = await erp.query(
+    `SELECT id, brand, model, processor, generation, ram, storage, gpu, screen_size,
+            quantity, rate, vendor_locking_period, warranty, remarks
+       FROM \`product_details\``
+  );
+  const productDetailsById = indexProductDetailsRows(pdRows);
+  const [poMetaRows] = await erp.query('SELECT id, product_details_id FROM `purchase_orders`');
+  const legacyIdsByErpPoId = new Map(
+    poMetaRows.map((po) => [String(po.id), parseLegacyProductIds(po.product_details_id)])
+  );
+
   const [countRows] = await erp.query('SELECT COUNT(*) AS cnt FROM `serial_numbers`');
   const total = Number(countRows[0].cnt);
   let processed = 0;
@@ -297,7 +316,14 @@ async function migrateSerialNumbers({ erp, crm, batchSize }) {
       });
       mapped += 1;
     } else {
-      const extra = buildSerialExtra(row);
+      const legacyIds = legacyIdsByErpPoId.get(String(row.po_id)) || [];
+      const extra = buildSerialConfigExtra({
+        serialRow: row,
+        legacyIds,
+        productDetailsById,
+        brandMap,
+        baseExtra: buildSerialExtra(row),
+      });
       const inventoryId = await findInventoryId(crm, assetCode || row.unique_product_serial, serialNumber);
       if (inventoryId != null) extra.inventory_id = inventoryId;
 
