@@ -49,10 +49,12 @@ function slugState(s) {
 }
 
 const emptyLine = () => ({
+  brand: '',
   category: '',
   category_label: '',
   part_id: '',
   part_custom: '',
+  part_type: '',
   specifications: '',
   warranty_months: '12',
   quantity: '',
@@ -62,7 +64,7 @@ const emptyLine = () => ({
 /** Mirror Laravel assets_details array shape loosely (nested keys grouped by field). */
 function buildAssetsDetails(linePayloads) {
   return {
-    brand: linePayloads.map((l) => l.category_label || l.category || ''),
+    brand: linePayloads.map((l) => l.brand_name || ''),
     parts: linePayloads.map((l) => l.spare_part_name),
     warranty_in_month: linePayloads.map((l) => l.warranty_months),
     quantity: linePayloads.map((l) => l.quantity),
@@ -87,14 +89,17 @@ function buildLinePayloads(lines, partsCatalog) {
     const ln = lines[idx];
     const category = (ln.category || '').trim();
     const category_label = ln.category_label || '';
+    const brand_name = (ln.brand || '').trim();
 
     let part_id = ln.part_id && ln.part_id !== '__custom__' ? Number(ln.part_id) : null;
     let spare_part_name = '';
     let floor_part_id = null;
+    let part_type = (ln.part_type || '').trim();
     if (part_id != null && Number.isFinite(part_id)) {
       const row = partsCatalog.find((p) => Number(p.id) === part_id);
       spare_part_name = row?.name ? String(row.name) : '';
       floor_part_id = row?.floor_part_id != null ? Number(row.floor_part_id) : null;
+      if (!part_type && row?.part_type) part_type = String(row.part_type);
     }
     if (ln.part_id === '__custom__' || !spare_part_name) {
       spare_part_name = (ln.part_custom || '').trim();
@@ -108,6 +113,9 @@ function buildLinePayloads(lines, partsCatalog) {
 
     if (!category) {
       throw new Error(`Line ${idx + 1}: category is required`);
+    }
+    if (!brand_name) {
+      throw new Error(`Line ${idx + 1}: brand is required`);
     }
     if (!spare_part_name) {
       throw new Error(`Line ${idx + 1}: part is required`);
@@ -125,9 +133,9 @@ function buildLinePayloads(lines, partsCatalog) {
     payloads.push({
       category,
       category_label,
-      // Keep brand_name populated for legacy list/preview rendering.
-      brand_name: category_label || category,
+      brand_name,
       brand_id: null,
+      part_type: part_type || null,
       part_id,
       floor_part_id,
       parts_catalog_id: floor_part_id,
@@ -153,6 +161,7 @@ export default function SparePartsPoFormModal({ open, onClose, onSaved, prefill 
 
   const [vendorOptions, setVendorOptions] = useState([]);
   const [categoriesFromMeta, setCategoriesFromMeta] = useState([]);
+  const [brandOptions, setBrandOptions] = useState([]);
   const [partsCatalog, setPartsCatalog] = useState([]);
   const [lines, setLines] = useState([emptyLine()]);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -173,6 +182,7 @@ export default function SparePartsPoFormModal({ open, onClose, onSaved, prefill 
       setPurchaseOrderNumber(data.purchase_order_number || '');
       setVendorOptions(Array.isArray(data.vendors) ? data.vendors : []);
       setCategoriesFromMeta(Array.isArray(data.categories) ? data.categories : []);
+      setBrandOptions(Array.isArray(data.brands) ? data.brands : []);
       setPartsCatalog(Array.isArray(data.parts) ? data.parts : []);
     } catch (e) {
       toast.error(e.response?.data?.message || e.message || 'Could not load spare PO form');
@@ -451,7 +461,7 @@ export default function SparePartsPoFormModal({ open, onClose, onSaved, prefill 
             <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
               <div className="flex items-center gap-2 border-b border-slate-100 pb-2">
                 <h3 className="text-sm font-bold text-slate-900">Parts order details</h3>
-                <span className="text-[11px] text-slate-500 ml-auto">Category, part, warranty, quantity & rate — add rows</span>
+                <span className="text-[11px] text-slate-500 ml-auto">Brand, category, part, type — add rows</span>
               </div>
 
               <div className="space-y-4">
@@ -470,7 +480,20 @@ export default function SparePartsPoFormModal({ open, onClose, onSaved, prefill 
                       </button>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-600">Brand*</label>
+                        <select
+                          className="mt-1 w-full border border-slate-200 rounded-lg px-2 py-2 text-sm bg-white"
+                          value={ln.brand}
+                          onChange={(e) => updateLine(idx, { brand: e.target.value })}
+                        >
+                          <option value="">Select brand…</option>
+                          {brandOptions.map((b) => (
+                            <option key={b.id} value={b.name}>{b.name}</option>
+                          ))}
+                        </select>
+                      </div>
                       <div>
                         <label className="text-[11px] font-semibold text-slate-600">Category*</label>
                         <select
@@ -482,7 +505,8 @@ export default function SparePartsPoFormModal({ open, onClose, onSaved, prefill 
                               category: e.target.value,
                               category_label: opt?.label || '',
                               part_id: '',
-                              part_custom: ''
+                              part_custom: '',
+                              part_type: '',
                             });
                           }}
                         >
@@ -495,16 +519,24 @@ export default function SparePartsPoFormModal({ open, onClose, onSaved, prefill 
                         </select>
                       </div>
                       <div>
-                        <label className="text-[11px] font-semibold text-slate-600">Part</label>
+                        <label className="text-[11px] font-semibold text-slate-600">Part*</label>
                         <select
                           className="mt-1 w-full border border-slate-200 rounded-lg px-2 py-2 text-sm bg-white"
                           value={ln.part_id}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            const sel = partsCatalog.find((p) => String(p.id) === val);
+                            const catOpt = categoriesFromMeta.find((c) => c.value === sel?.category);
                             updateLine(idx, {
-                              part_id: e.target.value,
-                              part_custom: ''
-                            })
-                          }
+                              part_id: val,
+                              part_custom: '',
+                              part_type: sel?.part_type || '',
+                              specifications: sel?.specifications || '',
+                              category: sel?.category || ln.category,
+                              category_label: catOpt?.label || ln.category_label,
+                              brand: sel?.default_brand || ln.brand,
+                            });
+                          }}
                         >
                           <option value="">Choose from catalog…</option>
                           {partsCatalog
@@ -512,8 +544,9 @@ export default function SparePartsPoFormModal({ open, onClose, onSaved, prefill 
                             .map((p) => (
                               <option key={p.id} value={String(p.id)}>
                                 {p.name}
+                                {p.part_type ? ` (${p.part_type})` : ''}
                                 {p.stock_qty !== undefined && p.stock_qty !== null
-                                  ? ` (Stock: ${p.stock_qty})`
+                                  ? ` · Stock ${p.stock_qty}`
                                   : ''}
                               </option>
                             ))}
@@ -529,6 +562,29 @@ export default function SparePartsPoFormModal({ open, onClose, onSaved, prefill 
                             </p>
                           );
                         })()}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-600">Type</label>
+                        <input
+                          className="mt-1 w-full border border-slate-200 rounded-lg px-2 py-2 text-sm"
+                          value={ln.part_type}
+                          placeholder="DDR4, NVMe, 65W…"
+                          onChange={(e) => updateLine(idx, { part_type: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-600">
+                          Specifications <span className="text-slate-400 font-normal">(optional)</span>
+                        </label>
+                        <input
+                          className="mt-1 w-full border border-slate-200 rounded-lg px-2 py-2 text-sm"
+                          value={ln.specifications}
+                          placeholder="Capacity, connector, compatible models…"
+                          onChange={(e) => updateLine(idx, { specifications: e.target.value })}
+                        />
                       </div>
                     </div>
 
@@ -549,18 +605,6 @@ export default function SparePartsPoFormModal({ open, onClose, onSaved, prefill 
                         />
                       </div>
                     )}
-
-                    <div>
-                      <label className="text-[11px] font-semibold text-slate-600">
-                        Specifications <span className="text-slate-400 font-normal">(optional)</span>
-                      </label>
-                      <input
-                        className="mt-1 w-full border border-slate-200 rounded-lg px-2 py-2 text-sm"
-                        value={ln.specifications}
-                        placeholder="e.g. DDR4, 2666MHz, SODIMM"
-                        onChange={(e) => updateLine(idx, { specifications: e.target.value })}
-                      />
-                    </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div>
@@ -746,8 +790,9 @@ export default function SparePartsPoFormModal({ open, onClose, onSaved, prefill 
                   <thead className="bg-slate-50 text-left text-xs font-semibold text-slate-600">
                     <tr>
                       <th className="p-2">#</th>
-                      <th className="p-2">Category</th>
+                      <th className="p-2">Brand</th>
                       <th className="p-2">Part</th>
+                      <th className="p-2">Type</th>
                       <th className="p-2">Warranty (mo)</th>
                       <th className="p-2 tabular-nums">Qty</th>
                       <th className="p-2 tabular-nums">Rate (₹)</th>
@@ -762,6 +807,7 @@ export default function SparePartsPoFormModal({ open, onClose, onSaved, prefill 
                           <td className="p-2">{idx + 1}</td>
                           <td className="p-2 font-medium text-slate-900">{row.brand_name}</td>
                           <td className="p-2 text-slate-800">{row.spare_part_name}</td>
+                          <td className="p-2 text-slate-600">{row.part_type || '—'}</td>
                           <td className="p-2 tabular-nums">{row.warranty_months}</td>
                           <td className="p-2 tabular-nums">{row.quantity}</td>
                           <td className="p-2 tabular-nums font-mono">{Number(row.rate).toFixed(2)}</td>
@@ -775,25 +821,25 @@ export default function SparePartsPoFormModal({ open, onClose, onSaved, prefill 
                       {previewGstFooter.mode === 'intra' ? (
                         <>
                           <tr>
-                            <td colSpan={6} className="p-2 text-right">
+                            <td colSpan={7} className="p-2 text-right">
                               Sub total
                             </td>
                             <td className="p-2 font-mono">₹{previewGstFooter.sub.toFixed(2)}</td>
                           </tr>
                           <tr className="font-normal text-slate-600">
-                            <td colSpan={6} className="p-2 text-right">
+                            <td colSpan={7} className="p-2 text-right">
                               SGST (9%)
                             </td>
                             <td className="p-2 font-mono">₹{previewGstFooter.sgst.toFixed(2)}</td>
                           </tr>
                           <tr className="font-normal text-slate-600">
-                            <td colSpan={6} className="p-2 text-right">
+                            <td colSpan={7} className="p-2 text-right">
                               CGST (9%)
                             </td>
                             <td className="p-2 font-mono">₹{previewGstFooter.cgst.toFixed(2)}</td>
                           </tr>
                           <tr>
-                            <td colSpan={6} className="p-2 text-right">
+                            <td colSpan={7} className="p-2 text-right">
                               Total
                             </td>
                             <td className="p-2 font-mono">₹{previewGstFooter.tot.toFixed(2)}</td>
@@ -802,19 +848,19 @@ export default function SparePartsPoFormModal({ open, onClose, onSaved, prefill 
                       ) : (
                         <>
                           <tr>
-                            <td colSpan={6} className="p-2 text-right">
+                            <td colSpan={7} className="p-2 text-right">
                               Sub total
                             </td>
                             <td className="p-2 font-mono">₹{previewGstFooter.sub.toFixed(2)}</td>
                           </tr>
                           <tr className="font-normal text-slate-600">
-                            <td colSpan={6} className="p-2 text-right">
+                            <td colSpan={7} className="p-2 text-right">
                               IGST (18%)
                             </td>
                             <td className="p-2 font-mono">₹{previewGstFooter.igst.toFixed(2)}</td>
                           </tr>
                           <tr>
-                            <td colSpan={6} className="p-2 text-right">
+                            <td colSpan={7} className="p-2 text-right">
                               Total
                             </td>
                             <td className="p-2 font-mono">₹{previewGstFooter.tot.toFixed(2)}</td>

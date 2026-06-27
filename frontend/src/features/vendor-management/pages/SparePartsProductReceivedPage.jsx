@@ -59,10 +59,12 @@ function formatDateTime(po) {
 function SpareItemCard({ line }) {
   const brand = line.brand_name ?? line.brand ?? '';
   const part = line.spare_part_name ?? line.part_name ?? line.name ?? '';
+  const partType = line.part_type ? String(line.part_type) : '';
   const title = [brand, part].filter(Boolean).join(' — ') || 'Spare item';
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50/90 shadow-sm px-3 py-2.5 text-left max-w-md">
       <h3 className="text-sm font-semibold text-slate-900 leading-snug">{title}</h3>
+      {partType ? <p className="text-xs text-slate-600 mt-1">Type: {partType}</p> : null}
     </div>
   );
 }

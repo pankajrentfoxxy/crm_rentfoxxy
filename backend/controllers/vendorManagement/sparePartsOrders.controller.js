@@ -329,11 +329,12 @@ async function formMeta(req, res) {
     ];
 
     let parts = [];
+    let brands = [];
     try {
       const pr = await pool.query(
-        `SELECT v.part_id AS id, v.name, v.category, v.specifications,
+        `SELECT v.part_id AS id, v.name, v.category, v.part_type, v.default_brand, v.specifications,
                 v.floor_part_id, p.quantity AS stock_qty, p.cost AS unit_cost,
-                p.location_code, p.compatible_brands
+                p.location_code, v.compatible_brands
          FROM vendor_spare_parts_catalog v
          LEFT JOIN parts p ON p.part_id = v.floor_part_id
          WHERE v.active = TRUE
@@ -344,12 +345,21 @@ async function formMeta(req, res) {
     } catch (e) {
       console.warn('[sparePo formMeta] parts catalog:', e.message || e);
     }
+    try {
+      const br = await pool.query(
+        `SELECT id, name FROM asset_config_brands WHERE deleted_at IS NULL ORDER BY name ASC`
+      );
+      brands = br.rows;
+    } catch (e) {
+      console.warn('[sparePo formMeta] brands:', e.message || e);
+    }
 
     res.json({
       success: true,
       purchase_order_number,
       categories,
       parts,
+      brands,
       vendors: vendors.rows.map((v) => ({
         id: v.vendor_id,
         label: [v.business_name, v.first_name].filter(Boolean).join(' — ') || `Vendor #${v.vendor_id}`,

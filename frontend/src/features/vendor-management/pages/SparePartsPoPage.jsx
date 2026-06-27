@@ -10,6 +10,7 @@ import {
 } from '../vendorManagementApi';
 import { getBackendOrigin } from '../../../utils/api';
 import SparePartsPoFormModal from '../components/SparePartsPoFormModal';
+import SparePartsCatalogPanel from '../components/SparePartsCatalogPanel';
 
 const LIST_PAGE_SIZE = 25;
 
@@ -255,6 +256,8 @@ export default function SparePartsPoPage() {
           Add spare parts PO
         </button>
       </header>
+
+      <SparePartsCatalogPanel />
 
       <form onSubmit={applySearch} className="flex flex-wrap items-center gap-2">
         <input
@@ -609,6 +612,7 @@ export default function SparePartsPoPage() {
                           <th className="p-2">#</th>
                           <th className="p-2">Brand</th>
                           <th className="p-2">Part</th>
+                          <th className="p-2">Type</th>
                           <th className="p-2">Warranty (mo)</th>
                           <th className="p-2 text-right">Qty</th>
                           <th className="p-2 text-right">Rate</th>
@@ -621,6 +625,7 @@ export default function SparePartsPoPage() {
                             <td className="p-2">{idx + 1}</td>
                             <td className="p-2">{formatBrandLabel(ln)}</td>
                             <td className="p-2">{formatPartLabel(ln)}</td>
+                            <td className="p-2">{ln.part_type || '—'}</td>
                             <td className="p-2">
                               {ln.warranty_months ?? ln.warranty ?? ln.warranty_in_month ?? '—'}
                             </td>

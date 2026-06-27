@@ -8,6 +8,7 @@ const { wrapMulter } = require('../config/uploadLimits');
 const vendors = require('../controllers/vendorManagement/vendors.controller');
 const purchaseOrders = require('../controllers/vendorManagement/purchaseOrders.controller');
 const sparePo = require('../controllers/vendorManagement/sparePartsOrders.controller');
+const spareCatalog = require('../controllers/vendorManagement/sparePartsCatalog.controller');
 const serials = require('../controllers/vendorManagement/serialNumbers.controller');
 const billing = require('../controllers/vendorManagement/billing.controller');
 const replaced = require('../controllers/vendorManagement/replacedProducts.controller');
@@ -153,6 +154,9 @@ router.put('/serial-numbers/update', authorize, serials.serialUpdateValidators, 
 // ---------- Spare parts PO ---------------------------------------------------------
 router.get('/spare-parts-orders/next-number', authorize, sparePo.nextNumber);
 router.get('/spare-parts-orders/form-meta', authorize, sparePo.formMeta);
+router.get('/spare-parts-catalog', authorize, spareCatalog.listCatalog);
+router.post('/spare-parts-catalog', authorize, spareCatalog.createValidators, spareCatalog.createCatalogItem);
+router.patch('/spare-parts-catalog/:id', authorize, spareCatalog.updateValidators, spareCatalog.updateCatalogItem);
 router.patch('/spare-parts-orders/:id/status', authorize, sparePo.statusValidators, sparePo.updateStatus);
 const spoBillsUpload = sparePo.createSpoBillsUpload();
 router.post(

@@ -179,6 +179,18 @@ export function fetchSparePartsFormMeta() {
   return api.get(`${base}/spare-parts-orders/form-meta`);
 }
 
+export function fetchSparePartsCatalog(params) {
+  return api.get(`${base}/spare-parts-catalog`, { params });
+}
+
+export function createSparePartsCatalogItem(body) {
+  return api.post(`${base}/spare-parts-catalog`, body);
+}
+
+export function updateSparePartsCatalogItem(id, body) {
+  return api.patch(`${base}/spare-parts-catalog/${id}`, body);
+}
+
 export function fetchSparePartsOrder(id) {
   return api.get(`${base}/spare-parts-orders/${id}`);
 }
