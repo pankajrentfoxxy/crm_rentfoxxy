@@ -2,6 +2,7 @@
 // route boundary (ProtectedRoute section="support_tickets"). These role lists
 // only shape in-module UX (lead vs technician views). super_admin/manager are
 // included so admins are never bounced out of a module the matrix grants them.
+import { canViewSection } from './permissionHelper';
 export const SUPPORT_ROLES = ['super_admin', 'admin', 'manager', 'support_lead', 'support_tech'];
 
 /** Sales / delivery sections a support_tech may open outside /support when granted. */
@@ -15,6 +16,11 @@ export const SUPPORT_TECH_DELIVERY_SECTIONS = [
 ];
 
 export const isSupportUser = (user) => user && SUPPORT_ROLES.includes(user.role);
+
+/** Matrix-first: any role with support_tickets view may open the Support module. */
+export function canAccessSupportModule(user, effectivePermissions) {
+  return canViewSection(user, effectivePermissions, 'support_tickets');
+}
 
 export const isSupportTechnician = (user) => user?.role === 'support_tech';
 

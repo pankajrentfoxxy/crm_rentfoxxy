@@ -53,7 +53,7 @@ import {
   Search,
 } from 'lucide-react';
 
-import { isSupportUser } from '../utils/supportAccess';
+import { canAccessSupportModule } from '../utils/supportAccess';
 import { useQcStatusCounts } from '../features/qc-management/hooks/useQcStatusCounts';
 import { useInventoryListCounts } from '../features/inventory-management/hooks/useInventoryListCounts';
 import usePermission from '../hooks/usePermission';
@@ -108,7 +108,7 @@ export default function Layout({ children }) {
 
   const location = useLocation();
 
-  const { user, logout } = useAuth();
+  const { user, logout, effectivePermissions } = useAuth();
   const { canView } = usePermission();
 
   const navigate = useNavigate();
@@ -302,7 +302,7 @@ export default function Layout({ children }) {
   const financeVisibleChildren = financeMenuItems.filter((c) => isFinanceChildVisible(c, canView));
   const settingsVisibleChildren = settingsAccordionChildren.filter((c) => isSettingsChildVisible(c, canView));
   const showVendorAccordion = canView('vendor_management');
-  const showSupportNav2 = canView('support_tickets') || isSupportUser(user) || canView('customer_inventory');
+  const showSupportNav2 = canAccessSupportModule(user, effectivePermissions) || canView('customer_inventory');
 
   // Whether each sidebar group has any content the user can reach.
   const groupHasContent = {

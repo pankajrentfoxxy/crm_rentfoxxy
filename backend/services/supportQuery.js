@@ -164,10 +164,7 @@ const listTicketsEnriched = async ({ user, view = 'active', search = '', type = 
     const listSql = `
         ${ticketSelectCore(settings.overdue_threshold_hours)}
         ${where}
-        ORDER BY
-            CASE WHEN t.priority = 'urgent' THEN 0 WHEN t.priority = 'high' THEN 1 ELSE 2 END,
-            is_overdue DESC,
-            t.updated_at DESC
+        ORDER BY t.id DESC
         LIMIT $${params.length - 1} OFFSET $${params.length}
     `;
     const listRes = await pool.query(listSql, params);

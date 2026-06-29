@@ -127,7 +127,7 @@ export default function SupportTicketList() {
       const to = new Date(dateTo).getTime() + 86400000;
       list = list.filter((t) => new Date(t.created_at).getTime() < to);
     }
-    return list;
+    return [...list].sort((a, b) => Number(b.id) - Number(a.id));
   }, [tickets, activeTab, statusTab, typeFilter, priorityFilter, assignFilter, dateFrom, dateTo, user?.user_id]);
 
   const handleAssign = async (ticketId, assignedTo) => {
