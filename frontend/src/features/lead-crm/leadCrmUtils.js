@@ -1,3 +1,13 @@
+export function leadDisplayLabel(lead) {
+  const company = (lead?.companyName || lead?.company_name || '').trim();
+  const name = (lead?.name || '').trim();
+  if (company) return company;
+  if (name && name !== 'Website Enquiry') return name;
+  if (lead?.email) return lead.email.split('@')[0];
+  if (lead?.phone) return lead.phone;
+  return `Lead #${lead?.leadId || '?'}`;
+}
+
 export function formatConfig(lead) {
   const parts = [lead?.processor, lead?.generation, lead?.ram, lead?.storage]
     .filter(Boolean)

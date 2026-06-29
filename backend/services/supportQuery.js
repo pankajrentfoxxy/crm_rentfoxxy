@@ -359,20 +359,37 @@ const navBadges = async (user) => {
         );
         return rows[0] || {};
     }
-    const { rows } = await pool.query(
-        `
-        SELECT
-            (SELECT COUNT(*)::int FROM support_tickets WHERE status NOT IN ('closed', 'cancelled')) AS open_tickets,
-            (SELECT COUNT(*)::int FROM support_tickets t WHERE ${ACTIVE_TICKET_STATUSES}
-                AND EXTRACT(EPOCH FROM (NOW() - ${activityAtSql})) / 3600.0 >= $1) AS overdue_tickets,
-            (SELECT COUNT(*)::int FROM support_tickets t WHERE ${ACTIVE_TICKET_STATUSES}
-                AND EXISTS (SELECT 1 FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.assigned_to IS NULL AND i.status NOT IN ('resolved','closed','cancelled'))) AS pending_assign,
-            (SELECT COUNT(*)::int FROM support_part_requests
-                WHERE status IN ('pending','return_requested')
-                   OR (reassign_requested_at IS NOT NULL AND status IN ('issued','return_requested'))) AS support_part_requests
-        `,
-        [oh]
-    );
+    let rows;
+    try {
+        ({ rows } = await pool.query(
+            `
+            SELECT
+                (SELECT COUNT(*)::int FROM support_tickets WHERE status NOT IN ('closed', 'cancelled')) AS open_tickets,
+                (SELECT COUNT(*)::int FROM support_tickets t WHERE ${ACTIVE_TICKET_STATUSES}
+                    AND EXTRACT(EPOCH FROM (NOW() - ${activityAtSql})) / 3600.0 >= $1) AS overdue_tickets,
+                (SELECT COUNT(*)::int FROM support_tickets t WHERE ${ACTIVE_TICKET_STATUSES}
+                    AND EXISTS (SELECT 1 FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.assigned_to IS NULL AND i.status NOT IN ('resolved','closed','cancelled'))) AS pending_assign,
+                (SELECT COUNT(*)::int FROM support_part_requests spr
+                    WHERE spr.status IN ('pending','return_requested')
+                       OR (spr.reassign_requested_at IS NOT NULL AND spr.status IN ('issued','return_requested'))
+                ) AS support_part_requests
+            `,
+            [oh]
+        ));
+    } catch {
+        ({ rows } = await pool.query(
+            `
+            SELECT
+                (SELECT COUNT(*)::int FROM support_tickets WHERE status NOT IN ('closed', 'cancelled')) AS open_tickets,
+                (SELECT COUNT(*)::int FROM support_tickets t WHERE ${ACTIVE_TICKET_STATUSES}
+                    AND EXTRACT(EPOCH FROM (NOW() - ${activityAtSql})) / 3600.0 >= $1) AS overdue_tickets,
+                (SELECT COUNT(*)::int FROM support_tickets t WHERE ${ACTIVE_TICKET_STATUSES}
+                    AND EXISTS (SELECT 1 FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.assigned_to IS NULL AND i.status NOT IN ('resolved','closed','cancelled'))) AS pending_assign,
+                0::int AS support_part_requests
+            `,
+            [oh]
+        ));
+    }
     return rows[0] || {};
 };
 

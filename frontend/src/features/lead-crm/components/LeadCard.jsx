@@ -2,7 +2,7 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { GripVertical } from 'lucide-react';
 import { STATUS_COLORS } from '../leadConstants';
-import { formatConfig, formatCurrency, formatFollowUpDateTime, formatInquiry, followUpTone, relativeTime } from '../leadCrmUtils';
+import { formatConfig, formatCurrency, formatFollowUpDateTime, formatInquiry, followUpTone, leadDisplayLabel, relativeTime } from '../leadCrmUtils';
 import QuickStatusUpdate from './QuickStatusUpdate';
 
 export default function LeadCard({ lead, onDragStart, onDragEnd, onRefresh }) {
@@ -31,9 +31,9 @@ export default function LeadCard({ lead, onDragStart, onDragEnd, onRefresh }) {
               }`} title="Follow-up" />
             )}
           </div>
-          <p className="font-semibold text-gray-900 truncate">{lead.companyName || lead.name}</p>
+          <p className="font-semibold text-gray-900 truncate">{leadDisplayLabel(lead)}</p>
           <p className="text-gray-500 text-xs truncate">
-            {lead.name}{lead.designation ? ` · ${lead.designation}` : ''}
+            {(lead.name && lead.name !== 'Website Enquiry' ? lead.name : lead.email || '—')}{lead.designation ? ` · ${lead.designation}` : ''}
           </p>
           <p className="text-xs text-gray-500 mt-1 truncate">📞 {lead.phone || '—'}</p>
           {lead.email && <p className="text-xs text-gray-400 truncate">📧 {lead.email}</p>}

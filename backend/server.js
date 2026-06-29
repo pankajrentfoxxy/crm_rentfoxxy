@@ -177,6 +177,7 @@ app.listen(PORT, () => {
   const { ensureSalesManagementSchema } = require('./controllers/salesManagementController');
   const { ensureCustomerManagementSchema } = require('./controllers/customerManagementController');
   const { ensureBillingEngineSchema } = require('./controllers/customerBillingController');
+  const { ensureLeadCrmSchema } = require('./controllers/leadController');
   const { startBillingScheduler } = require('./services/billingSchedulerService');
   ensureSupportSchema().catch((err) => console.error('Support schema ensure failed:', err.message));
   ensureUserSchema().catch((err) => console.error('User schema ensure failed:', err.message));
@@ -185,6 +186,7 @@ app.listen(PORT, () => {
   ensureSalesManagementSchema().catch((err) => console.error('Sales management schema failed:', err.message));
   ensureCustomerManagementSchema().catch((err) => console.error('Customer management schema failed:', err.message));
   ensureBillingEngineSchema().catch((err) => console.error('Billing engine schema failed:', err.message));
+  ensureLeadCrmSchema().catch((err) => console.error('Lead CRM schema ensure failed:', err.message));
   startBillingScheduler();
 });
 

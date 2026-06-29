@@ -273,6 +273,10 @@ const insertLeadFromEmail = async ({ parsedFields, subject, fromAddress, sentAt 
         return existingLeadId;
     }
 
+    if (!email && !phone) {
+        return null;
+    }
+
     const receivedAt = sentAt ? new Date(sentAt) : new Date();
     const safeReceivedAt = Number.isNaN(receivedAt.getTime()) ? new Date() : receivedAt;
 
@@ -426,6 +430,11 @@ const runLeadEmailSync = async () => {
                             fromAddress,
                             sentAt: message.envelope?.date || parsed.date || null
                         });
+                        if (!leadId) {
+                            await markMessageProcessed({ messageId, mailbox, subject, leadId: null });
+                            skipped++;
+                            continue;
+                        }
                         await markMessageProcessed({ messageId, mailbox, subject, leadId });
                         if (beforeInsertLeadId) {
                             updated++;

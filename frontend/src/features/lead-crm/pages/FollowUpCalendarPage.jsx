@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Phone } from 'lucide-react';
 import { getFollowUps, getLeads, updateFollowUp } from '../leadCrmApi';
 import { STATUS_COLORS } from '../leadConstants';
-import { daysInMonth, formatFollowUpDateTime, isSameDay, startOfMonth } from '../leadCrmUtils';
+import { daysInMonth, formatFollowUpDateTime, isSameDay, leadDisplayLabel, startOfMonth } from '../leadCrmUtils';
 import toast from 'react-hot-toast';
 
 export default function FollowUpCalendarPage() {
@@ -20,10 +20,14 @@ export default function FollowUpCalendarPage() {
     (async () => {
       try {
         const [leadsRes, fuRes] = await Promise.all([getLeads(), getFollowUps()]);
+        if (!leadsRes.data?.success) throw new Error(leadsRes.data?.message || 'Failed to load leads');
+        if (!fuRes.data?.success) throw new Error(fuRes.data?.message || 'Failed to load follow-ups');
         setAllLeads((leadsRes.data?.leads || []).filter((l) => l.followUpDate));
         setOverdue(fuRes.data?.overdue || []);
         setTodayList(fuRes.data?.today || []);
-      } catch { /* ignore */ }
+      } catch (err) {
+        toast.error(err.response?.data?.message || err.message || 'Failed to load follow-ups');
+      }
     })();
   }, []);
 
@@ -67,9 +71,9 @@ export default function FollowUpCalendarPage() {
         <div className="flex justify-between gap-2">
           <div>
             <Link to={`/lead-crm/leads/${lead.leadId}`} className="font-medium text-blue-600 hover:underline">
-              {lead.companyName || lead.name}
+              {leadDisplayLabel(lead)}
             </Link>
-            <p className="text-gray-500 text-xs">{lead.name} · {lead.phone}</p>
+            <p className="text-gray-500 text-xs">{lead.name || lead.email || '—'} · {lead.phone || '—'}</p>
           </div>
           <span className={`px-2 py-0.5 rounded-full text-xs h-fit ${st.bg} ${st.text}`}>{lead.status}</span>
         </div>

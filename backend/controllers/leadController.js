@@ -1,4 +1,5 @@
 const fs = require('fs');
+const path = require('path');
 const csv = require('csv-parser');
 const crypto = require('crypto');
 const prisma = require('../prisma/client');
@@ -80,6 +81,17 @@ async function ensureLeadQuotationColumns() {
       ADD COLUMN IF NOT EXISTS quotation_last_to_email VARCHAR(255)
   `);
 }
+
+exports.ensureLeadCrmSchema = async () => {
+  const files = ['057_phase3_lead_crm.sql'];
+  for (const file of files) {
+    const sqlPath = path.join(__dirname, '../migrations', file);
+    if (fs.existsSync(sqlPath)) {
+      await pool.query(fs.readFileSync(sqlPath, 'utf8'));
+    }
+  }
+  await ensureLeadQuotationColumns();
+};
 
 async function attachQuotationMeta(lead) {
   await ensureLeadQuotationColumns();
@@ -403,46 +415,51 @@ const normalizeArrayField = (value) => {
 async function enrichLeadsPhase3(leads) {
   if (!leads?.length) return leads;
   const ids = leads.map((l) => l.leadId);
-  const { rows } = await pool.query(
-    `SELECT lead_id, whatsapp_number, designation, quantity_required, monthly_budget,
-            rental_duration, use_case, company_type, company_size, industry, annual_revenue,
-            pan_number, gst_number, state, pincode, billing_address, shipping_same_as_billing,
-            shipping_address, follow_up_time, converted_at, converted_by, customer_id,
-            inquiry_type, last_activity_at
-     FROM leads WHERE lead_id = ANY($1::int[])`,
-    [ids]
-  );
-  const map = new Map(rows.map((r) => [r.lead_id, r]));
-  return leads.map((lead) => {
-    const ex = map.get(lead.leadId);
-    if (!ex) return lead;
-    return {
-      ...lead,
-      whatsappNumber: ex.whatsapp_number,
-      designation: ex.designation,
-      quantityRequired: ex.quantity_required,
-      monthlyBudget: ex.monthly_budget,
-      rentalDuration: ex.rental_duration,
-      useCase: ex.use_case,
-      companyType: ex.company_type,
-      companySize: ex.company_size,
-      industry: ex.industry,
-      annualRevenue: ex.annual_revenue,
-      panNumber: ex.pan_number,
-      gstNumber: ex.gst_number,
-      state: ex.state,
-      pincode: ex.pincode,
-      billingAddress: ex.billing_address,
-      shippingSameAsBilling: ex.shipping_same_as_billing,
-      shippingAddress: ex.shipping_address,
-      followUpTime: formatFollowUpTime(ex.follow_up_time),
-      convertedAt: ex.converted_at,
-      convertedBy: ex.converted_by,
-      customerId: ex.customer_id,
-      inquiryType: ex.inquiry_type,
-      lastActivityAt: ex.last_activity_at
-    };
-  });
+  try {
+    const { rows } = await pool.query(
+      `SELECT lead_id, whatsapp_number, designation, quantity_required, monthly_budget,
+              rental_duration, use_case, company_type, company_size, industry, annual_revenue,
+              pan_number, gst_number, state, pincode, billing_address, shipping_same_as_billing,
+              shipping_address, follow_up_time, converted_at, converted_by, customer_id,
+              inquiry_type, last_activity_at
+       FROM leads WHERE lead_id = ANY($1::int[])`,
+      [ids]
+    );
+    const map = new Map(rows.map((r) => [r.lead_id, r]));
+    return leads.map((lead) => {
+      const ex = map.get(lead.leadId);
+      if (!ex) return lead;
+      return {
+        ...lead,
+        whatsappNumber: ex.whatsapp_number,
+        designation: ex.designation,
+        quantityRequired: ex.quantity_required,
+        monthlyBudget: ex.monthly_budget,
+        rentalDuration: ex.rental_duration,
+        useCase: ex.use_case,
+        companyType: ex.company_type,
+        companySize: ex.company_size,
+        industry: ex.industry,
+        annualRevenue: ex.annual_revenue,
+        panNumber: ex.pan_number,
+        gstNumber: ex.gst_number,
+        state: ex.state,
+        pincode: ex.pincode,
+        billingAddress: ex.billing_address,
+        shippingSameAsBilling: ex.shipping_same_as_billing,
+        shippingAddress: ex.shipping_address,
+        followUpTime: formatFollowUpTime(ex.follow_up_time),
+        convertedAt: ex.converted_at,
+        convertedBy: ex.converted_by,
+        customerId: ex.customer_id,
+        inquiryType: ex.inquiry_type,
+        lastActivityAt: ex.last_activity_at
+      };
+    });
+  } catch (e) {
+    console.warn('enrichLeadsPhase3 skipped:', e.message);
+    return leads;
+  }
 }
 
 function applyLeadListFilters(leads, req) {

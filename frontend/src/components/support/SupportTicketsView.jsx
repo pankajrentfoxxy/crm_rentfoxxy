@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Loader2, Search, Plus, CheckCircle2 } from 'lucide-react';
+import toast from 'react-hot-toast';
 import api from '../../utils/api';
 import { isSupportLead } from '../../utils/supportAccess';
 import { ticketHasUnassignedTechnicianSlots } from './utils';
@@ -89,6 +90,7 @@ function SupportTicketsViewCards({ view = 'active', showFilters = true, splitSec
       setActiveTickets([]);
       setClosedTickets([]);
       setTypeCounts({ all: 0, complaint: 0, pickup: 0, replacement: 0 });
+      toast.error(e.response?.data?.message || e.message || 'Failed to load support tickets');
     } finally {
       setLoading(false);
     }

@@ -889,7 +889,10 @@ exports.listTickets = async (req, res) => {
         res.json({ success: true, ...data });
     } catch (e) {
         console.error('support listTickets', e);
-        res.status(500).json({ success: false, message: 'Failed to load tickets' });
+        const msg = process.env.NODE_ENV === 'production'
+            ? 'Failed to load tickets'
+            : (e.message || 'Failed to load tickets');
+        res.status(500).json({ success: false, message: msg });
     }
 };
 
@@ -3691,7 +3694,24 @@ exports.removeTicketItem = async (req, res) => {
 };
 
 exports.ensureSupportSchema = async () => {
-    for (const file of ['025_support_module.sql', '026_support_redesign.sql', '027_support_v2.sql', '029_support_v3.sql', '031_support_ticket_category.sql']) {
+    const files = [
+        '025_support_module.sql',
+        '026_support_redesign.sql',
+        '027_support_v2.sql',
+        '028_support_user_roles.sql',
+        '029_support_v3.sql',
+        '031_support_ticket_category.sql',
+        '068_phase6_support_customer_portal.sql',
+        '096_support_v3_columns.sql',
+        '097_support_phase18.sql',
+        '098_support_parts_bucket.sql',
+        '099_support_parts_reassign.sql',
+        '106_support_delivery_technician_permissions.sql',
+        '113_support_replacement_flow.sql',
+        '114_support_replacement_so_line.sql',
+        '117_support_ticket_cancellation.sql',
+    ];
+    for (const file of files) {
         const sqlPath = path.join(__dirname, '../migrations', file);
         if (fs.existsSync(sqlPath)) {
             const sql = fs.readFileSync(sqlPath, 'utf8');
