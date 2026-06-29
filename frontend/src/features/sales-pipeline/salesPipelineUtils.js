@@ -17,8 +17,9 @@ export const QUOTE_STATUS_STYLES = {
 
 export const TYPE_STYLES = {
   rental: 'bg-blue-100 text-blue-800',
-  demo: 'bg-blue-100 text-blue-800',
+  demo: 'bg-violet-100 text-violet-800',
   sale: 'bg-emerald-100 text-emerald-800',
+  sales: 'bg-emerald-100 text-emerald-800',
 };
 
 export const DC_STATUS_STYLES = {
@@ -87,8 +88,10 @@ export function formatConfig(line) {
 }
 
 export function typeLabel(t) {
-  if (t === 'sale') return 'Sales';
-  if (t === 'rental' || t === 'demo') return 'Rental';
+  const key = String(t || '').toLowerCase();
+  if (key === 'sale' || key === 'sales') return 'Sales';
+  if (key === 'demo') return 'Demo';
+  if (key === 'rental') return 'Rental';
   return t || '—';
 }
 

@@ -314,6 +314,7 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
               <label className="text-xs font-medium text-gray-600">Type *</label>
               <select className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" value={form.quotation_type} onChange={(e) => setForm((f) => ({ ...f, quotation_type: e.target.value, branch: branchForQuotationType(e.target.value) }))}>
                 <option value="rental">Rental</option>
+                <option value="demo">Demo</option>
                 <option value="sale">Sale</option>
               </select>
             </div>

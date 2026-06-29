@@ -81,7 +81,7 @@ router.get('/my-deliveries', tbView, flowCtrl.getMyDeliveries);
 router.patch(...dcRoute('/reached', tbEdit, flowCtrl.markTechReached));
 router.post(...dcRoute('/verify-serial', tbEdit, flowCtrl.verifySerialAndGenerateOtp));
 router.post(...dcRoute('/deliver', tbEdit, wrapMulter(uploadPod.single('pod_photo')), flowCtrl.submitDeliveryWithPod));
-router.patch(...dcRoute('/admin-deliver', checkRole('admin', 'manager', 'super_admin'), wrapMulter(uploadPod.single('pod_photo')), flowCtrl.adminDeliverOverride));
+router.patch(...dcRoute('/admin-deliver', checkRole('admin', 'manager', 'super_admin', 'warehouse', 'support_tech'), wrapMulter(uploadPod.single('pod_photo')), flowCtrl.adminDeliverOverride));
 
 router.get('/counts', quoteView, ctrl.getOperationCounts);
 router.get('/inventory/available-serials', soSerialsView, ctrl.getAvailableSerials);
