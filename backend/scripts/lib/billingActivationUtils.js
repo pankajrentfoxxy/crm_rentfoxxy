@@ -11,13 +11,32 @@ function parseMoney(raw) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+function toYmd(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 function parseDate(raw) {
-  if (!raw) return null;
+  if (raw == null || raw === '') return null;
+  if (raw instanceof Date) {
+    if (Number.isNaN(raw.getTime())) return null;
+    return toYmd(raw);
+  }
   const s = String(raw).trim();
   if (!s) return null;
-  const d = new Date(s.includes('T') ? s : `${s.slice(0, 10)}T00:00:00`);
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const d = new Date(s);
   if (Number.isNaN(d.getTime())) return null;
-  return s.slice(0, 10);
+  return toYmd(d);
+}
+
+/** Returns YYYY-MM-DD or null — never passes locale strings like "Sat Jun 27" to Postgres. */
+function parseDateStrict(raw) {
+  const ymd = parseDate(raw);
+  if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return null;
+  return ymd;
 }
 
 function ymFromDate(dateStr) {
@@ -526,6 +545,8 @@ function evaluateVendorBlockers(vendor, { strict = false } = {}) {
 module.exports = {
   parseMoney,
   parseDate,
+  parseDateStrict,
+  toYmd,
   ymFromDate,
   parseYm,
   ymKey,

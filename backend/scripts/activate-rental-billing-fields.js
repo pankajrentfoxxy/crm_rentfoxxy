@@ -16,6 +16,7 @@ const {
   deriveVendorSerialStart,
   planStatusNormalization,
   applyStatusNormalization,
+  parseDateStrict,
   writeMarkdownReport,
 } = require('./lib/billingActivationUtils');
 
@@ -66,7 +67,8 @@ async function buildPlan() {
 
     const patch = {};
     if (!serial.rent_start_date && start.date) {
-      patch.rent_start_date = start.date;
+      const ymd = parseDateStrict(start.date);
+      if (ymd) patch.rent_start_date = ymd;
     }
     if (!parseFloat(serial.rent_monthly_rate || 0) && rate.rate) {
       patch.rent_monthly_rate = rate.rate;
@@ -124,13 +126,16 @@ async function buildPlan() {
   for (const serial of vendorRows.serials) {
     const start = deriveVendorSerialStart(serial, ctx);
     if (start.date) {
-      vendorSerialUpdates.push({
-        serial_id: serial.serial_id,
-        serial_number: serial.serial_number,
-        po_id: serial.po_id,
-        received_at: start.date,
-        source: start.source,
-      });
+      const ymd = parseDateStrict(start.date);
+      if (ymd) {
+        vendorSerialUpdates.push({
+          serial_id: serial.serial_id,
+          serial_number: serial.serial_number,
+          po_id: serial.po_id,
+          received_at: ymd,
+          source: start.source,
+        });
+      }
     }
   }
 
