@@ -115,6 +115,58 @@ export function countLaptops(lines) {
   return (lines || []).reduce((s, l) => s + (Number(l.quantity) || 0), 0);
 }
 
+export const GST_RATE = 18;
+export const SELLER_STATE_CODE = '06';
+
+export function normalizeStateForGst(state) {
+  return String(state || '').trim().toLowerCase().replace(/\s+/g, '_');
+}
+
+/** Haryana (company state) → CGST+SGST; any other state → IGST. */
+export function isIntraStateGst(supplyState) {
+  const s = normalizeStateForGst(supplyState);
+  if (!s) return true;
+  if (s === '06' || s === 'hr') return true;
+  if (s.includes('haryana')) return true;
+  return false;
+}
+
+export function resolveSupplyStateFromShipping(shippingAddress, fallback = '') {
+  if (!shippingAddress?.state || !String(shippingAddress.state).trim()) {
+    return normalizeStateForGst(fallback);
+  }
+  return normalizeStateForGst(shippingAddress.state);
+}
+
+export function formatSupplyStateLabel(slug) {
+  if (!slug) return '—';
+  return String(slug).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/** GST on goods subtotal only; shipping + security added after tax (matches backend). */
+export function computeGstBreakdown({
+  subtotal = 0, shipping = 0, security = 0, supplyState = '',
+} = {}) {
+  const sub = +Number(subtotal || 0).toFixed(2);
+  const ship = +Number(shipping || 0).toFixed(2);
+  const sec = +Number(security || 0).toFixed(2);
+  const gstTotal = +(sub * GST_RATE / 100).toFixed(2);
+  const intra = isIntraStateGst(supplyState);
+  const half = +(gstTotal / 2).toFixed(2);
+  return {
+    subtotal: sub,
+    gst_rate: GST_RATE,
+    gst_type: intra ? 'intra' : 'inter',
+    cgst: intra ? half : 0,
+    sgst: intra ? +(gstTotal - half).toFixed(2) : 0,
+    igst: intra ? 0 : gstTotal,
+    gst_total: gstTotal,
+    shipping: ship,
+    security: sec,
+    grand_total: +(sub + gstTotal + ship + sec).toFixed(2),
+  };
+}
+
 /** Parse delivery/shipping address — handles JSON strings and nested/double-encoded JSON in `address`. */
 function tryParseJsonString(s) {
   if (typeof s !== 'string') return undefined;

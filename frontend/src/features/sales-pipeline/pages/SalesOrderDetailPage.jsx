@@ -9,7 +9,7 @@ import SoSerialPanel from '../components/SoSerialPanel';
 import SoDeliveryAddressPanel from '../components/SoDeliveryAddressPanel';
 import { cancelSalesOrder, getQuotation, getSalesOrderFull, listPayments, regenerateSalesOrderPdf } from '../salesPipelineApi';
 import { getBackendOrigin } from '../../../utils/api';
-import { formatConfig, formatCurrency, formatDate, TYPE_STYLES, typeLabel, deliveryChallanDetailPath } from '../salesPipelineUtils';
+import { formatConfig, formatCurrency, formatDate, TYPE_STYLES, typeLabel, deliveryChallanDetailPath, parseDeliveryAddress, formatSupplyStateLabel, resolveSupplyStateFromShipping } from '../salesPipelineUtils';
 
 function resolveSoNumber(params) {
   const raw = params['*'] ?? params.soNumber ?? '';
@@ -78,6 +78,10 @@ export default function SalesOrderDetailPage() {
   const hasAttachedLaptops = attachedCount > 0;
   const hasDc = dcs.length > 0;
   const halfGst = (Number(totals.gst_rate) || 18) / 2;
+  const shippingAddr = parseDeliveryAddress(head.customer_shipping_address);
+  const supplyStateLabel = formatSupplyStateLabel(
+    resolveSupplyStateFromShipping(shippingAddr, head.supply_state)
+  );
   const isCancelled = String(data?.status || head.status || '').toLowerCase() === 'cancelled';
 
   const handleCancel = useCallback(async () => {
@@ -145,7 +149,7 @@ export default function SalesOrderDetailPage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="bg-white border rounded-xl p-4 text-sm space-y-2">
             <p><span className="text-gray-500">Date:</span> {formatDate(head.created_at)}</p>
-            <p><span className="text-gray-500">Supply State:</span> {head.supply_state}</p>
+            <p><span className="text-gray-500">Shipping State (GST):</span> {supplyStateLabel}</p>
             <p><span className="text-gray-500">Remarks:</span> {head.remarks || '—'}</p>
           </div>
           <div className="bg-white border rounded-xl p-4 text-sm space-y-1.5">

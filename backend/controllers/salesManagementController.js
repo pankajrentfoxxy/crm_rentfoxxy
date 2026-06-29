@@ -7,6 +7,7 @@ const {
   nextFinancialYearNumber,
   peekFinancialYearNumber,
   computeGstBreakdown,
+  resolveSupplyStateFromAddress,
   resolveDcBilling,
   entityForQuotationType,
   generateToken,
@@ -258,6 +259,7 @@ exports.storeQuotation = async (req, res) => {
     if (billing && body.customer_name) {
       billing = { ...billing, name: body.customer_name };
     }
+    const supplyState = resolveSupplyStateFromAddress(shipping, body.supply_state);
 
     await client.query('BEGIN');
     for (const item of lineItems) {
@@ -279,7 +281,7 @@ exports.storeQuotation = async (req, res) => {
           shipping ? JSON.stringify(shipping) : null,
           billing ? JSON.stringify(billing) : null,
           body.GST_number || body.gst_number,
-          body.supply_state,
+          supplyState,
           body.security_amount || 0,
           body.shiping_charges || 0,
           body.quotation_type || 'rental',
@@ -491,6 +493,7 @@ exports.storeSalesOrder = async (req, res) => {
     if (billing && body.customer_name) {
       billing = { ...billing, name: body.customer_name };
     }
+    const supplyState = resolveSupplyStateFromAddress(shipping, body.supply_state);
     const customerId = toNullableInt(body.customer_id);
 
     if (customerId) {
@@ -526,7 +529,7 @@ exports.storeSalesOrder = async (req, res) => {
           shipping ? JSON.stringify(shipping) : null,
           billing ? JSON.stringify(billing) : null,
           body.GST_number || body.gst_number,
-          body.supply_state,
+          supplyState,
           body.security_amount || 0,
           body.shiping_charges || 0,
           body.quotation_type || 'rental',
@@ -810,7 +813,7 @@ exports.getDeliveryChallan = async (req, res) => {
       subtotal,
       shipping: head.shiping_charges,
       security: head.security_amount,
-      supplyState: head.supply_state,
+      supplyState: resolveSupplyStateFromAddress(head.customer_shipping_address, head.supply_state),
     });
 
     res.json({
@@ -881,6 +884,20 @@ exports.storeDeliveryChallan = async (req, res) => {
       || (await nextFinancialYearNumber('delivery_challan'));
     const shipping = parseJsonField(body.customer_shipping_address);
     const billing = parseJsonField(body.customer_billing_address);
+    let supplyState = resolveSupplyStateFromAddress(shipping, body.supply_state);
+    if (!supplyState && body.sales_order_number) {
+      const soRes = await pool.query(
+        `SELECT supply_state, customer_shipping_address
+           FROM sales_order_lines WHERE sales_order_number = $1 LIMIT 1`,
+        [body.sales_order_number]
+      );
+      if (soRes.rows.length) {
+        supplyState = resolveSupplyStateFromAddress(
+          soRes.rows[0].customer_shipping_address,
+          soRes.rows[0].supply_state
+        );
+      }
+    }
 
     // Pro-rata security: the SO security_amount is the TOTAL across all laptops on
     // the order. A DC for a subset of laptops only carries its share, so the
@@ -941,7 +958,7 @@ exports.storeDeliveryChallan = async (req, res) => {
           body.customer_name,
           body.email || body.customer_email,
           body.GST_number || body.gst_number,
-          body.supply_state,
+          supplyState,
           dcSecurity,
           dcShipping,
           body.branch || entityCode,
@@ -1225,6 +1242,7 @@ exports.createDcsByAddress = async (req, res) => {
       const groupSerials = ids.map((id) => allocMap[id]).filter(Boolean);
       const deliveryAddress = group.delivery_address
         || parseJsonSafe(soHead.customer_shipping_address) || billing || null;
+      const groupSupplyState = resolveSupplyStateFromAddress(deliveryAddress, soHead.supply_state);
 
       const groupSize = ids.length;
       const groupSecurity = Math.round((totalSecurity / totalSoUnits) * groupSize * 100) / 100;
@@ -1268,7 +1286,7 @@ exports.createDcsByAddress = async (req, res) => {
         )`,
         [
           dcNumber, sales_order_number, soHead.quotation_number, soHead.customer_id || null,
-          soHead.customer_name, soHead.customer_email, soHead.gst_number, soHead.supply_state,
+          soHead.customer_name, soHead.customer_email, soHead.gst_number, groupSupplyState,
           groupSecurity, groupShipping, entityCode, entityCode,
           billing ? JSON.stringify(billing) : null,
           deliveryAddress ? JSON.stringify(deliveryAddress) : null,
@@ -1861,7 +1879,7 @@ exports.getSoWithPayments = async (req, res) => {
       subtotal: totalValue,
       shipping: lines[0].shiping_charges,
       security: lines[0].security_amount,
-      supplyState: lines[0].supply_state,
+      supplyState: resolveSupplyStateFromAddress(lines[0].customer_shipping_address, lines[0].supply_state),
     });
     const soStatus = lines.every((l) => String(l.status).toLowerCase() === 'cancelled')
       ? 'cancelled'

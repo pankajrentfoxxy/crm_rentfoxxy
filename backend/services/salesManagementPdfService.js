@@ -3,6 +3,7 @@ const path = require('path');
 const PDFDocument = require('pdfkit');
 const nodemailer = require('nodemailer');
 const pool = require('../config/db');
+const { computeGstBreakdown, resolveSupplyStateFromAddress } = require('./salesManagementService');
 
 const UPLOAD_DIR = path.join(__dirname, '../uploads/sales-documents');
 
@@ -231,16 +232,16 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
   const goods = rows.reduce((s, r) => s + (Number(r.rate || 0) * Number(r.qty || 1)), 0);
   const shipping = Number(header.shiping_charges || lines[0]?.shiping_charges || 0);
   const security = Number(header.security_amount || lines[0]?.security_amount || 0);
-  // GST applies to the goods subtotal only (matches ERP). Shipping and security
-  // are added after tax. Intra-state (buyer == seller, Haryana) -> CGST+SGST,
-  // else IGST.
   const subtotal = +goods.toFixed(2);
-  const sellerState = String(company.state_code || '06').toLowerCase();
-  const buyerState = String(header.supply_state || '').toLowerCase();
-  const intra = !buyerState || buyerState === sellerState || buyerState.includes('haryana') || buyerState === '06';
-  const gstRate = 18;
-  const gstAmount = +(subtotal * gstRate / 100).toFixed(2);
-  const total = +(subtotal + gstAmount + shipping + security).toFixed(2);
+  const supplyState = resolveSupplyStateFromAddress(
+    header.customer_shipping_address || lines[0]?.customer_shipping_address,
+    header.supply_state || lines[0]?.supply_state
+  );
+  const gst = computeGstBreakdown({ subtotal, shipping, security, supplyState });
+  const intra = gst.gst_type === 'intra';
+  const gstRate = gst.gst_rate;
+  const gstAmount = gst.gst_total;
+  const total = gst.grand_total;
 
   const billing = parseJson(header.customer_billing_address, {}) || {};
   const shippingAddr = parseJson(header.customer_shipping_address, {}) || {};

@@ -991,10 +991,35 @@ async function searchAvailableInventory({
 const SELLER_STATE_CODE = '06'; // Rentfoxxy / Gorefurbo are registered in Haryana.
 const GST_RATE = 18;
 
+function parseAddressField(raw) {
+  if (raw == null) return null;
+  if (typeof raw === 'object') return raw;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeStateForGst(state) {
+  return String(state || '').trim().toLowerCase().replace(/\s+/g, '_');
+}
+
+/** Prefer shipping-address state for GST; fall back to stored supply_state. */
+function resolveSupplyStateFromAddress(shippingAddress, explicitSupplyState = '') {
+  const addr = parseAddressField(shippingAddress);
+  const fromAddr = addr?.state;
+  if (fromAddr && String(fromAddr).trim()) {
+    return normalizeStateForGst(fromAddr);
+  }
+  return normalizeStateForGst(explicitSupplyState);
+}
+
 function isIntraState(supplyState, sellerStateCode = SELLER_STATE_CODE) {
-  const s = String(supplyState || '').trim().toLowerCase();
+  const s = normalizeStateForGst(supplyState);
   if (!s) return true; // Unknown buyer state -> assume intra (seller's own state).
-  return s === String(sellerStateCode).toLowerCase() || s === '06' || s.includes('haryana');
+  const seller = String(sellerStateCode || SELLER_STATE_CODE).toLowerCase();
+  return s === seller || s === '06' || s === 'hr' || s.includes('haryana');
 }
 
 function computeGstBreakdown({
@@ -1194,6 +1219,12 @@ module.exports = {
   peekFinancialYearNumber,
   currentFinancialYear,
   computeGstBreakdown,
+  resolveSupplyStateFromAddress,
+  parseAddressField,
+  normalizeStateForGst,
+  isIntraState,
+  GST_RATE,
+  SELLER_STATE_CODE,
   getSalesOrderRateMap,
   rateForDcLine,
   getDcSerialRateLookup,

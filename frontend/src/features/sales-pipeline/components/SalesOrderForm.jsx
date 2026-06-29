@@ -4,12 +4,12 @@ import toast from 'react-hot-toast';
 import AssetDetailsForm, { emptyLineItem, lineItemsToPayload } from '../../operation-management/components/AssetDetailsForm';
 import { BillingAddressPanel, ShippingAddressPanel } from '../../operation-management/components/CustomerAddressPanels';
 import { branchForQuotationType } from '../../operation-management/utils/quotationHelpers';
-import { INDIAN_STATES, slugifyState } from '../../../constants/indianStates';
 import {
   createSalesOrder, getCustomerAddresses, getCustomerDetail, getQuotation, getSalesOrderMeta, listQuotations,
 } from '../salesPipelineApi';
 import {
   formatCurrency, sumLines, formatConfig, lineTotal, typeLabel, countLaptops,
+  computeGstBreakdown, resolveSupplyStateFromShipping, formatSupplyStateLabel,
 } from '../salesPipelineUtils';
 
 function getField(obj, snake, camel) {
@@ -92,7 +92,7 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
   const [manualShipping, setManualShipping] = useState(emptyManualShipping());
   const [form, setForm] = useState({
     customer_id: '', customer_name: '', quotation_number: prefillQuotation || '', quotation_type: 'rental',
-    branch: 'rentfoxxy', supply_state: slugifyState('Haryana'),
+    branch: 'rentfoxxy',
     security_type: 'none', security_amount: '', shiping_charges: '', remarks: '',
     advance_amount: '', advance_due_date: '', GST_number: '',
   });
@@ -216,7 +216,6 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
         customer_name: head.customer_name || f.customer_name,
         quotation_type: head.quotation_type || 'rental',
         branch: head.branch || branchForQuotationType(head.quotation_type),
-        supply_state: head.supply_state || f.supply_state,
         security_type: head.security_type || (Number(head.security_amount) > 0 ? 'one_month_rental' : 'none'),
         security_amount: head.security_amount || '',
         shiping_charges: head.shiping_charges || '',
@@ -240,13 +239,24 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
   }, [selectedShippingValue, shippingOptions, manualShipping]);
 
   const totalValue = useMemo(() => sumLines(lines), [lines]);
+  const shippingCharges = Number(form.shiping_charges) || 0;
   // '1 month rental' security = sum of each line's monthly rate x qty.
   const security = form.security_type === 'one_month_rental'
     ? totalValue
     : (Number(form.security_amount) || 0);
+  const supplyState = useMemo(
+    () => resolveSupplyStateFromShipping(selectedShippingAddress),
+    [selectedShippingAddress]
+  );
+  const gstTotals = useMemo(() => computeGstBreakdown({
+    subtotal: totalValue,
+    shipping: shippingCharges,
+    security,
+    supplyState,
+  }), [totalValue, shippingCharges, security, supplyState]);
   const isSaleType = form.quotation_type === 'sale' || form.quotation_type === 'sales';
   const advance = advanceRequired ? (Number(form.advance_amount) || 0) : 0;
-  const collectBeforeDispatch = totalValue + security + advance;
+  const collectBeforeDispatch = gstTotals.grand_total + (advanceRequired ? advance : 0);
 
   const submit = async () => {
     if (!form.customer_id) {
@@ -262,6 +272,7 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
       await createSalesOrder({
         sales_order_number: meta?.sales_order_number,
         ...form,
+        supply_state: supplyState,
         security_amount: security,
         customer_shipping_address: selectedShippingAddress,
         customer_billing_address: billingAddress,
@@ -342,9 +353,6 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
           <div>
             <input type="number" placeholder="Shipping Charges (₹)" className="w-full border rounded-lg px-3 py-2 text-sm" value={form.shiping_charges} onChange={(e) => setForm((f) => ({ ...f, shiping_charges: e.target.value }))} />
           </div>
-          <select className="w-full border rounded-lg px-3 py-2 text-sm" value={form.supply_state} onChange={(e) => setForm((f) => ({ ...f, supply_state: e.target.value }))}>
-            {INDIAN_STATES.map((s) => <option key={s} value={slugifyState(s)}>{s}</option>)}
-          </select>
 
           {customerDetail && billingAddress && (
             <div className="grid grid-cols-1 gap-3">
@@ -413,10 +421,27 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
             </div>
           )}
           <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 text-sm space-y-1">
-            <p>Total Order Value: <strong>{formatCurrency(totalValue)}</strong></p>
+            <p>Subtotal: <strong>{formatCurrency(gstTotals.subtotal)}</strong></p>
+            {gstTotals.gst_type === 'inter' ? (
+              <p>IGST ({gstTotals.gst_rate}%): <strong>{formatCurrency(gstTotals.igst)}</strong></p>
+            ) : (
+              <>
+                <p>CGST ({gstTotals.gst_rate / 2}%): <strong>{formatCurrency(gstTotals.cgst)}</strong></p>
+                <p>SGST ({gstTotals.gst_rate / 2}%): <strong>{formatCurrency(gstTotals.sgst)}</strong></p>
+              </>
+            )}
+            {shippingCharges > 0 && <p>Shipping: <strong>{formatCurrency(shippingCharges)}</strong></p>}
             <p>Security Deposit: <strong>{formatCurrency(security)}</strong></p>
             {advanceRequired && <p>Advance Required: <strong>{formatCurrency(advance)}</strong></p>}
-            <p className="text-blue-800 font-medium">Total to collect before dispatch: {formatCurrency(collectBeforeDispatch)}</p>
+            <p className="text-blue-800 font-medium">Grand Total: {formatCurrency(gstTotals.grand_total + (advanceRequired ? advance : 0))}</p>
+            {selectedShippingAddress?.state ? (
+              <p className="text-[11px] text-gray-500 pt-1">
+                GST for shipping state: {formatSupplyStateLabel(supplyState)}
+                {gstTotals.gst_type === 'inter' ? ' (IGST 18%)' : ' (CGST 9% + SGST 9%)'}
+              </p>
+            ) : (
+              <p className="text-[11px] text-amber-700 pt-1">Select a shipping address to apply GST.</p>
+            )}
           </div>
         </div>
         <div className="border-t p-4 flex justify-end gap-2">
@@ -445,6 +470,8 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
           advance={advance}
           advanceRequired={advanceRequired}
           collectBeforeDispatch={collectBeforeDispatch}
+          gstTotals={gstTotals}
+          supplyState={supplyState}
           fromQuote={fromQuote}
           isSaleType={isSaleType}
         />
@@ -477,12 +504,15 @@ function PreviewAddress({ title, addr, gstNumber }) {
 
 function SalesOrderPreview({
   onClose, soNumber, form, lines, billingAddress, shippingAddress, security, advance,
-  advanceRequired, collectBeforeDispatch, fromQuote, isSaleType,
+  advanceRequired, collectBeforeDispatch, gstTotals, supplyState, fromQuote, isSaleType,
 }) {
   const subtotal = sumLines(lines);
   const shipping = Number(form.shiping_charges) || 0;
   const showSecurity = !isSaleType && security > 0;
   const validLines = (lines || []).filter((l) => l.brand || l.model_name || l.model || Number(l.quantity) > 0);
+  const totals = gstTotals || computeGstBreakdown({
+    subtotal, shipping, security, supplyState: resolveSupplyStateFromShipping(shippingAddress),
+  });
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
@@ -504,7 +534,7 @@ function SalesOrderPreview({
               {fromQuote && form.quotation_number ? (
                 <p className="text-gray-500">From: {form.quotation_number}</p>
               ) : null}
-              <p className="text-gray-500">Supply: {String(form.supply_state || '').replace(/-/g, ' ') || '—'}</p>
+              <p className="text-gray-500">Supply state: {formatSupplyStateLabel(supplyState || resolveSupplyStateFromShipping(shippingAddress))}</p>
             </div>
           </div>
 
@@ -547,9 +577,26 @@ function SalesOrderPreview({
           <div className="flex justify-end">
             <div className="w-full sm:w-72 text-sm space-y-1">
               <div className="flex justify-between">
-                <span className="text-gray-600">Order Value{isSaleType ? '' : ' (monthly)'}</span>
-                <span className="tabular-nums">{formatCurrency(subtotal)}</span>
+                <span className="text-gray-600">Subtotal{isSaleType ? '' : ' (monthly)'}</span>
+                <span className="tabular-nums">{formatCurrency(totals.subtotal)}</span>
               </div>
+              {totals.gst_type === 'inter' ? (
+                <div className="flex justify-between">
+                  <span className="text-gray-600">IGST ({totals.gst_rate}%)</span>
+                  <span className="tabular-nums">{formatCurrency(totals.igst)}</span>
+                </div>
+              ) : (
+                <>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">CGST ({totals.gst_rate / 2}%)</span>
+                    <span className="tabular-nums">{formatCurrency(totals.cgst)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">SGST ({totals.gst_rate / 2}%)</span>
+                    <span className="tabular-nums">{formatCurrency(totals.sgst)}</span>
+                  </div>
+                </>
+              )}
               {showSecurity ? (
                 <div className="flex justify-between">
                   <span className="text-gray-600">Security Deposit</span>
@@ -567,11 +614,12 @@ function SalesOrderPreview({
                 <span className="tabular-nums">{formatCurrency(shipping)}</span>
               </div>
               <div className="flex justify-between border-t pt-1 font-semibold text-blue-800">
-                <span>Total to collect before dispatch</span>
-                <span className="tabular-nums">{formatCurrency(collectBeforeDispatch)}</span>
+                <span>Grand Total</span>
+                <span className="tabular-nums">{formatCurrency(totals.grand_total + (advanceRequired ? advance : 0))}</span>
               </div>
               <p className="text-[11px] text-gray-400 pt-1">
-                {countLaptops(lines)} unit(s){isSaleType ? '' : ' · monthly rental + security & advance as applicable'}. GST as applicable.
+                {countLaptops(lines)} unit(s){isSaleType ? '' : ' · monthly rental + security & advance as applicable'}.
+                GST based on shipping state{shippingAddress?.state ? `: ${shippingAddress.state}` : ''}.
               </p>
             </div>
           </div>
