@@ -4,7 +4,7 @@ const fs = require('fs');
 const multer = require('multer');
 const { multerLimits, wrapMulter, multerErrorMessage, UPLOAD_MAX_FILE_MB } = require('../config/uploadLimits');
 const { authMiddleware } = require('../middleware/auth');
-const { requireSupportAccess, requireSupportLead } = require('../middleware/supportAccess');
+const { requireSupportAccess, requireSupportLead, requireSupportTicketClose } = require('../middleware/supportAccess');
 const {
     listCategories,
     listTechnicians,
@@ -143,7 +143,7 @@ router.get('/tickets/:ticketId', getTicket);
 router.patch('/tickets/:ticketId', requireSupportLead, updateTicket);
 router.post('/tickets/:ticketId/phases', requireSupportLead, addWorkflowPhaseItems);
 router.post('/tickets/:ticketId/assign-all', requireSupportLead, assignTicketBulk);
-router.post('/tickets/:ticketId/close', requireSupportLead, closeTicket);
+router.post('/tickets/:ticketId/close', requireSupportTicketClose, closeTicket);
 router.post('/tickets/:ticketId/replacements', requireSupportLead, initiateReplacement);
 router.post('/tickets/:ticketId/assign-return-pickup', requireSupportLead, assignReturnPickupDispatch);
 router.get('/tickets/:ticketId/replacement-context', requireSupportLead, getReplacementContext);

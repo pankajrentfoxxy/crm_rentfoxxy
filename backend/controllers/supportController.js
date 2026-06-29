@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
-const { isSupportLead, isSupportTechnician } = require('../middleware/supportAccess');
+const { isSupportLead, isSupportTechnician, canCloseSupportTicket } = require('../middleware/supportAccess');
 const { deriveItemCurrentStep } = require('../services/supportTicketFlow');
 const { ensureCustomerTables } = require('../services/customerInventoryErpSyncService');
 const supportQuery = require('../services/supportQuery');
@@ -1042,8 +1042,8 @@ exports.getTicket = async (req, res) => {
 };
 
 exports.closeTicket = async (req, res) => {
-    if (!isSupportLead(req.user)) {
-        return res.status(403).json({ success: false, message: 'Only support lead can manually close' });
+    if (!canCloseSupportTicket(req.user)) {
+        return res.status(403).json({ success: false, message: 'Not allowed to close support tickets' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
     const force = !!(req.body && req.body.force);

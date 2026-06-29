@@ -27,6 +27,10 @@ export const isSupportTechnician = (user) => user?.role === 'support_tech';
 export const isSupportLead = (user) =>
   ['super_admin', 'admin', 'manager', 'support_lead'].includes(user?.role);
 
+/** Support lead/admin/manager or warehouse staff may close tickets. */
+export const canCloseSupportTicket = (user) =>
+  isSupportLead(user) || user?.role === 'warehouse';
+
 export const canAccessCustomerInventory = (user) => {
     if (!user) return false;
     if (['admin', 'manager', 'floor_manager', 'support_lead'].includes(user.role)) return true;

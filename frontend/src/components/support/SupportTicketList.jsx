@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Loader2, Search, Download } from 'lucide-react';
 import api from '../../utils/api';
-import { isSupportLead } from '../../utils/supportAccess';
+import { canCloseSupportTicket, isSupportLead } from '../../utils/supportAccess';
 import { useAuth } from '../../context/AuthContext';
 import { displayStatus, formatRelative, formatTicketId, podUrl, ticketHasUnassignedTechnicianSlots } from './utils';
 import TtsplHistoryDrawer from '../../features/floor-pipeline/components/TtsplHistoryDrawer';
@@ -342,7 +342,7 @@ export default function SupportTicketList() {
                       {technicians.map((tech) => (<option key={tech.user_id} value={tech.user_id}>{tech.name}</option>))}
                     </select>
                   )}
-                  {isSupportLead(user) && ticket.status !== 'closed' && (
+                  {canCloseSupportTicket(user) && ticket.status !== 'closed' && (
                     <button type="button" onClick={() => handleClose(ticket.id)} className="text-sm text-red-600 min-h-[36px] inline-flex items-center">Close</button>
                   )}
                 </div>
@@ -436,7 +436,7 @@ export default function SupportTicketList() {
                             ))}
                           </select>
                         )}
-                        {isSupportLead(user) && ticket.status !== 'closed' && (
+                        {canCloseSupportTicket(user) && ticket.status !== 'closed' && (
                           <button type="button" onClick={() => handleClose(ticket.id)} className="text-xs text-red-600 hover:underline">
                             Close
                           </button>

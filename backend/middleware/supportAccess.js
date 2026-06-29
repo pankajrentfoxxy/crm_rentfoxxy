@@ -7,6 +7,9 @@ const isSupportUser = (user) => user && SUPPORT_ROLES.includes(user.role);
 const isSupportLead = (user) =>
   user && ['super_admin', 'admin', 'manager', 'support_lead'].includes(user.role);
 
+const canCloseSupportTicket = (user) =>
+  user && (isSupportLead(user) || user.role === 'warehouse');
+
 const isSupportTechnician = (user) => user && user.role === 'support_tech';
 
 const hasCustomerInventoryAccess = (user) => {
@@ -55,12 +58,24 @@ const requireSupportLead = (req, res, next) => {
     return next();
 };
 
+const requireSupportTicketClose = (req, res, next) => {
+    if (!req.user) {
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+    if (!canCloseSupportTicket(req.user)) {
+        return res.status(403).json({ success: false, message: 'Not allowed to close support tickets' });
+    }
+    return next();
+};
+
 module.exports = {
     SUPPORT_ROLES,
     isSupportUser,
     isSupportLead,
+    canCloseSupportTicket,
     isSupportTechnician,
     hasCustomerInventoryAccess,
     requireSupportAccess,
-    requireSupportLead
+    requireSupportLead,
+    requireSupportTicketClose
 };

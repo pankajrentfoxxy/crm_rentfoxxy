@@ -5,7 +5,7 @@ import toast from 'react-hot-toast';
 import TtsplHistoryDrawer from '../../features/floor-pipeline/components/TtsplHistoryDrawer';
 import api from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
-import { isSupportLead, isSupportTechnician } from '../../utils/supportAccess';
+import { canCloseSupportTicket, isSupportLead, isSupportTechnician } from '../../utils/supportAccess';
 import OtpInput from './components/OtpInput';
 import ItemStepper from './components/ItemStepper';
 import CommentThread from './components/CommentThread';
@@ -925,7 +925,7 @@ export default function SupportTicketDetail() {
             </section>
           )}
 
-          {isSupportLead(user) && (
+          {canCloseSupportTicket(user) && ticket.status !== 'closed' && (
             <div className="flex justify-end pt-2">
               <button
                 type="button"
