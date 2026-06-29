@@ -34,6 +34,8 @@ const upload = multer({
 router.use(authMiddleware);
 
 router.get('/quotation-email-config', leadsView, leadController.getQuotationEmailConfig);
+router.get('/email-sync-status', leadsView, leadController.getEmailSyncStatus);
+router.post('/sync-email-inbox', leadsEdit, leadController.triggerEmailSync);
 router.get('/export-csv', leadsView, leadController.exportLeadsCsv);
 router.get('/stages', leadsView, leadController.getLeadStages);
 router.get('/', leadsView, leadController.getLeads);

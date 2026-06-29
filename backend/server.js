@@ -163,10 +163,14 @@ app.listen(PORT, () => {
     console.log(`Server running on port ${PORT} (${process.env.NODE_ENV || 'development'})`);
   }
 
-  // startEmailQueueWorker().catch((err) => console.error('Email queue worker failed:', err.message));
-  // startInventorySyncWorker().catch((err) => console.error('ERP inventory sync worker failed:', err.message));
-  // startLeadEmailIngestionWorker().catch((err) => console.error('Lead email ingestion worker failed:', err.message));
-  // startCustomerInventorySyncWorker().catch((err) => console.error('Customer inventory ERP worker failed:', err.message));
+  // Background workers — enable via env (default: on when configured).
+  const workersOn = String(process.env.ENABLE_BACKGROUND_WORKERS || 'true').toLowerCase() !== 'false';
+  if (workersOn) {
+    startEmailQueueWorker().catch((err) => console.error('Email queue worker failed:', err.message));
+    startLeadEmailIngestionWorker().catch((err) => console.error('Lead email ingestion worker failed:', err.message));
+    // startInventorySyncWorker().catch((err) => console.error('ERP inventory sync worker failed:', err.message));
+    // startCustomerInventorySyncWorker().catch((err) => console.error('Customer inventory ERP worker failed:', err.message));
+  }
   const { ensureSupportSchema } = require('./controllers/supportController');
   const { ensureUserSchema } = require('./controllers/authController');
   const { ensureVendorManagementSchema, ensureVendorBillingSchema } = require('./controllers/vendorManagementSchema');

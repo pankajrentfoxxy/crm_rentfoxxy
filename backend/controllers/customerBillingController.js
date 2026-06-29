@@ -6,6 +6,11 @@ const { emailDocument } = require('../services/salesManagementPdfService');
 const {
   generateCustomerInvoice,
 } = require('../services/billingSchedulerService');
+const {
+  recordPayment,
+  recordFullPayment,
+  listPayments,
+} = require('../services/paymentLedgerService');
 
 const UPLOAD_DIR = path.join(__dirname, '../uploads/customer-invoices');
 
@@ -295,18 +300,72 @@ exports.sendInvoice = async (req, res) => {
 exports.markPaid = async (req, res) => {
   try {
     const { id } = req.params;
-    const { payment_reference } = req.body || {};
-    const result = await pool.query(
-      `UPDATE customer_invoices
-       SET status = 'paid', paid_at = NOW(), payment_reference = $1, updated_at = NOW()
-       WHERE invoice_id = $2
-       RETURNING *`,
-      [payment_reference || null, id]
+    const { payment_reference, method } = req.body || {};
+    const result = await recordFullPayment(pool, {
+      partyType: 'customer',
+      invoiceId: Number(id),
+      reference: payment_reference || null,
+      method: method || 'adjustment',
+      recordedBy: req.user?.user_id || null,
+    });
+    if (result.skipped) {
+      const inv = await pool.query(`SELECT * FROM customer_invoices WHERE invoice_id = $1`, [id]);
+      if (!inv.rows.length) {
+        return res.status(404).json({ success: false, message: 'Invoice not found' });
+      }
+      return res.json({ success: true, invoice: inv.rows[0], message: result.reason });
+    }
+    const inv = await pool.query(`SELECT * FROM customer_invoices WHERE invoice_id = $1`, [id]);
+    res.json({ success: true, invoice: inv.rows[0], payment: result.payment });
+  } catch (err) {
+    res.status(err.message === 'Invoice not found' ? 404 : 500).json({ success: false, message: err.message });
+  }
+};
+
+exports.recordInvoicePayment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { amount, payment_date, method, reference, notes } = req.body || {};
+    if (!amount) {
+      return res.status(400).json({ success: false, message: 'amount is required' });
+    }
+    const result = await recordPayment(pool, {
+      partyType: 'customer',
+      invoiceId: Number(id),
+      amount,
+      paymentDate: payment_date,
+      method,
+      reference,
+      notes,
+      recordedBy: req.user?.user_id || null,
+    });
+    const inv = await pool.query(`SELECT * FROM customer_invoices WHERE invoice_id = $1`, [id]);
+    res.status(201).json({
+      success: true,
+      payment: result.payment,
+      amount_paid: result.amount_paid,
+      status: result.status,
+      invoice: inv.rows[0],
+    });
+  } catch (err) {
+    const code = err.message === 'Invoice not found' ? 404 : 500;
+    res.status(code).json({ success: false, message: err.message });
+  }
+};
+
+exports.listInvoicePayments = async (req, res) => {
+  try {
+    const { invoiceId, id } = req.params;
+    const targetId = invoiceId || id;
+    const payments = await listPayments({ invoiceId: Number(targetId) });
+    const inv = await pool.query(
+      `SELECT invoice_id, grand_total, amount_paid, status FROM customer_invoices WHERE invoice_id = $1`,
+      [targetId]
     );
-    if (!result.rows.length) {
+    if (!inv.rows.length) {
       return res.status(404).json({ success: false, message: 'Invoice not found' });
     }
-    res.json({ success: true, invoice: result.rows[0] });
+    res.json({ success: true, payments, invoice: inv.rows[0] });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

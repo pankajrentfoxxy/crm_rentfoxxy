@@ -1,5 +1,10 @@
 const pool = require('../config/db');
 const { generateVendorBill } = require('../services/billingSchedulerService');
+const {
+  recordPayment,
+  recordFullPayment,
+  listPayments,
+} = require('../services/paymentLedgerService');
 
 async function nextDebitNoteNumber() {
   const res = await pool.query(
@@ -172,18 +177,72 @@ exports.approveVendorBill = async (req, res) => {
 exports.markVendorBillPaid = async (req, res) => {
   try {
     const { id } = req.params;
-    const { payment_reference, payment_date } = req.body || {};
-    const result = await pool.query(
-      `UPDATE vendor_monthly_bills
-       SET status = 'paid', payment_reference = $1, payment_date = $2, updated_at = NOW()
-       WHERE bill_id = $3
-       RETURNING *`,
-      [payment_reference || null, payment_date || new Date().toISOString().slice(0, 10), id]
+    const { payment_reference, payment_date, method } = req.body || {};
+    const result = await recordFullPayment(pool, {
+      partyType: 'vendor',
+      billId: Number(id),
+      reference: payment_reference || null,
+      method: method || 'adjustment',
+      recordedBy: req.user?.user_id || null,
+    });
+    if (result.skipped) {
+      const bill = await pool.query(`SELECT * FROM vendor_monthly_bills WHERE bill_id = $1`, [id]);
+      if (!bill.rows.length) {
+        return res.status(404).json({ success: false, message: 'Bill not found' });
+      }
+      return res.json({ success: true, bill: bill.rows[0], message: result.reason });
+    }
+    const bill = await pool.query(`SELECT * FROM vendor_monthly_bills WHERE bill_id = $1`, [id]);
+    res.json({ success: true, bill: bill.rows[0], payment: result.payment });
+  } catch (err) {
+    res.status(err.message === 'Bill not found' ? 404 : 500).json({ success: false, message: err.message });
+  }
+};
+
+exports.recordBillPayment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { amount, payment_date, method, reference, notes } = req.body || {};
+    if (!amount) {
+      return res.status(400).json({ success: false, message: 'amount is required' });
+    }
+    const result = await recordPayment(pool, {
+      partyType: 'vendor',
+      billId: Number(id),
+      amount,
+      paymentDate: payment_date,
+      method,
+      reference,
+      notes,
+      recordedBy: req.user?.user_id || null,
+    });
+    const bill = await pool.query(`SELECT * FROM vendor_monthly_bills WHERE bill_id = $1`, [id]);
+    res.status(201).json({
+      success: true,
+      payment: result.payment,
+      amount_paid: result.amount_paid,
+      status: result.status,
+      bill: bill.rows[0],
+    });
+  } catch (err) {
+    const code = err.message === 'Bill not found' ? 404 : 500;
+    res.status(code).json({ success: false, message: err.message });
+  }
+};
+
+exports.listBillPayments = async (req, res) => {
+  try {
+    const { billId, id } = req.params;
+    const targetId = billId || id;
+    const payments = await listPayments({ billId: Number(targetId) });
+    const bill = await pool.query(
+      `SELECT bill_id, total_payable, amount_paid, status FROM vendor_monthly_bills WHERE bill_id = $1`,
+      [targetId]
     );
-    if (!result.rows.length) {
+    if (!bill.rows.length) {
       return res.status(404).json({ success: false, message: 'Bill not found' });
     }
-    res.json({ success: true, bill: result.rows[0] });
+    res.json({ success: true, payments, bill: bill.rows[0] });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

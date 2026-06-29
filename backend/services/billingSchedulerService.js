@@ -3,20 +3,24 @@
  */
 const cron = require('node-cron');
 const pool = require('../config/db');
+const logger = require('../utils/logger');
+const { enqueueEmail } = require('./emailQueueService');
+const {
+  toLocalYmd,
+  addDays,
+  daysInclusive,
+  monthSegments,
+  calcReturnCreditNoteAmount,
+  calcVendorLineAmount,
+} = require('./billingMath');
+const {
+  insertCustomerInvoiceLines,
+  insertVendorBillLines,
+} = require('./billingLineItemsService');
 
-// Format a Date as YYYY-MM-DD in LOCAL time. Using .toISOString() here shifts
-// dates back a day in IST (UTC+5:30 midnight = previous day in UTC), which both
-// mislabels invoice line items and skews the month-boundary overlap test.
-function toLocalYmd(d) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
+const billingLog = logger.child ? logger.child({ module: 'billing' }) : logger;
 
 async function nextInvoiceNumber(entity = 'rentfoxxy') {
-  // Rentals invoice under Rentfoxxy; per-entity sequence (migration 074),
-  // falling back to the legacy shared sequence if the entity one is absent.
   const docType = entity === 'gorefurbo' ? 'invoice_gorefurbo' : 'invoice_rentfoxxy';
   const res = await pool.query(
     `UPDATE sm_document_sequences
@@ -44,38 +48,38 @@ async function nextVendorBillNumber() {
   return res.rows[0].number;
 }
 
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
-const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
-const daysInclusive = (a, b) => Math.round((b - a) / MS_PER_DAY) + 1;
-
-// Split [start, end] (inclusive, JS Dates at local midnight) into one segment per
-// calendar month, each carrying that month's days-in-month for exact pro-rata.
-function monthSegments(start, end) {
-  const segs = [];
-  let cur = new Date(start.getFullYear(), start.getMonth(), start.getDate());
-  while (cur <= end) {
-    const y = cur.getFullYear();
-    const m = cur.getMonth();
-    const monthLast = new Date(y, m + 1, 0);
-    const segEnd = monthLast < end ? monthLast : end;
-    segs.push({ segStart: new Date(cur), segEnd, year: y, month: m + 1, daysInMonth: monthLast.getDate() });
-    cur = new Date(y, m + 1, 1);
+async function alertOpsOnBillingFailure(runName, summary) {
+  const to = process.env.OPS_ALERT_EMAIL || process.env.SMTP_USER;
+  if (!to) return;
+  try {
+    await enqueueEmail({
+      toEmail: to,
+      subject: `[Rentfoxxy CRM] Billing cron errors — ${runName}`,
+      bodyText: `Billing run "${runName}" completed with errors.\n\n${JSON.stringify(summary, null, 2)}`,
+      bodyHtml: `<pre>${JSON.stringify(summary, null, 2)}</pre>`,
+      dedupeKey: `billing-alert-${runName}-${new Date().toISOString().slice(0, 13)}`,
+    });
+  } catch (e) {
+    billingLog.error({ err: e.message, run: runName }, 'Failed to enqueue ops billing alert');
   }
-  return segs;
 }
 
-// PREPAID customer invoice for `month/year`.
-//  - Bills the invoice month IN ADVANCE (1st -> last day) for every held unit.
-//  - CATCH-UP: a unit taken mid-prior-month whose partial period was never
-//    invoiced (rent_billed_until IS NULL) is billed from its rent_start_date,
-//    so the line spans e.g. 15-May -> 30-Jun on the June invoice.
-//  - Each unit emits one line per calendar-month segment (exact pro-rata).
-//  - rent_billed_until advances to the billed-through date so the next invoice
-//    continues from there (no double billing).
-//  - Returned units are billed only up to their return date; the unused prepaid
-//    tail is refunded separately by a credit note created at pickup.
-//  - Approved, unapplied credit notes are subtracted (base amount) and marked
-//    applied. Rentals always bill under Rentfoxxy.
+async function runBillingBatch(runName, fn) {
+  try {
+    const results = await fn();
+    const errors = results.filter((r) => r.error).length;
+    const skipped = results.filter((r) => r.skipped).length;
+    const summary = { run: runName, processed: results.length, skipped, errors };
+    billingLog.info(summary, 'billing cron complete');
+    if (errors > 0) await alertOpsOnBillingFailure(runName, { ...summary, results });
+    return results;
+  } catch (err) {
+    billingLog.error({ run: runName, err: err.message }, 'billing cron failed');
+    await alertOpsOnBillingFailure(runName, { run: runName, fatal: err.message });
+    throw err;
+  }
+}
+
 async function generateCustomerInvoice(customerId, month, year) {
   const monthStart = new Date(year, month - 1, 1);
   const monthEnd = new Date(year, month, 0);
@@ -94,7 +98,6 @@ async function generateCustomerInvoice(customerId, month, year) {
       return { skipped: true, invoice_id: existing.rows[0].invoice_id };
     }
 
-    // Units held by this customer with an unbilled rental period up to monthEnd.
     const serialsRes = await client.query(
       `SELECT vsn.serial_id,
               COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
@@ -128,15 +131,13 @@ async function generateCustomerInvoice(customerId, month, year) {
       const billedUntil = row.rent_billed_until ? new Date(row.rent_billed_until) : null;
       const rentEnd = row.rent_end_date ? new Date(row.rent_end_date) : null;
 
-      // Start where we left off (prepaid cursor), else from rent start (catch-up).
       let billStart = billedUntil ? addDays(billedUntil, 1) : rentStart;
       if (billStart < rentStart) billStart = rentStart;
 
-      // Advance to end of the invoice month; a returned unit stops at its return.
       let billEnd = monthEnd;
       if (rentEnd && rentEnd < billEnd) billEnd = rentEnd;
 
-      if (billStart > billEnd) continue; // already fully billed / returned before window
+      if (billStart > billEnd) continue;
 
       const monthlyRate = parseFloat(row.rent_monthly_rate || 0);
       for (const seg of monthSegments(billStart, billEnd)) {
@@ -146,6 +147,7 @@ async function generateCustomerInvoice(customerId, month, year) {
         subtotal += amount;
         const isCatchup = seg.year !== year || seg.month !== month;
         lineItems.push({
+          serial_id: row.serial_id,
           ttspl_id: row.ttspl_id || null,
           serial_number: row.serial_number,
           dc_number: row.dc_number,
@@ -167,7 +169,6 @@ async function generateCustomerInvoice(customerId, month, year) {
       if (!periodStart || billStart < periodStart) periodStart = billStart;
       if (!periodEnd || billEnd > periodEnd) periodEnd = billEnd;
 
-      // Advance the prepaid cursor so next month continues cleanly.
       await client.query(
         `UPDATE vendor_serial_numbers SET rent_billed_until = $1, updated_at = NOW()
          WHERE serial_id = $2`,
@@ -215,20 +216,23 @@ async function generateCustomerInvoice(customerId, month, year) {
       ]
     );
 
+    const invoiceId = insertRes.rows[0].invoice_id;
+    await insertCustomerInvoiceLines(client, invoiceId, lineItems);
+
     if (creditAdjustment > 0) {
       await client.query(
         `UPDATE customer_credit_notes
          SET applied_in_invoice_id = $1, status = 'applied', updated_at = NOW()
          WHERE customer_id = $2 AND status = 'approved'
            AND applied_in_invoice_id IS NULL`,
-        [insertRes.rows[0].invoice_id, customerId]
+        [invoiceId, customerId]
       );
     }
 
     await client.query('COMMIT');
-    console.log(`[billing] Generated PREPAID invoice ${invoiceNumber} for customer ${customerId}`);
+    billingLog.info({ invoiceNumber, customerId }, 'Generated PREPAID customer invoice');
     return {
-      invoice_id: insertRes.rows[0].invoice_id,
+      invoice_id: invoiceId,
       invoice_number: insertRes.rows[0].invoice_number,
     };
   } catch (err) {
@@ -239,11 +243,6 @@ async function generateCustomerInvoice(customerId, month, year) {
   }
 }
 
-// Called when a rental unit is picked up (returned). If the customer prepaid
-// beyond the return date, raise a PENDING credit note for the unused days
-// (base amount only — GST not refunded), for the accounts team to approve.
-// Runs inside the caller's transaction (`client`). Returns the credit note row
-// or null when nothing is refundable.
 async function createReturnCreditNote(client, { serialId, returnDate, returnTicketId = null, actorUserId = null }) {
   const r = await client.query(
     `SELECT serial_id, current_customer_id,
@@ -255,21 +254,14 @@ async function createReturnCreditNote(client, { serialId, returnDate, returnTick
   const s = r.rows[0];
   if (!s || !s.current_customer_id || !s.rent_billed_until) return null;
 
-  const billedUntil = new Date(s.rent_billed_until);
+  const calc = calcReturnCreditNoteAmount({
+    rentMonthlyRate: s.rent_monthly_rate,
+    returnDate,
+    rentBilledUntil: s.rent_billed_until,
+  });
+  if (!calc) return null;
+
   const retDate = new Date(returnDate);
-  if (billedUntil <= retDate) return null; // nothing prepaid beyond the return
-
-  // Unused days = (return+1 .. billed-through); priced at the billed-through month.
-  const refundStart = addDays(retDate, 1);
-  const unusedDays = daysInclusive(refundStart, billedUntil);
-  if (unusedDays <= 0) return null;
-
-  const monthDays = new Date(billedUntil.getFullYear(), billedUntil.getMonth() + 1, 0).getDate();
-  const monthlyRate = parseFloat(s.rent_monthly_rate || 0);
-  const dailyRate = monthlyRate / monthDays;
-  const amount = parseFloat((dailyRate * unusedDays).toFixed(2));
-  if (amount <= 0) return null;
-
   const num = await client.query(
     `UPDATE sm_document_sequences SET last_value = last_value + 1
      WHERE doc_type = 'credit_note'
@@ -288,19 +280,18 @@ async function createReturnCreditNote(client, { serialId, returnDate, returnTick
       cnNumber, s.current_customer_id,
       'Rental return — unused prepaid days',
       `Unit ${s.ttspl_id || s.serial_id} returned on ${toLocalYmd(retDate)}; ` +
-        `${unusedDays} prepaid day(s) (${toLocalYmd(refundStart)} to ${toLocalYmd(billedUntil)}) refunded at ₹${dailyRate.toFixed(2)}/day (base, excl. GST).`,
-      amount, unusedDays, parseFloat(dailyRate.toFixed(2)),
-      toLocalYmd(refundStart), toLocalYmd(billedUntil),
+        `${calc.unusedDays} prepaid day(s) (${toLocalYmd(calc.refundStart)} to ${toLocalYmd(calc.billedUntil)}) refunded at ₹${calc.dailyRate.toFixed(2)}/day (base, excl. GST).`,
+      calc.amount, calc.unusedDays, calc.dailyRate,
+      toLocalYmd(calc.refundStart), toLocalYmd(calc.billedUntil),
       JSON.stringify([s.ttspl_id].filter(Boolean)), actorUserId,
       serialId, returnTicketId,
     ]
   );
-  console.log(`[billing] Return credit note ${cnNumber} (₹${amount}) for customer ${s.current_customer_id}, serial ${serialId}`);
+  billingLog.info({ cnNumber, amount: calc.amount, customerId: s.current_customer_id, serialId }, 'Return credit note created');
   return ins.rows[0];
 }
 
 async function generateAllCustomerInvoices(month, year) {
-  // Customers holding billable rental units, per the authoritative inventory.
   const customersRes = await pool.query(
     `SELECT DISTINCT current_customer_id AS customer_id
      FROM vendor_serial_numbers
@@ -310,137 +301,147 @@ async function generateAllCustomerInvoices(month, year) {
        AND rent_start_date IS NOT NULL`
   );
 
-  const results = [];
-  for (const row of customersRes.rows) {
-    try {
-      const result = await generateCustomerInvoice(row.customer_id, month, year);
-      results.push({ customer_id: row.customer_id, ...result });
-    } catch (err) {
-      console.error(`[billing] Error generating invoice for customer ${row.customer_id}:`, err.message);
-      results.push({ customer_id: row.customer_id, error: err.message });
+  return runBillingBatch(`customer-invoices-${month}-${year}`, async () => {
+    const results = [];
+    for (const row of customersRes.rows) {
+      try {
+        const result = await generateCustomerInvoice(row.customer_id, month, year);
+        results.push({ customer_id: row.customer_id, ...result });
+      } catch (err) {
+        billingLog.error({ customerId: row.customer_id, err: err.message }, 'Customer invoice generation failed');
+        results.push({ customer_id: row.customer_id, error: err.message });
+      }
     }
-  }
-
-  console.log(`[billing] Monthly invoice run complete: ${results.length} customers processed`);
-  return results;
+    return results;
+  });
 }
 
 async function generateVendorBill(vendorId, month, year) {
   const monthStart = new Date(year, month - 1, 1);
   const monthEnd = new Date(year, month, 0);
 
-  const existing = await pool.query(
-    `SELECT bill_id FROM vendor_monthly_bills
-     WHERE vendor_id = $1 AND bill_month = $2 AND bill_year = $3`,
-    [vendorId, month, year]
-  );
-  if (existing.rows.length) {
-    return { skipped: true, bill_id: existing.rows[0].bill_id };
-  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-  const serialsRes = await pool.query(
-    `SELECT vsn.serial_id,
-            COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
-            vsn.serial_number,
-            vsn.inventory_status,
-            COALESCE((vsn.extra->>'received_at')::date, vsn.rental_start_date, vsn.created_at::date) AS received_at,
-            (vsn.extra->>'returned_at')::date AS returned_at,
-            (vpo.line_items->0->>'rate')::numeric AS rental_monthly_rate,
-            vpo.purchase_order_type AS po_type
-     FROM vendor_serial_numbers vsn
-     JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id
-     WHERE vpo.vendor_id = $1
-       AND vpo.purchase_order_type IN ('rental_purchase','rent_to_own')
-       AND COALESCE((vsn.extra->>'received_at')::date, vsn.rental_start_date, vsn.created_at::date) IS NOT NULL
-       AND COALESCE((vsn.extra->>'received_at')::date, vsn.rental_start_date, vsn.created_at::date) <= $2::date`,
-    [vendorId, toLocalYmd(monthEnd)]
-  );
-
-  if (!serialsRes.rows.length) {
-    return { skipped: true, reason: 'No rental serials' };
-  }
-
-  const daysInMonth = monthEnd.getDate();
-  const lineItems = [];
-  let subtotal = 0;
-
-  for (const row of serialsRes.rows) {
-    const receivedAt = new Date(row.received_at);
-    const returnedAt = row.returned_at ? new Date(row.returned_at) : null;
-
-    const effectiveStart = receivedAt > monthStart ? receivedAt : monthStart;
-    const effectiveEnd = (returnedAt && returnedAt < monthEnd) ? returnedAt : monthEnd;
-
-    if (effectiveStart > effectiveEnd) continue;
-
-    const msPerDay = 24 * 60 * 60 * 1000;
-    const days = Math.max(1, Math.round((effectiveEnd - effectiveStart) / msPerDay) + 1);
-
-    const monthlyRate = parseFloat(row.rental_monthly_rate || 0);
-    const dailyRate = monthlyRate / daysInMonth;
-    const amount = parseFloat((dailyRate * days).toFixed(2));
-
-    subtotal += amount;
-    lineItems.push({
-      serial_id: row.serial_id,
-      ttspl_id: row.ttspl_id || null,
-      serial_number: row.serial_number,
-      received_date: toLocalYmd(receivedAt),
-      return_date: returnedAt ? toLocalYmd(returnedAt) : null,
-      days_in_month: days,
-      monthly_rate: monthlyRate,
-      daily_rate: parseFloat(dailyRate.toFixed(2)),
-      amount,
-    });
-  }
-
-  if (!lineItems.length) {
-    return { skipped: true, reason: 'No active serials in this month' };
-  }
-
-  const dnRes = await pool.query(
-    `SELECT COALESCE(SUM(amount), 0) AS total_dn
-     FROM vendor_debit_notes
-     WHERE vendor_id = $1 AND status = 'approved'
-       AND adjusted_in_bill_id IS NULL`,
-    [vendorId]
-  );
-  const debitAdjustment = parseFloat(dnRes.rows[0].total_dn || 0);
-
-  const gstAmount = parseFloat((subtotal * 0.18).toFixed(2));
-  const totalPayable = Math.max(0, parseFloat((subtotal + gstAmount - debitAdjustment).toFixed(2)));
-
-  const billNumber = await nextVendorBillNumber();
-
-  const insertRes = await pool.query(
-    `INSERT INTO vendor_monthly_bills
-      (bill_number, vendor_id, bill_month, bill_year,
-       bill_date, from_date, to_date, line_items,
-       subtotal, gst_amount, debit_note_adjustment, total_payable, status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,'generated')
-     RETURNING bill_id, bill_number`,
-    [
-      billNumber, vendorId, month, year,
-      toLocalYmd(new Date()),
-      toLocalYmd(monthStart),
-      toLocalYmd(monthEnd),
-      JSON.stringify(lineItems),
-      subtotal.toFixed(2), gstAmount, debitAdjustment.toFixed(2), totalPayable,
-    ]
-  );
-
-  if (debitAdjustment > 0) {
-    await pool.query(
-      `UPDATE vendor_debit_notes
-       SET adjusted_in_bill_id = $1, status = 'adjusted', updated_at = NOW()
-       WHERE vendor_id = $2 AND status = 'approved'
-         AND adjusted_in_bill_id IS NULL`,
-      [insertRes.rows[0].bill_id, vendorId]
+    const existing = await client.query(
+      `SELECT bill_id FROM vendor_monthly_bills
+       WHERE vendor_id = $1 AND bill_month = $2 AND bill_year = $3`,
+      [vendorId, month, year]
     );
-  }
+    if (existing.rows.length) {
+      await client.query('ROLLBACK');
+      return { skipped: true, bill_id: existing.rows[0].bill_id };
+    }
 
-  console.log(`[billing] Generated vendor bill ${billNumber} for vendor ${vendorId}`);
-  return { bill_id: insertRes.rows[0].bill_id, bill_number: insertRes.rows[0].bill_number };
+    const serialsRes = await client.query(
+      `SELECT vsn.serial_id,
+              COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
+              vsn.serial_number,
+              vsn.inventory_status,
+              COALESCE((vsn.extra->>'received_at')::date, vsn.rental_start_date, vsn.created_at::date) AS received_at,
+              (vsn.extra->>'returned_at')::date AS returned_at,
+              (vpo.line_items->0->>'rate')::numeric AS rental_monthly_rate,
+              vpo.purchase_order_type AS po_type
+       FROM vendor_serial_numbers vsn
+       JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id
+       WHERE vpo.vendor_id = $1
+         AND vpo.purchase_order_type IN ('rental_purchase','rent_to_own')
+         AND COALESCE((vsn.extra->>'received_at')::date, vsn.rental_start_date, vsn.created_at::date) IS NOT NULL
+         AND COALESCE((vsn.extra->>'received_at')::date, vsn.rental_start_date, vsn.created_at::date) <= $2::date`,
+      [vendorId, toLocalYmd(monthEnd)]
+    );
+
+    if (!serialsRes.rows.length) {
+      await client.query('ROLLBACK');
+      return { skipped: true, reason: 'No rental serials' };
+    }
+
+    const lineItems = [];
+    let subtotal = 0;
+
+    for (const row of serialsRes.rows) {
+      const calc = calcVendorLineAmount({
+        receivedAt: row.received_at,
+        returnedAt: row.returned_at,
+        monthStart,
+        monthEnd,
+        monthlyRate: row.rental_monthly_rate,
+      });
+      if (!calc) continue;
+
+      subtotal += calc.amount;
+      lineItems.push({
+        serial_id: row.serial_id,
+        ttspl_id: row.ttspl_id || null,
+        serial_number: row.serial_number,
+        received_date: toLocalYmd(new Date(row.received_at)),
+        return_date: row.returned_at ? toLocalYmd(new Date(row.returned_at)) : null,
+        days_in_month: calc.days,
+        monthly_rate: calc.monthlyRate,
+        daily_rate: calc.dailyRate,
+        amount: calc.amount,
+      });
+    }
+
+    if (!lineItems.length) {
+      await client.query('ROLLBACK');
+      return { skipped: true, reason: 'No active serials in this month' };
+    }
+
+    const dnRes = await client.query(
+      `SELECT COALESCE(SUM(amount), 0) AS total_dn
+       FROM vendor_debit_notes
+       WHERE vendor_id = $1 AND status = 'approved'
+         AND adjusted_in_bill_id IS NULL`,
+      [vendorId]
+    );
+    const debitAdjustment = parseFloat(dnRes.rows[0].total_dn || 0);
+
+    const gstAmount = parseFloat((subtotal * 0.18).toFixed(2));
+    const totalPayable = Math.max(0, parseFloat((subtotal + gstAmount - debitAdjustment).toFixed(2)));
+
+    const billNumber = await nextVendorBillNumber();
+
+    const insertRes = await client.query(
+      `INSERT INTO vendor_monthly_bills
+        (bill_number, vendor_id, bill_month, bill_year,
+         bill_date, from_date, to_date, line_items,
+         subtotal, gst_amount, debit_note_adjustment, total_payable, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,'generated')
+       RETURNING bill_id, bill_number`,
+      [
+        billNumber, vendorId, month, year,
+        toLocalYmd(new Date()),
+        toLocalYmd(monthStart),
+        toLocalYmd(monthEnd),
+        JSON.stringify(lineItems),
+        subtotal.toFixed(2), gstAmount, debitAdjustment.toFixed(2), totalPayable,
+      ]
+    );
+
+    const billId = insertRes.rows[0].bill_id;
+    await insertVendorBillLines(client, billId, lineItems);
+
+    if (debitAdjustment > 0) {
+      await client.query(
+        `UPDATE vendor_debit_notes
+         SET adjusted_in_bill_id = $1, status = 'adjusted', updated_at = NOW()
+         WHERE vendor_id = $2 AND status = 'approved'
+           AND adjusted_in_bill_id IS NULL`,
+        [billId, vendorId]
+      );
+    }
+
+    await client.query('COMMIT');
+    billingLog.info({ billNumber, vendorId }, 'Generated vendor bill');
+    return { bill_id: billId, bill_number: insertRes.rows[0].bill_number };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 async function generateAllVendorBills(month, year) {
@@ -452,27 +453,27 @@ async function generateAllVendorBills(month, year) {
        AND COALESCE((vsn.extra->>'received_at')::date, vsn.rental_start_date, vsn.created_at::date) IS NOT NULL`
   );
 
-  const results = [];
-  for (const row of vendorsRes.rows) {
-    try {
-      const result = await generateVendorBill(row.vendor_id, month, year);
-      results.push({ vendor_id: row.vendor_id, ...result });
-    } catch (err) {
-      console.error(`[billing] Error generating bill for vendor ${row.vendor_id}:`, err.message);
-      results.push({ vendor_id: row.vendor_id, error: err.message });
+  return runBillingBatch(`vendor-bills-${month}-${year}`, async () => {
+    const results = [];
+    for (const row of vendorsRes.rows) {
+      try {
+        const result = await generateVendorBill(row.vendor_id, month, year);
+        results.push({ vendor_id: row.vendor_id, ...result });
+      } catch (err) {
+        billingLog.error({ vendorId: row.vendor_id, err: err.message }, 'Vendor bill generation failed');
+        results.push({ vendor_id: row.vendor_id, error: err.message });
+      }
     }
-  }
-  return results;
+    return results;
+  });
 }
 
 function startBillingScheduler() {
   cron.schedule('1 0 1 * *', async () => {
-    // Customer billing is PREPAID: on the 1st, bill the CURRENT month in advance
-    // (the engine also catches up any unbilled mid-prior-month starts).
     const now = new Date();
     const month = now.getMonth() + 1;
     const year = now.getFullYear();
-    console.log(`[billing] CRON: generating PREPAID customer invoices for ${month}/${year}`);
+    billingLog.info({ month, year }, 'CRON: generating PREPAID customer invoices');
     await generateAllCustomerInvoices(month, year);
   }, { timezone: 'Asia/Kolkata' });
 
@@ -483,12 +484,12 @@ function startBillingScheduler() {
     if (tomorrow.getMonth() !== now.getMonth()) {
       const month = now.getMonth() + 1;
       const year = now.getFullYear();
-      console.log(`[billing] CRON: generating vendor bills for ${month}/${year}`);
+      billingLog.info({ month, year }, 'CRON: generating vendor bills');
       await generateAllVendorBills(month, year);
     }
   }, { timezone: 'Asia/Kolkata' });
 
-  console.log('[billing] Scheduler started (customer: 1st 00:01 IST, vendor: last day 23:59 IST)');
+  billingLog.info('Billing scheduler started (customer: 1st 00:01 IST, vendor: last day 23:59 IST)');
 }
 
 module.exports = {
@@ -498,4 +499,5 @@ module.exports = {
   generateVendorBill,
   generateAllVendorBills,
   createReturnCreditNote,
+  runBillingBatch,
 };

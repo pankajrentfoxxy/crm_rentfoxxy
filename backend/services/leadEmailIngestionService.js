@@ -233,6 +233,28 @@ const hasMessageProcessed = async (messageId) => {
     return result.rows.length > 0;
 };
 
+/** Refresh an existing lead when the same enquiry email/phone arrives again. */
+const updateExistingLeadFromEmail = async (leadId, { name, email, phone, city, safeNotes }) => {
+    await pool.query(
+        `UPDATE leads SET
+            name = COALESCE(NULLIF($1, ''), name),
+            email = COALESCE($2, email),
+            phone = COALESCE($3, phone),
+            city = COALESCE($4, city),
+            personal_remarks = COALESCE($5, personal_remarks),
+            updated_at = NOW(),
+            last_activity_at = NOW()
+         WHERE lead_id = $6`,
+        [name, email, phone, city, safeNotes, leadId]
+    );
+
+    await pool.query(
+        `INSERT INTO lead_activities (lead_id, user_id, action, status_from, status_to, notes, created_at)
+         VALUES ($1, NULL, 'email_reingested', NULL, NULL, $2, CURRENT_TIMESTAMP)`,
+        [leadId, safeNotes || 'Lead refreshed from enquiry email']
+    );
+};
+
 const insertLeadFromEmail = async ({ parsedFields, subject, fromAddress, sentAt }) => {
     const combinedName = normalizeText(
         `${normalizeText(parsedFields.first_name) || ''} ${normalizeText(parsedFields.last_name) || ''}`.trim()
@@ -247,6 +269,7 @@ const insertLeadFromEmail = async ({ parsedFields, subject, fromAddress, sentAt 
 
     const existingLeadId = await findExistingLeadId({ email, phone });
     if (existingLeadId) {
+        await updateExistingLeadFromEmail(existingLeadId, { name, email, phone, city, safeNotes });
         return existingLeadId;
     }
 
@@ -348,7 +371,7 @@ const runLeadEmailSync = async () => {
         const sinceDate = getSyncSinceDate();
 
         let created = 0;
-        let deduped = 0;
+        let updated = 0;
         let skipped = 0;
         for (const mailbox of mailboxes) {
             try {
@@ -404,8 +427,12 @@ const runLeadEmailSync = async () => {
                             sentAt: message.envelope?.date || parsed.date || null
                         });
                         await markMessageProcessed({ messageId, mailbox, subject, leadId });
-                        if (beforeInsertLeadId) deduped++;
-                        else {
+                        if (beforeInsertLeadId) {
+                            updated++;
+                            prisma.lead.findUnique({ where: { leadId } })
+                                .then((lead) => lead && ensureResearch(lead, { force: true }))
+                                .catch((err) => console.error('Lead research refresh error:', err));
+                        } else {
                             created++;
                             if (leadId) {
                                 prisma.lead.findUnique({ where: { leadId } })
@@ -423,10 +450,10 @@ const runLeadEmailSync = async () => {
             }
         }
 
-        if (process.env.NODE_ENV !== 'production') {
-            console.log(`Lead email sync: created=${created}, deduped=${deduped}, skipped=${skipped}`);
-        }
+        const summary = { created, updated, skipped };
+        console.log(`Lead email sync: ${JSON.stringify(summary)}`);
         lastSuccessfulSyncAt = new Date();
+        return summary;
     } finally {
         try {
             await client.logout();
@@ -462,7 +489,21 @@ const startLeadEmailIngestionWorker = async () => {
     }
 };
 
+const getLeadEmailSyncStatus = () => ({
+    configured: !!(
+        process.env.LEAD_EMAIL_IMAP_HOST &&
+        process.env.LEAD_EMAIL_IMAP_USER &&
+        process.env.LEAD_EMAIL_IMAP_PASS
+    ),
+    workerRunning: !!intervalRef,
+    lastSuccessfulSyncAt: lastSuccessfulSyncAt ? lastSuccessfulSyncAt.toISOString() : null,
+    pollIntervalMs: LEAD_EMAIL_POLL_INTERVAL_MS,
+    lookbackDays: LEAD_EMAIL_LOOKBACK_DAYS,
+    mailboxes: LEAD_EMAIL_MAILBOXES,
+});
+
 module.exports = {
     startLeadEmailIngestionWorker,
-    runLeadEmailSync
+    runLeadEmailSync,
+    getLeadEmailSyncStatus,
 };

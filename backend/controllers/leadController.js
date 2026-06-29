@@ -5,7 +5,10 @@ const prisma = require('../prisma/client');
 const pool = require('../config/db');
 const { ensureResearch } = require('../services/leadResearchService');
 const { getNextAutoAssignee, updateAutoAssignConfig } = require('../services/leadAutoAssignService');
-const { isRestrictedToAssigned } = require('../services/dataScopeService');
+const {
+  runLeadEmailSync,
+  getLeadEmailSyncStatus,
+} = require('../services/leadEmailIngestionService');
 
 const { STATUSES_WITHOUT_STAGE_CHOICE, STAGES_BY_STATUS, stagesForStatus } = require('../constants/leadStages');
 
@@ -2335,5 +2338,30 @@ exports.getLeadConversionStatus = async (req, res) => {
   } catch (error) {
     console.error('getLeadConversionStatus error:', error);
     res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+exports.getEmailSyncStatus = async (_req, res) => {
+  try {
+    res.json({ success: true, ...getLeadEmailSyncStatus() });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.triggerEmailSync = async (_req, res) => {
+  try {
+    const status = getLeadEmailSyncStatus();
+    if (!status.configured) {
+      return res.status(400).json({
+        success: false,
+        message: 'Lead email IMAP is not configured (LEAD_EMAIL_IMAP_HOST/USER/PASS)',
+      });
+    }
+    const summary = await runLeadEmailSync();
+    res.json({ success: true, summary, ...getLeadEmailSyncStatus() });
+  } catch (error) {
+    console.error('triggerEmailSync error:', error);
+    res.status(500).json({ success: false, message: error.message });
   }
 };

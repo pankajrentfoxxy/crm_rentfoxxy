@@ -9,6 +9,8 @@ const cp = checkSectionPermission;
 router.use(authMiddleware);
 
 router.get('/bills', cp('vendor_billing_mgmt', 'view'), ctrl.listVendorBills);
+router.get('/bills/:billId/payments', cp('vendor_billing_mgmt', 'view'), ctrl.listBillPayments);
+router.post('/bills/:id/payments', cp('vendor_billing_mgmt', 'edit'), ctrl.recordBillPayment);
 router.get('/bills/:billId', cp('vendor_billing_mgmt', 'view'), ctrl.getVendorBill);
 router.post('/bills/generate', cp('vendor_billing_mgmt', 'create'), ctrl.generateVendorBill);
 router.patch('/bills/:id/approve', cp('vendor_billing_mgmt', 'edit'), ctrl.approveVendorBill);
