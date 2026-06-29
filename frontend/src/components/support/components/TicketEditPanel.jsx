@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import api from '../../../utils/api';
-import { formatAddress } from '../utils';
+import { formatAddress, itemAllowsTechnicianAssign } from '../utils';
 
 const emptyRow = () => ({
   key: `new-${Date.now()}-${Math.random()}`,
@@ -33,6 +33,8 @@ export default function TicketEditPanel({ ticket, items, customerAddresses, tech
     assigned_to: i.assigned_to || '',
     remarks: i.remarks || '',
     status: i.status,
+    item_type: i.item_type,
+    pickup_method: i.pickup_method,
     serial: i.unique_serial_number || i.serial_number,
     canRemove: !i.assigned_to && i.status === 'open'
   })));
@@ -160,12 +162,20 @@ export default function TicketEditPanel({ ticket, items, customerAddresses, tech
                 <button type="button" className="text-red-700 text-sm min-h-[44px] px-2" onClick={() => removeExisting(row.id)}>Remove</button>
               )}
             </div>
+            {itemAllowsTechnicianAssign(row) ? (
             <select className="w-full border rounded-lg px-3 py-3 min-h-[44px] text-base" value={row.assigned_to} onChange={(e) => setItemRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, assigned_to: e.target.value } : r)))}>
               <option value="">Assign technician</option>
               {technicians.map((t) => (
                 <option key={t.user_id} value={t.user_id}>{t.name} ({t.open_ticket_count || 0})</option>
               ))}
             </select>
+            ) : (
+              <p className="text-sm text-slate-500">
+                {row.pickup_method === 'courier' || row.pickup_method === 'porter'
+                  ? 'Technician assignment is not available for courier/porter handling.'
+                  : 'Assign handling method before assigning a technician.'}
+              </p>
+            )}
             <textarea className="w-full border rounded-lg p-3 min-h-[64px] text-base" placeholder="Remarks" value={row.remarks} onChange={(e) => setItemRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, remarks: e.target.value } : r)))} />
           </article>
         ))}

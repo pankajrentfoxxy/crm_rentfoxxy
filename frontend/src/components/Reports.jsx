@@ -154,11 +154,209 @@ function WorkloadSection({ title, icon: Icon, accent, summaryText, totals, colum
 function defaultDateRange() {
     const to = new Date();
     const from = new Date();
-    from.setDate(from.getDate() - 30);
+    from.setDate(from.getDate() - 29);
     return {
-        from: from.toISOString().slice(0, 10),
-        to: to.toISOString().slice(0, 10)
+        from: localYmd(from),
+        to: localYmd(to)
     };
+}
+
+function localYmd(date) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+}
+
+const DATE_PRESETS = [
+    { key: 'today', label: 'Today' },
+    { key: 'yesterday', label: 'Yesterday' },
+    { key: 'last7', label: 'Last 7 Days' },
+    { key: 'last30', label: 'Last 30 Days' },
+    { key: 'thisMonth', label: 'This Month' },
+    { key: 'custom', label: 'Custom Date Range' },
+];
+
+function rangeForPreset(preset) {
+    const today = new Date();
+    const todayStr = localYmd(today);
+    switch (preset) {
+        case 'today':
+            return { from: todayStr, to: todayStr };
+        case 'yesterday': {
+            const y = new Date(today);
+            y.setDate(y.getDate() - 1);
+            return { from: localYmd(y), to: localYmd(y) };
+        }
+        case 'last7': {
+            const f = new Date(today);
+            f.setDate(f.getDate() - 6);
+            return { from: localYmd(f), to: todayStr };
+        }
+        case 'last30': {
+            const f = new Date(today);
+            f.setDate(f.getDate() - 29);
+            return { from: localYmd(f), to: todayStr };
+        }
+        case 'thisMonth': {
+            const f = new Date(today.getFullYear(), today.getMonth(), 1);
+            return { from: localYmd(f), to: todayStr };
+        }
+        default:
+            return null;
+    }
+}
+
+const TECH_SUMMARY_COLUMNS = [
+    { key: 'total_assigned', label: 'Assigned', short: 'Assigned' },
+    { key: 'active_tickets', label: 'Active', short: 'Active' },
+    { key: 'completed_tickets', label: 'Completed', short: 'Done' },
+    { key: 'pending_tickets', label: 'Pending', short: 'Pending' },
+    { key: 'overdue_tickets', label: 'Overdue', short: 'Overdue' },
+    { key: 'qc1_tickets', label: 'QC1', short: 'QC1' },
+    { key: 'qc2_tickets', label: 'QC2', short: 'QC2' },
+    { key: 'chip_repair_tickets', label: 'Chip Repair', short: 'Chip' },
+    { key: 'body_paint_tickets', label: 'Body & Paint', short: 'Body' },
+    { key: 'average_completion_human', label: 'Avg completion', short: 'Avg time' },
+    { key: 'total_working_human', label: 'Total working time', short: 'Work time' },
+];
+
+const TEAM_SUMMARY_METRICS = [
+    { key: 'total_tickets', label: 'Total tickets' },
+    { key: 'total_assigned', label: 'Assigned' },
+    { key: 'active_tickets', label: 'Active' },
+    { key: 'completed_tickets', label: 'Completed' },
+    { key: 'pending_tickets', label: 'Pending' },
+    { key: 'overdue_tickets', label: 'Overdue' },
+    { key: 'average_completion_human', label: 'Avg completion' },
+    { key: 'total_working_human', label: 'Total work time' },
+];
+
+const TEAM_MEMBER_COLUMNS = [
+    { key: 'total_assigned', short: 'Assigned' },
+    { key: 'active_tickets', short: 'Active' },
+    { key: 'completed_tickets', short: 'Completed' },
+    { key: 'pending_tickets', short: 'Pending' },
+    { key: 'overdue_tickets', short: 'Overdue' },
+    { key: 'average_completion_human', short: 'Avg time' },
+    { key: 'total_working_human', short: 'Work time' },
+];
+
+const TECHNICIAN_SINGLE_METRICS = [
+    { key: 'total_assigned', label: 'Assigned' },
+    { key: 'completed_tickets', label: 'Completed' },
+    { key: 'pending_tickets', label: 'Pending' },
+    { key: 'active_tickets', label: 'Active' },
+    { key: 'overdue_tickets', label: 'Overdue' },
+    { key: 'qc1_tickets', label: 'QC1' },
+    { key: 'qc2_tickets', label: 'QC2' },
+    { key: 'chip_repair_tickets', label: 'Chip repair' },
+    { key: 'body_paint_tickets', label: 'Body & paint' },
+    { key: 'average_completion_human', label: 'Avg completion' },
+    { key: 'total_working_human', label: 'Total work time' },
+];
+
+const STAGE_SUMMARY_METRICS = [
+    { key: 'total_assigned', label: 'Total entered' },
+    { key: 'completed_tickets', label: 'Completed' },
+    { key: 'pending_tickets', label: 'Pending' },
+    { key: 'active_tickets', label: 'Active' },
+    { key: 'failed_tickets', label: 'Failed' },
+    { key: 'returned_tickets', label: 'Returned' },
+    { key: 'average_stage_human', label: 'Avg time in stage' },
+    { key: 'currently_working', label: 'Currently working' },
+];
+
+function SummaryMetricCards({ metrics, fields, loading }) {
+    return (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3 p-4">
+            {fields.map((field) => (
+                <div key={field.key} className="rounded-lg border border-gray-200 bg-white px-3 py-3 shadow-sm">
+                    <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">{field.label}</div>
+                    <div className="text-xl font-bold text-gray-900 mt-1 tabular-nums">
+                        {loading ? '—' : (metrics?.[field.key] ?? 0)}
+                    </div>
+                </div>
+            ))}
+        </div>
+    );
+}
+
+function TechnicianSummaryTable({
+    columns,
+    rows,
+    loading,
+    userId,
+    onSelect,
+    emptyMessage = 'No technicians found for the current filters.',
+}) {
+    return (
+        <div className="overflow-x-auto">
+            <table className="w-full min-w-[720px] text-left">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                        <th className="px-3 py-2 text-xs font-semibold text-gray-700 sticky left-0 bg-gray-50">Technician</th>
+                        {columns.map((col) => (
+                            <th key={col.key} className="px-2 py-2 text-[10px] font-semibold text-gray-600 text-right whitespace-nowrap">
+                                {col.short}
+                            </th>
+                        ))}
+                    </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                    {loading ? (
+                        <tr>
+                            <td colSpan={columns.length + 1} className="px-4 py-8 text-center text-sm text-gray-500">
+                                Loading summary…
+                            </td>
+                        </tr>
+                    ) : !rows.length ? (
+                        <tr>
+                            <td colSpan={columns.length + 1} className="px-4 py-8 text-center text-sm text-gray-500">
+                                {emptyMessage}
+                            </td>
+                        </tr>
+                    ) : (
+                        rows.map((tech) => {
+                            const selected = String(userId) === String(tech.user_id);
+                            const hasActivity = columns.some((col) => {
+                                const val = tech[col.key];
+                                return typeof val === 'number' ? val > 0 : false;
+                            });
+                            return (
+                                <tr
+                                    key={tech.user_id}
+                                    onClick={() => onSelect?.(tech.user_id)}
+                                    className={`${onSelect ? 'cursor-pointer' : ''} transition-colors ${
+                                        selected
+                                            ? 'bg-indigo-50 hover:bg-indigo-100'
+                                            : hasActivity
+                                                ? 'hover:bg-gray-50'
+                                                : 'text-gray-500 hover:bg-gray-50/80'
+                                    }`}
+                                >
+                                    <td className={`px-3 py-2 text-sm font-medium sticky left-0 ${selected ? 'bg-indigo-50 text-indigo-900' : 'bg-white text-gray-900'}`}>
+                                        <span className="inline-flex items-center gap-1.5">
+                                            <User className="w-3.5 h-3.5 shrink-0" />
+                                            {tech.name}
+                                            {selected && (
+                                                <span className="text-[10px] font-semibold uppercase text-indigo-600">Filtered</span>
+                                            )}
+                                        </span>
+                                    </td>
+                                    {columns.map((col) => (
+                                        <td key={col.key} className="px-2 py-2 text-xs text-right tabular-nums font-medium">
+                                            {tech[col.key] ?? '—'}
+                                        </td>
+                                    ))}
+                                </tr>
+                            );
+                        })
+                    )}
+                </tbody>
+            </table>
+        </div>
+    );
 }
 
 export default function Reports({ api }) {
@@ -166,6 +364,7 @@ export default function Reports({ api }) {
     const [rows, setRows] = useState([]);
     const [summary, setSummary] = useState(null);
     const [workloadDashboard, setWorkloadDashboard] = useState(null);
+    const [dynamicSummary, setDynamicSummary] = useState({ mode: 'technicians', technicians: [] });
     const [dashExpanded, setDashExpanded] = useState(false);
     const [hwExpanded, setHwExpanded] = useState(false);
     const [qcExpanded, setQcExpanded] = useState(false);
@@ -174,6 +373,7 @@ export default function Reports({ api }) {
     const [stages, setStages] = useState([]);
     const [productivity, setProductivity] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [datePreset, setDatePreset] = useState('last30');
     const [from, setFrom] = useState(defaults.from);
     const [to, setTo] = useState(defaults.to);
     const [allTime, setAllTime] = useState(false);
@@ -222,6 +422,10 @@ export default function Reports({ api }) {
             setSummary(data.summary || null);
             setProductivity(data.productivity || data.summary?.productivity || null);
             setWorkloadDashboard(data.workload_dashboard || null);
+            setDynamicSummary(data.dynamic_summary || {
+                mode: data.summary_mode || 'technicians',
+                technicians: data.technician_summary || [],
+            });
             setTechnicians(data.technicians || []);
             setTeams(data.teams || []);
             setStages(data.stages || []);
@@ -232,6 +436,7 @@ export default function Reports({ api }) {
             setSummary(null);
             setProductivity(null);
             setWorkloadDashboard(null);
+            setDynamicSummary({ mode: 'technicians', technicians: [] });
             const msg = error.response?.data?.message || error.message;
             if (msg) alert(`Report failed to load: ${msg}. Check backend is running and database is connected.`);
         } finally {
@@ -249,7 +454,7 @@ export default function Reports({ api }) {
         list.sort((a, b) => {
             let va = a[key];
             let vb = b[key];
-            if (key === 'assigned_at' || key === 'completed_at') {
+            if (key === 'assigned_at' || key === 'completed_at' || key === 'assignment_time' || key === 'start_time' || key === 'end_time') {
                 va = va ? new Date(va).getTime() : 0;
                 vb = vb ? new Date(vb).getTime() : 0;
             } else if (key === 'duration_seconds') {
@@ -272,6 +477,54 @@ export default function Reports({ api }) {
             direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
         }));
     };
+
+    const applyDatePreset = (preset) => {
+        setDatePreset(preset);
+        if (preset === 'custom') return;
+        const range = rangeForPreset(preset);
+        if (!range) return;
+        setAllTime(false);
+        setFrom(range.from);
+        setTo(range.to);
+    };
+
+    const handleFromChange = (value) => {
+        setFrom(value);
+        setDatePreset('custom');
+    };
+
+    const handleToChange = (value) => {
+        setTo(value);
+        setDatePreset('custom');
+    };
+
+    const selectTechnician = (techUserId) => {
+        setUserId(String(techUserId) === String(userId) ? '' : String(techUserId));
+    };
+
+    const formatDateTime = (value) => (value ? new Date(value).toLocaleString() : '—');
+
+    const summaryMode = dynamicSummary?.mode || 'technicians';
+    const technicianRows = dynamicSummary?.technicians || [];
+
+    const detailSubtitle = useMemo(() => {
+        const teamName = teams.find((t) => String(t.team_id) === String(teamId))?.team_name || dynamicSummary?.label;
+        const techName = technicians.find((t) => String(t.user_id) === String(userId))?.name
+            || dynamicSummary?.technicians?.find((t) => String(t.user_id) === String(userId))?.name;
+        if (teamId && userId) {
+            return `Showing ${techName || 'selected technician'}'s tickets for ${teamName || 'selected team'}`;
+        }
+        if (userId) {
+            return `Showing tickets for ${techName || dynamicSummary?.label || 'selected technician'}`;
+        }
+        if (stageId) {
+            return `Showing ${stages.find((s) => String(s.stage_id) === String(stageId))?.stage_name || dynamicSummary?.label || 'selected stage'} stage tickets`;
+        }
+        if (teamId) {
+            return `Showing tickets for ${teamName || 'selected team'}`;
+        }
+        return 'All technicians in the selected date range';
+    }, [userId, stageId, teamId, technicians, teams, stages, dynamicSummary?.label, dynamicSummary?.technicians]);
 
     const th = 'px-3 py-3 text-left text-xs font-semibold text-gray-700 cursor-pointer hover:bg-gray-100 whitespace-nowrap';
     const td = 'px-3 py-2 text-xs text-gray-800 align-top';
@@ -484,6 +737,23 @@ export default function Reports({ api }) {
                 <div className="flex items-center gap-2 text-sm font-semibold text-gray-800 mb-3">
                     <Filter className="w-4 h-4 text-gray-500" /> Filters
                 </div>
+                <div className="flex flex-wrap gap-2 mb-4">
+                    {DATE_PRESETS.map((preset) => (
+                        <button
+                            key={preset.key}
+                            type="button"
+                            onClick={() => applyDatePreset(preset.key)}
+                            disabled={allTime && preset.key !== 'custom'}
+                            className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+                                datePreset === preset.key
+                                    ? 'bg-indigo-600 text-white border-indigo-600'
+                                    : 'bg-white text-gray-700 border-gray-300 hover:border-indigo-300'
+                            } ${allTime && preset.key !== 'custom' ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        >
+                            {preset.label}
+                        </button>
+                    ))}
+                </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
                     <label className="flex flex-col gap-1 text-[11px] font-medium text-gray-600">
                         From
@@ -491,7 +761,7 @@ export default function Reports({ api }) {
                             type="date"
                             value={from}
                             disabled={allTime}
-                            onChange={(e) => setFrom(e.target.value)}
+                            onChange={(e) => handleFromChange(e.target.value)}
                             className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm disabled:bg-gray-100"
                         />
                     </label>
@@ -501,7 +771,7 @@ export default function Reports({ api }) {
                             type="date"
                             value={to}
                             disabled={allTime}
-                            onChange={(e) => setTo(e.target.value)}
+                            onChange={(e) => handleToChange(e.target.value)}
                             className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm disabled:bg-gray-100"
                         />
                     </label>
@@ -509,7 +779,10 @@ export default function Reports({ api }) {
                         <input
                             type="checkbox"
                             checked={allTime}
-                            onChange={(e) => setAllTime(e.target.checked)}
+                            onChange={(e) => {
+                                setAllTime(e.target.checked);
+                                if (e.target.checked) setDatePreset('custom');
+                            }}
                             className="rounded border-gray-300"
                         />
                         All time
@@ -588,9 +861,62 @@ export default function Reports({ api }) {
                     </label>
                 </div>
                 <p className="text-[11px] text-gray-500 mt-3">
-                    Technician, team, stage, and ticket status use the ticket&apos;s <strong>current assignment</strong> (same as Floor Tickets).
-                    Segment and date filters apply to work-log segments. Search matches ticket ID, TTSPL ID, serial number, or assigned technician name.
+                    Selecting a <strong>Team</strong> shows a team summary plus only that team&apos;s members.
+                    Click a member to filter the detailed report. With no team filter, all technicians are listed.
+                    <strong> Stage</strong> and standalone <strong>Technician</strong> filters switch the summary view accordingly.
                 </p>
+            </div>
+
+            {/* Dynamic summary — changes with Team / Technician / Stage filters */}
+            <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+                <div className="px-4 py-3 border-b border-gray-200 bg-slate-50">
+                    <h3 className="text-sm font-bold text-gray-900 capitalize">
+                        {dynamicSummary?.title || 'Summary'}
+                    </h3>
+                    <p className="text-[11px] text-gray-600 mt-0.5">
+                        {dynamicSummary?.subtitle || 'Counts reflect the selected date range and filters.'}
+                    </p>
+                </div>
+
+                {summaryMode === 'technicians' && (
+                    <TechnicianSummaryTable
+                        columns={TECH_SUMMARY_COLUMNS}
+                        rows={technicianRows}
+                        loading={loading}
+                        userId={userId}
+                        onSelect={selectTechnician}
+                    />
+                )}
+
+                {summaryMode === 'team' && (
+                    <>
+                        <SummaryMetricCards
+                            loading={loading}
+                            metrics={dynamicSummary?.metrics}
+                            fields={TEAM_SUMMARY_METRICS}
+                        />
+                        <div className="border-t border-gray-200 px-4 py-2 bg-slate-50/80">
+                            <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-600">Team members</h4>
+                            <p className="text-[11px] text-gray-500 mt-0.5">Click a row to filter the detailed report to that technician.</p>
+                        </div>
+                        <TechnicianSummaryTable
+                            columns={TEAM_MEMBER_COLUMNS}
+                            rows={technicianRows}
+                            loading={loading}
+                            userId={userId}
+                            onSelect={selectTechnician}
+                            emptyMessage="No members found for this team."
+                        />
+                    </>
+                )}
+
+                {(summaryMode === 'technician' || summaryMode === 'stage') && (
+                    <SummaryMetricCards
+                        loading={loading}
+                        metrics={dynamicSummary?.metrics}
+                        fields={summaryMode === 'stage' ? STAGE_SUMMARY_METRICS : TECHNICIAN_SINGLE_METRICS}
+                    />
+                )}
             </div>
 
             <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
@@ -624,43 +950,25 @@ export default function Reports({ api }) {
             </div>
 
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div className="px-4 py-3 border-b border-gray-100 bg-slate-50">
+                    <h3 className="text-sm font-bold text-gray-900">Detailed report</h3>
+                    <p className="text-[11px] text-gray-600 mt-0.5">{detailSubtitle}</p>
+                </div>
                 <div className="overflow-x-auto">
-                    <table className="w-full text-left min-w-[1200px]">
+                    <table className="w-full text-left min-w-[1400px]">
                         <thead className="bg-gray-50 border-b border-gray-200">
                             <tr>
-                                <th className={th} onClick={() => handleSort('ticket_id')}>
-                                    Ticket ID
-                                </th>
-                                <th className={th} onClick={() => handleSort('ttspl_id')}>
-                                    TTSPL ID
-                                </th>
-                                <th className={th} onClick={() => handleSort('serial_number')}>
-                                    Serial number
-                                </th>
-                                <th className={th} onClick={() => handleSort('technician_name')}>
-                                    Technician
-                                </th>
-                                <th className={th} onClick={() => handleSort('team_name')}>
-                                    Team
-                                </th>
-                                <th className={th} onClick={() => handleSort('current_stage_name')}>
-                                    Current stage
-                                </th>
-                                <th className={th} onClick={() => handleSort('assigned_at')}>
-                                    Assigned date & time
-                                </th>
-                                <th className={th} onClick={() => handleSort('completed_at')}>
-                                    Completed date & time
-                                </th>
-                                <th className={th} onClick={() => handleSort('duration_seconds')}>
-                                    Duration
-                                </th>
-                                <th className={th} onClick={() => handleSort('ticket_status')}>
-                                    Current status
-                                </th>
-                                <th className={th} onClick={() => handleSort('qc_status')}>
-                                    QC status
-                                </th>
+                                <th className={th} onClick={() => handleSort('ticket_id')}>Ticket ID</th>
+                                <th className={th} onClick={() => handleSort('ttspl_id')}>TTSPL</th>
+                                <th className={th} onClick={() => handleSort('customer_name')}>Customer</th>
+                                <th className={th} onClick={() => handleSort('team_name')}>Team</th>
+                                <th className={th} onClick={() => handleSort('current_stage_name')}>Current stage</th>
+                                <th className={th} onClick={() => handleSort('ticket_status')}>Ticket status</th>
+                                <th className={th} onClick={() => handleSort('assignment_time')}>Assignment time</th>
+                                <th className={th} onClick={() => handleSort('start_time')}>Start time</th>
+                                <th className={th} onClick={() => handleSort('end_time')}>End time</th>
+                                <th className={th} onClick={() => handleSort('duration_seconds')}>Total duration</th>
+                                <th className={th} onClick={() => handleSort('technician_name')}>Current assignee</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-200">
@@ -673,7 +981,7 @@ export default function Reports({ api }) {
                             ) : sortedRows.length === 0 ? (
                                 <tr>
                                     <td colSpan={11} className="px-6 py-12 text-center text-gray-500">
-                                        No work segments match the filters. New segments appear when tickets are assigned, claimed, or moved
+                                        No tickets match the filters. New segments appear when tickets are assigned, claimed, or moved
                                         between stages after deployment.
                                     </td>
                                 </tr>
@@ -682,36 +990,22 @@ export default function Reports({ api }) {
                                     <tr key={row.log_id ?? `${row.ticket_id}-${row.technician_id}-${row.assigned_at}`} className="hover:bg-gray-50">
                                         <td className={`${td} font-mono font-semibold text-indigo-700`}>{row.ticket_id}</td>
                                         <td className={`${td} font-mono text-blue-700`}>{row.ttspl_id}</td>
-                                        <td className={`${td} font-mono text-gray-700`}>{row.serial_number}</td>
-                                        <td className={td}>
-                                            <span className="font-medium text-gray-900 inline-flex items-center gap-1">
-                                                <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
-                                                {row.technician_name || 'Unassigned'}
-                                            </span>
-                                            {row.segment_technician_name
-                                                && row.segment_technician_name !== row.technician_name ? (
-                                                    <div className="text-[10px] text-gray-500 mt-0.5">
-                                                        Last worked by {row.segment_technician_name}
-                                                    </div>
-                                                ) : null}
-                                        </td>
+                                        <td className={`${td} text-gray-800 max-w-[160px] truncate`} title={row.customer_name}>{row.customer_name || '—'}</td>
                                         <td className={`${td} text-gray-600`}>{row.team_name}</td>
                                         <td className={`${td} text-gray-800`}>{row.current_stage_name}</td>
-                                        <td className={`${td} text-gray-600 whitespace-nowrap`}>
-                                            {row.assigned_at ? new Date(row.assigned_at).toLocaleString() : '—'}
-                                        </td>
-                                        <td className={`${td} text-gray-600 whitespace-nowrap`}>
-                                            {row.completed_at ? new Date(row.completed_at).toLocaleString() : '—'}
-                                        </td>
-                                        <td className={`${td} font-mono text-gray-700`}>{row.duration_human}</td>
                                         <td className={td}>
                                             <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold capitalize">
                                                 {row.ticket_status?.replace(/_/g, ' ') || '—'}
                                             </span>
                                         </td>
+                                        <td className={`${td} text-gray-600 whitespace-nowrap`}>{formatDateTime(row.assignment_time)}</td>
+                                        <td className={`${td} text-gray-600 whitespace-nowrap`}>{formatDateTime(row.start_time || row.assigned_at)}</td>
+                                        <td className={`${td} text-gray-600 whitespace-nowrap`}>{formatDateTime(row.end_time || row.completed_at)}</td>
+                                        <td className={`${td} font-mono text-gray-700`}>{row.duration_human}</td>
                                         <td className={td}>
-                                            <span className="inline-flex rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-semibold capitalize text-violet-900">
-                                                {row.qc_status?.replace(/_/g, ' ') || '—'}
+                                            <span className="font-medium text-gray-900 inline-flex items-center gap-1">
+                                                <User className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                                                {row.technician_name || 'Unassigned'}
                                             </span>
                                         </td>
                                     </tr>

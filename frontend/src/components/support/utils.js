@@ -298,3 +298,20 @@ export const pickupMinScheduleDate = (loanDeliveredAt) => {
 };
 
 export const isLeadRole = (role) => role === 'admin' || role === 'support_lead';
+
+/** True when an item may receive assigned_to (technician visit handling only). */
+export const itemAllowsTechnicianAssign = (item) => {
+  if (!item) return true;
+  const method = String(item.pickup_method || '').trim().toLowerCase();
+  if (method === 'courier' || method === 'porter') return false;
+  if (item.item_type === 'pickup' && item.status === 'pending_dispatch') return false;
+  return true;
+};
+
+export const ticketHasUnassignedTechnicianSlots = (ticket) => (
+  (ticket?.items || []).some(
+    (item) => itemAllowsTechnicianAssign(item)
+      && !item.assigned_to
+      && !['resolved', 'closed'].includes(item.status)
+  )
+);

@@ -5,6 +5,7 @@ const { isSupportLead, isSupportTechnician } = require('../middleware/supportAcc
 const { deriveItemCurrentStep } = require('../services/supportTicketFlow');
 const { ensureCustomerTables } = require('../services/customerInventoryErpSyncService');
 const supportQuery = require('../services/supportQuery');
+const { assertItemAllowsTechnicianAssign, itemAllowsTechnicianAssign } = require('../services/supportAssignmentRules');
 const { isRestrictedToAssigned } = require('../services/dataScopeService');
 const supportInventoryService = require('../services/supportInventoryService');
 const inventorySM = require('../services/inventoryStateMachine');
@@ -123,6 +124,7 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
     } = opts;
 
     await ensureSupportTicketItemV3Columns(client);
+    await ensureDeliveryChallanReplacementColumns(client);
     if (ticket.return_dc_number) {
         throw Object.assign(new Error(`Return DC already exists: ${ticket.return_dc_number}`), { status: 400 });
     }
@@ -407,6 +409,9 @@ const assertMachinesAvailable = async (client, customerId, items, excludeTicketI
 };
 
 const insertTicketItem = async (client, ticketId, item, userId, extra = {}) => {
+    if (item.assigned_to) {
+        assertItemAllowsTechnicianAssign(item);
+    }
     const otp = generateOtp();
     const isPickup = item.item_type === 'pickup';
     const ins = await client.query(
@@ -489,6 +494,18 @@ const ensureSupportTicketItemV3Columns = async (client) => {
             ADD COLUMN IF NOT EXISTS technician_esign_url TEXT,
             ADD COLUMN IF NOT EXISTS technician_esign_at TIMESTAMP WITH TIME ZONE,
             ADD COLUMN IF NOT EXISTS technician_esign_by INTEGER REFERENCES users (user_id)
+    `);
+};
+
+/** Idempotent DDL for replacement / pickup Return DC columns (migration 113). */
+const ensureDeliveryChallanReplacementColumns = async (client) => {
+    await client.query(`
+        ALTER TABLE delivery_challan_lines
+            ADD COLUMN IF NOT EXISTS dc_purpose VARCHAR(40) DEFAULT 'standard',
+            ADD COLUMN IF NOT EXISTS support_replacement_order_id INT
+    `);
+    await client.query(`
+        UPDATE delivery_challan_lines SET dc_purpose = 'standard' WHERE dc_purpose IS NULL
     `);
 };
 
@@ -827,6 +844,11 @@ exports.listTickets = async (req, res) => {
         const view = (req.query.view || 'active').trim();
         const type = (req.query.type || '').trim();
         const closedDays = Math.min(parseInt(req.query.closed_days, 10) || 30, 365);
+        const statusTab = (req.query.status_tab || '').trim();
+        const priority = (req.query.priority || '').trim();
+        const assignee = (req.query.assignee || '').trim();
+        const dateFrom = (req.query.date_from || '').trim();
+        const dateTo = (req.query.date_to || '').trim();
         const assignedOnly = await isRestrictedToAssigned(req, 'support_tickets');
         const data = await supportQuery.listTicketsEnriched({
             user: req.user,
@@ -837,11 +859,46 @@ exports.listTickets = async (req, res) => {
             offset,
             closedDays,
             assignedOnly,
+            statusTab,
+            priority,
+            assignee,
+            dateFrom,
+            dateTo,
         });
         res.json({ success: true, ...data });
     } catch (e) {
         console.error('support listTickets', e);
         res.status(500).json({ success: false, message: 'Failed to load tickets' });
+    }
+};
+
+exports.countTickets = async (req, res) => {
+    try {
+        const search = (req.query.search || '').trim();
+        const view = (req.query.view || 'active').trim();
+        const closedDays = Math.min(parseInt(req.query.closed_days, 10) || 30, 365);
+        const statusTab = (req.query.status_tab || '').trim();
+        const priority = (req.query.priority || '').trim();
+        const assignee = (req.query.assignee || '').trim();
+        const dateFrom = (req.query.date_from || '').trim();
+        const dateTo = (req.query.date_to || '').trim();
+        const assignedOnly = await isRestrictedToAssigned(req, 'support_tickets');
+        const counts = await supportQuery.countTicketsByType({
+            user: req.user,
+            view,
+            search,
+            closedDays,
+            assignedOnly,
+            statusTab,
+            priority,
+            assignee,
+            dateFrom,
+            dateTo,
+        });
+        res.json({ success: true, counts });
+    } catch (e) {
+        console.error('support countTickets', e);
+        res.status(500).json({ success: false, message: 'Failed to load ticket counts' });
     }
 };
 
@@ -1413,6 +1470,13 @@ exports.assignItem = async (req, res) => {
         return res.status(404).json({ success: false, message: 'Item not found' });
     }
     const item = itemRes.rows[0];
+    if (assignedTo) {
+        try {
+            assertItemAllowsTechnicianAssign(item);
+        } catch (e) {
+            return res.status(e.status || 400).json({ success: false, message: e.message });
+        }
+    }
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -1677,13 +1741,26 @@ exports.assignTicketBulk = async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        const { rows } = await client.query(
-            `UPDATE support_ticket_items SET assigned_to = $2, updated_at = CURRENT_TIMESTAMP
-             WHERE ticket_id = $1 AND assigned_to IS NULL AND status NOT IN ('resolved','closed')
-             RETURNING id`,
-            [ticketId, assignedTo]
+        const { rows: eligible } = await client.query(
+            `SELECT id, pickup_method, item_type, status FROM support_ticket_items
+             WHERE ticket_id = $1 AND assigned_to IS NULL AND status NOT IN ('resolved','closed')`,
+            [ticketId]
         );
-        for (const row of rows) {
+        const toAssign = eligible.filter((row) => itemAllowsTechnicianAssign(row));
+        if (!toAssign.length) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                success: false,
+                message: 'No items on this ticket can be assigned to a technician (courier/porter handling or pending dispatch).'
+            });
+        }
+        const ids = toAssign.map((r) => r.id);
+        await client.query(
+            `UPDATE support_ticket_items SET assigned_to = $2, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ANY($1::int[])`,
+            [ids, assignedTo]
+        );
+        for (const row of toAssign) {
             await logAudit(client, {
                 itemId: row.id,
                 ticketId,
@@ -1748,6 +1825,14 @@ exports.updateTicket = async (req, res) => {
         if (Array.isArray(items)) {
             for (const item of items) {
                 if (!item.id) continue;
+                if (item.assigned_to != null) {
+                    const itemRes = await client.query(
+                        'SELECT * FROM support_ticket_items WHERE id = $1 AND ticket_id = $2',
+                        [item.id, ticketId]
+                    );
+                    if (!itemRes.rows.length) continue;
+                    assertItemAllowsTechnicianAssign(itemRes.rows[0]);
+                }
                 await client.query(
                     `UPDATE support_ticket_items
                      SET assigned_to = COALESCE($2, assigned_to),
@@ -1798,7 +1883,7 @@ exports.updateTicket = async (req, res) => {
         await client.query('COMMIT');
     } catch (e) {
         await client.query('ROLLBACK');
-        return res.status(500).json({ success: false, message: e.message || 'Failed to update ticket' });
+        return res.status(e.status || 500).json({ success: false, message: e.message || 'Failed to update ticket' });
     } finally {
         client.release();
     }

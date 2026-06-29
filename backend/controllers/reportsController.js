@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { getDisplayTeams, getTeamIdsForFilter } = require('../utils/teamUtils');
 
 function formatDuration(seconds) {
     if (seconds == null || !Number.isFinite(seconds)) return '—';
@@ -104,7 +105,11 @@ function appendTicketFiltersForAlias(conditions, params, idx, query, alias = 't'
         }
     }
 
-    if (query.team_id) {
+    if (Array.isArray(query.team_ids) && query.team_ids.length) {
+        conditions.push(`${alias}.assigned_team_id = ANY($${idx}::int[])`);
+        params.push(query.team_ids);
+        idx += 1;
+    } else if (query.team_id) {
         const tid = parseInt(query.team_id, 10);
         if (Number.isInteger(tid)) {
             conditions.push(`${alias}.assigned_team_id = $${idx}`);
@@ -263,23 +268,40 @@ function buildFilterWithoutDate(query) {
     return { whereSql, params, idx, segmentStatus };
 }
 
-function buildTechniciansSql(teamId) {
-    if (!teamId) {
-        return { sql: STAGE_TECHNICIANS_SQL, params: [] };
-    }
-    const tid = parseInt(teamId, 10);
-    if (!Number.isInteger(tid)) {
+function buildTeamMembersSql(teamIds) {
+    const ids = (Array.isArray(teamIds) ? teamIds : [])
+        .map((id) => parseInt(id, 10))
+        .filter(Number.isInteger);
+    if (!ids.length) {
         return { sql: STAGE_TECHNICIANS_SQL, params: [] };
     }
     return {
-        sql: `${STAGE_TECHNICIANS_SQL.replace('ORDER BY u.name ASC', '')}
-    AND (
-      u.team_id = $1
-      OR EXISTS (SELECT 1 FROM user_teams ut WHERE ut.user_id = u.user_id AND ut.team_id = $1)
-    )
-  ORDER BY u.name ASC`,
-        params: [tid]
+        sql: `
+          SELECT DISTINCT u.user_id, u.name
+          FROM users u
+          WHERE COALESCE(u.active, true) = true
+            AND u.role IN ('team_member', 'team_lead', 'floor_manager', 'qc', 'dispatch_qc')
+            AND (
+              u.team_id = ANY($1::int[])
+              OR EXISTS (
+                SELECT 1 FROM user_teams ut
+                WHERE ut.user_id = u.user_id AND ut.team_id = ANY($1::int[])
+              )
+            )
+          ORDER BY u.name ASC
+        `,
+        params: [ids],
     };
+}
+
+function buildTechniciansSql(teamId, teamIds = null) {
+    if (teamIds?.length) {
+        return buildTeamMembersSql(teamIds);
+    }
+    if (!teamId) {
+        return { sql: STAGE_TECHNICIANS_SQL, params: [] };
+    }
+    return buildTeamMembersSql([parseInt(teamId, 10)].filter(Number.isInteger));
 }
 
 function diagnosisDateClause(query, startIdx) {
@@ -485,6 +507,311 @@ async function queryDiagnosisRouting(query) {
     return res.rows;
 }
 
+function resolveSummaryMode(query) {
+    if (query.stage_id) return 'stage';
+    if (query.team_id) return 'team';
+    if (query.user_id) return 'technician';
+    return 'technicians';
+}
+
+const TICKET_SCOPE_OVERDUE_SQL = `ts.ticket_status IN ('in_progress', 'on_hold') AND (
+  COALESCE(ts.highlighted, FALSE) = TRUE
+  OR EXISTS (
+    SELECT 1 FROM work_logs wl
+    WHERE wl.ticket_id = ts.ticket_id
+      AND wl.end_time IS NULL
+      AND wl.start_time < NOW() - interval '48 hours'
+  )
+)`;
+
+function buildWorkLogDateSql(query, params, segmentStatus, wlAlias = 'wl') {
+    const clauses = [];
+    const { allTime, from, to } = resolveDateRange(query);
+    if (allTime) return { sql: '', params };
+    let idx = params.length + 1;
+    if (segmentStatus === 'completed') {
+        clauses.push(`${wlAlias}.end_time IS NOT NULL`);
+        clauses.push(`${wlAlias}.end_time >= $${idx}::date`);
+        params.push(from);
+        idx += 1;
+        clauses.push(`${wlAlias}.end_time < ($${idx}::date + interval '1 day')`);
+        params.push(to);
+    } else {
+        clauses.push(`${wlAlias}.start_time >= $${idx}::date`);
+        params.push(from);
+        idx += 1;
+        clauses.push(`${wlAlias}.start_time < ($${idx}::date + interval '1 day')`);
+        params.push(to);
+    }
+    return { sql: clauses.length ? ` AND ${clauses.join(' AND ')}` : '', params };
+}
+
+function mapScopeStatsRow(row) {
+    const total = row.total_assigned ?? 0;
+    return {
+        total_tickets: total,
+        total_assigned: total,
+        active_tickets: row.active_tickets ?? 0,
+        completed_tickets: row.completed_tickets ?? 0,
+        pending_tickets: row.pending_tickets ?? 0,
+        overdue_tickets: row.overdue_tickets ?? 0,
+        returned_tickets: row.returned_tickets ?? 0,
+        failed_tickets: row.failed_tickets ?? 0,
+        in_progress_tickets: row.in_progress_tickets ?? 0,
+        handed_over_tickets: row.handed_over_tickets ?? 0,
+        qc1_tickets: row.qc1_tickets ?? 0,
+        qc2_tickets: row.qc2_tickets ?? 0,
+        chip_repair_tickets: row.chip_repair_tickets ?? 0,
+        body_paint_tickets: row.body_paint_tickets ?? 0,
+        currently_working: row.currently_working ?? 0,
+        average_completion_seconds: row.average_completion_seconds,
+        average_completion_human: formatDuration(row.average_completion_seconds),
+        average_stage_seconds: row.average_stage_seconds,
+        average_stage_human: formatDuration(row.average_stage_seconds),
+        total_working_seconds: row.total_working_seconds,
+        total_working_human: formatDuration(row.total_working_seconds),
+    };
+}
+
+async function fetchScopeAggregateStats(query, { stageIdForAvg = null } = {}) {
+    const ticketScope = buildTicketScopeWhere(query);
+    const segmentStatus = resolveSegmentStatus(query);
+    const params = [...ticketScope.params];
+    const wlDate = buildWorkLogDateSql(query, params, segmentStatus, 'wl');
+    const stageAvgFilter = stageIdForAvg
+        ? ` AND wl.stage_id = ${Number(stageIdForAvg)}`
+        : '';
+    const stageWorkingFilter = stageIdForAvg
+        ? ` AND wl.stage_id = ${Number(stageIdForAvg)}`
+        : '';
+
+    const sql = `
+      WITH ticket_scope AS (
+        SELECT
+          t.ticket_id,
+          t.status AS ticket_status,
+          t.current_stage_id,
+          t.assigned_user_id,
+          t.highlighted,
+          t.completed_at AS ticket_completed_at
+        FROM tickets t
+        WHERE ${ticketScope.whereSql}
+      ),
+      first_starts AS (
+        SELECT ticket_id, MIN(start_time) AS first_start
+        FROM work_logs
+        GROUP BY ticket_id
+      )
+      SELECT
+        COUNT(*)::int AS total_assigned,
+        COUNT(*) FILTER (WHERE ts.ticket_status = 'in_progress')::int AS active_tickets,
+        COUNT(*) FILTER (WHERE ts.ticket_status = 'completed')::int AS completed_tickets,
+        COUNT(*) FILTER (WHERE ts.ticket_status = 'on_hold')::int AS pending_tickets,
+        COUNT(*) FILTER (WHERE ${TICKET_SCOPE_OVERDUE_SQL})::int AS overdue_tickets,
+        COUNT(*) FILTER (WHERE ts.ticket_status = 'qc_failed_return_vendor')::int AS returned_tickets,
+        COUNT(*) FILTER (WHERE ts.ticket_status = 'failed')::int AS failed_tickets,
+        COUNT(*) FILTER (WHERE ts.ticket_status = 'in_progress')::int AS in_progress_tickets,
+        COUNT(*) FILTER (WHERE cs.stage_name = 'QC1')::int AS qc1_tickets,
+        COUNT(*) FILTER (WHERE cs.stage_name = 'QC2')::int AS qc2_tickets,
+        COUNT(*) FILTER (WHERE cs.stage_name = 'Chip Level Repair')::int AS chip_repair_tickets,
+        COUNT(*) FILTER (WHERE cs.stage_name = 'Body & Paint')::int AS body_paint_tickets,
+        (SELECT COUNT(DISTINCT wl.ticket_id)::int
+           FROM work_logs wl
+           INNER JOIN ticket_scope ts2 ON ts2.ticket_id = wl.ticket_id
+          WHERE wl.end_time IS NOT NULL${wlDate.sql}) AS handed_over_tickets,
+        AVG(EXTRACT(EPOCH FROM (ts.ticket_completed_at - fs.first_start))) FILTER (
+          WHERE ts.ticket_completed_at IS NOT NULL
+        )::float AS average_completion_seconds,
+        (SELECT SUM(EXTRACT(EPOCH FROM (COALESCE(wl.end_time, CURRENT_TIMESTAMP) - wl.start_time)))::float
+           FROM work_logs wl
+           INNER JOIN ticket_scope ts3 ON ts3.ticket_id = wl.ticket_id) AS total_working_seconds,
+        (SELECT AVG(EXTRACT(EPOCH FROM (wl.end_time - wl.start_time)))::float
+           FROM work_logs wl
+           INNER JOIN ticket_scope ts4 ON ts4.ticket_id = wl.ticket_id
+          WHERE wl.end_time IS NOT NULL${stageAvgFilter}${wlDate.sql}) AS average_stage_seconds,
+        (SELECT COUNT(DISTINCT wl.ticket_id)::int
+           FROM work_logs wl
+           INNER JOIN ticket_scope ts5 ON ts5.ticket_id = wl.ticket_id
+          WHERE wl.end_time IS NULL${stageWorkingFilter}) AS currently_working
+      FROM ticket_scope ts
+      LEFT JOIN stages cs ON cs.stage_id = ts.current_stage_id
+      LEFT JOIN first_starts fs ON fs.ticket_id = ts.ticket_id
+    `;
+
+    const { rows } = await pool.query(sql, params);
+    return mapScopeStatsRow(rows[0] || {});
+}
+
+async function fetchDynamicSummary(query) {
+    const mode = resolveSummaryMode(query);
+
+    if (mode === 'technicians') {
+        const technicians = await fetchTechnicianSummary(query);
+        return {
+            mode,
+            title: 'Technician summary',
+            subtitle: 'Click a row to filter the detailed report below.',
+            technicians,
+        };
+    }
+
+    const stageId = query.stage_id ? parseInt(query.stage_id, 10) : null;
+    const teamId = query.team_id ? parseInt(query.team_id, 10) : null;
+    const userId = query.user_id ? parseInt(query.user_id, 10) : null;
+
+    let label = 'Summary';
+    if (mode === 'technician' && userId) {
+        const u = await pool.query('SELECT name FROM users WHERE user_id = $1', [userId]);
+        label = u.rows[0]?.name || 'Technician';
+    } else if (mode === 'stage' && stageId) {
+        const s = await pool.query('SELECT stage_name FROM stages WHERE stage_id = $1', [stageId]);
+        label = s.rows[0]?.stage_name || 'Stage';
+    } else if (mode === 'team' && teamId) {
+        const t = await pool.query('SELECT team_name FROM teams WHERE team_id = $1', [teamId]);
+        label = t.rows[0]?.team_name || 'Team';
+    }
+
+    if (mode === 'team') {
+        const [metrics, technicians] = await Promise.all([
+            fetchScopeAggregateStats(query),
+            fetchTechnicianSummary(query),
+        ]);
+        return {
+            mode,
+            title: `${label} team summary`,
+            subtitle: 'Team overview and member workload. Click a member to filter the detailed report.',
+            label,
+            metrics,
+            technicians,
+        };
+    }
+
+    const metrics = await fetchScopeAggregateStats(query, {
+        stageIdForAvg: mode === 'stage' ? stageId : null,
+    });
+
+    const titles = {
+        technician: `${label} summary`,
+        stage: `${label} stage summary`,
+    };
+    const subtitles = {
+        technician: 'Statistics for the selected technician within the current filters.',
+        stage: 'Stage metrics for tickets currently in this stage within the current filters.',
+    };
+
+    return {
+        mode,
+        title: titles[mode] || 'Summary',
+        subtitle: subtitles[mode] || '',
+        label,
+        metrics,
+    };
+}
+
+async function fetchTechnicianSummary(query) {
+    const ticketScope = buildTicketScopeWhere(query);
+    const techQuery = buildTechniciansSql(query.team_id, query.team_ids);
+
+    const statsSql = `
+      WITH ticket_scope AS (
+        SELECT
+          t.ticket_id,
+          t.status AS ticket_status,
+          t.current_stage_id,
+          t.assigned_user_id,
+          t.highlighted,
+          t.completed_at AS ticket_completed_at
+        FROM tickets t
+        WHERE ${ticketScope.whereSql}
+      ),
+      tech_stats AS (
+        SELECT
+          ts.assigned_user_id AS user_id,
+          COUNT(*)::int AS total_assigned,
+          COUNT(*) FILTER (WHERE ts.ticket_status = 'in_progress')::int AS active_tickets,
+          COUNT(*) FILTER (WHERE ts.ticket_status = 'completed')::int AS completed_tickets,
+          COUNT(*) FILTER (WHERE ts.ticket_status = 'on_hold')::int AS pending_tickets,
+          COUNT(*) FILTER (WHERE ts.ticket_status IN ('in_progress', 'on_hold') AND (
+            COALESCE(ts.highlighted, FALSE) = TRUE
+            OR EXISTS (
+              SELECT 1 FROM work_logs wl
+              WHERE wl.ticket_id = ts.ticket_id
+                AND wl.end_time IS NULL
+                AND wl.start_time < NOW() - interval '48 hours'
+            )
+          ))::int AS overdue_tickets,
+          COUNT(*) FILTER (WHERE cs.stage_name = 'QC1')::int AS qc1_tickets,
+          COUNT(*) FILTER (WHERE cs.stage_name = 'QC2')::int AS qc2_tickets,
+          COUNT(*) FILTER (WHERE cs.stage_name = 'Chip Level Repair')::int AS chip_repair_tickets,
+          COUNT(*) FILTER (WHERE cs.stage_name = 'Body & Paint')::int AS body_paint_tickets
+        FROM ticket_scope ts
+        LEFT JOIN stages cs ON cs.stage_id = ts.current_stage_id
+        WHERE ts.assigned_user_id IS NOT NULL
+        GROUP BY ts.assigned_user_id
+      ),
+      tech_work AS (
+        SELECT
+          ts.assigned_user_id AS user_id,
+          AVG(EXTRACT(EPOCH FROM (ts.ticket_completed_at - first_log.first_start))) FILTER (
+            WHERE ts.ticket_completed_at IS NOT NULL
+          )::float AS average_completion_seconds,
+          SUM(EXTRACT(EPOCH FROM (COALESCE(wl.end_time, CURRENT_TIMESTAMP) - wl.start_time)))::float AS total_working_seconds
+        FROM ticket_scope ts
+        INNER JOIN work_logs wl ON wl.ticket_id = ts.ticket_id
+        INNER JOIN (
+          SELECT ticket_id, MIN(start_time) AS first_start
+          FROM work_logs
+          GROUP BY ticket_id
+        ) first_log ON first_log.ticket_id = ts.ticket_id
+        WHERE ts.assigned_user_id IS NOT NULL
+        GROUP BY ts.assigned_user_id
+      )
+      SELECT
+        ts.user_id,
+        ts.total_assigned,
+        ts.active_tickets,
+        ts.completed_tickets,
+        ts.pending_tickets,
+        ts.overdue_tickets,
+        ts.qc1_tickets,
+        ts.qc2_tickets,
+        ts.chip_repair_tickets,
+        ts.body_paint_tickets,
+        tw.average_completion_seconds,
+        tw.total_working_seconds
+      FROM tech_stats ts
+      LEFT JOIN tech_work tw ON tw.user_id = ts.user_id
+    `;
+
+    const [techRes, statsRes] = await Promise.all([
+        pool.query(techQuery.sql, techQuery.params),
+        pool.query(statsSql, ticketScope.params),
+    ]);
+
+    const statsByUser = Object.fromEntries(statsRes.rows.map((r) => [r.user_id, r]));
+
+    return techRes.rows.map((tech) => {
+        const s = statsByUser[tech.user_id] || {};
+        return {
+            user_id: tech.user_id,
+            name: tech.name,
+            total_assigned: s.total_assigned ?? 0,
+            active_tickets: s.active_tickets ?? 0,
+            completed_tickets: s.completed_tickets ?? 0,
+            pending_tickets: s.pending_tickets ?? 0,
+            overdue_tickets: s.overdue_tickets ?? 0,
+            qc1_tickets: s.qc1_tickets ?? 0,
+            qc2_tickets: s.qc2_tickets ?? 0,
+            chip_repair_tickets: s.chip_repair_tickets ?? 0,
+            body_paint_tickets: s.body_paint_tickets ?? 0,
+            average_completion_seconds: s.average_completion_seconds,
+            average_completion_human: formatDuration(s.average_completion_seconds),
+            total_working_seconds: s.total_working_seconds,
+            total_working_human: formatDuration(s.total_working_seconds),
+        };
+    });
+}
+
 async function fetchTeamWorkloadDashboard(query) {
     const HW_METRIC_KEYS = ['total_tickets', 'active_till_today', 'completed_segments', 'chip_tickets', 'body_tickets', 'parts_used_count', 'upgrades_done'];
     const QC_METRIC_KEYS = ['total_tickets', 'active_till_today', 'completed_segments', 'qc1_segments', 'qc2_segments', 'parts_used_count', 'upgrades_done'];
@@ -511,11 +838,16 @@ async function fetchTeamWorkloadDashboard(query) {
 
 exports.getTechnicianPerformance = async (req, res) => {
     try {
-        const { whereSql, params } = buildFilter(req.query);
-        const ticketScope = buildTicketScopeWhere(req.query);
-        const { page, limit, offset } = parsePagination(req.query);
-        const techQuery = buildTechniciansSql(req.query.team_id);
-        const segmentStatus = resolveSegmentStatus(req.query);
+        const reportQuery = { ...req.query };
+        if (reportQuery.team_id) {
+            reportQuery.team_ids = await getTeamIdsForFilter(reportQuery.team_id);
+        }
+
+        const { whereSql, params } = buildFilter(reportQuery);
+        const ticketScope = buildTicketScopeWhere(reportQuery);
+        const { page, limit, offset } = parsePagination(reportQuery);
+        const techQuery = buildTechniciansSql(reportQuery.team_id, reportQuery.team_ids);
+        const segmentStatus = resolveSegmentStatus(reportQuery);
         const stageNamesList = PRODUCTIVITY_STAGE_NAMES.map((n) => `'${n.replace(/'/g, "''")}'`).join(', ');
 
         const ticketScopeCte = `
@@ -530,7 +862,9 @@ exports.getTechnicianPerformance = async (req, res) => {
           t.current_stage_id,
           t.assigned_user_id,
           t.assigned_team_id,
-          t.completed_at AS ticket_completed_at
+          t.completed_at AS ticket_completed_at,
+          t.highlighted,
+          t.created_at
         FROM tickets t
         WHERE ${ticketScope.whereSql}
       )
@@ -563,8 +897,8 @@ exports.getTechnicianPerformance = async (req, res) => {
         const wlDateForStageDone = [];
         const stageDoneParams = [...ticketScope.params];
         let stageDoneIdx = stageDoneParams.length + 1;
-        if (!resolveDateRange(req.query).allTime) {
-            const { from, to } = resolveDateRange(req.query);
+        if (!resolveDateRange(reportQuery).allTime) {
+            const { from, to } = resolveDateRange(reportQuery);
             if (segmentStatus === 'completed') {
                 wlDateForStageDone.push(`wl.end_time IS NOT NULL`);
                 wlDateForStageDone.push(`wl.end_time >= $${stageDoneIdx}::date`);
@@ -727,6 +1061,12 @@ exports.getTechnicianPerformance = async (req, res) => {
         at.team_name,
         seg.stage_id AS segment_stage_id,
         ws.stage_name AS stage_at_assignment,
+        (SELECT MIN(wl2.start_time)
+           FROM work_logs wl2
+          WHERE wl2.ticket_id = ts.ticket_id
+            AND wl2.user_id = ts.assigned_user_id) AS assignment_time,
+        seg.start_time AS start_time,
+        seg.end_time AS end_time,
         seg.start_time AS assigned_at,
         seg.end_time AS completed_at,
         EXTRACT(EPOCH FROM (COALESCE(seg.end_time, CURRENT_TIMESTAMP) - seg.start_time))::float AS duration_seconds,
@@ -736,6 +1076,7 @@ exports.getTechnicianPerformance = async (req, res) => {
         COALESCE(NULLIF(TRIM(ts.ttspl_id), ''), ts.machine_number) AS ttspl_id,
         ts.current_stage_id,
         cs.stage_name AS current_stage_name,
+        COALESCE(NULLIF(TRIM(cust.company_name), ''), NULLIF(TRIM(cust.name), ''), '—') AS customer_name,
         COALESCE(NULLIF(TRIM(vsn.qc_status), ''), NULLIF(TRIM(vsn.extra->>'status'), ''), '—') AS qc_status,
         su.name AS segment_technician_name
       FROM ticket_scope ts
@@ -752,19 +1093,14 @@ exports.getTechnicianPerformance = async (req, res) => {
       LEFT JOIN stages ws ON ws.stage_id = seg.stage_id
       LEFT JOIN stages cs ON cs.stage_id = ts.current_stage_id
       LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = ts.vendor_serial_id
+      LEFT JOIN customers cust ON cust.customer_id = vsn.current_customer_id
       ORDER BY COALESCE(seg.start_time, to_timestamp(0)) DESC, ts.ticket_id DESC
       LIMIT ${limit} OFFSET ${offset}
     `;
 
         const stagesSql = `SELECT stage_id, stage_name, stage_order FROM stages ORDER BY stage_order ASC`;
-        const teamsSql = `
-      SELECT DISTINCT tm.team_id, tm.team_name
-      FROM teams tm
-      INNER JOIN stages s ON s.team_id = tm.team_id
-      ORDER BY tm.team_name ASC
-    `;
 
-        const [sumRes, prodRes, stageAvgRes, breakRes, countRes, rowsRes, techRes, stagesRes, teamsRes, workloadDashboard] = await Promise.all([
+        const [sumRes, prodRes, stageAvgRes, breakRes, countRes, rowsRes, techRes, stagesRes, teamsList, workloadDashboard, dynamicSummary] = await Promise.all([
             pool.query(summarySql, params),
             pool.query(productivitySql, stageDoneParams),
             pool.query(stageAveragesSql, stageDoneParams),
@@ -773,8 +1109,9 @@ exports.getTechnicianPerformance = async (req, res) => {
             pool.query(rowsSql, ticketScope.params),
             pool.query(techQuery.sql, techQuery.params),
             pool.query(stagesSql),
-            pool.query(teamsSql),
-            fetchTeamWorkloadDashboard(req.query)
+            getDisplayTeams(),
+            fetchTeamWorkloadDashboard(reportQuery),
+            fetchDynamicSummary(reportQuery)
         ]);
 
         const totalRows = countRes.rows[0]?.total ?? 0;
@@ -833,11 +1170,15 @@ exports.getTechnicianPerformance = async (req, res) => {
             technician_id: row.technician_id,
             technician_name: row.technician_name,
             team_name: row.team_name || '—',
+            customer_name: row.customer_name || '—',
             ttspl_id: row.ttspl_id || '—',
             machine_number: row.machine_number || '—',
             serial_number: row.serial_number || '—',
             stage_at_assignment: row.stage_at_assignment || '—',
             segment_status: row.completed_at ? 'completed' : 'active',
+            assignment_time: row.assignment_time,
+            start_time: row.start_time,
+            end_time: row.end_time,
             assigned_at: row.assigned_at,
             completed_at: row.completed_at,
             duration_seconds: row.duration_seconds,
@@ -863,6 +1204,11 @@ exports.getTechnicianPerformance = async (req, res) => {
             summary,
             productivity,
             workload_dashboard: workloadDashboard,
+            dynamic_summary: dynamicSummary,
+            technician_summary: ['technicians', 'team'].includes(dynamicSummary.mode)
+                ? (dynamicSummary.technicians || [])
+                : [],
+            summary_mode: dynamicSummary.mode,
             rows,
             pagination: {
                 page,
@@ -871,7 +1217,7 @@ exports.getTechnicianPerformance = async (req, res) => {
                 totalPages
             },
             technicians: techRes.rows,
-            teams: teamsRes.rows,
+            teams: teamsList,
             stages: stagesRes.rows,
             report: rows.map((r) => ({
                 technician: r.technician_name,

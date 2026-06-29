@@ -4,8 +4,15 @@ import { Loader2, Search, Download } from 'lucide-react';
 import api from '../../utils/api';
 import { isSupportLead } from '../../utils/supportAccess';
 import { useAuth } from '../../context/AuthContext';
-import { displayStatus, formatRelative, formatTicketId, podUrl } from './utils';
+import { displayStatus, formatRelative, formatTicketId, podUrl, ticketHasUnassignedTechnicianSlots } from './utils';
 import TtsplHistoryDrawer from '../../features/floor-pipeline/components/TtsplHistoryDrawer';
+
+const TYPE_CHIPS = [
+  { key: '', label: 'All', countKey: 'all' },
+  { key: 'complaint', label: 'Complaint', countKey: 'complaint' },
+  { key: 'pickup', label: 'Pickup', countKey: 'pickup' },
+  { key: 'replacement', label: 'Replacement', countKey: 'replacement' },
+];
 
 const STATUS_TABS = [
   { key: 'all', label: 'All', view: 'all' },
@@ -40,7 +47,7 @@ function assignedLabel(ticket) {
 }
 
 function isUnassigned(ticket) {
-  return (ticket.unassigned_item_count || 0) > 0;
+  return ticketHasUnassignedTechnicianSlots(ticket);
 }
 
 export default function SupportTicketList() {
@@ -61,6 +68,7 @@ export default function SupportTicketList() {
   const [assignFilter, setAssignFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [typeCounts, setTypeCounts] = useState({ all: 0, complaint: 0, pickup: 0, replacement: 0 });
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(search.trim()), 300);
@@ -69,24 +77,41 @@ export default function SupportTicketList() {
 
   const activeTab = STATUS_TABS.find((t) => t.key === statusTab) || STATUS_TABS[0];
 
+  const buildFilterParams = useCallback(() => {
+    const params = new URLSearchParams();
+    if (debounced) params.set('search', debounced);
+    params.set('view', activeTab.view);
+    if (activeTab.status === 'in_progress') params.set('status_tab', 'in_progress');
+    else if (statusTab === 'open') params.set('status_tab', 'open');
+    if (priorityFilter) params.set('priority', priorityFilter);
+    if (assignFilter) params.set('assignee', assignFilter);
+    if (dateFrom) params.set('date_from', dateFrom);
+    if (dateTo) params.set('date_to', dateTo);
+    return params;
+  }, [debounced, activeTab.view, activeTab.status, statusTab, priorityFilter, assignFilter, dateFrom, dateTo]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (debounced) params.set('search', debounced);
+      const params = buildFilterParams();
       if (typeFilter && ['complaint', 'pickup', 'replacement'].includes(typeFilter)) {
         params.set('type', typeFilter);
       }
-      params.set('view', activeTab.view);
       params.set('limit', '100');
-      const { data } = await api.get(`/support/tickets?${params}`);
+      const countParams = buildFilterParams();
+      const [{ data }, countsRes] = await Promise.all([
+        api.get(`/support/tickets?${params}`),
+        api.get(`/support/tickets/counts?${countParams}`)
+      ]);
       setTickets(data.tickets || []);
+      setTypeCounts(countsRes.data.counts || { all: 0, complaint: 0, pickup: 0, replacement: 0 });
     } catch {
       setTickets([]);
+      setTypeCounts({ all: 0, complaint: 0, pickup: 0, replacement: 0 });
     } finally {
       setLoading(false);
     }
-  }, [debounced, typeFilter, activeTab.view]);
+  }, [buildFilterParams, typeFilter]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -99,36 +124,11 @@ export default function SupportTicketList() {
 
   const filtered = useMemo(() => {
     let list = tickets;
-    if (activeTab.status) {
-      list = list.filter((t) => t.status === activeTab.status);
-    } else if (statusTab === 'open') {
-      list = list.filter((t) => t.status !== 'closed' && t.status !== 'in_progress');
-    }
     if (typeFilter === 'loan') {
       list = list.filter((t) => (t.items || []).some((i) => i.item_type === 'loan'));
     }
-    if (priorityFilter === 'high') {
-      list = list.filter((t) => t.priority === 'high' || t.priority === 'urgent');
-    } else if (priorityFilter === 'normal') {
-      list = list.filter((t) => !t.priority || t.priority === 'normal');
-    }
-    if (assignFilter === 'unassigned') {
-      list = list.filter(isUnassigned);
-    } else if (assignFilter === 'me') {
-      list = list.filter((t) => (t.items || []).some((i) => i.assigned_to === user?.user_id));
-    } else if (assignFilter && assignFilter !== 'all') {
-      list = list.filter((t) => (t.items || []).some((i) => String(i.assigned_to) === assignFilter));
-    }
-    if (dateFrom) {
-      const from = new Date(dateFrom).getTime();
-      list = list.filter((t) => new Date(t.created_at).getTime() >= from);
-    }
-    if (dateTo) {
-      const to = new Date(dateTo).getTime() + 86400000;
-      list = list.filter((t) => new Date(t.created_at).getTime() < to);
-    }
     return [...list].sort((a, b) => Number(b.id) - Number(a.id));
-  }, [tickets, activeTab, statusTab, typeFilter, priorityFilter, assignFilter, dateFrom, dateTo, user?.user_id]);
+  }, [tickets, typeFilter]);
 
   const handleAssign = async (ticketId, assignedTo) => {
     await api.post(`/support/tickets/${ticketId}/assign-all`, { assigned_to: Number(assignedTo) });
@@ -215,6 +215,19 @@ export default function SupportTicketList() {
         })}
       </div>
 
+      <div className="flex flex-wrap gap-2">
+        {TYPE_CHIPS.map((chip) => (
+          <button
+            key={chip.key || 'all'}
+            type="button"
+            className={`support-filter-chip ${chip.key || 'all'}${typeFilter === chip.key ? ' active' : ''}`}
+            onClick={() => setTypeFilter(chip.key)}
+          >
+            {chip.label} ({typeCounts[chip.countKey] ?? 0})
+          </button>
+        ))}
+      </div>
+
       <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <div className="relative sm:col-span-2">
@@ -229,9 +242,9 @@ export default function SupportTicketList() {
           </div>
           <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm">
             <option value="">All types</option>
-            <option value="complaint">Complaint</option>
-            <option value="replacement">Replacement</option>
-            <option value="pickup">Pickup</option>
+            <option value="complaint">Complaint ({typeCounts.complaint ?? 0})</option>
+            <option value="replacement">Replacement ({typeCounts.replacement ?? 0})</option>
+            <option value="pickup">Pickup ({typeCounts.pickup ?? 0})</option>
             <option value="loan">Loan</option>
           </select>
           <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm">

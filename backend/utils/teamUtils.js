@@ -51,6 +51,18 @@ function invalidateCanonicalTeamCache() {
   canonicalCacheAt = 0;
 }
 
+async function getTeamIdsForFilter(teamId) {
+  const { idToCanonical } = await loadCanonicalTeamMaps();
+  const tid = parseInt(teamId, 10);
+  if (!Number.isFinite(tid)) return [];
+  const canonical = idToCanonical.get(tid) ?? tid;
+  const ids = new Set([canonical, tid]);
+  for (const [id, canon] of idToCanonical.entries()) {
+    if (canon === canonical) ids.add(id);
+  }
+  return [...ids];
+}
+
 async function getDisplayTeams() {
   const { displayTeams } = await loadCanonicalTeamMaps();
   return [...displayTeams].sort((a, b) =>
@@ -76,5 +88,6 @@ module.exports = {
   loadCanonicalTeamMaps,
   invalidateCanonicalTeamCache,
   getDisplayTeams,
+  getTeamIdsForFilter,
   normalizeTeamIds,
 };

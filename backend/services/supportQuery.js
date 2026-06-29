@@ -49,7 +49,7 @@ const attachItems = async (tickets) => {
     const ids = tickets.map((t) => t.id);
     const { rows } = await pool.query(
         `SELECT i.id, i.ticket_id, i.item_type, i.status, i.brand, i.model, i.serial_number, i.unique_serial_number,
-                i.assigned_to, i.loan_delivered_at, i.pickup_scheduled_at, i.updated_at, i.replacement_flag_reason,
+                i.assigned_to, i.pickup_method, i.loan_delivered_at, i.pickup_scheduled_at, i.updated_at, i.replacement_flag_reason,
                 i.visited_at, i.visited_lat, i.visited_lng, i.ttspl_verified, i.outcome,
                 i.pod_image_path, i.proof_of_completion_path,
                 ut.name AS assigned_to_name
@@ -121,11 +121,29 @@ const applyViewFilter = (view, params, user, overdueHours, { assignedOnly = fals
     return extra;
 };
 
-const listTicketsEnriched = async ({ user, view = 'active', search = '', type = '', limit = 50, offset = 0, closedDays = 30, assignedOnly = false }) => {
-    const settings = await getSettings();
+const buildTicketListWhere = ({
+    user,
+    view = 'active',
+    search = '',
+    type = '',
+    closedDays = 30,
+    assignedOnly = false,
+    overdueHours,
+    statusTab = '',
+    priority = '',
+    assignee = '',
+    dateFrom = '',
+    dateTo = ''
+}) => {
     const params = [];
     let where = 'WHERE 1=1';
-    where += applyViewFilter(view, params, user, settings.overdue_threshold_hours, { assignedOnly });
+    where += applyViewFilter(view, params, user, overdueHours, { assignedOnly });
+
+    if (statusTab === 'open') {
+        where += ` AND t.status <> 'closed' AND t.status <> 'in_progress'`;
+    } else if (statusTab === 'in_progress') {
+        where += ` AND t.status = 'in_progress'`;
+    }
 
     if (search) {
         params.push(`%${search}%`);
@@ -152,22 +170,91 @@ const listTicketsEnriched = async ({ user, view = 'active', search = '', type = 
         where += ` AND EXISTS (SELECT 1 FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.item_type = $${params.length})`;
     }
 
+    if (priority === 'high') {
+        where += ` AND t.priority IN ('high', 'urgent')`;
+    } else if (priority === 'normal') {
+        where += ` AND (t.priority IS NULL OR t.priority = 'normal')`;
+    }
+
+    if (assignee === 'unassigned') {
+        where += ` AND EXISTS (
+            SELECT 1 FROM support_ticket_items i
+            WHERE i.ticket_id = t.id AND i.assigned_to IS NULL AND i.status NOT IN ('resolved','closed')
+        )`;
+    } else if (assignee === 'me' && user?.user_id) {
+        params.push(user.user_id);
+        where += ` AND EXISTS (
+            SELECT 1 FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.assigned_to = $${params.length}
+        )`;
+    } else if (assignee && assignee !== 'all') {
+        const uid = parseInt(assignee, 10);
+        if (!Number.isNaN(uid)) {
+            params.push(uid);
+            where += ` AND EXISTS (
+                SELECT 1 FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.assigned_to = $${params.length}
+            )`;
+        }
+    }
+
+    if (dateFrom) {
+        params.push(dateFrom);
+        where += ` AND t.created_at >= $${params.length}::date`;
+    }
+    if (dateTo) {
+        params.push(dateTo);
+        where += ` AND t.created_at < ($${params.length}::date + INTERVAL '1 day')`;
+    }
+
     if (view === 'closed' || view === 'my_resolved') {
         params.push(closedDays);
         where += ` AND COALESCE(t.closed_at, t.updated_at) >= NOW() - ($${params.length} || ' days')::interval`;
     }
 
+    return { where, params };
+};
+
+const listTicketsEnriched = async ({
+    user,
+    view = 'active',
+    search = '',
+    type = '',
+    limit = 50,
+    offset = 0,
+    closedDays = 30,
+    assignedOnly = false,
+    statusTab = '',
+    priority = '',
+    assignee = '',
+    dateFrom = '',
+    dateTo = ''
+}) => {
+    const settings = await getSettings();
+    const { where, params } = buildTicketListWhere({
+        user,
+        view,
+        search,
+        type,
+        closedDays,
+        assignedOnly,
+        overdueHours: settings.overdue_threshold_hours,
+        statusTab,
+        priority,
+        assignee,
+        dateFrom,
+        dateTo
+    });
+
     const countSql = `SELECT COUNT(*)::int AS total FROM support_tickets t ${where}`;
     const countRes = await pool.query(countSql, params);
 
-    params.push(limit, offset);
+    const listParams = [...params, limit, offset];
     const listSql = `
         ${ticketSelectCore(settings.overdue_threshold_hours)}
         ${where}
         ORDER BY t.id DESC
-        LIMIT $${params.length - 1} OFFSET $${params.length}
+        LIMIT $${listParams.length - 1} OFFSET $${listParams.length}
     `;
-    const listRes = await pool.query(listSql, params);
+    const listRes = await pool.query(listSql, listParams);
     const tickets = await attachItems(listRes.rows);
 
     return {
@@ -177,6 +264,35 @@ const listTicketsEnriched = async ({ user, view = 'active', search = '', type = 
         settings,
         tickets
     };
+};
+
+const countTicketsByType = async (filters) => {
+    const settings = await getSettings();
+    const { where, params } = buildTicketListWhere({
+        ...filters,
+        type: '',
+        overdueHours: settings.overdue_threshold_hours
+    });
+    const sql = `
+        SELECT
+            COUNT(*)::int AS all,
+            COUNT(*) FILTER (WHERE EXISTS (
+                SELECT 1 FROM support_ticket_items i
+                WHERE i.ticket_id = t.id AND i.item_type = 'complaint'
+            ))::int AS complaint,
+            COUNT(*) FILTER (WHERE EXISTS (
+                SELECT 1 FROM support_ticket_items i
+                WHERE i.ticket_id = t.id AND i.item_type = 'pickup'
+            ))::int AS pickup,
+            COUNT(*) FILTER (WHERE EXISTS (
+                SELECT 1 FROM support_ticket_items i
+                WHERE i.ticket_id = t.id AND i.item_type = 'replacement'
+            ))::int AS replacement
+        FROM support_tickets t
+        ${where}
+    `;
+    const { rows } = await pool.query(sql, params);
+    return rows[0] || { all: 0, complaint: 0, pickup: 0, replacement: 0 };
 };
 
 const dashboardSummary = async (user) => {
@@ -254,7 +370,9 @@ const navBadges = async (user) => {
 
 module.exports = {
     getSettings,
+    buildTicketListWhere,
     listTicketsEnriched,
+    countTicketsByType,
     dashboardSummary,
     navBadges
 };

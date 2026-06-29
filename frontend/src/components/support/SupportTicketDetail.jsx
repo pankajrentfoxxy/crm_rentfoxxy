@@ -22,6 +22,7 @@ import {
   formatTicketId,
   formatAddress,
   initials,
+  itemAllowsTechnicianAssign,
   podUrl as podUrlFor,
   compressImageFile
 } from './utils';
@@ -896,7 +897,7 @@ export default function SupportTicketDetail() {
                   replacementOrder={(replacementOrders || []).find((o) => o.item_id === item.id)}
                   onRefresh={load}
                   technicians={technicians}
-                  canAssign={isSupportLead(user)}
+                  canAssign={isSupportLead(user) && itemAllowsTechnicianAssign(item)}
                   otpNote={otpNote}
                   workflowActions={workflowForItem(item)}
                 />
