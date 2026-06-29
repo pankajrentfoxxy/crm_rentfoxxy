@@ -105,6 +105,9 @@ function normalizeStorageSegment(part) {
   const sizeOnly = s.match(/^(\d+)\s*(gb|tb)$/i);
   if (sizeOnly) return `${sizeOnly[1]}${sizeOnly[2].toUpperCase()} SSD`;
 
+  const bareNum = s.match(/^(\d+)$/);
+  if (bareNum) return `${bareNum[1]}GB SSD`;
+
   return s;
 }
 
@@ -137,6 +140,22 @@ function normalizeProcessor(name) {
       ? `Intel Core i${intelCore[1]} Extreme`
       : `Intel Core i${intelCore[1]}`;
   }
+
+  // Verbose CPU strings from GRN/extra: Intel(R) Core(TM) i5-8365U CPU @ 1.60GHz
+  const intelVerbose = s.match(/intel(?:\([^)]*\))?\s*core(?:\([^)]*\))?\s*i([3579])(?:-\d+[a-z0-9]*)?/i);
+  if (intelVerbose) {
+    return s.toLowerCase().includes('extreme')
+      ? `Intel Core i${intelVerbose[1]} Extreme`
+      : `Intel Core i${intelVerbose[1]}`;
+  }
+
+  if (/intel/i.test(s)) {
+    const intelChip = s.match(/\bi([3579])(?:-\d+[a-z0-9]*)?\b/i);
+    if (intelChip) return `Intel Core i${intelChip[1]}`;
+  }
+
+  const amdRyzen = s.match(/amd\s+ryzen\s*([3579])\b/i);
+  if (amdRyzen) return `AMD Ryzen ${amdRyzen[1]}`;
 
   if (/^M[1-5](?:\s+(Pro|Max|PRO|MAX))?$/i.test(s) && !/^Apple/i.test(s)) {
     return `Apple ${s.replace(/^m/i, 'M').replace(/\bPRO\b/i, 'Pro').replace(/\bMAX\b/i, 'Max')}`;
