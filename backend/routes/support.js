@@ -64,7 +64,6 @@ const router = express.Router();
 const requireSupportTicketCreate = checkPermission('support_tickets', 'create');
 const requireSupportTicketEdit = checkPermission('support_tickets', 'edit');
 const requireSupportTicketDelete = checkPermission('support_tickets', 'delete');
-const requireSupportSettingsCreate = checkPermission('support_settings', 'create');
 const requireSupportSettingsEdit = checkPermission('support_settings', 'edit');
 const requireSupportSettingsDelete = checkPermission('support_settings', 'delete');
 
@@ -139,7 +138,7 @@ router.get('/dashboard', getDashboard);
 router.get('/badges', getNavBadges);
 router.get('/settings', getSettings);
 router.put('/settings', requireSupportSettingsEdit, updateSettings);
-router.post('/categories', requireSupportSettingsCreate, upsertCategory);
+router.post('/categories', requireSupportSettingsEdit, upsertCategory);
 router.delete('/categories/:categoryId', requireSupportSettingsDelete, deleteCategory);
 router.get('/tickets', listTickets);
 router.get('/tickets/counts', countTickets);
