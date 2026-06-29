@@ -22,7 +22,7 @@ export default function InvoiceListPage() {
   const [tab, setTab] = useState('all');
   const [customerId, setCustomerId] = useState('');
   const [month, setMonth] = useState('');
-  const [year, setYear] = useState(String(new Date().getFullYear()));
+  const [year, setYear] = useState('');
   const [customers, setCustomers] = useState([]);
   const [genOpen, setGenOpen] = useState(false);
   const [genForm, setGenForm] = useState({ customer_id: '', month: String(new Date().getMonth() || 12), year: String(new Date().getFullYear()) });
@@ -44,8 +44,8 @@ export default function InvoiceListPage() {
       const res = await listInvoices(params);
       setRows(res.data?.invoices || []);
       setSummary(res.data?.summary || {});
-    } catch {
-      toast.error('Failed to load invoices');
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to load invoices');
     } finally {
       setLoading(false);
     }
@@ -130,7 +130,7 @@ export default function InvoiceListPage() {
           <option value="">All months</option>
           {MONTHS.slice(1).map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
         </select>
-        <input type="number" value={year} onChange={(e) => setYear(e.target.value)} className="border rounded-lg px-2 py-1.5 text-sm w-24" placeholder="Year" />
+        <input type="number" value={year} onChange={(e) => setYear(e.target.value)} className="border rounded-lg px-2 py-1.5 text-sm w-28" placeholder="All years" />
       </div>
 
       <div className="flex flex-wrap gap-2 mb-4">
@@ -144,7 +144,10 @@ export default function InvoiceListPage() {
         {loading ? (
           <p className="text-center text-sm text-gray-500 py-8">Loading…</p>
         ) : rows.length === 0 ? (
-          <p className="text-center text-sm text-gray-500 py-8">No invoices</p>
+          <p className="text-center text-sm text-gray-500 py-8">
+            No invoices{year ? ` for ${year}` : ''}.
+            {year ? ' Clear the year filter to see all periods.' : ' Run billing activation on the server, then backfill with --commit.'}
+          </p>
         ) : rows.map((r) => (
           <div key={r.invoice_id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
             <div className="flex items-center justify-between gap-2">
@@ -194,7 +197,10 @@ export default function InvoiceListPage() {
             {loading ? (
               <tr><td colSpan={11} className="px-4 py-8 text-center text-gray-500">Loading…</td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={11} className="px-4 py-8 text-center text-gray-500">No invoices</td></tr>
+              <tr><td colSpan={11} className="px-4 py-8 text-center text-gray-500">
+                No invoices{year ? ` for ${year}` : ''}.
+                {year ? ' Clear the year filter to see all periods.' : ' If you ran activation scripts, ensure you used --commit on the production server.'}
+              </td></tr>
             ) : rows.map((r) => (
               <tr key={r.invoice_id} className="hover:bg-gray-50">
                 <td className="px-4 py-3 font-medium">

@@ -172,7 +172,7 @@ exports.listInvoices = async (req, res) => {
     const [listRes, summaryRes] = await Promise.all([
       pool.query(
         `SELECT ci.*, c.company_name AS customer_name, c.email AS customer_email,
-                jsonb_array_length(ci.line_items) AS laptop_count
+                COALESCE(jsonb_array_length(ci.line_items), 0) AS laptop_count
          FROM customer_invoices ci
          LEFT JOIN customers c ON c.customer_id = ci.customer_id
          WHERE ${where.join(' AND ')}
