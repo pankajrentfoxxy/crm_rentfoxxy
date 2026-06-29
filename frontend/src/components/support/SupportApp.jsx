@@ -1,7 +1,8 @@
 import React from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { isSupportLead, isSupportTechnician } from '../../utils/supportAccess';
+import { isSupportLead, isSupportTechnician, canCancelSupportTicket } from '../../utils/supportAccess';
+import CancelledTicketsPage from './CancelledTicketsPage';
 import SupportShell from './SupportShell';
 import SupportDashboard from './SupportDashboard';
 import SupportOverviewPage from '../../features/support-module/pages/SupportOverviewPage';
@@ -53,6 +54,12 @@ function PartsQueueOnly({ children }) {
   return children;
 }
 
+function CancelSectionOnly({ children }) {
+  const { user } = useAuth();
+  if (!canCancelSupportTicket(user)) return <Navigate to="/support/overview" replace />;
+  return children;
+}
+
 export default function SupportApp() {
   return (
     <Routes>
@@ -66,6 +73,7 @@ export default function SupportApp() {
         <Route path="overdue" element={<SupportTicketsView view="overdue" showFilters />} />
         <Route path="pickups" element={<SupportTicketsView view="pickups" showFilters />} />
         <Route path="complaints" element={<SupportTicketsView view="complaints" showFilters />} />
+        <Route path="cancelled-tickets" element={<CancelSectionOnly><CancelledTicketsPage /></CancelSectionOnly>} />
         <Route path="my-tickets" element={<SupportTicketsView view="my_open" showFilters />} />
         <Route path="my-pickups" element={<MyDeliveriesPage movement="return" />} />
         <Route path="pickup-bucket" element={<StatsOnly><TechnicianDeliveryBucketPage movement="return" /></StatsOnly>} />

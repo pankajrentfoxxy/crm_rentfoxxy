@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import api from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
-import { canAccessCustomerInventory, isSupportLead, isSupportTechnician } from '../../utils/supportAccess';
+import { canAccessCustomerInventory, canCancelSupportTicket, isSupportLead, isSupportTechnician } from '../../utils/supportAccess';
 import usePermission from '../../hooks/usePermission';
 import { initials } from './utils';
 import './support.css';
@@ -22,6 +22,7 @@ const titles = {
   'pickup-bucket': 'Pickup Bucket',
   'my-pickups': 'My Pickups',
   complaints: 'Complaints',
+  'cancelled-tickets': 'Cancelled tickets',
   'my-tickets': 'My tickets',
   'my-resolved': 'Resolved by me',
   technicians: 'Technicians',
@@ -117,6 +118,9 @@ export default function SupportShell() {
               <NavItem to="/support/pickup-bucket" icon={Package} label="Pickup bucket" />
               <NavItem to="/support/my-pickups" icon={Truck} label="My pickups" />
               <NavItem to="/support/complaints" icon={MessageSquare} label="Complaints" />
+              {canCancelSupportTicket(user) && (
+                <NavItem to="/support/cancelled-tickets" icon={Ticket} label="Cancelled tickets" />
+              )}
               <NavItem to="/support/my-resolved" icon={CheckCircle2} label="My resolved" badge={badges.my_resolved} />
 
               <div className="support-nav-label">Parts</div>

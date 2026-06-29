@@ -31,6 +31,10 @@ export const isSupportLead = (user) =>
 export const canCloseSupportTicket = (user) =>
   isSupportLead(user) || user?.role === 'warehouse';
 
+/** Admin / super_admin / support_lead only — cancel ERP migration tickets. */
+export const canCancelSupportTicket = (user) =>
+  ['super_admin', 'admin', 'support_lead'].includes(user?.role);
+
 export const canAccessCustomerInventory = (user) => {
     if (!user) return false;
     if (['admin', 'manager', 'floor_manager', 'support_lead'].includes(user.role)) return true;

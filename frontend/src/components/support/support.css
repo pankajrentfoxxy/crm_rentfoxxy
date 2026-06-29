@@ -176,6 +176,11 @@
   color: var(--support-closed-text);
 }
 
+.support-pill.cancelled {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
 .support-pill.replacement {
   background: #fbeaf0;
   color: #72243e;

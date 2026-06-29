@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
-const { isSupportLead, isSupportTechnician, canCloseSupportTicket } = require('../middleware/supportAccess');
+const { isSupportLead, isSupportTechnician, canCloseSupportTicket, canCancelSupportTicket } = require('../middleware/supportAccess');
 const { deriveItemCurrentStep } = require('../services/supportTicketFlow');
 const { ensureCustomerTables } = require('../services/customerInventoryErpSyncService');
 const supportQuery = require('../services/supportQuery');
@@ -15,11 +15,13 @@ const { createFloorTicketFromSupportPickup } = require('../services/grnTicketSer
 const { nextDocumentNumber } = require('../services/salesManagementService');
 const { regenerateReturnDcPdf, regenerateReturnDcPdfByRdc } = require('../services/returnDcPdfService');
 const replacementFlow = require('../services/supportReplacementFlowService');
+const { preserveCustomerAssetsOnCancel } = require('../services/supportCancelInventoryService');
 
 const ITEM_OPEN_STATUSES = new Set(['open', 'work_done', 'awaiting_otp']);
 const TICKET_OPEN = 'open';
 const TICKET_IN_PROGRESS = 'in_progress';
 const TICKET_CLOSED = 'closed';
+const TICKET_CANCELLED = 'cancelled';
 
 const generateOtp = () => String(Math.floor(100000 + Math.random() * 900000));
 
@@ -368,8 +370,8 @@ const findOpenTicketForMachine = async (client, customerId, item, excludeTicketI
         SELECT t.id, t.status, i.item_type, i.unique_serial_number, i.serial_number
         FROM support_tickets t
         JOIN support_ticket_items i ON i.ticket_id = t.id
-        WHERE t.customer_id = $1 AND t.status <> 'closed'
-          AND i.status NOT IN ('resolved', 'closed', 'inventory_updated')
+        WHERE t.customer_id = $1 AND t.status NOT IN ('closed', 'cancelled')
+          AND i.status NOT IN ('resolved', 'closed', 'inventory_updated', 'cancelled')
     `;
     if (excludeTicketId) {
         params.push(excludeTicketId);
@@ -509,6 +511,24 @@ const ensureDeliveryChallanReplacementColumns = async (client) => {
     `);
 };
 
+const ensureSupportTicketCancellationColumns = async (client) => {
+    await client.query(`
+        ALTER TABLE support_tickets
+            ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMP WITH TIME ZONE,
+            ADD COLUMN IF NOT EXISTS cancelled_by INTEGER REFERENCES users (user_id),
+            ADD COLUMN IF NOT EXISTS cancellation_remark TEXT
+    `);
+};
+
+const assertTicketNotCancelled = async (db, ticketId) => {
+    const r = await db.query('SELECT status FROM support_tickets WHERE id = $1', [ticketId]);
+    if (!r.rows.length) throw Object.assign(new Error('Ticket not found'), { status: 404 });
+    if (r.rows[0].status === TICKET_CANCELLED) {
+        throw Object.assign(new Error('This ticket has been cancelled'), { status: 400 });
+    }
+    return r.rows[0];
+};
+
 const logAudit = async (client, { itemId, ticketId, userId, action, detail }) => {
     await client.query(
         `INSERT INTO support_ticket_item_audit (item_id, ticket_id, user_id, action, detail)
@@ -570,9 +590,10 @@ const getTicketWithItems = async (ticketId, user) => {
     const techView = isSupportTechnician(user);
 
     const ticketRes = await pool.query(
-        `SELECT t.*, cb.name AS created_by_name
+        `SELECT t.*, cb.name AS created_by_name, cx.name AS cancelled_by_name
          FROM support_tickets t
          LEFT JOIN users cb ON cb.user_id = t.created_by
+         LEFT JOIN users cx ON cx.user_id = t.cancelled_by
          WHERE t.id = $1`,
         [ticketId]
     );
@@ -1046,6 +1067,11 @@ exports.closeTicket = async (req, res) => {
         return res.status(403).json({ success: false, message: 'Not allowed to close support tickets' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
+    try {
+        await assertTicketNotCancelled(pool, ticketId);
+    } catch (e) {
+        return res.status(e.status || 500).json({ success: false, message: e.message });
+    }
     const force = !!(req.body && req.body.force);
     if (!force) {
         const itemsRes = await pool.query(
@@ -1089,6 +1115,94 @@ exports.closeTicket = async (req, res) => {
     res.json({ success: true, ...data });
 };
 
+exports.cancelTicket = async (req, res) => {
+    if (!canCancelSupportTicket(req.user)) {
+        return res.status(403).json({ success: false, message: 'Not allowed to cancel support tickets' });
+    }
+    const ticketId = parseInt(req.params.ticketId, 10);
+    const remark = String(req.body?.cancellation_remark || req.body?.remark || '').trim();
+    if (!remark) {
+        return res.status(400).json({ success: false, message: 'Cancellation remark is required' });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await ensureSupportTicketCancellationColumns(client);
+        const ticketRes = await client.query(
+            'SELECT id, status, customer_id FROM support_tickets WHERE id = $1 FOR UPDATE',
+            [ticketId]
+        );
+        if (!ticketRes.rows.length) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ success: false, message: 'Ticket not found' });
+        }
+        if (ticketRes.rows[0].status === TICKET_CANCELLED) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ success: false, message: 'Ticket is already cancelled' });
+        }
+        const ticketRow = ticketRes.rows[0];
+        const itemsRes = await client.query(
+            `SELECT id, item_type, status, unique_serial_number, serial_number, ttspl_id,
+                    customer_inventory_id, warehouse_received_at, picked_up_at, customer_otp_verified_at
+               FROM support_ticket_items
+              WHERE ticket_id = $1`,
+            [ticketId]
+        );
+
+        await client.query(
+            `UPDATE support_ticket_items
+             SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+             WHERE ticket_id = $1 AND status NOT IN ('resolved','closed','inventory_updated','cancelled')`,
+            [ticketId]
+        );
+        try {
+            await client.query(
+                `UPDATE support_replacement_orders
+                 SET status = 'cancelled'
+                 WHERE ticket_id = $1 AND status NOT IN ('completed','cancelled')`,
+                [ticketId]
+            );
+        } catch (replacementErr) {
+            if (replacementErr.code !== '42P01') throw replacementErr;
+        }
+
+        await client.query(
+            `UPDATE support_tickets
+             SET status = $2, cancelled_at = CURRENT_TIMESTAMP, cancelled_by = $3,
+                 cancellation_remark = $4, last_activity_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1`,
+            [ticketId, TICKET_CANCELLED, req.user.user_id, remark]
+        );
+
+        const inventoryPreserved = await preserveCustomerAssetsOnCancel(client, {
+            ticketId,
+            customerId: ticketRow.customer_id,
+            items: itemsRes.rows,
+            actorUserId: req.user.user_id,
+            actorName: req.user.name,
+        });
+
+        await logAudit(client, {
+            itemId: null,
+            ticketId,
+            userId: req.user.user_id,
+            action: 'ticket_cancelled',
+            detail: { remark, inventory_preserved: inventoryPreserved }
+        });
+        await client.query('COMMIT');
+    } catch (e) {
+        await client.query('ROLLBACK');
+        console.error('cancelTicket:', e);
+        return res.status(e.status || 500).json({ success: false, message: e.message || 'Failed to cancel ticket' });
+    } finally {
+        client.release();
+    }
+
+    const data = await getTicketWithItems(ticketId, req.user);
+    res.json({ success: true, message: 'Ticket cancelled', ...data });
+};
+
 exports.addComment = async (req, res) => {
     const itemId = parseInt(req.params.itemId, 10);
     const { body } = req.body;
@@ -1104,6 +1218,11 @@ exports.addComment = async (req, res) => {
         return res.status(404).json({ success: false, message: 'Item not found' });
     }
     const item = itemRes.rows[0];
+    try {
+        await assertTicketNotCancelled(pool, item.ticket_id);
+    } catch (e) {
+        return res.status(e.status || 500).json({ success: false, message: e.message });
+    }
     if (isSupportTechnician(req.user) && !isSupportLead(req.user) && item.assigned_to !== req.user.user_id) {
         return res.status(403).json({ success: false, message: 'Not assigned to this item' });
     }
@@ -1470,6 +1589,11 @@ exports.assignItem = async (req, res) => {
         return res.status(404).json({ success: false, message: 'Item not found' });
     }
     const item = itemRes.rows[0];
+    try {
+        await assertTicketNotCancelled(pool, item.ticket_id);
+    } catch (e) {
+        return res.status(e.status || 500).json({ success: false, message: e.message });
+    }
     if (assignedTo) {
         try {
             assertItemAllowsTechnicianAssign(item);
@@ -1651,6 +1775,7 @@ exports.addWorkflowPhaseItems = async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
+        await assertTicketNotCancelled(client, ticketId);
         const ticketRes = await client.query('SELECT * FROM support_tickets WHERE id = $1', [ticketId]);
         if (!ticketRes.rows.length) {
             await client.query('ROLLBACK');
@@ -1741,6 +1866,7 @@ exports.assignTicketBulk = async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
+        await assertTicketNotCancelled(client, ticketId);
         const { rows: eligible } = await client.query(
             `SELECT id, pickup_method, item_type, status FROM support_ticket_items
              WHERE ticket_id = $1 AND assigned_to IS NULL AND status NOT IN ('resolved','closed')`,
@@ -1787,6 +1913,11 @@ exports.updateTicket = async (req, res) => {
         return res.status(403).json({ success: false, message: 'Only team lead can edit tickets' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
+    try {
+        await assertTicketNotCancelled(pool, ticketId);
+    } catch (e) {
+        return res.status(e.status || 500).json({ success: false, message: e.message });
+    }
     const {
         ticket_phone_override,
         ticket_alt_phone,

@@ -27,9 +27,10 @@ export default function PickupItemCard({ item, ticket, onRefresh }) {
 
   const lead = isSupportLead(user);
   const tech = isSupportTechnician(user);
-  const isWH = ['warehouse', 'admin', 'support_lead', 'manager', 'floor_manager', 'super_admin'].includes(user?.role);
+  const readOnly = ticket?.status === 'cancelled';
+  const isWH = !readOnly && ['warehouse', 'admin', 'support_lead', 'manager', 'floor_manager', 'super_admin'].includes(user?.role);
   const isMyPickup = item.pickup_assigned_to === user?.user_id || item.assigned_to === user?.user_id;
-  const canActTech = (tech && isMyPickup) || lead;
+  const canActTech = !readOnly && ((tech && isMyPickup) || lead);
 
   const es = item.effective_current_step || 'assigned';
   const isCourier = item.pickup_method === 'courier';

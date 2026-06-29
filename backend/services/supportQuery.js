@@ -4,6 +4,8 @@ const { appendSupportAssignedFilter, scopeUserId } = require('./dataScopeService
 
 const DEFAULT_OVERDUE_HOURS = 48;
 
+const ACTIVE_TICKET_STATUSES = `t.status NOT IN ('closed', 'cancelled')`;
+
 const activityAtSql = `
     GREATEST(
         COALESCE(t.last_activity_at, t.updated_at, t.created_at),
@@ -30,7 +32,7 @@ const getSettings = async () => {
 const ticketSelectCore = (overdueHours) => `
     SELECT t.*,
         EXTRACT(EPOCH FROM (NOW() - ${activityAtSql})) / 3600.0 AS hours_since_last_update,
-        (t.status <> 'closed' AND EXTRACT(EPOCH FROM (NOW() - ${activityAtSql})) / 3600.0 >= ${Number(overdueHours)}) AS is_overdue,
+        (t.status NOT IN ('closed', 'cancelled') AND EXTRACT(EPOCH FROM (NOW() - ${activityAtSql})) / 3600.0 >= ${Number(overdueHours)}) AS is_overdue,
         (SELECT COUNT(*)::int FROM support_ticket_items i WHERE i.ticket_id = t.id) AS item_count,
         (SELECT COUNT(*)::int FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.status IN ('resolved','closed')) AS resolved_item_count,
         (SELECT COUNT(*)::int FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.status NOT IN ('resolved','closed')) AS open_item_count,
@@ -39,9 +41,11 @@ const ticketSelectCore = (overdueHours) => `
             SELECT 1 FROM support_ticket_items i
             WHERE i.ticket_id = t.id AND i.item_type = 'replacement' AND i.status NOT IN ('resolved','closed')
         ) AS has_replacement_pending,
-        u.name AS created_by_name
+        u.name AS created_by_name,
+        cx.name AS cancelled_by_name
     FROM support_tickets t
     LEFT JOIN users u ON u.user_id = t.created_by
+    LEFT JOIN users cx ON cx.user_id = t.cancelled_by
 `;
 
 const attachItems = async (tickets) => {
@@ -78,33 +82,36 @@ const applyViewFilter = (view, params, user, overdueHours, { assignedOnly = fals
         extra += appendSupportAssignedFilter(userId, params);
     }
     switch (view) {
+        case 'cancelled':
+            extra += ` AND t.status = 'cancelled'`;
+            break;
         case 'pending_assign':
-            extra += ` AND t.status <> 'closed' AND EXISTS (
-                SELECT 1 FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.assigned_to IS NULL AND i.status NOT IN ('resolved','closed')
+            extra += ` AND ${ACTIVE_TICKET_STATUSES} AND EXISTS (
+                SELECT 1 FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.assigned_to IS NULL AND i.status NOT IN ('resolved','closed','cancelled')
             )`;
             break;
         case 'overdue':
             params.push(overdueHours);
-            extra += ` AND t.status <> 'closed' AND EXTRACT(EPOCH FROM (NOW() - ${activityAtSql})) / 3600.0 >= $${params.length}`;
+            extra += ` AND ${ACTIVE_TICKET_STATUSES} AND EXTRACT(EPOCH FROM (NOW() - ${activityAtSql})) / 3600.0 >= $${params.length}`;
             break;
         case 'pickups':
-            extra += ` AND EXISTS (SELECT 1 FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.item_type = 'pickup')`;
+            extra += ` AND ${ACTIVE_TICKET_STATUSES} AND EXISTS (SELECT 1 FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.item_type = 'pickup')`;
             break;
         case 'complaints':
-            extra += ` AND EXISTS (SELECT 1 FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.item_type = 'complaint')`;
+            extra += ` AND ${ACTIVE_TICKET_STATUSES} AND EXISTS (SELECT 1 FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.item_type = 'complaint')`;
             break;
         case 'replacements':
-            extra += ` AND EXISTS (SELECT 1 FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.item_type = 'replacement')`;
+            extra += ` AND ${ACTIVE_TICKET_STATUSES} AND EXISTS (SELECT 1 FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.item_type = 'replacement')`;
             break;
         case 'my_open':
             params.push(user.user_id);
-            extra += ` AND t.status <> 'closed' AND EXISTS (
-                SELECT 1 FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.assigned_to = $${params.length} AND i.status NOT IN ('resolved','closed')
+            extra += ` AND ${ACTIVE_TICKET_STATUSES} AND EXISTS (
+                SELECT 1 FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.assigned_to = $${params.length} AND i.status NOT IN ('resolved','closed','cancelled')
             )`;
             break;
         case 'my_resolved':
             params.push(user.user_id);
-            extra += ` AND EXISTS (
+            extra += ` AND t.status <> 'cancelled' AND EXISTS (
                 SELECT 1 FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.assigned_to = $${params.length} AND i.status IN ('resolved','closed')
             ) AND COALESCE(t.closed_at, t.updated_at) >= NOW() - INTERVAL '30 days'`;
             break;
@@ -112,10 +119,11 @@ const applyViewFilter = (view, params, user, overdueHours, { assignedOnly = fals
             extra += ` AND t.status = 'closed'`;
             break;
         case 'all':
+            extra += ` AND t.status <> 'cancelled'`;
             break;
         case 'active':
         default:
-            extra += ` AND t.status <> 'closed'`;
+            extra += ` AND ${ACTIVE_TICKET_STATUSES}`;
             break;
     }
     return extra;
@@ -140,7 +148,7 @@ const buildTicketListWhere = ({
     where += applyViewFilter(view, params, user, overdueHours, { assignedOnly });
 
     if (statusTab === 'open') {
-        where += ` AND t.status <> 'closed' AND t.status <> 'in_progress'`;
+        where += ` AND ${ACTIVE_TICKET_STATUSES} AND t.status <> 'in_progress'`;
     } else if (statusTab === 'in_progress') {
         where += ` AND t.status = 'in_progress'`;
     }
@@ -308,8 +316,8 @@ const dashboardSummary = async (user) => {
     const q = await pool.query(
         `
         SELECT
-            (SELECT COUNT(*)::int FROM support_tickets t WHERE t.status <> 'closed' AND ${techTicketExists}) AS open_total,
-            (SELECT COUNT(*)::int FROM support_tickets t WHERE t.status <> 'closed' AND ${techTicketExists}
+            (SELECT COUNT(*)::int FROM support_tickets t WHERE ${ACTIVE_TICKET_STATUSES} AND ${techTicketExists}) AS open_total,
+            (SELECT COUNT(*)::int FROM support_tickets t WHERE ${ACTIVE_TICKET_STATUSES} AND ${techTicketExists}
                 AND EXTRACT(EPOCH FROM (NOW() - ${activityAtSql})) / 3600.0 >= $1) AS overdue_total,
             (SELECT COUNT(*)::int FROM support_ticket_items i
                 JOIN support_tickets t ON t.id = i.ticket_id
@@ -323,8 +331,8 @@ const dashboardSummary = async (user) => {
                 JOIN support_tickets t ON t.id = i.ticket_id
                 WHERE i.item_type = 'pickup' AND i.status NOT IN ('resolved','closed')
                 AND ${techOnly ? `i.assigned_to = ${techId}` : 'TRUE'}) AS pending_pickups,
-            (SELECT COUNT(*)::int FROM support_tickets t WHERE t.status <> 'closed' AND ${techTicketExists}
-                AND EXISTS (SELECT 1 FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.assigned_to IS NULL AND i.status NOT IN ('resolved','closed'))) AS unassigned_tickets
+            (SELECT COUNT(*)::int FROM support_tickets t WHERE ${ACTIVE_TICKET_STATUSES} AND ${techTicketExists}
+                AND EXISTS (SELECT 1 FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.assigned_to IS NULL AND i.status NOT IN ('resolved','closed','cancelled'))) AS unassigned_tickets
         `,
         [oh]
     );
@@ -341,10 +349,10 @@ const navBadges = async (user) => {
             SELECT
                 (SELECT COUNT(DISTINCT t.id)::int FROM support_tickets t
                     JOIN support_ticket_items i ON i.ticket_id = t.id
-                    WHERE i.assigned_to = $1 AND t.status <> 'closed' AND i.status NOT IN ('resolved','closed')) AS my_open,
+                    WHERE i.assigned_to = $1 AND t.status NOT IN ('closed', 'cancelled') AND i.status NOT IN ('resolved','closed','cancelled')) AS my_open,
                 (SELECT COUNT(DISTINCT t.id)::int FROM support_tickets t
                     JOIN support_ticket_items i ON i.ticket_id = t.id
-                    WHERE i.assigned_to = $1 AND i.status IN ('resolved','closed')
+                    WHERE i.assigned_to = $1 AND t.status = 'closed'
                     AND COALESCE(t.closed_at, t.updated_at) >= NOW() - INTERVAL '30 days') AS my_resolved
             `,
             [user.user_id]
@@ -354,11 +362,11 @@ const navBadges = async (user) => {
     const { rows } = await pool.query(
         `
         SELECT
-            (SELECT COUNT(*)::int FROM support_tickets WHERE status <> 'closed') AS open_tickets,
-            (SELECT COUNT(*)::int FROM support_tickets t WHERE status <> 'closed'
+            (SELECT COUNT(*)::int FROM support_tickets WHERE status NOT IN ('closed', 'cancelled')) AS open_tickets,
+            (SELECT COUNT(*)::int FROM support_tickets t WHERE ${ACTIVE_TICKET_STATUSES}
                 AND EXTRACT(EPOCH FROM (NOW() - ${activityAtSql})) / 3600.0 >= $1) AS overdue_tickets,
-            (SELECT COUNT(*)::int FROM support_tickets t WHERE status <> 'closed'
-                AND EXISTS (SELECT 1 FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.assigned_to IS NULL AND i.status NOT IN ('resolved','closed'))) AS pending_assign,
+            (SELECT COUNT(*)::int FROM support_tickets t WHERE ${ACTIVE_TICKET_STATUSES}
+                AND EXISTS (SELECT 1 FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.assigned_to IS NULL AND i.status NOT IN ('resolved','closed','cancelled'))) AS pending_assign,
             (SELECT COUNT(*)::int FROM support_part_requests
                 WHERE status IN ('pending','return_requested')
                    OR (reassign_requested_at IS NOT NULL AND status IN ('issued','return_requested'))) AS support_part_requests

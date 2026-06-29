@@ -10,6 +10,10 @@ const isSupportLead = (user) =>
 const canCloseSupportTicket = (user) =>
   user && (isSupportLead(user) || user.role === 'warehouse');
 
+/** Admin / super_admin / support_lead only — ERP migration ticket cancellation. */
+const canCancelSupportTicket = (user) =>
+  user && ['super_admin', 'admin', 'support_lead'].includes(user.role);
+
 const isSupportTechnician = (user) => user && user.role === 'support_tech';
 
 const hasCustomerInventoryAccess = (user) => {
@@ -68,14 +72,26 @@ const requireSupportTicketClose = (req, res, next) => {
     return next();
 };
 
+const requireSupportTicketCancel = (req, res, next) => {
+    if (!req.user) {
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+    if (!canCancelSupportTicket(req.user)) {
+        return res.status(403).json({ success: false, message: 'Not allowed to cancel support tickets' });
+    }
+    return next();
+};
+
 module.exports = {
     SUPPORT_ROLES,
     isSupportUser,
     isSupportLead,
     canCloseSupportTicket,
+    canCancelSupportTicket,
     isSupportTechnician,
     hasCustomerInventoryAccess,
     requireSupportAccess,
     requireSupportLead,
-    requireSupportTicketClose
+    requireSupportTicketClose,
+    requireSupportTicketCancel
 };

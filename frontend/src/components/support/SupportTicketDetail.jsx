@@ -5,7 +5,8 @@ import toast from 'react-hot-toast';
 import TtsplHistoryDrawer from '../../features/floor-pipeline/components/TtsplHistoryDrawer';
 import api from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
-import { canCloseSupportTicket, isSupportLead, isSupportTechnician } from '../../utils/supportAccess';
+import { canCancelSupportTicket, canCloseSupportTicket, isSupportLead, isSupportTechnician } from '../../utils/supportAccess';
+import CancelTicketModal from './components/CancelTicketModal';
 import OtpInput from './components/OtpInput';
 import ItemStepper from './components/ItemStepper';
 import CommentThread from './components/CommentThread';
@@ -70,7 +71,7 @@ function ItemCard({
   const lead = isSupportLead(user);
   const tech = isSupportTechnician(user);
   const st = item.effective_current_step || (item.assigned_to ? 'assigned' : 'unassigned');
-  const canAct = lead || (tech && item.assigned_to === user.user_id);
+  const canAct = ticket.status !== 'cancelled' && (lead || (tech && item.assigned_to === user.user_id));
   const podUrl = podUrlFor(item.proof_of_completion_path || item.pod_image_path);
   const ttsplLabel = item.ttspl_id || item.unique_serial_number || item.serial_number;
   const terminal = ['resolved', 'closed', 'inventory_updated'].includes(item.status);
@@ -574,6 +575,7 @@ export default function SupportTicketDetail() {
   const [tab, setTab] = useState('complaint');
   const [historyOpen, setHistoryOpen] = useState(false);
   const [customerLaptops, setCustomerLaptops] = useState([]);
+  const [cancelOpen, setCancelOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -677,6 +679,7 @@ export default function SupportTicketDetail() {
   } = data;
   const items = Array.isArray(rawItems) ? rawItems : [];
   const audit = Array.isArray(rawAudit) ? rawAudit : [];
+  const isCancelled = ticket.status === 'cancelled';
   const resolvedCount = items.filter((i) => ['resolved', 'closed', 'inventory_updated'].includes(i.status)).length;
   const allResolved = items.length > 0 && resolvedCount === items.length;
   const complaints = items.filter((i) => i.item_type === 'complaint');
@@ -702,7 +705,7 @@ export default function SupportTicketDetail() {
   const activePickupExists = pickups.some((p) => !['resolved', 'closed', 'inventory_updated'].includes(p.status));
 
   const workflowForItem = (item) => {
-    if (!isSupportLead(user) || ticket.status === 'closed') return null;
+    if (!isSupportLead(user) || ticket.status === 'closed' || isCancelled) return null;
     const resolved = ['resolved', 'closed'].includes(item.status);
     const actions = {
       onAddPhase: (type) => (type === 'pickup'
@@ -736,7 +739,7 @@ export default function SupportTicketDetail() {
         <Link to="/support/tickets" className="text-sm min-h-[44px] inline-flex items-center" style={{ color: 'var(--support-primary)' }}>← All tickets</Link>
         <div className="flex flex-wrap gap-2">
           <button type="button" className="support-btn-outline lg:hidden min-h-[44px]" onClick={() => setMobileDetails(true)}>Details</button>
-          {isSupportLead(user) && (
+          {isSupportLead(user) && !isCancelled && (
             <>
               {canMoveToReplacement && (
                 <button
@@ -799,7 +802,7 @@ export default function SupportTicketDetail() {
         />
       )}
 
-      {editing && isSupportLead(user) && (
+      {editing && isSupportLead(user) && !isCancelled && (
         <TicketEditPanel
           ticket={ticket}
           items={items}
@@ -814,6 +817,15 @@ export default function SupportTicketDetail() {
       <div className="support-detail-layout">
         <div className="support-detail-main space-y-4">
           <section className="support-v3-card">
+            {isCancelled && (
+              <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm">
+                <p className="font-semibold text-red-800">This ticket has been cancelled</p>
+                <p className="text-red-900 mt-1"><span className="font-medium">Cancelled by:</span> {ticket.cancelled_by_name || '—'}</p>
+                <p className="text-red-900"><span className="font-medium">Cancelled at:</span> {ticket.cancelled_at ? new Date(ticket.cancelled_at).toLocaleString() : '—'}</p>
+                <p className="text-red-900 mt-2"><span className="font-medium">Remark:</span> {ticket.cancellation_remark || '—'}</p>
+                <p className="text-xs text-red-700 mt-2">This ticket is read-only. Create a new support ticket for the same customer/laptop if needed.</p>
+              </div>
+            )}
             <p className="text-xs font-mono mb-1" style={{ color: 'var(--color-text-tertiary)' }}>
               {formatTicketId(ticket.id)} · {new Date(ticket.created_at).toLocaleString()}
               {ticket.created_by_name ? ` · Created by ${ticket.created_by_name}` : ''}
@@ -842,7 +854,9 @@ export default function SupportTicketDetail() {
                 <MapPin className="w-4 h-4 shrink-0 mt-0.5" />
                 <span className="break-words">{shortCity}</span>
               </span>
-              <span className={`support-pill ${ticket.status === 'closed' ? 'closed' : 'progress'}`}>{ticket.status.replace(/_/g, ' ')}</span>
+              <span className={`support-pill ${isCancelled ? 'cancelled' : ticket.status === 'closed' ? 'closed' : 'progress'}`}>
+                {isCancelled ? 'Cancelled' : ticket.status.replace(/_/g, ' ')}
+              </span>
             </div>
             <div className="mt-4">
               <div className="flex justify-between text-sm mb-1" style={{ color: 'var(--color-text-secondary)' }}>
@@ -897,7 +911,7 @@ export default function SupportTicketDetail() {
                   replacementOrder={(replacementOrders || []).find((o) => o.item_id === item.id)}
                   onRefresh={load}
                   technicians={technicians}
-                  canAssign={isSupportLead(user) && itemAllowsTechnicianAssign(item)}
+                  canAssign={!isCancelled && isSupportLead(user) && itemAllowsTechnicianAssign(item)}
                   otpNote={otpNote}
                   workflowActions={workflowForItem(item)}
                 />
@@ -917,6 +931,7 @@ export default function SupportTicketDetail() {
                       <span className="font-medium">{entry.user_name || 'System'}</span>
                       {' · '}
                       {entry.action.replace(/_/g, ' ')}
+                      {entry.detail?.remark ? `: ${entry.detail.remark}` : ''}
                       {entry.detail?.text ? `: ${entry.detail.text}` : ''}
                     </p>
                   </li>
@@ -925,8 +940,17 @@ export default function SupportTicketDetail() {
             </section>
           )}
 
-          {canCloseSupportTicket(user) && ticket.status !== 'closed' && (
-            <div className="flex justify-end pt-2">
+          {!isCancelled && canCloseSupportTicket(user) && ticket.status !== 'closed' && (
+            <div className="flex justify-end gap-2 pt-2">
+              {canCancelSupportTicket(user) && (
+                <button
+                  type="button"
+                  className="support-btn-danger-outline"
+                  onClick={() => setCancelOpen(true)}
+                >
+                  Cancel ticket
+                </button>
+              )}
               <button
                 type="button"
                 className="support-btn-danger-outline"
@@ -965,10 +989,17 @@ export default function SupportTicketDetail() {
             mobileOpen={mobileDetails}
             onCloseMobile={() => setMobileDetails(false)}
             showLeadOtp={isSupportLead(user)}
-            onPriorityChange={isSupportLead(user) ? onPriorityChange : null}
+            onPriorityChange={!isCancelled && isSupportLead(user) ? onPriorityChange : null}
           />
         </div>
       </div>
+
+      <CancelTicketModal
+        ticketId={ticketId}
+        open={cancelOpen}
+        onClose={() => setCancelOpen(false)}
+        onCancelled={load}
+      />
 
       <TtsplHistoryDrawer
         ttsplId={ticket.ttspl_id || customerLaptops[0]?.ttspl_id}
