@@ -28,7 +28,19 @@ const pool = require('../config/db');
        )::int AS billable
      FROM vendor_serial_numbers`
   );
-  console.log(JSON.stringify({ invoices: inv.rows[0], byYear: byYear.rows, sample: sample.rows, serials: readiness.rows[0] }, null, 2));
+  const statuses = await pool.query(
+    `SELECT COALESCE(inventory_status, '(null)') AS inventory_status, COUNT(*)::int AS c
+       FROM vendor_serial_numbers
+      WHERE current_customer_id IS NOT NULL AND deleted_at IS NULL
+      GROUP BY 1 ORDER BY c DESC LIMIT 10`
+  );
+  console.log(JSON.stringify({
+    invoices: inv.rows[0],
+    byYear: byYear.rows,
+    sample: sample.rows,
+    serials: readiness.rows[0],
+    deployed_statuses: statuses.rows,
+  }, null, 2));
   await pool.end();
 })().catch((e) => {
   console.error(e);

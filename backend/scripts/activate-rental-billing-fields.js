@@ -14,6 +14,8 @@ const {
   loadVendorActivationRows,
   deriveVendorPoRate,
   deriveVendorSerialStart,
+  planStatusNormalization,
+  applyStatusNormalization,
   writeMarkdownReport,
 } = require('./lib/billingActivationUtils');
 
@@ -35,6 +37,7 @@ function parseLineItems(raw) {
 }
 
 async function buildPlan() {
+  const statusPlan = await planStatusNormalization(pool);
   const ctx = await loadActivationContext(pool);
   const beforeCustomer = await gatherCustomerReadiness(pool);
   const beforeVendor = await gatherVendorReadiness(pool);
@@ -134,6 +137,7 @@ async function buildPlan() {
   return {
     beforeCustomer,
     beforeVendor,
+    statusPlan,
     customerUpdates,
     lowConfidence,
     needsRate,
@@ -147,6 +151,9 @@ async function applyPlan(plan) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+
+    const statusResult = await applyStatusNormalization(client);
+    plan.statusApplied = statusResult;
 
     for (const row of plan.customerUpdates) {
       await client.query(
@@ -214,6 +221,11 @@ function renderReport(plan, mode, afterCustomer, afterVendor) {
     JSON.stringify({ customer: plan.beforeCustomer, vendor: plan.beforeVendor }, null, 2),
     '```',
     '',
+    '## Customer status normalization (legacy ERP → rented/returned)',
+    '',
+    `- Set to **returned**: **${plan.statusPlan.to_returned}**`,
+    `- Set to **rented**: **${plan.statusPlan.to_rented}**`,
+    '',
     '## Customer NULL-fill plan',
     '',
     `- Serial updates planned: **${plan.customerUpdates.length}**`,
@@ -275,6 +287,7 @@ function renderReport(plan, mode, afterCustomer, afterVendor) {
   console.log(dryRun ? 'DRY RUN — no writes' : 'COMMIT — applying NULL-fill updates');
   const plan = await buildPlan();
 
+  console.log(`Status normalize → returned: ${plan.statusPlan.to_returned}, rented: ${plan.statusPlan.to_rented}`);
   console.log(`Customer serial patches: ${plan.customerUpdates.length}`);
   console.log(`Vendor PO rate patches: ${plan.poUpdates.length}`);
   console.log(`Vendor serial start patches: ${plan.vendorSerialUpdates.length}`);

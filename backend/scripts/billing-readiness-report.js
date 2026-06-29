@@ -2,52 +2,62 @@
 /**
  * Step 1 — Read-only billing readiness diagnostic.
  * Prints customer + vendor coverage counts (go/no-go gate before activation).
+ *
+ * Flags:
+ *   --preflight   Warn only (exit 0) — for pipeline step 1 before activation
+ *   --strict      Default verify mode after activation
  */
 require('dotenv').config();
 const pool = require('../config/db');
 const {
   gatherCustomerReadiness,
   gatherVendorReadiness,
+  gatherDeployedStatusBreakdown,
+  evaluateCustomerBlockers,
+  evaluateVendorBlockers,
 } = require('./lib/billingActivationUtils');
+
+const preflight = process.argv.includes('--preflight');
+const strict = !preflight;
 
 (async () => {
   const customer = await gatherCustomerReadiness(pool);
   const vendor = await gatherVendorReadiness(pool);
+  const statusBreakdown = await gatherDeployedStatusBreakdown(pool);
+
+  const customerEval = evaluateCustomerBlockers(customer, { strict });
+  const vendorEval = evaluateVendorBlockers(vendor, { strict });
 
   const report = {
     generated_at: new Date().toISOString(),
+    mode: preflight ? 'preflight' : 'strict',
     customer,
     vendor,
+    deployed_status_breakdown: statusBreakdown,
     go_no_go: {
       customer_ready:
-        customer.missing_rent_start === 0 && customer.missing_rate === 0 && customer.orphan_customer === 0,
+        customer.eligible_status > 0
+        && customer.missing_rent_start === 0
+        && customer.missing_rate === 0
+        && customer.orphan_customer === 0,
       vendor_ready: vendor.missing_po_rate === 0 && vendor.missing_start_date === 0,
     },
   };
 
   console.log(JSON.stringify(report, null, 2));
 
-  const blockers = [];
-  if (customer.missing_rent_start > 0) {
-    blockers.push(`${customer.missing_rent_start} deployed serial(s) missing rent_start_date`);
-  }
-  if (customer.missing_rate > 0) {
-    blockers.push(`${customer.missing_rate} deployed serial(s) missing rent_monthly_rate`);
-  }
-  if (customer.orphan_customer > 0) {
-    blockers.push(`${customer.orphan_customer} serial(s) with orphan current_customer_id`);
-  }
-  if (vendor.missing_po_rate > 0) {
-    blockers.push(`${vendor.missing_po_rate} vendor rental serial(s) missing PO line rate`);
-  }
-  if (vendor.missing_start_date > 0) {
-    blockers.push(`${vendor.missing_start_date} vendor rental serial(s) missing start date`);
+  const allBlockers = [...customerEval.blockers, ...vendorEval.blockers];
+  const autoFix = [...customerEval.autoFix, ...vendorEval.autoFix];
+
+  if (autoFix.length) {
+    console.log('\nWill be fixed by activate-rental-billing-fields.js --commit:');
+    for (const b of autoFix) console.log(`  - ${b}`);
   }
 
-  if (blockers.length) {
-    console.error('\nBlockers (run activate-rental-billing-fields.js --dry-run first):');
-    for (const b of blockers) console.error(`  - ${b}`);
-    process.exitCode = 1;
+  if (allBlockers.length) {
+    console.error(`\nBlockers${preflight ? ' (preflight — continuing pipeline)' : ''}:`);
+    for (const b of allBlockers) console.error(`  - ${b}`);
+    if (strict) process.exitCode = 1;
   } else {
     console.log('\nCoverage OK — eligible for historical backfill.');
   }

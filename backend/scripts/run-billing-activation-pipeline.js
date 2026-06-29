@@ -29,7 +29,7 @@ function run(label, script, args = []) {
 
 console.log(commit ? 'PIPELINE: COMMIT mode (will write to DB)' : 'PIPELINE: DRY RUN (no writes — pass --commit to populate invoices)');
 
-run('Step 1 — Readiness diagnostic', 'billing-readiness-report.js');
+run('Step 1 — Readiness (preflight)', 'billing-readiness-report.js', ['--preflight']);
 
 const activationArgs = commit ? ['--commit'] : [];
 run('Step 2 — Activate rental billing fields', 'activate-rental-billing-fields.js', activationArgs);

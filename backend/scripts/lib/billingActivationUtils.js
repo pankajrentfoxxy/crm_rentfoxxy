@@ -121,6 +121,15 @@ async function gatherCustomerReadiness(pool) {
          WHERE vsn.inventory_status IN ('rented', 'returned')
        )::int AS eligible_status,
        COUNT(*) FILTER (
+         WHERE vsn.returned_at IS NOT NULL
+           AND vsn.inventory_status IS DISTINCT FROM 'returned'
+           AND vsn.inventory_status IS DISTINCT FROM 'sold'
+       )::int AS needs_returned_status,
+       COUNT(*) FILTER (
+         WHERE vsn.returned_at IS NULL
+           AND vsn.inventory_status NOT IN ('rented', 'sold', 'on_demo')
+       )::int AS needs_rented_status,
+       COUNT(*) FILTER (
          WHERE vsn.inventory_status IN ('rented', 'returned')
            AND vsn.rent_start_date IS NULL
        )::int AS missing_rent_start,
@@ -128,6 +137,14 @@ async function gatherCustomerReadiness(pool) {
          WHERE vsn.inventory_status IN ('rented', 'returned')
            AND (vsn.rent_monthly_rate IS NULL OR vsn.rent_monthly_rate = 0)
        )::int AS missing_rate,
+       COUNT(*) FILTER (
+         WHERE vsn.inventory_status NOT IN ('sold', 'on_demo')
+           AND vsn.rent_start_date IS NULL
+       )::int AS missing_rent_start_deployed,
+       COUNT(*) FILTER (
+         WHERE vsn.inventory_status NOT IN ('sold', 'on_demo')
+           AND (vsn.rent_monthly_rate IS NULL OR vsn.rent_monthly_rate = 0)
+       )::int AS missing_rate_deployed,
        COUNT(*) FILTER (
          WHERE NOT EXISTS (
            SELECT 1 FROM customers c WHERE c.customer_id = vsn.current_customer_id
@@ -139,6 +156,62 @@ async function gatherCustomerReadiness(pool) {
        AND vsn.deleted_at IS NULL`
   );
   return res.rows[0];
+}
+
+async function gatherDeployedStatusBreakdown(pool) {
+  const res = await pool.query(
+    `SELECT COALESCE(inventory_status, '(null)') AS inventory_status, COUNT(*)::int AS c
+       FROM vendor_serial_numbers
+      WHERE current_customer_id IS NOT NULL AND deleted_at IS NULL
+      GROUP BY 1
+      ORDER BY c DESC
+      LIMIT 15`
+  );
+  return res.rows;
+}
+
+async function planStatusNormalization(pool) {
+  const res = await pool.query(
+    `SELECT
+       COUNT(*) FILTER (
+         WHERE returned_at IS NOT NULL
+           AND inventory_status IS DISTINCT FROM 'returned'
+           AND inventory_status IS DISTINCT FROM 'sold'
+       )::int AS to_returned,
+       COUNT(*) FILTER (
+         WHERE returned_at IS NULL
+           AND inventory_status NOT IN ('rented', 'sold', 'on_demo')
+       )::int AS to_rented
+     FROM vendor_serial_numbers
+     WHERE deleted_at IS NULL
+       AND current_customer_id IS NOT NULL`
+  );
+  return res.rows[0];
+}
+
+async function applyStatusNormalization(client) {
+  const toReturned = await client.query(
+    `UPDATE vendor_serial_numbers
+        SET inventory_status = 'returned',
+            status_changed_at = COALESCE(status_changed_at, NOW()),
+            updated_at = NOW()
+      WHERE deleted_at IS NULL
+        AND current_customer_id IS NOT NULL
+        AND returned_at IS NOT NULL
+        AND inventory_status IS DISTINCT FROM 'returned'
+        AND inventory_status IS DISTINCT FROM 'sold'`
+  );
+  const toRented = await client.query(
+    `UPDATE vendor_serial_numbers
+        SET inventory_status = 'rented',
+            status_changed_at = COALESCE(status_changed_at, NOW()),
+            updated_at = NOW()
+      WHERE deleted_at IS NULL
+        AND current_customer_id IS NOT NULL
+        AND returned_at IS NULL
+        AND inventory_status NOT IN ('rented', 'sold', 'on_demo')`
+  );
+  return { to_returned: toReturned.rowCount, to_rented: toRented.rowCount };
 }
 
 async function gatherVendorReadiness(pool) {
@@ -176,7 +249,7 @@ async function loadActivationContext(pool) {
          FROM vendor_serial_numbers vsn
         WHERE vsn.current_customer_id IS NOT NULL
           AND vsn.deleted_at IS NULL
-          AND vsn.inventory_status IN ('rented', 'returned')`
+          AND vsn.inventory_status NOT IN ('sold', 'on_demo')`
     ),
     pool.query(
       `SELECT id, dc_number, sales_order_number, quotation_number, customer_id,
@@ -405,6 +478,51 @@ function writeMarkdownReport(relPath, body) {
   return outPath;
 }
 
+function evaluateCustomerBlockers(customer, { strict = false } = {}) {
+  const blockers = [];
+  const autoFix = [];
+
+  if (customer.needs_rented_status > 0 || customer.needs_returned_status > 0) {
+    const msg = `${customer.needs_rented_status + customer.needs_returned_status} deployed serial(s) need inventory_status normalized (legacy ERP statuses)`;
+    if (strict) blockers.push(msg);
+    else autoFix.push(msg);
+  }
+  if (customer.eligible_status === 0 && strict) {
+    blockers.push('No serials with billable status rented/returned');
+  }
+  if (customer.missing_rent_start_deployed > 0) {
+    const msg = `${customer.missing_rent_start_deployed} deployed serial(s) missing rent_start_date`;
+    if (strict) blockers.push(msg);
+    else autoFix.push(msg);
+  }
+  if (customer.missing_rate_deployed > 0) {
+    const msg = `${customer.missing_rate_deployed} deployed serial(s) missing rent_monthly_rate`;
+    if (strict) blockers.push(msg);
+    else autoFix.push(msg);
+  }
+  if (customer.missing_rent_start > 0) blockers.push(`${customer.missing_rent_start} billable serial(s) missing rent_start_date`);
+  if (customer.missing_rate > 0) blockers.push(`${customer.missing_rate} billable serial(s) missing rent_monthly_rate`);
+  if (customer.orphan_customer > 0) blockers.push(`${customer.orphan_customer} serial(s) with orphan current_customer_id`);
+
+  return { blockers, autoFix };
+}
+
+function evaluateVendorBlockers(vendor, { strict = false } = {}) {
+  const blockers = [];
+  const autoFix = [];
+  if (vendor.missing_po_rate > 0) {
+    const msg = `${vendor.missing_po_rate} vendor rental serial(s) missing PO line rate`;
+    if (strict) blockers.push(msg);
+    else autoFix.push(msg);
+  }
+  if (vendor.missing_start_date > 0) {
+    const msg = `${vendor.missing_start_date} vendor rental serial(s) missing start date`;
+    if (strict) blockers.push(msg);
+    else autoFix.push(msg);
+  }
+  return { blockers, autoFix };
+}
+
 module.exports = {
   parseMoney,
   parseDate,
@@ -416,6 +534,11 @@ module.exports = {
   lastCompletedMonthYm,
   gatherCustomerReadiness,
   gatherVendorReadiness,
+  gatherDeployedStatusBreakdown,
+  planStatusNormalization,
+  applyStatusNormalization,
+  evaluateCustomerBlockers,
+  evaluateVendorBlockers,
   loadActivationContext,
   deriveRentStartDate,
   deriveRentMonthlyRate,
