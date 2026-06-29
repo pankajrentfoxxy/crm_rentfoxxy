@@ -5,6 +5,7 @@ const multer = require('multer');
 const { multerLimits, wrapMulter, multerErrorMessage, UPLOAD_MAX_FILE_MB } = require('../config/uploadLimits');
 const { authMiddleware } = require('../middleware/auth');
 const { requireSupportAccess, requireSupportLead, requireSupportTicketClose } = require('../middleware/supportAccess');
+const { checkPermission } = require('../middleware/checkPermission');
 const {
     listCategories,
     listTechnicians,
@@ -59,6 +60,13 @@ const {
 } = require('../controllers/supportController');
 
 const router = express.Router();
+
+const requireSupportTicketCreate = checkPermission('support_tickets', 'create');
+const requireSupportTicketEdit = checkPermission('support_tickets', 'edit');
+const requireSupportTicketDelete = checkPermission('support_tickets', 'delete');
+const requireSupportSettingsCreate = checkPermission('support_settings', 'create');
+const requireSupportSettingsEdit = checkPermission('support_settings', 'edit');
+const requireSupportSettingsDelete = checkPermission('support_settings', 'delete');
 
 const supportUploadDir = path.join(__dirname, '..', 'uploads', 'support');
 if (!fs.existsSync(supportUploadDir)) {
@@ -130,53 +138,53 @@ router.get('/customers/:customerId/pickup-context', getPickupDeliveryContext);
 router.get('/dashboard', getDashboard);
 router.get('/badges', getNavBadges);
 router.get('/settings', getSettings);
-router.put('/settings', updateSettings);
-router.post('/categories', upsertCategory);
-router.delete('/categories/:categoryId', deleteCategory);
+router.put('/settings', requireSupportSettingsEdit, updateSettings);
+router.post('/categories', requireSupportSettingsCreate, upsertCategory);
+router.delete('/categories/:categoryId', requireSupportSettingsDelete, deleteCategory);
 router.get('/tickets', listTickets);
 router.get('/tickets/counts', countTickets);
 router.get('/tickets/export', exportTickets);
 router.get('/tickets/check-duplicate', checkDuplicateTicket);
-router.post('/tickets/pickup-ticket', requireSupportLead, createPickupTicket);
-router.post('/tickets', createTicket);
+router.post('/tickets/pickup-ticket', requireSupportLead, requireSupportTicketCreate, createPickupTicket);
+router.post('/tickets', requireSupportTicketCreate, createTicket);
 router.get('/tickets/:ticketId', getTicket);
-router.patch('/tickets/:ticketId', requireSupportLead, updateTicket);
-router.post('/tickets/:ticketId/phases', requireSupportLead, addWorkflowPhaseItems);
-router.post('/tickets/:ticketId/assign-all', requireSupportLead, assignTicketBulk);
-router.post('/tickets/:ticketId/close', requireSupportTicketClose, closeTicket);
-router.post('/tickets/:ticketId/replacements', requireSupportLead, initiateReplacement);
-router.post('/tickets/:ticketId/assign-return-pickup', requireSupportLead, assignReturnPickupDispatch);
+router.patch('/tickets/:ticketId', requireSupportLead, requireSupportTicketEdit, updateTicket);
+router.post('/tickets/:ticketId/phases', requireSupportLead, requireSupportTicketEdit, addWorkflowPhaseItems);
+router.post('/tickets/:ticketId/assign-all', requireSupportLead, requireSupportTicketEdit, assignTicketBulk);
+router.post('/tickets/:ticketId/close', requireSupportTicketClose, requireSupportTicketEdit, closeTicket);
+router.post('/tickets/:ticketId/replacements', requireSupportLead, requireSupportTicketEdit, initiateReplacement);
+router.post('/tickets/:ticketId/assign-return-pickup', requireSupportLead, requireSupportTicketEdit, assignReturnPickupDispatch);
 router.get('/tickets/:ticketId/replacement-context', requireSupportLead, getReplacementContext);
-router.post('/items/:itemId/move-to-replacement', requireSupportLead, moveComplaintToReplacement);
+router.post('/items/:itemId/move-to-replacement', requireSupportLead, requireSupportTicketEdit, moveComplaintToReplacement);
 router.get('/customers/:customerId/available-assets', getAvailableAssets);
-router.post('/items/:itemId/comments', addComment);
-router.post('/items/:itemId/work-done', markWorkDone);
-router.post('/items/:itemId/visit', logVisit);
-router.post('/items/:itemId/mark-visited', markVisited);
-router.post('/items/:itemId/verify-ttspl', verifyTtspl);
-router.post('/items/:itemId/submit-pickup', submitForPickup);
-router.post('/items/:itemId/warehouse-received', requireSupportLead, warehouseReceivedPickup);
-router.post('/items/:itemId/set-outcome', setOutcome);
-router.post('/items/:itemId/picked-up', markPickedUp);
-router.delete('/items/:itemId', requireSupportLead, removeTicketItem);
-router.post('/items/:itemId/pod', uploadPodFile, uploadPod);
-router.delete('/items/:itemId/pod', removePod);
-router.post('/items/:itemId/verify-otp', verifyOtp);
-router.post('/items/:itemId/verify-customer-otp', verifyOtp);
-router.post('/items/:itemId/verify-warehouse-otp', verifyOtp);
-router.patch('/items/:itemId/assign', requireSupportLead, assignItem);
+router.post('/items/:itemId/comments', requireSupportTicketEdit, addComment);
+router.post('/items/:itemId/work-done', requireSupportTicketEdit, markWorkDone);
+router.post('/items/:itemId/visit', requireSupportTicketEdit, logVisit);
+router.post('/items/:itemId/mark-visited', requireSupportTicketEdit, markVisited);
+router.post('/items/:itemId/verify-ttspl', requireSupportTicketEdit, verifyTtspl);
+router.post('/items/:itemId/submit-pickup', requireSupportTicketEdit, submitForPickup);
+router.post('/items/:itemId/warehouse-received', requireSupportLead, requireSupportTicketEdit, warehouseReceivedPickup);
+router.post('/items/:itemId/set-outcome', requireSupportTicketEdit, setOutcome);
+router.post('/items/:itemId/picked-up', requireSupportTicketEdit, markPickedUp);
+router.delete('/items/:itemId', requireSupportLead, requireSupportTicketDelete, removeTicketItem);
+router.post('/items/:itemId/pod', requireSupportTicketEdit, uploadPodFile, uploadPod);
+router.delete('/items/:itemId/pod', requireSupportTicketEdit, removePod);
+router.post('/items/:itemId/verify-otp', requireSupportTicketEdit, verifyOtp);
+router.post('/items/:itemId/verify-customer-otp', requireSupportTicketEdit, verifyOtp);
+router.post('/items/:itemId/verify-warehouse-otp', requireSupportTicketEdit, verifyOtp);
+router.patch('/items/:itemId/assign', requireSupportLead, requireSupportTicketEdit, assignItem);
 
 // Phase 20 — pickup flow redesign
-router.post('/tickets/:ticketId/pickup', requireSupportLead, createPickupWithReturnDc);
-router.post('/items/:itemId/pickup-reached', logVisit);
-router.post('/items/:itemId/technician-esign', technicianSignPickup);
-router.post('/items/:itemId/verify-pickup-otp', verifyPickupCustomerOtp);
+router.post('/tickets/:ticketId/pickup', requireSupportLead, requireSupportTicketCreate, createPickupWithReturnDc);
+router.post('/items/:itemId/pickup-reached', requireSupportTicketEdit, logVisit);
+router.post('/items/:itemId/technician-esign', requireSupportTicketEdit, technicianSignPickup);
+router.post('/items/:itemId/verify-pickup-otp', requireSupportTicketEdit, verifyPickupCustomerOtp);
 router.get('/tech-bucket/laptops', getTechnicianLaptopBucket);
 
-router.patch('/replacement-orders/:orderId', requireSupportLead, updateReplacementOrder);
-router.post('/replacement-orders/:orderId/deliver', requireSupportLead, deliverReplacement);
+router.patch('/replacement-orders/:orderId', requireSupportLead, requireSupportTicketEdit, updateReplacementOrder);
+router.post('/replacement-orders/:orderId/deliver', requireSupportLead, requireSupportTicketEdit, deliverReplacement);
 
-router.post('/admin/ensure-schema', requireSupportLead, async (req, res) => {
+router.post('/admin/ensure-schema', requireSupportLead, requireSupportSettingsEdit, async (req, res) => {
     try {
         await ensureSupportSchema();
         res.json({ success: true, message: 'Support schema ensured' });
