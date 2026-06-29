@@ -74,21 +74,50 @@ const dash = (v) => (v == null || v === '' ? 'N/A' : String(v));
 
 // delivery_challan_lines has no rate column; price each DC line from the linked
 // sales order so the PDF shows correct Rate/Amount/GST.
-async function attachDcLineRates(lines) {
-  const { getSalesOrderRateMap, rateForDcLine } = require('./salesManagementService');
+async function attachDcLineRates(lines, dcNumber) {
+  const {
+    getSalesOrderRateMap,
+    rateForDcLine,
+    getDcSerialRateLookup,
+    lookupSerialRate,
+    resolveDcBilling,
+  } = require('./salesManagementService');
+  const head = lines[0] || {};
+  const son = head.sales_order_number;
+  const dcNum = dcNumber || head.dc_number;
+  if (dcNum && son) {
+    const { billingLines } = await resolveDcBilling(dcNum, lines);
+    if (billingLines.length) {
+      const avgRate = billingLines.reduce((s, l) => s + l.amount, 0)
+        / Math.max(1, billingLines.reduce((s, l) => s + l.quantity, 0));
+      for (const line of lines) {
+        if (line.rate != null && Number(line.rate) > 0) continue;
+        line.rate = avgRate;
+      }
+      return lines;
+    }
+  }
   const cache = new Map();
   for (const line of lines) {
     if (line.rate != null && Number(line.rate) > 0) continue;
-    const son = line.sales_order_number;
-    if (!son) continue;
-    if (!cache.has(son)) cache.set(son, await getSalesOrderRateMap(son));
-    line.rate = rateForDcLine(line, cache.get(son));
+    const lineSon = line.sales_order_number || son;
+    if (!lineSon) continue;
+    if (!cache.has(lineSon)) cache.set(lineSon, await getSalesOrderRateMap(lineSon));
+    line.rate = rateForDcLine(line, cache.get(lineSon));
   }
   return lines;
 }
 
 // Resolve per-serial spec rows for a DC (one product row per laptop).
-async function resolveDcUnitRows(lines) {
+async function resolveDcUnitRows(lines, dcNumber) {
+  const { getDcSerialRateLookup, lookupSerialRate, rateForDcLine, getSalesOrderRateMap } = require('./salesManagementService');
+  const head = lines[0] || {};
+  const son = head.sales_order_number;
+  const dcNum = dcNumber || head.dc_number;
+  const serialLookup = (dcNum && son) ? await getDcSerialRateLookup(dcNum, son) : null;
+  const rateMap = (!serialLookup?.rows?.length && son)
+    ? await getSalesOrderRateMap(son)
+    : null;
   const rows = [];
   for (const line of lines) {
     const raw = line.serial_number;
@@ -105,6 +134,7 @@ async function resolveDcUnitRows(lines) {
       const serialId = /^\d+$/.test(parts[0]) ? Number(parts[0]) : null;
       const serialNumber = parts[1] || parts[0];
       const ttspl = parts[2] || null;
+      const priced = lookupSerialRate(serialLookup, { serialId, serialNumber, ttspl });
       let spec = {};
       try {
         const r = await pool.query(
@@ -126,8 +156,8 @@ async function resolveDcUnitRows(lines) {
         spec = r.rows[0] || {};
       } catch (_) { spec = {}; }
       rows.push({
-        brand: spec.brand || line.brand,
-        model_name: spec.model || line.model_name,
+        brand: priced?.brand || spec.brand || line.brand,
+        model_name: priced?.model_name || spec.model || line.model_name,
         processor: spec.processor || line.processor,
         generation: spec.generation || line.generation,
         ram: spec.ram || line.ram,
@@ -136,7 +166,7 @@ async function resolveDcUnitRows(lines) {
         screen_size: spec.screen_size || line.screen_size,
         serial: spec.serial_number || serialNumber,
         ttspl: spec.inventory_asset_code || ttspl || '',
-        rate: line.rate,
+        rate: priced?.rate ?? (rateMap ? rateForDcLine(line, rateMap) : line.rate),
         locking_period: line.locking_period,
         technical_warranty: line.technical_warranty,
         battery_charger_warranty: line.battery_charger_warranty,
@@ -188,7 +218,7 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
 
   // Product rows
   const rows = docType === 'delivery_challan'
-    ? await resolveDcUnitRows(await attachDcLineRates(lines))
+    ? await resolveDcUnitRows(await attachDcLineRates(lines, docNumber), docNumber)
     : lines.map((l) => ({
       brand: l.brand, model_name: l.model_name, processor: l.processor, generation: l.generation,
       ram: l.ram, storage: l.storage, gpu: l.gpu, screen_size: l.screen_size,

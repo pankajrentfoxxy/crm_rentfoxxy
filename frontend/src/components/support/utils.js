@@ -42,7 +42,13 @@ export const uploadBase = () => {
   return window.location.origin;
 };
 
-export const podUrl = (path) => (path ? `${uploadBase()}/uploads/${path}` : null);
+export const uploadAssetUrl = (path) => {
+  if (!path) return null;
+  if (String(path).startsWith('http')) return path;
+  return `${uploadBase().replace(/\/$/, '')}/${String(path).replace(/^\//, '')}`;
+};
+
+export const podUrl = (path) => (path ? `${uploadBase()}/uploads/${String(path).replace(/^\/?uploads\//, '')}` : null);
 
 // Client-side image compression so large phone-camera photos (often 5-15 MB)
 // are shrunk before upload and never trip the server's size limit. Resizes to a

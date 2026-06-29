@@ -4,7 +4,7 @@ import toast from 'react-hot-toast';
 import api from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
 import { isSupportLead, isSupportTechnician } from '../../../utils/supportAccess';
-import { uploadBase, podUrl as podUrlFor, compressImageFile } from '../utils';
+import { podUrl as podUrlFor, compressImageFile, uploadAssetUrl } from '../utils';
 
 /**
  * PickupItemCard — Phase 20 step-by-step pickup flow.
@@ -39,9 +39,9 @@ export default function PickupItemCard({ item, ticket, onRefresh }) {
   const isInhouse = !isCourier && !isPorter;
 
   const podUrl = podUrlFor(item.proof_of_completion_path || item.pod_image_path);
-  const esignUrl = item.warehouse_esign_url ? `${uploadBase()}/${item.warehouse_esign_url}` : null;
+  const esignUrl = uploadAssetUrl(item.warehouse_esign_url);
   const techSigned = !!item.technician_esign_url;
-  const returnDcPdfUrl = item.return_dc_pdf_path ? `${uploadBase()}/${item.return_dc_pdf_path.replace(/^\/?uploads\//, '')}` : null;
+  const returnDcPdfUrl = uploadAssetUrl(item.return_dc_pdf_path);
 
   const dispatchBadge = isCourier
     ? `🚚 Courier${item.pickup_courier_name ? ` — ${item.pickup_courier_name}` : ''}`

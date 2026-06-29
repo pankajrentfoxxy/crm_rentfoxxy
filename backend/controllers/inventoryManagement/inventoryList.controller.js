@@ -271,10 +271,13 @@ async function updateReadyToRentAction(req, res) {
       `UPDATE vendor_serial_numbers
        SET extra = $1::jsonb,
            inventory_status = CASE
+             WHEN inventory_status IN ('in_repair', 'repared')
+               AND COALESCE(qc_status, extra->>'status', 'pending') = 'passed'
+             THEN 'in_stock'
              WHEN inventory_status IS NULL
                OR inventory_status NOT IN (
                  'reserved','in_transit','rented','on_demo','sold',
-                 'returned','in_repair','qc_failed','scrapped'
+                 'returned','qc_failed','scrapped'
                )
              THEN 'in_stock'
              ELSE inventory_status

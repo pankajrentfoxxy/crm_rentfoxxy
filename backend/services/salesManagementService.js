@@ -849,10 +849,19 @@ async function searchAvailableInventory({
     )`;
   }
 
-  // Single authoritative source: vendor_serial_numbers (QC-passed + in_stock)
+  // Single authoritative source: vendor_serial_numbers (QC-passed, shelf-available)
   // enriched with vendor_product_details specs. Anything procured and received
   // becomes selectable here automatically — no separate catalog/vpi table, so
   // status can no longer drift (the legacy vendor_product_inventory is bypassed).
+  // Legacy ERP rows may still have inventory_status = in_repair after repair even
+  // though qc_status is passed — treat any non-deployed QC-passed unit as pickable.
+  const OFF_SHELF_INVENTORY_STATUSES = [
+    'reserved', 'in_transit', 'rented', 'on_demo', 'sold',
+    'returned', 'scrapped', 'out_stock', 'qc_failed',
+    'out_for_repare', 'out_for_return',
+  ];
+  const offShelfList = OFF_SHELF_INVENTORY_STATUSES.map((s) => `'${s}'`).join(', ');
+
   const result = await pool.query(
     `SELECT
        vsn.serial_id AS inventory_row_id,
@@ -877,7 +886,7 @@ async function searchAvailableInventory({
        ON vpo.po_id = vsn.po_id AND vpo.deleted_at IS NULL
      WHERE vsn.deleted_at IS NULL
        AND COALESCE(vsn.qc_status, vsn.extra->>'status', 'pending') = 'passed'
-       AND COALESCE(vsn.inventory_status, 'in_stock') = 'in_stock'
+       AND COALESCE(vsn.inventory_status, 'in_stock') NOT IN (${offShelfList})
        ${searchSql}
      ORDER BY vsn.serial_id DESC
      LIMIT ${candidateLimit}`,
@@ -1016,26 +1025,167 @@ function computeGstBreakdown({
 // (delivery_challan_lines has no rate column — the rate lives on the SO).
 async function getSalesOrderRateMap(salesOrderNumber) {
   const r = await pool.query(
-    `SELECT brand, model_name, rate FROM sales_order_lines WHERE sales_order_number = $1`,
+    `SELECT id, brand, model_name, rate FROM sales_order_lines WHERE sales_order_number = $1`,
     [salesOrderNumber]
   );
   const map = new Map();
+  const byLineId = new Map();
+  const byModel = new Map();
+  let rateSum = 0;
   for (const row of r.rows) {
+    const rate = Number(row.rate || 0);
+    rateSum += rate;
     const key = `${String(row.brand || '').trim().toLowerCase()}|${String(row.model_name || '').trim().toLowerCase()}`;
-    if (!map.has(key)) map.set(key, Number(row.rate || 0));
+    if (!map.has(key)) map.set(key, rate);
+    if (row.id != null) byLineId.set(Number(row.id), rate);
+    const modelKey = String(row.model_name || '').trim().toLowerCase();
+    if (modelKey && !byModel.has(modelKey)) byModel.set(modelKey, rate);
   }
-  return { map, single: r.rows.length === 1 ? Number(r.rows[0].rate || 0) : null };
+  return {
+    map,
+    byLineId,
+    byModel,
+    single: r.rows.length === 1 ? Number(r.rows[0].rate || 0) : null,
+    avgRate: r.rows.length ? rateSum / r.rows.length : 0,
+  };
+}
+
+function normalizeModelForRateMatch(model, brand) {
+  let m = String(model || '').trim().toLowerCase();
+  const b = String(brand || '').trim().toLowerCase();
+  if (!m) return m;
+  if (b && m.startsWith(`${b} `)) return m.slice(b.length + 1).trim();
+  const first = m.split(/\s+/)[0];
+  if (first && first !== b && m.startsWith(`${first} `)) {
+    return m.slice(first.length + 1).trim();
+  }
+  return m;
 }
 
 function rateForDcLine(line, rateMap) {
   if (!rateMap) return 0;
-  const model = String(line.model_name || '').trim().toLowerCase();
-  const key = `${String(line.brand || '').trim().toLowerCase()}|${model}`;
+  const modelRaw = String(line.model_name || '').trim().toLowerCase();
+  const brandRaw = String(line.brand || '').trim().toLowerCase();
+  const key = `${brandRaw}|${modelRaw}`;
   if (rateMap.map.has(key)) return rateMap.map.get(key);
+
+  const modelNorm = normalizeModelForRateMatch(line.model_name, line.brand);
+  if (modelNorm && rateMap.byModel?.has(modelNorm)) return rateMap.byModel.get(modelNorm);
+
   for (const [k, v] of rateMap.map) {
-    if (model && k.endsWith(`|${model}`)) return v;
+    const mapModel = k.split('|')[1] || '';
+    if (!modelNorm || !mapModel) continue;
+    if (mapModel === modelNorm || modelNorm.includes(mapModel) || mapModel.includes(modelNorm)) return v;
   }
-  return rateMap.single != null ? rateMap.single : 0;
+  if (rateMap.single != null) return rateMap.single;
+  if (rateMap.avgRate > 0) return rateMap.avgRate;
+  return 0;
+}
+
+/** Per-serial SO line rates for a DC (authoritative when allocations exist). */
+async function getDcSerialRateLookup(dcNumber, salesOrderNumber) {
+  const r = await pool.query(
+    `SELECT sos.serial_id, sos.ttspl_id, sos.serial_number,
+            sol.brand, sol.model_name, sol.rate
+       FROM sales_order_serials sos
+       INNER JOIN sales_order_lines sol
+         ON sol.id = sos.line_id AND sol.sales_order_number = sos.sales_order_number
+      WHERE sos.dc_number = $1
+        AND sos.sales_order_number = $2
+        AND sos.status <> 'removed'`,
+    [dcNumber, salesOrderNumber]
+  );
+  const bySerialId = new Map();
+  const byTtspl = new Map();
+  const bySerialNumber = new Map();
+  for (const row of r.rows) {
+    const payload = {
+      rate: Number(row.rate || 0),
+      brand: row.brand || '',
+      model_name: row.model_name || '',
+    };
+    if (row.serial_id) bySerialId.set(Number(row.serial_id), payload);
+    if (row.ttspl_id) byTtspl.set(String(row.ttspl_id).toUpperCase(), payload);
+    if (row.serial_number) bySerialNumber.set(String(row.serial_number).toUpperCase(), payload);
+  }
+  return { bySerialId, byTtspl, bySerialNumber, rows: r.rows };
+}
+
+function lookupSerialRate(lookup, { serialId, serialNumber, ttspl } = {}) {
+  if (!lookup) return null;
+  if (serialId && lookup.bySerialId.has(Number(serialId))) {
+    return lookup.bySerialId.get(Number(serialId));
+  }
+  const tt = ttspl ? String(ttspl).toUpperCase() : '';
+  const sn = serialNumber ? String(serialNumber).toUpperCase() : '';
+  if (tt && lookup.byTtspl.has(tt)) return lookup.byTtspl.get(tt);
+  if (sn && lookup.bySerialNumber.has(sn)) return lookup.bySerialNumber.get(sn);
+  if (sn && lookup.byTtspl.has(sn)) return lookup.byTtspl.get(sn);
+  return null;
+}
+
+/** Billing rows grouped by SO line for DC detail UI / totals. */
+async function getDcBillingLines(dcNumber, salesOrderNumber) {
+  const r = await pool.query(
+    `SELECT sol.brand, sol.model_name, sol.rate,
+            COUNT(*)::int AS quantity
+       FROM sales_order_serials sos
+       INNER JOIN sales_order_lines sol
+         ON sol.id = sos.line_id AND sol.sales_order_number = sos.sales_order_number
+      WHERE sos.dc_number = $1
+        AND sos.sales_order_number = $2
+        AND sos.status <> 'removed'
+      GROUP BY sol.id, sol.brand, sol.model_name, sol.rate
+      ORDER BY MIN(sos.allocation_id)`,
+    [dcNumber, salesOrderNumber]
+  );
+  return r.rows.map((row) => {
+    const rate = Number(row.rate || 0);
+    const qty = Number(row.quantity || 1);
+    return {
+      brand: row.brand || '',
+      model_name: row.model_name || '',
+      rate,
+      quantity: qty,
+      amount: +(rate * qty).toFixed(2),
+    };
+  });
+}
+
+async function resolveDcBilling(dcNumber, lines) {
+  const head = lines[0] || {};
+  const son = head.sales_order_number;
+  if (dcNumber && son) {
+    const billingLines = await getDcBillingLines(dcNumber, son);
+    if (billingLines.length) {
+      const subtotal = billingLines.reduce((s, l) => s + l.amount, 0);
+      return { billingLines, subtotal };
+    }
+  }
+
+  const rateMapCache = new Map();
+  let subtotal = 0;
+  const billingLines = [];
+  for (const line of lines) {
+    const lineSon = line.sales_order_number || son;
+    if (lineSon && !rateMapCache.has(lineSon)) {
+      rateMapCache.set(lineSon, await getSalesOrderRateMap(lineSon));
+    }
+    const qty = Number(line.quantity || line.main_qty || 1) || 1;
+    const rate = lineSon ? rateForDcLine(line, rateMapCache.get(lineSon)) : 0;
+    const amount = +(rate * qty).toFixed(2);
+    line.rate = rate;
+    line.amount = amount;
+    billingLines.push({
+      brand: line.brand,
+      model_name: line.model_name,
+      rate,
+      quantity: qty,
+      amount,
+    });
+    subtotal += amount;
+  }
+  return { billingLines, subtotal };
 }
 
 module.exports = {
@@ -1046,6 +1196,10 @@ module.exports = {
   computeGstBreakdown,
   getSalesOrderRateMap,
   rateForDcLine,
+  getDcSerialRateLookup,
+  lookupSerialRate,
+  getDcBillingLines,
+  resolveDcBilling,
   entityForQuotationType,
   entityDocType,
   generateToken,

@@ -134,7 +134,7 @@ async function resolveReceiveConfig(db, { poId, line, captureToken, productDetai
   if (captureToken) {
     const tok = await db.query(
       `SELECT actual_config FROM grn_serial_capture_tokens
-        WHERE token = $1 AND actual_config IS NOT NULL
+        WHERE token_id = $1 AND actual_config IS NOT NULL
         LIMIT 1`,
       [captureToken]
     );

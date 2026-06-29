@@ -48,6 +48,7 @@ export default function DeliveryChallanDetailPage() {
   const isSuperAdmin = user?.role === 'super_admin';
   const [tab, setTab] = useState('details');
   const [lines, setLines] = useState([]);
+  const [billingLines, setBillingLines] = useState([]);
   const [totals, setTotals] = useState(null);
   const [qc, setQc] = useState(null);
   const [paymentSummary, setPaymentSummary] = useState(null);
@@ -60,6 +61,7 @@ export default function DeliveryChallanDetailPage() {
   const [editOpen, setEditOpen] = useState(false);
 
   const head = lines[0] || {};
+  const summaryLines = billingLines.length ? billingLines : lines;
   const isSale = head.entity_code === 'gorefurbo' || head.quotation_type === 'sale' || head.quotation_type === 'sales';
 
   const loadQc = useCallback(async () => {
@@ -75,6 +77,7 @@ export default function DeliveryChallanDetailPage() {
     try {
       const res = await getDC(dcNumber);
       setLines(res.data?.lines || []);
+      setBillingLines(res.data?.billing_lines || []);
       setTotals(res.data?.totals || null);
       if (res.data?.lines?.[0]?.sales_order_number) {
         const soRes = await getSalesOrderFull(res.data.lines[0].sales_order_number);
@@ -272,12 +275,12 @@ export default function DeliveryChallanDetailPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y">
-                    {lines.map((l, i) => (
+                    {summaryLines.map((l, i) => (
                       <tr key={i}>
                         <td className="px-4 py-2">{[l.brand, l.model_name].filter(Boolean).join(' ') || '—'}</td>
                         <td className="px-4 py-2 text-right">{l.quantity || l.main_qty || 1}</td>
                         <td className="px-4 py-2 text-right">{formatCurrency(l.rate)}</td>
-                        <td className="px-4 py-2 text-right">{formatCurrency(l.amount)}</td>
+                        <td className="px-4 py-2 text-right">{formatCurrency(l.amount ?? (Number(l.rate || 0) * Number(l.quantity || l.main_qty || 1)))}</td>
                       </tr>
                     ))}
                   </tbody>

@@ -7,8 +7,7 @@ const {
   nextFinancialYearNumber,
   peekFinancialYearNumber,
   computeGstBreakdown,
-  getSalesOrderRateMap,
-  rateForDcLine,
+  resolveDcBilling,
   entityForQuotationType,
   generateToken,
   listQuotationsGrouped,
@@ -803,21 +802,9 @@ exports.getDeliveryChallan = async (req, res) => {
       });
     }
 
-    // Price the DC from the linked SO (delivery_challan_lines has no rate column)
-    // and compute the GST breakdown so the UI/PDF can show accurate amounts.
-    const rateMapCache = new Map();
-    let subtotal = 0;
-    for (const line of lines) {
-      const son = line.sales_order_number;
-      if (son && !rateMapCache.has(son)) {
-        rateMapCache.set(son, await getSalesOrderRateMap(son));
-      }
-      const qty = Number(line.quantity || line.main_qty || 1) || 1;
-      const rate = son ? rateForDcLine(line, rateMapCache.get(son)) : 0;
-      line.rate = rate;
-      line.amount = +(rate * qty).toFixed(2);
-      subtotal += line.amount;
-    }
+    // Price the DC from linked SO allocations (line_id → rate) or fall back to
+    // brand/model matching on the DC header row.
+    const { billingLines, subtotal } = await resolveDcBilling(req.params.dcNumber, lines);
     const head = lines[0];
     const totals = computeGstBreakdown({
       subtotal,
@@ -826,7 +813,13 @@ exports.getDeliveryChallan = async (req, res) => {
       supplyState: head.supply_state,
     });
 
-    res.json({ success: true, dc_number: req.params.dcNumber, lines, totals });
+    res.json({
+      success: true,
+      dc_number: req.params.dcNumber,
+      lines,
+      billing_lines: billingLines,
+      totals,
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1137,7 +1130,7 @@ exports.createDcsByAddress = async (req, res) => {
 
     // Validate allocations: attached to this SO and QC-passed.
     const allocRes = await client.query(
-      `SELECT sos.allocation_id, sos.serial_id, sos.qc_status, sos.status, sos.qc_ticket_id,
+      `SELECT sos.allocation_id, sos.serial_id, sos.line_id, sos.qc_status, sos.status, sos.qc_ticket_id,
               sos.ttspl_id, sos.serial_number,
               vsn.serial_number AS vsn_serial, vsn.inventory_asset_code AS ttspl_id_vsn,
               COALESCE(vsn.extra->>'brand', vpd.brand, '') AS brand,
@@ -1244,6 +1237,20 @@ exports.createDcsByAddress = async (req, res) => {
         `${s.serial_id || ''}|${s.serial_number || s.vsn_serial || ''}|${s.ttspl_id || s.ttspl_id_vsn || ''}`
       );
 
+      const soLineIds = [...new Set(groupSerials.map((s) => s.line_id).filter(Boolean))];
+      let dcBrand = groupSerials[0]?.brand || '';
+      let dcModel = groupSerials[0]?.model || '';
+      if (soLineIds.length === 1) {
+        const sl = soLines.find((l) => Number(l.id) === Number(soLineIds[0]));
+        if (sl) {
+          dcBrand = sl.brand || dcBrand;
+          dcModel = sl.model_name || dcModel;
+        }
+      } else if (soLineIds.length > 1) {
+        dcBrand = soHead.brand || dcBrand;
+        dcModel = 'Multiple configurations';
+      }
+
       await client.query(
         `INSERT INTO delivery_challan_lines (
           dc_number, sales_order_number, quotation_number, customer_id, customer_name,
@@ -1265,7 +1272,7 @@ exports.createDcsByAddress = async (req, res) => {
           groupSecurity, groupShipping, entityCode, entityCode,
           billing ? JSON.stringify(billing) : null,
           deliveryAddress ? JSON.stringify(deliveryAddress) : null,
-          groupSerials[0]?.brand || '', groupSerials[0]?.model || '',
+          dcBrand, dcModel,
           groupSize, groupSize, JSON.stringify(serialTokens),
           ship_by,
           ship_by === 'by_courier' ? (body.courier_name || null) : null,

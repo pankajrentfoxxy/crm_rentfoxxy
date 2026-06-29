@@ -41,7 +41,10 @@ function mapQcStatus(erpStatus) {
 
 function mapInventoryStatus(erpStatus, erpStatus2) {
   const s2 = str(erpStatus2, 64, '').toLowerCase();
-  if (s2 === 'repared') return 'in_repair';
+  if (s2 === 'repared') {
+    const s = str(erpStatus, 64, 'pending').toLowerCase();
+    return s === 'passed' ? 'in_stock' : 'in_repair';
+  }
   if (s2 === 'qc_reject') return 'qc_failed';
   if (s2 === 'replace') return 'replace';
   if (s2) return s2;
