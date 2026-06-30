@@ -10,6 +10,7 @@ const {
   runLeadEmailSync,
   getLeadEmailSyncStatus,
 } = require('../services/leadEmailIngestionService');
+const { isRestrictedToAssigned } = require('../services/dataScopeService');
 
 const { STATUSES_WITHOUT_STAGE_CHOICE, STAGES_BY_STATUS, stagesForStatus } = require('../constants/leadStages');
 
