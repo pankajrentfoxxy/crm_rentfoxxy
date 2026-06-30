@@ -42,6 +42,11 @@ export function updateInventoryItemDescription(serialId, body) {
   return api.patch(`${base}/${serialId}/item-description`, body);
 }
 
+/** Super admin — set qc_status / inventory_status (sync lists + optional floor ticket) */
+export function updateSerialQcStatus(serialId, body) {
+  return api.patch(`${base}/${serialId}/qc-status`, body);
+}
+
 /** Phase 2 — tag serial as rental or sales */
 export function tagInventorySerial(serialId, tag) {
   return api.patch(`${base}/${serialId}/tag`, { tag });

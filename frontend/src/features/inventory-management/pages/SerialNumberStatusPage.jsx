@@ -2,8 +2,10 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { History, Loader2, Search } from 'lucide-react';
+import { useAuth } from '../../../context/AuthContext';
 import { fetchSerialNumberStatus } from '../inventoryManagementApi';
 import ErpSerialHistoryTable from '../components/ErpSerialHistoryTable';
+import SuperAdminSerialStatusPanel from '../components/SuperAdminSerialStatusPanel';
 
 const TABS = [
   { key: 'detail', label: 'Detail' },
@@ -13,6 +15,8 @@ const TABS = [
 ];
 
 export default function SerialNumberStatusPage() {
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === 'super_admin';
   const [searchParams, setSearchParams] = useSearchParams();
   const initial = searchParams.get('serial') || searchParams.get('serial_number') || '';
   const [input, setInput] = useState(initial);
@@ -162,6 +166,14 @@ export default function SerialNumberStatusPage() {
               ) : null}
             </tbody>
           </table>
+          {isSuperAdmin && result.serials?.length === 1 ? (
+            <div className="p-4 border-t">
+              <SuperAdminSerialStatusPanel
+                row={result.serials[0]}
+                onUpdated={() => runSearch(input)}
+              />
+            </div>
+          ) : null}
         </div>
       ) : null}
 

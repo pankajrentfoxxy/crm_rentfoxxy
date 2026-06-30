@@ -635,6 +635,37 @@ async function updateItemDescription(req, res) {
   }
 }
 
+const qcStatusValidators = [
+  param('id').isInt().toInt(),
+  body('qc_status').notEmpty().trim(),
+  body('remark').optional({ nullable: true }).isString().trim(),
+  body('create_floor_ticket').optional().isBoolean().toBoolean(),
+];
+
+/** Super admin — correct qc_status / inventory_status so inventory lists stay in sync. */
+async function updateSerialQcStatus(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  try {
+    const { applySuperAdminSerialStatus } = require('../../services/inventoryStatusOverrideService');
+    const result = await applySuperAdminSerialStatus(pool, {
+      serialId: req.params.id,
+      qcStatus: req.body.qc_status,
+      remark: req.body.remark,
+      createFloorTicket: req.body.create_floor_ticket === true,
+      actorUserId: req.user?.user_id,
+    });
+    if (!result.ok) {
+      return res.status(result.status || 400).json({ success: false, message: result.message });
+    }
+    res.json({ success: true, message: result.message, data: result.data });
+  } catch (e) {
+    console.error('updateSerialQcStatus', e);
+    res.status(500).json({ success: false, message: e.message || 'Failed to update status' });
+  }
+}
+
 module.exports = {
   listValidators,
   listInventory,
@@ -647,6 +678,8 @@ module.exports = {
   tagInventoryItem,
   itemDescriptionValidators,
   updateItemDescription,
+  qcStatusValidators,
+  updateSerialQcStatus,
   customerAssetsValidators,
   customerAssets
 };

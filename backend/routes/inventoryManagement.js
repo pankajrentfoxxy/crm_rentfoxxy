@@ -98,5 +98,11 @@ router.patch(
   inventoryList.itemDescriptionValidators,
   inventoryList.updateItemDescription
 );
+router.patch(
+  '/:id/qc-status',
+  superAdminOnly,
+  inventoryList.qcStatusValidators,
+  inventoryList.updateSerialQcStatus
+);
 
 module.exports = router;

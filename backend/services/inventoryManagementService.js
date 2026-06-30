@@ -112,6 +112,22 @@ function buildListWhere(segment, params, alias = 's') {
 
   params.push(cfg.status);
   const i = params.length;
+
+  // Migrated ERP rows often store out_for_repare as inventory_status = in_repair
+  // while qc_status / extra.action_status carry the ERP label.
+  if (cfg.status === 'out_for_repare') {
+    params.push('in_repair');
+    const j = params.length;
+    return {
+      sql: ` AND ${alias}.po_id IS NOT NULL AND (
+        ${effectiveStatusSql(alias)} = $${i}
+        OR ${alias}.inventory_status IN ($${i}, $${j})
+        OR COALESCE(NULLIF(TRIM(${alias}.extra->>'action_status'), ''), '') = $${i}
+      )`,
+      params,
+    };
+  }
+
   return {
     sql: ` AND ${alias}.po_id IS NOT NULL AND ${effectiveStatusSql(alias)} = $${i}`,
     params
