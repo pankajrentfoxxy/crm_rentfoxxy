@@ -1,5 +1,7 @@
-name: Deploy to VPS
+name: CI/CD Deploy to VPS
 
+# Single pipeline: deploy on push to the active branch only.
+# No pull_request triggers — avoids duplicate runs on open PRs.
 on:
   push:
     branches:
