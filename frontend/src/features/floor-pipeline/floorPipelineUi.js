@@ -164,6 +164,28 @@ export function isTechnicianRole(role) {
   return ['team_member', 'team_lead', 'technician'].includes(role);
 }
 
+export function ticketStatusLabel(status) {
+  const map = {
+    in_progress: 'In Progress',
+    completed: 'Completed',
+    failed: 'Failed',
+    on_hold: 'On Hold',
+    qc_failed_return_vendor: 'Return to Vendor',
+    cancelled: 'Cancelled',
+    diagnosis_failed: 'Diagnosis Failed',
+    out_for_repair: 'Out for Repair',
+  };
+  return map[status] || String(status || '—').replace(/_/g, ' ');
+}
+
+export function ticketStatusBadgeClass(status) {
+  if (status === 'diagnosis_failed') return 'bg-amber-100 text-amber-900';
+  if (status === 'out_for_repair') return 'bg-purple-100 text-purple-900';
+  if (status === 'qc_failed_return_vendor') return 'bg-red-100 text-red-800';
+  if (status === 'completed') return 'bg-green-100 text-green-800';
+  return 'bg-slate-100 text-slate-700';
+}
+
 /** Stage moves / repair routing in the sidebar — not for floor technicians. */
 export function canRunStageRoutingActions(role) {
   return ['admin', 'super_admin', 'floor_manager', 'warehouse', 'manager'].includes(role);
@@ -188,6 +210,14 @@ export const EVENT_ICONS = {
   support_ticket: '🎧',
   vendor_assigned: '👤',
   qc_failed_return_vendor: '🚚',
+  diagnosis_failed: '⚠️',
+  vendor_dc_generated: '📄',
+  esign_completed: '✍️',
+  dispatched_to_vendor: '🚚',
+  returned_from_vendor: '↩️',
+  vendor_return: '↩️',
+  reentered_qc_process: '🔍',
+  received_at_warehouse: '📥',
   chip_repair_started: '🔬',
   body_paint_started: '🎨',
   inventory_tagged: '🏷️',

@@ -295,7 +295,7 @@ exports.getTickets = async (req, res) => {
         query += ` AND t.status = 'completed'`;
       }
     } else if (view === 'in_progress') {
-      query += ` AND t.status NOT IN ('completed', 'cancelled')`;
+      query += ` AND t.status NOT IN ('completed', 'cancelled', 'diagnosis_failed', 'out_for_repair')`;
     } else if (!status) {
       // Default list never shows cancelled tickets (e.g. serial removed from SO),
       // unless the caller explicitly filters by status.
@@ -349,7 +349,7 @@ exports.getFloorNavCounts = async (req, res) => {
   try {
     const params = [];
     let paramCount = 1;
-    let where = `WHERE t.status NOT IN ('completed', 'cancelled')`;
+    let where = `WHERE t.status NOT IN ('completed', 'cancelled', 'diagnosis_failed', 'out_for_repair')`;
 
     if (req.user.role === 'qc') {
       where += ` AND s.stage_name IN ('QC1', 'QC2', 'Dispatch QC')`;
@@ -369,7 +369,8 @@ exports.getFloorNavCounts = async (req, res) => {
         COUNT(*)::int AS all_tickets,
         COUNT(*) FILTER (WHERE s.stage_name IN ('QC1','QC2'))::int AS qc_queue,
         COUNT(*) FILTER (WHERE s.stage_name = 'Chip Level Repair')::int AS chip_level,
-        COUNT(*) FILTER (WHERE s.stage_name = 'Body & Paint')::int AS body_paint
+        COUNT(*) FILTER (WHERE s.stage_name = 'Body & Paint')::int AS body_paint,
+        COUNT(*) FILTER (WHERE t.status = 'diagnosis_failed')::int AS diagnosis_failed
       FROM tickets t
       LEFT JOIN stages s ON s.stage_id = t.current_stage_id
       ${where}`,
@@ -392,6 +393,7 @@ exports.getFloorNavCounts = async (req, res) => {
         qc_queue: (await canViewSection('qc_management')) ? (r.qc_queue || 0) : 0,
         chip_level: (await canViewSection('chip_level_repair')) ? (r.chip_level || 0) : 0,
         body_paint: (await canViewSection('floor_pipeline')) ? (r.body_paint || 0) : 0,
+        diagnosis_failed: (await canViewSection('floor_pipeline')) ? (r.diagnosis_failed || 0) : 0,
       },
     });
   } catch (error) {

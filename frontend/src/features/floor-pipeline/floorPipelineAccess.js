@@ -80,3 +80,22 @@ export function canMoveDiagnosisToAssemblyForUser(user, canEdit, isAssignedDataO
   if (canManageFloorTickets(canEdit, isAssignedDataOnly)) return true;
   return canMoveDiagnosisToAssembly(user?.role);
 }
+
+/** Sidebar highlight — match stage query presets, not just pathname. */
+export function isFloorPipelineNavActive(childPath, location) {
+  const pathname = location.pathname || '';
+  const stage = new URLSearchParams(location.search || '').get('stage') || '';
+
+  if (childPath === '/floor-pipeline/tickets') {
+    return pathname === '/floor-pipeline/tickets' && !stage;
+  }
+  if (childPath.startsWith('/floor-pipeline/tickets?')) {
+    if (pathname !== '/floor-pipeline/tickets') return false;
+    const childStage = new URLSearchParams(childPath.split('?')[1] || '').get('stage') || '';
+    return stage === childStage;
+  }
+  if (childPath === '/floor-pipeline/diagnosis-failed') {
+    return pathname === '/floor-pipeline/diagnosis-failed';
+  }
+  return pathname === childPath || pathname.startsWith(`${childPath}/`);
+}

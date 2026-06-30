@@ -44,6 +44,9 @@ function activityEventType(action) {
   if (a.includes('qc')) return 'qc2_passed';
   if (a.includes('chip')) return 'chip_repair_started';
   if (a.includes('body') || a.includes('paint')) return 'body_paint_started';
+  if (a === 'diagnosis_failed') return 'diagnosis_failed';
+  if (a === 'out_for_repair') return 'dispatched_to_vendor';
+  if (a === 'returned_from_vendor') return 'returned_from_vendor';
   return 'default';
 }
 

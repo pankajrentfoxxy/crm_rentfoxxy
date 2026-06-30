@@ -240,6 +240,8 @@ export default function DiagnosisForm({
   onRepairReasonChange,
   onMarkChipRepair,
   onMarkBodyPaint,
+  onMarkDiagnosisFailed,
+  diagnosisFailedDisabled = false,
 }) {
     const [sections, setSections] = useState({});
     const [data, setData] = useState({});
@@ -504,6 +506,16 @@ export default function DiagnosisForm({
                   >
                     Mark Body &amp; Paint Required
                   </button>
+                  {onMarkDiagnosisFailed ? (
+                    <button
+                      type="button"
+                      disabled={repairRoutingDisabled || diagnosisFailedDisabled}
+                      onClick={onMarkDiagnosisFailed}
+                      className="flex-1 py-2.5 rounded-lg bg-red-700 text-white text-sm font-semibold disabled:opacity-50"
+                    >
+                      Diagnosis Failed
+                    </button>
+                  ) : null}
                 </div>
               </div>
             ) : null}

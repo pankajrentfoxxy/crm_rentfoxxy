@@ -5,6 +5,8 @@ import usePermission from '../../hooks/usePermission';
 import FloorTicketListPage from './pages/FloorTicketListPage';
 import FloorDashboardPage from './pages/FloorDashboardPage';
 import TicketDetailPage from './pages/TicketDetailPage';
+import DiagnosisFailedPage from './pages/DiagnosisFailedPage';
+import VendorRepairDcDetailPage from './pages/VendorRepairDcDetailPage';
 import {
   canAccessFloorStageFilter,
   FLOOR_DASHBOARD_SECTIONS,
@@ -49,6 +51,8 @@ export default function FloorPipelineApp() {
         )}
       />
       <Route path="tickets/:id" element={g(FLOOR_TICKETS_BASE_SECTIONS, <TicketDetailPage />)} />
+      <Route path="diagnosis-failed" element={g(FLOOR_DASHBOARD_SECTIONS, <DiagnosisFailedPage />)} />
+      <Route path="vendor-repair-dc/:dcNumber" element={g(FLOOR_DASHBOARD_SECTIONS, <VendorRepairDcDetailPage />)} />
       <Route path="*" element={<FloorIndexRedirect />} />
     </Routes>
   );

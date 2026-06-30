@@ -69,6 +69,12 @@ export const INVENTORY_PAGE_META = {
     countKey: 'out_for_repare',
     description: 'Assets sent out for repair.'
   },
+  'out-for-repair': {
+    title: 'Out for Repair',
+    erpSegment: 'out_for_repair',
+    countKey: 'out_for_repair',
+    description: 'Laptops dispatched to external vendor repair (Production Diagnosis Failed workflow).'
+  },
   'spare-parts': {
     title: 'Spare Parts',
     erpSegment: 'spare_parts',

@@ -7,6 +7,7 @@ import QcProcessPage from './pages/QcProcessPage';
 import RentToOwnPage from './pages/RentToOwnPage';
 import RentalPurchasePage from './pages/RentalPurchasePage';
 import DirectPurchasePage from './pages/DirectPurchasePage';
+import OutForRepairInventoryPage from './pages/OutForRepairInventoryPage';
 import OutForReparePage from './pages/OutForReparePage';
 import SparePartsInventoryPage from './pages/SparePartsInventoryPage';
 import SerialNumberStatusPage from './pages/SerialNumberStatusPage';
@@ -43,6 +44,7 @@ export default function InventoryManagementApp() {
         <Route path="customer-assets" element={g('customer_inventory', <CustomerAssetsPage />)} />
         <Route path="ready-to-rent-or-sell" element={g('inventory_management', <ReadyToRentOrSellPage />)} />
         <Route path="qc-process" element={g('inventory_management', <QcProcessPage />)} />
+        <Route path="out-for-repair" element={g('inventory_management', <OutForRepairInventoryPage />)} />
         <Route path="rent-to-own" element={g('inventory_management', <RentToOwnPage />)} />
         <Route path="rental-purchase" element={g('inventory_management', <RentalPurchasePage />)} />
         <Route path="direct-purchase" element={g('inventory_management', <DirectPurchasePage />)} />

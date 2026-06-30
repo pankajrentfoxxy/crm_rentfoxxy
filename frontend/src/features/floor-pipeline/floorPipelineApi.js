@@ -100,6 +100,10 @@ export function logTicketNote(id, body) {
   return api.post(`${base}/${id}/log-note`, body);
 }
 
+export function markTicketDiagnosisFailed(id, body) {
+  return api.patch(`${base}/${id}/diagnosis-failed`, body);
+}
+
 // Work timer (scan-to-start gate)
 export function startWork(id, verify) {
   return api.post(`${base}/${id}/work/start`, { verify });

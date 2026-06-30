@@ -102,6 +102,7 @@ app.use('/api/finance-overview', require('./routes/financeOverview'));
 app.use('/api/demo', require('./routes/demo'));
 app.use('/api/companies', require('./routes/companies'));
 app.use('/api/asset-configuration', require('./routes/assetConfiguration'));
+app.use('/api/vendor-repair', require('./routes/vendorRepair'));
 
 // Health check
 app.get('/health', (req, res) => {
@@ -187,6 +188,8 @@ app.listen(PORT, () => {
   ensureCustomerManagementSchema().catch((err) => console.error('Customer management schema failed:', err.message));
   ensureBillingEngineSchema().catch((err) => console.error('Billing engine schema failed:', err.message));
   ensureLeadCrmSchema().catch((err) => console.error('Lead CRM schema ensure failed:', err.message));
+  const { ensureVendorRepairSchema } = require('./services/vendorRepairDcService');
+  ensureVendorRepairSchema().catch((err) => console.error('Vendor repair schema ensure failed:', err.message));
   startBillingScheduler();
 });
 

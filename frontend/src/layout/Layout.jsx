@@ -63,6 +63,7 @@ import { useLeadCrmCounts } from '../features/lead-crm/hooks/useLeadCrmCounts';
 import { useFinanceCounts } from '../features/finance-overview/hooks/useFinanceCounts';
 import { useSupportCounts } from '../features/support-module/hooks/useSupportCounts';
 import { useFloorCounts } from '../features/floor-pipeline/hooks/useFloorCounts';
+import { isFloorPipelineNavActive } from '../features/floor-pipeline/floorPipelineAccess';
 import {
   FLAT_MENU_ITEMS,
   vendorAccordionChildren,
@@ -765,6 +766,8 @@ export default function Layout({ children }) {
                           to={child.path}
 
                           onClick={() => setSidebarOpen(false)}
+
+                          isActive={(_, location) => isFloorPipelineNavActive(child.path, location)}
 
                           className={({ isActive }) =>
 

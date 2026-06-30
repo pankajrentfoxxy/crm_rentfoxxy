@@ -112,6 +112,7 @@ router.patch(
   ftEdit,
   phase2.markQcFailed
 );
+router.patch('/:id/diagnosis-failed', phase2.markDiagnosisFailed);
 router.patch('/:id/config', phase2.updateTtsplConfig);
 
 // @route   GET /api/tickets/:id

@@ -25,7 +25,9 @@ import {
   stageCategory,
   stageCategoryBadge,
   ticketAgeDays,
-  resolveTicketTtspl
+  resolveTicketTtspl,
+  ticketStatusLabel,
+  ticketStatusBadgeClass,
 } from '../floorPipelineUi';
 
 const VIEW_KEY = 'floor_pipeline_view';
@@ -37,7 +39,7 @@ export default function FloorTicketListPage() {
   const { canEdit } = usePermission();
   const canAssign = canAssignFloorTickets(canEdit, isAssignedDataOnly);
   const allDataScope = !isFloorAssignedDataOnly(isAssignedDataOnly);
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [view, setView] = useState(() => localStorage.getItem(VIEW_KEY) || 'kanban');
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -45,19 +47,31 @@ export default function FloorTicketListPage() {
   const debouncedSearch = useDebouncedValue(search.trim(), 320);
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
-  const [stageFilter, setStageFilter] = useState(searchParams.get('stage') || '');
+  const stageFilter = searchParams.get('stage') || '';
   const [priorityFilter, setPriorityFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [assignTicket, setAssignTicket] = useState(null);
 
   const fm = isFloorManagerRole(user?.role);
 
+  const updateStageFilter = useCallback((value) => {
+    setPage(1);
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set('stage', value);
+    else next.delete('stage');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
+
   const subtitle = useMemo(() => {
+    if (stageFilter === 'QC1,QC2') return 'QC Queue';
+    if (stageFilter === 'Chip Level Repair') return 'Chip Level Repair';
+    if (stageFilter === 'Body & Paint') return 'Body & Paint';
+    if (stageFilter) return stageFilter;
     if (allDataScope && (canAssign || fm)) return 'All tickets';
     if (isDispatchQcRole(user?.role)) return 'Dispatch QC queue';
     if (isQcRole(user?.role)) return 'QC queue';
     return 'My tickets';
-  }, [user?.role, fm, canAssign, allDataScope]);
+  }, [stageFilter, user?.role, fm, canAssign, allDataScope]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -175,8 +189,9 @@ export default function FloorTicketListPage() {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <select className="rounded-lg border px-3 py-2 text-sm" value={stageFilter} onChange={(e) => { setPage(1); setStageFilter(e.target.value); }}>
+        <select className="rounded-lg border px-3 py-2 text-sm" value={stageFilter} onChange={(e) => updateStageFilter(e.target.value)}>
           <option value="">All stages</option>
+          <option value="QC1,QC2">QC Queue (QC1 + QC2)</option>
           {STAGE_GROUPS.flatMap((g) => g.stages).map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
         <select className="rounded-lg border px-3 py-2 text-sm" value={priorityFilter} onChange={(e) => { setPage(1); setPriorityFilter(e.target.value); }}>
@@ -306,6 +321,11 @@ export default function FloorTicketListPage() {
                         {ttspl || '—'}
                       </Link>
                       <p className="text-[10px] text-slate-400 font-mono mt-0.5">#{t.ticket_id}</p>
+                      {['diagnosis_failed', 'out_for_repair'].includes(t.status) ? (
+                        <span className={`inline-block mt-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${ticketStatusBadgeClass(t.status)}`}>
+                          {ticketStatusLabel(t.status)}
+                        </span>
+                      ) : null}
                       {t.highlighted ? <span className="ml-1" title={t.highlighted_reason}>⚠</span> : null}
                     </td>
                     <td className="px-3 py-3 text-xs">{configSummary(t)}</td>

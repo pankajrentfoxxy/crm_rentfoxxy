@@ -196,6 +196,13 @@ async function getListCounts(req, res) {
       }
     }
 
+    try {
+      const { countOutForRepairInventory } = require('../../services/vendorRepairDcService');
+      counts.out_for_repair = await countOutForRepairInventory();
+    } catch {
+      counts.out_for_repair = 0;
+    }
+
     const deployedR = await pool.query(
       `SELECT inventory_status, COUNT(*)::int AS c
          FROM vendor_serial_numbers

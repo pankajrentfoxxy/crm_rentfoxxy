@@ -16,6 +16,7 @@ import {
   markBodyPaint,
   markChipRepair,
   moveTicketStage,
+  markTicketDiagnosisFailed,
   startWork
 } from '../floorPipelineApi';
 import {
@@ -24,7 +25,9 @@ import {
   isDispatchQcRole,
   isTechnicianRole,
   priorityBadge,
-  resolveTicketTtspl
+  resolveTicketTtspl,
+  ticketStatusLabel,
+  ticketStatusBadgeClass,
 } from '../floorPipelineUi';
 import {
   canManageFloorTickets,
@@ -46,6 +49,7 @@ import TtsplHistoryDrawer from '../components/TtsplHistoryDrawer';
 import useAutoRefresh from '../hooks/useAutoRefresh';
 
 const HW_WORK_STAGES = ['Assembly & Software', 'Final Testing', 'Chip Level Repair', 'Body & Paint'];
+const HW_SW_DIAGNOSIS_STAGES = ['Diagnosis', ...HW_WORK_STAGES];
 // Stages where the assignee must scan/confirm the machine and run a work timer.
 const TIMED_WORK_STAGES = ['Diagnosis', 'Assembly & Software', 'Final Testing', 'Chip Level Repair', 'Body & Paint', 'QC1', 'QC2', 'Dispatch QC'];
 const STAGE_TASK_STAGES = ['Assembly & Software', 'Final Testing'];
@@ -278,7 +282,7 @@ export default function TicketDetailPage() {
     && Number(ticket.assigned_user_id) === Number(user.user_id));
   const needsStart = TIMED_WORK_STAGES.includes(stage) && isAssignee && !activeLog;
   const workTabsLocked = needsStart;
-  const techCanSeeDiagnosisRepair = tech && isAssignee && stage === 'Diagnosis';
+  const techCanSeeDiagnosisRepair = tech && isAssignee && HW_SW_DIAGNOSIS_STAGES.includes(stage);
   const canDiagnosisRepairMark = stageRouting || techCanSeeDiagnosisRepair;
   const repairReasonBody = () => {
     const trimmed = repairReason.trim();
@@ -394,6 +398,24 @@ export default function TicketDetailPage() {
     }
   };
 
+  const markDiagnosisFailed = async () => {
+    const reason = repairReason.trim() || failReason.trim();
+    if (!reason || reason.length < 5) {
+      toast.error('Failure reason required (min 5 characters)');
+      return;
+    }
+    if (!window.confirm('Mark as Diagnosis Failed? The ticket will be unassigned and sent to warehouse for vendor repair.')) return;
+    try {
+      const { data: res } = await markTicketDiagnosisFailed(id, { reason });
+      if (res.success) {
+        toast.success(res.message || 'Marked as Diagnosis Failed');
+        navigate('/floor-pipeline/diagnosis-failed');
+      }
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Failed');
+    }
+  };
+
   const stageActivities = useMemo(() => {
     return (data?.activities || [])
       .filter((a) => ['stage_changed', 'stage_jumped', 'assigned', 'bulk_move'].includes(a.action))
@@ -430,9 +452,23 @@ export default function TicketDetailPage() {
           action: runMarkBodyPaint,
           pink: true,
           disabled: needsStart
+        },
+        {
+          label: 'Mark Diagnosis Failed',
+          action: markDiagnosisFailed,
+          danger: true,
+          disabled: needsStart || ticket.status === 'diagnosis_failed'
         }
       );
     }
+  }
+  if (canDiagnosisRepairMark && HW_SW_DIAGNOSIS_STAGES.includes(stage) && stage !== 'Diagnosis') {
+    stageButtons.push({
+      label: 'Mark Diagnosis Failed',
+      action: markDiagnosisFailed,
+      danger: true,
+      disabled: needsStart || ticket.status === 'diagnosis_failed' || ticket.status === 'out_for_repair',
+    });
   }
   if (stageRouting && HW_WORK_STAGES.includes(stage)) {
     if (stage === 'Final Testing') {
@@ -574,7 +610,22 @@ export default function TicketDetailPage() {
                 <h3 className="font-semibold">Ticket Details</h3>
                 <div className="grid grid-cols-2 gap-2">
                   <p><span className="text-slate-500">Type:</span> {ticket.ticket_type || 'grn_qc'}</p>
-                  <p><span className="text-slate-500">Status:</span> {ticket.status}</p>
+                  <p><span className="text-slate-500">Status:</span>{' '}
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${ticketStatusBadgeClass(ticket.status)}`}>
+                      {ticketStatusLabel(ticket.status)}
+                    </span>
+                  </p>
+                  {ticket.current_location ? (
+                    <p><span className="text-slate-500">Location:</span> {ticket.current_location}</p>
+                  ) : null}
+                  {ticket.vendor_repair_dc_number ? (
+                    <p>
+                      <span className="text-slate-500">Vendor DC:</span>{' '}
+                      <Link to={`/floor-pipeline/vendor-repair-dc/${encodeURIComponent(ticket.vendor_repair_dc_number)}`} className="text-blue-600">
+                        {ticket.vendor_repair_dc_number}
+                      </Link>
+                    </p>
+                  ) : null}
                   <p><span className="text-slate-500">QC Fails:</span> <span className={ticket.qc_fail_count > 0 ? 'text-red-600 font-bold' : ''}>{ticket.qc_fail_count || 0}</span></p>
                   <p><span className="text-slate-500">Created:</span> {ticket.created_at ? new Date(ticket.created_at).toLocaleString() : '—'}</p>
                 </div>
@@ -630,12 +681,14 @@ export default function TicketDetailPage() {
               api={api}
               ticket={ticket}
               onComplete={handleWorkflowComplete}
-              showRepairRouting={canDiagnosisRepairMark}
+              showRepairRouting={canDiagnosisRepairMark && HW_SW_DIAGNOSIS_STAGES.includes(stage)}
               repairRoutingDisabled={needsStart}
               repairReason={repairReason}
               onRepairReasonChange={setRepairReason}
               onMarkChipRepair={runMarkChipRepair}
               onMarkBodyPaint={runMarkBodyPaint}
+              onMarkDiagnosisFailed={canDiagnosisRepairMark ? markDiagnosisFailed : undefined}
+              diagnosisFailedDisabled={needsStart || ticket.status === 'diagnosis_failed' || ticket.status === 'out_for_repair'}
             />
           )}
           {tab === 'task' && (

@@ -831,3 +831,63 @@ exports.updateTtsplConfig = async (req, res) => {
     res.status(500).json({ success: false, message: e.message || 'Config update failed' });
   }
 };
+
+const vendorRepairSvc = require('../services/vendorRepairDcService');
+const HW_SW_DIAGNOSIS_STAGES = new Set([
+  'Diagnosis', 'Assembly & Software', 'Final Testing', 'Chip Level Repair', 'Body & Paint',
+]);
+
+exports.markDiagnosisFailed = async (req, res) => {
+  const { id } = req.params;
+  const { reason } = req.body;
+  if (!reason?.trim()) {
+    return res.status(400).json({ success: false, message: 'Failure reason is required' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await vendorRepairSvc.ensureVendorRepairSchema();
+    const tRes = await client.query(
+      `SELECT t.*, s.stage_name
+         FROM tickets t
+         LEFT JOIN stages s ON s.stage_id = t.current_stage_id
+        WHERE t.ticket_id = $1`,
+      [id]
+    );
+    const ticket = tRes.rows[0];
+    if (!ticket) {
+      return res.status(404).json({ success: false, message: 'Ticket not found' });
+    }
+
+    const stageName = ticket.stage_name;
+    const onHwStage = !stageName || HW_SW_DIAGNOSIS_STAGES.has(stageName) || stageName === 'Floor Manager';
+    const canMark = onHwStage && (
+      isStageRouter(req.user)
+      || isAssignedTechnician(req.user, ticket)
+      || ['super_admin'].includes(req.user.role)
+    );
+    if (!canMark) {
+      return res.status(403).json({ success: false, message: 'Not allowed to mark diagnosis failed on this ticket' });
+    }
+
+    await client.query('BEGIN');
+    const result = await vendorRepairSvc.markDiagnosisFailed(client, {
+      ticketId: Number(id),
+      reason: reason.trim(),
+      actorUserId: req.user.user_id,
+      actorName: req.user.name,
+    });
+    await client.query('COMMIT');
+
+    res.json({
+      success: true,
+      message: result.already_failed ? 'Already marked as Diagnosis Failed' : 'Marked as Diagnosis Failed',
+      ...result,
+    });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ success: false, message: e.message || 'Failed to mark diagnosis failed' });
+  } finally {
+    client.release();
+  }
+};

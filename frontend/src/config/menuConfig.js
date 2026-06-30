@@ -42,12 +42,14 @@ export const floorPipelineAccordionChildren = [
   { label: 'QC Queue', path: '/floor-pipeline/tickets?stage=QC1,QC2', section: 'qc_management', countKey: 'qc_queue' },
   { label: 'Chip Level Repair', path: '/floor-pipeline/tickets?stage=Chip+Level+Repair', section: 'chip_level_repair', countKey: 'chip_level' },
   { label: 'Body & Paint', path: '/floor-pipeline/tickets?stage=Body+%26+Paint', section: 'floor_pipeline', countKey: 'body_paint' },
+  { label: 'Diagnosis Failed', path: '/floor-pipeline/diagnosis-failed', section: 'floor_pipeline', countKey: 'diagnosis_failed' },
 ];
 
 /** Inventory accordion — each child maps to the RBAC section the route/API enforces. */
 export const inventoryAccordionChildren = [
   { label: 'Stock Management', path: '/inventory-management/universal-search', section: 'inventory_management' },
   { label: 'QC Process Laptops', path: '/inventory-management/qc-process', countKey: 'qc_process', section: 'inventory_management' },
+  { label: 'Out for Repair', path: '/inventory-management/out-for-repair', countKey: 'out_for_repair', section: 'inventory_management' },
   { label: 'Ready to Rent/Sell', path: '/inventory-management/ready-to-rent-or-sell', countKey: 'passed', section: 'inventory_management' },
   { label: 'Parts Inventory', path: '/inventory-management/parts', section: 'parts_inventory' },
   { label: 'Parts Movement History', path: '/inventory-management/parts-history', section: 'parts_inventory' },
