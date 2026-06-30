@@ -74,6 +74,8 @@ router.patch('/so-serials/:allocationId/address', soSerialsEdit, ctrl.updateSoSe
 router.patch(...soRoute('/serial-addresses', soSerialsEdit, ctrl.bulkUpdateSoSerialAddresses));
 // Phase 14 — line-level delivery address (before serials are attached)
 router.patch('/so-lines/:lineId/address', soSerialsEdit, ctrl.updateSoLineAddress);
+// Super Admin — correct sales-side line config (processor / gen / RAM / storage)
+router.patch('/so-lines/:lineId/config', checkRole('super_admin'), ctrl.updateSoLineConfig);
 
 // Phase 13 — delivery flow (technician bucket / my deliveries / OTP / POD)
 router.get('/delivery-flow', drView, flowCtrl.listDeliveryFlow);

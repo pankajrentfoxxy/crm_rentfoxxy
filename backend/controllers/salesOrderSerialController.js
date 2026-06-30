@@ -49,10 +49,19 @@ exports.listSerials = async (req, res) => {
     );
 
     const allocRes = await pool.query(
-      `SELECT sos.*, t.status AS ticket_status, s.stage_name AS ticket_stage
+      `SELECT sos.*, t.status AS ticket_status, s.stage_name AS ticket_stage,
+              COALESCE(vsn.extra->>'brand', vpd.brand) AS serial_brand,
+              COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', vpd.model) AS serial_model,
+              COALESCE(vsn.extra->>'processor', vpd.processor) AS serial_processor,
+              COALESCE(vsn.extra->>'generation', vpd.generation) AS serial_generation,
+              COALESCE(vsn.extra->>'ram', vpd.ram) AS serial_ram,
+              COALESCE(vsn.extra->>'storage', vpd.storage) AS serial_storage
          FROM sales_order_serials sos
          LEFT JOIN tickets t ON t.ticket_id = sos.qc_ticket_id
          LEFT JOIN stages s ON s.stage_id = t.current_stage_id
+         LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = sos.serial_id
+         LEFT JOIN vendor_product_details vpd
+           ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id', '')::int
         WHERE sos.sales_order_number = $1 AND sos.status <> 'removed'
         ORDER BY sos.allocation_id ASC`,
       [soNumber]

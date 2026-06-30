@@ -6,7 +6,6 @@ const {
   partialSpecMatch,
   normalizedSpecMatch,
   normalizedModelMatch,
-  brandMatchesRow,
 } = require('../utils/soInventorySpecMatch');
 const columnExistsCache = new Map();
 
@@ -975,9 +974,9 @@ async function searchAvailableInventory({
     });
   }
 
-  if (brand) {
-    rows = rows.filter((r) => brandMatchesRow(r, brand));
-  }
+  // Brand is intentionally NOT applied here — warehouse attaches by specs
+  // (processor, generation, RAM, storage). Sales-side brand labels are catalog
+  // choices and must not hide otherwise matching inventory.
 
   return rows.slice(0, responseLimit).map(mapInventorySerialRow);
 }

@@ -1,6 +1,6 @@
 # Billing Activation Report
 
-Generated: 2026-06-29T20:48:58.201Z
+Generated: 2026-06-30T06:31:40.080Z
 Mode: dry-run
 
 ## Before
@@ -44,8 +44,8 @@ Mode: dry-run
 
 | serial_id | serial_number | date | source |
 |-----------|---------------|------|--------|
-| 4 | SN-DELL-3510-004 | Sun Jun 14 | created_at |
-| 5 | SN-DELL-3510-005 | Sun Jun 14 | created_at |
+| 4 | SN-DELL-3510-004 | 2026-06-14 | created_at |
+| 5 | SN-DELL-3510-005 | 2026-06-14 | created_at |
 
 ## Vendor PO rate backfill
 

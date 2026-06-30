@@ -65,6 +65,8 @@ export const bulkUpdateSoSerialAddresses = (so, d) =>
 // Phase 14 — line-level delivery address (before serials attached)
 export const updateSoLineAddress = (lineId, d) =>
   api.patch(`${base}/so-lines/${lineId}/address`, d);
+export const updateSoLineConfig = (lineId, d) =>
+  api.patch(`${base}/so-lines/${lineId}/config`, d);
 
 // Phase 13 — delivery flow
 export const listDeliveryFlow = (params) => api.get(`${base}/delivery-flow`, { params });

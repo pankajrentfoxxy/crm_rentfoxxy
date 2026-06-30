@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Package } from 'lucide-react';
+import { Package, Pencil } from 'lucide-react';
 import PermissionGate from '../../../components/PermissionGate';
+import { useAuth } from '../../../context/AuthContext';
 import { attachSoSerial, detachSoSerial, getAvailableSerials, listSoSerials } from '../salesPipelineApi';
+import SoLineConfigEditModal from './SoLineConfigEditModal';
 
 const QC_BADGE = {
   passed: 'bg-emerald-100 text-emerald-700',
@@ -29,10 +31,8 @@ function AttachPicker({ soNumber, line, onAttached }) {
     setOpen(true);
     setLoading(true);
     try {
-      // Phase 14: match by processor + generation + RAM + storage (model optional).
+      // Match by processor + generation + RAM + storage only (not sales-side brand).
       const r = await getAvailableSerials({
-        brand: line.brand,
-        model_name: line.model_name,
         processor: line.processor,
         generation: line.generation,
         ram: line.ram,
@@ -122,7 +122,7 @@ function AttachPicker({ soNumber, line, onAttached }) {
                   <button type="button" disabled={busy} onClick={() => attach(o.serial_id)}
                     className="text-xs px-2.5 py-0.5 bg-teal-600 text-white rounded disabled:opacity-50">Attach</button>
                   <span className="col-span-3 text-[11px] text-gray-500 -mt-1">
-                    {[o.processor, o.generation, o.ram, o.storage].filter(Boolean).join(' · ')}
+                    {[o.brand, o.processor, o.generation, o.ram, o.storage].filter(Boolean).join(' · ')}
                   </span>
                 </div>
               ))}
@@ -138,6 +138,9 @@ function AttachPicker({ soNumber, line, onAttached }) {
 export default function SoSerialPanel({ soNumber }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [editLine, setEditLine] = useState(null);
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === 'super_admin';
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -178,19 +181,40 @@ export default function SoSerialPanel({ soNumber }) {
 
       {(data.lines || []).map((line) => (
         <div key={line.line_id} className="bg-white border rounded-xl p-4">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-3">
             <div>
               <p className="font-medium text-sm">{line.brand} {line.model_name}</p>
               <p className="text-xs text-gray-500">{[line.processor, line.generation, line.ram, line.storage].filter(Boolean).join(' · ')}</p>
             </div>
-            <span className="text-xs text-gray-500">{line.attached_count}/{line.ordered_qty} attached</span>
+            <div className="flex items-center gap-2 shrink-0">
+              {isSuperAdmin && line.attached_count === 0 && (
+                <button
+                  type="button"
+                  onClick={() => setEditLine(line)}
+                  className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50"
+                  title="Edit line config"
+                >
+                  <Pencil className="w-3 h-3" />
+                  Edit config
+                </button>
+              )}
+              <span className="text-xs text-gray-500">{line.attached_count}/{line.ordered_qty} attached</span>
+            </div>
           </div>
 
           {(line.allocations || []).length > 0 && (
             <div className="mt-3 divide-y border rounded-lg">
               {line.allocations.map((a) => (
                 <div key={a.allocation_id} className="flex items-center justify-between gap-2 px-3 py-2">
-                  <span className="font-mono text-xs text-blue-700">{a.ttspl_id || a.serial_number}</span>
+                  <div className="min-w-0">
+                    <span className="font-mono text-xs text-blue-700">{a.ttspl_id || a.serial_number}</span>
+                    {(a.serial_brand || a.serial_processor) && (
+                      <p className="text-[11px] text-gray-500 truncate">
+                        {[a.serial_brand, a.serial_model, a.serial_processor, a.serial_generation, a.serial_ram, a.serial_storage]
+                          .filter(Boolean).join(' · ')}
+                      </p>
+                    )}
+                  </div>
                   <div className="flex items-center gap-2">
                     {a.qc_ticket_id && (
                       <Link to={`/floor-pipeline/tickets/${a.qc_ticket_id}`} className="text-xs text-blue-600">QC #{a.qc_ticket_id}</Link>
@@ -214,6 +238,13 @@ export default function SoSerialPanel({ soNumber }) {
           )}
         </div>
       ))}
+
+      <SoLineConfigEditModal
+        open={Boolean(editLine)}
+        line={editLine}
+        onClose={() => setEditLine(null)}
+        onSaved={load}
+      />
     </div>
   );
 }

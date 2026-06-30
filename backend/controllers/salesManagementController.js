@@ -1255,19 +1255,14 @@ exports.createDcsByAddress = async (req, res) => {
         `${s.serial_id || ''}|${s.serial_number || s.vsn_serial || ''}|${s.ttspl_id || s.ttspl_id_vsn || ''}`
       );
 
-      const soLineIds = [...new Set(groupSerials.map((s) => s.line_id).filter(Boolean))];
-      let dcBrand = groupSerials[0]?.brand || '';
-      let dcModel = groupSerials[0]?.model || '';
-      if (soLineIds.length === 1) {
-        const sl = soLines.find((l) => Number(l.id) === Number(soLineIds[0]));
-        if (sl) {
-          dcBrand = sl.brand || dcBrand;
-          dcModel = sl.model_name || dcModel;
-        }
-      } else if (soLineIds.length > 1) {
-        dcBrand = soHead.brand || dcBrand;
-        dcModel = 'Multiple configurations';
-      }
+      const uniqueBrands = [...new Set(groupSerials.map((s) => s.brand).filter(Boolean))];
+      const uniqueModels = [...new Set(groupSerials.map((s) => s.model).filter(Boolean))];
+      const dcBrand = uniqueBrands.length === 1
+        ? uniqueBrands[0]
+        : (uniqueBrands.length > 1 ? uniqueBrands.join(', ') : '');
+      const dcModel = uniqueModels.length === 1
+        ? uniqueModels[0]
+        : (uniqueModels.length > 1 ? 'Multiple configurations' : '');
 
       await client.query(
         `INSERT INTO delivery_challan_lines (
@@ -2609,6 +2604,88 @@ exports.updateSoLineAddress = async (req, res) => {
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('updateSoLineAddress:', error);
+    res.status(500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
+  }
+};
+
+/** PATCH /so-lines/:lineId/config — Super Admin only. Correct sales-side catalog config. */
+exports.updateSoLineConfig = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const lineId = parseInt(req.params.lineId, 10);
+    if (!lineId) {
+      return res.status(400).json({ success: false, message: 'Invalid line id' });
+    }
+
+    const body = req.body || {};
+    const processor = body.processor != null ? String(body.processor).trim() : null;
+    const generation = body.generation != null ? String(body.generation).trim() : null;
+    const ram = body.ram != null ? String(body.ram).trim() : null;
+    const storage = body.storage != null ? String(body.storage).trim() : null;
+
+    if (!processor || !generation || !ram || !storage) {
+      return res.status(400).json({
+        success: false,
+        message: 'processor, generation, ram, and storage are required',
+      });
+    }
+
+    await client.query('BEGIN');
+
+    const lineRes = await client.query(
+      `SELECT id, sales_order_number, brand, model_name, processor, generation, ram, storage,
+              gpu, screen_size, status
+         FROM sales_order_lines WHERE id = $1 FOR UPDATE`,
+      [lineId]
+    );
+    if (!lineRes.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Sales order line not found' });
+    }
+    const line = lineRes.rows[0];
+    if (String(line.status || '').toLowerCase() === 'cancelled') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: 'Sales order line is cancelled' });
+    }
+
+    const attachedRes = await client.query(
+      `SELECT COUNT(*)::int AS n FROM sales_order_serials
+        WHERE line_id = $1 AND status <> 'removed'`,
+      [lineId]
+    );
+    if (Number(attachedRes.rows[0]?.n || 0) > 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'Cannot edit config while laptops are attached. Detach all units first.',
+      });
+    }
+
+    const brand = body.brand != null ? String(body.brand).trim() : line.brand;
+    const modelName = body.model_name != null ? String(body.model_name).trim() : line.model_name;
+    const gpu = body.gpu != null ? String(body.gpu).trim() : line.gpu;
+    const screenSize = body.screen_size != null ? String(body.screen_size).trim() : line.screen_size;
+
+    const upd = await client.query(
+      `UPDATE sales_order_lines
+          SET brand = $1, model_name = $2, processor = $3, generation = $4,
+              ram = $5, storage = $6, gpu = $7, screen_size = $8, updated_at = NOW()
+        WHERE id = $9
+        RETURNING id, sales_order_number, brand, model_name, processor, generation, ram, storage, gpu, screen_size`,
+      [brand, modelName, processor, generation, ram, storage, gpu, screenSize, lineId]
+    );
+
+    await client.query('COMMIT');
+    res.json({
+      success: true,
+      message: 'Sales order line config updated',
+      line: upd.rows[0],
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('updateSoLineConfig:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
     client.release();

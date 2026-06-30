@@ -32,16 +32,10 @@ function brandMatchesRow(row, brand) {
   return brandHay.includes(b) || modelHay.includes(b);
 }
 
-/** SO line (sales_order_lines) vs serial row from vendor_serial_numbers. */
+/** SO line (sales_order_lines) vs serial row from vendor_serial_numbers.
+ *  Match on processor + generation + RAM + storage only — sales-side brand/model
+ *  labels (e.g. catalog "Assamble") must not block attaching real inventory units. */
 function serialMatchesSoLine(line, serial) {
-  const brandHint = line.brand || serial.brand || '';
-
-  if (line.brand && !brandMatchesRow(serial, line.brand)) return false;
-
-  if (line.model_name) {
-    if (!normalizedModelMatch(serial.model, line.model_name, brandHint)) return false;
-  }
-
   if (line.processor && !normalizedSpecMatch(serial.processor, line.processor, 'processors')) return false;
   if (line.generation && !normalizedSpecMatch(serial.generation, line.generation, 'generations')) return false;
   if (line.ram && !normalizedSpecMatch(serial.ram, line.ram, 'ram')) return false;
@@ -52,14 +46,7 @@ function serialMatchesSoLine(line, serial) {
 
 function configMismatchMessage(line, serial) {
   const parts = [];
-  const brandHint = line.brand || serial.brand || '';
 
-  if (line.brand && !brandMatchesRow(serial, line.brand)) {
-    parts.push(`brand line=${line.brand} serial=${serial.brand || '—'}`);
-  }
-  if (line.model_name && !normalizedModelMatch(serial.model, line.model_name, brandHint)) {
-    parts.push(`model line=${line.model_name} serial=${serial.model || '—'}`);
-  }
   if (line.processor && !normalizedSpecMatch(serial.processor, line.processor, 'processors')) {
     parts.push(`processor line=${line.processor} serial=${serial.processor || '—'}`);
   }
