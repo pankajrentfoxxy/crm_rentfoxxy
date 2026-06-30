@@ -32,6 +32,18 @@ ALTER TABLE customer_invoices
 ALTER TABLE vendor_monthly_bills
   ADD COLUMN IF NOT EXISTS amount_paid NUMERIC(12,2) DEFAULT 0;
 
+-- Existing paid invoices/bills predate the ledger table, so seed their
+-- balance snapshot to avoid allowing a second full payment after deploy.
+UPDATE customer_invoices
+SET amount_paid = COALESCE(grand_total, 0)
+WHERE status = 'paid'
+  AND COALESCE(amount_paid, 0) = 0;
+
+UPDATE vendor_monthly_bills
+SET amount_paid = COALESCE(total_payable, 0)
+WHERE status = 'paid'
+  AND COALESCE(amount_paid, 0) = 0;
+
 -- Extend status CHECK to include partially_paid (drop named constraint if present).
 DO $$
 DECLARE

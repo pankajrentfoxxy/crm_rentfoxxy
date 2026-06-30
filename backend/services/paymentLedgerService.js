@@ -19,6 +19,18 @@ function deriveVendorStatus(amountPaid, totalPayable, currentStatus) {
   return currentStatus || 'generated';
 }
 
+class PaymentValidationError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'PaymentValidationError';
+    this.statusCode = 400;
+  }
+}
+
+function roundMoney(value) {
+  return parseFloat(Number(value || 0).toFixed(2));
+}
+
 async function sumPayments(client, { invoiceId, billId }) {
   if (invoiceId) {
     const r = await client.query(
@@ -44,6 +56,7 @@ async function recordPayment(db, {
   reference = null,
   notes = null,
   recordedBy = null,
+  payRemaining = false,
 }) {
   const client = db.connect ? await db.connect() : null;
   const q = client || db;
@@ -52,8 +65,8 @@ async function recordPayment(db, {
   try {
     if (ownTx) await client.query('BEGIN');
 
-    const amt = parseFloat(amount);
-    if (!Number.isFinite(amt) || amt <= 0) {
+    let amt = parseFloat(amount);
+    if (!payRemaining && (!Number.isFinite(amt) || amt <= 0)) {
       throw new Error('Payment amount must be greater than zero');
     }
     if (partyType === 'customer' && !invoiceId) throw new Error('invoice_id required');
@@ -63,25 +76,56 @@ async function recordPayment(db, {
     let vendorId = null;
     let grandTotal = 0;
     let currentStatus = null;
+    let currentAmountPaid = 0;
 
     if (partyType === 'customer') {
       const inv = await q.query(
-        `SELECT invoice_id, customer_id, grand_total, status FROM customer_invoices WHERE invoice_id = $1`,
+        `SELECT invoice_id, customer_id, grand_total, amount_paid, status
+         FROM customer_invoices
+         WHERE invoice_id = $1
+         FOR UPDATE`,
         [invoiceId]
       );
       if (!inv.rows.length) throw new Error('Invoice not found');
       customerId = inv.rows[0].customer_id;
-      grandTotal = parseFloat(inv.rows[0].grand_total || 0);
+      grandTotal = roundMoney(inv.rows[0].grand_total);
+      currentAmountPaid = roundMoney(inv.rows[0].amount_paid);
       currentStatus = inv.rows[0].status;
     } else {
       const bill = await q.query(
-        `SELECT bill_id, vendor_id, total_payable, status FROM vendor_monthly_bills WHERE bill_id = $1`,
+        `SELECT bill_id, vendor_id, total_payable, amount_paid, status
+         FROM vendor_monthly_bills
+         WHERE bill_id = $1
+         FOR UPDATE`,
         [billId]
       );
       if (!bill.rows.length) throw new Error('Bill not found');
       vendorId = bill.rows[0].vendor_id;
-      grandTotal = parseFloat(bill.rows[0].total_payable || 0);
+      grandTotal = roundMoney(bill.rows[0].total_payable);
+      currentAmountPaid = roundMoney(bill.rows[0].amount_paid);
       currentStatus = bill.rows[0].status;
+    }
+
+    const effectivePaid = currentStatus === 'paid' && grandTotal > 0
+      ? grandTotal
+      : currentAmountPaid;
+    const remaining = roundMoney(grandTotal - effectivePaid);
+    if (remaining <= 0) {
+      if (payRemaining) {
+        if (ownTx) await client.query('COMMIT');
+        return { skipped: true, reason: 'Already fully paid' };
+      }
+      throw new PaymentValidationError('Payment would exceed remaining balance');
+    }
+
+    if (payRemaining) {
+      amt = remaining;
+    }
+    if (!Number.isFinite(amt) || amt <= 0) {
+      throw new Error('Payment amount must be greater than zero');
+    }
+    if (roundMoney(amt - remaining) > 0) {
+      throw new PaymentValidationError('Payment would exceed remaining balance');
     }
 
     const payDate = paymentDate || new Date().toISOString().slice(0, 10);
@@ -146,41 +190,14 @@ async function recordPayment(db, {
 }
 
 async function recordFullPayment(db, { partyType, invoiceId, billId, reference, recordedBy, method = 'adjustment' }) {
-  const q = db;
-  let grandTotal = 0;
-  let amountPaid = 0;
-
-  if (partyType === 'customer') {
-    const inv = await q.query(
-      `SELECT grand_total, amount_paid FROM customer_invoices WHERE invoice_id = $1`,
-      [invoiceId]
-    );
-    if (!inv.rows.length) throw new Error('Invoice not found');
-    grandTotal = parseFloat(inv.rows[0].grand_total || 0);
-    amountPaid = parseFloat(inv.rows[0].amount_paid || 0);
-  } else {
-    const bill = await q.query(
-      `SELECT total_payable, amount_paid FROM vendor_monthly_bills WHERE bill_id = $1`,
-      [billId]
-    );
-    if (!bill.rows.length) throw new Error('Bill not found');
-    grandTotal = parseFloat(bill.rows[0].total_payable || 0);
-    amountPaid = parseFloat(bill.rows[0].amount_paid || 0);
-  }
-
-  const remaining = parseFloat((grandTotal - amountPaid).toFixed(2));
-  if (remaining <= 0) {
-    return { skipped: true, reason: 'Already fully paid' };
-  }
-
   return recordPayment(db, {
     partyType,
     invoiceId,
     billId,
-    amount: remaining,
     reference,
     method,
     recordedBy,
+    payRemaining: true,
   });
 }
 
@@ -205,6 +222,7 @@ async function listPayments({ invoiceId, billId }) {
 module.exports = {
   deriveCustomerStatus,
   deriveVendorStatus,
+  PaymentValidationError,
   recordPayment,
   recordFullPayment,
   listPayments,

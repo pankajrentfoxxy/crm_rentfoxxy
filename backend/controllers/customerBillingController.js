@@ -318,7 +318,7 @@ exports.markPaid = async (req, res) => {
     const inv = await pool.query(`SELECT * FROM customer_invoices WHERE invoice_id = $1`, [id]);
     res.json({ success: true, invoice: inv.rows[0], payment: result.payment });
   } catch (err) {
-    res.status(err.message === 'Invoice not found' ? 404 : 500).json({ success: false, message: err.message });
+    res.status(err.message === 'Invoice not found' ? 404 : (err.statusCode || 500)).json({ success: false, message: err.message });
   }
 };
 
@@ -348,7 +348,7 @@ exports.recordInvoicePayment = async (req, res) => {
       invoice: inv.rows[0],
     });
   } catch (err) {
-    const code = err.message === 'Invoice not found' ? 404 : 500;
+    const code = err.message === 'Invoice not found' ? 404 : (err.statusCode || 500);
     res.status(code).json({ success: false, message: err.message });
   }
 };
