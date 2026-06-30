@@ -9,7 +9,7 @@ const { createTicketFromReturn } = require('./grnTicketService');
 const { emailDocument } = require('./salesManagementPdfService');
 const { getDeliveryChallanLines } = require('./salesManagementService');
 
-const REJECTABLE_STATUSES = new Set(['in_transit', 'reached', 'shipped']);
+const REJECTABLE_STATUSES = new Set(['in_transit', 'reached', 'shipped', 'processing', 'pending']);
 
 let schemaEnsured = false;
 async function ensureDeliveryRejectionSchema() {
@@ -58,6 +58,44 @@ async function resolveSerialId(client, s) {
     [key]
   );
   return r.rows[0]?.serial_id || null;
+}
+
+/** Move serial back to QC-eligible stock after delivery rejection (any deploy state). */
+async function resetSerialForDeliveryRejection(client, serialId, {
+  reason, actorUserId, actorName,
+}) {
+  const r = await client.query(
+    `SELECT inventory_status FROM vendor_serial_numbers WHERE serial_id = $1 AND deleted_at IS NULL`,
+    [serialId]
+  );
+  const st = r.rows[0]?.inventory_status || null;
+  const opts = { reason, actorUserId, actorName };
+
+  if (!st || st === inventorySM.STATUS.IN_STOCK) return;
+
+  if (st === inventorySM.STATUS.IN_TRANSIT || st === inventorySM.STATUS.RESERVED) {
+    await inventorySM.backToStock(client, serialId, opts);
+    return;
+  }
+
+  if ([inventorySM.STATUS.RENTED, inventorySM.STATUS.ON_DEMO, inventorySM.STATUS.SOLD].includes(st)) {
+    await inventorySM.markReturned(client, serialId, opts);
+    await inventorySM.backToStock(client, serialId, opts);
+    return;
+  }
+
+  if (st === inventorySM.STATUS.RETURNED) {
+    await inventorySM.backToStock(client, serialId, opts);
+    return;
+  }
+
+  await inventorySM.transitionAsset(client, {
+    serialId,
+    toStatus: inventorySM.STATUS.IN_STOCK,
+    dcNumber: null,
+    customerId: null,
+    ...opts,
+  });
 }
 
 async function getDcHead(client, dcNumber) {
@@ -130,19 +168,11 @@ async function processSerialsToQc(client, {
     const spec = specRes.rows[0];
     if (!spec) continue;
 
-    try {
-      await inventorySM.backToStock(client, serialId, {
-        reason: `DC ${dcNumber} delivery rejected: ${reason}`,
-        actorUserId,
-        actorName,
-      });
-    } catch (err) {
-      if (spec.inventory_status === 'in_stock') {
-        // Already in stock — continue QC reset.
-      } else {
-        throw err;
-      }
-    }
+    await resetSerialForDeliveryRejection(client, serialId, {
+      reason: `DC ${dcNumber} delivery rejected: ${reason}`,
+      actorUserId,
+      actorName,
+    });
 
     await client.query(
       `UPDATE vendor_serial_numbers SET qc_status = 'pending', updated_at = NOW() WHERE serial_id = $1`,
