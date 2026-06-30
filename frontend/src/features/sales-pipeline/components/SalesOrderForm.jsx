@@ -58,6 +58,8 @@ function parseAddress(raw) {
   try { return JSON.parse(raw); } catch { return null; }
 }
 
+const SO_ASSET_REQUIRED_FIELDS = ['processor', 'generation', 'ram', 'storage'];
+
 function linesFromQuote(quoteLines) {
   return (quoteLines || []).map((l) => ({
     brand: l.brand || '',
@@ -267,6 +269,13 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
       toast.error('Select a delivery (shipping) address');
       return;
     }
+    const invalidLine = lines.find((line) =>
+      SO_ASSET_REQUIRED_FIELDS.some((field) => !String(line[field] || '').trim())
+    );
+    if (invalidLine) {
+      toast.error('Each asset line requires processor, generation, RAM, and storage');
+      return;
+    }
     setSaving(true);
     try {
       await createSalesOrder({
@@ -330,7 +339,13 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
               </select>
             </div>
           </div>
-          <AssetDetailsForm lines={lines} onChange={setLines} catalog={meta?.catalog} quotationType={form.quotation_type} />
+          <AssetDetailsForm
+            lines={lines}
+            onChange={setLines}
+            catalog={meta?.catalog}
+            quotationType={form.quotation_type}
+            requiredFields={SO_ASSET_REQUIRED_FIELDS}
+          />
           {!isSaleType && (
             <div className="border rounded-lg p-3 space-y-2">
               <p className="text-xs font-medium text-gray-600">Security Deposit</p>

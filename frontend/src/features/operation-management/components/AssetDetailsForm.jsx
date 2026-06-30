@@ -56,7 +56,19 @@ function pickOptions(catalogRows, line, field, fallback = []) {
   return filtered.length ? filtered : fallback;
 }
 
-export default function AssetDetailsForm({ lines, onChange, catalog, quotationType }) {
+const DEFAULT_REQUIRED_FIELDS = [
+  'brand', 'model_name', 'processor', 'generation', 'ram', 'storage', 'gpu', 'screen_size', 'quantity', 'rate',
+];
+
+export default function AssetDetailsForm({
+  lines,
+  onChange,
+  catalog,
+  quotationType,
+  requiredFields = DEFAULT_REQUIRED_FIELDS,
+}) {
+  const required = new Set(requiredFields);
+  const isRequired = (field) => required.has(field);
   const showRentalFields = quotationType === 'rental' || quotationType === 'demo';
   const cfg = catalog?.brands?.length ? catalog : EMPTY_ASSET_CATALOG;
   const catalogRows = cfg.catalog_rows || [];
@@ -153,7 +165,7 @@ export default function AssetDetailsForm({ lines, onChange, catalog, quotationTy
             <SearchableSelect
               id={`asset-brand-${index}`}
               label="Brand"
-              required
+              required={isRequired('brand')}
               value={line.brand}
               onChange={(v) => updateLine(index, 'brand', v)}
               options={brandOptions}
@@ -161,7 +173,7 @@ export default function AssetDetailsForm({ lines, onChange, catalog, quotationTy
             <SearchableSelect
               id={`asset-model-${index}`}
               label="Model"
-              required
+              required={isRequired('model_name')}
               value={line.model_name}
               onChange={(v) => updateLine(index, 'model_name', v)}
               options={modelOptions}
@@ -170,7 +182,7 @@ export default function AssetDetailsForm({ lines, onChange, catalog, quotationTy
             <SearchableSelect
               id={`asset-processor-${index}`}
               label="Processor"
-              required
+              required={isRequired('processor')}
               value={line.processor}
               onChange={(v) => updateLine(index, 'processor', v)}
               options={processorOptions}
@@ -178,7 +190,7 @@ export default function AssetDetailsForm({ lines, onChange, catalog, quotationTy
             <SearchableSelect
               id={`asset-generation-${index}`}
               label="Generation"
-              required
+              required={isRequired('generation')}
               value={line.generation}
               onChange={(v) => updateLine(index, 'generation', v)}
               options={generationOptions}
@@ -187,7 +199,7 @@ export default function AssetDetailsForm({ lines, onChange, catalog, quotationTy
             <SearchableSelect
               id={`asset-ram-${index}`}
               label="Ram"
-              required
+              required={isRequired('ram')}
               value={line.ram}
               onChange={(v) => updateLine(index, 'ram', v)}
               options={ramOptions}
@@ -195,7 +207,7 @@ export default function AssetDetailsForm({ lines, onChange, catalog, quotationTy
             <SearchableSelect
               id={`asset-storage-${index}`}
               label="Storage"
-              required
+              required={isRequired('storage')}
               value={line.storage}
               onChange={(v) => updateLine(index, 'storage', v)}
               options={storageOptions}
@@ -203,7 +215,7 @@ export default function AssetDetailsForm({ lines, onChange, catalog, quotationTy
             <SearchableSelect
               id={`asset-gpu-${index}`}
               label="Gpu"
-              required
+              required={isRequired('gpu')}
               value={line.gpu}
               onChange={(v) => updateLine(index, 'gpu', v)}
               options={cfg.gpus || []}
@@ -211,7 +223,7 @@ export default function AssetDetailsForm({ lines, onChange, catalog, quotationTy
             <SearchableSelect
               id={`asset-screen-${index}`}
               label="Screen Size"
-              required
+              required={isRequired('screen_size')}
               value={line.screen_size}
               onChange={(v) => updateLine(index, 'screen_size', v)}
               options={cfg.screen_sizes || []}
@@ -219,12 +231,12 @@ export default function AssetDetailsForm({ lines, onChange, catalog, quotationTy
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">
                 Quantity
-                <span className="text-red-500 ml-0.5">*</span>
+                {isRequired('quantity') ? <span className="text-red-500 ml-0.5">*</span> : null}
               </label>
               <input
                 type="number"
                 min="1"
-                required
+                required={isRequired('quantity')}
                 placeholder="Enter quantity"
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
                 value={line.quantity}
@@ -234,12 +246,12 @@ export default function AssetDetailsForm({ lines, onChange, catalog, quotationTy
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">
                 Rate
-                <span className="text-red-500 ml-0.5">*</span>
+                {isRequired('rate') ? <span className="text-red-500 ml-0.5">*</span> : null}
               </label>
               <input
                 type="number"
                 min="0"
-                required
+                required={isRequired('rate')}
                 placeholder="Enter rate"
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
                 value={line.rate}
