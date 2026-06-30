@@ -20,6 +20,12 @@ function getRelevantTeams(stageName) {
   if (stageName === 'QC2') {
     return [{ key: 'qc2', label: 'QC2 Team', teamName: 'QC2 Team' }];
   }
+  if (stageName === 'Dispatch QC') {
+    return [
+      { key: 'dqc', label: 'Dispatch QC', teamName: 'Dispatch QC Team' },
+      { key: 'fm', label: 'Floor Manager', teamName: 'Floor Manager' },
+    ];
+  }
   return [
     { key: 'hw', label: 'Hardware & Software', teamName: 'Hardware & Software' },
     { key: 'qc1', label: 'QC1 Team', teamName: 'QC1 Team' },
@@ -38,14 +44,18 @@ export default function AssignmentModal({ ticket, open, onClose, onAssigned }) {
   const team = teams.find((t) => t.key === tab) || teams[0];
   const isSalesQc = ticket?.ticket_type === 'sales_order_qc' || ticket?.priority === 'sales_order';
   const isQcStage = ['QC1', 'QC2'].includes(stageName);
+  const isDispatchQcStage = stageName === 'Dispatch QC';
 
   useEffect(() => {
     if (!open || !ticket || !teams.length) return;
-    const defaultTab = isSalesQc
-      ? (teams.find((t) => t.key.startsWith('qc'))?.key || teams[0].key)
-      : teams[0].key;
+    let defaultTab = teams[0].key;
+    if (isDispatchQcStage) {
+      defaultTab = teams.find((t) => t.key === 'dqc')?.key || teams[0].key;
+    } else if (isSalesQc) {
+      defaultTab = teams.find((t) => t.key.startsWith('qc'))?.key || teams[0].key;
+    }
     setTab(defaultTab);
-  }, [open, ticket, teams, isSalesQc]);
+  }, [open, ticket, teams, isSalesQc, isDispatchQcStage]);
 
   useEffect(() => {
     if (!open || !ticket || !team) return;
@@ -125,7 +135,13 @@ export default function AssignmentModal({ ticket, open, onClose, onAssigned }) {
               Use manual assignment to override.
             </p>
           ) : null}
-          {isSalesQc && tab === 'hw' ? (
+          {isDispatchQcStage ? (
+            <p className="text-xs text-slate-600 bg-orange-50 border border-orange-200 rounded-lg p-3">
+              Assign to a Dispatch QC inspector or a Floor Manager. Sales Order pre-dispatch tickets
+              should not go to Hardware &amp; Software or QC1/QC2 teams.
+            </p>
+          ) : null}
+          {isSalesQc && !isDispatchQcStage && tab === 'hw' ? (
             <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
               Sales Order QC tickets are usually assigned directly to the QC team.
             </p>

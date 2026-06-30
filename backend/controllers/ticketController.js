@@ -843,6 +843,20 @@ exports.assignTicket = async (req, res) => {
   const { user_id, team_id, target_stage_id } = req.body;
 
   try {
+    const ticketRes = await pool.query(
+      `SELECT t.ticket_id, t.current_stage_id, t.assigned_team_id, s.stage_name
+       FROM tickets t
+       JOIN stages s ON s.stage_id = t.current_stage_id
+       WHERE t.ticket_id = $1`,
+      [id]
+    );
+    if (ticketRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Ticket not found' });
+    }
+    const currentTicket = ticketRes.rows[0];
+    const preserveDispatchQcStage =
+      currentTicket.stage_name === 'Dispatch QC' && user_id && !target_stage_id && !team_id;
+
     let updateQuery = 'UPDATE tickets SET ';
     const params = [];
     let paramCount = 1;
@@ -884,6 +898,9 @@ exports.assignTicket = async (req, res) => {
         targetTeamId = stageRes.rows[0].team_id;
         logMessage += `Moved to ${stageRes.rows[0].stage_name || `stage #${targetStageId}`}. `;
       }
+    } else if (preserveDispatchQcStage) {
+      // Reassign within Dispatch QC — keep stage, only change assignee
+      logMessage += 'Reassigned at Dispatch QC. ';
     } else if (user_id) {
       // Get all teams for this user (primary team_id + user_teams)
       const userTeamsRes = await pool.query(
@@ -1761,10 +1778,59 @@ exports.getFloorManagerQueue = async (req, res) => {
 };
 
 /** GET /api/tickets/team-members?team_name=Hardware+%26+Software */
+function rolesForTeamName(teamName) {
+  const n = String(teamName || '').trim().toLowerCase();
+  if (n === 'dispatch qc team' || n === 'dispatch qc') {
+    return { roles: ['dispatch_qc'], roleOnly: true };
+  }
+  if (n === 'floor manager') {
+    return { roles: ['floor_manager'], roleOnly: true };
+  }
+  if (n === 'qc1 team' || n === 'qc2 team') {
+    return { roles: ['qc'], roleOnly: false };
+  }
+  if (/qc/i.test(n)) {
+    return { roles: ['qc'], roleOnly: false };
+  }
+  return { roles: ['technician', 'floor_manager', 'team_member', 'team_lead'], roleOnly: false };
+}
+
+async function queryTeamMembers(pool, { roles, teamId }) {
+  if (teamId) {
+    const r = await pool.query(
+      `SELECT u.user_id, u.name, u.role,
+              COUNT(t.ticket_id) FILTER (WHERE t.status = 'in_progress')::int AS active_tickets
+       FROM users u
+       LEFT JOIN tickets t ON t.assigned_user_id = u.user_id AND t.status = 'in_progress'
+       WHERE COALESCE(u.active, true) = true
+         AND u.role = ANY($1::text[])
+         AND (
+           u.team_id = $2
+           OR EXISTS (SELECT 1 FROM user_teams ut WHERE ut.user_id = u.user_id AND ut.team_id = $2)
+         )
+       GROUP BY u.user_id, u.name, u.role
+       ORDER BY active_tickets ASC, u.name ASC`,
+      [roles, teamId]
+    );
+    if (r.rows.length) return r.rows;
+  }
+
+  const r = await pool.query(
+    `SELECT u.user_id, u.name, u.role,
+            COUNT(t.ticket_id) FILTER (WHERE t.status = 'in_progress')::int AS active_tickets
+     FROM users u
+     LEFT JOIN tickets t ON t.assigned_user_id = u.user_id AND t.status = 'in_progress'
+     WHERE COALESCE(u.active, true) = true AND u.role = ANY($1::text[])
+     GROUP BY u.user_id, u.name, u.role
+     ORDER BY active_tickets ASC, u.name ASC`,
+    [roles]
+  );
+  return r.rows;
+}
+
 exports.getTeamMembers = async (req, res) => {
   const teamName = String(req.query.team_name || 'Hardware & Software').trim();
-  const isQc = /qc/i.test(teamName);
-  const roles = isQc ? ['qc'] : ['technician', 'floor_manager', 'team_member', 'team_lead'];
+  const { roles, roleOnly } = rolesForTeamName(teamName);
   try {
     const teamRes = await pool.query(
       `SELECT team_id FROM teams WHERE team_name = $1 LIMIT 1`,
@@ -1772,38 +1838,16 @@ exports.getTeamMembers = async (req, res) => {
     );
     const teamId = teamRes.rows[0]?.team_id;
 
-    let rows;
-    if (teamId) {
-      const r = await pool.query(
-        `SELECT u.user_id, u.name, u.role,
-                COUNT(t.ticket_id) FILTER (WHERE t.status = 'in_progress')::int AS active_tickets
-         FROM users u
-         LEFT JOIN tickets t ON t.assigned_user_id = u.user_id AND t.status = 'in_progress'
-         WHERE COALESCE(u.active, true) = true
-           AND u.role = ANY($1::text[])
-           AND (
-             u.team_id = $2
-             OR EXISTS (SELECT 1 FROM user_teams ut WHERE ut.user_id = u.user_id AND ut.team_id = $2)
-           )
-         GROUP BY u.user_id, u.name, u.role
-         ORDER BY active_tickets ASC, u.name ASC`,
-        [roles, teamId]
-      );
-      rows = r.rows;
-    }
-
-    if (!rows?.length) {
-      const fallback = await pool.query(
-        `SELECT u.user_id, u.name, u.role,
-                COUNT(t.ticket_id) FILTER (WHERE t.status = 'in_progress')::int AS active_tickets
-         FROM users u
-         LEFT JOIN tickets t ON t.assigned_user_id = u.user_id AND t.status = 'in_progress'
-         WHERE COALESCE(u.active, true) = true AND u.role = ANY($1::text[])
-         GROUP BY u.user_id, u.name, u.role
-         ORDER BY active_tickets ASC, u.name ASC`,
-        [roles]
-      );
-      rows = fallback.rows;
+    let rows = [];
+    if (teamId && !roleOnly) {
+      rows = await queryTeamMembers(pool, { roles, teamId });
+    } else if (teamId && roleOnly) {
+      rows = await queryTeamMembers(pool, { roles, teamId });
+      if (!rows.length) {
+        rows = await queryTeamMembers(pool, { roles, teamId: null });
+      }
+    } else {
+      rows = await queryTeamMembers(pool, { roles, teamId: null });
     }
 
     res.json({ success: true, team_name: teamName, members: rows });
