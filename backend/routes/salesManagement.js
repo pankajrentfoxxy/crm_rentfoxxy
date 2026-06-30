@@ -117,6 +117,10 @@ router.get(...dcRoute('/qc-status', soDcView, ctrl.getDcQcStatus));
 router.patch(...dcRoute('/dispatch', soDcEdit, ctrl.updateDcDispatch));
 router.patch(...dcRoute('/delivered', soDcEdit, ctrl.markDcDelivered));
 router.patch(...dcRoute('/rejected', soDcEdit, ctrl.markDcRejected));
+router.patch(...dcRoute('/customer-rejected', tbEdit, flowCtrl.markCustomerRejected));
+router.post(...dcRoute('/warehouse-return-otp', tbEdit, flowCtrl.sendWarehouseReturnOtp));
+router.post(...dcRoute('/warehouse-return-otp/verify', tbEdit, flowCtrl.verifyWarehouseReturnOtp));
+router.patch(...dcRoute('/courier-rejected', soDcEdit, flowCtrl.markCourierRejected));
 // Catch-all DC routes MUST be registered last: their greedy (.+) pattern would
 // otherwise swallow specific sub-paths like /qc-status, /dispatch, /delivered.
 router.get(/^\/delivery-challans\/(.+)$/, bindDcNumber, soDcView, ctrl.getDeliveryChallan);

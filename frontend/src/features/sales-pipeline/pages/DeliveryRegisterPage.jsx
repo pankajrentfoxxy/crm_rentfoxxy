@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { KeyRound, Map as MapIcon, CheckCircle2, ExternalLink, Image as ImageIcon, Users } from 'lucide-react';
+import { KeyRound, Map as MapIcon, CheckCircle2, ExternalLink, Image as ImageIcon, Users, XCircle } from 'lucide-react';
 import { ListPagination, SearchField } from '../../../components/ui/primitives';
-import { listDeliveryFlow } from '../salesPipelineApi';
+import { listDeliveryFlow, markCourierRejected } from '../salesPipelineApi';
 import { DISPATCH_MODE_STYLES, formatDateTime, statusLabel } from '../salesPipelineUtils';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import { getBackendOrigin } from '../../../utils/api';
@@ -17,6 +17,7 @@ const TABS = [
   { id: 'courier', label: 'Courier' },
   { id: 'porter', label: 'Porter' },
   { id: 'delivered', label: 'Delivered' },
+  { id: 'rejected', label: 'Rejected' },
 ];
 
 const PAGE_SIZE = 25;
@@ -40,8 +41,12 @@ export default function DeliveryRegisterPage() {
   const [otpModal, setOtpModal] = useState(null);
   const [deliverModal, setDeliverModal] = useState(null);
   const [receiveModal, setReceiveModal] = useState(null);
+  const [rejectModal, setRejectModal] = useState(null);
+  const [rejectReason, setRejectReason] = useState('');
+  const [rejectRemarks, setRejectRemarks] = useState('');
 
   const isDelivered = tab === 'delivered';
+  const isRejectedTab = tab === 'rejected';
 
   useEffect(() => { setPage(1); }, [tab, search]);
 
@@ -67,6 +72,26 @@ export default function DeliveryRegisterPage() {
   }, [tab, page, search]);
 
   useEffect(() => { load(); }, [load]);
+
+  const handleCourierReject = async () => {
+    if (!rejectModal || !rejectReason.trim()) {
+      toast.error('Rejection reason is required');
+      return;
+    }
+    try {
+      await markCourierRejected(rejectModal.dc_number, {
+        rejection_reason: rejectReason.trim(),
+        rejection_remarks: rejectRemarks.trim() || undefined,
+      });
+      toast.success('Delivery rejected — moved to QC');
+      setRejectModal(null);
+      setRejectReason('');
+      setRejectRemarks('');
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Reject failed');
+    }
+  };
 
   const selectTab = (id) => setTab(id);
 
@@ -107,7 +132,7 @@ export default function DeliveryRegisterPage() {
 
       {!loading && pagination.total > 0 ? (
         <p className="text-sm text-gray-500 mb-3">
-          {pagination.total} {isDelivered ? 'delivered ' : ''}challan{pagination.total === 1 ? '' : 's'}
+          {pagination.total} {isDelivered ? 'delivered ' : isRejectedTab ? 'rejected ' : ''}challan{pagination.total === 1 ? '' : 's'}
         </p>
       ) : null}
 
@@ -131,8 +156,8 @@ export default function DeliveryRegisterPage() {
             ) : rows.length === 0 ? (
               <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-500">No deliveries in this view.</td></tr>
             ) : rows.map((row) => (
-              <tr key={row.dc_number}>
-                <td className="px-4 py-3 font-mono text-blue-700">
+              <tr key={row.dc_number} className={row.status === 'rejected' ? 'bg-red-50/60' : ''}>
+                <td className={`px-4 py-3 font-mono ${row.status === 'rejected' ? 'text-red-700 line-through decoration-red-400' : 'text-blue-700'}`}>
                   {row.dc_number}
                   {row.movement_type === 'return' && (
                     <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-700">RDC</span>
@@ -157,7 +182,13 @@ export default function DeliveryRegisterPage() {
                   </span>
                 </td>
                 <td className="px-4 py-3 text-gray-600">{formatDateTime(row.dispatched_at)}</td>
-                <td className="px-4 py-3">{statusLabel(row.status)}</td>
+                <td className="px-4 py-3">
+                  <span className={row.status === 'rejected' ? 'text-red-700 font-medium line-through decoration-red-400' : ''}>
+                    {statusLabel(row.status)}
+                  </span>
+                  {row.rejected_at && <p className="text-[10px] text-red-600">{formatDateTime(row.rejected_at)}</p>}
+                  {row.return_to_warehouse_at && <p className="text-[10px] text-emerald-700">WH: {formatDateTime(row.return_to_warehouse_at)}</p>}
+                </td>
                 <td className="px-4 py-3">
                   {row.otp_verified_at ? (
                     <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">✓ Verified</span>
@@ -183,14 +214,24 @@ export default function DeliveryRegisterPage() {
                       {!row.pod_photo_url && !row.esign_url && <span className="text-xs text-gray-400">{row.pod_type || '—'}</span>}
                     </div>
                   ) : (
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
                       {(row.tech_latitude && row.tech_longitude) && (
                         <a href={`https://www.google.com/maps?q=${row.tech_latitude},${row.tech_longitude}`} target="_blank" rel="noreferrer" className="text-xs text-gray-600 inline-flex items-center gap-1"><MapIcon className="w-3.5 h-3.5" /> Map</a>
                       )}
                       {row.movement_type === 'return' ? (
                         <button type="button" onClick={() => setReceiveModal(row)} className="text-xs text-blue-700 inline-flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" /> Warehouse receive</button>
                       ) : (
-                        <button type="button" onClick={() => setDeliverModal(row)} className="text-xs text-emerald-700 inline-flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" /> Deliver</button>
+                        <>
+                          <button type="button" onClick={() => setDeliverModal(row)} className="text-xs text-emerald-700 inline-flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" /> Deliver</button>
+                          {(row.dispatch_mode === 'courier' || row.ship_by === 'by_courier') && ['in_transit', 'reached', 'shipped'].includes(row.status) && (
+                            <PermissionGate section="dispatch_ops" action="edit">
+                              <button type="button" onClick={() => { setRejectModal(row); setRejectReason(''); setRejectRemarks(''); }}
+                                className="text-xs text-red-700 inline-flex items-center gap-1">
+                                <XCircle className="w-3.5 h-3.5" /> Reject
+                              </button>
+                            </PermissionGate>
+                          )}
+                        </>
                       )}
                     </div>
                   )}
@@ -235,6 +276,19 @@ export default function DeliveryRegisterPage() {
           onClose={() => setReceiveModal(null)}
           onReceived={load}
         />
+      )}
+
+      {rejectModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <button type="button" className="absolute inset-0 bg-black/40" onClick={() => setRejectModal(null)} aria-label="Close" />
+          <div className="relative bg-white rounded-xl p-6 w-full max-w-sm space-y-3">
+            <h3 className="font-semibold">Reject Courier Delivery — {rejectModal.dc_number}</h3>
+            <p className="text-xs text-gray-500">Laptops return to warehouse QC with floor tickets.</p>
+            <textarea className="w-full border rounded-lg px-3 py-2 text-sm" rows={2} placeholder="Rejection reason" value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} />
+            <textarea className="w-full border rounded-lg px-3 py-2 text-sm" rows={2} placeholder="Warehouse remarks (optional)" value={rejectRemarks} onChange={(e) => setRejectRemarks(e.target.value)} />
+            <button type="button" onClick={handleCourierReject} className="w-full py-2 bg-red-600 text-white rounded-lg text-sm">Confirm Reject</button>
+          </div>
+        </div>
       )}
     </div>
   );

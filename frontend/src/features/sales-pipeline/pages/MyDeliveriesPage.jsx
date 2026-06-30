@@ -1,20 +1,22 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
-  MapPin, Map as MapIcon, Camera, PenLine, CheckCircle2, Loader2, Phone, User, Laptop,
+  MapPin, Map as MapIcon, Camera, PenLine, CheckCircle2, Loader2, Phone, User, Laptop, XCircle,
 } from 'lucide-react';
 import {
   getMyDeliveries, markReached, verifySerialAndGenerateOtp, submitDeliveryWithPod,
+  markCustomerRejected, sendWarehouseReturnOtp, verifyWarehouseReturnOtp,
 } from '../salesPipelineApi';
 import SignaturePadComponent from '../components/SignaturePad';
-import { deliveryAddressPhone, formatDeliveryAddressLine, parseDeliveryAddress } from '../salesPipelineUtils';
+import { deliveryAddressPhone, formatDeliveryAddressLine, formatDateTime, parseDeliveryAddress } from '../salesPipelineUtils';
 
 function StatusBadge({ status }) {
   const map = {
     in_transit: 'bg-blue-100 text-blue-700',
     reached: 'bg-amber-100 text-amber-700',
+    rejected: 'bg-red-100 text-red-800 line-through decoration-red-500',
   };
-  const label = { in_transit: 'In Transit', reached: 'Reached' }[status] || status;
+  const label = { in_transit: 'In Transit', reached: 'Reached', rejected: 'Rejected' }[status] || status;
   return <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${map[status] || 'bg-gray-100 text-gray-700'}`}>{label}</span>;
 }
 
@@ -39,6 +41,11 @@ function DeliveryCard({ dc, onChanged }) {
   const [showSign, setShowSign] = useState(false);
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
+  const [rejectRemarks, setRejectRemarks] = useState('');
+  const [warehouseOtp, setWarehouseOtp] = useState('');
+  const [otpRequested, setOtpRequested] = useState(Boolean(dc.warehouse_return_otp_sent));
 
   const addr = parseDeliveryAddress(dc.delivery_address) || {};
   const addrText = formatDeliveryAddressLine(dc.delivery_address);
@@ -111,10 +118,59 @@ function DeliveryCard({ dc, onChanged }) {
     }
   };
 
+  const handleReject = async () => {
+    if (!rejectReason.trim()) { toast.error('Enter why the customer rejected delivery'); return; }
+    setBusy(true);
+    try {
+      await markCustomerRejected(dc.dc_number, {
+        rejection_reason: rejectReason.trim(),
+        rejection_remarks: rejectRemarks.trim() || undefined,
+        source: 'technician',
+      });
+      toast.success('Marked as rejected — return laptops to warehouse');
+      setRejectOpen(false);
+      onChanged();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Could not mark rejected');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRequestWarehouseOtp = async () => {
+    setBusy(true);
+    try {
+      const r = await sendWarehouseReturnOtp(dc.dc_number);
+      setOtpRequested(true);
+      toast.success(r.data?.message || 'Warehouse OTP sent');
+      if (r.data?.otp_visible) toast(`Dev OTP: ${r.data.otp_visible}`, { duration: 8000 });
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Failed to request warehouse OTP');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleVerifyWarehouseOtp = async () => {
+    if (!warehouseOtp.trim()) { toast.error('Enter warehouse return OTP'); return; }
+    setBusy(true);
+    try {
+      await verifyWarehouseReturnOtp(dc.dc_number, { otp: warehouseOtp.trim() });
+      toast.success('Return confirmed — laptops sent to QC');
+      onChanged();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Invalid warehouse OTP');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const isRejectedPendingReturn = dc.status === 'rejected' && dc.warehouse_return_pending;
+
   return (
-    <div className="bg-white border rounded-2xl shadow-sm overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-3 border-b">
-        <span className="font-mono font-semibold text-blue-700 flex items-center gap-2">
+    <div className={`bg-white border rounded-2xl shadow-sm overflow-hidden ${isRejectedPendingReturn ? 'border-red-300 ring-1 ring-red-100' : ''}`}>
+      <div className={`flex items-center justify-between px-4 py-3 border-b ${isRejectedPendingReturn ? 'bg-red-50' : ''}`}>
+        <span className={`font-mono font-semibold flex items-center gap-2 ${isRejectedPendingReturn ? 'text-red-700 line-through decoration-red-400' : 'text-blue-700'}`}>
           {dc.dc_number}
           {dc.dc_purpose === 'replacement' && (
             <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-pink-100 text-pink-800">REPLACEMENT</span>
@@ -235,7 +291,62 @@ function DeliveryCard({ dc, onChanged }) {
             </button>
           </div>
         )}
+
+        {/* STATE: rejected — return to warehouse with OTP */}
+        {isRejectedPendingReturn && (
+          <div className="border-t pt-3 space-y-3 bg-red-50/50 -mx-4 px-4 pb-1">
+            <div className="text-sm text-red-800">
+              <p className="font-semibold flex items-center gap-1.5"><XCircle className="w-4 h-4" /> Customer rejected delivery</p>
+              {dc.rejection_reason && <p className="text-xs mt-1">Reason: {dc.rejection_reason}</p>}
+              {dc.rejected_at && <p className="text-xs text-red-600">Rejected: {formatDateTime(dc.rejected_at)}</p>}
+            </div>
+            <p className="text-xs text-gray-600">Return laptops to warehouse and enter the OTP from the warehouse lead.</p>
+            {!otpRequested && (
+              <button type="button" disabled={busy} onClick={handleRequestWarehouseOtp}
+                className="w-full py-2.5 border border-red-200 text-red-700 rounded-xl text-sm font-medium disabled:opacity-50">
+                Request Warehouse Return OTP
+              </button>
+            )}
+            {(otpRequested || dc.warehouse_return_otp_sent) && (
+              <>
+                <input value={warehouseOtp} onChange={(e) => setWarehouseOtp(e.target.value)} inputMode="numeric"
+                  placeholder="Warehouse return OTP" className="w-full border rounded-xl px-3 py-3 text-sm tracking-widest" />
+                <button type="button" disabled={busy} onClick={handleVerifyWarehouseOtp}
+                  className="w-full py-3 bg-red-600 text-white rounded-xl text-sm font-semibold disabled:opacity-50">
+                  Confirm Return to Warehouse
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Customer rejected option while still attempting delivery */}
+        {(dc.status === 'in_transit' || dc.status === 'reached') && (
+          <div className="border-t pt-3">
+            <button type="button" onClick={() => setRejectOpen(true)}
+              className="w-full py-2.5 text-sm text-red-700 border border-red-200 rounded-xl hover:bg-red-50">
+              Customer Rejected Delivery
+            </button>
+          </div>
+        )}
       </div>
+
+      {rejectOpen && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4">
+          <button type="button" className="absolute inset-0 bg-black/40" onClick={() => setRejectOpen(false)} aria-label="Close" />
+          <div className="relative bg-white rounded-xl p-5 w-full max-w-md space-y-3">
+            <h3 className="font-semibold text-gray-900">Customer Rejected Delivery</h3>
+            <textarea className="w-full border rounded-lg px-3 py-2 text-sm" rows={2}
+              placeholder="Rejection reason (required)" value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} />
+            <textarea className="w-full border rounded-lg px-3 py-2 text-sm" rows={2}
+              placeholder="Additional remarks (optional)" value={rejectRemarks} onChange={(e) => setRejectRemarks(e.target.value)} />
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setRejectOpen(false)} className="flex-1 py-2 border rounded-lg text-sm">Cancel</button>
+              <button type="button" disabled={busy} onClick={handleReject} className="flex-1 py-2 bg-red-600 text-white rounded-lg text-sm disabled:opacity-50">Confirm Reject</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

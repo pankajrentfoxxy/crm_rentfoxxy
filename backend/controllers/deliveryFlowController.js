@@ -193,6 +193,13 @@ async function buildDcFlow(where, params, { includeOtp = false } = {}) {
       pod_submitted_at: first.pod_submitted_at,
       delivery_notes: first.delivery_notes,
       delivered_at: first.delivered_at,
+      rejected_at: first.rejected_at,
+      rejection_reason: first.rejection_reason,
+      rejection_remarks: first.rejection_remarks,
+      rejection_source: first.rejection_source,
+      return_to_warehouse_at: first.return_to_warehouse_at,
+      warehouse_return_pending: first.status === 'rejected' && !first.return_to_warehouse_at,
+      warehouse_return_otp_sent: Boolean(first.warehouse_return_otp_sent_at),
       serials,
     });
   }
@@ -218,6 +225,8 @@ exports.listDeliveryFlow = async (req, res) => {
     } else if (status === 'courier') {
       conditions.push(`d.dispatch_mode = 'courier'`);
       conditions.push(`d.status IN ('shipped','in_transit','reached')`);
+    } else if (status === 'rejected') {
+      conditions.push(`d.status = 'rejected'`);
     } else {
       params.push(status);
       conditions.push(`d.status = $${params.length}`);
@@ -307,8 +316,12 @@ exports.getMyDeliveries = async (req, res) => {
     // Match by technician_id (new flow) OR by user_id (legacy data where the
     // delivery_person_id stored the user id directly).
     const params = [techId || -1, req.user.user_id];
-    const where = `WHERE d.status IN ('in_transit','reached')
-                     AND (d.delivery_person_id = $1 OR d.delivery_person_id = $2)`;
+    const where = `WHERE (
+                       (d.status IN ('in_transit','reached')
+                        AND (d.delivery_person_id = $1 OR d.delivery_person_id = $2))
+                       OR (d.status = 'rejected' AND d.return_to_warehouse_at IS NULL
+                           AND (d.delivery_person_id = $1 OR d.delivery_person_id = $2))
+                     )`;
     const items = await buildDcFlow(where, params, { includeOtp: false });
     res.json({ success: true, technician_id: techId, items });
   } catch (error) {
@@ -577,6 +590,111 @@ exports.adminDeliverOverride = async (req, res) => {
     await client.query('ROLLBACK').catch(() => {});
     console.error('adminDeliverOverride:', error);
     res.status(500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
+  }
+};
+
+const rejectionSvc = require('../services/deliveryRejectionService');
+const WAREHOUSE_ROLES = ['warehouse', 'admin', 'manager', 'super_admin', 'support_lead', 'floor_manager'];
+
+// PATCH /delivery-challans/:dcNumber/customer-rejected
+exports.markCustomerRejected = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await rejectionSvc.ensureDeliveryRejectionSchema();
+    const dcNumber = req.params.dcNumber;
+    const reason = req.body?.rejection_reason || req.body?.reason;
+    const remarks = req.body?.rejection_remarks || req.body?.remarks;
+    const source = req.body?.source || (WAREHOUSE_ROLES.includes(req.user.role) ? 'warehouse' : 'technician');
+
+    await client.query('BEGIN');
+    const result = await rejectionSvc.markDeliveryRejectedByCustomer(client, {
+      dcNumber,
+      reason,
+      remarks,
+      source,
+      actorUserId: req.user.user_id,
+    });
+    await client.query('COMMIT');
+    res.json({ success: true, message: 'Delivery marked as rejected by customer', ...result });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('markCustomerRejected:', error);
+    res.status(error.message.includes('not found') ? 404 : 400).json({ success: false, message: error.message });
+  } finally {
+    client.release();
+  }
+};
+
+// POST /delivery-challans/:dcNumber/warehouse-return-otp
+exports.sendWarehouseReturnOtp = async (req, res) => {
+  try {
+    await rejectionSvc.ensureDeliveryRejectionSchema();
+    const result = await rejectionSvc.sendWarehouseReturnOtp(req.params.dcNumber);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    console.error('sendWarehouseReturnOtp:', error);
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+// POST /delivery-challans/:dcNumber/warehouse-return-otp/verify
+exports.verifyWarehouseReturnOtp = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await rejectionSvc.ensureDeliveryRejectionSchema();
+    const otp = req.body?.otp || req.body?.warehouse_return_otp;
+    await client.query('BEGIN');
+    const result = await rejectionSvc.verifyWarehouseReturnOtp(client, {
+      dcNumber: req.params.dcNumber,
+      otp,
+      actorUserId: req.user.user_id,
+      actorName: req.user.name,
+    });
+    await client.query('COMMIT');
+    res.json({
+      success: true,
+      message: 'Laptops returned to warehouse and sent to QC',
+      ...result,
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('verifyWarehouseReturnOtp:', error);
+    res.status(400).json({ success: false, message: error.message });
+  } finally {
+    client.release();
+  }
+};
+
+// PATCH /delivery-challans/:dcNumber/courier-rejected  (warehouse — reject + QC in one step)
+exports.markCourierRejected = async (req, res) => {
+  if (!WAREHOUSE_ROLES.includes(req.user.role)) {
+    return res.status(403).json({ success: false, message: 'Warehouse access required' });
+  }
+  const client = await pool.connect();
+  try {
+    await rejectionSvc.ensureDeliveryRejectionSchema();
+    const reason = req.body?.rejection_reason || req.body?.reason;
+    const remarks = req.body?.rejection_remarks || req.body?.remarks;
+    await client.query('BEGIN');
+    const result = await rejectionSvc.rejectCourierAndComplete(client, {
+      dcNumber: req.params.dcNumber,
+      reason,
+      remarks,
+      actorUserId: req.user.user_id,
+      actorName: req.user.name,
+    });
+    await client.query('COMMIT');
+    res.json({
+      success: true,
+      message: 'Courier delivery rejected — laptops moved to QC',
+      ...result,
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('markCourierRejected:', error);
+    res.status(400).json({ success: false, message: error.message });
   } finally {
     client.release();
   }

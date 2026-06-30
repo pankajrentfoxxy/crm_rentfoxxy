@@ -6,7 +6,7 @@ const errorHandler = require('./middleware/errorHandler');
 const { BODY_PARSER_LIMIT } = require('./config/uploadLimits');
 const { startEmailQueueWorker } = require('./services/emailQueueService');
 const { startInventorySyncWorker } = require('./services/inventoryErpSyncService');
-const { startLeadEmailIngestionWorker } = require('./services/leadEmailIngestionService');
+const { startLeadEmailIngestionWorker, stopLeadEmailIngestionWorker } = require('./services/leadEmailIngestionService');
 const { startCustomerInventorySyncWorker } = require('./services/customerInventoryErpSyncService');
 
 const app = express();
@@ -167,7 +167,7 @@ app.listen(PORT, () => {
   const workersOn = String(process.env.ENABLE_BACKGROUND_WORKERS || 'true').toLowerCase() !== 'false';
   if (workersOn) {
     startEmailQueueWorker().catch((err) => console.error('Email queue worker failed:', err.message));
-    // startLeadEmailIngestionWorker().catch((err) => console.error('Lead email ingestion worker failed:', err.message));
+    startLeadEmailIngestionWorker().catch((err) => console.error('Lead email ingestion worker failed:', err.message));
     // startInventorySyncWorker().catch((err) => console.error('ERP inventory sync worker failed:', err.message));
     // startCustomerInventorySyncWorker().catch((err) => console.error('Customer inventory ERP worker failed:', err.message));
   }
@@ -188,6 +188,23 @@ app.listen(PORT, () => {
   ensureBillingEngineSchema().catch((err) => console.error('Billing engine schema failed:', err.message));
   ensureLeadCrmSchema().catch((err) => console.error('Lead CRM schema ensure failed:', err.message));
   startBillingScheduler();
+});
+
+const shutdownWorkers = async (signal) => {
+  console.log(`${signal} received — shutting down background workers`);
+  try {
+    await stopLeadEmailIngestionWorker();
+  } catch (err) {
+    console.error('Lead email idle shutdown failed:', err.message);
+  }
+};
+
+process.on('SIGTERM', () => {
+  shutdownWorkers('SIGTERM').finally(() => process.exit(0));
+});
+
+process.on('SIGINT', () => {
+  shutdownWorkers('SIGINT').finally(() => process.exit(0));
 });
 
 module.exports = app;

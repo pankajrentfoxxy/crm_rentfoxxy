@@ -5,7 +5,6 @@ const prisma = require('../prisma/client');
 const { getNextAutoAssignee } = require('./leadAutoAssignService');
 const { ensureResearch } = require('./leadResearchService');
 
-const LEAD_EMAIL_POLL_INTERVAL_MS = parseInt(process.env.LEAD_EMAIL_POLL_INTERVAL_MS || '120000', 10);
 const LEAD_EMAIL_LOOKBACK_DAYS = parseInt(process.env.LEAD_EMAIL_LOOKBACK_DAYS || '14', 10);
 const LEAD_EMAIL_MAILBOXES = (process.env.LEAD_EMAIL_MAILBOXES || 'Sent,INBOX,[Gmail]/Sent Mail')
     .split(',')
@@ -19,9 +18,31 @@ const PERSONAL_EMAIL_DOMAINS = new Set(
         .filter(Boolean)
 );
 
-let intervalRef = null;
-let running = false;
+let syncInProgress = false;
+let syncPending = false;
 let lastSuccessfulSyncAt = null;
+
+const isLeadEmailConfigured = () => !!(
+    process.env.LEAD_EMAIL_IMAP_HOST &&
+    process.env.LEAD_EMAIL_IMAP_USER &&
+    process.env.LEAD_EMAIL_IMAP_PASS
+);
+
+const createLeadEmailImapClient = () => {
+    const host = process.env.LEAD_EMAIL_IMAP_HOST;
+    const user = process.env.LEAD_EMAIL_IMAP_USER;
+    const pass = process.env.LEAD_EMAIL_IMAP_PASS;
+    const port = parseInt(process.env.LEAD_EMAIL_IMAP_PORT || '993', 10);
+    const secure = String(process.env.LEAD_EMAIL_IMAP_SECURE || 'true').toLowerCase() !== 'false';
+
+    return new ImapFlow({
+        host,
+        port,
+        secure,
+        auth: { user, pass },
+        logger: false,
+    });
+};
 
 const normalizeText = (value) => {
     if (value === undefined || value === null) return null;
@@ -345,31 +366,33 @@ const getSyncSinceDate = () => {
     return new Date(lastSuccessfulSyncAt.getTime() - 5 * 60 * 1000);
 };
 
-const runLeadEmailSync = async () => {
-    const host = process.env.LEAD_EMAIL_IMAP_HOST;
-    const user = process.env.LEAD_EMAIL_IMAP_USER;
-    const pass = process.env.LEAD_EMAIL_IMAP_PASS;
-    const port = parseInt(process.env.LEAD_EMAIL_IMAP_PORT || '993', 10);
-    const secure = String(process.env.LEAD_EMAIL_IMAP_SECURE || 'true').toLowerCase() !== 'false';
+const runLeadEmailSync = async (options = {}) => {
+    const { client: externalClient = null } = options;
+    const ownConnection = !externalClient;
 
-    if (!host || !user || !pass) {
+    if (syncInProgress) {
+        syncPending = true;
+        console.log('Lead email sync already in progress; coalescing into a single follow-up run');
+        return { coalesced: true };
+    }
+    syncInProgress = true;
+
+    if (!isLeadEmailConfigured()) {
+        syncInProgress = false;
         console.warn('⚠️ Lead email sync skipped: IMAP credentials are missing');
         return;
     }
 
-    const client = new ImapFlow({
-        host,
-        port,
-        secure,
-        auth: { user, pass },
-        logger: false
-    });
-    client.on('error', (error) => {
-        console.error(`⚠️ Lead email IMAP connection issue: ${error.message}`);
-    });
-
+    let client = externalClient;
     try {
-        await client.connect();
+        if (ownConnection) {
+            client = createLeadEmailImapClient();
+            client.on('error', (error) => {
+                console.error(`⚠️ Lead email IMAP connection issue: ${error.message}`);
+            });
+            await client.connect();
+        }
+
         const mailboxes = await getAvailableMailboxes(client);
 
         const sinceDate = getSyncSinceDate();
@@ -464,55 +487,52 @@ const runLeadEmailSync = async () => {
         lastSuccessfulSyncAt = new Date();
         return summary;
     } finally {
-        try {
-            await client.logout();
-        } catch {
-            // Ignore logout errors.
+        syncInProgress = false;
+        const shouldRerun = syncPending;
+        syncPending = false;
+
+        if (ownConnection && client) {
+            try {
+                await client.logout();
+            } catch {
+                // Ignore logout errors.
+            }
+        }
+
+        if (shouldRerun) {
+            return runLeadEmailSync(options);
         }
     }
 };
 
 const startLeadEmailIngestionWorker = async () => {
     await ensureIngestionTable();
-
-    if (!running) {
-        running = true;
-        await runLeadEmailSync().catch((error) => {
-            console.error('❌ Lead email sync failed:', error.message);
-        });
-        running = false;
-    }
-
-    if (!intervalRef) {
-        intervalRef = setInterval(async () => {
-            if (running) return;
-            running = true;
-            try {
-                await runLeadEmailSync();
-            } catch (error) {
-                console.error('❌ Lead email sync failed:', error.message);
-            } finally {
-                running = false;
-            }
-        }, LEAD_EMAIL_POLL_INTERVAL_MS);
-    }
+    const { startLeadEmailIdleService } = require('./leadEmailIdleService');
+    await startLeadEmailIdleService();
 };
 
-const getLeadEmailSyncStatus = () => ({
-    configured: !!(
-        process.env.LEAD_EMAIL_IMAP_HOST &&
-        process.env.LEAD_EMAIL_IMAP_USER &&
-        process.env.LEAD_EMAIL_IMAP_PASS
-    ),
-    workerRunning: !!intervalRef,
-    lastSuccessfulSyncAt: lastSuccessfulSyncAt ? lastSuccessfulSyncAt.toISOString() : null,
-    pollIntervalMs: LEAD_EMAIL_POLL_INTERVAL_MS,
-    lookbackDays: LEAD_EMAIL_LOOKBACK_DAYS,
-    mailboxes: LEAD_EMAIL_MAILBOXES,
-});
+const getLeadEmailSyncStatus = () => {
+    const { getLeadEmailIdleStatus } = require('./leadEmailIdleService');
+    return {
+        configured: isLeadEmailConfigured(),
+        ...getLeadEmailIdleStatus(),
+        syncInProgress,
+        lastSuccessfulSyncAt: lastSuccessfulSyncAt ? lastSuccessfulSyncAt.toISOString() : null,
+        lookbackDays: LEAD_EMAIL_LOOKBACK_DAYS,
+        mailboxes: LEAD_EMAIL_MAILBOXES,
+    };
+};
+
+const stopLeadEmailIngestionWorker = async () => {
+    const { stopLeadEmailIdleService } = require('./leadEmailIdleService');
+    await stopLeadEmailIdleService();
+};
 
 module.exports = {
     startLeadEmailIngestionWorker,
+    stopLeadEmailIngestionWorker,
     runLeadEmailSync,
     getLeadEmailSyncStatus,
+    createLeadEmailImapClient,
+    isLeadEmailConfigured,
 };

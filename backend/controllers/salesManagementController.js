@@ -2453,42 +2453,68 @@ exports.markDcRejected = async (req, res) => {
   try {
     const dcNumber = req.params.dcNumber;
     const reason = req.body?.rejection_reason || req.body?.reason;
-    if (!reason?.trim()) {
-      return res.status(400).json({ success: false, message: 'rejection_reason is required' });
+    const remarks = req.body?.rejection_remarks || req.body?.remarks;
+    const completeReturn = req.body?.complete_return === true;
+
+    const rejectionSvc = require('../services/deliveryRejectionService');
+    await rejectionSvc.ensureDeliveryRejectionSchema();
+
+    const headRes = await pool.query(
+      `SELECT dispatch_mode, ship_by, status FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
+      [dcNumber]
+    );
+    const head = headRes.rows[0];
+    if (!head) {
+      return res.status(404).json({ success: false, message: 'Delivery challan not found' });
     }
+
+    const isCourier = head.dispatch_mode === 'courier' || head.ship_by === 'by_courier';
+    const isInhouse = head.dispatch_mode === 'inhouse' || head.ship_by === 'by_hand';
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      await client.query(
-        `UPDATE delivery_challan_lines SET
-          status = 'rejected', rejection_reason = $1, updated_at = NOW()
-         WHERE dc_number = $2`,
-        [reason.trim(), dcNumber]
-      );
 
-      const serials = await collectDcSerials(dcNumber);
-      for (const s of serials) {
-        const serialId = await resolveSerialId(client, s);
-        if (!serialId) continue;
-        // Delivery rejected at the door — asset comes straight back to stock.
-        await inventorySM.backToStock(client, serialId, {
-          reason: `DC ${dcNumber} delivery rejected: ${reason.trim()}`,
+      if (completeReturn || isCourier) {
+        const result = await rejectionSvc.rejectCourierAndComplete(client, {
+          dcNumber,
+          reason,
+          remarks,
           actorUserId: req.user.user_id,
           actorName: req.user.name,
         });
+        await client.query('COMMIT');
+        return res.json({
+          success: true,
+          message: isCourier
+            ? 'Courier delivery rejected — laptops moved to QC'
+            : 'Delivery rejected and returned to warehouse',
+          ...result,
+        });
       }
+
+      await rejectionSvc.markDeliveryRejectedByCustomer(client, {
+        dcNumber,
+        reason,
+        remarks,
+        source: isInhouse ? 'dispatch' : 'warehouse',
+        actorUserId: req.user.user_id,
+      });
       await client.query('COMMIT');
+      res.json({
+        success: true,
+        message: isInhouse
+          ? 'Marked rejected — technician must return laptops to warehouse with warehouse OTP'
+          : 'Delivery marked as rejected',
+      });
     } catch (txErr) {
       await client.query('ROLLBACK').catch(() => {});
       throw txErr;
     } finally {
       client.release();
     }
-
-    res.json({ success: true, message: 'Delivery marked as rejected' });
   } catch (error) {
     console.error('markDcRejected:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(400).json({ success: false, message: error.message });
   }
 };
 

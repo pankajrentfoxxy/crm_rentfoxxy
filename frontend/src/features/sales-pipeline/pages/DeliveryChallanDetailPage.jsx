@@ -8,7 +8,9 @@ import EInvoicePanel from '../components/EInvoicePanel';
 import QcStatusBadge from '../components/QcStatusBadge';
 import {
   createDcQcTickets, getDC, getDcQcStatus, getSalesOrderFull,
-  markDelivered, markRejected, sendDeliveryOtp, verifyDeliveryOtp, updateDC, dispatchDC,
+  markDelivered, markRejected, markCourierRejected,
+  sendDeliveryOtp, sendWarehouseReturnOtp, verifyDeliveryOtp, verifyWarehouseReturnOtp,
+  updateDC, dispatchDC,
 } from '../salesPipelineApi';
 import {
   DC_STATUS_STYLES, formatConfig, formatCurrency, formatDateTime,
@@ -58,6 +60,8 @@ export default function DeliveryChallanDetailPage() {
   const [otpValue, setOtpValue] = useState('');
   const [rejectModal, setRejectModal] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
+  const [rejectRemarks, setRejectRemarks] = useState('');
+  const [warehouseOtp, setWarehouseOtp] = useState('');
   const [editOpen, setEditOpen] = useState(false);
 
   const head = lines[0] || {};
@@ -125,7 +129,10 @@ export default function DeliveryChallanDetailPage() {
 
   const handleReject = async () => {
     try {
-      await markRejected(dcNumber, { rejection_reason: rejectReason });
+      await markRejected(dcNumber, {
+        rejection_reason: rejectReason,
+        rejection_remarks: rejectRemarks.trim() || undefined,
+      });
       toast.success('Marked rejected');
       setRejectModal(false);
       load();
@@ -133,6 +140,45 @@ export default function DeliveryChallanDetailPage() {
       toast.error(err.response?.data?.message || 'Failed');
     }
   };
+
+  const handleCourierReject = async () => {
+    try {
+      await markCourierRejected(dcNumber, {
+        rejection_reason: rejectReason,
+        rejection_remarks: rejectRemarks.trim() || undefined,
+      });
+      toast.success('Courier delivery rejected — laptops moved to QC');
+      setRejectModal(false);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed');
+    }
+  };
+
+  const handleSendWarehouseReturnOtp = async () => {
+    try {
+      const r = await sendWarehouseReturnOtp(dcNumber);
+      toast.success(r.data?.message || 'Warehouse OTP sent');
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to send OTP');
+    }
+  };
+
+  const handleVerifyWarehouseReturn = async () => {
+    try {
+      await verifyWarehouseReturnOtp(dcNumber, { otp: warehouseOtp });
+      toast.success('Return confirmed — laptops in QC');
+      setWarehouseOtp('');
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Invalid OTP');
+    }
+  };
+
+  const isRejected = head.status === 'rejected';
+  const isCourier = head.dispatch_mode === 'courier' || head.ship_by === 'by_courier';
+  const pendingWarehouseReturn = isRejected && !head.return_to_warehouse_at;
 
   const specStr = (d) => [d.processor, d.generation, d.ram, d.storage, d.gpu, d.screen_size]
     .filter(Boolean).join(' · ');
@@ -158,7 +204,7 @@ export default function DeliveryChallanDetailPage() {
       <div className="flex flex-wrap items-start justify-between gap-4 mb-4">
         <div>
           <Link to="/sales-pipeline/delivery-challans" className="text-sm text-blue-600">← Back</Link>
-          <h1 className="text-2xl font-semibold font-mono mt-1">{dcNumber}</h1>
+          <h1 className={`text-2xl font-semibold font-mono mt-1 ${isRejected ? 'text-red-700 line-through decoration-red-400' : ''}`}>{dcNumber}</h1>
           <p className="text-gray-600">{head.customer_name || '—'} · SO: <Link className="text-blue-600" to={salesOrderDetailPath(head.sales_order_number)}>{head.sales_order_number}</Link></p>
           <div className="flex flex-wrap gap-2 mt-2 items-center">
             <span className={`px-2 py-0.5 rounded-full text-xs ${DC_STATUS_STYLES[head.status || 'pending']}`}>{statusLabel(head.status || 'pending')}</span>
@@ -367,7 +413,7 @@ export default function DeliveryChallanDetailPage() {
                     className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">Mark Dispatched</button>
                 </PermissionGate>
               )}
-              {head.status === 'in_transit' && (
+              {['in_transit', 'reached', 'shipped'].includes(head.status) && (
                 <div className="text-sm space-y-2">
                   <p>Mode: {head.dispatch_mode || head.ship_by}</p>
                   {head.dispatch_mode === 'inhouse' || head.ship_by === 'by_hand' ? (
@@ -376,12 +422,19 @@ export default function DeliveryChallanDetailPage() {
                       <button type="button" onClick={handleSendOtp} className="px-3 py-1 border rounded-lg text-xs">Send OTP</button>
                       <button type="button" onClick={() => setOtpModal(true)} className="ml-2 px-3 py-1 bg-blue-600 text-white rounded-lg text-xs">Verify & Deliver</button>
                     </>
+                  ) : isCourier ? (
+                    <PermissionGate section="dispatch_ops" action="edit">
+                      <button type="button" onClick={() => markDelivered(dcNumber, {}).then(load).then(() => toast.success('Delivered'))} className="px-3 py-1 bg-emerald-600 text-white rounded-lg text-xs">Mark Delivered</button>
+                      <button type="button" onClick={() => setRejectModal(true)} className="ml-2 px-3 py-1 text-red-700 border border-red-200 rounded-lg text-xs">Warehouse: Mark Rejected</button>
+                    </PermissionGate>
                   ) : (
                     <PermissionGate section="dispatch_ops" action="edit">
                       <button type="button" onClick={() => markDelivered(dcNumber, {}).then(load).then(() => toast.success('Delivered'))} className="px-3 py-1 bg-emerald-600 text-white rounded-lg text-xs">Mark Delivered</button>
                     </PermissionGate>
                   )}
-                  <button type="button" onClick={() => setRejectModal(true)} className="ml-2 px-3 py-1 text-red-700 border border-red-200 rounded-lg text-xs">Mark Rejected</button>
+                  {!isCourier && (
+                    <button type="button" onClick={() => setRejectModal(true)} className="ml-2 px-3 py-1 text-red-700 border border-red-200 rounded-lg text-xs">Mark Rejected</button>
+                  )}
                 </div>
               )}
               {head.status === 'delivered' && (
@@ -411,10 +464,24 @@ export default function DeliveryChallanDetailPage() {
                   )}
                 </div>
               )}
-              {head.status === 'rejected' && (
-                <div className="text-sm">
-                  <p className="text-red-700">Reason: {head.rejection_reason}</p>
-                  <button type="button" onClick={() => setDispatchOpen(true)} className="mt-2 px-3 py-1 border rounded-lg text-xs">Re-attempt Delivery</button>
+              {isRejected && (
+                <div className="text-sm space-y-3 border border-red-200 bg-red-50 rounded-lg p-4">
+                  <p className="text-red-800 font-semibold line-through decoration-red-400">Delivery Rejected</p>
+                  <p className="text-red-700">Reason: {head.rejection_reason || '—'}</p>
+                  {head.rejection_remarks && <p className="text-gray-700">Remarks: {head.rejection_remarks}</p>}
+                  {head.rejected_at && <p className="text-gray-600">Rejected at: {formatDateTime(head.rejected_at)}</p>}
+                  {head.return_to_warehouse_at ? (
+                    <p className="text-emerald-700">Returned to warehouse: {formatDateTime(head.return_to_warehouse_at)} — QC tickets created</p>
+                  ) : pendingWarehouseReturn ? (
+                    <div className="space-y-2 pt-2 border-t border-red-200">
+                      <p className="text-xs text-gray-600">Technician must return laptops. Warehouse lead sends return OTP.</p>
+                      <button type="button" onClick={handleSendWarehouseReturnOtp} className="px-3 py-1 border border-red-300 rounded-lg text-xs text-red-700">Send Warehouse Return OTP</button>
+                      <div className="flex gap-2 items-center">
+                        <input className="flex-1 border rounded-lg px-2 py-1 text-sm" value={warehouseOtp} onChange={(e) => setWarehouseOtp(e.target.value)} placeholder="Warehouse OTP" />
+                        <button type="button" onClick={handleVerifyWarehouseReturn} className="px-3 py-1 bg-red-600 text-white rounded-lg text-xs">Confirm Return</button>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               )}
             </div>
@@ -467,10 +534,12 @@ export default function DeliveryChallanDetailPage() {
       {rejectModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <button type="button" className="absolute inset-0 bg-black/40" onClick={() => setRejectModal(false)} aria-label="Close" />
-          <div className="relative bg-white rounded-xl p-6 w-full max-w-sm">
-            <h3 className="font-semibold mb-3">Rejection Reason</h3>
-            <textarea className="w-full border rounded-lg px-3 py-2 mb-3" rows={3} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} />
-            <button type="button" onClick={handleReject} className="w-full py-2 bg-red-600 text-white rounded-lg text-sm">Confirm Reject</button>
+          <div className="relative bg-white rounded-xl p-6 w-full max-w-sm space-y-3">
+            <h3 className="font-semibold mb-1">{isCourier ? 'Warehouse: Reject Courier Delivery' : 'Rejection Reason'}</h3>
+            {isCourier && <p className="text-xs text-gray-500">Laptops will move to QC immediately with floor tickets.</p>}
+            <textarea className="w-full border rounded-lg px-3 py-2 mb-1" rows={2} placeholder="Rejection reason (required)" value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} />
+            <textarea className="w-full border rounded-lg px-3 py-2" rows={2} placeholder="Remarks (optional)" value={rejectRemarks} onChange={(e) => setRejectRemarks(e.target.value)} />
+            <button type="button" onClick={isCourier ? handleCourierReject : handleReject} className="w-full py-2 bg-red-600 text-white rounded-lg text-sm">Confirm Reject</button>
           </div>
         </div>
       )}
