@@ -4,23 +4,98 @@ import { MapPin, X } from 'lucide-react';
 import {
   listSoSerials, getSalesOrderFull, getDCMeta,
   updateSoSerialAddress, updateSoLineAddress, bulkUpdateSoSerialAddresses,
+  getCustomerDetail, getCustomerAddresses,
 } from '../salesPipelineApi';
+import { parseDeliveryAddress } from '../salesPipelineUtils';
 
 const emptyAddress = {
   name: '', phone: '', address: '', city: '', state: '', pincode: '', landmark: '',
   employee_name: '', employee_phone: '',
 };
 
+function getField(obj, snake, camel) {
+  if (!obj) return '';
+  const val = obj[snake] ?? obj[camel];
+  if (val && typeof val === 'object' && val.address) return val.address;
+  return val || '';
+}
+
+function mapToDeliveryForm(addr, fallback = {}) {
+  const parsed = parseDeliveryAddress(addr) || addr || {};
+  return {
+    name: parsed.name || parsed.concern_person || fallback.name || '',
+    phone: parsed.phone || parsed.mobile_no || fallback.phone || '',
+    address: parsed.address || '',
+    city: parsed.city || '',
+    state: parsed.state || '',
+    pincode: parsed.pincode || parsed.zip_code || '',
+    landmark: parsed.landmark || '',
+  };
+}
+
+function buildShippingAddressOptions({ customer, savedAddresses = [], soShipping }) {
+  const options = [];
+  const seen = new Set();
+  const fallbackName = customer?.company_name || customer?.name || customer?.customer_name || '';
+  const fallbackPhone = customer?.phone || customer?.customer_number || '';
+
+  const addOption = (value, label, rawAddr) => {
+    const mapped = mapToDeliveryForm(rawAddr, { name: fallbackName, phone: fallbackPhone });
+    if (!mapped.address?.trim()) return;
+    const key = [mapped.address, mapped.pincode].join('|').toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    options.push({ value, label, address: mapped });
+  };
+
+  if (soShipping) {
+    addOption('so_shipping', 'Sales order shipping address', soShipping);
+  }
+
+  const shippingSame = customer?.shipping_same ?? customer?.shippingSame ?? true;
+  if (customer && !shippingSame && getField(customer, 'shipping_address', 'shippingAddress')) {
+    addOption('customer_shipping', 'Customer shipping address', {
+      name: fallbackName,
+      phone: fallbackPhone,
+      address: getField(customer, 'shipping_address', 'shippingAddress'),
+      city: getField(customer, 'shipping_city', 'shippingCity'),
+      state: getField(customer, 'shipping_state', 'shippingState'),
+      pincode: getField(customer, 'shipping_pincode', 'shippingPincode'),
+    });
+  }
+
+  const detailShipping = customer?.shipping_addresses || [];
+  (Array.isArray(detailShipping) ? detailShipping : []).forEach((addr, index) => {
+    const label = addr.label || addr.name || `Shipping address ${index + 1}`;
+    addOption(`detail_${index}`, label, addr);
+  });
+
+  savedAddresses
+    .filter((addr) => !addr.address_type || String(addr.address_type).toLowerCase() === 'shipping')
+    .forEach((addr) => {
+      const label = `${addr.concern_person || 'Shipping'} — ${addr.address}${addr.pincode ? `, ${addr.pincode}` : ''}`;
+      addOption(`saved_${addr.customer_address_id}`, label, {
+        name: addr.concern_person || fallbackName,
+        phone: addr.mobile_no || fallbackPhone,
+        address: addr.address,
+        pincode: addr.pincode,
+      });
+    });
+
+  return options;
+}
+
 function addressLine(a) {
   if (!a) return null;
   return [a.address, a.city, a.state, a.pincode].filter(Boolean).join(', ');
 }
 
-function EditDrawer({ title, subtitle, initial, customer, onClose, onSave }) {
+function EditDrawer({ title, subtitle, initial, customer, shippingOptions, onClose, onSave }) {
   const [form, setForm] = useState({ ...emptyAddress, ...(initial.delivery_address || {}) });
   const [isWfh, setIsWfh] = useState(Boolean(initial.is_wfh));
   const [notes, setNotes] = useState(initial.delivery_notes || '');
   const [saving, setSaving] = useState(false);
+  const [selectedShipping, setSelectedShipping] = useState('');
 
   useEffect(() => {
     setForm((f) => ({
@@ -32,7 +107,21 @@ function EditDrawer({ title, subtitle, initial, customer, onClose, onSave }) {
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
+  const applyShippingOption = (value) => {
+    setSelectedShipping(value);
+    if (!value) return;
+    const opt = shippingOptions.find((o) => o.value === value);
+    if (!opt?.address) return;
+    setForm((f) => ({
+      ...f,
+      ...opt.address,
+      employee_name: f.employee_name,
+      employee_phone: f.employee_phone,
+    }));
+  };
+
   const copyBilling = () => {
+    setSelectedShipping('');
     const b = customer?.billing || {};
     setForm((f) => ({
       ...f,
@@ -74,6 +163,22 @@ function EditDrawer({ title, subtitle, initial, customer, onClose, onSave }) {
           <button type="button" onClick={onClose} className="p-1 rounded hover:bg-gray-100"><X className="w-5 h-5" /></button>
         </div>
         <div className="flex-1 overflow-y-auto p-4 space-y-3 text-sm">
+          {shippingOptions.length > 0 && (
+            <label className="block">
+              <span className="block text-xs font-medium text-gray-600 mb-1">Select customer shipping address</span>
+              <select
+                className="w-full border rounded-lg px-3 py-2 text-sm bg-white"
+                value={selectedShipping}
+                onChange={(e) => applyShippingOption(e.target.value)}
+              >
+                <option value="">Choose a shipping address…</option>
+                {shippingOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+              <p className="text-[11px] text-gray-400 mt-1">Fields below can still be edited after selection.</p>
+            </label>
+          )}
           <button type="button" onClick={copyBilling} className="text-xs text-blue-600 hover:underline">
             Copy Billing Address
           </button>
@@ -135,6 +240,7 @@ export default function SoDeliveryAddressPanel({ soNumber }) {
   const [editSerial, setEditSerial] = useState(null);
   const [editLine, setEditLine] = useState(null);
   const [customer, setCustomer] = useState(null);
+  const [shippingOptions, setShippingOptions] = useState([]);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -169,10 +275,10 @@ export default function SoDeliveryAddressPanel({ soNumber }) {
   useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
-    getDCMeta(soNumber).then((res) => {
+    getDCMeta(soNumber).then(async (res) => {
       const d = res.data || {};
       const billing = d.billing_address || {};
-      const shipping = d.shipping_address || {};
+      const shipping = parseDeliveryAddress(d.shipping_address) || d.shipping_address || {};
       setCustomer({
         name: d.customer_name || billing.name || '',
         phone: d.customer_mobile || billing.phone || '',
@@ -180,8 +286,29 @@ export default function SoDeliveryAddressPanel({ soNumber }) {
           name: billing.name, phone: billing.phone, address: billing.address,
           city: billing.city, state: billing.state, pincode: billing.zip_code || billing.pincode,
         },
-        shipping,
+        soShipping: shipping,
       });
+
+      if (!d.customer_id) {
+        setShippingOptions(buildShippingAddressOptions({ soShipping: shipping }));
+        return;
+      }
+
+      try {
+        const [custRes, addrRes] = await Promise.all([
+          getCustomerDetail(d.customer_id),
+          getCustomerAddresses(d.customer_id),
+        ]);
+        const cust = custRes.data?.customer || custRes.data;
+        const saved = addrRes.data?.addresses || cust?.saved_addresses || [];
+        setShippingOptions(buildShippingAddressOptions({
+          customer: cust,
+          savedAddresses: saved,
+          soShipping: shipping,
+        }));
+      } catch {
+        setShippingOptions(buildShippingAddressOptions({ soShipping: shipping }));
+      }
     }).catch(() => {});
   }, [soNumber]);
 
@@ -273,6 +400,7 @@ export default function SoDeliveryAddressPanel({ soNumber }) {
             subtitle={`${editLine.main_qty || editLine.quantity || 0} unit(s) on this line`}
             initial={editLine}
             customer={customer}
+            shippingOptions={shippingOptions}
             onClose={() => setEditLine(null)}
             onSave={async (payload) => {
               await updateSoLineAddress(editLine.id, payload);
@@ -344,6 +472,7 @@ export default function SoDeliveryAddressPanel({ soNumber }) {
           title={`Delivery Address — ${editSerial.ttspl_id || editSerial.serial_number}`}
           initial={editSerial}
           customer={customer}
+          shippingOptions={shippingOptions}
           onClose={() => setEditSerial(null)}
           onSave={async (payload) => {
             await updateSoSerialAddress(editSerial.allocation_id, payload);
