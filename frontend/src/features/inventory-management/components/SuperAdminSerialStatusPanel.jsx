@@ -131,10 +131,10 @@ export default function SuperAdminSerialStatusPanel({ row, onUpdated }) {
         </button>
         {status === 'out_for_repare' ? (
           <Link
-            to="/inventory-management/out-for-repare"
+            to="/inventory-management/out-for-repair"
             className="text-xs text-sky-700 hover:underline"
           >
-            Open Out For Repare list →
+            Open Out for Repair list →
           </Link>
         ) : null}
         {status === 'pending' ? (

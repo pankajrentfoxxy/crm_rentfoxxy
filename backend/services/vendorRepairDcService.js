@@ -493,6 +493,103 @@ async function receiveFromVendor(client, {
   return { dc_number: dcNumber, status: 'returned', tickets_updated: itemsRes.rows.length };
 }
 
+function effectiveQcStatusSql(alias = 'vsn') {
+  return `COALESCE(
+    NULLIF(TRIM(${alias}.qc_status), ''),
+    NULLIF(TRIM(${alias}.extra->>'status'), ''),
+    'pending'
+  )`;
+}
+
+/** ERP / migrated laptops marked out_for_repare (not on an active vendor-repair DC). */
+function erpOutForRepareSql(alias = 'vsn') {
+  const eff = effectiveQcStatusSql(alias);
+  return `${alias}.deleted_at IS NULL
+    AND ${alias}.po_id IS NOT NULL
+    AND (
+      ${eff} = 'out_for_repare'
+      OR ${alias}.inventory_status IN ('out_for_repare', 'in_repair')
+      OR COALESCE(NULLIF(TRIM(${alias}.extra->>'action_status'), ''), '') = 'out_for_repare'
+    )
+    AND NOT EXISTS (
+      SELECT 1
+        FROM vendor_repair_dc_items vri
+        JOIN vendor_repair_delivery_challans vrd ON vrd.dc_number = vri.dc_number
+        JOIN tickets vt ON vt.ticket_id = vri.ticket_id
+       WHERE vrd.status = 'dispatched'
+         AND vt.status = 'out_for_repair'
+         AND (
+           vri.serial_id = ${alias}.serial_id
+           OR vri.serial_number = ${alias}.serial_number
+           OR vri.ttspl_id = ${alias}.inventory_asset_code
+         )
+    )`;
+}
+
+function mapErpOutForRepareRow(row) {
+  const extra = typeof row.vsn_extra === 'object' && row.vsn_extra ? row.vsn_extra : {};
+  const brand = extra.brand || row.pd_brand || null;
+  const model = extra.model || extra.model_name || row.pd_model || null;
+  return {
+    id: `erp:${row.serial_id}`,
+    source: 'erp',
+    serial_id: row.serial_id,
+    ticket_id: row.open_ticket_id || null,
+    ttspl_id: row.ttspl_id || row.inventory_asset_code || null,
+    serial_number: row.serial_number,
+    brand,
+    model,
+    configuration: configString({
+      brand,
+      model,
+      processor: extra.processor || row.pd_processor,
+      generation: extra.generation || row.pd_generation,
+      ram: extra.ram || row.pd_ram,
+      storage: extra.storage || row.pd_storage,
+    }),
+    vendor_name: extra.vendor_name || row.vendor_name || 'External vendor',
+    vendor_address: extra.vendor_address || row.vendor_address || null,
+    dc_number: null,
+    dc_label: 'ERP / Legacy',
+    out_date: extra.repair_start_date || row.updated_at,
+    expected_return_date: null,
+    current_status: 'Out For Repare',
+    remarks: row.remark || extra.action_remark || null,
+    sort_ts: row.updated_at,
+  };
+}
+
+function mapVendorDcRow(r) {
+  const extra = typeof r.vsn_extra === 'object' && r.vsn_extra ? r.vsn_extra : {};
+  return {
+    id: `vdc:${r.id}`,
+    source: 'vendor_dc',
+    serial_id: r.serial_id || null,
+    ticket_id: r.ticket_id,
+    ttspl_id: r.ttspl_id,
+    serial_number: r.serial_number,
+    brand: extra.brand || r.ticket_brand || null,
+    model: extra.model || r.ticket_model || null,
+    configuration: r.configuration || configString({
+      brand: extra.brand || r.ticket_brand,
+      model: extra.model || r.ticket_model,
+      processor: extra.processor,
+      generation: extra.generation,
+      ram: extra.ram,
+      storage: extra.storage,
+    }),
+    vendor_name: r.vendor_name,
+    vendor_address: r.vendor_address,
+    dc_number: r.dc_number,
+    dc_label: r.dc_number,
+    out_date: r.out_date,
+    expected_return_date: r.expected_return_date,
+    current_status: 'Out for Repair',
+    remarks: r.remarks,
+    sort_ts: r.dispatched_at,
+  };
+}
+
 async function listOutForRepairInventory({
   search,
   vendor,
@@ -501,13 +598,13 @@ async function listOutForRepairInventory({
   limit = 25,
 } = {}) {
   await ensureVendorRepairSchema();
-  const params = [];
-  let where = `WHERE d.status = 'dispatched' AND t.status = 'out_for_repair'`;
 
+  const vendorParams = [];
+  let vendorWhere = `WHERE d.status = 'dispatched' AND t.status = 'out_for_repair'`;
   if (search?.trim()) {
-    params.push(`%${search.trim()}%`);
-    const i = params.length;
-    where += ` AND (
+    vendorParams.push(`%${search.trim()}%`);
+    const i = vendorParams.length;
+    vendorWhere += ` AND (
       COALESCE(i.ttspl_id, '') ILIKE $${i}
       OR COALESCE(i.serial_number, '') ILIKE $${i}
       OR COALESCE(d.vendor_name, '') ILIKE $${i}
@@ -518,69 +615,115 @@ async function listOutForRepairInventory({
     )`;
   }
   if (vendor?.trim()) {
-    params.push(`%${vendor.trim()}%`);
-    where += ` AND d.vendor_name ILIKE $${params.length}`;
+    vendorParams.push(`%${vendor.trim()}%`);
+    vendorWhere += ` AND d.vendor_name ILIKE $${vendorParams.length}`;
   }
   if (dcNumber?.trim()) {
-    params.push(`%${dcNumber.trim()}%`);
-    where += ` AND d.dc_number ILIKE $${params.length}`;
+    vendorParams.push(`%${dcNumber.trim()}%`);
+    vendorWhere += ` AND d.dc_number ILIKE $${vendorParams.length}`;
   }
 
-  const fromSql = `
+  const erpParams = [];
+  let erpSearchSql = '';
+  if (search?.trim()) {
+    erpParams.push(`%${search.trim()}%`);
+    const i = erpParams.length;
+    erpSearchSql = ` AND (
+      COALESCE(vsn.inventory_asset_code, '') ILIKE $${i}
+      OR vsn.serial_number ILIKE $${i}
+      OR COALESCE(vsn.extra->>'vendor_name', '') ILIKE $${i}
+      OR COALESCE(v.business_name, '') ILIKE $${i}
+      OR COALESCE(vsn.extra->>'brand', vpd.brand, '') ILIKE $${i}
+      OR COALESCE(vsn.extra->>'model', vpd.model, '') ILIKE $${i}
+    )`;
+  }
+  if (vendor?.trim()) {
+    erpParams.push(`%${vendor.trim()}%`);
+    erpSearchSql += ` AND (
+      COALESCE(vsn.extra->>'vendor_name', '') ILIKE $${erpParams.length}
+      OR COALESCE(v.business_name, '') ILIKE $${erpParams.length}
+    )`;
+  }
+  if (dcNumber?.trim()) {
+    erpSearchSql += ' AND FALSE';
+  }
+
+  const vendorFrom = `
     FROM vendor_repair_dc_items i
     JOIN vendor_repair_delivery_challans d ON d.dc_number = i.dc_number
     JOIN tickets t ON t.ticket_id = i.ticket_id
     LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = COALESCE(i.serial_id, t.vendor_serial_id)
-    ${where}
+    ${vendorWhere}
+  `;
+
+  const erpFrom = `
+    FROM vendor_serial_numbers vsn
+    INNER JOIN vendor_purchase_orders p ON p.po_id = vsn.po_id AND p.deleted_at IS NULL
+    LEFT JOIN vendor_product_details vpd
+      ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id', '')::int
+    LEFT JOIN vendors v ON v.vendor_id = COALESCE(
+      NULLIF(vsn.extra->>'repair_vendor_id', '')::int,
+      NULLIF(vsn.extra->>'seller_id', '')::int,
+      p.vendor_id
+    ) AND v.deleted_at IS NULL
+    WHERE ${erpOutForRepareSql('vsn')}
+    ${erpSearchSql}
   `;
 
   const safePage = Math.max(1, Number(page) || 1);
   const safeLimit = Math.min(500, Math.max(1, Number(limit) || 25));
   const offset = (safePage - 1) * safeLimit;
 
-  const countR = await pool.query(`SELECT COUNT(*)::int AS total ${fromSql}`, params);
-  const total = countR.rows[0]?.total || 0;
-  const listParams = [...params, safeLimit, offset];
-  const rowsR = await pool.query(
-    `SELECT i.id, i.ticket_id, i.ttspl_id, i.serial_number, i.configuration,
-            t.status AS ticket_status,
-            t.brand AS ticket_brand, t.model AS ticket_model,
-            d.dc_number, d.vendor_name, d.vendor_address,
-            d.out_date, d.expected_return_date, d.remarks, d.dispatched_at,
-            vsn.extra AS vsn_extra
-     ${fromSql}
-     ORDER BY d.dispatched_at DESC NULLS LAST, i.id DESC
-     LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
-    listParams
-  );
+  const [vendorCountR, erpCountR] = await Promise.all([
+    pool.query(`SELECT COUNT(*)::int AS total ${vendorFrom}`, vendorParams),
+    pool.query(`SELECT COUNT(*)::int AS total ${erpFrom}`, erpParams),
+  ]);
+  const total = (vendorCountR.rows[0]?.total || 0) + (erpCountR.rows[0]?.total || 0);
 
-  const data = rowsR.rows.map((r) => {
-    const extra = typeof r.vsn_extra === 'object' && r.vsn_extra ? r.vsn_extra : {};
-    return {
-      id: r.id,
-      ticket_id: r.ticket_id,
-      ttspl_id: r.ttspl_id,
-      serial_number: r.serial_number,
-      brand: extra.brand || r.ticket_brand || null,
-      model: extra.model || r.ticket_model || null,
-      configuration: r.configuration || configString({
-        brand: extra.brand || r.ticket_brand,
-        model: extra.model || r.ticket_model,
-        processor: extra.processor,
-        generation: extra.generation,
-        ram: extra.ram,
-        storage: extra.storage,
-      }),
-      vendor_name: r.vendor_name,
-      vendor_address: r.vendor_address,
-      dc_number: r.dc_number,
-      out_date: r.out_date,
-      expected_return_date: r.expected_return_date,
-      current_status: 'Out for Repair',
-      remarks: r.remarks,
-      dispatched_at: r.dispatched_at,
-    };
+  const fetchEach = safePage === 1 ? safeLimit : safePage * safeLimit;
+  const [vendorRowsR, erpRowsR] = await Promise.all([
+    pool.query(
+      `SELECT i.id, i.ticket_id, i.ttspl_id, i.serial_number, i.serial_id, i.configuration,
+              t.status AS ticket_status,
+              t.brand AS ticket_brand, t.model AS ticket_model,
+              d.dc_number, d.vendor_name, d.vendor_address,
+              d.out_date, d.expected_return_date, d.remarks, d.dispatched_at,
+              vsn.extra AS vsn_extra
+       ${vendorFrom}
+       ORDER BY d.dispatched_at DESC NULLS LAST, i.id DESC
+       LIMIT ${fetchEach}`,
+      vendorParams
+    ),
+    pool.query(
+      `SELECT vsn.serial_id, vsn.serial_number, vsn.inventory_asset_code, vsn.remark, vsn.updated_at,
+              vsn.extra AS vsn_extra,
+              COALESCE(vsn.inventory_asset_code, vsn.extra->>'unique_product_serial') AS ttspl_id,
+              vpd.brand AS pd_brand, vpd.model AS pd_model,
+              vpd.processor AS pd_processor, vpd.generation AS pd_generation,
+              vpd.ram AS pd_ram, vpd.storage AS pd_storage,
+              COALESCE(vsn.extra->>'vendor_name', v.business_name, v.first_name) AS vendor_name,
+              v.address AS vendor_address,
+              (SELECT t.ticket_id FROM tickets t
+                WHERE t.vendor_serial_id = vsn.serial_id
+                  AND t.status IN ('in_progress', 'on_hold')
+                ORDER BY t.created_at DESC LIMIT 1) AS open_ticket_id
+       ${erpFrom}
+       ORDER BY vsn.updated_at DESC NULLS LAST, vsn.serial_id DESC
+       LIMIT ${fetchEach}`,
+      erpParams
+    ),
+  ]);
+
+  const merged = [
+    ...vendorRowsR.rows.map(mapVendorDcRow),
+    ...erpRowsR.rows.map(mapErpOutForRepareRow),
+  ].sort((a, b) => {
+    const ta = a.sort_ts ? new Date(a.sort_ts).getTime() : 0;
+    const tb = b.sort_ts ? new Date(b.sort_ts).getTime() : 0;
+    return tb - ta;
   });
+
+  const data = merged.slice(offset, offset + safeLimit).map(({ sort_ts, ...row }) => row);
 
   return {
     data,
@@ -595,14 +738,86 @@ async function listOutForRepairInventory({
 
 async function countOutForRepairInventory() {
   await ensureVendorRepairSchema();
-  const r = await pool.query(
-    `SELECT COUNT(*)::int AS c
-       FROM vendor_repair_dc_items i
-       JOIN vendor_repair_delivery_challans d ON d.dc_number = i.dc_number
-       JOIN tickets t ON t.ticket_id = i.ticket_id
-      WHERE d.status = 'dispatched' AND t.status = 'out_for_repair'`
+  const [vendorR, erpR] = await Promise.all([
+    pool.query(
+      `SELECT COUNT(*)::int AS c
+         FROM vendor_repair_dc_items i
+         JOIN vendor_repair_delivery_challans d ON d.dc_number = i.dc_number
+         JOIN tickets t ON t.ticket_id = i.ticket_id
+        WHERE d.status = 'dispatched' AND t.status = 'out_for_repair'`
+    ),
+    pool.query(
+      `SELECT COUNT(*)::int AS c
+         FROM vendor_serial_numbers vsn
+        WHERE ${erpOutForRepareSql('vsn')}`
+    ),
+  ]);
+  return (vendorR.rows[0]?.c || 0) + (erpR.rows[0]?.c || 0);
+}
+
+/** Receive an ERP / legacy out_for_repare laptop back to QC Process. */
+async function receiveErpRepairBack(client, { serialId, actorUserId, actorName, createFloorTicket = true }) {
+  const sid = Number(serialId);
+  if (!sid) throw new Error('Invalid serial id');
+
+  const cur = await client.query(
+    `SELECT vsn.serial_id, vsn.serial_number, vsn.inventory_asset_code, vsn.qc_status, vsn.extra
+       FROM vendor_serial_numbers vsn
+      WHERE vsn.serial_id = $1 AND ${erpOutForRepareSql('vsn')}
+      FOR UPDATE OF vsn`,
+    [sid]
   );
-  return r.rows[0]?.c || 0;
+  if (!cur.rows.length) {
+    throw new Error('Serial is not in Out For Repare status or is already on a vendor repair DC');
+  }
+  const row = cur.rows[0];
+  const extra = typeof row.extra === 'object' && row.extra ? { ...row.extra } : {};
+
+  extra.status = 'pending';
+  extra.action_status = 'repared';
+  extra.status2 = 'repared';
+  extra.came_from = extra.came_from || 'External vendor';
+  extra.repair_received_at = new Date().toISOString();
+
+  await client.query(
+    `UPDATE vendor_serial_numbers
+        SET qc_status = 'pending',
+            inventory_status = 'in_stock',
+            extra = $1::jsonb,
+            updated_at = NOW()
+      WHERE serial_id = $2`,
+    [JSON.stringify(extra), sid]
+  );
+
+  const ttsplId = row.inventory_asset_code || row.serial_number;
+  await logTtsplEvent({
+    ttsplId,
+    vendorSerialId: sid,
+    eventType: 'repair_received',
+    description: 'Received back from external repair — moved to QC Process',
+    metadata: { previous_qc_status: row.qc_status },
+    actorUserId,
+    actorName,
+    db: client,
+  });
+
+  let ticketId = null;
+  if (createFloorTicket) {
+    const { createProductionTicketForQcSerial } = require('./qcProcessIntakeService');
+    const ticketResult = await createProductionTicketForQcSerial(
+      client,
+      { serialId: sid, serialNumber: row.serial_number },
+      actorUserId
+    );
+    if (ticketResult.ok) ticketId = ticketResult.data?.ticket_id || null;
+  }
+
+  return {
+    serial_id: sid,
+    serial_number: row.serial_number,
+    qc_status: 'pending',
+    ticket_id: ticketId,
+  };
 }
 
 module.exports = {
@@ -616,4 +831,5 @@ module.exports = {
   receiveFromVendor,
   listOutForRepairInventory,
   countOutForRepairInventory,
+  receiveErpRepairBack,
 };

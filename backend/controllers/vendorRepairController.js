@@ -102,6 +102,31 @@ exports.receiveBack = async (req, res) => {
   }
 };
 
+/** POST /vendor-repair/inventory/erp/:serialId/receive-back — legacy ERP out_for_repare units */
+exports.receiveErpRepairBack = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await svc.ensureVendorRepairSchema();
+    await client.query('BEGIN');
+    const result = await svc.receiveErpRepairBack(client, {
+      serialId: req.params.serialId,
+      actorUserId: req.user.user_id,
+      actorName: req.user.name,
+      createFloorTicket: req.body.create_floor_ticket !== false,
+    });
+    await client.query('COMMIT');
+    const msg = result.ticket_id
+      ? `Received — moved to QC Process. Floor ticket #${result.ticket_id} created.`
+      : 'Received — moved to QC Process.';
+    res.json({ success: true, message: msg, data: result });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ success: false, message: err.message || 'Receive failed' });
+  } finally {
+    client.release();
+  }
+};
+
 exports.downloadPdf = async (req, res) => {
   try {
     await svc.ensureVendorRepairSchema();
@@ -151,6 +176,7 @@ exports.exportOutForRepairExcel = async (req, res) => {
     });
     const XLSX = require('xlsx');
     const rows = (data || []).map((r) => ({
+      Source: r.source === 'erp' ? 'ERP / Legacy' : 'Vendor DC',
       TTSPL: r.ttspl_id || '',
       'Serial Number': r.serial_number || '',
       Brand: r.brand || '',
@@ -159,7 +185,7 @@ exports.exportOutForRepairExcel = async (req, res) => {
       'Ticket ID': r.ticket_id || '',
       'Vendor Name': r.vendor_name || '',
       'Vendor Address': r.vendor_address || '',
-      'DC Number': r.dc_number || '',
+      'DC Number': r.dc_number || r.dc_label || '',
       'Out Date': r.out_date || '',
       'Expected Return': r.expected_return_date || '',
       Status: r.current_status || 'Out for Repair',

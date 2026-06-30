@@ -35,6 +35,10 @@ export function fetchOutForRepairInventory(params) {
   return api.get(`${base}/inventory`, { params });
 }
 
+export function receiveErpRepairBack(serialId, body = {}) {
+  return api.post(`${base}/inventory/erp/${serialId}/receive-back`, body);
+}
+
 export function fetchOutForRepairInventoryCount() {
   return api.get(`${base}/inventory/count`);
 }

@@ -9,6 +9,7 @@ import {
   exportOutForRepairExcel,
   exportOutForRepairPdf,
   fetchOutForRepairInventory,
+  receiveErpRepairBack,
 } from '../../floor-pipeline/vendorRepairApi';
 import { ticketStatusLabel } from '../../floor-pipeline/floorPipelineUi';
 import { invalidateInventoryManagement } from '../inventoryCountsEvents';
@@ -82,11 +83,23 @@ export default function OutForRepairInventoryPage() {
     }
   };
 
+  const handleReceiveErp = async (row) => {
+    if (!window.confirm(`Receive ${row.ttspl_id || row.serial_number} back from repair?\nIt will move to QC Process with a floor ticket.`)) return;
+    try {
+      const { data } = await receiveErpRepairBack(row.serial_id, { create_floor_ticket: true });
+      toast.success(data.message || 'Received to QC Process');
+      load();
+      invalidateInventoryManagement();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Receive failed');
+    }
+  };
+
   return (
     <div className="space-y-4 pb-8">
       <PageHeader
         title="Out for Repair"
-        subtitle="Laptops dispatched to external repair vendors"
+        subtitle="Laptops at external repair vendors — includes ERP legacy and vendor-repair DC units"
         icon={Wrench}
         actions={(
           <div className="flex flex-wrap gap-2">
@@ -155,33 +168,51 @@ export default function OutForRepairInventoryPage() {
                     <td className="p-3 text-xs">{[r.brand, r.model].filter(Boolean).join(' / ') || '—'}</td>
                     <td className="p-3 text-xs max-w-[180px]">{r.configuration || '—'}</td>
                     <td className="p-3">
-                      <Link to={`/floor-pipeline/tickets/${r.ticket_id}`} className="text-blue-600 font-mono text-xs">
-                        #{r.ticket_id}
-                      </Link>
+                      {r.ticket_id ? (
+                        <Link to={`/floor-pipeline/tickets/${r.ticket_id}`} className="text-blue-600 font-mono text-xs">
+                          #{r.ticket_id}
+                        </Link>
+                      ) : (
+                        <span className="text-slate-400 text-xs">—</span>
+                      )}
                     </td>
                     <td className="p-3 text-xs">{r.vendor_name || '—'}</td>
                     <td className="p-3 text-xs max-w-[160px]">{r.vendor_address || '—'}</td>
                     <td className="p-3">
-                      <Link to={`/floor-pipeline/vendor-repair-dc/${encodeURIComponent(r.dc_number)}`} className="text-purple-700 font-mono text-xs hover:underline">
-                        {r.dc_number}
-                      </Link>
+                      {r.dc_number ? (
+                        <Link to={`/floor-pipeline/vendor-repair-dc/${encodeURIComponent(r.dc_number)}`} className="text-purple-700 font-mono text-xs hover:underline">
+                          {r.dc_number}
+                        </Link>
+                      ) : (
+                        <span className="text-xs text-slate-500">{r.dc_label || 'ERP / Legacy'}</span>
+                      )}
                     </td>
                     <td className="p-3 text-xs whitespace-nowrap">{fmtDate(r.out_date)}</td>
                     <td className="p-3 text-xs whitespace-nowrap">{fmtDate(r.expected_return_date)}</td>
                     <td className="p-3">
-                      <span className="px-2 py-0.5 rounded-full text-xs bg-purple-100 text-purple-900">
-                        {ticketStatusLabel('out_for_repair')}
+                      <span className={`px-2 py-0.5 rounded-full text-xs ${r.source === 'erp' ? 'bg-amber-100 text-amber-900' : 'bg-purple-100 text-purple-900'}`}>
+                        {r.current_status || (r.source === 'erp' ? 'Out For Repare' : ticketStatusLabel('out_for_repair'))}
                       </span>
                     </td>
                     <td className="p-3 text-xs max-w-[140px]">{r.remarks || '—'}</td>
                     {canReceive ? (
                       <td className="p-3">
-                        <Link
-                          to={`/floor-pipeline/vendor-repair-dc/${encodeURIComponent(r.dc_number)}`}
-                          className="inline-flex items-center gap-1 text-xs font-semibold text-green-700 hover:underline"
-                        >
-                          <RotateCcw className="w-3.5 h-3.5" /> Receive Back
-                        </Link>
+                        {r.source === 'erp' ? (
+                          <button
+                            type="button"
+                            onClick={() => handleReceiveErp(r)}
+                            className="inline-flex items-center gap-1 text-xs font-semibold text-green-700 hover:underline"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" /> Receive to QC
+                          </button>
+                        ) : (
+                          <Link
+                            to={`/floor-pipeline/vendor-repair-dc/${encodeURIComponent(r.dc_number)}`}
+                            className="inline-flex items-center gap-1 text-xs font-semibold text-green-700 hover:underline"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" /> Receive Back
+                          </Link>
+                        )}
                       </td>
                     ) : null}
                   </tr>
