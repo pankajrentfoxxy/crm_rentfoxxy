@@ -54,6 +54,8 @@ const rdcView = cp('return_dc', 'view');
 const rdcEdit = cp('return_dc', 'edit');
 const tbView = cp('technician_bucket', 'view');
 const tbEdit = cp('technician_bucket', 'edit');
+/** Warehouse return OTP — warehouse/sales (send) and technicians (verify) both need access. */
+const whReturnEdit = cpAny(['delivery_challans', 'technician_bucket'], 'edit');
 const drView = cpAny(['delivery_register_management', 'technician_bucket'], 'view');
 const ctrl = require('../controllers/salesManagementController');
 const sosCtrl = require('../controllers/salesOrderSerialController');
@@ -120,8 +122,8 @@ router.patch(...dcRoute('/dispatch', soDcEdit, ctrl.updateDcDispatch));
 router.patch(...dcRoute('/delivered', soDcEdit, ctrl.markDcDelivered));
 router.patch(...dcRoute('/rejected', soDcEdit, ctrl.markDcRejected));
 router.patch(...dcRoute('/customer-rejected', tbEdit, flowCtrl.markCustomerRejected));
-router.post(...dcRoute('/warehouse-return-otp', tbEdit, flowCtrl.sendWarehouseReturnOtp));
-router.post(...dcRoute('/warehouse-return-otp/verify', tbEdit, flowCtrl.verifyWarehouseReturnOtp));
+router.post(...dcRoute('/warehouse-return-otp', whReturnEdit, flowCtrl.sendWarehouseReturnOtp));
+router.post(...dcRoute('/warehouse-return-otp/verify', whReturnEdit, flowCtrl.verifyWarehouseReturnOtp));
 router.patch(...dcRoute('/courier-rejected', soDcEdit, flowCtrl.markCourierRejected));
 // Catch-all DC routes MUST be registered last: their greedy (.+) pattern would
 // otherwise swallow specific sub-paths like /qc-status, /dispatch, /delivered.

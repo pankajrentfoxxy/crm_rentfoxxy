@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { KeyRound, Map as MapIcon, CheckCircle2, ExternalLink, Image as ImageIcon, Users, XCircle } from 'lucide-react';
 import { ListPagination, SearchField } from '../../../components/ui/primitives';
-import { listDeliveryFlow, markCourierRejected } from '../salesPipelineApi';
+import { listDeliveryFlow, markRejected } from '../salesPipelineApi';
+import { deliveryChallanDetailPath } from '../salesPipelineUtils';
 import { DISPATCH_MODE_STYLES, formatDateTime, statusLabel } from '../salesPipelineUtils';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import { getBackendOrigin } from '../../../utils/api';
@@ -79,11 +80,11 @@ export default function DeliveryRegisterPage() {
       return;
     }
     try {
-      await markCourierRejected(rejectModal.dc_number, {
+      await markRejected(rejectModal.dc_number, {
         rejection_reason: rejectReason.trim(),
         rejection_remarks: rejectRemarks.trim() || undefined,
       });
-      toast.success('Delivery rejected — moved to QC');
+      toast.success('Marked rejected — confirm warehouse return with OTP');
       setRejectModal(null);
       setRejectReason('');
       setRejectRemarks('');
@@ -220,6 +221,17 @@ export default function DeliveryRegisterPage() {
                       )}
                       {row.movement_type === 'return' ? (
                         <button type="button" onClick={() => setReceiveModal(row)} className="text-xs text-blue-700 inline-flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" /> Warehouse receive</button>
+                      ) : row.status === 'rejected' ? (
+                        row.return_to_warehouse_at ? (
+                          <span className="text-xs text-emerald-700">Returned to QC</span>
+                        ) : (
+                          <Link
+                            to={deliveryChallanDetailPath(row.dc_number)}
+                            className="text-xs text-red-700 inline-flex items-center gap-1"
+                          >
+                            <XCircle className="w-3.5 h-3.5" /> Warehouse return
+                          </Link>
+                        )
                       ) : (
                         <>
                           <button type="button" onClick={() => setDeliverModal(row)} className="text-xs text-emerald-700 inline-flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" /> Deliver</button>
@@ -283,7 +295,7 @@ export default function DeliveryRegisterPage() {
           <button type="button" className="absolute inset-0 bg-black/40" onClick={() => setRejectModal(null)} aria-label="Close" />
           <div className="relative bg-white rounded-xl p-6 w-full max-w-sm space-y-3">
             <h3 className="font-semibold">Reject Courier Delivery — {rejectModal.dc_number}</h3>
-            <p className="text-xs text-gray-500">Laptops return to warehouse QC with floor tickets.</p>
+            <p className="text-xs text-gray-500">Mark rejected — laptops return to QC only after warehouse OTP is confirmed.</p>
             <textarea className="w-full border rounded-lg px-3 py-2 text-sm" rows={2} placeholder="Rejection reason" value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} />
             <textarea className="w-full border rounded-lg px-3 py-2 text-sm" rows={2} placeholder="Warehouse remarks (optional)" value={rejectRemarks} onChange={(e) => setRejectRemarks(e.target.value)} />
             <button type="button" onClick={handleCourierReject} className="w-full py-2 bg-red-600 text-white rounded-lg text-sm">Confirm Reject</button>

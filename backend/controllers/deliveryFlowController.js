@@ -631,7 +631,7 @@ exports.markCustomerRejected = async (req, res) => {
 exports.sendWarehouseReturnOtp = async (req, res) => {
   try {
     await rejectionSvc.ensureDeliveryRejectionSchema();
-    const result = await rejectionSvc.sendWarehouseReturnOtp(req.params.dcNumber);
+    const result = await rejectionSvc.sendWarehouseReturnOtp(req.params.dcNumber, { user: req.user });
     res.json({ success: true, ...result });
   } catch (error) {
     console.error('sendWarehouseReturnOtp:', error);
@@ -667,7 +667,7 @@ exports.verifyWarehouseReturnOtp = async (req, res) => {
   }
 };
 
-// PATCH /delivery-challans/:dcNumber/courier-rejected  (warehouse — reject + QC in one step)
+// PATCH /delivery-challans/:dcNumber/courier-rejected  (warehouse — mark rejected; inventory after OTP)
 exports.markCourierRejected = async (req, res) => {
   if (!WAREHOUSE_ROLES.includes(req.user.role)) {
     return res.status(403).json({ success: false, message: 'Warehouse access required' });
@@ -678,17 +678,17 @@ exports.markCourierRejected = async (req, res) => {
     const reason = req.body?.rejection_reason || req.body?.reason;
     const remarks = req.body?.rejection_remarks || req.body?.remarks;
     await client.query('BEGIN');
-    const result = await rejectionSvc.rejectCourierAndComplete(client, {
+    const result = await rejectionSvc.markDeliveryRejectedByCustomer(client, {
       dcNumber: req.params.dcNumber,
       reason,
       remarks,
+      source: 'warehouse',
       actorUserId: req.user.user_id,
-      actorName: req.user.name,
     });
     await client.query('COMMIT');
     res.json({
       success: true,
-      message: 'Courier delivery rejected — laptops moved to QC',
+      message: 'Delivery marked rejected — confirm warehouse return with OTP when laptops arrive',
       ...result,
     });
   } catch (error) {

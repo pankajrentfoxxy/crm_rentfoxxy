@@ -2473,12 +2473,12 @@ exports.markDcRejected = async (req, res) => {
     }
 
     const isCourier = head.dispatch_mode === 'courier' || head.ship_by === 'by_courier';
-    const isInhouse = head.dispatch_mode === 'inhouse' || head.ship_by === 'by_hand';
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
 
-      if (completeReturn || isCourier) {
+      // Inventory moves only after warehouse return OTP — never on reject alone.
+      if (completeReturn === true) {
         const result = await rejectionSvc.rejectCourierAndComplete(client, {
           dcNumber,
           reason,
@@ -2489,9 +2489,7 @@ exports.markDcRejected = async (req, res) => {
         await client.query('COMMIT');
         return res.json({
           success: true,
-          message: isCourier
-            ? 'Courier delivery rejected — laptops moved to QC'
-            : 'Delivery rejected and returned to warehouse',
+          message: 'Delivery rejected and returned to warehouse',
           ...result,
         });
       }
@@ -2500,15 +2498,15 @@ exports.markDcRejected = async (req, res) => {
         dcNumber,
         reason,
         remarks,
-        source: isInhouse ? 'dispatch' : 'warehouse',
+        source: isCourier ? 'warehouse' : 'dispatch',
         actorUserId: req.user.user_id,
       });
       await client.query('COMMIT');
       res.json({
         success: true,
-        message: isInhouse
-          ? 'Marked rejected — technician must return laptops to warehouse with warehouse OTP'
-          : 'Delivery marked as rejected',
+        message: isCourier
+          ? 'Marked rejected — send warehouse return OTP when laptops arrive back'
+          : 'Marked rejected — technician must return laptops; warehouse sends return OTP',
       });
     } catch (txErr) {
       await client.query('ROLLBACK').catch(() => {});

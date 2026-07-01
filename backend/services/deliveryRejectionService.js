@@ -11,6 +11,14 @@ const { getDeliveryChallanLines } = require('./salesManagementService');
 
 const REJECTABLE_STATUSES = new Set(['in_transit', 'reached', 'shipped', 'processing', 'pending']);
 
+const WAREHOUSE_OTP_VIEW_ROLES = new Set([
+  'admin', 'manager', 'super_admin', 'warehouse', 'support_lead', 'floor_manager',
+]);
+
+function canViewWarehouseOtp(user) {
+  return WAREHOUSE_OTP_VIEW_ROLES.has(user?.role) || process.env.NODE_ENV !== 'production';
+}
+
 let schemaEnsured = false;
 async function ensureDeliveryRejectionSchema() {
   if (schemaEnsured) return;
@@ -119,7 +127,7 @@ async function resetSoSerialForReject(client, { serialId, salesOrderNumber, newQ
   const alloc = r.rows[0];
   if (!alloc) return;
 
-  if (alloc.qc_ticket_id) {
+  if (alloc.qc_ticket_id && alloc.qc_ticket_id !== newQcTicketId) {
     await client.query(
       `UPDATE tickets SET status = 'cancelled', updated_at = NOW()
         WHERE ticket_id = $1 AND status NOT IN ('completed', 'cancelled')`,
@@ -127,15 +135,28 @@ async function resetSoSerialForReject(client, { serialId, salesOrderNumber, newQ
     );
   }
 
+  // Keep the SO allocation alive so the same line can get a new DC after QC re-pass.
   await client.query(
     `UPDATE sales_order_serials SET
-        status = 'removed',
+        status = 'attached',
         qc_status = 'pending',
         qc_ticket_id = COALESCE($2, qc_ticket_id),
         dc_number = NULL,
         updated_at = NOW()
       WHERE allocation_id = $1`,
     [alloc.allocation_id, newQcTicketId || null]
+  );
+}
+
+/** On reject only — release the SO line from this DC without touching inventory (still in_transit). */
+async function releaseSoAllocationOnReject(client, dcNumber) {
+  await client.query(
+    `UPDATE sales_order_serials SET
+        status = 'attached',
+        dc_number = NULL,
+        updated_at = NOW()
+      WHERE dc_number = $1 AND status = 'dispatched'`,
+    [dcNumber]
   );
 }
 
@@ -175,7 +196,9 @@ async function processSerialsToQc(client, {
     });
 
     await client.query(
-      `UPDATE vendor_serial_numbers SET qc_status = 'pending', updated_at = NOW() WHERE serial_id = $1`,
+      `UPDATE vendor_serial_numbers
+          SET qc_status = 'pending', current_dc_number = NULL, updated_at = NOW()
+        WHERE serial_id = $1`,
       [serialId]
     );
 
@@ -246,6 +269,9 @@ async function markDeliveryRejectedByCustomer(client, {
     [reason.trim(), remarks?.trim() || null, source || 'technician', actorUserId, dcNumber]
   );
 
+  // Inventory stays in_transit until warehouse OTP confirms physical return.
+  await releaseSoAllocationOnReject(client, dcNumber);
+
   return { rejected: true };
 }
 
@@ -304,7 +330,7 @@ async function rejectCourierAndComplete(client, {
   });
 }
 
-async function sendWarehouseReturnOtp(dcNumber) {
+async function sendWarehouseReturnOtp(dcNumber, { user } = {}) {
   const head = await getDcHead(pool, dcNumber);
   if (!head) throw new Error('Delivery challan not found');
   if (head.status !== 'rejected') throw new Error('DC must be marked rejected first');
@@ -325,6 +351,7 @@ async function sendWarehouseReturnOtp(dcNumber) {
     || process.env.SMTP_FROM
     || process.env.SMTP_USER;
 
+  let emailed = false;
   if (warehouseEmail) {
     try {
       await emailDocument({
@@ -339,16 +366,21 @@ async function sendWarehouseReturnOtp(dcNumber) {
           + `(Share this OTP with the technician when they return the laptops to warehouse.)`,
         pdfRelativePath: null,
       });
+      emailed = true;
     } catch (err) {
       console.error('Warehouse return OTP email failed:', err.message);
     }
   }
 
-  const isDev = process.env.NODE_ENV !== 'production';
+  const showOtp = canViewWarehouseOtp(user);
   return {
     otp_sent: true,
-    otp_visible: isDev ? otp : undefined,
-    message: 'Warehouse return OTP sent to warehouse lead.',
+    otp_visible: showOtp ? otp : undefined,
+    message: emailed
+      ? 'Warehouse return OTP sent to warehouse lead email.'
+      : (showOtp
+        ? 'OTP generated — share with technician when laptops are returned (email not configured).'
+        : 'OTP generated — ask warehouse lead to open this DC for the code (email not configured).'),
   };
 }
 
@@ -393,5 +425,7 @@ module.exports = {
   rejectCourierAndComplete,
   sendWarehouseReturnOtp,
   verifyWarehouseReturnOtp,
+  releaseSoAllocationOnReject,
   REJECTABLE_STATUSES,
+  canViewWarehouseOtp,
 };

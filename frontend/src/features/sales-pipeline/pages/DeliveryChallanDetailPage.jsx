@@ -8,7 +8,7 @@ import EInvoicePanel from '../components/EInvoicePanel';
 import QcStatusBadge from '../components/QcStatusBadge';
 import {
   createDcQcTickets, getDC, getDcQcStatus, getSalesOrderFull,
-  markDelivered, markRejected, markCourierRejected,
+  markDelivered, markRejected,
   sendDeliveryOtp, sendWarehouseReturnOtp, verifyDeliveryOtp, verifyWarehouseReturnOtp,
   updateDC, dispatchDC,
 } from '../salesPipelineApi';
@@ -128,12 +128,16 @@ export default function DeliveryChallanDetailPage() {
   };
 
   const handleReject = async () => {
+    if (!rejectReason.trim()) {
+      toast.error('Rejection reason is required');
+      return;
+    }
     try {
       await markRejected(dcNumber, {
-        rejection_reason: rejectReason,
+        rejection_reason: rejectReason.trim(),
         rejection_remarks: rejectRemarks.trim() || undefined,
       });
-      toast.success('Marked rejected');
+      toast.success('Marked rejected — confirm warehouse return with OTP when laptops are back');
       setRejectModal(false);
       load();
     } catch (err) {
@@ -142,12 +146,16 @@ export default function DeliveryChallanDetailPage() {
   };
 
   const handleCourierReject = async () => {
+    if (!rejectReason.trim()) {
+      toast.error('Rejection reason is required');
+      return;
+    }
     try {
-      await markCourierRejected(dcNumber, {
-        rejection_reason: rejectReason,
+      await markRejected(dcNumber, {
+        rejection_reason: rejectReason.trim(),
         rejection_remarks: rejectRemarks.trim() || undefined,
       });
-      toast.success('Courier delivery rejected — laptops moved to QC');
+      toast.success('Marked rejected — send warehouse return OTP when laptops arrive');
       setRejectModal(false);
       load();
     } catch (err) {
@@ -158,7 +166,12 @@ export default function DeliveryChallanDetailPage() {
   const handleSendWarehouseReturnOtp = async () => {
     try {
       const r = await sendWarehouseReturnOtp(dcNumber);
-      toast.success(r.data?.message || 'Warehouse OTP sent');
+      if (r.data?.otp_visible) {
+        setWarehouseOtp(r.data.otp_visible);
+        toast.success(`Warehouse OTP: ${r.data.otp_visible}`);
+      } else {
+        toast.success(r.data?.message || 'Warehouse OTP sent');
+      }
       load();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to send OTP');
@@ -474,7 +487,13 @@ export default function DeliveryChallanDetailPage() {
                     <p className="text-emerald-700">Returned to warehouse: {formatDateTime(head.return_to_warehouse_at)} — QC tickets created</p>
                   ) : pendingWarehouseReturn ? (
                     <div className="space-y-2 pt-2 border-t border-red-200">
-                      <p className="text-xs text-gray-600">Technician must return laptops. Warehouse lead sends return OTP.</p>
+                      <p className="text-xs text-gray-600">
+                        Laptops stay in transit until warehouse confirms return. Send OTP when the technician
+                        brings units back, then enter it below to move them to QC.
+                      </p>
+                      {head.warehouse_return_otp_sent_at && (
+                        <p className="text-xs text-gray-500">OTP sent: {formatDateTime(head.warehouse_return_otp_sent_at)}</p>
+                      )}
                       <button type="button" onClick={handleSendWarehouseReturnOtp} className="px-3 py-1 border border-red-300 rounded-lg text-xs text-red-700">Send Warehouse Return OTP</button>
                       <div className="flex gap-2 items-center">
                         <input className="flex-1 border rounded-lg px-2 py-1 text-sm" value={warehouseOtp} onChange={(e) => setWarehouseOtp(e.target.value)} placeholder="Warehouse OTP" />
@@ -535,8 +554,12 @@ export default function DeliveryChallanDetailPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <button type="button" className="absolute inset-0 bg-black/40" onClick={() => setRejectModal(false)} aria-label="Close" />
           <div className="relative bg-white rounded-xl p-6 w-full max-w-sm space-y-3">
-            <h3 className="font-semibold mb-1">{isCourier ? 'Warehouse: Reject Courier Delivery' : 'Rejection Reason'}</h3>
-            {isCourier && <p className="text-xs text-gray-500">Laptops will move to QC immediately with floor tickets.</p>}
+            <h3 className="font-semibold mb-1">{isCourier ? 'Reject Courier Delivery' : 'Rejection Reason'}</h3>
+            {isCourier && (
+              <p className="text-xs text-gray-500">
+                Laptops are not moved to inventory until warehouse return OTP is confirmed.
+              </p>
+            )}
             <textarea className="w-full border rounded-lg px-3 py-2 mb-1" rows={2} placeholder="Rejection reason (required)" value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} />
             <textarea className="w-full border rounded-lg px-3 py-2" rows={2} placeholder="Remarks (optional)" value={rejectRemarks} onChange={(e) => setRejectRemarks(e.target.value)} />
             <button type="button" onClick={isCourier ? handleCourierReject : handleReject} className="w-full py-2 bg-red-600 text-white rounded-lg text-sm">Confirm Reject</button>
