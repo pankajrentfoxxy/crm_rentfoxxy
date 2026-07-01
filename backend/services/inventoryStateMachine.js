@@ -132,8 +132,7 @@ async function transitionAsset(db, {
       if (customerId !== null) add('current_customer_id', customerId);
       add('delivered_at', new Date());
       // Demo is free until the customer "keeps" — clear any mistaken rental anchors.
-      add('rent_start_date', rentStartDate);
-      add('rent_billed_until', null);
+      sets.push('rent_start_date = NULL', 'rent_billed_until = NULL');
       if (rentMonthlyRate !== null) add('rent_monthly_rate', rentMonthlyRate);
       break;
     case STATUS.RETURNED:

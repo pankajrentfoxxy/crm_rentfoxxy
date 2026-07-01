@@ -2404,13 +2404,13 @@ exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}) => {
            (sales_order_number, dc_number, customer_id, serial_id, ttspl_id,
             delivered_at, decision_due_at, decision)
          SELECT
-           (SELECT sales_order_number FROM delivery_challan_lines WHERE dc_number=$2 LIMIT 1),
-           $2, $3, $4, $5, $6, $7, 'pending'
+           (SELECT sales_order_number FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1),
+           $1, $2, $3, $4, $5, $6, 'pending'
          WHERE NOT EXISTS (
            SELECT 1 FROM demo_agreements
-            WHERE dc_number = $2 AND serial_id = $4 AND decision = 'pending'
+            WHERE dc_number = $1 AND serial_id = $3 AND decision = 'pending'
          )`,
-        [null, dcNumber, ctx.customer_id, d.serialId, d.ttsplId, deliveredAt, decisionDue]
+        [dcNumber, ctx.customer_id, d.serialId, d.ttsplId, deliveredAt, decisionDue]
       );
     }
   }
