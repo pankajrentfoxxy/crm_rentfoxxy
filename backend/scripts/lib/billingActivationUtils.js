@@ -199,7 +199,7 @@ async function planStatusNormalization(pool) {
        )::int AS to_returned,
        COUNT(*) FILTER (
          WHERE returned_at IS NULL
-           AND inventory_status NOT IN ('rented', 'sold', 'on_demo')
+           AND inventory_status NOT IN ('rented', 'sold', 'on_demo', 'in_transit', 'reserved')
        )::int AS to_rented
      FROM vendor_serial_numbers
      WHERE deleted_at IS NULL
@@ -228,7 +228,7 @@ async function applyStatusNormalization(client) {
       WHERE deleted_at IS NULL
         AND current_customer_id IS NOT NULL
         AND returned_at IS NULL
-        AND inventory_status NOT IN ('rented', 'sold', 'on_demo')`
+        AND inventory_status NOT IN ('rented', 'sold', 'on_demo', 'in_transit', 'reserved')`
   );
   return { to_returned: toReturned.rowCount, to_rented: toRented.rowCount };
 }

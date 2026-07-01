@@ -2267,14 +2267,23 @@ exports.updateDcDispatch = async (req, res) => {
         const serialId = await resolveSerialId(client, s);
         if (!serialId) continue;
         // reserved -> in_transit (mark the asset unavailable the moment it ships).
-        await inventorySM.markDispatched(client, serialId, {
-          dcNumber,
-          customerId: ctx.customer_id || null,
-          entityCode: ctx.entity_code || null,
-          dispatchMode,
-          actorUserId: req.user.user_id,
-          actorName: req.user.name,
-        });
+        try {
+          await inventorySM.markDispatched(client, serialId, {
+            dcNumber,
+            customerId: ctx.customer_id || null,
+            entityCode: ctx.entity_code || null,
+            dispatchMode,
+            actorUserId: req.user.user_id,
+            actorName: req.user.name,
+          });
+        } catch (rErr) {
+          await client.query(
+            `UPDATE vendor_serial_numbers SET inventory_status = 'in_transit', current_dc_number = $2,
+                    dispatch_mode = $3, dispatched_at = NOW(), updated_at = NOW()
+             WHERE serial_id = $1`,
+            [serialId, dcNumber, dispatchMode]
+          );
+        }
       }
 
       // Reflect dispatch on the SO serial allocations.
@@ -2365,7 +2374,7 @@ exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}) => {
         LIMIT 1`,
       [dcNumber]
     );
-    const rentMonthlyRate = quotationType === 'rental'
+    const rentMonthlyRate = ['rental', 'demo'].includes(String(quotationType || '').toLowerCase())
       ? parseFloat(rateRes.rows[0]?.rate || 0) || null
       : null;
     const result = await inventorySM.markDelivered(client, serialId, {

@@ -55,8 +55,15 @@ exports.decideDemo = async (req, res) => {
 
     if (decision === 'keep') {
       const rentStartDate = req.body.rent_start_date || new Date().toISOString().slice(0, 10);
-      const monthlyRate = req.body.monthly_rate != null ? parseFloat(req.body.monthly_rate) : null;
+      let monthlyRate = req.body.monthly_rate != null ? parseFloat(req.body.monthly_rate) : null;
       if (demo.serial_id) {
+        if (monthlyRate == null || !Number.isFinite(monthlyRate)) {
+          const rateRes = await client.query(
+            `SELECT rent_monthly_rate FROM vendor_serial_numbers WHERE serial_id = $1`,
+            [demo.serial_id]
+          );
+          monthlyRate = parseFloat(rateRes.rows[0]?.rent_monthly_rate) || null;
+        }
         await inventorySM.convertDemoToRental(client, demo.serial_id, {
           rentStartDate,
           rentMonthlyRate: monthlyRate,

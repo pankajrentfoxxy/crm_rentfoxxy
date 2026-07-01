@@ -92,13 +92,14 @@ async function transitionAsset(db, {
   rentMonthlyRate = null,
   actorUserId = null,
   actorName = null,
+  allowOverride = false,
 }) {
   const client = db || pool;
   const serial = await loadSerial(client, serialId);
   if (!serial) throw new Error(`Serial ${serialId} not found`);
 
   const from = serial.inventory_status || null;
-  if (!isAllowed(from, toStatus)) {
+  if (!allowOverride && !isAllowed(from, toStatus)) {
     throw new Error(`Illegal inventory transition ${from} -> ${toStatus} (serial ${serialId})`);
   }
 
@@ -121,11 +122,18 @@ async function transitionAsset(db, {
       add('dispatched_at', new Date());
       break;
     case STATUS.RENTED:
-    case STATUS.ON_DEMO:
     case STATUS.SOLD:
       if (customerId !== null) add('current_customer_id', customerId);
       add('delivered_at', new Date());
       if (rentStartDate !== null) add('rent_start_date', rentStartDate);
+      if (rentMonthlyRate !== null) add('rent_monthly_rate', rentMonthlyRate);
+      break;
+    case STATUS.ON_DEMO:
+      if (customerId !== null) add('current_customer_id', customerId);
+      add('delivered_at', new Date());
+      // Demo is free until the customer "keeps" — clear any mistaken rental anchors.
+      add('rent_start_date', rentStartDate);
+      add('rent_billed_until', null);
       if (rentMonthlyRate !== null) add('rent_monthly_rate', rentMonthlyRate);
       break;
     case STATUS.RETURNED:
@@ -219,18 +227,52 @@ function deliveredStatusForType(quotationType) {
   return STATUS.RENTED;
 }
 
-const markDelivered = (db, serialId, {
+const markDelivered = async (db, serialId, {
   quotationType, dcNumber, customerId, entityCode, dispatchMode, dispatchedAt, deliveredAt,
   rentMonthlyRate, actorUserId, actorName,
 }) => {
+  const client = db || pool;
+  const serial = await loadSerial(client, serialId);
+  if (!serial) throw new Error(`Serial ${serialId} not found`);
+
   const toStatus = deliveredStatusForType(quotationType);
+  const from = serial.inventory_status || null;
+
+  // Demo delivery: unit may still show "rented" if billing backfill or legacy ERP sync
+  // ran before POD confirmation. Allow the correction at delivery time.
+  const demoFromRented = from === STATUS.RENTED && toStatus === STATUS.ON_DEMO;
+
+  if (!demoFromRented && !isAllowed(from, toStatus)) {
+    if ([STATUS.IN_STOCK, STATUS.RESERVED].includes(from)) {
+      await markDispatched(client, serialId, {
+        dcNumber, customerId, entityCode, dispatchMode, actorUserId, actorName,
+      });
+    } else {
+      throw new Error(`Illegal inventory transition ${from} -> ${toStatus} (serial ${serialId})`);
+    }
+  }
+
   // Demo + sale do not start rent; rental does.
   const rentStartDate = toStatus === STATUS.RENTED
     ? toDateStr(computeRentStart({ dispatchMode, dispatchedAt, deliveredAt }))
     : null;
-  return transitionAsset(db, { serialId, toStatus, dcNumber, customerId, entityCode,
-    dispatchMode, rentStartDate, rentMonthlyRate: rentMonthlyRate ?? null,
-    reason: `Delivered on ${dcNumber}`, actorUserId, actorName });
+
+  return transitionAsset(client, {
+    serialId,
+    toStatus,
+    dcNumber,
+    customerId,
+    entityCode,
+    dispatchMode,
+    rentStartDate,
+    rentMonthlyRate: rentMonthlyRate ?? null,
+    reason: demoFromRented
+      ? `Demo delivered on ${dcNumber} (corrected from rented)`
+      : `Delivered on ${dcNumber}`,
+    actorUserId,
+    actorName,
+    allowOverride: demoFromRented,
+  });
 };
 
 /** Demo "keep" decision: on_demo -> rented, with the agreed billing start + rate. */
