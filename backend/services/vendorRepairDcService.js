@@ -301,9 +301,17 @@ async function createOutForRepairDc(client, {
   return { dc_number: dcNumber };
 }
 
+function vendorDisplayName(vendor) {
+  if (!vendor) return '';
+  return vendor.business_name
+    || [vendor.first_name, vendor.last_name].filter(Boolean).join(' ').trim()
+    || vendor.f_name
+    || '';
+}
+
 function formatVendorBillingFromRow(vendor) {
   if (!vendor) return '';
-  const lines = [vendor.business_name || vendor.f_name].filter(Boolean);
+  const lines = [vendorDisplayName(vendor)].filter(Boolean);
   const street = [vendor.address, vendor.city, vendor.state, vendor.pincode].filter(Boolean).join(', ');
   if (street) lines.push(street);
   return lines.join('\n');
@@ -312,7 +320,7 @@ function formatVendorBillingFromRow(vendor) {
 function formatVendorShippingFromRow(vendor) {
   if (!vendor) return '';
   if (vendor.shipping_same !== false) return formatVendorBillingFromRow(vendor);
-  const lines = [vendor.business_name || vendor.f_name].filter(Boolean);
+  const lines = [vendorDisplayName(vendor)].filter(Boolean);
   const street = [vendor.shipping_address, vendor.shipping_city, vendor.shipping_state, vendor.shipping_pincode]
     .filter(Boolean).join(', ');
   if (street) lines.push(street);
@@ -323,7 +331,8 @@ async function getVendorRepairDc(dcNumber) {
   const headRes = await pool.query(
     `SELECT d.*,
             v.business_name AS vendor_business_name,
-            v.f_name AS vendor_f_name,
+            v.first_name AS vendor_first_name,
+            v.last_name AS vendor_last_name,
             v.address AS vendor_reg_address,
             v.city AS vendor_reg_city,
             v.state AS vendor_reg_state,
@@ -350,7 +359,8 @@ async function getVendorRepairDc(dcNumber) {
   );
   const vendorMaster = head.vendor_id ? {
     business_name: head.vendor_business_name,
-    f_name: head.vendor_f_name,
+    first_name: head.vendor_first_name,
+    last_name: head.vendor_last_name,
     address: head.vendor_reg_address,
     city: head.vendor_reg_city,
     state: head.vendor_reg_state,
