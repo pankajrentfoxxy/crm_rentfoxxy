@@ -17,7 +17,7 @@ const empty = () => ({
   shipping_same: true, shipping_address: '', shipping_city: '', shipping_state: '', shipping_pincode: '',
   whatsapp_number: '', designation: '', notes: '',
   finance_contact_name: '', finance_contact_email: '', finance_contact_mobile: '',
-  expox_person_name: '', expox_person_email: '', expox_person_mobile: '',
+  spock_person_name: '', spock_person_email: '', spock_person_mobile: '',
 });
 
 const emptyAddrForm = () => ({
@@ -61,9 +61,9 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
         finance_contact_name: customer.finance_contact_name || customer.details?.finance_contact_name || '',
         finance_contact_email: customer.finance_contact_email || customer.details?.finance_contact_email || '',
         finance_contact_mobile: customer.finance_contact_mobile || customer.details?.finance_contact_mobile || '',
-        expox_person_name: customer.expox_person_name || customer.details?.expox_person_name || '',
-        expox_person_email: customer.expox_person_email || customer.details?.expox_person_email || '',
-        expox_person_mobile: customer.expox_person_mobile || customer.details?.expox_person_mobile || '',
+        spock_person_name: customer.spock_person_name || customer.details?.spock_person_name || customer.expox_person_name || customer.details?.expox_person_name || '',
+        spock_person_email: customer.spock_person_email || customer.details?.spock_person_email || customer.expox_person_email || customer.details?.expox_person_email || '',
+        spock_person_mobile: customer.spock_person_mobile || customer.details?.spock_person_mobile || customer.expox_person_mobile || customer.details?.expox_person_mobile || '',
       });
       setShippingSame(customer.shipping_same !== false);
       setFieldErrors({});
@@ -101,10 +101,10 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
 
   const validateForm = () => {
     const errors = {};
-    const requiredExpoxFields = [
-      ['expox_person_name', 'Expox Person Name'],
-      ['expox_person_email', 'Expox Person Email'],
-      ['expox_person_mobile', 'Expox Person Mobile Number'],
+    const requiredSpockFields = [
+      ['spock_person_name', 'Spock Person Name'],
+      ['spock_person_email', 'Spock Person Email'],
+      ['spock_person_mobile', 'Spock Person Mobile Number'],
     ];
     const optionalEmailFields = [
       ['email', 'Email'],
@@ -113,7 +113,7 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
     const optionalMobileFields = [
       ['finance_contact_mobile', 'Finance Contact Mobile Number'],
     ];
-    requiredExpoxFields.forEach(([key, label]) => {
+    requiredSpockFields.forEach(([key, label]) => {
       const value = String(form[key] || '').trim();
       if (!value) {
         errors[key] = `${label} is required`;
@@ -313,11 +313,11 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
           </div>
 
           <div className="sm:col-span-2 pt-2 border-t space-y-3">
-            <h3 className="text-sm font-semibold text-gray-800">Expox Person</h3>
+            <h3 className="text-sm font-semibold text-gray-800">Spock Person</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {renderField('expox_person_name', 'Expox Person Name', { required: true })}
-              {renderField('expox_person_email', 'Expox Person Email', { type: 'email', required: true })}
-              {renderField('expox_person_mobile', 'Expox Person Mobile Number', { mobile: true, required: true })}
+              {renderField('spock_person_name', 'Spock Person Name', { required: true })}
+              {renderField('spock_person_email', 'Spock Person Email', { type: 'email', required: true })}
+              {renderField('spock_person_mobile', 'Spock Person Mobile Number', { mobile: true, required: true })}
             </div>
           </div>
 

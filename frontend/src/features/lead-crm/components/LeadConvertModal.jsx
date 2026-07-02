@@ -22,9 +22,9 @@ const emptyForm = () => ({
   shipping_city: '',
   shipping_state: '',
   shipping_pincode: '',
-  expox_person_name: '',
-  expox_person_email: '',
-  expox_person_mobile: '',
+  spock_person_name: '',
+  spock_person_email: '',
+  spock_person_mobile: '',
 });
 
 export default function LeadConvertModal({ open, lead, onClose }) {
@@ -51,9 +51,9 @@ export default function LeadConvertModal({ open, lead, onClose }) {
         shipping_city: lead.city || '',
         shipping_state: lead.state || '',
         shipping_pincode: lead.pincode || '',
-        expox_person_name: '',
-        expox_person_email: '',
-        expox_person_mobile: '',
+        spock_person_name: '',
+        spock_person_email: '',
+        spock_person_mobile: '',
       });
       setShippingSame(lead.shippingSameAsBilling !== false);
       setFieldErrors({});
@@ -76,12 +76,12 @@ export default function LeadConvertModal({ open, lead, onClose }) {
 
   const validateForm = () => {
     const errors = {};
-    const requiredExpoxFields = [
-      ['expox_person_name', 'Expox Person Name'],
-      ['expox_person_email', 'Expox Person Email'],
-      ['expox_person_mobile', 'Expox Person Mobile Number'],
+    const requiredSpockFields = [
+      ['spock_person_name', 'Spock Person Name'],
+      ['spock_person_email', 'Spock Person Email'],
+      ['spock_person_mobile', 'Spock Person Mobile Number'],
     ];
-    requiredExpoxFields.forEach(([key, label]) => {
+    requiredSpockFields.forEach(([key, label]) => {
       const value = String(form[key] || '').trim();
       if (!value) {
         errors[key] = `${label} is required`;
@@ -116,7 +116,7 @@ export default function LeadConvertModal({ open, lead, onClose }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!validateForm()) {
-      toast.error('Please fill all required Expox Person fields');
+      toast.error('Please fill all required Spock Person fields');
       return;
     }
     setSaving(true);
@@ -175,10 +175,10 @@ export default function LeadConvertModal({ open, lead, onClose }) {
             </>
           )}
           <div className="pt-2 border-t space-y-3">
-            <p className="text-sm font-medium text-gray-700">Expox Person</p>
-            {renderField('expox_person_name', 'Expox Person Name', { required: true })}
-            {renderField('expox_person_email', 'Expox Person Email', { type: 'email', required: true })}
-            {renderField('expox_person_mobile', 'Expox Person Mobile Number', { mobile: true, required: true })}
+            <p className="text-sm font-medium text-gray-700">Spock Person</p>
+            {renderField('spock_person_name', 'Spock Person Name', { required: true })}
+            {renderField('spock_person_email', 'Spock Person Email', { type: 'email', required: true })}
+            {renderField('spock_person_mobile', 'Spock Person Mobile Number', { mobile: true, required: true })}
           </div>
           <div className="flex gap-2 justify-end pt-3">
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm border border-gray-200 rounded-lg">Cancel</button>

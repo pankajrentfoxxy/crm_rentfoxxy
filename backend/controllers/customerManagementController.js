@@ -21,26 +21,33 @@ function parseDetails(value) {
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MOBILE_RE = /^\d{10}$/;
 
-const FINANCE_EXPOX_DETAIL_KEYS = [
+const FINANCE_SPOCK_DETAIL_KEYS = [
   'finance_contact_name',
   'finance_contact_email',
   'finance_contact_mobile',
+  'spock_person_name',
+  'spock_person_email',
+  'spock_person_mobile',
+];
+
+const LEGACY_EXPOX_DETAIL_KEYS = [
   'expox_person_name',
   'expox_person_email',
   'expox_person_mobile',
 ];
 
-function normalizeMobileNumber(value) {
-  const digits = String(value || '').replace(/\D/g, '').slice(-10);
-  return digits.length === 10 ? digits : String(value || '').trim();
+function spockFieldFromBody(body, spockKey) {
+  if (body[spockKey] !== undefined) return body[spockKey];
+  const legacyKey = spockKey.replace(/^spock_/, 'expox_');
+  return body[legacyKey];
 }
 
-function validateFinanceExpoxContactFields(body) {
+function validateFinanceSpockContactFields(body) {
   const errors = [];
   const requiredFields = [
-    ['expox_person_name', 'Expox Person Name'],
-    ['expox_person_email', 'Expox Person Email'],
-    ['expox_person_mobile', 'Expox Person Mobile Number'],
+    ['spock_person_name', 'Spock Person Name'],
+    ['spock_person_email', 'Spock Person Email'],
+    ['spock_person_mobile', 'Spock Person Mobile Number'],
   ];
   const optionalEmailFields = [
     ['finance_contact_email', 'Finance Contact Email'],
@@ -49,7 +56,7 @@ function validateFinanceExpoxContactFields(body) {
     ['finance_contact_mobile', 'Finance Contact Mobile Number'],
   ];
   for (const [key, label] of requiredFields) {
-    const value = String(body[key] || '').trim();
+    const value = String(spockFieldFromBody(body, key) || '').trim();
     if (!value) {
       errors.push(`${label} is required`);
       continue;
@@ -72,14 +79,23 @@ function validateFinanceExpoxContactFields(body) {
   return errors;
 }
 
-function applyFinanceExpoxDetails(details, body) {
-  for (const key of FINANCE_EXPOX_DETAIL_KEYS) {
-    if (body[key] === undefined) continue;
-    let value = String(body[key] || '').trim();
+function applyFinanceSpockDetails(details, body) {
+  for (const key of FINANCE_SPOCK_DETAIL_KEYS) {
+    const raw = spockFieldFromBody(body, key);
+    if (raw === undefined) continue;
+    let value = String(raw || '').trim();
     if (key.endsWith('_mobile') && value) value = normalizeMobileNumber(value);
     details[key] = value || null;
   }
+  for (const legacyKey of LEGACY_EXPOX_DETAIL_KEYS) {
+    delete details[legacyKey];
+  }
   return details;
+}
+
+function normalizeMobileNumber(value) {
+  const digits = String(value || '').replace(/\D/g, '').slice(-10);
+  return digits.length === 10 ? digits : String(value || '').trim();
 }
 
 function generatePassword(length = 10) {
@@ -123,9 +139,9 @@ function formatCustomerRow(row) {
     finance_contact_name: details.finance_contact_name || '',
     finance_contact_email: details.finance_contact_email || '',
     finance_contact_mobile: details.finance_contact_mobile || '',
-    expox_person_name: details.expox_person_name || '',
-    expox_person_email: details.expox_person_email || '',
-    expox_person_mobile: details.expox_person_mobile || '',
+    spock_person_name: details.spock_person_name || details.expox_person_name || '',
+    spock_person_email: details.spock_person_email || details.expox_person_email || '',
+    spock_person_mobile: details.spock_person_mobile || details.expox_person_mobile || '',
     gst_number: row.gst_no || details.gst_number || '',
     gst_no: row.gst_no || details.gst_number || '',
     pan_card_number: row.pan_number || details.pan_card_number || '',
@@ -167,61 +183,62 @@ function formatCustomerRow(row) {
   };
 }
 
-function formatAddressExportLine({ address, city, state, pincode, concern_person, mobile_no } = {}) {
+function createAddressExportEntry({ address, city, state, pincode, concern_person, mobile_no } = {}) {
   const location = [address, city, state, pincode].filter((part) => String(part || '').trim()).join(', ');
-  const contact = [concern_person, mobile_no].filter((part) => String(part || '').trim()).join(' · ');
-  if (location && contact) return `${location} (${contact})`;
-  return location || contact || '';
+  return {
+    address: location,
+    concern_person: String(concern_person || '').trim(),
+    mobile_no: String(mobile_no || '').trim(),
+  };
 }
 
-function collectBillingAddresses(row, details, savedAddresses = []) {
-  const addresses = [];
-  const seen = new Set();
-  const add = (line) => {
-    const value = String(line || '').trim();
-    if (!value || seen.has(value)) return;
-    seen.add(value);
-    addresses.push(value);
-  };
-
-  add(formatAddressExportLine({
+function profileBillingFields(row, details) {
+  return {
     address: typeof row.billing_address === 'string'
       ? row.billing_address
       : (details.billing_address?.address || details.billing_address || ''),
     city: row.billing_city,
     state: row.billing_state,
     pincode: row.billing_pincode,
-  }));
+  };
+}
+
+function collectAddressEntries(entries, entry) {
+  if (!entry?.address) return;
+  const key = `${entry.address}|${entry.concern_person}|${entry.mobile_no}`;
+  if (entries.seen.has(key)) return;
+  entries.seen.add(key);
+  entries.list.push(entry);
+}
+
+function collectBillingAddresses(row, details, savedAddresses = []) {
+  const entries = { list: [], seen: new Set() };
+  collectAddressEntries(entries, createAddressExportEntry(profileBillingFields(row, details)));
 
   savedAddresses
     .filter((addr) => String(addr.address_type || '').toLowerCase() === 'billing')
-    .forEach((addr) => add(formatAddressExportLine(addr)));
+    .forEach((addr) => collectAddressEntries(entries, createAddressExportEntry(addr)));
 
-  return addresses;
+  return entries.list;
 }
 
 function collectShippingAddresses(row, details, savedAddresses = []) {
-  const addresses = [];
-  const seen = new Set();
-  const add = (line) => {
-    const value = String(line || '').trim();
-    if (!value || seen.has(value)) return;
-    seen.add(value);
-    addresses.push(value);
-  };
+  const entries = { list: [], seen: new Set() };
 
   if (row.shipping_same === false) {
-    add(formatAddressExportLine({
+    collectAddressEntries(entries, createAddressExportEntry({
       address: row.shipping_address,
       city: row.shipping_city,
       state: row.shipping_state,
       pincode: row.shipping_pincode,
     }));
+  } else {
+    collectAddressEntries(entries, createAddressExportEntry(profileBillingFields(row, details)));
   }
 
   const legacyShipping = details.shipping_address || details.shipping_addresses;
   if (Array.isArray(legacyShipping)) {
-    legacyShipping.forEach((item) => add(formatAddressExportLine({
+    legacyShipping.forEach((item) => collectAddressEntries(entries, createAddressExportEntry({
       address: item?.address,
       city: item?.city,
       state: item?.state,
@@ -232,10 +249,10 @@ function collectShippingAddresses(row, details, savedAddresses = []) {
   }
 
   savedAddresses
-    .filter((addr) => String(addr.address_type || 'shipping').toLowerCase() === 'shipping')
-    .forEach((addr) => add(formatAddressExportLine(addr)));
+    .filter((addr) => String(addr.address_type || 'Shipping').toLowerCase() !== 'billing')
+    .forEach((addr) => collectAddressEntries(entries, createAddressExportEntry(addr)));
 
-  return addresses;
+  return entries.list;
 }
 
 function buildCustomerExportBaseRow(formatted, assetCount) {
@@ -250,20 +267,45 @@ function buildCustomerExportBaseRow(formatted, assetCount) {
     'Finance Contact Name': formatted.finance_contact_name || '',
     'Finance Contact Email': formatted.finance_contact_email || '',
     'Finance Contact Mobile Number': formatted.finance_contact_mobile || '',
-    'Expox Person Name': formatted.expox_person_name || '',
-    'Expox Person Email': formatted.expox_person_email || '',
-    'Expox Person Mobile Number': formatted.expox_person_mobile || '',
+    'Spock Person Name': formatted.spock_person_name || '',
+    'Spock Person Email': formatted.spock_person_email || '',
+    'Spock Person Mobile Number': formatted.spock_person_mobile || '',
   };
 }
 
 function appendDynamicAddressColumns(row, billingAddresses, shippingAddresses, maxBilling, maxShipping) {
   for (let i = 0; i < maxBilling; i += 1) {
-    row[`Billing Address ${i + 1}`] = billingAddresses[i] || '';
+    const entry = billingAddresses[i] || {};
+    row[`Billing Address ${i + 1}`] = entry.address || '';
+    row[`Billing Contact Person ${i + 1}`] = entry.concern_person || '';
+    row[`Billing Contact Mobile ${i + 1}`] = entry.mobile_no || '';
   }
   for (let i = 0; i < maxShipping; i += 1) {
-    row[`Shipping Address ${i + 1}`] = shippingAddresses[i] || '';
+    const entry = shippingAddresses[i] || {};
+    row[`Shipping Address ${i + 1}`] = entry.address || '';
+    row[`Shipping Contact Person ${i + 1}`] = entry.concern_person || '';
+    row[`Shipping Contact Mobile ${i + 1}`] = entry.mobile_no || '';
   }
   return row;
+}
+
+function buildAddressExportColumnOrder(maxBilling, maxShipping) {
+  const columns = [];
+  for (let i = 0; i < maxBilling; i += 1) {
+    columns.push(
+      `Billing Address ${i + 1}`,
+      `Billing Contact Person ${i + 1}`,
+      `Billing Contact Mobile ${i + 1}`,
+    );
+  }
+  for (let i = 0; i < maxShipping; i += 1) {
+    columns.push(
+      `Shipping Address ${i + 1}`,
+      `Shipping Contact Person ${i + 1}`,
+      `Shipping Contact Mobile ${i + 1}`,
+    );
+  }
+  return columns;
 }
 
 async function ensureCustomerManagementSchema() {
@@ -432,11 +474,10 @@ exports.exportCustomersExcel = async (req, res) => {
       'Finance Contact Name',
       'Finance Contact Email',
       'Finance Contact Mobile Number',
-      'Expox Person Name',
-      'Expox Person Email',
-      'Expox Person Mobile Number',
-      ...Array.from({ length: maxBilling }, (_, i) => `Billing Address ${i + 1}`),
-      ...Array.from({ length: maxShipping }, (_, i) => `Shipping Address ${i + 1}`),
+      'Spock Person Name',
+      'Spock Person Email',
+      'Spock Person Mobile Number',
+      ...buildAddressExportColumnOrder(maxBilling, maxShipping),
     ];
 
     const orderedRows = sheetRows.map((row) => {
@@ -675,7 +716,7 @@ exports.storeCustomer = async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(body.password, 10);
-    const contactValidationErrors = validateFinanceExpoxContactFields(body);
+    const contactValidationErrors = validateFinanceSpockContactFields(body);
     if (contactValidationErrors.length) {
       return res.status(400).json({ success: false, message: contactValidationErrors[0] });
     }
@@ -691,7 +732,7 @@ exports.storeCustomer = async (req, res) => {
       profile: profilePath,
       password_hash: passwordHash,
     };
-    applyFinanceExpoxDetails(details, body);
+    applyFinanceSpockDetails(details, body);
 
     const result = await pool.query(
       `INSERT INTO customers (name, company_name, email, phone, gst_no, address, type, details, status, created_at, updated_at)
@@ -731,7 +772,7 @@ exports.updateCustomer = async (req, res) => {
     const body = req.body || {};
     const details = parseDetails(row.details);
 
-    const contactValidationErrors = validateFinanceExpoxContactFields(body);
+    const contactValidationErrors = validateFinanceSpockContactFields(body);
     if (contactValidationErrors.length) {
       return res.status(400).json({ success: false, message: contactValidationErrors[0] });
     }
@@ -783,10 +824,10 @@ exports.updateCustomer = async (req, res) => {
       details.contact_person_number = body.contact_person_number || null;
       detailsChanged = true;
     }
-    for (const key of FINANCE_EXPOX_DETAIL_KEYS) {
+    for (const key of FINANCE_SPOCK_DETAIL_KEYS) {
       if (body[key] !== undefined) detailsChanged = true;
     }
-    applyFinanceExpoxDetails(details, body);
+    applyFinanceSpockDetails(details, body);
     if (detailsChanged) {
       await pool.query('UPDATE customers SET details = $1 WHERE customer_id = $2', [
         JSON.stringify(details),
@@ -1196,5 +1237,5 @@ exports.enableCustomerPortal = async (req, res) => {
   }
 };
 
-exports.validateFinanceExpoxContactFields = validateFinanceExpoxContactFields;
-exports.applyFinanceExpoxDetails = applyFinanceExpoxDetails;
+exports.validateFinanceSpockContactFields = validateFinanceSpockContactFields;
+exports.applyFinanceSpockDetails = applyFinanceSpockDetails;
