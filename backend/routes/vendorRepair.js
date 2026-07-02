@@ -8,6 +8,8 @@ const invView = checkSectionPermission('inventory_management', 'view');
 
 router.use(authMiddleware);
 
+router.get('/company-defaults', floorView, ctrl.getCompanyDefaults);
+router.get('/dc', floorView, ctrl.listVendorRepairDcs);
 router.get('/diagnosis-failed', floorView, ctrl.listDiagnosisFailed);
 router.get('/inventory', invView, ctrl.listOutForRepairInventory);
 router.get('/inventory/count', invView, ctrl.getOutForRepairInventoryCount);

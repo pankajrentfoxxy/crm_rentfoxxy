@@ -34,6 +34,8 @@ function getMailTransport() {
   return nodemailer.createTransport({ host, port, secure, auth: { user, pass } });
 }
 
+const { mergeCompany, formatCompanyBlock, TRUETECH } = require('../utils/companyDefaults');
+
 async function loadCompany(entityCode) {
   const code = entityCode === 'gorefurbo' ? 'gorefurbo' : 'rentfoxxy';
   try {
@@ -42,13 +44,9 @@ async function loadCompany(entityCode) {
        FROM companies WHERE code = $1`,
       [code]
     );
-    if (r.rows.length) return r.rows[0];
+    if (r.rows.length) return mergeCompany(r.rows[0]);
   } catch (_) { /* pre-migration */ }
-  return {
-    code,
-    legal_name: code === 'gorefurbo' ? 'Gorefurbo' : 'TRUETECH SERVICES PRIVATE LIMITED',
-    gstin: null, pan: null, email: null, phone: null, address: null, state_code: '06', logo_url: null,
-  };
+  return mergeCompany({ ...TRUETECH, code });
 }
 
 function parseJson(v, fallback = null) {

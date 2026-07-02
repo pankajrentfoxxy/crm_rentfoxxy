@@ -5,12 +5,13 @@ import { Download, Loader2, PenLine, Printer, RotateCcw } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext';
 import { getBackendOrigin } from '../../../utils/api';
 import {
+  downloadVendorRepairPdf,
   fetchVendorRepairDc,
   receiveVendorRepairBack,
   signVendorRepairDispatch,
-  vendorRepairPdfUrl,
 } from '../vendorRepairApi';
 import { ticketStatusLabel } from '../floorPipelineUi';
+import { DEFAULT_BILLING_ADDRESS, fmtVendorRepairDate } from '../vendorRepairUi';
 import { invalidateInventoryManagement } from '../../inventory-management/inventoryCountsEvents';
 
 const WAREHOUSE_ROLES = new Set(['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'support_lead']);
@@ -109,6 +110,19 @@ export default function VendorRepairDcDetailPage() {
   const [pendingWhDispatch, setPendingWhDispatch] = useState(null);
   const [pendingVendorDispatch, setPendingVendorDispatch] = useState(null);
   const [activeSign, setActiveSign] = useState(null);
+  const [pdfBusy, setPdfBusy] = useState(false);
+
+  const handleDownloadPdf = async () => {
+    setPdfBusy(true);
+    try {
+      await downloadVendorRepairPdf(dcNumber);
+      toast.success('PDF downloaded');
+    } catch {
+      toast.error('PDF download failed');
+    } finally {
+      setPdfBusy(false);
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -202,15 +216,20 @@ export default function VendorRepairDcDetailPage() {
     <div className="p-4 md:p-6 max-w-5xl mx-auto space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <Link to="/floor-pipeline/diagnosis-failed" className="text-sm text-blue-600 hover:underline">← Diagnosis Failed</Link>
+          <Link to="/floor-pipeline/vendor-repair-dc" className="text-sm text-blue-600 hover:underline">← Vendor Repair DC</Link>
           <h1 className="text-xl font-bold mt-1">Vendor Repair DC</h1>
           <p className="font-mono text-purple-800">{dc.dc_number}</p>
           <span className="inline-block mt-2 px-2 py-0.5 rounded-full text-xs bg-purple-100 text-purple-900">{statusLabel(dc.status)}</span>
         </div>
         <div className="flex flex-wrap gap-2">
-          <a href={vendorRepairPdfUrl(dcNumber)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 px-3 py-2 border rounded-lg text-sm">
-            <Download className="w-4 h-4" /> PDF
-          </a>
+          <button
+            type="button"
+            disabled={pdfBusy}
+            onClick={handleDownloadPdf}
+            className="inline-flex items-center gap-1 px-3 py-2 border rounded-lg text-sm disabled:opacity-50"
+          >
+            <Download className="w-4 h-4" /> {pdfBusy ? 'PDF…' : 'PDF'}
+          </button>
           <button type="button" onClick={() => window.print()} className="inline-flex items-center gap-1 px-3 py-2 border rounded-lg text-sm">
             <Printer className="w-4 h-4" /> Print
           </button>
@@ -225,17 +244,20 @@ export default function VendorRepairDcDetailPage() {
         </div>
       </div>
 
-      <div className="grid md:grid-cols-2 gap-4 print:grid-cols-2">
+      <div className="grid md:grid-cols-3 gap-4 print:grid-cols-3">
         <div className="rounded-xl border bg-white p-4 text-sm space-y-1">
-          <h3 className="font-semibold mb-2">Billing Address (From)</h3>
-          <p className="text-slate-600 whitespace-pre-wrap">{dc.billing_address || dc.warehouse_address || dc.warehouse_name || '—'}</p>
+          <h3 className="font-semibold mb-2">Our Address (Dispatch From)</h3>
+          <p className="text-slate-600 whitespace-pre-wrap">{DEFAULT_BILLING_ADDRESS}</p>
         </div>
         <div className="rounded-xl border bg-white p-4 text-sm space-y-1">
-          <h3 className="font-semibold mb-2">Shipping Address (To Vendor)</h3>
-          <p>{dc.vendor_name}</p>
-          <p className="text-slate-600 whitespace-pre-wrap">{dc.shipping_address || dc.vendor_address}</p>
-          <p className="text-slate-600">{dc.contact_person} · {dc.contact_mobile}</p>
-          <p className="text-slate-600">Expected return: {dc.expected_return_date || '—'}</p>
+          <h3 className="font-semibold mb-2">Vendor Billing Address</h3>
+          <p className="text-slate-600 whitespace-pre-wrap">{dc.vendor_billing_display || dc.vendor_address || dc.vendor_name || '—'}</p>
+        </div>
+        <div className="rounded-xl border bg-white p-4 text-sm space-y-1">
+          <h3 className="font-semibold mb-2">Vendor Shipping Address</h3>
+          <p className="text-slate-600 whitespace-pre-wrap">{dc.vendor_shipping_display || dc.shipping_address || dc.vendor_address || '—'}</p>
+          <p className="text-slate-600 pt-2">{dc.contact_person || '—'} · {dc.contact_mobile || '—'}</p>
+          <p className="text-slate-600">Expected return: {fmtVendorRepairDate(dc.expected_return_date)}</p>
           {dc.items_received_count != null ? (
             <p className="text-slate-600 font-medium pt-1">
               Received: {dc.items_received_count || 0} / {dc.items_dispatched_count || dc.items?.length || 0}

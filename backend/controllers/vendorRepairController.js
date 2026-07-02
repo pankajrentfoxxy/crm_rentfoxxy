@@ -28,6 +28,7 @@ exports.createOutForRepair = async (req, res) => {
       vendorId: req.body.vendor_id || req.body.vendorId,
       vendorName: req.body.vendor_name || req.body.vendorName,
       vendorAddress: req.body.vendor_address || req.body.vendorAddress,
+      vendorBillingAddress: req.body.vendor_billing_address || req.body.vendorBillingAddress,
       billingAddress: req.body.billing_address || req.body.billingAddress,
       shippingAddress: req.body.shipping_address || req.body.shippingAddress,
       contactPerson: req.body.contact_person || req.body.contactPerson,
@@ -47,6 +48,30 @@ exports.createOutForRepair = async (req, res) => {
     res.status(400).json({ success: false, message: err.message || 'Failed to create vendor repair DC' });
   } finally {
     client.release();
+  }
+};
+
+exports.getCompanyDefaults = async (_req, res) => {
+  try {
+    const { formatCompanyBlock } = require('../utils/companyDefaults');
+    res.json({ success: true, billing_address: formatCompanyBlock() });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message || 'Failed to load company defaults' });
+  }
+};
+
+exports.listVendorRepairDcs = async (req, res) => {
+  try {
+    await svc.ensureVendorRepairSchema();
+    const result = await svc.listVendorRepairDcs({
+      search: req.query.search,
+      status: req.query.status,
+      page: req.query.page,
+      limit: req.query.limit,
+    });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message || 'Failed to load vendor repair DCs' });
   }
 };
 
@@ -182,12 +207,16 @@ exports.listVendorPortalRepairDcs = async (req, res) => {
 exports.downloadPdf = async (req, res) => {
   try {
     await svc.ensureVendorRepairSchema();
+    const dcNumber = req.params.dcNumber;
     const { generateVendorRepairPdf } = require('../services/vendorRepairPdfService');
-    const rel = await generateVendorRepairPdf(req.params.dcNumber);
+    const rel = await generateVendorRepairPdf(dcNumber);
     if (!rel) return res.status(404).json({ success: false, message: 'PDF not found' });
     const abs = path.join(__dirname, '../uploads', rel);
     if (!fs.existsSync(abs)) return res.status(404).json({ success: false, message: 'PDF file missing' });
-    res.download(abs, path.basename(abs));
+    const safe = String(dcNumber).replace(/[^\w-]+/g, '_');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="VRDC_${safe}.pdf"`);
+    res.download(abs, `VRDC_${safe}.pdf`);
   } catch (err) {
     res.status(500).json({ success: false, message: err.message || 'PDF download failed' });
   }

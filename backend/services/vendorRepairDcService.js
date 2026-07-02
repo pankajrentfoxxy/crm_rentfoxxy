@@ -68,12 +68,10 @@ async function nextReceiveDcNumber(client, dispatchDcNumber) {
   return `${dispatchDcNumber}-R${seq}`;
 }
 
+const { formatCompanyBlock } = require('../utils/companyDefaults');
+
 function defaultBillingAddress() {
-  const parts = [
-    process.env.COMPANY_NAME || 'Rentfoxxy',
-    process.env.COMPANY_ADDRESS || process.env.WAREHOUSE_ADDRESS || '',
-  ].filter(Boolean);
-  return parts.join('\n') || 'Rentfoxxy Warehouse';
+  return formatCompanyBlock();
 }
 
 async function nextVendorRepairDcNumber(client) {
@@ -196,6 +194,7 @@ async function createOutForRepairDc(client, {
   vendorId,
   vendorName,
   vendorAddress,
+  vendorBillingAddress,
   billingAddress,
   shippingAddress,
   contactPerson,
@@ -212,9 +211,11 @@ async function createOutForRepairDc(client, {
     throw new Error('Select at least one laptop');
   }
   if (!vendorName?.trim()) throw new Error('Vendor name is required');
-  const shipAddr = shippingAddress?.trim() || vendorAddress?.trim();
-  if (!shipAddr) throw new Error('Shipping address is required');
-  const billAddr = billingAddress?.trim() || defaultBillingAddress();
+  const vendorBillAddr = (vendorBillingAddress || vendorAddress)?.trim();
+  const shipAddr = shippingAddress?.trim();
+  if (!vendorBillAddr) throw new Error('Vendor billing address is required');
+  if (!shipAddr) throw new Error('Vendor shipping address is required');
+  const billAddr = defaultBillingAddress();
 
   const tRes = await client.query(
     `SELECT t.*, s.stage_name,
@@ -245,14 +246,14 @@ async function createOutForRepairDc(client, {
       dcNumber,
       vendorId || null,
       vendorName.trim(),
-      vendorAddress?.trim() || shipAddr,
+      vendorBillAddr,
       billAddr,
       shipAddr,
       contactPerson?.trim() || null,
       contactMobile?.trim() || null,
       expectedReturnDate || null,
       remarks?.trim() || null,
-      warehouseName?.trim() || process.env.COMPANY_NAME || 'Rentfoxxy Warehouse',
+      warehouseName?.trim() || 'TRUETECH SERVICES PRIVATE LIMITED',
       warehouseAddress?.trim() || billAddr,
       actorUserId,
     ]
@@ -300,9 +301,41 @@ async function createOutForRepairDc(client, {
   return { dc_number: dcNumber };
 }
 
+function formatVendorBillingFromRow(vendor) {
+  if (!vendor) return '';
+  const lines = [vendor.business_name || vendor.f_name].filter(Boolean);
+  const street = [vendor.address, vendor.city, vendor.state, vendor.pincode].filter(Boolean).join(', ');
+  if (street) lines.push(street);
+  return lines.join('\n');
+}
+
+function formatVendorShippingFromRow(vendor) {
+  if (!vendor) return '';
+  if (vendor.shipping_same !== false) return formatVendorBillingFromRow(vendor);
+  const lines = [vendor.business_name || vendor.f_name].filter(Boolean);
+  const street = [vendor.shipping_address, vendor.shipping_city, vendor.shipping_state, vendor.shipping_pincode]
+    .filter(Boolean).join(', ');
+  if (street) lines.push(street);
+  return lines.join('\n');
+}
+
 async function getVendorRepairDc(dcNumber) {
   const headRes = await pool.query(
-    `SELECT * FROM vendor_repair_delivery_challans WHERE dc_number = $1`,
+    `SELECT d.*,
+            v.business_name AS vendor_business_name,
+            v.f_name AS vendor_f_name,
+            v.address AS vendor_reg_address,
+            v.city AS vendor_reg_city,
+            v.state AS vendor_reg_state,
+            v.pincode AS vendor_reg_pincode,
+            v.shipping_same AS vendor_shipping_same,
+            v.shipping_address AS vendor_ship_address,
+            v.shipping_city AS vendor_ship_city,
+            v.shipping_state AS vendor_ship_state,
+            v.shipping_pincode AS vendor_ship_pincode
+       FROM vendor_repair_delivery_challans d
+       LEFT JOIN vendors v ON v.vendor_id = d.vendor_id AND v.deleted_at IS NULL
+      WHERE d.dc_number = $1`,
     [dcNumber]
   );
   const head = headRes.rows[0];
@@ -315,7 +348,28 @@ async function getVendorRepairDc(dcNumber) {
       ORDER BY i.id ASC`,
     [dcNumber]
   );
-  return { ...head, items: itemsRes.rows };
+  const vendorMaster = head.vendor_id ? {
+    business_name: head.vendor_business_name,
+    f_name: head.vendor_f_name,
+    address: head.vendor_reg_address,
+    city: head.vendor_reg_city,
+    state: head.vendor_reg_state,
+    pincode: head.vendor_reg_pincode,
+    shipping_same: head.vendor_shipping_same,
+    shipping_address: head.vendor_ship_address,
+    shipping_city: head.vendor_ship_city,
+    shipping_state: head.vendor_ship_state,
+    shipping_pincode: head.vendor_ship_pincode,
+  } : null;
+  const vendor_billing_display = formatVendorBillingFromRow(vendorMaster) || head.vendor_address || head.vendor_name;
+  const vendor_shipping_display = formatVendorShippingFromRow(vendorMaster) || head.shipping_address || head.vendor_address;
+  return {
+    ...head,
+    company_from_display: formatCompanyBlock(),
+    vendor_billing_display,
+    vendor_shipping_display,
+    items: itemsRes.rows,
+  };
 }
 
 async function signDispatchDc(client, {
@@ -838,6 +892,64 @@ async function listOutForRepairInventory({
   };
 }
 
+async function listVendorRepairDcs({
+  search,
+  status,
+  page = 1,
+  limit = 25,
+} = {}) {
+  await ensureVendorRepairSchema();
+  const params = [];
+  const conditions = ['1=1'];
+  if (search?.trim()) {
+    params.push(`%${search.trim()}%`);
+    const i = params.length;
+    conditions.push(`(
+      d.dc_number ILIKE $${i}
+      OR d.vendor_name ILIKE $${i}
+      OR COALESCE(d.contact_person, '') ILIKE $${i}
+    )`);
+  }
+  if (status?.trim()) {
+    params.push(status.trim());
+    conditions.push(`d.status = $${params.length}`);
+  }
+  const where = conditions.join(' AND ');
+  const safePage = Math.max(1, Number(page) || 1);
+  const safeLimit = Math.min(100, Math.max(1, Number(limit) || 25));
+  const offset = (safePage - 1) * safeLimit;
+
+  const countR = await pool.query(
+    `SELECT COUNT(*)::int AS total FROM vendor_repair_delivery_challans d WHERE ${where}`,
+    params
+  );
+  const total = countR.rows[0]?.total || 0;
+
+  const listR = await pool.query(
+    `SELECT d.*,
+            (SELECT COUNT(*)::int FROM vendor_repair_dc_items i WHERE i.dc_number = d.dc_number) AS item_count,
+            (SELECT COUNT(*)::int FROM vendor_repair_dc_items i
+              WHERE i.dc_number = d.dc_number AND COALESCE(i.item_status, 'draft') = 'received') AS received_count,
+            (SELECT COUNT(*)::int FROM vendor_repair_dc_items i
+              WHERE i.dc_number = d.dc_number AND COALESCE(i.item_status, 'draft') = 'dispatched') AS pending_count
+       FROM vendor_repair_delivery_challans d
+      WHERE ${where}
+      ORDER BY d.created_at DESC
+      LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+    [...params, safeLimit, offset]
+  );
+
+  return {
+    data: listR.rows,
+    pagination: {
+      page: safePage,
+      limit: safeLimit,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / safeLimit)),
+    },
+  };
+}
+
 async function countOutForRepairInventory() {
   await ensureVendorRepairSchema();
   const [vendorR, erpR] = await Promise.all([
@@ -930,6 +1042,7 @@ module.exports = {
   listDiagnosisFailedTickets,
   createOutForRepairDc,
   getVendorRepairDc,
+  listVendorRepairDcs,
   signDispatchDc,
   receiveFromVendor,
   receiveItemsFromVendor,
