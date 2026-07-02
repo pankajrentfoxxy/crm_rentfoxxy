@@ -1489,22 +1489,72 @@ exports.getAvailableSerials = async (req, res) => {
 exports.sendDeliveryOtp = async (req, res) => {
   try {
     const { dcNumber } = req.params;
-    const { email, name } = req.body;
-    const otp = String(Math.floor(100000 + Math.random() * 900000));
-    await pool.query(
-      `UPDATE delivery_challan_lines SET d_otp = $1, d_customer_email = $2, d_customer_name = $3, updated_at = NOW()
-       WHERE dc_number = $4`,
-      [otp, email, name, dcNumber]
-    );
-    if (email) {
-      await emailDocument({
-        to: email,
-        subject: `Delivery OTP for ${dcNumber}`,
-        text: `Your delivery OTP is ${otp}`,
-        pdfRelativePath: null,
-      });
+    const body = req.body || {};
+    const lines = await getDeliveryChallanLines(dcNumber);
+    if (!lines.length) {
+      return res.status(404).json({ success: false, message: 'Delivery challan not found' });
     }
-    res.json({ success: true, message: 'OTP sent' });
+    const first = lines[0];
+    const customerEmail = body.email || first.email || null;
+    const customerName = body.name || first.customer_name || null;
+    const otp = String(Math.floor(100000 + Math.random() * 900000));
+
+    await pool.query(
+      `UPDATE delivery_challan_lines
+          SET otp_code = $1, otp_sent_at = NOW(), otp_verified_at = NULL,
+              d_otp = $1, delivery_otp_sent_at = NOW(),
+              d_customer_email = COALESCE($2, d_customer_email, email),
+              d_customer_name = COALESCE($3, d_customer_name, customer_name),
+              updated_at = NOW()
+        WHERE dc_number = $4`,
+      [otp, customerEmail, customerName, dcNumber]
+    );
+
+    if (customerEmail) {
+      try {
+        await emailDocument({
+          to: customerEmail,
+          subject: `Delivery OTP for ${dcNumber}`,
+          text: `Your delivery OTP is ${otp}`,
+          pdfRelativePath: null,
+        });
+      } catch (mailErr) {
+        console.error('Customer OTP email failed:', mailErr.message);
+      }
+    }
+
+    const salesEmail = process.env.SMTP_FROM || process.env.SMTP_USER;
+    if (salesEmail) {
+      try {
+        const { normalizeDeliveryAddress } = require('../utils/deliveryAddressUtils');
+        const shipping = normalizeDeliveryAddress(first.customer_shipping_address) || {};
+        const addressText = [shipping.address, shipping.city, shipping.state, shipping.pincode || shipping.zip_code]
+          .filter(Boolean).join(', ');
+        await emailDocument({
+          to: salesEmail,
+          subject: `Delivery OTP — ${dcNumber} — ${first.customer_name || ''}`.trim(),
+          text:
+            `DC: ${dcNumber}\n`
+            + `Customer: ${first.customer_name || ''}\n`
+            + `Address: ${addressText || '—'}\n\n`
+            + `OTP: ${otp}\n\n`
+            + `(Share this OTP verbally with the customer at delivery.)`,
+          pdfRelativePath: null,
+        });
+      } catch (mailErr) {
+        console.error('Sales OTP email failed:', mailErr.message);
+      }
+    }
+
+    const adminRoles = ['admin', 'manager', 'super_admin', 'support_lead'];
+    const payload = {
+      success: true,
+      message: customerEmail
+        ? 'OTP sent to customer and sales email.'
+        : 'OTP generated and emailed to sales.',
+    };
+    if (adminRoles.includes(req.user?.role)) payload.otp_visible = otp;
+    res.json(payload);
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1515,14 +1565,19 @@ exports.verifyDeliveryOtp = async (req, res) => {
     const { dcNumber } = req.params;
     const { otp } = req.body;
     const result = await pool.query(
-      `SELECT d_otp FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
+      `SELECT COALESCE(otp_code, d_otp) AS stored_otp
+         FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
       [dcNumber]
     );
-    if (!result.rows.length || result.rows[0].d_otp !== String(otp)) {
+    if (!result.rows.length || result.rows[0].stored_otp !== String(otp)) {
       return res.status(400).json({ success: false, message: 'Invalid OTP' });
     }
     await pool.query(
-      `UPDATE delivery_challan_lines SET d_otp_verified_at = NOW(), updated_at = NOW() WHERE dc_number = $1`,
+      `UPDATE delivery_challan_lines
+          SET otp_verified_at = COALESCE(otp_verified_at, NOW()),
+              d_otp_verified_at = COALESCE(d_otp_verified_at, NOW()),
+              updated_at = NOW()
+        WHERE dc_number = $1`,
       [dcNumber]
     );
     res.json({ success: true, message: 'OTP verified' });

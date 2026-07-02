@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { MapPin, Phone, KeyRound, Map as MapIcon, CheckCircle2, Truck } from 'lucide-react';
-import { listDeliveryFlow } from '../salesPipelineApi';
+import { listDeliveryFlow, sendDeliveryOtp } from '../salesPipelineApi';
 import {
   deliveryAddressPhone,
   formatDateTime,
@@ -32,7 +32,24 @@ export default function TechnicianDeliveryBucketPage({ movement = null }) {
   const [techFilter, setTechFilter] = useState('all');
   const [otpModal, setOtpModal] = useState(null);
   const [deliverModal, setDeliverModal] = useState(null);
+  const [sendingOtp, setSendingOtp] = useState(null);
   const isReturn = movement === 'return';
+
+  const handleSendOtp = async (dc) => {
+    setSendingOtp(dc.dc_number);
+    try {
+      const r = await sendDeliveryOtp(dc.dc_number, {});
+      toast.success(r.data?.message || 'OTP generated');
+      if (r.data?.otp_visible) {
+        setOtpModal({ ...dc, otp_code: r.data.otp_visible, otp_sent_at: new Date().toISOString() });
+      }
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Failed to generate OTP');
+    } finally {
+      setSendingOtp(null);
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -155,9 +172,15 @@ export default function TechnicianDeliveryBucketPage({ movement = null }) {
                             <KeyRound className="w-3.5 h-3.5" /> View OTP
                           </button>
                         ) : (
-                          <span className="text-xs px-2.5 py-1 rounded-lg bg-gray-50 text-gray-500">
-                            OTP not generated
-                          </span>
+                          <button
+                            type="button"
+                            disabled={sendingOtp === dc.dc_number}
+                            onClick={() => handleSendOtp(dc)}
+                            className="text-xs px-2.5 py-1 rounded-lg border border-gray-200 text-gray-700 flex items-center gap-1 disabled:opacity-50"
+                          >
+                            <KeyRound className="w-3.5 h-3.5" />
+                            {sendingOtp === dc.dc_number ? 'Sending…' : 'Send OTP'}
+                          </button>
                         )}
                         {mapsUrl && (
                           <a
