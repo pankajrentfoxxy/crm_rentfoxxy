@@ -6,6 +6,8 @@ import {
   getCustomerAddresses, setDefaultCustomerAddress, updateCustomer,
 } from '../leadCrmApi';
 import toast from 'react-hot-toast';
+import { INDIAN_STATES, resolveStateSelectValue } from '../../../constants/indianStates';
+import { lookupAndResolvePincode } from '../../../utils/pincodeLookup';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MOBILE_RE = /^\d{10}$/;
@@ -48,12 +50,12 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
         industry: customer.industry || '',
         billing_address: typeof customer.billing_address === 'string' ? customer.billing_address : customer.billing_address?.address || '',
         billing_city: customer.billing_city || '',
-        billing_state: customer.billing_state || '',
+        billing_state: resolveStateSelectValue(customer.billing_state || ''),
         billing_pincode: customer.billing_pincode || '',
         shipping_same: customer.shipping_same !== false,
         shipping_address: customer.shipping_address || '',
         shipping_city: customer.shipping_city || '',
-        shipping_state: customer.shipping_state || '',
+        shipping_state: resolveStateSelectValue(customer.shipping_state || ''),
         shipping_pincode: customer.shipping_pincode || '',
         whatsapp_number: customer.whatsapp_number || '',
         designation: customer.designation || '',
@@ -88,6 +90,18 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
   if (!open) return null;
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  const handlePincodeAutofill = async (value, cityKey, stateKey, setPin) => {
+    const { pin, info } = await lookupAndResolvePincode(value);
+    setPin(pin);
+    if (info) {
+      setForm((f) => ({
+        ...f,
+        [cityKey]: info.city || f[cityKey],
+        [stateKey]: info.state || f[stateKey],
+      }));
+    }
+  };
 
   const setMobile = (k, v) => {
     set(k, v.replace(/\D/g, '').slice(0, 10));
@@ -298,8 +312,20 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
           {['billing_city', 'billing_state', 'billing_pincode'].map((k) => (
             <div key={k}>
               <label className="text-xs text-gray-500 capitalize">{k.replace('billing_', '')}</label>
-              <input value={form[k]} onChange={(e) => set(k, e.target.value)}
-                className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              {k === 'billing_state' ? (
+                <select value={form.billing_state} onChange={(e) => set('billing_state', e.target.value)}
+                  className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white">
+                  <option value="">Select state</option>
+                  {INDIAN_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              ) : k === 'billing_pincode' ? (
+                <input value={form.billing_pincode}
+                  onChange={(e) => handlePincodeAutofill(e.target.value, 'billing_city', 'billing_state', (pin) => set('billing_pincode', pin))}
+                  className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              ) : (
+                <input value={form[k]} onChange={(e) => set(k, e.target.value)}
+                  className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              )}
             </div>
           ))}
 
@@ -349,8 +375,20 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
               ].map(([k, label]) => (
                 <div key={k}>
                   <label className="text-xs text-gray-500">{label}</label>
-                  <input value={form[k]} onChange={(e) => set(k, e.target.value)}
-                    className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                  {k === 'shipping_state' ? (
+                    <select value={form.shipping_state} onChange={(e) => set('shipping_state', e.target.value)}
+                      className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white">
+                      <option value="">Select state</option>
+                      {INDIAN_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  ) : k === 'shipping_pincode' ? (
+                    <input value={form.shipping_pincode}
+                      onChange={(e) => handlePincodeAutofill(e.target.value, 'shipping_city', 'shipping_state', (pin) => set('shipping_pincode', pin))}
+                      className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                  ) : (
+                    <input value={form[k]} onChange={(e) => set(k, e.target.value)}
+                      className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                  )}
                 </div>
               ))}
             </>
@@ -393,8 +431,27 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
                   ].map(([k, label]) => (
                     <div key={k}>
                       <label className="text-xs text-gray-500">{label}</label>
-                      <input value={addrForm[k]} onChange={(e) => setAddrForm((f) => ({ ...f, [k]: e.target.value }))}
-                        className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" />
+                      {k === 'state' ? (
+                        <select value={addrForm.state} onChange={(e) => setAddrForm((f) => ({ ...f, state: e.target.value }))}
+                          className="w-full mt-1 border rounded-lg px-3 py-2 text-sm bg-white">
+                          <option value="">Select state</option>
+                          {INDIAN_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      ) : k === 'pincode' ? (
+                        <input value={addrForm.pincode}
+                          onChange={async (e) => {
+                            const { pin, info } = await lookupAndResolvePincode(e.target.value);
+                            setAddrForm((f) => ({
+                              ...f,
+                              pincode: pin,
+                              ...(info ? { city: info.city || f.city, state: info.state || f.state } : {}),
+                            }));
+                          }}
+                          className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" />
+                      ) : (
+                        <input value={addrForm[k]} onChange={(e) => setAddrForm((f) => ({ ...f, [k]: e.target.value }))}
+                          className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" />
+                      )}
                     </div>
                   ))}
                   <div className="sm:col-span-2 flex gap-2">

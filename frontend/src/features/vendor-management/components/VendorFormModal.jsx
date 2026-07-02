@@ -8,19 +8,11 @@ import {
   updateVendorPortalAccess
 } from '../vendorManagementApi';
 import { getBackendOrigin } from '../../../utils/api';
+import { INDIAN_STATE_OPTIONS, matchIndianState, slugifyState } from '../../../constants/indianStates';
+import { lookupAndResolvePincode } from '../../../utils/pincodeLookup';
 import { GSTIN_RE, IFSC_RE } from '../vendorMgmtUi';
 
-const INDIAN_STATE_NAMES = [
-  'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 'Gujarat',
-  'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala', 'Madhya Pradesh', 'Maharashtra',
-  'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab', 'Rajasthan', 'Sikkim',
-  'Tamil Nadu', 'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal'
-];
-
-const STATE_OPTIONS = INDIAN_STATE_NAMES.map((name) => ({
-  label: name,
-  value: name.toLowerCase().replace(/\s+/g, '_')
-}));
+const STATE_OPTIONS = INDIAN_STATE_OPTIONS;
 
 const BUSINESS_TYPES = ['Proprietorship', 'Partnership', 'Pvt Ltd', 'LLP', 'Other'];
 
@@ -187,8 +179,11 @@ export default function VendorFormModal({ open, mode, vendorId, onClose, onSaved
         if (!data.success || !v) throw new Error('Not found');
         if (cancelled) return;
 
-        let st = String(v.state || '').trim().toLowerCase().replace(/\s+/g, '_');
-        if (!STATE_OPTIONS.some((o) => o.value === st)) st = 'madhya_pradesh';
+        let st = slugifyState(v.state || '');
+        if (!STATE_OPTIONS.some((o) => o.value === st)) {
+          const matched = matchIndianState(v.state);
+          st = matched ? slugifyState(matched) : st;
+        }
 
         setForm({
           status: v.status || 'approved',
@@ -507,7 +502,18 @@ export default function VendorFormModal({ open, mode, vendorId, onClose, onSaved
                 <TextInput
                   label="Pincode"
                   value={form.pincode}
-                  onChange={(v) => onChange('pincode', v.replace(/\D/g, '').slice(0, 6))}
+                  onChange={async (v) => {
+                    const { pin, info } = await lookupAndResolvePincode(v);
+                    onChange('pincode', pin);
+                    if (info) {
+                      setForm((f) => ({
+                        ...f,
+                        pincode: pin,
+                        city: info.city || f.city,
+                        state: info.stateSlug || f.state,
+                      }));
+                    }
+                  }}
                 />
               </div>
               <TextArea
