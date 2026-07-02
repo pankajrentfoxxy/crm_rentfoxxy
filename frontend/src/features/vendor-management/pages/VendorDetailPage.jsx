@@ -118,17 +118,35 @@ export default function VendorDetailPage() {
           <DetailRow label="MSME" value={vendor.msme_number} />
         </Section>
 
-        <Section title="Contact">
-          <DetailRow label="Contact person" value={vendor.contact_person_name || vendor.f_name} />
-          <DetailRow label="Phone" value={vendor.contact_person_phone || vendor.number || vendor.phone} />
-          <DetailRow label="Alternate phone" value={vendor.alternate_phone} />
-          <DetailRow label="Email" value={vendor.email} />
+        <Section title="Registered Address">
           <DetailRow label="Address" value={vendor.address} />
           <DetailRow
             label="City / State"
             value={[vendor.city, formatStateLabel(vendor.state)].filter(Boolean).join(', ')}
           />
           <DetailRow label="Pincode" value={vendor.pincode} />
+        </Section>
+
+        <Section title="Shipping Address">
+          {vendor.shipping_same !== false ? (
+            <p className="text-sm text-slate-600">Same as registered address</p>
+          ) : (
+            <>
+              <DetailRow label="Address" value={vendor.shipping_address} />
+              <DetailRow
+                label="City / State"
+                value={[vendor.shipping_city, formatStateLabel(vendor.shipping_state)].filter(Boolean).join(', ')}
+              />
+              <DetailRow label="Pincode" value={vendor.shipping_pincode} />
+            </>
+          )}
+        </Section>
+
+        <Section title="Contact">
+          <DetailRow label="Contact person" value={vendor.contact_person_name || vendor.f_name} />
+          <DetailRow label="Phone" value={vendor.contact_person_phone || vendor.number || vendor.phone} />
+          <DetailRow label="Alternate phone" value={vendor.alternate_phone} />
+          <DetailRow label="Email" value={vendor.email} />
         </Section>
 
         <Section title="Banking">

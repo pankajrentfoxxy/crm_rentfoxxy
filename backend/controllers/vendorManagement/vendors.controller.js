@@ -14,6 +14,17 @@ const {
 
 const UPLOAD_SUB = 'vendor-management';
 
+let vendorShippingSchemaEnsured = false;
+
+async function ensureVendorShippingSchema() {
+  if (vendorShippingSchemaEnsured) return;
+  const migrationPath = path.join(__dirname, '../../migrations/123_vendor_shipping_address.sql');
+  if (fs.existsSync(migrationPath)) {
+    await pool.query(fs.readFileSync(migrationPath, 'utf8'));
+  }
+  vendorShippingSchemaEnsured = true;
+}
+
 function ensureUploadDir() {
   const dir = path.join(__dirname, '..', '..', 'uploads', UPLOAD_SUB);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -105,11 +116,17 @@ function extendedVendorValidators() {
     body('alternate_phone').optional({ checkFalsy: true }).isString().isLength({ max: 32 }),
     body('city').optional({ checkFalsy: true }).isString().isLength({ max: 100 }),
     body('pincode').optional({ checkFalsy: true }).isString().isLength({ max: 10 }),
-    body('notes').optional({ checkFalsy: true }).isString().isLength({ max: 5000 })
+    body('notes').optional({ checkFalsy: true }).isString().isLength({ max: 5000 }),
+    body('shipping_same').optional().isBoolean(),
+    body('shipping_address').optional({ checkFalsy: true }).isString().isLength({ max: 5000 }),
+    body('shipping_city').optional({ checkFalsy: true }).isString().isLength({ max: 100 }),
+    body('shipping_state').optional({ checkFalsy: true }).isString().isLength({ max: 128 }),
+    body('shipping_pincode').optional({ checkFalsy: true }).isString().isLength({ max: 10 })
   ];
 }
 
 function pickExtendedVendorFields(body) {
+  const shippingSame = body.shipping_same === false || body.shipping_same === 'false' ? false : true;
   return {
     po_payment_terms: body.po_payment_terms || 'postpaid_monthly',
     credit_days: body.credit_days != null && body.credit_days !== '' ? Number(body.credit_days) : 1,
@@ -120,7 +137,12 @@ function pickExtendedVendorFields(body) {
     alternate_phone: body.alternate_phone || null,
     city: body.city || null,
     pincode: body.pincode || null,
-    notes: body.notes || null
+    notes: body.notes || null,
+    shipping_same: shippingSame,
+    shipping_address: shippingSame ? null : (body.shipping_address || null),
+    shipping_city: shippingSame ? null : (body.shipping_city || null),
+    shipping_state: shippingSame ? null : (body.shipping_state || null),
+    shipping_pincode: shippingSame ? null : (body.shipping_pincode || null),
   };
 }
 
@@ -144,6 +166,7 @@ function normalizeVendorRow(row) {
 const getValidators = [param('id').isInt().toInt()];
 
 async function getVendor(req, res) {
+  await ensureVendorShippingSchema();
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
   const { id } = req.params;
@@ -209,6 +232,7 @@ function createValidators() {
 }
 
 async function createVendor(req, res) {
+  await ensureVendorShippingSchema();
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
 
@@ -241,9 +265,10 @@ async function createVendor(req, res) {
         contact_person_name, contact_person_phone, alternate_phone,
         bank_name, account_number, bank_ifsc_code, account_holder_name,
         po_payment_terms, credit_days, notes,
+        shipping_same, shipping_address, shipping_city, shipping_state, shipping_pincode,
         image_url, logo_url, licenses_url, remember_pass_plain, vendor_portal_enabled
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,TRUE
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,TRUE
       ) RETURNING *`,
       [
         req.body.status,
@@ -276,6 +301,11 @@ async function createVendor(req, res) {
         ext.po_payment_terms,
         ext.credit_days,
         ext.notes,
+        ext.shipping_same,
+        ext.shipping_address,
+        ext.shipping_city,
+        ext.shipping_state,
+        ext.shipping_pincode,
         image_url,
         logo_url,
         licenses_url,
@@ -357,6 +387,7 @@ function updateValidatorsFixed() {
 }
 
 async function updateVendor(req, res) {
+  await ensureVendorShippingSchema();
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
   const vendor_id = Number(req.params.id);
@@ -421,12 +452,17 @@ async function updateVendor(req, res) {
       po_payment_terms = $28,
       credit_days = $29,
       notes = $30,
-      image_url = $31,
-      logo_url = $32,
-      licenses_url = $33,
-      remember_pass_plain = $34,
+      shipping_same = $31,
+      shipping_address = $32,
+      shipping_city = $33,
+      shipping_state = $34,
+      shipping_pincode = $35,
+      image_url = $36,
+      logo_url = $37,
+      licenses_url = $38,
+      remember_pass_plain = $39,
       updated_at = NOW()
-     WHERE vendor_id = $35 AND deleted_at IS NULL
+     WHERE vendor_id = $40 AND deleted_at IS NULL
      RETURNING *`,
     [
       req.body.status,
@@ -459,6 +495,11 @@ async function updateVendor(req, res) {
       ext.po_payment_terms,
       ext.credit_days,
       ext.notes,
+      ext.shipping_same,
+      ext.shipping_address,
+      ext.shipping_city,
+      ext.shipping_state,
+      ext.shipping_pincode,
       image_url,
       logo_url,
       licenses_url,

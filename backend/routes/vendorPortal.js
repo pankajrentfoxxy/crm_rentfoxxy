@@ -32,5 +32,6 @@ router.get('/bills', vendorPortalAuth, portal.listBillsValidators, portal.listVe
 router.get('/bills/:billId', vendorPortalAuth, portal.billIdParam, portal.getBillDetail);
 router.get('/debit-notes', vendorPortalAuth, portal.listVendorDebitNotes);
 router.get('/returns', vendorPortalAuth, portal.listReturnsValidators, portal.listVendorReturns);
+router.get('/repair-challans', vendorPortalAuth, require('../controllers/vendorRepairController').listVendorPortalRepairDcs);
 
 module.exports = router;

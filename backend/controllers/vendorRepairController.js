@@ -28,12 +28,15 @@ exports.createOutForRepair = async (req, res) => {
       vendorId: req.body.vendor_id || req.body.vendorId,
       vendorName: req.body.vendor_name || req.body.vendorName,
       vendorAddress: req.body.vendor_address || req.body.vendorAddress,
+      billingAddress: req.body.billing_address || req.body.billingAddress,
+      shippingAddress: req.body.shipping_address || req.body.shippingAddress,
       contactPerson: req.body.contact_person || req.body.contactPerson,
       contactMobile: req.body.contact_mobile || req.body.contactMobile,
       expectedReturnDate: req.body.expected_return_date || req.body.expectedReturnDate,
       remarks: req.body.remarks,
       warehouseName: req.body.warehouse_name || req.body.warehouseName,
       warehouseAddress: req.body.warehouse_address || req.body.warehouseAddress,
+      itemRemarks: req.body.item_remarks || req.body.itemRemarks || {},
       actorUserId: req.user.user_id,
       actorName: req.user.name,
     });
@@ -87,13 +90,17 @@ exports.receiveBack = async (req, res) => {
     await client.query('BEGIN');
     const result = await svc.receiveFromVendor(client, {
       dcNumber: req.params.dcNumber,
+      ticketIds: req.body.ticket_ids || req.body.ticketIds || null,
       warehouseEsign: req.body.warehouse_esign,
       vendorEsign: req.body.vendor_esign,
       actorUserId: req.user.user_id,
       actorName: req.user.name,
     });
     await client.query('COMMIT');
-    res.json({ success: true, message: 'Received back at warehouse — QC Process', ...result });
+    const msg = result.status === 'returned'
+      ? 'All laptops received — moved to Floor Manager'
+      : `Received ${result.tickets_updated} laptop(s) — ${result.items_pending} still out for repair`;
+    res.json({ success: true, message: msg, ...result });
   } catch (err) {
     await client.query('ROLLBACK');
     res.status(400).json({ success: false, message: err.message || 'Receive back failed' });
@@ -124,6 +131,51 @@ exports.receiveErpRepairBack = async (req, res) => {
     res.status(400).json({ success: false, message: err.message || 'Receive failed' });
   } finally {
     client.release();
+  }
+};
+
+exports.downloadReceivePdf = async (req, res) => {
+  try {
+    await svc.ensureVendorRepairSchema();
+    const dc = await svc.getVendorRepairDc(req.params.dcNumber);
+    if (!dc?.receive_pdf_path) {
+      const { generateVendorRepairReceivePdf } = require('../services/vendorRepairPdfService');
+      const itemIds = (dc?.items || []).filter((i) => i.item_status === 'received').map((i) => i.id);
+      if (!itemIds.length) return res.status(404).json({ success: false, message: 'Receive PDF not found' });
+      const rel = await generateVendorRepairReceivePdf(req.params.dcNumber, dc.receive_dc_number || `${req.params.dcNumber}-R01`, itemIds);
+      if (!rel) return res.status(404).json({ success: false, message: 'PDF not found' });
+      const abs = path.join(__dirname, '../uploads', rel);
+      return res.download(abs, path.basename(abs));
+    }
+    const abs = path.join(__dirname, '../uploads', dc.receive_pdf_path);
+    if (!fs.existsSync(abs)) return res.status(404).json({ success: false, message: 'PDF file missing' });
+    res.download(abs, path.basename(abs));
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message || 'PDF download failed' });
+  }
+};
+
+exports.listVendorPortalRepairDcs = async (req, res) => {
+  try {
+    await svc.ensureVendorRepairSchema();
+    const vendorId = req.vendor?.vendor_id;
+    const { rows } = await pool.query(
+      `SELECT d.*,
+              (SELECT json_agg(json_build_object(
+                'id', i.id, 'ttspl_id', i.ttspl_id, 'serial_number', i.serial_number,
+                'configuration', i.configuration, 'item_remarks', i.item_remarks,
+                'item_status', i.item_status, 'receive_dc_number', i.receive_dc_number
+              ) ORDER BY i.id)
+               FROM vendor_repair_dc_items i WHERE i.dc_number = d.dc_number) AS items
+         FROM vendor_repair_delivery_challans d
+        WHERE d.vendor_id = $1
+        ORDER BY d.created_at DESC
+        LIMIT 100`,
+      [vendorId]
+    );
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message || 'Failed to load repair challans' });
   }
 };
 
