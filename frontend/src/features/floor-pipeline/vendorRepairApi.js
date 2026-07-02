@@ -26,6 +26,14 @@ export function signVendorRepairDispatch(dcNumber, body) {
   return api.post(`${base}/dc/${encodeURIComponent(dcNumber)}/dispatch-sign`, body);
 }
 
+export function updateVendorRepairDispatchDetails(dcNumber, body) {
+  return api.patch(`${base}/dc/${encodeURIComponent(dcNumber)}/dispatch-details`, body);
+}
+
+export function markVendorRepairDeliveredToVendor(dcNumber) {
+  return api.post(`${base}/dc/${encodeURIComponent(dcNumber)}/mark-delivered-to-vendor`);
+}
+
 export function receiveVendorRepairBack(dcNumber, body) {
   return api.post(`${base}/dc/${encodeURIComponent(dcNumber)}/receive-back`, body);
 }

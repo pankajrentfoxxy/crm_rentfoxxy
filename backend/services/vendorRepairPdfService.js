@@ -48,9 +48,12 @@ async function loadDc(dcNumber) {
             v.shipping_address AS vendor_ship_address,
             v.shipping_city AS vendor_ship_city,
             v.shipping_state AS vendor_ship_state,
-            v.shipping_pincode AS vendor_ship_pincode
+            v.shipping_pincode AS vendor_ship_pincode,
+            dt.first_name AS delivery_person_first_name,
+            dt.last_name AS delivery_person_last_name
        FROM vendor_repair_delivery_challans d
        LEFT JOIN vendors v ON v.vendor_id = d.vendor_id AND v.deleted_at IS NULL
+       LEFT JOIN delivery_technicians dt ON dt.technician_id = d.delivery_person_id
       WHERE d.dc_number = $1`,
     [dcNumber]
   );
@@ -152,62 +155,149 @@ function drawCompanyHeader(doc, company, { docTitle, docNumber, rightLabel, righ
     doc.text(`Address: ${company.address}`, L, y, { width: W });
     y += doc.heightOfString(`Address: ${company.address}`, { width: W }) + 4;
   }
-  if (docNumber) {
-    doc.font('Helvetica-Bold').fontSize(10).fillColor(C.ink).text(`Challan No: ${docNumber}`, L, y);
-    y += 14;
-  }
 
   return y + 8;
 }
 
-function writeAddressColumns(doc, y, companyFrom, vendorBilling, vendorShipping) {
+/** Two boxed columns — vendor billing + shipping (company is already in header). */
+function writeVendorAddressBoxes(doc, y, vendorBilling, vendorShipping) {
   const L = 40;
-  const colW = 168;
-  const cols = [
-    { title: 'Our Address (Dispatch From)', text: companyFrom },
-    { title: 'Vendor Billing Address', text: vendorBilling },
-    { title: 'Vendor Shipping Address', text: vendorShipping },
-  ];
-  let maxH = 0;
-  cols.forEach((col, idx) => {
-    const x = L + idx * (colW + 8);
-    doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink).text(col.title, x, y, { width: colW });
-    doc.font('Helvetica').fontSize(8).fillColor(C.ink);
-    const h = doc.heightOfString(String(col.text || '—'), { width: colW });
-    doc.text(String(col.text || '—'), x, y + 14, { width: colW });
-    maxH = Math.max(maxH, h + 14);
-  });
-  return y + maxH + 12;
+  const R = 555;
+  const W = R - L;
+  const colW = (W - 12) / 2;
+  const boxTop = y;
+
+  const drawBox = (x, title, body) => {
+    let yy = boxTop + 8;
+    doc.font('Helvetica-Bold').fontSize(10).fillColor(C.ink).text(title, x + 10, yy, { width: colW - 20 });
+    yy += 16;
+    doc.font('Helvetica').fontSize(8.5).fillColor(C.ink);
+    String(body || '—').split('\n').forEach((line) => {
+      if (!line.trim()) return;
+      doc.text(line.trim(), x + 10, yy, { width: colW - 20 });
+      yy = doc.y + 2;
+    });
+    return yy;
+  };
+
+  const leftEnd = drawBox(L, 'Vendor Billing Address', vendorBilling);
+  const rightEnd = drawBox(L + colW + 12, 'Vendor Shipping Address', vendorShipping);
+  const boxBottom = Math.max(leftEnd, rightEnd) + 8;
+  doc.roundedRect(L, boxTop, colW, boxBottom - boxTop, 6).strokeColor(C.line).lineWidth(1).stroke();
+  doc.roundedRect(L + colW + 12, boxTop, colW, boxBottom - boxTop, 6).strokeColor(C.line).lineWidth(1).stroke();
+  return boxBottom + 14;
+}
+
+function parseItemProduct(item) {
+  const parts = String(item.configuration || '').split('·').map((s) => s.trim()).filter(Boolean);
+  const brand = parts[0] || '';
+  const model = parts[1] || '';
+  const processor = parts[2] || '';
+  const generation = parts[3] || '';
+  const ram = parts[4] || '';
+  const storage = parts[5] || '';
+  const l1 = `${brand} ${model}`.replace(/\s+/g, ' ').trim();
+  const l2 = [processor, generation].filter(Boolean).join(' | ');
+  const l3 = [ram, storage].filter(Boolean).join(' | ');
+  const l5 = [item.serial_number, item.ttspl_id].filter(Boolean).join('  ');
+  return { l1, l2, l3, l5 };
 }
 
 function writeItemsTable(doc, y, items, { title = 'Laptops' } = {}) {
   const L = 40;
   const R = 555;
-  doc.font('Helvetica-Bold').fontSize(11).fillColor(C.ink).text(title, L, y);
-  y += 16;
-  doc.rect(L, y, R - L, 18).fill(C.panel);
-  doc.fillColor(C.sub).font('Helvetica-Bold').fontSize(8);
-  doc.text('#', L + 6, y + 5, { width: 20 });
-  doc.text('TTSPL', L + 28, y + 5, { width: 80 });
-  doc.text('Serial', L + 110, y + 5, { width: 90 });
-  doc.text('Configuration', L + 205, y + 5, { width: 180 });
-  doc.text('Remarks', L + 390, y + 5, { width: 150 });
-  y += 22;
+  const W = R - L;
 
-  (items || []).forEach((item, idx) => {
-    if (y > 720) {
+  doc.font('Helvetica-Bold').fontSize(11).fillColor(C.ink).text(title, L, y);
+  y += 14;
+
+  const cols = [
+    { key: 'product', label: 'Product', w: 320, align: 'left' },
+    { key: 'qty', label: 'Qty.', w: 55, align: 'center' },
+    { key: 'remarks', label: 'Remarks', w: W - 375, align: 'left' },
+  ];
+
+  const drawTableHeader = (yy) => {
+    doc.rect(L, yy, W, 22).fill(C.teal);
+    let cx = L;
+    doc.fillColor(C.white).font('Helvetica-Bold').fontSize(9);
+    for (const c of cols) {
+      doc.text(c.label, cx + 6, yy + 6, { width: c.w - 12, align: c.align });
+      cx += c.w;
+    }
+    return yy + 22;
+  };
+
+  y = drawTableHeader(y);
+  doc.font('Helvetica').fontSize(8.5).fillColor(C.ink);
+
+  (items || []).forEach((item) => {
+    const p = parseItemProduct(item);
+    const pLines = [p.l1, p.l2, p.l3, p.l5].filter(Boolean);
+    const rowH = Math.max(46, 12 + pLines.length * 11);
+    if (y + rowH > 760) {
       doc.addPage();
       y = 40;
+      y = drawTableHeader(y);
     }
-    doc.fillColor(C.ink).font('Helvetica').fontSize(8);
-    doc.text(String(idx + 1), L + 6, y, { width: 20 });
-    doc.text(String(item.ttspl_id || '—'), L + 28, y, { width: 80 });
-    doc.text(String(item.serial_number || '—'), L + 110, y, { width: 90 });
-    doc.text(String(item.configuration || '—'), L + 205, y, { width: 180 });
-    doc.text(String(item.item_remarks || '—'), L + 390, y, { width: 150 });
-    y += 16;
+
+    let cx = L;
+    for (const c of cols) {
+      doc.rect(cx, y, c.w, rowH).strokeColor(C.line).lineWidth(0.6).stroke();
+      cx += c.w;
+    }
+
+    let py = y + 6;
+    if (p.l1) {
+      doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.ink).text(p.l1, L + 6, py, { width: cols[0].w - 12 });
+      py += 11;
+    }
+    doc.font('Helvetica').fontSize(8).fillColor(C.sub);
+    if (p.l2) { doc.text(p.l2, L + 6, py, { width: cols[0].w - 12 }); py += 10; }
+    if (p.l3) { doc.text(p.l3, L + 6, py, { width: cols[0].w - 12 }); py += 10; }
+    if (p.l5) {
+      doc.font('Helvetica-Bold').fontSize(8).fillColor(C.ink).text(p.l5, L + 6, py, { width: cols[0].w - 12 });
+    }
+
+    const qtyX = L + cols[0].w;
+    doc.font('Helvetica').fontSize(8.5).fillColor(C.ink)
+      .text('1 Pcs.', qtyX + 6, y + rowH / 2 - 5, { width: cols[1].w - 12, align: 'center' });
+
+    const remX = qtyX + cols[1].w;
+    doc.text(String(item.item_remarks || '—'), remX + 6, y + 8, { width: cols[2].w - 12, align: 'left' });
+
+    y += rowH;
   });
-  return y + 8;
+
+  return y + 10;
+}
+
+function dispatchTagsForDc(dc) {
+  const tags = [];
+  const shipBy = dc.ship_by || dc.dispatch_mode;
+  if (shipBy === 'by_hand' || shipBy === 'inhouse') tags.push('By Hand');
+  else if (shipBy === 'by_courier' || shipBy === 'courier') tags.push('By Courier');
+  else if (shipBy === 'by_porter' || shipBy === 'porter') tags.push('By Porter');
+  const person = [dc.delivery_person_first_name, dc.delivery_person_last_name].filter(Boolean).join(' ').trim();
+  if (person) tags.push(person);
+  if (dc.courier_name) tags.push(dc.courier_name);
+  if (dc.awb_number) tags.push(dc.awb_number);
+  if (dc.porter_tracking_id) tags.push(dc.porter_tracking_id);
+  return tags;
+}
+
+function drawDispatchTags(doc, y, tags) {
+  if (!tags.length) return y;
+  const L = 40;
+  const accent = C.accent;
+  let tx = L;
+  for (const t of tags) {
+    const w = doc.font('Helvetica').fontSize(8).widthOfString(t) + 16;
+    doc.roundedRect(tx, y, w, 16, 8).strokeColor(accent).lineWidth(0.8).stroke();
+    doc.fillColor(accent).text(t, tx + 8, y + 4);
+    tx += w + 6;
+  }
+  return y + 24;
 }
 
 async function generateVendorRepairPdf(dcNumber) {
@@ -215,7 +305,6 @@ async function generateVendorRepairPdf(dcNumber) {
   if (!dc) return null;
 
   const company = await loadCompany();
-  const companyFrom = formatCompanyBlock(company);
   const vendorBilling = dc.vendor_billing_display || dc.vendor_address || dc.vendor_name || '—';
   const vendorShipping = dc.vendor_shipping_display || dc.shipping_address || dc.vendor_address || '—';
 
@@ -238,12 +327,17 @@ async function generateVendorRepairPdf(dcNumber) {
     });
 
     doc.font('Helvetica').fontSize(9).fillColor(C.sub);
-    doc.text(`Status: ${dc.status || '—'}`, 40, y);
-    doc.text(`Out Date: ${dc.out_date ? new Date(dc.out_date).toLocaleDateString('en-IN') : '—'}`, 200, y);
-    doc.text(`Expected Return: ${dc.expected_return_date ? new Date(dc.expected_return_date).toLocaleDateString('en-IN') : '—'}`, 360, y);
-    y += 20;
+    const deliveryLabel = dc.vendor_delivered_at
+      ? `Delivered to vendor: ${new Date(dc.vendor_delivered_at).toLocaleDateString('en-IN')}`
+      : (dc.dispatched_at ? 'In transit to vendor' : 'Pending dispatch');
+    doc.text(`Status: ${dc.status || '—'} · ${deliveryLabel}`, 40, y);
+    doc.text(`Out Date: ${dc.out_date ? new Date(dc.out_date).toLocaleDateString('en-IN') : '—'}`, 40, y + 12);
+    doc.text(`Expected Return: ${dc.expected_return_date ? new Date(dc.expected_return_date).toLocaleDateString('en-IN') : '—'}`, 280, y + 12);
+    y += 28;
 
-    y = writeAddressColumns(doc, y, companyFrom, vendorBilling, vendorShipping);
+    y = drawDispatchTags(doc, y, dispatchTagsForDc(dc));
+
+    y = writeVendorAddressBoxes(doc, y, vendorBilling, vendorShipping);
     doc.font('Helvetica').fontSize(9).fillColor(C.ink);
     doc.text(`Vendor: ${dc.vendor_name || '—'}`, 40, y);
     y += 12;
@@ -252,7 +346,8 @@ async function generateVendorRepairPdf(dcNumber) {
 
     y = writeItemsTable(doc, y, dc.items);
     if (dc.remarks) {
-      doc.font('Helvetica-Bold').fontSize(9).text('Remarks:', 40, y);
+      y += 4;
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink).text('DC Remarks:', 40, y);
       doc.font('Helvetica').fontSize(9).text(dc.remarks, 40, y + 12, { width: 515 });
     }
 
@@ -273,7 +368,6 @@ async function generateVendorRepairReceivePdf(dcNumber, receiveDcNumber, itemIds
   const dc = await loadDc(dcNumber);
   if (!dc) return null;
   const company = await loadCompany();
-  const companyFrom = formatCompanyBlock(company);
   const vendorBilling = dc.vendor_billing_display || dc.vendor_address || dc.vendor_name || '—';
   const vendorShipping = dc.vendor_shipping_display || dc.shipping_address || dc.vendor_address || '—';
   const ids = (itemIds || []).map(Number).filter(Boolean);
@@ -302,7 +396,7 @@ async function generateVendorRepairReceivePdf(dcNumber, receiveDcNumber, itemIds
     doc.text(`Receive Date: ${new Date().toLocaleDateString('en-IN')}`, 300, y);
     y += 20;
 
-    y = writeAddressColumns(doc, y, companyFrom, vendorBilling, vendorShipping);
+    y = writeVendorAddressBoxes(doc, y, vendorBilling, vendorShipping);
     y = writeItemsTable(doc, y, items, { title: 'Laptops Received' });
     doc.font('Helvetica').fontSize(8).fillColor(C.sub)
       .text('Warehouse POD + Vendor acknowledgement captured via e-sign in CRM.', 40, y);

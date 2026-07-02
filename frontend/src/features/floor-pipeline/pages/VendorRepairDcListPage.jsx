@@ -9,7 +9,7 @@ import {
   downloadVendorRepairPdf,
   fetchVendorRepairDcList,
 } from '../vendorRepairApi';
-import { vendorRepairStatusClass, vendorRepairStatusLabel } from '../vendorRepairUi';
+import { vendorRepairStatusClass, vendorRepairStatusLabel, vendorRepairDispatchModeLabel, vendorDeliveryStatusLabel, vendorDeliveryStatusClass } from '../vendorRepairUi';
 
 const PAGE_SIZE = 25;
 const WAREHOUSE_ROLES = new Set(['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'support_lead']);
@@ -111,6 +111,8 @@ export default function VendorRepairDcListPage() {
                   <th className="p-3">VRDC #</th>
                   <th className="p-3">Vendor</th>
                   <th className="p-3">Status</th>
+                  <th className="p-3">Send mode</th>
+                  <th className="p-3">Vendor delivery</th>
                   <th className="p-3">Laptops</th>
                   <th className="p-3">Out Date</th>
                   <th className="p-3">Expected Return</th>
@@ -125,6 +127,12 @@ export default function VendorRepairDcListPage() {
                     <td className="p-3">
                       <span className={`px-2 py-0.5 rounded-full text-xs ${vendorRepairStatusClass(r.status)}`}>
                         {vendorRepairStatusLabel(r.status)}
+                      </span>
+                    </td>
+                    <td className="p-3 text-xs">{vendorRepairDispatchModeLabel(r.ship_by, r.dispatch_mode)}</td>
+                    <td className="p-3">
+                      <span className={`px-2 py-0.5 rounded-full text-xs ${vendorDeliveryStatusClass(r)}`}>
+                        {vendorDeliveryStatusLabel(r)}
                       </span>
                     </td>
                     <td className="p-3 text-xs">
@@ -165,7 +173,7 @@ export default function VendorRepairDcListPage() {
                 ))}
                 {!rows.length ? (
                   <tr>
-                    <td colSpan={7} className="p-8 text-center text-slate-500">
+                    <td colSpan={9} className="p-8 text-center text-slate-500">
                       No vendor repair challans yet. Create one from{' '}
                       <Link to="/floor-pipeline/diagnosis-failed" className="text-blue-600 hover:underline">Diagnosis Failed</Link>.
                     </td>

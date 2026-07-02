@@ -50,6 +50,45 @@ export function formatVendorShippingFromVendor(vendor, { includeName = true } = 
   return lines.join('\n');
 }
 
+export function formatVrdcProductLines(item) {
+  const parts = String(item?.configuration || '').split('·').map((s) => s.trim()).filter(Boolean);
+  const brand = parts[0] || '';
+  const model = parts[1] || '';
+  const title = `${brand} ${model}`.replace(/\s+/g, ' ').trim();
+  const specs = [
+    [parts[2], parts[3]].filter(Boolean).join(' | '),
+    [parts[4], parts[5]].filter(Boolean).join(' | '),
+  ].filter(Boolean);
+  const ids = [item?.serial_number, item?.ttspl_id].filter(Boolean).join(' · ');
+  return { title, specs, ids };
+}
+
+export function vendorRepairDispatchModeLabel(shipBy, dispatchMode) {
+  const v = shipBy || dispatchMode;
+  if (v === 'by_hand' || v === 'inhouse') return 'By Hand';
+  if (v === 'by_courier' || v === 'courier') return 'By Courier';
+  if (v === 'by_porter' || v === 'porter') return 'By Porter';
+  return '—';
+}
+
+export function vendorDeliveryStatusLabel(dc) {
+  if (dc?.vendor_delivered_at || dc?.vendor_delivery_status === 'delivered') return 'Delivered to Vendor';
+  if (dc?.dispatched_at || dc?.status === 'dispatched' || dc?.vendor_delivery_status === 'in_transit') {
+    return 'In Transit to Vendor';
+  }
+  return 'Pending Dispatch';
+}
+
+export function vendorDeliveryStatusClass(dc) {
+  if (dc?.vendor_delivered_at || dc?.vendor_delivery_status === 'delivered') {
+    return 'bg-green-100 text-green-800';
+  }
+  if (dc?.dispatched_at || dc?.status === 'dispatched' || dc?.vendor_delivery_status === 'in_transit') {
+    return 'bg-blue-100 text-blue-800';
+  }
+  return 'bg-slate-100 text-slate-700';
+}
+
 export function vendorRepairStatusLabel(status) {
   const map = {
     draft: 'Draft',

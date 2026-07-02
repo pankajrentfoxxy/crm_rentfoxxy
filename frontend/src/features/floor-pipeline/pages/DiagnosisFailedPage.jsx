@@ -7,6 +7,8 @@ import VendorSearchSelect from '../../vendor-management/components/VendorSearchS
 import { fetchVendor } from '../../vendor-management/vendorManagementApi';
 import { fetchDiagnosisFailedTickets, createOutForRepairDc, fetchVendorRepairCompanyDefaults } from '../vendorRepairApi';
 import { DEFAULT_BILLING_ADDRESS, formatVendorBillingFromVendor, formatVendorShippingFromVendor } from '../vendorRepairUi';
+import VrdcDispatchFields, { validateVrdcDispatch } from '../components/VrdcDispatchFields';
+import { fetchDeliveryTechnicians } from '../../../utils/deliveryRegisterApi';
 import { ticketStatusLabel } from '../floorPipelineUi';
 import { formatStateLabel } from '../../vendor-management/vendorMgmtUi';
 
@@ -35,6 +37,9 @@ export default function DiagnosisFailedPage() {
   const [selected, setSelected] = useState(new Set());
   const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deliveryTechnicians, setDeliveryTechnicians] = useState([]);
+  const [shipBy, setShipBy] = useState('');
+  const [dispatchFields, setDispatchFields] = useState({});
   const [itemRemarks, setItemRemarks] = useState({});
   const [form, setForm] = useState({
     vendor_id: '',
@@ -67,6 +72,9 @@ export default function DiagnosisFailedPage() {
 
   useEffect(() => {
     fetchVendorRepairCompanyDefaults().catch(() => {});
+    fetchDeliveryTechnicians({ limit: 200 })
+      .then((data) => setDeliveryTechnicians(data?.data || data?.technicians || []))
+      .catch(() => {});
   }, []);
 
   const allSelected = rows.length > 0 && selected.size === rows.length;
@@ -135,6 +143,11 @@ export default function DiagnosisFailedPage() {
       toast.error('Vendor billing and shipping addresses are required');
       return;
     }
+    const dispatchErr = validateVrdcDispatch(shipBy, dispatchFields);
+    if (dispatchErr) {
+      toast.error(dispatchErr);
+      return;
+    }
     setSaving(true);
     try {
       const { data } = await createOutForRepairDc({
@@ -151,6 +164,14 @@ export default function DiagnosisFailedPage() {
         warehouse_name: form.warehouse_name.trim() || undefined,
         warehouse_address: DEFAULT_BILLING_ADDRESS,
         item_remarks: itemRemarks,
+        ship_by: shipBy,
+        courier_name: dispatchFields.courier_name,
+        awb_number: dispatchFields.awb_number,
+        courier_tracking_url: dispatchFields.courier_tracking_url,
+        porter_tracking_id: dispatchFields.porter_tracking_id,
+        porter_order_id: dispatchFields.porter_order_id,
+        porter_booking_url: dispatchFields.porter_booking_url,
+        delivery_person_id: dispatchFields.delivery_person_id || undefined,
       });
       toast.success(data.message || 'Vendor DC created');
       setModalOpen(false);
@@ -288,6 +309,16 @@ export default function DiagnosisFailedPage() {
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1">Expected return date</label>
               <input type="date" className="w-full border rounded-lg px-3 py-2 text-sm" value={form.expected_return_date} onChange={(e) => setForm({ ...form, expected_return_date: e.target.value })} />
+            </div>
+            <div className="rounded-lg border p-3 bg-slate-50/80">
+              <p className="text-xs font-semibold uppercase text-slate-500 mb-2">Send to vendor</p>
+              <VrdcDispatchFields
+                shipBy={shipBy}
+                onShipByChange={setShipBy}
+                fields={dispatchFields}
+                onFieldsChange={setDispatchFields}
+                deliveryTechnicians={deliveryTechnicians}
+              />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1">DC-level remarks</label>
