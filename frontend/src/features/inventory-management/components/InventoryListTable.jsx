@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
-import { Clock, ExternalLink, FileImage, FileText, History, Loader2, Pencil, Plus, RefreshCw, X } from 'lucide-react';
+import { Clock, ExternalLink, FileImage, FileSpreadsheet, FileText, History, Loader2, Pencil, Plus, RefreshCw, X } from 'lucide-react';
 import { SearchField, ListPagination } from '../../../components/ui/primitives';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import { useAuth } from '../../../context/AuthContext';
@@ -9,6 +9,7 @@ import {
   createProductionTicket,
   fetchInventoryList,
   fetchInventoryListCounts,
+  exportInventoryListExcel,
   movePassedToQcProcess,
   tagInventorySerial,
   updateInventoryItemDescription,
@@ -564,6 +565,7 @@ export default function InventoryListTable({ routeKey }) {
   const [historyTtspl, setHistoryTtspl] = useState(null);
   const [selectedIds, setSelectedIds] = useState([]);
   const [showAddLaptopModal, setShowAddLaptopModal] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => { setPage(1); }, [search]);
 
@@ -616,6 +618,7 @@ export default function InventoryListTable({ routeKey }) {
   const showTicketId = routeKey === 'qc-process';
   const showQcCreateTicket = routeKey === 'qc-process';
   const showReadyToRentAction = routeKey === 'ready-to-rent-or-sell';
+  const showExportExcel = ['ready-to-rent-or-sell', 'qc-process'].includes(routeKey);
   const showPassedStatus = showReadyToRentAction || ['rent-to-own', 'rental-purchase', 'direct-purchase'].includes(routeKey);
   const showTagColumn = showReadyToRentAction || routeKey === 'ready-to-rent-or-sell';
 
@@ -640,6 +643,19 @@ export default function InventoryListTable({ routeKey }) {
         value: listCounts[card.countKey] ?? 0
       }))
     : null;
+
+  const handleExportExcel = async () => {
+    if (!apiSegment) return;
+    setExporting(true);
+    try {
+      await exportInventoryListExcel(apiSegment, { search: search || undefined });
+      toast.success('Excel export downloaded');
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -679,6 +695,17 @@ export default function InventoryListTable({ routeKey }) {
             >
               <Plus className="w-4 h-4" />
               Add Laptop
+            </button>
+          ) : null}
+          {showExportExcel ? (
+            <button
+              type="button"
+              onClick={handleExportExcel}
+              disabled={exporting || loading}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
+            >
+              {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+              Export Excel
             </button>
           ) : null}
           <button

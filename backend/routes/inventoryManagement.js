@@ -77,6 +77,7 @@ router.post(
   inventoryList.readyToRentActionValidators,
   inventoryList.updateReadyToRentAction
 );
+router.get('/lists/:segment/export.xlsx', invView, inventoryList.listValidators, inventoryList.exportInventoryExcel);
 router.get('/lists/:segment', invView, inventoryList.listValidators, inventoryList.listInventory);
 router.get('/serial-number-status', invView, serialStatus.searchValidators, serialStatus.serialNumberStatus);
 router.get('/universal-search', invView, universalSearch.searchValidators, universalSearch.universalSearch);

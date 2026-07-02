@@ -173,6 +173,107 @@ async function listInventory(req, res) {
   }
 }
 
+async function exportInventoryExcel(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  const segment = normalizeListSegment(req.params.segment);
+  if (!segment) return res.status(400).json({ success: false, message: 'Invalid inventory segment' });
+  if (segment === 'spare_parts') {
+    return res.status(400).json({ success: false, message: 'Export not supported for spare parts' });
+  }
+
+  const search = (req.query.search || '').trim();
+  const limit = Math.min(5000, Math.max(1, parseInt(req.query.limit, 10) || 5000));
+
+  try {
+    const params = [];
+    const { sql: segmentSql } = buildListWhere(segment, params);
+    let searchSql = '';
+    if (search) {
+      params.push(`%${search}%`);
+      const i = params.length;
+      searchSql = ` AND (
+        s.serial_number ILIKE $${i}
+        OR COALESCE(s.inventory_asset_code, '') ILIKE $${i}
+        OR p.purchase_order_number ILIKE $${i}
+        OR COALESCE(v.business_name, '') ILIKE $${i}
+        OR s.extra::text ILIKE $${i}
+      )`;
+    }
+    const fromSql = `
+      FROM vendor_serial_numbers s
+      INNER JOIN vendor_purchase_orders p ON p.po_id = s.po_id AND p.deleted_at IS NULL
+      LEFT JOIN vendors v ON v.vendor_id = p.vendor_id AND v.deleted_at IS NULL
+      LEFT JOIN vendor_goods_received_notes g ON g.grn_id = s.grn_id AND g.deleted_at IS NULL
+      WHERE s.deleted_at IS NULL
+      ${segmentSql}
+      ${searchSql}
+    `;
+    const listParams = [...params, limit];
+    const rowsR = await pool.query(
+      `SELECT
+         s.serial_id, s.serial_number, s.inventory_asset_code, s.qc_status, s.remark,
+         s.extra, s.created_at AS serial_created_at, s.updated_at AS serial_updated_at,
+         s.rental_start_date, s.grn_id, s.inventory_status,
+         p.po_id, p.purchase_order_number, p.purchase_order_type, p.vendor_id, p.line_items,
+         p.product_details_legacy_ids,
+         v.business_name, v.first_name || ' ' || v.last_name AS vendor_name,
+         g.meta->>'product_id' AS grn_product_id,
+         (SELECT t.ticket_id FROM tickets t
+            WHERE t.vendor_serial_id = s.serial_id
+            ORDER BY t.created_at DESC LIMIT 1) AS ticket_id,
+         (SELECT t.ticket_id FROM tickets t
+            WHERE t.vendor_serial_id = s.serial_id
+              AND t.status IN ('in_progress', 'on_hold')
+            ORDER BY t.created_at DESC LIMIT 1) AS active_floor_ticket_id
+       ${fromSql}
+       ORDER BY s.updated_at DESC
+       LIMIT $${listParams.length}`,
+      listParams
+    );
+    const data = await enrichSerialRowsBatch(pool, rowsR.rows);
+    const XLSX = require('xlsx');
+    const sheetRows = data.map((r, idx) => {
+      const receivedFrom = r.received_from?.type === 'vendor'
+        ? (r.vendor_name || 'Vendor')
+        : (r.received_from?.label || r.vendor_name || 'Vendor');
+      const base = {
+        'S.No': idx + 1,
+        TTSPL: r.unique_product_serial || '',
+        'Serial Number': r.serial_number || '',
+        'PO Number': r.purchase_order_number || '',
+        'GRN Number': r.grn_number || '',
+        'Item Description': r.item_description || '',
+        'Locking Period': r.locking_period?.label || '',
+        'PO Type': r.purchase_order_type_label || '',
+        'PO Type Period': r.po_type_period?.label || '',
+        'Received From': receivedFrom,
+        Status: segment === 'passed' ? 'QC Passed' : (r.qc_status || '').replace(/_/g, ' '),
+        'Vendor Name': r.vendor_name || '',
+      };
+      if (segment === 'qc_process') {
+        return { ...base, 'Ticket ID': r.active_floor_ticket_id || r.ticket_id || '' };
+      }
+      if (segment === 'passed') {
+        return { ...base, 'Tagged As': r.inventory_tag || '' };
+      }
+      return base;
+    });
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(sheetRows);
+    XLSX.utils.book_append_sheet(wb, ws, listTitleForSegment(segment).slice(0, 31));
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const safeSegment = String(segment).replace(/[^\w-]+/g, '_');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeSegment}_inventory.xlsx"`);
+    res.send(buf);
+  } catch (e) {
+    console.error('exportInventoryExcel', e);
+    res.status(500).json({ success: false, message: e.message || 'Export failed' });
+  }
+}
+
 async function getListCounts(req, res) {
   try {
     const keys = ['passed', 'qc_process', 'rent_to_own', 'rental_purchase', 'direct_purchase', 'out_for_repare', 'failed', 'spare_parts'];
@@ -669,6 +770,7 @@ async function updateSerialQcStatus(req, res) {
 module.exports = {
   listValidators,
   listInventory,
+  exportInventoryExcel,
   getListCounts,
   readyToRentActionValidators,
   updateReadyToRentAction,

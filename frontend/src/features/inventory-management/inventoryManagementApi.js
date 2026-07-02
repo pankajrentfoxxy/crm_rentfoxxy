@@ -6,6 +6,30 @@ export function fetchInventoryList(segment, params) {
   return api.get(`${base}/lists/${encodeURIComponent(segment)}`, { params });
 }
 
+function downloadBlobResponse(response, fallbackName) {
+  const blob = new Blob([response.data], {
+    type: response.headers['content-type'] || 'application/octet-stream',
+  });
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const disposition = response.headers['content-disposition'] || '';
+  const match = /filename="?([^"]+)"?/.exec(disposition);
+  a.href = url;
+  a.download = match?.[1] || fallbackName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+export async function exportInventoryListExcel(segment, params = {}) {
+  const response = await api.get(`${base}/lists/${encodeURIComponent(segment)}/export.xlsx`, {
+    params,
+    responseType: 'blob',
+  });
+  downloadBlobResponse(response, `${segment}_inventory.xlsx`);
+}
+
 export function fetchInventoryListCounts() {
   return api.get(`${base}/lists/counts`);
 }
