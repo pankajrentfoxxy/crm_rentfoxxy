@@ -116,7 +116,8 @@ export const settingsAccordionChildren = [
   { label: 'Role Reference', path: '/settings/role-reference', section: 'roles' },
   // (role-reference shares the 'roles' section so Settings never shows for non-admins)
   { label: 'Companies', path: '/settings/companies', section: 'company_settings' },
-  { label: 'Asset Configuration', path: '/settings/asset-configuration', section: 'asset_configuration' },
+  { label: 'Laptop Configuration', path: '/asset-configuration/laptop', section: 'asset_configuration' },
+  { label: 'Spare Parts Configuration', path: '/asset-configuration/spare-parts', section: 'asset_configuration' },
 ];
 
 /** Legacy exports — kept for Layout imports; not shown in sidebar */

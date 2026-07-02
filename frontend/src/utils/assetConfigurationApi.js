@@ -4,6 +4,17 @@ const base = '/asset-configuration';
 
 export const fetchAssetDropdowns = () => api.get(`${base}/dropdowns`);
 
+export const fetchCascadeBrands = () => api.get(`${base}/cascade/brands`);
+export const fetchCascadeSpecMasters = () => api.get(`${base}/cascade/spec-masters`);
+export const fetchCascadeProcessors = (brandName) =>
+  api.get(`${base}/cascade/brands/${encodeURIComponent(brandName)}/processors`);
+export const fetchCascadeModels = (brandName) =>
+  api.get(`${base}/cascade/brands/${encodeURIComponent(brandName)}/models`);
+export const fetchCascadeGenerations = (brandName) =>
+  api.get(`${base}/cascade/brands/${encodeURIComponent(brandName)}/generations`);
+export const fetchCascadeGenerationsByProcessor = (brandName, processorName) =>
+  api.get(`${base}/cascade/brands/${encodeURIComponent(brandName)}/processors/${encodeURIComponent(processorName)}/generations`);
+
 export const listBrands = (p) => api.get(`${base}/brands`, { params: p });
 export const createBrand = (d) => api.post(`${base}/brands`, d);
 export const updateBrand = (id, d) => api.put(`${base}/brands/${id}`, d);
@@ -64,3 +75,30 @@ export const bulkDeleteMapping = (type, ids) =>
   api.post(`${base}/mappings/${type}/bulk-delete`, { ids });
 export const bulkStatusMapping = (type, ids, status) =>
   api.post(`${base}/mappings/${type}/bulk-status`, { ids, status });
+
+export const fetchLaptopSpecMapping = () => api.get(`${base}/mappings/laptop-spec/tree`);
+export const bulkAddBrandModels = (brandId, modelIds) =>
+  api.post(`${base}/mappings/laptop-spec/models/bulk-add`, { brand_id: brandId, model_ids: modelIds });
+export const bulkAddBrandProcessors = (brandId, processorIds) =>
+  api.post(`${base}/mappings/laptop-spec/processors/bulk-add`, { brand_id: brandId, processor_ids: processorIds });
+export const bulkAddBrandGenerations = (brandId, generationIds) =>
+  api.post(`${base}/mappings/laptop-spec/generations/bulk-add`, { brand_id: brandId, generation_ids: generationIds });
+export const bulkAddBrandProcessorGenerations = (brandId, processorId, generationIds) =>
+  api.post(`${base}/mappings/laptop-spec/generations/bulk-add`, {
+    brand_id: brandId,
+    generation_ids: generationIds,
+  });
+export const bulkDeleteBrandModels = (ids) =>
+  api.post(`${base}/mappings/laptop-spec/models/bulk-delete`, { ids });
+export const bulkDeleteBrandProcessors = (ids) =>
+  api.post(`${base}/mappings/laptop-spec/processors/bulk-delete`, { ids });
+export const bulkDeleteBrandGenerations = (ids) =>
+  api.post(`${base}/mappings/laptop-spec/generations/bulk-delete`, { ids });
+export const bulkDeleteBrandProcessorGenerations = bulkDeleteBrandGenerations;
+export const bulkStatusBrandModels = (ids, status) =>
+  api.post(`${base}/mappings/laptop-spec/models/bulk-status`, { ids, status });
+export const bulkStatusBrandProcessors = (ids, status) =>
+  api.post(`${base}/mappings/laptop-spec/processors/bulk-status`, { ids, status });
+export const bulkStatusBrandGenerations = (ids, status) =>
+  api.post(`${base}/mappings/laptop-spec/generations/bulk-status`, { ids, status });
+export const bulkStatusBrandProcessorGenerations = bulkStatusBrandGenerations;

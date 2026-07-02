@@ -427,9 +427,8 @@ exports.getAddSalesOrderMeta = async (req, res) => {
     if (quotationNumber) {
       quotationLines = await getQuotationLines(quotationNumber);
     }
-    const [customersRes, catalog] = await Promise.all([
+    const [customersRes] = await Promise.all([
       pool.query(`SELECT customer_id, name, company_name, email, phone, gst_no, address, details FROM customers ORDER BY company_name ASC NULLS LAST, name ASC LIMIT 500`),
-      fetchCatalogAttributeOptions(),
     ]);
     res.json({
       success: true,
@@ -437,7 +436,6 @@ exports.getAddSalesOrderMeta = async (req, res) => {
       quotation_number: quotationNumber || null,
       quotation_lines: quotationLines,
       customers: customersRes.rows.map(normalizeCustomerForQuotation),
-      catalog,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

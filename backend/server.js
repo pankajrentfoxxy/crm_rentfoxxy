@@ -189,6 +189,8 @@ app.listen(PORT, () => {
   ensureCustomerManagementSchema().catch((err) => console.error('Customer management schema failed:', err.message));
   ensureBillingEngineSchema().catch((err) => console.error('Billing engine schema failed:', err.message));
   ensureLeadCrmSchema().catch((err) => console.error('Lead CRM schema ensure failed:', err.message));
+  const { ensureAssetConfigurationSchema } = require('./controllers/assetConfigurationController');
+  ensureAssetConfigurationSchema().catch((err) => console.error('Asset configuration schema ensure failed:', err.message));
   const { ensureVendorRepairSchema } = require('./services/vendorRepairDcService');
   ensureVendorRepairSchema().catch((err) => console.error('Vendor repair schema ensure failed:', err.message));
   startBillingScheduler();

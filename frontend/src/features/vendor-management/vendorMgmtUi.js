@@ -10,7 +10,9 @@ export const VM_COLORS = {
 export {
   mergeAssetCatalog,
   modelsForBrand,
+  processorsForBrand,
   generationsForProcessor,
+  generationsForBrandProcessor,
   EMPTY_ASSET_CATALOG,
 } from '../../utils/assetCatalogUtils';
 

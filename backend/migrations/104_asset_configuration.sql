@@ -128,7 +128,7 @@ DECLARE bid INT; pid INT;
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM asset_config_brands WHERE deleted_at IS NULL LIMIT 1) THEN
     INSERT INTO asset_config_brands (name) VALUES
-      ('Dell'),('HP'),('Lenovo'),('Apple'),('Asus'),('Acer'),('MSI'),('Samsung'),('Toshiba'),('Other');
+      ('Apple'),('Assamble'),('Asus'),('Dell'),('Dummy Brand'),('HP'),('Lenovo'),('Rentfoxxy');
   END IF;
 
   SELECT id INTO bid FROM asset_config_brands WHERE LOWER(name)='dell' AND deleted_at IS NULL LIMIT 1;

@@ -1,4 +1,5 @@
 import React from 'react';
+import { Navigate } from 'react-router-dom';
 import Layout from '../layout/Layout';
 import ProtectedRoute from '../router/ProtectedRoute';
 import RolesPage from '../pages/admin/settings/RolesPage';
@@ -7,7 +8,6 @@ import UserPermissionsPage from '../pages/admin/settings/UserPermissionsPage';
 import UserManagementPage from '../pages/admin/settings/UserManagementPage';
 import RoleReferencePage from '../pages/admin/settings/RoleReferencePage';
 import CompanySettingsPage from '../pages/admin/settings/CompanySettingsPage';
-import AssetConfigurationPage from '../pages/admin/settings/AssetConfigurationPage';
 
 const withLayout = (node) => <Layout>{node}</Layout>;
 
@@ -22,5 +22,5 @@ export const settingsRoutes = [
   { path: '/settings/user-permissions', element: guard('user_permissions', 'view', withLayout(<UserPermissionsPage />)) },
   { path: '/settings/role-reference', element: withLayout(<RoleReferencePage />) },
   { path: '/settings/companies', element: guard('company_settings', 'view', withLayout(<CompanySettingsPage />)) },
-  { path: '/settings/asset-configuration', element: guard('asset_configuration', 'view', withLayout(<AssetConfigurationPage />)) },
+  { path: '/settings/asset-configuration', element: <Navigate to="/asset-configuration/laptop" replace /> },
 ];

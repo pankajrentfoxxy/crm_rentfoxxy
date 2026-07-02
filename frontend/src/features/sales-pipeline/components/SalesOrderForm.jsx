@@ -343,9 +343,9 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
           <AssetDetailsForm
             lines={lines}
             onChange={setLines}
-            catalog={meta?.catalog}
             quotationType={form.quotation_type}
             requiredFields={SO_ASSET_REQUIRED_FIELDS}
+            useCascadeApi
           />
           {!isSaleType && (
             <div className="border rounded-lg p-3 space-y-2">

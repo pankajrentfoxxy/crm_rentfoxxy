@@ -30,7 +30,8 @@ import {
   isProcurementUser,
   mergeAssetCatalog,
   modelsForBrand,
-  generationsForProcessor,
+  processorsForBrand,
+  generationsForBrandProcessor,
   poStatusBadge,
   poTypeBadge
 } from '../vendorMgmtUi';
@@ -443,9 +444,14 @@ export default function PurchaseOrdersPage() {
     [assetDraft.brand, catalog]
   );
 
+  const processorOptions = useMemo(
+    () => processorsForBrand(assetDraft.brand, catalog),
+    [assetDraft.brand, catalog]
+  );
+
   const generationOptions = useMemo(
-    () => generationsForProcessor(assetDraft.processor, catalog),
-    [assetDraft.processor, catalog]
+    () => generationsForBrandProcessor(assetDraft.brand, assetDraft.processor, catalog),
+    [assetDraft.brand, assetDraft.processor, catalog]
   );
 
   function addAssetRow() {
@@ -1342,7 +1348,11 @@ export default function PurchaseOrdersPage() {
                             const nextModels = modelsForBrand(v, catalog);
                             const model =
                               d.model && nextModels.includes(d.model) ? d.model : '';
-                            return { ...d, brand: v, model };
+                            const nextProcs = processorsForBrand(v, catalog);
+                            const processor = d.processor && nextProcs.includes(d.processor) ? d.processor : '';
+                            const nextGens = generationsForBrandProcessor(v, processor, catalog);
+                            const generation = d.generation && nextGens.includes(d.generation) ? d.generation : '';
+                            return { ...d, brand: v, model, processor, generation };
                           })
                         }
                         options={catalog.brands}
@@ -1360,13 +1370,13 @@ export default function PurchaseOrdersPage() {
                         value={assetDraft.processor}
                         onChange={(v) =>
                           setAssetDraft((d) => {
-                            const nextGens = generationsForProcessor(v, catalog);
+                            const nextGens = generationsForBrandProcessor(d.brand, v, catalog);
                             const generation =
                               d.generation && nextGens.includes(d.generation) ? d.generation : '';
                             return { ...d, processor: v, generation };
                           })
                         }
-                        options={catalog.processors}
+                        options={processorOptions}
                       />
                       <AssetSelect
                         label="Generation"

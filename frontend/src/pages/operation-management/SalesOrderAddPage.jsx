@@ -308,8 +308,8 @@ export default function SalesOrderAddPage() {
           <AssetDetailsForm
             lines={lines}
             onChange={setLines}
-            catalog={meta?.catalog}
             quotationType={form.quotation_type}
+            useCascadeApi
           />
         ) : null}
 

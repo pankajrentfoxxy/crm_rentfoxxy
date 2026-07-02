@@ -13,6 +13,26 @@ const {
   reassignChildren,
   bulkDeleteChildren,
   bulkSetChildStatus,
+  getLaptopSpecMappingTree,
+  bulkAddProcessorsToBrand,
+  bulkAddModelsToBrand,
+  bulkAddGenerationsToBrand,
+  bulkAddGenerationsToBrandProcessor,
+  bulkDeleteBrandProcessors,
+  bulkDeleteBrandModels,
+  bulkDeleteBrandGenerations,
+  bulkDeleteBrandProcessorGenerations,
+  bulkSetBrandProcessorStatus,
+  bulkSetBrandModelStatus,
+  bulkSetBrandGenerationStatus,
+  bulkSetBrandProcessorGenerationStatus,
+  ensureAssetConfigurationSchema,
+  listCascadeBrands,
+  listCascadeSpecMasters,
+  listCascadeModelsForBrand,
+  listCascadeProcessorsForBrand,
+  listCascadeGenerationsForBrand,
+  listCascadeGenerationsForBrandProcessor,
 } = require('../services/assetConfigurationService');
 
 // Mapping view types -> the child entity whose parent relationship is managed.
@@ -170,6 +190,63 @@ exports.getDropdownCatalog = async (req, res) => {
   }
 };
 
+exports.listCascadeBrands = async (req, res) => {
+  try {
+    const brands = await listCascadeBrands();
+    res.json({ success: true, brands });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+exports.listCascadeSpecMasters = async (req, res) => {
+  try {
+    const specs = await listCascadeSpecMasters();
+    res.json({ success: true, ...specs });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+exports.listCascadeModelsForBrand = async (req, res) => {
+  try {
+    const data = await listCascadeModelsForBrand(decodeURIComponent(req.params.brandName || ''));
+    res.json({ success: true, ...data });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};
+
+exports.listCascadeProcessorsForBrand = async (req, res) => {
+  try {
+    const data = await listCascadeProcessorsForBrand(decodeURIComponent(req.params.brandName || ''));
+    res.json({ success: true, ...data });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};
+
+exports.listCascadeGenerationsForBrand = async (req, res) => {
+  try {
+    const data = await listCascadeGenerationsForBrand(decodeURIComponent(req.params.brandName || ''));
+    res.json({ success: true, ...data });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};
+
+exports.listCascadeGenerationsForBrandProcessor = async (req, res) => {
+  try {
+    const data = await listCascadeGenerationsForBrandProcessor(
+      decodeURIComponent(req.params.brandName || ''),
+      decodeURIComponent(req.params.processorName || '')
+    );
+    res.json({ success: true, ...data });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};
+
 exports.getParentOptions = async (req, res) => {
   try {
     const entity = req.params.entity;
@@ -234,6 +311,141 @@ exports.bulkStatusMapping = async (req, res) => {
     res.status(e.status || 500).json({ success: false, message: e.message });
   }
 };
+
+exports.getLaptopSpecMapping = async (req, res) => {
+  try {
+    const brands = await getLaptopSpecMappingTree();
+    res.json({ success: true, brands });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};
+
+exports.bulkAddBrandModels = async (req, res) => {
+  try {
+    const result = await bulkAddModelsToBrand(
+      req.body.brand_id,
+      req.body.model_ids,
+      req.user.user_id
+    );
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};
+
+exports.bulkAddBrandProcessors = async (req, res) => {
+  try {
+    const result = await bulkAddProcessorsToBrand(
+      req.body.brand_id,
+      req.body.processor_ids,
+      req.user.user_id
+    );
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};
+
+exports.bulkAddBrandGenerations = async (req, res) => {
+  try {
+    const result = await bulkAddGenerationsToBrand(
+      req.body.brand_id,
+      req.body.generation_ids,
+      req.user.user_id
+    );
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};
+
+exports.bulkAddBrandProcessorGenerations = async (req, res) => {
+  try {
+    const result = await bulkAddGenerationsToBrand(
+      req.body.brand_id,
+      req.body.generation_ids,
+      req.user.user_id
+    );
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};
+
+exports.bulkDeleteBrandModels = async (req, res) => {
+  try {
+    const result = await bulkDeleteBrandModels(req.body.ids, req.user.user_id);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};
+
+exports.bulkDeleteBrandProcessors = async (req, res) => {
+  try {
+    const result = await bulkDeleteBrandProcessors(req.body.ids, req.user.user_id);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};
+
+exports.bulkDeleteBrandGenerations = async (req, res) => {
+  try {
+    const result = await bulkDeleteBrandGenerations(req.body.ids, req.user.user_id);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};
+
+exports.bulkDeleteBrandProcessorGenerations = async (req, res) => {
+  try {
+    const result = await bulkDeleteBrandProcessorGenerations(req.body.ids, req.user.user_id);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};
+
+exports.bulkStatusBrandModels = async (req, res) => {
+  try {
+    const result = await bulkSetBrandModelStatus(req.body.ids, req.body.status, req.user.user_id);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};
+
+exports.bulkStatusBrandProcessors = async (req, res) => {
+  try {
+    const result = await bulkSetBrandProcessorStatus(req.body.ids, req.body.status, req.user.user_id);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};
+
+exports.bulkStatusBrandGenerations = async (req, res) => {
+  try {
+    const result = await bulkSetBrandGenerationStatus(req.body.ids, req.body.status, req.user.user_id);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};
+
+exports.bulkStatusBrandProcessorGenerations = async (req, res) => {
+  try {
+    const result = await bulkSetBrandProcessorGenerationStatus(req.body.ids, req.body.status, req.user.user_id);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  }
+};
+
+exports.ensureAssetConfigurationSchema = ensureAssetConfigurationSchema;
 
 exports.listEntityTypes = async (req, res) => {
   res.json({

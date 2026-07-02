@@ -13,12 +13,29 @@ router.use(authMiddleware);
 
 // Used by quotation / SO / DC asset forms — any authenticated user
 router.get('/dropdowns', ctrl.getDropdownCatalog);
+router.get('/cascade/brands', ctrl.listCascadeBrands);
+router.get('/cascade/spec-masters', ctrl.listCascadeSpecMasters);
+router.get('/cascade/brands/:brandName/processors', ctrl.listCascadeProcessorsForBrand);
+router.get('/cascade/brands/:brandName/models', ctrl.listCascadeModelsForBrand);
+router.get('/cascade/brands/:brandName/generations', ctrl.listCascadeGenerationsForBrand);
+router.get('/cascade/brands/:brandName/processors/:processorName/generations', ctrl.listCascadeGenerationsForBrandProcessor);
 
 // Settings CRUD meta
 router.get('/types', view, ctrl.listEntityTypes);
 router.get('/parents/:entity', view, ctrl.getParentOptions);
 
-// Parent ↔ child mapping (brand-models | processor-generations)
+// Brand flat mapping (models, processors, generations per brand)
+router.get('/mappings/laptop-spec/tree', view, ctrl.getLaptopSpecMapping);
+router.post('/mappings/laptop-spec/models/bulk-add', create, ctrl.bulkAddBrandModels);
+router.post('/mappings/laptop-spec/processors/bulk-add', create, ctrl.bulkAddBrandProcessors);
+router.post('/mappings/laptop-spec/generations/bulk-add', create, ctrl.bulkAddBrandGenerations);
+router.post('/mappings/laptop-spec/models/bulk-delete', del, ctrl.bulkDeleteBrandModels);
+router.post('/mappings/laptop-spec/processors/bulk-delete', del, ctrl.bulkDeleteBrandProcessors);
+router.post('/mappings/laptop-spec/generations/bulk-delete', del, ctrl.bulkDeleteBrandGenerations);
+router.post('/mappings/laptop-spec/models/bulk-status', edit, ctrl.bulkStatusBrandModels);
+router.post('/mappings/laptop-spec/processors/bulk-status', edit, ctrl.bulkStatusBrandProcessors);
+router.post('/mappings/laptop-spec/generations/bulk-status', edit, ctrl.bulkStatusBrandGenerations);
+
 router.get('/mappings/:type', view, ctrl.getMapping);
 router.post('/mappings/:type/bulk-create', create, ctrl.bulkCreateMapping);
 router.post('/mappings/:type/reassign', edit, ctrl.reassignMapping);

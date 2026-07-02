@@ -114,27 +114,9 @@ BEGIN
   PERFORM _asset_cfg_ensure_model('Asus', 'ROG Strix');
   PERFORM _asset_cfg_ensure_model('Asus', 'Other');
 
-  PERFORM _asset_cfg_ensure_model('Acer', 'Aspire 5');
-  PERFORM _asset_cfg_ensure_model('Acer', 'Aspire 7');
-  PERFORM _asset_cfg_ensure_model('Acer', 'Swift 3');
-  PERFORM _asset_cfg_ensure_model('Acer', 'TravelMate P2');
-  PERFORM _asset_cfg_ensure_model('Acer', 'Spin 5');
-  PERFORM _asset_cfg_ensure_model('Acer', 'Other');
-
-  PERFORM _asset_cfg_ensure_model('MSI', 'Modern 14');
-  PERFORM _asset_cfg_ensure_model('MSI', 'Prestige 14');
-  PERFORM _asset_cfg_ensure_model('MSI', 'GF63');
-  PERFORM _asset_cfg_ensure_model('MSI', 'Other');
-
-  PERFORM _asset_cfg_ensure_model('Samsung', 'Galaxy Book2');
-  PERFORM _asset_cfg_ensure_model('Samsung', 'Galaxy Book3');
-  PERFORM _asset_cfg_ensure_model('Samsung', 'Other');
-
-  PERFORM _asset_cfg_ensure_model('Toshiba', 'Portégé X30');
-  PERFORM _asset_cfg_ensure_model('Toshiba', 'Tecra A50');
-  PERFORM _asset_cfg_ensure_model('Toshiba', 'Other');
-
-  PERFORM _asset_cfg_ensure_model('Other', 'Other');
+  PERFORM _asset_cfg_ensure_model('Assamble', 'Other');
+  PERFORM _asset_cfg_ensure_model('Dummy Brand', 'Other');
+  PERFORM _asset_cfg_ensure_model('Rentfoxxy', 'Other');
 
   FOREACH p IN ARRAY procs LOOP
     PERFORM _asset_cfg_ensure_simple('asset_config_processors', p);

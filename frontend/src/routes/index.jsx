@@ -10,6 +10,7 @@ import { deliveryRegisterManagementRoutes } from './deliveryRegisterManagementRo
 import { technicianRoutes } from './technicianRoutes';
 import { financeRoutes } from './financeRoutes';
 import { reportingRoutes } from './reportingRoutes';
+import { assetConfigurationRoutes } from './assetConfigurationRoutes';
 
 export const appRoutes = [
   ...publicRoutes,
@@ -18,6 +19,7 @@ export const appRoutes = [
   ...warehouseRoutes,
   ...teamRoutes,
   ...settingsRoutes,
+  ...assetConfigurationRoutes,
   ...operationManagementRoutes,
   ...customerManagementRoutes,
   ...deliveryRegisterManagementRoutes,
@@ -39,4 +41,5 @@ export {
   technicianRoutes,
   financeRoutes,
   reportingRoutes,
+  assetConfigurationRoutes,
 };

@@ -1,8 +1,12 @@
+import React, { useEffect } from 'react';
 import {
   modelsForBrand,
-  generationsForProcessor,
+  processorsForBrand,
+  generationsForBrand,
+  generationsForBrandProcessor,
   EMPTY_ASSET_CATALOG,
 } from '../../../utils/assetCatalogUtils';
+import useAssetCascadeCatalog from '../../../hooks/useAssetCascadeCatalog';
 import { emptyLineItem, lineItemsToPayload } from './DocumentLineItemsForm';
 import SearchableSelect from './SearchableSelect';
 
@@ -66,15 +70,44 @@ export default function AssetDetailsForm({
   catalog,
   quotationType,
   requiredFields = DEFAULT_REQUIRED_FIELDS,
+  useCascadeApi,
 }) {
   const required = new Set(requiredFields);
   const isRequired = (field) => required.has(field);
   const showRentalFields = quotationType === 'rental' || quotationType === 'demo';
-  const cfg = catalog?.brands?.length ? catalog : EMPTY_ASSET_CATALOG;
+  const cascadeMode = useCascadeApi ?? !catalog?.brands?.length;
+  const {
+    brands: cascadeBrands,
+    specMasters,
+    modelsByBrand,
+    processorsByBrand,
+    generationsByBrand,
+    loadBrandData,
+    prefetchLine,
+  } = useAssetCascadeCatalog(cascadeMode);
+  const cfg = cascadeMode
+    ? {
+      from_asset_config: true,
+      brands: cascadeBrands,
+      rams: specMasters.rams,
+      storages: specMasters.storages,
+      gpus: specMasters.gpus,
+      screen_sizes: specMasters.screen_sizes,
+    }
+    : (catalog?.brands?.length ? catalog : EMPTY_ASSET_CATALOG);
   const catalogRows = cfg.catalog_rows || [];
-  const useConfig = cfg.from_asset_config !== false;
+  const useConfig = cascadeMode || cfg.from_asset_config !== false;
+
+  useEffect(() => {
+    if (!cascadeMode) return;
+    lines.forEach((line) => prefetchLine(line));
+  }, [cascadeMode, lines, prefetchLine]);
 
   const updateLine = (index, field, value) => {
+    if (cascadeMode && field === 'brand' && value) {
+      loadBrandData(value);
+    }
+
     const next = lines.map((row, i) => {
       if (i !== index) return row;
       const updated = { ...row, [field]: value };
@@ -95,10 +128,13 @@ export default function AssetDetailsForm({
           updated.generation = '';
           updated.ram = '';
           updated.storage = '';
+        } else {
+          updated.processor = '';
+          updated.generation = '';
         }
       }
 
-      if (field === 'processor' && value) {
+      if (field === 'processor' && value && !useConfig) {
         updated.generation = '';
       }
 
@@ -128,18 +164,26 @@ export default function AssetDetailsForm({
   return (
     <div className="space-y-4">
       {lines.map((line, index) => {
-        const brandOptions = useConfig
-          ? (cfg.brands || [])
-          : pickOptions(catalogRows, line, 'brand', cfg.brands);
-        const modelOptions = useConfig
-          ? modelsForBrand(line.brand, cfg)
-          : pickOptions(catalogRows, line, 'model_name', modelsForBrand(line.brand, cfg));
-        const processorOptions = useConfig
-          ? (cfg.processors || [])
-          : pickOptions(catalogRows, line, 'processor', cfg.processors);
-        const generationOptions = useConfig
-          ? generationsForProcessor(line.processor, cfg)
-          : pickOptions(catalogRows, line, 'generation', generationsForProcessor(line.processor, cfg));
+        const brandOptions = cascadeMode
+          ? cascadeBrands
+          : (useConfig
+            ? (cfg.brands || [])
+            : pickOptions(catalogRows, line, 'brand', cfg.brands));
+        const modelOptions = cascadeMode
+          ? (modelsByBrand[line.brand] || [])
+          : (useConfig
+            ? modelsForBrand(line.brand, cfg)
+            : pickOptions(catalogRows, line, 'model_name', modelsForBrand(line.brand, cfg)));
+        const processorOptions = cascadeMode
+          ? (processorsByBrand[line.brand] || [])
+          : (useConfig
+            ? processorsForBrand(line.brand, cfg)
+            : pickOptions(catalogRows, line, 'processor', cfg.processors));
+        const generationOptions = cascadeMode
+          ? (generationsByBrand[line.brand] || [])
+          : (useConfig
+            ? generationsForBrand(line.brand, cfg)
+            : pickOptions(catalogRows, line, 'generation', generationsForBrandProcessor(line.brand, line.processor, cfg)));
         const ramOptions = useConfig
           ? (cfg.rams || [])
           : pickOptions(catalogRows, line, 'ram', cfg.rams);
@@ -186,6 +230,7 @@ export default function AssetDetailsForm({
               value={line.processor}
               onChange={(v) => updateLine(index, 'processor', v)}
               options={processorOptions}
+              disabled={useConfig && (!line.brand || (cascadeMode && !processorOptions.length && line.brand))}
             />
             <SearchableSelect
               id={`asset-generation-${index}`}
@@ -194,7 +239,7 @@ export default function AssetDetailsForm({
               value={line.generation}
               onChange={(v) => updateLine(index, 'generation', v)}
               options={generationOptions}
-              disabled={useConfig && !line.processor}
+              disabled={useConfig && (cascadeMode ? !line.brand : !line.processor)}
             />
             <SearchableSelect
               id={`asset-ram-${index}`}

@@ -68,7 +68,7 @@ export const COMPANY_TYPES = [
 ];
 
 export const LAPTOP_BRANDS = [
-  'Dell', 'HP', 'Lenovo', 'Apple', 'Asus', 'Acer', 'MSI', 'Samsung', 'Any',
+  'Apple', 'Assamble', 'Asus', 'Dell', 'Dummy Brand', 'HP', 'Lenovo', 'Rentfoxxy',
 ];
 
 export const PROCESSORS = [

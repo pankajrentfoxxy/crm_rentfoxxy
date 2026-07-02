@@ -20,12 +20,12 @@ const ENTITIES = {
   models: {
     table: 'asset_config_models',
     label: 'Model',
-    parentKey: 'brand_id',
-    parentTable: 'asset_config_brands',
-    joinSelect: ', b.name AS brand_name',
-    joinClause: 'LEFT JOIN asset_config_brands b ON b.id = t.brand_id',
-    listSelect: 't.*, b.name AS brand_name',
-    orderBy: 'b.name ASC, t.name ASC',
+    parentKey: null,
+    parentTable: null,
+    joinSelect: '',
+    joinClause: '',
+    listSelect: 't.*',
+    orderBy: 't.name ASC',
   },
   processors: {
     table: 'asset_config_processors',
@@ -40,12 +40,12 @@ const ENTITIES = {
   generations: {
     table: 'asset_config_generations',
     label: 'Generation',
-    parentKey: 'processor_id',
-    parentTable: 'asset_config_processors',
-    joinSelect: ', p.name AS processor_name',
-    joinClause: 'LEFT JOIN asset_config_processors p ON p.id = t.processor_id',
-    listSelect: 't.*, p.name AS processor_name',
-    orderBy: 'p.name ASC, t.name ASC',
+    parentKey: null,
+    parentTable: null,
+    joinSelect: '',
+    joinClause: '',
+    listSelect: 't.*',
+    orderBy: 't.name ASC',
   },
   ram: {
     table: 'asset_config_ram',
@@ -341,6 +341,72 @@ async function setEntityStatus(entityKey, id, status, userId) {
   return r.rows[0];
 }
 
+async function loadLaptopSpecMappingMaps() {
+  try {
+    const [modelRows, bp, bg] = await Promise.all([
+      pool.query(
+        `SELECT bm.brand_id, b.name AS brand_name, m.name AS model_name, bm.status
+           FROM asset_config_brand_models bm
+           JOIN asset_config_brands b ON b.id = bm.brand_id AND b.deleted_at IS NULL
+           JOIN asset_config_models m ON m.id = bm.model_id AND m.deleted_at IS NULL
+          WHERE bm.deleted_at IS NULL`
+      ).catch(() => ({ rows: [] })),
+      pool.query(
+        `SELECT bp.brand_id, b.name AS brand_name, p.name AS processor_name, bp.status
+           FROM asset_config_brand_processors bp
+           JOIN asset_config_brands b ON b.id = bp.brand_id AND b.deleted_at IS NULL
+           JOIN asset_config_processors p ON p.id = bp.processor_id AND p.deleted_at IS NULL
+          WHERE bp.deleted_at IS NULL`
+      ),
+      pool.query(
+        `SELECT bg.brand_id, b.name AS brand_name, g.name AS generation_name, bg.status
+           FROM asset_config_brand_generations bg
+           JOIN asset_config_brands b ON b.id = bg.brand_id AND b.deleted_at IS NULL
+           JOIN asset_config_generations g ON g.id = bg.generation_id AND g.deleted_at IS NULL
+          WHERE bg.deleted_at IS NULL`
+      ).catch(() => ({ rows: [] })),
+    ]);
+
+    const modelsByBrand = {};
+    const processorsByBrand = {};
+    const generationsByBrand = {};
+
+    for (const row of modelRows.rows) {
+      if (row.status !== 'active') continue;
+      if (!modelsByBrand[row.brand_name]) modelsByBrand[row.brand_name] = [];
+      if (!modelsByBrand[row.brand_name].includes(row.model_name)) {
+        modelsByBrand[row.brand_name].push(row.model_name);
+      }
+    }
+    for (const row of bp.rows) {
+      if (row.status !== 'active') continue;
+      if (!processorsByBrand[row.brand_name]) processorsByBrand[row.brand_name] = [];
+      if (!processorsByBrand[row.brand_name].includes(row.processor_name)) {
+        processorsByBrand[row.brand_name].push(row.processor_name);
+      }
+    }
+    for (const row of bg.rows) {
+      if (row.status !== 'active') continue;
+      if (!generationsByBrand[row.brand_name]) generationsByBrand[row.brand_name] = [];
+      if (!generationsByBrand[row.brand_name].includes(row.generation_name)) {
+        generationsByBrand[row.brand_name].push(row.generation_name);
+      }
+    }
+
+    const hasFlatMapping = modelRows.rows.length > 0 || bp.rows.length > 0 || bg.rows.length > 0;
+    if (!hasFlatMapping) return null;
+
+    return { modelsByBrand, processorsByBrand, generationsByBrand, hasFlatMapping: true };
+  } catch (e) {
+    if (e.message && (e.message.includes('asset_config_brand_processors')
+      || e.message.includes('asset_config_brand_models')
+      || e.message.includes('asset_config_brand_generations'))) {
+      return null;
+    }
+    throw e;
+  }
+}
+
 /** Active dropdown catalog for Asset Details forms. */
 async function getAssetDropdownCatalog() {
   const [brands, models, processors, generations, rams, storages, gpus, screenSizes] = await Promise.all([
@@ -348,17 +414,17 @@ async function getAssetDropdownCatalog() {
     pool.query(
       `SELECT m.id, m.name, m.brand_id, b.name AS brand_name
          FROM asset_config_models m
-         JOIN asset_config_brands b ON b.id = m.brand_id AND b.deleted_at IS NULL AND b.status = 'active'
+         LEFT JOIN asset_config_brands b ON b.id = m.brand_id AND b.deleted_at IS NULL AND b.status = 'active'
         WHERE m.deleted_at IS NULL AND m.status = 'active'
-        ORDER BY b.name, m.name`
+        ORDER BY m.name`
     ),
     pool.query(`SELECT id, name FROM asset_config_processors WHERE deleted_at IS NULL AND status = 'active' ORDER BY name`),
     pool.query(
       `SELECT g.id, g.name, g.processor_id, p.name AS processor_name
          FROM asset_config_generations g
-         JOIN asset_config_processors p ON p.id = g.processor_id AND p.deleted_at IS NULL AND p.status = 'active'
+         LEFT JOIN asset_config_processors p ON p.id = g.processor_id AND p.deleted_at IS NULL AND p.status = 'active'
         WHERE g.deleted_at IS NULL AND g.status = 'active'
-        ORDER BY p.name, g.name`
+        ORDER BY g.name`
     ),
     pool.query(`SELECT name FROM asset_config_ram WHERE deleted_at IS NULL AND status = 'active' ORDER BY name`),
     pool.query(`SELECT name FROM asset_config_storage WHERE deleted_at IS NULL AND status = 'active' ORDER BY name`),
@@ -366,33 +432,64 @@ async function getAssetDropdownCatalog() {
     pool.query(`SELECT name FROM asset_config_screen_sizes WHERE deleted_at IS NULL AND status = 'active' ORDER BY name`),
   ]);
 
-  const modelsByBrand = {};
-  for (const row of models.rows) {
-    const brand = row.brand_name;
-    if (!modelsByBrand[brand]) modelsByBrand[brand] = [];
-    modelsByBrand[brand].push(row.name);
+  const laptopSpecMaps = await loadLaptopSpecMappingMaps();
+  const modelsByBrand = laptopSpecMaps?.modelsByBrand || {};
+  if (!Object.keys(modelsByBrand).length) {
+    for (const row of models.rows) {
+      const brand = row.brand_name;
+      if (!brand) continue;
+      if (!modelsByBrand[brand]) modelsByBrand[brand] = [];
+      modelsByBrand[brand].push(row.name);
+    }
   }
 
   const generationsByProcessor = {};
   for (const row of generations.rows) {
     const proc = row.processor_name;
+    if (!proc) continue;
     if (!generationsByProcessor[proc]) generationsByProcessor[proc] = [];
     generationsByProcessor[proc].push(row.name);
   }
 
+  const processorsByBrand = laptopSpecMaps?.processorsByBrand || null;
+  const generationsByBrand = laptopSpecMaps?.generationsByBrand || null;
+
   const catalogRows = [];
-  for (const b of brands.rows) {
-    const brandModels = models.rows.filter((m) => m.brand_id === b.id);
-    for (const m of brandModels.length ? brandModels : [{ name: '' }]) {
-      for (const p of processors.rows) {
-        const procGens = generations.rows.filter((g) => g.processor_id === p.id);
-        for (const g of procGens.length ? procGens : [{ name: '' }]) {
-          catalogRows.push({
-            brand: b.name,
-            model: m.name || null,
-            processor: p.name,
-            generation: g.name || null,
-          });
+  if (laptopSpecMaps?.hasFlatMapping) {
+    for (const b of brands.rows) {
+      const brandModels = modelsByBrand[b.name] || [];
+      const brandProcessors = processorsByBrand?.[b.name] || [];
+      const brandGenerations = generationsByBrand?.[b.name] || [];
+      const modelList = brandModels.length ? brandModels : [''];
+      const processorList = brandProcessors.length ? brandProcessors : [''];
+      const generationList = brandGenerations.length ? brandGenerations : [''];
+      for (const modelName of modelList) {
+        for (const processorName of processorList) {
+          for (const generationName of generationList) {
+            catalogRows.push({
+              brand: b.name,
+              model: modelName || null,
+              processor: processorName || null,
+              generation: generationName || null,
+            });
+          }
+        }
+      }
+    }
+  } else {
+    for (const b of brands.rows) {
+      const brandModels = models.rows.filter((m) => m.brand_id === b.id);
+      for (const m of brandModels.length ? brandModels : [{ name: '' }]) {
+        for (const p of processors.rows) {
+          const procGens = generations.rows.filter((g) => g.processor_id === p.id);
+          for (const g of procGens.length ? procGens : [{ name: '' }]) {
+            catalogRows.push({
+              brand: b.name,
+              model: m.name || null,
+              processor: p.name,
+              generation: g.name || null,
+            });
+          }
         }
       }
     }
@@ -405,9 +502,15 @@ async function getAssetDropdownCatalog() {
     models_by_brand: modelsByBrand,
     models_flat: [...new Set(Object.values(modelsByBrand).flat())],
     processors: processors.rows.map((r) => r.name),
+    processors_by_brand: processorsByBrand || {},
     generations: generationsByProcessor,
     generations_by_processor: generationsByProcessor,
-    generations_flat: [...new Set(Object.values(generationsByProcessor).flat())],
+    generations_by_brand: generationsByBrand || {},
+    generations_by_brand_processor: {},
+    generations_flat: generationsByBrand
+      ? [...new Set(Object.values(generationsByBrand).flat())]
+      : [...new Set(Object.values(generationsByProcessor).flat())],
+    has_laptop_spec_mapping: Boolean(laptopSpecMaps?.hasFlatMapping),
     rams: rams.rows.map((r) => r.name),
     storages: storages.rows.map((r) => r.name),
     gpus: gpus.rows.map((r) => r.name),
@@ -421,13 +524,16 @@ async function getAssetDropdownCatalog() {
 function emptyAssetCatalog() {
   return {
     from_asset_config: false,
+    has_laptop_spec_mapping: false,
     brands: [],
     models: {},
     models_by_brand: {},
     models_flat: [],
     processors: [],
+    processors_by_brand: {},
     generations: {},
     generations_by_processor: {},
+    generations_by_brand_processor: {},
     generations_flat: [],
     rams: [],
     storages: [],
@@ -655,6 +761,457 @@ async function bulkSetChildStatus(childEntityKey, ids, status, userId) {
   return { updated: r.rowCount };
 }
 
+async function getLaptopSpecMappingTree() {
+  const [brands, modelRows, processorRows, generationRows] = await Promise.all([
+    pool.query(`SELECT id, name, status FROM asset_config_brands WHERE deleted_at IS NULL ORDER BY name ASC`),
+    pool.query(
+      `SELECT bm.id, bm.brand_id, bm.model_id, bm.status, m.name AS item_name
+         FROM asset_config_brand_models bm
+         JOIN asset_config_models m ON m.id = bm.model_id AND m.deleted_at IS NULL
+        WHERE bm.deleted_at IS NULL
+        ORDER BY m.name ASC`
+    ).catch(() => ({ rows: [] })),
+    pool.query(
+      `SELECT bp.id, bp.brand_id, bp.processor_id, bp.status, p.name AS item_name
+         FROM asset_config_brand_processors bp
+         JOIN asset_config_processors p ON p.id = bp.processor_id AND p.deleted_at IS NULL
+        WHERE bp.deleted_at IS NULL
+        ORDER BY p.name ASC`
+    ),
+    pool.query(
+      `SELECT bg.id, bg.brand_id, bg.generation_id, bg.status, g.name AS item_name
+         FROM asset_config_brand_generations bg
+         JOIN asset_config_generations g ON g.id = bg.generation_id AND g.deleted_at IS NULL
+        WHERE bg.deleted_at IS NULL
+        ORDER BY g.name ASC`
+    ).catch(() => ({ rows: [] })),
+  ]);
+
+  const modelsByBrand = new Map();
+  for (const row of modelRows.rows) {
+    if (!modelsByBrand.has(row.brand_id)) modelsByBrand.set(row.brand_id, []);
+    modelsByBrand.get(row.brand_id).push({
+      id: row.id,
+      model_id: row.model_id,
+      name: row.item_name,
+      status: row.status,
+    });
+  }
+
+  const processorsByBrand = new Map();
+  for (const row of processorRows.rows) {
+    if (!processorsByBrand.has(row.brand_id)) processorsByBrand.set(row.brand_id, []);
+    processorsByBrand.get(row.brand_id).push({
+      id: row.id,
+      processor_id: row.processor_id,
+      name: row.item_name,
+      status: row.status,
+    });
+  }
+
+  const generationsByBrand = new Map();
+  for (const row of generationRows.rows) {
+    if (!generationsByBrand.has(row.brand_id)) generationsByBrand.set(row.brand_id, []);
+    generationsByBrand.get(row.brand_id).push({
+      id: row.id,
+      generation_id: row.generation_id,
+      name: row.item_name,
+      status: row.status,
+    });
+  }
+
+  return brands.rows.map((brand) => ({
+    id: brand.id,
+    name: brand.name,
+    status: brand.status,
+    models: modelsByBrand.get(brand.id) || [],
+    processors: processorsByBrand.get(brand.id) || [],
+    generations: generationsByBrand.get(brand.id) || [],
+  }));
+}
+
+async function assertBrandProcessorRow(brandId, processorId) {
+  const brand = parseInt(brandId, 10);
+  const processor = parseInt(processorId, 10);
+  if (!brand || !processor) {
+    const err = new Error('Brand and processor are required');
+    err.status = 400;
+    throw err;
+  }
+  await assertParentActive('asset_config_brands', brand);
+  await assertParentActive('asset_config_processors', processor);
+  return { brand, processor };
+}
+
+async function bulkAddProcessorsToBrand(brandId, processorIds, userId) {
+  const brand = parseInt(brandId, 10);
+  if (!brand) {
+    const err = new Error('Brand is required');
+    err.status = 400;
+    throw err;
+  }
+  await assertParentActive('asset_config_brands', brand);
+
+  const ids = [...new Set((Array.isArray(processorIds) ? processorIds : [])
+    .map((n) => parseInt(n, 10)).filter(Boolean))];
+  const created = [];
+  const skipped = [];
+  for (const processorId of ids) {
+    try {
+      await assertParentActive('asset_config_processors', processorId);
+    } catch {
+      skipped.push(processorId);
+      continue;
+    }
+    const existing = await pool.query(
+      `SELECT id FROM asset_config_brand_processors
+        WHERE brand_id = $1 AND processor_id = $2 AND deleted_at IS NULL`,
+      [brand, processorId]
+    );
+    if (existing.rows.length) {
+      skipped.push(processorId);
+      continue;
+    }
+    const r = await pool.query(
+      `INSERT INTO asset_config_brand_processors (brand_id, processor_id, status, created_by, updated_by)
+       VALUES ($1, $2, 'active', $3, $3)
+       RETURNING id, processor_id, status`,
+      [brand, processorId, userId]
+    );
+    const proc = await pool.query(`SELECT name FROM asset_config_processors WHERE id = $1`, [processorId]);
+    created.push({ ...r.rows[0], name: proc.rows[0]?.name || '', generations: [] });
+  }
+  return { created, skipped };
+}
+
+async function bulkAddModelsToBrand(brandId, modelIds, userId) {
+  const brand = parseInt(brandId, 10);
+  if (!brand) {
+    const err = new Error('Brand is required');
+    err.status = 400;
+    throw err;
+  }
+  await assertParentActive('asset_config_brands', brand);
+
+  const ids = [...new Set((Array.isArray(modelIds) ? modelIds : [])
+    .map((n) => parseInt(n, 10)).filter(Boolean))];
+  const created = [];
+  const skipped = [];
+  for (const modelId of ids) {
+    try {
+      await assertParentActive('asset_config_models', modelId);
+    } catch {
+      skipped.push(modelId);
+      continue;
+    }
+    const existing = await pool.query(
+      `SELECT id FROM asset_config_brand_models
+        WHERE brand_id = $1 AND model_id = $2 AND deleted_at IS NULL`,
+      [brand, modelId]
+    );
+    if (existing.rows.length) {
+      skipped.push(modelId);
+      continue;
+    }
+    const r = await pool.query(
+      `INSERT INTO asset_config_brand_models (brand_id, model_id, status, created_by, updated_by)
+       VALUES ($1, $2, 'active', $3, $3)
+       RETURNING id, model_id, status`,
+      [brand, modelId, userId]
+    );
+    const model = await pool.query(`SELECT name FROM asset_config_models WHERE id = $1`, [modelId]);
+    created.push({ ...r.rows[0], name: model.rows[0]?.name || '' });
+  }
+  return { created, skipped };
+}
+
+async function bulkAddGenerationsToBrand(brandId, generationIds, userId) {
+  const brand = parseInt(brandId, 10);
+  if (!brand) {
+    const err = new Error('Brand is required');
+    err.status = 400;
+    throw err;
+  }
+  await assertParentActive('asset_config_brands', brand);
+
+  const ids = [...new Set((Array.isArray(generationIds) ? generationIds : [])
+    .map((n) => parseInt(n, 10)).filter(Boolean))];
+  const created = [];
+  const skipped = [];
+  for (const generationId of ids) {
+    try {
+      await assertParentActive('asset_config_generations', generationId);
+    } catch {
+      skipped.push(generationId);
+      continue;
+    }
+    const existing = await pool.query(
+      `SELECT id FROM asset_config_brand_generations
+        WHERE brand_id = $1 AND generation_id = $2 AND deleted_at IS NULL`,
+      [brand, generationId]
+    );
+    if (existing.rows.length) {
+      skipped.push(generationId);
+      continue;
+    }
+    const r = await pool.query(
+      `INSERT INTO asset_config_brand_generations (brand_id, generation_id, status, created_by, updated_by)
+       VALUES ($1, $2, 'active', $3, $3)
+       RETURNING id, generation_id, status`,
+      [brand, generationId, userId]
+    );
+    const gen = await pool.query(`SELECT name FROM asset_config_generations WHERE id = $1`, [generationId]);
+    created.push({ ...r.rows[0], name: gen.rows[0]?.name || '' });
+  }
+  return { created, skipped };
+}
+
+async function bulkAddGenerationsToBrandProcessor(brandId, processorId, generationIds, userId) {
+  return bulkAddGenerationsToBrand(brandId, generationIds, userId);
+}
+
+async function bulkDeleteBrandModels(ids, userId) {
+  const idList = (Array.isArray(ids) ? ids : []).map((n) => parseInt(n, 10)).filter(Boolean);
+  if (!idList.length) return { deleted: 0 };
+  const r = await pool.query(
+    `UPDATE asset_config_brand_models
+        SET deleted_at = NOW(), updated_by = $1, updated_at = NOW()
+      WHERE id = ANY($2::int[]) AND deleted_at IS NULL`,
+    [userId, idList]
+  );
+  return { deleted: r.rowCount };
+}
+
+async function bulkDeleteBrandGenerations(ids, userId) {
+  const idList = (Array.isArray(ids) ? ids : []).map((n) => parseInt(n, 10)).filter(Boolean);
+  if (!idList.length) return { deleted: 0 };
+  const r = await pool.query(
+    `UPDATE asset_config_brand_generations
+        SET deleted_at = NOW(), updated_by = $1, updated_at = NOW()
+      WHERE id = ANY($2::int[]) AND deleted_at IS NULL`,
+    [userId, idList]
+  );
+  return { deleted: r.rowCount };
+}
+
+async function bulkSetBrandModelStatus(ids, status, userId) {
+  const idList = (Array.isArray(ids) ? ids : []).map((n) => parseInt(n, 10)).filter(Boolean);
+  if (!idList.length) return { updated: 0 };
+  const s = status === 'inactive' ? 'inactive' : 'active';
+  const r = await pool.query(
+    `UPDATE asset_config_brand_models SET status = $1, updated_by = $2, updated_at = NOW()
+      WHERE id = ANY($3::int[]) AND deleted_at IS NULL`,
+    [s, userId, idList]
+  );
+  return { updated: r.rowCount };
+}
+
+async function bulkSetBrandGenerationStatus(ids, status, userId) {
+  const idList = (Array.isArray(ids) ? ids : []).map((n) => parseInt(n, 10)).filter(Boolean);
+  if (!idList.length) return { updated: 0 };
+  const s = status === 'inactive' ? 'inactive' : 'active';
+  const r = await pool.query(
+    `UPDATE asset_config_brand_generations SET status = $1, updated_by = $2, updated_at = NOW()
+      WHERE id = ANY($3::int[]) AND deleted_at IS NULL`,
+    [s, userId, idList]
+  );
+  return { updated: r.rowCount };
+}
+
+async function brandHasFlatMappings(brandId) {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM asset_config_brand_models WHERE brand_id = $1 AND deleted_at IS NULL
+     UNION ALL
+     SELECT 1 FROM asset_config_brand_processors WHERE brand_id = $1 AND deleted_at IS NULL
+     UNION ALL
+     SELECT 1 FROM asset_config_brand_generations WHERE brand_id = $1 AND deleted_at IS NULL
+     LIMIT 1`,
+    [brandId]
+  );
+  return rows.length > 0;
+}
+
+async function bulkDeleteBrandProcessors(ids, userId) {
+  const idList = (Array.isArray(ids) ? ids : []).map((n) => parseInt(n, 10)).filter(Boolean);
+  if (!idList.length) return { deleted: 0 };
+  const r = await pool.query(
+    `UPDATE asset_config_brand_processors
+        SET deleted_at = NOW(), updated_by = $1, updated_at = NOW()
+      WHERE id = ANY($2::int[]) AND deleted_at IS NULL`,
+    [userId, idList]
+  );
+  return { deleted: r.rowCount };
+}
+
+async function bulkDeleteBrandProcessorGenerations(ids, userId) {
+  return bulkDeleteBrandGenerations(ids, userId);
+}
+
+async function bulkSetBrandProcessorStatus(ids, status, userId) {
+  const s = status === 'inactive' ? 'inactive' : 'active';
+  const idList = (Array.isArray(ids) ? ids : []).map((n) => parseInt(n, 10)).filter(Boolean);
+  if (!idList.length) return { updated: 0 };
+  const r = await pool.query(
+    `UPDATE asset_config_brand_processors SET status = $1, updated_by = $2, updated_at = NOW()
+      WHERE id = ANY($3::int[]) AND deleted_at IS NULL`,
+    [s, userId, idList]
+  );
+  return { updated: r.rowCount };
+}
+
+async function bulkSetBrandProcessorGenerationStatus(ids, status, userId) {
+  return bulkSetBrandGenerationStatus(ids, status, userId);
+}
+
+async function getActiveBrandByName(brandName) {
+  const { rows } = await pool.query(
+    `SELECT id, name FROM asset_config_brands
+      WHERE deleted_at IS NULL AND status = 'active' AND LOWER(TRIM(name)) = LOWER(TRIM($1))
+      LIMIT 1`,
+    [brandName]
+  );
+  return rows[0] || null;
+}
+
+async function listCascadeBrands() {
+  const { rows } = await pool.query(
+    `SELECT id, name FROM asset_config_brands
+      WHERE deleted_at IS NULL AND status = 'active'
+      ORDER BY name ASC`
+  );
+  return rows.map((row) => ({ id: row.id, name: row.name }));
+}
+
+async function listCascadeSpecMasters() {
+  const [rams, storages, gpus, screenSizes] = await Promise.all([
+    pool.query(`SELECT name FROM asset_config_ram WHERE deleted_at IS NULL AND status = 'active' ORDER BY name`),
+    pool.query(`SELECT name FROM asset_config_storage WHERE deleted_at IS NULL AND status = 'active' ORDER BY name`),
+    pool.query(`SELECT name FROM asset_config_gpu WHERE deleted_at IS NULL AND status = 'active' ORDER BY name`),
+    pool.query(`SELECT name FROM asset_config_screen_sizes WHERE deleted_at IS NULL AND status = 'active' ORDER BY name`),
+  ]);
+  return {
+    rams: rams.rows.map((r) => r.name),
+    storages: storages.rows.map((r) => r.name),
+    gpus: gpus.rows.map((r) => r.name),
+    screen_sizes: screenSizes.rows.map((r) => r.name),
+  };
+}
+
+async function listMappedNamesForBrand(brandId, junctionTable, joinTable, joinColumn, itemColumn = 'name') {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT target.${itemColumn} AS name
+       FROM ${junctionTable} j
+       JOIN ${joinTable} target ON target.id = j.${joinColumn} AND target.deleted_at IS NULL AND target.status = 'active'
+      WHERE j.brand_id = $1 AND j.deleted_at IS NULL AND j.status = 'active'
+      ORDER BY target.${itemColumn} ASC`,
+    [brandId]
+  );
+  return rows.map((r) => r.name);
+}
+
+async function listCascadeModelsForBrand(brandName) {
+  const brand = await getActiveBrandByName(brandName);
+  if (!brand) {
+    return { brand: brandName, models: [], has_mapping: false };
+  }
+  const hasMapping = await brandHasFlatMappings(brand.id);
+  const models = await listMappedNamesForBrand(
+    brand.id,
+    'asset_config_brand_models',
+    'asset_config_models',
+    'model_id'
+  ).catch(() => []);
+  if (models.length || hasMapping) {
+    return { brand: brand.name, models, has_mapping: true };
+  }
+  const legacy = await pool.query(
+    `SELECT name FROM asset_config_models
+      WHERE brand_id = $1 AND deleted_at IS NULL AND status = 'active'
+      ORDER BY name ASC`,
+    [brand.id]
+  ).catch(() => ({ rows: [] }));
+  return {
+    brand: brand.name,
+    models: legacy.rows.map((r) => r.name),
+    has_mapping: false,
+  };
+}
+
+async function listCascadeProcessorsForBrand(brandName) {
+  const brand = await getActiveBrandByName(brandName);
+  if (!brand) {
+    return { brand: brandName, processors: [], has_mapping: false };
+  }
+  const mapped = await listMappedNamesForBrand(
+    brand.id,
+    'asset_config_brand_processors',
+    'asset_config_processors',
+    'processor_id'
+  );
+  if (mapped.length) {
+    return { brand: brand.name, processors: mapped, has_mapping: true };
+  }
+  const hasMapping = await brandHasFlatMappings(brand.id);
+  if (hasMapping) {
+    return { brand: brand.name, processors: [], has_mapping: true };
+  }
+  const { rows } = await pool.query(
+    `SELECT name FROM asset_config_processors
+      WHERE deleted_at IS NULL AND status = 'active'
+      ORDER BY name ASC`
+  );
+  return {
+    brand: brand.name,
+    processors: rows.map((r) => r.name),
+    has_mapping: false,
+  };
+}
+
+async function listCascadeGenerationsForBrand(brandName) {
+  const brand = await getActiveBrandByName(brandName);
+  if (!brand) {
+    return { brand: brandName, generations: [], has_mapping: false };
+  }
+  const mapped = await listMappedNamesForBrand(
+    brand.id,
+    'asset_config_brand_generations',
+    'asset_config_generations',
+    'generation_id'
+  ).catch(() => []);
+  if (mapped.length) {
+    return { brand: brand.name, generations: mapped, has_mapping: true };
+  }
+  const hasMapping = await brandHasFlatMappings(brand.id);
+  if (hasMapping) {
+    return { brand: brand.name, generations: [], has_mapping: true };
+  }
+  const { rows } = await pool.query(
+    `SELECT name FROM asset_config_generations
+      WHERE deleted_at IS NULL AND status = 'active'
+      ORDER BY name ASC`
+  );
+  return {
+    brand: brand.name,
+    generations: rows.map((r) => r.name),
+    has_mapping: false,
+  };
+}
+
+async function listCascadeGenerationsForBrandProcessor(brandName, processorName) {
+  return listCascadeGenerationsForBrand(brandName);
+}
+
+async function ensureAssetConfigurationSchema() {
+  const fs = require('fs');
+  const path = require('path');
+  for (const file of ['123_asset_config_laptop_spec_mapping.sql', '126_asset_config_brand_flat_mapping.sql']) {
+    const migrationPath = path.join(__dirname, '../migrations', file);
+    if (!fs.existsSync(migrationPath)) continue;
+    const sql = fs.readFileSync(migrationPath, 'utf8');
+    await pool.query(sql);
+  }
+}
+
 module.exports = {
   ENTITIES,
   getEntity,
@@ -672,4 +1229,24 @@ module.exports = {
   reassignChildren,
   bulkDeleteChildren,
   bulkSetChildStatus,
+  getLaptopSpecMappingTree,
+  bulkAddProcessorsToBrand,
+  bulkAddModelsToBrand,
+  bulkAddGenerationsToBrand,
+  bulkAddGenerationsToBrandProcessor,
+  bulkDeleteBrandProcessors,
+  bulkDeleteBrandModels,
+  bulkDeleteBrandGenerations,
+  bulkDeleteBrandProcessorGenerations,
+  bulkSetBrandProcessorStatus,
+  bulkSetBrandModelStatus,
+  bulkSetBrandGenerationStatus,
+  bulkSetBrandProcessorGenerationStatus,
+  ensureAssetConfigurationSchema,
+  listCascadeBrands,
+  listCascadeSpecMasters,
+  listCascadeModelsForBrand,
+  listCascadeProcessorsForBrand,
+  listCascadeGenerationsForBrand,
+  listCascadeGenerationsForBrandProcessor,
 };
