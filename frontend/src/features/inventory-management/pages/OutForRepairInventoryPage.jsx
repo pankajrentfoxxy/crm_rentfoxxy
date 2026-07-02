@@ -116,7 +116,7 @@ export default function OutForRepairInventoryPage() {
       <div className="flex flex-wrap gap-2">
         <SearchField
           value={search}
-          onChange={setSearch}
+          onChange={(e) => setSearch(e.target.value)}
           placeholder="TTSPL, serial, vendor, DC…"
           className="min-w-[220px] flex-1 max-w-md"
         />
