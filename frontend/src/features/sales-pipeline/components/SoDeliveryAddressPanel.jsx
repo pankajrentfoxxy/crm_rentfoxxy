@@ -8,7 +8,7 @@ import {
 } from '../salesPipelineApi';
 import { parseDeliveryAddress } from '../salesPipelineUtils';
 import { INDIAN_STATES, resolveStateSelectValue } from '../../../constants/indianStates';
-import { lookupAndResolvePincode } from '../../../utils/pincodeLookup';
+import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
 
 const emptyAddress = {
   name: '', phone: '', address: '', city: '', state: '', pincode: '', landmark: '',
@@ -109,14 +109,9 @@ function EditDrawer({ title, subtitle, initial, customer, shippingOptions, onClo
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
-  const handlePincodeChange = async (value) => {
-    const { pin, info } = await lookupAndResolvePincode(value);
-    setForm((f) => ({
-      ...f,
-      pincode: pin,
-      ...(info ? { city: info.city || f.city, state: info.state || f.state } : {}),
-    }));
-  };
+  const handlePincodeChange = (value) => applyPincodeAutofill(value, setForm, {
+    pinKey: 'pincode', cityKey: 'city', stateKey: 'state',
+  });
 
   const applyShippingOption = (value) => {
     setSelectedShipping(value);
@@ -209,7 +204,9 @@ function EditDrawer({ title, subtitle, initial, customer, shippingOptions, onClo
                 {INDIAN_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
             </label>
-            <Field label="Pincode*" value={form.pincode} onChange={handlePincodeChange} />
+            <Field label="Pincode*" value={form.pincode}
+              onChange={handlePincodeChange}
+              onBlur={handlePincodeChange} />
           </div>
           <Field label="Landmark" value={form.landmark} onChange={(v) => set('landmark', v)} />
           <label className="flex items-center gap-2 text-sm">
@@ -233,7 +230,7 @@ function EditDrawer({ title, subtitle, initial, customer, shippingOptions, onClo
   );
 }
 
-function Field({ label, value, onChange, textarea }) {
+function Field({ label, value, onChange, onBlur, textarea }) {
   return (
     <label className="block">
       <span className="block text-xs font-medium text-gray-600 mb-1">{label}</span>
@@ -242,7 +239,9 @@ function Field({ label, value, onChange, textarea }) {
           value={value} onChange={(e) => onChange(e.target.value)} />
       ) : (
         <input className="w-full border rounded-lg px-3 py-2 text-sm"
-          value={value} onChange={(e) => onChange(e.target.value)} />
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onBlur={onBlur ? (e) => onBlur(e.target.value) : undefined} />
       )}
     </label>
   );

@@ -7,7 +7,7 @@ import {
 } from '../leadCrmApi';
 import toast from 'react-hot-toast';
 import { INDIAN_STATES, resolveStateSelectValue } from '../../../constants/indianStates';
-import { lookupAndResolvePincode } from '../../../utils/pincodeLookup';
+import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MOBILE_RE = /^\d{10}$/;
@@ -91,17 +91,8 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
-  const handlePincodeAutofill = async (value, cityKey, stateKey, setPin) => {
-    const { pin, info } = await lookupAndResolvePincode(value);
-    setPin(pin);
-    if (info) {
-      setForm((f) => ({
-        ...f,
-        [cityKey]: info.city || f[cityKey],
-        [stateKey]: info.state || f[stateKey],
-      }));
-    }
-  };
+  const handlePincodeAutofill = (value, cityKey, stateKey, pinKey) =>
+    applyPincodeAutofill(value, setForm, { pinKey, cityKey, stateKey });
 
   const setMobile = (k, v) => {
     set(k, v.replace(/\D/g, '').slice(0, 10));
@@ -320,7 +311,8 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
                 </select>
               ) : k === 'billing_pincode' ? (
                 <input value={form.billing_pincode}
-                  onChange={(e) => handlePincodeAutofill(e.target.value, 'billing_city', 'billing_state', (pin) => set('billing_pincode', pin))}
+                  onChange={(e) => handlePincodeAutofill(e.target.value, 'billing_city', 'billing_state', 'billing_pincode')}
+                  onBlur={(e) => handlePincodeAutofill(e.target.value, 'billing_city', 'billing_state', 'billing_pincode')}
                   className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
               ) : (
                 <input value={form[k]} onChange={(e) => set(k, e.target.value)}
@@ -383,7 +375,8 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
                     </select>
                   ) : k === 'shipping_pincode' ? (
                     <input value={form.shipping_pincode}
-                      onChange={(e) => handlePincodeAutofill(e.target.value, 'shipping_city', 'shipping_state', (pin) => set('shipping_pincode', pin))}
+                      onChange={(e) => handlePincodeAutofill(e.target.value, 'shipping_city', 'shipping_state', 'shipping_pincode')}
+                      onBlur={(e) => handlePincodeAutofill(e.target.value, 'shipping_city', 'shipping_state', 'shipping_pincode')}
                       className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
                   ) : (
                     <input value={form[k]} onChange={(e) => set(k, e.target.value)}
@@ -439,14 +432,12 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
                         </select>
                       ) : k === 'pincode' ? (
                         <input value={addrForm.pincode}
-                          onChange={async (e) => {
-                            const { pin, info } = await lookupAndResolvePincode(e.target.value);
-                            setAddrForm((f) => ({
-                              ...f,
-                              pincode: pin,
-                              ...(info ? { city: info.city || f.city, state: info.state || f.state } : {}),
-                            }));
-                          }}
+                          onChange={(e) => applyPincodeAutofill(e.target.value, setAddrForm, {
+                            pinKey: 'pincode', cityKey: 'city', stateKey: 'state',
+                          })}
+                          onBlur={(e) => applyPincodeAutofill(e.target.value, setAddrForm, {
+                            pinKey: 'pincode', cityKey: 'city', stateKey: 'state',
+                          })}
                           className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" />
                       ) : (
                         <input value={addrForm[k]} onChange={(e) => setAddrForm((f) => ({ ...f, [k]: e.target.value }))}

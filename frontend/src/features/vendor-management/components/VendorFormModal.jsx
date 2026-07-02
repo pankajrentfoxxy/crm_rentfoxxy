@@ -9,7 +9,7 @@ import {
 } from '../vendorManagementApi';
 import { getBackendOrigin } from '../../../utils/api';
 import { INDIAN_STATE_OPTIONS, matchIndianState, slugifyState } from '../../../constants/indianStates';
-import { lookupAndResolvePincode } from '../../../utils/pincodeLookup';
+import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
 import { GSTIN_RE, IFSC_RE } from '../vendorMgmtUi';
 
 const STATE_OPTIONS = INDIAN_STATE_OPTIONS;
@@ -502,18 +502,12 @@ export default function VendorFormModal({ open, mode, vendorId, onClose, onSaved
                 <TextInput
                   label="Pincode"
                   value={form.pincode}
-                  onChange={async (v) => {
-                    const { pin, info } = await lookupAndResolvePincode(v);
-                    onChange('pincode', pin);
-                    if (info) {
-                      setForm((f) => ({
-                        ...f,
-                        pincode: pin,
-                        city: info.city || f.city,
-                        state: info.stateSlug || f.state,
-                      }));
-                    }
-                  }}
+                  onChange={(v) => applyPincodeAutofill(v, setForm, {
+                    pinKey: 'pincode', cityKey: 'city', stateKey: 'state', useStateSlug: true,
+                  })}
+                  onBlur={() => applyPincodeAutofill(form.pincode, setForm, {
+                    pinKey: 'pincode', cityKey: 'city', stateKey: 'state', useStateSlug: true,
+                  })}
                 />
               </div>
               <TextArea

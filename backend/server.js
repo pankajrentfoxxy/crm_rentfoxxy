@@ -103,6 +103,7 @@ app.use('/api/demo', require('./routes/demo'));
 app.use('/api/companies', require('./routes/companies'));
 app.use('/api/asset-configuration', require('./routes/assetConfiguration'));
 app.use('/api/vendor-repair', require('./routes/vendorRepair'));
+app.use('/api/utils', require('./routes/utils'));
 
 // Health check
 app.get('/health', (req, res) => {

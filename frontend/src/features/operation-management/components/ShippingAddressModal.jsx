@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { INDIAN_STATES, slugifyState } from '../../../constants/indianStates';
-import { lookupAndResolvePincode } from '../../../utils/pincodeLookup';
+import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
 
 const emptyForm = {
   name: '',
@@ -71,14 +71,12 @@ export default function ShippingAddressModal({ open, onClose, onSubmit, saving }
             <div>
               <label className="text-xs text-gray-500">Pin Code *</label>
               <input required className="w-full mt-1 px-3 py-2 border rounded-lg text-sm" value={form.zip_code}
-                onChange={async (e) => {
-                  const { pin, info } = await lookupAndResolvePincode(e.target.value);
-                  setForm((f) => ({
-                    ...f,
-                    zip_code: pin,
-                    ...(info ? { city: info.city || f.city, state: info.state || f.state } : {}),
-                  }));
-                }} />
+                onChange={(e) => applyPincodeAutofill(e.target.value, setForm, {
+                  pinKey: 'zip_code', cityKey: 'city', stateKey: 'state',
+                })}
+                onBlur={(e) => applyPincodeAutofill(e.target.value, setForm, {
+                  pinKey: 'zip_code', cityKey: 'city', stateKey: 'state',
+                })} />
             </div>
             <div className="sm:col-span-2">
               <label className="text-xs text-gray-500">Address *</label>
