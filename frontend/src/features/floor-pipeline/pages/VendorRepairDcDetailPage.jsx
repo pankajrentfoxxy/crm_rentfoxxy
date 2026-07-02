@@ -5,12 +5,24 @@ import { Download, Loader2, PenLine, Printer, RotateCcw } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext';
 import { getBackendOrigin } from '../../../utils/api';
 import {
+  downloadVendorRepairPdf,
   fetchVendorRepairDc,
+  markVendorRepairDeliveredToVendor,
   receiveVendorRepairBack,
   signVendorRepairDispatch,
-  vendorRepairPdfUrl,
+  updateVendorRepairDispatchDetails,
 } from '../vendorRepairApi';
 import { ticketStatusLabel } from '../floorPipelineUi';
+import {
+  DEFAULT_BILLING_ADDRESS,
+  fmtVendorRepairDate,
+  formatVrdcProductLines,
+  vendorDeliveryStatusClass,
+  vendorDeliveryStatusLabel,
+  vendorRepairDispatchModeLabel,
+} from '../vendorRepairUi';
+import VrdcDispatchFields, { validateVrdcDispatch } from '../components/VrdcDispatchFields';
+import { fetchDeliveryTechnicians } from '../../../utils/deliveryRegisterApi';
 import { invalidateInventoryManagement } from '../../inventory-management/inventoryCountsEvents';
 
 const WAREHOUSE_ROLES = new Set(['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'support_lead']);
@@ -109,19 +121,60 @@ export default function VendorRepairDcDetailPage() {
   const [pendingWhDispatch, setPendingWhDispatch] = useState(null);
   const [pendingVendorDispatch, setPendingVendorDispatch] = useState(null);
   const [activeSign, setActiveSign] = useState(null);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [deliveryTechnicians, setDeliveryTechnicians] = useState([]);
+  const [shipBy, setShipBy] = useState('');
+  const [dispatchFields, setDispatchFields] = useState({});
+  const [dispatchSaving, setDispatchSaving] = useState(false);
+  const [deliverBusy, setDeliverBusy] = useState(false);
+
+  const syncDispatchFromDc = useCallback((head) => {
+    if (!head) return;
+    const mode = head.ship_by
+      || (head.dispatch_mode === 'inhouse' ? 'by_hand' : head.dispatch_mode === 'porter' ? 'by_porter' : head.dispatch_mode === 'courier' ? 'by_courier' : '');
+    setShipBy(mode || '');
+    setDispatchFields({
+      courier_name: head.courier_name || '',
+      awb_number: head.awb_number || '',
+      courier_tracking_url: head.courier_tracking_url || '',
+      porter_tracking_id: head.porter_tracking_id || '',
+      porter_order_id: head.porter_order_id || '',
+      porter_booking_url: head.porter_booking_url || '',
+      delivery_person_id: head.delivery_person_id ? String(head.delivery_person_id) : '',
+    });
+  }, []);
+
+  const handleDownloadPdf = async () => {
+    setPdfBusy(true);
+    try {
+      await downloadVendorRepairPdf(dcNumber);
+      toast.success('PDF downloaded');
+    } catch {
+      toast.error('PDF download failed');
+    } finally {
+      setPdfBusy(false);
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const { data } = await fetchVendorRepairDc(dcNumber);
       setDc(data.data);
+      syncDispatchFromDc(data.data);
     } catch {
       toast.error('Vendor repair DC not found');
       setDc(null);
     } finally {
       setLoading(false);
     }
-  }, [dcNumber]);
+  }, [dcNumber, syncDispatchFromDc]);
+
+  useEffect(() => {
+    fetchDeliveryTechnicians({ limit: 200 })
+      .then((data) => setDeliveryTechnicians(data?.data || data?.technicians || []))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => { load(); }, [load]);
 
@@ -145,7 +198,18 @@ export default function VendorRepairDcDetailPage() {
       toast.error('Both warehouse and vendor dispatch signatures are required');
       return;
     }
+    const dispatchErr = shipBy ? validateVrdcDispatch(shipBy, dispatchFields) : null;
+    if (dispatchErr) {
+      toast.error(dispatchErr);
+      return;
+    }
     try {
+      if (dc.status === 'draft' && shipBy) {
+        await updateVendorRepairDispatchDetails(dcNumber, {
+          ship_by: shipBy,
+          ...dispatchFields,
+        });
+      }
       await signVendorRepairDispatch(dcNumber, {
         warehouse_esign: pendingWhDispatch || undefined,
         vendor_esign: pendingVendorDispatch || undefined,
@@ -157,6 +221,41 @@ export default function VendorRepairDcDetailPage() {
       load();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Dispatch failed');
+    }
+  };
+
+  const saveDispatchDetails = async () => {
+    const dispatchErr = validateVrdcDispatch(shipBy, dispatchFields);
+    if (dispatchErr) {
+      toast.error(dispatchErr);
+      return;
+    }
+    setDispatchSaving(true);
+    try {
+      await updateVendorRepairDispatchDetails(dcNumber, {
+        ship_by: shipBy,
+        ...dispatchFields,
+      });
+      toast.success('Send details saved');
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Save failed');
+    } finally {
+      setDispatchSaving(false);
+    }
+  };
+
+  const handleMarkDeliveredToVendor = async () => {
+    if (!window.confirm('Confirm laptops have been delivered to the vendor?')) return;
+    setDeliverBusy(true);
+    try {
+      const { data } = await markVendorRepairDeliveredToVendor(dcNumber);
+      toast.success(data.message || 'Marked delivered to vendor');
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to mark delivered');
+    } finally {
+      setDeliverBusy(false);
     }
   };
 
@@ -202,15 +301,38 @@ export default function VendorRepairDcDetailPage() {
     <div className="p-4 md:p-6 max-w-5xl mx-auto space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <Link to="/floor-pipeline/diagnosis-failed" className="text-sm text-blue-600 hover:underline">← Diagnosis Failed</Link>
+          <Link to="/floor-pipeline/vendor-repair-dc" className="text-sm text-blue-600 hover:underline">← Vendor Repair DC</Link>
           <h1 className="text-xl font-bold mt-1">Vendor Repair DC</h1>
           <p className="font-mono text-purple-800">{dc.dc_number}</p>
           <span className="inline-block mt-2 px-2 py-0.5 rounded-full text-xs bg-purple-100 text-purple-900">{statusLabel(dc.status)}</span>
+          <span className={`inline-block mt-2 ml-2 px-2 py-0.5 rounded-full text-xs ${vendorDeliveryStatusClass(dc)}`}>
+            {vendorDeliveryStatusLabel(dc)}
+          </span>
+          {dc.ship_by || dc.dispatch_mode ? (
+            <span className="inline-block mt-2 ml-2 px-2 py-0.5 rounded-full text-xs bg-orange-50 text-orange-800 border border-orange-200">
+              {vendorRepairDispatchModeLabel(dc.ship_by, dc.dispatch_mode)}
+            </span>
+          ) : null}
         </div>
         <div className="flex flex-wrap gap-2">
-          <a href={vendorRepairPdfUrl(dcNumber)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 px-3 py-2 border rounded-lg text-sm">
-            <Download className="w-4 h-4" /> PDF
-          </a>
+          {canProcess && ['dispatched', 'partially_returned'].includes(dc.status) && !dc.vendor_delivered_at ? (
+            <button
+              type="button"
+              disabled={deliverBusy}
+              onClick={handleMarkDeliveredToVendor}
+              className="inline-flex items-center gap-1 px-3 py-2 bg-emerald-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50"
+            >
+              {deliverBusy ? 'Saving…' : 'Mark Delivered to Vendor'}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            disabled={pdfBusy}
+            onClick={handleDownloadPdf}
+            className="inline-flex items-center gap-1 px-3 py-2 border rounded-lg text-sm disabled:opacity-50"
+          >
+            <Download className="w-4 h-4" /> {pdfBusy ? 'PDF…' : 'PDF'}
+          </button>
           <button type="button" onClick={() => window.print()} className="inline-flex items-center gap-1 px-3 py-2 border rounded-lg text-sm">
             <Printer className="w-4 h-4" /> Print
           </button>
@@ -225,17 +347,21 @@ export default function VendorRepairDcDetailPage() {
         </div>
       </div>
 
+      <div className="rounded-xl border bg-slate-50 p-4 text-sm whitespace-pre-wrap text-slate-700">
+        <p className="text-xs font-semibold uppercase text-slate-500 mb-1">Dispatch From (TRUETECH)</p>
+        {DEFAULT_BILLING_ADDRESS}
+      </div>
+
       <div className="grid md:grid-cols-2 gap-4 print:grid-cols-2">
         <div className="rounded-xl border bg-white p-4 text-sm space-y-1">
-          <h3 className="font-semibold mb-2">Billing Address (From)</h3>
-          <p className="text-slate-600 whitespace-pre-wrap">{dc.billing_address || dc.warehouse_address || dc.warehouse_name || '—'}</p>
+          <h3 className="font-semibold mb-2">Vendor Billing Address</h3>
+          <p className="text-slate-600 whitespace-pre-wrap">{dc.vendor_billing_display || dc.vendor_address || dc.vendor_name || '—'}</p>
         </div>
         <div className="rounded-xl border bg-white p-4 text-sm space-y-1">
-          <h3 className="font-semibold mb-2">Shipping Address (To Vendor)</h3>
-          <p>{dc.vendor_name}</p>
-          <p className="text-slate-600 whitespace-pre-wrap">{dc.shipping_address || dc.vendor_address}</p>
-          <p className="text-slate-600">{dc.contact_person} · {dc.contact_mobile}</p>
-          <p className="text-slate-600">Expected return: {dc.expected_return_date || '—'}</p>
+          <h3 className="font-semibold mb-2">Vendor Shipping Address</h3>
+          <p className="text-slate-600 whitespace-pre-wrap">{dc.vendor_shipping_display || dc.shipping_address || dc.vendor_address || '—'}</p>
+          <p className="text-slate-600 pt-2">{dc.contact_person || '—'} · {dc.contact_mobile || '—'}</p>
+          <p className="text-slate-600">Expected return: {fmtVendorRepairDate(dc.expected_return_date)}</p>
           {dc.items_received_count != null ? (
             <p className="text-slate-600 font-medium pt-1">
               Received: {dc.items_received_count || 0} / {dc.items_dispatched_count || dc.items?.length || 0}
@@ -253,31 +379,90 @@ export default function VendorRepairDcDetailPage() {
 
       <div className="rounded-xl border bg-white overflow-hidden">
         <table className="min-w-full text-sm">
-          <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+          <thead className="bg-teal-700 text-xs uppercase text-white">
             <tr>
-              <th className="p-3 text-left">TTSPL</th>
-              <th className="p-3 text-left">Serial</th>
-              <th className="p-3 text-left">Configuration</th>
+              <th className="p-3 text-left">Product</th>
+              <th className="p-3 text-center w-16">Qty.</th>
               <th className="p-3 text-left">Remarks</th>
-              <th className="p-3 text-left">Item status</th>
+              <th className="p-3 text-left">Status</th>
               <th className="p-3 text-left">Ticket</th>
             </tr>
           </thead>
           <tbody>
-            {(dc.items || []).map((item) => (
-              <tr key={item.id} className="border-t">
-                <td className="p-3 font-mono text-xs">{item.ttspl_id || '—'}</td>
-                <td className="p-3 font-mono text-xs">{item.serial_number || '—'}</td>
-                <td className="p-3 text-xs">{item.configuration || '—'}</td>
-                <td className="p-3 text-xs max-w-[180px]">{item.item_remarks || item.diagnosis_failed_reason || '—'}</td>
-                <td className="p-3 text-xs capitalize">{item.item_status || item.ticket_status || '—'}</td>
-                <td className="p-3">
-                  <Link to={`/floor-pipeline/tickets/${item.ticket_id}`} className="text-blue-600">#{item.ticket_id}</Link>
-                </td>
-              </tr>
-            ))}
+            {(dc.items || []).map((item) => {
+              const prod = formatVrdcProductLines(item);
+              return (
+                <tr key={item.id} className="border-t align-top">
+                  <td className="p-3 text-xs">
+                    {prod.title ? <p className="font-semibold text-gray-900">{prod.title}</p> : null}
+                    {prod.specs.map((line) => (
+                      <p key={line} className="text-gray-500">{line}</p>
+                    ))}
+                    {prod.ids ? <p className="font-mono font-semibold text-gray-800 mt-1">{prod.ids}</p> : null}
+                  </td>
+                  <td className="p-3 text-xs text-center">1 Pcs.</td>
+                  <td className="p-3 text-xs max-w-[180px]">{item.item_remarks || item.diagnosis_failed_reason || '—'}</td>
+                  <td className="p-3 text-xs capitalize">{item.item_status || item.ticket_status || '—'}</td>
+                  <td className="p-3">
+                    <Link to={`/floor-pipeline/tickets/${item.ticket_id}`} className="text-blue-600">#{item.ticket_id}</Link>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
+      </div>
+
+      ) : null}
+
+      <div className="rounded-xl border bg-white p-4 text-sm space-y-2 print:hidden">
+        <h3 className="font-semibold">Send to vendor</h3>
+        {dc.status === 'draft' && canProcess ? (
+          <>
+            <VrdcDispatchFields
+              shipBy={shipBy}
+              onShipByChange={setShipBy}
+              fields={dispatchFields}
+              onFieldsChange={setDispatchFields}
+              deliveryTechnicians={deliveryTechnicians}
+            />
+            <button
+              type="button"
+              disabled={dispatchSaving}
+              onClick={saveDispatchDetails}
+              className="px-3 py-2 border rounded-lg text-sm font-medium hover:bg-slate-50 disabled:opacity-50"
+            >
+              {dispatchSaving ? 'Saving…' : 'Save send details'}
+            </button>
+          </>
+        ) : (
+          <div className="text-slate-600 space-y-1">
+            <p>Mode: <strong>{vendorRepairDispatchModeLabel(dc.ship_by, dc.dispatch_mode)}</strong></p>
+            {(dc.ship_by === 'by_courier' || dc.dispatch_mode === 'courier') && (
+              <p>Courier: {dc.courier_name || '—'} · AWB: {dc.awb_number || '—'}
+                {dc.courier_tracking_url ? (
+                  <> · <a href={dc.courier_tracking_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">Track</a></>
+                ) : null}
+              </p>
+            )}
+            {(dc.ship_by === 'by_porter' || dc.dispatch_mode === 'porter') && (
+              <p>Porter ID: {dc.porter_tracking_id || '—'}
+                {dc.porter_order_id ? <> · Order: {dc.porter_order_id}</> : null}
+                {dc.porter_booking_url ? (
+                  <> · <a href={dc.porter_booking_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">Track</a></>
+                ) : null}
+              </p>
+            )}
+            {(dc.ship_by === 'by_hand' || dc.dispatch_mode === 'inhouse') && (
+              <p>Delivery person: {dc.delivery_person_name || '—'}{dc.delivery_person_phone ? ` · ${dc.delivery_person_phone}` : ''}</p>
+            )}
+            {dc.vendor_delivered_at ? (
+              <p className="text-green-700 font-medium">Delivered to vendor: {fmtVendorRepairDate(dc.vendor_delivered_at)}</p>
+            ) : dc.dispatched_at ? (
+              <p className="text-blue-700">Left warehouse: {fmtVendorRepairDate(dc.dispatched_at)} — awaiting vendor delivery confirmation</p>
+            ) : null}
+          </div>
+        )}
       </div>
 
       {canProcess && dc.status === 'draft' ? (

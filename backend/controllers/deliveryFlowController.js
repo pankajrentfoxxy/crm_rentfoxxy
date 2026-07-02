@@ -182,11 +182,15 @@ async function buildDcFlow(where, params, { includeOtp = false } = {}) {
       tech_longitude: first.tech_longitude,
       serial_verified_at: first.serial_verified_at,
       serial_verified_no: first.serial_verified_no,
-      otp_sent_at: first.otp_sent_at || first.support_otp_sent_at,
-      otp_verified_at: first.otp_verified_at || first.support_otp_verified_at,
-      otp_code: includeOtp ? (first.otp_code || first.support_otp_code) : undefined,
-      otp_pending: Boolean(first.otp_sent_at || first.support_otp_sent_at)
-        && !(first.otp_verified_at || first.support_otp_verified_at),
+      otp_sent_at: first.otp_sent_at || first.delivery_otp_sent_at
+        || (first.d_otp ? first.updated_at : null) || first.support_otp_sent_at,
+      otp_verified_at: first.otp_verified_at || first.d_otp_verified_at || first.support_otp_verified_at,
+      otp_code: includeOtp
+        ? (first.otp_code || first.d_otp || first.delivery_otp || first.support_otp_code)
+        : undefined,
+      otp_pending: Boolean(
+        first.otp_sent_at || first.delivery_otp_sent_at || first.d_otp || first.support_otp_sent_at
+      ) && !(first.otp_verified_at || first.d_otp_verified_at || first.support_otp_verified_at),
       pod_type: first.pod_type,
       pod_photo_url: first.pod_photo_url,
       esign_url: first.esign_url,
@@ -474,7 +478,7 @@ exports.submitDeliveryWithPod = async (req, res) => {
       return res.status(409).json({ success: false, message: 'DC already delivered' });
     }
     const otpRes = await client.query(
-      `SELECT otp_code, otp_verified_at, status FROM delivery_challan_lines
+      `SELECT COALESCE(otp_code, d_otp) AS otp_code, otp_verified_at, status FROM delivery_challan_lines
         WHERE dc_number = $1 AND status <> 'delivered'
         ORDER BY id ASC LIMIT 1`,
       [dcNumber]

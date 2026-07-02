@@ -28,6 +28,7 @@ exports.createOutForRepair = async (req, res) => {
       vendorId: req.body.vendor_id || req.body.vendorId,
       vendorName: req.body.vendor_name || req.body.vendorName,
       vendorAddress: req.body.vendor_address || req.body.vendorAddress,
+      vendorBillingAddress: req.body.vendor_billing_address || req.body.vendorBillingAddress,
       billingAddress: req.body.billing_address || req.body.billingAddress,
       shippingAddress: req.body.shipping_address || req.body.shippingAddress,
       contactPerson: req.body.contact_person || req.body.contactPerson,
@@ -37,6 +38,15 @@ exports.createOutForRepair = async (req, res) => {
       warehouseName: req.body.warehouse_name || req.body.warehouseName,
       warehouseAddress: req.body.warehouse_address || req.body.warehouseAddress,
       itemRemarks: req.body.item_remarks || req.body.itemRemarks || {},
+      ship_by: req.body.ship_by || req.body.shipBy,
+      dispatch_mode: req.body.dispatch_mode || req.body.dispatchMode,
+      courier_name: req.body.courier_name || req.body.courierName,
+      awb_number: req.body.awb_number || req.body.awbNumber,
+      courier_tracking_url: req.body.courier_tracking_url || req.body.courierTrackingUrl,
+      porter_tracking_id: req.body.porter_tracking_id || req.body.porterTrackingId,
+      porter_order_id: req.body.porter_order_id || req.body.porterOrderId,
+      porter_booking_url: req.body.porter_booking_url || req.body.porterBookingUrl,
+      delivery_person_id: req.body.delivery_person_id || req.body.deliveryPersonId,
       actorUserId: req.user.user_id,
       actorName: req.user.name,
     });
@@ -50,6 +60,30 @@ exports.createOutForRepair = async (req, res) => {
   }
 };
 
+exports.getCompanyDefaults = async (_req, res) => {
+  try {
+    const { formatCompanyBlock } = require('../utils/companyDefaults');
+    res.json({ success: true, billing_address: formatCompanyBlock() });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message || 'Failed to load company defaults' });
+  }
+};
+
+exports.listVendorRepairDcs = async (req, res) => {
+  try {
+    await svc.ensureVendorRepairSchema();
+    const result = await svc.listVendorRepairDcs({
+      search: req.query.search,
+      status: req.query.status,
+      page: req.query.page,
+      limit: req.query.limit,
+    });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message || 'Failed to load vendor repair DCs' });
+  }
+};
+
 exports.getVendorRepairDc = async (req, res) => {
   try {
     await svc.ensureVendorRepairSchema();
@@ -58,6 +92,50 @@ exports.getVendorRepairDc = async (req, res) => {
     res.json({ success: true, data: dc });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message || 'Failed to load DC' });
+  }
+};
+
+exports.updateDispatchDetails = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await svc.ensureVendorRepairSchema();
+    await client.query('BEGIN');
+    const result = await svc.updateVendorRepairDispatchDetails(client, {
+      dcNumber: req.params.dcNumber,
+      body: req.body,
+      actorUserId: req.user.user_id,
+    });
+    await client.query('COMMIT');
+    res.json({ success: true, message: 'Dispatch details updated', ...result });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ success: false, message: err.message || 'Update failed' });
+  } finally {
+    client.release();
+  }
+};
+
+exports.markDeliveredToVendor = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await svc.ensureVendorRepairSchema();
+    await client.query('BEGIN');
+    const result = await svc.markDeliveredToVendor(client, {
+      dcNumber: req.params.dcNumber,
+      actorUserId: req.user.user_id,
+      actorName: req.user.name,
+    });
+    await client.query('COMMIT');
+    res.json({
+      success: true,
+      message: result.already_delivered ? 'Already marked delivered to vendor' : 'Marked delivered to vendor',
+      ...result,
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ success: false, message: err.message || 'Failed to mark delivered' });
+  } finally {
+    client.release();
   }
 };
 
@@ -182,12 +260,16 @@ exports.listVendorPortalRepairDcs = async (req, res) => {
 exports.downloadPdf = async (req, res) => {
   try {
     await svc.ensureVendorRepairSchema();
+    const dcNumber = req.params.dcNumber;
     const { generateVendorRepairPdf } = require('../services/vendorRepairPdfService');
-    const rel = await generateVendorRepairPdf(req.params.dcNumber);
+    const rel = await generateVendorRepairPdf(dcNumber);
     if (!rel) return res.status(404).json({ success: false, message: 'PDF not found' });
     const abs = path.join(__dirname, '../uploads', rel);
     if (!fs.existsSync(abs)) return res.status(404).json({ success: false, message: 'PDF file missing' });
-    res.download(abs, path.basename(abs));
+    const safe = String(dcNumber).replace(/[^\w-]+/g, '_');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="VRDC_${safe}.pdf"`);
+    res.download(abs, `VRDC_${safe}.pdf`);
   } catch (err) {
     res.status(500).json({ success: false, message: err.message || 'PDF download failed' });
   }

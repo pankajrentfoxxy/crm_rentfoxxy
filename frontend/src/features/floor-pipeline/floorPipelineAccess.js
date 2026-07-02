@@ -97,5 +97,8 @@ export function isFloorPipelineNavActive(childPath, location) {
   if (childPath === '/floor-pipeline/diagnosis-failed') {
     return pathname === '/floor-pipeline/diagnosis-failed';
   }
+  if (childPath === '/floor-pipeline/vendor-repair-dc') {
+    return pathname === '/floor-pipeline/vendor-repair-dc' || pathname.startsWith('/floor-pipeline/vendor-repair-dc/');
+  }
   return pathname === childPath || pathname.startsWith(`${childPath}/`);
 }

@@ -431,7 +431,7 @@ export default function DeliveryChallanDetailPage() {
                   <p>Mode: {head.dispatch_mode || head.ship_by}</p>
                   {head.dispatch_mode === 'inhouse' || head.ship_by === 'by_hand' ? (
                     <>
-                      <p>OTP: {head.delivery_otp_sent_at ? 'Sent' : 'Not Sent'}</p>
+                      <p>OTP: {(head.otp_sent_at || head.delivery_otp_sent_at || head.d_otp) ? 'Sent' : 'Not Sent'}</p>
                       <button type="button" onClick={handleSendOtp} className="px-3 py-1 border rounded-lg text-xs">Send OTP</button>
                       <button type="button" onClick={() => setOtpModal(true)} className="ml-2 px-3 py-1 bg-blue-600 text-white rounded-lg text-xs">Verify & Deliver</button>
                     </>

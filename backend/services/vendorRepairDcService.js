@@ -23,7 +23,7 @@ function currentFinancialYearLabel(date = new Date()) {
 
 async function ensureVendorRepairSchema() {
   if (schemaEnsured) return;
-  for (const file of ['121_diagnosis_failed_vendor_repair.sql', '124_vendor_repair_enhancements.sql']) {
+  for (const file of ['121_diagnosis_failed_vendor_repair.sql', '124_vendor_repair_enhancements.sql', '125_vendor_repair_dispatch.sql']) {
     const migrationPath = path.join(__dirname, '../migrations', file);
     if (fs.existsSync(migrationPath)) {
       await pool.query(fs.readFileSync(migrationPath, 'utf8'));
@@ -68,12 +68,61 @@ async function nextReceiveDcNumber(client, dispatchDcNumber) {
   return `${dispatchDcNumber}-R${seq}`;
 }
 
+const { formatCompanyBlock } = require('../utils/companyDefaults');
+
 function defaultBillingAddress() {
-  const parts = [
-    process.env.COMPANY_NAME || 'Rentfoxxy',
-    process.env.COMPANY_ADDRESS || process.env.WAREHOUSE_ADDRESS || '',
-  ].filter(Boolean);
-  return parts.join('\n') || 'Rentfoxxy Warehouse';
+  return formatCompanyBlock();
+}
+
+function normalizeShipBy(shipBy, dispatchMode) {
+  if (shipBy === 'by_hand' || shipBy === 'by_courier' || shipBy === 'by_porter') return shipBy;
+  if (dispatchMode === 'inhouse') return 'by_hand';
+  if (dispatchMode === 'porter') return 'by_porter';
+  if (dispatchMode === 'courier') return 'by_courier';
+  return null;
+}
+
+function shipByToDispatchMode(shipBy) {
+  if (shipBy === 'by_hand') return 'inhouse';
+  if (shipBy === 'by_porter') return 'porter';
+  if (shipBy === 'courier') return 'courier';
+  return null;
+}
+
+function validateDispatchDetails({ shipBy, courierName, porterTrackingId, deliveryPersonId }) {
+  if (!shipBy) throw new Error('Send mode is required (By Hand, Courier, or Porter)');
+  if (shipBy === 'by_courier' && !courierName?.trim()) {
+    throw new Error('Courier name is required for By Courier dispatch');
+  }
+  if (shipBy === 'by_porter' && !porterTrackingId?.trim()) {
+    throw new Error('Porter tracking / booking ID is required');
+  }
+  if (shipBy === 'by_hand' && !deliveryPersonId) {
+    throw new Error('Delivery person is required for By Hand dispatch');
+  }
+}
+
+function dispatchPayloadFromBody(body) {
+  const shipBy = normalizeShipBy(body.ship_by || body.shipBy, body.dispatch_mode || body.dispatchMode);
+  const dispatchMode = shipByToDispatchMode(shipBy) || body.dispatch_mode || body.dispatchMode;
+  const deliveryPersonId = body.delivery_person_id || body.deliveryPersonId;
+  validateDispatchDetails({
+    shipBy,
+    courierName: body.courier_name || body.courierName,
+    porterTrackingId: body.porter_tracking_id || body.porterTrackingId,
+    deliveryPersonId,
+  });
+  return {
+    ship_by: shipBy,
+    dispatch_mode: dispatchMode,
+    courier_name: shipBy === 'by_courier' ? (body.courier_name || body.courierName || '').trim() || null : null,
+    awb_number: shipBy === 'by_courier' ? (body.awb_number || body.awbNumber || '').trim() || null : null,
+    courier_tracking_url: shipBy === 'by_courier' ? (body.courier_tracking_url || body.courierTrackingUrl || '').trim() || null : null,
+    porter_tracking_id: shipBy === 'by_porter' ? (body.porter_tracking_id || body.porterTrackingId || '').trim() || null : null,
+    porter_order_id: shipBy === 'by_porter' ? (body.porter_order_id || body.porterOrderId || '').trim() || null : null,
+    porter_booking_url: shipBy === 'by_porter' ? (body.porter_booking_url || body.porterBookingUrl || '').trim() || null : null,
+    delivery_person_id: shipBy === 'by_hand' && deliveryPersonId ? Number(deliveryPersonId) : null,
+  };
 }
 
 async function nextVendorRepairDcNumber(client) {
@@ -196,6 +245,7 @@ async function createOutForRepairDc(client, {
   vendorId,
   vendorName,
   vendorAddress,
+  vendorBillingAddress,
   billingAddress,
   shippingAddress,
   contactPerson,
@@ -205,6 +255,16 @@ async function createOutForRepairDc(client, {
   warehouseName,
   warehouseAddress,
   itemRemarks = {},
+  ship_by,
+  shipBy,
+  dispatch_mode,
+  courier_name,
+  awb_number,
+  courier_tracking_url,
+  porter_tracking_id,
+  porter_order_id,
+  porter_booking_url,
+  delivery_person_id,
   actorUserId,
   actorName,
 }) {
@@ -212,9 +272,22 @@ async function createOutForRepairDc(client, {
     throw new Error('Select at least one laptop');
   }
   if (!vendorName?.trim()) throw new Error('Vendor name is required');
-  const shipAddr = shippingAddress?.trim() || vendorAddress?.trim();
-  if (!shipAddr) throw new Error('Shipping address is required');
-  const billAddr = billingAddress?.trim() || defaultBillingAddress();
+  const vendorBillAddr = (vendorBillingAddress || vendorAddress)?.trim();
+  const shipAddr = shippingAddress?.trim();
+  if (!vendorBillAddr) throw new Error('Vendor billing address is required');
+  if (!shipAddr) throw new Error('Vendor shipping address is required');
+  const billAddr = defaultBillingAddress();
+  const dispatch = dispatchPayloadFromBody({
+    ship_by: ship_by || shipBy,
+    dispatch_mode,
+    courier_name,
+    awb_number,
+    courier_tracking_url,
+    porter_tracking_id,
+    porter_order_id,
+    porter_booking_url,
+    delivery_person_id,
+  });
 
   const tRes = await client.query(
     `SELECT t.*, s.stage_name,
@@ -239,22 +312,33 @@ async function createOutForRepairDc(client, {
         dc_number, vendor_id, vendor_name, vendor_address, billing_address, shipping_address,
         contact_person, contact_mobile,
         expected_return_date, remarks, warehouse_name, warehouse_address, status, created_by,
-        items_dispatched_count, items_received_count
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'draft',$13,0,0)`,
+        items_dispatched_count, items_received_count,
+        ship_by, dispatch_mode, courier_name, awb_number, courier_tracking_url,
+        porter_tracking_id, porter_order_id, porter_booking_url, delivery_person_id
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'draft',$13,0,0,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
     [
       dcNumber,
       vendorId || null,
       vendorName.trim(),
-      vendorAddress?.trim() || shipAddr,
+      vendorBillAddr,
       billAddr,
       shipAddr,
       contactPerson?.trim() || null,
       contactMobile?.trim() || null,
       expectedReturnDate || null,
       remarks?.trim() || null,
-      warehouseName?.trim() || process.env.COMPANY_NAME || 'Rentfoxxy Warehouse',
+      warehouseName?.trim() || 'TRUETECH SERVICES PRIVATE LIMITED',
       warehouseAddress?.trim() || billAddr,
       actorUserId,
+      dispatch.ship_by,
+      dispatch.dispatch_mode,
+      dispatch.courier_name,
+      dispatch.awb_number,
+      dispatch.courier_tracking_url,
+      dispatch.porter_tracking_id,
+      dispatch.porter_order_id,
+      dispatch.porter_booking_url,
+      dispatch.delivery_person_id,
     ]
   );
 
@@ -300,9 +384,54 @@ async function createOutForRepairDc(client, {
   return { dc_number: dcNumber };
 }
 
+function vendorDisplayName(vendor) {
+  if (!vendor) return '';
+  return vendor.business_name
+    || [vendor.first_name, vendor.last_name].filter(Boolean).join(' ').trim()
+    || vendor.f_name
+    || '';
+}
+
+function formatVendorBillingFromRow(vendor) {
+  if (!vendor) return '';
+  const lines = [vendorDisplayName(vendor)].filter(Boolean);
+  const street = [vendor.address, vendor.city, vendor.state, vendor.pincode].filter(Boolean).join(', ');
+  if (street) lines.push(street);
+  return lines.join('\n');
+}
+
+function formatVendorShippingFromRow(vendor) {
+  if (!vendor) return '';
+  if (vendor.shipping_same !== false) return formatVendorBillingFromRow(vendor);
+  const lines = [vendorDisplayName(vendor)].filter(Boolean);
+  const street = [vendor.shipping_address, vendor.shipping_city, vendor.shipping_state, vendor.shipping_pincode]
+    .filter(Boolean).join(', ');
+  if (street) lines.push(street);
+  return lines.join('\n');
+}
+
 async function getVendorRepairDc(dcNumber) {
   const headRes = await pool.query(
-    `SELECT * FROM vendor_repair_delivery_challans WHERE dc_number = $1`,
+    `SELECT d.*,
+            v.business_name AS vendor_business_name,
+            v.first_name AS vendor_first_name,
+            v.last_name AS vendor_last_name,
+            v.address AS vendor_reg_address,
+            v.city AS vendor_reg_city,
+            v.state AS vendor_reg_state,
+            v.pincode AS vendor_reg_pincode,
+            v.shipping_same AS vendor_shipping_same,
+            v.shipping_address AS vendor_ship_address,
+            v.shipping_city AS vendor_ship_city,
+            v.shipping_state AS vendor_ship_state,
+            v.shipping_pincode AS vendor_ship_pincode,
+            dt.first_name AS delivery_person_first_name,
+            dt.last_name AS delivery_person_last_name,
+            dt.phone AS delivery_person_phone
+       FROM vendor_repair_delivery_challans d
+       LEFT JOIN vendors v ON v.vendor_id = d.vendor_id AND v.deleted_at IS NULL
+       LEFT JOIN delivery_technicians dt ON dt.technician_id = d.delivery_person_id
+      WHERE d.dc_number = $1`,
     [dcNumber]
   );
   const head = headRes.rows[0];
@@ -315,7 +444,130 @@ async function getVendorRepairDc(dcNumber) {
       ORDER BY i.id ASC`,
     [dcNumber]
   );
-  return { ...head, items: itemsRes.rows };
+  const vendorMaster = head.vendor_id ? {
+    business_name: head.vendor_business_name,
+    first_name: head.vendor_first_name,
+    last_name: head.vendor_last_name,
+    address: head.vendor_reg_address,
+    city: head.vendor_reg_city,
+    state: head.vendor_reg_state,
+    pincode: head.vendor_reg_pincode,
+    shipping_same: head.vendor_shipping_same,
+    shipping_address: head.vendor_ship_address,
+    shipping_city: head.vendor_ship_city,
+    shipping_state: head.vendor_ship_state,
+    shipping_pincode: head.vendor_ship_pincode,
+  } : null;
+  const vendor_billing_display = formatVendorBillingFromRow(vendorMaster) || head.vendor_address || head.vendor_name;
+  const vendor_shipping_display = formatVendorShippingFromRow(vendorMaster) || head.shipping_address || head.vendor_address;
+  const delivery_person_name = [head.delivery_person_first_name, head.delivery_person_last_name]
+    .filter(Boolean).join(' ').trim() || null;
+  return {
+    ...head,
+    company_from_display: formatCompanyBlock(),
+    vendor_billing_display,
+    vendor_shipping_display,
+    delivery_person_name,
+    vendor_delivery_status: head.vendor_delivered_at ? 'delivered' : (head.dispatched_at ? 'in_transit' : 'pending'),
+    items: itemsRes.rows,
+  };
+}
+
+async function updateVendorRepairDispatchDetails(client, { dcNumber, body, actorUserId }) {
+  const headRes = await client.query(
+    `SELECT * FROM vendor_repair_delivery_challans WHERE dc_number = $1 FOR UPDATE`,
+    [dcNumber]
+  );
+  const head = headRes.rows[0];
+  if (!head) throw new Error('Vendor repair DC not found');
+  if (head.status !== 'draft') throw new Error('Dispatch details can only be edited while DC is in draft');
+
+  const dispatch = dispatchPayloadFromBody(body);
+  await client.query(
+    `UPDATE vendor_repair_delivery_challans SET
+        ship_by = $2,
+        dispatch_mode = $3,
+        courier_name = $4,
+        awb_number = $5,
+        courier_tracking_url = $6,
+        porter_tracking_id = $7,
+        porter_order_id = $8,
+        porter_booking_url = $9,
+        delivery_person_id = $10,
+        updated_at = NOW()
+      WHERE dc_number = $1`,
+    [
+      dcNumber,
+      dispatch.ship_by,
+      dispatch.dispatch_mode,
+      dispatch.courier_name,
+      dispatch.awb_number,
+      dispatch.courier_tracking_url,
+      dispatch.porter_tracking_id,
+      dispatch.porter_order_id,
+      dispatch.porter_booking_url,
+      dispatch.delivery_person_id,
+    ]
+  );
+  return { dc_number: dcNumber, ...dispatch };
+}
+
+async function markDeliveredToVendor(client, { dcNumber, actorUserId, actorName }) {
+  const headRes = await client.query(
+    `SELECT * FROM vendor_repair_delivery_challans WHERE dc_number = $1 FOR UPDATE`,
+    [dcNumber]
+  );
+  const head = headRes.rows[0];
+  if (!head) throw new Error('Vendor repair DC not found');
+  if (head.status === 'draft') throw new Error('DC must be dispatched before marking delivered to vendor');
+  if (head.status === 'returned') throw new Error('DC already fully returned from vendor');
+  if (head.vendor_delivered_at) return { already_delivered: true, dc_number: dcNumber };
+
+  await client.query(
+    `UPDATE vendor_repair_delivery_challans SET
+        vendor_delivered_at = NOW(),
+        vendor_delivered_by = $2,
+        updated_at = NOW()
+      WHERE dc_number = $1`,
+    [dcNumber, actorUserId]
+  );
+
+  const itemsRes = await client.query(
+    `SELECT i.ticket_id, i.ttspl_id, t.vendor_serial_id, t.ttspl_id AS ticket_ttspl
+       FROM vendor_repair_dc_items i
+       JOIN tickets t ON t.ticket_id = i.ticket_id
+      WHERE i.dc_number = $1`,
+    [dcNumber]
+  );
+
+  for (const item of itemsRes.rows) {
+    await logTtsplEvent({
+      ttsplId: item.ttspl_id || item.ticket_ttspl,
+      vendorSerialId: item.vendor_serial_id,
+      eventType: 'delivered_to_vendor',
+      description: `Delivered to vendor via ${dcNumber}`,
+      metadata: { dc_number: dcNumber, vendor_name: head.vendor_name },
+      actorUserId,
+      actorName,
+      db: client,
+    });
+    await logTicketActivity(client, {
+      ticketId: item.ticket_id,
+      userId: actorUserId,
+      action: 'delivered_to_vendor',
+      notes: `Confirmed delivered to ${head.vendor_name} (${dcNumber})`,
+    });
+  }
+
+  const pdfPath = await generateVendorRepairPdf(dcNumber);
+  if (pdfPath) {
+    await client.query(
+      `UPDATE vendor_repair_delivery_challans SET pdf_path = $2, updated_at = NOW() WHERE dc_number = $1`,
+      [dcNumber, pdfPath]
+    );
+  }
+
+  return { dc_number: dcNumber, vendor_delivered_at: new Date().toISOString(), pdf_path: pdfPath };
 }
 
 async function signDispatchDc(client, {
@@ -838,6 +1090,64 @@ async function listOutForRepairInventory({
   };
 }
 
+async function listVendorRepairDcs({
+  search,
+  status,
+  page = 1,
+  limit = 25,
+} = {}) {
+  await ensureVendorRepairSchema();
+  const params = [];
+  const conditions = ['1=1'];
+  if (search?.trim()) {
+    params.push(`%${search.trim()}%`);
+    const i = params.length;
+    conditions.push(`(
+      d.dc_number ILIKE $${i}
+      OR d.vendor_name ILIKE $${i}
+      OR COALESCE(d.contact_person, '') ILIKE $${i}
+    )`);
+  }
+  if (status?.trim()) {
+    params.push(status.trim());
+    conditions.push(`d.status = $${params.length}`);
+  }
+  const where = conditions.join(' AND ');
+  const safePage = Math.max(1, Number(page) || 1);
+  const safeLimit = Math.min(100, Math.max(1, Number(limit) || 25));
+  const offset = (safePage - 1) * safeLimit;
+
+  const countR = await pool.query(
+    `SELECT COUNT(*)::int AS total FROM vendor_repair_delivery_challans d WHERE ${where}`,
+    params
+  );
+  const total = countR.rows[0]?.total || 0;
+
+  const listR = await pool.query(
+    `SELECT d.*,
+            (SELECT COUNT(*)::int FROM vendor_repair_dc_items i WHERE i.dc_number = d.dc_number) AS item_count,
+            (SELECT COUNT(*)::int FROM vendor_repair_dc_items i
+              WHERE i.dc_number = d.dc_number AND COALESCE(i.item_status, 'draft') = 'received') AS received_count,
+            (SELECT COUNT(*)::int FROM vendor_repair_dc_items i
+              WHERE i.dc_number = d.dc_number AND COALESCE(i.item_status, 'draft') = 'dispatched') AS pending_count
+       FROM vendor_repair_delivery_challans d
+      WHERE ${where}
+      ORDER BY d.created_at DESC
+      LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+    [...params, safeLimit, offset]
+  );
+
+  return {
+    data: listR.rows,
+    pagination: {
+      page: safePage,
+      limit: safeLimit,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / safeLimit)),
+    },
+  };
+}
+
 async function countOutForRepairInventory() {
   await ensureVendorRepairSchema();
   const [vendorR, erpR] = await Promise.all([
@@ -930,6 +1240,9 @@ module.exports = {
   listDiagnosisFailedTickets,
   createOutForRepairDc,
   getVendorRepairDc,
+  updateVendorRepairDispatchDetails,
+  markDeliveredToVendor,
+  listVendorRepairDcs,
   signDispatchDc,
   receiveFromVendor,
   receiveItemsFromVendor,

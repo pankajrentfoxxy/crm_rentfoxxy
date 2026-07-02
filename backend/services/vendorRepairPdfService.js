@@ -2,43 +2,311 @@ const fs = require('fs');
 const path = require('path');
 const PDFDocument = require('pdfkit');
 const pool = require('../config/db');
+const { mergeCompany, formatCompanyBlock } = require('../utils/companyDefaults');
+
+const C = {
+  ink: '#1f2937',
+  sub: '#6b7280',
+  line: '#e5e7eb',
+  accent: '#f26b21',
+  teal: '#0e7490',
+  panel: '#f9fafb',
+};
+
+async function loadCompany() {
+  try {
+    const r = await pool.query(
+      `SELECT code, legal_name, gstin, pan, email, phone, address, state_code, logo_url
+         FROM companies WHERE code = 'rentfoxxy' LIMIT 1`
+    );
+    if (r.rows.length) return mergeCompany(r.rows[0]);
+  } catch (_) { /* pre-migration */ }
+  return mergeCompany(null);
+}
+
+function resolveLogoPath(company) {
+  const rel = company?.logo_url;
+  if (!rel) return null;
+  const candidates = [
+    path.join(__dirname, '..', String(rel).replace(/^\//, '')),
+    path.join(__dirname, '..', 'uploads', String(rel).replace(/^\/?uploads\//, '')),
+  ];
+  return candidates.find((p) => fs.existsSync(p)) || null;
+}
 
 async function loadDc(dcNumber) {
-  const headRes = await pool.query(`SELECT * FROM vendor_repair_delivery_challans WHERE dc_number = $1`, [dcNumber]);
+  const headRes = await pool.query(
+    `SELECT d.*,
+            v.business_name AS vendor_business_name,
+            v.first_name AS vendor_first_name,
+            v.last_name AS vendor_last_name,
+            v.address AS vendor_reg_address,
+            v.city AS vendor_reg_city,
+            v.state AS vendor_reg_state,
+            v.pincode AS vendor_reg_pincode,
+            v.shipping_same AS vendor_shipping_same,
+            v.shipping_address AS vendor_ship_address,
+            v.shipping_city AS vendor_ship_city,
+            v.shipping_state AS vendor_ship_state,
+            v.shipping_pincode AS vendor_ship_pincode,
+            dt.first_name AS delivery_person_first_name,
+            dt.last_name AS delivery_person_last_name
+       FROM vendor_repair_delivery_challans d
+       LEFT JOIN vendors v ON v.vendor_id = d.vendor_id AND v.deleted_at IS NULL
+       LEFT JOIN delivery_technicians dt ON dt.technician_id = d.delivery_person_id
+      WHERE d.dc_number = $1`,
+    [dcNumber]
+  );
   const head = headRes.rows[0];
   if (!head) return null;
   const itemsRes = await pool.query(
     `SELECT * FROM vendor_repair_dc_items WHERE dc_number = $1 ORDER BY id ASC`,
     [dcNumber]
   );
-  return { ...head, items: itemsRes.rows };
+  const vendorMaster = head.vendor_id ? {
+    business_name: head.vendor_business_name,
+    first_name: head.vendor_first_name,
+    last_name: head.vendor_last_name,
+    address: head.vendor_reg_address,
+    city: head.vendor_reg_city,
+    state: head.vendor_reg_state,
+    pincode: head.vendor_reg_pincode,
+    shipping_same: head.vendor_shipping_same,
+    shipping_address: head.vendor_ship_address,
+    shipping_city: head.vendor_ship_city,
+    shipping_state: head.vendor_ship_state,
+    shipping_pincode: head.vendor_ship_pincode,
+  } : null;
+  return {
+    ...head,
+    items: itemsRes.rows,
+    vendor_billing_display: formatVendorBillingFromRow(vendorMaster) || head.vendor_address || head.vendor_name,
+    vendor_shipping_display: formatVendorShippingFromRow(vendorMaster) || head.shipping_address || head.vendor_address,
+  };
 }
 
-function writeAddressBlock(doc, title, text) {
-  doc.fontSize(11).text(title, { underline: true });
-  doc.fontSize(9).text(String(text || '—'), { width: 240 });
-  doc.moveDown(0.5);
+function vendorDisplayName(vendor) {
+  if (!vendor) return '';
+  return vendor.business_name
+    || [vendor.first_name, vendor.last_name].filter(Boolean).join(' ').trim()
+    || '';
 }
 
-function writeItemsTable(doc, items, { title = 'Laptops' } = {}) {
-  doc.fontSize(12).text(title, { underline: true });
-  doc.moveDown(0.3);
-  (items || []).forEach((item, idx) => {
-    doc.fontSize(9).text(
-      `${idx + 1}. TTSPL ${item.ttspl_id || '—'} · SN ${item.serial_number || '—'}`
-    );
-    doc.fontSize(8).fillColor('#444').text(`   Config: ${item.configuration || '—'}`);
-    if (item.item_remarks) {
-      doc.fontSize(8).fillColor('#666').text(`   Remarks: ${item.item_remarks}`);
+function formatVendorBillingFromRow(vendor) {
+  if (!vendor) return '';
+  const lines = [vendorDisplayName(vendor)].filter(Boolean);
+  const street = [vendor.address, vendor.city, vendor.state, vendor.pincode].filter(Boolean).join(', ');
+  if (street) lines.push(street);
+  return lines.join('\n');
+}
+
+function formatVendorShippingFromRow(vendor) {
+  if (!vendor) return '';
+  if (vendor.shipping_same !== false) return formatVendorBillingFromRow(vendor);
+  const lines = [vendorDisplayName(vendor)].filter(Boolean);
+  const street = [vendor.shipping_address, vendor.shipping_city, vendor.shipping_state, vendor.shipping_pincode]
+    .filter(Boolean).join(', ');
+  if (street) lines.push(street);
+  return lines.join('\n');
+}
+
+function drawCompanyHeader(doc, company, { docTitle, docNumber, rightLabel, rightValue, yStart = 40 } = {}) {
+  const L = 40;
+  const R = 555;
+  const W = R - L;
+  let y = yStart;
+
+  const logoAbs = resolveLogoPath(company);
+  let logoDrawn = false;
+  if (logoAbs) {
+    try {
+      doc.image(logoAbs, L, y, { height: 36 });
+      logoDrawn = true;
+    } catch (_) { /* ignore */ }
+  }
+  if (!logoDrawn) {
+    doc.fillColor(C.accent).font('Helvetica-Bold').fontSize(20).text(company.code || 'rentfoxxy', L, y + 6);
+  }
+
+  if (rightValue) {
+    doc.fillColor(C.ink).font('Helvetica-Bold').fontSize(13)
+      .text(rightValue, R - 210, y, { width: 210, align: 'right' });
+    if (rightLabel) {
+      doc.font('Helvetica').fontSize(8).fillColor(C.sub)
+        .text(rightLabel, R - 210, y + 18, { width: 210, align: 'right' });
     }
-    doc.fillColor('#000');
-    doc.moveDown(0.2);
+  }
+
+  y += 48;
+  doc.moveTo(L, y).lineTo(R, y).strokeColor(C.line).lineWidth(1).stroke();
+  y += 12;
+
+  if (docTitle) {
+    doc.font('Helvetica-Bold').fontSize(14).fillColor(C.teal).text(docTitle, L, y, { align: 'center', width: W });
+    y += 20;
+  }
+
+  doc.font('Helvetica-Bold').fontSize(11).fillColor(C.ink).text(company.legal_name, L, y);
+  y += 14;
+  doc.font('Helvetica').fontSize(9).fillColor(C.sub);
+  if (company.email) { doc.text(`Email: ${company.email}`, L, y); y += 12; }
+  if (company.gstin) { doc.text(`GSTIN: ${company.gstin}`, L, y); y += 12; }
+  if (company.address) {
+    doc.text(`Address: ${company.address}`, L, y, { width: W });
+    y += doc.heightOfString(`Address: ${company.address}`, { width: W }) + 4;
+  }
+
+  return y + 8;
+}
+
+/** Two boxed columns — vendor billing + shipping (company is already in header). */
+function writeVendorAddressBoxes(doc, y, vendorBilling, vendorShipping) {
+  const L = 40;
+  const R = 555;
+  const W = R - L;
+  const colW = (W - 12) / 2;
+  const boxTop = y;
+
+  const drawBox = (x, title, body) => {
+    let yy = boxTop + 8;
+    doc.font('Helvetica-Bold').fontSize(10).fillColor(C.ink).text(title, x + 10, yy, { width: colW - 20 });
+    yy += 16;
+    doc.font('Helvetica').fontSize(8.5).fillColor(C.ink);
+    String(body || '—').split('\n').forEach((line) => {
+      if (!line.trim()) return;
+      doc.text(line.trim(), x + 10, yy, { width: colW - 20 });
+      yy = doc.y + 2;
+    });
+    return yy;
+  };
+
+  const leftEnd = drawBox(L, 'Vendor Billing Address', vendorBilling);
+  const rightEnd = drawBox(L + colW + 12, 'Vendor Shipping Address', vendorShipping);
+  const boxBottom = Math.max(leftEnd, rightEnd) + 8;
+  doc.roundedRect(L, boxTop, colW, boxBottom - boxTop, 6).strokeColor(C.line).lineWidth(1).stroke();
+  doc.roundedRect(L + colW + 12, boxTop, colW, boxBottom - boxTop, 6).strokeColor(C.line).lineWidth(1).stroke();
+  return boxBottom + 14;
+}
+
+function parseItemProduct(item) {
+  const parts = String(item.configuration || '').split('·').map((s) => s.trim()).filter(Boolean);
+  const brand = parts[0] || '';
+  const model = parts[1] || '';
+  const processor = parts[2] || '';
+  const generation = parts[3] || '';
+  const ram = parts[4] || '';
+  const storage = parts[5] || '';
+  const l1 = `${brand} ${model}`.replace(/\s+/g, ' ').trim();
+  const l2 = [processor, generation].filter(Boolean).join(' | ');
+  const l3 = [ram, storage].filter(Boolean).join(' | ');
+  const l5 = [item.serial_number, item.ttspl_id].filter(Boolean).join('  ');
+  return { l1, l2, l3, l5 };
+}
+
+function writeItemsTable(doc, y, items, { title = 'Laptops' } = {}) {
+  const L = 40;
+  const R = 555;
+  const W = R - L;
+
+  doc.font('Helvetica-Bold').fontSize(11).fillColor(C.ink).text(title, L, y);
+  y += 14;
+
+  const cols = [
+    { key: 'product', label: 'Product', w: 320, align: 'left' },
+    { key: 'qty', label: 'Qty.', w: 55, align: 'center' },
+    { key: 'remarks', label: 'Remarks', w: W - 375, align: 'left' },
+  ];
+
+  const drawTableHeader = (yy) => {
+    doc.rect(L, yy, W, 22).fill(C.teal);
+    let cx = L;
+    doc.fillColor(C.white).font('Helvetica-Bold').fontSize(9);
+    for (const c of cols) {
+      doc.text(c.label, cx + 6, yy + 6, { width: c.w - 12, align: c.align });
+      cx += c.w;
+    }
+    return yy + 22;
+  };
+
+  y = drawTableHeader(y);
+  doc.font('Helvetica').fontSize(8.5).fillColor(C.ink);
+
+  (items || []).forEach((item) => {
+    const p = parseItemProduct(item);
+    const pLines = [p.l1, p.l2, p.l3, p.l5].filter(Boolean);
+    const rowH = Math.max(46, 12 + pLines.length * 11);
+    if (y + rowH > 760) {
+      doc.addPage();
+      y = 40;
+      y = drawTableHeader(y);
+    }
+
+    let cx = L;
+    for (const c of cols) {
+      doc.rect(cx, y, c.w, rowH).strokeColor(C.line).lineWidth(0.6).stroke();
+      cx += c.w;
+    }
+
+    let py = y + 6;
+    if (p.l1) {
+      doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.ink).text(p.l1, L + 6, py, { width: cols[0].w - 12 });
+      py += 11;
+    }
+    doc.font('Helvetica').fontSize(8).fillColor(C.sub);
+    if (p.l2) { doc.text(p.l2, L + 6, py, { width: cols[0].w - 12 }); py += 10; }
+    if (p.l3) { doc.text(p.l3, L + 6, py, { width: cols[0].w - 12 }); py += 10; }
+    if (p.l5) {
+      doc.font('Helvetica-Bold').fontSize(8).fillColor(C.ink).text(p.l5, L + 6, py, { width: cols[0].w - 12 });
+    }
+
+    const qtyX = L + cols[0].w;
+    doc.font('Helvetica').fontSize(8.5).fillColor(C.ink)
+      .text('1 Pcs.', qtyX + 6, y + rowH / 2 - 5, { width: cols[1].w - 12, align: 'center' });
+
+    const remX = qtyX + cols[1].w;
+    doc.text(String(item.item_remarks || '—'), remX + 6, y + 8, { width: cols[2].w - 12, align: 'left' });
+
+    y += rowH;
   });
+
+  return y + 10;
+}
+
+function dispatchTagsForDc(dc) {
+  const tags = [];
+  const shipBy = dc.ship_by || dc.dispatch_mode;
+  if (shipBy === 'by_hand' || shipBy === 'inhouse') tags.push('By Hand');
+  else if (shipBy === 'by_courier' || shipBy === 'courier') tags.push('By Courier');
+  else if (shipBy === 'by_porter' || shipBy === 'porter') tags.push('By Porter');
+  const person = [dc.delivery_person_first_name, dc.delivery_person_last_name].filter(Boolean).join(' ').trim();
+  if (person) tags.push(person);
+  if (dc.courier_name) tags.push(dc.courier_name);
+  if (dc.awb_number) tags.push(dc.awb_number);
+  if (dc.porter_tracking_id) tags.push(dc.porter_tracking_id);
+  return tags;
+}
+
+function drawDispatchTags(doc, y, tags) {
+  if (!tags.length) return y;
+  const L = 40;
+  const accent = C.accent;
+  let tx = L;
+  for (const t of tags) {
+    const w = doc.font('Helvetica').fontSize(8).widthOfString(t) + 16;
+    doc.roundedRect(tx, y, w, 16, 8).strokeColor(accent).lineWidth(0.8).stroke();
+    doc.fillColor(accent).text(t, tx + 8, y + 4);
+    tx += w + 6;
+  }
+  return y + 24;
 }
 
 async function generateVendorRepairPdf(dcNumber) {
   const dc = await loadDc(dcNumber);
   if (!dc) return null;
+
+  const company = await loadCompany();
+  const vendorBilling = dc.vendor_billing_display || dc.vendor_address || dc.vendor_name || '—';
+  const vendorShipping = dc.vendor_shipping_display || dc.shipping_address || dc.vendor_address || '—';
 
   const dir = path.join(__dirname, '../uploads/vendor-repair');
   fs.mkdirSync(dir, { recursive: true });
@@ -47,35 +315,40 @@ async function generateVendorRepairPdf(dcNumber) {
   const abs = path.join(__dirname, '../uploads', rel);
 
   await new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 40 });
+    const doc = new PDFDocument({ margin: 40, size: 'A4' });
     const stream = fs.createWriteStream(abs);
     doc.pipe(stream);
 
-    doc.fontSize(16).text('Out for Repair — Vendor Delivery Challan', { align: 'center' });
-    doc.moveDown();
-    doc.fontSize(10).text(`Dispatch DC: ${dc.dc_number}`);
-    doc.text(`Status: ${dc.status}`);
-    doc.text(`Out Date: ${dc.out_date ? new Date(dc.out_date).toLocaleDateString('en-IN') : '—'}`);
-    doc.text(`Expected Return: ${dc.expected_return_date || '—'}`);
-    doc.moveDown();
+    let y = drawCompanyHeader(doc, company, {
+      docTitle: 'Vendor Repair — Out for Repair Delivery Challan',
+      docNumber: dc.dc_number,
+      rightLabel: 'Dispatch DC',
+      rightValue: dc.dc_number,
+    });
 
-    doc.fontSize(11).text('Addresses', { underline: true });
-    doc.moveDown(0.3);
-    const y0 = doc.y;
-    doc.fontSize(9).text('Billing (From)', 40, y0, { width: 240, continued: false });
-    doc.text(String(dc.billing_address || dc.warehouse_address || dc.warehouse_name || '—'), 40, doc.y, { width: 240 });
-    const leftEnd = doc.y;
-    doc.fontSize(9).text('Shipping (To Vendor)', 310, y0, { width: 240 });
-    doc.text(String(dc.shipping_address || dc.vendor_address || '—'), 310, y0 + 14, { width: 240 });
-    doc.y = Math.max(leftEnd, doc.y) + 10;
+    doc.font('Helvetica').fontSize(9).fillColor(C.sub);
+    const deliveryLabel = dc.vendor_delivered_at
+      ? `Delivered to vendor: ${new Date(dc.vendor_delivered_at).toLocaleDateString('en-IN')}`
+      : (dc.dispatched_at ? 'In transit to vendor' : 'Pending dispatch');
+    doc.text(`Status: ${dc.status || '—'} · ${deliveryLabel}`, 40, y);
+    doc.text(`Out Date: ${dc.out_date ? new Date(dc.out_date).toLocaleDateString('en-IN') : '—'}`, 40, y + 12);
+    doc.text(`Expected Return: ${dc.expected_return_date ? new Date(dc.expected_return_date).toLocaleDateString('en-IN') : '—'}`, 280, y + 12);
+    y += 28;
 
-    doc.fontSize(10).text(`Vendor: ${dc.vendor_name || '—'}`);
-    doc.text(`Contact: ${dc.contact_person || '—'} · ${dc.contact_mobile || '—'}`);
-    doc.moveDown();
+    y = drawDispatchTags(doc, y, dispatchTagsForDc(dc));
 
-    writeItemsTable(doc, dc.items);
+    y = writeVendorAddressBoxes(doc, y, vendorBilling, vendorShipping);
+    doc.font('Helvetica').fontSize(9).fillColor(C.ink);
+    doc.text(`Vendor: ${dc.vendor_name || '—'}`, 40, y);
+    y += 12;
+    doc.text(`Contact: ${dc.contact_person || '—'} · ${dc.contact_mobile || '—'}`, 40, y);
+    y += 16;
+
+    y = writeItemsTable(doc, y, dc.items);
     if (dc.remarks) {
-      doc.moveDown().fontSize(10).text(`DC Remarks: ${dc.remarks}`);
+      y += 4;
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink).text('DC Remarks:', 40, y);
+      doc.font('Helvetica').fontSize(9).text(dc.remarks, 40, y + 12, { width: 515 });
     }
 
     doc.end();
@@ -83,12 +356,20 @@ async function generateVendorRepairPdf(dcNumber) {
     stream.on('error', reject);
   });
 
+  await pool.query(
+    `UPDATE vendor_repair_delivery_challans SET pdf_path = $2, updated_at = NOW() WHERE dc_number = $1`,
+    [dcNumber, rel]
+  ).catch(() => {});
+
   return rel;
 }
 
 async function generateVendorRepairReceivePdf(dcNumber, receiveDcNumber, itemIds = []) {
   const dc = await loadDc(dcNumber);
   if (!dc) return null;
+  const company = await loadCompany();
+  const vendorBilling = dc.vendor_billing_display || dc.vendor_address || dc.vendor_name || '—';
+  const vendorShipping = dc.vendor_shipping_display || dc.shipping_address || dc.vendor_address || '—';
   const ids = (itemIds || []).map(Number).filter(Boolean);
   const items = (dc.items || []).filter((it) => !ids.length || ids.includes(Number(it.id)));
 
@@ -99,22 +380,26 @@ async function generateVendorRepairReceivePdf(dcNumber, receiveDcNumber, itemIds
   const abs = path.join(__dirname, '../uploads', rel);
 
   await new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 40 });
+    const doc = new PDFDocument({ margin: 40, size: 'A4' });
     const stream = fs.createWriteStream(abs);
     doc.pipe(stream);
 
-    doc.fontSize(16).text('Vendor Repair — Return / Receive Challan', { align: 'center' });
-    doc.moveDown();
-    doc.fontSize(10).text(`Receive DC: ${receiveDcNumber}`);
-    doc.text(`Original Dispatch DC: ${dc.dc_number}`);
-    doc.text(`Receive Date: ${new Date().toLocaleDateString('en-IN')}`);
-    doc.moveDown();
+    let y = drawCompanyHeader(doc, company, {
+      docTitle: 'Vendor Repair — Return / Receive Challan',
+      docNumber: receiveDcNumber,
+      rightLabel: 'Receive DC',
+      rightValue: receiveDcNumber,
+    });
 
-    writeAddressBlock(doc, 'Billing (Warehouse)', dc.billing_address || dc.warehouse_address);
-    writeAddressBlock(doc, 'Shipping (Vendor)', dc.shipping_address || dc.vendor_address);
+    doc.font('Helvetica').fontSize(9).fillColor(C.sub);
+    doc.text(`Original Dispatch DC: ${dc.dc_number}`, 40, y);
+    doc.text(`Receive Date: ${new Date().toLocaleDateString('en-IN')}`, 300, y);
+    y += 20;
 
-    writeItemsTable(doc, items, { title: 'Laptops Received' });
-    doc.moveDown().fontSize(9).text('Signatures: Warehouse POD + Vendor acknowledgement captured via e-sign in CRM.');
+    y = writeVendorAddressBoxes(doc, y, vendorBilling, vendorShipping);
+    y = writeItemsTable(doc, y, items, { title: 'Laptops Received' });
+    doc.font('Helvetica').fontSize(8).fillColor(C.sub)
+      .text('Warehouse POD + Vendor acknowledgement captured via e-sign in CRM.', 40, y);
 
     doc.end();
     stream.on('finish', resolve);
@@ -124,4 +409,4 @@ async function generateVendorRepairReceivePdf(dcNumber, receiveDcNumber, itemIds
   return rel;
 }
 
-module.exports = { generateVendorRepairPdf, generateVendorRepairReceivePdf };
+module.exports = { generateVendorRepairPdf, generateVendorRepairReceivePdf, loadCompany, formatCompanyBlock };

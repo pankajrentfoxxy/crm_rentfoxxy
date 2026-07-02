@@ -5,7 +5,10 @@ import { Loader2, Truck } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext';
 import VendorSearchSelect from '../../vendor-management/components/VendorSearchSelect';
 import { fetchVendor } from '../../vendor-management/vendorManagementApi';
-import { fetchDiagnosisFailedTickets, createOutForRepairDc } from '../vendorRepairApi';
+import { fetchDiagnosisFailedTickets, createOutForRepairDc, fetchVendorRepairCompanyDefaults } from '../vendorRepairApi';
+import { DEFAULT_BILLING_ADDRESS, formatVendorBillingFromVendor, formatVendorShippingFromVendor } from '../vendorRepairUi';
+import VrdcDispatchFields, { validateVrdcDispatch } from '../components/VrdcDispatchFields';
+import { fetchDeliveryTechnicians } from '../../../utils/deliveryRegisterApi';
 import { ticketStatusLabel } from '../floorPipelineUi';
 import { formatStateLabel } from '../../vendor-management/vendorMgmtUi';
 
@@ -16,22 +19,13 @@ function fmtDate(v) {
   return new Date(v).toLocaleDateString('en-IN');
 }
 
-function formatVendorBlock(vendor, kind = 'registered') {
-  if (!vendor) return '';
-  if (kind === 'shipping' && vendor.shipping_same === false) {
-    return [
-      vendor.shipping_address,
-      vendor.shipping_city,
-      formatStateLabel(vendor.shipping_state),
-      vendor.shipping_pincode,
-    ].filter(Boolean).join(', ');
-  }
-  return [
-    vendor.address,
-    vendor.city,
-    formatStateLabel(vendor.state),
-    vendor.pincode,
-  ].filter(Boolean).join(', ');
+function withStateLabel(vendor) {
+  if (!vendor) return vendor;
+  return {
+    ...vendor,
+    state_label: formatStateLabel(vendor.state),
+    shipping_state_label: formatStateLabel(vendor.shipping_state),
+  };
 }
 
 export default function DiagnosisFailedPage() {
@@ -43,12 +37,15 @@ export default function DiagnosisFailedPage() {
   const [selected, setSelected] = useState(new Set());
   const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deliveryTechnicians, setDeliveryTechnicians] = useState([]);
+  const [shipBy, setShipBy] = useState('');
+  const [dispatchFields, setDispatchFields] = useState({});
   const [itemRemarks, setItemRemarks] = useState({});
   const [form, setForm] = useState({
     vendor_id: '',
     vendor_name: '',
+    vendor_billing_address: '',
     vendor_address: '',
-    billing_address: '',
     shipping_address: '',
     contact_person: '',
     contact_mobile: '',
@@ -72,6 +69,13 @@ export default function DiagnosisFailedPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    fetchVendorRepairCompanyDefaults().catch(() => {});
+    fetchDeliveryTechnicians({ limit: 200 })
+      .then((data) => setDeliveryTechnicians(data?.data || data?.technicians || []))
+      .catch(() => {});
+  }, []);
 
   const allSelected = rows.length > 0 && selected.size === rows.length;
   const toggleAll = () => {
@@ -108,14 +112,16 @@ export default function DiagnosisFailedPage() {
     }
     try {
       const { data } = await fetchVendor(vendorId);
-      const vendor = data?.data;
-      const shipping = formatVendorBlock(vendor, 'shipping') || formatVendorBlock(vendor, 'registered');
+      const vendor = withStateLabel(data?.data);
+      const vendorBilling = formatVendorBillingFromVendor(vendor);
+      const vendorShipping = formatVendorShippingFromVendor(vendor);
       setForm((f) => ({
         ...f,
         vendor_id: vendorId,
         vendor_name: vendor?.business_name || vendor?.f_name || f.vendor_name,
-        vendor_address: shipping || f.vendor_address,
-        shipping_address: shipping || f.shipping_address,
+        vendor_billing_address: vendorBilling || f.vendor_billing_address,
+        vendor_address: vendorBilling || f.vendor_address,
+        shipping_address: vendorShipping || f.shipping_address,
         contact_person: vendor?.contact_person_name || vendor?.f_name || f.contact_person,
         contact_mobile: vendor?.contact_person_phone || vendor?.phone || vendor?.number || f.contact_mobile,
       }));
@@ -133,8 +139,13 @@ export default function DiagnosisFailedPage() {
       toast.error('Vendor name is required');
       return;
     }
-    if (!form.billing_address.trim() || !form.shipping_address.trim()) {
-      toast.error('Billing and shipping addresses are required');
+    if (!form.vendor_billing_address.trim() || !form.shipping_address.trim()) {
+      toast.error('Vendor billing and shipping addresses are required');
+      return;
+    }
+    const dispatchErr = validateVrdcDispatch(shipBy, dispatchFields);
+    if (dispatchErr) {
+      toast.error(dispatchErr);
       return;
     }
     setSaving(true);
@@ -143,16 +154,24 @@ export default function DiagnosisFailedPage() {
         ticket_ids: selectedRows.map((r) => r.ticket_id),
         vendor_id: form.vendor_id || undefined,
         vendor_name: form.vendor_name.trim(),
-        vendor_address: form.shipping_address.trim(),
-        billing_address: form.billing_address.trim(),
+        vendor_billing_address: form.vendor_billing_address.trim(),
+        vendor_address: form.vendor_billing_address.trim(),
         shipping_address: form.shipping_address.trim(),
         contact_person: form.contact_person.trim() || undefined,
         contact_mobile: form.contact_mobile.trim() || undefined,
         expected_return_date: form.expected_return_date || undefined,
         remarks: form.remarks.trim() || undefined,
         warehouse_name: form.warehouse_name.trim() || undefined,
-        warehouse_address: form.billing_address.trim() || undefined,
+        warehouse_address: DEFAULT_BILLING_ADDRESS,
         item_remarks: itemRemarks,
+        ship_by: shipBy,
+        courier_name: dispatchFields.courier_name,
+        awb_number: dispatchFields.awb_number,
+        courier_tracking_url: dispatchFields.courier_tracking_url,
+        porter_tracking_id: dispatchFields.porter_tracking_id,
+        porter_order_id: dispatchFields.porter_order_id,
+        porter_booking_url: dispatchFields.porter_booking_url,
+        delivery_person_id: dispatchFields.delivery_person_id || undefined,
       });
       toast.success(data.message || 'Vendor DC created');
       setModalOpen(false);
@@ -265,13 +284,17 @@ export default function DiagnosisFailedPage() {
               <label className="block text-xs font-medium text-slate-600 mb-1">Vendor name</label>
               <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.vendor_name} onChange={(e) => setForm({ ...form, vendor_name: e.target.value })} />
             </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Billing Address (Warehouse / From)</label>
-              <textarea className="w-full border rounded-lg px-3 py-2 text-sm min-h-[70px]" value={form.billing_address} onChange={(e) => setForm({ ...form, billing_address: e.target.value })} placeholder="Company warehouse address" />
+            <div className="rounded-lg border bg-slate-50 p-3 text-sm whitespace-pre-wrap text-slate-700">
+              <p className="text-xs font-semibold uppercase text-slate-500 mb-1">Our Address (Dispatch From)</p>
+              {DEFAULT_BILLING_ADDRESS}
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Shipping Address (Vendor / To)</label>
-              <textarea className="w-full border rounded-lg px-3 py-2 text-sm min-h-[70px]" value={form.shipping_address} onChange={(e) => setForm({ ...form, shipping_address: e.target.value, vendor_address: e.target.value })} />
+              <label className="block text-xs font-medium text-slate-600 mb-1">Vendor Billing Address (from vendor registered address)</label>
+              <textarea className="w-full border rounded-lg px-3 py-2 text-sm min-h-[70px]" value={form.vendor_billing_address} onChange={(e) => setForm({ ...form, vendor_billing_address: e.target.value, vendor_address: e.target.value })} />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">Vendor Shipping Address (from vendor shipping address)</label>
+              <textarea className="w-full border rounded-lg px-3 py-2 text-sm min-h-[70px]" value={form.shipping_address} onChange={(e) => setForm({ ...form, shipping_address: e.target.value })} />
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
@@ -286,6 +309,16 @@ export default function DiagnosisFailedPage() {
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1">Expected return date</label>
               <input type="date" className="w-full border rounded-lg px-3 py-2 text-sm" value={form.expected_return_date} onChange={(e) => setForm({ ...form, expected_return_date: e.target.value })} />
+            </div>
+            <div className="rounded-lg border p-3 bg-slate-50/80">
+              <p className="text-xs font-semibold uppercase text-slate-500 mb-2">Send to vendor</p>
+              <VrdcDispatchFields
+                shipBy={shipBy}
+                onShipByChange={setShipBy}
+                fields={dispatchFields}
+                onFieldsChange={setDispatchFields}
+                deliveryTechnicians={deliveryTechnicians}
+              />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1">DC-level remarks</label>
