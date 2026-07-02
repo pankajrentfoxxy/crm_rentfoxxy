@@ -8,6 +8,23 @@ export function sanitizePincode(value) {
   return String(value || '').replace(/\D/g, '').slice(0, 6);
 }
 
+function normalizePostalPayload(raw) {
+  if (Array.isArray(raw) && raw.length) return raw[0];
+  return raw;
+}
+
+function parsePostalPayload(raw) {
+  const data = normalizePostalPayload(raw);
+  if (!data || data.Status !== 'Success' || !Array.isArray(data.PostOffice) || !data.PostOffice.length) {
+    return null;
+  }
+  const po = data.PostOffice.find((p) => p.DeliveryStatus === 'Delivery') || data.PostOffice[0];
+  return {
+    city: po.District || po.Name || '',
+    state: po.State || '',
+  };
+}
+
 function toResult(city, state) {
   const stateName = matchIndianState(state) || state || '';
   return {
@@ -21,6 +38,23 @@ async function lookupViaBackend(pin) {
   const { data } = await api.get(`/utils/pincode/${pin}`, { timeout: LOOKUP_TIMEOUT_MS });
   if (!data?.success) return null;
   return toResult(data.city, data.state);
+}
+
+async function lookupViaPostalPincodeIn(pin) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), LOOKUP_TIMEOUT_MS);
+  try {
+    const res = await fetch(`https://api.postalpincode.in/pincode/${pin}`, { signal: controller.signal });
+    if (!res.ok) return null;
+    const raw = await res.json();
+    const parsed = parsePostalPayload(raw);
+    if (!parsed) return null;
+    return toResult(parsed.city, parsed.state);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function lookupViaZippopotam(pin) {
@@ -45,20 +79,17 @@ export async function lookupPincode(pincode) {
   if (pin.length !== 6) return null;
   if (cache.has(pin)) return cache.get(pin);
 
+  const sources = [lookupViaBackend, lookupViaPostalPincodeIn, lookupViaZippopotam];
   let result = null;
-  try {
-    result = await lookupViaBackend(pin);
-  } catch {
-    result = null;
-  }
-  if (!result) {
+  for (const source of sources) {
     try {
-      result = await lookupViaZippopotam(pin);
+      result = await source(pin);
+      if (result) break;
     } catch {
-      result = null;
+      // try next source
     }
   }
-  cache.set(pin, result);
+  if (result) cache.set(pin, result);
   return result;
 }
 

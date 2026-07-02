@@ -3,6 +3,8 @@ import { X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { convertToCustomer } from '../leadCrmApi';
 import toast from 'react-hot-toast';
+import { INDIAN_STATES } from '../../../constants/indianStates';
+import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MOBILE_RE = /^\d{10}$/;
@@ -154,8 +156,25 @@ export default function LeadConvertModal({ open, lead, onClose }) {
           {['billing_address', 'billing_city', 'billing_state', 'billing_pincode'].map((field) => (
             <div key={field}>
               <label className="text-xs text-gray-500 capitalize">{field.replace(/billing_/, '')} *</label>
-              <input value={form[field] || ''} onChange={(e) => set(field, e.target.value)} required={field !== 'billing_address' || true}
-                className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              {field === 'billing_state' ? (
+                <select value={form.billing_state || ''} onChange={(e) => set('billing_state', e.target.value)} required
+                  className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white">
+                  <option value="">Select state</option>
+                  {INDIAN_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              ) : field === 'billing_pincode' ? (
+                <input value={form.billing_pincode || ''} required
+                  onChange={(e) => applyPincodeAutofill(e.target.value, setForm, {
+                    pinKey: 'billing_pincode', cityKey: 'billing_city', stateKey: 'billing_state',
+                  })}
+                  onBlur={(e) => applyPincodeAutofill(e.target.value, setForm, {
+                    pinKey: 'billing_pincode', cityKey: 'billing_city', stateKey: 'billing_state',
+                  })}
+                  className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              ) : (
+                <input value={form[field] || ''} onChange={(e) => set(field, e.target.value)} required={field !== 'billing_address' || true}
+                  className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              )}
             </div>
           ))}
           <label className="flex items-center gap-2 text-sm">
@@ -168,8 +187,25 @@ export default function LeadConvertModal({ open, lead, onClose }) {
               {['shipping_address', 'shipping_city', 'shipping_state', 'shipping_pincode'].map((field) => (
                 <div key={field}>
                   <label className="text-xs text-gray-500 capitalize">{field.replace(/shipping_/, '')}</label>
-                  <input value={form[field] || ''} onChange={(e) => set(field, e.target.value)}
-                    className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                  {field === 'shipping_state' ? (
+                    <select value={form.shipping_state || ''} onChange={(e) => set('shipping_state', e.target.value)}
+                      className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white">
+                      <option value="">Select state</option>
+                      {INDIAN_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  ) : field === 'shipping_pincode' ? (
+                    <input value={form.shipping_pincode || ''}
+                      onChange={(e) => applyPincodeAutofill(e.target.value, setForm, {
+                        pinKey: 'shipping_pincode', cityKey: 'shipping_city', stateKey: 'shipping_state',
+                      })}
+                      onBlur={(e) => applyPincodeAutofill(e.target.value, setForm, {
+                        pinKey: 'shipping_pincode', cityKey: 'shipping_city', stateKey: 'shipping_state',
+                      })}
+                      className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                  ) : (
+                    <input value={form[field] || ''} onChange={(e) => set(field, e.target.value)}
+                      className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                  )}
                 </div>
               ))}
             </>

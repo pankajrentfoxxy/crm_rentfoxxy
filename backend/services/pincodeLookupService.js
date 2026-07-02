@@ -1,10 +1,20 @@
 const axios = require('axios');
 
 const cache = new Map();
-const TIMEOUT_MS = 12000;
+const TIMEOUT_MS = 15000;
+
+const POSTAL_URLS = (pin) => [
+  `https://api.postalpincode.in/pincode/${pin}`,
+  `http://www.postalpincode.in/api/pincode/${pin}`,
+];
 
 function sanitizePincode(value) {
   return String(value || '').replace(/\D/g, '').slice(0, 6);
+}
+
+function normalizePostalPayload(raw) {
+  if (Array.isArray(raw) && raw.length) return raw[0];
+  return raw;
 }
 
 function matchIndianState(raw) {
@@ -16,23 +26,32 @@ function matchIndianState(raw) {
   return s;
 }
 
-async function fetchPostalPincodeIn(pin) {
-  try {
-    const { data } = await axios.get(`http://www.postalpincode.in/api/pincode/${pin}`, {
-      timeout: TIMEOUT_MS,
-      validateStatus: () => true,
-    });
-    if (data?.Status !== 'Success' || !Array.isArray(data.PostOffice) || !data.PostOffice.length) {
-      return null;
-    }
-    const po = data.PostOffice.find((p) => p.DeliveryStatus === 'Delivery') || data.PostOffice[0];
-    return {
-      city: po.District || po.Name || '',
-      state: matchIndianState(po.State),
-    };
-  } catch {
+function parsePostalPayload(raw) {
+  const data = normalizePostalPayload(raw);
+  if (!data || data.Status !== 'Success' || !Array.isArray(data.PostOffice) || !data.PostOffice.length) {
     return null;
   }
+  const po = data.PostOffice.find((p) => p.DeliveryStatus === 'Delivery') || data.PostOffice[0];
+  return {
+    city: po.District || po.Name || '',
+    state: matchIndianState(po.State),
+  };
+}
+
+async function fetchPostalPincodeIn(pin) {
+  for (const url of POSTAL_URLS(pin)) {
+    try {
+      const { data } = await axios.get(url, {
+        timeout: TIMEOUT_MS,
+        validateStatus: () => true,
+      });
+      const parsed = parsePostalPayload(data);
+      if (parsed) return parsed;
+    } catch {
+      // try next URL
+    }
+  }
+  return null;
 }
 
 async function fetchZippopotam(pin) {
@@ -58,8 +77,8 @@ async function lookupPincode(pincode) {
   if (cache.has(pin)) return cache.get(pin);
 
   const result = (await fetchPostalPincodeIn(pin)) || (await fetchZippopotam(pin));
-  cache.set(pin, result);
+  if (result) cache.set(pin, result);
   return result;
 }
 
-module.exports = { lookupPincode, sanitizePincode };
+module.exports = { lookupPincode, sanitizePincode, parsePostalPayload, normalizePostalPayload };
