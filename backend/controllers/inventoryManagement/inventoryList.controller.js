@@ -238,13 +238,21 @@ async function exportInventoryExcel(req, res) {
       const receivedFrom = r.received_from?.type === 'vendor'
         ? (r.vendor_name || 'Vendor')
         : (r.received_from?.label || r.vendor_name || 'Vendor');
+      const item = r.item_description && typeof r.item_description === 'object' ? r.item_description : {};
       const base = {
         'S.No': idx + 1,
         TTSPL: r.unique_product_serial || '',
         'Serial Number': r.serial_number || '',
         'PO Number': r.purchase_order_number || '',
         'GRN Number': r.grn_number || '',
-        'Item Description': r.item_description || '',
+        Brand: item.brand || '',
+        Model: item.model || '',
+        Processor: item.processor || '',
+        Generation: item.generation || '',
+        RAM: item.ram || '',
+        HDD: item.storage || '',
+        'Screen Size': item.screen_size || '',
+        Graphics: item.gpu || '',
         'Locking Period': r.locking_period?.label || '',
         'PO Type': r.purchase_order_type_label || '',
         'PO Type Period': r.po_type_period?.label || '',
