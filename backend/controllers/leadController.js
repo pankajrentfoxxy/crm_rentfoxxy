@@ -12,8 +12,8 @@ const {
 } = require('../services/leadEmailIngestionService');
 const { isRestrictedToAssigned } = require('../services/dataScopeService');
 const {
-  validateFinanceExpoxContactFields,
-  applyFinanceExpoxDetails,
+  validateFinanceSpockContactFields,
+  applyFinanceSpockDetails,
 } = require('./customerManagementController');
 
 const { STATUSES_WITHOUT_STAGE_CHOICE, STAGES_BY_STATUS, stagesForStatus } = require('../constants/leadStages');
@@ -2248,7 +2248,7 @@ exports.convertToCustomer = async (req, res) => {
       });
     }
 
-    const contactValidationErrors = validateFinanceExpoxContactFields(body);
+    const contactValidationErrors = validateFinanceSpockContactFields(body);
     if (contactValidationErrors.length) {
       return res.status(400).json({ success: false, message: contactValidationErrors[0] });
     }
@@ -2273,7 +2273,7 @@ exports.convertToCustomer = async (req, res) => {
       contact_person_name: customerName,
       contact_person_number: phone,
     };
-    applyFinanceExpoxDetails(customerDetails, body);
+    applyFinanceSpockDetails(customerDetails, body);
 
     let customerId = lead.customer_id;
     let isNew = false;
@@ -2292,7 +2292,7 @@ exports.convertToCustomer = async (req, res) => {
       const mergedDetails = parseCustomerDetails(existingDetailsRes.rows[0]?.details);
       mergedDetails.contact_person_name = customerName;
       mergedDetails.contact_person_number = phone;
-      applyFinanceExpoxDetails(mergedDetails, body);
+      applyFinanceSpockDetails(mergedDetails, body);
       await pool.query(
         `UPDATE customers SET
           name = $1, company_name = $2, email = $3, phone = $4, gst_no = $5,

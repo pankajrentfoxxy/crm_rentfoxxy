@@ -7,14 +7,19 @@ import { Button, SearchField, ListPagination } from '../../../components/ui/prim
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
 import {
-  getCustomer, getCustomerLaptops, updateCustomer, verifyCustomerKyc, enableCustomerPortal,
+  getCustomer, getCustomerLaptops, getCustomerAddresses, verifyCustomerKyc, enableCustomerPortal,
 } from '../leadCrmApi';
 import { formatCurrency } from '../leadCrmUtils';
 import { getBackendOrigin } from '../../../utils/api';
 import CustomerDocuments from '../components/CustomerDocuments';
 import CustomerFormDrawer from '../components/CustomerFormDrawer';
+import CustomerAddressesTab from '../components/CustomerAddressesTab';
 
-const TABS = ['Profile', 'Documents', 'Assets', 'Orders', 'Lead Origin', 'Portal Access'];
+const TABS = ['Profile', 'Addresses', 'Documents', 'Assets', 'Orders', 'Lead Origin', 'Portal Access'];
+const TAB_PROFILE = 0;
+const TAB_ADDRESSES = 1;
+const TAB_DOCUMENTS = 2;
+const TAB_ASSETS = 3;
 const ASSET_PAGE_SIZE = 25;
 
 function podFileUrl(path) {
@@ -139,13 +144,29 @@ export default function CustomerDetailPage() {
   const [ttsplOpen, setTtsplOpen] = useState(null);
   const [portalBusy, setPortalBusy] = useState(false);
   const [newPassword, setNewPassword] = useState(null);
+  const [savedAddresses, setSavedAddresses] = useState([]);
+  const [addressesLoading, setAddressesLoading] = useState(false);
 
   const loadCustomer = useCallback(async () => {
     try {
       const res = await getCustomer(id);
-      setCustomer(res.data?.customer);
+      const row = res.data?.customer;
+      setCustomer(row);
+      setSavedAddresses(row?.saved_addresses || []);
     } catch {
       toast.error('Failed to load customer');
+    }
+  }, [id]);
+
+  const loadAddresses = useCallback(async () => {
+    setAddressesLoading(true);
+    try {
+      const res = await getCustomerAddresses(id);
+      setSavedAddresses(res.data?.addresses || []);
+    } catch {
+      toast.error('Failed to load addresses');
+    } finally {
+      setAddressesLoading(false);
     }
   }, [id]);
 
@@ -176,16 +197,22 @@ export default function CustomerDetailPage() {
   useEffect(() => { loadCustomer(); }, [loadCustomer]);
 
   useEffect(() => {
-    if (tab !== 2) return;
+    if (tab !== TAB_ASSETS) return;
     loadAssets();
   }, [tab, loadAssets]);
+
+  useEffect(() => {
+    if (tab !== TAB_ADDRESSES) return;
+    loadAddresses();
+  }, [tab, loadAddresses]);
 
   useEffect(() => { setAssetPage(1); }, [assetSearch, assetView]);
 
   const load = useCallback(async () => {
     await loadCustomer();
-    if (tab === 2) await loadAssets();
-  }, [loadCustomer, loadAssets, tab]);
+    if (tab === TAB_ASSETS) await loadAssets();
+    if (tab === TAB_ADDRESSES) await loadAddresses();
+  }, [loadCustomer, loadAssets, loadAddresses, tab]);
 
   if (!customer) return <div className="p-6 text-center text-gray-400">Loading...</div>;
 
@@ -241,7 +268,7 @@ export default function CustomerDetailPage() {
         ))}
       </div>
 
-      {tab === 0 && (
+      {tab === TAB_PROFILE && (
         <div className="space-y-4">
           <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
             {[
@@ -275,12 +302,12 @@ export default function CustomerDetailPage() {
             ]}
           />
           <ProfileFieldGrid
-            title="Expox Person"
+            title="Spock Person"
             customer={customer}
             fields={[
-              ['Name', 'expox_person_name'],
-              ['Email', 'expox_person_email'],
-              ['Mobile Number', 'expox_person_mobile'],
+              ['Name', 'spock_person_name'],
+              ['Email', 'spock_person_email'],
+              ['Mobile Number', 'spock_person_mobile'],
             ]}
           />
           <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 text-sm">
@@ -303,9 +330,18 @@ export default function CustomerDetailPage() {
         </div>
       )}
 
-      {tab === 1 && <CustomerDocuments customerId={customer.customer_id} />}
+      {tab === TAB_ADDRESSES && (
+        <CustomerAddressesTab
+          customer={customer}
+          savedAddresses={savedAddresses}
+          loading={addressesLoading}
+          onAddAddress={() => setEditOpen(true)}
+        />
+      )}
 
-      {tab === 2 && (
+      {tab === TAB_DOCUMENTS && <CustomerDocuments customerId={customer.customer_id} />}
+
+      {tab === TAB_ASSETS && (
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3 sm:max-w-md">
             <button
@@ -465,13 +501,13 @@ export default function CustomerDetailPage() {
         </div>
       )}
 
-      {tab === 3 && (
+      {tab === 4 && (
         <p className="text-sm text-gray-500 p-4 rounded-xl border border-gray-100 bg-white">
           Orders are managed in Operation Management. Link customer orders from sales orders module.
         </p>
       )}
 
-      {tab === 4 && (
+      {tab === 5 && (
         <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 text-sm">
           {customer.source_lead_id ? (
             <>
@@ -485,7 +521,7 @@ export default function CustomerDetailPage() {
         </div>
       )}
 
-      {tab === 5 && (
+      {tab === 6 && (
         <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 space-y-4">
           <PermissionGate section="customers" action="edit">
             <div className="flex items-center justify-between">
