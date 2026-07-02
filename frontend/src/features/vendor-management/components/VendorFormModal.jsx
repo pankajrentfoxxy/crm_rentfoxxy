@@ -8,19 +8,12 @@ import {
   updateVendorPortalAccess
 } from '../vendorManagementApi';
 import { getBackendOrigin } from '../../../utils/api';
+import { INDIAN_STATE_OPTIONS, matchIndianState, slugifyState } from '../../../constants/indianStates';
+import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
+import { INDIAN_STATES, resolveStateSelectValue } from '../../../constants/indianStates';
 import { GSTIN_RE, IFSC_RE } from '../vendorMgmtUi';
 
-const INDIAN_STATE_NAMES = [
-  'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 'Gujarat',
-  'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala', 'Madhya Pradesh', 'Maharashtra',
-  'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab', 'Rajasthan', 'Sikkim',
-  'Tamil Nadu', 'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal'
-];
-
-const STATE_OPTIONS = INDIAN_STATE_NAMES.map((name) => ({
-  label: name,
-  value: name.toLowerCase().replace(/\s+/g, '_')
-}));
+const STATE_OPTIONS = INDIAN_STATE_OPTIONS;
 
 const BUSINESS_TYPES = ['Proprietorship', 'Partnership', 'Pvt Ltd', 'LLP', 'Other'];
 
@@ -73,6 +66,11 @@ function emptyVendorForm({ password } = {}) {
     msme_number: '',
     city: '',
     pincode: '',
+    shipping_same: true,
+    shipping_address: '',
+    shipping_city: '',
+    shipping_state: '',
+    shipping_pincode: '',
     contact_person_name: '',
     contact_person_phone: '',
     alternate_phone: '',
@@ -151,6 +149,7 @@ export default function VendorFormModal({ open, mode, vendorId, onClose, onSaved
   const [portalEnabled, setPortalEnabled] = useState(true);
   const [portalLastLogin, setPortalLastLogin] = useState(null);
   const [portalBusy, setPortalBusy] = useState(false);
+  const [shippingSame, setShippingSame] = useState(true);
 
   const savedProfileUrlRef = useRef(PROFILE_PLACEHOLDER);
   const [profilePreview, setProfilePreview] = useState(PROFILE_PLACEHOLDER);
@@ -187,8 +186,11 @@ export default function VendorFormModal({ open, mode, vendorId, onClose, onSaved
         if (!data.success || !v) throw new Error('Not found');
         if (cancelled) return;
 
-        let st = String(v.state || '').trim().toLowerCase().replace(/\s+/g, '_');
-        if (!STATE_OPTIONS.some((o) => o.value === st)) st = 'madhya_pradesh';
+        let st = slugifyState(v.state || '');
+        if (!STATE_OPTIONS.some((o) => o.value === st)) {
+          const matched = matchIndianState(v.state);
+          st = matched ? slugifyState(matched) : st;
+        }
 
         setForm({
           status: v.status || 'approved',
@@ -210,6 +212,11 @@ export default function VendorFormModal({ open, mode, vendorId, onClose, onSaved
           msme_number: v.msme_number || '',
           city: v.city || '',
           pincode: v.pincode || '',
+          shipping_same: v.shipping_same !== false,
+          shipping_address: v.shipping_address || '',
+          shipping_city: v.shipping_city || '',
+          shipping_state: resolveStateSelectValue(v.shipping_state || ''),
+          shipping_pincode: v.shipping_pincode || '',
           contact_person_name: v.contact_person_name || '',
           contact_person_phone: v.contact_person_phone || '',
           alternate_phone: v.alternate_phone || '',
@@ -219,6 +226,7 @@ export default function VendorFormModal({ open, mode, vendorId, onClose, onSaved
           from_submit: 'admin'
         });
         setPortalEnabled(v.vendor_portal_enabled !== false);
+        setShippingSame(v.shipping_same !== false);
         setPortalLastLogin(v.vendor_portal_last_login || null);
         setFiles({});
         const profileSrc = v.image_url ? mediaUrl(v.image_url) : PROFILE_PLACEHOLDER;
@@ -258,6 +266,7 @@ export default function VendorFormModal({ open, mode, vendorId, onClose, onSaved
     };
 
     if (field === 'business_name') rq('business_name');
+    if (field === 'business_type') rq('business_type', 'Select business type');
     if (field === 'gst_number') {
       const g = String(body.gst_number || '').trim().toUpperCase();
       if (!g) e.gst_number = 'GSTIN is required';
@@ -292,6 +301,7 @@ export default function VendorFormModal({ open, mode, vendorId, onClose, onSaved
     };
 
     rq('business_name');
+    rq('business_type', 'Select business type');
     rq('address');
     rq('email');
     rq('state', 'Select a state');
@@ -345,6 +355,7 @@ export default function VendorFormModal({ open, mode, vendorId, onClose, onSaved
     const vErr = clientValidate(submitBody);
     if (Object.keys(vErr).length) {
       setFieldErrors(vErr);
+      setTouched((t) => ({ ...t, ...Object.fromEntries(Object.keys(vErr).map((k) => [k, true])) }));
       toast.error('Please fix the highlighted fields.');
       return;
     }
@@ -356,6 +367,7 @@ export default function VendorFormModal({ open, mode, vendorId, onClose, onSaved
         if (isEdit && k === 'password' && !val) return;
         fd.append(k, val ?? '');
       });
+      fd.set('shipping_same', shippingSame ? 'true' : 'false');
       if (!isEdit) {
         fd.set('registration_date', todayIsoDate());
         fd.set('status', 'approved');
@@ -377,7 +389,10 @@ export default function VendorFormModal({ open, mode, vendorId, onClose, onSaved
       onClose();
     } catch (err) {
       const mapped = mapServerErrors(err);
-      if (Object.keys(mapped).length) setFieldErrors(mapped);
+      if (Object.keys(mapped).length) {
+        setFieldErrors(mapped);
+        setTouched((t) => ({ ...t, ...Object.fromEntries(Object.keys(mapped).map((k) => [k, true])) }));
+      }
       toast.error(err.response?.data?.message || err.message || 'Save failed');
     } finally {
       setSaving(false);
@@ -466,11 +481,13 @@ export default function VendorFormModal({ open, mode, vendorId, onClose, onSaved
                   onBlur={() => touch('business_name')}
                   error={touched.business_name ? fieldErrors.business_name : undefined}
                 />
-                <Field label="Business Type">
+                <Field label="Business Type" required error={touched.business_type ? fieldErrors.business_type : undefined}>
                   <select
-                    className="w-full h-9 px-3 border border-gray-200 rounded-lg text-sm bg-white"
+                    required
+                    className={`w-full h-9 px-3 border rounded-lg text-sm bg-white ${fieldErrors.business_type && touched.business_type ? 'border-red-400' : 'border-gray-200'}`}
                     value={form.business_type}
                     onChange={(e) => onChange('business_type', e.target.value)}
+                    onBlur={() => touch('business_type')}
                   >
                     <option value="">Select type</option>
                     {BUSINESS_TYPES.map((t) => (
@@ -507,17 +524,63 @@ export default function VendorFormModal({ open, mode, vendorId, onClose, onSaved
                 <TextInput
                   label="Pincode"
                   value={form.pincode}
-                  onChange={(v) => onChange('pincode', v.replace(/\D/g, '').slice(0, 6))}
+                  onChange={(v) => applyPincodeAutofill(v, setForm, {
+                    pinKey: 'pincode', cityKey: 'city', stateKey: 'state', useStateSlug: true,
+                  })}
+                  onBlur={() => applyPincodeAutofill(form.pincode, setForm, {
+                    pinKey: 'pincode', cityKey: 'city', stateKey: 'state', useStateSlug: true,
+                  })}
                 />
               </div>
               <TextArea
-                label="Address"
+                label="Registered / Billing Address"
                 required
                 value={form.address}
                 onChange={(v) => onChange('address', v)}
                 onBlur={() => touch('address')}
                 error={touched.address ? fieldErrors.address : undefined}
               />
+              <div className="pt-2 border-t space-y-3">
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={shippingSame}
+                    onChange={(e) => {
+                      setShippingSame(e.target.checked);
+                      onChange('shipping_same', e.target.checked);
+                    }}
+                  />
+                  Shipping address same as registered address
+                </label>
+                {!shippingSame && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <Field label="Shipping State">
+                      <select
+                        className="w-full h-9 px-3 border border-gray-200 rounded-lg text-sm bg-white"
+                        value={form.shipping_state}
+                        onChange={(e) => onChange('shipping_state', e.target.value)}
+                      >
+                        <option value="">Select state</option>
+                        {INDIAN_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </Field>
+                    <TextInput label="Shipping City" value={form.shipping_city} onChange={(v) => onChange('shipping_city', v)} />
+                    <TextInput
+                      label="Shipping Pincode"
+                      value={form.shipping_pincode}
+                      onChange={(v) => applyPincodeAutofill(v, setForm, {
+                        pinKey: 'shipping_pincode', cityKey: 'shipping_city', stateKey: 'shipping_state',
+                      })}
+                      onBlur={() => applyPincodeAutofill(form.shipping_pincode, setForm, {
+                        pinKey: 'shipping_pincode', cityKey: 'shipping_city', stateKey: 'shipping_state',
+                      })}
+                    />
+                    <div className="sm:col-span-2">
+                      <TextArea label="Shipping Address" value={form.shipping_address} onChange={(v) => onChange('shipping_address', v)} />
+                    </div>
+                  </div>
+                )}
+              </div>
             </SectionCard>
 
             <SectionCard title="Contact Details">

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Download, Loader2, PenLine, Printer, RotateCcw } from 'lucide-react';
@@ -103,6 +103,7 @@ export default function VendorRepairDcDetailPage() {
   const [loading, setLoading] = useState(true);
   const [dc, setDc] = useState(null);
   const [receiveOpen, setReceiveOpen] = useState(false);
+  const [receiveSelected, setReceiveSelected] = useState(new Set());
   const [whReturnSign, setWhReturnSign] = useState(null);
   const [vendorReturnSign, setVendorReturnSign] = useState(null);
   const [pendingWhDispatch, setPendingWhDispatch] = useState(null);
@@ -127,9 +128,15 @@ export default function VendorRepairDcDetailPage() {
   const statusLabel = (s) => {
     if (s === 'draft') return 'Draft — pending e-sign';
     if (s === 'dispatched') return 'Dispatched to Vendor';
+    if (s === 'partially_returned') return 'Partially returned';
     if (s === 'returned') return 'Returned';
     return s;
   };
+
+  const dispatchedItems = useMemo(
+    () => (dc?.items || []).filter((i) => (i.item_status || 'dispatched') === 'dispatched'),
+    [dc]
+  );
 
   const completeDispatchSign = async () => {
     const wh = pendingWhDispatch || dc?.warehouse_dispatch_esign_url;
@@ -158,14 +165,23 @@ export default function VendorRepairDcDetailPage() {
       toast.error('Both return signatures are required');
       return;
     }
-    if (!window.confirm('Confirm laptops received back at warehouse? Tickets will re-enter QC Process.')) return;
+    const ticketIds = receiveSelected.size
+      ? [...receiveSelected]
+      : dispatchedItems.map((i) => i.ticket_id);
+    if (!ticketIds.length) {
+      toast.error('Select at least one laptop to receive');
+      return;
+    }
+    if (!window.confirm(`Receive ${ticketIds.length} laptop(s)? They will move to Floor Manager.`)) return;
     try {
-      await receiveVendorRepairBack(dcNumber, {
+      const { data } = await receiveVendorRepairBack(dcNumber, {
         warehouse_esign: whReturnSign,
         vendor_esign: vendorReturnSign,
+        ticket_ids: ticketIds,
       });
-      toast.success('Received at warehouse — QC Process');
+      toast.success(data.message || 'Received at warehouse — Floor Manager');
       setReceiveOpen(false);
+      setReceiveSelected(new Set());
       invalidateInventoryManagement();
       load();
     } catch (err) {
@@ -198,9 +214,12 @@ export default function VendorRepairDcDetailPage() {
           <button type="button" onClick={() => window.print()} className="inline-flex items-center gap-1 px-3 py-2 border rounded-lg text-sm">
             <Printer className="w-4 h-4" /> Print
           </button>
-          {canProcess && dc.status === 'dispatched' ? (
-            <button type="button" onClick={() => setReceiveOpen(true)} className="inline-flex items-center gap-1 px-3 py-2 bg-green-700 text-white rounded-lg text-sm font-semibold">
-              <RotateCcw className="w-4 h-4" /> Receive Back to Warehouse
+          {canProcess && ['dispatched', 'partially_returned'].includes(dc.status) && dispatchedItems.length ? (
+            <button type="button" onClick={() => {
+              setReceiveSelected(new Set(dispatchedItems.map((i) => i.ticket_id)));
+              setReceiveOpen(true);
+            }} className="inline-flex items-center gap-1 px-3 py-2 bg-green-700 text-white rounded-lg text-sm font-semibold">
+              <RotateCcw className="w-4 h-4" /> Receive Back ({dispatchedItems.length})
             </button>
           ) : null}
         </div>
@@ -208,17 +227,20 @@ export default function VendorRepairDcDetailPage() {
 
       <div className="grid md:grid-cols-2 gap-4 print:grid-cols-2">
         <div className="rounded-xl border bg-white p-4 text-sm space-y-1">
-          <h3 className="font-semibold mb-2">Vendor</h3>
-          <p>{dc.vendor_name}</p>
-          <p className="text-slate-600">{dc.vendor_address}</p>
-          <p className="text-slate-600">{dc.contact_person} · {dc.contact_mobile}</p>
-          <p className="text-slate-600">Expected return: {dc.expected_return_date || '—'}</p>
+          <h3 className="font-semibold mb-2">Billing Address (From)</h3>
+          <p className="text-slate-600 whitespace-pre-wrap">{dc.billing_address || dc.warehouse_address || dc.warehouse_name || '—'}</p>
         </div>
         <div className="rounded-xl border bg-white p-4 text-sm space-y-1">
-          <h3 className="font-semibold mb-2">Warehouse</h3>
-          <p>{dc.warehouse_name || '—'}</p>
-          <p className="text-slate-600">{dc.warehouse_address || '—'}</p>
-          <p className="text-slate-600">Out date: {dc.out_date ? new Date(dc.out_date).toLocaleDateString('en-IN') : '—'}</p>
+          <h3 className="font-semibold mb-2">Shipping Address (To Vendor)</h3>
+          <p>{dc.vendor_name}</p>
+          <p className="text-slate-600 whitespace-pre-wrap">{dc.shipping_address || dc.vendor_address}</p>
+          <p className="text-slate-600">{dc.contact_person} · {dc.contact_mobile}</p>
+          <p className="text-slate-600">Expected return: {dc.expected_return_date || '—'}</p>
+          {dc.items_received_count != null ? (
+            <p className="text-slate-600 font-medium pt-1">
+              Received: {dc.items_received_count || 0} / {dc.items_dispatched_count || dc.items?.length || 0}
+            </p>
+          ) : null}
         </div>
       </div>
 
@@ -236,7 +258,8 @@ export default function VendorRepairDcDetailPage() {
               <th className="p-3 text-left">TTSPL</th>
               <th className="p-3 text-left">Serial</th>
               <th className="p-3 text-left">Configuration</th>
-              <th className="p-3 text-left">Status</th>
+              <th className="p-3 text-left">Remarks</th>
+              <th className="p-3 text-left">Item status</th>
               <th className="p-3 text-left">Ticket</th>
             </tr>
           </thead>
@@ -246,7 +269,8 @@ export default function VendorRepairDcDetailPage() {
                 <td className="p-3 font-mono text-xs">{item.ttspl_id || '—'}</td>
                 <td className="p-3 font-mono text-xs">{item.serial_number || '—'}</td>
                 <td className="p-3 text-xs">{item.configuration || '—'}</td>
-                <td className="p-3 text-xs">{ticketStatusLabel(item.ticket_status)}</td>
+                <td className="p-3 text-xs max-w-[180px]">{item.item_remarks || item.diagnosis_failed_reason || '—'}</td>
+                <td className="p-3 text-xs capitalize">{item.item_status || item.ticket_status || '—'}</td>
                 <td className="p-3">
                   <Link to={`/floor-pipeline/tickets/${item.ticket_id}`} className="text-blue-600">#{item.ticket_id}</Link>
                 </td>
@@ -314,7 +338,27 @@ export default function VendorRepairDcDetailPage() {
           <button type="button" className="absolute inset-0 bg-black/40" onClick={() => setReceiveOpen(false)} aria-label="Close" />
           <div className="relative bg-white rounded-xl shadow-xl max-w-lg w-full p-5 space-y-3">
             <h3 className="font-semibold">Receive Back to Warehouse</h3>
-            <p className="text-xs text-slate-500">Capture return e-signatures. Ticket status will change to QC Process.</p>
+            <p className="text-xs text-slate-500">Select laptops received today. Remaining units stay on Out for Repair until received later. Tickets move to Floor Manager.</p>
+            <div className="max-h-40 overflow-y-auto border rounded-lg divide-y">
+              {dispatchedItems.map((item) => (
+                <label key={item.id} className="flex items-start gap-2 p-2 text-xs cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={receiveSelected.has(item.ticket_id)}
+                    onChange={() => setReceiveSelected((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(item.ticket_id)) next.delete(item.ticket_id);
+                      else next.add(item.ticket_id);
+                      return next;
+                    })}
+                  />
+                  <span>
+                    <span className="font-mono">{item.ttspl_id}</span>
+                    {item.item_remarks ? ` — ${item.item_remarks}` : ''}
+                  </span>
+                </label>
+              ))}
+            </div>
             <div className="grid grid-cols-2 gap-2">
               <button type="button" onClick={() => setActiveSign('wh_return')} className="py-2 border rounded-lg text-sm">
                 {whReturnSign ? 'Warehouse signed ✓' : 'Warehouse e-sign'}

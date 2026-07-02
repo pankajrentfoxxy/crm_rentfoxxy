@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { INDIAN_STATES, slugifyState } from '../../constants/indianStates';
+import { applyPincodeAutofill } from '../../utils/pincodeLookup';
 import { createCustomerManagement, fetchCustomerManagementMeta } from '../../utils/customerManagementApi';
 
 const emptyForm = {
@@ -41,6 +42,9 @@ export default function CustomerAddPage() {
   }, []);
 
   const update = (field, value) => setForm((prev) => ({ ...prev, [field]: value }));
+
+  const handlePincodeChange = (field, cityField, stateField, value) =>
+    applyPincodeAutofill(value, setForm, { pinKey: field, cityKey: cityField, stateKey: stateField });
 
   const onProfileChange = (e) => {
     const file = e.target.files?.[0];
@@ -129,7 +133,9 @@ export default function CustomerAddPage() {
               <input required className="field-input" value={form.billing_city} onChange={(e) => update('billing_city', e.target.value)} />
             </Field>
             <Field label="Billing Pin Code" required>
-              <input required className="field-input" value={form.billing_pin_code} onChange={(e) => update('billing_pin_code', e.target.value)} />
+              <input required className="field-input" value={form.billing_pin_code}
+                onChange={(e) => handlePincodeChange('billing_pin_code', 'billing_city', 'billing_state', e.target.value)}
+                onBlur={(e) => handlePincodeChange('billing_pin_code', 'billing_city', 'billing_state', e.target.value)} />
             </Field>
             <Field label="Billing Address 1" required>
               <textarea required rows={2} className="field-input" value={form.billing_address_1} onChange={(e) => update('billing_address_1', e.target.value)} />
@@ -151,7 +157,9 @@ export default function CustomerAddPage() {
               <input required className="field-input" value={form.shipping_city} onChange={(e) => update('shipping_city', e.target.value)} />
             </Field>
             <Field label="Shipping Pin Code" required>
-              <input required className="field-input" value={form.shipping_pin_code} onChange={(e) => update('shipping_pin_code', e.target.value)} />
+              <input required className="field-input" value={form.shipping_pin_code}
+                onChange={(e) => handlePincodeChange('shipping_pin_code', 'shipping_city', 'shipping_state', e.target.value)}
+                onBlur={(e) => handlePincodeChange('shipping_pin_code', 'shipping_city', 'shipping_state', e.target.value)} />
             </Field>
             <Field label="Shipping Address 1" required>
               <textarea required rows={2} className="field-input" value={form.shipping_address_1} onChange={(e) => update('shipping_address_1', e.target.value)} />

@@ -11,6 +11,7 @@ import {
   formatCurrency, sumLines, formatConfig, lineTotal, typeLabel, countLaptops,
   computeGstBreakdown, resolveSupplyStateFromShipping, formatSupplyStateLabel,
 } from '../salesPipelineUtils';
+import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
 
 function getField(obj, snake, camel) {
   if (!obj) return '';
@@ -394,11 +395,24 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
                     ].map(([k, label]) => (
                       <div key={k}>
                         <label className="text-xs text-gray-500">{label}</label>
-                        <input
-                          className="w-full mt-1 border rounded-lg px-3 py-2 text-sm"
-                          value={manualShipping[k]}
-                          onChange={(e) => setManualShipping((m) => ({ ...m, [k]: e.target.value }))}
-                        />
+                        {k === 'zip_code' ? (
+                          <input
+                            className="w-full mt-1 border rounded-lg px-3 py-2 text-sm"
+                            value={manualShipping[k]}
+                            onChange={(e) => applyPincodeAutofill(e.target.value, setManualShipping, {
+                              pinKey: 'zip_code', cityKey: 'city', stateKey: 'state',
+                            })}
+                            onBlur={(e) => applyPincodeAutofill(e.target.value, setManualShipping, {
+                              pinKey: 'zip_code', cityKey: 'city', stateKey: 'state',
+                            })}
+                          />
+                        ) : (
+                          <input
+                            className="w-full mt-1 border rounded-lg px-3 py-2 text-sm"
+                            value={manualShipping[k]}
+                            onChange={(e) => setManualShipping((m) => ({ ...m, [k]: e.target.value }))}
+                          />
+                        )}
                       </div>
                     ))}
                     <div className="sm:col-span-2">

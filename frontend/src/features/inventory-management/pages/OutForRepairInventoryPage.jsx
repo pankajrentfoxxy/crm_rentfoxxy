@@ -177,7 +177,7 @@ export default function OutForRepairInventoryPage() {
                       )}
                     </td>
                     <td className="p-3 text-xs">{r.vendor_name || '—'}</td>
-                    <td className="p-3 text-xs max-w-[160px]">{r.vendor_address || '—'}</td>
+                    <td className="p-3 text-xs max-w-[160px]">{r.shipping_address || r.vendor_address || '—'}</td>
                     <td className="p-3">
                       {r.dc_number ? (
                         <Link to={`/floor-pipeline/vendor-repair-dc/${encodeURIComponent(r.dc_number)}`} className="text-purple-700 font-mono text-xs hover:underline">
@@ -194,7 +194,7 @@ export default function OutForRepairInventoryPage() {
                         {r.current_status || (r.source === 'erp' ? 'Out For Repare' : ticketStatusLabel('out_for_repair'))}
                       </span>
                     </td>
-                    <td className="p-3 text-xs max-w-[140px]">{r.remarks || '—'}</td>
+                    <td className="p-3 text-xs max-w-[140px]">{r.item_remarks || r.remarks || '—'}</td>
                     {canReceive ? (
                       <td className="p-3">
                         {r.source === 'erp' ? (

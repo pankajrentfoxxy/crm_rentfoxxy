@@ -7,6 +7,8 @@ import {
   getCustomerDetail, getCustomerAddresses,
 } from '../salesPipelineApi';
 import { parseDeliveryAddress } from '../salesPipelineUtils';
+import { INDIAN_STATES, resolveStateSelectValue } from '../../../constants/indianStates';
+import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
 
 const emptyAddress = {
   name: '', phone: '', address: '', city: '', state: '', pincode: '', landmark: '',
@@ -107,6 +109,10 @@ function EditDrawer({ title, subtitle, initial, customer, shippingOptions, onClo
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
+  const handlePincodeChange = (value) => applyPincodeAutofill(value, setForm, {
+    pinKey: 'pincode', cityKey: 'city', stateKey: 'state',
+  });
+
   const applyShippingOption = (value) => {
     setSelectedShipping(value);
     if (!value) return;
@@ -189,8 +195,18 @@ function EditDrawer({ title, subtitle, initial, customer, shippingOptions, onClo
           <Field label="Address*" textarea value={form.address} onChange={(v) => set('address', v)} />
           <div className="grid grid-cols-3 gap-3">
             <Field label="City*" value={form.city} onChange={(v) => set('city', v)} />
-            <Field label="State*" value={form.state} onChange={(v) => set('state', v)} />
-            <Field label="Pincode*" value={form.pincode} onChange={(v) => set('pincode', v)} />
+            <label className="block">
+              <span className="block text-xs font-medium text-gray-600 mb-1">State*</span>
+              <select className="w-full border rounded-lg px-3 py-2 text-sm bg-white"
+                value={resolveStateSelectValue(form.state)}
+                onChange={(e) => set('state', e.target.value)}>
+                <option value="">Select state</option>
+                {INDIAN_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </label>
+            <Field label="Pincode*" value={form.pincode}
+              onChange={handlePincodeChange}
+              onBlur={handlePincodeChange} />
           </div>
           <Field label="Landmark" value={form.landmark} onChange={(v) => set('landmark', v)} />
           <label className="flex items-center gap-2 text-sm">
@@ -214,7 +230,7 @@ function EditDrawer({ title, subtitle, initial, customer, shippingOptions, onClo
   );
 }
 
-function Field({ label, value, onChange, textarea }) {
+function Field({ label, value, onChange, onBlur, textarea }) {
   return (
     <label className="block">
       <span className="block text-xs font-medium text-gray-600 mb-1">{label}</span>
@@ -223,7 +239,9 @@ function Field({ label, value, onChange, textarea }) {
           value={value} onChange={(e) => onChange(e.target.value)} />
       ) : (
         <input className="w-full border rounded-lg px-3 py-2 text-sm"
-          value={value} onChange={(e) => onChange(e.target.value)} />
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onBlur={onBlur ? (e) => onBlur(e.target.value) : undefined} />
       )}
     </label>
   );
