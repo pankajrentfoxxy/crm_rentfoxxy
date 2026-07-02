@@ -11,6 +11,10 @@ const {
   getLeadEmailSyncStatus,
 } = require('../services/leadEmailIngestionService');
 const { isRestrictedToAssigned } = require('../services/dataScopeService');
+const {
+  validateFinanceExpoxContactFields,
+  applyFinanceExpoxDetails,
+} = require('./customerManagementController');
 
 const { STATUSES_WITHOUT_STAGE_CHOICE, STAGES_BY_STATUS, stagesForStatus } = require('../constants/leadStages');
 
@@ -2198,6 +2202,16 @@ exports.updateLeadFullProfile = async (req, res) => {
   }
 };
 
+function parseCustomerDetails(value) {
+  if (value == null) return {};
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value) || {};
+  } catch {
+    return {};
+  }
+}
+
 exports.convertToCustomer = async (req, res) => {
   const { id } = req.params;
   const leadId = parseInt(id, 10);
@@ -2234,6 +2248,11 @@ exports.convertToCustomer = async (req, res) => {
       });
     }
 
+    const contactValidationErrors = validateFinanceExpoxContactFields(body);
+    if (contactValidationErrors.length) {
+      return res.status(400).json({ success: false, message: contactValidationErrors[0] });
+    }
+
     const shippingSame = body.shipping_same_as_billing !== false && body.shipping_same !== false
       && lead.shipping_same_as_billing !== false;
     const shippingAddress = shippingSame
@@ -2250,6 +2269,12 @@ exports.convertToCustomer = async (req, res) => {
     const gstNo = body.gst_number || body.gst_no || lead.gst_number || null;
     const panNumber = body.pan_number || lead.pan_number || null;
 
+    const customerDetails = {
+      contact_person_name: customerName,
+      contact_person_number: phone,
+    };
+    applyFinanceExpoxDetails(customerDetails, body);
+
     let customerId = lead.customer_id;
     let isNew = false;
 
@@ -2260,6 +2285,14 @@ exports.convertToCustomer = async (req, res) => {
 
     if (existingByLead.rows.length) {
       customerId = existingByLead.rows[0].customer_id;
+      const existingDetailsRes = await pool.query(
+        'SELECT details FROM customers WHERE customer_id = $1',
+        [customerId]
+      );
+      const mergedDetails = parseCustomerDetails(existingDetailsRes.rows[0]?.details);
+      mergedDetails.contact_person_name = customerName;
+      mergedDetails.contact_person_number = phone;
+      applyFinanceExpoxDetails(mergedDetails, body);
       await pool.query(
         `UPDATE customers SET
           name = $1, company_name = $2, email = $3, phone = $4, gst_no = $5,
@@ -2267,15 +2300,15 @@ exports.convertToCustomer = async (req, res) => {
           billing_address = $10, billing_city = $11, billing_state = $12, billing_pincode = $13,
           shipping_same = $14, shipping_address = $15, shipping_city = $16, shipping_state = $17, shipping_pincode = $18,
           whatsapp_number = $19, designation = $20, source_lead_stage = $21,
-          onboarded_by = $22, onboarded_at = COALESCE(onboarded_at, NOW()), updated_at = NOW()
-         WHERE customer_id = $23`,
+          onboarded_by = $22, onboarded_at = COALESCE(onboarded_at, NOW()), details = $23, updated_at = NOW()
+         WHERE customer_id = $24`,
         [
           customerName, companyName, email, phone, gstNo, panNumber,
           lead.company_type, lead.company_size, lead.industry,
           billingAddress, billingCity, billingState, billingPincode,
           shippingSame, shippingAddress, shippingCity, shippingState, shippingPincode,
           lead.whatsapp_number, lead.designation, lead.lead_stage,
-          req.user.user_id, customerId
+          req.user.user_id, JSON.stringify(mergedDetails), customerId
         ]
       );
     } else {
@@ -2286,11 +2319,11 @@ exports.convertToCustomer = async (req, res) => {
           billing_address, billing_city, billing_state, billing_pincode,
           shipping_same, shipping_address, shipping_city, shipping_state, shipping_pincode,
           whatsapp_number, designation, source_lead_stage, onboarded_by, onboarded_at,
-          type, created_at, updated_at
+          type, details, created_at, updated_at
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
           $11, $12, $13, $14, $15, $16, $17, $18, $19,
-          $20, $21, $22, $23, NOW(), 'Lead', NOW(), NOW()
+          $20, $21, $22, $23, NOW(), 'Lead', $24, NOW(), NOW()
         ) RETURNING customer_id`,
         [
           customerName, companyName, leadId, email, phone, gstNo, panNumber,
@@ -2298,7 +2331,7 @@ exports.convertToCustomer = async (req, res) => {
           billingAddress, billingCity, billingState, billingPincode,
           shippingSame, shippingAddress, shippingCity, shippingState, shippingPincode,
           lead.whatsapp_number, lead.designation, lead.lead_stage,
-          req.user.user_id
+          req.user.user_id, JSON.stringify(customerDetails)
         ]
       );
       customerId = insertRes.rows[0].customer_id;

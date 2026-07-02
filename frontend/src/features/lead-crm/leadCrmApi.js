@@ -25,6 +25,8 @@ export const getAssignableUsers = () => api.get('/leads/assignable-users');
 export const getUsers = () => getAssignableUsers();
 
 export const getCustomers = (params) => api.get('/customer-management/customers', { params });
+export const exportCustomersExcel = (params = {}) =>
+  api.get('/customer-management/customers/export.xlsx', { params, responseType: 'blob' });
 export const getCustomer = (id) => api.get(`/customer-management/customers/${id}`);
 export const createCustomer = (data) => api.post('/customer-management/customers', data);
 export const updateCustomer = (id, data) => api.put(`/customer-management/customers/${id}`, data);

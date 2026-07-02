@@ -1,14 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Building2 } from 'lucide-react';
+import { Plus, Building2, Download } from 'lucide-react';
 import { listSalesOrders } from '../../sales-pipeline/salesPipelineApi';
-import { getCustomers } from '../leadCrmApi';
+import { exportCustomersExcel, getCustomers } from '../leadCrmApi';
 import CustomerFormDrawer from '../components/CustomerFormDrawer';
 import { PageHeader, StatCard, Button, ResponsiveTable } from '../../../components/ui/primitives';
+import { useAuth } from '../../../context/AuthContext';
 import toast from 'react-hot-toast';
+
+const EXPORT_ROLES = new Set(['admin', 'super_admin']);
 
 export default function CustomerListPage() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const canExportCustomers = EXPORT_ROLES.has(user?.role);
   const [customers, setCustomers] = useState([]);
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
@@ -18,6 +23,7 @@ export default function CustomerListPage() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editCustomer, setEditCustomer] = useState(null);
   const [activeOrderCounts, setActiveOrderCounts] = useState({});
+  const [exporting, setExporting] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -83,6 +89,31 @@ export default function CustomerListPage() {
     setPage(1);
   };
 
+  const handleExportExcel = async () => {
+    setExporting(true);
+    try {
+      const response = await exportCustomersExcel({ search: search || undefined });
+      const blob = new Blob([response.data], {
+        type: response.headers['content-type'] || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const disposition = response.headers['content-disposition'] || '';
+      const match = /filename="?([^"]+)"?/.exec(disposition);
+      a.href = url;
+      a.download = match?.[1] || 'customers_export.xlsx';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success('Customer export downloaded');
+    } catch {
+      toast.error('Failed to export customers');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const columns = [
     { key: 'id', header: 'ID', sortable: true, sortKey: 'customer_id', render: (c) => `#${c.customer_id}` },
     { key: 'company', header: 'Company', render: (c) => <span className="font-medium">{c.company_name || c.customer_name}</span> },
@@ -120,7 +151,16 @@ export default function CustomerListPage() {
         title="Customers"
         subtitle="Manage customer profiles and KYC"
         icon={Building2}
-        actions={<Button icon={Plus} onClick={() => { setEditCustomer(null); setDrawerOpen(true); }}>Add Customer</Button>}
+        actions={(
+          <div className="flex flex-wrap gap-2">
+            {canExportCustomers ? (
+              <Button variant="secondary" icon={Download} disabled={exporting} onClick={handleExportExcel}>
+                {exporting ? 'Exporting...' : 'Export Excel'}
+              </Button>
+            ) : null}
+            <Button icon={Plus} onClick={() => { setEditCustomer(null); setDrawerOpen(true); }}>Add Customer</Button>
+          </div>
+        )}
       />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">

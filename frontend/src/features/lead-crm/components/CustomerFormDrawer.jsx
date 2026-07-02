@@ -7,12 +7,17 @@ import {
 } from '../leadCrmApi';
 import toast from 'react-hot-toast';
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MOBILE_RE = /^\d{10}$/;
+
 const empty = () => ({
   customer_name: '', email: '', customer_number: '', company_name: '',
   gst_number: '', pan_number: '', company_type: '', industry: '',
   billing_address: '', billing_city: '', billing_state: '', billing_pincode: '',
   shipping_same: true, shipping_address: '', shipping_city: '', shipping_state: '', shipping_pincode: '',
   whatsapp_number: '', designation: '', notes: '',
+  finance_contact_name: '', finance_contact_email: '', finance_contact_mobile: '',
+  expox_person_name: '', expox_person_email: '', expox_person_mobile: '',
 });
 
 const emptyAddrForm = () => ({
@@ -27,6 +32,7 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
   const [addrForm, setAddrForm] = useState(emptyAddrForm());
   const [addrSaving, setAddrSaving] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState({});
   const isEdit = !!customer;
 
   useEffect(() => {
@@ -52,12 +58,20 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
         whatsapp_number: customer.whatsapp_number || '',
         designation: customer.designation || '',
         notes: customer.notes || '',
+        finance_contact_name: customer.finance_contact_name || customer.details?.finance_contact_name || '',
+        finance_contact_email: customer.finance_contact_email || customer.details?.finance_contact_email || '',
+        finance_contact_mobile: customer.finance_contact_mobile || customer.details?.finance_contact_mobile || '',
+        expox_person_name: customer.expox_person_name || customer.details?.expox_person_name || '',
+        expox_person_email: customer.expox_person_email || customer.details?.expox_person_email || '',
+        expox_person_mobile: customer.expox_person_mobile || customer.details?.expox_person_mobile || '',
       });
       setShippingSame(customer.shipping_same !== false);
+      setFieldErrors({});
     } else if (open) {
       setForm(empty());
       setShippingSame(true);
       setSavedAddresses([]);
+      setFieldErrors({});
     }
   }, [customer, open]);
 
@@ -74,6 +88,81 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
   if (!open) return null;
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  const setMobile = (k, v) => {
+    set(k, v.replace(/\D/g, '').slice(0, 10));
+    setFieldErrors((prev) => {
+      if (!prev[k]) return prev;
+      const next = { ...prev };
+      delete next[k];
+      return next;
+    });
+  };
+
+  const validateForm = () => {
+    const errors = {};
+    const requiredExpoxFields = [
+      ['expox_person_name', 'Expox Person Name'],
+      ['expox_person_email', 'Expox Person Email'],
+      ['expox_person_mobile', 'Expox Person Mobile Number'],
+    ];
+    const optionalEmailFields = [
+      ['email', 'Email'],
+      ['finance_contact_email', 'Finance Contact Email'],
+    ];
+    const optionalMobileFields = [
+      ['finance_contact_mobile', 'Finance Contact Mobile Number'],
+    ];
+    requiredExpoxFields.forEach(([key, label]) => {
+      const value = String(form[key] || '').trim();
+      if (!value) {
+        errors[key] = `${label} is required`;
+        return;
+      }
+      if (key.endsWith('_email') && !EMAIL_RE.test(value)) errors[key] = `${label} is invalid`;
+      if (key.endsWith('_mobile') && !MOBILE_RE.test(value)) errors[key] = `${label} must be a 10-digit number`;
+    });
+    optionalEmailFields.forEach(([key, label]) => {
+      const value = String(form[key] || '').trim();
+      if (value && !EMAIL_RE.test(value)) errors[key] = `${label} is invalid`;
+    });
+    optionalMobileFields.forEach(([key, label]) => {
+      const value = String(form[key] || '').trim();
+      if (value && !MOBILE_RE.test(value)) errors[key] = `${label} must be a 10-digit number`;
+    });
+    setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const renderField = (key, label, { type = 'text', mobile = false, required = false } = {}) => (
+    <div key={key}>
+      <label className="text-xs text-gray-500">
+        {label}
+        {required && <span className="text-red-500"> *</span>}
+      </label>
+      <input
+        type={type}
+        value={form[key]}
+        onChange={(e) => {
+          if (mobile) setMobile(key, e.target.value);
+          else {
+            set(key, e.target.value);
+            setFieldErrors((prev) => {
+              if (!prev[key]) return prev;
+              const next = { ...prev };
+              delete next[key];
+              return next;
+            });
+          }
+        }}
+        maxLength={mobile ? 10 : undefined}
+        className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm ${
+          fieldErrors[key] ? 'border-red-300' : 'border-gray-200'
+        }`}
+      />
+      {fieldErrors[key] && <p className="mt-1 text-xs text-red-600">{fieldErrors[key]}</p>}
+    </div>
+  );
 
   const loadAddresses = async () => {
     if (!customer?.customer_id) return;
@@ -124,6 +213,10 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
   };
 
   const handleSave = async () => {
+    if (!validateForm()) {
+      toast.error('Please fix the highlighted fields');
+      return;
+    }
     setSaving(true);
     try {
       const payload = {
@@ -209,6 +302,24 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
                 className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
             </div>
           ))}
+
+          <div className="sm:col-span-2 pt-2 border-t space-y-3">
+            <h3 className="text-sm font-semibold text-gray-800">Finance Contact</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {renderField('finance_contact_name', 'Finance Contact Name')}
+              {renderField('finance_contact_email', 'Finance Contact Email', { type: 'email' })}
+              {renderField('finance_contact_mobile', 'Finance Contact Mobile Number', { mobile: true })}
+            </div>
+          </div>
+
+          <div className="sm:col-span-2 pt-2 border-t space-y-3">
+            <h3 className="text-sm font-semibold text-gray-800">Expox Person</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {renderField('expox_person_name', 'Expox Person Name', { required: true })}
+              {renderField('expox_person_email', 'Expox Person Email', { type: 'email', required: true })}
+              {renderField('expox_person_mobile', 'Expox Person Mobile Number', { mobile: true, required: true })}
+            </div>
+          </div>
 
           <div className="sm:col-span-2 pt-2 border-t">
             <h3 className="text-sm font-semibold text-gray-800 mb-2">Shipping Address</h3>

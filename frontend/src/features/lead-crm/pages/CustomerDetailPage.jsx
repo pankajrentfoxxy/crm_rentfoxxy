@@ -78,6 +78,27 @@ function KycBadge({ status }) {
 }
 const PORTAL_URL = process.env.REACT_APP_CUSTOMER_PORTAL_URL || 'http://localhost:3002';
 
+function customerField(customer, key) {
+  if (!customer) return '';
+  return customer[key] || customer.details?.[key] || '';
+}
+
+function ProfileFieldGrid({ title, fields, customer }) {
+  return (
+    <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 text-sm">
+      <h3 className="font-semibold text-gray-900 mb-3">{title}</h3>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {fields.map(([label, key]) => (
+          <div key={key}>
+            <span className="text-gray-500">{label}</span>
+            <p className="font-medium">{customerField(customer, key) || '—'}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function PasswordModal({ password, onClose }) {
   const copy = () => {
     navigator.clipboard.writeText(password);
@@ -244,6 +265,24 @@ export default function CustomerDetailPage() {
               <div key={label}><span className="text-gray-500">{label}</span><p className="font-medium">{val || '—'}</p></div>
             ))}
           </div>
+          <ProfileFieldGrid
+            title="Finance Contact"
+            customer={customer}
+            fields={[
+              ['Name', 'finance_contact_name'],
+              ['Email', 'finance_contact_email'],
+              ['Mobile Number', 'finance_contact_mobile'],
+            ]}
+          />
+          <ProfileFieldGrid
+            title="Expox Person"
+            customer={customer}
+            fields={[
+              ['Name', 'expox_person_name'],
+              ['Email', 'expox_person_email'],
+              ['Mobile Number', 'expox_person_mobile'],
+            ]}
+          />
           <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 text-sm">
             <h3 className="font-semibold text-gray-900 mb-3">Financial</h3>
             <p>

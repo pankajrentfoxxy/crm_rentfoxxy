@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
 const { multerLimits } = require('../config/uploadLimits');
-const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
+const { authMiddleware, checkSectionPermission, checkRole } = require('../middleware/auth');
 const ctrl = require('../controllers/customerManagementController');
 
 const router = express.Router();
@@ -20,6 +20,7 @@ const upload = multer({
 router.use(authMiddleware);
 
 router.get('/customers/meta/add', cp('customers', 'view'), ctrl.getAddCustomerMeta);
+router.get('/customers/export.xlsx', checkRole('admin', 'super_admin'), ctrl.exportCustomersExcel);
 router.get('/customers', cp('customers', 'view'), ctrl.listCustomers);
 router.post(
   '/customers',

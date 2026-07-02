@@ -18,6 +18,70 @@ function parseDetails(value) {
   }
 }
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MOBILE_RE = /^\d{10}$/;
+
+const FINANCE_EXPOX_DETAIL_KEYS = [
+  'finance_contact_name',
+  'finance_contact_email',
+  'finance_contact_mobile',
+  'expox_person_name',
+  'expox_person_email',
+  'expox_person_mobile',
+];
+
+function normalizeMobileNumber(value) {
+  const digits = String(value || '').replace(/\D/g, '').slice(-10);
+  return digits.length === 10 ? digits : String(value || '').trim();
+}
+
+function validateFinanceExpoxContactFields(body) {
+  const errors = [];
+  const requiredFields = [
+    ['expox_person_name', 'Expox Person Name'],
+    ['expox_person_email', 'Expox Person Email'],
+    ['expox_person_mobile', 'Expox Person Mobile Number'],
+  ];
+  const optionalEmailFields = [
+    ['finance_contact_email', 'Finance Contact Email'],
+  ];
+  const optionalMobileFields = [
+    ['finance_contact_mobile', 'Finance Contact Mobile Number'],
+  ];
+  for (const [key, label] of requiredFields) {
+    const value = String(body[key] || '').trim();
+    if (!value) {
+      errors.push(`${label} is required`);
+      continue;
+    }
+    if (key.endsWith('_email') && !EMAIL_RE.test(value)) errors.push(`${label} is invalid`);
+    if (key.endsWith('_mobile') && !MOBILE_RE.test(normalizeMobileNumber(value))) {
+      errors.push(`${label} must be a 10-digit number`);
+    }
+  }
+  for (const [key, label] of optionalEmailFields) {
+    const value = String(body[key] || '').trim();
+    if (value && !EMAIL_RE.test(value)) errors.push(`${label} is invalid`);
+  }
+  for (const [key, label] of optionalMobileFields) {
+    const value = String(body[key] || '').trim();
+    if (value && !MOBILE_RE.test(normalizeMobileNumber(value))) {
+      errors.push(`${label} must be a 10-digit number`);
+    }
+  }
+  return errors;
+}
+
+function applyFinanceExpoxDetails(details, body) {
+  for (const key of FINANCE_EXPOX_DETAIL_KEYS) {
+    if (body[key] === undefined) continue;
+    let value = String(body[key] || '').trim();
+    if (key.endsWith('_mobile') && value) value = normalizeMobileNumber(value);
+    details[key] = value || null;
+  }
+  return details;
+}
+
 function generatePassword(length = 10) {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
   let out = '';
@@ -56,6 +120,12 @@ function formatCustomerRow(row) {
     phone: row.phone,
     contact_person_name: details.contact_person_name || row.name || '',
     contact_person_number: details.contact_person_number || row.phone || '',
+    finance_contact_name: details.finance_contact_name || '',
+    finance_contact_email: details.finance_contact_email || '',
+    finance_contact_mobile: details.finance_contact_mobile || '',
+    expox_person_name: details.expox_person_name || '',
+    expox_person_email: details.expox_person_email || '',
+    expox_person_mobile: details.expox_person_mobile || '',
     gst_number: row.gst_no || details.gst_number || '',
     gst_no: row.gst_no || details.gst_number || '',
     pan_card_number: row.pan_number || details.pan_card_number || '',
@@ -95,6 +165,105 @@ function formatCustomerRow(row) {
     updated_at: row.updated_at,
     details,
   };
+}
+
+function formatAddressExportLine({ address, city, state, pincode, concern_person, mobile_no } = {}) {
+  const location = [address, city, state, pincode].filter((part) => String(part || '').trim()).join(', ');
+  const contact = [concern_person, mobile_no].filter((part) => String(part || '').trim()).join(' · ');
+  if (location && contact) return `${location} (${contact})`;
+  return location || contact || '';
+}
+
+function collectBillingAddresses(row, details, savedAddresses = []) {
+  const addresses = [];
+  const seen = new Set();
+  const add = (line) => {
+    const value = String(line || '').trim();
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    addresses.push(value);
+  };
+
+  add(formatAddressExportLine({
+    address: typeof row.billing_address === 'string'
+      ? row.billing_address
+      : (details.billing_address?.address || details.billing_address || ''),
+    city: row.billing_city,
+    state: row.billing_state,
+    pincode: row.billing_pincode,
+  }));
+
+  savedAddresses
+    .filter((addr) => String(addr.address_type || '').toLowerCase() === 'billing')
+    .forEach((addr) => add(formatAddressExportLine(addr)));
+
+  return addresses;
+}
+
+function collectShippingAddresses(row, details, savedAddresses = []) {
+  const addresses = [];
+  const seen = new Set();
+  const add = (line) => {
+    const value = String(line || '').trim();
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    addresses.push(value);
+  };
+
+  if (row.shipping_same === false) {
+    add(formatAddressExportLine({
+      address: row.shipping_address,
+      city: row.shipping_city,
+      state: row.shipping_state,
+      pincode: row.shipping_pincode,
+    }));
+  }
+
+  const legacyShipping = details.shipping_address || details.shipping_addresses;
+  if (Array.isArray(legacyShipping)) {
+    legacyShipping.forEach((item) => add(formatAddressExportLine({
+      address: item?.address,
+      city: item?.city,
+      state: item?.state,
+      pincode: item?.zip_code || item?.pincode,
+      concern_person: item?.name,
+      mobile_no: item?.phone,
+    })));
+  }
+
+  savedAddresses
+    .filter((addr) => String(addr.address_type || 'shipping').toLowerCase() === 'shipping')
+    .forEach((addr) => add(formatAddressExportLine(addr)));
+
+  return addresses;
+}
+
+function buildCustomerExportBaseRow(formatted, assetCount) {
+  return {
+    'Company Name': formatted.company_name || formatted.customer_name || '',
+    'Contact Person': formatted.contact_person_name || formatted.customer_name || '',
+    'Phone Number': formatted.customer_number || formatted.phone || '',
+    Email: formatted.email || '',
+    'GST Number': formatted.gst_number || '',
+    City: formatted.billing_city || '',
+    'Asset Count': assetCount,
+    'Finance Contact Name': formatted.finance_contact_name || '',
+    'Finance Contact Email': formatted.finance_contact_email || '',
+    'Finance Contact Mobile Number': formatted.finance_contact_mobile || '',
+    'Expox Person Name': formatted.expox_person_name || '',
+    'Expox Person Email': formatted.expox_person_email || '',
+    'Expox Person Mobile Number': formatted.expox_person_mobile || '',
+  };
+}
+
+function appendDynamicAddressColumns(row, billingAddresses, shippingAddresses, maxBilling, maxShipping) {
+  for (let i = 0; i < maxBilling; i += 1) {
+    row[`Billing Address ${i + 1}`] = billingAddresses[i] || '';
+  }
+  for (let i = 0; i < maxShipping; i += 1) {
+    row[`Shipping Address ${i + 1}`] = shippingAddresses[i] || '';
+  }
+  return row;
 }
 
 async function ensureCustomerManagementSchema() {
@@ -172,6 +341,120 @@ exports.listCustomers = async (req, res) => {
   } catch (error) {
     console.error('listCustomers:', error);
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.exportCustomersExcel = async (req, res) => {
+  try {
+    const search = (req.query.search || '').trim();
+    const params = [];
+    const conditions = ['c.status = 1'];
+
+    if (search) {
+      params.push(`%${search}%`);
+      const idx = params.length;
+      conditions.push(`(
+        c.name ILIKE $${idx} OR c.email ILIKE $${idx} OR c.phone ILIKE $${idx}
+        OR c.gst_no ILIKE $${idx} OR c.company_name ILIKE $${idx}
+        OR c.details->>'contact_person_name' ILIKE $${idx}
+        OR c.details->>'pan_card_number' ILIKE $${idx}
+      )`);
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const customersResult = await pool.query(
+      `SELECT c.*,
+        COALESCE(ac.asset_count, 0) AS asset_count
+       FROM customers c
+       LEFT JOIN (
+         SELECT current_customer_id AS customer_id, COUNT(*)::int AS asset_count
+         FROM vendor_serial_numbers
+         WHERE deleted_at IS NULL
+           AND current_customer_id IS NOT NULL
+           AND inventory_status = ANY($${params.length + 1}::text[])
+         GROUP BY current_customer_id
+       ) ac ON ac.customer_id = c.customer_id
+       ${where}
+       ORDER BY c.customer_id ASC`,
+      [...params, DEPLOYED_WITH_CUSTOMER_STATUSES]
+    );
+
+    const customerRows = customersResult.rows;
+    const customerIds = customerRows.map((row) => row.customer_id);
+    const addressesByCustomer = new Map();
+
+    if (customerIds.length) {
+      const addressesResult = await pool.query(
+        `SELECT customer_id, concern_person, mobile_no, address, pincode, address_type, is_head_office
+         FROM customer_addresses
+         WHERE customer_id = ANY($1::int[])
+         ORDER BY customer_id ASC, is_head_office DESC, customer_address_id ASC`,
+        [customerIds]
+      );
+      addressesResult.rows.forEach((addr) => {
+        const list = addressesByCustomer.get(addr.customer_id) || [];
+        list.push(addr);
+        addressesByCustomer.set(addr.customer_id, list);
+      });
+    }
+
+    const exportRows = customerRows.map((row) => {
+      const formatted = formatCustomerRow(row);
+      const savedAddresses = addressesByCustomer.get(row.customer_id) || [];
+      return {
+        formatted,
+        assetCount: Number(row.asset_count || 0),
+        billingAddresses: collectBillingAddresses(row, formatted.details, savedAddresses),
+        shippingAddresses: collectShippingAddresses(row, formatted.details, savedAddresses),
+      };
+    });
+
+    const maxBilling = exportRows.reduce((max, item) => Math.max(max, item.billingAddresses.length), 0);
+    const maxShipping = exportRows.reduce((max, item) => Math.max(max, item.shippingAddresses.length), 0);
+
+    const XLSX = require('xlsx');
+    const sheetRows = exportRows.map((item, idx) => {
+      const row = buildCustomerExportBaseRow(item.formatted, item.assetCount);
+      row['S.No'] = idx + 1;
+      appendDynamicAddressColumns(row, item.billingAddresses, item.shippingAddresses, maxBilling, maxShipping);
+      return row;
+    });
+
+    const columnOrder = [
+      'S.No',
+      'Company Name',
+      'Contact Person',
+      'Phone Number',
+      'Email',
+      'GST Number',
+      'City',
+      'Asset Count',
+      'Finance Contact Name',
+      'Finance Contact Email',
+      'Finance Contact Mobile Number',
+      'Expox Person Name',
+      'Expox Person Email',
+      'Expox Person Mobile Number',
+      ...Array.from({ length: maxBilling }, (_, i) => `Billing Address ${i + 1}`),
+      ...Array.from({ length: maxShipping }, (_, i) => `Shipping Address ${i + 1}`),
+    ];
+
+    const orderedRows = sheetRows.map((row) => {
+      const ordered = {};
+      columnOrder.forEach((key) => { ordered[key] = row[key] ?? ''; });
+      return ordered;
+    });
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(orderedRows, { header: columnOrder });
+    XLSX.utils.book_append_sheet(wb, ws, 'Customers');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="customers_export.xlsx"');
+    res.send(buf);
+  } catch (error) {
+    console.error('exportCustomersExcel:', error);
+    res.status(500).json({ success: false, message: error.message || 'Export failed' });
   }
 };
 
@@ -392,6 +675,11 @@ exports.storeCustomer = async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(body.password, 10);
+    const contactValidationErrors = validateFinanceExpoxContactFields(body);
+    if (contactValidationErrors.length) {
+      return res.status(400).json({ success: false, message: contactValidationErrors[0] });
+    }
+
     const details = {
       contact_person_name: body.contact_person_name,
       contact_person_number: body.contact_person_number,
@@ -403,6 +691,7 @@ exports.storeCustomer = async (req, res) => {
       profile: profilePath,
       password_hash: passwordHash,
     };
+    applyFinanceExpoxDetails(details, body);
 
     const result = await pool.query(
       `INSERT INTO customers (name, company_name, email, phone, gst_no, address, type, details, status, created_at, updated_at)
@@ -442,6 +731,11 @@ exports.updateCustomer = async (req, res) => {
     const body = req.body || {};
     const details = parseDetails(row.details);
 
+    const contactValidationErrors = validateFinanceExpoxContactFields(body);
+    if (contactValidationErrors.length) {
+      return res.status(400).json({ success: false, message: contactValidationErrors[0] });
+    }
+
     const name = body.customer_name || body.name || row.name;
     const companyName = body.company_name || row.company_name;
     const email = body.email ?? row.email;
@@ -480,9 +774,20 @@ exports.updateCustomer = async (req, res) => {
       ]
     );
 
-    if (body.contact_person_name || body.contact_person_number) {
-      details.contact_person_name = body.contact_person_name || details.contact_person_name;
-      details.contact_person_number = body.contact_person_number || details.contact_person_number;
+    let detailsChanged = false;
+    if (body.contact_person_name !== undefined) {
+      details.contact_person_name = body.contact_person_name || null;
+      detailsChanged = true;
+    }
+    if (body.contact_person_number !== undefined) {
+      details.contact_person_number = body.contact_person_number || null;
+      detailsChanged = true;
+    }
+    for (const key of FINANCE_EXPOX_DETAIL_KEYS) {
+      if (body[key] !== undefined) detailsChanged = true;
+    }
+    applyFinanceExpoxDetails(details, body);
+    if (detailsChanged) {
       await pool.query('UPDATE customers SET details = $1 WHERE customer_id = $2', [
         JSON.stringify(details),
         customerId,
@@ -890,3 +1195,6 @@ exports.enableCustomerPortal = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+exports.validateFinanceExpoxContactFields = validateFinanceExpoxContactFields;
+exports.applyFinanceExpoxDetails = applyFinanceExpoxDetails;
