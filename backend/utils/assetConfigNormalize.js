@@ -191,6 +191,7 @@ function normalizeScreenSize(name) {
 
 const NORMALIZERS = {
   brands: normalizeBrand,
+  'spare-brands': normalizeBrand,
   models: normalizeModel,
   processors: normalizeProcessor,
   generations: normalizeGeneration,

@@ -132,6 +132,13 @@ exports.updateBrand = handlers.brands.update;
 exports.deleteBrand = handlers.brands.remove;
 exports.setBrandStatus = handlers.brands.setStatus;
 
+exports.listSpareBrands = handlers['spare-brands'].list;
+exports.getSpareBrand = handlers['spare-brands'].get;
+exports.createSpareBrand = handlers['spare-brands'].create;
+exports.updateSpareBrand = handlers['spare-brands'].update;
+exports.deleteSpareBrand = handlers['spare-brands'].remove;
+exports.setSpareBrandStatus = handlers['spare-brands'].setStatus;
+
 exports.listModels = handlers.models.list;
 exports.getModel = handlers.models.get;
 exports.createModel = handlers.models.create;

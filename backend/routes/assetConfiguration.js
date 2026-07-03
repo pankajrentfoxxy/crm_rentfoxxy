@@ -52,6 +52,7 @@ function crudRoutes(path, list, get, post, put, remove, patchStatus) {
 }
 
 crudRoutes('brands', ctrl.listBrands, ctrl.getBrand, ctrl.createBrand, ctrl.updateBrand, ctrl.deleteBrand, ctrl.setBrandStatus);
+crudRoutes('spare-brands', ctrl.listSpareBrands, ctrl.getSpareBrand, ctrl.createSpareBrand, ctrl.updateSpareBrand, ctrl.deleteSpareBrand, ctrl.setSpareBrandStatus);
 crudRoutes('models', ctrl.listModels, ctrl.getModel, ctrl.createModel, ctrl.updateModel, ctrl.deleteModel, ctrl.setModelStatus);
 crudRoutes('processors', ctrl.listProcessors, ctrl.getProcessor, ctrl.createProcessor, ctrl.updateProcessor, ctrl.deleteProcessor, ctrl.setProcessorStatus);
 crudRoutes('generations', ctrl.listGenerations, ctrl.getGeneration, ctrl.createGeneration, ctrl.updateGeneration, ctrl.deleteGeneration, ctrl.setGenerationStatus);

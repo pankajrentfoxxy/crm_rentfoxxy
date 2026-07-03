@@ -21,6 +21,12 @@ export const updateBrand = (id, d) => api.put(`${base}/brands/${id}`, d);
 export const deleteBrand = (id) => api.delete(`${base}/brands/${id}`);
 export const setBrandStatus = (id, status) => api.patch(`${base}/brands/${id}/status`, { status });
 
+export const listSpareBrands = (p) => api.get(`${base}/spare-brands`, { params: p });
+export const createSpareBrand = (d) => api.post(`${base}/spare-brands`, d);
+export const updateSpareBrand = (id, d) => api.put(`${base}/spare-brands/${id}`, d);
+export const deleteSpareBrand = (id) => api.delete(`${base}/spare-brands/${id}`);
+export const setSpareBrandStatus = (id, status) => api.patch(`${base}/spare-brands/${id}/status`, { status });
+
 export const listModels = (p) => api.get(`${base}/models`, { params: p });
 export const createModel = (d) => api.post(`${base}/models`, d);
 export const updateModel = (id, d) => api.put(`${base}/models/${id}`, d);

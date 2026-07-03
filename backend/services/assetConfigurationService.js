@@ -17,6 +17,16 @@ const ENTITIES = {
     listSelect: 't.*',
     orderBy: 't.name ASC',
   },
+  'spare-brands': {
+    table: 'asset_config_spare_brands',
+    label: 'Spare Part Brand',
+    parentKey: null,
+    parentTable: null,
+    joinSelect: '',
+    joinClause: '',
+    listSelect: 't.*',
+    orderBy: 't.name ASC',
+  },
   models: {
     table: 'asset_config_models',
     label: 'Model',
@@ -1201,10 +1211,28 @@ async function listCascadeGenerationsForBrandProcessor(brandName, processorName)
   return listCascadeGenerationsForBrand(brandName);
 }
 
+async function listActiveSpareBrandsForDropdown() {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, name FROM asset_config_spare_brands
+        WHERE deleted_at IS NULL AND status = 'active'
+        ORDER BY name ASC`
+    );
+    return rows;
+  } catch (e) {
+    if (e.message && e.message.includes('asset_config_spare_brands')) return [];
+    throw e;
+  }
+}
+
 async function ensureAssetConfigurationSchema() {
   const fs = require('fs');
   const path = require('path');
-  for (const file of ['123_asset_config_laptop_spec_mapping.sql', '126_asset_config_brand_flat_mapping.sql']) {
+  for (const file of [
+    '123_asset_config_laptop_spec_mapping.sql',
+    '126_asset_config_brand_flat_mapping.sql',
+    '127_asset_config_spare_brands.sql',
+  ]) {
     const migrationPath = path.join(__dirname, '../migrations', file);
     if (!fs.existsSync(migrationPath)) continue;
     const sql = fs.readFileSync(migrationPath, 'utf8');
@@ -1249,4 +1277,5 @@ module.exports = {
   listCascadeProcessorsForBrand,
   listCascadeGenerationsForBrand,
   listCascadeGenerationsForBrandProcessor,
+  listActiveSpareBrandsForDropdown,
 };

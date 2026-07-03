@@ -9,6 +9,7 @@ const { nextSparePartsPurchaseOrderNumber } = require('../../services/vendorNumb
 const { logVendorAudit } = require('../../services/vendorAuditLogService');
 const { allocateTtsplCodes } = require('../../services/vendorInventoryAssetCodeService');
 const { createPartInstances } = require('../../services/partIdService');
+const { listActiveSpareBrandsForDropdown } = require('../../services/assetConfigurationService');
 
 /**
  * Phase 16 (best-effort): when spare units are received, mirror them into the
@@ -329,7 +330,6 @@ async function formMeta(req, res) {
     ];
 
     let parts = [];
-    let brands = [];
     try {
       const pr = await pool.query(
         `SELECT v.part_id AS id, v.name, v.category, v.part_type, v.default_brand, v.specifications,
@@ -345,11 +345,10 @@ async function formMeta(req, res) {
     } catch (e) {
       console.warn('[sparePo formMeta] parts catalog:', e.message || e);
     }
+
+    let brands = [];
     try {
-      const br = await pool.query(
-        `SELECT id, name FROM asset_config_brands WHERE deleted_at IS NULL ORDER BY name ASC`
-      );
-      brands = br.rows;
+      brands = await listActiveSpareBrandsForDropdown();
     } catch (e) {
       console.warn('[sparePo formMeta] brands:', e.message || e);
     }

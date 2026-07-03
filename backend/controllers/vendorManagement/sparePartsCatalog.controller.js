@@ -1,5 +1,6 @@
 const { param, query, body, validationResult } = require('express-validator');
 const pool = require('../../config/db');
+const { listActiveSpareBrandsForDropdown } = require('../../services/assetConfigurationService');
 
 const CATEGORIES = [
   { value: 'ram', label: 'RAM' },
@@ -89,14 +90,12 @@ async function listCatalog(req, res) {
          LIMIT 500`,
       params
     );
-    const brandsR = await pool.query(
-      `SELECT id, name FROM asset_config_brands WHERE deleted_at IS NULL ORDER BY name ASC`
-    ).catch(() => ({ rows: [] }));
+    const brands = await listActiveSpareBrandsForDropdown();
 
     res.json({
       success: true,
       categories: CATEGORIES,
-      brands: brandsR.rows,
+      brands,
       data: rows.map(mapCatalogRow),
     });
   } catch (e) {
