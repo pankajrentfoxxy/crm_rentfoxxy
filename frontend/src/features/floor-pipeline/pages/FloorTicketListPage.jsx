@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { LayoutGrid, List, Loader2, Search, Factory } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { PageHeader, ListPagination } from '../../../components/ui/primitives';
+import { PageHeader, ListPagination, DateRangeFilter } from '../../../components/ui/primitives';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import { useAuth } from '../../../context/AuthContext';
 import usePermission from '../../../hooks/usePermission';
@@ -50,6 +50,8 @@ export default function FloorTicketListPage() {
   const stageFilter = searchParams.get('stage') || '';
   const [priorityFilter, setPriorityFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [assignTicket, setAssignTicket] = useState(null);
 
   const fm = isFloorManagerRole(user?.role);
@@ -81,6 +83,8 @@ export default function FloorTicketListPage() {
       if (priorityFilter) params.priority = priorityFilter;
       if (typeFilter) params.ticket_type = typeFilter;
       if (stageFilter) params.stage_names = stageFilter;
+      if (dateFrom) params.date_from = dateFrom;
+      if (dateTo) params.date_to = dateTo;
       params.page = page;
       params.limit = PAGE_SIZE;
       const { data } = await fetchFloorTickets(params);
@@ -97,9 +101,9 @@ export default function FloorTicketListPage() {
     } finally {
       setLoading(false);
     }
-  }, [debouncedSearch, priorityFilter, typeFilter, stageFilter, page]);
+  }, [debouncedSearch, priorityFilter, typeFilter, stageFilter, page, dateFrom, dateTo]);
 
-  useEffect(() => { setPage(1); }, [debouncedSearch, priorityFilter, typeFilter, stageFilter, view]);
+  useEffect(() => { setPage(1); }, [debouncedSearch, priorityFilter, typeFilter, stageFilter, view, dateFrom, dateTo]);
 
   useEffect(() => { load(); }, [load]);
   useAutoRefresh(load);
@@ -207,6 +211,14 @@ export default function FloorTicketListPage() {
           <option value="support">Support</option>
           <option value="general">General</option>
         </select>
+        <DateRangeFilter
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onDateFromChange={setDateFrom}
+          onDateToChange={setDateTo}
+          fromLabel="Created from"
+          toLabel="Created to"
+        />
       </div>
 
       {loading ? (

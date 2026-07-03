@@ -2,8 +2,8 @@ import api from '../../utils/api';
 
 const base = '/vendor-repair';
 
-export function fetchDiagnosisFailedTickets() {
-  return api.get(`${base}/diagnosis-failed`);
+export function fetchDiagnosisFailedTickets(params) {
+  return api.get(`${base}/diagnosis-failed`, { params });
 }
 
 export function createOutForRepairDc(body) {

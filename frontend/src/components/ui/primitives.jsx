@@ -264,6 +264,42 @@ export function SearchField({ value, onChange, placeholder, className = '' }) {
   );
 }
 
+/* ── DateRangeFilter ─────────────────────────────────────────────────────── */
+export function DateRangeFilter({
+  dateFrom,
+  dateTo,
+  onDateFromChange,
+  onDateToChange,
+  fromLabel = 'From',
+  toLabel = 'To',
+  className = '',
+}) {
+  const inputClass = 'border border-slate-200 rounded-lg px-3 py-2 text-sm min-h-[44px]';
+  return (
+    <div className={`flex flex-wrap items-end gap-2 ${className}`}>
+      <label className="text-sm">
+        <span className="block text-xs text-slate-500 mb-1">{fromLabel}</span>
+        <input
+          type="date"
+          value={dateFrom}
+          onChange={(e) => onDateFromChange(e.target.value)}
+          className={inputClass}
+        />
+      </label>
+      <label className="text-sm">
+        <span className="block text-xs text-slate-500 mb-1">{toLabel}</span>
+        <input
+          type="date"
+          value={dateTo}
+          min={dateFrom || undefined}
+          onChange={(e) => onDateToChange(e.target.value)}
+          className={inputClass}
+        />
+      </label>
+    </div>
+  );
+}
+
 /* ── ListPagination ──────────────────────────────────────────────────────── */
 export function ListPagination({ page, totalPages, total, pageSize, onPageChange }) {
   if (!total && totalPages <= 1) return null;
@@ -292,5 +328,5 @@ export function ListPagination({ page, totalPages, total, pageSize, onPageChange
 
 export default {
   Button, Badge, PageHeader, Card, StatCard, EmptyState, SectionLoader, ResponsiveTable,
-  ListPagination, SearchField,
+  ListPagination, SearchField, DateRangeFilter,
 };

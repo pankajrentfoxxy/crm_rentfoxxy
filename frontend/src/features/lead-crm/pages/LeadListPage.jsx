@@ -73,8 +73,11 @@ export default function LeadListPage() {
       active: leads.filter((l) => !['Gone', 'Rejected'].includes(l.status)).length,
       followToday: leads.filter((l) => l.followUpDate && followUpTone(l.followUpDate) === 'today').length,
       converted: leads.filter((l) => ['Deal', 'Demo'].includes(l.status)).length,
+      totalItems: leads.reduce((sum, l) => sum + (Number(l.quantityRequired) || 0), 0),
     };
   }, [leads]);
+
+  useEffect(() => { setPage(1); }, [filters]);
 
   const sortedLeads = useMemo(() => {
     const copy = [...leads];
@@ -180,11 +183,12 @@ export default function LeadListPage() {
         )}
       />
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
         <StatCard label="Total Leads" value={stats.total} tone="gray" />
         <StatCard label="Active" value={stats.active} tone="blue" />
         <StatCard label="Follow-up Today" value={stats.followToday} tone="amber" />
         <StatCard label="Converted" value={stats.converted} tone="green" />
+        <StatCard label="Total Items (Qty)" value={stats.totalItems} tone="gray" />
       </div>
 
       <div className="flex flex-wrap items-center gap-2 mb-4">
@@ -232,6 +236,27 @@ export default function LeadListPage() {
             <option value="this_week">This Week</option>
             <option value="overdue">Overdue</option>
           </select>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-3">
+          <label className="text-sm">
+            <span className="block text-xs text-gray-500 mb-1">Created from</span>
+            <input
+              type="date"
+              value={filters.date_from}
+              onChange={(e) => setFilters((f) => ({ ...f, date_from: e.target.value }))}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+            />
+          </label>
+          <label className="text-sm">
+            <span className="block text-xs text-gray-500 mb-1">Created to</span>
+            <input
+              type="date"
+              value={filters.date_to}
+              min={filters.date_from || undefined}
+              onChange={(e) => setFilters((f) => ({ ...f, date_to: e.target.value }))}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+            />
+          </label>
         </div>
         <button type="button" onClick={() => setFilters({ search: '', statuses: [], assigned_to: '', source: '', inquiry_type: '', date_from: '', date_to: '', follow_up: '' })}
           className="text-sm text-blue-600 mt-2 hover:underline">Clear filters</button>

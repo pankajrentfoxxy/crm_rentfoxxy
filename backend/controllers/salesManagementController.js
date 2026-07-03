@@ -451,6 +451,8 @@ exports.listSalesOrders = async (req, res) => {
       limit: Math.min(parseInt(req.query.limit, 10) || 20, 100),
       search: req.query.search || '',
       assignedUserId,
+      dateFrom: req.query.date_from,
+      dateTo: req.query.date_to,
     });
     res.json({ success: true, ...data });
   } catch (error) {
@@ -731,6 +733,8 @@ exports.listDeliveryChallans = async (req, res) => {
       search: req.query.search || '',
       status: req.query.status || '',
       assignedUserId,
+      dateFrom: req.query.date_from,
+      dateTo: req.query.date_to,
     });
     res.json({ success: true, ...data });
   } catch (error) {
@@ -1635,6 +1639,8 @@ exports.listReturnDeliveryChallans = async (req, res) => {
       page: parseInt(req.query.page, 10) || 1,
       limit: Math.min(parseInt(req.query.limit, 10) || 25, 100),
       search: req.query.search || '',
+      dateFrom: req.query.date_from,
+      dateTo: req.query.date_to,
     });
     res.json({
       success: true,

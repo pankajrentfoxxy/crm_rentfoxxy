@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
 import { Clock, ExternalLink, FileImage, FileSpreadsheet, FileText, History, Loader2, Pencil, Plus, RefreshCw, X } from 'lucide-react';
-import { SearchField, ListPagination } from '../../../components/ui/primitives';
+import { SearchField, ListPagination, DateRangeFilter } from '../../../components/ui/primitives';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import { useAuth } from '../../../context/AuthContext';
 import {
@@ -561,13 +561,16 @@ export default function InventoryListTable({ routeKey }) {
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [searchInput, setSearchInput] = useState('');
   const search = useDebouncedValue(searchInput.trim(), 320);
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const showDateFilter = ['qc-process', 'ready-to-rent-or-sell'].includes(routeKey);
   const [listCounts, setListCounts] = useState(null);
   const [historyTtspl, setHistoryTtspl] = useState(null);
   const [selectedIds, setSelectedIds] = useState([]);
   const [showAddLaptopModal, setShowAddLaptopModal] = useState(false);
   const [exporting, setExporting] = useState(false);
 
-  useEffect(() => { setPage(1); }, [search]);
+  useEffect(() => { setPage(1); }, [search, dateFrom, dateTo]);
 
   const total = pagination.total || 0;
 
@@ -578,7 +581,9 @@ export default function InventoryListTable({ routeKey }) {
       const { data } = await fetchInventoryList(apiSegment, {
         page,
         limit: PAGE_SIZE,
-        search: search || undefined
+        search: search || undefined,
+        date_from: showDateFilter && dateFrom ? dateFrom : undefined,
+        date_to: showDateFilter && dateTo ? dateTo : undefined,
       });
       if (data.success) {
         setRows(data.data || []);
@@ -592,7 +597,7 @@ export default function InventoryListTable({ routeKey }) {
     } finally {
       setLoading(false);
     }
-  }, [apiSegment, search, page]);
+  }, [apiSegment, search, page, dateFrom, dateTo, showDateFilter]);
 
   useEffect(() => {
     load();
@@ -648,7 +653,11 @@ export default function InventoryListTable({ routeKey }) {
     if (!apiSegment) return;
     setExporting(true);
     try {
-      await exportInventoryListExcel(apiSegment, { search: search || undefined });
+      await exportInventoryListExcel(apiSegment, {
+        search: search || undefined,
+        date_from: showDateFilter && dateFrom ? dateFrom : undefined,
+        date_to: showDateFilter && dateTo ? dateTo : undefined,
+      });
       toast.success('Excel export downloaded');
     } catch (e) {
       toast.error(e.response?.data?.message || 'Export failed');
@@ -720,12 +729,22 @@ export default function InventoryListTable({ routeKey }) {
         </div>
       </div>
 
-      <div className="mb-2">
+      <div className="flex flex-wrap gap-3 mb-2">
         <SearchField
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
           placeholder="Search TTSPL, serial, PO, vendor…"
         />
+        {showDateFilter ? (
+          <DateRangeFilter
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            onDateFromChange={setDateFrom}
+            onDateToChange={setDateTo}
+            fromLabel="Updated from"
+            toLabel="Updated to"
+          />
+        ) : null}
       </div>
 
       <div className="rounded-xl border bg-white shadow-sm overflow-x-auto">

@@ -14,6 +14,7 @@ const {
   canAccessTicketRecord,
   isRestrictedToAssignedAny,
 } = require('../services/dataScopeService');
+const { appendDateRangeClauses } = require('../utils/dateRangeFilter');
 
 // Replace legacy "user/team/stage ID: N" tokens in activity notes with names.
 // New activity logs already store names; this keeps historical entries readable.
@@ -280,6 +281,18 @@ exports.getTickets = async (req, res) => {
       )`;
       params.push(`%${search}%`);
       paramCount++;
+    }
+
+    const dateClauses = appendDateRangeClauses({
+      column: 'created_at',
+      dateFrom: req.query.date_from,
+      dateTo: req.query.date_to,
+      params,
+      tableAlias: 't',
+    });
+    if (dateClauses.length) {
+      query += ` AND ${dateClauses.join(' AND ')}`;
+      paramCount = params.length + 1;
     }
 
     // View filter: completed tab shows status=completed OR tickets user moved; in_progress shows status!=completed

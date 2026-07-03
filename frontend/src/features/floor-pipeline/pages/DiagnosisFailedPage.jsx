@@ -11,6 +11,7 @@ import VrdcDispatchFields, { validateVrdcDispatch } from '../components/VrdcDisp
 import { fetchDeliveryTechnicians } from '../../../utils/deliveryRegisterApi';
 import { ticketStatusLabel } from '../floorPipelineUi';
 import { formatStateLabel } from '../../vendor-management/vendorMgmtUi';
+import { DateRangeFilter } from '../../../components/ui/primitives';
 
 const WAREHOUSE_ROLES = new Set(['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'support_lead']);
 
@@ -41,6 +42,8 @@ export default function DiagnosisFailedPage() {
   const [shipBy, setShipBy] = useState('');
   const [dispatchFields, setDispatchFields] = useState({});
   const [itemRemarks, setItemRemarks] = useState({});
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [form, setForm] = useState({
     vendor_id: '',
     vendor_name: '',
@@ -58,7 +61,10 @@ export default function DiagnosisFailedPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const { data } = await fetchDiagnosisFailedTickets();
+      const { data } = await fetchDiagnosisFailedTickets({
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
+      });
       setRows(data.data || []);
       setSelected(new Set());
     } catch (err) {
@@ -66,7 +72,7 @@ export default function DiagnosisFailedPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [dateFrom, dateTo]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -201,6 +207,17 @@ export default function DiagnosisFailedPage() {
             Out for Repair ({selected.size || 0})
           </button>
         ) : null}
+      </div>
+
+      <div className="mb-4">
+        <DateRangeFilter
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onDateFromChange={setDateFrom}
+          onDateToChange={setDateTo}
+          fromLabel="Failed from"
+          toLabel="Failed to"
+        />
       </div>
 
       {loading ? (

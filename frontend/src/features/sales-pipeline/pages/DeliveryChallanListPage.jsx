@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Plus, Truck } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
-import { PageHeader, StatCard, Button, ResponsiveTable, SearchField, ListPagination } from '../../../components/ui/primitives';
+import { PageHeader, StatCard, Button, ResponsiveTable, SearchField, ListPagination, DateRangeFilter } from '../../../components/ui/primitives';
 import DCForm from '../components/DCForm';
 import DispatchModal from '../components/DispatchModal';
 import QcStatusBadge from '../components/QcStatusBadge';
@@ -22,11 +22,13 @@ export default function DeliveryChallanListPage() {
   const [page, setPage] = useState(1);
   const [searchInput, setSearchInput] = useState('');
   const search = useDebouncedValue(searchInput.trim(), 320);
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [dcDrawer, setDcDrawer] = useState(false);
   const [dispatchDc, setDispatchDc] = useState(null);
 
-  useEffect(() => { setPage(1); }, [search, tab]);
+  useEffect(() => { setPage(1); }, [search, tab, dateFrom, dateTo]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -36,6 +38,8 @@ export default function DeliveryChallanListPage() {
         limit: PAGE_SIZE,
         search: search || undefined,
         status: tab !== 'all' ? tab : undefined,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
       });
       const list = res.data?.delivery_challans || [];
       setRows(list);
@@ -45,7 +49,7 @@ export default function DeliveryChallanListPage() {
     } finally {
       setLoading(false);
     }
-  }, [tab, page, search]);
+  }, [tab, page, search, dateFrom, dateTo]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -153,11 +157,19 @@ export default function DeliveryChallanListPage() {
         ))}
       </div>
 
-      <div className="mb-4">
+      <div className="flex flex-wrap gap-3 mb-4">
         <SearchField
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
           placeholder="Search DC #, SO #, customer, GST…"
+        />
+        <DateRangeFilter
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onDateFromChange={setDateFrom}
+          onDateToChange={setDateTo}
+          fromLabel="Created from"
+          toLabel="Created to"
         />
       </div>
 

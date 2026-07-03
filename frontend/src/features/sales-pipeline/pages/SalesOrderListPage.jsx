@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { Plus, ClipboardList } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
-import { PageHeader, StatCard, Button, ResponsiveTable, SearchField, ListPagination } from '../../../components/ui/primitives';
+import { PageHeader, StatCard, Button, ResponsiveTable, SearchField, ListPagination, DateRangeFilter } from '../../../components/ui/primitives';
 import PaymentModal from '../components/PaymentModal';
 import SalesOrderForm from '../components/SalesOrderForm';
 import DCForm from '../components/DCForm';
@@ -21,6 +21,8 @@ export default function SalesOrderListPage() {
   const [page, setPage] = useState(1);
   const [searchInput, setSearchInput] = useState('');
   const search = useDebouncedValue(searchInput.trim(), 320);
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [soDrawer, setSoDrawer] = useState(false);
   const [dcDrawer, setDcDrawer] = useState(false);
@@ -28,7 +30,7 @@ export default function SalesOrderListPage() {
   const [prefillQuote, setPrefillQuote] = useState(location.state?.fromQuote || null);
   const [prefillSo, setPrefillSo] = useState(null);
 
-  useEffect(() => { setPage(1); }, [search]);
+  useEffect(() => { setPage(1); }, [search, dateFrom, dateTo]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -37,6 +39,8 @@ export default function SalesOrderListPage() {
         page,
         limit: PAGE_SIZE,
         search: search || undefined,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
       });
       setRows(res.data?.sales_orders || []);
       setPagination(res.data?.pagination || { page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
@@ -45,7 +49,7 @@ export default function SalesOrderListPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, search]);
+  }, [page, search, dateFrom, dateTo]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -157,11 +161,19 @@ export default function SalesOrderListPage() {
         <StatCard label="With DC (page)" value={stats.withDc} tone="green" />
       </div>
 
-      <div className="mb-4">
+      <div className="flex flex-wrap gap-3 mb-4">
         <SearchField
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
           placeholder="Search SO #, customer, GST…"
+        />
+        <DateRangeFilter
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onDateFromChange={setDateFrom}
+          onDateToChange={setDateTo}
+          fromLabel="Created from"
+          toLabel="Created to"
         />
       </div>
 

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Download, FileSpreadsheet, Loader2, RotateCcw, Search, Wrench } from 'lucide-react';
-import { PageHeader, ListPagination, SearchField } from '../../../components/ui/primitives';
+import { PageHeader, ListPagination, SearchField, DateRangeFilter } from '../../../components/ui/primitives';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import { useAuth } from '../../../context/AuthContext';
 import {
@@ -32,6 +32,8 @@ export default function OutForRepairInventoryPage() {
   const [search, setSearch] = useState('');
   const [vendorFilter, setVendorFilter] = useState('');
   const [dcFilter, setDcFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const debouncedSearch = useDebouncedValue(search.trim(), 320);
   const debouncedVendor = useDebouncedValue(vendorFilter.trim(), 320);
   const debouncedDc = useDebouncedValue(dcFilter.trim(), 320);
@@ -45,6 +47,8 @@ export default function OutForRepairInventoryPage() {
         dc_number: debouncedDc || undefined,
         page,
         limit: PAGE_SIZE,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
       });
       setRows(data.data || []);
       setPagination(data.pagination || { page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
@@ -54,15 +58,17 @@ export default function OutForRepairInventoryPage() {
     } finally {
       setLoading(false);
     }
-  }, [debouncedSearch, debouncedVendor, debouncedDc, page]);
+  }, [debouncedSearch, debouncedVendor, debouncedDc, page, dateFrom, dateTo]);
 
-  useEffect(() => { setPage(1); }, [debouncedSearch, debouncedVendor, debouncedDc]);
+  useEffect(() => { setPage(1); }, [debouncedSearch, debouncedVendor, debouncedDc, dateFrom, dateTo]);
   useEffect(() => { load(); }, [load]);
 
   const exportParams = {
     search: debouncedSearch || undefined,
     vendor: debouncedVendor || undefined,
     dc_number: debouncedDc || undefined,
+    date_from: dateFrom || undefined,
+    date_to: dateTo || undefined,
   };
 
   const handleExportExcel = async () => {
@@ -131,6 +137,14 @@ export default function OutForRepairInventoryPage() {
           placeholder="Filter DC number"
           value={dcFilter}
           onChange={(e) => setDcFilter(e.target.value)}
+        />
+        <DateRangeFilter
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onDateFromChange={setDateFrom}
+          onDateToChange={setDateTo}
+          fromLabel="Out from"
+          toLabel="Out to"
         />
         <button type="button" onClick={() => { load(); invalidateInventoryManagement(); }} className="inline-flex items-center gap-1 px-3 py-2 border rounded-lg text-sm">
           <Search className="w-4 h-4" /> Refresh

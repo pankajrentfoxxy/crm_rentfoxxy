@@ -122,6 +122,7 @@ export default function CustomerListPage() {
     { key: 'email', header: 'Email', render: (c) => c.email || '—' },
     { key: 'gst', header: 'GST', render: (c) => <span className="text-xs">{c.gst_number || '—'}</span> },
     { key: 'city', header: 'City', render: (c) => c.billing_city || '—' },
+    { key: 'items', header: 'Items', align: 'center', render: (c) => c.active_item_count ?? 0 },
     { key: 'orders', header: 'Active Orders', align: 'center', render: (c) => activeOrderCounts[c.customer_id] ?? 0 },
     { key: 'portal', header: 'Portal', render: (c) => <span className={`inline-block w-2 h-2 rounded-full ${c.portal_enabled ? 'bg-green-500' : 'bg-gray-300'}`} /> },
     { key: 'kyc', header: 'KYC', render: kycBadge },
@@ -139,6 +140,7 @@ export default function CustomerListPage() {
         <span>{c.contact_person_name || c.customer_name}</span>
         <span>{c.customer_number || c.phone}</span>
         {c.billing_city && <span>{c.billing_city}</span>}
+        <span>Items: {c.active_item_count ?? 0}</span>
         <span>Active orders: {activeOrderCounts[c.customer_id] ?? 0}</span>
       </div>
       <div className="pt-2 border-t border-slate-100">{actionCell(c)}</div>

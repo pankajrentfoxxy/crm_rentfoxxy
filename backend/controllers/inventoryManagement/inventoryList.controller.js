@@ -16,6 +16,7 @@ const {
   SPARE_STATUS_VALUES
 } = require('../../services/inventoryManagementService');
 const { DEPLOYED_WITH_CUSTOMER_STATUSES, displayDeployedStatus } = require('../../services/customerDeployedAssets');
+const { appendDateRangeClauses } = require('../../utils/dateRangeFilter');
 
 const READY_TO_RENT_SALE_VALUES = [
   'normal_sale',
@@ -29,7 +30,9 @@ const listValidators = [
   query('page').optional().isInt({ min: 1 }).toInt(),
   query('limit').optional().isInt({ min: 1, max: 500 }).toInt(),
   query('search').optional().isString().trim(),
-  query('tab').optional().isString().trim()
+  query('tab').optional().isString().trim(),
+  query('date_from').optional().isString().trim(),
+  query('date_to').optional().isString().trim(),
 ];
 
 async function listInventory(req, res) {
@@ -43,6 +46,8 @@ async function listInventory(req, res) {
   const limit = req.query.limit || 50;
   const offset = (page - 1) * limit;
   const search = (req.query.search || '').trim();
+  const dateFrom = req.query.date_from;
+  const dateTo = req.query.date_to;
   const isSpare = segment === 'spare_parts';
 
   try {
@@ -65,6 +70,10 @@ async function listInventory(req, res) {
           OR COALESCE(s.extra->>'main_serial_number', '') ILIKE $${i}
         )`;
       }
+      const spareDateClauses = appendDateRangeClauses({
+        column: 'updated_at', dateFrom, dateTo, params, tableAlias: 's',
+      });
+      const spareDateSql = spareDateClauses.length ? ` AND ${spareDateClauses.join(' AND ')}` : '';
       const fromSql = `
         FROM vendor_serial_numbers s
         INNER JOIN vendor_spare_parts_purchase_orders sp ON sp.spo_id = s.spo_id AND sp.deleted_at IS NULL
@@ -76,7 +85,7 @@ async function listInventory(req, res) {
         LEFT JOIN vendor_purchase_orders apo ON apo.po_id = asset.po_id AND apo.deleted_at IS NULL
         WHERE s.deleted_at IS NULL AND s.spo_id IS NOT NULL
           AND ${statusSql} = $1
-        ${searchSql}
+        ${searchSql}${spareDateSql}
       `;
       const tabCounts = await fetchSparePartTabCounts(pool);
       const countR = await pool.query(`SELECT COUNT(*)::int AS total ${fromSql}`, params);
@@ -126,6 +135,10 @@ async function listInventory(req, res) {
         OR s.extra::text ILIKE $${i}
       )`;
     }
+    const dateClauses = appendDateRangeClauses({
+      column: 'updated_at', dateFrom, dateTo, params, tableAlias: 's',
+    });
+    const dateSql = dateClauses.length ? ` AND ${dateClauses.join(' AND ')}` : '';
     const fromSql = `
       FROM vendor_serial_numbers s
       INNER JOIN vendor_purchase_orders p ON p.po_id = s.po_id AND p.deleted_at IS NULL
@@ -133,7 +146,7 @@ async function listInventory(req, res) {
       LEFT JOIN vendor_goods_received_notes g ON g.grn_id = s.grn_id AND g.deleted_at IS NULL
       WHERE s.deleted_at IS NULL
       ${segmentSql}
-      ${searchSql}
+      ${searchSql}${dateSql}
     `;
     const countR = await pool.query(`SELECT COUNT(*)::int AS total ${fromSql}`, params);
     const total = countR.rows[0]?.total || 0;
@@ -184,6 +197,8 @@ async function exportInventoryExcel(req, res) {
   }
 
   const search = (req.query.search || '').trim();
+  const dateFrom = req.query.date_from;
+  const dateTo = req.query.date_to;
   const limit = Math.min(5000, Math.max(1, parseInt(req.query.limit, 10) || 5000));
 
   try {
@@ -201,6 +216,10 @@ async function exportInventoryExcel(req, res) {
         OR s.extra::text ILIKE $${i}
       )`;
     }
+    const exportDateClauses = appendDateRangeClauses({
+      column: 'updated_at', dateFrom, dateTo, params, tableAlias: 's',
+    });
+    const exportDateSql = exportDateClauses.length ? ` AND ${exportDateClauses.join(' AND ')}` : '';
     const fromSql = `
       FROM vendor_serial_numbers s
       INNER JOIN vendor_purchase_orders p ON p.po_id = s.po_id AND p.deleted_at IS NULL
@@ -208,7 +227,7 @@ async function exportInventoryExcel(req, res) {
       LEFT JOIN vendor_goods_received_notes g ON g.grn_id = s.grn_id AND g.deleted_at IS NULL
       WHERE s.deleted_at IS NULL
       ${segmentSql}
-      ${searchSql}
+      ${searchSql}${exportDateSql}
     `;
     const listParams = [...params, limit];
     const rowsR = await pool.query(

@@ -5,7 +5,7 @@ import ReturnDcDetailModal from '../components/ReturnDcDetailModal';
 import { listReturnDCs } from '../salesPipelineApi';
 import { DC_STATUS_STYLES, formatDate, statusLabel } from '../salesPipelineUtils';
 import { getBackendOrigin } from '../../../utils/api';
-import { PageHeader, StatCard, Button, ResponsiveTable } from '../../../components/ui/primitives';
+import { PageHeader, StatCard, Button, ResponsiveTable, DateRangeFilter } from '../../../components/ui/primitives';
 
 const PAGE_SIZE = 25;
 
@@ -21,13 +21,20 @@ export default function ReturnDcListPage() {
   const [page, setPage] = useState(1);
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [detailRdc, setDetailRdc] = useState(null);
 
   useEffect(() => {
-    const id = setTimeout(() => setSearch(searchInput.trim()), 300);
+    const id = setTimeout(() => {
+      setSearch(searchInput.trim());
+      setPage(1);
+    }, 300);
     return () => clearTimeout(id);
   }, [searchInput]);
+
+  useEffect(() => { setPage(1); }, [dateFrom, dateTo]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -36,6 +43,8 @@ export default function ReturnDcListPage() {
         page,
         limit: PAGE_SIZE,
         search: search.trim() || undefined,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
       });
       setRows(res.data?.return_dcs || res.data?.rows || []);
       setPagination(res.data?.pagination || { page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
@@ -44,7 +53,7 @@ export default function ReturnDcListPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, search]);
+  }, [page, search, dateFrom, dateTo]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -174,10 +183,18 @@ export default function ReturnDcListPage() {
             type="search"
             placeholder="Search RDC #, customer, SO #, original DC, serial…"
             value={searchInput}
-            onChange={(e) => { setSearchInput(e.target.value); setPage(1); }}
-            className="w-full border border-gray-200 rounded-lg pl-9 pr-3 py-2 text-sm"
+            onChange={(e) => setSearchInput(e.target.value)}
+            className="w-full border border-gray-200 rounded-lg pl-9 pr-3 py-2 text-sm min-h-[44px]"
           />
         </div>
+        <DateRangeFilter
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onDateFromChange={setDateFrom}
+          onDateToChange={setDateTo}
+          fromLabel="Created from"
+          toLabel="Created to"
+        />
       </div>
 
       <ResponsiveTable

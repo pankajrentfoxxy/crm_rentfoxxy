@@ -4,6 +4,7 @@ const pool = require('../config/db');
 const { closeOpenWorkLogs } = require('./ticketWorkLogService');
 const { logTtsplEvent } = require('./ttsplAuditService');
 const { generateVendorRepairPdf } = require('./vendorRepairPdfService');
+const { appendDateRangeClauses } = require('../utils/dateRangeFilter');
 
 const WAREHOUSE_ROLES = new Set(['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'support_lead']);
 const HW_SW_STAGES = new Set([
@@ -212,7 +213,15 @@ async function markDiagnosisFailed(client, {
   return { ticket_id: ticketId, status: 'diagnosis_failed' };
 }
 
-async function listDiagnosisFailedTickets() {
+async function listDiagnosisFailedTickets({ dateFrom, dateTo } = {}) {
+  const params = [];
+  const dateClauses = appendDateRangeClauses({
+    expr: 'COALESCE(t.diagnosis_failed_at, t.created_at)',
+    dateFrom,
+    dateTo,
+    params,
+  });
+  const dateSql = dateClauses.length ? ` AND ${dateClauses.join(' AND ')}` : '';
   const { rows } = await pool.query(
     `SELECT t.ticket_id, t.ttspl_id, t.serial_number, t.status, t.brand, t.model,
             t.processor, t.ram, t.storage, t.diagnosis_failed_at,
@@ -231,8 +240,9 @@ async function listDiagnosisFailedTickets() {
           JOIN vendor_repair_delivery_challans vd ON vd.dc_number = vi.dc_number
           WHERE vi.ticket_id = t.ticket_id
             AND vd.status IN ('draft', 'dispatched', 'partially_returned')
-        )
-      ORDER BY t.diagnosis_failed_at DESC NULLS LAST, t.ticket_id DESC`
+        )${dateSql}
+      ORDER BY t.diagnosis_failed_at DESC NULLS LAST, t.ticket_id DESC`,
+    params
   );
   return rows.map((r) => ({
     ...r,
@@ -946,6 +956,8 @@ async function listOutForRepairInventory({
   dcNumber,
   page = 1,
   limit = 25,
+  dateFrom,
+  dateTo,
 } = {}) {
   await ensureVendorRepairSchema();
 
@@ -974,6 +986,15 @@ async function listOutForRepairInventory({
     vendorParams.push(`%${dcNumber.trim()}%`);
     vendorWhere += ` AND d.dc_number ILIKE $${vendorParams.length}`;
   }
+  const vendorDateClauses = appendDateRangeClauses({
+    expr: 'COALESCE(d.dispatched_at, d.out_date, d.created_at)',
+    dateFrom,
+    dateTo,
+    params: vendorParams,
+  });
+  if (vendorDateClauses.length) {
+    vendorWhere += ` AND ${vendorDateClauses.join(' AND ')}`;
+  }
 
   const erpParams = [];
   let erpSearchSql = '';
@@ -998,6 +1019,16 @@ async function listOutForRepairInventory({
   }
   if (dcNumber?.trim()) {
     erpSearchSql += ' AND FALSE';
+  }
+  const erpDateClauses = appendDateRangeClauses({
+    column: 'updated_at',
+    dateFrom,
+    dateTo,
+    params: erpParams,
+    tableAlias: 'vsn',
+  });
+  if (erpDateClauses.length) {
+    erpSearchSql += ` AND ${erpDateClauses.join(' AND ')}`;
   }
 
   const vendorFrom = `
@@ -1095,6 +1126,8 @@ async function listVendorRepairDcs({
   status,
   page = 1,
   limit = 25,
+  dateFrom,
+  dateTo,
 } = {}) {
   await ensureVendorRepairSchema();
   const params = [];
@@ -1111,6 +1144,15 @@ async function listVendorRepairDcs({
   if (status?.trim()) {
     params.push(status.trim());
     conditions.push(`d.status = $${params.length}`);
+  }
+  const dateClauses = appendDateRangeClauses({
+    expr: 'COALESCE(d.dispatched_at, d.created_at)',
+    dateFrom,
+    dateTo,
+    params,
+  });
+  if (dateClauses.length) {
+    conditions.push(...dateClauses);
   }
   const where = conditions.join(' AND ');
   const safePage = Math.max(1, Number(page) || 1);

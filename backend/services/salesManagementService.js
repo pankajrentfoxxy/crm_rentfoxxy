@@ -9,6 +9,7 @@ const {
   enrichSerialSpecs,
 } = require('../utils/soInventorySpecMatch');
 const columnExistsCache = new Map();
+const { appendDateRangeClauses, appendDateRangeToWhere } = require('../utils/dateRangeFilter');
 
 const DOC_TYPES = {
   quotation: { prefix: 'EST-', pad: 6 },
@@ -275,7 +276,9 @@ async function getQuotationLines(quotationNumber) {
   return result.rows;
 }
 
-async function listSalesOrdersGrouped({ page = 1, limit = 20, search = '', assignedUserId = null }) {
+async function listSalesOrdersGrouped({
+  page = 1, limit = 20, search = '', assignedUserId = null, dateFrom, dateTo,
+} = {}) {
   const hasEntityCode = await tableColumnExists('sales_order_lines', 'entity_code');
   const entitySelect = hasEntityCode ? 'entity_code' : `'rentfoxxy' AS entity_code`;
   const params = [];
@@ -288,6 +291,10 @@ async function listSalesOrdersGrouped({ page = 1, limit = 20, search = '', assig
     params.push(assignedUserId);
     where += where ? ` AND created_by = $${params.length}` : `WHERE created_by = $${params.length}`;
   }
+  where = appendDateRangeToWhere(
+    where,
+    appendDateRangeClauses({ column: 'created_at', dateFrom, dateTo, params })
+  );
   const countResult = await pool.query(
     `SELECT COUNT(DISTINCT sales_order_number)::int AS total FROM sales_order_lines ${where}`,
     params
@@ -368,7 +375,9 @@ async function getDcQcStatusSummaries(dcNumbers) {
   return out;
 }
 
-async function listDeliveryChallansGrouped({ page = 1, limit = 20, search = '', status = '', assignedUserId = null }) {
+async function listDeliveryChallansGrouped({
+  page = 1, limit = 20, search = '', status = '', assignedUserId = null, dateFrom, dateTo,
+} = {}) {
   const params = [];
   const baseFilter = `COALESCE(d.movement_type, 'outbound') = 'outbound'`;
   let where = `WHERE ${baseFilter}`;
@@ -390,6 +399,10 @@ async function listDeliveryChallansGrouped({ page = 1, limit = 20, search = '', 
     params.push(status);
     where += ` AND d.status = $${params.length}`;
   }
+  where = appendDateRangeToWhere(
+    where,
+    appendDateRangeClauses({ column: 'created_at', dateFrom, dateTo, params, tableAlias: 'd' })
+  );
   // A DC can have several line items; list/count one row per DC (not per line)
   // so multi-laptop challans don't appear duplicated.
   const countResult = await pool.query(
@@ -489,9 +502,13 @@ async function healReturnDcPickupLinks() {
 
 /** Return DC list — sourced from the actual Return DC rows
  *  (delivery_challan_lines with movement_type='return'), one row per RDC. */
-async function listReturnDeliveryChallans({ page = 1, limit = 25, search = '' } = {}) {
+async function listReturnDeliveryChallans({ page = 1, limit = 25, search = '', dateFrom, dateTo } = {}) {
   const params = [];
   let searchSql = '';
+  const dateClauses = appendDateRangeClauses({
+    column: 'created_at', dateFrom, dateTo, params, tableAlias: 'rl',
+  });
+  const dateSql = dateClauses.length ? ` AND ${dateClauses.join(' AND ')}` : '';
   if (search) {
     params.push(`%${search}%`);
     const n = params.length;
@@ -520,7 +537,7 @@ async function listReturnDeliveryChallans({ page = 1, limit = 25, search = '' } 
     `SELECT COUNT(*)::int AS total
        FROM delivery_challan_lines rl
        LEFT JOIN support_tickets st ON st.id = rl.support_ticket_id
-      WHERE rl.movement_type = 'return'${searchSql}`,
+      WHERE rl.movement_type = 'return'${searchSql}${dateSql}`,
     params
   );
 
@@ -589,7 +606,7 @@ async function listReturnDeliveryChallans({ page = 1, limit = 25, search = '' } 
      LEFT JOIN pickup_by_rdc sti_rdc ON sti_rdc.return_dc_number = rl.dc_number
      LEFT JOIN pickup_by_ticket sti_tkt
        ON sti_tkt.ticket_id = rl.support_ticket_id AND sti_rdc.return_dc_number IS NULL
-     WHERE rl.movement_type = 'return'${searchSql}
+     WHERE rl.movement_type = 'return'${searchSql}${dateSql}
      ORDER BY rl.created_at DESC NULLS LAST
      LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
     listParams

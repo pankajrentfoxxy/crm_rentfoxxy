@@ -153,6 +153,7 @@ function formatCustomerRow(row) {
     profile: details.profile || null,
     upload_docs: uploadDocs,
     total_security_amount: Number(row.total_security_amount || 0),
+    active_item_count: Number(row.active_item_count || 0),
     billing_address: billingObj,
     billingAddress: billingObj.address,
     billing_city: row.billing_city || null,
@@ -357,16 +358,26 @@ exports.listCustomers = async (req, res) => {
     );
 
     const offset = (page - 1) * limit;
-    const listParams = [...params, limit, offset];
+    const statusParamIdx = params.length + 1;
+    const listParams = [...params, DEPLOYED_WITH_CUSTOMER_STATUSES, limit, offset];
+    const limitIdx = listParams.length - 1;
+    const offsetIdx = listParams.length;
     const listResult = await pool.query(
       `SELECT c.*,
         COALESCE((
           SELECT SUM(security_amount) FROM sales_quotations sq WHERE sq.customer_id = c.customer_id
-        ), 0) AS total_security_amount
+        ), 0) AS total_security_amount,
+        COALESCE((
+          SELECT COUNT(*)::int
+            FROM vendor_serial_numbers vsn
+           WHERE vsn.current_customer_id = c.customer_id
+             AND vsn.deleted_at IS NULL
+             AND vsn.inventory_status = ANY($${statusParamIdx}::text[])
+        ), 0) AS active_item_count
        FROM customers c
        ${where}
        ORDER BY ${orderBy} ${orderDir}
-       LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       listParams
     );
 

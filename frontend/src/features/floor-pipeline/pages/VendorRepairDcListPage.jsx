@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Download, Eye, FileText, Loader2, RotateCcw } from 'lucide-react';
-import { PageHeader, ListPagination, SearchField } from '../../../components/ui/primitives';
+import { PageHeader, ListPagination, SearchField, DateRangeFilter } from '../../../components/ui/primitives';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import { useAuth } from '../../../context/AuthContext';
 import {
@@ -28,6 +28,8 @@ export default function VendorRepairDcListPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [pdfBusy, setPdfBusy] = useState(null);
   const debouncedSearch = useDebouncedValue(search.trim(), 320);
 
@@ -39,6 +41,8 @@ export default function VendorRepairDcListPage() {
         status: status || undefined,
         page,
         limit: PAGE_SIZE,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
       });
       setRows(data.data || []);
       setPagination(data.pagination || { page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
@@ -48,9 +52,9 @@ export default function VendorRepairDcListPage() {
     } finally {
       setLoading(false);
     }
-  }, [debouncedSearch, status, page]);
+  }, [debouncedSearch, status, page, dateFrom, dateTo]);
 
-  useEffect(() => { setPage(1); }, [debouncedSearch, status]);
+  useEffect(() => { setPage(1); }, [debouncedSearch, status, dateFrom, dateTo]);
   useEffect(() => { load(); }, [load]);
 
   const handlePdf = async (dcNumber) => {
@@ -98,6 +102,14 @@ export default function VendorRepairDcListPage() {
           <option value="partially_returned">Partially Returned</option>
           <option value="returned">Returned</option>
         </select>
+        <DateRangeFilter
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onDateFromChange={setDateFrom}
+          onDateToChange={setDateTo}
+          fromLabel="Dispatched from"
+          toLabel="Dispatched to"
+        />
       </div>
 
       {loading ? (

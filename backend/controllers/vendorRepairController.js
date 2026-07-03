@@ -11,7 +11,10 @@ function requireWarehouse(req, res, next) {
 exports.listDiagnosisFailed = async (req, res) => {
   try {
     await svc.ensureVendorRepairSchema();
-    const data = await svc.listDiagnosisFailedTickets();
+    const data = await svc.listDiagnosisFailedTickets({
+      dateFrom: req.query.date_from,
+      dateTo: req.query.date_to,
+    });
     res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message || 'Failed to load diagnosis failed tickets' });
@@ -77,6 +80,8 @@ exports.listVendorRepairDcs = async (req, res) => {
       status: req.query.status,
       page: req.query.page,
       limit: req.query.limit,
+      dateFrom: req.query.date_from,
+      dateTo: req.query.date_to,
     });
     res.json({ success: true, ...result });
   } catch (err) {
@@ -283,6 +288,8 @@ exports.listOutForRepairInventory = async (req, res) => {
       dcNumber: req.query.dc_number || req.query.dcNumber,
       page: req.query.page,
       limit: req.query.limit,
+      dateFrom: req.query.date_from,
+      dateTo: req.query.date_to,
     });
     res.json({ success: true, ...result });
   } catch (err) {
@@ -307,6 +314,8 @@ exports.exportOutForRepairExcel = async (req, res) => {
       dcNumber: req.query.dc_number || req.query.dcNumber,
       page: 1,
       limit: 5000,
+      dateFrom: req.query.date_from,
+      dateTo: req.query.date_to,
     });
     const XLSX = require('xlsx');
     const rows = (data || []).map((r) => ({
@@ -345,6 +354,8 @@ exports.exportOutForRepairPdf = async (req, res) => {
       dcNumber: req.query.dc_number || req.query.dcNumber,
       page: 1,
       limit: 500,
+      dateFrom: req.query.date_from,
+      dateTo: req.query.date_to,
     });
     const PDFDocument = require('pdfkit');
     const doc = new PDFDocument({ margin: 40, size: 'A4', layout: 'landscape' });
