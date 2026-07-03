@@ -6,7 +6,7 @@
 const pool = require('../config/db');
 const inventorySM = require('../services/inventoryStateMachine');
 const { createSalesOrderQcTicket } = require('../services/grnTicketService');
-const { entityForQuotationType } = require('../services/salesManagementService');
+const { entityForQuotationType, healStaleReturnedPassedSerials } = require('../services/salesManagementService');
 const {
   serialMatchesSoLine,
   configMismatchMessage,
@@ -121,18 +121,28 @@ exports.attachSerial = async (req, res) => {
     const serial = sr.rows[0];
     if (!serial) return res.status(404).json({ success: false, message: 'Serial not found' });
 
-    // Must be QC-passed (from GRN) and available.
-    if (String(serial.qc_status || '').toLowerCase() !== 'passed') {
+    await healStaleReturnedPassedSerials(client);
+    const sr2 = await client.query(`${SPEC_SELECT} ${cond} LIMIT 1`, [body.serial_id || key]);
+    const freshSerial = sr2.rows[0] || serial;
+
+    // Must be QC-passed (from GRN) and available on shelf.
+    if (String(freshSerial.qc_status || '').toLowerCase() !== 'passed') {
       return res.status(400).json({ success: false, message: 'Serial has not passed GRN QC yet' });
     }
-    if (String(serial.inventory_status || 'in_stock') !== 'in_stock') {
-      return res.status(400).json({ success: false, message: `Serial is not available (status: ${serial.inventory_status})` });
+    const shelfStatus = String(freshSerial.inventory_status || 'in_stock').toLowerCase();
+    if (!['in_stock', 'passed'].includes(shelfStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: `Serial is not available (status: ${freshSerial.inventory_status}). Complete production QC or release from return first.`,
+      });
     }
+
+    const serialForAttach = freshSerial;
 
     // Already attached somewhere active?
     const dup = await client.query(
       `SELECT allocation_id, sales_order_number FROM sales_order_serials WHERE serial_id = $1 AND status = 'attached'`,
-      [serial.serial_id]
+      [serialForAttach.serial_id]
     );
     if (dup.rows.length) {
       return res.status(409).json({ success: false, message: `Serial already attached to ${dup.rows[0].sales_order_number}` });
@@ -158,7 +168,7 @@ exports.attachSerial = async (req, res) => {
     } else {
       line = linesRes.rows.find(
         (l) =>
-          serialMatchesSoLine(l, serial) &&
+          serialMatchesSoLine(l, serialForAttach) &&
           (countByLine[l.line_id] || 0) < Number(l.ordered_qty)
       );
     }
@@ -168,10 +178,10 @@ exports.attachSerial = async (req, res) => {
     if ((countByLine[line.line_id] || 0) >= Number(line.ordered_qty)) {
       return res.status(400).json({ success: false, message: 'This line is already fully allocated' });
     }
-    if (!serialMatchesSoLine(line, serial)) {
+    if (!serialMatchesSoLine(line, serialForAttach)) {
       return res.status(400).json({
         success: false,
-        message: configMismatchMessage(line, serial),
+        message: configMismatchMessage(line, serialForAttach),
       });
     }
 
@@ -181,7 +191,7 @@ exports.attachSerial = async (req, res) => {
 
     // Reserve the unit (in_stock -> reserved).
     await inventorySM.transitionAsset(client, {
-      serialId: serial.serial_id,
+      serialId: serialForAttach.serial_id,
       toStatus: inventorySM.STATUS.RESERVED,
       customerId: header.customer_id || null,
       entityCode,
@@ -192,15 +202,15 @@ exports.attachSerial = async (req, res) => {
 
     // One pre-dispatch QC ticket for this serial.
     const ticket = await createSalesOrderQcTicket(client, {
-      serialId: serial.serial_id,
-      ttsplId: serial.inventory_asset_code,
-      serialNumber: serial.serial_number,
-      brand: serial.brand,
-      model: serial.model,
-      processor: serial.processor,
-      generation: serial.generation,
-      ram: serial.ram,
-      storage: serial.storage,
+      serialId: serialForAttach.serial_id,
+      ttsplId: serialForAttach.inventory_asset_code,
+      serialNumber: serialForAttach.serial_number,
+      brand: serialForAttach.brand,
+      model: serialForAttach.model,
+      processor: serialForAttach.processor,
+      generation: serialForAttach.generation,
+      ram: serialForAttach.ram,
+      storage: serialForAttach.storage,
       salesOrderNumber: soNumber,
       dcNumber: null,
       createdByUserId: req.user.user_id,
@@ -212,7 +222,7 @@ exports.attachSerial = async (req, res) => {
           qc_ticket_id, qc_status, status, entity_code, created_by)
        VALUES ($1,$2,$3,$4,$5,$6,'pending','attached',$7,$8)
        RETURNING allocation_id`,
-      [soNumber, line.line_id, serial.serial_id, serial.inventory_asset_code, serial.serial_number,
+      [soNumber, line.line_id, serialForAttach.serial_id, serialForAttach.inventory_asset_code, serialForAttach.serial_number,
        ticket.ok ? ticket.ticket_id : null, entityCode, req.user.user_id]
     );
 

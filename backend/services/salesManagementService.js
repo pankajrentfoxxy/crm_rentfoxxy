@@ -6,6 +6,7 @@ const {
   partialSpecMatch,
   normalizedSpecMatch,
   normalizedModelMatch,
+  enrichSerialSpecs,
 } = require('../utils/soInventorySpecMatch');
 const columnExistsCache = new Map();
 
@@ -790,24 +791,25 @@ function filterSpecRows(rows, { brand, model_name, processor, generation, ram, s
   const model = model_name?.trim();
 
   return rows.filter((row) => {
-    const pdModel = row.pd_model || row.product_model_name || '';
-    const brandHint = brand || row.brand || '';
+    const r = enrichSerialSpecs(row);
+    const pdModel = r.pd_model || r.product_model_name || '';
+    const brandHint = brand || r.brand || '';
 
     if (model) {
       if (isSale) {
-        if (!partialSpecMatch(pdModel, model) && !partialSpecMatch(row.product_model_name, model)) {
+        if (!partialSpecMatch(pdModel, model) && !partialSpecMatch(r.product_model_name, model)) {
           return false;
         }
       } else if (!normalizedModelMatch(pdModel, model, brandHint) &&
-          !normalizedModelMatch(row.product_model_name, model, brandHint)) {
+          !normalizedModelMatch(r.product_model_name, model, brandHint)) {
         return false;
       }
     }
-    if (!normalizedSpecMatch(row.processor, processor, 'processors')) return false;
-    if (!normalizedSpecMatch(row.generation, generation, 'generations')) return false;
-    if (!normalizedSpecMatch(row.ram, ram, 'ram')) return false;
-    if (!normalizedSpecMatch(row.storage, storage, 'storage')) return false;
-    if (isSale && !row.po_id) return false;
+    if (!normalizedSpecMatch(r.processor, processor, 'processors')) return false;
+    if (!normalizedSpecMatch(r.generation, generation, 'generations')) return false;
+    if (!normalizedSpecMatch(r.ram, ram, 'ram')) return false;
+    if (!normalizedSpecMatch(r.storage, storage, 'storage')) return false;
+    if (isSale && !r.po_id) return false;
     return true;
   });
 }
@@ -816,6 +818,26 @@ function filterSpecRows(rows, { brand, model_name, processor, generation, ram, s
  * Laravel getAllProductFromInventoryUsingModelIfSaleNew / getAllProductFromInventoryUsingModelNew
  * — vendor_product_inventory (in_stock) + product_details specs + serial_numbers unique code.
  */
+/**
+ * Units that finished QC after a customer return can stay inventory_status=returned
+ * even when qc_status=passed — heal them so SO attach / Ready to Rent lists work.
+ */
+async function healStaleReturnedPassedSerials(db = pool) {
+  await db.query(
+    `UPDATE vendor_serial_numbers vsn SET
+        inventory_status = 'in_stock',
+        updated_at = NOW()
+      WHERE vsn.deleted_at IS NULL
+        AND COALESCE(NULLIF(TRIM(vsn.qc_status), ''), NULLIF(TRIM(vsn.extra->>'status'), ''), 'pending') = 'passed'
+        AND vsn.inventory_status = 'returned'
+        AND NOT EXISTS (
+          SELECT 1 FROM tickets t
+           WHERE t.vendor_serial_id = vsn.serial_id
+             AND t.status IN ('in_progress', 'on_hold', 'diagnosis_failed', 'out_for_repair')
+        )`
+  );
+}
+
 async function searchAvailableInventory({
   brand,
   model_name,
@@ -836,6 +858,8 @@ async function searchAvailableInventory({
   const responseLimit = Math.min(Number(limit) || 200, 500);
   // Spec-based SO attach must scan the full QC-passed pool — not only the 500 newest serials.
   const candidateLimit = hasSpecFilter ? 25000 : responseLimit;
+
+  await healStaleReturnedPassedSerials();
 
   const params = [];
   let searchSql = '';
@@ -1245,4 +1269,5 @@ module.exports = {
   getReturnDcDetail,
   getOperationCounts,
   searchAvailableInventory,
+  healStaleReturnedPassedSerials,
 };
