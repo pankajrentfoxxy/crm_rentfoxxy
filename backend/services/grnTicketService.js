@@ -224,11 +224,13 @@ async function applyGrnVendorQcPassOnTicketComplete(db, ticket, userId) {
   if (!vendorSerialId) return { applied: false, reason: 'not_grn_ticket' };
 
   const cur = await db.query(
-    `SELECT qc_status FROM vendor_serial_numbers WHERE serial_id = $1 AND deleted_at IS NULL`,
+    `SELECT qc_status, inventory_status FROM vendor_serial_numbers WHERE serial_id = $1 AND deleted_at IS NULL`,
     [vendorSerialId]
   );
   if (!cur.rows.length) return { applied: false, reason: 'vendor_serial_missing' };
-  if (String(cur.rows[0].qc_status || '').toLowerCase() === 'passed') {
+  const row = cur.rows[0];
+  if (String(row.qc_status || '').toLowerCase() === 'passed'
+    && String(row.inventory_status || '').toLowerCase() === 'in_stock') {
     return { applied: false, reason: 'already_passed' };
   }
 
@@ -259,11 +261,70 @@ async function applyGrnVendorQcPassOnTicketComplete(db, ticket, userId) {
     details.unique_product_serial
   );
   await db.query(
-    `UPDATE vendor_serial_numbers SET inventory_status = 'in_stock', updated_at = NOW() WHERE serial_id = $1`,
+    `UPDATE vendor_serial_numbers SET inventory_status = 'in_stock', qc_status = 'passed', updated_at = NOW() WHERE serial_id = $1`,
     [vendorSerialId]
   );
 
   return { applied: true, serial_id: vendorSerialId };
+}
+
+/**
+ * After QC2 / Inventory completion — always flip vendor serial to passed + in_stock,
+ * then run GRN allocation extras when product details exist.
+ */
+async function markVendorSerialReadyForRent(db, ticket, userId) {
+  const vendorSerialId = ticket?.vendor_serial_id;
+  if (!vendorSerialId) return { applied: false, reason: 'no_vendor_serial' };
+
+  await db.query(
+    `UPDATE vendor_serial_numbers
+        SET qc_status = 'passed',
+            inventory_status = 'in_stock',
+            updated_at = NOW()
+      WHERE serial_id = $1 AND deleted_at IS NULL`,
+    [vendorSerialId]
+  );
+
+  let grn = { applied: false };
+  try {
+    grn = await applyGrnVendorQcPassOnTicketComplete(db, ticket, userId);
+  } catch (e) {
+    console.error('GRN vendor QC pass extras failed:', e.message);
+  }
+
+  if (ticket.ttspl_id) {
+    await logTtsplEvent({
+      ttsplId: ticket.ttspl_id,
+      vendorSerialId,
+      eventType: 'qc2_passed',
+      description: 'QC2 passed — ready for inventory',
+      actorUserId: userId,
+      db,
+    });
+    await logTtsplEvent({
+      ttsplId: ticket.ttspl_id,
+      vendorSerialId,
+      eventType: 'inventory_ready',
+      description: 'Ticket completed — moved to Ready to Rent/Sell',
+      actorUserId: userId,
+      db,
+    });
+  }
+
+  return { applied: true, grn_extras: grn.applied };
+}
+
+/** Reset a returned unit into QC Process (pending) when it re-enters the warehouse. */
+async function resetVendorSerialForQcReentry(db, serialId) {
+  if (!serialId) return;
+  await db.query(
+    `UPDATE vendor_serial_numbers SET
+        qc_status = 'pending',
+        extra = COALESCE(extra, '{}'::jsonb) || '{"status":"pending"}'::jsonb,
+        updated_at = NOW()
+      WHERE serial_id = $1 AND deleted_at IS NULL`,
+    [serialId]
+  );
 }
 
 /**
@@ -605,6 +666,8 @@ module.exports = {
   createTicketFromReturn,
   createFloorTicketFromSupportPickup,
   applyGrnVendorQcPassOnTicketComplete,
+  markVendorSerialReadyForRent,
+  resetVendorSerialForQcReentry,
   createSalesOrderQcTicket,
   recoverOrphanGrnTickets,
 };

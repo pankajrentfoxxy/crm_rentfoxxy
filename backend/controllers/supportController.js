@@ -11,7 +11,7 @@ const supportInventoryService = require('../services/supportInventoryService');
 const inventorySM = require('../services/inventoryStateMachine');
 const { DEPLOYED_WITH_CUSTOMER_STATUSES } = require('../services/customerDeployedAssets');
 const { processReturnedSerials } = require('../services/returnCompletionService');
-const { createFloorTicketFromSupportPickup } = require('../services/grnTicketService');
+const { createFloorTicketFromSupportPickup, resetVendorSerialForQcReentry } = require('../services/grnTicketService');
 const { nextDocumentNumber } = require('../services/salesManagementService');
 const { regenerateReturnDcPdf, regenerateReturnDcPdfByRdc } = require('../services/returnDcPdfService');
 const replacementFlow = require('../services/supportReplacementFlowService');
@@ -2261,6 +2261,7 @@ exports.warehouseReceivedPickup = async (req, res) => {
                      WHERE serial_id = $1`,
                     [vsn.serial_id]
                 );
+                await resetVendorSerialForQcReentry(client, vsn.serial_id);
             }
         }
 
@@ -2718,6 +2719,7 @@ const warehouseReceiveSinglePickupItem = async (client, it, userId, esignUrl, si
              WHERE serial_id = $1`,
             [vsn.serial_id]
         );
+        await resetVendorSerialForQcReentry(client, vsn.serial_id);
     }
 
     if (it.customer_inventory_id) {

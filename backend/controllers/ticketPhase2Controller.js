@@ -1,7 +1,7 @@
 const pool = require('../config/db');
 const { resolveQcAssignee, recordAssigneeForTeam, fetchOrderedMemberIds } = require('../services/qcRoundRobinService');
 const { syncWorkLogForTicketState, closeOpenWorkLogs, startWorkLog } = require('../services/ticketWorkLogService');
-const { applyGrnVendorQcPassOnTicketComplete } = require('../services/grnTicketService');
+const { markVendorSerialReadyForRent } = require('../services/grnTicketService');
 const ttsplAuditService = require('../services/ttsplAuditService');
 const { sendHighlightedTicketAlert } = require('../services/highlightedTicketAlertService');
 const vendorBilling = require('./vendorBillingController');
@@ -98,33 +98,13 @@ async function applyInventoryCompletion(db, ticket, userId) {
   );
 
   if (ticket.vendor_serial_id) {
-    await db.query(
-      `UPDATE vendor_serial_numbers
-       SET qc_status = 'passed', inventory_status = 'in_stock', updated_at = NOW()
-       WHERE serial_id = $1`,
-      [ticket.vendor_serial_id]
-    );
-    try {
-      await applyGrnVendorQcPassOnTicketComplete(db, ticket, userId);
-    } catch (e) {
-      console.error('GRN vendor QC pass on inventory move failed:', e);
-    }
-  }
-
-  if (ticket.ttspl_id) {
+    await markVendorSerialReadyForRent(db, ticket, userId);
+  } else if (ticket.ttspl_id) {
     await ttsplAuditService.logTtsplEvent({
       ttsplId: ticket.ttspl_id,
-      vendorSerialId: ticket.vendor_serial_id,
-      eventType: 'qc2_passed',
-      description: 'QC2 passed — ready for inventory',
-      actorUserId: userId,
-      db
-    });
-    await ttsplAuditService.logTtsplEvent({
-      ttsplId: ticket.ttspl_id,
-      vendorSerialId: ticket.vendor_serial_id,
+      vendorSerialId: null,
       eventType: 'inventory_ready',
-      description: 'Ticket completed — moved to Inventory',
+      description: 'Ticket completed — moved to Inventory (no vendor serial link)',
       actorUserId: userId,
       db
     });

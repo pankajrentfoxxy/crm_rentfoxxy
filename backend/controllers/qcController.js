@@ -5,7 +5,7 @@ const {
     recordAssigneeForTeam
 } = require('../services/qcRoundRobinService');
 const { syncWorkLogForTicketState } = require('../services/ticketWorkLogService');
-const { applyGrnVendorQcPassOnTicketComplete } = require('../services/grnTicketService');
+const { markVendorSerialReadyForRent } = require('../services/grnTicketService');
 
 // QC Checklist Configuration
 const QC_CHECKLIST_STRUCTURE = {
@@ -430,19 +430,25 @@ exports.submitQC = async (req, res) => {
                         [ticketMeta.vendor_serial_id]
                     );
                 }
-            } else if (isCompleted && (serialNumber || machineNumber)) {
-                await client.query(
-                    `UPDATE inventory 
-                     SET status = 'In Stock', stock_type = 'Ready', stage = 'Inventory'
-                     WHERE serial_number = $1 OR machine_number = $2`,
-                    [serialNumber, machineNumber]
-                );
+            } else if (isCompleted && result === 'PASS') {
+                if (serialNumber || machineNumber) {
+                    await client.query(
+                        `UPDATE inventory 
+                         SET status = 'In Stock', stock_type = 'Ready', stage = 'Inventory'
+                         WHERE serial_number = $1 OR machine_number = $2`,
+                        [serialNumber, machineNumber]
+                    );
+                }
                 if (ticketMeta.vendor_serial_id) {
-                    try {
-                        await applyGrnVendorQcPassOnTicketComplete(client, ticketMeta, userId);
-                    } catch (grnQcErr) {
-                        console.error('GRN vendor QC pass on QC completion failed:', grnQcErr);
-                    }
+                    const fullTicket = await client.query(
+                        `SELECT * FROM tickets WHERE ticket_id = $1`,
+                        [id]
+                    );
+                    await markVendorSerialReadyForRent(
+                        client,
+                        fullTicket.rows[0] || ticketMeta,
+                        userId
+                    );
                 }
             } else if (serialNumber || machineNumber) {
                 await client.query(
