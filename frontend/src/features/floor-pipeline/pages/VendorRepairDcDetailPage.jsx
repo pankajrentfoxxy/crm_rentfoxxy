@@ -126,6 +126,8 @@ export default function VendorRepairDcDetailPage() {
   const [shipBy, setShipBy] = useState('');
   const [dispatchFields, setDispatchFields] = useState({});
   const [dispatchSaving, setDispatchSaving] = useState(false);
+  const [dispatchBusy, setDispatchBusy] = useState(false);
+  const [pendingDispatchPod, setPendingDispatchPod] = useState(null);
   const [deliverBusy, setDeliverBusy] = useState(false);
 
   const syncDispatchFromDc = useCallback((head) => {
@@ -191,6 +193,16 @@ export default function VendorRepairDcDetailPage() {
     [dc]
   );
 
+  const effectiveShipBy = useMemo(() => {
+    if (shipBy) return shipBy;
+    if (!dc) return '';
+    if (dc.ship_by) return dc.ship_by;
+    if (dc.dispatch_mode === 'inhouse') return 'by_hand';
+    if (dc.dispatch_mode === 'porter') return 'by_porter';
+    if (dc.dispatch_mode === 'courier') return 'by_courier';
+    return '';
+  }, [shipBy, dc]);
+
   const completeDispatchSign = async () => {
     const wh = pendingWhDispatch || dc?.warehouse_dispatch_esign_url;
     const vendor = pendingVendorDispatch || dc?.vendor_dispatch_esign_url;
@@ -198,29 +210,30 @@ export default function VendorRepairDcDetailPage() {
       toast.error('Both warehouse and vendor dispatch signatures are required');
       return;
     }
-    const dispatchErr = shipBy ? validateVrdcDispatch(shipBy, dispatchFields) : null;
+    const dispatchErr = validateVrdcDispatch(effectiveShipBy, dispatchFields);
     if (dispatchErr) {
       toast.error(dispatchErr);
       return;
     }
+    setDispatchBusy(true);
     try {
-      if (dc.status === 'draft' && shipBy) {
-        await updateVendorRepairDispatchDetails(dcNumber, {
-          ship_by: shipBy,
-          ...dispatchFields,
-        });
-      }
       await signVendorRepairDispatch(dcNumber, {
+        ship_by: effectiveShipBy,
+        ...dispatchFields,
         warehouse_esign: pendingWhDispatch || undefined,
         vendor_esign: pendingVendorDispatch || undefined,
+        dispatch_pod: pendingDispatchPod || undefined,
       });
       toast.success('Dispatched to vendor');
       setPendingWhDispatch(null);
       setPendingVendorDispatch(null);
+      setPendingDispatchPod(null);
       invalidateInventoryManagement();
       load();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Dispatch failed');
+    } finally {
+      setDispatchBusy(false);
     }
   };
 
@@ -413,8 +426,6 @@ export default function VendorRepairDcDetailPage() {
         </table>
       </div>
 
-      ) : null}
-
       <div className="rounded-xl border bg-white p-4 text-sm space-y-2 print:hidden">
         <h3 className="font-semibold">Send to vendor</h3>
         {dc.status === 'draft' && canProcess ? (
@@ -485,18 +496,72 @@ export default function VendorRepairDcDetailPage() {
               onSign={() => setActiveSign('vendor_dispatch')}
             />
           </div>
+          <div className="rounded-lg border border-dashed p-3 space-y-2">
+            <p className="text-xs font-semibold uppercase text-slate-500">Proof of dispatch (optional)</p>
+            <p className="text-xs text-slate-500">Upload a photo of the handover or courier receipt if available.</p>
+            {pendingDispatchPod ? (
+              <div className="space-y-2">
+                <img src={pendingDispatchPod} alt="Dispatch POD" className="w-full max-h-32 object-contain border rounded bg-white" />
+                <button type="button" onClick={() => setPendingDispatchPod(null)} className="text-xs text-red-600">Remove photo</button>
+              </div>
+            ) : (
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/jpg"
+                className="text-xs w-full"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  if (file.size > 5 * 1024 * 1024) {
+                    toast.error('Image must be under 5 MB');
+                    e.target.value = '';
+                    return;
+                  }
+                  const reader = new FileReader();
+                  reader.onload = () => setPendingDispatchPod(reader.result);
+                  reader.onerror = () => toast.error('Could not read image');
+                  reader.readAsDataURL(file);
+                  e.target.value = '';
+                }}
+              />
+            )}
+          </div>
           {dispatchReady ? (
-            <button type="button" onClick={completeDispatchSign} className="w-full py-2.5 rounded-lg bg-purple-700 text-white font-semibold text-sm">
-              Confirm dispatch to vendor
-            </button>
+            <>
+              {!effectiveShipBy ? (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  Select send mode above (By Hand, Courier, or Porter) before confirming dispatch.
+                </p>
+              ) : null}
+              <button
+                type="button"
+                disabled={dispatchBusy}
+                onClick={completeDispatchSign}
+                className="w-full py-2.5 rounded-lg bg-purple-700 text-white font-semibold text-sm disabled:opacity-50"
+              >
+                {dispatchBusy ? 'Confirming dispatch…' : 'Confirm dispatch to vendor'}
+              </button>
+            </>
           ) : null}
         </div>
       ) : null}
 
       {canProcess && dc.status === 'dispatched' && dc.warehouse_dispatch_esign_url ? (
-        <div className="grid md:grid-cols-2 gap-3 print:hidden">
-          <EsignBox label="Warehouse dispatch sign" url={dc.warehouse_dispatch_esign_url} />
-          <EsignBox label="Vendor dispatch sign" url={dc.vendor_dispatch_esign_url} />
+        <div className="space-y-3 print:hidden">
+          <div className="grid md:grid-cols-2 gap-3">
+            <EsignBox label="Warehouse dispatch sign" url={dc.warehouse_dispatch_esign_url} />
+            <EsignBox label="Vendor dispatch sign" url={dc.vendor_dispatch_esign_url} />
+          </div>
+          {dc.dispatch_pod_path ? (
+            <div className="rounded-xl border p-3">
+              <p className="text-xs font-semibold uppercase text-slate-500 mb-2">Proof of dispatch</p>
+              <img
+                src={uploadUrl(dc.dispatch_pod_path)}
+                alt="Dispatch POD"
+                className="w-full max-h-48 object-contain border rounded bg-white"
+              />
+            </div>
+          ) : null}
         </div>
       ) : null}
 

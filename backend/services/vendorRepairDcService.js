@@ -24,7 +24,7 @@ function currentFinancialYearLabel(date = new Date()) {
 
 async function ensureVendorRepairSchema() {
   if (schemaEnsured) return;
-  for (const file of ['121_diagnosis_failed_vendor_repair.sql', '124_vendor_repair_enhancements.sql', '125_vendor_repair_dispatch.sql']) {
+  for (const file of ['121_diagnosis_failed_vendor_repair.sql', '124_vendor_repair_enhancements.sql', '125_vendor_repair_dispatch.sql', '129_vendor_repair_dispatch_pod.sql']) {
     const migrationPath = path.join(__dirname, '../migrations', file);
     if (fs.existsSync(migrationPath)) {
       await pool.query(fs.readFileSync(migrationPath, 'utf8'));
@@ -48,6 +48,10 @@ function saveEsign(prefix, dcNumber, dataUrl) {
   const filename = `${prefix}_${safe}_${Date.now()}.${ext}`;
   fs.writeFileSync(path.join(dir, filename), Buffer.from(m[2], 'base64'));
   return `vendor-repair/${filename}`;
+}
+
+function saveDispatchPod(dcNumber, dataUrl) {
+  return saveEsign('dispatch_pod', dcNumber, dataUrl);
 }
 
 async function logTicketActivity(client, { ticketId, userId, action, notes, stageId }) {
@@ -106,7 +110,10 @@ function validateDispatchDetails({ shipBy, courierName, porterTrackingId, delive
 function dispatchPayloadFromBody(body) {
   const shipBy = normalizeShipBy(body.ship_by || body.shipBy, body.dispatch_mode || body.dispatchMode);
   const dispatchMode = shipByToDispatchMode(shipBy) || body.dispatch_mode || body.dispatchMode;
-  const deliveryPersonId = body.delivery_person_id || body.deliveryPersonId;
+  const rawDeliveryPersonId = body.delivery_person_id ?? body.deliveryPersonId;
+  const deliveryPersonId = rawDeliveryPersonId != null && String(rawDeliveryPersonId).trim() !== ''
+    ? Number(rawDeliveryPersonId)
+    : null;
   validateDispatchDetails({
     shipBy,
     courierName: body.courier_name || body.courierName,
@@ -584,6 +591,8 @@ async function signDispatchDc(client, {
   dcNumber,
   warehouseEsign,
   vendorEsign,
+  dispatchBody,
+  dispatchPod,
   actorUserId,
   actorName,
 }) {
@@ -595,21 +604,67 @@ async function signDispatchDc(client, {
   if (!head) throw new Error('Vendor repair DC not found');
   if (head.status === 'dispatched') return { already_dispatched: true };
   if (head.status === 'returned') throw new Error('DC already returned');
+  if (head.status !== 'draft') throw new Error('DC must be in draft to dispatch');
+
+  let dispatch = null;
+  if (dispatchBody && (dispatchBody.ship_by || dispatchBody.shipBy || dispatchBody.dispatch_mode)) {
+    dispatch = dispatchPayloadFromBody(dispatchBody);
+  } else if (head.ship_by || head.dispatch_mode) {
+    dispatch = {
+      ship_by: head.ship_by,
+      dispatch_mode: head.dispatch_mode,
+      courier_name: head.courier_name,
+      awb_number: head.awb_number,
+      courier_tracking_url: head.courier_tracking_url,
+      porter_tracking_id: head.porter_tracking_id,
+      porter_order_id: head.porter_order_id,
+      porter_booking_url: head.porter_booking_url,
+      delivery_person_id: head.delivery_person_id,
+    };
+  } else {
+    throw new Error('Send mode is required before dispatch (select By Hand, Courier, or Porter)');
+  }
 
   const whUrl = warehouseEsign ? saveEsign('wh_dispatch', dcNumber, warehouseEsign) : head.warehouse_dispatch_esign_url;
   const vUrl = vendorEsign ? saveEsign('vendor_dispatch', dcNumber, vendorEsign) : head.vendor_dispatch_esign_url;
   if (!whUrl || !vUrl) throw new Error('Warehouse and vendor dispatch e-signatures are required');
 
+  const podPath = dispatchPod ? saveDispatchPod(dcNumber, dispatchPod) : head.dispatch_pod_path || null;
+
   await client.query(
     `UPDATE vendor_repair_delivery_challans SET
         warehouse_dispatch_esign_url = $2,
         vendor_dispatch_esign_url = $3,
+        ship_by = $4,
+        dispatch_mode = $5,
+        courier_name = $6,
+        awb_number = $7,
+        courier_tracking_url = $8,
+        porter_tracking_id = $9,
+        porter_order_id = $10,
+        porter_booking_url = $11,
+        delivery_person_id = $12,
+        dispatch_pod_path = COALESCE($13, dispatch_pod_path),
         status = 'dispatched',
         dispatched_at = NOW(),
         items_dispatched_count = (SELECT COUNT(*)::int FROM vendor_repair_dc_items WHERE dc_number = $1),
         updated_at = NOW()
       WHERE dc_number = $1`,
-    [dcNumber, whUrl, vUrl]
+    [
+      dcNumber,
+      whUrl,
+      vUrl,
+      dispatch.ship_by,
+      dispatch.dispatch_mode,
+      dispatch.courier_name,
+      dispatch.awb_number,
+      dispatch.courier_tracking_url,
+      dispatch.porter_tracking_id,
+      dispatch.porter_order_id,
+      dispatch.porter_booking_url,
+      dispatch.delivery_person_id,
+      podPath,
+    ]
   );
 
   await client.query(

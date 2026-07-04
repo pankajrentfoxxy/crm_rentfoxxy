@@ -153,11 +153,14 @@ exports.signDispatch = async (req, res) => {
       dcNumber: req.params.dcNumber,
       warehouseEsign: req.body.warehouse_esign,
       vendorEsign: req.body.vendor_esign,
+      dispatchBody: req.body,
+      dispatchPod: req.body.dispatch_pod || req.body.dispatch_pod_data || null,
       actorUserId: req.user.user_id,
       actorName: req.user.name,
     });
     await client.query('COMMIT');
-    res.json({ success: true, message: 'Dispatched to vendor', ...result });
+    const msg = result.already_dispatched ? 'Already dispatched' : 'Dispatched to vendor';
+    res.json({ success: true, message: msg, ...result });
   } catch (err) {
     await client.query('ROLLBACK');
     res.status(400).json({ success: false, message: err.message || 'Dispatch signing failed' });
