@@ -109,7 +109,7 @@ async function attachDcLineRates(lines, dcNumber) {
 
 // Resolve per-serial spec rows for a DC (one product row per laptop).
 async function resolveDcUnitRows(lines, dcNumber) {
-  const { getDcSerialRateLookup, lookupSerialRate, rateForDcLine, getSalesOrderRateMap } = require('./salesManagementService');
+  const { getDcSerialRateLookup, lookupSerialRate, rateForDcLine, getSalesOrderRateMap, loadSerialInventorySpec } = require('./salesManagementService');
   const head = lines[0] || {};
   const son = head.sales_order_number;
   const dcNum = dcNumber || head.dc_number;
@@ -134,29 +134,10 @@ async function resolveDcUnitRows(lines, dcNumber) {
       const serialNumber = parts[1] || parts[0];
       const ttspl = parts[2] || null;
       const priced = lookupSerialRate(serialLookup, { serialId, serialNumber, ttspl });
-      let spec = {};
-      try {
-        const r = await pool.query(
-          `SELECT vsn.serial_number, vsn.inventory_asset_code,
-                  COALESCE(vsn.extra->>'brand', vpd.brand) AS brand,
-                  COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', vpd.model) AS model,
-                  COALESCE(vsn.extra->>'processor', vpd.processor) AS processor,
-                  COALESCE(vsn.extra->>'generation', vpd.generation) AS generation,
-                  COALESCE(vsn.extra->>'ram', vpd.ram) AS ram,
-                  COALESCE(vsn.extra->>'storage', vpd.storage) AS storage,
-                  COALESCE(vsn.extra->>'gpu', vpd.gpu) AS gpu,
-                  COALESCE(vsn.extra->>'screen_size', vpd.screen_size) AS screen_size
-             FROM vendor_serial_numbers vsn
-             LEFT JOIN vendor_product_details vpd ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id','')::int
-            WHERE vsn.deleted_at IS NULL AND (vsn.serial_id = $1 OR vsn.serial_number = $2 OR vsn.inventory_asset_code = $2)
-            LIMIT 1`,
-          [serialId, serialNumber]
-        );
-        spec = r.rows[0] || {};
-      } catch (_) { spec = {}; }
+      const spec = await loadSerialInventorySpec({ serialId, serialNumber, ttspl }) || {};
       rows.push({
-        brand: priced?.brand || spec.brand || line.brand,
-        model_name: priced?.model_name || spec.model || line.model_name,
+        brand: spec.brand || line.brand,
+        model_name: spec.model || line.model_name,
         processor: spec.processor || line.processor,
         generation: spec.generation || line.generation,
         ram: spec.ram || line.ram,

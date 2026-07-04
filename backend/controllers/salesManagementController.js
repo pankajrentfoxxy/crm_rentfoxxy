@@ -2744,10 +2744,32 @@ exports.updateSoLineConfig = async (req, res) => {
     );
 
     await client.query('COMMIT');
+
+    const soNumber = upd.rows[0]?.sales_order_number || line.sales_order_number;
+    let pdfPath = null;
+    try {
+      const soLines = await getSalesOrderLines(soNumber);
+      if (soLines.length) {
+        pdfPath = await generateDocumentPdf({
+          docType: 'sales_order',
+          docNumber: soNumber,
+          header: soLines[0],
+          lines: soLines,
+        });
+        await pool.query(
+          `UPDATE sales_order_lines SET pdf_path = $1 WHERE sales_order_number = $2`,
+          [pdfPath, soNumber]
+        );
+      }
+    } catch (pdfErr) {
+      console.warn('SO PDF regeneration after config update:', pdfErr.message);
+    }
+
     res.json({
       success: true,
       message: 'Sales order line config updated',
       line: upd.rows[0],
+      pdf_path: pdfPath,
     });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});

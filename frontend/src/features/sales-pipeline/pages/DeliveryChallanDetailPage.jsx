@@ -8,7 +8,7 @@ import EInvoicePanel from '../components/EInvoicePanel';
 import QcStatusBadge from '../components/QcStatusBadge';
 import {
   createDcQcTickets, getDC, getDcQcStatus, getSalesOrderFull,
-  markDelivered, markRejected,
+  markDelivered, markRejected, regenerateDcPdf,
   sendDeliveryOtp, sendWarehouseReturnOtp, verifyDeliveryOtp, verifyWarehouseReturnOtp,
   updateDC, dispatchDC,
 } from '../salesPipelineApi';
@@ -230,10 +230,22 @@ export default function DeliveryChallanDetailPage() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {dcPdfUrl(head.pdf_path) && (
-            <a href={dcPdfUrl(head.pdf_path)} target="_blank" rel="noreferrer"
-              className="inline-flex items-center px-4 min-h-[40px] text-sm font-semibold border border-slate-300 rounded-xl text-gray-700 hover:bg-gray-50">Download PDF</a>
-          )}
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                const r = await regenerateDcPdf(dcNumber);
+                const url = dcPdfUrl(r.data?.pdf_path) || dcPdfUrl(head.pdf_path);
+                if (url) window.open(url, '_blank');
+                else toast.error('PDF not available');
+              } catch {
+                toast.error('Could not open PDF');
+              }
+            }}
+            className="inline-flex items-center px-4 min-h-[40px] text-sm font-semibold border border-slate-300 rounded-xl text-gray-700 hover:bg-gray-50"
+          >
+            Download PDF
+          </button>
           {isSuperAdmin && (
             <button type="button" onClick={() => setEditOpen(true)}
               className="inline-flex items-center px-4 min-h-[40px] text-sm font-semibold bg-amber-600 text-white rounded-xl hover:bg-amber-700">Edit DC</button>

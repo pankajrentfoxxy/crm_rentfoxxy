@@ -1217,6 +1217,47 @@ async function getDcBillingLines(dcNumber, salesOrderNumber) {
   });
 }
 
+/** Authoritative per-unit spec for DC/PDF (GRN extra → product details → inventory). */
+async function loadSerialInventorySpec({ serialId, serialNumber, ttspl } = {}) {
+  const sid = serialId ? Number(serialId) : null;
+  const sn = serialNumber ? String(serialNumber).trim() : '';
+  const tt = ttspl ? String(ttspl).trim() : '';
+  if (!sid && !sn && !tt) return null;
+
+  const r = await pool.query(
+    `SELECT vsn.serial_id, vsn.serial_number, vsn.inventory_asset_code,
+            COALESCE(vsn.extra->>'brand', vpd.brand, inv.brand) AS brand,
+            COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', vpd.model, inv.model) AS model,
+            COALESCE(vsn.extra->>'processor', vpd.processor, inv.processor) AS processor,
+            COALESCE(vsn.extra->>'generation', vpd.generation, inv.generation) AS generation,
+            COALESCE(vsn.extra->>'ram', vpd.ram, inv.ram) AS ram,
+            COALESCE(vsn.extra->>'storage', vpd.storage, inv.storage) AS storage,
+            COALESCE(vsn.extra->>'gpu', vpd.gpu, inv.gpu) AS gpu,
+            COALESCE(vsn.extra->>'screen_size', vpd.screen_size, inv.screen_size) AS screen_size
+       FROM vendor_serial_numbers vsn
+       LEFT JOIN vendor_product_details vpd
+         ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id', '')::int
+       LEFT JOIN LATERAL (
+         SELECT i.brand, i.model, i.processor, i.generation, i.ram, i.storage, i.gpu, i.screen_size
+           FROM inventory i
+          WHERE i.serial_number = vsn.serial_number
+             OR i.machine_number = vsn.serial_number
+             OR i.machine_number = vsn.inventory_asset_code
+          LIMIT 1
+       ) inv ON TRUE
+      WHERE vsn.deleted_at IS NULL
+        AND (
+          ($1::int IS NOT NULL AND vsn.serial_id = $1)
+          OR ($2::text <> '' AND (vsn.serial_number = $2 OR vsn.inventory_asset_code = $2))
+          OR ($3::text <> '' AND vsn.inventory_asset_code = $3)
+        )
+      LIMIT 1`,
+    [sid, sn, tt]
+  );
+  return r.rows[0] || null;
+}
+
+/** Billing rows grouped by SO line for DC detail UI / totals. */
 async function resolveDcBilling(dcNumber, lines) {
   const head = lines[0] || {};
   const son = head.sales_order_number;
@@ -1269,6 +1310,7 @@ module.exports = {
   rateForDcLine,
   getDcSerialRateLookup,
   lookupSerialRate,
+  loadSerialInventorySpec,
   getDcBillingLines,
   resolveDcBilling,
   entityForQuotationType,

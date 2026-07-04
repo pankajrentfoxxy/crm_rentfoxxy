@@ -112,11 +112,8 @@ export default function SalesOrderDetailPage() {
         <div className="flex flex-wrap gap-2">
           <Button variant="secondary" onClick={async () => {
             try {
-              let url = pdfUrl(head.pdf_path);
-              if (!url) {
-                const r = await regenerateSalesOrderPdf(soNumber);
-                url = pdfUrl(r.data?.pdf_path);
-              }
+              const r = await regenerateSalesOrderPdf(soNumber);
+              const url = pdfUrl(r.data?.pdf_path) || pdfUrl(head.pdf_path);
               if (url) window.open(url, '_blank');
               else toast.error('PDF not available');
             } catch { toast.error('Could not open PDF'); }
