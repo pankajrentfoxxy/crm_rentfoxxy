@@ -31,10 +31,12 @@ function normModel(s) {
   return norm(s).replace(/\s+/g, '');
 }
 
-/** Extract a comparable processor type: i3/i5/i7/i9 or ryzen3/5/7/9 or apple m1/m2/m3. */
+/** Extract a comparable processor type: i3/i5/i7/i9, Core Ultra 5/7/9, ryzen, apple m-series. */
 function cpuType(s) {
   const t = norm(s);
-  let m = t.match(/\bi\s?([3579])\b/) || t.match(/core\s?i\s?([3579])/) || t.match(/i([3579])\s?\d{3,5}/);
+  let m = t.match(/\bultra\s*([579])\b/) || t.match(/core\s*ultra\s*([579])/);
+  if (m) return `ultra${m[1]}`;
+  m = t.match(/\bi\s?([3579])\b/) || t.match(/core\s?i\s?([3579])/) || t.match(/i([3579])\s?\d{3,5}/);
   if (m) return `i${m[1]}`;
   m = t.match(/ryzen\s?([3579])/);
   if (m) return `ryzen${m[1]}`;
@@ -130,6 +132,59 @@ function bothContain(a, b) {
   return a.includes(b) || b.includes(a);
 }
 
+const MODEL_NOISE = new Set([
+  'inch', 'in', 'notebook', 'pc', 'laptop', 'series', 'with', 'wifi', 'bt',
+  'touch', 'fhd', 'uhd', 'hd', 'display', 'windows', 'intel', 'amd', 'core',
+  'the', 'and', 'for',
+]);
+
+/** Significant model tokens — ignores screen size (14, 15.6) and marketing noise. */
+function modelTokens(s) {
+  return norm(s)
+    .split(' ')
+    .filter((t) => {
+      if (!t || t.length < 2) return false;
+      if (MODEL_NOISE.has(t)) return false;
+      if (/^\d{1,2}(?:\.\d)?$/.test(t)) return false; // lone screen sizes
+      return true;
+    });
+}
+
+function processorsMatch(expectedProcessor, actualProcessor) {
+  if (!expectedProcessor) return true;
+  const e = cpuType(expectedProcessor);
+  const a = cpuType(actualProcessor);
+  if (e === a) return true;
+  const en = norm(expectedProcessor);
+  const an = norm(actualProcessor);
+  return bothContain(an, en);
+}
+
+function modelsMatch(expectedModel, actual) {
+  const e = normModel(expectedModel);
+  if (!e) return true;
+  const rawCandidates = [actual.model, actual.model_version, actual.system_family].filter(Boolean);
+  const candidates = rawCandidates.map(normModel).filter((c) => c.length >= 2);
+  const hit = candidates.find((c) => bothContain(c, e));
+  if (hit) return { matched: true, matchedRaw: rawCandidates[candidates.indexOf(hit)] || actual.model };
+
+  const expectedTokens = modelTokens(expectedModel);
+  if (!expectedTokens.length) return { matched: true, matchedRaw: actual.model };
+
+  for (let i = 0; i < rawCandidates.length; i += 1) {
+    const raw = rawCandidates[i];
+    const joined = candidates[i] || normModel(raw);
+    const actualTokenSet = new Set(modelTokens(raw));
+    const allFound = expectedTokens.every(
+      (tok) => joined.includes(tok)
+        || actualTokenSet.has(tok)
+        || [...actualTokenSet].some((at) => at.includes(tok) || tok.includes(at))
+    );
+    if (allFound) return { matched: true, matchedRaw: raw };
+  }
+  return { matched: false, matchedRaw: actual.model };
+}
+
 /**
  * Returns { configurationMatched, checks: [{field,label,matched,required,expected,actual}], errors }.
  * Blocking fields: brand, model, processor, generation, ram (exact), ssd (±10%).
@@ -149,27 +204,33 @@ function compareConfig(expected, actual) {
   // Model — required, normalized contains-match against EVERY identifier the OS
   // exposes. Win32_ComputerSystem.Model is the friendly name on Dell ("Latitude
   // 5420") but the machine-type code on Lenovo ("20TAS0E800"); the friendly name
-  // there lives in ComputerSystemProduct.Version / SystemFamily. So we accept a
-  // match on any of them.
+  // there lives in ComputerSystemProduct.Version / SystemFamily. HP often reports
+  // "EliteBook 640 14 inch G11 Notebook PC" while the PO stores "Elitebook 640 G11".
   {
-    const e = normModel(expected.model);
-    const rawCandidates = [actual.model, actual.model_version, actual.system_family].filter(Boolean);
-    const candidates = rawCandidates.map(normModel).filter((c) => c.length >= 2);
-    const hit = candidates.find((c) => bothContain(c, e));
-    const matched = !e || Boolean(hit);
-    // Show the identifier that matched (friendly), else the primary model.
-    const matchedRaw = matched && e
-      ? rawCandidates[candidates.indexOf(hit)] || actual.model
-      : actual.model;
-    checks.push({ field: 'model', label: FIELD_LABELS.model, required: true, matched, expected: expected.model, actual: matchedRaw ?? actual.model ?? '' });
+    const modelResult = modelsMatch(expected.model, actual);
+    const matched = modelResult.matched;
+    checks.push({
+      field: 'model',
+      label: FIELD_LABELS.model,
+      required: true,
+      matched,
+      expected: expected.model,
+      actual: modelResult.matchedRaw ?? actual.model ?? '',
+    });
   }
 
-  // Processor type — required.
+  // Processor — required. PO may store shorthand ("Ultra 7") while WMI returns the
+  // full string ("Intel(R) Core(TM) Ultra 7 165U").
   {
-    const e = cpuType(expected.processor);
-    const a = cpuType(actual.processor);
-    const matched = !expected.processor || e === a;
-    checks.push({ field: 'processor', label: FIELD_LABELS.processor, required: true, matched, expected: expected.processor, actual: actual.processor ?? '' });
+    const matched = processorsMatch(expected.processor, actual.processor);
+    checks.push({
+      field: 'processor',
+      label: FIELD_LABELS.processor,
+      required: true,
+      matched,
+      expected: expected.processor,
+      actual: actual.processor ?? '',
+    });
   }
 
   // Generation — derived authoritatively from the actual CPU name (handles the
@@ -276,4 +337,7 @@ module.exports = {
   genNum,
   genFromActual,
   sizeNum,
+  processorsMatch,
+  modelsMatch,
+  modelTokens,
 };
