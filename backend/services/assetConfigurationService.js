@@ -4,6 +4,7 @@ const {
   compareKey,
   collapseSpaces,
 } = require('../utils/assetConfigNormalize');
+const { normalizeSpecFilterOptions } = require('../utils/specFilterNormalize');
 
 /** Entity registry — table metadata for generic CRUD. */
 const ENTITIES = {
@@ -1108,8 +1109,50 @@ async function listCascadeSpecMasters() {
 }
 
 /** Flat active names for independent inventory spec filters (no brand cascade). */
+function mergeUniqueSorted(...lists) {
+  const set = new Set();
+  for (const list of lists) {
+    for (const item of list || []) {
+      const v = String(item || '').trim();
+      if (v) set.add(v);
+    }
+  }
+  return [...set].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+}
+
+async function distinctSpecValues(sql) {
+  const { rows } = await pool.query(sql).catch(() => ({ rows: [] }));
+  return rows.map((r) => r.v).filter(Boolean);
+}
+
+async function listObservedInventorySpecValues() {
+  const base = `
+    SELECT DISTINCT val AS v FROM (
+      SELECT TRIM(%COL%) AS val FROM inventory WHERE %COL% IS NOT NULL AND TRIM(%COL%) <> ''
+      UNION
+      SELECT TRIM(extra->>'%FIELD%') FROM vendor_serial_numbers
+        WHERE extra->>'%FIELD%' IS NOT NULL AND TRIM(extra->>'%FIELD%') <> '' AND deleted_at IS NULL
+      UNION
+      SELECT TRIM(%COL%) FROM vendor_product_details
+        WHERE %COL% IS NOT NULL AND TRIM(%COL%) <> ''
+    ) t ORDER BY v ASC`;
+  const q = (col, field = col) => base.replace(/%COL%/g, col).replace(/%FIELD%/g, field);
+
+  const [generations, processors, rams, storages, gpus, screen_sizes, brands, models] = await Promise.all([
+    distinctSpecValues(q('generation')),
+    distinctSpecValues(q('processor')),
+    distinctSpecValues(q('ram')),
+    distinctSpecValues(q('storage')),
+    distinctSpecValues(q('gpu')),
+    distinctSpecValues(q('screen_size')),
+    distinctSpecValues(q('brand')),
+    distinctSpecValues(q('model')),
+  ]);
+  return { generations, processors, rams, storages, gpus, screen_sizes, brands, models };
+}
+
 async function listInventorySpecFilterOptions() {
-  const [brands, models, processors, generations, specs] = await Promise.all([
+  const [brands, models, processors, generations, specs, observed] = await Promise.all([
     listCascadeBrands(),
     pool.query(
       `SELECT DISTINCT name FROM asset_config_models
@@ -1127,17 +1170,18 @@ async function listInventorySpecFilterOptions() {
         ORDER BY name ASC`
     ).catch(() => ({ rows: [] })),
     listCascadeSpecMasters(),
+    listObservedInventorySpecValues(),
   ]);
-  return {
-    brands: brands.map((b) => b.name),
-    models: models.rows.map((r) => r.name),
-    processors: processors.rows.map((r) => r.name),
-    generations: generations.rows.map((r) => r.name),
-    rams: specs.rams,
-    storages: specs.storages,
-    gpus: specs.gpus,
-    screen_sizes: specs.screen_sizes,
-  };
+  return normalizeSpecFilterOptions({
+    brands: mergeUniqueSorted(brands.map((b) => b.name), observed.brands),
+    models: mergeUniqueSorted(models.rows.map((r) => r.name), observed.models),
+    processors: mergeUniqueSorted(processors.rows.map((r) => r.name), observed.processors),
+    generations: mergeUniqueSorted(generations.rows.map((r) => r.name), observed.generations),
+    rams: mergeUniqueSorted(specs.rams, observed.rams),
+    storages: mergeUniqueSorted(specs.storages, observed.storages),
+    gpus: mergeUniqueSorted(specs.gpus, observed.gpus),
+    screen_sizes: mergeUniqueSorted(specs.screen_sizes, observed.screen_sizes),
+  });
 }
 
 async function listMappedNamesForBrand(brandId, junctionTable, joinTable, joinColumn, itemColumn = 'name') {
