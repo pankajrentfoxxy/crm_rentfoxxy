@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Download, LayoutGrid, List, Plus, Upload, Users } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { PageHeader, StatCard } from '../../../components/ui/primitives';
+import { PageHeader, StatCard, DateRangeFilter } from '../../../components/ui/primitives';
 import { useAuth } from '../../../context/AuthContext';
 import PermissionGate from '../../../components/PermissionGate';
 import { LEAD_SOURCES, LEAD_STATUSES, STAGES_BY_STATUS, STATUS_COLORS, INQUIRY_TYPES } from '../leadConstants';
@@ -125,7 +125,13 @@ export default function LeadListPage() {
 
   const handleExport = async () => {
     try {
-      const res = await exportLeadsCsv({});
+      const params = {};
+      if (filters.date_from) params.date_from = filters.date_from;
+      if (filters.date_to) params.date_to = filters.date_to;
+      if (filters.search) params.search = filters.search;
+      if (filters.statuses.length) params.status = filters.statuses.join(',');
+      if (filters.source) params.source = filters.source;
+      const res = await exportLeadsCsv(params);
       const url = window.URL.createObjectURL(new Blob([res.data]));
       const a = document.createElement('a');
       a.href = url; a.download = 'leads.csv'; a.click();
@@ -237,26 +243,15 @@ export default function LeadListPage() {
             <option value="overdue">Overdue</option>
           </select>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-3">
-          <label className="text-sm">
-            <span className="block text-xs text-gray-500 mb-1">Created from</span>
-            <input
-              type="date"
-              value={filters.date_from}
-              onChange={(e) => setFilters((f) => ({ ...f, date_from: e.target.value }))}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-            />
-          </label>
-          <label className="text-sm">
-            <span className="block text-xs text-gray-500 mb-1">Created to</span>
-            <input
-              type="date"
-              value={filters.date_to}
-              min={filters.date_from || undefined}
-              onChange={(e) => setFilters((f) => ({ ...f, date_to: e.target.value }))}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-            />
-          </label>
+        <div className="mt-3">
+          <DateRangeFilter
+            dateFrom={filters.date_from}
+            dateTo={filters.date_to}
+            onDateFromChange={(value) => setFilters((f) => ({ ...f, date_from: value }))}
+            onDateToChange={(value) => setFilters((f) => ({ ...f, date_to: value }))}
+            fromLabel="Created from"
+            toLabel="Created to"
+          />
         </div>
         <button type="button" onClick={() => setFilters({ search: '', statuses: [], assigned_to: '', source: '', inquiry_type: '', date_from: '', date_to: '', follow_up: '' })}
           className="text-sm text-blue-600 mt-2 hover:underline">Clear filters</button>

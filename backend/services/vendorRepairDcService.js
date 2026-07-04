@@ -5,6 +5,12 @@ const { closeOpenWorkLogs } = require('./ticketWorkLogService');
 const { logTtsplEvent } = require('./ttsplAuditService');
 const { generateVendorRepairPdf } = require('./vendorRepairPdfService');
 const { appendDateRangeClauses } = require('../utils/dateRangeFilter');
+const {
+  pickSpecFilters,
+  appendRepairSpecClauses,
+  vendorRepairSpecExpr,
+  erpRepairSpecExpr,
+} = require('../utils/inventorySpecFilter');
 
 const WAREHOUSE_ROLES = new Set(['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'support_lead']);
 const HW_SW_STAGES = new Set([
@@ -1013,8 +1019,19 @@ async function listOutForRepairInventory({
   limit = 25,
   dateFrom,
   dateTo,
+  brand,
+  model,
+  processor,
+  generation,
+  ram,
+  storage,
+  screen_size,
+  gpu,
 } = {}) {
   await ensureVendorRepairSchema();
+  const specFilters = pickSpecFilters({
+    brand, model, processor, generation, ram, storage, screen_size, gpu,
+  });
 
   const vendorParams = [];
   let vendorWhere = `WHERE d.status IN ('dispatched', 'partially_returned')
@@ -1050,6 +1067,10 @@ async function listOutForRepairInventory({
   if (vendorDateClauses.length) {
     vendorWhere += ` AND ${vendorDateClauses.join(' AND ')}`;
   }
+  const vendorSpecClauses = appendRepairSpecClauses(specFilters, vendorParams, vendorRepairSpecExpr);
+  if (vendorSpecClauses.length) {
+    vendorWhere += ` AND ${vendorSpecClauses.join(' AND ')}`;
+  }
 
   const erpParams = [];
   let erpSearchSql = '';
@@ -1084,6 +1105,10 @@ async function listOutForRepairInventory({
   });
   if (erpDateClauses.length) {
     erpSearchSql += ` AND ${erpDateClauses.join(' AND ')}`;
+  }
+  const erpSpecClauses = appendRepairSpecClauses(specFilters, erpParams, erpRepairSpecExpr);
+  if (erpSpecClauses.length) {
+    erpSearchSql += ` AND ${erpSpecClauses.join(' AND ')}`;
   }
 
   const vendorFrom = `
@@ -1181,8 +1206,21 @@ async function listVendorRepairDcs({
   status,
   page = 1,
   limit = 25,
+  brand,
+  model,
+  generation,
+  ram,
+  storage,
   dateFrom,
   dateTo,
+  brand: reqBrand,
+  model: reqModel,
+  processor,
+  generation: reqGeneration,
+  ram: reqRam,
+  storage: reqStorage,
+  screen_size,
+  gpu,
 } = {}) {
   await ensureVendorRepairSchema();
   const params = [];

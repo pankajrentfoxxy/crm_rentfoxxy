@@ -1107,6 +1107,39 @@ async function listCascadeSpecMasters() {
   };
 }
 
+/** Flat active names for independent inventory spec filters (no brand cascade). */
+async function listInventorySpecFilterOptions() {
+  const [brands, models, processors, generations, specs] = await Promise.all([
+    listCascadeBrands(),
+    pool.query(
+      `SELECT DISTINCT name FROM asset_config_models
+        WHERE deleted_at IS NULL AND status = 'active'
+        ORDER BY name ASC`
+    ).catch(() => ({ rows: [] })),
+    pool.query(
+      `SELECT DISTINCT name FROM asset_config_processors
+        WHERE deleted_at IS NULL AND status = 'active'
+        ORDER BY name ASC`
+    ).catch(() => ({ rows: [] })),
+    pool.query(
+      `SELECT DISTINCT name FROM asset_config_generations
+        WHERE deleted_at IS NULL AND status = 'active'
+        ORDER BY name ASC`
+    ).catch(() => ({ rows: [] })),
+    listCascadeSpecMasters(),
+  ]);
+  return {
+    brands: brands.map((b) => b.name),
+    models: models.rows.map((r) => r.name),
+    processors: processors.rows.map((r) => r.name),
+    generations: generations.rows.map((r) => r.name),
+    rams: specs.rams,
+    storages: specs.storages,
+    gpus: specs.gpus,
+    screen_sizes: specs.screen_sizes,
+  };
+}
+
 async function listMappedNamesForBrand(brandId, junctionTable, joinTable, joinColumn, itemColumn = 'name') {
   const { rows } = await pool.query(
     `SELECT DISTINCT target.${itemColumn} AS name
@@ -1273,6 +1306,7 @@ module.exports = {
   ensureAssetConfigurationSchema,
   listCascadeBrands,
   listCascadeSpecMasters,
+  listInventorySpecFilterOptions,
   listCascadeModelsForBrand,
   listCascadeProcessorsForBrand,
   listCascadeGenerationsForBrand,

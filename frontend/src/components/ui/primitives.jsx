@@ -1,5 +1,10 @@
 import React from 'react';
 import { Loader2, Search, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
+import {
+  detectDatePreset,
+  todayDateInput,
+  yesterdayDateInput,
+} from '../../utils/dateRangeFilter';
 
 /**
  * Shared design-system primitives for a consistent, professional, mobile-first CRM.
@@ -273,10 +278,47 @@ export function DateRangeFilter({
   fromLabel = 'From',
   toLabel = 'To',
   className = '',
+  showPresets = true,
 }) {
   const inputClass = 'border border-slate-200 rounded-lg px-3 py-2 text-sm min-h-[44px]';
+  const preset = detectDatePreset(dateFrom, dateTo);
+
+  const presetBtn = (key, label) => (
+    <button
+      type="button"
+      onClick={() => {
+        if (key === 'all') {
+          onDateFromChange('');
+          onDateToChange('');
+        } else if (key === 'today') {
+          const t = todayDateInput();
+          onDateFromChange(t);
+          onDateToChange(t);
+        } else if (key === 'yesterday') {
+          const y = yesterdayDateInput();
+          onDateFromChange(y);
+          onDateToChange(y);
+        }
+      }}
+      className={`px-3 py-2 rounded-lg text-xs font-semibold min-h-[44px] transition-colors ${
+        preset === key
+          ? 'bg-blue-600 text-white'
+          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+      }`}
+    >
+      {label}
+    </button>
+  );
+
   return (
     <div className={`flex flex-wrap items-end gap-2 ${className}`}>
+      {showPresets ? (
+        <div className="flex flex-wrap gap-1.5">
+          {presetBtn('all', 'All dates')}
+          {presetBtn('today', 'Today')}
+          {presetBtn('yesterday', 'Yesterday')}
+        </div>
+      ) : null}
       <label className="text-sm">
         <span className="block text-xs text-slate-500 mb-1">{fromLabel}</span>
         <input
@@ -296,6 +338,9 @@ export function DateRangeFilter({
           className={inputClass}
         />
       </label>
+      {showPresets && preset === 'custom' && (dateFrom || dateTo) ? (
+        <span className="text-xs text-slate-500 pb-2">Custom range</span>
+      ) : null}
     </div>
   );
 }

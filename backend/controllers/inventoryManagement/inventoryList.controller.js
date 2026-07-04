@@ -17,6 +17,7 @@ const {
 } = require('../../services/inventoryManagementService');
 const { DEPLOYED_WITH_CUSTOMER_STATUSES, displayDeployedStatus } = require('../../services/customerDeployedAssets');
 const { appendDateRangeClauses } = require('../../utils/dateRangeFilter');
+const { pickSpecFilters, buildSerialSpecFilter } = require('../../utils/inventorySpecFilter');
 
 const READY_TO_RENT_SALE_VALUES = [
   'normal_sale',
@@ -33,6 +34,14 @@ const listValidators = [
   query('tab').optional().isString().trim(),
   query('date_from').optional().isString().trim(),
   query('date_to').optional().isString().trim(),
+  query('brand').optional().isString().trim(),
+  query('model').optional().isString().trim(),
+  query('processor').optional().isString().trim(),
+  query('generation').optional().isString().trim(),
+  query('ram').optional().isString().trim(),
+  query('storage').optional().isString().trim(),
+  query('screen_size').optional().isString().trim(),
+  query('gpu').optional().isString().trim(),
 ];
 
 async function listInventory(req, res) {
@@ -48,6 +57,7 @@ async function listInventory(req, res) {
   const search = (req.query.search || '').trim();
   const dateFrom = req.query.date_from;
   const dateTo = req.query.date_to;
+  const specFilters = pickSpecFilters(req.query);
   const isSpare = segment === 'spare_parts';
 
   try {
@@ -139,14 +149,16 @@ async function listInventory(req, res) {
       column: 'updated_at', dateFrom, dateTo, params, tableAlias: 's',
     });
     const dateSql = dateClauses.length ? ` AND ${dateClauses.join(' AND ')}` : '';
+    const specFilter = buildSerialSpecFilter(specFilters, params);
     const fromSql = `
       FROM vendor_serial_numbers s
       INNER JOIN vendor_purchase_orders p ON p.po_id = s.po_id AND p.deleted_at IS NULL
       LEFT JOIN vendors v ON v.vendor_id = p.vendor_id AND v.deleted_at IS NULL
       LEFT JOIN vendor_goods_received_notes g ON g.grn_id = s.grn_id AND g.deleted_at IS NULL
+      ${specFilter.joinSql}
       WHERE s.deleted_at IS NULL
       ${segmentSql}
-      ${searchSql}${dateSql}
+      ${searchSql}${dateSql}${specFilter.whereSql}
     `;
     const countR = await pool.query(`SELECT COUNT(*)::int AS total ${fromSql}`, params);
     const total = countR.rows[0]?.total || 0;
@@ -199,6 +211,7 @@ async function exportInventoryExcel(req, res) {
   const search = (req.query.search || '').trim();
   const dateFrom = req.query.date_from;
   const dateTo = req.query.date_to;
+  const specFilters = pickSpecFilters(req.query);
   const limit = Math.min(5000, Math.max(1, parseInt(req.query.limit, 10) || 5000));
 
   try {
@@ -220,14 +233,16 @@ async function exportInventoryExcel(req, res) {
       column: 'updated_at', dateFrom, dateTo, params, tableAlias: 's',
     });
     const exportDateSql = exportDateClauses.length ? ` AND ${exportDateClauses.join(' AND ')}` : '';
+    const specFilter = buildSerialSpecFilter(specFilters, params);
     const fromSql = `
       FROM vendor_serial_numbers s
       INNER JOIN vendor_purchase_orders p ON p.po_id = s.po_id AND p.deleted_at IS NULL
       LEFT JOIN vendors v ON v.vendor_id = p.vendor_id AND v.deleted_at IS NULL
       LEFT JOIN vendor_goods_received_notes g ON g.grn_id = s.grn_id AND g.deleted_at IS NULL
+      ${specFilter.joinSql}
       WHERE s.deleted_at IS NULL
       ${segmentSql}
-      ${searchSql}${exportDateSql}
+      ${searchSql}${exportDateSql}${specFilter.whereSql}
     `;
     const listParams = [...params, limit];
     const rowsR = await pool.query(

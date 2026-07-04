@@ -15,6 +15,7 @@ router.use(authMiddleware);
 router.get('/dropdowns', ctrl.getDropdownCatalog);
 router.get('/cascade/brands', ctrl.listCascadeBrands);
 router.get('/cascade/spec-masters', ctrl.listCascadeSpecMasters);
+router.get('/cascade/filter-options', ctrl.listInventorySpecFilterOptions);
 router.get('/cascade/brands/:brandName/processors', ctrl.listCascadeProcessorsForBrand);
 router.get('/cascade/brands/:brandName/models', ctrl.listCascadeModelsForBrand);
 router.get('/cascade/brands/:brandName/generations', ctrl.listCascadeGenerationsForBrand);

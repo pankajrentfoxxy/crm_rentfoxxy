@@ -293,6 +293,14 @@ exports.listOutForRepairInventory = async (req, res) => {
       limit: req.query.limit,
       dateFrom: req.query.date_from,
       dateTo: req.query.date_to,
+      brand: req.query.brand,
+      model: req.query.model,
+      processor: req.query.processor,
+      generation: req.query.generation,
+      ram: req.query.ram,
+      storage: req.query.storage,
+      screen_size: req.query.screen_size,
+      gpu: req.query.gpu,
     });
     res.json({ success: true, ...result });
   } catch (err) {
@@ -319,6 +327,14 @@ exports.exportOutForRepairExcel = async (req, res) => {
       limit: 5000,
       dateFrom: req.query.date_from,
       dateTo: req.query.date_to,
+      brand: req.query.brand,
+      model: req.query.model,
+      processor: req.query.processor,
+      generation: req.query.generation,
+      ram: req.query.ram,
+      storage: req.query.storage,
+      screen_size: req.query.screen_size,
+      gpu: req.query.gpu,
     });
     const XLSX = require('xlsx');
     const rows = (data || []).map((r) => ({
@@ -359,6 +375,14 @@ exports.exportOutForRepairPdf = async (req, res) => {
       limit: 500,
       dateFrom: req.query.date_from,
       dateTo: req.query.date_to,
+      brand: req.query.brand,
+      model: req.query.model,
+      processor: req.query.processor,
+      generation: req.query.generation,
+      ram: req.query.ram,
+      storage: req.query.storage,
+      screen_size: req.query.screen_size,
+      gpu: req.query.gpu,
     });
     const PDFDocument = require('pdfkit');
     const doc = new PDFDocument({ margin: 40, size: 'A4', layout: 'landscape' });

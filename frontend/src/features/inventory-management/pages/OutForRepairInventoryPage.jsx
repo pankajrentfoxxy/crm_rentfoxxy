@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Download, FileSpreadsheet, Loader2, RotateCcw, Search, Wrench } from 'lucide-react';
+import { Download, FileSpreadsheet, Loader2, RefreshCw, Wrench } from 'lucide-react';
 import { PageHeader, ListPagination, SearchField, DateRangeFilter } from '../../../components/ui/primitives';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import { useAuth } from '../../../context/AuthContext';
@@ -13,9 +13,13 @@ import {
 } from '../../floor-pipeline/vendorRepairApi';
 import { ticketStatusLabel } from '../../floor-pipeline/floorPipelineUi';
 import { invalidateInventoryManagement } from '../inventoryCountsEvents';
+import InventorySpecFilterBar from '../components/InventorySpecFilterBar';
+import { EMPTY_SPEC_FILTERS } from '../inventorySpecFilters';
+import useDebouncedSpecParams from '../hooks/useDebouncedSpecParams';
 
 const PAGE_SIZE = 25;
 const WAREHOUSE_ROLES = new Set(['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'support_lead']);
+const INPUT_CLS = 'rounded-md border border-slate-200 px-2 py-1.5 text-xs min-h-[32px] min-w-[120px]';
 
 function fmtDate(v) {
   if (!v) return '—';
@@ -34,9 +38,12 @@ export default function OutForRepairInventoryPage() {
   const [dcFilter, setDcFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [specFilters, setSpecFilters] = useState(EMPTY_SPEC_FILTERS);
   const debouncedSearch = useDebouncedValue(search.trim(), 320);
   const debouncedVendor = useDebouncedValue(vendorFilter.trim(), 320);
   const debouncedDc = useDebouncedValue(dcFilter.trim(), 320);
+  const debouncedSpecParams = useDebouncedSpecParams(specFilters);
+  const specFilterKey = JSON.stringify(debouncedSpecParams);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -49,6 +56,7 @@ export default function OutForRepairInventoryPage() {
         limit: PAGE_SIZE,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
+        ...debouncedSpecParams,
       });
       setRows(data.data || []);
       setPagination(data.pagination || { page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
@@ -58,9 +66,11 @@ export default function OutForRepairInventoryPage() {
     } finally {
       setLoading(false);
     }
-  }, [debouncedSearch, debouncedVendor, debouncedDc, page, dateFrom, dateTo]);
+  }, [debouncedSearch, debouncedVendor, debouncedDc, page, dateFrom, dateTo, debouncedSpecParams]);
 
-  useEffect(() => { setPage(1); }, [debouncedSearch, debouncedVendor, debouncedDc, dateFrom, dateTo]);
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, debouncedVendor, debouncedDc, dateFrom, dateTo, specFilterKey]);
   useEffect(() => { load(); }, [load]);
 
   const exportParams = {
@@ -69,6 +79,7 @@ export default function OutForRepairInventoryPage() {
     dc_number: debouncedDc || undefined,
     date_from: dateFrom || undefined,
     date_to: dateTo || undefined,
+    ...debouncedSpecParams,
   };
 
   const handleExportExcel = async () => {
@@ -102,53 +113,70 @@ export default function OutForRepairInventoryPage() {
   };
 
   return (
-    <div className="space-y-4 pb-8">
+    <div className="space-y-3 pb-8">
       <PageHeader
         title="Out for Repair"
         subtitle="Laptops at external repair vendors — includes ERP legacy and vendor-repair DC units"
         icon={Wrench}
         actions={(
           <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={handleExportExcel} className="inline-flex items-center gap-1.5 px-3 py-2 border rounded-lg text-sm hover:bg-slate-50">
-              <FileSpreadsheet className="w-4 h-4" /> Excel
+            <button type="button" onClick={handleExportExcel} className="inline-flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs hover:bg-slate-50">
+              <FileSpreadsheet className="w-3.5 h-3.5" /> Excel
             </button>
-            <button type="button" onClick={handleExportPdf} className="inline-flex items-center gap-1.5 px-3 py-2 border rounded-lg text-sm hover:bg-slate-50">
-              <Download className="w-4 h-4" /> PDF
+            <button type="button" onClick={handleExportPdf} className="inline-flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs hover:bg-slate-50">
+              <Download className="w-3.5 h-3.5" /> PDF
             </button>
           </div>
         )}
       />
 
-      <div className="flex flex-wrap gap-2">
-        <SearchField
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="TTSPL, serial, vendor, DC…"
-          className="min-w-[220px] flex-1 max-w-md"
+      <div className="rounded-lg border border-slate-200 bg-white px-2 py-2 space-y-1.5">
+        <div className="flex flex-wrap items-end gap-2">
+          <SearchField
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="TTSPL, serial, vendor, DC…"
+            className="min-w-[160px] flex-1 max-w-sm"
+          />
+          <label className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+            <span className="block mb-0.5">Vendor</span>
+            <input
+              className={INPUT_CLS}
+              placeholder="Vendor name"
+              value={vendorFilter}
+              onChange={(e) => setVendorFilter(e.target.value)}
+            />
+          </label>
+          <label className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+            <span className="block mb-0.5">DC #</span>
+            <input
+              className={INPUT_CLS}
+              placeholder="DC number"
+              value={dcFilter}
+              onChange={(e) => setDcFilter(e.target.value)}
+            />
+          </label>
+          <DateRangeFilter
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            onDateFromChange={setDateFrom}
+            onDateToChange={setDateTo}
+            fromLabel="Out from"
+            toLabel="Out to"
+          />
+          <button
+            type="button"
+            onClick={() => { load(); invalidateInventoryManagement(); }}
+            className="inline-flex items-center gap-1 px-2 py-1.5 border rounded-md text-xs min-h-[32px] hover:bg-slate-50"
+          >
+            <RefreshCw className="w-3.5 h-3.5" /> Refresh
+          </button>
+        </div>
+        <InventorySpecFilterBar
+          filters={specFilters}
+          onChange={setSpecFilters}
+          onClear={() => setSpecFilters(EMPTY_SPEC_FILTERS)}
         />
-        <input
-          className="rounded-lg border px-3 py-2 text-sm min-w-[160px]"
-          placeholder="Filter vendor"
-          value={vendorFilter}
-          onChange={(e) => setVendorFilter(e.target.value)}
-        />
-        <input
-          className="rounded-lg border px-3 py-2 text-sm min-w-[160px]"
-          placeholder="Filter DC number"
-          value={dcFilter}
-          onChange={(e) => setDcFilter(e.target.value)}
-        />
-        <DateRangeFilter
-          dateFrom={dateFrom}
-          dateTo={dateTo}
-          onDateFromChange={setDateFrom}
-          onDateToChange={setDateTo}
-          fromLabel="Out from"
-          toLabel="Out to"
-        />
-        <button type="button" onClick={() => { load(); invalidateInventoryManagement(); }} className="inline-flex items-center gap-1 px-3 py-2 border rounded-lg text-sm">
-          <Search className="w-4 h-4" /> Refresh
-        </button>
       </div>
 
       {loading ? (
@@ -217,14 +245,14 @@ export default function OutForRepairInventoryPage() {
                             onClick={() => handleReceiveErp(r)}
                             className="inline-flex items-center gap-1 text-xs font-semibold text-green-700 hover:underline"
                           >
-                            <RotateCcw className="w-3.5 h-3.5" /> Receive to QC
+                            Receive to QC
                           </button>
                         ) : (
                           <Link
                             to={`/floor-pipeline/vendor-repair-dc/${encodeURIComponent(r.dc_number)}`}
                             className="inline-flex items-center gap-1 text-xs font-semibold text-green-700 hover:underline"
                           >
-                            <RotateCcw className="w-3.5 h-3.5" /> Receive Back
+                            Receive Back
                           </Link>
                         )}
                       </td>
@@ -233,7 +261,7 @@ export default function OutForRepairInventoryPage() {
                 ))}
                 {!rows.length ? (
                   <tr>
-                    <td colSpan={canReceive ? 13 : 12} className="p-8 text-center text-slate-500">
+                    <td colSpan={canReceive ? 13 : 12} className="p-8 text-center text-slate-500 text-sm">
                       No laptops currently out for repair
                     </td>
                   </tr>

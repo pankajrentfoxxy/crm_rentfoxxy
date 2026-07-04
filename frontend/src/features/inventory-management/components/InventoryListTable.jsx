@@ -27,6 +27,9 @@ import { invalidateInventoryManagement } from '../inventoryCountsEvents';
 import { invalidateQcCounts } from '../../qc-management/qcCountsEvents';
 import { INVENTORY_LIST_INVALIDATE } from '../inventoryCountsEvents';
 import ReturnRepareActionModal from '../../qc-management/components/ReturnRepareActionModal';
+import InventorySpecFilterBar from './InventorySpecFilterBar';
+import { EMPTY_SPEC_FILTERS } from '../inventorySpecFilters';
+import useDebouncedSpecParams from '../hooks/useDebouncedSpecParams';
 import { getBackendOrigin } from '../../../utils/api';
 
 const PAGE_SIZE = 25;
@@ -563,14 +566,18 @@ export default function InventoryListTable({ routeKey }) {
   const search = useDebouncedValue(searchInput.trim(), 320);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [specFilters, setSpecFilters] = useState(EMPTY_SPEC_FILTERS);
   const showDateFilter = ['qc-process', 'ready-to-rent-or-sell'].includes(routeKey);
+  const showSpecFilter = showDateFilter;
+  const debouncedSpecParams = useDebouncedSpecParams(specFilters);
+  const specFilterKey = JSON.stringify(debouncedSpecParams);
   const [listCounts, setListCounts] = useState(null);
   const [historyTtspl, setHistoryTtspl] = useState(null);
   const [selectedIds, setSelectedIds] = useState([]);
   const [showAddLaptopModal, setShowAddLaptopModal] = useState(false);
   const [exporting, setExporting] = useState(false);
 
-  useEffect(() => { setPage(1); }, [search, dateFrom, dateTo]);
+  useEffect(() => { setPage(1); }, [search, dateFrom, dateTo, specFilterKey]);
 
   const total = pagination.total || 0;
 
@@ -584,6 +591,7 @@ export default function InventoryListTable({ routeKey }) {
         search: search || undefined,
         date_from: showDateFilter && dateFrom ? dateFrom : undefined,
         date_to: showDateFilter && dateTo ? dateTo : undefined,
+        ...(showSpecFilter ? debouncedSpecParams : {}),
       });
       if (data.success) {
         setRows(data.data || []);
@@ -597,7 +605,7 @@ export default function InventoryListTable({ routeKey }) {
     } finally {
       setLoading(false);
     }
-  }, [apiSegment, search, page, dateFrom, dateTo, showDateFilter]);
+  }, [apiSegment, search, page, dateFrom, dateTo, showDateFilter, showSpecFilter, debouncedSpecParams]);
 
   useEffect(() => {
     load();
@@ -657,6 +665,7 @@ export default function InventoryListTable({ routeKey }) {
         search: search || undefined,
         date_from: showDateFilter && dateFrom ? dateFrom : undefined,
         date_to: showDateFilter && dateTo ? dateTo : undefined,
+        ...(showSpecFilter ? debouncedSpecParams : {}),
       });
       toast.success('Excel export downloaded');
     } catch (e) {
@@ -729,20 +738,30 @@ export default function InventoryListTable({ routeKey }) {
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-3 mb-2">
-        <SearchField
-          value={searchInput}
-          onChange={(e) => setSearchInput(e.target.value)}
-          placeholder="Search TTSPL, serial, PO, vendor…"
-        />
-        {showDateFilter ? (
-          <DateRangeFilter
-            dateFrom={dateFrom}
-            dateTo={dateTo}
-            onDateFromChange={setDateFrom}
-            onDateToChange={setDateTo}
-            fromLabel="Updated from"
-            toLabel="Updated to"
+      <div className="rounded-lg border border-slate-200 bg-white px-2 py-2 space-y-1.5 mb-2">
+        <div className="flex flex-wrap items-end gap-2">
+          <SearchField
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="Search TTSPL, serial, PO, vendor…"
+            className="min-w-[180px] flex-1 max-w-md"
+          />
+          {showDateFilter ? (
+            <DateRangeFilter
+              dateFrom={dateFrom}
+              dateTo={dateTo}
+              onDateFromChange={setDateFrom}
+              onDateToChange={setDateTo}
+              fromLabel="Updated from"
+              toLabel="Updated to"
+            />
+          ) : null}
+        </div>
+        {showSpecFilter ? (
+          <InventorySpecFilterBar
+            filters={specFilters}
+            onChange={setSpecFilters}
+            onClear={() => setSpecFilters(EMPTY_SPEC_FILTERS)}
           />
         ) : null}
       </div>

@@ -29,6 +29,7 @@ const {
   ensureAssetConfigurationSchema,
   listCascadeBrands,
   listCascadeSpecMasters,
+  listInventorySpecFilterOptions,
   listCascadeModelsForBrand,
   listCascadeProcessorsForBrand,
   listCascadeGenerationsForBrand,
@@ -210,6 +211,15 @@ exports.listCascadeSpecMasters = async (req, res) => {
   try {
     const specs = await listCascadeSpecMasters();
     res.json({ success: true, ...specs });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+exports.listInventorySpecFilterOptions = async (req, res) => {
+  try {
+    const options = await listInventorySpecFilterOptions();
+    res.json({ success: true, ...options });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message });
   }
