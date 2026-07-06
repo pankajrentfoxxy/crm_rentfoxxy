@@ -29,6 +29,7 @@ import {
   stageCategoryBadge,
   ticketAgeDays,
   resolveTicketTtspl,
+  resolveTicketSerial,
   ticketStatusLabel,
   ticketStatusBadgeClass,
 } from '../floorPipelineUi';
@@ -336,6 +337,7 @@ export default function FloorTicketListPage() {
               <tr>
                 <th className="px-3 py-3 text-left">#</th>
                 <th className="px-3 py-3 text-left">TTSPL</th>
+                <th className="px-3 py-3 text-left">Serial</th>
                 <th className="px-3 py-3 text-left">Config</th>
                 <th className="px-3 py-3 text-left">Stage</th>
                 <th className="px-3 py-3 text-left">Category</th>
@@ -349,7 +351,7 @@ export default function FloorTicketListPage() {
             <tbody>
               {tickets.length === 0 ? (
                 <tr>
-                  <td colSpan={canAssign ? 10 : 9} className="px-3 py-8 text-center text-slate-500">No tickets</td>
+                  <td colSpan={canAssign ? 11 : 10} className="px-3 py-8 text-center text-slate-500">No tickets</td>
                 </tr>
               ) : tickets.map((t, i) => {
                 const pri = priorityBadge(t.priority);
@@ -370,6 +372,9 @@ export default function FloorTicketListPage() {
                         </span>
                       ) : null}
                       {t.highlighted ? <span className="ml-1" title={t.highlighted_reason}>⚠</span> : null}
+                    </td>
+                    <td className="px-3 py-3 font-mono text-xs text-slate-700">
+                      {resolveTicketSerial(t) || '—'}
                     </td>
                     <td className="px-3 py-3 text-xs">{configSummary(t)}</td>
                     <td className="px-3 py-3">{t.stage_name}</td>

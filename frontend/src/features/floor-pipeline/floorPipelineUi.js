@@ -86,6 +86,13 @@ export function resolveTicketTtspl(ticket) {
   return trimmed || null;
 }
 
+/** OEM / vendor serial — list & ticket detail only */
+export function resolveTicketSerial(ticket) {
+  const sn = ticket?.resolved_serial_number || ticket?.serial_number || ticket?.vsn_serial_number;
+  if (sn != null && String(sn).trim()) return String(sn).trim();
+  return null;
+}
+
 export function configSummary(ticket) {
   const firstValue = (...keys) => {
     for (const key of keys) {

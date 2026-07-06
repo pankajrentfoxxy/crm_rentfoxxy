@@ -5,7 +5,7 @@ const { multerLimits } = require('../config/uploadLimits');
 const fs = require('fs');
 const { authMiddleware } = require('../middleware/auth');
 const {
-    researchCompanyData,
+    // researchCompanyData,
     createCustomer,
     getCustomers,
     getCustomerById,
@@ -127,7 +127,7 @@ const requireDispatchAccess = (req, res, next) => {
     }
 };
 
-router.post('/research', authMiddleware, requireSalesAccess, researchCompanyData);
+// router.post('/research', authMiddleware, requireSalesAccess, researchCompanyData);
 
 const customerUploadDir = 'uploads/customers';
 if (!fs.existsSync(customerUploadDir)) fs.mkdirSync(customerUploadDir, { recursive: true });

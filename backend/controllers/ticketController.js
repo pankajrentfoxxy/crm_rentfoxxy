@@ -210,7 +210,12 @@ exports.getTickets = async (req, res) => {
                NULLIF(TRIM(t.ttspl_id), ''),
                (regexp_match(t.machine_number, 'TTSPL[0-9]+', 'i'))[1],
                NULLIF(TRIM(t.machine_number), '')
-             ) AS ttspl_display
+             ) AS ttspl_display,
+             COALESCE(
+               NULLIF(TRIM(t.serial_number), ''),
+               (SELECT vsn.serial_number FROM vendor_serial_numbers vsn
+                WHERE vsn.serial_id = t.vendor_serial_id AND vsn.deleted_at IS NULL LIMIT 1)
+             ) AS resolved_serial_number
       FROM tickets t
       LEFT JOIN stages s ON t.current_stage_id = s.stage_id
       LEFT JOIN teams tm ON t.assigned_team_id = tm.team_id
@@ -489,6 +494,8 @@ exports.getTicketById = async (req, res) => {
                 (regexp_match(t.machine_number, 'TTSPL[0-9]+', 'i'))[1],
                 NULLIF(TRIM(t.machine_number), '')
               ) AS ttspl_display,
+              vsn.serial_number AS vsn_serial_number,
+              COALESCE(NULLIF(TRIM(t.serial_number), ''), vsn.serial_number) AS resolved_serial_number,
               vsn.extra AS vsn_extra
        FROM tickets t
        LEFT JOIN stages s ON t.current_stage_id = s.stage_id

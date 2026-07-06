@@ -26,6 +26,7 @@ import {
   isTechnicianRole,
   priorityBadge,
   resolveTicketTtspl,
+  resolveTicketSerial,
   ticketStatusLabel,
   ticketStatusBadgeClass,
 } from '../floorPipelineUi';
@@ -543,7 +544,12 @@ export default function TicketDetailPage() {
           <Link to="/floor-pipeline/tickets" className="text-sm text-blue-600 hover:underline">← Back</Link>
           <span className="text-slate-300">|</span>
           <span className="font-mono font-bold">#{ticket.ticket_id}</span>
-          <span className="font-mono text-blue-700 font-semibold">{resolveTicketTtspl(ticket) || '—'}</span>
+          <span className="inline-flex items-baseline gap-1.5 font-mono">
+            <span className="text-blue-700 font-semibold">{resolveTicketTtspl(ticket) || '—'}</span>
+            {resolveTicketSerial(ticket) ? (
+              <span className="text-slate-500 text-sm font-normal">({resolveTicketSerial(ticket)})</span>
+            ) : null}
+          </span>
           <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold">{stage}</span>
           <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${pri.className}`}>{pri.label}</span>
           {ticket.ticket_type === 'sales_order_qc' ? (
@@ -731,6 +737,10 @@ export default function TicketDetailPage() {
             <h3 className="text-xs font-semibold uppercase text-slate-500 mb-2">TTSPL Info</h3>
             <div className="flex flex-col gap-1.5">
               <p className="font-mono font-bold text-blue-700 text-sm">{resolveTicketTtspl(ticket) || '—'}</p>
+              <p className="text-xs text-slate-600">
+                <span className="text-slate-400 uppercase tracking-wide text-[10px]">Serial:</span>{' '}
+                <span className="font-mono font-semibold text-slate-800">{resolveTicketSerial(ticket) || '—'}</span>
+              </p>
               <div className="flex flex-wrap gap-1">
                 {configBadges(ticket).map((b, i) => (
                   <React.Fragment key={b.label}>

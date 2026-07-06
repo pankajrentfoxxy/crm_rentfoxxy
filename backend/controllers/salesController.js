@@ -472,29 +472,30 @@ const renderEwayPdf = (res, bundle) => {
     doc.end();
 };
 
-exports.researchCompanyData = async (req, res) => {
-    const { company_name } = req.body;
-    if (!company_name) return res.status(400).json({ message: 'Company name is required' });
+// exports.researchCompanyData = async (req, res) => {
+//     const { company_name } = req.body;
+//     if (!company_name) return res.status(400).json({ message: 'Company name is required' });
 
-    try {
-        // 1. Check Database for existing company research
-        const dbRes = await pool.query(
-            `SELECT details FROM customers WHERE name ILIKE $1 AND details IS NOT NULL LIMIT 1`,
-            [company_name]
-        );
+//     try {
+//         // 1. Check Database for existing company research
+//         const dbRes = await pool.query(
+//             `SELECT details FROM customers WHERE name ILIKE $1 AND details IS NOT NULL LIMIT 1`,
+//             [company_name]
+//         );
 
-        if (dbRes.rows.length > 0) {
-            return res.json({ success: true, data: dbRes.rows[0].details, source: 'database' });
-        }
+//         if (dbRes.rows.length > 0) {
+//             return res.json({ success: true, data: dbRes.rows[0].details, source: 'database' });
+//         }
 
-        // 2. Fetch from Perplexity API
-        const data = await researchCompany(company_name);
-        res.json({ success: true, data, source: 'api' });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Research failed', error: error.message });
-    }
-};
+//         // 2. Fetch from Perplexity API
+//         // const data = await researchCompany(company_name);
+//         const data = null;
+//         res.json({ success: true, data, source: 'api' });
+//     } catch (error) {
+//         console.error(error);
+//         res.status(500).json({ message: 'Research failed', error: error.message });
+//     }
+// };
 
 const formatCustomerAddressLine = (row) => {
     if (!row) return null;
