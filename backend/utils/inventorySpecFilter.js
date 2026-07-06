@@ -227,14 +227,46 @@ function appendRepairSpecClauses(filters, params, exprFn) {
   return clauses;
 }
 
+function ticketSpecExpr(field) {
+  const map = {
+    brand: `COALESCE(NULLIF(TRIM(vsn.extra->>'brand_name'), ''), NULLIF(TRIM(vsn.extra->>'brand'), ''), t.brand, inv.brand)`,
+    model: `COALESCE(NULLIF(TRIM(vsn.extra->>'model'), ''), NULLIF(TRIM(vsn.extra->>'model_name'), ''), t.model, inv.model)`,
+    processor: `COALESCE(NULLIF(TRIM(vsn.extra->>'processor'), ''), t.processor, inv.processor)`,
+    generation: `COALESCE(NULLIF(TRIM(vsn.extra->>'generation'), ''), inv.generation)`,
+    ram: `COALESCE(NULLIF(TRIM(vsn.extra->>'ram'), ''), t.ram, inv.ram)`,
+    storage: `COALESCE(NULLIF(TRIM(vsn.extra->>'storage'), ''), t.storage, inv.storage)`,
+    screen_size: `COALESCE(NULLIF(TRIM(vsn.extra->>'screen_size'), ''), inv.screen_size)`,
+    gpu: `COALESCE(NULLIF(TRIM(vsn.extra->>'gpu'), ''), inv.gpu)`,
+  };
+  return map[field];
+}
+
+function buildTicketSpecFilter(filters, params, tAlias = 't') {
+  if (!hasSpecFilters(filters)) {
+    return { joinSql: '', whereSql: '' };
+  }
+  const clauses = appendRepairSpecClauses(filters, params, ticketSpecExpr);
+  return {
+    joinSql: `
+      LEFT JOIN vendor_serial_numbers vsn
+        ON vsn.serial_id = ${tAlias}.vendor_serial_id AND vsn.deleted_at IS NULL
+      LEFT JOIN inventory inv
+        ON LOWER(TRIM(inv.serial_number)) = LOWER(TRIM(${tAlias}.serial_number))
+    `,
+    whereSql: clauses.length ? ` AND ${clauses.join(' AND ')}` : '',
+  };
+}
+
 module.exports = {
   SPEC_QUERY_KEYS,
   pickSpecFilters,
   hasSpecFilters,
   buildSerialSpecFilter,
+  buildTicketSpecFilter,
   appendRepairSpecClauses,
   vendorRepairSpecExpr,
   erpRepairSpecExpr,
+  ticketSpecExpr,
   buildSpecMatchClause,
   serialSpecExpr,
 };

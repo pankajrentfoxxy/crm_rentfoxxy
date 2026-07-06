@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Loader2, Truck } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext';
+import { DateRangeFilter } from '../../../components/ui/primitives';
 import VendorSearchSelect from '../../vendor-management/components/VendorSearchSelect';
 import { fetchVendor } from '../../vendor-management/vendorManagementApi';
 import { fetchDiagnosisFailedTickets, createOutForRepairDc, fetchVendorRepairCompanyDefaults } from '../vendorRepairApi';
@@ -11,7 +12,9 @@ import VrdcDispatchFields, { validateVrdcDispatch } from '../components/VrdcDisp
 import { fetchDeliveryTechnicians } from '../../../utils/deliveryRegisterApi';
 import { ticketStatusLabel } from '../floorPipelineUi';
 import { formatStateLabel } from '../../vendor-management/vendorMgmtUi';
-import { DateRangeFilter } from '../../../components/ui/primitives';
+import FloorPipelineFilterPanel from '../components/FloorPipelineFilterPanel';
+import { EMPTY_SPEC_FILTERS } from '../../inventory-management/inventorySpecFilters';
+import useDebouncedSpecParams from '../../inventory-management/hooks/useDebouncedSpecParams';
 
 const WAREHOUSE_ROLES = new Set(['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'support_lead']);
 
@@ -44,6 +47,8 @@ export default function DiagnosisFailedPage() {
   const [itemRemarks, setItemRemarks] = useState({});
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [specFilters, setSpecFilters] = useState(EMPTY_SPEC_FILTERS);
+  const debouncedSpecParams = useDebouncedSpecParams(specFilters);
   const [form, setForm] = useState({
     vendor_id: '',
     vendor_name: '',
@@ -64,6 +69,7 @@ export default function DiagnosisFailedPage() {
       const { data } = await fetchDiagnosisFailedTickets({
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
+        ...debouncedSpecParams,
       });
       setRows(data.data || []);
       setSelected(new Set());
@@ -72,7 +78,7 @@ export default function DiagnosisFailedPage() {
     } finally {
       setLoading(false);
     }
-  }, [dateFrom, dateTo]);
+  }, [dateFrom, dateTo, debouncedSpecParams]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -201,7 +207,7 @@ export default function DiagnosisFailedPage() {
             type="button"
             disabled={!selected.size}
             onClick={openModal}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-700 text-white text-sm font-semibold disabled:opacity-50"
+            className="inline-flex items-center gap-2 h-9 px-4 rounded-lg bg-purple-700 text-white text-sm font-semibold disabled:opacity-50"
           >
             <Truck className="w-4 h-4" />
             Out for Repair ({selected.size || 0})
@@ -209,8 +215,15 @@ export default function DiagnosisFailedPage() {
         ) : null}
       </div>
 
-      <div className="mb-4">
+      <FloorPipelineFilterPanel
+        className="mb-4"
+        specFilters={specFilters}
+        onSpecFiltersChange={setSpecFilters}
+        onSpecFiltersClear={() => setSpecFilters(EMPTY_SPEC_FILTERS)}
+      >
         <DateRangeFilter
+          layout="inline"
+          controlClassName="h-9 px-2 text-sm min-h-0"
           dateFrom={dateFrom}
           dateTo={dateTo}
           onDateFromChange={setDateFrom}
@@ -218,7 +231,7 @@ export default function DiagnosisFailedPage() {
           fromLabel="Failed from"
           toLabel="Failed to"
         />
-      </div>
+      </FloorPipelineFilterPanel>
 
       {loading ? (
         <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>

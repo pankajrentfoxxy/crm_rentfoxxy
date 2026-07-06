@@ -109,7 +109,7 @@ async function attachDcLineRates(lines, dcNumber) {
 
 // Resolve per-serial spec rows for a DC (one product row per laptop).
 async function resolveDcUnitRows(lines, dcNumber) {
-  const { getDcSerialRateLookup, lookupSerialRate, rateForDcLine, getSalesOrderRateMap, loadSerialInventorySpec } = require('./salesManagementService');
+  const { getDcSerialRateLookup, lookupSerialRate, lookupSerialRemark, rateForDcLine, getSalesOrderRateMap, loadSerialInventorySpec } = require('./salesManagementService');
   const head = lines[0] || {};
   const son = head.sales_order_number;
   const dcNum = dcNumber || head.dc_number;
@@ -125,7 +125,13 @@ async function resolveDcUnitRows(lines, dcNumber) {
     if (Array.isArray(arr)) entries = arr;
     else if (raw) entries = [raw];
     if (!entries.length) {
-      rows.push({ ...line, ttspl: '', serial: '', qty: line.quantity || 1 });
+      rows.push({
+        ...line,
+        ttspl: '',
+        serial: '',
+        qty: line.quantity || 1,
+        remarks: (line.remarks || line.remark || '').trim(),
+      });
       continue;
     }
     for (const e of entries) {
@@ -151,10 +157,44 @@ async function resolveDcUnitRows(lines, dcNumber) {
         technical_warranty: line.technical_warranty,
         battery_charger_warranty: line.battery_charger_warranty,
         qty: 1,
+        remarks: (line.remarks || line.remark || '').trim()
+          || lookupSerialRemark(serialLookup, { serialId, serialNumber, ttspl })
+          || '',
       });
     }
   }
   return rows;
+}
+
+/** Fill delivery_challan_lines.remarks from linked SO line items when not set on DC. */
+async function enrichDcLinesWithSoRemarks(lines, dcNumber) {
+  const { getDcSerialRateLookup, lookupSerialRemark } = require('./salesManagementService');
+  const head = lines[0] || {};
+  const son = head.sales_order_number;
+  const dcNum = dcNumber || head.dc_number;
+  if (!son || !dcNum) return lines;
+
+  const lookup = await getDcSerialRateLookup(dcNum, son);
+  for (const line of lines) {
+    if ((line.remarks || line.remark || '').trim()) continue;
+    const raw = line.serial_number;
+    let entries = [];
+    const arr = parseJson(raw, null);
+    if (Array.isArray(arr)) entries = arr;
+    else if (raw) entries = [raw];
+    const remarks = [];
+    for (const e of entries) {
+      const parts = String(e).split('|');
+      const serialId = /^\d+$/.test(parts[0]) ? Number(parts[0]) : null;
+      const serialNumber = parts[1] || parts[0];
+      const ttspl = parts[2] || null;
+      const r = lookupSerialRemark(lookup, { serialId, serialNumber, ttspl });
+      if (r) remarks.push(r);
+    }
+    const uniq = [...new Set(remarks)];
+    if (uniq.length) line.remarks = uniq.join('; ');
+  }
+  return lines;
 }
 
 function fmtMonths(v) {
@@ -197,8 +237,11 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
   const typeLabel = isSale ? 'Sale' : isDemo ? 'Demo' : 'Rental';
 
   // Product rows
+  const dcLines = docType === 'delivery_challan'
+    ? await enrichDcLinesWithSoRemarks([...lines], docNumber)
+    : lines;
   const rows = docType === 'delivery_challan'
-    ? await resolveDcUnitRows(await attachDcLineRates(lines, docNumber), docNumber)
+    ? await resolveDcUnitRows(await attachDcLineRates(dcLines, docNumber), docNumber)
     : lines.map((l) => ({
       brand: l.brand, model_name: l.model_name, processor: l.processor, generation: l.generation,
       ram: l.ram, storage: l.storage, gpu: l.gpu, screen_size: l.screen_size,
@@ -423,13 +466,14 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
     totRow('Total:', money(total), true);
     y += 10;
 
-    // ── Remarks ──────────────────────────────────────────────────────────
+    // ── Remarks (one entry per DC line — falls back to SO line remark) ─────
     doc.font('Helvetica-Bold').fontSize(11).fillColor(C.teal).text('Remarks', L, y); y += 16;
     doc.font('Helvetica').fontSize(9).fillColor(C.ink);
-    rows.forEach((r, i) => {
-      const rk = lines[i]?.remarks || lines[i]?.remark;
-      doc.text(`• Product ${i + 1} : ${rk || typeLabel.toUpperCase()}`, L + 6, y); y += 13;
-    });
+    const remarkLines = docType === 'delivery_challan' ? dcLines : lines;
+    for (const line of remarkLines) {
+      const rk = String(line.remarks || line.remark || '').trim();
+      doc.text(`• ${rk || '—'}`, L + 6, y); y += 13;
+    }
     y += 14;
 
     // ── Acknowledgement / e-sign area (future tracking) ──────────────────

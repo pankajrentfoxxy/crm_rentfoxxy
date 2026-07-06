@@ -15,6 +15,7 @@ const {
   isRestrictedToAssignedAny,
 } = require('../services/dataScopeService');
 const { appendDateRangeClauses } = require('../utils/dateRangeFilter');
+const { pickSpecFilters, buildTicketSpecFilter } = require('../utils/inventorySpecFilter');
 
 // Replace legacy "user/team/stage ID: N" tokens in activity notes with names.
 // New activity logs already store names; this keeps historical entries readable.
@@ -194,8 +195,11 @@ exports.createTicket = async (req, res) => {
 // Get Tickets (with filters)
 exports.getTickets = async (req, res) => {
   const { status, stage_id, team_id, search, view, priority, ticket_type, stage_names } = req.query;
+  const specFilters = pickSpecFilters(req.query);
 
   try {
+    const params = [];
+    const specFilter = buildTicketSpecFilter(specFilters, params, 't');
     let query = `
       SELECT t.*, 
              s.stage_name, s.stage_order,
@@ -211,11 +215,12 @@ exports.getTickets = async (req, res) => {
       LEFT JOIN stages s ON t.current_stage_id = s.stage_id
       LEFT JOIN teams tm ON t.assigned_team_id = tm.team_id
       LEFT JOIN users u ON t.assigned_user_id = u.user_id
+      ${specFilter.joinSql}
       WHERE 1=1
+      ${specFilter.whereSql}
     `;
 
-    const params = [];
-    let paramCount = 1;
+    let paramCount = params.length + 1;
 
     if (status) {
       query += ` AND t.status = $${paramCount}`;

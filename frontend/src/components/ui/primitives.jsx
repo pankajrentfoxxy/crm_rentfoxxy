@@ -279,36 +279,76 @@ export function DateRangeFilter({
   toLabel = 'To',
   className = '',
   showPresets = true,
+  layout = 'default',
+  controlClassName = '',
 }) {
-  const inputClass = 'border border-slate-200 rounded-lg px-3 py-2 text-sm min-h-[44px]';
+  const baseInput =
+    'border border-slate-200 rounded-lg bg-white text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500';
+  const inputClass = `${baseInput} ${controlClassName || 'px-3 py-2 min-h-[44px]'}`;
   const preset = detectDatePreset(dateFrom, dateTo);
 
-  const presetBtn = (key, label) => (
+  const applyPreset = (key) => {
+    if (key === 'all') {
+      onDateFromChange('');
+      onDateToChange('');
+    } else if (key === 'today') {
+      const t = todayDateInput();
+      onDateFromChange(t);
+      onDateToChange(t);
+    } else if (key === 'yesterday') {
+      const y = yesterdayDateInput();
+      onDateFromChange(y);
+      onDateToChange(y);
+    }
+  };
+
+  const presetBtnClass = controlClassName || 'px-3 py-2 text-xs font-semibold min-h-[44px]';
+  const inlinePresetClass = controlClassName || 'h-9 px-2.5 text-xs font-semibold min-h-0';
+  const presetBtn = (key, label, btnClass = presetBtnClass) => (
     <button
       type="button"
-      onClick={() => {
-        if (key === 'all') {
-          onDateFromChange('');
-          onDateToChange('');
-        } else if (key === 'today') {
-          const t = todayDateInput();
-          onDateFromChange(t);
-          onDateToChange(t);
-        } else if (key === 'yesterday') {
-          const y = yesterdayDateInput();
-          onDateFromChange(y);
-          onDateToChange(y);
-        }
-      }}
-      className={`px-3 py-2 rounded-lg text-xs font-semibold min-h-[44px] transition-colors ${
+      onClick={() => applyPreset(key)}
+      className={`rounded-lg whitespace-nowrap transition-colors ${btnClass} ${
         preset === key
-          ? 'bg-blue-600 text-white'
+          ? 'bg-blue-600 text-white shadow-sm'
           : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
       }`}
     >
       {label}
     </button>
   );
+
+  if (layout === 'inline') {
+    return (
+      <div className={`flex items-center gap-1.5 shrink-0 ${className}`}>
+        {showPresets ? (
+          <>
+            {presetBtn('all', 'All', inlinePresetClass)}
+            {presetBtn('today', 'Today', inlinePresetClass)}
+            {presetBtn('yesterday', 'Yesterday', inlinePresetClass)}
+          </>
+        ) : null}
+        <input
+          type="date"
+          value={dateFrom}
+          onChange={(e) => onDateFromChange(e.target.value)}
+          aria-label={fromLabel}
+          title={fromLabel}
+          className={`${inputClass} w-[9.25rem]`}
+        />
+        <span className="text-slate-300 text-xs select-none">–</span>
+        <input
+          type="date"
+          value={dateTo}
+          min={dateFrom || undefined}
+          onChange={(e) => onDateToChange(e.target.value)}
+          aria-label={toLabel}
+          title={toLabel}
+          className={`${inputClass} w-[9.25rem]`}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className={`flex flex-wrap items-end gap-2 ${className}`}>

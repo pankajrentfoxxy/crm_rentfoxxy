@@ -1151,7 +1151,7 @@ function rateForDcLine(line, rateMap) {
 async function getDcSerialRateLookup(dcNumber, salesOrderNumber) {
   const r = await pool.query(
     `SELECT sos.serial_id, sos.ttspl_id, sos.serial_number,
-            sol.brand, sol.model_name, sol.rate
+            sol.brand, sol.model_name, sol.rate, sol.remark
        FROM sales_order_serials sos
        INNER JOIN sales_order_lines sol
          ON sol.id = sos.line_id AND sol.sales_order_number = sos.sales_order_number
@@ -1168,12 +1168,18 @@ async function getDcSerialRateLookup(dcNumber, salesOrderNumber) {
       rate: Number(row.rate || 0),
       brand: row.brand || '',
       model_name: row.model_name || '',
+      remark: (row.remark || '').trim(),
     };
     if (row.serial_id) bySerialId.set(Number(row.serial_id), payload);
     if (row.ttspl_id) byTtspl.set(String(row.ttspl_id).toUpperCase(), payload);
     if (row.serial_number) bySerialNumber.set(String(row.serial_number).toUpperCase(), payload);
   }
   return { bySerialId, byTtspl, bySerialNumber, rows: r.rows };
+}
+
+function lookupSerialRemark(lookup, { serialId, serialNumber, ttspl } = {}) {
+  const hit = lookupSerialRate(lookup, { serialId, serialNumber, ttspl });
+  return hit?.remark || '';
 }
 
 function lookupSerialRate(lookup, { serialId, serialNumber, ttspl } = {}) {
@@ -1310,6 +1316,7 @@ module.exports = {
   rateForDcLine,
   getDcSerialRateLookup,
   lookupSerialRate,
+  lookupSerialRemark,
   loadSerialInventorySpec,
   getDcBillingLines,
   resolveDcBilling,

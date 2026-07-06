@@ -147,7 +147,7 @@ export default function SalesOrderDetailPage() {
           <div className="bg-white border rounded-xl p-4 text-sm space-y-2">
             <p><span className="text-gray-500">Date:</span> {formatDate(head.created_at)}</p>
             <p><span className="text-gray-500">Shipping State (GST):</span> {supplyStateLabel}</p>
-            <p><span className="text-gray-500">Remarks:</span> {head.remarks || '—'}</p>
+            <p><span className="text-gray-500">Remarks:</span> {lines.map((l) => (l.remark || '').trim()).filter(Boolean).join(' · ') || '—'}</p>
           </div>
           <div className="bg-white border rounded-xl p-4 text-sm space-y-1.5">
             <div className="flex justify-between"><span className="text-gray-500">Subtotal</span><strong>{formatCurrency(totals.subtotal)}</strong></div>

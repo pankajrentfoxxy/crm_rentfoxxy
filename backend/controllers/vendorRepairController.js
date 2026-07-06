@@ -8,12 +8,15 @@ function requireWarehouse(req, res, next) {
   return res.status(403).json({ success: false, message: 'Warehouse or admin access required' });
 }
 
+const { pickSpecFilters } = require('../utils/inventorySpecFilter');
+
 exports.listDiagnosisFailed = async (req, res) => {
   try {
     await svc.ensureVendorRepairSchema();
     const data = await svc.listDiagnosisFailedTickets({
       dateFrom: req.query.date_from,
       dateTo: req.query.date_to,
+      ...pickSpecFilters(req.query),
     });
     res.json({ success: true, data });
   } catch (err) {
@@ -82,6 +85,7 @@ exports.listVendorRepairDcs = async (req, res) => {
       limit: req.query.limit,
       dateFrom: req.query.date_from,
       dateTo: req.query.date_to,
+      ...pickSpecFilters(req.query),
     });
     res.json({ success: true, ...result });
   } catch (err) {

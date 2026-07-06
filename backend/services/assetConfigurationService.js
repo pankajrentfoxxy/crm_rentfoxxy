@@ -5,6 +5,7 @@ const {
   collapseSpaces,
 } = require('../utils/assetConfigNormalize');
 const { normalizeSpecFilterOptions } = require('../utils/specFilterNormalize');
+const { cacheWrap, CACHE_TTL } = require('../utils/cacheService');
 
 /** Entity registry — table metadata for generic CRUD. */
 const ENTITIES = {
@@ -1151,37 +1152,102 @@ async function listObservedInventorySpecValues() {
   return { generations, processors, rams, storages, gpus, screen_sizes, brands, models };
 }
 
-async function listInventorySpecFilterOptions() {
-  const [brands, models, processors, generations, specs, observed] = await Promise.all([
-    listCascadeBrands(),
-    pool.query(
-      `SELECT DISTINCT name FROM asset_config_models
-        WHERE deleted_at IS NULL AND status = 'active'
-        ORDER BY name ASC`
-    ).catch(() => ({ rows: [] })),
-    pool.query(
-      `SELECT DISTINCT name FROM asset_config_processors
-        WHERE deleted_at IS NULL AND status = 'active'
-        ORDER BY name ASC`
-    ).catch(() => ({ rows: [] })),
-    pool.query(
-      `SELECT DISTINCT name FROM asset_config_generations
-        WHERE deleted_at IS NULL AND status = 'active'
-        ORDER BY name ASC`
-    ).catch(() => ({ rows: [] })),
+function listObservedInventorySpecValuesCached() {
+  return cacheWrap(
+    'inventory:observed-spec-values',
+    CACHE_TTL.OBSERVED_SPECS,
+    listObservedInventorySpecValues
+  );
+}
+
+function activeLaptopMappedNames(items = []) {
+  return (items || [])
+    .filter((row) => row.status === 'active')
+    .map((row) => row.name)
+    .filter(Boolean);
+}
+
+function findLaptopBrandInTree(tree, brandName) {
+  const key = compareKey('brands', brandName);
+  return (tree || []).find(
+    (b) => b.status === 'active' && compareKey('brands', b.name) === key
+  );
+}
+
+async function getLaptopMappingTreeCached() {
+  return cacheWrap(
+    'asset-config:laptop-spec-tree:v1',
+    CACHE_TTL.FILTER_OPTIONS,
+    getLaptopSpecMappingTree
+  );
+}
+
+async function buildAllInventorySpecFilterOptions() {
+  const [tree, specs] = await Promise.all([
+    getLaptopMappingTreeCached(),
     listCascadeSpecMasters(),
-    listObservedInventorySpecValues(),
   ]);
+  const brands = (tree || [])
+    .filter((b) => b.status === 'active')
+    .map((b) => b.name);
+  const models = new Set();
+  const processors = new Set();
+  const generations = new Set();
+  for (const brand of tree || []) {
+    if (brand.status !== 'active') continue;
+    activeLaptopMappedNames(brand.models).forEach((n) => models.add(n));
+    activeLaptopMappedNames(brand.processors).forEach((n) => processors.add(n));
+    activeLaptopMappedNames(brand.generations).forEach((n) => generations.add(n));
+  }
   return normalizeSpecFilterOptions({
-    brands: mergeUniqueSorted(brands.map((b) => b.name), observed.brands),
-    models: mergeUniqueSorted(models.rows.map((r) => r.name), observed.models),
-    processors: mergeUniqueSorted(processors.rows.map((r) => r.name), observed.processors),
-    generations: mergeUniqueSorted(generations.rows.map((r) => r.name), observed.generations),
-    rams: mergeUniqueSorted(specs.rams, observed.rams),
-    storages: mergeUniqueSorted(specs.storages, observed.storages),
-    gpus: mergeUniqueSorted(specs.gpus, observed.gpus),
-    screen_sizes: mergeUniqueSorted(specs.screen_sizes, observed.screen_sizes),
+    brands: mergeUniqueSorted(brands),
+    models: mergeUniqueSorted([...models]),
+    processors: mergeUniqueSorted([...processors]),
+    generations: mergeUniqueSorted([...generations]),
+    rams: specs.rams,
+    storages: specs.storages,
+    gpus: specs.gpus,
+    screen_sizes: specs.screen_sizes,
   });
+}
+
+async function buildBrandScopedInventorySpecFilterOptions(brandName) {
+  const brand = String(brandName || '').trim();
+  const [tree, specs] = await Promise.all([
+    getLaptopMappingTreeCached(),
+    listCascadeSpecMasters(),
+  ]);
+  const brands = (tree || [])
+    .filter((b) => b.status === 'active')
+    .map((b) => b.name);
+  const match = findLaptopBrandInTree(tree, brand);
+  return normalizeSpecFilterOptions({
+    brands: mergeUniqueSorted(brands),
+    models: match ? activeLaptopMappedNames(match.models) : [],
+    processors: match ? activeLaptopMappedNames(match.processors) : [],
+    generations: match ? activeLaptopMappedNames(match.generations) : [],
+    rams: specs.rams,
+    storages: specs.storages,
+    gpus: specs.gpus,
+    screen_sizes: specs.screen_sizes,
+  });
+}
+
+async function listInventorySpecFilterOptions(brandName) {
+  const brand = String(brandName || '').trim();
+  if (!brand) {
+    return cacheWrap(
+      'inventory:spec-filter-options:v3:all',
+      CACHE_TTL.FILTER_OPTIONS,
+      buildAllInventorySpecFilterOptions
+    );
+  }
+  const cacheKey = `inventory:spec-filter-options:v3:${compareKey('brands', brand)}`;
+  return cacheWrap(
+    cacheKey,
+    CACHE_TTL.FILTER_OPTIONS,
+    () => buildBrandScopedInventorySpecFilterOptions(brand)
+  );
 }
 
 async function listMappedNamesForBrand(brandId, junctionTable, joinTable, joinColumn, itemColumn = 'name') {
@@ -1201,15 +1267,18 @@ async function listCascadeModelsForBrand(brandName) {
   if (!brand) {
     return { brand: brandName, models: [], has_mapping: false };
   }
-  const hasMapping = await brandHasFlatMappings(brand.id);
-  const models = await listMappedNamesForBrand(
+  const mapped = await listMappedNamesForBrand(
     brand.id,
     'asset_config_brand_models',
     'asset_config_models',
     'model_id'
   ).catch(() => []);
-  if (models.length || hasMapping) {
-    return { brand: brand.name, models, has_mapping: true };
+  if (mapped.length) {
+    return { brand: brand.name, models: mapped, has_mapping: true };
+  }
+  const hasMapping = await brandHasFlatMappings(brand.id);
+  if (hasMapping) {
+    return { brand: brand.name, models: [], has_mapping: true };
   }
   const legacy = await pool.query(
     `SELECT name FROM asset_config_models
@@ -1220,7 +1289,7 @@ async function listCascadeModelsForBrand(brandName) {
   return {
     brand: brand.name,
     models: legacy.rows.map((r) => r.name),
-    has_mapping: false,
+    has_mapping: legacy.rows.length > 0,
   };
 }
 
@@ -1235,22 +1304,10 @@ async function listCascadeProcessorsForBrand(brandName) {
     'asset_config_processors',
     'processor_id'
   );
-  if (mapped.length) {
-    return { brand: brand.name, processors: mapped, has_mapping: true };
-  }
-  const hasMapping = await brandHasFlatMappings(brand.id);
-  if (hasMapping) {
-    return { brand: brand.name, processors: [], has_mapping: true };
-  }
-  const { rows } = await pool.query(
-    `SELECT name FROM asset_config_processors
-      WHERE deleted_at IS NULL AND status = 'active'
-      ORDER BY name ASC`
-  );
   return {
     brand: brand.name,
-    processors: rows.map((r) => r.name),
-    has_mapping: false,
+    processors: mapped,
+    has_mapping: mapped.length > 0 || (await brandHasFlatMappings(brand.id)),
   };
 }
 
@@ -1265,22 +1322,10 @@ async function listCascadeGenerationsForBrand(brandName) {
     'asset_config_generations',
     'generation_id'
   ).catch(() => []);
-  if (mapped.length) {
-    return { brand: brand.name, generations: mapped, has_mapping: true };
-  }
-  const hasMapping = await brandHasFlatMappings(brand.id);
-  if (hasMapping) {
-    return { brand: brand.name, generations: [], has_mapping: true };
-  }
-  const { rows } = await pool.query(
-    `SELECT name FROM asset_config_generations
-      WHERE deleted_at IS NULL AND status = 'active'
-      ORDER BY name ASC`
-  );
   return {
     brand: brand.name,
-    generations: rows.map((r) => r.name),
-    has_mapping: false,
+    generations: mapped,
+    has_mapping: mapped.length > 0 || (await brandHasFlatMappings(brand.id)),
   };
 }
 

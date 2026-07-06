@@ -193,6 +193,8 @@ app.listen(PORT, () => {
   ensureAssetConfigurationSchema().catch((err) => console.error('Asset configuration schema ensure failed:', err.message));
   const { ensureVendorRepairSchema } = require('./services/vendorRepairDcService');
   ensureVendorRepairSchema().catch((err) => console.error('Vendor repair schema ensure failed:', err.message));
+  const { initCache } = require('./utils/cacheService');
+  initCache().catch((err) => console.error('Cache init failed:', err.message));
   startBillingScheduler();
 });
 

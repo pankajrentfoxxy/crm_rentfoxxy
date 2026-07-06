@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Download, Eye, FileText, Loader2, RotateCcw } from 'lucide-react';
-import { PageHeader, ListPagination, SearchField, DateRangeFilter } from '../../../components/ui/primitives';
+import { Download, Eye, FileText, Loader2, RotateCcw, Search } from 'lucide-react';
+import { PageHeader, ListPagination, DateRangeFilter } from '../../../components/ui/primitives';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import { useAuth } from '../../../context/AuthContext';
 import {
@@ -10,6 +10,9 @@ import {
   fetchVendorRepairDcList,
 } from '../vendorRepairApi';
 import { vendorRepairStatusClass, vendorRepairStatusLabel, vendorRepairDispatchModeLabel, vendorDeliveryStatusLabel, vendorDeliveryStatusClass } from '../vendorRepairUi';
+import FloorPipelineFilterPanel, { FILTER_CTL } from '../components/FloorPipelineFilterPanel';
+import { EMPTY_SPEC_FILTERS } from '../../inventory-management/inventorySpecFilters';
+import useDebouncedSpecParams from '../../inventory-management/hooks/useDebouncedSpecParams';
 
 const PAGE_SIZE = 25;
 const WAREHOUSE_ROLES = new Set(['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'support_lead']);
@@ -30,8 +33,11 @@ export default function VendorRepairDcListPage() {
   const [status, setStatus] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [specFilters, setSpecFilters] = useState(EMPTY_SPEC_FILTERS);
   const [pdfBusy, setPdfBusy] = useState(null);
   const debouncedSearch = useDebouncedValue(search.trim(), 320);
+  const debouncedSpecParams = useDebouncedSpecParams(specFilters);
+  const specFilterKey = JSON.stringify(debouncedSpecParams);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -43,6 +49,7 @@ export default function VendorRepairDcListPage() {
         limit: PAGE_SIZE,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
+        ...debouncedSpecParams,
       });
       setRows(data.data || []);
       setPagination(data.pagination || { page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
@@ -52,9 +59,9 @@ export default function VendorRepairDcListPage() {
     } finally {
       setLoading(false);
     }
-  }, [debouncedSearch, status, page, dateFrom, dateTo]);
+  }, [debouncedSearch, status, page, dateFrom, dateTo, debouncedSpecParams]);
 
-  useEffect(() => { setPage(1); }, [debouncedSearch, status, dateFrom, dateTo]);
+  useEffect(() => { setPage(1); }, [debouncedSearch, status, dateFrom, dateTo, specFilterKey]);
   useEffect(() => { load(); }, [load]);
 
   const handlePdf = async (dcNumber) => {
@@ -77,24 +84,33 @@ export default function VendorRepairDcListPage() {
         actions={(
           <Link
             to="/floor-pipeline/diagnosis-failed"
-            className="inline-flex items-center gap-1.5 px-3 py-2 border rounded-lg text-sm hover:bg-slate-50"
+            className="inline-flex items-center gap-1.5 h-9 px-3 border rounded-lg text-sm hover:bg-slate-50"
           >
             ← Diagnosis Failed
           </Link>
         )}
       />
 
-      <div className="flex flex-wrap gap-2">
-        <SearchField
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search VRDC #, vendor…"
-          className="min-w-[220px] flex-1 max-w-md"
-        />
+      <FloorPipelineFilterPanel
+        specFilters={specFilters}
+        onSpecFiltersChange={setSpecFilters}
+        onSpecFiltersClear={() => setSpecFilters(EMPTY_SPEC_FILTERS)}
+      >
+        <div className="relative min-w-[12rem] flex-1 max-w-sm shrink-0">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input
+            type="search"
+            className={`${FILTER_CTL} w-full pl-8 pr-2`}
+            placeholder="Search VRDC #, vendor…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
         <select
           value={status}
           onChange={(e) => setStatus(e.target.value)}
-          className="rounded-lg border px-3 py-2 text-sm min-h-[44px]"
+          className={`${FILTER_CTL} min-w-[7.5rem] max-w-[9rem]`}
+          aria-label="Status"
         >
           <option value="">All statuses</option>
           <option value="draft">Draft</option>
@@ -103,6 +119,8 @@ export default function VendorRepairDcListPage() {
           <option value="returned">Returned</option>
         </select>
         <DateRangeFilter
+          layout="inline"
+          controlClassName="h-9 px-2 text-sm min-h-0"
           dateFrom={dateFrom}
           dateTo={dateTo}
           onDateFromChange={setDateFrom}
@@ -110,7 +128,7 @@ export default function VendorRepairDcListPage() {
           fromLabel="Dispatched from"
           toLabel="Dispatched to"
         />
-      </div>
+      </FloorPipelineFilterPanel>
 
       {loading ? (
         <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>

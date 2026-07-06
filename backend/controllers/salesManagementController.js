@@ -23,6 +23,8 @@ const {
   getSalesOrderRemainingQty,
   getOperationCounts,
   searchAvailableInventory,
+  getDcSerialRateLookup,
+  lookupSerialRemark,
 } = require('../services/salesManagementService');
 const { generateDocumentPdf } = require('../services/salesManagementPdfService');
 const { emailDocument } = require('../services/salesManagementPdfService');
@@ -749,6 +751,10 @@ exports.getDeliveryChallan = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Delivery challan not found' });
     }
 
+    const dcNumber = req.params.dcNumber;
+    const son = lines[0]?.sales_order_number;
+    const serialLookup = (son && dcNumber) ? await getDcSerialRateLookup(dcNumber, son) : null;
+
     // Resolve full laptop specs for every attached serial. Migrated units often
     // have empty extra/vendor_product_details, so fall back to the inventory
     // table (the authoritative spec store for legacy stock).
@@ -791,6 +797,15 @@ exports.getDeliveryChallan = async (req, res) => {
           (e.serialId && x.serial_id === e.serialId)
           || (e.serialNumber && x.serial_number === e.serialNumber)
           || (e.ttsplId && x.inventory_asset_code === e.ttsplId)) || {};
+        const dcLineRemark = (line.remarks || '').trim();
+        const soRemark = serialLookup
+          ? lookupSerialRemark(serialLookup, {
+            serialId: e.serialId,
+            serialNumber: e.serialNumber,
+            ttspl: e.ttsplId,
+          })
+          : '';
+        const remark = dcLineRemark || soRemark;
         return {
           ttspl: d.inventory_asset_code || e.ttsplId || e.serialNumber,
           serial_number: d.serial_number || e.serialNumber,
@@ -803,8 +818,13 @@ exports.getDeliveryChallan = async (req, res) => {
           gpu: d.gpu || '',
           screen_size: d.screen_size || '',
           status: d.inventory_status || '',
+          remark,
         };
       });
+      if (!(line.remarks || '').trim() && line.serials_detail.length) {
+        const uniq = [...new Set(line.serials_detail.map((u) => u.remark).filter(Boolean))];
+        if (uniq.length) line.remarks = uniq.join('; ');
+      }
     }
 
     // Price the DC from linked SO allocations (line_id → rate) or fall back to
@@ -1266,6 +1286,15 @@ exports.createDcsByAddress = async (req, res) => {
         ? uniqueModels[0]
         : (uniqueModels.length > 1 ? 'Multiple configurations' : '');
 
+      const groupLineIds = [...new Set(groupSerials.map((s) => s.line_id).filter(Boolean))];
+      const groupRemarks = groupLineIds
+        .map((lid) => {
+          const soLine = soLines.find((l) => Number(l.id) === Number(lid));
+          return (soLine?.remark || '').trim();
+        })
+        .filter(Boolean);
+      const dcRemarks = [...new Set(groupRemarks)].join('; ') || null;
+
       await client.query(
         `INSERT INTO delivery_challan_lines (
           dc_number, sales_order_number, quotation_number, customer_id, customer_name,
@@ -1275,11 +1304,11 @@ exports.createDcsByAddress = async (req, res) => {
           ship_by, courier_name, awb_number, courier_tracking_url,
           porter_tracking_id, porter_order_id, porter_booking_url,
           delivery_person_id, dispatch_mode, dispatched_at,
-          status, created_by
+          remarks, status, created_by
         ) VALUES (
           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
           $15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,NOW(),
-          'in_transit',$29
+          $29,'in_transit',$30
         )`,
         [
           dcNumber, sales_order_number, soHead.quotation_number, soHead.customer_id || null,
@@ -1297,7 +1326,7 @@ exports.createDcsByAddress = async (req, res) => {
           ship_by === 'by_porter' ? (group.porter_order_id || body.porter_order_id || null) : null,
           ship_by === 'by_porter' ? (group.porter_booking_url || body.porter_booking_url || null) : null,
           ship_by === 'by_hand' && groupDeliveryPersonId ? Number(groupDeliveryPersonId) : null,
-          dispatchMode, req.user?.user_id,
+          dispatchMode, dcRemarks, req.user?.user_id,
         ]
       );
 

@@ -7,6 +7,8 @@ const { generateVendorRepairPdf } = require('./vendorRepairPdfService');
 const { appendDateRangeClauses } = require('../utils/dateRangeFilter');
 const {
   pickSpecFilters,
+  hasSpecFilters,
+  buildTicketSpecFilter,
   appendRepairSpecClauses,
   vendorRepairSpecExpr,
   erpRepairSpecExpr,
@@ -226,8 +228,26 @@ async function markDiagnosisFailed(client, {
   return { ticket_id: ticketId, status: 'diagnosis_failed' };
 }
 
-async function listDiagnosisFailedTickets({ dateFrom, dateTo } = {}) {
+async function listDiagnosisFailedTickets({
+  dateFrom,
+  dateTo,
+  brand,
+  model,
+  processor,
+  generation,
+  ram,
+  storage,
+  screen_size,
+  gpu,
+} = {}) {
+  const specFilters = pickSpecFilters({
+    brand, model, processor, generation, ram, storage, screen_size, gpu,
+  });
   const params = [];
+  const specFilter = buildTicketSpecFilter(specFilters, params, 't');
+  const ticketJoins = specFilter.joinSql || `
+       LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = t.vendor_serial_id AND vsn.deleted_at IS NULL
+       LEFT JOIN inventory inv ON LOWER(TRIM(inv.serial_number)) = LOWER(TRIM(t.serial_number))`;
   const dateClauses = appendDateRangeClauses({
     expr: 'COALESCE(t.diagnosis_failed_at, t.created_at)',
     dateFrom,
@@ -240,11 +260,11 @@ async function listDiagnosisFailedTickets({ dateFrom, dateTo } = {}) {
             t.processor, t.ram, t.storage, t.diagnosis_failed_at,
             t.diagnosis_failed_reason, t.current_location, t.created_at,
             t.previous_technician_id, t.previous_stage_id,
-            COALESCE(NULLIF(TRIM(vsn.extra->>'generation'), ''), '') AS generation,
+            COALESCE(NULLIF(TRIM(vsn.extra->>'generation'), ''), inv.generation, '') AS generation,
             ps.stage_name AS previous_stage_name,
             pu.name AS previous_technician_name
        FROM tickets t
-       LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = t.vendor_serial_id
+       ${ticketJoins}
        LEFT JOIN stages ps ON ps.stage_id = t.previous_stage_id
        LEFT JOIN users pu ON pu.user_id = t.previous_technician_id
       WHERE t.status = 'diagnosis_failed'
@@ -253,7 +273,7 @@ async function listDiagnosisFailedTickets({ dateFrom, dateTo } = {}) {
           JOIN vendor_repair_delivery_challans vd ON vd.dc_number = vi.dc_number
           WHERE vi.ticket_id = t.ticket_id
             AND vd.status IN ('draft', 'dispatched', 'partially_returned')
-        )${dateSql}
+        )${dateSql}${specFilter.whereSql}
       ORDER BY t.diagnosis_failed_at DESC NULLS LAST, t.ticket_id DESC`,
     params
   );
@@ -1206,23 +1226,21 @@ async function listVendorRepairDcs({
   status,
   page = 1,
   limit = 25,
+  dateFrom,
+  dateTo,
   brand,
   model,
+  processor,
   generation,
   ram,
   storage,
-  dateFrom,
-  dateTo,
-  brand: reqBrand,
-  model: reqModel,
-  processor,
-  generation: reqGeneration,
-  ram: reqRam,
-  storage: reqStorage,
   screen_size,
   gpu,
 } = {}) {
   await ensureVendorRepairSchema();
+  const specFilters = pickSpecFilters({
+    brand, model, processor, generation, ram, storage, screen_size, gpu,
+  });
   const params = [];
   const conditions = ['1=1'];
   if (search?.trim()) {
@@ -1246,6 +1264,18 @@ async function listVendorRepairDcs({
   });
   if (dateClauses.length) {
     conditions.push(...dateClauses);
+  }
+  if (hasSpecFilters(specFilters)) {
+    const specClauses = appendRepairSpecClauses(specFilters, params, vendorRepairSpecExpr);
+    conditions.push(`EXISTS (
+      SELECT 1
+        FROM vendor_repair_dc_items i
+        JOIN tickets t ON t.ticket_id = i.ticket_id
+        LEFT JOIN vendor_serial_numbers vsn
+          ON vsn.serial_id = COALESCE(i.serial_id, t.vendor_serial_id) AND vsn.deleted_at IS NULL
+       WHERE i.dc_number = d.dc_number
+         AND ${specClauses.join(' AND ')}
+    )`);
   }
   const where = conditions.join(' AND ');
   const safePage = Math.max(1, Number(page) || 1);

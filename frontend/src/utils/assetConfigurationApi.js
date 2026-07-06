@@ -6,7 +6,8 @@ export const fetchAssetDropdowns = () => api.get(`${base}/dropdowns`);
 
 export const fetchCascadeBrands = () => api.get(`${base}/cascade/brands`);
 export const fetchCascadeSpecMasters = () => api.get(`${base}/cascade/spec-masters`);
-export const fetchInventorySpecFilterOptions = () => api.get(`${base}/cascade/filter-options`);
+export const fetchInventorySpecFilterOptions = (params = {}) =>
+  api.get(`${base}/cascade/filter-options`, { params });
 export const fetchCascadeProcessors = (brandName) =>
   api.get(`${base}/cascade/brands/${encodeURIComponent(brandName)}/processors`);
 export const fetchCascadeModels = (brandName) =>

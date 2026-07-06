@@ -10,6 +10,9 @@ import { fetchFloorTickets } from '../floorPipelineApi';
 import useAutoRefresh from '../hooks/useAutoRefresh';
 import TicketCard from '../components/TicketCard';
 import AssignmentModal from '../components/AssignmentModal';
+import FloorPipelineFilterPanel, { FILTER_CTL } from '../components/FloorPipelineFilterPanel';
+import { EMPTY_SPEC_FILTERS } from '../../inventory-management/inventorySpecFilters';
+import useDebouncedSpecParams from '../../inventory-management/hooks/useDebouncedSpecParams';
 import {
   canAssignFloorTickets,
   isFloorAssignedDataOnly,
@@ -52,6 +55,9 @@ export default function FloorTicketListPage() {
   const [typeFilter, setTypeFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [specFilters, setSpecFilters] = useState(EMPTY_SPEC_FILTERS);
+  const debouncedSpecParams = useDebouncedSpecParams(specFilters);
+  const specFilterKey = JSON.stringify(debouncedSpecParams);
   const [assignTicket, setAssignTicket] = useState(null);
 
   const fm = isFloorManagerRole(user?.role);
@@ -85,6 +91,7 @@ export default function FloorTicketListPage() {
       if (stageFilter) params.stage_names = stageFilter;
       if (dateFrom) params.date_from = dateFrom;
       if (dateTo) params.date_to = dateTo;
+      Object.assign(params, debouncedSpecParams);
       params.page = page;
       params.limit = PAGE_SIZE;
       const { data } = await fetchFloorTickets(params);
@@ -101,9 +108,9 @@ export default function FloorTicketListPage() {
     } finally {
       setLoading(false);
     }
-  }, [debouncedSearch, priorityFilter, typeFilter, stageFilter, page, dateFrom, dateTo]);
+  }, [debouncedSearch, priorityFilter, typeFilter, stageFilter, page, dateFrom, dateTo, debouncedSpecParams]);
 
-  useEffect(() => { setPage(1); }, [debouncedSearch, priorityFilter, typeFilter, stageFilter, view, dateFrom, dateTo]);
+  useEffect(() => { setPage(1); }, [debouncedSearch, priorityFilter, typeFilter, stageFilter, view, dateFrom, dateTo, specFilterKey]);
 
   useEffect(() => { load(); }, [load]);
   useAutoRefresh(load);
@@ -183,43 +190,67 @@ export default function FloorTicketListPage() {
         )}
       />
 
-      <div className="flex flex-wrap gap-2">
-        <div className="relative flex-1 min-w-[200px] max-w-md">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-          <input
-            className="w-full rounded-lg border pl-9 pr-3 py-2 text-sm"
-            placeholder="TTSPL ID, serial, model…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </div>
-        <select className="rounded-lg border px-3 py-2 text-sm" value={stageFilter} onChange={(e) => updateStageFilter(e.target.value)}>
-          <option value="">All stages</option>
-          <option value="QC1,QC2">QC Queue (QC1 + QC2)</option>
-          {STAGE_GROUPS.flatMap((g) => g.stages).map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
-        <select className="rounded-lg border px-3 py-2 text-sm" value={priorityFilter} onChange={(e) => { setPage(1); setPriorityFilter(e.target.value); }}>
-          <option value="">All priorities</option>
-          <option value="normal">Normal</option>
-          <option value="high">High</option>
-          <option value="sales_order">Sales Order</option>
-        </select>
-        <select className="rounded-lg border px-3 py-2 text-sm" value={typeFilter} onChange={(e) => { setPage(1); setTypeFilter(e.target.value); }}>
-          <option value="">All types</option>
-          <option value="grn_qc">GRN QC</option>
-          <option value="sales_order_qc">Sales Order QC</option>
-          <option value="support">Support</option>
-          <option value="general">General</option>
-        </select>
-        <DateRangeFilter
-          dateFrom={dateFrom}
-          dateTo={dateTo}
-          onDateFromChange={setDateFrom}
-          onDateToChange={setDateTo}
-          fromLabel="Created from"
-          toLabel="Created to"
+      <FloorPipelineFilterPanel
+        specFilters={specFilters}
+        onSpecFiltersChange={setSpecFilters}
+        onSpecFiltersClear={() => setSpecFilters(EMPTY_SPEC_FILTERS)}
+      >
+        <div className="relative min-w-[12rem] flex-1 max-w-sm shrink-0">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              type="search"
+              className={`${FILTER_CTL} w-full pl-8 pr-2`}
+              placeholder="TTSPL ID, serial, model…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          <select
+            className={`${FILTER_CTL} min-w-[7.5rem] max-w-[9rem]`}
+            value={stageFilter}
+            onChange={(e) => updateStageFilter(e.target.value)}
+            aria-label="Stage"
+          >
+            <option value="">All stages</option>
+            <option value="QC1,QC2">QC Queue</option>
+            {STAGE_GROUPS.flatMap((g) => g.stages).map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+          <select
+            className={`${FILTER_CTL} min-w-[6.5rem] max-w-[8rem]`}
+            value={priorityFilter}
+            onChange={(e) => { setPage(1); setPriorityFilter(e.target.value); }}
+            aria-label="Priority"
+          >
+            <option value="">All priorities</option>
+            <option value="normal">Normal</option>
+            <option value="high">High</option>
+            <option value="sales_order">Sales Order</option>
+          </select>
+          <select
+            className={`${FILTER_CTL} min-w-[6rem] max-w-[7.5rem]`}
+            value={typeFilter}
+            onChange={(e) => { setPage(1); setTypeFilter(e.target.value); }}
+            aria-label="Type"
+          >
+            <option value="">All types</option>
+            <option value="grn_qc">GRN QC</option>
+            <option value="sales_order_qc">Sales Order QC</option>
+            <option value="support">Support</option>
+            <option value="general">General</option>
+          </select>
+          <DateRangeFilter
+            layout="inline"
+            controlClassName="h-9 px-2 text-sm min-h-0"
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            onDateFromChange={setDateFrom}
+            onDateToChange={setDateTo}
+            fromLabel="Created from"
+            toLabel="Created to"
         />
-      </div>
+      </FloorPipelineFilterPanel>
 
       {loading ? (
         <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>

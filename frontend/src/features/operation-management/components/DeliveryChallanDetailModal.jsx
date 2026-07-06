@@ -49,6 +49,9 @@ export default function DeliveryChallanDetailModal({ dcNumber, onClose }) {
             return (
               <div key={line.id || i} className="border rounded-lg p-3 text-sm space-y-2">
                 <p className="font-semibold">{line.model_name} — Qty {line.quantity}</p>
+                {(line.remarks || '').trim() ? (
+                  <p className="text-gray-700"><span className="text-gray-500">Remarks:</span> {line.remarks.trim()}</p>
+                ) : null}
                 {units.length === 0 ? (
                   <p className="text-gray-600">{[line.processor, line.generation, line.ram, line.storage].filter(Boolean).join(' | ') || 'No unit details'}</p>
                 ) : (

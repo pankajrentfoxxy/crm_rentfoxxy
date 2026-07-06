@@ -203,7 +203,28 @@ export default function DeliveryChallanDetailPage() {
         return { ttspl: parts[2] || parts[1] || parts[0], config: formatConfig(l) };
       })
   ));
-  const allUnits = lines.flatMap((l) => l.serials_detail || []);
+  const allUnits = lines.flatMap((l) => {
+    const lineRemark = (l.remarks || '').trim();
+    if (l.serials_detail && l.serials_detail.length) {
+      return l.serials_detail.map((d) => ({ ...d, remark: lineRemark }));
+    }
+    return parseSerials(l.serial_number).map((s) => {
+      const parts = String(s).split('|');
+      return {
+        ttspl: parts[2] || parts[1] || parts[0],
+        config: formatConfig(l),
+        remark: lineRemark,
+        brand: l.brand,
+        model: l.model_name,
+        processor: l.processor,
+        generation: l.generation,
+        ram: l.ram,
+        storage: l.storage,
+        gpu: l.gpu,
+        screen_size: l.screen_size,
+      };
+    });
+  });
 
   const qcBanner = () => {
     if (!qc?.total_count) return null;
@@ -279,11 +300,12 @@ export default function DeliveryChallanDetailPage() {
                       <th className="px-3 py-2 text-left">Storage</th>
                       <th className="px-3 py-2 text-left">GPU</th>
                       <th className="px-3 py-2 text-left">Screen</th>
+                      <th className="px-3 py-2 text-left">Remarks</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y">
                     {allUnits.length === 0 ? (
-                      <tr><td colSpan={9} className="px-3 py-6 text-center text-gray-400">No laptops attached</td></tr>
+                      <tr><td colSpan={10} className="px-3 py-6 text-center text-gray-400">No laptops attached</td></tr>
                     ) : allUnits.map((d, i) => (
                       <tr key={d.ttspl || i}>
                         <td className="px-3 py-2 font-mono text-xs text-blue-700">{d.ttspl}</td>
@@ -295,11 +317,22 @@ export default function DeliveryChallanDetailPage() {
                         <td className="px-3 py-2">{d.storage || '—'}</td>
                         <td className="px-3 py-2">{d.gpu || '—'}</td>
                         <td className="px-3 py-2">{d.screen_size || '—'}</td>
+                        <td className="px-3 py-2 text-xs text-gray-700 max-w-[200px] whitespace-pre-wrap">{d.remark || '—'}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+              {allUnits.length === 0 && lines.length > 0 ? (
+                <div className="p-4 text-sm border-t space-y-1">
+                  {lines.map((l, i) => (
+                    <p key={l.id || i}>
+                      <span className="text-gray-500">{[l.brand, l.model_name].filter(Boolean).join(' ') || `Item ${i + 1}`} — Remarks:</span>{' '}
+                      {(l.remarks || '').trim() || '—'}
+                    </p>
+                  ))}
+                </div>
+              ) : null}
               <div className="p-4 text-sm border-t space-y-1">
                 {(head.ship_by === 'by_courier' || head.dispatch_mode === 'courier') && (
                   <p>

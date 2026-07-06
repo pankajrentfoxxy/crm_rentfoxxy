@@ -150,12 +150,26 @@ async function listInventory(req, res) {
     });
     const dateSql = dateClauses.length ? ` AND ${dateClauses.join(' AND ')}` : '';
     const specFilter = buildSerialSpecFilter(specFilters, params);
+    const ticketJoinSql = `
+      LEFT JOIN LATERAL (
+        SELECT tk.ticket_id FROM tickets tk
+        WHERE tk.vendor_serial_id = s.serial_id
+        ORDER BY tk.created_at DESC LIMIT 1
+      ) latest_ticket ON true
+      LEFT JOIN LATERAL (
+        SELECT tk.ticket_id FROM tickets tk
+        WHERE tk.vendor_serial_id = s.serial_id
+          AND tk.status IN ('in_progress', 'on_hold')
+        ORDER BY tk.created_at DESC LIMIT 1
+      ) active_ticket ON true
+    `;
     const fromSql = `
       FROM vendor_serial_numbers s
       INNER JOIN vendor_purchase_orders p ON p.po_id = s.po_id AND p.deleted_at IS NULL
       LEFT JOIN vendors v ON v.vendor_id = p.vendor_id AND v.deleted_at IS NULL
       LEFT JOIN vendor_goods_received_notes g ON g.grn_id = s.grn_id AND g.deleted_at IS NULL
       ${specFilter.joinSql}
+      ${ticketJoinSql}
       WHERE s.deleted_at IS NULL
       ${segmentSql}
       ${searchSql}${dateSql}${specFilter.whereSql}
@@ -172,13 +186,8 @@ async function listInventory(req, res) {
          p.product_details_legacy_ids,
          v.business_name, v.first_name || ' ' || v.last_name AS vendor_name,
          g.meta->>'product_id' AS grn_product_id,
-         (SELECT t.ticket_id FROM tickets t
-            WHERE t.vendor_serial_id = s.serial_id
-            ORDER BY t.created_at DESC LIMIT 1) AS ticket_id,
-         (SELECT t.ticket_id FROM tickets t
-            WHERE t.vendor_serial_id = s.serial_id
-              AND t.status IN ('in_progress', 'on_hold')
-            ORDER BY t.created_at DESC LIMIT 1) AS active_floor_ticket_id
+         latest_ticket.ticket_id,
+         active_ticket.ticket_id AS active_floor_ticket_id
        ${fromSql}
        ORDER BY s.updated_at DESC
        LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
@@ -234,12 +243,26 @@ async function exportInventoryExcel(req, res) {
     });
     const exportDateSql = exportDateClauses.length ? ` AND ${exportDateClauses.join(' AND ')}` : '';
     const specFilter = buildSerialSpecFilter(specFilters, params);
+    const exportTicketJoinSql = `
+      LEFT JOIN LATERAL (
+        SELECT tk.ticket_id FROM tickets tk
+        WHERE tk.vendor_serial_id = s.serial_id
+        ORDER BY tk.created_at DESC LIMIT 1
+      ) latest_ticket ON true
+      LEFT JOIN LATERAL (
+        SELECT tk.ticket_id FROM tickets tk
+        WHERE tk.vendor_serial_id = s.serial_id
+          AND tk.status IN ('in_progress', 'on_hold')
+        ORDER BY tk.created_at DESC LIMIT 1
+      ) active_ticket ON true
+    `;
     const fromSql = `
       FROM vendor_serial_numbers s
       INNER JOIN vendor_purchase_orders p ON p.po_id = s.po_id AND p.deleted_at IS NULL
       LEFT JOIN vendors v ON v.vendor_id = p.vendor_id AND v.deleted_at IS NULL
       LEFT JOIN vendor_goods_received_notes g ON g.grn_id = s.grn_id AND g.deleted_at IS NULL
       ${specFilter.joinSql}
+      ${exportTicketJoinSql}
       WHERE s.deleted_at IS NULL
       ${segmentSql}
       ${searchSql}${exportDateSql}${specFilter.whereSql}
@@ -254,13 +277,8 @@ async function exportInventoryExcel(req, res) {
          p.product_details_legacy_ids,
          v.business_name, v.first_name || ' ' || v.last_name AS vendor_name,
          g.meta->>'product_id' AS grn_product_id,
-         (SELECT t.ticket_id FROM tickets t
-            WHERE t.vendor_serial_id = s.serial_id
-            ORDER BY t.created_at DESC LIMIT 1) AS ticket_id,
-         (SELECT t.ticket_id FROM tickets t
-            WHERE t.vendor_serial_id = s.serial_id
-              AND t.status IN ('in_progress', 'on_hold')
-            ORDER BY t.created_at DESC LIMIT 1) AS active_floor_ticket_id
+         latest_ticket.ticket_id,
+         active_ticket.ticket_id AS active_floor_ticket_id
        ${fromSql}
        ORDER BY s.updated_at DESC
        LIMIT $${listParams.length}`,

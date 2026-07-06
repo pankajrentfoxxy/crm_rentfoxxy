@@ -29,7 +29,7 @@ const {
   ensureAssetConfigurationSchema,
   listCascadeBrands,
   listCascadeSpecMasters,
-  listInventorySpecFilterOptions,
+  listInventorySpecFilterOptions: loadInventorySpecFilterOptions,
   listCascadeModelsForBrand,
   listCascadeProcessorsForBrand,
   listCascadeGenerationsForBrand,
@@ -218,8 +218,10 @@ exports.listCascadeSpecMasters = async (req, res) => {
 
 exports.listInventorySpecFilterOptions = async (req, res) => {
   try {
-    const options = await listInventorySpecFilterOptions();
-    res.json({ success: true, ...options });
+    const brand = (req.query.brand || '').trim();
+    const options = await loadInventorySpecFilterOptions(brand || undefined);
+    res.set('Cache-Control', 'private, max-age=60');
+    res.json({ success: true, brand: brand || null, ...options });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message });
   }
