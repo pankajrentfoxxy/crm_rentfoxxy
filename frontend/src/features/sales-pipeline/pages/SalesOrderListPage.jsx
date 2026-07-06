@@ -1,17 +1,86 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Plus, ClipboardList } from 'lucide-react';
+import { Plus, ClipboardList, Eye, Banknote, Truck, Ban } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import { PageHeader, StatCard, Button, ResponsiveTable, SearchField, ListPagination, DateRangeFilter } from '../../../components/ui/primitives';
 import PaymentModal from '../components/PaymentModal';
 import SalesOrderForm from '../components/SalesOrderForm';
 import DCForm from '../components/DCForm';
-import { cancelSalesOrder, listSalesOrders } from '../salesPipelineApi';
+import { cancelSalesOrder, getSalesOrderMeta, listSalesOrders } from '../salesPipelineApi';
 import { formatCurrency, formatDate, TYPE_STYLES, typeLabel, salesOrderDetailPath } from '../salesPipelineUtils';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 
 const PAGE_SIZE = 25;
+const SO_STATUS_OPTIONS = [
+  { value: '', label: 'All statuses' },
+  { value: 'pending', label: 'Pending' },
+  { value: 'cancelled', label: 'Cancelled' },
+];
+
+function soStatusLabel(status) {
+  const s = String(status || 'pending').toLowerCase();
+  if (s === 'cancelled') return 'Cancelled';
+  return 'Pending';
+}
+
+function soStatusClass(status) {
+  const s = String(status || 'pending').toLowerCase();
+  if (s === 'cancelled') return 'bg-red-100 text-red-700';
+  return 'bg-amber-100 text-amber-800';
+}
+
+function QtyPill({ label, value, tone = 'slate' }) {
+  const tones = {
+    slate: 'bg-slate-100 text-slate-800',
+    blue: 'bg-blue-100 text-blue-900',
+    amber: 'bg-amber-100 text-amber-900',
+    green: 'bg-emerald-100 text-emerald-800',
+    teal: 'bg-teal-100 text-teal-900',
+  };
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-bold ${tones[tone] || tones.slate}`}>
+      <span className="font-medium opacity-75">{label}</span>
+      {value}
+    </span>
+  );
+}
+
+function fulfillmentFromRow(row) {
+  const total = Number(row.laptop_qty ?? row.remaining_qty ?? 0);
+  const delivered = Number(row.delivered_count ?? 0);
+  const attached = Number(row.attached_count ?? 0);
+  const dispatched = Number(row.dispatched_count ?? 0);
+  const pending = Number(row.pending_qty ?? Math.max(0, total - delivered - dispatched - attached));
+  return { total, delivered, attached, dispatched, pending };
+}
+
+/** Icon action with hover label (Visibility / Payments / LocalShipping style). */
+function ActionIconButton({ label, onClick, icon: Icon, tone = 'slate' }) {
+  const tones = {
+    blue: 'text-blue-600 hover:bg-blue-50',
+    teal: 'text-teal-700 hover:bg-teal-50',
+    slate: 'text-slate-700 hover:bg-slate-100',
+    red: 'text-red-600 hover:bg-red-50',
+  };
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      onClick={onClick}
+      className={`group relative inline-flex items-center justify-center rounded-lg p-2 transition-colors ${tones[tone] || tones.slate}`}
+    >
+      <Icon className="w-5 h-5" strokeWidth={1.75} />
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[11px] font-medium text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+      >
+        {label}
+      </span>
+    </button>
+  );
+}
 
 export default function SalesOrderListPage() {
   const navigate = useNavigate();
@@ -23,6 +92,9 @@ export default function SalesOrderListPage() {
   const search = useDebouncedValue(searchInput.trim(), 320);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [customerId, setCustomerId] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [customers, setCustomers] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [soDrawer, setSoDrawer] = useState(false);
   const [dcDrawer, setDcDrawer] = useState(false);
@@ -30,7 +102,13 @@ export default function SalesOrderListPage() {
   const [prefillQuote, setPrefillQuote] = useState(location.state?.fromQuote || null);
   const [prefillSo, setPrefillSo] = useState(null);
 
-  useEffect(() => { setPage(1); }, [search, dateFrom, dateTo]);
+  useEffect(() => { setPage(1); }, [search, dateFrom, dateTo, customerId, statusFilter]);
+
+  useEffect(() => {
+    getSalesOrderMeta()
+      .then((res) => setCustomers(res.data?.customers || []))
+      .catch(() => {});
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -41,6 +119,8 @@ export default function SalesOrderListPage() {
         search: search || undefined,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
+        customer_id: customerId || undefined,
+        status: statusFilter || undefined,
       });
       setRows(res.data?.sales_orders || []);
       setPagination(res.data?.pagination || { page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
@@ -49,7 +129,7 @@ export default function SalesOrderListPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, search, dateFrom, dateTo]);
+  }, [page, search, dateFrom, dateTo, customerId, statusFilter]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -59,11 +139,15 @@ export default function SalesOrderListPage() {
     }
   }, [location.state]);
 
-  const stats = useMemo(() => ({
-    total: pagination.total || rows.length,
-    pending: rows.filter((r) => !r.dc_count).length,
-    withDc: rows.filter((r) => r.dc_count > 0).length,
-  }), [rows, pagination.total]);
+  const stats = useMemo(() => rows.reduce((acc, row) => {
+    const f = fulfillmentFromRow(row);
+    acc.totalLaptops += f.total;
+    acc.dispatched += f.dispatched;
+    acc.pending += f.pending;
+    return acc;
+  }, { totalLaptops: 0, dispatched: 0, pending: 0 }), [rows]);
+
+  const pageOrderCount = pagination.total || rows.length;
 
   const handleCancel = useCallback(async (soNumber) => {
     if (!window.confirm(`Cancel sales order ${soNumber}? Attached laptops will be released back to inventory. This cannot be undone.`)) return;
@@ -79,23 +163,44 @@ export default function SalesOrderListPage() {
   const actionCell = (row) => {
     const cancelled = String(row.status || '').toLowerCase() === 'cancelled';
     const hasAttachedLaptops = Number(row.attached_count || 0) > 0;
-    const hasDc = Number(row.dc_count || 0) > 0;
+    const { delivered, dispatched } = fulfillmentFromRow(row);
+    const hasDc = (delivered + dispatched) > 0;
     return (
-      <div className="flex flex-wrap items-center gap-3" onClick={(e) => e.stopPropagation()}>
-        <button type="button" className="text-blue-600 text-sm font-semibold" onClick={() => navigate(salesOrderDetailPath(row.sales_order_number))}>View</button>
+      <div className="flex flex-wrap items-center gap-1" onClick={(e) => e.stopPropagation()}>
+        <ActionIconButton
+          label="View"
+          icon={Eye}
+          tone="blue"
+          onClick={() => navigate(salesOrderDetailPath(row.sales_order_number))}
+        />
         {!cancelled && (
           <>
             {hasAttachedLaptops && (
               <PermissionGate section={['sales_orders_doc', 'delivery_challans']} action="create">
-                <button type="button" className="text-sm text-teal-700 font-semibold" onClick={() => { setPrefillSo(row.sales_order_number); setDcDrawer(true); }}>Create DC</button>
+                <ActionIconButton
+                  label="Create DC"
+                  icon={Truck}
+                  tone="teal"
+                  onClick={() => { setPrefillSo(row.sales_order_number); setDcDrawer(true); }}
+                />
               </PermissionGate>
             )}
             <PermissionGate section="payment_records" action="create">
-              <button type="button" className="text-sm text-gray-700 font-semibold" onClick={() => setPaymentSo(row.sales_order_number)}>Record Payment</button>
+              <ActionIconButton
+                label="Record Payment"
+                icon={Banknote}
+                tone="slate"
+                onClick={() => setPaymentSo(row.sales_order_number)}
+              />
             </PermissionGate>
             {!hasDc && (
               <PermissionGate section="sales_orders_doc" action="edit">
-                <button type="button" className="text-sm text-red-600 font-semibold" onClick={() => handleCancel(row.sales_order_number)}>Cancel</button>
+                <ActionIconButton
+                  label="Cancel"
+                  icon={Ban}
+                  tone="red"
+                  onClick={() => handleCancel(row.sales_order_number)}
+                />
               </PermissionGate>
             )}
           </>
@@ -114,14 +219,45 @@ export default function SalesOrderListPage() {
       </span>
     ) },
     { key: 'date', header: 'Date', render: (r) => formatDate(r.created_at) },
+    { key: 'dispatch_date', header: 'Dispatch Date', render: (r) => (
+      <span className="text-sm font-medium text-slate-800">{formatDate(r.dispatch_date)}</span>
+    ) },
     { key: 'customer_name', header: 'Customer' },
     { key: 'type', header: 'Type', render: (r) => <span className={`px-2 py-0.5 rounded-full text-xs ${TYPE_STYLES[r.quotation_type]}`}>{typeLabel(r.quotation_type)}</span> },
+    { key: 'laptop_qty', header: 'Laptop Qty', render: (r) => {
+      const { total } = fulfillmentFromRow(r);
+      return <span className="text-lg font-bold text-blue-700">{total}</span>;
+    } },
+    { key: 'delivered_count', header: 'Delivered', render: (r) => {
+      const { delivered } = fulfillmentFromRow(r);
+      return <span className="text-base font-bold text-emerald-700">{delivered}</span>;
+    } },
+    { key: 'attached_count', header: 'Attached', render: (r) => {
+      const { attached } = fulfillmentFromRow(r);
+      return <span className="text-base font-bold text-teal-700">{attached}</span>;
+    } },
+    { key: 'fulfillment', header: 'Progress', render: (r) => {
+      const { total, dispatched, pending } = fulfillmentFromRow(r);
+      return (
+        <div className="flex flex-wrap gap-1">
+          <QtyPill label="Total" value={total} tone="blue" />
+          <QtyPill label="Dispatched" value={dispatched} tone="amber" />
+          <QtyPill label="Pending" value={pending} tone="slate" />
+        </div>
+      );
+    } },
+    { key: 'status', header: 'Status', render: (r) => (
+      <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${soStatusClass(r.status)}`}>
+        {soStatusLabel(r.status)}
+      </span>
+    ) },
     { key: 'total', header: 'Total', render: (r) => formatCurrency(r.total_value) },
-    { key: 'dc', header: 'DC', render: (r) => <span className="bg-gray-100 px-2 py-0.5 rounded-full text-xs">{r.dc_count || 0}</span> },
     { key: 'actions', header: 'Actions', render: actionCell },
   ];
 
-  const renderCard = (r) => (
+  const renderCard = (r) => {
+    const { total, delivered, attached, dispatched, pending } = fulfillmentFromRow(r);
+    return (
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-2">
         <span className="flex items-center gap-2">
@@ -133,14 +269,23 @@ export default function SalesOrderListPage() {
         <span className={`px-2 py-0.5 rounded-full text-xs ${TYPE_STYLES[r.quotation_type]}`}>{typeLabel(r.quotation_type)}</span>
       </div>
       <p className="font-medium text-slate-800">{r.customer_name}</p>
+      <div className="flex flex-wrap gap-1">
+        <QtyPill label="Total" value={total} tone="blue" />
+        <QtyPill label="Delivered" value={delivered} tone="green" />
+        <QtyPill label="Attached" value={attached} tone="teal" />
+        <QtyPill label="Dispatched" value={dispatched} tone="amber" />
+        <QtyPill label="Pending" value={pending} tone="slate" />
+      </div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
         <span>{formatDate(r.created_at)}</span>
+        {r.dispatch_date ? <span>Dispatch: {formatDate(r.dispatch_date)}</span> : null}
+        <span className={`px-2 py-0.5 rounded-full font-semibold ${soStatusClass(r.status)}`}>{soStatusLabel(r.status)}</span>
         <span className="font-semibold text-slate-700">{formatCurrency(r.total_value)}</span>
-        <span>DC: {r.dc_count || 0}</span>
       </div>
       <div className="pt-2 border-t border-slate-100">{actionCell(r)}</div>
     </div>
-  );
+    );
+  };
 
   return (
     <div className="p-4 max-w-7xl mx-auto">
@@ -155,18 +300,46 @@ export default function SalesOrderListPage() {
         )}
       />
 
-      <div className="grid grid-cols-3 gap-3 mb-4">
-        <StatCard label="Total" value={stats.total} tone="gray" />
-        <StatCard label="Awaiting DC (page)" value={stats.pending} tone="amber" />
-        <StatCard label="With DC (page)" value={stats.withDc} tone="green" />
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+        <StatCard label="Orders (filtered)" value={pageOrderCount} tone="gray" />
+        <StatCard label="Total laptops (page)" value={stats.totalLaptops} tone="blue" />
+        <StatCard label="Dispatched (page)" value={stats.dispatched} tone="amber" />
+        <StatCard label="Pending (page)" value={stats.pending} tone="gray" />
       </div>
 
-      <div className="flex flex-wrap gap-3 mb-4">
+      <div className="flex flex-wrap gap-3 mb-4 items-end">
         <SearchField
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
           placeholder="Search SO #, customer, GST…"
         />
+        <label className="flex flex-col gap-1 text-xs text-slate-600">
+          Customer
+          <select
+            className="min-w-[180px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+            value={customerId}
+            onChange={(e) => setCustomerId(e.target.value)}
+          >
+            <option value="">All customers</option>
+            {customers.map((c) => (
+              <option key={c.customer_id} value={c.customer_id}>
+                {c.company_name || c.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-slate-600">
+          Status
+          <select
+            className="min-w-[140px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+          >
+            {SO_STATUS_OPTIONS.map((opt) => (
+              <option key={opt.value || 'all'} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        </label>
         <DateRangeFilter
           dateFrom={dateFrom}
           dateTo={dateTo}

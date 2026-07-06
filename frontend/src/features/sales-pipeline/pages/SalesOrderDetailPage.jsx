@@ -74,9 +74,20 @@ export default function SalesOrderDetailPage() {
   const summary = data?.summary || {};
   const totals = data?.totals || {};
   const dcs = data?.delivery_challans || [];
-  const attachedCount = Number(data?.attached_count || 0);
+  const attachedCount = Number(data?.attached_count ?? summary.attached_count ?? 0);
+  const deliveredCount = Number(data?.delivered_count ?? summary.delivered_count ?? 0);
+  const dispatchedCount = Number(data?.dispatched_count ?? summary.dispatched_count ?? 0);
+  const laptopQty = Number(data?.laptop_qty ?? summary.laptop_qty ?? lines.reduce(
+    (sum, l) => sum + Number(l.main_qty || l.quantity || 0),
+    0
+  ));
+  const pendingQty = Number(
+    data?.pending_qty ?? summary.pending_qty
+    ?? Math.max(0, laptopQty - deliveredCount - dispatchedCount - attachedCount)
+  );
+  const dispatchDate = data?.dispatch_date ?? summary.dispatch_date ?? null;
   const hasAttachedLaptops = attachedCount > 0;
-  const hasDc = dcs.length > 0;
+  const hasDc = (deliveredCount + dispatchedCount) > 0;
   const halfGst = (Number(totals.gst_rate) || 18) / 2;
   const shippingAddr = parseDeliveryAddress(head.customer_shipping_address);
   const supplyStateLabel = formatSupplyStateLabel(
@@ -102,7 +113,29 @@ export default function SalesOrderDetailPage() {
           <Link to="/sales-pipeline/sales-orders" className="text-sm text-blue-600">← Back</Link>
           <h1 className="text-2xl font-semibold font-mono mt-1">{soNumber}</h1>
           <p className="text-gray-600">{head.customer_name}</p>
-          <div className="flex flex-wrap items-center gap-2 mt-1">
+          <div className="flex flex-wrap gap-2 mt-2">
+            <span className="inline-flex items-center gap-1 rounded-lg bg-blue-100 px-3 py-1 text-sm font-bold text-blue-900">
+              <span className="font-medium opacity-75">Total</span> {laptopQty}
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-100 px-3 py-1 text-sm font-bold text-emerald-800">
+              <span className="font-medium opacity-75">Delivered</span> {deliveredCount}
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-lg bg-teal-100 px-3 py-1 text-sm font-bold text-teal-900">
+              <span className="font-medium opacity-75">Attached</span> {attachedCount}
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-lg bg-amber-100 px-3 py-1 text-sm font-bold text-amber-900">
+              <span className="font-medium opacity-75">Dispatched</span> {dispatchedCount}
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-3 py-1 text-sm font-bold text-slate-800">
+              <span className="font-medium opacity-75">Pending</span> {pendingQty}
+            </span>
+            {dispatchDate ? (
+              <span className="inline-flex items-center gap-1 rounded-lg bg-indigo-100 px-3 py-1 text-sm font-bold text-indigo-900">
+                <span className="font-medium opacity-75">Dispatch Date</span> {formatDate(dispatchDate)}
+              </span>
+            ) : null}
+          </div>
+          <div className="flex flex-wrap items-center gap-2 mt-2">
             <span className={`inline-block px-2 py-0.5 rounded-full text-xs ${TYPE_STYLES[head.quotation_type]}`}>{typeLabel(head.quotation_type)}</span>
             {isCancelled && (
               <span className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">Cancelled</span>
@@ -146,6 +179,13 @@ export default function SalesOrderDetailPage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="bg-white border rounded-xl p-4 text-sm space-y-2">
             <p><span className="text-gray-500">Date:</span> {formatDate(head.created_at)}</p>
+            <p><span className="text-gray-500">Dispatch date:</span> {formatDate(dispatchDate)}</p>
+            <p><span className="text-gray-500">Status:</span> {isCancelled ? 'Cancelled' : 'Pending'}</p>
+            <p><span className="text-gray-500">Laptop quantity:</span> <strong className="text-blue-700">{laptopQty}</strong></p>
+            <p><span className="text-gray-500">Delivered:</span> <strong className="text-emerald-700">{deliveredCount}</strong></p>
+            <p><span className="text-gray-500">Attached:</span> <strong className="text-teal-700">{attachedCount}</strong></p>
+            <p><span className="text-gray-500">Dispatched:</span> <strong className="text-amber-700">{dispatchedCount}</strong></p>
+            <p><span className="text-gray-500">Pending:</span> <strong className="text-slate-800">{pendingQty}</strong></p>
             <p><span className="text-gray-500">Shipping State (GST):</span> {supplyStateLabel}</p>
             <p><span className="text-gray-500">Remarks:</span> {lines.map((l) => (l.remark || '').trim()).filter(Boolean).join(' · ') || '—'}</p>
           </div>
@@ -251,7 +291,8 @@ export default function SalesOrderDetailPage() {
             <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
               <tr>
                 <th className="px-4 py-2 text-left">DC #</th>
-                <th className="px-4 py-2 text-left">Date</th>
+                <th className="px-4 py-2 text-left">Created</th>
+                <th className="px-4 py-2 text-left">Dispatch Date</th>
                 <th className="px-4 py-2 text-left">Dispatch</th>
                 <th className="px-4 py-2 text-left">Status</th>
                 <th className="px-4 py-2 text-left">Actions</th>
@@ -264,6 +305,7 @@ export default function SalesOrderDetailPage() {
                     <Link to={deliveryChallanDetailPath(dc.dc_number)}>{dc.dc_number}</Link>
                   </td>
                   <td className="px-4 py-2">{formatDate(dc.created_at)}</td>
+                  <td className="px-4 py-2 font-medium text-slate-800">{formatDate(dc.dispatched_at)}</td>
                   <td className="px-4 py-2">{dc.dispatch_mode || '—'}</td>
                   <td className="px-4 py-2">{dc.status || 'pending'}</td>
                   <td className="px-4 py-2">

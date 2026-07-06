@@ -21,6 +21,8 @@ const {
   getReturnDcDetail,
   getQuotationRemainingQty,
   getSalesOrderRemainingQty,
+  getSalesOrderFulfillmentCounts,
+  getSalesOrderDispatchDate,
   getOperationCounts,
   searchAvailableInventory,
   getDcSerialRateLookup,
@@ -455,6 +457,8 @@ exports.listSalesOrders = async (req, res) => {
       assignedUserId,
       dateFrom: req.query.date_from,
       dateTo: req.query.date_to,
+      customerId: req.query.customer_id || null,
+      status: req.query.status || '',
     });
     res.json({ success: true, ...data });
   } catch (error) {
@@ -1942,7 +1946,7 @@ exports.getSoWithPayments = async (req, res) => {
       [soNumber]
     );
     const dcRes = await pool.query(
-      `SELECT DISTINCT ON (dc_number) dc_number, status, created_at, ship_by, dispatch_mode
+      `SELECT DISTINCT ON (dc_number) dc_number, status, created_at, ship_by, dispatch_mode, dispatched_at
        FROM delivery_challan_lines WHERE sales_order_number = $1 ORDER BY dc_number, id DESC`,
       [soNumber]
     );
@@ -1951,9 +1955,13 @@ exports.getSoWithPayments = async (req, res) => {
         WHERE sales_order_number = $1 AND status = 'attached'`,
       [soNumber]
     );
+    const fulfillment = await getSalesOrderFulfillmentCounts(soNumber);
+    const dispatchMeta = await getSalesOrderDispatchDate(soNumber);
     let totalValue = 0;
+    let laptopQty = fulfillment.laptop_qty || 0;
     lines.forEach((l) => {
       const qty = Number(l.main_qty || l.quantity || 0) || 0;
+      if (!laptopQty) laptopQty += qty;
       l.amount = +(Number(l.rate || 0) * qty).toFixed(2);
       totalValue += l.amount;
     });
@@ -1971,13 +1979,26 @@ exports.getSoWithPayments = async (req, res) => {
       success: true,
       sales_order_number: soNumber,
       status: soStatus,
+      laptop_qty: laptopQty,
+      attached_count: Number(attachedRes.rows[0]?.c || fulfillment.attached_count || 0),
+      delivered_count: fulfillment.delivered_count,
+      dispatched_count: fulfillment.dispatched_count,
+      pending_qty: fulfillment.pending_qty,
+      dispatch_date: dispatchMeta.dispatch_date,
+      last_dispatch_date: dispatchMeta.last_dispatch_date,
       lines,
       payments: payRes.rows,
       delivery_challans: dcRes.rows,
-      attached_count: Number(attachedRes.rows[0]?.c || 0),
       totals,
       summary: {
         total_value: totalValue,
+        laptop_qty: laptopQty,
+        attached_count: fulfillment.attached_count,
+        delivered_count: fulfillment.delivered_count,
+        dispatched_count: fulfillment.dispatched_count,
+        pending_qty: fulfillment.pending_qty,
+        dispatch_date: dispatchMeta.dispatch_date,
+        last_dispatch_date: dispatchMeta.last_dispatch_date,
         total_paid: totalPaid,
         balance_due: Math.max(0, totalValue - totalPaid),
         security_amount: Number(lines[0].security_amount || 0),
@@ -2097,7 +2118,13 @@ exports.regenerateSalesOrderPdf = async (req, res) => {
     const n = req.params.salesOrderNumber;
     const lines = await getSalesOrderLines(n);
     if (!lines.length) return res.status(404).json({ success: false, message: 'Sales order not found' });
-    const pdf = await generateDocumentPdf({ docType: 'sales_order', docNumber: n, header: lines[0], lines });
+    const { dispatch_date: dispatchDate } = await getSalesOrderDispatchDate(n);
+    const pdf = await generateDocumentPdf({
+      docType: 'sales_order',
+      docNumber: n,
+      header: { ...lines[0], dispatch_date: dispatchDate },
+      lines,
+    });
     await pool.query(`UPDATE sales_order_lines SET pdf_path = $1 WHERE sales_order_number = $2`, [pdf, n]);
     res.json({ success: true, pdf_path: pdf });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }

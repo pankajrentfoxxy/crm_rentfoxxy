@@ -24,6 +24,13 @@ function ensureUploadDir() {
   if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
 
+function formatPdfDate(value) {
+  if (!value) return null;
+  const dt = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(dt.getTime())) return null;
+  return dt.toLocaleDateString('en-GB');
+}
+
 function getMailTransport() {
   const host = process.env.SMTP_HOST;
   const user = process.env.SMTP_USER;
@@ -299,9 +306,15 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
     y += 12;
 
     // ── Seller block + type/dispatch ─────────────────────────────────────
+    const docDate = formatPdfDate(header.dc_date || header.created_at) || new Date().toLocaleDateString('en-GB');
+    const dispatchDate = formatPdfDate(header.dispatched_at || header.dispatch_date);
     doc.font('Helvetica').fontSize(9).fillColor(C.sub)
-      .text(`Date: ${header.dc_date || new Date().toLocaleDateString('en-GB')}`, L, y);
+      .text(`Date: ${docDate}`, L, y);
     y += 14;
+    if (dispatchDate) {
+      doc.text(`Dispatch Date: ${dispatchDate}`, L, y);
+      y += 14;
+    }
     doc.font('Helvetica-Bold').fontSize(13).fillColor(accent).text(company.legal_name, L, y);
     y += 18;
     doc.font('Helvetica').fontSize(9).fillColor(C.ink);

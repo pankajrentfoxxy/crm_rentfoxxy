@@ -192,6 +192,74 @@ async function getQuotationRemainingQty(quotationNumber) {
   return result.rows[0]?.qty || 0;
 }
 
+const SO_FULFILLMENT_DELIVERED_SQL = `(SELECT COUNT(*)::int FROM sales_order_serials sos
+  WHERE sos.sales_order_number = %SO%
+    AND sos.status = 'dispatched'
+    AND sos.dc_number IS NOT NULL
+    AND EXISTS (
+      SELECT 1 FROM delivery_challan_lines dcl
+      WHERE dcl.dc_number = sos.dc_number AND dcl.status = 'delivered'
+    ))`;
+
+const SO_FULFILLMENT_DISPATCHED_SQL = `(SELECT COUNT(*)::int FROM sales_order_serials sos
+  WHERE sos.sales_order_number = %SO%
+    AND sos.status = 'dispatched'
+    AND sos.dc_number IS NOT NULL
+    AND EXISTS (
+      SELECT 1 FROM delivery_challan_lines dcl
+      WHERE dcl.dc_number = sos.dc_number
+        AND COALESCE(dcl.status, 'pending') NOT IN ('delivered', 'rejected')
+    ))`;
+
+function fulfillmentSql(template, soRef) {
+  return template.replace(/%SO%/g, soRef);
+}
+
+function withPendingQty(row = {}) {
+  const laptopQty = Number(row.laptop_qty || 0);
+  const attached = Number(row.attached_count || 0);
+  const delivered = Number(row.delivered_count || 0);
+  const dispatched = Number(row.dispatched_count || 0);
+  return {
+    ...row,
+    laptop_qty: laptopQty,
+    attached_count: attached,
+    delivered_count: delivered,
+    dispatched_count: dispatched,
+    pending_qty: Math.max(0, laptopQty - delivered - dispatched - attached),
+  };
+}
+
+async function getSalesOrderDispatchDate(salesOrderNumber) {
+  const r = await pool.query(
+    `SELECT MIN(dcl.dispatched_at) AS dispatch_date,
+            MAX(dcl.dispatched_at) AS last_dispatch_date
+       FROM delivery_challan_lines dcl
+      WHERE dcl.sales_order_number = $1
+        AND dcl.dispatched_at IS NOT NULL
+        AND COALESCE(dcl.movement_type, 'outbound') = 'outbound'`,
+    [salesOrderNumber]
+  );
+  return {
+    dispatch_date: r.rows[0]?.dispatch_date || null,
+    last_dispatch_date: r.rows[0]?.last_dispatch_date || null,
+  };
+}
+
+async function getSalesOrderFulfillmentCounts(salesOrderNumber) {
+  const r = await pool.query(
+    `SELECT
+       (SELECT COALESCE(SUM(COALESCE(main_qty, quantity, 0)), 0)::int
+          FROM sales_order_lines WHERE sales_order_number = $1) AS laptop_qty,
+       (SELECT COUNT(*)::int FROM sales_order_serials
+          WHERE sales_order_number = $1 AND status = 'attached') AS attached_count,
+       ${fulfillmentSql(SO_FULFILLMENT_DELIVERED_SQL, '$1')} AS delivered_count,
+       ${fulfillmentSql(SO_FULFILLMENT_DISPATCHED_SQL, '$1')} AS dispatched_count`,
+    [salesOrderNumber]
+  );
+  return withPendingQty(r.rows[0] || {});
+}
+
 async function getSalesOrderRemainingQty(salesOrderNumber) {
   const result = await pool.query(
     `SELECT COALESCE(SUM(quantity), 0)::int AS qty FROM sales_order_lines WHERE sales_order_number = $1`,
@@ -278,6 +346,7 @@ async function getQuotationLines(quotationNumber) {
 
 async function listSalesOrdersGrouped({
   page = 1, limit = 20, search = '', assignedUserId = null, dateFrom, dateTo,
+  customerId = null, status = '',
 } = {}) {
   const hasEntityCode = await tableColumnExists('sales_order_lines', 'entity_code');
   const entitySelect = hasEntityCode ? 'entity_code' : `'rentfoxxy' AS entity_code`;
@@ -290,6 +359,34 @@ async function listSalesOrdersGrouped({
   if (assignedUserId) {
     params.push(assignedUserId);
     where += where ? ` AND created_by = $${params.length}` : `WHERE created_by = $${params.length}`;
+  }
+  if (customerId) {
+    params.push(Number(customerId));
+    where += where ? ` AND customer_id = $${params.length}` : `WHERE customer_id = $${params.length}`;
+  }
+  const normalizedStatus = String(status || '').trim().toLowerCase();
+  if (normalizedStatus === 'cancelled') {
+    where += where ? ` AND sales_order_number IN (
+      SELECT sales_order_number FROM sales_order_lines
+      GROUP BY sales_order_number
+      HAVING COUNT(*) > 0
+        AND COUNT(*) FILTER (WHERE LOWER(COALESCE(status, 'pending')) = 'cancelled') = COUNT(*)
+    )` : `WHERE sales_order_number IN (
+      SELECT sales_order_number FROM sales_order_lines
+      GROUP BY sales_order_number
+      HAVING COUNT(*) > 0
+        AND COUNT(*) FILTER (WHERE LOWER(COALESCE(status, 'pending')) = 'cancelled') = COUNT(*)
+    )`;
+  } else if (normalizedStatus === 'pending') {
+    where += where ? ` AND sales_order_number IN (
+      SELECT sales_order_number FROM sales_order_lines
+      GROUP BY sales_order_number
+      HAVING COUNT(*) FILTER (WHERE LOWER(COALESCE(status, 'pending')) != 'cancelled') > 0
+    )` : `WHERE sales_order_number IN (
+      SELECT sales_order_number FROM sales_order_lines
+      GROUP BY sales_order_number
+      HAVING COUNT(*) FILTER (WHERE LOWER(COALESCE(status, 'pending')) != 'cancelled') > 0
+    )`;
   }
   where = appendDateRangeToWhere(
     where,
@@ -304,12 +401,19 @@ async function listSalesOrdersGrouped({
   const listResult = await pool.query(
     `SELECT g.*,
        COALESCE(NULLIF(g.customer_name, ''), c.company_name, c.name) AS customer_name,
+       (SELECT COALESCE(SUM(COALESCE(main_qty, quantity, 0)), 0)::int FROM sales_order_lines sol WHERE sol.sales_order_number = g.sales_order_number) AS laptop_qty,
        (SELECT COALESCE(SUM(quantity), 0) FROM sales_order_lines sol WHERE sol.sales_order_number = g.sales_order_number) AS remaining_qty,
        (SELECT COALESCE(SUM(COALESCE(rate,0) * COALESCE(quantity,0)), 0) FROM sales_order_lines sol WHERE sol.sales_order_number = g.sales_order_number) AS total_value,
        (SELECT COALESCE(SUM(COALESCE(rate,0) * COALESCE(quantity,0)), 0) FROM sales_order_lines sol WHERE sol.sales_order_number = g.sales_order_number) AS total_amount,
-       (SELECT COUNT(DISTINCT dcl.dc_number) FROM delivery_challan_lines dcl WHERE dcl.sales_order_number = g.sales_order_number) AS dc_count,
        (SELECT COUNT(*)::int FROM sales_order_serials sos
           WHERE sos.sales_order_number = g.sales_order_number AND sos.status = 'attached') AS attached_count,
+       ${fulfillmentSql(SO_FULFILLMENT_DELIVERED_SQL, 'g.sales_order_number')} AS delivered_count,
+       ${fulfillmentSql(SO_FULFILLMENT_DISPATCHED_SQL, 'g.sales_order_number')} AS dispatched_count,
+       (SELECT MIN(dcl.dispatched_at)
+          FROM delivery_challan_lines dcl
+         WHERE dcl.sales_order_number = g.sales_order_number
+           AND dcl.dispatched_at IS NOT NULL
+           AND COALESCE(dcl.movement_type, 'outbound') = 'outbound') AS dispatch_date,
        (SELECT CASE WHEN COUNT(*) > 0 AND COUNT(*) FILTER (WHERE sol.status = 'cancelled') = COUNT(*)
                     THEN 'cancelled' ELSE 'pending' END
           FROM sales_order_lines sol WHERE sol.sales_order_number = g.sales_order_number) AS status
@@ -327,7 +431,7 @@ async function listSalesOrdersGrouped({
     listParams
   );
   return {
-    sales_orders: listResult.rows,
+    sales_orders: listResult.rows.map(withPendingQty),
     pagination: {
       page,
       limit,
@@ -416,7 +520,8 @@ async function listDeliveryChallansGrouped({
        SELECT DISTINCT ON (d.dc_number)
             d.id, d.dc_number, d.sales_order_number, d.quotation_number, d.customer_id, d.customer_name,
             d.gst_number, d.status, d.pdf_path, d.file_path, d.ship_by, d.delivery_person_id,
-            d.courier_name, d.awb_number, d.model_name, d.created_at, d.updated_at,
+            d.courier_name, d.awb_number, d.model_name, d.dispatch_mode, d.dispatched_at,
+            d.created_at, d.updated_at,
             COALESCE(u.name, u.email, '') AS delivery_person_name
        FROM delivery_challan_lines d
        LEFT JOIN users u ON u.user_id = d.delivery_person_id
@@ -1325,6 +1430,9 @@ module.exports = {
   generateToken,
   getQuotationRemainingQty,
   getSalesOrderRemainingQty,
+  getSalesOrderFulfillmentCounts,
+  getSalesOrderDispatchDate,
+  withPendingQty,
   listQuotationsGrouped,
   getQuotationLines,
   listSalesOrdersGrouped,

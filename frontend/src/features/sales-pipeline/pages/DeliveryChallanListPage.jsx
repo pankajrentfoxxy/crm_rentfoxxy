@@ -78,7 +78,10 @@ export default function DeliveryChallanListPage() {
 
   const columns = [
     { key: 'dc_number', header: 'DC #', render: (r) => <span className="font-mono text-blue-700 font-semibold">{r.dc_number}</span> },
-    { key: 'date', header: 'Date', render: (r) => formatDate(r.created_at) },
+    { key: 'date', header: 'Created', render: (r) => formatDate(r.created_at) },
+    { key: 'dispatch_date', header: 'Dispatch Date', render: (r) => (
+      <span className="text-sm font-medium text-slate-800">{formatDate(r.dispatched_at)}</span>
+    ) },
     { key: 'customer_name', header: 'Customer' },
     { key: 'so', header: 'SO #', render: (r) => <span className="font-mono text-xs">{r.sales_order_number || '—'}</span> },
     { key: 'dispatch', header: 'Dispatch', render: (r) => (r.dispatch_mode ? <span className={`px-2 py-0.5 rounded-full text-xs ${DISPATCH_MODE_STYLES[r.dispatch_mode]}`}>{r.dispatch_mode}</span> : '—') },
@@ -112,6 +115,7 @@ export default function DeliveryChallanListPage() {
         <p className="font-medium text-slate-800">{r.customer_name}</p>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
           <span>{formatDate(r.created_at)}</span>
+          {r.dispatched_at ? <span>Dispatch: {formatDate(r.dispatched_at)}</span> : null}
           {r.sales_order_number && <span className="font-mono">SO {r.sales_order_number}</span>}
           {r.dispatch_mode && <span className={`px-2 py-0.5 rounded-full ${DISPATCH_MODE_STYLES[r.dispatch_mode]}`}>{r.dispatch_mode}</span>}
         </div>

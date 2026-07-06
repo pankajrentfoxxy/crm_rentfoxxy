@@ -13,7 +13,7 @@ import {
   updateDC, dispatchDC,
 } from '../salesPipelineApi';
 import {
-  DC_STATUS_STYLES, formatConfig, formatCurrency, formatDateTime,
+  DC_STATUS_STYLES, formatConfig, formatCurrency, formatDate, formatDateTime,
   parseSerials, salesOrderDetailPath, statusLabel,
 } from '../salesPipelineUtils';
 import { getBackendOrigin } from '../../../utils/api';
@@ -240,6 +240,14 @@ export default function DeliveryChallanDetailPage() {
           <Link to="/sales-pipeline/delivery-challans" className="text-sm text-blue-600">← Back</Link>
           <h1 className={`text-2xl font-semibold font-mono mt-1 ${isRejected ? 'text-red-700 line-through decoration-red-400' : ''}`}>{dcNumber}</h1>
           <p className="text-gray-600">{head.customer_name || '—'} · SO: <Link className="text-blue-600" to={salesOrderDetailPath(head.sales_order_number)}>{head.sales_order_number}</Link></p>
+          <p className="text-sm text-gray-500 mt-1">
+            Created: {formatDate(head.created_at)}
+            {head.dispatched_at ? (
+              <span className="ml-3 font-medium text-indigo-800">Dispatch Date: {formatDateTime(head.dispatched_at)}</span>
+            ) : (
+              <span className="ml-3 text-amber-700">Not dispatched yet</span>
+            )}
+          </p>
           <div className="flex flex-wrap gap-2 mt-2 items-center">
             <span className={`px-2 py-0.5 rounded-full text-xs ${DC_STATUS_STYLES[head.status || 'pending']}`}>{statusLabel(head.status || 'pending')}</span>
             {head.entity_code && (
@@ -334,6 +342,8 @@ export default function DeliveryChallanDetailPage() {
                 </div>
               ) : null}
               <div className="p-4 text-sm border-t space-y-1">
+                <p>Created: {formatDate(head.created_at)}</p>
+                <p className="font-medium text-slate-800">Dispatch date: {formatDateTime(head.dispatched_at)}</p>
                 {(head.ship_by === 'by_courier' || head.dispatch_mode === 'courier') && (
                   <p>
                     Courier: <strong>{head.courier_name || '—'}</strong>
@@ -557,6 +567,15 @@ export default function DeliveryChallanDetailPage() {
         </div>
 
         <aside className="space-y-4">
+          <div className="bg-white border rounded-xl p-4 text-sm">
+            <h3 className="font-semibold mb-2">Dispatch</h3>
+            <p><span className="text-gray-500">Created:</span> {formatDate(head.created_at)}</p>
+            <p><span className="text-gray-500">Dispatch date:</span> <strong>{formatDateTime(head.dispatched_at)}</strong></p>
+            <p><span className="text-gray-500">Mode:</span> {head.dispatch_mode || head.ship_by || '—'}</p>
+            {head.delivered_at ? (
+              <p><span className="text-gray-500">Delivered:</span> {formatDateTime(head.delivered_at)}</p>
+            ) : null}
+          </div>
           <div className="bg-white border rounded-xl p-4 text-sm">
             <h3 className="font-semibold mb-2">Customer</h3>
             <p>{head.customer_name}</p>
