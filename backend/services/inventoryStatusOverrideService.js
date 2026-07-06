@@ -5,6 +5,7 @@
 const { parseExtra } = require('./qcManagementService');
 const { createProductionTicketForQcSerial } = require('./qcProcessIntakeService');
 const { logTtsplEvent } = require('./ttsplAuditService');
+const { invalidateInventoryListCachesFireAndForget } = require('./inventoryListCache');
 
 const ALLOWED_QC_STATUSES = new Set([
   'out_for_repare',
@@ -129,6 +130,8 @@ async function applySuperAdminSerialStatus(pool, opts) {
       );
       if (ticketResult.ok) ticketId = ticketResult.data?.ticket_id || null;
     }
+
+    invalidateInventoryListCachesFireAndForget();
 
     return {
       ok: true,

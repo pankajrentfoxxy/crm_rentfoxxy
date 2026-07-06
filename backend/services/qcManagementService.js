@@ -296,46 +296,46 @@ async function buildSerialSpecContext(pool, rows) {
   const inventoryBySerial = new Map();
   const inventoryByAsset = new Map();
   const inventoryById = new Map();
-  if (serialNumbers.length || assetCodes.length || inventoryIds.size) {
-    const invR = await pool.query(
-      `SELECT inventory_id, serial_number, machine_number, brand, model, processor,
-              generation, ram, storage, gpu, screen_size
-         FROM inventory
-        WHERE serial_number = ANY($1::text[])
-           OR machine_number = ANY($2::text[])
-           OR inventory_id = ANY($3::int[])`,
-      [serialNumbers, assetCodes, [...inventoryIds]]
-    );
-    for (const inv of invR.rows) {
-      if (inv.serial_number) inventoryBySerial.set(String(inv.serial_number).toLowerCase(), inv);
-      if (inv.machine_number) inventoryByAsset.set(String(inv.machine_number), inv);
-      inventoryById.set(String(inv.inventory_id), inv);
-    }
-  }
-
   const vpdByOldId = new Map();
   const vpdById = new Map();
-  if (oldProductIds.size || productDetailIds.size) {
-    const vpdR = await pool.query(
-      `SELECT product_detail_id, old_product_id, brand, model, processor, generation,
-              ram, storage, gpu, screen_size
-         FROM vendor_product_details
-        WHERE old_product_id = ANY($1::int[])
-           OR product_detail_id = ANY($2::int[])`,
-      [[...oldProductIds], [...productDetailIds]]
-    );
-    for (const vpd of vpdR.rows) {
-      if (vpd.old_product_id != null) vpdByOldId.set(String(vpd.old_product_id), vpd);
-      vpdById.set(String(vpd.product_detail_id), vpd);
-    }
+
+  const needsInventory = serialNumbers.length || assetCodes.length || inventoryIds.size;
+  const needsVpd = oldProductIds.size || productDetailIds.size;
+
+  const [invR, vpdR, brandMap] = await Promise.all([
+    needsInventory
+      ? pool.query(
+          `SELECT inventory_id, serial_number, machine_number, brand, model, processor,
+                  generation, ram, storage, gpu, screen_size
+             FROM inventory
+            WHERE serial_number = ANY($1::text[])
+               OR machine_number = ANY($2::text[])
+               OR inventory_id = ANY($3::int[])`,
+          [serialNumbers, assetCodes, [...inventoryIds]]
+        )
+      : Promise.resolve({ rows: [] }),
+    needsVpd
+      ? pool.query(
+          `SELECT product_detail_id, old_product_id, brand, model, processor, generation,
+                  ram, storage, gpu, screen_size
+             FROM vendor_product_details
+            WHERE old_product_id = ANY($1::int[])
+               OR product_detail_id = ANY($2::int[])`,
+          [[...oldProductIds], [...productDetailIds]]
+        )
+      : Promise.resolve({ rows: [] }),
+    loadBrandNameMap(pool),
+  ]);
+
+  for (const inv of invR.rows) {
+    if (inv.serial_number) inventoryBySerial.set(String(inv.serial_number).toLowerCase(), inv);
+    if (inv.machine_number) inventoryByAsset.set(String(inv.machine_number), inv);
+    inventoryById.set(String(inv.inventory_id), inv);
   }
 
-  const brandMap = new Map();
-  try {
-    const brandR = await pool.query(`SELECT id, name FROM asset_config_brands WHERE deleted_at IS NULL`);
-    for (const brand of brandR.rows) brandMap.set(String(brand.id), brand.name);
-  } catch {
-    /* optional table */
+  for (const vpd of vpdR.rows) {
+    if (vpd.old_product_id != null) vpdByOldId.set(String(vpd.old_product_id), vpd);
+    vpdById.set(String(vpd.product_detail_id), vpd);
   }
 
   return {
@@ -344,8 +344,30 @@ async function buildSerialSpecContext(pool, rows) {
     inventoryById,
     vpdByOldId,
     vpdById,
-    brandMap
+    brandMap,
   };
+}
+
+async function loadBrandNameMap(pool) {
+  try {
+    const { cacheWrap, CACHE_TTL } = require('../utils/cacheService');
+    const cached = await cacheWrap('master:asset_config_brands:v1', CACHE_TTL.MASTER_LOOKUP, async () => {
+      const brandR = await pool.query(
+        `SELECT id, name FROM asset_config_brands WHERE deleted_at IS NULL`
+      );
+      const obj = {};
+      for (const brand of brandR.rows) obj[String(brand.id)] = brand.name;
+      return obj;
+    });
+    return new Map(Object.entries(cached || {}));
+  } catch {
+    const brandR = await pool.query(
+      `SELECT id, name FROM asset_config_brands WHERE deleted_at IS NULL`
+    );
+    const map = new Map();
+    for (const brand of brandR.rows) map.set(String(brand.id), brand.name);
+    return map;
+  }
 }
 
 async function enrichSerialRowsBatch(pool, rows) {

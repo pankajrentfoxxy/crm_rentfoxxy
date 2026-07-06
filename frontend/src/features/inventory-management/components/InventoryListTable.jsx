@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
 import { Clock, ExternalLink, FileImage, FileSpreadsheet, FileText, History, Loader2, Pencil, Plus, RefreshCw, X } from 'lucide-react';
@@ -33,6 +33,20 @@ import useDebouncedSpecParams from '../hooks/useDebouncedSpecParams';
 import { getBackendOrigin } from '../../../utils/api';
 
 const PAGE_SIZE = 25;
+
+function InventoryTableSkeleton({ colSpan = 12, rows = 8 }) {
+  return (
+    <>
+      {Array.from({ length: rows }, (_, i) => (
+        <tr key={i} className="animate-pulse">
+          <td colSpan={colSpan} className="px-3 py-3">
+            <div className="h-4 bg-slate-100 rounded w-full" />
+          </td>
+        </tr>
+      ))}
+    </>
+  );
+}
 
 /** Dashboard stat cards on Ready to Rent/Sell — link to the list that owns each bucket. */
 const READY_TO_RENT_STAT_CARDS = [
@@ -560,6 +574,9 @@ export default function InventoryListTable({ routeKey }) {
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const listAbortRef = useRef(null);
+  const hasLoadedOnceRef = useRef(false);
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [searchInput, setSearchInput] = useState('');
@@ -583,7 +600,12 @@ export default function InventoryListTable({ routeKey }) {
 
   const load = useCallback(async () => {
     if (!apiSegment) return;
-    setLoading(true);
+    listAbortRef.current?.abort();
+    const controller = new AbortController();
+    listAbortRef.current = controller;
+    const isInitial = !hasLoadedOnceRef.current;
+    if (isInitial) setLoading(true);
+    else setRefreshing(true);
     try {
       const { data } = await fetchInventoryList(apiSegment, {
         page,
@@ -592,18 +614,24 @@ export default function InventoryListTable({ routeKey }) {
         date_from: showDateFilter && dateFrom ? dateFrom : undefined,
         date_to: showDateFilter && dateTo ? dateTo : undefined,
         ...(showSpecFilter ? debouncedSpecParams : {}),
-      });
+      }, { signal: controller.signal });
+      if (controller.signal.aborted) return;
       if (data.success) {
         setRows(data.data || []);
         setPagination(data.pagination || { page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
         setSelectedIds([]);
+        hasLoadedOnceRef.current = true;
       } else {
         toast.error(data.message || 'Failed to load');
       }
     } catch (e) {
+      if (controller.signal.aborted || e.code === 'ERR_CANCELED' || e.name === 'CanceledError') return;
       toast.error(e.response?.data?.message || e.message || 'Failed to load');
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [apiSegment, search, page, dateFrom, dateTo, showDateFilter, showSpecFilter, debouncedSpecParams]);
 
@@ -612,12 +640,15 @@ export default function InventoryListTable({ routeKey }) {
   }, [load]);
 
   useEffect(() => {
+    if (routeKey !== 'ready-to-rent-or-sell') return;
     fetchInventoryListCounts()
       .then(({ data }) => {
         if (data.success) setListCounts(data.counts || data.data || data);
       })
       .catch(() => {});
-  }, [rows.length]);
+  }, [routeKey]);
+
+  useEffect(() => () => listAbortRef.current?.abort(), []);
 
   useEffect(() => {
     const onInvalidate = () => load();
@@ -625,12 +656,22 @@ export default function InventoryListTable({ routeKey }) {
     return () => window.removeEventListener(INVENTORY_LIST_INVALIDATE, onInvalidate);
   }, [load]);
 
+  const showReadyToRentAction = routeKey === 'ready-to-rent-or-sell';
+  const statCards = useMemo(
+    () => (listCounts && showReadyToRentAction
+      ? READY_TO_RENT_STAT_CARDS.map((card) => ({
+          ...card,
+          value: listCounts[card.countKey] ?? 0
+        }))
+      : null),
+    [listCounts, showReadyToRentAction]
+  );
+
   if (!meta) return <p className="text-sm text-red-600">Unknown inventory route.</p>;
 
   const showOutForRepareExtras = routeKey === 'out-for-repare';
   const showTicketId = routeKey === 'qc-process';
   const showQcCreateTicket = routeKey === 'qc-process';
-  const showReadyToRentAction = routeKey === 'ready-to-rent-or-sell';
   const showExportExcel = ['ready-to-rent-or-sell', 'qc-process'].includes(routeKey);
   const showPassedStatus = showReadyToRentAction || ['rent-to-own', 'rental-purchase', 'direct-purchase'].includes(routeKey);
   const showTagColumn = showReadyToRentAction || routeKey === 'ready-to-rent-or-sell';
@@ -649,13 +690,6 @@ export default function InventoryListTable({ routeKey }) {
       toast.error(e.response?.data?.message || 'Bulk tag failed');
     }
   };
-
-  const statCards = listCounts && showReadyToRentAction
-    ? READY_TO_RENT_STAT_CARDS.map((card) => ({
-        ...card,
-        value: listCounts[card.countKey] ?? 0
-      }))
-    : null;
 
   const handleExportExcel = async () => {
     if (!apiSegment) return;
@@ -766,7 +800,13 @@ export default function InventoryListTable({ routeKey }) {
         ) : null}
       </div>
 
-      <div className="rounded-xl border bg-white shadow-sm overflow-x-auto">
+      <div className={`rounded-xl border bg-white shadow-sm overflow-x-auto relative ${refreshing ? 'opacity-80' : ''}`}>
+        {refreshing ? (
+          <div className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded-full bg-white/90 border border-slate-200 px-2 py-1 text-[11px] text-slate-600 shadow-sm">
+            <Loader2 className="w-3 h-3 animate-spin text-sky-600" />
+            Updating…
+          </div>
+        ) : null}
         <table className="min-w-full text-sm">
           <thead className="bg-slate-50 text-left text-xs font-semibold uppercase text-slate-500">
             <tr>
@@ -808,11 +848,7 @@ export default function InventoryListTable({ routeKey }) {
           </thead>
           <tbody className="divide-y divide-slate-100">
             {loading ? (
-              <tr>
-                <td colSpan={12} className="py-16 text-center">
-                  <Loader2 className="w-8 h-8 animate-spin mx-auto text-sky-600" />
-                </td>
-              </tr>
+              <InventoryTableSkeleton colSpan={12} />
             ) : rows.length === 0 ? (
               <tr>
                 <td colSpan={12} className="py-12 text-center text-slate-500">

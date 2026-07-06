@@ -5,7 +5,18 @@ const {
   collapseSpaces,
 } = require('../utils/assetConfigNormalize');
 const { normalizeSpecFilterOptions } = require('../utils/specFilterNormalize');
-const { cacheWrap, CACHE_TTL } = require('../utils/cacheService');
+const { cacheWrap, CACHE_TTL, cacheDelPattern } = require('../utils/cacheService');
+
+async function invalidateAssetConfigCaches(entityKey) {
+  const { invalidateInventoryListCaches } = require('./inventoryListCache');
+  await Promise.all([
+    cacheDelPattern('asset-config:'),
+    cacheDelPattern('inventory:spec-filter-options'),
+    cacheDelPattern('inventory:observed-spec-values'),
+    entityKey === 'brands' ? cacheDelPattern('master:asset_config_brands') : Promise.resolve(),
+    invalidateInventoryListCaches(),
+  ]);
+}
 
 /** Entity registry — table metadata for generic CRUD. */
 const ENTITIES = {
@@ -265,6 +276,7 @@ async function createEntity(entityKey, body, userId) {
     `INSERT INTO ${cfg.table} (${cols.join(', ')}) VALUES (${placeholders}) RETURNING *`,
     vals
   );
+  await invalidateAssetConfigCaches(entityKey);
   return r.rows[0];
 }
 
@@ -307,6 +319,7 @@ async function updateEntity(entityKey, id, body, userId) {
         WHERE id = $1 AND deleted_at IS NULL RETURNING *`,
       [id, name, parentId, status, userId]
     );
+    await invalidateAssetConfigCaches(entityKey);
     return r.rows[0];
   }
 
@@ -315,6 +328,7 @@ async function updateEntity(entityKey, id, body, userId) {
       WHERE id = $1 AND deleted_at IS NULL RETURNING *`,
     [id, name, status, userId]
   );
+  await invalidateAssetConfigCaches(entityKey);
   return r.rows[0];
 }
 
@@ -330,6 +344,7 @@ async function softDeleteEntity(entityKey, id, userId) {
     err.status = 404;
     throw err;
   }
+  await invalidateAssetConfigCaches(entityKey);
   return { id };
 }
 
@@ -350,6 +365,7 @@ async function setEntityStatus(entityKey, id, status, userId) {
     err.status = 404;
     throw err;
   }
+  await invalidateAssetConfigCaches(entityKey);
   return r.rows[0];
 }
 

@@ -3,6 +3,7 @@
  */
 const { startWorkLog } = require('./ticketWorkLogService');
 const { logTtsplEvent } = require('./ttsplAuditService');
+const { invalidateInventoryListCachesFireAndForget } = require('./inventoryListCache');
 const {
   applySerialQcUpdate,
   getProductDetailsBySerialId,
@@ -265,6 +266,7 @@ async function applyGrnVendorQcPassOnTicketComplete(db, ticket, userId) {
     [vendorSerialId]
   );
 
+  invalidateInventoryListCachesFireAndForget();
   return { applied: true, serial_id: vendorSerialId };
 }
 
@@ -311,6 +313,7 @@ async function markVendorSerialReadyForRent(db, ticket, userId) {
     });
   }
 
+  invalidateInventoryListCachesFireAndForget();
   return { applied: true, grn_extras: grn.applied };
 }
 
@@ -325,6 +328,7 @@ async function resetVendorSerialForQcReentry(db, serialId) {
       WHERE serial_id = $1 AND deleted_at IS NULL`,
     [serialId]
   );
+  invalidateInventoryListCachesFireAndForget();
 }
 
 /**

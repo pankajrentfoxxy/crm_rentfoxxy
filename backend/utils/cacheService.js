@@ -95,5 +95,8 @@ module.exports = {
     FILTER_OPTIONS: parseInt(process.env.CACHE_TTL_FILTER_OPTIONS_SEC || '300', 10),
     OBSERVED_SPECS: parseInt(process.env.CACHE_TTL_OBSERVED_SPECS_SEC || '600', 10),
     CASCADE_BRAND: parseInt(process.env.CACHE_TTL_CASCADE_BRAND_SEC || '300', 10),
+    MASTER_LOOKUP: parseInt(process.env.CACHE_TTL_MASTER_LOOKUP_SEC || '86400', 10),
+    INVENTORY_LIST: parseInt(process.env.CACHE_TTL_INVENTORY_LIST_SEC || '300', 10),
+    INVENTORY_COUNT: parseInt(process.env.CACHE_TTL_INVENTORY_COUNT_SEC || '600', 10),
   },
 };

@@ -91,8 +91,7 @@ function serialSpecJoinSql(sAlias = 's') {
   `;
 }
 
-/** PO line_items JSON — same sources as resolveItemDescription in qcManagementService. */
-function poLineItemSpecSubquery(field, sAlias = 's', pAlias = 'p') {
+function poLineItemFieldExpr(field) {
   const lineFields = {
     brand: `COALESCE(NULLIF(TRIM(li.elem->>'brand_name'), ''), NULLIF(TRIM(li.elem->>'brand'), ''))`,
     model: `COALESCE(NULLIF(TRIM(li.elem->>'model'), ''), NULLIF(TRIM(li.elem->>'product_name'), ''), NULLIF(TRIM(li.elem->>'model_name'), ''))`,
@@ -103,45 +102,212 @@ function poLineItemSpecSubquery(field, sAlias = 's', pAlias = 'p') {
     screen_size: `NULLIF(TRIM(li.elem->>'screen_size'), '')`,
     gpu: `NULLIF(TRIM(li.elem->>'gpu'), '')`,
   };
-  const pick = lineFields[field];
-  if (!pick) return 'NULL';
+  return lineFields[field] || 'NULL';
+}
+
+function poLineItemResolutionSql(sAlias = 's', pAlias = 'p') {
+  return `(
+    (
+      NULLIF(TRIM(${sAlias}.extra->>'line_index'), '') IS NOT NULL
+      AND (li.ord - 1) = (NULLIF(TRIM(${sAlias}.extra->>'line_index'), '')::int)
+    )
+    OR (
+      NULLIF(TRIM(${sAlias}.extra->>'product_detail_id'), '') IS NOT NULL
+      AND (
+        NULLIF(TRIM(li.elem->>'product_detail_id'), '') = NULLIF(TRIM(${sAlias}.extra->>'product_detail_id'), '')
+        OR NULLIF(TRIM(li.elem->>'pro_id'), '') = NULLIF(TRIM(${sAlias}.extra->>'product_detail_id'), '')
+      )
+    )
+    OR (
+      NULLIF(TRIM(${sAlias}.extra->>'pro_id'), '') IS NOT NULL
+      AND NULLIF(TRIM(li.elem->>'pro_id'), '') = NULLIF(TRIM(${sAlias}.extra->>'pro_id'), '')
+    )
+    OR (
+      NULLIF(TRIM(${sAlias}.extra->>'product_id'), '') IS NOT NULL
+      AND NULLIF(TRIM(li.elem->>'product_id'), '') = NULLIF(TRIM(${sAlias}.extra->>'product_id'), '')
+    )
+    OR (
+      NULLIF(TRIM(${sAlias}.extra->>'product_detail_id'), '') IS NOT NULL
+      AND jsonb_typeof(${pAlias}.product_details_legacy_ids) = 'array'
+      AND EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements_text(${pAlias}.product_details_legacy_ids) WITH ORDINALITY AS leg(lid, lord)
+        WHERE leg.lid = NULLIF(TRIM(${sAlias}.extra->>'product_detail_id'), '')
+          AND (li.ord - 1) = (leg.lord - 1)
+      )
+    )
+    OR jsonb_array_length(COALESCE(${pAlias}.line_items, '[]'::jsonb)) = 1
+  )`;
+}
+
+/** EXISTS form for PO line spec filter — avoids per-row scalar subquery in WHERE. */
+function poLineItemFilterExists(field, paramIdx, sAlias = 's', pAlias = 'p') {
+  const pick = poLineItemFieldExpr(field);
+  const e = `LOWER(TRIM(COALESCE(${pick}, '')))`;
+  const p = `LOWER(TRIM($${paramIdx}))`;
+  const match = buildSpecMatchClauseWithParam(field, e, p);
+  return `EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(COALESCE(${pAlias}.line_items, '[]'::jsonb)) WITH ORDINALITY AS li(elem, ord)
+    WHERE NULLIF(TRIM(${pick}), '') IS NOT NULL
+      AND ${match}
+      AND ${poLineItemResolutionSql(sAlias, pAlias)}
+  )`;
+}
+
+function isBlankSql(expr) {
+  return `NULLIF(TRIM(COALESCE(${expr}, '')), '') IS NULL`;
+}
+
+function isPresentSql(expr) {
+  return `NULLIF(TRIM(COALESCE(${expr}, '')), '') IS NOT NULL`;
+}
+
+function buildSpecMatchClauseWithParam(field, eExpr, pExpr) {
+  const exact = `${eExpr} = ${pExpr}`;
+  if (field === 'generation' || field === 'ram' || field === 'storage') {
+    const eNum = `NULLIF(regexp_replace(${eExpr}, '[^0-9].*', ''), '')`;
+    const pNum = `NULLIF(regexp_replace(${pExpr}, '[^0-9].*', ''), '')`;
+    return `(${exact} OR (${eNum} IS NOT NULL AND ${pNum} IS NOT NULL AND ${eNum} = ${pNum}))`;
+  }
+  if (field === 'processor' || field === 'gpu') {
+    return `(${exact} OR ${eExpr} LIKE '%' || ${pExpr} || '%' OR ${pExpr} LIKE '%' || ${eExpr} || '%')`;
+  }
+  if (field === 'screen_size') {
+    return `(${exact} OR regexp_replace(${eExpr}, '[^0-9.].*', '') = regexp_replace(${pExpr}, '[^0-9.].*', ''))`;
+  }
+  if (field === 'model') {
+    return `(${exact} OR ${eExpr} LIKE '%' || ${pExpr} || '%')`;
+  }
+  return exact;
+}
+
+function fieldSourceChain(field, sAlias = 's') {
+  const po = { type: 'po_line', field };
+  const chains = {
+    brand: [
+      { type: 'col', expr: `acb_spec.name`, join: 'acb' },
+      { type: 'col', expr: `${sAlias}.extra->>'brand_name'` },
+      { type: 'col', expr: `${sAlias}.extra->>'brand'` },
+      po,
+      { type: 'col', expr: 'vpd_spec.brand', join: 'vpd' },
+      { type: 'col', expr: 'inv_spec.brand', join: 'inv' },
+    ],
+    model: [
+      { type: 'col', expr: `${sAlias}.extra->>'model'` },
+      { type: 'col', expr: `${sAlias}.extra->>'model_name'` },
+      po,
+      { type: 'col', expr: 'vpd_spec.model', join: 'vpd' },
+      { type: 'col', expr: 'inv_spec.model', join: 'inv' },
+    ],
+    processor: [
+      { type: 'col', expr: `${sAlias}.extra->>'processor'` },
+      po,
+      { type: 'col', expr: 'vpd_spec.processor', join: 'vpd' },
+      { type: 'col', expr: 'inv_spec.processor', join: 'inv' },
+    ],
+    generation: [
+      { type: 'col', expr: `${sAlias}.extra->>'generation'` },
+      po,
+      { type: 'col', expr: 'vpd_spec.generation', join: 'vpd' },
+      { type: 'col', expr: 'inv_spec.generation', join: 'inv' },
+    ],
+    ram: [
+      { type: 'col', expr: `${sAlias}.extra->>'ram'` },
+      po,
+      { type: 'col', expr: 'vpd_spec.ram', join: 'vpd' },
+      { type: 'col', expr: 'inv_spec.ram', join: 'inv' },
+    ],
+    storage: [
+      { type: 'col', expr: `${sAlias}.extra->>'storage'` },
+      po,
+      { type: 'col', expr: 'vpd_spec.storage', join: 'vpd' },
+      { type: 'col', expr: 'inv_spec.storage', join: 'inv' },
+    ],
+    screen_size: [
+      { type: 'col', expr: `${sAlias}.extra->>'screen_size'` },
+      po,
+      { type: 'col', expr: 'vpd_spec.screen_size', join: 'vpd' },
+      { type: 'col', expr: 'inv_spec.screen_size', join: 'inv' },
+    ],
+    gpu: [
+      { type: 'col', expr: `${sAlias}.extra->>'gpu'` },
+      po,
+      { type: 'col', expr: 'vpd_spec.gpu', join: 'vpd' },
+      { type: 'col', expr: 'inv_spec.gpu', join: 'inv' },
+    ],
+  };
+  return chains[field] || [];
+}
+
+/** COALESCE-order-preserving filter: first non-blank source must match (fast path on extra JSON). */
+function buildCascadeSerialSpecClause(field, val, params, sAlias = 's', pAlias = 'p') {
+  params.push(val);
+  const paramIdx = params.length;
+  const p = `LOWER(TRIM($${paramIdx}))`;
+  const chain = fieldSourceChain(field, sAlias);
+  const branches = [];
+  const priorBlanks = [];
+
+  for (const src of chain) {
+    if (src.type === 'po_line') {
+      const prefix = priorBlanks.length ? `${priorBlanks.join(' AND ')} AND ` : '';
+      branches.push(`(${prefix}${poLineItemFilterExists(field, paramIdx, sAlias, pAlias)})`);
+      continue;
+    }
+    const e = `LOWER(TRIM(COALESCE(${src.expr}, '')))`;
+    const match = buildSpecMatchClauseWithParam(field, e, p);
+    const present = isPresentSql(src.expr);
+    const prefix = priorBlanks.length ? `${priorBlanks.join(' AND ')} AND ` : '';
+    branches.push(`(${prefix}${present} AND ${match})`);
+    priorBlanks.push(isBlankSql(src.expr));
+  }
+
+  return `(${branches.join(' OR ')})`;
+}
+
+function minimalSpecJoinSql(activeFields, sAlias = 's') {
+  const joins = new Set(['vpd', 'inv']);
+  for (const field of activeFields) {
+    for (const src of fieldSourceChain(field, sAlias)) {
+      if (src.join) joins.add(src.join);
+    }
+  }
+
+  let sql = '';
+  if (joins.has('acb')) {
+    sql += `
+    LEFT JOIN asset_config_brands acb_spec
+      ON acb_spec.deleted_at IS NULL
+      AND (
+        acb_spec.id::text = NULLIF(TRIM(${sAlias}.extra->>'brand'), '')
+        OR LOWER(acb_spec.name) = LOWER(NULLIF(TRIM(${sAlias}.extra->>'brand'), ''))
+      )`;
+  }
+  if (joins.has('vpd')) {
+    sql += `
+    LEFT JOIN vendor_product_details vpd_spec
+      ON vpd_spec.product_detail_id = NULLIF(TRIM(${sAlias}.extra->>'product_detail_id'), '')::int`;
+  }
+  if (joins.has('inv')) {
+    sql += `
+    LEFT JOIN inventory inv_spec
+      ON LOWER(TRIM(inv_spec.serial_number)) = LOWER(TRIM(${sAlias}.serial_number))
+      OR TRIM(inv_spec.machine_number) = TRIM(COALESCE(${sAlias}.inventory_asset_code, ''))`;
+  }
+  return sql;
+}
+
+/** PO line_items JSON — same sources as resolveItemDescription in qcManagementService. */
+function poLineItemSpecSubquery(field, sAlias = 's', pAlias = 'p') {
+  const pick = poLineItemFieldExpr(field);
+  if (pick === 'NULL') return 'NULL';
 
   return `(
     SELECT ${pick}
     FROM jsonb_array_elements(COALESCE(${pAlias}.line_items, '[]'::jsonb)) WITH ORDINALITY AS li(elem, ord)
     WHERE NULLIF(TRIM(${pick}), '') IS NOT NULL
-      AND (
-        (
-          NULLIF(TRIM(${sAlias}.extra->>'line_index'), '') IS NOT NULL
-          AND (li.ord - 1) = (NULLIF(TRIM(${sAlias}.extra->>'line_index'), '')::int)
-        )
-        OR (
-          NULLIF(TRIM(${sAlias}.extra->>'product_detail_id'), '') IS NOT NULL
-          AND (
-            NULLIF(TRIM(li.elem->>'product_detail_id'), '') = NULLIF(TRIM(${sAlias}.extra->>'product_detail_id'), '')
-            OR NULLIF(TRIM(li.elem->>'pro_id'), '') = NULLIF(TRIM(${sAlias}.extra->>'product_detail_id'), '')
-          )
-        )
-        OR (
-          NULLIF(TRIM(${sAlias}.extra->>'pro_id'), '') IS NOT NULL
-          AND NULLIF(TRIM(li.elem->>'pro_id'), '') = NULLIF(TRIM(${sAlias}.extra->>'pro_id'), '')
-        )
-        OR (
-          NULLIF(TRIM(${sAlias}.extra->>'product_id'), '') IS NOT NULL
-          AND NULLIF(TRIM(li.elem->>'product_id'), '') = NULLIF(TRIM(${sAlias}.extra->>'product_id'), '')
-        )
-        OR (
-          NULLIF(TRIM(${sAlias}.extra->>'product_detail_id'), '') IS NOT NULL
-          AND jsonb_typeof(${pAlias}.product_details_legacy_ids) = 'array'
-          AND EXISTS (
-            SELECT 1
-            FROM jsonb_array_elements_text(${pAlias}.product_details_legacy_ids) WITH ORDINALITY AS leg(lid, lord)
-            WHERE leg.lid = NULLIF(TRIM(${sAlias}.extra->>'product_detail_id'), '')
-              AND (li.ord - 1) = (leg.lord - 1)
-          )
-        )
-        OR jsonb_array_length(COALESCE(${pAlias}.line_items, '[]'::jsonb)) = 1
-      )
+      AND ${poLineItemResolutionSql(sAlias, pAlias)}
     ORDER BY
       CASE
         WHEN NULLIF(TRIM(${sAlias}.extra->>'line_index'), '') IS NOT NULL
@@ -177,14 +343,12 @@ function buildSerialSpecFilter(filters, params, sAlias = 's', pAlias = 'p') {
   if (!hasSpecFilters(filters)) {
     return { joinSql: '', whereSql: '' };
   }
-  const clauses = [];
-  for (const key of SPEC_QUERY_KEYS) {
-    const val = filters[key];
-    if (!val) continue;
-    clauses.push(buildSpecMatchClause(serialSpecExpr(key, sAlias, pAlias), val, params, key));
-  }
+  const activeFields = SPEC_QUERY_KEYS.filter((k) => filters[k]);
+  const clauses = activeFields.map(
+    (key) => buildCascadeSerialSpecClause(key, filters[key], params, sAlias, pAlias)
+  );
   return {
-    joinSql: serialSpecJoinSql(sAlias),
+    joinSql: minimalSpecJoinSql(activeFields, sAlias),
     whereSql: clauses.length ? ` AND ${clauses.join(' AND ')}` : '',
   };
 }

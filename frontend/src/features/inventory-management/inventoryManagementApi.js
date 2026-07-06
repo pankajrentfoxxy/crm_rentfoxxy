@@ -2,8 +2,8 @@ import api from '../../utils/api';
 
 const base = '/inventory-management';
 
-export function fetchInventoryList(segment, params) {
-  return api.get(`${base}/lists/${encodeURIComponent(segment)}`, { params });
+export function fetchInventoryList(segment, params, config = {}) {
+  return api.get(`${base}/lists/${encodeURIComponent(segment)}`, { params, ...config });
 }
 
 function downloadBlobResponse(response, fallbackName) {

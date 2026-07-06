@@ -49,6 +49,12 @@ app.use(cors({
   },
   credentials: true
 }));
+try {
+  const compression = require('compression');
+  app.use(compression());
+} catch {
+  console.warn('[server] compression middleware unavailable — run npm install in backend/');
+}
 app.use(express.json({ limit: BODY_PARSER_LIMIT }));
 app.use(express.urlencoded({ extended: true, limit: BODY_PARSER_LIMIT }));
 app.use('/uploads', express.static('uploads'));

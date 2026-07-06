@@ -17,7 +17,15 @@ const {
 } = require('../../services/inventoryManagementService');
 const { DEPLOYED_WITH_CUSTOMER_STATUSES, displayDeployedStatus } = require('../../services/customerDeployedAssets');
 const { appendDateRangeClauses } = require('../../utils/dateRangeFilter');
-const { pickSpecFilters, buildSerialSpecFilter } = require('../../utils/inventorySpecFilter');
+const { pickSpecFilters } = require('../../utils/inventorySpecFilter');
+const { listInventorySerials } = require('../../services/inventoryListService');
+const { invalidateInventoryListCachesFireAndForget } = require('../../services/inventoryListCache');
+const { perfEnabled } = require('../../utils/performanceLogger');
+const {
+  buildInventorySerialListQuery,
+  listSelectSql,
+  attachSerialTicketIds,
+} = require('../../utils/inventoryListQuery');
 
 const READY_TO_RENT_SALE_VALUES = [
   'normal_sale',
@@ -42,6 +50,7 @@ const listValidators = [
   query('storage').optional().isString().trim(),
   query('screen_size').optional().isString().trim(),
   query('gpu').optional().isString().trim(),
+  query('cursor').optional().isString().trim(),
 ];
 
 async function listInventory(req, res) {
@@ -131,76 +140,22 @@ async function listInventory(req, res) {
       });
     }
 
-    const params = [];
-    const { sql: segmentSql } = buildListWhere(segment, params);
-    let searchSql = '';
-    if (search) {
-      params.push(`%${search}%`);
-      const i = params.length;
-      searchSql = ` AND (
-        s.serial_number ILIKE $${i}
-        OR COALESCE(s.inventory_asset_code, '') ILIKE $${i}
-        OR p.purchase_order_number ILIKE $${i}
-        OR COALESCE(v.business_name, '') ILIKE $${i}
-        OR s.extra::text ILIKE $${i}
-      )`;
-    }
-    const dateClauses = appendDateRangeClauses({
-      column: 'updated_at', dateFrom, dateTo, params, tableAlias: 's',
-    });
-    const dateSql = dateClauses.length ? ` AND ${dateClauses.join(' AND ')}` : '';
-    const specFilter = buildSerialSpecFilter(specFilters, params);
-    const ticketJoinSql = `
-      LEFT JOIN LATERAL (
-        SELECT tk.ticket_id FROM tickets tk
-        WHERE tk.vendor_serial_id = s.serial_id
-        ORDER BY tk.created_at DESC LIMIT 1
-      ) latest_ticket ON true
-      LEFT JOIN LATERAL (
-        SELECT tk.ticket_id FROM tickets tk
-        WHERE tk.vendor_serial_id = s.serial_id
-          AND tk.status IN ('in_progress', 'on_hold')
-        ORDER BY tk.created_at DESC LIMIT 1
-      ) active_ticket ON true
-    `;
-    const fromSql = `
-      FROM vendor_serial_numbers s
-      INNER JOIN vendor_purchase_orders p ON p.po_id = s.po_id AND p.deleted_at IS NULL
-      LEFT JOIN vendors v ON v.vendor_id = p.vendor_id AND v.deleted_at IS NULL
-      LEFT JOIN vendor_goods_received_notes g ON g.grn_id = s.grn_id AND g.deleted_at IS NULL
-      ${specFilter.joinSql}
-      ${ticketJoinSql}
-      WHERE s.deleted_at IS NULL
-      ${segmentSql}
-      ${searchSql}${dateSql}${specFilter.whereSql}
-    `;
-    const countR = await pool.query(`SELECT COUNT(*)::int AS total ${fromSql}`, params);
-    const total = countR.rows[0]?.total || 0;
-    const listParams = [...params, limit, offset];
-    const rowsR = await pool.query(
-      `SELECT
-         s.serial_id, s.serial_number, s.inventory_asset_code, s.qc_status, s.remark,
-         s.extra, s.created_at AS serial_created_at, s.updated_at AS serial_updated_at,
-         s.rental_start_date, s.grn_id, s.inventory_status,
-         p.po_id, p.purchase_order_number, p.purchase_order_type, p.vendor_id, p.line_items,
-         p.product_details_legacy_ids,
-         v.business_name, v.first_name || ' ' || v.last_name AS vendor_name,
-         g.meta->>'product_id' AS grn_product_id,
-         latest_ticket.ticket_id,
-         active_ticket.ticket_id AS active_floor_ticket_id
-       ${fromSql}
-       ORDER BY s.updated_at DESC
-       LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
-      listParams
-    );
-    const data = await enrichSerialRowsBatch(pool, rowsR.rows);
-    res.json({
-      success: true,
+    const cursor = (req.query.cursor || '').trim() || undefined;
+    const { payload, perf } = await listInventorySerials({
       segment,
-      title: listTitleForSegment(segment),
-      data,
-      pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) }
+      page,
+      limit,
+      offset,
+      search,
+      dateFrom,
+      dateTo,
+      specFilters,
+      cursor,
     });
+    if (perfEnabled() && perf?.total != null) {
+      res.setHeader('X-Perf-Total-Ms', String(perf.total));
+    }
+    return res.json(payload);
   } catch (e) {
     console.error('listInventory', e);
     res.status(500).json({ success: false, message: e.message || 'Failed to load inventory list' });
@@ -224,66 +179,27 @@ async function exportInventoryExcel(req, res) {
   const limit = Math.min(5000, Math.max(1, parseInt(req.query.limit, 10) || 5000));
 
   try {
-    const params = [];
-    const { sql: segmentSql } = buildListWhere(segment, params);
-    let searchSql = '';
-    if (search) {
-      params.push(`%${search}%`);
-      const i = params.length;
-      searchSql = ` AND (
-        s.serial_number ILIKE $${i}
-        OR COALESCE(s.inventory_asset_code, '') ILIKE $${i}
-        OR p.purchase_order_number ILIKE $${i}
-        OR COALESCE(v.business_name, '') ILIKE $${i}
-        OR s.extra::text ILIKE $${i}
-      )`;
-    }
-    const exportDateClauses = appendDateRangeClauses({
-      column: 'updated_at', dateFrom, dateTo, params, tableAlias: 's',
+    const useBatchTickets = segment === 'passed';
+    const listQuery = buildInventorySerialListQuery({
+      segment,
+      search,
+      dateFrom,
+      dateTo,
+      specFilters,
+      includeTicketJoins: !useBatchTickets,
+      includeGrnJoin: true,
     });
-    const exportDateSql = exportDateClauses.length ? ` AND ${exportDateClauses.join(' AND ')}` : '';
-    const specFilter = buildSerialSpecFilter(specFilters, params);
-    const exportTicketJoinSql = `
-      LEFT JOIN LATERAL (
-        SELECT tk.ticket_id FROM tickets tk
-        WHERE tk.vendor_serial_id = s.serial_id
-        ORDER BY tk.created_at DESC LIMIT 1
-      ) latest_ticket ON true
-      LEFT JOIN LATERAL (
-        SELECT tk.ticket_id FROM tickets tk
-        WHERE tk.vendor_serial_id = s.serial_id
-          AND tk.status IN ('in_progress', 'on_hold')
-        ORDER BY tk.created_at DESC LIMIT 1
-      ) active_ticket ON true
-    `;
-    const fromSql = `
-      FROM vendor_serial_numbers s
-      INNER JOIN vendor_purchase_orders p ON p.po_id = s.po_id AND p.deleted_at IS NULL
-      LEFT JOIN vendors v ON v.vendor_id = p.vendor_id AND v.deleted_at IS NULL
-      LEFT JOIN vendor_goods_received_notes g ON g.grn_id = s.grn_id AND g.deleted_at IS NULL
-      ${specFilter.joinSql}
-      ${exportTicketJoinSql}
-      WHERE s.deleted_at IS NULL
-      ${segmentSql}
-      ${searchSql}${exportDateSql}${specFilter.whereSql}
-    `;
-    const listParams = [...params, limit];
+    const listParams = [...listQuery.params, limit];
+    const selectSql = listSelectSql(!useBatchTickets);
     const rowsR = await pool.query(
-      `SELECT
-         s.serial_id, s.serial_number, s.inventory_asset_code, s.qc_status, s.remark,
-         s.extra, s.created_at AS serial_created_at, s.updated_at AS serial_updated_at,
-         s.rental_start_date, s.grn_id, s.inventory_status,
-         p.po_id, p.purchase_order_number, p.purchase_order_type, p.vendor_id, p.line_items,
-         p.product_details_legacy_ids,
-         v.business_name, v.first_name || ' ' || v.last_name AS vendor_name,
-         g.meta->>'product_id' AS grn_product_id,
-         latest_ticket.ticket_id,
-         active_ticket.ticket_id AS active_floor_ticket_id
-       ${fromSql}
+      `SELECT ${selectSql} ${listQuery.fromSql}
        ORDER BY s.updated_at DESC
        LIMIT $${listParams.length}`,
       listParams
     );
+    if (useBatchTickets) {
+      await attachSerialTicketIds(pool, rowsR.rows);
+    }
     const data = await enrichSerialRowsBatch(pool, rowsR.rows);
     const XLSX = require('xlsx');
     const sheetRows = data.map((r, idx) => {
@@ -455,6 +371,7 @@ async function updateReadyToRentAction(req, res) {
       [JSON.stringify(extra), serialId]
     );
 
+    invalidateInventoryListCachesFireAndForget();
     res.json({ success: true, message: 'Action taken successfully!' });
   } catch (e) {
     console.error('updateReadyToRentAction', e);
@@ -499,6 +416,7 @@ async function changeSparePartStatus(req, res) {
       [status, JSON.stringify(extra), serialId]
     );
 
+    invalidateInventoryListCachesFireAndForget();
     res.json({ success: true, message: 'Status updated successfully.' });
   } catch (e) {
     console.error('changeSparePartStatus', e);
@@ -699,6 +617,7 @@ async function tagInventoryItem(req, res) {
       });
     }
 
+    invalidateInventoryListCachesFireAndForget();
     res.json({ success: true, message: `Tagged as ${tag}`, tag });
   } catch (e) {
     console.error('tagInventoryItem', e);
@@ -789,6 +708,7 @@ async function updateItemDescription(req, res) {
       });
     }
 
+    invalidateInventoryListCachesFireAndForget();
     res.json({ success: true, message: 'Item description updated', item_description: payload });
   } catch (e) {
     console.error('updateItemDescription', e);
@@ -820,6 +740,7 @@ async function updateSerialQcStatus(req, res) {
     if (!result.ok) {
       return res.status(result.status || 400).json({ success: false, message: result.message });
     }
+    invalidateInventoryListCachesFireAndForget();
     res.json({ success: true, message: result.message, data: result.data });
   } catch (e) {
     console.error('updateSerialQcStatus', e);
