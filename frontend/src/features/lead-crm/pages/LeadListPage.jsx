@@ -1,23 +1,27 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Download, LayoutGrid, List, Plus, Upload, Users } from 'lucide-react';
+import { Download, LayoutGrid, List, Plus, Upload, Users, ChevronDown, ChevronRight } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { PageHeader, StatCard, DateRangeFilter } from '../../../components/ui/primitives';
 import { useAuth } from '../../../context/AuthContext';
 import PermissionGate from '../../../components/PermissionGate';
 import { LEAD_SOURCES, LEAD_STATUSES, STAGES_BY_STATUS, STATUS_COLORS, INQUIRY_TYPES } from '../leadConstants';
 import {
-  assignLeads, exportLeadsCsv, getAssignableUsers, getLeads, importLeadsCsv, updateLeadStatus,
+  assignLeads, exportLeadsCsv, getAssignableUsers, getLeads, getLeadRecentActivity, importLeadsCsv, updateLeadStatus,
 } from '../leadCrmApi';
 import {
-  formatConfig, formatFollowUpDateTime, formatInquiry, followUpTone, relativeTime,
+  formatFollowUpDateTime, followUpTone, formatLeadDate,
 } from '../leadCrmUtils';
 import LeadCard from '../components/LeadCard';
 import LeadFormDrawer from '../components/LeadFormDrawer';
+import LeadCompactCell from '../components/LeadCompactCell';
+import LeadConfigCell from '../components/LeadConfigCell';
+import LeadListExpandPanel from '../components/LeadListExpandPanel';
 import QuickStatusUpdate from '../components/QuickStatusUpdate';
 
 const PAGE_SIZE = 25;
 const VIEW_KEY = 'lead_crm_view_mode';
+const TABLE_COLS = 11;
 
 export default function LeadListPage() {
   const { user, isAssignedDataOnly, hasPermission } = useAuth();
@@ -29,8 +33,10 @@ export default function LeadListPage() {
   const [users, setUsers] = useState([]);
   const [selected, setSelected] = useState(new Set());
   const [page, setPage] = useState(1);
-  const [sort, setSort] = useState({ key: 'createdAt', dir: 'desc' });
   const [dragLead, setDragLead] = useState(null);
+  const [expandedId, setExpandedId] = useState(null);
+  const [activityCache, setActivityCache] = useState({});
+  const [activityLoading, setActivityLoading] = useState(null);
   const [filters, setFilters] = useState({
     search: '', statuses: [], assigned_to: '', source: '', inquiry_type: '',
     date_from: '', date_to: '', follow_up: '',
@@ -59,6 +65,44 @@ export default function LeadListPage() {
   }, [filters, isAssignedDataOnly]);
 
   useEffect(() => { load(); }, [load]);
+
+  const refreshList = useCallback(async () => {
+    const openId = expandedId;
+    setActivityCache({});
+    await load();
+    if (openId) {
+      setActivityLoading(openId);
+      try {
+        const res = await getLeadRecentActivity(openId, 5);
+        setActivityCache({ [openId]: res.data?.activities || [] });
+      } catch {
+        toast.error('Failed to refresh activities');
+      } finally {
+        setActivityLoading(null);
+      }
+    }
+  }, [load, expandedId]);
+
+  const toggleExpand = useCallback(async (leadId, e) => {
+    e?.stopPropagation();
+    if (expandedId === leadId) {
+      setExpandedId(null);
+      return;
+    }
+    setExpandedId(leadId);
+    if (activityCache[leadId]) return;
+    setActivityLoading(leadId);
+    try {
+      const res = await getLeadRecentActivity(leadId, 5);
+      setActivityCache((prev) => ({ ...prev, [leadId]: res.data?.activities || [] }));
+    } catch {
+      toast.error('Failed to load activities');
+      setActivityCache((prev) => ({ ...prev, [leadId]: [] }));
+    } finally {
+      setActivityLoading(null);
+    }
+  }, [expandedId, activityCache]);
+
   useEffect(() => {
     if (!hasPermission('leads', 'edit')) return;
     getAssignableUsers()
@@ -80,19 +124,14 @@ export default function LeadListPage() {
   useEffect(() => { setPage(1); }, [filters]);
 
   const sortedLeads = useMemo(() => {
-    const copy = [...leads];
-    copy.sort((a, b) => {
-      let av; let bv;
-      if (sort.key === 'company') { av = a.companyName || ''; bv = b.companyName || ''; }
-      else if (sort.key === 'followUpDate') { av = a.followUpDate || ''; bv = b.followUpDate || ''; }
-      else if (sort.key === 'lastActivityAt') { av = a.lastActivityAt || a.updatedAt; bv = b.lastActivityAt || b.updatedAt; }
-      else { av = a.createdAt; bv = b.createdAt; }
-      if (av < bv) return sort.dir === 'asc' ? -1 : 1;
-      if (av > bv) return sort.dir === 'asc' ? 1 : -1;
+    return [...leads].sort((a, b) => {
+      const av = a.createdAt;
+      const bv = b.createdAt;
+      if (av < bv) return 1;
+      if (av > bv) return -1;
       return 0;
     });
-    return copy;
-  }, [leads, sort]);
+  }, [leads]);
 
   const paged = sortedLeads.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const totalPages = Math.max(1, Math.ceil(sortedLeads.length / PAGE_SIZE));
@@ -151,10 +190,6 @@ export default function LeadListPage() {
       toast.error(err.response?.data?.message || 'Import failed');
     }
     e.target.value = '';
-  };
-
-  const toggleSort = (key) => {
-    setSort((s) => ({ key, dir: s.key === key && s.dir === 'asc' ? 'desc' : 'asc' }));
   };
 
   const columnHeaderClass = (status) => {
@@ -274,7 +309,7 @@ export default function LeadListPage() {
                 </div>
                 <div className="flex-1 overflow-y-auto max-h-[calc(100vh-220px)] space-y-2 p-2 bg-gray-50/80 border border-t-0 border-gray-100 rounded-b-xl">
                   {col.map((lead) => (
-                    <LeadCard key={lead.leadId} lead={lead} onRefresh={load}
+                    <LeadCard key={lead.leadId} lead={lead} onRefresh={refreshList}
                       onDragStart={(_e, l) => setDragLead(l)} onDragEnd={() => setDragLead(null)} />
                   ))}
                 </div>
@@ -289,65 +324,108 @@ export default function LeadListPage() {
             {paged.length === 0 ? (
               <p className="text-center text-sm text-gray-500 py-8">No leads</p>
             ) : paged.map((lead) => (
-              <LeadCard key={lead.leadId} lead={lead} onRefresh={load} />
+              <LeadCard key={lead.leadId} lead={lead} onRefresh={refreshList} />
             ))}
           </div>
           <div className="hidden sm:block rounded-xl border border-gray-100 bg-white shadow-sm overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-left text-xs text-gray-500">
+              <thead className="bg-gray-50 text-left text-xs uppercase text-gray-500">
                 <tr>
-                  <th className="p-3 w-8"><input type="checkbox" onChange={(e) => {
-                    if (e.target.checked) setSelected(new Set(paged.map((l) => l.leadId)));
-                    else setSelected(new Set());
-                  }} /></th>
-                  {[
-                    ['#', null], ['Company', 'company'], ['Contact', null], ['Phone', null], ['City', null],
-                    ['Config', null], ['Qty', null], ['Inquiry', null], ['Status', null], ['Stage', null],
-                    ['Assigned', null], ['Follow-up', 'followUpDate'], ['Last Activity', 'lastActivityAt'], ['Actions', null],
-                  ].map(([label, sortKey]) => (
-                    <th key={label} className="p-3 whitespace-nowrap">
-                      {sortKey ? (
-                        <button type="button" onClick={() => toggleSort(sortKey)} className="hover:text-gray-800">{label}</button>
-                      ) : label}
-                    </th>
-                  ))}
+                  <th className="p-2.5 w-8">
+                    <input type="checkbox" aria-label="Select all on page" onChange={(e) => {
+                      if (e.target.checked) setSelected(new Set(paged.map((l) => l.leadId)));
+                      else setSelected(new Set());
+                    }} />
+                  </th>
+                  <th className="p-2.5 w-8" aria-label="Expand" />
+                  <th className="p-2.5 whitespace-nowrap">ID</th>
+                  <th className="p-2.5 whitespace-nowrap">Date</th>
+                  <th className="p-2.5 whitespace-nowrap min-w-[200px]">Lead</th>
+                  <th className="p-2.5 whitespace-nowrap min-w-[220px]">Config</th>
+                  <th className="p-2.5 whitespace-nowrap">Source</th>
+                  <th className="p-2.5 whitespace-nowrap">Status</th>
+                  <th className="p-2.5 whitespace-nowrap">Assignee</th>
+                  <th className="p-2.5 whitespace-nowrap">Follow-up</th>
+                  <th className="p-2.5 whitespace-nowrap">Action</th>
                 </tr>
               </thead>
               <tbody>
-                {paged.map((lead, i) => {
+                {paged.length === 0 ? (
+                  <tr>
+                    <td colSpan={TABLE_COLS} className="p-8 text-center text-gray-500">No leads</td>
+                  </tr>
+                ) : paged.map((lead) => {
                   const fu = followUpTone(lead.followUpDate);
+                  const isExpanded = expandedId === lead.leadId;
+                  const ExpandIcon = isExpanded ? ChevronDown : ChevronRight;
                   return (
-                    <tr key={lead.leadId} className="border-t border-gray-100 hover:bg-gray-50/50">
-                      <td className="p-3">
-                        <input type="checkbox" checked={selected.has(lead.leadId)}
-                          onChange={(e) => {
-                            const next = new Set(selected);
-                            if (e.target.checked) next.add(lead.leadId); else next.delete(lead.leadId);
-                            setSelected(next);
-                          }} />
-                      </td>
-                      <td className="p-3 text-gray-400">{(page - 1) * PAGE_SIZE + i + 1}</td>
-                      <td className="p-3 font-medium">{lead.companyName || '—'}</td>
-                      <td className="p-3">{lead.name}</td>
-                      <td className="p-3">{lead.phone}</td>
-                      <td className="p-3">{lead.city || '—'}</td>
-                      <td className="p-3 text-xs">{formatConfig(lead)}</td>
-                      <td className="p-3">{lead.quantityRequired || '—'}</td>
-                      <td className="p-3">{formatInquiry(lead.inquiryType)}</td>
-                      <td className="p-3">
-                        <QuickStatusUpdate lead={lead} onUpdated={load} />
-                      </td>
-                      <td className="p-3 text-xs text-gray-500">{lead.leadStage || '—'}</td>
-                      <td className="p-3 text-xs">{lead.assignedUser?.name || '—'}</td>
-                      <td className={`p-3 text-xs ${fu === 'overdue' ? 'text-red-600 font-medium' : fu === 'today' ? 'text-amber-600' : 'text-green-600'}`}>
-                        {formatFollowUpDateTime(lead.followUpDate, lead.followUpTime)}
-                      </td>
-                      <td className="p-3 text-xs text-gray-500">{relativeTime(lead.lastActivityAt || lead.updatedAt)}</td>
-                      <td className="p-3">
-                        <button type="button" onClick={() => navigate(`/lead-crm/leads/${lead.leadId}`)}
-                          className="text-blue-600 text-xs hover:underline">View</button>
-                      </td>
-                    </tr>
+                    <React.Fragment key={lead.leadId}>
+                      <tr className={`border-t border-gray-100 hover:bg-gray-50/60 ${isExpanded ? 'bg-blue-50/30' : ''}`}>
+                        <td className="p-2.5 align-top">
+                          <input type="checkbox" checked={selected.has(lead.leadId)}
+                            onChange={(e) => {
+                              const next = new Set(selected);
+                              if (e.target.checked) next.add(lead.leadId);
+                              else next.delete(lead.leadId);
+                              setSelected(next);
+                            }} />
+                        </td>
+                        <td className="p-2.5 align-top">
+                          <button
+                            type="button"
+                            aria-expanded={isExpanded}
+                            aria-label={isExpanded ? 'Collapse activities' : 'Expand activities'}
+                            onClick={(e) => toggleExpand(lead.leadId, e)}
+                            className="p-1 rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors"
+                          >
+                            <ExpandIcon className="w-4 h-4" />
+                          </button>
+                        </td>
+                        <td className="p-2.5 align-top font-mono text-xs text-gray-500 whitespace-nowrap">
+                          #{lead.leadId}
+                        </td>
+                        <td className="p-2.5 align-top text-xs text-gray-600 whitespace-nowrap">
+                          {formatLeadDate(lead.createdAt)}
+                        </td>
+                        <td className="p-2.5 align-top">
+                          <LeadCompactCell lead={lead} />
+                        </td>
+                        <td className="p-2.5 align-top">
+                          <LeadConfigCell lead={lead} />
+                        </td>
+                        <td className="p-2.5 align-top text-xs text-gray-600">{lead.source || '—'}</td>
+                        <td className="p-2.5 align-top">
+                          <QuickStatusUpdate lead={lead} onUpdated={refreshList} />
+                          {lead.leadStage ? (
+                            <p className="text-[11px] text-gray-500 mt-1 max-w-[140px] truncate">{lead.leadStage}</p>
+                          ) : null}
+                        </td>
+                        <td className="p-2.5 align-top text-xs text-gray-700">{lead.assignedUser?.name || '—'}</td>
+                        <td className={`p-2.5 align-top text-xs whitespace-nowrap ${
+                          fu === 'overdue' ? 'text-red-600 font-medium' : fu === 'today' ? 'text-amber-600' : 'text-gray-600'
+                        }`}>
+                          {formatFollowUpDateTime(lead.followUpDate, lead.followUpTime)}
+                        </td>
+                        <td className="p-2.5 align-top">
+                          <button type="button" onClick={() => navigate(`/lead-crm/leads/${lead.leadId}`)}
+                            className="text-blue-600 text-xs font-medium hover:underline whitespace-nowrap">
+                            View
+                          </button>
+                        </td>
+                      </tr>
+                      {isExpanded ? (
+                        <tr className="border-t border-blue-100 bg-slate-50/80">
+                          <td colSpan={TABLE_COLS} className="p-0">
+                            <div className="px-4 py-3 border-l-4 border-l-blue-500">
+                              <LeadListExpandPanel
+                                loading={activityLoading === lead.leadId}
+                                activities={activityCache[lead.leadId] || []}
+                              />
+                            </div>
+                          </td>
+                        </tr>
+                      ) : null}
+                    </React.Fragment>
                   );
                 })}
               </tbody>
@@ -370,7 +448,7 @@ export default function LeadListPage() {
                   try {
                     await assignLeads({ lead_ids: [...selected], sales_user_id: parseInt(uid, 10) });
                     toast.success('Assigned');
-                    load();
+                    refreshList();
                     setSelected(new Set());
                   } catch (err) {
                     toast.error(err.response?.data?.message || 'Assignment failed');
@@ -386,7 +464,7 @@ export default function LeadListPage() {
         </>
       )}
 
-      <LeadFormDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} onSaved={load} />
+      <LeadFormDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} onSaved={refreshList} />
     </div>
   );
 }

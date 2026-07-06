@@ -2392,6 +2392,106 @@ exports.getLeadConversionStatus = async (req, res) => {
   }
 };
 
+function formatLeadActivityType(action, statusFrom, statusTo) {
+  const a = String(action || '').toLowerCase();
+  if (a.includes('status')) return 'Status Changed';
+  if (a.includes('follow')) return 'Follow-up';
+  if (a.includes('quotation')) return 'Quotation Sent';
+  if (a.includes('email')) return 'Email';
+  if (a.includes('convert')) return 'Converted';
+  if (a.includes('assign')) return 'Assignment';
+  if (a.includes('created')) return 'Lead Created';
+  if (a.includes('remark')) return 'Remark';
+  if (statusFrom || statusTo) return 'Status Changed';
+  return 'Activity';
+}
+
+function buildLeadActivityDescription(row) {
+  if (row._kind === 'remark') {
+    return String(row.note || '').trim() || 'Remark added';
+  }
+  const parts = [];
+  if (row.statusFrom && row.statusTo) {
+    parts.push(`Status: ${row.statusFrom} → ${row.statusTo}`);
+  } else if (row.statusTo) {
+    parts.push(`Status: ${row.statusTo}`);
+  }
+  if (row.stageTo) {
+    parts.push(`Stage: ${row.stageTo}`);
+  } else if (row.stageFrom && !row.stageTo) {
+    parts.push(`Stage: ${row.stageFrom}`);
+  }
+  const note = String(row.notes || '').trim();
+  if (note && !parts.some((p) => note.includes(p.replace('Status: ', '').replace('Stage: ', '')))) {
+    if (parts.length) parts.push(note);
+    else return note;
+  }
+  if (parts.length) return parts.join(' · ');
+  return note || row.action || 'Activity';
+}
+
+/** GET /api/leads/:id/recent-activity?limit=5 */
+exports.getLeadRecentActivity = async (req, res) => {
+  const leadId = parseInt(req.params.id, 10);
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 5, 1), 20);
+
+  try {
+    const lead = await prisma.lead.findUnique({ where: { leadId } });
+    if (!lead) {
+      return res.status(404).json({ success: false, message: 'Lead not found' });
+    }
+    if (await denyUnlessCanEditLead(req, res, lead)) return;
+
+    const [activities, remarksRes] = await Promise.all([
+      prisma.leadActivity.findMany({
+        where: {
+          leadId,
+          NOT: { action: 'email_reingested' },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: limit * 3,
+        include: { user: { select: { name: true } } },
+      }),
+      pool.query(
+        `SELECT r.remark_id, r.note, r.created_at, u.name AS user_name
+         FROM lead_remarks r
+         LEFT JOIN users u ON r.user_id = u.user_id
+         WHERE r.lead_id = $1
+         ORDER BY r.created_at DESC
+         LIMIT $2`,
+        [leadId, limit * 3]
+      ),
+    ]);
+
+    const merged = [
+      ...activities.map((a) => ({
+        id: `a-${a.activityId}`,
+        type: formatLeadActivityType(a.action, a.statusFrom, a.statusTo),
+        description: buildLeadActivityDescription({ ...a, _kind: 'activity' }),
+        performedBy: a.user?.name || 'System',
+        createdAt: a.createdAt,
+        _ts: new Date(a.createdAt).getTime(),
+      })),
+      ...(remarksRes.rows || []).map((r) => ({
+        id: `r-${r.remark_id}`,
+        type: 'Remark',
+        description: buildLeadActivityDescription({ ...r, _kind: 'remark' }),
+        performedBy: r.user_name || 'System',
+        createdAt: r.created_at,
+        _ts: new Date(r.created_at).getTime(),
+      })),
+    ]
+      .sort((a, b) => b._ts - a._ts)
+      .slice(0, limit)
+      .map(({ _ts, ...rest }) => rest);
+
+    res.json({ success: true, activities: merged });
+  } catch (error) {
+    console.error('getLeadRecentActivity error:', error);
+    res.status(500).json({ success: false, message: 'Server error fetching activity' });
+  }
+};
+
 exports.getEmailSyncStatus = async (_req, res) => {
   try {
     res.json({ success: true, ...getLeadEmailSyncStatus() });

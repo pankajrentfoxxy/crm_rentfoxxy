@@ -25,16 +25,17 @@ async function listInventorySerials(options) {
     dateTo,
     specFilters,
     cursor,
+    ticketStageFilter = 'all',
   } = options;
 
   const perf = createPerfLogger(`inventory.list.${segment}`);
   perf.start('total');
 
   const listKey = buildListCacheKey({
-    segment, page, limit, search, dateFrom, dateTo, specFilters, cursor,
+    segment, page, limit, search, dateFrom, dateTo, specFilters, cursor, ticketStageFilter,
   });
   const countKey = buildCountCacheKey({
-    segment, search, dateFrom, dateTo, specFilters,
+    segment, search, dateFrom, dateTo, specFilters, ticketStageFilter,
   });
 
   perf.start('cache_read');
@@ -48,7 +49,7 @@ async function listInventorySerials(options) {
 
   perf.start('sql');
   const rowsPromise = fetchInventoryPage({
-    segment, limit, offset, search, dateFrom, dateTo, specFilters, cursor,
+    segment, limit, offset, search, dateFrom, dateTo, specFilters, cursor, ticketStageFilter,
   });
   const cachedTotal = await getCachedCount(countKey);
 
@@ -59,7 +60,7 @@ async function listInventorySerials(options) {
     rows = await rowsPromise;
   } else {
     [total, rows] = await Promise.all([
-      countInventoryRows({ segment, search, dateFrom, dateTo, specFilters }),
+      countInventoryRows({ segment, search, dateFrom, dateTo, specFilters, ticketStageFilter }),
       rowsPromise,
     ]);
     await setCachedCount(countKey, total);

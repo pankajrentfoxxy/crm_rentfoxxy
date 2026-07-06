@@ -2,6 +2,8 @@ import api from '../../utils/api';
 
 export const getLeads = (params) => api.get('/leads', { params });
 export const getLead = (id) => api.get(`/leads/${id}`);
+export const getLeadRecentActivity = (id, limit = 5) =>
+  api.get(`/leads/${id}/recent-activity`, { params: { limit } });
 export const createLead = (data) => api.post('/leads', data);
 export const updateLeadStatus = (id, data) => api.put(`/leads/${id}/status`, data);
 export const updateLeadBasic = (id, data) => api.put(`/leads/${id}/basic`, data);

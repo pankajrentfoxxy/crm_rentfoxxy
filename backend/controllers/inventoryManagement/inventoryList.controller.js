@@ -51,6 +51,7 @@ const listValidators = [
   query('screen_size').optional().isString().trim(),
   query('gpu').optional().isString().trim(),
   query('cursor').optional().isString().trim(),
+  query('ticket_stage_filter').optional().isIn(['all', 'qc1_qc2']),
 ];
 
 async function listInventory(req, res) {
@@ -67,6 +68,7 @@ async function listInventory(req, res) {
   const dateFrom = req.query.date_from;
   const dateTo = req.query.date_to;
   const specFilters = pickSpecFilters(req.query);
+  const ticketStageFilter = req.query.ticket_stage_filter === 'qc1_qc2' ? 'qc1_qc2' : 'all';
   const isSpare = segment === 'spare_parts';
 
   try {
@@ -151,6 +153,7 @@ async function listInventory(req, res) {
       dateTo,
       specFilters,
       cursor,
+      ticketStageFilter,
     });
     if (perfEnabled() && perf?.total != null) {
       res.setHeader('X-Perf-Total-Ms', String(perf.total));
@@ -176,6 +179,7 @@ async function exportInventoryExcel(req, res) {
   const dateFrom = req.query.date_from;
   const dateTo = req.query.date_to;
   const specFilters = pickSpecFilters(req.query);
+  const ticketStageFilter = req.query.ticket_stage_filter === 'qc1_qc2' ? 'qc1_qc2' : 'all';
   const limit = Math.min(5000, Math.max(1, parseInt(req.query.limit, 10) || 5000));
 
   try {
@@ -188,6 +192,7 @@ async function exportInventoryExcel(req, res) {
       specFilters,
       includeTicketJoins: !useBatchTickets,
       includeGrnJoin: true,
+      ticketStageFilter,
     });
     const listParams = [...listQuery.params, limit];
     const selectSql = listSelectSql(!useBatchTickets);
@@ -229,7 +234,7 @@ async function exportInventoryExcel(req, res) {
         'Vendor Name': r.vendor_name || '',
       };
       if (segment === 'qc_process') {
-        return { ...base, 'Ticket ID': r.active_floor_ticket_id || r.ticket_id || '' };
+        return { ...base, 'Ticket Stage': r.ticket_stage_name || '' };
       }
       if (segment === 'passed') {
         return { ...base, 'Tagged As': r.inventory_tag || '' };

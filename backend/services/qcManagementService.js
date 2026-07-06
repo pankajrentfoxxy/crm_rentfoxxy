@@ -471,6 +471,7 @@ function enrichSerialRow(row, specContext = null) {
     inventory_tag: ex.inventory_tag || null,
     ticket_id: row.ticket_id ?? null,
     active_floor_ticket_id: row.active_floor_ticket_id ?? null,
+    ticket_stage_name: row.ticket_stage_name ?? null,
     extra: ex
   };
 }

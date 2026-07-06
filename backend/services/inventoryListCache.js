@@ -23,20 +23,21 @@ function stableFilterKey(specFilters = {}) {
   return parts.length ? parts.join('&') : '-';
 }
 
-function buildListCacheKey({ segment, page, limit, search, dateFrom, dateTo, specFilters, cursor }) {
+function buildListCacheKey({ segment, page, limit, search, dateFrom, dateTo, specFilters, cursor, ticketStageFilter }) {
   const filters = stableFilterKey(specFilters);
   const searchPart = sanitizePart(search);
   const from = sanitizePart(dateFrom);
   const to = sanitizePart(dateTo);
+  const stagePart = sanitizePart(ticketStageFilter || 'all');
   if (cursor) {
-    return `inventory:${CACHE_VERSION}:${segment}:cursor:${sanitizePart(cursor)}:${limit}:${searchPart}:${filters}:${from}:${to}`;
+    return `inventory:${CACHE_VERSION}:${segment}:cursor:${sanitizePart(cursor)}:${limit}:${searchPart}:${filters}:${from}:${to}:${stagePart}`;
   }
-  return `inventory:${CACHE_VERSION}:${segment}:${page}:${limit}:${searchPart}:${filters}:${from}:${to}`;
+  return `inventory:${CACHE_VERSION}:${segment}:${page}:${limit}:${searchPart}:${filters}:${from}:${to}:${stagePart}`;
 }
 
-function buildCountCacheKey({ segment, search, dateFrom, dateTo, specFilters }) {
+function buildCountCacheKey({ segment, search, dateFrom, dateTo, specFilters, ticketStageFilter }) {
   const filters = stableFilterKey(specFilters);
-  return `inventory_count:${CACHE_VERSION}:${segment}:${sanitizePart(search)}:${filters}:${sanitizePart(dateFrom)}:${sanitizePart(dateTo)}`;
+  return `inventory_count:${CACHE_VERSION}:${segment}:${sanitizePart(search)}:${filters}:${sanitizePart(dateFrom)}:${sanitizePart(dateTo)}:${sanitizePart(ticketStageFilter || 'all')}`;
 }
 
 async function getCachedList(key) {

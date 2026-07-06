@@ -593,8 +593,10 @@ export default function InventoryListTable({ routeKey }) {
   const [selectedIds, setSelectedIds] = useState([]);
   const [showAddLaptopModal, setShowAddLaptopModal] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [qcStageFilter, setQcStageFilter] = useState('all');
+  const isQcProcess = routeKey === 'qc-process';
 
-  useEffect(() => { setPage(1); }, [search, dateFrom, dateTo, specFilterKey]);
+  useEffect(() => { setPage(1); }, [search, dateFrom, dateTo, specFilterKey, qcStageFilter]);
 
   const total = pagination.total || 0;
 
@@ -613,6 +615,7 @@ export default function InventoryListTable({ routeKey }) {
         search: search || undefined,
         date_from: showDateFilter && dateFrom ? dateFrom : undefined,
         date_to: showDateFilter && dateTo ? dateTo : undefined,
+        ...(isQcProcess && qcStageFilter === 'qc1_qc2' ? { ticket_stage_filter: 'qc1_qc2' } : {}),
         ...(showSpecFilter ? debouncedSpecParams : {}),
       }, { signal: controller.signal });
       if (controller.signal.aborted) return;
@@ -633,7 +636,7 @@ export default function InventoryListTable({ routeKey }) {
         setRefreshing(false);
       }
     }
-  }, [apiSegment, search, page, dateFrom, dateTo, showDateFilter, showSpecFilter, debouncedSpecParams]);
+  }, [apiSegment, search, page, dateFrom, dateTo, showDateFilter, showSpecFilter, debouncedSpecParams, isQcProcess, qcStageFilter]);
 
   useEffect(() => {
     load();
@@ -670,8 +673,8 @@ export default function InventoryListTable({ routeKey }) {
   if (!meta) return <p className="text-sm text-red-600">Unknown inventory route.</p>;
 
   const showOutForRepareExtras = routeKey === 'out-for-repare';
-  const showTicketId = routeKey === 'qc-process';
-  const showQcCreateTicket = routeKey === 'qc-process';
+  const showTicketStage = isQcProcess;
+  const showQcCreateTicket = isQcProcess;
   const showExportExcel = ['ready-to-rent-or-sell', 'qc-process'].includes(routeKey);
   const showPassedStatus = showReadyToRentAction || ['rent-to-own', 'rental-purchase', 'direct-purchase'].includes(routeKey);
   const showTagColumn = showReadyToRentAction || routeKey === 'ready-to-rent-or-sell';
@@ -699,6 +702,7 @@ export default function InventoryListTable({ routeKey }) {
         search: search || undefined,
         date_from: showDateFilter && dateFrom ? dateFrom : undefined,
         date_to: showDateFilter && dateTo ? dateTo : undefined,
+        ...(isQcProcess && qcStageFilter === 'qc1_qc2' ? { ticket_stage_filter: 'qc1_qc2' } : {}),
         ...(showSpecFilter ? debouncedSpecParams : {}),
       });
       toast.success('Excel export downloaded');
@@ -733,12 +737,23 @@ export default function InventoryListTable({ routeKey }) {
       ) : null}
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-2xl font-bold text-slate-900">
-          {meta.title} <span className="text-slate-600 font-semibold text-lg">List</span>
-          <span className="ml-2 rounded-full bg-slate-100 text-slate-800 text-sm font-semibold px-3 py-0.5">
-            {total}
-          </span>
+          {meta.title}
+          {!isQcProcess ? (
+            <>
+              <span className="text-slate-600 font-semibold text-lg"> List</span>
+              <span className="ml-2 rounded-full bg-slate-100 text-slate-800 text-sm font-semibold px-3 py-0.5">
+                {total}
+              </span>
+            </>
+          ) : null}
         </h2>
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+        {isQcProcess ? (
+          <div className="ml-auto rounded-xl border border-sky-200 bg-gradient-to-br from-sky-50 to-blue-50 px-4 py-2 shadow-sm">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-700">Total records</p>
+            <p className="text-2xl font-bold text-sky-900 tabular-nums">{total.toLocaleString('en-IN')}</p>
+          </div>
+        ) : null}
+        <div className={`flex flex-wrap items-center gap-2 ${isQcProcess ? 'w-full sm:w-auto sm:ml-auto' : 'ml-auto'}`}>
           {showQcAddLaptop ? (
             <button
               type="button"
@@ -771,6 +786,29 @@ export default function InventoryListTable({ routeKey }) {
           </button>
         </div>
       </div>
+
+      {isQcProcess ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold uppercase text-slate-500 mr-1">QC stage</span>
+          {[
+            { key: 'all', label: 'All' },
+            { key: 'qc1_qc2', label: 'QC1 + QC2' },
+          ].map((opt) => (
+            <button
+              key={opt.key}
+              type="button"
+              onClick={() => setQcStageFilter(opt.key)}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                qcStageFilter === opt.key
+                  ? 'bg-sky-600 text-white shadow-sm'
+                  : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       <div className="rounded-lg border border-slate-200 bg-white px-2 py-2 space-y-1.5 mb-2">
         <div className="flex flex-wrap items-end gap-2">
@@ -813,7 +851,7 @@ export default function InventoryListTable({ routeKey }) {
               {showReadyToRentAction ? <th className="px-3 py-3 w-8" /> : null}
               <th className="px-3 py-3">S.No</th>
               {!isSpare ? <th className="px-3 py-3">TTSPL</th> : null}
-              {showTicketId ? <th className="px-3 py-3">Ticket ID</th> : null}
+              {showTicketStage ? <th className="px-3 py-3">Ticket Stage</th> : null}
               {showOutForRepareExtras ? (
                 <>
                   <th className="px-3 py-3">Added Date</th>
@@ -898,15 +936,21 @@ export default function InventoryListTable({ routeKey }) {
                       <span className="text-slate-400 text-xs">—</span>
                     )}
                   </td>
-                  {showTicketId ? (
+                  {showTicketStage ? (
                     <td className="px-3 py-3">
-                      {row.active_floor_ticket_id ? (
-                        <Link
-                          to={`/floor-pipeline/tickets/${row.active_floor_ticket_id}`}
-                          className="font-mono text-xs font-semibold text-blue-700 hover:underline"
-                        >
-                          #{row.active_floor_ticket_id}
-                        </Link>
+                      {row.ticket_stage_name ? (
+                        row.active_floor_ticket_id ? (
+                          <Link
+                            to={`/floor-pipeline/tickets/${row.active_floor_ticket_id}`}
+                            className="inline-flex rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-semibold text-indigo-800 hover:bg-indigo-100"
+                          >
+                            {row.ticket_stage_name}
+                          </Link>
+                        ) : (
+                          <span className="inline-flex rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-semibold text-indigo-800">
+                            {row.ticket_stage_name}
+                          </span>
+                        )
                       ) : (
                         <span className="text-slate-400 text-xs">—</span>
                       )}
