@@ -241,11 +241,39 @@ exports.attachSerial = async (req, res) => {
     );
 
     await client.query('COMMIT');
+
+    let qcTicket = null;
+    if (ticket.ticket_id) {
+      const tRes = await pool.query(
+        `SELECT t.ticket_id, t.serial_number, t.ttspl_id, t.brand, t.model, t.processor, t.ram, t.storage,
+                t.priority, t.ticket_type, t.sales_order_number, t.vendor_serial_id, t.highlighted,
+                s.stage_name, tm.team_name
+           FROM tickets t
+           LEFT JOIN stages s ON s.stage_id = t.current_stage_id
+           LEFT JOIN teams tm ON tm.team_id = t.assigned_team_id
+          WHERE t.ticket_id = $1`,
+        [ticket.ticket_id]
+      );
+      qcTicket = tRes.rows[0] || null;
+    }
+
     res.status(201).json({
       success: true,
       message: 'Serial attached & QC ticket created',
       allocation_id: ins.rows[0].allocation_id,
       qc_ticket_id: ticket.ticket_id || null,
+      qc_ticket: qcTicket,
+      serial: {
+        serial_id: serialForAttach.serial_id,
+        serial_number: serialForAttach.serial_number,
+        ttspl_id: serialForAttach.inventory_asset_code,
+        brand: serialForAttach.brand,
+        model: serialForAttach.model,
+        processor: serialForAttach.processor,
+        generation: serialForAttach.generation,
+        ram: serialForAttach.ram,
+        storage: serialForAttach.storage,
+      },
     });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});

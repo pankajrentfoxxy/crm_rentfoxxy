@@ -50,6 +50,10 @@ export function assignTicket(id, body) {
   return api.post(`${base}/${id}/assign`, body);
 }
 
+export function updateTicket(id, body) {
+  return api.put(`${base}/${id}`, body);
+}
+
 export function addTicketPart(id, body) {
   return api.post(`${base}/${id}/parts`, body);
 }

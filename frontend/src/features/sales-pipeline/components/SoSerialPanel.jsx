@@ -7,6 +7,7 @@ import { useAuth } from '../../../context/AuthContext';
 import { attachSoSerial, detachSoSerial, getAvailableSerials, listSoSerials } from '../salesPipelineApi';
 import SoLineConfigEditModal from './SoLineConfigEditModal';
 import SoLineRateEditModal from './SoLineRateEditModal';
+import DispatchQcAssignModal from './DispatchQcAssignModal';
 
 const QC_BADGE = {
   passed: 'bg-emerald-100 text-emerald-700',
@@ -14,7 +15,7 @@ const QC_BADGE = {
   failed: 'bg-red-100 text-red-700',
 };
 
-function AttachPicker({ soNumber, line, onAttached }) {
+function AttachPicker({ soNumber, line, onAttached, onTicketCreated }) {
   const [open, setOpen] = useState(false);
   const [options, setOptions] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -57,10 +58,17 @@ function AttachPicker({ soNumber, line, onAttached }) {
   const attach = async (serialId) => {
     setBusy(true);
     try {
-      await attachSoSerial(soNumber, { serial_id: serialId, line_id: line.line_id });
-      toast.success('Laptop attached · QC ticket created');
+      const { data } = await attachSoSerial(soNumber, { serial_id: serialId, line_id: line.line_id });
       setOpen(false);
       onAttached();
+      if (data?.qc_ticket_id && data?.qc_ticket) {
+        onTicketCreated?.({
+          ticket: data.qc_ticket,
+          serial: data.serial,
+        });
+      } else {
+        toast.success('Laptop attached · QC ticket created');
+      }
     } catch (err) {
       toast.error(err.response?.data?.message || 'Attach failed');
     } finally {
@@ -141,6 +149,7 @@ export default function SoSerialPanel({ soNumber }) {
   const [loading, setLoading] = useState(true);
   const [editLine, setEditLine] = useState(null);
   const [editRateLine, setEditRateLine] = useState(null);
+  const [assignModal, setAssignModal] = useState(null);
   const { user } = useAuth();
   const isSuperAdmin = user?.role === 'super_admin';
 
@@ -249,7 +258,12 @@ export default function SoSerialPanel({ soNumber }) {
 
           {line.remaining_qty > 0 && (
             <PermissionGate section={['sales_orders_doc', 'delivery_challans']} action="edit">
-              <AttachPicker soNumber={soNumber} line={line} onAttached={load} />
+              <AttachPicker
+                soNumber={soNumber}
+                line={line}
+                onAttached={load}
+                onTicketCreated={setAssignModal}
+              />
             </PermissionGate>
           )}
         </div>
@@ -266,6 +280,14 @@ export default function SoSerialPanel({ soNumber }) {
         line={editRateLine}
         onClose={() => setEditRateLine(null)}
         onSaved={load}
+      />
+      <DispatchQcAssignModal
+        open={Boolean(assignModal)}
+        soNumber={soNumber}
+        ticket={assignModal?.ticket}
+        serial={assignModal?.serial}
+        onClose={() => setAssignModal(null)}
+        onAssigned={load}
       />
     </div>
   );
