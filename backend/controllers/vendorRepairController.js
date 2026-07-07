@@ -77,7 +77,6 @@ exports.getCompanyDefaults = async (_req, res) => {
 
 exports.listVendorRepairDcs = async (req, res) => {
   try {
-    await svc.ensureVendorRepairSchema();
     const result = await svc.listVendorRepairDcs({
       search: req.query.search,
       status: req.query.status,
@@ -95,7 +94,6 @@ exports.listVendorRepairDcs = async (req, res) => {
 
 exports.getVendorRepairDc = async (req, res) => {
   try {
-    await svc.ensureVendorRepairSchema();
     const dc = await svc.getVendorRepairDc(req.params.dcNumber);
     if (!dc) return res.status(404).json({ success: false, message: 'Vendor repair DC not found' });
     res.json({ success: true, data: dc });

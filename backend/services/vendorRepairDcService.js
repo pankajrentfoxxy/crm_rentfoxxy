@@ -25,6 +25,7 @@ const HW_SW_STAGES = new Set([
 ]);
 
 let schemaEnsured = false;
+let schemaEnsurePromise = null;
 
 function currentFinancialYearLabel(date = new Date()) {
   const year = date.getFullYear();
@@ -37,13 +38,20 @@ function currentFinancialYearLabel(date = new Date()) {
 
 async function ensureVendorRepairSchema() {
   if (schemaEnsured) return;
-  for (const file of ['121_diagnosis_failed_vendor_repair.sql', '124_vendor_repair_enhancements.sql', '125_vendor_repair_dispatch.sql', '129_vendor_repair_dispatch_pod.sql']) {
-    const migrationPath = path.join(__dirname, '../migrations', file);
-    if (fs.existsSync(migrationPath)) {
-      await pool.query(fs.readFileSync(migrationPath, 'utf8'));
-    }
+  if (!schemaEnsurePromise) {
+    schemaEnsurePromise = (async () => {
+      for (const file of ['121_diagnosis_failed_vendor_repair.sql', '124_vendor_repair_enhancements.sql', '125_vendor_repair_dispatch.sql', '129_vendor_repair_dispatch_pod.sql']) {
+        const migrationPath = path.join(__dirname, '../migrations', file);
+        if (fs.existsSync(migrationPath)) {
+          await pool.query(fs.readFileSync(migrationPath, 'utf8'));
+        }
+      }
+      schemaEnsured = true;
+    })().finally(() => {
+      schemaEnsurePromise = null;
+    });
   }
-  schemaEnsured = true;
+  await schemaEnsurePromise;
 }
 
 function configString(ticket) {
@@ -508,8 +516,13 @@ function formatVendorShippingFromRow(vendor) {
 /** Remove duplicate laptops from a draft VRDC (keeps newest ticket per serial). */
 async function dedupeDraftVrdcItems(dcNumber) {
   const client = await pool.connect();
+  let removed = 0;
+  let cancelledTicketIds = [];
+  let shouldRegeneratePdf = false;
   try {
     await client.query('BEGIN');
+    // Never hold a row lock while generating PDFs — that deadlocks other readers/writers.
+    await client.query('SET LOCAL lock_timeout = 5000');
     const headRes = await client.query(
       `SELECT status FROM vendor_repair_delivery_challans WHERE dc_number = $1 FOR UPDATE`,
       [dcNumber]
@@ -569,25 +582,32 @@ async function dedupeDraftVrdcItems(dcNumber) {
         `UPDATE vendor_repair_delivery_challans SET updated_at = NOW() WHERE dc_number = $1`,
         [dcNumber]
       );
-      try {
-        const pdfPath = await generateVendorRepairPdf(dcNumber);
-        if (pdfPath) {
-          await client.query(
-            `UPDATE vendor_repair_delivery_challans SET pdf_path = $2 WHERE dc_number = $1`,
-            [dcNumber, pdfPath]
-          );
-        }
-      } catch (_) { /* best-effort */ }
+      removed = toRemove.length;
+      cancelledTicketIds = toRemove.map((r) => r.ticket_id);
+      shouldRegeneratePdf = true;
     }
 
     await client.query('COMMIT');
-    return { removed: toRemove.length, cancelled_ticket_ids: toRemove.map((r) => r.ticket_id) };
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     throw err;
   } finally {
     client.release();
   }
+
+  if (shouldRegeneratePdf) {
+    try {
+      const pdfPath = await generateVendorRepairPdf(dcNumber);
+      if (pdfPath) {
+        await pool.query(
+          `UPDATE vendor_repair_delivery_challans SET pdf_path = $2, updated_at = NOW() WHERE dc_number = $1`,
+          [dcNumber, pdfPath]
+        );
+      }
+    } catch (_) { /* best-effort */ }
+  }
+
+  return { removed, cancelled_ticket_ids: cancelledTicketIds };
 }
 
 async function getVendorRepairDc(dcNumber) {
@@ -616,38 +636,7 @@ async function getVendorRepairDc(dcNumber) {
   );
   const head = headRes.rows[0];
   if (!head) return null;
-  if (head.status === 'draft') {
-    try {
-      await dedupeDraftVrdcItems(dcNumber);
-    } catch (err) {
-      console.warn(`VRDC dedupe skipped for ${dcNumber}:`, err.message);
-    }
-  }
-  const refreshedHead = head.status === 'draft'
-    ? (await pool.query(
-      `SELECT d.*,
-              v.business_name AS vendor_business_name,
-              v.first_name AS vendor_first_name,
-              v.last_name AS vendor_last_name,
-              v.address AS vendor_reg_address,
-              v.city AS vendor_reg_city,
-              v.state AS vendor_reg_state,
-              v.pincode AS vendor_reg_pincode,
-              v.shipping_same AS vendor_shipping_same,
-              v.shipping_address AS vendor_ship_address,
-              v.shipping_city AS vendor_ship_city,
-              v.shipping_state AS vendor_ship_state,
-              v.shipping_pincode AS vendor_ship_pincode,
-              dt.first_name AS delivery_person_first_name,
-              dt.last_name AS delivery_person_last_name,
-              dt.phone AS delivery_person_phone
-         FROM vendor_repair_delivery_challans d
-         LEFT JOIN vendors v ON v.vendor_id = d.vendor_id AND v.deleted_at IS NULL
-         LEFT JOIN delivery_technicians dt ON dt.technician_id = d.delivery_person_id
-        WHERE d.dc_number = $1`,
-      [dcNumber]
-    )).rows[0] || head
-    : head;
+  const refreshedHead = head;
   const itemsRes = await pool.query(
     `SELECT i.*, t.status AS ticket_status, t.diagnosis_failed_reason
        FROM vendor_repair_dc_items i
@@ -1583,4 +1572,5 @@ module.exports = {
   listOutForRepairInventory,
   countOutForRepairInventory,
   receiveErpRepairBack,
+  dedupeDraftVrdcItems,
 };
