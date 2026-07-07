@@ -109,6 +109,7 @@ export function StatCard({ label, value, icon: Icon, tone = 'blue', hint, onClic
     amber: 'text-amber-600 bg-amber-50',
     red: 'text-red-600 bg-red-50',
     purple: 'text-violet-600 bg-violet-50',
+    teal: 'text-teal-600 bg-teal-50',
     gray: 'text-slate-600 bg-slate-100',
   };
   const Comp = onClick ? 'button' : 'div';

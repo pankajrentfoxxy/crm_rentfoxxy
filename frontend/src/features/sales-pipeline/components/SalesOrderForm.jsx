@@ -11,6 +11,7 @@ import {
   formatCurrency, sumLines, formatConfig, lineTotal, typeLabel, countLaptops,
   computeGstBreakdown, resolveSupplyStateFromShipping, formatSupplyStateLabel,
 } from '../salesPipelineUtils';
+import { getSoScopeConfig, orderMatchesScope } from '../salesOrderScope';
 import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
 
 function getField(obj, snake, camel) {
@@ -79,7 +80,10 @@ function linesFromQuote(quoteLines) {
   }));
 }
 
-export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotation }) {
+export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotation, scope }) {
+  const scopeConfig = getSoScopeConfig(scope);
+  const defaultType = scopeConfig?.defaultQuotationType || 'rental';
+  const defaultBranch = scopeConfig?.defaultBranch || branchForQuotationType(defaultType);
   const [meta, setMeta] = useState(null);
   const [customers, setCustomers] = useState([]);
   const [quotations, setQuotations] = useState([]);
@@ -94,23 +98,34 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
   const [selectedShippingValue, setSelectedShippingValue] = useState('');
   const [manualShipping, setManualShipping] = useState(emptyManualShipping());
   const [form, setForm] = useState({
-    customer_id: '', customer_name: '', quotation_number: prefillQuotation || '', quotation_type: 'rental',
-    branch: 'rentfoxxy',
+    customer_id: '', customer_name: '', quotation_number: prefillQuotation || '', quotation_type: defaultType,
+    branch: defaultBranch,
     security_type: 'none', security_amount: '', shiping_charges: '', remarks: '',
     advance_amount: '', advance_due_date: '', GST_number: '',
   });
 
+  const resolveBranch = (quotationType) => {
+    if (quotationType === 'demo' && scopeConfig) return scopeConfig.defaultBranch;
+    return branchForQuotationType(quotationType);
+  };
+
   useEffect(() => {
     if (!open) return;
-    getSalesOrderMeta().then((res) => {
+    setForm((f) => ({
+      ...f,
+      quotation_type: defaultType,
+      branch: defaultBranch,
+    }));
+    getSalesOrderMeta(scope ? { entity_scope: scope } : undefined).then((res) => {
       const data = res.data;
       setMeta(data);
       setCustomers(data.customers || []);
     });
     listQuotations({ status: 'approved', limit: 100 }).then((res) => {
-      setQuotations(res.data?.quotations || []);
+      const all = res.data?.quotations || [];
+      setQuotations(scope ? all.filter((q) => orderMatchesScope(q, scope)) : all);
     }).catch(() => {});
-  }, [open]);
+  }, [open, scope, defaultType, defaultBranch]);
 
   useEffect(() => {
     if (!prefillQuotation || !open) return;
@@ -305,7 +320,14 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
       <button type="button" className="absolute inset-0 bg-black/40" onClick={onClose} aria-label="Close" />
       <aside className="relative w-full max-w-[600px] bg-white shadow-xl flex flex-col max-h-full overflow-hidden">
         <div className="flex items-center justify-between border-b px-4 py-3">
-          <h2 className="font-semibold text-gray-900">Create Sales Order</h2>
+          <div>
+            <h2 className="font-semibold text-gray-900">Create Sales Order</h2>
+            {scopeConfig && (
+              <p className="text-xs font-semibold mt-0.5" style={{ color: scopeConfig.brandColor }}>
+                {scopeConfig.brandName}
+              </p>
+            )}
+          </div>
           <button type="button" onClick={onClose} className="p-1 rounded hover:bg-gray-100"><X className="w-5 h-5" /></button>
         </div>
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -333,10 +355,25 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
             </div>
             <div>
               <label className="text-xs font-medium text-gray-600">Type *</label>
-              <select className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" value={form.quotation_type} onChange={(e) => setForm((f) => ({ ...f, quotation_type: e.target.value, branch: branchForQuotationType(e.target.value) }))}>
-                <option value="rental">Rental</option>
-                <option value="demo">Demo</option>
-                <option value="sale">Sale</option>
+              <select
+                className="w-full mt-1 border rounded-lg px-3 py-2 text-sm"
+                value={form.quotation_type}
+                onChange={(e) => {
+                  const nextType = e.target.value;
+                  setForm((f) => ({
+                    ...f,
+                    quotation_type: nextType,
+                    branch: resolveBranch(nextType),
+                  }));
+                }}
+              >
+                {(scopeConfig?.typeOptions || [
+                  { value: 'rental', label: 'Rental' },
+                  { value: 'demo', label: 'Demo' },
+                  { value: 'sale', label: 'Sale' },
+                ]).map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
               </select>
             </div>
           </div>
@@ -542,6 +579,10 @@ function SalesOrderPreview({
   const totals = gstTotals || computeGstBreakdown({
     subtotal, shipping, security, supplyState: resolveSupplyStateFromShipping(shippingAddress),
   });
+  const isGorefurbo = String(form.branch || '').toLowerCase() === 'gorefurbo'
+    || isSaleType;
+  const brandName = isGorefurbo ? 'Gorefurbo' : 'Rentfoxxy';
+  const brandColor = isGorefurbo ? '#0ba86b' : '#f26b21';
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
@@ -555,7 +596,7 @@ function SalesOrderPreview({
         <div className="flex-1 overflow-y-auto p-6 space-y-5">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h2 className="text-xl font-bold text-gray-900">Rentfoxxy</h2>
+              <h2 className="text-xl font-bold" style={{ color: brandColor }}>{brandName}</h2>
               <p className="text-xs text-gray-500 mt-0.5">{typeLabel(form.quotation_type)} Sales Order</p>
             </div>
             <div className="text-right text-sm">

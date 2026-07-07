@@ -28,10 +28,63 @@ const DOC_TYPES = {
 };
 
 // Rental + Demo bill/dispatch under Rentfoxxy; Sales under Gorefurbo.
-// Accept both 'sale' and 'sales' (the UI uses 'sale').
-function entityForQuotationType(quotationType) {
+// Demo can be tagged to either entity via branch on create (sale-section demo → gorefurbo).
+function entityForQuotationType(quotationType, branch) {
   const t = String(quotationType || 'rental').toLowerCase();
-  return (t === 'sales' || t === 'sale') ? 'gorefurbo' : 'rentfoxxy';
+  if (t === 'sale' || t === 'sales') return 'gorefurbo';
+  if (t === 'demo') {
+    const b = String(branch || '').toLowerCase();
+    if (b === 'gorefurbo' || b === 'rentfoxxy') return b;
+    return 'rentfoxxy';
+  }
+  return 'rentfoxxy';
+}
+
+/** SQL predicate for sale vs rental SO list segregation. */
+function salesOrderScopeWhere(scope, alias = '') {
+  const p = alias ? `${alias}.` : '';
+  if (scope === 'sale') {
+    return `(LOWER(COALESCE(${p}quotation_type, '')) IN ('sale', 'sales')
+      OR LOWER(COALESCE(${p}entity_code, '')) = 'gorefurbo')`;
+  }
+  if (scope === 'rental') {
+    return `(LOWER(COALESCE(${p}quotation_type, 'rental')) = 'rental'
+      OR (LOWER(COALESCE(${p}quotation_type, '')) = 'demo'
+        AND LOWER(COALESCE(${p}entity_code, 'rentfoxxy')) = 'rentfoxxy'))`;
+  }
+  return '';
+}
+
+async function listCustomersForOrderScope(scope) {
+  const saleExists = `EXISTS (
+    SELECT 1 FROM sales_order_lines sol
+    WHERE sol.customer_id = c.customer_id
+      AND (LOWER(COALESCE(sol.quotation_type, '')) IN ('sale', 'sales')
+        OR LOWER(COALESCE(sol.entity_code, '')) = 'gorefurbo')
+  )`;
+  const rentalExists = `EXISTS (
+    SELECT 1 FROM sales_order_lines sol
+    WHERE sol.customer_id = c.customer_id
+      AND (LOWER(COALESCE(sol.quotation_type, '')) = 'rental'
+        OR (LOWER(COALESCE(sol.quotation_type, '')) = 'demo'
+          AND LOWER(COALESCE(sol.entity_code, 'rentfoxxy')) = 'rentfoxxy'))
+  )`;
+  const noOrders = `NOT EXISTS (SELECT 1 FROM sales_order_lines sol WHERE sol.customer_id = c.customer_id)`;
+  const scopeFilter = scope === 'sale'
+    ? `(${saleExists} OR ${noOrders})`
+    : scope === 'rental'
+      ? `(${rentalExists} OR ${noOrders})`
+      : 'TRUE';
+
+  const { rows } = await pool.query(
+    `SELECT customer_id, name, company_name, email, phone, gst_no, address, details
+       FROM customers c
+      WHERE COALESCE(c.status, 1) = 1
+        AND ${scopeFilter}
+      ORDER BY company_name ASC NULLS LAST, name ASC
+      LIMIT 500`
+  );
+  return rows;
 }
 
 // Resolve an entity-scoped doc type, e.g. ('delivery_challan','gorefurbo') -> 'dc_gorefurbo'.
@@ -215,19 +268,44 @@ function fulfillmentSql(template, soRef) {
   return template.replace(/%SO%/g, soRef);
 }
 
-function withPendingQty(row = {}) {
-  const laptopQty = Number(row.laptop_qty || 0);
-  const attached = Number(row.attached_count || 0);
-  const delivered = Number(row.delivered_count || 0);
-  const dispatched = Number(row.dispatched_count || 0);
+/** Cap serial counts to ordered qty so pending + attached + dispatched + delivered = laptop_qty. */
+function reconcileFulfillmentCounts(laptopQty, attached, delivered, dispatched) {
+  const total = Math.max(0, Number(laptopQty || 0));
+  let a = Math.max(0, Number(attached || 0));
+  let d = Math.max(0, Number(delivered || 0));
+  let dp = Math.max(0, Number(dispatched || 0));
+  let accounted = a + d + dp;
+
+  if (accounted > total) {
+    let excess = accounted - total;
+    const trim = (val) => {
+      const cut = Math.min(val, excess);
+      excess -= cut;
+      return val - cut;
+    };
+    d = trim(d);
+    dp = trim(dp);
+    a = trim(a);
+  }
+
+  const pending = Math.max(0, total - a - d - dp);
   return {
-    ...row,
-    laptop_qty: laptopQty,
-    attached_count: attached,
-    delivered_count: delivered,
-    dispatched_count: dispatched,
-    pending_qty: Math.max(0, laptopQty - delivered - dispatched - attached),
+    laptop_qty: total,
+    attached_count: a,
+    delivered_count: d,
+    dispatched_count: dp,
+    pending_qty: pending,
   };
+}
+
+function withPendingQty(row = {}) {
+  const reconciled = reconcileFulfillmentCounts(
+    row.laptop_qty,
+    row.attached_count,
+    row.delivered_count,
+    row.dispatched_count
+  );
+  return { ...row, ...reconciled };
 }
 
 async function getSalesOrderDispatchDate(salesOrderNumber) {
@@ -346,7 +424,7 @@ async function getQuotationLines(quotationNumber) {
 
 async function listSalesOrdersGrouped({
   page = 1, limit = 20, search = '', assignedUserId = null, dateFrom, dateTo,
-  customerId = null, status = '',
+  customerId = null, status = '', entityScope = '',
 } = {}) {
   const hasEntityCode = await tableColumnExists('sales_order_lines', 'entity_code');
   const entitySelect = hasEntityCode ? 'entity_code' : `'rentfoxxy' AS entity_code`;
@@ -392,13 +470,42 @@ async function listSalesOrdersGrouped({
     where,
     appendDateRangeClauses({ column: 'created_at', dateFrom, dateTo, params })
   );
-  const countResult = await pool.query(
-    `SELECT COUNT(DISTINCT sales_order_number)::int AS total FROM sales_order_lines ${where}`,
-    params
-  );
+  const scopeSql = salesOrderScopeWhere(entityScope);
+  if (scopeSql) {
+    where += where ? ` AND ${scopeSql}` : `WHERE ${scopeSql}`;
+  }
+  const statsQuery = `
+    WITH filtered AS (
+      SELECT DISTINCT sales_order_number
+      FROM sales_order_lines
+      ${where}
+    ),
+    so_metrics AS (
+      SELECT
+        f.sales_order_number,
+        (SELECT COALESCE(SUM(COALESCE(main_qty, quantity, 0)), 0)::int
+           FROM sales_order_lines sol WHERE sol.sales_order_number = f.sales_order_number) AS laptop_qty,
+        (SELECT COUNT(*)::int FROM sales_order_serials sos
+           WHERE sos.sales_order_number = f.sales_order_number AND sos.status = 'attached') AS attached_count,
+        ${fulfillmentSql(SO_FULFILLMENT_DELIVERED_SQL, 'f.sales_order_number')} AS delivered_count,
+        ${fulfillmentSql(SO_FULFILLMENT_DISPATCHED_SQL, 'f.sales_order_number')} AS dispatched_count
+      FROM filtered f
+    )
+    SELECT
+      COUNT(*)::int AS orders,
+      COALESCE(SUM(laptop_qty), 0)::int AS total_laptops,
+      COALESCE(SUM(attached_count), 0)::int AS attached,
+      COALESCE(SUM(delivered_count), 0)::int AS delivered,
+      COALESCE(SUM(dispatched_count), 0)::int AS dispatched
+    FROM so_metrics`;
   const offset = (page - 1) * limit;
   const listParams = [...params, limit, offset];
-  const listResult = await pool.query(
+  const [countResult, listResult, statsResult] = await Promise.all([
+    pool.query(
+      `SELECT COUNT(DISTINCT sales_order_number)::int AS total FROM sales_order_lines ${where}`,
+      params
+    ),
+    pool.query(
     `SELECT g.*,
        COALESCE(NULLIF(g.customer_name, ''), c.company_name, c.name) AS customer_name,
        (SELECT COALESCE(SUM(COALESCE(main_qty, quantity, 0)), 0)::int FROM sales_order_lines sol WHERE sol.sales_order_number = g.sales_order_number) AS laptop_qty,
@@ -429,9 +536,26 @@ async function listSalesOrdersGrouped({
      ORDER BY g.created_at DESC
      LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
     listParams
+    ),
+    pool.query(statsQuery, params),
+  ]);
+  const statsRow = statsResult.rows[0] || {};
+  const statsCounts = reconcileFulfillmentCounts(
+    statsRow.total_laptops,
+    statsRow.attached,
+    statsRow.delivered,
+    statsRow.dispatched
   );
   return {
     sales_orders: listResult.rows.map(withPendingQty),
+    stats: {
+      orders: Number(statsRow.orders || 0),
+      total_laptops: statsCounts.laptop_qty,
+      attached: statsCounts.attached_count,
+      delivered: statsCounts.delivered_count,
+      dispatched: statsCounts.dispatched_count,
+      pending: statsCounts.pending_qty,
+    },
     pagination: {
       page,
       limit,
@@ -857,9 +981,13 @@ async function countReturnDcPickupPairs() {
 }
 
 async function getOperationCounts() {
-  const [q, so, dc, rdcPairs, rdcLines] = await Promise.all([
+  const saleScope = salesOrderScopeWhere('sale');
+  const rentalScope = salesOrderScopeWhere('rental');
+  const [q, so, soSale, soRental, dc, rdcPairs, rdcLines] = await Promise.all([
     pool.query(`SELECT COUNT(DISTINCT quotation_number)::int AS c FROM sales_quotations`),
     pool.query(`SELECT COUNT(DISTINCT sales_order_number)::int AS c FROM sales_order_lines`),
+    pool.query(`SELECT COUNT(DISTINCT sales_order_number)::int AS c FROM sales_order_lines WHERE ${saleScope}`),
+    pool.query(`SELECT COUNT(DISTINCT sales_order_number)::int AS c FROM sales_order_lines WHERE ${rentalScope}`),
     pool.query(`SELECT COUNT(*)::int AS c FROM delivery_challan_lines WHERE COALESCE(movement_type, 'outbound') = 'outbound'`),
     countReturnDcPickupPairs(),
     pool.query(`SELECT COUNT(DISTINCT dc_number)::int AS c FROM delivery_challan_lines WHERE movement_type = 'return'`),
@@ -867,6 +995,8 @@ async function getOperationCounts() {
   return {
     quotations: q.rows[0]?.c || 0,
     sales_orders: so.rows[0]?.c || 0,
+    sales_orders_sale: soSale.rows[0]?.c || 0,
+    sales_orders_rental: soRental.rows[0]?.c || 0,
     delivery_challans: dc.rows[0]?.c || 0,
     return_dc: rdcPairs || 0,
     return_dc_lines: rdcLines.rows[0]?.c || 0,
@@ -1427,6 +1557,8 @@ module.exports = {
   resolveDcBilling,
   entityForQuotationType,
   entityDocType,
+  salesOrderScopeWhere,
+  listCustomersForOrderScope,
   generateToken,
   getQuotationRemainingQty,
   getSalesOrderRemainingQty,

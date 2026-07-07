@@ -1,5 +1,5 @@
 import api from './api';
-import { APPLICATION_SECTIONS, PERMISSION_ACTIONS } from '../constants/sections';
+import { APPLICATION_SECTIONS, PERMISSION_ACTIONS, visibleRolePermissionSections } from '../constants/sections';
 import { CRM_ROLES, MANAGEABLE_ROLES } from '../constants/roles';
 
 export const RBAC_SECTIONS = APPLICATION_SECTIONS;
@@ -107,7 +107,7 @@ export function emptyPermissionRow() {
 
 export function permissionsArrayToMatrix(permissions, sections = RBAC_SECTIONS) {
   const matrix = {};
-  sections.forEach((section) => {
+  visibleRolePermissionSections(sections).forEach((section) => {
     matrix[section] = emptyPermissionRow();
   });
   (permissions || []).forEach((row) => {

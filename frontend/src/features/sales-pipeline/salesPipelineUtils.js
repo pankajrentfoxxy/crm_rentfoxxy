@@ -46,10 +46,7 @@ export function formatDate(d) {
 }
 
 /** CRM route — SO numbers may contain slashes (e.g. SO/26-27/0590). */
-export function salesOrderDetailPath(soNumber) {
-  if (!soNumber) return '/sales-pipeline/sales-orders';
-  return `/sales-pipeline/sales-orders/${encodeURIComponent(soNumber)}`;
-}
+export { salesOrderDetailPath, salesOrderListPath } from './salesOrderScope';
 
 /** CRM route — DC numbers may contain slashes (e.g. DC/26-27/0765). */
 export function deliveryChallanDetailPath(dcNumber) {

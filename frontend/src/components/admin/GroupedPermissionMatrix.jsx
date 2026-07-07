@@ -5,6 +5,7 @@ import {
   SECTION_LABELS,
   GROUP_COLORS,
   PERMISSION_ACTIONS,
+  isHiddenRolePermissionSection,
 } from '../../constants/sections';
 
 const ACTION_LABELS = {
@@ -114,7 +115,7 @@ export default function GroupedPermissionMatrix({
                     </tr>
                   </thead>
                   <tbody>
-                    {sections.map((section) => (
+                    {sections.filter((section) => !isHiddenRolePermissionSection(section)).map((section) => (
                       <tr key={section} className="border-t border-gray-100">
                         <td className="px-4 py-2.5">
                           <div className="flex items-center gap-2">

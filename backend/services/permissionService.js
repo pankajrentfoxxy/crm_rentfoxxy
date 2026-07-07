@@ -8,7 +8,9 @@ const SECTION_ALIASES = {
   follow_ups: ['follow_ups', 'lead_follow_ups'],
   lead_follow_ups: ['follow_ups', 'lead_follow_ups'],
   sales_orders: ['sales_orders', 'sales_orders_doc'],
-  sales_orders_doc: ['sales_orders', 'sales_orders_doc'],
+  sales_orders_doc: ['sales_orders', 'sales_orders_doc', 'sales_orders_sale', 'sales_orders_rental'],
+  sales_orders_sale: ['sales_orders_sale', 'sales_orders_doc', 'sales_orders'],
+  sales_orders_rental: ['sales_orders_rental', 'sales_orders_doc', 'sales_orders'],
 };
 
 function sectionsToCheck(section) {

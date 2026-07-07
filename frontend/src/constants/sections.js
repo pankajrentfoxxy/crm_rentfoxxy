@@ -9,6 +9,8 @@ export const APPLICATION_SECTIONS = [
   'customer_documents',
   'sales_quotations',
   'sales_orders_doc',
+  'sales_orders_sale',
+  'sales_orders_rental',
   'delivery_challans',
   'return_dc',
   'delivery_register_management',
@@ -64,7 +66,9 @@ export const SECTION_LABELS = {
   customers: 'Customers',
   customer_documents: 'Customer Documents',
   sales_quotations: 'Quotations',
-  sales_orders_doc: 'Sales Orders',
+  sales_orders_doc: 'Sales Orders (legacy)',
+  sales_orders_sale: 'Sales Order – Sale',
+  sales_orders_rental: 'Sales Order – Rental',
   delivery_challans: 'Delivery Challans',
   return_dc: 'Return DC',
   delivery_register_management: 'Delivery Register',
@@ -115,7 +119,7 @@ export const SECTION_GROUPS = {
   Core: ['dashboard', 'analytics_dashboard'],
   'Lead & Sales CRM': [
     'leads', 'lead_follow_ups', 'lead_conversion', 'customers', 'customer_documents',
-    'sales_quotations', 'sales_orders_doc', 'delivery_challans', 'return_dc',
+    'sales_quotations', 'sales_orders_sale', 'sales_orders_rental', 'delivery_challans', 'return_dc',
     'delivery_register_management', 'technician_bucket', 'technicians_bucket_list', 'payment_records',
   ],
   'Vendor & Procurement': ['vendor_management', 'procurement', 'sales_pipeline'],
@@ -147,6 +151,20 @@ export const GROUP_COLORS = {
 };
 
 export const PERMISSION_ACTIONS = ['can_view', 'can_create', 'can_edit', 'can_delete'];
+
+/** Legacy umbrella keys — kept in DB for backward compat but hidden from role-permission UI. */
+export const HIDDEN_ROLE_PERMISSION_SECTIONS = new Set([
+  'sales_orders',
+  'sales_orders_doc',
+]);
+
+export function isHiddenRolePermissionSection(section) {
+  return HIDDEN_ROLE_PERMISSION_SECTIONS.has(section);
+}
+
+export function visibleRolePermissionSections(sections) {
+  return (sections || []).filter((s) => !isHiddenRolePermissionSection(s));
+}
 
 export const ACTION_ALIASES = {
   view: 'can_view',

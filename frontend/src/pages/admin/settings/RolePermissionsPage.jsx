@@ -13,6 +13,7 @@ import {
   permissionsArrayToMatrix,
   saveRolePermissions,
 } from '../../../utils/rbacApi';
+import { visibleRolePermissionSections } from '../../../constants/sections';
 
 function countChanges(matrix, baseline) {
   let n = 0;
@@ -61,9 +62,11 @@ export default function RolePermissionsPage() {
     setLoading(true);
     fetchRolePermissions(role)
       .then((data) => {
-        const sectionList = data.sections?.length
-          ? data.sections.map((s) => (typeof s === 'string' ? s : s.section))
-          : RBAC_SECTIONS;
+        const sectionList = visibleRolePermissionSections(
+          data.sections?.length
+            ? data.sections.map((s) => (typeof s === 'string' ? s : s.section))
+            : RBAC_SECTIONS
+        );
         setSections(sectionList);
         const loaded = permissionsArrayToMatrix(data.permissions, sectionList);
         setMatrix(loaded);
@@ -99,9 +102,11 @@ export default function RolePermissionsPage() {
     setApplyingDefaults(true);
     try {
       const data = await applyRoleDefaults(selectedRole);
-      const sectionList = data.sections?.length
-        ? data.sections.map((s) => (typeof s === 'string' ? s : s.section))
-        : sections;
+      const sectionList = visibleRolePermissionSections(
+        data.sections?.length
+          ? data.sections.map((s) => (typeof s === 'string' ? s : s.section))
+          : sections
+      );
       const loaded = permissionsArrayToMatrix(data.permissions, sectionList);
       setMatrix(loaded);
       setBaselineMatrix(JSON.parse(JSON.stringify(loaded)));

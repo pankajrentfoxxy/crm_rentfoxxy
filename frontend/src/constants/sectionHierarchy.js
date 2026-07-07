@@ -10,7 +10,9 @@ export const SECTION_ALIASES = {
   follow_ups: ['follow_ups', 'lead_follow_ups'],
   lead_follow_ups: ['follow_ups', 'lead_follow_ups'],
   sales_orders: ['sales_orders', 'sales_orders_doc'],
-  sales_orders_doc: ['sales_orders', 'sales_orders_doc'],
+  sales_orders_doc: ['sales_orders', 'sales_orders_doc', 'sales_orders_sale', 'sales_orders_rental'],
+  sales_orders_sale: ['sales_orders_sale', 'sales_orders_doc', 'sales_orders'],
+  sales_orders_rental: ['sales_orders_rental', 'sales_orders_doc', 'sales_orders'],
 };
 
 /** Sidebar accordion / module umbrella → granular RBAC sections */
@@ -18,6 +20,8 @@ export const MODULE_CHILDREN = {
   sales_pipeline: [
     'sales_quotations',
     'sales_orders_doc',
+    'sales_orders_sale',
+    'sales_orders_rental',
     'delivery_challans',
     'return_dc',
     'delivery_register_management',

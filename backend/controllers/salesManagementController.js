@@ -14,6 +14,7 @@ const {
   listQuotationsGrouped,
   getQuotationLines,
   listSalesOrdersGrouped,
+  listCustomersForOrderScope,
   getSalesOrderLines,
   listDeliveryChallansGrouped,
   getDeliveryChallanLines,
@@ -514,19 +515,25 @@ exports.getAddSalesOrderMeta = async (req, res) => {
   try {
     const salesOrderNumber = await peekFinancialYearNumber('sales_order');
     const quotationNumber = req.query.quotation_number;
+    const entityScope = String(req.query.entity_scope || '').toLowerCase();
     let quotationLines = [];
     if (quotationNumber) {
       quotationLines = await getQuotationLines(quotationNumber);
     }
-    const [customersRes] = await Promise.all([
-      pool.query(`SELECT customer_id, name, company_name, email, phone, gst_no, address, details FROM customers ORDER BY company_name ASC NULLS LAST, name ASC LIMIT 500`),
-    ]);
+    const customers = entityScope === 'sale' || entityScope === 'rental'
+      ? await listCustomersForOrderScope(entityScope)
+      : (await pool.query(
+        `SELECT customer_id, name, company_name, email, phone, gst_no, address, details
+           FROM customers WHERE COALESCE(status, 1) = 1
+           ORDER BY company_name ASC NULLS LAST, name ASC LIMIT 500`
+      )).rows;
     res.json({
       success: true,
       sales_order_number: salesOrderNumber,
       quotation_number: quotationNumber || null,
       quotation_lines: quotationLines,
-      customers: customersRes.rows.map(normalizeCustomerForQuotation),
+      customers: customers.map(normalizeCustomerForQuotation),
+      entity_scope: entityScope || null,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -546,6 +553,7 @@ exports.listSalesOrders = async (req, res) => {
       dateTo: req.query.date_to,
       customerId: req.query.customer_id || null,
       status: req.query.status || '',
+      entityScope: req.query.entity_scope || '',
     });
     res.json({ success: true, ...data });
   } catch (error) {
@@ -650,7 +658,7 @@ exports.storeSalesOrder = async (req, res) => {
     // Tag the owning entity (Sales -> gorefurbo, Rental/Demo -> rentfoxxy).
     await client.query(
       `UPDATE sales_order_lines SET entity_code = $1 WHERE sales_order_number = $2`,
-      [entityForQuotationType(body.quotation_type || 'rental'), salesOrderNumber]
+      [entityForQuotationType(body.quotation_type || 'rental', body.branch), salesOrderNumber]
     );
 
     // Security: 'one_month_rental' auto-computes from the sum of each line's

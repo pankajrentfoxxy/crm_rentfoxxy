@@ -12,6 +12,7 @@ import { cancelSalesOrder, getQuotation, getSalesOrderFull, listPayments, regene
 import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
 import { formatConfig, formatCurrency, formatDate, TYPE_STYLES, typeLabel, deliveryChallanDetailPath, parseDeliveryAddress, formatSupplyStateLabel, resolveSupplyStateFromShipping } from '../salesPipelineUtils';
+import { getSoScopeConfig, orderMatchesScope, salesOrderListPath } from '../salesOrderScope';
 
 function resolveSoNumber(params) {
   const raw = params['*'] ?? params.soNumber ?? '';
@@ -44,7 +45,7 @@ function pdfUrl(p) {
 
 const TABS = ['overview', 'laptops', 'addresses', 'payments', 'dcs', 'quote'];
 
-export default function SalesOrderDetailPage() {
+export default function SalesOrderDetailPage({ scope: scopeProp }) {
   const params = useParams();
   const soNumber = resolveSoNumber(params);
   const { user } = useAuth();
@@ -99,6 +100,10 @@ export default function SalesOrderDetailPage() {
     resolveSupplyStateFromShipping(shippingAddr, head.supply_state)
   );
   const isCancelled = String(data?.status || head.status || '').toLowerCase() === 'cancelled';
+  const resolvedScope = scopeProp
+    || (orderMatchesScope(head, 'sale') ? 'sale' : orderMatchesScope(head, 'rental') ? 'rental' : null);
+  const scopeConfig = getSoScopeConfig(resolvedScope);
+  const listPath = salesOrderListPath(resolvedScope);
 
   const handleCancel = useCallback(async () => {
     if (!window.confirm(`Cancel sales order ${soNumber}? Attached laptops will be released back to inventory. This cannot be undone.`)) return;
@@ -115,8 +120,18 @@ export default function SalesOrderDetailPage() {
     <div className="p-4 max-w-6xl mx-auto">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div>
-          <Link to="/sales-pipeline/sales-orders" className="text-sm text-blue-600">← Back</Link>
-          <h1 className="text-2xl font-semibold font-mono mt-1">{soNumber}</h1>
+          <Link to={listPath} className="text-sm text-blue-600">← Back</Link>
+          <div className="flex flex-wrap items-center gap-2 mt-1">
+            <h1 className="text-2xl font-semibold font-mono">{soNumber}</h1>
+            {scopeConfig && (
+              <span
+                className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-bold text-white"
+                style={{ backgroundColor: scopeConfig.brandColor }}
+              >
+                {scopeConfig.brandName}
+              </span>
+            )}
+          </div>
           <p className="text-gray-600">{head.customer_name}</p>
           <div className="flex flex-wrap gap-2 mt-2">
             <span className="inline-flex items-center gap-1 rounded-lg bg-blue-100 px-3 py-1 text-sm font-bold text-blue-900">

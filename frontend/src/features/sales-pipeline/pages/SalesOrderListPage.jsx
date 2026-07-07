@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Plus, ClipboardList, Eye, Banknote, Truck, Ban } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -8,7 +8,12 @@ import PaymentModal from '../components/PaymentModal';
 import SalesOrderForm from '../components/SalesOrderForm';
 import DCForm from '../components/DCForm';
 import { cancelSalesOrder, getSalesOrderMeta, listSalesOrders } from '../salesPipelineApi';
-import { formatCurrency, formatDate, TYPE_STYLES, typeLabel, salesOrderDetailPath } from '../salesPipelineUtils';
+import { formatCurrency, formatDate, TYPE_STYLES, typeLabel } from '../salesPipelineUtils';
+import {
+  getSoScopeConfig,
+  salesOrderDetailPath,
+  soPermissionSectionsForGate,
+} from '../salesOrderScope';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 
 const PAGE_SIZE = 25;
@@ -51,7 +56,7 @@ function fulfillmentFromRow(row) {
   const delivered = Number(row.delivered_count ?? 0);
   const attached = Number(row.attached_count ?? 0);
   const dispatched = Number(row.dispatched_count ?? 0);
-  const pending = Number(row.pending_qty ?? Math.max(0, total - delivered - dispatched - attached));
+  const pending = Number(row.pending_qty ?? 0);
   return { total, delivered, attached, dispatched, pending };
 }
 
@@ -82,7 +87,9 @@ function ActionIconButton({ label, onClick, icon: Icon, tone = 'slate' }) {
   );
 }
 
-export default function SalesOrderListPage() {
+export default function SalesOrderListPage({ scope }) {
+  const scopeConfig = getSoScopeConfig(scope);
+  const permissionSections = soPermissionSectionsForGate();
   const navigate = useNavigate();
   const location = useLocation();
   const [rows, setRows] = useState([]);
@@ -96,6 +103,9 @@ export default function SalesOrderListPage() {
   const [statusFilter, setStatusFilter] = useState('');
   const [customers, setCustomers] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
+  const [stats, setStats] = useState({
+    orders: 0, total_laptops: 0, attached: 0, delivered: 0, dispatched: 0, pending: 0,
+  });
   const [soDrawer, setSoDrawer] = useState(false);
   const [dcDrawer, setDcDrawer] = useState(false);
   const [paymentSo, setPaymentSo] = useState(null);
@@ -105,10 +115,10 @@ export default function SalesOrderListPage() {
   useEffect(() => { setPage(1); }, [search, dateFrom, dateTo, customerId, statusFilter]);
 
   useEffect(() => {
-    getSalesOrderMeta()
+    getSalesOrderMeta(scope ? { entity_scope: scope } : undefined)
       .then((res) => setCustomers(res.data?.customers || []))
       .catch(() => {});
-  }, []);
+  }, [scope]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -121,15 +131,20 @@ export default function SalesOrderListPage() {
         date_to: dateTo || undefined,
         customer_id: customerId || undefined,
         status: statusFilter || undefined,
+        entity_scope: scope || undefined,
       });
       setRows(res.data?.sales_orders || []);
       setPagination(res.data?.pagination || { page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
+      setStats(res.data?.stats || {
+        orders: res.data?.pagination?.total || 0,
+        total_laptops: 0, attached: 0, delivered: 0, dispatched: 0, pending: 0,
+      });
     } catch {
       toast.error('Failed to load sales orders');
     } finally {
       setLoading(false);
     }
-  }, [page, search, dateFrom, dateTo, customerId, statusFilter]);
+  }, [page, search, dateFrom, dateTo, customerId, statusFilter, scope]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -138,16 +153,6 @@ export default function SalesOrderListPage() {
       setSoDrawer(true);
     }
   }, [location.state]);
-
-  const stats = useMemo(() => rows.reduce((acc, row) => {
-    const f = fulfillmentFromRow(row);
-    acc.totalLaptops += f.total;
-    acc.dispatched += f.dispatched;
-    acc.pending += f.pending;
-    return acc;
-  }, { totalLaptops: 0, dispatched: 0, pending: 0 }), [rows]);
-
-  const pageOrderCount = pagination.total || rows.length;
 
   const handleCancel = useCallback(async (soNumber) => {
     if (!window.confirm(`Cancel sales order ${soNumber}? Attached laptops will be released back to inventory. This cannot be undone.`)) return;
@@ -171,12 +176,12 @@ export default function SalesOrderListPage() {
           label="View"
           icon={Eye}
           tone="blue"
-          onClick={() => navigate(salesOrderDetailPath(row.sales_order_number))}
+          onClick={() => navigate(salesOrderDetailPath(row.sales_order_number, scope))}
         />
         {!cancelled && (
           <>
             {hasAttachedLaptops && (
-              <PermissionGate section={['sales_orders_doc', 'delivery_challans']} action="create">
+              <PermissionGate section={[...permissionSections, 'delivery_challans']} action="create">
                 <ActionIconButton
                   label="Create DC"
                   icon={Truck}
@@ -194,7 +199,7 @@ export default function SalesOrderListPage() {
               />
             </PermissionGate>
             {!hasDc && (
-              <PermissionGate section="sales_orders_doc" action="edit">
+              <PermissionGate section={scopeConfig?.permissionSection || permissionSections} action="edit">
                 <ActionIconButton
                   label="Cancel"
                   icon={Ban}
@@ -236,15 +241,9 @@ export default function SalesOrderListPage() {
       const { attached } = fulfillmentFromRow(r);
       return <span className="text-base font-bold text-teal-700">{attached}</span>;
     } },
-    { key: 'fulfillment', header: 'Progress', render: (r) => {
-      const { total, dispatched, pending } = fulfillmentFromRow(r);
-      return (
-        <div className="flex flex-wrap gap-1">
-          <QtyPill label="Total" value={total} tone="blue" />
-          <QtyPill label="Dispatched" value={dispatched} tone="amber" />
-          <QtyPill label="Pending" value={pending} tone="slate" />
-        </div>
-      );
+    { key: 'pending_qty', header: 'Pending', render: (r) => {
+      const { pending } = fulfillmentFromRow(r);
+      return <span className="text-base font-bold text-slate-800">{pending}</span>;
     } },
     { key: 'status', header: 'Status', render: (r) => (
       <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${soStatusClass(r.status)}`}>
@@ -290,21 +289,33 @@ export default function SalesOrderListPage() {
   return (
     <div className="p-4 max-w-7xl mx-auto">
       <PageHeader
-        title="Sales Orders"
-        subtitle="SO-* series"
+        title={scopeConfig?.title || 'Sales Orders'}
+        subtitle={scopeConfig?.subtitle || 'SO series'}
         icon={ClipboardList}
         actions={(
-          <PermissionGate section="sales_orders_doc" action="create">
-            <Button icon={Plus} onClick={() => setSoDrawer(true)}>Create Sales Order</Button>
-          </PermissionGate>
+          <div className="flex items-center gap-3">
+            {scopeConfig && (
+              <span
+                className="hidden sm:inline-flex items-center rounded-full px-3 py-1 text-sm font-bold text-white"
+                style={{ backgroundColor: scopeConfig.brandColor }}
+              >
+                {scopeConfig.brandName}
+              </span>
+            )}
+            <PermissionGate section={scopeConfig?.permissionSection || permissionSections} action="create">
+              <Button icon={Plus} onClick={() => setSoDrawer(true)}>Create Sales Order</Button>
+            </PermissionGate>
+          </div>
         )}
       />
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
-        <StatCard label="Orders (filtered)" value={pageOrderCount} tone="gray" />
-        <StatCard label="Total laptops (page)" value={stats.totalLaptops} tone="blue" />
-        <StatCard label="Dispatched (page)" value={stats.dispatched} tone="amber" />
-        <StatCard label="Pending (page)" value={stats.pending} tone="gray" />
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
+        <StatCard label="Orders (filtered)" value={stats.orders} tone="gray" />
+        <StatCard label="Total laptops" value={stats.total_laptops} tone="blue" />
+        <StatCard label="Delivered" value={stats.delivered} tone="green" />
+        <StatCard label="Attached" value={stats.attached} tone="teal" />
+        <StatCard label="Dispatched" value={stats.dispatched} tone="amber" />
+        <StatCard label="Pending" value={stats.pending} tone="gray" />
       </div>
 
       <div className="flex flex-wrap gap-3 mb-4 items-end">
@@ -356,7 +367,7 @@ export default function SalesOrderListPage() {
         keyField="sales_order_number"
         loading={loading}
         renderCard={renderCard}
-        onRowClick={(r) => navigate(salesOrderDetailPath(r.sales_order_number))}
+        onRowClick={(r) => navigate(salesOrderDetailPath(r.sales_order_number, scope))}
       />
 
       <ListPagination
@@ -367,7 +378,13 @@ export default function SalesOrderListPage() {
         onPageChange={setPage}
       />
 
-      <SalesOrderForm open={soDrawer} onClose={() => setSoDrawer(false)} onSaved={load} prefillQuotation={prefillQuote} />
+      <SalesOrderForm
+        open={soDrawer}
+        onClose={() => setSoDrawer(false)}
+        onSaved={load}
+        prefillQuotation={prefillQuote}
+        scope={scope}
+      />
       <DCForm open={dcDrawer} onClose={() => { setDcDrawer(false); setPrefillSo(null); }} prefillSo={prefillSo} />
       <PaymentModal open={Boolean(paymentSo)} soNumber={paymentSo} onClose={() => setPaymentSo(null)} onSaved={load} />
     </div>
