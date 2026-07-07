@@ -628,12 +628,14 @@ exports.updateCustomerAddress = async (req, res) => {
               concern_person = COALESCE($1, concern_person),
               mobile_no = COALESCE($2, mobile_no),
               address = COALESCE($3, address),
-              pincode = COALESCE($4, pincode),
-              is_head_office = COALESCE($5, is_head_office),
-              address_type = COALESCE($6, address_type),
+              city = COALESCE($4, city),
+              state = COALESCE($5, state),
+              pincode = COALESCE($6, pincode),
+              is_head_office = COALESCE($7, is_head_office),
+              address_type = COALESCE($8, address_type),
               updated_at = CURRENT_TIMESTAMP
-             WHERE customer_address_id = $7`,
-            [concern_person || null, mobile_no || null, address || null, pincode || null, is_head_office ?? false, address_type || null, addr_id]
+             WHERE customer_address_id = $9`,
+            [concern_person || null, mobile_no || null, address || null, req.body.city || null, req.body.state || null, pincode || null, is_head_office ?? false, address_type || null, addr_id]
         );
         const res2 = await pool.query('SELECT * FROM customer_addresses WHERE customer_address_id = $1', [addr_id]);
         res.json({ success: true, address: res2.rows[0] });

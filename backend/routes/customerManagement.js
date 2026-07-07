@@ -37,6 +37,7 @@ router.patch('/customers/:customerId/portal-access', cp('customers', 'edit'), ct
 router.get('/customers/:customerId/laptops', cp('customer_assets', 'view'), ctrl.getCustomerLaptops);
 router.get('/customers/:customerId/addresses', cp('customers', 'view'), ctrl.getCustomerAddresses);
 router.post('/customers/:customerId/addresses', cp('customers', 'edit'), ctrl.addCustomerAddress);
+router.put('/customers/:customerId/addresses/:addressId', cp('customers', 'edit'), ctrl.updateCustomerAddress);
 router.delete('/customers/:customerId/addresses/:addressId', cp('customers', 'edit'), ctrl.deleteCustomerAddress);
 router.patch('/customers/:customerId/addresses/:addressId/default', cp('customers', 'edit'), ctrl.setDefaultCustomerAddress);
 router.get('/customers/:customerId', cp('customers', 'view'), ctrl.getCustomer);

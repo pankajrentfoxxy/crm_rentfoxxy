@@ -438,7 +438,7 @@ exports.exportCustomersExcel = async (req, res) => {
 
     if (customerIds.length) {
       const addressesResult = await pool.query(
-        `SELECT customer_id, concern_person, mobile_no, address, pincode, address_type, is_head_office
+        `SELECT customer_id, concern_person, mobile_no, address, city, state, pincode, address_type, is_head_office
          FROM customer_addresses
          WHERE customer_id = ANY($1::int[])
          ORDER BY customer_id ASC, is_head_office DESC, customer_address_id ASC`,
@@ -525,7 +525,7 @@ exports.getCustomer = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
     const addrRes = await pool.query(
-      `SELECT customer_address_id, customer_id, concern_person, mobile_no, address, pincode,
+      `SELECT customer_address_id, customer_id, concern_person, mobile_no, address, city, state, pincode,
               is_head_office, address_type, created_at, updated_at
        FROM customer_addresses
        WHERE customer_id = $1
@@ -547,7 +547,7 @@ exports.getCustomerAddresses = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid customer id' });
     }
     const { rows } = await pool.query(
-      `SELECT customer_address_id, customer_id, concern_person, mobile_no, address, pincode,
+      `SELECT customer_address_id, customer_id, concern_person, mobile_no, address, city, state, pincode,
               is_head_office, address_type, created_at, updated_at
        FROM customer_addresses
        WHERE customer_id = $1
@@ -577,20 +577,67 @@ exports.addCustomerAddress = async (req, res) => {
     }
     const result = await pool.query(
       `INSERT INTO customer_addresses
-        (customer_id, concern_person, mobile_no, address, pincode, is_head_office, address_type)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+        (customer_id, concern_person, mobile_no, address, city, state, pincode, is_head_office, address_type)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
       [
         customerId,
         body.concern_person || null,
         body.mobile_no || null,
         body.address,
+        body.city || null,
+        body.state || null,
         body.pincode || null,
         !!body.is_head_office,
         body.address_type || 'Shipping',
       ]
     );
     res.status(201).json({ success: true, address: result.rows[0] });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updateCustomerAddress = async (req, res) => {
+  try {
+    const customerId = parseInt(req.params.customerId, 10);
+    const addressId = parseInt(req.params.addressId, 10);
+    const body = req.body || {};
+    const check = await pool.query(
+      'SELECT 1 FROM customer_addresses WHERE customer_address_id = $1 AND customer_id = $2',
+      [addressId, customerId]
+    );
+    if (!check.rows.length) {
+      return res.status(404).json({ success: false, message: 'Address not found' });
+    }
+    if (!body.address || !String(body.address).trim()) {
+      return res.status(400).json({ success: false, message: 'Address is required' });
+    }
+    const result = await pool.query(
+      `UPDATE customer_addresses
+          SET concern_person = $1,
+              mobile_no = $2,
+              address = $3,
+              city = $4,
+              state = $5,
+              pincode = $6,
+              address_type = COALESCE($7, address_type),
+              updated_at = NOW()
+        WHERE customer_address_id = $8 AND customer_id = $9
+        RETURNING *`,
+      [
+        body.concern_person || null,
+        body.mobile_no || null,
+        String(body.address).trim(),
+        body.city || null,
+        body.state || null,
+        body.pincode || null,
+        body.address_type || null,
+        addressId,
+        customerId,
+      ]
+    );
+    res.json({ success: true, address: result.rows[0] });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -635,7 +682,7 @@ exports.setDefaultCustomerAddress = async (req, res) => {
       [addressId]
     );
     const { rows } = await pool.query(
-      `SELECT customer_address_id, customer_id, concern_person, mobile_no, address, pincode,
+      `SELECT customer_address_id, customer_id, concern_person, mobile_no, address, city, state, pincode,
               is_head_office, address_type
        FROM customer_addresses WHERE customer_id = $1
        ORDER BY is_head_office DESC, customer_address_id ASC`,

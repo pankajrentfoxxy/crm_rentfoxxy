@@ -3,7 +3,7 @@ import { X } from 'lucide-react';
 import { COMPANY_TYPES } from '../leadConstants';
 import {
   addCustomerAddress, createCustomer, deleteCustomerAddress,
-  getCustomerAddresses, setDefaultCustomerAddress, updateCustomer,
+  getCustomerAddresses, setDefaultCustomerAddress, updateCustomer, updateCustomerAddress,
 } from '../leadCrmApi';
 import toast from 'react-hot-toast';
 import { INDIAN_STATES, resolveStateSelectValue } from '../../../constants/indianStates';
@@ -31,6 +31,7 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
   const [shippingSame, setShippingSame] = useState(true);
   const [savedAddresses, setSavedAddresses] = useState([]);
   const [showAddrForm, setShowAddrForm] = useState(false);
+  const [editingAddressId, setEditingAddressId] = useState(null);
   const [addrForm, setAddrForm] = useState(emptyAddrForm());
   const [addrSaving, setAddrSaving] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -175,6 +176,25 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
     setSavedAddresses(res.data?.addresses || []);
   };
 
+  const resetAddrForm = () => {
+    setShowAddrForm(false);
+    setEditingAddressId(null);
+    setAddrForm(emptyAddrForm());
+  };
+
+  const handleEditAddress = (addr) => {
+    setEditingAddressId(addr.customer_address_id);
+    setAddrForm({
+      address: addr.address || '',
+      city: addr.city || '',
+      state: resolveStateSelectValue(addr.state || ''),
+      pincode: addr.pincode || '',
+      concern_person: addr.concern_person || '',
+      mobile_no: addr.mobile_no || '',
+    });
+    setShowAddrForm(true);
+  };
+
   const handleSaveAddress = async () => {
     if (!customer?.customer_id || !addrForm.address.trim()) {
       toast.error('Address is required');
@@ -182,13 +202,18 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
     }
     setAddrSaving(true);
     try {
-      await addCustomerAddress(customer.customer_id, {
+      const payload = {
         ...addrForm,
         address_type: 'Shipping',
-      });
-      toast.success('Shipping address saved');
-      setAddrForm(emptyAddrForm());
-      setShowAddrForm(false);
+      };
+      if (editingAddressId) {
+        await updateCustomerAddress(customer.customer_id, editingAddressId, payload);
+        toast.success('Shipping address updated');
+      } else {
+        await addCustomerAddress(customer.customer_id, payload);
+        toast.success('Shipping address saved');
+      }
+      resetAddrForm();
       await loadAddresses();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to save address');
@@ -402,6 +427,8 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
                   </p>
                   {addr.is_head_office && <span className="text-xs text-green-700">Default</span>}
                   <div className="flex gap-2 pt-1">
+                    <button type="button" onClick={() => handleEditAddress(addr)}
+                      className="text-xs text-blue-600 hover:underline">Edit</button>
                     {!addr.is_head_office && (
                       <button type="button" onClick={() => handleSetDefaultAddress(addr.customer_address_id)}
                         className="text-xs text-blue-600 hover:underline">Set as default</button>
@@ -413,6 +440,9 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
               ))}
               {showAddrForm ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-3 border rounded-lg">
+                  <p className="sm:col-span-2 text-sm font-medium text-gray-800">
+                    {editingAddressId ? 'Edit shipping address' : 'Add shipping address'}
+                  </p>
                   <div className="sm:col-span-2">
                     <label className="text-xs text-gray-500">Address *</label>
                     <textarea value={addrForm.address} onChange={(e) => setAddrForm((f) => ({ ...f, address: e.target.value }))}
@@ -448,14 +478,14 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
                   <div className="sm:col-span-2 flex gap-2">
                     <button type="button" onClick={handleSaveAddress} disabled={addrSaving}
                       className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg disabled:opacity-50">
-                      {addrSaving ? 'Saving...' : 'Save Address'}
+                      {addrSaving ? 'Saving...' : editingAddressId ? 'Update Address' : 'Save Address'}
                     </button>
-                    <button type="button" onClick={() => { setShowAddrForm(false); setAddrForm(emptyAddrForm()); }}
+                    <button type="button" onClick={resetAddrForm}
                       className="px-3 py-1.5 text-sm border rounded-lg">Cancel</button>
                   </div>
                 </div>
               ) : (
-                <button type="button" onClick={() => setShowAddrForm(true)}
+                <button type="button" onClick={() => { setEditingAddressId(null); setAddrForm(emptyAddrForm()); setShowAddrForm(true); }}
                   className="text-sm text-blue-600 hover:underline">+ Add Shipping Address</button>
               )}
             </div>

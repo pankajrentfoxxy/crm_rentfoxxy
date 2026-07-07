@@ -14,6 +14,7 @@ import { getBackendOrigin } from '../../../utils/api';
 import CustomerDocuments from '../components/CustomerDocuments';
 import CustomerFormDrawer from '../components/CustomerFormDrawer';
 import CustomerAddressesTab from '../components/CustomerAddressesTab';
+import CustomerAddressModal from '../components/CustomerAddressModal';
 
 const TABS = ['Profile', 'Addresses', 'Documents', 'Assets', 'Orders', 'Lead Origin', 'Portal Access'];
 const TAB_PROFILE = 0;
@@ -146,6 +147,7 @@ export default function CustomerDetailPage() {
   const [newPassword, setNewPassword] = useState(null);
   const [savedAddresses, setSavedAddresses] = useState([]);
   const [addressesLoading, setAddressesLoading] = useState(false);
+  const [addressModal, setAddressModal] = useState(null);
 
   const loadCustomer = useCallback(async () => {
     try {
@@ -335,7 +337,13 @@ export default function CustomerDetailPage() {
           customer={customer}
           savedAddresses={savedAddresses}
           loading={addressesLoading}
-          onAddAddress={() => setEditOpen(true)}
+          onAddAddress={() => setAddressModal({ mode: 'add', kind: 'saved' })}
+          onEditAddress={(item) => setAddressModal({
+            mode: 'edit',
+            kind: item.kind,
+            addressId: item.customerAddressId || null,
+            initial: item,
+          })}
         />
       )}
 
@@ -594,6 +602,16 @@ export default function CustomerDetailPage() {
       )}
 
       <CustomerFormDrawer open={editOpen} customer={customer} onClose={() => setEditOpen(false)} onSaved={load} />
+      <CustomerAddressModal
+        open={Boolean(addressModal)}
+        mode={addressModal?.mode || 'add'}
+        kind={addressModal?.kind || 'saved'}
+        customer={customer}
+        addressId={addressModal?.addressId}
+        initial={addressModal?.initial}
+        onClose={() => setAddressModal(null)}
+        onSaved={load}
+      />
       <TtsplHistoryDrawer ttsplId={ttsplOpen} open={!!ttsplOpen} onClose={() => setTtsplOpen(null)} />
       {newPassword && <PasswordModal password={newPassword} onClose={() => setNewPassword(null)} />}
     </div>

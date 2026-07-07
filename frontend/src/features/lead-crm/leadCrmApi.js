@@ -36,6 +36,8 @@ export const verifyCustomerKyc = (id) => api.put(`/customer-management/customers
 export const getCustomerLaptops = (id, params) => api.get(`/customer-management/customers/${id}/laptops`, { params });
 export const getCustomerAddresses = (id) => api.get(`/customer-management/customers/${id}/addresses`);
 export const addCustomerAddress = (id, data) => api.post(`/customer-management/customers/${id}/addresses`, data);
+export const updateCustomerAddress = (id, addressId, data) =>
+  api.put(`/customer-management/customers/${id}/addresses/${addressId}`, data);
 export const deleteCustomerAddress = (id, addressId) => api.delete(`/customer-management/customers/${id}/addresses/${addressId}`);
 export const setDefaultCustomerAddress = (id, addressId) => api.patch(`/customer-management/customers/${id}/addresses/${addressId}/default`);
 
