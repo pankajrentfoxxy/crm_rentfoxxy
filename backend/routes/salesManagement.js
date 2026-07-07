@@ -78,6 +78,8 @@ router.patch(...soRoute('/serial-addresses', soSerialsEdit, ctrl.bulkUpdateSoSer
 router.patch('/so-lines/:lineId/address', soSerialsEdit, ctrl.updateSoLineAddress);
 // Super Admin — correct sales-side line config (processor / gen / RAM / storage)
 router.patch('/so-lines/:lineId/config', checkRole('super_admin'), ctrl.updateSoLineConfig);
+// Super Admin — correct monthly rate (regenerates SO + linked DC PDFs)
+router.patch('/so-lines/:lineId/rate', checkRole('super_admin'), ctrl.updateSoLineRate);
 
 // Phase 13 — delivery flow (technician bucket / my deliveries / OTP / POD)
 router.get('/delivery-flow', drView, flowCtrl.listDeliveryFlow);

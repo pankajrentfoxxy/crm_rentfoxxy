@@ -7,8 +7,10 @@ import PaymentModal from '../components/PaymentModal';
 import DCForm from '../components/DCForm';
 import SoSerialPanel from '../components/SoSerialPanel';
 import SoDeliveryAddressPanel from '../components/SoDeliveryAddressPanel';
+import SoLineRateEditModal from '../components/SoLineRateEditModal';
 import { cancelSalesOrder, getQuotation, getSalesOrderFull, listPayments, regenerateSalesOrderPdf } from '../salesPipelineApi';
 import { getBackendOrigin } from '../../../utils/api';
+import { useAuth } from '../../../context/AuthContext';
 import { formatConfig, formatCurrency, formatDate, TYPE_STYLES, typeLabel, deliveryChallanDetailPath, parseDeliveryAddress, formatSupplyStateLabel, resolveSupplyStateFromShipping } from '../salesPipelineUtils';
 
 function resolveSoNumber(params) {
@@ -45,12 +47,15 @@ const TABS = ['overview', 'laptops', 'addresses', 'payments', 'dcs', 'quote'];
 export default function SalesOrderDetailPage() {
   const params = useParams();
   const soNumber = resolveSoNumber(params);
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === 'super_admin';
   const [tab, setTab] = useState('overview');
   const [data, setData] = useState(null);
   const [payments, setPayments] = useState([]);
   const [quote, setQuote] = useState(null);
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [dcOpen, setDcOpen] = useState(false);
+  const [editRateLine, setEditRateLine] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -218,6 +223,7 @@ export default function SalesOrderDetailPage() {
                   <th className="px-4 py-2 text-right">Qty</th>
                   <th className="px-4 py-2 text-right">Rate</th>
                   <th className="px-4 py-2 text-right">Total</th>
+                  {isSuperAdmin ? <th className="px-4 py-2 text-right"> </th> : null}
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -228,6 +234,17 @@ export default function SalesOrderDetailPage() {
                     <td className="px-4 py-2 text-right">{l.main_qty || l.quantity}</td>
                     <td className="px-4 py-2 text-right">{formatCurrency(l.rate)}</td>
                     <td className="px-4 py-2 text-right">{formatCurrency((l.main_qty || l.quantity || 0) * (l.rate || 0))}</td>
+                    {isSuperAdmin ? (
+                      <td className="px-4 py-2 text-right">
+                        <button
+                          type="button"
+                          onClick={() => setEditRateLine(l)}
+                          className="text-xs text-amber-700 hover:underline"
+                        >
+                          Edit rate
+                        </button>
+                      </td>
+                    ) : null}
                   </tr>
                 ))}
               </tbody>
@@ -331,6 +348,12 @@ export default function SalesOrderDetailPage() {
 
       <PaymentModal open={paymentOpen} soNumber={soNumber} onClose={() => setPaymentOpen(false)} onSaved={load} />
       <DCForm open={dcOpen} onClose={() => setDcOpen(false)} prefillSo={soNumber} />
+      <SoLineRateEditModal
+        open={Boolean(editRateLine)}
+        line={editRateLine}
+        onClose={() => setEditRateLine(null)}
+        onSaved={load}
+      />
     </div>
   );
 }

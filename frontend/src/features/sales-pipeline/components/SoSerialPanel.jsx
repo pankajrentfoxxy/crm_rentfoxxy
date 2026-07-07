@@ -6,6 +6,7 @@ import PermissionGate from '../../../components/PermissionGate';
 import { useAuth } from '../../../context/AuthContext';
 import { attachSoSerial, detachSoSerial, getAvailableSerials, listSoSerials } from '../salesPipelineApi';
 import SoLineConfigEditModal from './SoLineConfigEditModal';
+import SoLineRateEditModal from './SoLineRateEditModal';
 
 const QC_BADGE = {
   passed: 'bg-emerald-100 text-emerald-700',
@@ -139,6 +140,7 @@ export default function SoSerialPanel({ soNumber }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [editLine, setEditLine] = useState(null);
+  const [editRateLine, setEditRateLine] = useState(null);
   const { user } = useAuth();
   const isSuperAdmin = user?.role === 'super_admin';
 
@@ -187,6 +189,17 @@ export default function SoSerialPanel({ soNumber }) {
               <p className="text-xs text-gray-500">{[line.processor, line.generation, line.ram, line.storage].filter(Boolean).join(' · ')}</p>
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              {isSuperAdmin && (
+                <button
+                  type="button"
+                  onClick={() => setEditRateLine(line)}
+                  className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-amber-300 text-amber-800 hover:bg-amber-50"
+                  title="Edit monthly rate"
+                >
+                  <Pencil className="w-3 h-3" />
+                  Edit rate
+                </button>
+              )}
               {isSuperAdmin && line.attached_count === 0 && (
                 <button
                   type="button"
@@ -199,6 +212,9 @@ export default function SoSerialPanel({ soNumber }) {
                 </button>
               )}
               <span className="text-xs text-gray-500">{line.attached_count}/{line.ordered_qty} attached</span>
+              {line.rate != null ? (
+                <span className="text-xs text-gray-600">@ ₹{Number(line.rate).toLocaleString('en-IN')}</span>
+              ) : null}
             </div>
           </div>
 
@@ -243,6 +259,12 @@ export default function SoSerialPanel({ soNumber }) {
         open={Boolean(editLine)}
         line={editLine}
         onClose={() => setEditLine(null)}
+        onSaved={load}
+      />
+      <SoLineRateEditModal
+        open={Boolean(editRateLine)}
+        line={editRateLine}
+        onClose={() => setEditRateLine(null)}
         onSaved={load}
       />
     </div>

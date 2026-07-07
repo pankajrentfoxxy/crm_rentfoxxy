@@ -78,6 +78,93 @@ function parseJsonSafe(value, fallback = null) {
   }
 }
 
+/** Recompute one-month-rental security on all SO lines after a rate change. */
+async function recalcSoSecurityIfNeeded(db, salesOrderNumber) {
+  const typeRes = await db.query(
+    `SELECT security_type FROM sales_order_lines WHERE sales_order_number = $1 LIMIT 1`,
+    [salesOrderNumber]
+  );
+  if (String(typeRes.rows[0]?.security_type || '').toLowerCase() !== 'one_month_rental') {
+    return null;
+  }
+  const sumRes = await db.query(
+    `SELECT COALESCE(SUM(COALESCE(rate, 0) * COALESCE(quantity, 1)), 0) AS one_month
+       FROM sales_order_lines WHERE sales_order_number = $1`,
+    [salesOrderNumber]
+  );
+  const oneMonth = +Number(sumRes.rows[0]?.one_month || 0).toFixed(2);
+  await db.query(
+    `UPDATE sales_order_lines SET security_amount = $1 WHERE sales_order_number = $2`,
+    [oneMonth, salesOrderNumber]
+  );
+  return oneMonth;
+}
+
+/** Pro-rate updated SO security across existing DCs for that order. */
+async function syncDcSecurityForSo(db, salesOrderNumber, totalSecurity) {
+  const sec = Number(totalSecurity || 0);
+  if (!sec) return;
+  const unitsRes = await db.query(
+    `SELECT COUNT(*)::int AS n FROM sales_order_serials
+      WHERE sales_order_number = $1 AND status <> 'removed'`,
+    [salesOrderNumber]
+  );
+  const totalUnits = Number(unitsRes.rows[0]?.n || 0);
+  if (!totalUnits) return;
+  const dcs = await db.query(
+    `SELECT dc_number, SUM(COALESCE(quantity, main_qty, 1))::int AS qty
+       FROM delivery_challan_lines
+      WHERE sales_order_number = $1
+      GROUP BY dc_number`,
+    [salesOrderNumber]
+  );
+  for (const dc of dcs.rows) {
+    const groupSecurity = Math.round((sec / totalUnits) * Number(dc.qty || 1) * 100) / 100;
+    await db.query(
+      `UPDATE delivery_challan_lines SET security_amount = $1, updated_at = NOW() WHERE dc_number = $2`,
+      [groupSecurity, dc.dc_number]
+    );
+  }
+}
+
+/** Regenerate SO PDF and every linked DC PDF (rates/GST pull live from SO lines). */
+async function regenerateSoAndLinkedDcPdfs(salesOrderNumber) {
+  const soLines = await getSalesOrderLines(salesOrderNumber);
+  let soPdfPath = null;
+  if (soLines.length) {
+    soPdfPath = await generateDocumentPdf({
+      docType: 'sales_order',
+      docNumber: salesOrderNumber,
+      header: soLines[0],
+      lines: soLines,
+    });
+    await pool.query(
+      `UPDATE sales_order_lines SET pdf_path = $1 WHERE sales_order_number = $2`,
+      [soPdfPath, salesOrderNumber]
+    );
+  }
+  const dcRes = await pool.query(
+    `SELECT DISTINCT dc_number FROM delivery_challan_lines WHERE sales_order_number = $1`,
+    [salesOrderNumber]
+  );
+  const dcPdfs = [];
+  for (const { dc_number: dcNumber } of dcRes.rows) {
+    const dcLines = await getDeliveryChallanLines(dcNumber);
+    const pdfPath = await generateDocumentPdf({
+      docType: 'delivery_challan',
+      docNumber: dcNumber,
+      header: dcLines[0] || {},
+      lines: dcLines,
+    });
+    await pool.query(
+      `UPDATE delivery_challan_lines SET pdf_path = $1 WHERE dc_number = $2`,
+      [pdfPath, dcNumber]
+    );
+    dcPdfs.push({ dc_number: dcNumber, pdf_path: pdfPath });
+  }
+  return { so_pdf_path: soPdfPath, dc_pdfs: dcPdfs };
+}
+
 function normalizeCustomerForQuotation(row) {
   const details = parseJsonSafe(row.details, {}) || {};
   const billingRaw = details.billing_address || details.billing;
@@ -2803,20 +2890,11 @@ exports.updateSoLineConfig = async (req, res) => {
 
     const soNumber = upd.rows[0]?.sales_order_number || line.sales_order_number;
     let pdfPath = null;
+    let dcPdfs = [];
     try {
-      const soLines = await getSalesOrderLines(soNumber);
-      if (soLines.length) {
-        pdfPath = await generateDocumentPdf({
-          docType: 'sales_order',
-          docNumber: soNumber,
-          header: soLines[0],
-          lines: soLines,
-        });
-        await pool.query(
-          `UPDATE sales_order_lines SET pdf_path = $1 WHERE sales_order_number = $2`,
-          [pdfPath, soNumber]
-        );
-      }
+      const regen = await regenerateSoAndLinkedDcPdfs(soNumber);
+      pdfPath = regen.so_pdf_path;
+      dcPdfs = regen.dc_pdfs;
     } catch (pdfErr) {
       console.warn('SO PDF regeneration after config update:', pdfErr.message);
     }
@@ -2826,10 +2904,83 @@ exports.updateSoLineConfig = async (req, res) => {
       message: 'Sales order line config updated',
       line: upd.rows[0],
       pdf_path: pdfPath,
+      dc_pdfs: dcPdfs,
     });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('updateSoLineConfig:', error);
+    res.status(500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
+  }
+};
+
+/** PATCH /so-lines/:lineId/rate — Super Admin only. Correct monthly rate after SO/DC exist. */
+exports.updateSoLineRate = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const lineId = parseInt(req.params.lineId, 10);
+    if (!lineId) {
+      return res.status(400).json({ success: false, message: 'Invalid line id' });
+    }
+    const rate = Number(req.body?.rate);
+    if (!Number.isFinite(rate) || rate <= 0) {
+      return res.status(400).json({ success: false, message: 'A positive rate is required' });
+    }
+    const roundedRate = +rate.toFixed(2);
+
+    await client.query('BEGIN');
+
+    const lineRes = await client.query(
+      `SELECT id, sales_order_number, brand, model_name, rate, quantity, main_qty, status
+         FROM sales_order_lines WHERE id = $1 FOR UPDATE`,
+      [lineId]
+    );
+    if (!lineRes.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Sales order line not found' });
+    }
+    const line = lineRes.rows[0];
+    if (String(line.status || '').toLowerCase() === 'cancelled') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: 'Sales order line is cancelled' });
+    }
+
+    const upd = await client.query(
+      `UPDATE sales_order_lines SET rate = $1, updated_at = NOW()
+        WHERE id = $2
+        RETURNING id, sales_order_number, brand, model_name, rate, quantity, main_qty`,
+      [roundedRate, lineId]
+    );
+
+    const soNumber = line.sales_order_number;
+    const newSecurity = await recalcSoSecurityIfNeeded(client, soNumber);
+    if (newSecurity != null) {
+      await syncDcSecurityForSo(client, soNumber, newSecurity);
+    }
+
+    await client.query('COMMIT');
+
+    let regen = { so_pdf_path: null, dc_pdfs: [] };
+    try {
+      regen = await regenerateSoAndLinkedDcPdfs(soNumber);
+    } catch (pdfErr) {
+      console.warn('PDF regeneration after rate update:', pdfErr.message);
+    }
+
+    const dcCount = regen.dc_pdfs.length;
+    res.json({
+      success: true,
+      message: dcCount
+        ? `Rate updated — SO and ${dcCount} DC PDF(s) regenerated`
+        : 'Rate updated — SO PDF regenerated',
+      line: upd.rows[0],
+      pdf_path: regen.so_pdf_path,
+      dc_pdfs: regen.dc_pdfs,
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('updateSoLineRate:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
     client.release();
