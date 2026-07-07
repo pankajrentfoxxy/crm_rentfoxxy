@@ -220,6 +220,56 @@ async function applyStatusNormalization(client) {
         AND inventory_status IS DISTINCT FROM 'returned'
         AND inventory_status IS DISTINCT FROM 'sold'`
   );
+  const salesTypeOnDc = `
+    EXISTS (
+      SELECT 1 FROM delivery_challan_lines dcl
+      JOIN sales_order_lines sol ON sol.sales_order_number = dcl.sales_order_number
+      WHERE dcl.dc_number = vendor_serial_numbers.current_dc_number
+        AND LOWER(COALESCE(sol.quotation_type, 'rental')) IN ('sales', 'sale')
+    )
+    OR EXISTS (
+      SELECT 1 FROM sales_order_serials sos
+      JOIN sales_order_lines sol ON sol.sales_order_number = sos.sales_order_number
+      WHERE sos.serial_id = vendor_serial_numbers.serial_id
+        AND sos.status <> 'removed'
+        AND LOWER(COALESCE(sol.quotation_type, 'rental')) IN ('sales', 'sale')
+    )`;
+  const demoTypeOnDc = `
+    EXISTS (
+      SELECT 1 FROM delivery_challan_lines dcl
+      JOIN sales_order_lines sol ON sol.sales_order_number = dcl.sales_order_number
+      WHERE dcl.dc_number = vendor_serial_numbers.current_dc_number
+        AND LOWER(COALESCE(sol.quotation_type, 'rental')) = 'demo'
+    )
+    OR EXISTS (
+      SELECT 1 FROM sales_order_serials sos
+      JOIN sales_order_lines sol ON sol.sales_order_number = sos.sales_order_number
+      WHERE sos.serial_id = vendor_serial_numbers.serial_id
+        AND sos.status <> 'removed'
+        AND LOWER(COALESCE(sol.quotation_type, 'rental')) = 'demo'
+    )`;
+  const toSold = await client.query(
+    `UPDATE vendor_serial_numbers
+        SET inventory_status = 'sold',
+            status_changed_at = COALESCE(status_changed_at, NOW()),
+            updated_at = NOW()
+      WHERE deleted_at IS NULL
+        AND current_customer_id IS NOT NULL
+        AND returned_at IS NULL
+        AND inventory_status NOT IN ('rented', 'sold', 'on_demo', 'in_transit', 'reserved')
+        AND (${salesTypeOnDc})`
+  );
+  const toOnDemo = await client.query(
+    `UPDATE vendor_serial_numbers
+        SET inventory_status = 'on_demo',
+            status_changed_at = COALESCE(status_changed_at, NOW()),
+            updated_at = NOW()
+      WHERE deleted_at IS NULL
+        AND current_customer_id IS NOT NULL
+        AND returned_at IS NULL
+        AND inventory_status NOT IN ('rented', 'sold', 'on_demo', 'in_transit', 'reserved')
+        AND (${demoTypeOnDc})`
+  );
   const toRented = await client.query(
     `UPDATE vendor_serial_numbers
         SET inventory_status = 'rented',
@@ -228,9 +278,16 @@ async function applyStatusNormalization(client) {
       WHERE deleted_at IS NULL
         AND current_customer_id IS NOT NULL
         AND returned_at IS NULL
-        AND inventory_status NOT IN ('rented', 'sold', 'on_demo', 'in_transit', 'reserved')`
+        AND inventory_status NOT IN ('rented', 'sold', 'on_demo', 'in_transit', 'reserved')
+        AND NOT (${salesTypeOnDc})
+        AND NOT (${demoTypeOnDc})`
   );
-  return { to_returned: toReturned.rowCount, to_rented: toRented.rowCount };
+  return {
+    to_returned: toReturned.rowCount,
+    to_sold: toSold.rowCount,
+    to_on_demo: toOnDemo.rowCount,
+    to_rented: toRented.rowCount,
+  };
 }
 
 async function gatherVendorReadiness(pool) {

@@ -11,6 +11,7 @@ const {
   insertAllocationLog,
   addToInventory
 } = require('./qcCheckService');
+const { findBlockingTicket, blockingTicketMessage } = require('../utils/floorTicketSerialGuard');
 
 function lineItemSpecs(line) {
   if (!line) {
@@ -128,12 +129,16 @@ async function createTicketFromGrnReceive(db, {
   actorUserId,
   initialConditionOverride
 }) {
-  const open = await db.query(
+  const blocking = await db.query(
     `SELECT ticket_id FROM tickets WHERE serial_number = $1 AND status IN ('in_progress', 'on_hold')`,
     [serialNumber]
   );
-  if (open.rows.length) {
+  if (blocking.rows.length) {
     return { ok: false, skipped: true, reason: 'open_ticket', serial_number: serialNumber };
+  }
+  const blocked = await findBlockingTicket(db, { serialNumber, ttsplId: inventoryAssetCode, vendorSerialId: serialId });
+  if (blocked) {
+    return { ok: false, skipped: true, reason: blocked.status, ticket_id: blocked.ticket_id, serial_number: serialNumber, message: blockingTicketMessage(blocked) };
   }
 
   const stage = await resolveFloorManagerStage(db);
@@ -355,6 +360,10 @@ async function createTicketFromReturn(db, {
   if (open.rows.length) {
     return { ok: false, skipped: true, reason: 'open_ticket', ticket_id: open.rows[0].ticket_id };
   }
+  const blocked = await findBlockingTicket(db, { serialNumber, ttsplId: inventoryAssetCode, vendorSerialId: serialId });
+  if (blocked) {
+    return { ok: false, skipped: true, reason: blocked.status, ticket_id: blocked.ticket_id, message: blockingTicketMessage(blocked) };
+  }
 
   const stage = await resolveFloorManagerStage(db);
   if (!stage) {
@@ -453,6 +462,10 @@ async function createSalesOrderQcTicket(db, {
   );
   if (open.rows.length) {
     return { ok: false, skipped: true, reason: 'open_ticket', ticket_id: open.rows[0].ticket_id };
+  }
+  const blocked = await findBlockingTicket(db, { serialNumber, ttsplId, vendorSerialId: serialId });
+  if (blocked) {
+    return { ok: false, skipped: true, reason: blocked.status, ticket_id: blocked.ticket_id, message: blockingTicketMessage(blocked) };
   }
 
   // Pre-dispatch QC for sales-order laptops goes to the dedicated "Dispatch QC"
@@ -590,6 +603,14 @@ async function createFloorTicketFromSupportPickup(db, item, actorUserId) {
   );
   if (open.rows.length) {
     return { ok: true, ticket_id: open.rows[0].ticket_id, skipped: true, reason: 'open_ticket' };
+  }
+  const blocked = await findBlockingTicket(db, {
+    serialNumber: vsn.serial_number,
+    ttsplId: vsn.inventory_asset_code,
+    vendorSerialId: vsn.serial_id,
+  });
+  if (blocked) {
+    return { ok: false, skipped: true, reason: blocked.status, ticket_id: blocked.ticket_id, message: blockingTicketMessage(blocked) };
   }
 
   const stage = await resolveFloorManagerStage(db);

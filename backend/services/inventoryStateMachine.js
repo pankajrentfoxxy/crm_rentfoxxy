@@ -237,11 +237,15 @@ const markDelivered = async (db, serialId, {
   const toStatus = deliveredStatusForType(quotationType);
   const from = serial.inventory_status || null;
 
-  // Demo delivery: unit may still show "rented" if billing backfill or legacy ERP sync
-  // ran before POD confirmation. Allow the correction at delivery time.
-  const demoFromRented = from === STATUS.RENTED && toStatus === STATUS.ON_DEMO;
+  // Billing backfill / legacy ERP sync may set "rented" before POD confirmation
+  // even when the DC is demo or sales. Allow the correction at delivery time.
+  const deliveryCorrection = (from === STATUS.RENTED && toStatus === STATUS.ON_DEMO)
+    ? 'demo'
+    : (from === STATUS.RENTED && toStatus === STATUS.SOLD)
+      ? 'sale'
+      : null;
 
-  if (!demoFromRented && !isAllowed(from, toStatus)) {
+  if (!deliveryCorrection && !isAllowed(from, toStatus)) {
     if ([STATUS.IN_STOCK, STATUS.RESERVED].includes(from)) {
       await markDispatched(client, serialId, {
         dcNumber, customerId, entityCode, dispatchMode, actorUserId, actorName,
@@ -256,6 +260,12 @@ const markDelivered = async (db, serialId, {
     ? toDateStr(computeRentStart({ dispatchMode, dispatchedAt, deliveredAt }))
     : null;
 
+  const correctionReason = deliveryCorrection === 'demo'
+    ? `Demo delivered on ${dcNumber} (corrected from rented)`
+    : deliveryCorrection === 'sale'
+      ? `Sold on ${dcNumber} (corrected from rented)`
+      : `Delivered on ${dcNumber}`;
+
   return transitionAsset(client, {
     serialId,
     toStatus,
@@ -265,12 +275,10 @@ const markDelivered = async (db, serialId, {
     dispatchMode,
     rentStartDate,
     rentMonthlyRate: rentMonthlyRate ?? null,
-    reason: demoFromRented
-      ? `Demo delivered on ${dcNumber} (corrected from rented)`
-      : `Delivered on ${dcNumber}`,
+    reason: correctionReason,
     actorUserId,
     actorName,
-    allowOverride: demoFromRented,
+    allowOverride: Boolean(deliveryCorrection),
   });
 };
 

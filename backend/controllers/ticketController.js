@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { findBlockingTicket, blockingTicketMessage } = require('../utils/floorTicketSerialGuard');
 const { pickNextAssigneeForTeamPool } = require('../services/qcRoundRobinService');
 const {
   startWorkLog,
@@ -129,6 +130,15 @@ exports.createTicket = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'An open ticket already exists for this serial. Complete or resolve it before creating another.'
+      });
+    }
+
+    const blocked = await findBlockingTicket(pool, { serialNumber: serial_number, ttsplId: ttspl_id });
+    if (blocked) {
+      return res.status(400).json({
+        success: false,
+        message: blockingTicketMessage(blocked),
+        blocking_ticket_id: blocked.ticket_id,
       });
     }
 

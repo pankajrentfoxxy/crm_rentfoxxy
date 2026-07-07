@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
+const { findBlockingTicket, blockingTicketMessage } = require('../utils/floorTicketSerialGuard');
 const { isSupportLead, isSupportTechnician, canCloseSupportTicket, canCancelSupportTicket } = require('../middleware/supportAccess');
 const { deriveItemCurrentStep } = require('../services/supportTicketFlow');
 const { ensureCustomerTables } = require('../services/customerInventoryErpSyncService');
@@ -2235,6 +2236,17 @@ exports.warehouseReceivedPickup = async (req, res) => {
             );
             const vsn = vsnRes.rows[0];
             if (vsn) {
+                const blocked = await findBlockingTicket(client, {
+                    serialNumber: item.serial_number,
+                    ttsplId: item.ttspl_id || item.unique_serial_number,
+                    vendorSerialId: vsn.serial_id,
+                });
+                if (blocked) {
+                    throw Object.assign(
+                        new Error(blockingTicketMessage(blocked)),
+                        { status: 409, blocking_ticket_id: blocked.ticket_id }
+                    );
+                }
                 const ftRes = await client.query(
                     `INSERT INTO tickets
                         (serial_number, ttspl_id, brand, model, processor, ram, storage,

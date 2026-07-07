@@ -2554,6 +2554,7 @@ exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}) => {
 
   const ctx = await getDcContext(client, dcNumber);
   const quotationType = ctx.quotation_type || 'rental';
+  const targetStatus = inventorySM.deliveredStatusForType(quotationType);
   const serials = await collectDcSerials(dcNumber);
   const deliveredAt = new Date();
   const demoRows = [];
@@ -2562,11 +2563,22 @@ exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}) => {
     const serialId = await resolveSerialId(client, s);
     if (!serialId) continue;
     const sr = await client.query(
-      `SELECT dispatch_mode, dispatched_at, inventory_asset_code AS ttspl_id
+      `SELECT dispatch_mode, dispatched_at, inventory_asset_code AS ttspl_id,
+              inventory_status, current_dc_number
          FROM vendor_serial_numbers WHERE serial_id = $1`,
       [serialId]
     );
     const row = sr.rows[0] || {};
+    // Skip units already finalized for this DC (e.g. partial POD on multi-line DCs).
+    if (
+      row.inventory_status === targetStatus
+      && String(row.current_dc_number || '') === String(dcNumber)
+    ) {
+      if (row.inventory_status === inventorySM.STATUS.ON_DEMO) {
+        demoRows.push({ serialId, ttsplId: row.ttspl_id });
+      }
+      continue;
+    }
     const rateRes = await client.query(
       `SELECT sol.rate
          FROM delivery_challan_lines dcl
