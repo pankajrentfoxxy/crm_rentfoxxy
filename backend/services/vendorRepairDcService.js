@@ -13,6 +13,11 @@ const {
   vendorRepairSpecExpr,
   erpRepairSpecExpr,
 } = require('../utils/inventorySpecFilter');
+const {
+  serialIdentityKey,
+  findBlockingTicket,
+  findActiveVrdcItemForSerial,
+} = require('../utils/floorTicketSerialGuard');
 
 const WAREHOUSE_ROLES = new Set(['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'support_lead']);
 const HW_SW_STAGES = new Set([
@@ -175,6 +180,19 @@ async function markDiagnosisFailed(client, {
     throw new Error('Diagnosis Failed is only available during Hardware & Software / Diagnosis stages');
   }
 
+  const otherFailed = await findBlockingTicket(client, {
+    serialNumber: ticket.serial_number,
+    ttsplId: ticket.ttspl_id,
+    vendorSerialId: ticket.vendor_serial_id,
+    excludeTicketId: ticketId,
+  });
+  if (otherFailed?.status === 'diagnosis_failed') {
+    throw new Error(
+      `This laptop already has Diagnosis Failed ticket #${otherFailed.ticket_id}. `
+      + 'Use that ticket for vendor repair — do not mark another ticket as diagnosis failed for the same unit.'
+    );
+  }
+
   await closeOpenWorkLogs(client, ticketId);
 
   await client.query(
@@ -277,7 +295,15 @@ async function listDiagnosisFailedTickets({
       ORDER BY t.diagnosis_failed_at DESC NULLS LAST, t.ticket_id DESC`,
     params
   );
-  return rows.map((r) => ({
+  const seen = new Set();
+  const deduped = [];
+  for (const row of rows) {
+    const key = serialIdentityKey(row);
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    deduped.push(row);
+  }
+  return deduped.map((r) => ({
     ...r,
     configuration: configString(r),
   }));
@@ -347,6 +373,32 @@ async function createOutForRepairDc(client, {
   const invalid = tRes.rows.filter((t) => t.status !== 'diagnosis_failed');
   if (invalid.length) {
     throw new Error('All selected laptops must be in Diagnosis Failed status');
+  }
+
+  const seenSerials = new Map();
+  for (const ticket of tRes.rows) {
+    const key = serialIdentityKey(ticket);
+    if (key) {
+      if (seenSerials.has(key)) {
+        throw new Error(
+          `Duplicate laptop in selection (${ticket.serial_number || ticket.ttspl_id}) — `
+          + `tickets #${seenSerials.get(key)} and #${ticket.ticket_id}`
+        );
+      }
+      seenSerials.set(key, ticket.ticket_id);
+    }
+    const onDc = await findActiveVrdcItemForSerial(client, {
+      serialId: ticket.vendor_serial_id,
+      serialNumber: ticket.serial_number,
+      ttsplId: ticket.ttspl_id,
+      excludeTicketId: ticket.ticket_id,
+    });
+    if (onDc) {
+      throw new Error(
+        `Laptop ${ticket.ttspl_id || ticket.serial_number} is already on vendor repair DC ${onDc.dc_number} `
+        + `(ticket #${onDc.ticket_id})`
+      );
+    }
   }
 
   const dcNumber = await nextVendorRepairDcNumber(client);
@@ -453,6 +505,91 @@ function formatVendorShippingFromRow(vendor) {
   return lines.join('\n');
 }
 
+/** Remove duplicate laptops from a draft VRDC (keeps newest ticket per serial). */
+async function dedupeDraftVrdcItems(dcNumber) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const headRes = await client.query(
+      `SELECT status FROM vendor_repair_delivery_challans WHERE dc_number = $1 FOR UPDATE`,
+      [dcNumber]
+    );
+    if (!headRes.rows.length || headRes.rows[0].status !== 'draft') {
+      await client.query('ROLLBACK');
+      return { removed: 0 };
+    }
+
+    const itemsRes = await client.query(
+      `SELECT i.*, t.status AS ticket_status
+         FROM vendor_repair_dc_items i
+         JOIN tickets t ON t.ticket_id = i.ticket_id
+        WHERE i.dc_number = $1
+        ORDER BY i.ticket_id ASC, i.id ASC`,
+      [dcNumber]
+    );
+
+    const keepByKey = new Map();
+    const toRemove = [];
+    for (const item of itemsRes.rows) {
+      const key = serialIdentityKey(item);
+      if (!key) continue;
+      const existing = keepByKey.get(key);
+      if (!existing) {
+        keepByKey.set(key, item);
+        continue;
+      }
+      if (item.ticket_id > existing.ticket_id) {
+        toRemove.push(existing);
+        keepByKey.set(key, item);
+      } else {
+        toRemove.push(item);
+      }
+    }
+
+    for (const dup of toRemove) {
+      await client.query(`DELETE FROM vendor_repair_dc_items WHERE id = $1`, [dup.id]);
+      await client.query(
+        `UPDATE tickets
+            SET vendor_repair_dc_number = NULL,
+                status = CASE WHEN status = 'diagnosis_failed' THEN 'cancelled' ELSE status END,
+                updated_at = NOW()
+          WHERE ticket_id = $1 AND vendor_repair_dc_number = $2`,
+        [dup.ticket_id, dcNumber]
+      );
+      await logTicketActivity(client, {
+        ticketId: dup.ticket_id,
+        userId: null,
+        action: 'cancelled',
+        notes: `Removed duplicate from draft VRDC ${dcNumber} — superseded by newer ticket for same laptop`,
+      });
+    }
+
+    if (toRemove.length) {
+      await client.query(
+        `UPDATE vendor_repair_delivery_challans SET updated_at = NOW() WHERE dc_number = $1`,
+        [dcNumber]
+      );
+      try {
+        const pdfPath = await generateVendorRepairPdf(dcNumber);
+        if (pdfPath) {
+          await client.query(
+            `UPDATE vendor_repair_delivery_challans SET pdf_path = $2 WHERE dc_number = $1`,
+            [dcNumber, pdfPath]
+          );
+        }
+      } catch (_) { /* best-effort */ }
+    }
+
+    await client.query('COMMIT');
+    return { removed: toRemove.length, cancelled_ticket_ids: toRemove.map((r) => r.ticket_id) };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 async function getVendorRepairDc(dcNumber) {
   const headRes = await pool.query(
     `SELECT d.*,
@@ -479,6 +616,38 @@ async function getVendorRepairDc(dcNumber) {
   );
   const head = headRes.rows[0];
   if (!head) return null;
+  if (head.status === 'draft') {
+    try {
+      await dedupeDraftVrdcItems(dcNumber);
+    } catch (err) {
+      console.warn(`VRDC dedupe skipped for ${dcNumber}:`, err.message);
+    }
+  }
+  const refreshedHead = head.status === 'draft'
+    ? (await pool.query(
+      `SELECT d.*,
+              v.business_name AS vendor_business_name,
+              v.first_name AS vendor_first_name,
+              v.last_name AS vendor_last_name,
+              v.address AS vendor_reg_address,
+              v.city AS vendor_reg_city,
+              v.state AS vendor_reg_state,
+              v.pincode AS vendor_reg_pincode,
+              v.shipping_same AS vendor_shipping_same,
+              v.shipping_address AS vendor_ship_address,
+              v.shipping_city AS vendor_ship_city,
+              v.shipping_state AS vendor_ship_state,
+              v.shipping_pincode AS vendor_ship_pincode,
+              dt.first_name AS delivery_person_first_name,
+              dt.last_name AS delivery_person_last_name,
+              dt.phone AS delivery_person_phone
+         FROM vendor_repair_delivery_challans d
+         LEFT JOIN vendors v ON v.vendor_id = d.vendor_id AND v.deleted_at IS NULL
+         LEFT JOIN delivery_technicians dt ON dt.technician_id = d.delivery_person_id
+        WHERE d.dc_number = $1`,
+      [dcNumber]
+    )).rows[0] || head
+    : head;
   const itemsRes = await pool.query(
     `SELECT i.*, t.status AS ticket_status, t.diagnosis_failed_reason
        FROM vendor_repair_dc_items i
@@ -487,31 +656,31 @@ async function getVendorRepairDc(dcNumber) {
       ORDER BY i.id ASC`,
     [dcNumber]
   );
-  const vendorMaster = head.vendor_id ? {
-    business_name: head.vendor_business_name,
-    first_name: head.vendor_first_name,
-    last_name: head.vendor_last_name,
-    address: head.vendor_reg_address,
-    city: head.vendor_reg_city,
-    state: head.vendor_reg_state,
-    pincode: head.vendor_reg_pincode,
-    shipping_same: head.vendor_shipping_same,
-    shipping_address: head.vendor_ship_address,
-    shipping_city: head.vendor_ship_city,
-    shipping_state: head.vendor_ship_state,
-    shipping_pincode: head.vendor_ship_pincode,
+  const vendorMaster = refreshedHead.vendor_id ? {
+    business_name: refreshedHead.vendor_business_name,
+    first_name: refreshedHead.vendor_first_name,
+    last_name: refreshedHead.vendor_last_name,
+    address: refreshedHead.vendor_reg_address,
+    city: refreshedHead.vendor_reg_city,
+    state: refreshedHead.vendor_reg_state,
+    pincode: refreshedHead.vendor_reg_pincode,
+    shipping_same: refreshedHead.vendor_shipping_same,
+    shipping_address: refreshedHead.vendor_ship_address,
+    shipping_city: refreshedHead.vendor_ship_city,
+    shipping_state: refreshedHead.vendor_ship_state,
+    shipping_pincode: refreshedHead.vendor_ship_pincode,
   } : null;
-  const vendor_billing_display = formatVendorBillingFromRow(vendorMaster) || head.vendor_address || head.vendor_name;
-  const vendor_shipping_display = formatVendorShippingFromRow(vendorMaster) || head.shipping_address || head.vendor_address;
-  const delivery_person_name = [head.delivery_person_first_name, head.delivery_person_last_name]
+  const vendor_billing_display = formatVendorBillingFromRow(vendorMaster) || refreshedHead.vendor_address || refreshedHead.vendor_name;
+  const vendor_shipping_display = formatVendorShippingFromRow(vendorMaster) || refreshedHead.shipping_address || refreshedHead.vendor_address;
+  const delivery_person_name = [refreshedHead.delivery_person_first_name, refreshedHead.delivery_person_last_name]
     .filter(Boolean).join(' ').trim() || null;
   return {
-    ...head,
+    ...refreshedHead,
     company_from_display: formatCompanyBlock(),
     vendor_billing_display,
     vendor_shipping_display,
     delivery_person_name,
-    vendor_delivery_status: head.vendor_delivered_at ? 'delivered' : (head.dispatched_at ? 'in_transit' : 'pending'),
+    vendor_delivery_status: refreshedHead.vendor_delivered_at ? 'delivered' : (refreshedHead.dispatched_at ? 'in_transit' : 'pending'),
     items: itemsRes.rows,
   };
 }
