@@ -177,6 +177,16 @@ const getUserTeamIds = async (userId, fallbackTeamId) => {
   return fallbackTeamId != null ? normalizeTeamIds([fallbackTeamId]) : [];
 };
 
+const getUserTeamNames = async (userId, fallbackTeamId) => {
+  const teamIds = await getUserTeamIds(userId, fallbackTeamId);
+  if (!teamIds.length) return [];
+  const res = await pool.query(
+    'SELECT team_name FROM teams WHERE team_id = ANY($1::int[]) ORDER BY team_name',
+    [teamIds]
+  );
+  return res.rows.map((r) => r.team_name);
+};
+
 // Login User
 exports.login = async (req, res) => {
   const { email, password } = req.body;
@@ -223,6 +233,7 @@ exports.login = async (req, res) => {
     }
 
     const teamIds = await getUserTeamIds(user.user_id, user.team_id);
+    const teamNames = await getUserTeamNames(user.user_id, user.team_id);
 
     try {
       await pool.query(
@@ -242,6 +253,7 @@ exports.login = async (req, res) => {
         user_type: user.user_type || 'internal',
         team_id: user.team_id,
         team_ids: teamIds,
+        team_names: teamNames,
         permissions: user.permissions || []
       },
       process.env.JWT_SECRET,
@@ -251,6 +263,7 @@ exports.login = async (req, res) => {
     delete user.password_hash;
     user.permissions = Array.isArray(user.permissions) ? user.permissions : [];
     user.team_ids = teamIds;
+    user.team_names = teamNames;
     user.effective_permissions = await buildEffectivePermissionsForUser(user.user_id, user.role);
 
     res.json({
@@ -289,6 +302,7 @@ exports.getCurrentUser = async (req, res) => {
     const user = result.rows[0];
     user.permissions = Array.isArray(user.permissions) ? user.permissions : [];
     user.team_ids = req.user.team_ids || await getUserTeamIds(user.user_id, user.team_id);
+    user.team_names = req.user.team_names || await getUserTeamNames(user.user_id, user.team_id);
     user.effective_permissions = await buildEffectivePermissionsForUser(user.user_id, user.role);
     res.json({
       success: true,
@@ -324,6 +338,7 @@ exports.loginBarcode = async (req, res) => {
 
     const user = result.rows[0];
     const teamIds = await getUserTeamIds(user.user_id, user.team_id);
+    const teamNames = await getUserTeamNames(user.user_id, user.team_id);
 
     const token = jwt.sign(
       {
@@ -332,6 +347,7 @@ exports.loginBarcode = async (req, res) => {
         role: user.role,
         team_id: user.team_id,
         team_ids: teamIds,
+        team_names: teamNames,
         permissions: user.permissions || []
       },
       process.env.JWT_SECRET,
@@ -340,6 +356,7 @@ exports.loginBarcode = async (req, res) => {
 
     delete user.password_hash;
     user.team_ids = teamIds;
+    user.team_names = teamNames;
 
     res.json({
       success: true,

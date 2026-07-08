@@ -163,8 +163,18 @@ export function isQcRole(role) {
   return role === 'qc';
 }
 
+export const DISPATCH_QC_TEAM_NAME = 'Dispatch QC Team';
+
 export function isDispatchQcRole(role) {
   return role === 'dispatch_qc';
+}
+
+/** Dispatch QC role, or floor tech assigned to Dispatch QC Team. */
+export function canActAsDispatchQc(user) {
+  if (!user) return false;
+  if (isDispatchQcRole(user.role)) return true;
+  const names = user.team_names || [];
+  return names.some((n) => String(n).trim().toLowerCase() === DISPATCH_QC_TEAM_NAME.toLowerCase());
 }
 
 export function isTechnicianRole(role) {

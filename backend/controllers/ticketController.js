@@ -1816,7 +1816,8 @@ exports.getFloorManagerQueue = async (req, res) => {
 function rolesForTeamName(teamName) {
   const n = String(teamName || '').trim().toLowerCase();
   if (n === 'dispatch qc team' || n === 'dispatch qc') {
-    return { roles: ['dispatch_qc'], roleOnly: true };
+    // Floor techs on Dispatch QC Team can do pre-dispatch QC alongside HW/SW work.
+    return { roles: ['dispatch_qc', 'team_member', 'team_lead'], roleOnly: false };
   }
   if (n === 'floor manager') {
     return { roles: ['floor_manager'], roleOnly: true };
