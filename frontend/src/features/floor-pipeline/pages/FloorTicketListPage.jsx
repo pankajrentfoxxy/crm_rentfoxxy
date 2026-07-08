@@ -77,10 +77,10 @@ export default function FloorTicketListPage() {
     if (stageFilter === 'Body & Paint') return 'Body & Paint';
     if (stageFilter) return stageFilter;
     if (allDataScope && (canAssign || fm)) return 'All tickets';
-    if (canActAsDispatchQc(user)) return 'Dispatch QC queue';
+    if (canActAsDispatchQc(user, canEdit)) return 'Dispatch QC queue';
     if (isQcRole(user?.role)) return 'QC queue';
     return 'My tickets';
-  }, [stageFilter, user?.role, fm, canAssign, allDataScope]);
+  }, [stageFilter, user, canEdit, fm, canAssign, allDataScope]);
 
   const load = useCallback(async () => {
     setLoading(true);

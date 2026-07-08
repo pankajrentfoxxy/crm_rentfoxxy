@@ -256,7 +256,7 @@ export default function TicketDetailPage() {
   const canDiagnosisToAssembly = canMoveDiagnosisToAssemblyForUser(user, canEdit, isAssignedDataOnly);
   const tech = isTechnicianRole(user?.role);
   const qc = isQcRole(user?.role);
-  const dqc = canActAsDispatchQc(user);
+  const dqc = canActAsDispatchQc(user, canEdit);
   const canSeeStageRouting = canDiagnosisToAssembly || stageRouting;
 
   // The CURRENT stage's task is always the first tab so the assignee sees their

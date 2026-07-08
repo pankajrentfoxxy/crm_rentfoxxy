@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { queryDispatchQcEligibleMembers } = require('../utils/dispatchQcAccess');
 const { findBlockingTicket, blockingTicketMessage } = require('../utils/floorTicketSerialGuard');
 const { pickNextAssigneeForTeamPool } = require('../services/qcRoundRobinService');
 const {
@@ -1816,7 +1817,7 @@ exports.getFloorManagerQueue = async (req, res) => {
 function rolesForTeamName(teamName) {
   const n = String(teamName || '').trim().toLowerCase();
   if (n === 'dispatch qc team' || n === 'dispatch qc') {
-    // Floor techs on Dispatch QC Team can do pre-dispatch QC alongside HW/SW work.
+    // Handled separately in getTeamMembers via queryDispatchQcEligibleMembers.
     return { roles: ['dispatch_qc', 'team_member', 'team_lead'], roleOnly: false };
   }
   if (n === 'floor manager') {
@@ -1866,13 +1867,21 @@ async function queryTeamMembers(pool, { roles, teamId }) {
 
 exports.getTeamMembers = async (req, res) => {
   const teamName = String(req.query.team_name || 'Hardware & Software').trim();
-  const { roles, roleOnly } = rolesForTeamName(teamName);
+  const n = teamName.trim().toLowerCase();
+
   try {
     const teamRes = await pool.query(
       `SELECT team_id FROM teams WHERE team_name = $1 LIMIT 1`,
       [teamName]
     );
-    const teamId = teamRes.rows[0]?.team_id;
+    const teamId = teamRes.rows[0]?.team_id ?? null;
+
+    if (n === 'dispatch qc team' || n === 'dispatch qc') {
+      const rows = await queryDispatchQcEligibleMembers(pool, teamId);
+      return res.json({ success: true, team_name: teamName, members: rows });
+    }
+
+    const { roles, roleOnly } = rolesForTeamName(teamName);
 
     let rows = [];
     if (teamId && !roleOnly) {

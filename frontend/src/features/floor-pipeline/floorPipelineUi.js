@@ -169,12 +169,16 @@ export function isDispatchQcRole(role) {
   return role === 'dispatch_qc';
 }
 
-/** Dispatch QC role, or floor tech assigned to Dispatch QC Team. */
-export function canActAsDispatchQc(user) {
+/** Dispatch QC role, Dispatch QC Team, or dispatch_qc permission (EDIT). */
+export function canActAsDispatchQc(user, canEdit) {
   if (!user) return false;
   if (isDispatchQcRole(user.role)) return true;
   const names = user.team_names || [];
-  return names.some((n) => String(n).trim().toLowerCase() === DISPATCH_QC_TEAM_NAME.toLowerCase());
+  if (names.some((n) => String(n).trim().toLowerCase() === DISPATCH_QC_TEAM_NAME.toLowerCase())) {
+    return true;
+  }
+  if (typeof canEdit === 'function' && canEdit('dispatch_qc')) return true;
+  return false;
 }
 
 export function isTechnicianRole(role) {
