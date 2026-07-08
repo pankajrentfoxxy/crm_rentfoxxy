@@ -5,7 +5,7 @@ const pool = require('../config/db');
 
 async function main() {
   const sql = fs.readFileSync(
-    path.join(__dirname, '../migrations/137_sales_order_activities.sql'),
+    path.join(__dirname, '../migrations/138_purchase_order_activities.sql'),
     'utf8'
   );
   const client = await pool.connect();
@@ -13,11 +13,11 @@ async function main() {
     await client.query('BEGIN');
     await client.query(sql);
     await client.query(
-      `INSERT INTO schema_migrations (name) VALUES ('137_sales_order_activities.sql')
+      `INSERT INTO schema_migrations (name) VALUES ('138_purchase_order_activities.sql')
        ON CONFLICT (name) DO NOTHING`
     );
     await client.query('COMMIT');
-    console.log('Migration 137 applied.');
+    console.log('Migration 138 applied.');
   } catch (e) {
     await client.query('ROLLBACK');
     throw e;

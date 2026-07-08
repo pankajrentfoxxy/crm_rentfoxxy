@@ -101,6 +101,8 @@ router.patch('/quotations/:quotationNumber/status', quoteEdit, ctrl.updateQuotat
 
 router.get('/sales-orders/meta/add', soView, ctrl.getAddSalesOrderMeta);
 router.get('/sales-orders', soView, ctrl.listSalesOrders);
+router.get(...soRoute('/activities', soView, ctrl.listSalesOrderActivities));
+router.post(...soRoute('/activities', soView, ctrl.logSalesOrderDocumentActivity));
 router.get(...soRoute('/full', soView, ctrl.getSoWithPayments));
 router.get(...soRoute('/payments', payView, ctrl.listPayments));
 router.post(...soRoute('/payments', payCreate, ctrl.recordPayment));

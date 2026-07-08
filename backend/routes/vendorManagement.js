@@ -134,6 +134,8 @@ router.post(
   purchaseOrders.uploadGrnBill
 );
 
+router.get('/purchase-orders/:poId/activities', authorize, purchaseOrders.listPurchaseOrderActivities);
+router.post('/purchase-orders/:poId/activities', authorize, purchaseOrders.logPurchaseOrderDocumentActivity);
 router.get('/purchase-orders/:id', authorize, purchaseOrders.getValidators, purchaseOrders.getOne);
 router.post('/purchase-orders', authorize, ...purchaseOrders.createValidators(), purchaseOrders.create);
 router.put('/purchase-orders/:id', authorize, purchaseOrders.updateValidators, purchaseOrders.update);

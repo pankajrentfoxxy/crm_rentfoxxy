@@ -45,9 +45,9 @@ function spockFieldFromBody(body, spockKey) {
 function validateFinanceSpockContactFields(body) {
   const errors = [];
   const requiredFields = [
-    ['spock_person_name', 'Spock Person Name'],
-    ['spock_person_email', 'Spock Person Email'],
-    ['spock_person_mobile', 'Spock Person Mobile Number'],
+    ['spock_person_name', 'Spoke person name'],
+    ['spock_person_email', 'Spoke person email'],
+    ['spock_person_mobile', 'Spoke person mobile number'],
   ];
   const optionalEmailFields = [
     ['finance_contact_email', 'Finance Contact Email'],
@@ -268,9 +268,9 @@ function buildCustomerExportBaseRow(formatted, assetCount) {
     'Finance Contact Name': formatted.finance_contact_name || '',
     'Finance Contact Email': formatted.finance_contact_email || '',
     'Finance Contact Mobile Number': formatted.finance_contact_mobile || '',
-    'Spock Person Name': formatted.spock_person_name || '',
-    'Spock Person Email': formatted.spock_person_email || '',
-    'Spock Person Mobile Number': formatted.spock_person_mobile || '',
+    'Spoke Person Name': formatted.spock_person_name || '',
+    'Spoke Person Email': formatted.spock_person_email || '',
+    'Spoke Person Mobile Number': formatted.spock_person_mobile || '',
   };
 }
 
@@ -485,9 +485,9 @@ exports.exportCustomersExcel = async (req, res) => {
       'Finance Contact Name',
       'Finance Contact Email',
       'Finance Contact Mobile Number',
-      'Spock Person Name',
-      'Spock Person Email',
-      'Spock Person Mobile Number',
+      'Spoke Person Name',
+      'Spoke Person Email',
+      'Spoke Person Mobile Number',
       ...buildAddressExportColumnOrder(maxBilling, maxShipping),
     ];
 

@@ -8,7 +8,8 @@ import DCForm from '../components/DCForm';
 import SoSerialPanel from '../components/SoSerialPanel';
 import SoDeliveryAddressPanel from '../components/SoDeliveryAddressPanel';
 import SoLineRateEditModal from '../components/SoLineRateEditModal';
-import { cancelSalesOrder, getQuotation, getSalesOrderFull, listPayments, regenerateSalesOrderPdf } from '../salesPipelineApi';
+import SoActivityPanel from '../components/SoActivityPanel';
+import { cancelSalesOrder, getQuotation, getSalesOrderFull, listPayments, logSoDocumentActivity, regenerateSalesOrderPdf } from '../salesPipelineApi';
 import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
 import { formatConfig, formatCurrency, formatDate, TYPE_STYLES, typeLabel, deliveryChallanDetailPath, parseDeliveryAddress, formatSupplyStateLabel, resolveSupplyStateFromShipping } from '../salesPipelineUtils';
@@ -43,7 +44,7 @@ function pdfUrl(p) {
   return `${getBackendOrigin().replace(/\/$/, '')}/${p.replace(/^\//, '')}`;
 }
 
-const TABS = ['overview', 'laptops', 'addresses', 'payments', 'dcs', 'quote'];
+const TABS = ['overview', 'laptops', 'addresses', 'payments', 'dcs', 'activity', 'quote'];
 
 export default function SalesOrderDetailPage({ scope: scopeProp }) {
   const params = useParams();
@@ -57,6 +58,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [dcOpen, setDcOpen] = useState(false);
   const [editRateLine, setEditRateLine] = useState(null);
+  const [activityRefreshKey, setActivityRefreshKey] = useState(0);
 
   const load = useCallback(async () => {
     try {
@@ -68,6 +70,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
       if (qn) {
         getQuotation(qn).then((qr) => setQuote(qr.data)).catch(() => {});
       }
+      setActivityRefreshKey((k) => k + 1);
     } catch {
       toast.error('Failed to load sales order');
     }
@@ -167,8 +170,10 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
             try {
               const r = await regenerateSalesOrderPdf(soNumber);
               const url = pdfUrl(r.data?.pdf_path) || pdfUrl(head.pdf_path);
-              if (url) window.open(url, '_blank');
-              else toast.error('PDF not available');
+              if (url) {
+                window.open(url, '_blank');
+                logSoDocumentActivity(soNumber, { action: 'pdf_downloaded' }).catch(() => {});
+              } else toast.error('PDF not available');
             } catch { toast.error('Could not open PDF'); }
           }}>Download PDF</Button>
           {!isCancelled && hasAttachedLaptops && (
@@ -190,7 +195,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
       <div className="flex gap-2 border-b mb-4 overflow-x-auto">
         {TABS.map((t) => (
           <button key={t} type="button" onClick={() => setTab(t)} className={`px-4 py-2 text-sm capitalize border-b-2 -mb-px ${tab === t ? 'border-blue-600 text-blue-700 font-medium' : 'border-transparent text-gray-500'}`}>
-            {t === 'dcs' ? 'Delivery Challans' : t === 'quote' ? 'Linked Quotation' : t === 'laptops' ? 'Laptops & QC' : t === 'addresses' ? 'Delivery Addresses' : t}
+            {t === 'dcs' ? 'Delivery Challans' : t === 'quote' ? 'Linked Quotation' : t === 'laptops' ? 'Laptops & QC' : t === 'addresses' ? 'Delivery Addresses' : t === 'activity' ? 'Activity' : t}
           </button>
         ))}
       </div>
@@ -349,6 +354,8 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
           </table>
         </div>
       )}
+
+      {tab === 'activity' && <SoActivityPanel soNumber={soNumber} refreshKey={activityRefreshKey} />}
 
       {tab === 'quote' && quote && (
         <div className="bg-white border rounded-xl p-4 text-sm">

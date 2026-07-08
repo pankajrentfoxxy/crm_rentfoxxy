@@ -2,6 +2,7 @@ const { param, validationResult } = require('express-validator');
 const { body } = require('express-validator');
 const pool = require('../../config/db');
 const { logVendorAudit } = require('../../services/vendorAuditLogService');
+const { ACTIVITY_TYPES, safeLogPurchaseOrderActivity } = require('../../services/purchaseOrderActivityService');
 
 async function listGrnForPo(req, res) {
   const errors = validationResult(req);
@@ -42,6 +43,15 @@ async function createGrn(req, res) {
   });
 
   res.status(201).json({ success: true, data: ins.rows[0] });
+
+  await safeLogPurchaseOrderActivity({
+    poId,
+    activityType: ACTIVITY_TYPES.GRN,
+    action: 'grn_created',
+    description: `GRN-${ins.rows[0].grn_id} was created against this Purchase Order.`,
+    metadata: { grn_id: ins.rows[0].grn_id },
+    user: req.user,
+  });
 }
 
 async function listSerials(req, res) {

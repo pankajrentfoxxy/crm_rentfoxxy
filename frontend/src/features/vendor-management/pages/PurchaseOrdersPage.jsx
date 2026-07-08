@@ -23,6 +23,7 @@ import {
   patchPurchaseOrderStatus,
   uploadPurchaseOrderBills
 } from '../vendorManagementApi';
+import PoActivityPanel from '../components/PoActivityPanel';
 import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
 import {
@@ -315,6 +316,8 @@ export default function PurchaseOrdersPage() {
   const [assetCatalog, setAssetCatalog] = useState(null);
 
   const [preview, setPreview] = useState({ open: false, loading: false, detail: null });
+  const [previewTab, setPreviewTab] = useState('details');
+  const [activityRefreshKey, setActivityRefreshKey] = useState(0);
   const [billView, setBillView] = useState({ open: false, bill_name: '', files: [], poId: null });
   const [billUpload, setBillUpload] = useState({ open: false, po: null, bill_name: '' });
   /** Read-only summary of the create-PO modal before Save (no API call). */
@@ -671,11 +674,13 @@ export default function PurchaseOrdersPage() {
   }
 
   async function openPreview(poId) {
+    setPreviewTab('details');
     setPreview({ open: true, loading: true, detail: null });
     try {
       const { data } = await fetchPurchaseOrder(poId);
       if (!data.success || !data.data) throw new Error(data.message || 'Not found');
       setPreview({ open: true, loading: false, detail: data.data });
+      setActivityRefreshKey((k) => k + 1);
     } catch (e) {
       toast.error(e.response?.data?.message || e.message || 'Could not load preview');
       setPreview({ open: false, loading: false, detail: null });
@@ -693,6 +698,7 @@ export default function PurchaseOrdersPage() {
       if (!data.success) throw new Error(data.message);
       toast.success(data.message || 'Purchase order status updated!');
       if (next === 'rejected') setRejectModal({ open: false, po: null, reason: '' });
+      setActivityRefreshKey((k) => k + 1);
       await loadList();
     } catch (err) {
       toast.error(err.response?.data?.message || err.message || 'Update failed');
@@ -1883,8 +1889,13 @@ export default function PurchaseOrdersPage() {
             className="bg-white rounded-2xl shadow-xl w-full max-w-5xl max-h-[92vh] overflow-hidden flex flex-col"
             onMouseDown={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between px-5 py-3 border-b bg-slate-50">
-              <h2 className="text-lg font-bold text-slate-900">Purchase order preview</h2>
+            <div className="flex items-center justify-between px-5 py-3 border-b bg-slate-50 gap-3">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">Purchase order details</h2>
+                {preview.detail?.purchase_order_number ? (
+                  <p className="text-xs text-slate-500 font-mono mt-0.5">{preview.detail.purchase_order_number}</p>
+                ) : null}
+              </div>
               <button
                 type="button"
                 onClick={closePreview}
@@ -1894,10 +1905,31 @@ export default function PurchaseOrdersPage() {
                 <X className="w-5 h-5" />
               </button>
             </div>
+            {!preview.loading && preview.detail ? (
+              <div className="flex gap-2 border-b px-5 pt-2">
+                {['details', 'activity'].map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setPreviewTab(t)}
+                    className={`px-4 py-2 text-sm capitalize border-b-2 -mb-px ${
+                      previewTab === t
+                        ? 'border-indigo-600 text-indigo-700 font-medium'
+                        : 'border-transparent text-gray-500 hover:text-gray-800'
+                    }`}
+                  >
+                    {t === 'activity' ? 'Activity' : 'Details'}
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <div className="flex-1 overflow-y-auto p-5 space-y-4">
               {preview.loading ? (
                 <div className="py-16 text-center text-slate-500 animate-pulse">Loading…</div>
               ) : preview.detail ? (
+                previewTab === 'activity' ? (
+                  <PoActivityPanel poId={preview.detail.po_id} refreshKey={activityRefreshKey} />
+                ) : (
                 <>
                   <div className="rounded-xl border border-slate-200 p-4 bg-slate-50/50">
                     <div className="grid sm:grid-cols-3 gap-3 text-sm">
@@ -2041,6 +2073,7 @@ export default function PurchaseOrdersPage() {
                     </table>
                   </div>
                 </>
+                )
               ) : null}
             </div>
           </div>

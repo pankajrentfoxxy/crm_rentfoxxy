@@ -78,19 +78,20 @@ export default function LeadConvertModal({ open, lead, onClose }) {
 
   const validateForm = () => {
     const errors = {};
-    const requiredSpockFields = [
-      ['spock_person_name', 'Spock Person Name'],
-      ['spock_person_email', 'Spock Person Email'],
-      ['spock_person_mobile', 'Spock Person Mobile Number'],
+    const requiredSpokeFields = [
+      ['spock_person_name', 'Name'],
+      ['spock_person_email', 'Email'],
+      ['spock_person_mobile', 'Mobile Number'],
     ];
-    requiredSpockFields.forEach(([key, label]) => {
+    requiredSpokeFields.forEach(([key, label]) => {
       const value = String(form[key] || '').trim();
+      const errorLabel = `Spoke person ${label.toLowerCase()}`;
       if (!value) {
-        errors[key] = `${label} is required`;
+        errors[key] = `${errorLabel} is required`;
         return;
       }
-      if (key.endsWith('_email') && !EMAIL_RE.test(value)) errors[key] = `${label} is invalid`;
-      if (key.endsWith('_mobile') && !MOBILE_RE.test(value)) errors[key] = `${label} must be a 10-digit number`;
+      if (key.endsWith('_email') && !EMAIL_RE.test(value)) errors[key] = `${errorLabel} is invalid`;
+      if (key.endsWith('_mobile') && !MOBILE_RE.test(value)) errors[key] = `${errorLabel} must be a 10-digit number`;
     });
     setFieldErrors(errors);
     return Object.keys(errors).length === 0;
@@ -118,7 +119,7 @@ export default function LeadConvertModal({ open, lead, onClose }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!validateForm()) {
-      toast.error('Please fill all required Spock Person fields');
+      toast.error('Please fill all required Spoke Person fields');
       return;
     }
     setSaving(true);
@@ -211,10 +212,10 @@ export default function LeadConvertModal({ open, lead, onClose }) {
             </>
           )}
           <div className="pt-2 border-t space-y-3">
-            <p className="text-sm font-medium text-gray-700">Spock Person</p>
-            {renderField('spock_person_name', 'Spock Person Name', { required: true })}
-            {renderField('spock_person_email', 'Spock Person Email', { type: 'email', required: true })}
-            {renderField('spock_person_mobile', 'Spock Person Mobile Number', { mobile: true, required: true })}
+            <p className="text-sm font-medium text-gray-700">Spoke Person</p>
+            {renderField('spock_person_name', 'Name', { required: true })}
+            {renderField('spock_person_email', 'Email', { type: 'email', required: true })}
+            {renderField('spock_person_mobile', 'Mobile Number', { mobile: true, required: true })}
           </div>
           <div className="flex gap-2 justify-end pt-3">
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm border border-gray-200 rounded-lg">Cancel</button>

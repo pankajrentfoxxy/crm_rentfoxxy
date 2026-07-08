@@ -11,6 +11,7 @@ const {
   serialMatchesSoLine,
   configMismatchMessage,
 } = require('../utils/soInventorySpecMatch');
+const { ACTIVITY_TYPES, safeLogSalesOrderActivity } = require('../services/salesOrderActivityService');
 
 // Resolve a serial's full specs from the authoritative source.
 const SPEC_SELECT = `
@@ -275,6 +276,20 @@ exports.attachSerial = async (req, res) => {
         storage: serialForAttach.storage,
       },
     });
+
+    await safeLogSalesOrderActivity({
+      salesOrderNumber: soNumber,
+      activityType: ACTIVITY_TYPES.LAPTOP,
+      action: 'laptop_attached',
+      description: `${req.user?.name || 'User'} attached laptop ${serialForAttach.inventory_asset_code || serialForAttach.serial_number} to this Sales Order.`,
+      metadata: {
+        allocation_id: ins.rows[0].allocation_id,
+        serial_id: serialForAttach.serial_id,
+        ttspl_id: serialForAttach.inventory_asset_code,
+        serial_number: serialForAttach.serial_number,
+      },
+      user: req.user,
+    });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     if (String(err.code) === '23505') {
@@ -330,6 +345,20 @@ exports.detachSerial = async (req, res) => {
     );
     await client.query('COMMIT');
     res.json({ success: true, message: 'Serial detached' });
+
+    await safeLogSalesOrderActivity({
+      salesOrderNumber: alloc.sales_order_number,
+      activityType: ACTIVITY_TYPES.LAPTOP,
+      action: 'laptop_removed',
+      description: `${req.user?.name || 'User'} removed laptop ${alloc.ttspl_id || alloc.serial_number} from this Sales Order.`,
+      metadata: {
+        allocation_id: allocId,
+        serial_id: alloc.serial_id,
+        ttspl_id: alloc.ttspl_id,
+        serial_number: alloc.serial_number,
+      },
+      user: req.user,
+    });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('detachSerial:', err);

@@ -107,10 +107,10 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
 
   const validateForm = () => {
     const errors = {};
-    const requiredSpockFields = [
-      ['spock_person_name', 'Spock Person Name'],
-      ['spock_person_email', 'Spock Person Email'],
-      ['spock_person_mobile', 'Spock Person Mobile Number'],
+    const requiredSpokeFields = [
+      ['spock_person_name', 'Name'],
+      ['spock_person_email', 'Email'],
+      ['spock_person_mobile', 'Mobile Number'],
     ];
     const optionalEmailFields = [
       ['email', 'Email'],
@@ -119,14 +119,15 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
     const optionalMobileFields = [
       ['finance_contact_mobile', 'Finance Contact Mobile Number'],
     ];
-    requiredSpockFields.forEach(([key, label]) => {
+    requiredSpokeFields.forEach(([key, label]) => {
       const value = String(form[key] || '').trim();
+      const errorLabel = `Spoke person ${label.toLowerCase()}`;
       if (!value) {
-        errors[key] = `${label} is required`;
+        errors[key] = `${errorLabel} is required`;
         return;
       }
-      if (key.endsWith('_email') && !EMAIL_RE.test(value)) errors[key] = `${label} is invalid`;
-      if (key.endsWith('_mobile') && !MOBILE_RE.test(value)) errors[key] = `${label} must be a 10-digit number`;
+      if (key.endsWith('_email') && !EMAIL_RE.test(value)) errors[key] = `${errorLabel} is invalid`;
+      if (key.endsWith('_mobile') && !MOBILE_RE.test(value)) errors[key] = `${errorLabel} must be a 10-digit number`;
     });
     optionalEmailFields.forEach(([key, label]) => {
       const value = String(form[key] || '').trim();
@@ -356,11 +357,11 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
           </div>
 
           <div className="sm:col-span-2 pt-2 border-t space-y-3">
-            <h3 className="text-sm font-semibold text-gray-800">Spock Person</h3>
+            <h3 className="text-sm font-semibold text-gray-800">Spoke Person</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {renderField('spock_person_name', 'Spock Person Name', { required: true })}
-              {renderField('spock_person_email', 'Spock Person Email', { type: 'email', required: true })}
-              {renderField('spock_person_mobile', 'Spock Person Mobile Number', { mobile: true, required: true })}
+              {renderField('spock_person_name', 'Name', { required: true })}
+              {renderField('spock_person_email', 'Email', { type: 'email', required: true })}
+              {renderField('spock_person_mobile', 'Mobile Number', { mobile: true, required: true })}
             </div>
           </div>
 

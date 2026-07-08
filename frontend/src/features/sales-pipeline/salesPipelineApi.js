@@ -14,6 +14,8 @@ export const getQuotationMeta = () => api.get(`${base}/quotations/meta/add`);
 export const listSalesOrders = (p) => api.get(`${base}/sales-orders`, { params: p });
 export const getSalesOrder = (n) => api.get(`${base}/sales-orders/${encSo(n)}`);
 export const getSalesOrderFull = (n) => api.get(`${base}/sales-orders/${encSo(n)}/full`);
+export const listSoActivities = (n, p) => api.get(`${base}/sales-orders/${encSo(n)}/activities`, { params: p });
+export const logSoDocumentActivity = (n, d) => api.post(`${base}/sales-orders/${encSo(n)}/activities`, d);
 export const createSalesOrder = (d) => api.post(`${base}/sales-orders`, d);
 export const cancelSalesOrder = (n) => api.patch(`${base}/sales-orders/${encSo(n)}/cancel`);
 export const getSalesOrderMeta = (p) => api.get(`${base}/sales-orders/meta/add`, { params: p });

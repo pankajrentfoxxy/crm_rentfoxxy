@@ -95,6 +95,14 @@ export function fetchPurchaseOrder(id) {
   return api.get(`${base}/purchase-orders/${id}`);
 }
 
+export function listPoActivities(poId, params) {
+  return api.get(`${base}/purchase-orders/${poId}/activities`, { params });
+}
+
+export function logPoDocumentActivity(poId, body) {
+  return api.post(`${base}/purchase-orders/${poId}/activities`, body);
+}
+
 /** Laravel addProductReceived: vendor + PO stats + lines with received counts + GRNs */
 export function fetchProductReceivedContext(poId) {
   return api.get(`${base}/purchase-orders/${poId}/product-received`);

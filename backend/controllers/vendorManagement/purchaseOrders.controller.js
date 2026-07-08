@@ -29,6 +29,64 @@ const {
   sendPurchaseOrderApprovedEmail,
   sendPoPendingApprovalEmailToManagers,
 } = require('../../services/vendorPoEmailService');
+const {
+  ACTIVITY_TYPES,
+  safeLogPurchaseOrderActivity,
+  listPurchaseOrderActivities,
+} = require('../../services/purchaseOrderActivityService');
+
+async function logReceiveActivities({
+  poId, user, grnId, grnWasNew, unitCount, ttsplCodes = [], ticketCount = 0, poNumber,
+}) {
+  if (grnWasNew && grnId) {
+    await safeLogPurchaseOrderActivity({
+      poId,
+      activityType: ACTIVITY_TYPES.GRN,
+      action: 'grn_created',
+      description: `GRN-${grnId} was created against this Purchase Order.`,
+      metadata: { grn_id: grnId },
+      user,
+    });
+  }
+  if (unitCount > 0) {
+    await safeLogPurchaseOrderActivity({
+      poId,
+      activityType: ACTIVITY_TYPES.GRN,
+      action: 'laptop_accepted',
+      description: `${unitCount} laptop${unitCount === 1 ? '' : 's'} were accepted into inventory.`,
+      metadata: { grn_id: grnId, count: unitCount },
+      user,
+    });
+    await safeLogPurchaseOrderActivity({
+      poId,
+      activityType: ACTIVITY_TYPES.INVENTORY,
+      action: 'inventory_added',
+      description: `${unitCount} laptop${unitCount === 1 ? '' : 's'} added to inventory for ${poNumber || `PO #${poId}`}.`,
+      metadata: { grn_id: grnId, count: unitCount },
+      user,
+    });
+  }
+  if (ttsplCodes.length) {
+    await safeLogPurchaseOrderActivity({
+      poId,
+      activityType: ACTIVITY_TYPES.INVENTORY,
+      action: 'ttspl_generated',
+      description: `${ttsplCodes.length} TTSPL code${ttsplCodes.length === 1 ? '' : 's'} generated.`,
+      metadata: { grn_id: grnId, ttspl_codes: ttsplCodes.slice(0, 50) },
+      user,
+    });
+  }
+  if (ticketCount > 0) {
+    await safeLogPurchaseOrderActivity({
+      poId,
+      activityType: ACTIVITY_TYPES.INVENTORY,
+      action: 'qc_started',
+      description: `${ticketCount} laptop${ticketCount === 1 ? '' : 's'} moved to QC Process.`,
+      metadata: { grn_id: grnId, ticket_count: ticketCount },
+      user,
+    });
+  }
+}
 
 /**
  * Extract the laptop configuration from a PO line so it can be persisted on the
@@ -260,6 +318,25 @@ async function syncPoReceiveProgressStatus(poId, actorUserId) {
       action: 'status_auto_receive_progress',
       payload: { from: st, to: next }
     });
+    const action = next === 'completed' ? 'grn_complete_received' : 'grn_partial_received';
+    await safeLogPurchaseOrderActivity({
+      poId,
+      activityType: ACTIVITY_TYPES.GRN,
+      action,
+      description: next === 'completed'
+        ? 'All ordered units have been received for this Purchase Order.'
+        : 'Partial goods receipt recorded against this Purchase Order.',
+      metadata: { from_status: st, to_status: next, received_qty: totals.receivedQty, order_qty: totals.orderQty },
+      user: actorUserId ? { user_id: actorUserId } : null,
+    });
+    await safeLogPurchaseOrderActivity({
+      poId,
+      activityType: ACTIVITY_TYPES.PURCHASE_ORDER,
+      action: 'status_changed',
+      description: `Purchase Order status changed from ${st} to ${next}.`,
+      metadata: { from: st, to: next },
+      user: actorUserId ? { user_id: actorUserId } : null,
+    });
   }
 }
 
@@ -407,6 +484,7 @@ async function receiveProductSerial(req, res) {
   const client = await pool.connect();
   let finalGrnId;
   let serialId;
+  let grnWasNew = false;
   try {
     await client.query('BEGIN');
 
@@ -432,6 +510,7 @@ async function receiveProductSerial(req, res) {
           [poId]
         );
         finalGrnId = insG.rows[0].grn_id;
+        grnWasNew = true;
       }
     }
 
@@ -505,6 +584,17 @@ async function receiveProductSerial(req, res) {
 
   const qtyMaps2 = await buildReceivedQtyMapsForPoIds([poId]);
   const lines2 = enrichLineItemsWithReceived(parseLineItemsJson(po.line_items), qtyMaps2.get(poId));
+
+  await logReceiveActivities({
+    poId,
+    user: req.user,
+    grnId: finalGrnId,
+    grnWasNew,
+    unitCount: 1,
+    ttsplCodes: [],
+    ticketCount: ticketResult?.ok ? 1 : 0,
+    poNumber: po.purchase_order_number,
+  });
 
   res.status(201).json({
     success: true,
@@ -602,6 +692,7 @@ async function receivePoLineBulk(req, res) {
 
   const client = await pool.connect();
   let finalGrnId;
+  let grnWasNew = false;
   const createdRows = [];
 
   try {
@@ -642,6 +733,7 @@ async function receivePoLineBulk(req, res) {
           [poId]
         );
         finalGrnId = insG.rows[0].grn_id;
+        grnWasNew = true;
       }
     }
 
@@ -760,6 +852,18 @@ async function receivePoLineBulk(req, res) {
   const linesAfter = enrichLineItemsWithReceived(parseLineItemsJson(po.line_items), qtyMapsAfter.get(poId));
 
   const ticketsCreated = ticketResults.filter((t) => t.ok).length;
+
+  await logReceiveActivities({
+    poId,
+    user: req.user,
+    grnId: finalGrnId,
+    grnWasNew,
+    unitCount: quantity,
+    ttsplCodes: createdRows.map((row) => row.inventory_asset_code).filter(Boolean),
+    ticketCount: ticketsCreated,
+    poNumber: po.purchase_order_number,
+  });
+
   res.status(201).json({
     success: true,
     message:
@@ -847,6 +951,7 @@ async function receivePoLineUnit(req, res) {
   const pd = line.product_detail_id ?? line.product_id ?? line.pro_id ?? line.id;
   const client = await pool.connect();
   let finalGrnId;
+  let grnWasNew = false;
   let createdRow = null;
   let receiveConfig = buildConfigExtraFromLine(line);
 
@@ -888,6 +993,7 @@ async function receivePoLineUnit(req, res) {
           [poId]
         );
         finalGrnId = insG.rows[0].grn_id;
+        grnWasNew = true;
       }
     }
 
@@ -1013,6 +1119,17 @@ async function receivePoLineUnit(req, res) {
 
   const qtyMapsAfter = await buildReceivedQtyMapsForPoIds([poId]);
   const linesAfter = enrichLineItemsWithReceived(parseLineItemsJson(po.line_items), qtyMapsAfter.get(poId));
+
+  await logReceiveActivities({
+    poId,
+    user: req.user,
+    grnId: finalGrnId,
+    grnWasNew,
+    unitCount: 1,
+    ttsplCodes: createdRow?.inventory_asset_code ? [createdRow.inventory_asset_code] : [],
+    ticketCount: ticketResult?.ok ? 1 : 0,
+    poNumber: po.purchase_order_number,
+  });
 
   res.status(201).json({
     success: true,
@@ -1494,6 +1611,23 @@ async function create(req, res) {
       message: 'Purchase Order saved successfully',
       data: { ...ins.rows[0], po_id: poId, line_items: enrichedLines, product_details: enrichedLines }
     });
+
+    await safeLogPurchaseOrderActivity({
+      poId,
+      activityType: ACTIVITY_TYPES.PURCHASE_ORDER,
+      action: 'created',
+      description: `${req.user?.name || 'User'} created Purchase Order ${purchase_order_number}.`,
+      metadata: { purchase_order_number, vendor_id: body.vendor_id, line_count: enrichedLines.length },
+      user: req.user,
+    });
+    await safeLogPurchaseOrderActivity({
+      poId,
+      activityType: ACTIVITY_TYPES.VENDOR,
+      action: 'vendor_selected',
+      description: `Vendor selected for Purchase Order ${purchase_order_number}.`,
+      metadata: { vendor_id: body.vendor_id },
+      user: req.user,
+    });
   } catch (e) {
     try {
       await client.query('ROLLBACK');
@@ -1527,6 +1661,7 @@ async function update(req, res) {
   const id = Number(req.params.id);
   const cur = await pool.query(`SELECT * FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL`, [id]);
   if (!cur.rows.length) return res.status(404).json({ success: false, message: 'Not found' });
+  const oldPo = cur.rows[0];
 
   const body = req.body;
   const line_items = Array.isArray(body.line_items) ? body.line_items : JSON.parse(JSON.stringify(cur.rows[0].line_items || []));
@@ -1592,6 +1727,43 @@ async function update(req, res) {
     });
 
     res.json({ success: true, data: upd.rows[0] });
+
+    await safeLogPurchaseOrderActivity({
+      poId: id,
+      activityType: ACTIVITY_TYPES.PURCHASE_ORDER,
+      action: 'updated',
+      description: `${req.user?.name || 'User'} updated Purchase Order ${upd.rows[0].purchase_order_number}.`,
+      user: req.user,
+    });
+    if (body.vendor_id != null && Number(body.vendor_id) !== Number(oldPo.vendor_id)) {
+      await safeLogPurchaseOrderActivity({
+        poId: id,
+        activityType: ACTIVITY_TYPES.VENDOR,
+        action: 'vendor_changed',
+        description: `Vendor changed on Purchase Order ${upd.rows[0].purchase_order_number}.`,
+        metadata: { from_vendor_id: oldPo.vendor_id, to_vendor_id: body.vendor_id },
+        user: req.user,
+      });
+    }
+    if (Number(total_amount) !== Number(oldPo.total_amount)) {
+      await safeLogPurchaseOrderActivity({
+        poId: id,
+        activityType: ACTIVITY_TYPES.ITEM,
+        action: 'total_amount_updated',
+        description: `Total amount updated from ₹${oldPo.total_amount} to ₹${total_amount}.`,
+        metadata: { old_total: oldPo.total_amount, new_total: total_amount },
+        user: req.user,
+      });
+    }
+    if (body.line_items != null) {
+      await safeLogPurchaseOrderActivity({
+        poId: id,
+        activityType: ACTIVITY_TYPES.ITEM,
+        action: 'item_updated',
+        description: `Line items updated on Purchase Order ${upd.rows[0].purchase_order_number}.`,
+        user: req.user,
+      });
+    }
   } catch (e) {
     console.error(e);
     res.status(500).json({ success: false, message: e.message });
@@ -1629,6 +1801,14 @@ async function remove(req, res) {
     payload: {}
   });
   res.json({ success: true, message: 'Deleted' });
+
+  await safeLogPurchaseOrderActivity({
+    poId: Number(req.params.id),
+    activityType: ACTIVITY_TYPES.PURCHASE_ORDER,
+    action: 'cancelled',
+    description: `${req.user?.name || 'User'} cancelled Purchase Order ${r.rows[0].purchase_order_number}.`,
+    user: req.user,
+  });
 }
 
 const MANAGER_ROLES = new Set(['manager', 'admin', 'super_admin']);
@@ -1763,6 +1943,36 @@ async function updateStatus(req, res) {
     action: 'status_change',
     payload: { from: prev, to: status, rejection_reason: rejectionReason || null }
   });
+
+  const statusActionMap = {
+    pending_approval: 'status_changed',
+    approved: 'approved',
+    rejected: 'rejected',
+  };
+  const poAction = statusActionMap[status] || 'status_changed';
+  const statusDescriptions = {
+    pending_approval: `${req.user?.name || 'User'} submitted Purchase Order ${po.purchase_order_number} for approval.`,
+    approved: `${req.user?.name || 'User'} approved Purchase Order ${po.purchase_order_number}.`,
+    rejected: `${req.user?.name || 'User'} rejected Purchase Order ${po.purchase_order_number}.`,
+  };
+  await safeLogPurchaseOrderActivity({
+    poId: id,
+    activityType: ACTIVITY_TYPES.PURCHASE_ORDER,
+    action: poAction,
+    description: statusDescriptions[status] || `Purchase Order status changed from ${prev} to ${status}.`,
+    remarks: status === 'rejected' ? rejectionReason || null : null,
+    metadata: { from: prev, to: status },
+    user: req.user,
+  });
+  if (status === 'approved') {
+    await safeLogPurchaseOrderActivity({
+      poId: id,
+      activityType: ACTIVITY_TYPES.DOCUMENT,
+      action: 'pdf_generated',
+      description: `Purchase Order PDF generated for ${po.purchase_order_number}.`,
+      user: req.user,
+    });
+  }
 
   res.json({ success: true, message: 'Purchase order status updated!', data: { po_id: id, status } });
 }
@@ -1911,6 +2121,15 @@ async function uploadBills(req, res) {
       bill_name,
       bill_files: merged
     });
+
+    await safeLogPurchaseOrderActivity({
+      poId: id,
+      activityType: ACTIVITY_TYPES.ATTACHMENT,
+      action: 'invoice_uploaded',
+      description: `${req.user?.name || 'User'} uploaded invoice ${bill_name} (${files.length} file${files.length === 1 ? '' : 's'}).`,
+      metadata: { bill_name, files_count: files.length },
+      user: req.user,
+    });
   } catch (e) {
     console.error(e);
     res.status(500).json({ success: false, message: e.message || 'Upload failed' });
@@ -1948,5 +2167,54 @@ module.exports = {
   uploadBills,
   grnBillParamValidators,
   createGrnBillsUpload,
-  uploadGrnBill
+  uploadGrnBill,
+  listPurchaseOrderActivities: async (req, res) => {
+    try {
+      const poId = Number(req.params.poId || req.params.id);
+      const exists = await pool.query(
+        `SELECT po_id FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL`,
+        [poId]
+      );
+      if (!exists.rows.length) {
+        return res.status(404).json({ success: false, message: 'Purchase order not found' });
+      }
+      const page = parseInt(req.query.page, 10) || 1;
+      const limit = parseInt(req.query.limit, 10) || 50;
+      const data = await listPurchaseOrderActivities(poId, { page, limit });
+      res.json({ success: true, ...data });
+    } catch (error) {
+      console.error('listPurchaseOrderActivities:', error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  },
+  logPurchaseOrderDocumentActivity: async (req, res) => {
+    try {
+      const poId = Number(req.params.poId || req.params.id);
+      const exists = await pool.query(
+        `SELECT purchase_order_number FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL`,
+        [poId]
+      );
+      if (!exists.rows.length) {
+        return res.status(404).json({ success: false, message: 'Purchase order not found' });
+      }
+      const action = String(req.body?.action || '').trim();
+      const allowed = new Set(['pdf_downloaded', 'printed', 'shared']);
+      if (!allowed.has(action)) {
+        return res.status(400).json({ success: false, message: 'Invalid document activity action' });
+      }
+      const poNumber = exists.rows[0].purchase_order_number;
+      const row = await safeLogPurchaseOrderActivity({
+        poId,
+        activityType: ACTIVITY_TYPES.DOCUMENT,
+        action,
+        description: `${req.user?.name || 'User'} ${action.replace(/_/g, ' ')} for Purchase Order ${poNumber}.`,
+        remarks: req.body?.remarks || null,
+        user: req.user,
+      });
+      res.status(201).json({ success: true, activity: row });
+    } catch (error) {
+      console.error('logPurchaseOrderDocumentActivity:', error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  },
 };

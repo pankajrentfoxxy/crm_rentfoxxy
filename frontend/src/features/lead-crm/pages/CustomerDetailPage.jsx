@@ -86,7 +86,13 @@ const PORTAL_URL = process.env.REACT_APP_CUSTOMER_PORTAL_URL || 'http://localhos
 
 function customerField(customer, key) {
   if (!customer) return '';
-  return customer[key] || customer.details?.[key] || '';
+  const direct = customer[key] || customer.details?.[key];
+  if (direct) return direct;
+  if (key.startsWith('spock_person_')) {
+    const legacyKey = key.replace(/^spock_person_/, 'expox_person_');
+    return customer[legacyKey] || customer.details?.[legacyKey] || '';
+  }
+  return '';
 }
 
 function ProfileFieldGrid({ title, fields, customer }) {
@@ -304,7 +310,7 @@ export default function CustomerDetailPage() {
             ]}
           />
           <ProfileFieldGrid
-            title="Spock Person"
+            title="Spoke Person"
             customer={customer}
             fields={[
               ['Name', 'spock_person_name'],
