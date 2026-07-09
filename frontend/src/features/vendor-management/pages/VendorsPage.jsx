@@ -8,6 +8,7 @@ import {
   updateVendorPortalAccess
 } from '../vendorManagementApi';
 import VendorFormModal from '../components/VendorFormModal';
+import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import {
   formatStateLabel,
   paymentTermsBadgeClass,
@@ -68,7 +69,7 @@ export default function VendorsPage() {
   const [poCountByVendor, setPoCountByVendor] = useState({});
   const [page, setPage] = useState(1);
   const [searchInput, setSearchInput] = useState('');
-  const [search, setSearch] = useState('');
+  const search = useDebouncedValue(searchInput.trim(), 320);
   const [statusFilter, setStatusFilter] = useState('all');
   const [paymentFilter, setPaymentFilter] = useState('all');
   const [activeTab, setActiveTab] = useState('all');
@@ -150,11 +151,6 @@ export default function VendorsPage() {
   useEffect(() => {
     setPage(1);
   }, [activeTab, statusFilter, paymentFilter, search]);
-
-  function applySearch(e) {
-    e.preventDefault();
-    setSearch(searchInput.trim());
-  }
 
   function openCreate() {
     setVendorModal({ open: true, mode: 'create', vendorId: null });
@@ -240,10 +236,11 @@ export default function VendorsPage() {
       </header>
 
       <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm space-y-3">
-        <form onSubmit={applySearch} className="flex flex-col sm:flex-row gap-2">
+        <div className="flex flex-col sm:flex-row gap-2">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
+              type="search"
               placeholder="Search name, GSTIN, phone, email..."
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
@@ -271,13 +268,7 @@ export default function VendorsPage() {
             <option value="net15">Net 15</option>
             <option value="advance">Advance</option>
           </select>
-          <button
-            type="submit"
-            className="h-9 px-4 rounded-lg bg-gray-900 text-white text-sm font-medium hover:bg-gray-800"
-          >
-            Search
-          </button>
-        </form>
+        </div>
 
         <div className="flex flex-wrap gap-1 border-b border-gray-100 -mx-1">
           {STATUS_TABS.map((tab) => (

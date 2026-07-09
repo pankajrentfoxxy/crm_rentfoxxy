@@ -442,6 +442,11 @@ export default function GeneratedGrnDetailPage() {
                         </p>
                         <p className="text-xs text-gray-600 mt-1 leading-relaxed">{config || '—'}</p>
                         <p className="text-xs font-mono text-gray-500 mt-2">S/N: {item.serial_number || '—'}</p>
+                        {item.physical_damage_remark ? (
+                          <p className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-lg p-2 mt-2 leading-relaxed">
+                            <span className="font-semibold">Physical damage:</span> {item.physical_damage_remark}
+                          </p>
+                        ) : null}
                         {item.is_replaced || item.is_repaired ? (
                           <div className="flex gap-1 mt-2">
                             {item.is_replaced ? (

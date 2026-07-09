@@ -181,6 +181,7 @@ export default function ProductReceivedPage() {
   const [accessAdminOpen, setAccessAdminOpen] = useState(false);
   const [billStatus, setBillStatus] = useState('pending');
   const [billName, setBillName] = useState('');
+  const [physicalDamageRemark, setPhysicalDamageRemark] = useState('');
   const [modalBusy, setModalBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -222,6 +223,7 @@ export default function ProductReceivedPage() {
     setCaptureUrl('');
     setBillStatus('pending');
     setBillName('');
+    setPhysicalDamageRemark('');
   }
 
   useEffect(() => {
@@ -262,6 +264,7 @@ export default function ProductReceivedPage() {
     setActiveGrnId(null);
     setCaptureToken(null);
     setCaptureUrl('');
+    setPhysicalDamageRemark('');
   }
 
   function gotoSerialInputs() {
@@ -296,6 +299,7 @@ export default function ProductReceivedPage() {
     setCaptureToken(null);
     setCaptureUrl('');
     setAccessNumber(null);
+    setPhysicalDamageRemark('');
     setReceiveStep('serials');
   }
 
@@ -372,6 +376,7 @@ export default function ProductReceivedPage() {
         bill_status: billStatus,
         bill_name: billStatus === 'received' ? billName.trim() : undefined,
         capture_token: captureToken || undefined,
+        physical_damage_remark: physicalDamageRemark.trim() || undefined,
       };
       if (activeGrnId) body.grn_id = activeGrnId;
 
@@ -402,6 +407,7 @@ export default function ProductReceivedPage() {
           setCurrentSerial('');
           setCaptureToken(null);
           setCaptureUrl('');
+          setPhysicalDamageRemark('');
         }
       }
     } catch (e) {
@@ -986,6 +992,21 @@ export default function ProductReceivedPage() {
                     {captureUrl && !/localhost|127\.0\.0\.1/.test(captureUrl) ? (
                       <p className="text-[10px] text-slate-400 m-0 font-mono break-all">{captureUrl}</p>
                     ) : null}
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1.5" htmlFor="physical-damage-remark">
+                      Physical Damage — remark
+                    </label>
+                    <textarea
+                      id="physical-damage-remark"
+                      rows={3}
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-teal-500 focus:border-teal-500 outline-none disabled:opacity-50 resize-y min-h-[4.5rem]"
+                      placeholder="Note any scratches, dents, cracks, or other physical damage observed during receive"
+                      value={physicalDamageRemark}
+                      disabled={modalBusy}
+                      onChange={(e) => setPhysicalDamageRemark(e.target.value)}
+                    />
                   </div>
                 </div>
               )}

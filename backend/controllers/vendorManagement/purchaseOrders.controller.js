@@ -894,6 +894,7 @@ const receivePoLineUnitValidators = [
   body('bill_name').optional({ nullable: true }).isString().trim().isLength({ max: 255 }),
   body('apply_bill_settings').optional().isBoolean().toBoolean(),
   body('capture_token').optional({ nullable: true }).isUUID(),
+  body('physical_damage_remark').optional({ nullable: true }).isString().trim().isLength({ max: 2000 }),
 ];
 
 async function receivePoLineUnit(req, res) {
@@ -906,6 +907,7 @@ async function receivePoLineUnit(req, res) {
   const serial_number = String(req.body.serial_number || '').trim().toUpperCase();
   const applyBill = req.body.apply_bill_settings === true || req.body.apply_bill_settings === 'true';
   const captureToken = req.body.capture_token || null;
+  const physicalDamageRemark = String(req.body.physical_damage_remark || '').trim();
 
   let grnId =
     req.body.grn_id === '' || req.body.grn_id === undefined || req.body.grn_id === null
@@ -1036,6 +1038,7 @@ async function receivePoLineUnit(req, res) {
       receiveConfig
     );
     if (pd != null && String(pd).trim() !== '') extra.product_detail_id = String(pd);
+    if (physicalDamageRemark) extra.physical_damage_remark = physicalDamageRemark;
 
     const insS = await client.query(
       `INSERT INTO vendor_serial_numbers (po_id, grn_id, serial_number, inventory_asset_code, rental_start_date, qc_status, extra)
@@ -1104,13 +1107,18 @@ async function receivePoLineUnit(req, res) {
   let ticketResult = null;
   try {
     const receiveLine = { ...line, ...receiveConfig };
+    const poLabel = po.purchase_order_number || String(po.po_id);
+    const initialCondition = physicalDamageRemark
+      ? `GRN receive — PO ${poLabel}. Physical damage: ${physicalDamageRemark}`
+      : undefined;
     ticketResult = await createTicketFromGrnReceive(pool, {
       serialId: createdRow.serial_id,
       serialNumber: createdRow.serial_number,
       inventoryAssetCode: createdRow.inventory_asset_code,
       po,
       line: receiveLine,
-      actorUserId: req.user?.user_id
+      actorUserId: req.user?.user_id,
+      initialConditionOverride: initialCondition,
     });
   } catch (ticketErr) {
     console.error('GRN ticket creation failed (unit receive):', ticketErr);
@@ -1297,6 +1305,7 @@ async function getGrnReceivedProducts(req, res) {
       storage: config.storage ?? null,
       gpu: config.gpu ?? null,
       screen_size: config.screen_size ?? null,
+      physical_damage_remark: ex.physical_damage_remark ?? null,
       grn_date: grn.updated_at ?? grn.created_at
     };
   });
