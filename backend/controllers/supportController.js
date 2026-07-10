@@ -496,7 +496,8 @@ const ensureSupportTicketItemV3Columns = async (client) => {
             ADD COLUMN IF NOT EXISTS return_dc_number VARCHAR(50),
             ADD COLUMN IF NOT EXISTS technician_esign_url TEXT,
             ADD COLUMN IF NOT EXISTS technician_esign_at TIMESTAMP WITH TIME ZONE,
-            ADD COLUMN IF NOT EXISTS technician_esign_by INTEGER REFERENCES users (user_id)
+            ADD COLUMN IF NOT EXISTS technician_esign_by INTEGER REFERENCES users (user_id),
+            ADD COLUMN IF NOT EXISTS processor VARCHAR(200)
     `);
 };
 
@@ -3140,6 +3141,8 @@ exports.initiateReplacement = async (req, res) => {
     const client = await pool.connect();
     let resultPayload = {};
     try {
+        await ensureSupportTicketItemV3Columns(client);
+        await ensureDeliveryChallanReplacementColumns(client);
         await client.query('BEGIN');
 
         const ticketRes = await client.query('SELECT * FROM support_tickets WHERE id = $1', [ticketId]);
@@ -3724,6 +3727,7 @@ exports.ensureSupportSchema = async () => {
         '113_support_replacement_flow.sql',
         '114_support_replacement_so_line.sql',
         '117_support_ticket_cancellation.sql',
+        '138_support_ticket_items_processor.sql',
     ];
     for (const file of files) {
         const sqlPath = path.join(__dirname, '../migrations', file);
