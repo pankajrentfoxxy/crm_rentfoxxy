@@ -2,7 +2,7 @@
  * Inventory list orchestration — cache-aside, parallel SQL, enrichment.
  */
 const pool = require('../config/db');
-const { listTitleForSegment, enrichSerialRowsBatch } = require('./inventoryManagementService');
+const { listTitleForSegment, enrichSerialRowsBatch, attachSoAttachmentIndicators } = require('./inventoryManagementService');
 const {
   buildListCacheKey,
   buildCountCacheKey,
@@ -68,7 +68,10 @@ async function listInventorySerials(options) {
   perf.end('sql');
 
   perf.start('enrichment');
-  const data = await enrichSerialRowsBatch(pool, rows);
+  let data = await enrichSerialRowsBatch(pool, rows);
+  if (segment === 'passed') {
+    data = await attachSoAttachmentIndicators(pool, data);
+  }
   perf.end('enrichment');
 
   const payload = buildResponse({

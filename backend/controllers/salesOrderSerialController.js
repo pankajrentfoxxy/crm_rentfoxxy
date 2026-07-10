@@ -12,6 +12,7 @@ const {
   configMismatchMessage,
 } = require('../utils/soInventorySpecMatch');
 const { ACTIVITY_TYPES, safeLogSalesOrderActivity } = require('../services/salesOrderActivityService');
+const { invalidateInventoryListCachesFireAndForget } = require('../services/inventoryListCache');
 
 // Resolve a serial's full specs from the authoritative source.
 const SPEC_SELECT = `
@@ -242,6 +243,7 @@ exports.attachSerial = async (req, res) => {
     );
 
     await client.query('COMMIT');
+    invalidateInventoryListCachesFireAndForget();
 
     let qcTicket = null;
     if (ticket.ticket_id) {
@@ -344,6 +346,7 @@ exports.detachSerial = async (req, res) => {
       [allocId]
     );
     await client.query('COMMIT');
+    invalidateInventoryListCachesFireAndForget();
     res.json({ success: true, message: 'Serial detached' });
 
     await safeLogSalesOrderActivity({
