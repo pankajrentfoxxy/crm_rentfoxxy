@@ -217,6 +217,138 @@ async function getPendingCounts(query) {
   return map;
 }
 
+async function fetchPendingTicketIds(stageName, query) {
+  const conditions = [
+    `t.status NOT IN ('cancelled')`,
+    `s.stage_name = $1`,
+  ];
+  const params = [stageName];
+  let idx = 2;
+
+  const { from, to, period } = resolvePeriodRange(query);
+  if (period !== 'all' && from && to) {
+    conditions.push(`t.updated_at >= $${idx}::date`);
+    params.push(from);
+    idx += 1;
+    conditions.push(`t.updated_at < ($${idx}::date + interval '1 day')`);
+    params.push(to);
+  }
+
+  const res = await pool.query(
+    `SELECT t.ticket_id
+       FROM tickets t
+       JOIN stages s ON s.stage_id = t.current_stage_id
+      WHERE ${conditions.join(' AND ')}`,
+    params
+  );
+  return res.rows.map((r) => r.ticket_id);
+}
+
+function collectTicketIdsForBucket(bucket, stageName, filteredHistory, assignments) {
+  const ticketIds = new Set();
+
+  if (bucket === 'assigned') {
+    for (const row of filteredHistory) {
+      if (isStageEnter(row, stageName)) ticketIds.add(row.ticket_id);
+    }
+    for (const a of assignments) {
+      if (a.stage_name === stageName) ticketIds.add(a.ticket_id);
+    }
+    return ticketIds;
+  }
+
+  if (bucket === 'completed' || bucket === 'passed') {
+    for (const row of filteredHistory) {
+      if (isStageComplete(row, stageName)) ticketIds.add(row.ticket_id);
+    }
+    return ticketIds;
+  }
+
+  if (bucket === 'reworked') {
+    const enterCounts = new Map();
+    for (const row of filteredHistory) {
+      if (!isStageEnter(row, stageName)) continue;
+      enterCounts.set(row.ticket_id, (enterCounts.get(row.ticket_id) || 0) + 1);
+    }
+    for (const [ticketId, count] of enterCounts) {
+      if (count > 1) ticketIds.add(ticketId);
+    }
+    return ticketIds;
+  }
+
+  return ticketIds;
+}
+
+function buildStageEpisodes(ticketIds, stageName, bucket, filteredHistory, allHistory, assignments) {
+  const episodes = new Map();
+  const stageDef = STAGE_PERFORMANCE_STAGES.find((s) => s.name === stageName);
+
+  const ensureEp = (ticketId) => {
+    if (!episodes.has(ticketId)) {
+      episodes.set(ticketId, {
+        assignedAt: null,
+        completedAt: null,
+        failedAt: null,
+        stageStatus: bucket === 'pending' ? 'pending' : 'assigned',
+        technicianId: null,
+        technicianName: null,
+      });
+    }
+    return episodes.get(ticketId);
+  };
+
+  for (const ticketId of ticketIds) ensureEp(ticketId);
+
+  const historyForMeta = bucket === 'pending' ? allHistory : filteredHistory;
+  for (const row of historyForMeta) {
+    if (!ticketIds.has(row.ticket_id)) continue;
+    if (isStageEnter(row, stageName)) {
+      const ep = ensureEp(row.ticket_id);
+      ep.assignedAt = row.created_at;
+      ep.stageStatus = bucket === 'pending' ? 'pending' : ep.stageStatus;
+      ep.technicianId = row.current_technician_id || ep.technicianId;
+      ep.technicianName = row.current_technician || ep.technicianName;
+    }
+    if ((bucket === 'completed' || bucket === 'passed') && isStageComplete(row, stageName)) {
+      const ep = ensureEp(row.ticket_id);
+      ep.completedAt = row.created_at;
+      ep.stageStatus = stageDef?.qc ? 'passed' : 'completed';
+      ep.technicianId = row.current_technician_id || ep.technicianId;
+      ep.technicianName = row.current_technician || ep.technicianName;
+    }
+  }
+
+  for (const a of assignments) {
+    if (!ticketIds.has(a.ticket_id) || a.stage_name !== stageName) continue;
+    const ep = ensureEp(a.ticket_id);
+    if (!ep.assignedAt || new Date(a.assigned_at) > new Date(ep.assignedAt)) {
+      if (bucket !== 'completed' && bucket !== 'passed') {
+        ep.assignedAt = a.assigned_at;
+      }
+      ep.technicianId = a.technician_id || ep.technicianId;
+      ep.technicianName = a.technician_name || ep.technicianName;
+    }
+  }
+
+  if (bucket === 'completed' || bucket === 'passed') {
+    for (const ticketId of ticketIds) {
+      const ep = ensureEp(ticketId);
+      if (!ep.assignedAt) {
+        for (const row of allHistory) {
+          if (row.ticket_id !== ticketId) continue;
+          if (!isStageEnter(row, stageName)) continue;
+          if (ep.completedAt && new Date(row.created_at).getTime() > new Date(ep.completedAt).getTime()) continue;
+          ep.assignedAt = row.created_at;
+          ep.technicianId = ep.technicianId || row.current_technician_id;
+          ep.technicianName = ep.technicianName || row.current_technician;
+        }
+      }
+    }
+  }
+
+  return episodes;
+}
+
 async function getStagePerformanceSummary(query = {}) {
   const { history, assignments } = await fetchHistoryBundle(query);
   const ticketMetrics = buildTicketStageMetrics(history, assignments);
@@ -356,86 +488,33 @@ async function resolveStagePerformanceTicketIds(query) {
     };
   }
 
-  const episodes = new Map();
-
-  const ensureEp = (ticketId) => {
-    if (!episodes.has(ticketId)) {
-      episodes.set(ticketId, {
-        assignedAt: null,
-        completedAt: null,
-        failedAt: null,
-        stageStatus: 'assigned',
-        technicianId: null,
-        technicianName: null,
-      });
-    }
-    return episodes.get(ticketId);
-  };
-
-  for (const row of allHistory) {
-    if (isStageEnter(row, stageName)) {
-      const ep = ensureEp(row.ticket_id);
-      ep.assignedAt = row.created_at;
-      ep.stageStatus = 'pending';
-      ep.technicianId = row.current_technician_id;
-      ep.technicianName = row.current_technician;
-    }
-    if (isStageComplete(row, stageName)) {
-      const ep = ensureEp(row.ticket_id);
-      ep.completedAt = row.created_at;
-      ep.stageStatus = STAGE_PERFORMANCE_STAGES.find((s) => s.name === stageName)?.qc ? 'passed' : 'completed';
-    }
-  }
-
-  for (const a of assignments) {
-    if (a.stage_name !== stageName) continue;
-    const ep = ensureEp(a.ticket_id);
-    if (!ep.assignedAt || new Date(a.assigned_at) < new Date(ep.assignedAt)) {
-      ep.assignedAt = a.assigned_at;
-      ep.technicianId = a.technician_id;
-      ep.technicianName = a.technician_name;
-    }
-  }
-
-  const pendingRes = await pool.query(
-    `SELECT t.ticket_id FROM tickets t
-      JOIN stages s ON s.stage_id = t.current_stage_id
-     WHERE s.stage_name = $1 AND t.status NOT IN ('cancelled', 'completed')`,
-    [stageName]
-  );
-  const pendingSet = new Set(pendingRes.rows.map((r) => r.ticket_id));
-
-  const ticketIds = new Set();
-  for (const [ticketId, ep] of episodes) {
-    let include = false;
-    if (bucket === 'assigned') include = !!ep.assignedAt;
-    else if (bucket === 'completed' || bucket === 'passed') include = !!ep.completedAt;
-    else if (bucket === 'pending') include = pendingSet.has(ticketId);
-    else if (bucket === 'reworked') {
-      const enters = allHistory.filter((h) => isStageEnter(h, stageName) && h.ticket_id === ticketId).length;
-      include = enters > 1;
-    }
-    if (include) ticketIds.add(ticketId);
-  }
-
+  let ticketIdList = [];
   if (bucket === 'pending') {
-    for (const id of pendingSet) {
-      ticketIds.add(id);
-      ensureEp(id);
-    }
+    ticketIdList = await fetchPendingTicketIds(stageName, query);
+  } else {
+    ticketIdList = [...collectTicketIdsForBucket(bucket, stageName, filteredHistory, assignments)];
   }
 
-  let ids = [...ticketIds];
+  const stageEpisodes = buildStageEpisodes(
+    new Set(ticketIdList),
+    stageName,
+    bucket,
+    filteredHistory,
+    allHistory,
+    assignments
+  );
+
+  let ids = [...ticketIdList];
   if (techFilter || techIdFilter) {
     ids = ids.filter((id) => {
-      const ep = episodes.get(id);
+      const ep = stageEpisodes.get(id);
       if (techIdFilter && ep?.technicianId === techIdFilter) return true;
       if (techFilter && ep?.technicianName === techFilter) return true;
       return false;
     });
   }
 
-  return { ticketIds: ids, stageEpisodes: episodes, stageName, bucket, failEvents: null };
+  return { ticketIds: ids, stageEpisodes, stageName, bucket, failEvents: null };
 }
 
 const QC_STAGE_NAMES = ['QC1', 'QC2', 'Dispatch QC'];

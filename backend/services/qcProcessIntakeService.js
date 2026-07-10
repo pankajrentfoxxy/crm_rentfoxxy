@@ -5,7 +5,10 @@ const { getTotalAmountOfPurchaseOrder } = require('../utils/purchaseOrderGst');
 const { allocatePurchaseOrderNumber } = require('./vendorNumberService');
 const { allocateTtsplCodes } = require('./vendorInventoryAssetCodeService');
 const { createTicketFromGrnReceive } = require('./grnTicketService');
-const { logGrnReceive } = require('./ttsplAuditService');
+const { logGrnReceive, logTtsplEvent } = require('./ttsplAuditService');
+const { logProductionHistory } = require('./ticketWorkflowHistoryService');
+const { startWorkLog } = require('./ticketWorkLogService');
+const { findBlockingTicket, blockingTicketMessage } = require('../utils/floorTicketSerialGuard');
 const {
   parseExtra,
   resolveItemDescription,
@@ -111,6 +114,107 @@ async function findActiveFloorTicket(db, { serialId, serialNumber }) {
     [serialId, serialNumber]
   );
   return r.rows[0] || null;
+}
+
+async function resolveFloorManagerStage(db) {
+  const r = await db.query(
+    `SELECT stage_id, team_id, stage_name
+       FROM stages
+      WHERE stage_name = 'Floor Manager'
+      ORDER BY stage_order ASC
+      LIMIT 1`
+  );
+  if (r.rows.length) return r.rows[0];
+  const fallback = await db.query(
+    `SELECT stage_id, team_id, stage_name FROM stages ORDER BY stage_order ASC LIMIT 1`
+  );
+  return fallback.rows[0] || null;
+}
+
+async function pickFloorManagerUser(db) {
+  const r = await db.query(
+    `SELECT user_id FROM users WHERE role = 'floor_manager' AND active = TRUE ORDER BY user_id ASC LIMIT 1`
+  );
+  return r.rows[0]?.user_id ?? null;
+}
+
+async function reopenDiagnosisFailedTicketForQcProcess(db, ticketId, {
+  actorUserId,
+  sourceNote,
+  inventoryAssetCode,
+  serialId,
+}) {
+  const stage = await resolveFloorManagerStage(db);
+  if (!stage) {
+    return { ok: false, status: 500, message: 'Floor Manager stage is not configured.' };
+  }
+
+  const floorManagerUserId = await pickFloorManagerUser(db);
+  const beforeRes = await db.query(
+    `SELECT t.*, s.stage_name
+       FROM tickets t
+       LEFT JOIN stages s ON s.stage_id = t.current_stage_id
+      WHERE t.ticket_id = $1`,
+    [ticketId]
+  );
+  const ticketBefore = beforeRes.rows[0];
+  if (!ticketBefore) {
+    return { ok: false, status: 404, message: 'Ticket not found' };
+  }
+
+  await db.query(
+    `UPDATE tickets
+        SET status = 'in_progress',
+            current_stage_id = $1,
+            assigned_team_id = $2,
+            assigned_user_id = $3,
+            updated_at = NOW()
+      WHERE ticket_id = $4`,
+    [stage.stage_id, stage.team_id, floorManagerUserId, ticketId]
+  );
+
+  const afterRes = await db.query('SELECT * FROM tickets WHERE ticket_id = $1', [ticketId]);
+  const ticketAfter = afterRes.rows[0];
+  const note = sourceNote || 'Reopened from QC Process for production';
+
+  await logProductionHistory(db, {
+    ticketBefore,
+    ticketAfter,
+    beforeStageName: ticketBefore.stage_name,
+    afterStageName: stage.stage_name,
+    source: 'qcProcessReopen',
+    remarks: note,
+    actor: { user_id: actorUserId },
+    assignmentType: 'qc_process_reopen',
+  });
+
+  await db.query(
+    `INSERT INTO activities (ticket_id, stage_id, user_id, action, notes)
+     VALUES ($1, $2, $3, 'reopened', $4)`,
+    [ticketId, stage.stage_id, actorUserId, note]
+  );
+
+  if (floorManagerUserId) {
+    await startWorkLog(db, {
+      ticketId,
+      userId: floorManagerUserId,
+      stageId: stage.stage_id,
+    });
+  }
+
+  if (inventoryAssetCode && serialId) {
+    await logTtsplEvent({
+      ttsplId: inventoryAssetCode,
+      vendorSerialId: serialId,
+      eventType: 'ticket_reopened',
+      description: note,
+      metadata: { ticket_id: ticketId, source: 'qc_process' },
+      actorUserId,
+      db,
+    }).catch(() => {});
+  }
+
+  return { ok: true, ticket_id: ticketId, reopened: true, serial_number: ticketBefore.serial_number };
 }
 
 /**
@@ -556,6 +660,21 @@ async function createProductionTicketForQcSerial(db, { serialId, serialNumber },
     };
   }
 
+  const ttspl = row.inventory_asset_code || parseExtra(row.extra).unique_product_serial || null;
+  const blocked = await findBlockingTicket(db, {
+    serialNumber: row.serial_number,
+    ttsplId: ttspl,
+    vendorSerialId: row.serial_id,
+  });
+  if (blocked?.status === 'out_for_repair') {
+    return {
+      ok: false,
+      status: 409,
+      message: blockingTicketMessage(blocked),
+      data: { ticket_id: blocked.ticket_id, serial_id: row.serial_id }
+    };
+  }
+
   const specCtx = await buildSerialSpecContext(db, [row]);
   const itemDesc = resolveItemDescription(row, specCtx);
   const line = itemDescToGrnLine(itemDesc);
@@ -565,13 +684,45 @@ async function createProductionTicketForQcSerial(db, { serialId, serialNumber },
     purchase_order_type: row.purchase_order_type,
     vendor_id: row.vendor_id
   };
-  const ttspl = row.inventory_asset_code || parseExtra(row.extra).unique_product_serial || null;
+  const poLabel = po.purchase_order_number || po.po_id || '';
 
   const mergedExtra = mergeConfigIntoExtra(parseExtra(row.extra), itemDesc);
   await db.query(
     `UPDATE vendor_serial_numbers SET extra = $1::jsonb, updated_at = NOW() WHERE serial_id = $2`,
     [JSON.stringify(mergedExtra), row.serial_id]
   );
+
+  if (blocked?.status === 'diagnosis_failed') {
+    const reopenResult = await reopenDiagnosisFailedTicketForQcProcess(db, blocked.ticket_id, {
+      actorUserId,
+      sourceNote: `QC Process — reopened for production (PO ${poLabel})`,
+      inventoryAssetCode: ttspl,
+      serialId: row.serial_id,
+    });
+    if (!reopenResult.ok || !reopenResult.ticket_id) {
+      return {
+        ok: false,
+        status: reopenResult.status || 500,
+        message: reopenResult.message || 'Failed to reopen Production ticket.'
+      };
+    }
+    await syncTicketHardwareConfig(db, {
+      ticketId: reopenResult.ticket_id,
+      serialId: row.serial_id,
+      itemDesc
+    });
+    return {
+      ok: true,
+      message: `Production ticket #${reopenResult.ticket_id} reopened for QC Process.`,
+      data: {
+        serial_id: row.serial_id,
+        serial_number: row.serial_number,
+        inventory_asset_code: ttspl,
+        ticket_id: reopenResult.ticket_id,
+        reopened: true
+      }
+    };
+  }
 
   const ticketResult = await createTicketFromGrnReceive(db, {
     serialId: row.serial_id,
@@ -580,21 +731,24 @@ async function createProductionTicketForQcSerial(db, { serialId, serialNumber },
     po,
     line,
     actorUserId,
-    initialConditionOverride: `QC Process — PO ${po.purchase_order_number || po.po_id}`
+    initialConditionOverride: `QC Process — PO ${poLabel}`
   });
 
   if (!ticketResult.ok || !ticketResult.ticket_id) {
     const reason = ticketResult.reason || 'unknown';
     const msg =
-      reason === 'open_ticket'
+      ticketResult.message
+      || (reason === 'open_ticket'
         ? 'A Production ticket already exists for this serial.'
         : reason === 'no_stage'
           ? 'Floor Manager stage is not configured.'
-          : 'Failed to create Production ticket.';
+          : blockingTicketMessage({ ticket_id: ticketResult.ticket_id, status: reason })
+            || 'Failed to create Production ticket.');
     return {
       ok: false,
-      status: reason === 'open_ticket' ? 409 : 500,
-      message: msg
+      status: reason === 'open_ticket' || reason === 'in_progress' || reason === 'on_hold' ? 409 : 500,
+      message: msg,
+      data: ticketResult.ticket_id ? { ticket_id: ticketResult.ticket_id, serial_id: row.serial_id } : undefined
     };
   }
 
