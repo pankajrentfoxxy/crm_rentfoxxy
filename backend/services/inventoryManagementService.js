@@ -63,11 +63,17 @@ function effectiveStatusSql(alias) {
 }
 
 // Lifecycle statuses that mean a unit has left the "Ready to Rent/Sell" shelf
-// (attached to an order, dispatched, with a customer, or scrapped/returned).
+// (DC created/dispatched, with a customer, or scrapped/returned).
 // These units belong in Customer Assets / Dead Assets, not the rentable pool.
 const OFF_SHELF_STATUSES = [
-  'reserved', 'in_transit', 'rented', 'on_demo', 'sold', 'returned', 'scrapped'
+  'in_transit', 'rented', 'on_demo', 'sold', 'returned', 'scrapped'
 ];
+
+/** QC-passed units on DC or with a customer must not appear in Ready to Rent or Sell. */
+function offShelfInventoryFilterSql(alias = 's') {
+  const list = OFF_SHELF_STATUSES.map((s) => `'${s}'`).join(', ');
+  return ` AND COALESCE(${alias}.inventory_status, 'in_stock') NOT IN (${list})`;
+}
 
 function buildListWhere(segment, params, alias = 's') {
   const cfg = LIST_SEGMENT_MAP[segment];
@@ -84,7 +90,7 @@ function buildListWhere(segment, params, alias = 's') {
     params.push('passed', cfg.poType);
     return {
       sql: ` AND ${alias}.po_id IS NOT NULL AND ${effectiveStatusSql(alias)} = $${params.length - 1}
-             AND p.purchase_order_type = $${params.length}`,
+             AND p.purchase_order_type = $${params.length}${offShelfInventoryFilterSql(alias)}`,
       params
     };
   }
@@ -128,8 +134,9 @@ function buildListWhere(segment, params, alias = 's') {
     };
   }
 
+  const shelfSql = cfg.status === 'passed' ? offShelfInventoryFilterSql(alias) : '';
   return {
-    sql: ` AND ${alias}.po_id IS NOT NULL AND ${effectiveStatusSql(alias)} = $${i}`,
+    sql: ` AND ${alias}.po_id IS NOT NULL AND ${effectiveStatusSql(alias)} = $${i}${shelfSql}`,
     params
   };
 }
@@ -254,10 +261,46 @@ async function fetchSparePartTabCounts(pool) {
   return counts;
 }
 
+/** Active SO allocations (attached, not yet on a DC) for Ready to Rent/Sell indicators. */
+async function attachSoAttachmentIndicators(pool, rows) {
+  if (!rows?.length) return rows;
+  const serialIds = rows.map((r) => r.serial_id).filter(Boolean);
+  if (!serialIds.length) return rows;
+
+  const r = await pool.query(
+    `SELECT sos.serial_id,
+            sos.sales_order_number,
+            COALESCE(MAX(sol.customer_name), MAX(c.company_name), MAX(c.name), '') AS customer_name,
+            COALESCE(MAX(sol.quotation_type), MAX(sq.quotation_type), 'rental') AS quotation_type
+       FROM sales_order_serials sos
+       LEFT JOIN sales_order_lines sol ON sol.sales_order_number = sos.sales_order_number
+       LEFT JOIN sales_quotations sq ON sq.quotation_number = sol.quotation_number
+       LEFT JOIN customers c ON c.customer_id = sol.customer_id
+      WHERE sos.serial_id = ANY($1::int[])
+        AND sos.status = 'attached'
+      GROUP BY sos.serial_id, sos.sales_order_number`,
+    [serialIds]
+  );
+
+  const bySerial = Object.fromEntries(r.rows.map((row) => [row.serial_id, row]));
+  for (const row of rows) {
+    const att = bySerial[row.serial_id];
+    row.so_attachment = att
+      ? {
+          sales_order_number: att.sales_order_number,
+          customer_name: att.customer_name || null,
+          quotation_type: att.quotation_type || 'rental',
+        }
+      : null;
+  }
+  return rows;
+}
+
 module.exports = {
   LIST_SEGMENT_MAP,
   ROUTE_TO_SEGMENT,
   OFF_SHELF_STATUSES,
+  offShelfInventoryFilterSql,
   SPARE_PART_TABS,
   SPARE_STATUS_VALUES,
   normalizeListSegment,
@@ -270,6 +313,7 @@ module.exports = {
   enrichSerialRowsBatch,
   enrichSparePartRow,
   fetchSparePartTabCounts,
+  attachSoAttachmentIndicators,
   parseExtra,
   parseLineItems
 };

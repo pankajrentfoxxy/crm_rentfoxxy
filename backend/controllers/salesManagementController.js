@@ -2721,6 +2721,140 @@ exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}) => {
   return { ctx, deliveredAt };
 };
 
+/**
+ * Cancel an outbound DC before delivery: mark lines cancelled, release inventory
+ * back to in_stock (Ready to Rent or Sell), and re-attach SO serial allocations.
+ */
+exports.cancelDeliveryChallan = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const dcNumber = req.params.dcNumber;
+    const reason = req.body?.reason || req.body?.cancellation_reason || null;
+
+    const linesRes = await client.query(
+      `SELECT id, status, sales_order_number, movement_type, serial_number
+         FROM delivery_challan_lines
+        WHERE dc_number = $1`,
+      [dcNumber]
+    );
+    if (!linesRes.rows.length) {
+      return res.status(404).json({ success: false, message: 'Delivery challan not found' });
+    }
+
+    const head = linesRes.rows[0];
+    if (String(head.movement_type || '').toLowerCase() === 'return') {
+      return res.status(409).json({
+        success: false,
+        message: 'Return delivery challans cannot be cancelled via this endpoint',
+      });
+    }
+
+    const statuses = [...new Set(linesRes.rows.map((r) => String(r.status || '').toLowerCase()))];
+    if (statuses.includes('cancelled')) {
+      return res.status(409).json({ success: false, message: 'Delivery challan is already cancelled' });
+    }
+    if (statuses.some((s) => ['delivered', 'rejected'].includes(s))) {
+      return res.status(409).json({
+        success: false,
+        message: `Cannot cancel: DC is ${statuses.join('/')}`,
+      });
+    }
+
+    await client.query('BEGIN');
+
+    const serialEntries = [];
+    for (const line of linesRes.rows) {
+      for (const s of parseSerialEntries(line.serial_number)) {
+        serialEntries.push(s);
+      }
+    }
+
+    const serialIds = [];
+    const serialNumbers = [];
+    for (const s of serialEntries) {
+      const serialId = await resolveSerialId(client, s);
+      if (!serialId) continue;
+      serialIds.push(serialId);
+      const sn = s.serialNumber || null;
+      if (sn) serialNumbers.push(sn);
+      try {
+        await inventorySM.backToStock(client, serialId, {
+          reason: reason || `DC ${dcNumber} cancelled`,
+          actorUserId: req.user?.user_id,
+          actorName: req.user?.name,
+        });
+      } catch (_) {
+        await client.query(
+          `UPDATE vendor_serial_numbers
+              SET inventory_status = 'in_stock', current_dc_number = NULL, current_customer_id = NULL,
+                  current_entity = NULL, dispatch_mode = NULL, dispatched_at = NULL,
+                  updated_at = NOW(), status_changed_at = NOW()
+            WHERE serial_id = $1`,
+          [serialId]
+        );
+      }
+    }
+
+    if (serialIds.length) {
+      await client.query(
+        `UPDATE vendor_product_inventory SET status = 'in_stock', updated_at = NOW()
+          WHERE serial_id = ANY($1::int[])`,
+        [serialIds]
+      );
+    }
+    if (serialNumbers.length) {
+      await client.query(
+        `UPDATE vendor_product_inventory SET status = 'in_stock', updated_at = NOW()
+          WHERE serial_number = ANY($1::text[])`,
+        [serialNumbers]
+      );
+    }
+
+    await client.query(
+      `UPDATE sales_order_serials
+          SET status = 'attached', dc_number = NULL, updated_at = NOW()
+        WHERE dc_number = $1 AND status = 'dispatched'`,
+      [dcNumber]
+    );
+
+    await client.query(`DELETE FROM dc_qc_tickets WHERE dc_number = $1`, [dcNumber]).catch(() => {});
+
+    await client.query(
+      `UPDATE delivery_challan_lines SET status = 'cancelled', updated_at = NOW()
+        WHERE dc_number = $1`,
+      [dcNumber]
+    );
+
+    await client.query('COMMIT');
+
+    const soNumber = head.sales_order_number;
+    if (soNumber) {
+      await safeLogSalesOrderActivity({
+        salesOrderNumber: soNumber,
+        activityType: ACTIVITY_TYPES.DELIVERY_CHALLAN,
+        action: 'dc_cancelled',
+        description: `${dcNumber} was cancelled${reason ? `: ${reason}` : ''}. Laptops returned to inventory.`,
+        metadata: { dc_number: dcNumber, serial_ids: serialIds },
+        remarks: reason,
+        user: req.user,
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Delivery challan cancelled; laptops returned to Ready to Rent or Sell',
+      dc_number: dcNumber,
+      serials_released: serialIds.length,
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('cancelDeliveryChallan:', error);
+    res.status(500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
+  }
+};
+
 exports.markDcDelivered = async (req, res) => {
   const client = await pool.connect();
   try {

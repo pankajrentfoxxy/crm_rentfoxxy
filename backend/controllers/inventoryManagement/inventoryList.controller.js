@@ -13,6 +13,7 @@ const {
   spareStatusForTab,
   effectiveSpareStatusSql,
   fetchSparePartTabCounts,
+  attachSoAttachmentIndicators,
   SPARE_STATUS_VALUES
 } = require('../../services/inventoryManagementService');
 const { DEPLOYED_WITH_CUSTOMER_STATUSES, displayDeployedStatus } = require('../../services/customerDeployedAssets');
@@ -206,8 +207,11 @@ async function exportInventoryExcel(req, res) {
       await attachSerialTicketIds(pool, rowsR.rows);
     }
     const data = await enrichSerialRowsBatch(pool, rowsR.rows);
+    const enriched = segment === 'passed'
+      ? await attachSoAttachmentIndicators(pool, data)
+      : data;
     const XLSX = require('xlsx');
-    const sheetRows = data.map((r, idx) => {
+    const sheetRows = enriched.map((r, idx) => {
       const receivedFrom = r.received_from?.type === 'vendor'
         ? (r.vendor_name || 'Vendor')
         : (r.received_from?.label || r.vendor_name || 'Vendor');
@@ -237,7 +241,12 @@ async function exportInventoryExcel(req, res) {
         return { ...base, 'Ticket Stage': r.ticket_stage_name || '' };
       }
       if (segment === 'passed') {
-        return { ...base, 'Tagged As': r.inventory_tag || '' };
+        return {
+          ...base,
+          'Tagged As': r.inventory_tag || '',
+          'SO Attached': r.so_attachment?.sales_order_number || '',
+          'SO Customer': r.so_attachment?.customer_name || '',
+        };
       }
       return base;
     });

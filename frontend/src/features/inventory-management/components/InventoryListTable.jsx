@@ -31,6 +31,7 @@ import InventorySpecFilterBar from './InventorySpecFilterBar';
 import { EMPTY_SPEC_FILTERS } from '../inventorySpecFilters';
 import useDebouncedSpecParams from '../hooks/useDebouncedSpecParams';
 import { getBackendOrigin } from '../../../utils/api';
+import { salesOrderDetailPath } from '../../sales-pipeline/salesOrderScope';
 
 const PAGE_SIZE = 25;
 
@@ -322,6 +323,60 @@ function PassedStatusBadge() {
     <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-800">
       Passed
     </span>
+  );
+}
+
+function soScopeFromQuotationType(type) {
+  const key = String(type || '').toLowerCase();
+  return key === 'sale' || key === 'sales' ? 'sale' : 'rental';
+}
+
+function SoAttachedBadge({ attachment }) {
+  const [open, setOpen] = useState(false);
+  const popoverRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDocClick = (e) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [open]);
+
+  if (!attachment?.sales_order_number) return null;
+
+  const scope = soScopeFromQuotationType(attachment.quotation_type);
+  const soPath = salesOrderDetailPath(attachment.sales_order_number, scope);
+
+  return (
+    <div className="relative" ref={popoverRef}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-900 border border-amber-200 hover:bg-amber-100"
+      >
+        SO Attached
+      </button>
+      {open ? (
+        <div className="absolute left-0 top-full z-20 mt-1 w-56 rounded-lg border border-slate-200 bg-white p-3 shadow-lg text-left">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Sales Order</p>
+          <Link
+            to={soPath}
+            className="mt-1 block text-xs font-semibold text-sky-700 hover:underline break-all"
+            onClick={() => setOpen(false)}
+          >
+            {attachment.sales_order_number}
+          </Link>
+          <p className="mt-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Customer</p>
+          <p className="mt-1 text-xs text-slate-800">
+            {attachment.customer_name || '—'}
+          </p>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -917,13 +972,18 @@ export default function InventoryListTable({ routeKey }) {
                   <td className="px-3 py-3">
                     {row.unique_product_serial || row.inventory_asset_code ? (
                       <div className="flex flex-col gap-1">
-                        <button
-                          type="button"
-                          onClick={() => setHistoryTtspl(row.unique_product_serial || row.inventory_asset_code)}
-                          className="font-mono text-xs font-semibold text-blue-700 hover:underline text-left"
-                        >
-                          {row.unique_product_serial || row.inventory_asset_code}
-                        </button>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setHistoryTtspl(row.unique_product_serial || row.inventory_asset_code)}
+                            className="font-mono text-xs font-semibold text-blue-700 hover:underline text-left"
+                          >
+                            {row.unique_product_serial || row.inventory_asset_code}
+                          </button>
+                          {showReadyToRentAction ? (
+                            <SoAttachedBadge attachment={row.so_attachment} />
+                          ) : null}
+                        </div>
                         <button
                           type="button"
                           onClick={() => setHistoryTtspl(row.unique_product_serial || row.inventory_asset_code)}
