@@ -6,6 +6,8 @@ const {
 } = require('../services/qcRoundRobinService');
 const { syncWorkLogForTicketState } = require('../services/ticketWorkLogService');
 const { markVendorSerialReadyForRent } = require('../services/grnTicketService');
+const ttsplAuditService = require('../services/ttsplAuditService');
+const { logProductionHistory } = require('../services/ticketWorkflowHistoryService');
 
 // QC Checklist Configuration
 const QC_CHECKLIST_STRUCTURE = {
@@ -257,8 +259,16 @@ exports.submitQC = async (req, res) => {
     try {
         await client.query('BEGIN');
 
+        const ticketBeforeRes = await client.query('SELECT * FROM tickets WHERE ticket_id = $1', [id]);
+        const ticketBefore = ticketBeforeRes.rows[0] || null;
+        const beforeStageRes = ticketBefore?.current_stage_id
+          ? await client.query('SELECT stage_name FROM stages WHERE stage_id = $1', [ticketBefore.current_stage_id])
+          : { rows: [] };
+        const beforeStageName = beforeStageRes.rows[0]?.stage_name || qcStage;
+
         const ticketMetaRes = await client.query(
-            `SELECT serial_number, machine_number, vendor_serial_id, ticket_type FROM tickets WHERE ticket_id = $1`,
+            `SELECT serial_number, machine_number, vendor_serial_id, ticket_type, ttspl_id, qc_fail_count
+               FROM tickets WHERE ticket_id = $1`,
             [id]
         );
         const ticketMeta = ticketMetaRes.rows[0] || {};
@@ -377,15 +387,61 @@ exports.submitQC = async (req, res) => {
                         assignedUserId = null;
                     }
                 }
+            } else if (result === 'FAIL' && qcStage === 'QC1') {
+                const manualId = assignToUserId != null && assignToUserId !== ''
+                    ? parseInt(assignToUserId, 10)
+                    : null;
+                if (!manualId || Number.isNaN(manualId)) {
+                    await client.query('ROLLBACK');
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Hardware & Software technician is required when failing from QC1',
+                    });
+                }
+                const eligible = await fetchOrderedMemberIds(client, team_id);
+                if (!eligible.includes(manualId)) {
+                    await client.query('ROLLBACK');
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Selected assignee is not an active Hardware & Software team member',
+                    });
+                }
+                assignedUserId = manualId;
             }
+
+            const qc1FailReason = (remarks?.trim() || reasons?.join('; ') || 'QC1 checklist failed').slice(0, 2000);
+            const qc1FailUpdates = result === 'FAIL' && qcStage === 'QC1'
+                ? `, qc_fail_count = COALESCE(qc_fail_count, 0) + 1,
+                     qc1_failed_at = NOW(),
+                     qc1_fail_reason = $6,
+                     highlighted = TRUE,
+                     highlighted_reason = $7`
+                : '';
+            const qc1FailParams = result === 'FAIL' && qcStage === 'QC1'
+                ? [qc1FailReason, `QC1 failed: ${qc1FailReason}`]
+                : [];
 
             await client.query(
                 `UPDATE tickets 
                  SET current_stage_id = $1, assigned_team_id = $2, assigned_user_id = $5,
                      status = $4::varchar, completed_at = CASE WHEN $4::varchar = 'completed' THEN CURRENT_TIMESTAMP ELSE NULL END
+                     ${qc1FailUpdates}
                  WHERE ticket_id = $3`,
-                [stage_id, team_id, id, isCompleted ? 'completed' : 'in_progress', assignedUserId]
+                [stage_id, team_id, id, isCompleted ? 'completed' : 'in_progress', assignedUserId, ...qc1FailParams]
             );
+
+            if (result === 'FAIL' && qcStage === 'QC1') {
+                await ttsplAuditService.logTtsplEvent({
+                    ttsplId: ticketMeta.ttspl_id,
+                    vendorSerialId: ticketMeta.vendor_serial_id,
+                    eventType: 'qc1_failed',
+                    description: `QC1 failed: ${qc1FailReason}`,
+                    metadata: { reason: qc1FailReason, ticket_id: Number(id) },
+                    actorUserId: userId,
+                    actorName: req.user.name,
+                    db: client
+                });
+            }
 
             const ticketAfterQc = await client.query(
                 `SELECT ticket_id, status, assigned_user_id, current_stage_id FROM tickets WHERE ticket_id = $1`,
@@ -479,6 +535,20 @@ exports.submitQC = async (req, res) => {
                     `${qcStage} completed. Result: ${result}. Grade: ${grading.final_grade}. Next: ${nextStage}${assigneeNote}${checklistNote}`
                 ]
             );
+
+            const ticketAfterRes = await client.query('SELECT * FROM tickets WHERE ticket_id = $1', [id]);
+            await logProductionHistory(client, {
+                ticketBefore,
+                ticketAfter: ticketAfterRes.rows[0] || ticketBefore,
+                beforeStageName,
+                afterStageName: nextStage,
+                source: 'submitQC',
+                remarks: remarks || null,
+                failureReason: result === 'FAIL' ? (remarks?.trim() || reasons?.join('; ') || null) : null,
+                actor: req.user,
+                metadata: { qc_result: result, qc_stage: qcStage, grade: grading.final_grade },
+                assignmentType: result === 'FAIL' ? 'qc_fail_return' : 'qc_pass_handoff',
+            });
         }
 
         await client.query('COMMIT');

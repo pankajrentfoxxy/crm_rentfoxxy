@@ -13,6 +13,8 @@ router.get('/lead-conversion', authMiddleware, reportsView, reportsController.ge
 router.get('/salesperson', authMiddleware, reportsView, reportsController.getSalespersonReport);
 router.get('/collections', authMiddleware, reportsView, reportsController.getCollectionsReport);
 router.get('/vendor-spend', authMiddleware, reportsView, reportsController.getVendorSpendReport);
+router.get('/laptop-report', authMiddleware, reportsView, reportsController.getLaptopReport);
+router.get('/laptop-report/tickets', authMiddleware, reportsView, reportsController.getLaptopReportTickets);
 router.post('/export', authMiddleware, cp('reports_export', 'create'), reportsController.exportToExcel);
 router.get('/support-stats', authMiddleware, reportsView, reportsController.getSupportStats);
 

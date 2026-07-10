@@ -3,6 +3,7 @@
  */
 const { startWorkLog } = require('./ticketWorkLogService');
 const { logTtsplEvent } = require('./ttsplAuditService');
+const { logProductionHistory } = require('./ticketWorkflowHistoryService');
 const { invalidateInventoryListCachesFireAndForget } = require('./inventoryListCache');
 const {
   applySerialQcUpdate,
@@ -187,6 +188,15 @@ async function createTicketFromGrnReceive(db, {
   );
 
   const ticketId = ins.rows[0].ticket_id;
+
+  await logProductionHistory(db, {
+    ticketAfter: ins.rows[0],
+    afterStageName: stage.stage_name,
+    source: 'createGrnQcTicket',
+    remarks: `Ticket auto-created from GRN receive (serial: ${serialNumber})`,
+    actor: { user_id: actorUserId, name: 'GRN Receive' },
+    assignmentType: 'auto_create',
+  });
 
   await db.query(
     `INSERT INTO activities (ticket_id, stage_id, user_id, action, notes)
@@ -414,6 +424,15 @@ async function createTicketFromReturn(db, {
 
   const ticketId = ins.rows[0].ticket_id;
 
+  await logProductionHistory(db, {
+    ticketAfter: ins.rows[0],
+    afterStageName: stage.stage_name,
+    source: 'createReturnQcTicket',
+    remarks: `QC ticket auto-created from customer return (serial: ${serialNumber})`,
+    actor: { user_id: actorUserId, name: 'Return QC' },
+    assignmentType: 'auto_create',
+  });
+
   await db.query(
     `INSERT INTO activities (ticket_id, stage_id, user_id, action, notes)
      VALUES ($1, $2, $3, 'created', $4)`,
@@ -507,6 +526,15 @@ async function createSalesOrderQcTicket(db, {
   );
 
   const ticketId = ins.rows[0].ticket_id;
+
+  await logProductionHistory(db, {
+    ticketAfter: ins.rows[0],
+    afterStageName: stage.stage_name,
+    source: 'createSalesOrderQcTicket',
+    remarks: `Pre-dispatch QC ticket for DC ${dcNumber}`,
+    actor: { user_id: createdByUserId, name: 'Sales Order QC' },
+    assignmentType: 'auto_create',
+  });
 
   await db.query(
     `INSERT INTO activities (ticket_id, stage_id, user_id, action, notes)

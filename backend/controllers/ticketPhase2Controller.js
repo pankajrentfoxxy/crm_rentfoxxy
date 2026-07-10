@@ -3,6 +3,7 @@ const { resolveQcAssignee, recordAssigneeForTeam, fetchOrderedMemberIds } = requ
 const { syncWorkLogForTicketState, closeOpenWorkLogs, startWorkLog } = require('../services/ticketWorkLogService');
 const { markVendorSerialReadyForRent } = require('../services/grnTicketService');
 const ttsplAuditService = require('../services/ttsplAuditService');
+const { logProductionHistory } = require('../services/ticketWorkflowHistoryService');
 const { sendHighlightedTicketAlert } = require('../services/highlightedTicketAlertService');
 const vendorBilling = require('./vendorBillingController');
 
@@ -306,6 +307,23 @@ exports.moveToStage = async (req, res) => {
         await client.query('ROLLBACK');
         return res.status(400).json({ success: false, message: 'QC1 fail reason is required' });
       }
+      if (!overrideAssignee) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Hardware & Software technician is required when failing from QC1',
+        });
+      }
+      const hwMemberIds = nextStage.team_id
+        ? await fetchOrderedMemberIds(client, nextStage.team_id)
+        : [];
+      if (!hwMemberIds.includes(overrideAssignee)) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Selected user is not an active Hardware & Software team member',
+        });
+      }
       qcFailCount += 1;
       updates.push(`qc_fail_count = $${pi++}`); params.push(qcFailCount);
       updates.push(`qc1_failed_at = NOW()`);
@@ -504,6 +522,14 @@ exports.moveToStage = async (req, res) => {
       assignedUserId = ticket.assigned_user_id;
     }
 
+    // Side-routes to repair vendors: unassign so Body & Paint / Chip tech can be picked.
+    if (
+      (to_stage_name === 'Body & Paint' || to_stage_name === 'Chip Level Repair')
+      && !overrideAssignee
+    ) {
+      assignedUserId = null;
+    }
+
     // Manual picker (e.g. Final Testing -> QC1, QC2 fail -> QC1) wins over round-robin/keep-same.
     if (overrideAssignee) {
       assignedUserId = overrideAssignee;
@@ -559,6 +585,19 @@ exports.moveToStage = async (req, res) => {
       actorUserId: req.user.user_id,
       actorName: req.user.name,
       db: client
+    });
+
+    await logProductionHistory(client, {
+      ticketBefore: ticket,
+      ticketAfter: newTicket,
+      beforeStageName: currentStageName,
+      afterStageName: to_stage_name,
+      source: 'moveToStage',
+      hint: conditionHint,
+      remarks: activityNotes,
+      failureReason: ['qc1_failed', 'qc2_failed', 'dispatch_qc_failed'].includes(conditionHint) ? reason?.trim() : null,
+      actor: req.user,
+      assignmentType: conditionHint || 'stage_move',
     });
 
     await client.query('COMMIT');
@@ -696,6 +735,16 @@ exports.markQcFailed = async (req, res) => {
       metadata: { return_dc_number: return_dc_number || null },
       actorUserId: req.user.user_id,
       actorName: req.user.name
+    });
+
+    const afterRes = await pool.query('SELECT * FROM tickets WHERE ticket_id = $1', [id]);
+    await logProductionHistory(pool, {
+      ticketBefore: ticket,
+      ticketAfter: afterRes.rows[0] || ticket,
+      source: 'markQcFailed',
+      remarks: reason.trim(),
+      failureReason: reason.trim(),
+      actor: req.user,
     });
 
     // Auto-raise a DRAFT vendor debit note linked to this return ticket (accounts

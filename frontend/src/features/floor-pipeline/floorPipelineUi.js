@@ -17,6 +17,83 @@ export const KANBAN_STAGES = [
   'Inventory'
 ];
 
+/** Main production path — branch stages (chip / body paint) are not sequential steps. */
+export const MAIN_STAGE_ORDER = [
+  'Floor Manager',
+  'Diagnosis',
+  'Assembly & Software',
+  'Final Testing',
+  'QC1',
+  'QC2',
+  'Dispatch QC',
+  'Inventory',
+];
+
+export const BRANCH_STAGES = ['Chip Level Repair', 'Body & Paint'];
+
+export const MAIN_HW_STAGES = ['Diagnosis', 'Assembly & Software', 'Final Testing'];
+
+/**
+ * Stage pill status for the ticket detail timeline.
+ * completed = green, active = blue, incomplete = red (bypassed / not finished),
+ * pending = grey (not yet reached).
+ */
+export function computeStageStatuses(currentStage, ticket = {}) {
+  const statuses = Object.fromEntries(KANBAN_STAGES.map((s) => [s, 'pending']));
+  const branchActive = BRANCH_STAGES.includes(currentStage);
+  const diagnosisFailed = ticket.status === 'diagnosis_failed';
+  const mainIdx = MAIN_STAGE_ORDER.indexOf(currentStage);
+
+  const markBranchSideTrip = (stageName, flagKey) => {
+    if (!ticket[flagKey]) {
+      statuses[stageName] = 'pending';
+      return;
+    }
+    if (currentStage === stageName) return;
+    const atOrPastAssembly = mainIdx >= MAIN_STAGE_ORDER.indexOf('Assembly & Software');
+    statuses[stageName] = atOrPastAssembly ? 'completed' : 'pending';
+  };
+
+  if (branchActive || diagnosisFailed) {
+    statuses['Floor Manager'] = 'completed';
+    MAIN_HW_STAGES.forEach((s) => {
+      statuses[s] = 'incomplete';
+    });
+    BRANCH_STAGES.forEach((s) => {
+      if (s !== currentStage) statuses[s] = 'pending';
+    });
+    if (branchActive) {
+      statuses[currentStage] = 'active';
+    } else if (diagnosisFailed) {
+      statuses['Diagnosis'] = 'incomplete';
+    }
+    return statuses;
+  }
+
+  MAIN_STAGE_ORDER.forEach((stage, i) => {
+    if (mainIdx === -1) return;
+    if (stage === currentStage) {
+      statuses[stage] = 'active';
+    } else if (i < mainIdx) {
+      statuses[stage] = 'completed';
+    } else {
+      statuses[stage] = 'pending';
+    }
+  });
+
+  markBranchSideTrip('Body & Paint', 'body_paint_required');
+  markBranchSideTrip('Chip Level Repair', 'chip_repair_required');
+
+  return statuses;
+}
+
+export const STAGE_TIMELINE_STYLES = {
+  completed: 'bg-emerald-100 text-emerald-800',
+  active: 'bg-blue-600 text-white',
+  incomplete: 'bg-red-100 text-red-800',
+  pending: 'bg-slate-100 text-slate-500',
+};
+
 export const STAGE_GROUPS = [
   {
     label: 'FLOOR MANAGER',

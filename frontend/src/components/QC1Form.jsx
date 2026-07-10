@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { CheckCircle, AlertTriangle, Save, ChevronDown, ChevronUp } from 'lucide-react';
 import api from '../utils/api';
+import HwReworkAssignModal from '../features/floor-pipeline/components/HwReworkAssignModal';
 
 const GRADE_OPTIONS = ['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C', 'D'];
 
@@ -101,6 +102,7 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
     const [qc2Assignees, setQc2Assignees] = useState([]);
     const [selectedAssigneeId, setSelectedAssigneeId] = useState('');
     const [loadingAssignees, setLoadingAssignees] = useState(false);
+    const [hwFailPickerOpen, setHwFailPickerOpen] = useState(false);
 
     const loadQCData = useCallback(async () => {
         try {
@@ -202,6 +204,7 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
             setProcessing(false);
             setAssigneeModal(false);
             setSelectedAssigneeId('');
+            setHwFailPickerOpen(false);
         }
     };
 
@@ -260,6 +263,10 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
         setBitlockerModal(false);
 
         const needsQc2Assignee = qcStage === 'QC1' && willPassQC();
+        if (qcStage === 'QC1' && !willPassQC()) {
+            setHwFailPickerOpen(true);
+            return;
+        }
         if (!needsQc2Assignee) {
             await submitQC();
             return;
@@ -297,6 +304,10 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
             return alert('Please select a QC2 team member to assign this ticket');
         }
         await submitQC(parseInt(selectedAssigneeId, 10));
+    };
+
+    const confirmHwFailAssign = async (userId) => {
+        await submitQC(userId);
     };
 
     const addReplacedPart = () => {
@@ -733,6 +744,14 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
                     </div>
                 </div>
             )}
+
+            <HwReworkAssignModal
+                ticket={ticket}
+                open={hwFailPickerOpen}
+                onClose={() => setHwFailPickerOpen(false)}
+                onConfirm={confirmHwFailAssign}
+                confirming={processing}
+            />
 
             {/* Bitlocker Reminder Modal */}
             {bitlockerModal && (

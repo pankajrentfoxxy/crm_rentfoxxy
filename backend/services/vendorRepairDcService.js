@@ -3,6 +3,7 @@ const path = require('path');
 const pool = require('../config/db');
 const { closeOpenWorkLogs } = require('./ticketWorkLogService');
 const { logTtsplEvent } = require('./ttsplAuditService');
+const { logProductionHistory } = require('./ticketWorkflowHistoryService');
 const { generateVendorRepairPdf } = require('./vendorRepairPdfService');
 const { appendDateRangeClauses } = require('../utils/dateRangeFilter');
 const {
@@ -234,6 +235,17 @@ async function markDiagnosisFailed(client, {
     stageId: ticket.current_stage_id,
     action: 'diagnosis_failed',
     notes: reason.trim(),
+  });
+
+  const afterRes = await client.query('SELECT * FROM tickets WHERE ticket_id = $1', [ticketId]);
+  await logProductionHistory(client, {
+    ticketBefore: ticket,
+    ticketAfter: afterRes.rows[0] || ticket,
+    beforeStageName: ticket.stage_name,
+    source: 'markDiagnosisFailed',
+    remarks: reason.trim(),
+    failureReason: reason.trim(),
+    actor: { user_id: actorUserId, name: actorName || 'System' },
   });
 
   await logTtsplEvent({

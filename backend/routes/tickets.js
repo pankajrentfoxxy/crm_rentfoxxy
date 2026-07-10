@@ -27,6 +27,7 @@ const {
   getTickets,
   getMyTickets,
   getTicketById,
+  getProductionHistory,
   updateTicket,
   moveToNextStage,
   assignTicket,
@@ -102,6 +103,7 @@ router.get(
 );
 router.get('/team-members', getTeamMembers);
 router.get('/:id/next-assignee', getNextAssignee);
+router.get('/:id/production-history', ftView, getProductionHistory);
 router.get('/ttspl/:ttsplId/history', ttsplHistoryView, phase2.getTtsplHistory);
 router.get('/ttspl/:ttsplId', phase2.getTicketsByTtsplId);
 router.post('/:id/move-stage', phase2.moveToStage);

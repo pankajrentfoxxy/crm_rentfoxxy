@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const { getDisplayTeams, getTeamIdsForFilter } = require('../utils/teamUtils');
+const { getLaptopReport, getTicketRows, getStagePerformanceTickets } = require('../services/laptopReportService');
 
 function formatDuration(seconds) {
     if (seconds == null || !Number.isFinite(seconds)) return '—';
@@ -2027,5 +2028,35 @@ exports.getSupportStats = async (req, res) => {
     } catch (error) {
         console.error('getSupportStats error:', error);
         res.status(500).json({ success: false, message: 'Server error generating support stats' });
+    }
+};
+
+exports.getLaptopReport = async (req, res) => {
+    try {
+        const data = await getLaptopReport(req.query);
+        res.json({ success: true, ...data });
+    } catch (error) {
+        console.error('getLaptopReport error:', error);
+        res.status(500).json({ success: false, message: error.message || 'Server error generating laptop report' });
+    }
+};
+
+exports.getLaptopReportTickets = async (req, res) => {
+    try {
+        const q = req.query;
+        if (q.popup_qc_history_failed === 'true' || q.popup_qc_history_failed === true || q.popup_status === 'QC Failed') {
+            const { getQcFailedTickets } = require('../services/laptopReportStagePerformanceService');
+            const data = await getQcFailedTickets(q);
+            return res.json({ success: true, ...data });
+        }
+        if (q.stage_perf_stage || q.stage_performance_stage || q.stage_perf_bucket || q.stage_performance_bucket) {
+            const data = await getStagePerformanceTickets(q);
+            return res.json({ success: true, ...data });
+        }
+        const data = await getTicketRows(q);
+        res.json({ success: true, ...data });
+    } catch (error) {
+        console.error('getLaptopReportTickets error:', error);
+        res.status(500).json({ success: false, message: error.message || 'Server error loading laptop report tickets' });
     }
 };

@@ -9,6 +9,11 @@ const {
 } = require('../services/ticketWorkLogService');
 const { applyGrnVendorQcPassOnTicketComplete } = require('../services/grnTicketService');
 const ttsplAuditService = require('../services/ttsplAuditService');
+const {
+  logProductionHistory,
+  logWorkStarted,
+  getTicketProductionHistory,
+} = require('../services/ticketWorkflowHistoryService');
 const { hasPermission } = require('../services/permissionService');
 const {
   resolveTicketListScope,
@@ -167,6 +172,16 @@ exports.createTicket = async (req, res) => {
        VALUES ($1, $2, $3, $4, $5)`,
       [ticket.ticket_id, finalStageId, req.user.user_id, 'created', logMessage]
     );
+
+    await logProductionHistory(pool, {
+      ticketBefore: null,
+      ticketAfter: ticket,
+      afterStageName: firstStage.stage_name,
+      source: 'createTicket',
+      remarks: logMessage,
+      actor: req.user,
+      assignmentType: 'initial',
+    });
 
     if (finalUserId) {
       await startWorkLog(pool, {
@@ -624,6 +639,20 @@ exports.getTicketById = async (req, res) => {
   }
 };
 
+exports.getProductionHistory = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const ticketRes = await pool.query('SELECT ticket_id FROM tickets WHERE ticket_id = $1', [id]);
+    if (!ticketRes.rows.length) {
+      return res.status(404).json({ success: false, message: 'Ticket not found' });
+    }
+    const data = await getTicketProductionHistory(id);
+    res.json({ success: true, ...data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || 'Failed to load production history' });
+  }
+};
+
 // Update Ticket
 exports.updateTicket = async (req, res) => {
   const { id } = req.params;
@@ -859,6 +888,16 @@ exports.moveToNextStage = async (req, res) => {
       [id, nextStage.stage_id, req.user.user_id, action, activityNotes]
     );
 
+    await logProductionHistory(pool, {
+      ticketBefore: ticket,
+      ticketAfter: updateResult.rows[0],
+      beforeStageName: currentStageName,
+      afterStageName: nextStage.stage_name,
+      source: target_stage_id ? 'moveToNextStageJump' : 'moveToNextStage',
+      remarks: activityNotes,
+      actor: req.user,
+    });
+
     res.json({
       success: true,
       message: successMessage,
@@ -880,7 +919,7 @@ exports.assignTicket = async (req, res) => {
 
   try {
     const ticketRes = await pool.query(
-      `SELECT t.ticket_id, t.current_stage_id, t.assigned_team_id, s.stage_name
+      `SELECT t.*, s.stage_name
        FROM tickets t
        JOIN stages s ON s.stage_id = t.current_stage_id
        WHERE t.ticket_id = $1`,
@@ -998,6 +1037,16 @@ exports.assignTicket = async (req, res) => {
 
     const updatedTicket = result.rows[0];
 
+    await logProductionHistory(pool, {
+      ticketBefore: currentTicket,
+      ticketAfter: updatedTicket,
+      beforeStageName: currentTicket.stage_name,
+      source: 'assignTicket',
+      remarks: logMessage.trim(),
+      actor: req.user,
+      assignmentType: 'manual_assign',
+    });
+
     await syncWorkLogForTicketState(pool, updatedTicket);
 
     // Inventory Sync Logic: If ticket was completed (or we are resetting to in_progress), ensure Inventory is "Floor"
@@ -1084,6 +1133,15 @@ exports.claimTicket = async (req, res) => {
          WHERE t.ticket_id = $1`,
       [id]
     );
+
+    await logProductionHistory(pool, {
+      ticketBefore: ticket,
+      ticketAfter: updatedTicket.rows[0] || result.rows[0],
+      source: 'claimTicket',
+      remarks: 'Technician claimed ticket',
+      actor: req.user,
+      assignmentType: 'self_claim',
+    });
 
     // Log activity
     await pool.query(
@@ -1475,6 +1533,8 @@ exports.startWork = async (req, res) => {
       [id, userId]
     );
 
+    await logWorkStarted(pool, { ticketId: Number(id), stageId, actor: req.user });
+
     res.json({ success: true, message: 'Work started — timer running' });
   } catch (error) {
     console.error('Start work error:', error);
@@ -1671,7 +1731,16 @@ exports.bulkMoveTickets = async (req, res) => {
     // We should probably respect RBAC (only admin/manager/floor manager).
     // Assuming route protection handles RBAC.
 
-    const ticketsRes = await pool.query('SELECT ticket_id, serial_number FROM tickets WHERE current_stage_id = $1', [current_stage_id]);
+    const currentStageRes = await pool.query('SELECT stage_name FROM stages WHERE stage_id = $1', [current_stage_id]);
+    const fromStageName = currentStageRes.rows[0]?.stage_name || null;
+
+    const ticketsRes = await pool.query(
+      `SELECT t.*, s.stage_name
+         FROM tickets t
+         LEFT JOIN stages s ON s.stage_id = t.current_stage_id
+        WHERE t.current_stage_id = $1`,
+      [current_stage_id]
+    );
     const tickets = ticketsRes.rows;
 
     if (tickets.length === 0) {
@@ -1723,6 +1792,22 @@ exports.bulkMoveTickets = async (req, res) => {
     });
 
     await Promise.all(promises);
+
+    await Promise.all(
+      tickets.map(async (beforeTicket) => {
+        const afterRes = await pool.query('SELECT * FROM tickets WHERE ticket_id = $1', [beforeTicket.ticket_id]);
+        return logProductionHistory(pool, {
+          ticketBefore: beforeTicket,
+          ticketAfter: afterRes.rows[0] || beforeTicket,
+          beforeStageName: fromStageName,
+          afterStageName: targetStage.stage_name,
+          source: 'bulkMoveTickets',
+          remarks: `Bulk moved to ${targetStage.stage_name}`,
+          actor: req.user,
+          assignmentType: 'bulk_move',
+        });
+      })
+    );
 
     res.json({
       success: true,
