@@ -3381,6 +3381,251 @@ exports.initiateReplacement = async (req, res) => {
     res.json({ success: true, ...resultPayload, ...data });
 };
 
+/** Cancel a Return DC + pickup before collection — resets ticket so replacement/pickup can be recreated. */
+async function cancelReplacementSalesOrder(client, soNumber, actor) {
+    if (!soNumber) return { cancelled: false };
+    const outboundDc = await client.query(
+        `SELECT dc_number FROM delivery_challan_lines
+          WHERE sales_order_number = $1 AND movement_type = 'outbound'
+            AND COALESCE(status, '') NOT IN ('cancelled')
+          LIMIT 1`,
+        [soNumber]
+    );
+    if (outboundDc.rows.length) {
+        throw Object.assign(
+            new Error(`Cannot cancel sales order ${soNumber}: outbound delivery DC ${outboundDc.rows[0].dc_number} already exists`),
+            { status: 400 }
+        );
+    }
+
+    const attachedRes = await client.query(
+        `SELECT allocation_id, serial_id, qc_ticket_id
+           FROM sales_order_serials
+          WHERE sales_order_number = $1 AND status = 'attached'
+          FOR UPDATE`,
+        [soNumber]
+    );
+    for (const alloc of attachedRes.rows) {
+        if (alloc.serial_id) {
+            try {
+                await inventorySM.backToStock(client, alloc.serial_id, {
+                    reason: `Sales order ${soNumber} cancelled (return pickup reset)`,
+                    actorUserId: actor?.user_id,
+                    actorName: actor?.name,
+                });
+            } catch (_) { /* tolerate */ }
+        }
+        if (alloc.qc_ticket_id) {
+            await client.query(
+                `UPDATE tickets SET status = 'cancelled', updated_at = NOW()
+                  WHERE ticket_id = $1 AND status NOT IN ('completed', 'cancelled')`,
+                [alloc.qc_ticket_id]
+            );
+        }
+        await client.query(
+            `UPDATE sales_order_serials SET status = 'removed', updated_at = NOW() WHERE allocation_id = $1`,
+            [alloc.allocation_id]
+        );
+    }
+    await client.query(
+        `UPDATE sales_order_lines SET status = 'cancelled' WHERE sales_order_number = $1`,
+        [soNumber]
+    );
+    return { cancelled: true, released: attachedRes.rows.length };
+}
+
+exports.cancelReturnPickup = async (req, res) => {
+    if (!isSupportLead(req.user)) {
+        return res.status(403).json({ success: false, message: 'Only support lead can cancel return pickup' });
+    }
+    const ticketId = parseInt(req.params.ticketId, 10);
+    const reason = String(req.body?.reason || req.body?.cancellation_remark || '').trim()
+        || 'Return pickup cancelled — will recreate';
+    const requestedRdc = String(req.body?.return_dc_number || '').trim() || null;
+    const cancelReplacementOrder = req.body?.cancel_replacement_order !== false;
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const ticketRes = await client.query(
+            'SELECT * FROM support_tickets WHERE id = $1 FOR UPDATE',
+            [ticketId]
+        );
+        if (!ticketRes.rows.length) {
+            throw Object.assign(new Error('Ticket not found'), { status: 404 });
+        }
+        const ticket = ticketRes.rows[0];
+        const rdc = requestedRdc || ticket.return_dc_number;
+        if (!rdc) {
+            throw Object.assign(new Error('No Return DC on this ticket'), { status: 400 });
+        }
+
+        const dcRes = await client.query(
+            `SELECT status, sales_order_number FROM delivery_challan_lines
+              WHERE dc_number = $1 AND movement_type = 'return' LIMIT 1`,
+            [rdc]
+        );
+        if (!dcRes.rows.length) {
+            throw Object.assign(new Error(`Return DC ${rdc} not found`), { status: 404 });
+        }
+        const dcStatus = String(dcRes.rows[0].status || '').toLowerCase();
+        if (dcStatus === 'cancelled') {
+            throw Object.assign(new Error(`Return DC ${rdc} is already cancelled`), { status: 400 });
+        }
+        if (dcStatus === 'delivered') {
+            throw Object.assign(new Error(`Return DC ${rdc} is already delivered — cannot cancel`), { status: 400 });
+        }
+
+        const pickupRes = await client.query(
+            `SELECT id, status, picked_up_at, warehouse_received_at, customer_otp_verified_at
+               FROM support_ticket_items
+              WHERE ticket_id = $1 AND item_type = 'pickup'
+                AND return_dc_number = $2`,
+            [ticketId, rdc]
+        );
+        for (const row of pickupRes.rows) {
+            if (row.picked_up_at || row.warehouse_received_at || row.customer_otp_verified_at) {
+                throw Object.assign(
+                    new Error('Pickup already started or completed — cannot cancel this Return DC'),
+                    { status: 400 }
+                );
+            }
+            if (['resolved', 'closed', 'inventory_updated'].includes(row.status)) {
+                throw Object.assign(
+                    new Error('Pickup item is already closed — cannot cancel this Return DC'),
+                    { status: 400 }
+                );
+            }
+        }
+
+        if (pickupRes.rows.length) {
+            await client.query(
+                `UPDATE support_ticket_items
+                    SET status = 'cancelled',
+                        return_dc_number = NULL,
+                        assigned_to = NULL,
+                        pickup_assigned_to = NULL,
+                        pickup_method = NULL,
+                        updated_at = NOW()
+                  WHERE ticket_id = $1 AND item_type = 'pickup' AND return_dc_number = $2`,
+                [ticketId, rdc]
+            );
+        }
+
+        await client.query(
+            `UPDATE delivery_challan_lines
+                SET status = 'cancelled', updated_at = NOW()
+              WHERE dc_number = $1 AND movement_type = 'return'`,
+            [rdc]
+        );
+
+        await client.query(
+            `UPDATE support_ticket_items
+                SET return_dc_number = NULL, updated_at = NOW()
+              WHERE ticket_id = $1 AND return_dc_number = $2`,
+            [ticketId, rdc]
+        );
+
+        let soCancelled = null;
+        if (cancelReplacementOrder) {
+            try {
+                await client.query(
+                    `UPDATE support_replacement_orders
+                        SET status = 'cancelled'
+                      WHERE ticket_id = $1 AND status NOT IN ('completed', 'cancelled')`,
+                    [ticketId]
+                );
+            } catch (replacementErr) {
+                if (replacementErr.code !== '42P01') throw replacementErr;
+            }
+
+            await client.query(
+                `UPDATE support_ticket_items
+                    SET status = 'cancelled', updated_at = NOW()
+                  WHERE ticket_id = $1 AND item_type = 'replacement'
+                    AND status NOT IN ('resolved', 'closed', 'inventory_updated', 'cancelled')`,
+                [ticketId]
+            );
+
+            const soNumber = ticket.sales_order_number || null;
+            if (soNumber) {
+                soCancelled = await cancelReplacementSalesOrder(client, soNumber, req.user);
+            }
+
+            const srcRes = await client.query(
+                `SELECT DISTINCT COALESCE(complaint_item_id, source_item_id) AS complaint_id
+                   FROM support_replacement_orders
+                  WHERE ticket_id = $1 AND COALESCE(complaint_item_id, source_item_id) IS NOT NULL`,
+                [ticketId]
+            );
+            const complaintIds = srcRes.rows.map((r) => r.complaint_id).filter(Boolean);
+            if (complaintIds.length) {
+                await client.query(
+                    `UPDATE support_ticket_items
+                        SET outcome = COALESCE(outcome, 'replacement_required'),
+                            replacement_approved_by = NULL,
+                            replacement_approved_at = NULL,
+                            updated_at = NOW()
+                      WHERE id = ANY($1::int[]) AND item_type = 'complaint'`,
+                    [complaintIds]
+                );
+            } else {
+                await client.query(
+                    `UPDATE support_ticket_items
+                        SET outcome = COALESCE(outcome, 'replacement_required'),
+                            replacement_approved_by = NULL,
+                            replacement_approved_at = NULL,
+                            updated_at = NOW()
+                      WHERE ticket_id = $1 AND item_type = 'complaint'
+                        AND status NOT IN ('resolved', 'closed', 'inventory_updated', 'cancelled')`,
+                    [ticketId]
+                );
+            }
+        }
+
+        await client.query(
+            `UPDATE support_tickets
+                SET return_dc_number = NULL,
+                    sales_order_number = CASE WHEN $2 THEN NULL ELSE sales_order_number END,
+                    updated_at = NOW()
+              WHERE id = $1`,
+            [ticketId, cancelReplacementOrder]
+        );
+
+        await logAudit(client, {
+            ticketId,
+            userId: req.user.user_id,
+            action: 'return_pickup_cancelled',
+            detail: {
+                return_dc_number: rdc,
+                reason,
+                cancel_replacement_order: cancelReplacementOrder,
+                sales_order_cancelled: soCancelled?.cancelled || false,
+            },
+        });
+        await bumpTicketActivity(client, ticketId);
+        await client.query('COMMIT');
+
+        const data = await getTicketWithItems(ticketId, req.user);
+        return res.json({
+            success: true,
+            message: `Return DC ${rdc} cancelled. You can create a new replacement or pickup.`,
+            return_dc_number: rdc,
+            sales_order_released: soCancelled?.released || 0,
+            ...data,
+        });
+    } catch (e) {
+        await client.query('ROLLBACK');
+        console.error('cancelReturnPickup:', e);
+        return res.status(e.status || 400).json({
+            success: false,
+            message: e.message || 'Failed to cancel return pickup',
+        });
+    } finally {
+        client.release();
+    }
+};
+
 /** Assign technician / courier / porter to an existing Return DC (created without dispatch). */
 exports.assignReturnPickupDispatch = async (req, res) => {
     if (!isSupportLead(req.user)) {
