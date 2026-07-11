@@ -166,7 +166,72 @@ async function preserveCustomerAssetsOnCancel(client, {
     return preserved;
 }
 
+/**
+ * Migrated / bad ERP data: pickup shows complete in CRM but never happened physically.
+ * Force-restore deployed laptops to the customer and cancel linked floor tickets.
+ */
+async function forceRestoreCustomerAssetsOnCancel(client, {
+    ticketId,
+    customerId,
+    items,
+    actorUserId,
+    actorName,
+}) {
+    const restored = [];
+
+    for (const item of items || []) {
+        if (item.item_type !== 'pickup') continue;
+
+        const code = item.unique_serial_number || item.ttspl_id || item.serial_number;
+        if (!code) continue;
+
+        const serial = await loadSerialRow(client, code);
+        if (!serial) continue;
+
+        const targetStatus = await resolveDeployedStatus(client, customerId, code);
+        const result = await restoreSerialToCustomer(client, {
+            serial: {
+                ...serial,
+                current_customer_id: serial.current_customer_id || customerId,
+            },
+            targetStatus,
+            ticketId,
+            itemId: item.id,
+            actorUserId,
+            actorName,
+        });
+
+        if (!serial.current_customer_id && customerId) {
+            await client.query(
+                `UPDATE vendor_serial_numbers
+                    SET current_customer_id = $2, updated_at = NOW()
+                  WHERE serial_id = $1`,
+                [serial.serial_id, customerId]
+            );
+        }
+
+        if (item.floor_ticket_id) {
+            await client.query(
+                `UPDATE tickets SET status = 'cancelled', updated_at = NOW()
+                  WHERE ticket_id = $1 AND status NOT IN ('completed', 'cancelled')`,
+                [item.floor_ticket_id]
+            );
+        }
+
+        await cancelPrematureReturnQcTickets(client, serial.serial_id);
+
+        if (item.customer_inventory_id) {
+            await supportInventoryService.activateAsset(client, item.customer_inventory_id);
+        }
+
+        restored.push({ ...result, floor_ticket_id: item.floor_ticket_id || null });
+    }
+
+    return restored;
+}
+
 module.exports = {
     wasWarehouseReceived,
     preserveCustomerAssetsOnCancel,
+    forceRestoreCustomerAssetsOnCancel,
 };

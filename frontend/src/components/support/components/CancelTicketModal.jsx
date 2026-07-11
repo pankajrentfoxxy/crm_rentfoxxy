@@ -3,8 +3,9 @@ import { X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../../utils/api';
 
-export default function CancelTicketModal({ ticketId, open, onClose, onCancelled }) {
+export default function CancelTicketModal({ ticketId, open, onClose, onCancelled, hasReturnDc }) {
   const [remark, setRemark] = useState('');
+  const [forceRevert, setForceRevert] = useState(!!hasReturnDc);
   const [busy, setBusy] = useState(false);
 
   if (!open) return null;
@@ -15,11 +16,17 @@ export default function CancelTicketModal({ ticketId, open, onClose, onCancelled
       toast.error('Cancellation remark is required');
       return;
     }
-    if (!window.confirm('Cancel this support ticket? This cannot be undone.')) return;
+    const confirmMsg = forceRevert
+      ? 'Void this migrated pickup ticket? Return DC will be cancelled and TTSPL will be restored with the customer so you can open a new ticket.'
+      : 'Cancel this support ticket? This cannot be undone.';
+    if (!window.confirm(confirmMsg)) return;
     setBusy(true);
     try {
-      await api.post(`/support/tickets/${ticketId}/cancel`, { cancellation_remark: text });
-      toast.success('Ticket cancelled');
+      await api.post(`/support/tickets/${ticketId}/cancel`, {
+        cancellation_remark: text,
+        force_inventory_revert: forceRevert,
+      });
+      toast.success(forceRevert ? 'Ticket voided — laptop restored with customer' : 'Ticket cancelled');
       setRemark('');
       onCancelled?.();
       onClose();
@@ -41,6 +48,20 @@ export default function CancelTicketModal({ ticketId, open, onClose, onCancelled
         <p className="text-sm text-gray-600 mb-4">
           Use this for old ERP migrated tickets that cannot complete Return DC. The ticket history is preserved.
         </p>
+        {hasReturnDc ? (
+          <label className="flex items-start gap-2 mb-4 text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-lg p-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={forceRevert}
+              onChange={(e) => setForceRevert(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>
+              <strong>Migrated pickup never happened</strong> — cancel Return DC, restore laptop with customer
+              (TTSPL stays deployed), and remove the block on creating a new ticket.
+            </span>
+          </label>
+        ) : null}
         <label className="block text-xs font-medium text-gray-600 mb-1">Cancellation remark *</label>
         <textarea
           value={remark}

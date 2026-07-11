@@ -16,7 +16,7 @@ const { createFloorTicketFromSupportPickup, resetVendorSerialForQcReentry } = re
 const { nextDocumentNumber } = require('../services/salesManagementService');
 const { regenerateReturnDcPdf, regenerateReturnDcPdfByRdc } = require('../services/returnDcPdfService');
 const replacementFlow = require('../services/supportReplacementFlowService');
-const { preserveCustomerAssetsOnCancel } = require('../services/supportCancelInventoryService');
+const { preserveCustomerAssetsOnCancel, forceRestoreCustomerAssetsOnCancel } = require('../services/supportCancelInventoryService');
 
 const ITEM_OPEN_STATUSES = new Set(['open', 'work_done', 'awaiting_otp']);
 const TICKET_OPEN = 'open';
@@ -1135,7 +1135,7 @@ exports.cancelTicket = async (req, res) => {
         await client.query('BEGIN');
         await ensureSupportTicketCancellationColumns(client);
         const ticketRes = await client.query(
-            'SELECT id, status, customer_id FROM support_tickets WHERE id = $1 FOR UPDATE',
+            'SELECT id, status, customer_id, return_dc_number, sales_order_number FROM support_tickets WHERE id = $1 FOR UPDATE',
             [ticketId]
         );
         if (!ticketRes.rows.length) {
@@ -1155,12 +1155,32 @@ exports.cancelTicket = async (req, res) => {
             [ticketId]
         );
 
-        await client.query(
-            `UPDATE support_ticket_items
-             SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
-             WHERE ticket_id = $1 AND status NOT IN ('resolved','closed','inventory_updated','cancelled')`,
-            [ticketId]
-        );
+        if (req.body?.force_inventory_revert) {
+            await client.query(
+                `UPDATE support_ticket_items
+                    SET status = 'cancelled',
+                        return_dc_number = NULL,
+                        updated_at = CURRENT_TIMESTAMP
+                  WHERE ticket_id = $1 AND status <> 'cancelled'`,
+                [ticketId]
+            );
+            if (ticketRow.return_dc_number) {
+                await client.query(
+                    `UPDATE delivery_challan_lines
+                        SET status = 'cancelled', updated_at = NOW()
+                      WHERE dc_number = $1 AND movement_type = 'return'
+                        AND COALESCE(status, '') NOT IN ('cancelled')`,
+                    [ticketRow.return_dc_number]
+                );
+            }
+        } else {
+            await client.query(
+                `UPDATE support_ticket_items
+                 SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+                 WHERE ticket_id = $1 AND status NOT IN ('resolved','closed','inventory_updated','cancelled')`,
+                [ticketId]
+            );
+        }
         try {
             await client.query(
                 `UPDATE support_replacement_orders
@@ -1175,25 +1195,34 @@ exports.cancelTicket = async (req, res) => {
         await client.query(
             `UPDATE support_tickets
              SET status = $2, cancelled_at = CURRENT_TIMESTAMP, cancelled_by = $3,
-                 cancellation_remark = $4, last_activity_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                 cancellation_remark = $4, return_dc_number = CASE WHEN $5 THEN NULL ELSE return_dc_number END,
+                 last_activity_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
              WHERE id = $1`,
-            [ticketId, TICKET_CANCELLED, req.user.user_id, remark]
+            [ticketId, TICKET_CANCELLED, req.user.user_id, remark, !!req.body?.force_inventory_revert]
         );
 
-        const inventoryPreserved = await preserveCustomerAssetsOnCancel(client, {
-            ticketId,
-            customerId: ticketRow.customer_id,
-            items: itemsRes.rows,
-            actorUserId: req.user.user_id,
-            actorName: req.user.name,
-        });
+        const inventoryPreserved = req.body?.force_inventory_revert
+            ? await forceRestoreCustomerAssetsOnCancel(client, {
+                ticketId,
+                customerId: ticketRow.customer_id,
+                items: itemsRes.rows,
+                actorUserId: req.user.user_id,
+                actorName: req.user.name,
+            })
+            : await preserveCustomerAssetsOnCancel(client, {
+                ticketId,
+                customerId: ticketRow.customer_id,
+                items: itemsRes.rows,
+                actorUserId: req.user.user_id,
+                actorName: req.user.name,
+            });
 
         await logAudit(client, {
             itemId: null,
             ticketId,
             userId: req.user.user_id,
             action: 'ticket_cancelled',
-            detail: { remark, inventory_preserved: inventoryPreserved }
+            detail: { remark, inventory_preserved: inventoryPreserved, force_inventory_revert: !!req.body?.force_inventory_revert }
         });
         await client.query('COMMIT');
     } catch (e) {
@@ -3443,6 +3472,7 @@ exports.cancelReturnPickup = async (req, res) => {
         || 'Return pickup cancelled — will recreate';
     const requestedRdc = String(req.body?.return_dc_number || '').trim() || null;
     const cancelReplacementOrder = req.body?.cancel_replacement_order !== false;
+    const force = !!req.body?.force;
 
     const client = await pool.connect();
     try {
@@ -3472,30 +3502,41 @@ exports.cancelReturnPickup = async (req, res) => {
         if (dcStatus === 'cancelled') {
             throw Object.assign(new Error(`Return DC ${rdc} is already cancelled`), { status: 400 });
         }
-        if (dcStatus === 'delivered') {
+        if (!force && dcStatus === 'delivered') {
             throw Object.assign(new Error(`Return DC ${rdc} is already delivered — cannot cancel`), { status: 400 });
         }
 
         const pickupRes = await client.query(
-            `SELECT id, status, picked_up_at, warehouse_received_at, customer_otp_verified_at
+            `SELECT id, status, picked_up_at, warehouse_received_at, customer_otp_verified_at,
+                    floor_ticket_id, ttspl_id, unique_serial_number, serial_number, customer_inventory_id
                FROM support_ticket_items
               WHERE ticket_id = $1 AND item_type = 'pickup'
-                AND return_dc_number = $2`,
+                AND ($2::text IS NULL OR return_dc_number = $2 OR return_dc_number IS NULL)`,
             [ticketId, rdc]
         );
-        for (const row of pickupRes.rows) {
-            if (row.picked_up_at || row.warehouse_received_at || row.customer_otp_verified_at) {
-                throw Object.assign(
-                    new Error('Pickup already started or completed — cannot cancel this Return DC'),
-                    { status: 400 }
-                );
+        if (!force) {
+            for (const row of pickupRes.rows) {
+                if (row.picked_up_at || row.warehouse_received_at || row.customer_otp_verified_at) {
+                    throw Object.assign(
+                        new Error('Pickup already started or completed — cannot cancel this Return DC'),
+                        { status: 400 }
+                    );
+                }
+                if (['resolved', 'closed', 'inventory_updated'].includes(row.status)) {
+                    throw Object.assign(
+                        new Error('Pickup item is already closed — cannot cancel this Return DC'),
+                        { status: 400 }
+                    );
+                }
             }
-            if (['resolved', 'closed', 'inventory_updated'].includes(row.status)) {
-                throw Object.assign(
-                    new Error('Pickup item is already closed — cannot cancel this Return DC'),
-                    { status: 400 }
-                );
-            }
+        } else {
+            await forceRestoreCustomerAssetsOnCancel(client, {
+                ticketId,
+                customerId: ticket.customer_id,
+                items: pickupRes.rows,
+                actorUserId: req.user.user_id,
+                actorName: req.user.name,
+            });
         }
 
         if (pickupRes.rows.length) {
@@ -3506,9 +3547,15 @@ exports.cancelReturnPickup = async (req, res) => {
                         assigned_to = NULL,
                         pickup_assigned_to = NULL,
                         pickup_method = NULL,
+                        picked_up_at = NULL,
+                        warehouse_received_at = NULL,
+                        customer_otp_verified_at = NULL,
+                        warehouse_received_by = NULL,
+                        floor_ticket_id = NULL,
                         updated_at = NOW()
-                  WHERE ticket_id = $1 AND item_type = 'pickup' AND return_dc_number = $2`,
-                [ticketId, rdc]
+                  WHERE ticket_id = $1 AND item_type = 'pickup'
+                    AND ($2::text IS NULL OR return_dc_number = $2 OR id = ANY($3::int[]))`,
+                [ticketId, rdc, pickupRes.rows.map((r) => r.id)]
             );
         }
 
@@ -3591,6 +3638,24 @@ exports.cancelReturnPickup = async (req, res) => {
               WHERE id = $1`,
             [ticketId, cancelReplacementOrder]
         );
+
+        if (force) {
+            const nonPickupRes = await client.query(
+                `SELECT COUNT(*)::int AS n FROM support_ticket_items
+                  WHERE ticket_id = $1 AND item_type <> 'pickup' AND status <> 'cancelled'`,
+                [ticketId]
+            );
+            if (Number(nonPickupRes.rows[0]?.n || 0) === 0) {
+                await ensureSupportTicketCancellationColumns(client);
+                await client.query(
+                    `UPDATE support_tickets
+                        SET status = $2, cancelled_at = CURRENT_TIMESTAMP, cancelled_by = $3,
+                            cancellation_remark = $4, return_dc_number = NULL, updated_at = CURRENT_TIMESTAMP
+                      WHERE id = $1`,
+                    [ticketId, TICKET_CANCELLED, req.user.user_id, reason]
+                );
+            }
+        }
 
         await logAudit(client, {
             ticketId,

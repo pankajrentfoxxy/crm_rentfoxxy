@@ -448,9 +448,15 @@ function ReplacementOrderBanner({ ticket, replacementOrders, pickups, ticketId, 
   const pendingPickup = linkedPickups.some(
     (p) => p.status === 'pending_dispatch' || (!p.pickup_method && !p.assigned_to && !p.pickup_assigned_to)
   );
+  const migratedPickupStuck = linkedPickups.some(
+    (p) => ['resolved', 'inventory_updated', 'closed'].includes(p.status)
+      || p.customer_otp_verified_at
+      || p.warehouse_received_at
+  );
   const canCancelReturnPickup = isLead && ticket.return_dc_number
     && (linkedPickups.length === 0 || linkedPickups.every((p) => !p.picked_up_at && !p.warehouse_received_at
       && !['resolved', 'closed', 'inventory_updated', 'cancelled'].includes(p.status)));
+  const canForceVoidPickup = isLead && ticket.return_dc_number && migratedPickupStuck;
 
   const assignPickup = async (form) => {
     setAssignBusy(true);
@@ -473,9 +479,11 @@ function ReplacementOrderBanner({ ticket, replacementOrders, pickups, ticketId, 
     }
   };
 
-  const cancelReturnPickup = async () => {
+  const cancelReturnPickup = async (force = false) => {
     const reason = window.prompt(
-      `Cancel Return DC ${ticket.return_dc_number} and reset replacement?\n\nReason (required):`
+      force
+        ? `Force-cancel ${ticket.return_dc_number}? Pickup shows complete in CRM but never happened.\n\nReason (required):`
+        : `Cancel Return DC ${ticket.return_dc_number} and reset replacement?\n\nReason (required):`
     );
     if (reason == null) return;
     if (!String(reason).trim()) {
@@ -491,6 +499,7 @@ function ReplacementOrderBanner({ ticket, replacementOrders, pickups, ticketId, 
         return_dc_number: ticket.return_dc_number,
         reason: reason.trim(),
         cancel_replacement_order: true,
+        force,
       });
       toast.success(data.message || 'Return pickup cancelled');
       onRefresh?.();
@@ -553,12 +562,27 @@ function ReplacementOrderBanner({ ticket, replacementOrders, pickups, ticketId, 
             )}
           </div>
         )}
+        {canForceVoidPickup && (
+          <div className="pt-2 border-t border-amber-200 bg-amber-50 rounded-lg p-3">
+            <p className="text-xs text-amber-900 mb-2">
+              CRM shows return pickup as done (migrated data) but it never happened. Void to restore the laptop with the customer.
+            </p>
+            <button
+              type="button"
+              className="support-btn-danger-outline min-h-[40px] text-sm"
+              onClick={() => cancelReturnPickup(true)}
+              disabled={cancelBusy || assignBusy}
+            >
+              {cancelBusy ? 'Voiding…' : `Void migrated pickup (${ticket.return_dc_number})`}
+            </button>
+          </div>
+        )}
         {canCancelReturnPickup && (
           <div className="pt-2 border-t border-pink-100">
             <button
               type="button"
               className="support-btn-outline min-h-[40px] text-sm text-red-700 border-red-200"
-              onClick={cancelReturnPickup}
+              onClick={() => cancelReturnPickup(false)}
               disabled={cancelBusy || assignBusy}
             >
               {cancelBusy ? 'Cancelling…' : `Cancel Return DC ${ticket.return_dc_number}`}
@@ -581,24 +605,39 @@ function PickupStatusBanner({ ticket, pickups, ticketId, isLead, onRefresh }) {
   );
   const linkedPickups = ticket.return_dc_number
     ? pickups.filter((p) => p.return_dc_number === ticket.return_dc_number)
-    : [];
+    : pickups.filter((p) => !['cancelled'].includes(p.status));
+  const migratedPickupStuck = linkedPickups.some(
+    (p) => ['resolved', 'inventory_updated', 'closed'].includes(p.status)
+      || p.customer_otp_verified_at
+      || p.warehouse_received_at
+  );
   const canCancelReturnPickup = isLead && ticket.return_dc_number
     && (linkedPickups.length === 0 || linkedPickups.every((p) => !p.picked_up_at && !p.warehouse_received_at
       && !['resolved', 'closed', 'inventory_updated', 'cancelled'].includes(p.status)));
+  const canForceVoidPickup = isLead && ticket.return_dc_number && migratedPickupStuck;
 
-  const cancelReturnPickup = async () => {
-    const reason = window.prompt(`Cancel Return DC ${ticket.return_dc_number}?\n\nReason (required):`);
+  const cancelReturnPickup = async (force = false) => {
+    const reason = window.prompt(
+      force
+        ? `Force void ${ticket.return_dc_number}? CRM shows pickup done but it never happened.\n\nReason (required):`
+        : `Cancel Return DC ${ticket.return_dc_number}?\n\nReason (required):`
+    );
     if (reason == null || !String(reason).trim()) {
       if (reason != null) toast.error('Cancellation reason is required');
       return;
     }
-    if (!window.confirm(`Cancel ${ticket.return_dc_number} and linked pickup items?`)) return;
+    if (!window.confirm(
+      force
+        ? `Void ${ticket.return_dc_number} and restore the laptop with the customer?`
+        : `Cancel ${ticket.return_dc_number} and linked pickup items?`
+    )) return;
     setCancelBusy(true);
     try {
       const { data } = await api.post(`/support/tickets/${ticketId}/cancel-return-pickup`, {
         return_dc_number: ticket.return_dc_number,
         reason: reason.trim(),
         cancel_replacement_order: false,
+        force,
       });
       toast.success(data.message || 'Return pickup cancelled');
       onRefresh?.();
@@ -634,12 +673,27 @@ function PickupStatusBanner({ ticket, pickups, ticketId, isLead, onRefresh }) {
           Return DC <b>{ticket.return_dc_number}</b> — pickup completed or closed.
         </p>
       )}
+      {canForceVoidPickup && (
+        <div className="mt-3 pt-3 border-t border-amber-200 bg-amber-50 rounded-lg p-3">
+          <p className="text-sm text-amber-900 mb-2">
+            CRM shows this pickup as done (migrated data) but it was not completed. Void it to restore the laptop with the customer and open a new ticket.
+          </p>
+          <button
+            type="button"
+            className="support-btn-danger-outline min-h-[40px] text-sm"
+            onClick={() => cancelReturnPickup(true)}
+            disabled={cancelBusy}
+          >
+            {cancelBusy ? 'Voiding…' : `Void migrated pickup (${ticket.return_dc_number})`}
+          </button>
+        </div>
+      )}
       {canCancelReturnPickup && (
         <div className="mt-3 pt-3 border-t border-slate-100">
           <button
             type="button"
             className="support-btn-outline min-h-[40px] text-sm text-red-700 border-red-200"
-            onClick={cancelReturnPickup}
+            onClick={() => cancelReturnPickup(false)}
             disabled={cancelBusy}
           >
             {cancelBusy ? 'Cancelling…' : `Cancel Return DC ${ticket.return_dc_number}`}
@@ -1099,6 +1153,7 @@ export default function SupportTicketDetail() {
         open={cancelOpen}
         onClose={() => setCancelOpen(false)}
         onCancelled={load}
+        hasReturnDc={!!ticket.return_dc_number}
       />
 
       <TtsplHistoryDrawer
