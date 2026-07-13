@@ -1168,25 +1168,25 @@ async function receiveItemsFromVendor(client, {
       `UPDATE vendor_repair_dc_items SET
           item_status = $3,
           returned_at = $12::timestamptz,
-          receive_dc_number = $2,
+          receive_dc_number = $2::text,
           receive_mode = $4,
-          receive_verified_serial = $5,
-          receive_wh_esign_url = $6,
-          receive_wh_signer_name = $7,
+          receive_verified_serial = $5::text,
+          receive_wh_esign_url = $6::text,
+          receive_wh_signer_name = $7::text,
           receive_wh_signed_at = $12::timestamptz,
           receive_vendor_esign_url = $8::text,
-          receive_vendor_signer_name = $9,
+          receive_vendor_signer_name = $9::text,
           receive_vendor_signed_at = CASE WHEN $8::text IS NOT NULL THEN $12::timestamptz ELSE NULL END,
-          replacement_serial_number = $10,
-          replacement_ttspl_id = $11,
-          replacement_brand = $13,
-          replacement_model = $14,
-          replacement_generation = $15,
-          replacement_configuration = $16,
-          replacement_dc_number = $17,
-          replacement_serial_id = $18,
-          replaced_original_ttspl_id = $19,
-          replaced_original_serial = $20
+          replacement_serial_number = $10::text,
+          replacement_ttspl_id = $11::text,
+          replacement_brand = $13::text,
+          replacement_model = $14::text,
+          replacement_generation = $15::text,
+          replacement_configuration = $16::text,
+          replacement_dc_number = $17::text,
+          replacement_serial_id = $18::int,
+          replaced_original_ttspl_id = $19::text,
+          replaced_original_serial = $20::text
         WHERE id = $1`,
       [
         item.id,
@@ -1220,16 +1220,16 @@ async function receiveItemsFromVendor(client, {
     await client.query(
       `UPDATE tickets SET
           status = 'in_progress',
-          current_stage_id = COALESCE($2, current_stage_id),
+          current_stage_id = COALESCE($2::int, current_stage_id),
           assigned_user_id = NULL,
-          assigned_team_id = $3,
+          assigned_team_id = $3::int,
           current_location = 'Warehouse — Floor Manager',
           highlighted = TRUE,
-          highlighted_reason = $4,
+          highlighted_reason = $4::text,
           priority = 'high',
-          serial_number = COALESCE($5, serial_number),
-          ttspl_id = COALESCE($6, ttspl_id),
-          vendor_serial_id = COALESCE($7, vendor_serial_id),
+          serial_number = COALESCE($5::text, serial_number),
+          ttspl_id = COALESCE($6::text, ttspl_id),
+          vendor_serial_id = COALESCE($7::int, vendor_serial_id),
           updated_at = NOW()
         WHERE ticket_id = $1`,
       [
@@ -1349,9 +1349,9 @@ async function receiveItemsFromVendor(client, {
 
   await client.query(
     `UPDATE vendor_repair_delivery_challans SET
-        status = $2,
-        items_received_count = $3,
-        returned_at = CASE WHEN $2 = 'returned' THEN NOW() ELSE returned_at END,
+        status = $2::text,
+        items_received_count = $3::int,
+        returned_at = CASE WHEN $2::text = 'returned' THEN NOW() ELSE returned_at END,
         updated_at = NOW()
       WHERE dc_number = $1`,
     [dcNumber, nextStatus, received]
