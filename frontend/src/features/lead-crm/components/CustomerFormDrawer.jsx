@@ -8,9 +8,13 @@ import {
 import toast from 'react-hot-toast';
 import { INDIAN_STATES, resolveStateSelectValue } from '../../../constants/indianStates';
 import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
+import {
+  formatIndianMobileInput,
+  indianMobileError,
+  normalizeIndianMobile,
+} from '../../../utils/phoneValidation';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const MOBILE_RE = /^\d{10}$/;
 
 const empty = () => ({
   customer_name: '', email: '', customer_number: '', company_name: '',
@@ -96,7 +100,7 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
     applyPincodeAutofill(value, setForm, { pinKey, cityKey, stateKey });
 
   const setMobile = (k, v) => {
-    set(k, v.replace(/\D/g, '').slice(0, 10));
+    set(k, formatIndianMobileInput(v));
     setFieldErrors((prev) => {
       if (!prev[k]) return prev;
       const next = { ...prev };
@@ -107,6 +111,10 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
 
   const validateForm = () => {
     const errors = {};
+    const phoneErr = indianMobileError(form.customer_number, { required: true, label: 'Phone' });
+    if (phoneErr) errors.customer_number = phoneErr;
+    const whatsappErr = indianMobileError(form.whatsapp_number, { label: 'WhatsApp number' });
+    if (whatsappErr) errors.whatsapp_number = whatsappErr;
     const requiredSpokeFields = [
       ['spock_person_name', 'Name'],
       ['spock_person_email', 'Email'],
@@ -127,15 +135,18 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
         return;
       }
       if (key.endsWith('_email') && !EMAIL_RE.test(value)) errors[key] = `${errorLabel} is invalid`;
-      if (key.endsWith('_mobile') && !MOBILE_RE.test(value)) errors[key] = `${errorLabel} must be a 10-digit number`;
+      if (key.endsWith('_mobile')) {
+        const err = indianMobileError(value, { required: true, label: errorLabel });
+        if (err) errors[key] = err;
+      }
     });
     optionalEmailFields.forEach(([key, label]) => {
       const value = String(form[key] || '').trim();
       if (value && !EMAIL_RE.test(value)) errors[key] = `${label} is invalid`;
     });
     optionalMobileFields.forEach(([key, label]) => {
-      const value = String(form[key] || '').trim();
-      if (value && !MOBILE_RE.test(value)) errors[key] = `${label} must be a 10-digit number`;
+      const err = indianMobileError(form[key], { label });
+      if (err) errors[key] = err;
     });
     setFieldErrors(errors);
     return Object.keys(errors).length === 0;
@@ -201,10 +212,16 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
       toast.error('Address is required');
       return;
     }
+    const mobileErr = indianMobileError(addrForm.mobile_no, { label: 'Mobile number' });
+    if (mobileErr) {
+      toast.error(mobileErr);
+      return;
+    }
     setAddrSaving(true);
     try {
       const payload = {
         ...addrForm,
+        mobile_no: addrForm.mobile_no?.trim() ? normalizeIndianMobile(addrForm.mobile_no) : '',
         address_type: 'Shipping',
       };
       if (editingAddressId) {
@@ -252,6 +269,8 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
     try {
       const payload = {
         ...form,
+        customer_number: normalizeIndianMobile(form.customer_number),
+        whatsapp_number: form.whatsapp_number?.trim() ? normalizeIndianMobile(form.whatsapp_number) : '',
         shipping_same: shippingSame,
         shipping_address: shippingSame ? '' : form.shipping_address,
         shipping_city: shippingSame ? '' : form.shipping_city,
@@ -299,13 +318,21 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
         <div className="flex-1 overflow-y-auto p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
           {[
             ['customer_name', 'Customer Name'], ['company_name', 'Company'], ['email', 'Email'],
-            ['customer_number', 'Phone'], ['whatsapp_number', 'WhatsApp'], ['designation', 'Designation'],
+            ['customer_number', 'Phone', true], ['whatsapp_number', 'WhatsApp', true], ['designation', 'Designation'],
             ['gst_number', 'GST'], ['pan_number', 'PAN'],
-          ].map(([k, label]) => (
+          ].map(([k, label, mobile]) => (
             <div key={k}>
               <label className="text-xs text-gray-500">{label}</label>
-              <input value={form[k]} onChange={(e) => set(k, e.target.value)}
-                className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              <input
+                value={form[k]}
+                onChange={(e) => (mobile ? setMobile(k, e.target.value) : set(k, e.target.value))}
+                maxLength={mobile ? 10 : undefined}
+                inputMode={mobile ? 'numeric' : undefined}
+                className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm ${
+                  fieldErrors[k] ? 'border-red-300' : 'border-gray-200'
+                }`}
+              />
+              {fieldErrors[k] && <p className="mt-1 text-xs text-red-600">{fieldErrors[k]}</p>}
             </div>
           ))}
           <div>
@@ -471,8 +498,16 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
                           })}
                           className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" />
                       ) : (
-                        <input value={addrForm[k]} onChange={(e) => setAddrForm((f) => ({ ...f, [k]: e.target.value }))}
-                          className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" />
+                        <input
+                          value={addrForm[k]}
+                          onChange={(e) => setAddrForm((f) => ({
+                            ...f,
+                            [k]: k === 'mobile_no' ? formatIndianMobileInput(e.target.value) : e.target.value,
+                          }))}
+                          maxLength={k === 'mobile_no' ? 10 : undefined}
+                          inputMode={k === 'mobile_no' ? 'numeric' : undefined}
+                          className="w-full mt-1 border rounded-lg px-3 py-2 text-sm"
+                        />
                       )}
                     </div>
                   ))}

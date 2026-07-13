@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
 const { DEPLOYED_WITH_CUSTOMER_STATUSES } = require('../services/customerDeployedAssets');
+const { validateIndianMobile, normalizeIndianMobile } = require('../utils/phoneValidation');
 
 const PORTAL_ITEM_TYPE_MAP = {
   'Replacement Request': 'replacement',
@@ -339,6 +340,11 @@ exports.raiseTicket = async (req, res) => {
     const { subject, description, ticket_type, ttspl_id, photos, pickup_address } = req.body || {};
     if (!subject || !description || description.length < 20) {
       return res.status(400).json({ success: false, message: 'Subject and description (min 20 chars) required' });
+    }
+    if (pickup_address?.phone != null && String(pickup_address.phone).trim()) {
+      const phoneError = validateIndianMobile(pickup_address.phone, { label: 'Pickup phone' });
+      if (phoneError) return res.status(400).json({ success: false, message: phoneError });
+      pickup_address.phone = normalizeIndianMobile(pickup_address.phone);
     }
 
     const customerId = req.customer.customer_id;

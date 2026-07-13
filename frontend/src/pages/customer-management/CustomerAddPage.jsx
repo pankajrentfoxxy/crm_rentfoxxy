@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { INDIAN_STATES, slugifyState } from '../../constants/indianStates';
 import { applyPincodeAutofill } from '../../utils/pincodeLookup';
 import { createCustomerManagement, fetchCustomerManagementMeta } from '../../utils/customerManagementApi';
+import { formatIndianMobileInput, indianMobileError, normalizeIndianMobile } from '../../utils/phoneValidation';
 
 const emptyForm = {
   customer_name: '',
@@ -60,6 +61,12 @@ export default function CustomerAddPage() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    const phoneErr = indianMobileError(form.customer_number, { required: true, label: 'Customer number' });
+    const contactErr = indianMobileError(form.contact_person_number, { required: true, label: 'Contact number' });
+    if (phoneErr || contactErr) {
+      setError(phoneErr || contactErr);
+      return;
+    }
     setSaving(true);
     setError('');
     try {
@@ -67,6 +74,8 @@ export default function CustomerAddPage() {
       Object.entries(form).forEach(([key, value]) => {
         if (key.includes('_state')) {
           payload.append(key, slugifyState(value));
+        } else if (key === 'customer_number' || key === 'contact_person_number') {
+          payload.append(key, normalizeIndianMobile(value));
         } else {
           payload.append(key, value ?? '');
         }
@@ -99,7 +108,7 @@ export default function CustomerAddPage() {
             </Field>
             <Field label="Customer Number" required>
               <input required type="tel" maxLength={10} className="field-input" value={form.customer_number}
-                onChange={(e) => update('customer_number', e.target.value.replace(/\D/g, '').slice(0, 10))} placeholder="Customer number" />
+                onChange={(e) => update('customer_number', formatIndianMobileInput(e.target.value))} placeholder="Customer number" />
             </Field>
             <Field label="Customer Email" required>
               <input required type="email" className="field-input" value={form.email} onChange={(e) => update('email', e.target.value)} placeholder="Email" />
@@ -109,7 +118,7 @@ export default function CustomerAddPage() {
             </Field>
             <Field label="Contact Person Number" required>
               <input required type="tel" maxLength={10} className="field-input" value={form.contact_person_number}
-                onChange={(e) => update('contact_person_number', e.target.value.replace(/\D/g, '').slice(0, 10))} />
+                onChange={(e) => update('contact_person_number', formatIndianMobileInput(e.target.value))} />
             </Field>
             <Field label="Password" required>
               <input required readOnly className="field-input bg-gray-50" value={form.password} />

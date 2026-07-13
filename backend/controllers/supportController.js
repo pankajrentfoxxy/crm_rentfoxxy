@@ -17,6 +17,19 @@ const { nextDocumentNumber } = require('../services/salesManagementService');
 const { regenerateReturnDcPdf, regenerateReturnDcPdfByRdc } = require('../services/returnDcPdfService');
 const replacementFlow = require('../services/supportReplacementFlowService');
 const { preserveCustomerAssetsOnCancel, forceRestoreCustomerAssetsOnCancel } = require('../services/supportCancelInventoryService');
+const { validateIndianMobile, normalizeIndianMobile } = require('../utils/phoneValidation');
+
+function normalizeSupportPhoneFields(body) {
+    const out = { ...body };
+    for (const key of ['customer_phone', 'ticket_phone_override', 'ticket_alt_phone']) {
+        if (out[key] != null && String(out[key]).trim()) {
+            const err = validateIndianMobile(out[key], { label: key === 'ticket_alt_phone' ? 'Alternate phone' : 'Phone' });
+            if (err) return { ok: false, error: err };
+            out[key] = normalizeIndianMobile(out[key]);
+        }
+    }
+    return { ok: true, value: out };
+}
 
 const ITEM_OPEN_STATUSES = new Set(['open', 'work_done', 'awaiting_otp']);
 const TICKET_OPEN = 'open';
@@ -970,6 +983,16 @@ exports.createTicket = async (req, res) => {
         return res.status(400).json({ success: false, message: 'customer_id and items are required' });
     }
 
+    const phoneNorm = normalizeSupportPhoneFields({
+        customer_phone,
+        ticket_phone_override,
+        ticket_alt_phone,
+    });
+    if (!phoneNorm.ok) {
+        return res.status(400).json({ success: false, message: phoneNorm.error });
+    }
+    const phones = phoneNorm.value;
+
     const ticketCategory = VALID_ITEM_TYPES.has(ticketCategoryRaw)
         ? ticketCategoryRaw
         : (VALID_ITEM_TYPES.has(items[0]?.item_type) ? items[0].item_type : null);
@@ -1007,13 +1030,13 @@ exports.createTicket = async (req, res) => {
             [
                 customer_id,
                 customer_name || null,
-                customer_phone || null,
+                phones.customer_phone || null,
                 initialStatus,
                 req.user.user_id,
                 ['normal', 'high', 'urgent'].includes(priority) ? priority : 'normal',
                 top_level_remarks || null,
-                ticket_phone_override || customer_phone || null,
-                ticket_alt_phone || null,
+                phones.ticket_phone_override || phones.customer_phone || null,
+                phones.ticket_alt_phone || null,
                 ticket_email || null,
                 ticket_address || null,
                 ticketCategory,
@@ -1963,6 +1986,14 @@ exports.updateTicket = async (req, res) => {
         new_items: newItems,
         remove_item_ids: removeItemIds
     } = req.body || {};
+    const phoneNorm = normalizeSupportPhoneFields({
+        ticket_phone_override,
+        ticket_alt_phone,
+    });
+    if (!phoneNorm.ok) {
+        return res.status(400).json({ success: false, message: phoneNorm.error });
+    }
+    const phones = phoneNorm.value;
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
@@ -1979,8 +2010,8 @@ exports.updateTicket = async (req, res) => {
              WHERE id = $1`,
             [
                 ticketId,
-                ticket_phone_override ?? null,
-                ticket_alt_phone ?? null,
+                phones.ticket_phone_override ?? null,
+                phones.ticket_alt_phone ?? null,
                 ticket_email ?? null,
                 ticket_address ?? null,
                 priority ?? null,

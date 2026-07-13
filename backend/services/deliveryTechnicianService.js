@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const pool = require('../config/db');
+const { parseIndianMobile } = require('../utils/phoneValidation');
 
 const UPLOAD_SUBDIR = 'delivery-man';
 const uploadRoot = path.join(__dirname, '..', '..', 'uploads', UPLOAD_SUBDIR);
@@ -148,12 +149,13 @@ async function createTechnician(body, files = {}) {
   const firstName = (body.first_name || body.f_name || '').trim();
   const lastName = (body.last_name || body.l_name || '').trim();
   const email = (body.email || '').trim();
-  const phone = (body.phone || '').trim();
+  const phoneParsed = parseIndianMobile(body.phone, { required: true, label: 'Phone' });
+  if (!phoneParsed.ok) return { ok: false, message: phoneParsed.error };
+  const phone = phoneParsed.value;
   const countryCode = (body.country_code || '91').trim();
 
   if (!firstName) return { ok: false, message: 'First name is required' };
   if (!lastName) return { ok: false, message: 'Last name is required' };
-  if (!phone) return { ok: false, message: 'Phone is required' };
   if (!email) return { ok: false, message: 'Email is required' };
 
   const unique = await assertUniquePhoneEmail({ email, phone, countryCode });
@@ -211,7 +213,12 @@ async function updateTechnician(id, body, files = {}) {
   const firstName = (body.first_name || body.f_name || existing.first_name || '').trim();
   const lastName = (body.last_name || body.l_name || existing.last_name || '').trim();
   const email = (body.email || existing.email || '').trim();
-  const phone = (body.phone || existing.phone || '').trim();
+  let phone = existing.phone;
+  if (body.phone !== undefined) {
+    const phoneParsed = parseIndianMobile(body.phone, { required: true, label: 'Phone' });
+    if (!phoneParsed.ok) return { ok: false, message: phoneParsed.error };
+    phone = phoneParsed.value;
+  }
   const countryCode = (body.country_code || existing.country_code || '91').trim();
 
   if (!firstName) return { ok: false, message: 'First name is required' };

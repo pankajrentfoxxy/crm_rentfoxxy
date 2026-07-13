@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 import api from '../utils/api';
+import { formatIndianMobileInput, indianMobileError, normalizeIndianMobile } from '../utils/phoneValidation';
 
 const ISSUE_TYPES = [
   'Laptop Not Working', 'Display Issue', 'Keyboard Issue', 'Battery Issue',
@@ -77,6 +78,13 @@ export default function SupportPage() {
       toast.error('Please provide the pickup address (address, city, pincode)');
       return;
     }
+    if (isReturn && pickupAddr.phone?.trim()) {
+      const phoneErr = indianMobileError(pickupAddr.phone, { label: 'Pickup phone' });
+      if (phoneErr) {
+        toast.error(phoneErr);
+        return;
+      }
+    }
     setBusy(true);
     try {
       const { data } = await api.post('/tickets', {
@@ -84,7 +92,9 @@ export default function SupportPage() {
         description,
         ticket_type: ticketType,
         ttspl_id: ttsplId || undefined,
-        pickup_address: isReturn ? pickupAddr : undefined,
+        pickup_address: isReturn
+          ? { ...pickupAddr, phone: pickupAddr.phone?.trim() ? normalizeIndianMobile(pickupAddr.phone) : '' }
+          : undefined,
         photos: [],
       });
       toast.success(`Ticket ${data.ticket_number} created`);
@@ -129,7 +139,7 @@ export default function SupportPage() {
             <p className="text-xs text-slate-500">Our team will collect the laptop from this address.</p>
             <div className="grid grid-cols-2 gap-2">
               <input placeholder="Contact name" value={pickupAddr.name} onChange={(e) => setPickupAddr((a) => ({ ...a, name: e.target.value }))} className="border rounded-lg px-3 py-2 text-sm" />
-              <input placeholder="Phone" value={pickupAddr.phone} onChange={(e) => setPickupAddr((a) => ({ ...a, phone: e.target.value }))} className="border rounded-lg px-3 py-2 text-sm" />
+              <input placeholder="Phone" value={pickupAddr.phone} onChange={(e) => setPickupAddr((a) => ({ ...a, phone: formatIndianMobileInput(e.target.value) }))} className="border rounded-lg px-3 py-2 text-sm" maxLength={10} inputMode="numeric" />
             </div>
             <input placeholder="Address *" value={pickupAddr.address} onChange={(e) => setPickupAddr((a) => ({ ...a, address: e.target.value }))} className="w-full border rounded-lg px-3 py-2 text-sm" />
             <div className="grid grid-cols-3 gap-2">

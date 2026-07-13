@@ -1,0 +1,39 @@
+{
+  "generated_at": "2026-07-13T07:56:54.456Z",
+  "lead_ids": [
+    914,
+    915,
+    916,
+    917,
+    918,
+    919,
+    920,
+    921,
+    922
+  ],
+  "row_counts": {
+    "users": 2,
+    "leads": 9,
+    "lead_addresses": 0,
+    "lead_activities": 81,
+    "lead_remarks": 23,
+    "lead_assignments": 3,
+    "lead_followup_notifications": 0,
+    "lead_company_research": 9,
+    "lead_orders": 0,
+    "email_lead_ingestion_log": 17,
+    "customers": 2,
+    "customer_addresses": 1,
+    "customer_documents": 0,
+    "email_queue": 0
+  },
+  "attachment_files": [],
+  "empty_tables": [
+    "lead_addresses",
+    "lead_followup_notifications",
+    "lead_orders",
+    "customer_documents",
+    "email_queue",
+    "sales_quotations"
+  ]
+}

@@ -12,6 +12,7 @@ import { INDIAN_STATE_OPTIONS, matchIndianState, slugifyState } from '../../../c
 import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
 import { INDIAN_STATES, resolveStateSelectValue } from '../../../constants/indianStates';
 import { GSTIN_RE, IFSC_RE } from '../vendorMgmtUi';
+import { formatIndianMobileInput, indianMobileError } from '../../../utils/phoneValidation';
 
 const STATE_OPTIONS = INDIAN_STATE_OPTIONS;
 
@@ -279,7 +280,16 @@ export default function VendorFormModal({ open, mode, vendorId, onClose, onSaved
       if (body.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email)) e.email = 'Invalid email';
     }
     if (field === 'number') {
-      if (!/^\d{10}$/.test(String(body.number || ''))) e.number = 'Enter a valid 10-digit phone';
+      const err = indianMobileError(body.number, { required: true, label: 'Phone' });
+      if (err) e.number = err;
+    }
+    if (field === 'contact_person_phone') {
+      const err = indianMobileError(body.contact_person_phone, { label: 'Contact person phone' });
+      if (err) e.contact_person_phone = err;
+    }
+    if (field === 'alternate_phone') {
+      const err = indianMobileError(body.alternate_phone, { label: 'Alternate phone' });
+      if (err) e.alternate_phone = err;
     }
     if (field === 'bank_ifsc_code') {
       const ifsc = String(body.bank_ifsc_code || '').trim().toUpperCase();
@@ -315,7 +325,12 @@ export default function VendorFormModal({ open, mode, vendorId, onClose, onSaved
     else if (!GSTIN_RE.test(g)) e.gst_number = 'Enter a valid 15-character GSTIN';
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(body.email || '').trim())) e.email = 'Invalid email';
-    if (!/^\d{10}$/.test(String(body.number || ''))) e.number = 'Enter a valid 10-digit phone';
+    const numberErr = indianMobileError(body.number, { required: true, label: 'Phone' });
+    if (numberErr) e.number = numberErr;
+    const contactErr = indianMobileError(body.contact_person_phone, { label: 'Contact person phone' });
+    if (contactErr) e.contact_person_phone = contactErr;
+    const altErr = indianMobileError(body.alternate_phone, { label: 'Alternate phone' });
+    if (altErr) e.alternate_phone = altErr;
 
     const ifsc = String(body.bank_ifsc_code || '').trim().toUpperCase();
     if (!IFSC_RE.test(ifsc)) e.bank_ifsc_code = 'IFSC must be 11 characters';
@@ -598,7 +613,7 @@ export default function VendorFormModal({ open, mode, vendorId, onClose, onSaved
                   label="Primary Phone"
                   required
                   value={form.number}
-                  onChange={(v) => onChange('number', v.replace(/\D/g, '').slice(0, 10))}
+                  onChange={(v) => onChange('number', formatIndianMobileInput(v))}
                   onBlur={() => touch('number')}
                   error={touched.number ? fieldErrors.number : undefined}
                   inputMode="numeric"
@@ -611,12 +626,12 @@ export default function VendorFormModal({ open, mode, vendorId, onClose, onSaved
                 <TextInput
                   label="Contact Person Phone"
                   value={form.contact_person_phone}
-                  onChange={(v) => onChange('contact_person_phone', v.replace(/\D/g, '').slice(0, 10))}
+                  onChange={(v) => onChange('contact_person_phone', formatIndianMobileInput(v))}
                 />
                 <TextInput
                   label="Alternate Phone"
                   value={form.alternate_phone}
-                  onChange={(v) => onChange('alternate_phone', v)}
+                  onChange={(v) => onChange('alternate_phone', formatIndianMobileInput(v))}
                 />
               </div>
             </SectionCard>

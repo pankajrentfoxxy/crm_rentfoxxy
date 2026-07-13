@@ -8,6 +8,7 @@ import { filterAssignableUsers } from '../leadCrmUtils';
 import { INDIAN_STATES } from '../../../constants/indianStates';
 import { createLead, getAssignableUsers, updateLeadBasic, updateLeadProfile } from '../leadCrmApi';
 import toast from 'react-hot-toast';
+import { formatIndianMobileInput, indianMobileError, normalizeIndianMobile } from '../../../utils/phoneValidation';
 
 const emptyForm = () => ({
   company_name: '', company_brand: '', name: '', designation: '', email: '', phone: '', whatsapp_number: '',
@@ -82,8 +83,10 @@ export default function LeadFormDrawer({ open, lead, onClose, onSaved }) {
   const validate = () => {
     const e = {};
     if (!form.company_name?.trim()) e.company_name = 'Company name is required';
-    if (!form.phone?.trim()) e.phone = 'Phone is required';
-    else if (!/^\d{10}$/.test(form.phone.replace(/\D/g, '').slice(-10))) e.phone = 'Enter 10-digit phone';
+    const phoneErr = indianMobileError(form.phone, { required: true, label: 'Phone' });
+    if (phoneErr) e.phone = phoneErr;
+    const whatsappErr = indianMobileError(form.whatsapp_number, { label: 'WhatsApp number' });
+    if (whatsappErr) e.whatsapp_number = whatsappErr;
     if (!form.source) e.source = 'Source is required';
     if (!form.inquiry_type) e.inquiry_type = 'Inquiry type is required';
     setErrors(e);
@@ -96,6 +99,8 @@ export default function LeadFormDrawer({ open, lead, onClose, onSaved }) {
     try {
       const payload = {
         ...form,
+        phone: normalizeIndianMobile(form.phone),
+        whatsapp_number: form.whatsapp_number?.trim() ? normalizeIndianMobile(form.whatsapp_number) : '',
         quantity_required: form.quantity_required ? parseInt(form.quantity_required, 10) : null,
         monthly_budget: form.monthly_budget ? parseFloat(form.monthly_budget) : null,
         rental_duration: form.rental_duration ? parseInt(form.rental_duration, 10) : null,
@@ -158,8 +163,15 @@ export default function LeadFormDrawer({ open, lead, onClose, onSaved }) {
         <textarea value={form[key]} onChange={(e) => set(key, e.target.value)} rows={opts.rows || 2}
           className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
       ) : (
-        <input type={opts.type || 'text'} value={form[key]} onChange={(e) => set(key, e.target.value)} onBlur={validate}
-          className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm ${errors[key] ? 'border-red-400' : 'border-gray-200'}`} />
+        <input
+          type={opts.mobile ? 'tel' : (opts.type || 'text')}
+          inputMode={opts.mobile ? 'numeric' : undefined}
+          maxLength={opts.mobile ? 10 : undefined}
+          value={form[key]}
+          onChange={(e) => set(key, opts.mobile ? formatIndianMobileInput(e.target.value) : e.target.value)}
+          onBlur={validate}
+          className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm ${errors[key] ? 'border-red-400' : 'border-gray-200'}`}
+        />
       )}
       {errors[key] && <p className="text-xs text-red-500 mt-0.5">{errors[key]}</p>}
     </div>
@@ -182,8 +194,8 @@ export default function LeadFormDrawer({ open, lead, onClose, onSaved }) {
               {field('name', 'Contact Name', { required: true })}
               {field('designation', 'Designation')}
               {field('email', 'Email', { type: 'email' })}
-              {field('phone', 'Phone', { required: true })}
-              {field('whatsapp_number', 'WhatsApp')}
+              {field('phone', 'Phone', { required: true, mobile: true })}
+              {field('whatsapp_number', 'WhatsApp', { mobile: true })}
               {field('source', 'Source', { type: 'select', options: LEAD_SOURCES, required: true })}
               {field('inquiry_type', 'Inquiry Type', { type: 'select', options: INQUIRY_TYPES, required: true })}
               {field('city', 'City')}

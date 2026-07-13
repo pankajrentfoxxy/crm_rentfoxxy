@@ -7,6 +7,11 @@ const {
   DEPLOYED_WITH_CUSTOMER_STATUSES,
   displayDeployedStatus,
 } = require('../services/customerDeployedAssets');
+const {
+  MOBILE_RE,
+  normalizeIndianMobile,
+  validateIndianMobile,
+} = require('../utils/phoneValidation');
 
 function parseDetails(value) {
   if (value == null) return {};
@@ -19,7 +24,6 @@ function parseDetails(value) {
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const MOBILE_RE = /^\d{10}$/;
 
 const FINANCE_SPOCK_DETAIL_KEYS = [
   'finance_contact_name',
@@ -62,7 +66,7 @@ function validateFinanceSpockContactFields(body) {
       continue;
     }
     if (key.endsWith('_email') && !EMAIL_RE.test(value)) errors.push(`${label} is invalid`);
-    if (key.endsWith('_mobile') && !MOBILE_RE.test(normalizeMobileNumber(value))) {
+    if (key.endsWith('_mobile') && !MOBILE_RE.test(normalizeIndianMobile(value))) {
       errors.push(`${label} must be a 10-digit number`);
     }
   }
@@ -72,7 +76,7 @@ function validateFinanceSpockContactFields(body) {
   }
   for (const [key, label] of optionalMobileFields) {
     const value = String(body[key] || '').trim();
-    if (value && !MOBILE_RE.test(normalizeMobileNumber(value))) {
+    if (value && !MOBILE_RE.test(normalizeIndianMobile(value))) {
       errors.push(`${label} must be a 10-digit number`);
     }
   }
@@ -84,7 +88,7 @@ function applyFinanceSpockDetails(details, body) {
     const raw = spockFieldFromBody(body, key);
     if (raw === undefined) continue;
     let value = String(raw || '').trim();
-    if (key.endsWith('_mobile') && value) value = normalizeMobileNumber(value);
+    if (key.endsWith('_mobile') && value) value = normalizeIndianMobile(value);
     details[key] = value || null;
   }
   for (const legacyKey of LEGACY_EXPOX_DETAIL_KEYS) {
@@ -93,9 +97,23 @@ function applyFinanceSpockDetails(details, body) {
   return details;
 }
 
-function normalizeMobileNumber(value) {
-  const digits = String(value || '').replace(/\D/g, '').slice(-10);
-  return digits.length === 10 ? digits : String(value || '').trim();
+function validateCustomerPhoneFields(body, { requirePrimary = false } = {}) {
+  const errors = [];
+  const primary = validateIndianMobile(body.customer_number ?? body.phone, {
+    required: requirePrimary,
+    label: 'Phone',
+  });
+  if (primary) errors.push(primary);
+  const contact = validateIndianMobile(body.contact_person_number, {
+    required: requirePrimary,
+    label: 'Contact phone',
+  });
+  if (contact) errors.push(contact);
+  const whatsapp = validateIndianMobile(body.whatsapp_number, { label: 'WhatsApp number' });
+  if (whatsapp) errors.push(whatsapp);
+  const addrMobile = validateIndianMobile(body.mobile_no, { label: 'Mobile number' });
+  if (addrMobile) errors.push(addrMobile);
+  return errors;
 }
 
 function generatePassword(length = 10) {
@@ -575,6 +593,11 @@ exports.addCustomerAddress = async (req, res) => {
     if (!body.address) {
       return res.status(400).json({ success: false, message: 'Address is required' });
     }
+    const phoneErrors = validateCustomerPhoneFields(body);
+    if (phoneErrors.length) {
+      return res.status(400).json({ success: false, message: phoneErrors[0] });
+    }
+    const mobileNo = body.mobile_no ? normalizeIndianMobile(body.mobile_no) : null;
     const result = await pool.query(
       `INSERT INTO customer_addresses
         (customer_id, concern_person, mobile_no, address, city, state, pincode, is_head_office, address_type)
@@ -583,7 +606,7 @@ exports.addCustomerAddress = async (req, res) => {
       [
         customerId,
         body.concern_person || null,
-        body.mobile_no || null,
+        mobileNo,
         body.address,
         body.city || null,
         body.state || null,
@@ -613,6 +636,11 @@ exports.updateCustomerAddress = async (req, res) => {
     if (!body.address || !String(body.address).trim()) {
       return res.status(400).json({ success: false, message: 'Address is required' });
     }
+    const phoneErrors = validateCustomerPhoneFields(body);
+    if (phoneErrors.length) {
+      return res.status(400).json({ success: false, message: phoneErrors[0] });
+    }
+    const mobileNo = body.mobile_no ? normalizeIndianMobile(body.mobile_no) : null;
     const result = await pool.query(
       `UPDATE customer_addresses
           SET concern_person = $1,
@@ -627,7 +655,7 @@ exports.updateCustomerAddress = async (req, res) => {
         RETURNING *`,
       [
         body.concern_person || null,
-        body.mobile_no || null,
+        mobileNo,
         String(body.address).trim(),
         body.city || null,
         body.state || null,
@@ -729,9 +757,16 @@ exports.storeCustomer = async (req, res) => {
       }
     }
 
+    const phoneErrors = validateCustomerPhoneFields(body, { requirePrimary: true });
+    if (phoneErrors.length) {
+      return res.status(400).json({ success: false, message: phoneErrors[0] });
+    }
+    const customerNumber = normalizeIndianMobile(body.customer_number);
+    const contactPersonNumber = normalizeIndianMobile(body.contact_person_number);
+
     const billingAddress = {
       name: body.customer_name,
-      phone: body.customer_number,
+      phone: customerNumber,
       country: 'India',
       state: body.billing_state,
       city: body.billing_city,
@@ -741,7 +776,7 @@ exports.storeCustomer = async (req, res) => {
 
     const shippingAddresses = [{
       name: body.contact_person_name,
-      phone: body.contact_person_number,
+      phone: contactPersonNumber,
       country: 'India',
       state: body.shipping_state,
       city: body.shipping_city,
@@ -781,7 +816,7 @@ exports.storeCustomer = async (req, res) => {
 
     const details = {
       contact_person_name: body.contact_person_name,
-      contact_person_number: body.contact_person_number,
+      contact_person_number: contactPersonNumber,
       business_type: body.business_type,
       pan_card_number: body.pan_card_number || null,
       billing_address: billingAddress,
@@ -800,7 +835,7 @@ exports.storeCustomer = async (req, res) => {
         body.customer_name,
         body.customer_name,
         body.email,
-        body.customer_number,
+        customerNumber,
         body.gst_number || null,
         billingAddress.address,
         body.business_type === 'supplier' ? 'Supplier' : 'Regular',
@@ -834,11 +869,20 @@ exports.updateCustomer = async (req, res) => {
     if (contactValidationErrors.length) {
       return res.status(400).json({ success: false, message: contactValidationErrors[0] });
     }
+    const phoneErrors = validateCustomerPhoneFields(body);
+    if (phoneErrors.length) {
+      return res.status(400).json({ success: false, message: phoneErrors[0] });
+    }
 
     const name = body.customer_name || body.name || row.name;
     const companyName = body.company_name || row.company_name;
     const email = body.email ?? row.email;
-    const phone = body.customer_number || body.phone || row.phone;
+    const phone = body.customer_number != null || body.phone != null
+      ? normalizeIndianMobile(body.customer_number ?? body.phone)
+      : row.phone;
+    const whatsappNumber = body.whatsapp_number != null
+      ? (String(body.whatsapp_number).trim() ? normalizeIndianMobile(body.whatsapp_number) : null)
+      : row.whatsapp_number;
     const gstNo = body.gst_number ?? row.gst_no;
     const panNumber = body.pan_number || body.pan_card_number || row.pan_number;
 
@@ -865,7 +909,7 @@ exports.updateCustomer = async (req, res) => {
         body.shipping_city ?? row.shipping_city,
         body.shipping_state ?? row.shipping_state,
         body.shipping_pincode ?? row.shipping_pincode,
-        body.whatsapp_number ?? row.whatsapp_number,
+        whatsappNumber,
         body.designation ?? row.designation,
         body.portal_enabled !== undefined ? !!body.portal_enabled : null,
         body.notes ?? null,

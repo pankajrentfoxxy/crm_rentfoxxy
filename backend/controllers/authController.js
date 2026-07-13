@@ -5,6 +5,13 @@ const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
 const { buildEffectivePermissionsForUser, upsertUserPermissions: upsertUserPermissionsService } = require('../services/permissionService');
 const { getDisplayTeams, normalizeTeamIds } = require('../utils/teamUtils');
+const { parseIndianMobile } = require('../utils/phoneValidation');
+
+function resolveMobileNo(mobile_no, { required = false } = {}) {
+  const parsed = parseIndianMobile(mobile_no, { required, label: 'Mobile number' });
+  if (!parsed.ok) return parsed;
+  return { ok: true, value: parsed.value };
+}
 
 const MANAGEABLE_ROLES = [
   'team_member', 'team_lead', 'sales', 'floor_manager', 'procurement', 'qc', 'dispatch',
@@ -91,7 +98,11 @@ exports.register = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const password_hash = await bcrypt.hash(password, salt);
 
-    const mobileNo = mobile_no ? String(mobile_no).trim() : null;
+    const mobileParsed = resolveMobileNo(mobile_no);
+    if (!mobileParsed.ok) {
+      return res.status(400).json({ success: false, message: mobileParsed.error });
+    }
+    const mobileNo = mobileParsed.value;
     const result = await pool.query(
       `INSERT INTO users (
          name, email, password_hash, role, team_id, active, permissions, mobile_no,
@@ -391,7 +402,11 @@ exports.updateMobile = async (req, res) => {
       return res.status(403).json({ success: false, message: 'You cannot modify this user' });
     }
 
-    const mobileNo = mobile_no ? String(mobile_no).trim() : null;
+    const mobileParsed = resolveMobileNo(mobile_no);
+    if (!mobileParsed.ok) {
+      return res.status(400).json({ success: false, message: mobileParsed.error });
+    }
+    const mobileNo = mobileParsed.value;
     const result = await pool.query(
       `UPDATE users SET mobile_no = $1 WHERE user_id = $2 RETURNING user_id, name, mobile_no`,
       [mobileNo, id]
@@ -594,6 +609,15 @@ exports.updateUser = async (req, res) => {
       }
     }
 
+    let normalizedMobile = undefined;
+    if (mobile_no != null) {
+      const mobileParsed = resolveMobileNo(mobile_no);
+      if (!mobileParsed.ok) {
+        return res.status(400).json({ success: false, message: mobileParsed.error });
+      }
+      normalizedMobile = mobileParsed.value;
+    }
+
     await pool.query(
       `UPDATE users SET
          name = COALESCE($1, name),
@@ -609,7 +633,7 @@ exports.updateUser = async (req, res) => {
          updated_at = NOW()
        WHERE user_id = $11`,
       [
-        name || null, email || null, mobile_no != null ? String(mobile_no).trim() : null,
+        name || null, email || null, normalizedMobile,
         role ? String(role).trim().toLowerCase() : null,
         team_id != null ? team_id : null,
         designation || null, department || null, employee_id || null,
@@ -848,13 +872,16 @@ exports.registerCustomer = async (req, res) => {
 
     const salt = await bcrypt.genSalt(10);
     const password_hash = await bcrypt.hash(password, salt);
-    const mobileNo = mobile_no ? String(mobile_no).trim() : null;
+    const mobileParsed = resolveMobileNo(mobile_no);
+    if (!mobileParsed.ok) {
+      return res.status(400).json({ success: false, message: mobileParsed.error });
+    }
 
     const result = await pool.query(
       `INSERT INTO users (name, email, password_hash, role, user_type, status, active, mobile_no)
        VALUES ($1, $2, $3, 'customer', 'customer', 'active', true, $4)
        RETURNING user_id, name, email, role, user_type, status, mobile_no, created_at`,
-      [name, email, password_hash, mobileNo]
+      [name, email, password_hash, mobileParsed.value]
     );
 
     res.status(201).json({ success: true, user: result.rows[0] });
@@ -880,7 +907,10 @@ exports.registerVendor = async (req, res) => {
 
     const salt = await bcrypt.genSalt(10);
     const password_hash = await bcrypt.hash(password, salt);
-    const mobileNo = mobile_no ? String(mobile_no).trim() : null;
+    const mobileParsed = resolveMobileNo(mobile_no, { required: true });
+    if (!mobileParsed.ok) {
+      return res.status(400).json({ success: false, message: mobileParsed.error });
+    }
 
     const result = await pool.query(
       `INSERT INTO users (name, email, password_hash, role, user_type, status, active, mobile_no, company_name, gst_number)
@@ -890,7 +920,7 @@ exports.registerVendor = async (req, res) => {
         name,
         email,
         password_hash,
-        mobileNo,
+        mobileParsed.value,
         company_name ? String(company_name).trim() : null,
         gst_number ? String(gst_number).trim() : null,
       ]
@@ -927,13 +957,16 @@ exports.registerTechnician = async (req, res) => {
 
     const salt = await bcrypt.genSalt(10);
     const password_hash = await bcrypt.hash(password, salt);
-    const mobileNo = mobile_no ? String(mobile_no).trim() : null;
+    const mobileParsed = resolveMobileNo(mobile_no);
+    if (!mobileParsed.ok) {
+      return res.status(400).json({ success: false, message: mobileParsed.error });
+    }
 
     const result = await pool.query(
       `INSERT INTO users (name, email, password_hash, role, user_type, status, active, mobile_no)
        VALUES ($1, $2, $3, 'technician', 'technician', 'active', true, $4)
        RETURNING user_id, name, email, role, user_type, status, mobile_no, created_at`,
-      [name, email, password_hash, mobileNo]
+      [name, email, password_hash, mobileParsed.value]
     );
 
     const user = result.rows[0];

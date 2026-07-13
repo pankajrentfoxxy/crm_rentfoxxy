@@ -3,6 +3,7 @@
  * Backs the entity separation — GSTIN, legal name, address, logo, number prefixes.
  */
 const pool = require('../config/db');
+const { validateIndianMobile, normalizeIndianMobile, parseIndianMobile } = require('../utils/phoneValidation');
 
 exports.listCompanies = async (_req, res) => {
   try {
@@ -22,6 +23,11 @@ exports.updateCompany = async (req, res) => {
   try {
     const { code } = req.params;
     const b = req.body || {};
+    if (b.phone != null && String(b.phone).trim()) {
+      const phoneError = validateIndianMobile(b.phone, { label: 'Phone' });
+      if (phoneError) return res.status(400).json({ success: false, message: phoneError });
+      b.phone = normalizeIndianMobile(b.phone);
+    }
     const { rows } = await pool.query(
       `UPDATE companies SET
          legal_name = COALESCE($2, legal_name),

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, Check, ChevronDown, ChevronUp, Loader2, Search } from 'lucide-react';
 import api from '../../utils/api';
+import { formatIndianMobileInput, indianMobileError, normalizeIndianMobile } from '../../utils/phoneValidation';
 import { formatAddress } from './utils';
 import PickupSetupForm from './components/PickupSetupForm';
 import './support.css';
@@ -67,7 +68,7 @@ function CustomerCard({
             <div className="grid gap-2 mt-2 sm:grid-cols-2">
                 <label className="support-label-compact">
                     <span className="support-label-text">Phone</span>
-                    <input className="support-field support-field-compact" value={ticketPhone} onChange={(e) => setTicketPhone(e.target.value)} />
+                    <input className="support-field support-field-compact" value={ticketPhone} onChange={(e) => setTicketPhone(formatIndianMobileInput(e.target.value))} maxLength={10} inputMode="numeric" />
                 </label>
                 <label className="support-label-compact">
                     <span className="support-label-text">Priority</span>
@@ -86,7 +87,7 @@ function CustomerCard({
                 <div className="grid gap-2 mt-2">
                     <label className="support-label-compact">
                         <span className="support-label-text">Alt phone</span>
-                        <input className="support-field support-field-compact" value={ticketAltPhone} onChange={(e) => setTicketAltPhone(e.target.value)} />
+                        <input className="support-field support-field-compact" value={ticketAltPhone} onChange={(e) => setTicketAltPhone(formatIndianMobileInput(e.target.value))} maxLength={10} inputMode="numeric" />
                     </label>
                     <label className="support-label-compact">
                         <span className="support-label-text">Email</span>
@@ -293,9 +294,25 @@ export default function SupportTicketCreate() {
         };
     }, [customer, ticketPhone]);
 
+    const validateSupportPhones = () => {
+        const phoneErr = indianMobileError(ticketPhone, { label: 'Phone' });
+        if (phoneErr) return phoneErr;
+        const altErr = indianMobileError(ticketAltPhone, { label: 'Alternate phone' });
+        if (altErr) return altErr;
+        return null;
+    };
+
+    const normalizedTicketPhone = () => (ticketPhone?.trim() ? normalizeIndianMobile(ticketPhone) : '');
+    const normalizedAltPhone = () => (ticketAltPhone?.trim() ? normalizeIndianMobile(ticketAltPhone) : '');
+
     const submitPickupTicket = async (pickupPayload) => {
         if (!customer || !selectedCount) {
             alert('Select at least one laptop');
+            return;
+        }
+        const phoneValidationError = validateSupportPhones();
+        if (phoneValidationError) {
+            alert(phoneValidationError);
             return;
         }
         setSaving(true);
@@ -313,10 +330,10 @@ export default function SupportTicketCreate() {
             const { data } = await api.post('/support/tickets/pickup-ticket', {
                 customer_id: customer.customer_id,
                 customer_name: customer.customer_name,
-                customer_phone: ticketPhone,
+                customer_phone: normalizedTicketPhone() || customer.contact_person_number || customer.customer_number,
                 priority,
-                ticket_phone_override: ticketPhone,
-                ticket_alt_phone: ticketAltPhone,
+                ticket_phone_override: normalizedTicketPhone(),
+                ticket_alt_phone: normalizedAltPhone() || null,
                 ticket_email: ticketEmail,
                 ticket_address: ticketAddress,
                 machines,
@@ -362,6 +379,11 @@ export default function SupportTicketCreate() {
             alert('Select at least one machine');
             return;
         }
+        const phoneValidationError = validateSupportPhones();
+        if (phoneValidationError) {
+            alert(phoneValidationError);
+            return;
+        }
         setSaving(true);
         try {
             const { data } = await api.post('/support/tickets', {
@@ -370,8 +392,8 @@ export default function SupportTicketCreate() {
                 customer_phone: customer.contact_person_number || customer.customer_number,
                 ticket_category: ticketCategory,
                 priority,
-                ticket_phone_override: ticketPhone,
-                ticket_alt_phone: ticketAltPhone,
+                ticket_phone_override: normalizedTicketPhone(),
+                ticket_alt_phone: normalizedAltPhone() || null,
                 ticket_email: ticketEmail,
                 ticket_address: ticketAddress,
                 items: buildItems()

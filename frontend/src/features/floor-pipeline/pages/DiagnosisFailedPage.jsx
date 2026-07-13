@@ -13,6 +13,7 @@ import { fetchDeliveryTechnicians } from '../../../utils/deliveryRegisterApi';
 import { ticketStatusLabel } from '../floorPipelineUi';
 import { formatStateLabel } from '../../vendor-management/vendorMgmtUi';
 import FloorPipelineFilterPanel from '../components/FloorPipelineFilterPanel';
+import { formatIndianMobileInput, indianMobileError, normalizeIndianMobile } from '../../../utils/phoneValidation';
 import { EMPTY_SPEC_FILTERS } from '../../inventory-management/inventorySpecFilters';
 import useDebouncedSpecParams from '../../inventory-management/hooks/useDebouncedSpecParams';
 
@@ -160,6 +161,13 @@ export default function DiagnosisFailedPage() {
       toast.error(dispatchErr);
       return;
     }
+    if (form.contact_mobile?.trim()) {
+      const mobileErr = indianMobileError(form.contact_mobile, { label: 'Contact mobile' });
+      if (mobileErr) {
+        toast.error(mobileErr);
+        return;
+      }
+    }
     setSaving(true);
     try {
       const { data } = await createOutForRepairDc({
@@ -170,7 +178,7 @@ export default function DiagnosisFailedPage() {
         vendor_address: form.vendor_billing_address.trim(),
         shipping_address: form.shipping_address.trim(),
         contact_person: form.contact_person.trim() || undefined,
-        contact_mobile: form.contact_mobile.trim() || undefined,
+        contact_mobile: form.contact_mobile.trim() ? normalizeIndianMobile(form.contact_mobile) : undefined,
         expected_return_date: form.expected_return_date || undefined,
         remarks: form.remarks.trim() || undefined,
         warehouse_name: form.warehouse_name.trim() || undefined,
@@ -333,7 +341,7 @@ export default function DiagnosisFailedPage() {
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-600 mb-1">Mobile</label>
-                <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.contact_mobile} onChange={(e) => setForm({ ...form, contact_mobile: e.target.value })} />
+                <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.contact_mobile} onChange={(e) => setForm({ ...form, contact_mobile: formatIndianMobileInput(e.target.value) })} maxLength={10} inputMode="numeric" />
               </div>
             </div>
             <div>

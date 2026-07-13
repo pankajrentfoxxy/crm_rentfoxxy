@@ -11,6 +11,7 @@ import {
   ROLE_DESCRIPTIONS,
   ROLE_DISPLAY_NAMES,
 } from '../../../constants/roles';
+import { formatIndianMobileInput, indianMobileError, normalizeIndianMobile } from '../../../utils/phoneValidation';
 import {
   createUser,
   fetchAuthTeams,
@@ -212,13 +213,20 @@ export default function UserManagementPage() {
         return;
       }
     }
+    if (form.mobile_no?.trim()) {
+      const mobileErr = indianMobileError(form.mobile_no, { label: 'Mobile number' });
+      if (mobileErr) {
+        showToast(mobileErr, 'error');
+        return;
+      }
+    }
 
     setSaving(true);
     try {
       const payload = {
         name: form.name.trim(),
         email: form.email.trim(),
-        mobile_no: form.mobile_no || null,
+        mobile_no: form.mobile_no?.trim() ? normalizeIndianMobile(form.mobile_no) : null,
         role: form.role,
         team_ids: showTeamField ? form.team_ids : [],
         team_id: showTeamField && form.team_ids[0] ? form.team_ids[0] : null,
@@ -602,7 +610,9 @@ export default function UserManagementPage() {
                     <input
                       type="text"
                       value={form.mobile_no}
-                      onChange={(e) => setField('mobile_no', e.target.value)}
+                      onChange={(e) => setField('mobile_no', formatIndianMobileInput(e.target.value))}
+                      maxLength={10}
+                      inputMode="numeric"
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
                     />
                   </div>

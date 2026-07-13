@@ -9,6 +9,7 @@ const {
   DEPLOYED_WITH_CUSTOMER_STATUSES,
   displayDeployedStatus,
 } = require('../../services/customerDeployedAssets');
+const { normalizeIndianMobile } = require('../../utils/phoneValidation');
 
 /** PO bulk receive + TTSPL: `purchaseOrders.controller` (`receivePoLineBulk`). Spare PO bulk: `sparePartsOrders.controller` (`receiveSpareLineBulk`). */
 
@@ -112,8 +113,16 @@ function extendedVendorValidators() {
     body('pan_number').optional({ checkFalsy: true }).isString().isLength({ max: 20 }),
     body('msme_number').optional({ checkFalsy: true }).isString().isLength({ max: 50 }),
     body('contact_person_name').optional({ checkFalsy: true }).isString().isLength({ max: 255 }),
-    body('contact_person_phone').optional({ checkFalsy: true }).isString().isLength({ max: 32 }),
-    body('alternate_phone').optional({ checkFalsy: true }).isString().isLength({ max: 32 }),
+    body('contact_person_phone')
+      .optional({ checkFalsy: true })
+      .customSanitizer(normalizeIndianMobile)
+      .matches(/^\d{10}$/)
+      .withMessage('Contact phone must be exactly 10 digits'),
+    body('alternate_phone')
+      .optional({ checkFalsy: true })
+      .customSanitizer(normalizeIndianMobile)
+      .matches(/^\d{10}$/)
+      .withMessage('Alternate phone must be exactly 10 digits'),
     body('city').optional({ checkFalsy: true }).isString().isLength({ max: 100 }),
     body('pincode').optional({ checkFalsy: true }).isString().isLength({ max: 10 }),
     body('notes').optional({ checkFalsy: true }).isString().isLength({ max: 5000 }),
@@ -127,14 +136,18 @@ function extendedVendorValidators() {
 
 function pickExtendedVendorFields(body) {
   const shippingSame = body.shipping_same === false || body.shipping_same === 'false' ? false : true;
+  const contactPhone = body.contact_person_phone
+    ? normalizeIndianMobile(body.contact_person_phone)
+    : null;
+  const alternatePhone = body.alternate_phone ? normalizeIndianMobile(body.alternate_phone) : null;
   return {
     po_payment_terms: body.po_payment_terms || 'postpaid_monthly',
     credit_days: body.credit_days != null && body.credit_days !== '' ? Number(body.credit_days) : 1,
     pan_number: body.pan_number || null,
     msme_number: body.msme_number || null,
     contact_person_name: body.contact_person_name || null,
-    contact_person_phone: body.contact_person_phone || null,
-    alternate_phone: body.alternate_phone || null,
+    contact_person_phone: contactPhone,
+    alternate_phone: alternatePhone,
     city: body.city || null,
     pincode: body.pincode || null,
     notes: body.notes || null,
@@ -201,6 +214,7 @@ function createValidators() {
     body('email').trim().notEmpty().isEmail(),
     body('password').notEmpty().isLength({ min: 8, max: 256 }),
     body('number')
+      .customSanitizer(normalizeIndianMobile)
       .trim()
       .notEmpty()
       .matches(/^\d{10}$/)
@@ -356,6 +370,7 @@ function updateValidatorsFixed() {
     body('business_name').trim().notEmpty().isLength({ min: 1, max: 255 }),
     body('email').trim().notEmpty().isEmail(),
     body('number')
+      .customSanitizer(normalizeIndianMobile)
       .trim()
       .notEmpty()
       .matches(/^\d{10}$/)

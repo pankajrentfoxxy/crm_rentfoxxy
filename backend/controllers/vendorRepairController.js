@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const svc = require('../services/vendorRepairDcService');
+const { validateIndianMobile, normalizeIndianMobile } = require('../utils/phoneValidation');
 const path = require('path');
 const fs = require('fs');
 
@@ -25,6 +26,14 @@ exports.listDiagnosisFailed = async (req, res) => {
 };
 
 exports.createOutForRepair = async (req, res) => {
+  const contactMobileRaw = req.body.contact_mobile || req.body.contactMobile;
+  if (contactMobileRaw != null && String(contactMobileRaw).trim()) {
+    const phoneError = validateIndianMobile(contactMobileRaw, { label: 'Contact mobile' });
+    if (phoneError) return res.status(400).json({ success: false, message: phoneError });
+  }
+  const normalizedContactMobile = contactMobileRaw != null && String(contactMobileRaw).trim()
+    ? normalizeIndianMobile(contactMobileRaw)
+    : null;
   const client = await pool.connect();
   try {
     await svc.ensureVendorRepairSchema();
@@ -38,7 +47,7 @@ exports.createOutForRepair = async (req, res) => {
       billingAddress: req.body.billing_address || req.body.billingAddress,
       shippingAddress: req.body.shipping_address || req.body.shippingAddress,
       contactPerson: req.body.contact_person || req.body.contactPerson,
-      contactMobile: req.body.contact_mobile || req.body.contactMobile,
+      contactMobile: normalizedContactMobile,
       expectedReturnDate: req.body.expected_return_date || req.body.expectedReturnDate,
       remarks: req.body.remarks,
       warehouseName: req.body.warehouse_name || req.body.warehouseName,

@@ -15,6 +15,10 @@ const {
   validateFinanceSpockContactFields,
   applyFinanceSpockDetails,
 } = require('./customerManagementController');
+const {
+  normalizeIndianMobile,
+  validateIndianMobile,
+} = require('../utils/phoneValidation');
 
 const { STATUSES_WITHOUT_STAGE_CHOICE, STAGES_BY_STATUS, stagesForStatus } = require('../constants/leadStages');
 
@@ -206,7 +210,11 @@ function buildPrismaWhereForLeads(req, { assignedOnly = false } = {}) {
 }
 
 const normalizeEmail = (value) => (value || '').trim().toLowerCase();
-const normalizePhone = (value) => (value || '').replace(/\s+/g, '');
+const normalizePhone = (value) => {
+  const trimmed = String(value ?? '').trim();
+  if (!trimmed) return null;
+  return normalizeIndianMobile(trimmed);
+};
 const isLikelyCompanyDomain = (value) => !!value && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(value);
 const getDomainFromEmail = (email) => {
   const normalized = normalizeEmail(email);
@@ -832,8 +840,19 @@ exports.acceptLeadQuotation = async (req, res) => {
 exports.createLead = async (req, res) => {
   const payload = buildLeadPayload(req.body || {});
 
-  if (!payload.phone || !String(payload.phone).trim()) {
-    return res.status(400).json({ success: false, message: 'Phone is required' });
+  const phoneError = validateIndianMobile(payload.phone, { required: true, label: 'Phone' });
+  if (phoneError) {
+    return res.status(400).json({ success: false, message: phoneError });
+  }
+  payload.phone = normalizeIndianMobile(payload.phone);
+
+  const body = req.body || {};
+  const whatsappRaw = body.whatsapp_number ?? body.whatsappNumber;
+  if (whatsappRaw != null && String(whatsappRaw).trim()) {
+    const whatsappError = validateIndianMobile(whatsappRaw, { label: 'WhatsApp number' });
+    if (whatsappError) {
+      return res.status(400).json({ success: false, message: whatsappError });
+    }
   }
 
   try {
@@ -861,7 +880,6 @@ exports.createLead = async (req, res) => {
       }
     }
 
-    const body = req.body || {};
     const personalRemarks = body.personal_remarks ?? body.personalRemarks;
     const inquiryType = body.inquiry_type ?? body.inquiryType ?? 'rental';
     const normalizedInquiry = ['rental', 'sales', 'both'].includes(inquiryType) ? inquiryType : 'rental';
@@ -1524,7 +1542,12 @@ exports.updateLeadBasicDetails = async (req, res) => {
     // Only update email/phone if explicitly provided - otherwise keep existing (fixes bug when only personal_remarks is sent)
     const nextName = (name ?? existing.name)?.trim() || existing.name;
     const nextEmail = email !== undefined ? (normalizeEmail(email) || null) : existing.email;
-    const nextPhone = phone !== undefined ? (normalizePhone(phone) || null) : existing.phone;
+    let nextPhone = existing.phone;
+    if (phone !== undefined) {
+      const phoneError = validateIndianMobile(phone, { required: true, label: 'Phone' });
+      if (phoneError) return res.status(400).json({ success: false, message: phoneError });
+      nextPhone = normalizeIndianMobile(phone);
+    }
     const nextCity = normalizedCity !== undefined ? (normalizedCity || null) : existing.city;
     const nextPersonalRemarksVal = nextPersonalRemarks !== undefined ? nextPersonalRemarks : (existing.personalRemarks ?? existing.personal_remarks);
     const cbRes = await pool.query('SELECT company_brand FROM leads WHERE lead_id = $1', [leadId]);
@@ -1609,6 +1632,13 @@ exports.addLeadAddress = async (req, res) => {
   if (!address || !String(address).trim()) {
     return res.status(400).json({ success: false, message: 'Address is required' });
   }
+  if (mobile_no != null && String(mobile_no).trim()) {
+    const mobileError = validateIndianMobile(mobile_no, { label: 'Mobile number' });
+    if (mobileError) return res.status(400).json({ success: false, message: mobileError });
+  }
+  const normalizedMobile = mobile_no != null && String(mobile_no).trim()
+    ? normalizeIndianMobile(mobile_no)
+    : null;
   try {
     const lead = await prisma.lead.findUnique({ where: { leadId: parseInt(id, 10) } });
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
@@ -1617,7 +1647,7 @@ exports.addLeadAddress = async (req, res) => {
       `INSERT INTO lead_addresses (lead_id, concern_person, mobile_no, address, pincode, address_type, created_by, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
        RETURNING address_id, concern_person, mobile_no, address, pincode, address_type, created_at`,
-      [id, concern_person || null, mobile_no || null, String(address).trim(), pincode || null, address_type || 'Shipping', req.user.user_id]
+      [id, concern_person || null, normalizedMobile, String(address).trim(), pincode || null, address_type || 'Shipping', req.user.user_id]
     );
     res.status(201).json({ success: true, address: inserted.rows[0] });
   } catch (error) {
@@ -2105,6 +2135,19 @@ exports.updateLeadFullProfile = async (req, res) => {
     const params = [];
     let idx = 1;
 
+    const phoneFields = [
+      ['phone', 'phone', 'phone', 'Phone'],
+      ['whatsapp_number', 'whatsappNumber', 'whatsapp', 'WhatsApp number'],
+    ];
+    for (const [snake, camel, label, errLabel] of phoneFields) {
+      const raw = body[snake] !== undefined ? body[snake] : body[camel];
+      if (raw === undefined) continue;
+      if (raw != null && String(raw).trim()) {
+        const err = validateIndianMobile(raw, { label: errLabel });
+        if (err) return res.status(400).json({ success: false, message: err });
+      }
+    }
+
     const addField = (dbCol, value, label, prevVal) => {
       if (value === undefined) return;
       setClauses.push(`${dbCol} = $${idx}`);
@@ -2122,7 +2165,15 @@ exports.updateLeadFullProfile = async (req, res) => {
     addField('company_brand', pick('company_brand', 'companyBrand'), 'company brand', existing.companyBrand);
     addField('email', pick('email', 'email') != null ? normalizeEmail(pick('email', 'email')) : undefined, 'email', existing.email);
     addField('phone', pick('phone', 'phone') != null ? normalizePhone(pick('phone', 'phone')) : undefined, 'phone', existing.phone);
-    addField('whatsapp_number', pick('whatsapp_number', 'whatsappNumber'), 'whatsapp', existing.whatsappNumber);
+    const whatsappPick = pick('whatsapp_number', 'whatsappNumber');
+    addField(
+      'whatsapp_number',
+      whatsappPick != null
+        ? (String(whatsappPick).trim() ? normalizeIndianMobile(whatsappPick) : null)
+        : undefined,
+      'whatsapp',
+      existing.whatsappNumber
+    );
     addField('designation', pick('designation', 'designation'), 'designation', existing.designation);
     addField('quantity_required', pick('quantity_required', 'quantityRequired'), 'quantity', existing.quantityRequired);
     addField('monthly_budget', pick('monthly_budget', 'monthlyBudget'), 'budget', existing.monthlyBudget);

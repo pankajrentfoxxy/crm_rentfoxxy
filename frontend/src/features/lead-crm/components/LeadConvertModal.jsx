@@ -5,9 +5,10 @@ import { convertToCustomer } from '../leadCrmApi';
 import toast from 'react-hot-toast';
 import { INDIAN_STATES } from '../../../constants/indianStates';
 import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
+import { formatIndianMobileInput, indianMobileError, INDIAN_MOBILE_RE } from '../../../utils/phoneValidation';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const MOBILE_RE = /^\d{10}$/;
+const MOBILE_RE = INDIAN_MOBILE_RE;
 
 const emptyForm = () => ({
   customer_name: '',
@@ -74,10 +75,12 @@ export default function LeadConvertModal({ open, lead, onClose }) {
     });
   };
 
-  const setMobile = (key, value) => set(key, value.replace(/\D/g, '').slice(0, 10));
+  const setMobile = (key, value) => set(key, formatIndianMobileInput(value));
 
   const validateForm = () => {
     const errors = {};
+    const phoneErr = indianMobileError(form.phone, { label: 'Phone' });
+    if (phoneErr) errors.phone = phoneErr;
     const requiredSpokeFields = [
       ['spock_person_name', 'Name'],
       ['spock_person_email', 'Email'],

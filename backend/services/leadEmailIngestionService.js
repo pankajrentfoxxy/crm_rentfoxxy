@@ -60,8 +60,9 @@ const truncateText = (value, maxLength) => {
 const normalizePhone = (value) => {
     const text = normalizeText(value);
     if (!text) return null;
-    const digits = text.replace(/\D/g, '');
-    return digits.length ? digits : null;
+    const { normalizeIndianMobile, isValidIndianMobile } = require('../utils/phoneValidation');
+    const normalized = normalizeIndianMobile(text);
+    return isValidIndianMobile(normalized) ? normalized : null;
 };
 
 const sanitizeCity = (value) => {

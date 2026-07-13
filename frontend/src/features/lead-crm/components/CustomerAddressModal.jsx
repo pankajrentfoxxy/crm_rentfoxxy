@@ -10,6 +10,7 @@ import {
   updateCustomer,
   updateCustomerAddress,
 } from '../leadCrmApi';
+import { formatIndianMobileInput, indianMobileError, normalizeIndianMobile } from '../../../utils/phoneValidation';
 
 const emptySavedForm = () => ({
   address: '',
@@ -135,6 +136,14 @@ export default function CustomerAddressModal({
       toast.error('Address is required');
       return;
     }
+    if (form.mobile_no?.trim()) {
+      const mobileErr = indianMobileError(form.mobile_no, { label: 'Mobile number' });
+      if (mobileErr) {
+        toast.error(mobileErr);
+        return;
+      }
+    }
+    const normalizedMobile = form.mobile_no?.trim() ? normalizeIndianMobile(form.mobile_no) : null;
     setSaving(true);
     try {
       if (isSaved) {
@@ -144,7 +153,7 @@ export default function CustomerAddressModal({
           state: form.state || null,
           pincode: form.pincode.trim() || null,
           concern_person: form.concern_person.trim() || null,
-          mobile_no: form.mobile_no.trim() || null,
+          mobile_no: normalizedMobile,
           address_type: 'Shipping',
         };
         if (isEdit && addressId) {
@@ -268,7 +277,9 @@ export default function CustomerAddressModal({
                 <label className="text-xs text-gray-500">Mobile no</label>
                 <input
                   value={form.mobile_no}
-                  onChange={(e) => setForm((f) => ({ ...f, mobile_no: e.target.value.replace(/\D/g, '').slice(0, 15) }))}
+                  onChange={(e) => setForm((f) => ({ ...f, mobile_no: formatIndianMobileInput(e.target.value) }))}
+                  maxLength={10}
+                  inputMode="numeric"
                   className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm"
                 />
               </div>

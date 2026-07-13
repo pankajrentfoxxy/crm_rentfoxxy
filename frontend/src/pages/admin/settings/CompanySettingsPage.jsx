@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../../../utils/api';
+import { formatIndianMobileInput, indianMobileError, normalizeIndianMobile } from '../../../utils/phoneValidation';
 
 const FIELDS = [
   ['legal_name', 'Legal Name'],
@@ -19,9 +20,20 @@ function CompanyCard({ company, onSaved }) {
   const [saving, setSaving] = useState(false);
 
   const save = async () => {
+    if (form.phone?.trim()) {
+      const phoneErr = indianMobileError(form.phone, { label: 'Phone' });
+      if (phoneErr) {
+        toast.error(phoneErr);
+        return;
+      }
+    }
     setSaving(true);
     try {
-      const res = await api.put(`/companies/${company.code}`, form);
+      const payload = {
+        ...form,
+        phone: form.phone?.trim() ? normalizeIndianMobile(form.phone) : form.phone,
+      };
+      const res = await api.put(`/companies/${company.code}`, payload);
       toast.success(`${company.code} updated`);
       onSaved(res.data?.data);
     } catch (err) {
@@ -55,7 +67,12 @@ function CompanyCard({ company, onSaved }) {
             <input
               className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
               value={form[key] || ''}
-              onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+              onChange={(e) => setForm({
+                ...form,
+                [key]: key === 'phone' ? formatIndianMobileInput(e.target.value) : e.target.value,
+              })}
+              maxLength={key === 'phone' ? 10 : undefined}
+              inputMode={key === 'phone' ? 'numeric' : undefined}
             />
           </label>
         ))}
