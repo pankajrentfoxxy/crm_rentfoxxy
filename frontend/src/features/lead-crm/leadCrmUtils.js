@@ -178,3 +178,8 @@ export function isSameDay(a, b) {
     && a.getMonth() === b.getMonth()
     && a.getDate() === b.getDate();
 }
+
+export function filterAssignableUsers(users = [], excludedNames = []) {
+  const blocked = new Set(excludedNames.map((name) => String(name).toLowerCase()));
+  return users.filter((user) => !blocked.has(String(user?.name || '').toLowerCase()));
+}

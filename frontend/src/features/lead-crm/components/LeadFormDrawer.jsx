@@ -2,8 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import {
   COMPANY_TYPES, GENERATIONS, INQUIRY_TYPES, LAPTOP_BRANDS, LEAD_SOURCES,
-  PROCESSORS, RAM_OPTIONS, STORAGE_OPTIONS, USE_CASES,
+  PROCESSORS, RAM_OPTIONS, STORAGE_OPTIONS, USE_CASES, EXCLUDED_LEAD_ASSIGNEES,
 } from '../leadConstants';
+import { filterAssignableUsers } from '../leadCrmUtils';
 import { INDIAN_STATES } from '../../../constants/indianStates';
 import { createLead, getAssignableUsers, updateLeadBasic, updateLeadProfile } from '../leadCrmApi';
 import toast from 'react-hot-toast';
@@ -26,7 +27,9 @@ export default function LeadFormDrawer({ open, lead, onClose, onSaved }) {
 
   useEffect(() => {
     if (open) {
-      getAssignableUsers().then((r) => setUsers(r.data?.users || [])).catch(() => {});
+      getAssignableUsers()
+        .then((r) => setUsers(filterAssignableUsers(r.data?.users || [], EXCLUDED_LEAD_ASSIGNEES)))
+        .catch(() => {});
     }
   }, [open]);
 

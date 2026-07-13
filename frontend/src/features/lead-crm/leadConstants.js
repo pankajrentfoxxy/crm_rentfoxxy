@@ -55,6 +55,9 @@ export const STATUSES_WITH_STAGES = Object.entries(STAGES_BY_STATUS)
 
 export const INQUIRY_TYPES = ['rental', 'sales', 'both'];
 
+/** Sales users excluded from lead assignment dropdowns */
+export const EXCLUDED_LEAD_ASSIGNEES = ['Pradeep'];
+
 export const LEAD_SOURCES = [
   'Email', 'Walk-in', 'Reference', 'Website', 'Cold Call', 'LinkedIn',
   'WhatsApp', 'Just Dial', 'IndiaMART', 'Other',

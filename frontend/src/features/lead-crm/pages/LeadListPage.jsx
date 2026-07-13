@@ -5,12 +5,12 @@ import toast from 'react-hot-toast';
 import { PageHeader, StatCard, DateRangeFilter } from '../../../components/ui/primitives';
 import { useAuth } from '../../../context/AuthContext';
 import PermissionGate from '../../../components/PermissionGate';
-import { LEAD_SOURCES, LEAD_STATUSES, STAGES_BY_STATUS, STATUS_COLORS, INQUIRY_TYPES } from '../leadConstants';
+import { LEAD_SOURCES, LEAD_STATUSES, STAGES_BY_STATUS, STATUS_COLORS, INQUIRY_TYPES, EXCLUDED_LEAD_ASSIGNEES } from '../leadConstants';
 import {
   assignLeads, exportLeadsCsv, getAssignableUsers, getLeads, getLeadRecentActivity, importLeadsCsv, updateLeadStatus,
 } from '../leadCrmApi';
 import {
-  formatFollowUpDateTime, followUpTone, formatLeadDate,
+  formatFollowUpDateTime, followUpTone, formatLeadDate, filterAssignableUsers,
 } from '../leadCrmUtils';
 import LeadCard from '../components/LeadCard';
 import LeadFormDrawer from '../components/LeadFormDrawer';
@@ -18,6 +18,7 @@ import LeadCompactCell from '../components/LeadCompactCell';
 import LeadConfigCell from '../components/LeadConfigCell';
 import LeadListExpandPanel from '../components/LeadListExpandPanel';
 import QuickStatusUpdate from '../components/QuickStatusUpdate';
+import MultiSelectFilter from '../components/MultiSelectFilter';
 
 const PAGE_SIZE = 25;
 const VIEW_KEY = 'lead_crm_view_mode';
@@ -38,9 +39,33 @@ export default function LeadListPage() {
   const [activityCache, setActivityCache] = useState({});
   const [activityLoading, setActivityLoading] = useState(null);
   const [filters, setFilters] = useState({
-    search: '', statuses: [], assigned_to: '', source: '', inquiry_type: '',
+    search: '', statuses: [], assignees: [], sources: [], inquiry_types: [],
     date_from: '', date_to: '', follow_up: '',
   });
+
+  const assignableUsers = useMemo(
+    () => filterAssignableUsers(users, EXCLUDED_LEAD_ASSIGNEES),
+    [users],
+  );
+
+  const assigneeOptions = useMemo(
+    () => [
+      { value: 'unassigned', label: 'Unassigned' },
+      ...assignableUsers.map((u) => ({
+        value: String(u.user_id || u.userId),
+        label: u.name,
+      })),
+    ],
+    [assignableUsers],
+  );
+
+  const inquiryTypeOptions = useMemo(
+    () => INQUIRY_TYPES.map((type) => ({
+      value: type,
+      label: type.charAt(0).toUpperCase() + type.slice(1),
+    })),
+    [],
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -48,13 +73,13 @@ export default function LeadListPage() {
       const params = {};
       if (filters.search) params.search = filters.search;
       if (filters.statuses.length) params.status = filters.statuses.join(',');
-      if (filters.source) params.source = filters.source;
-      if (filters.inquiry_type) params.inquiry_type = filters.inquiry_type;
+      if (filters.sources.length) params.source = filters.sources.join(',');
+      if (filters.inquiry_types.length) params.inquiry_type = filters.inquiry_types.join(',');
       if (filters.date_from) params.date_from = filters.date_from;
       if (filters.date_to) params.date_to = filters.date_to;
       if (filters.follow_up) params.follow_up = filters.follow_up;
       if (isAssignedDataOnly('leads')) params.assigned_to = 'me';
-      else if (filters.assigned_to) params.assigned_to = filters.assigned_to;
+      else if (filters.assignees.length) params.assigned_to = filters.assignees.join(',');
       const res = await getLeads(params);
       setLeads(res.data?.leads || []);
     } catch {
@@ -169,7 +194,7 @@ export default function LeadListPage() {
       if (filters.date_to) params.date_to = filters.date_to;
       if (filters.search) params.search = filters.search;
       if (filters.statuses.length) params.status = filters.statuses.join(',');
-      if (filters.source) params.source = filters.source;
+      if (filters.sources.length) params.source = filters.sources.join(',');
       const res = await exportLeadsCsv(params);
       const url = window.URL.createObjectURL(new Blob([res.data]));
       const a = document.createElement('a');
@@ -248,28 +273,32 @@ export default function LeadListPage() {
           <input placeholder="Search..." value={filters.search}
             onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
             className="border border-gray-200 rounded-lg px-3 py-2 text-sm" />
-          <select value={filters.statuses[0] || ''} onChange={(e) => setFilters((f) => ({ ...f, statuses: e.target.value ? [e.target.value] : [] }))}
-            className="border border-gray-200 rounded-lg px-3 py-2 text-sm">
-            <option value="">All statuses</option>
-            {LEAD_STATUSES.map((s) => <option key={s}>{s}</option>)}
-          </select>
+          <MultiSelectFilter
+            options={LEAD_STATUSES}
+            value={filters.statuses}
+            onChange={(statuses) => setFilters((f) => ({ ...f, statuses }))}
+            allLabel="All statuses"
+          />
           {user?.role !== 'sales' && (
-            <select value={filters.assigned_to} onChange={(e) => setFilters((f) => ({ ...f, assigned_to: e.target.value }))}
-              className="border border-gray-200 rounded-lg px-3 py-2 text-sm">
-              <option value="">All assignees</option>
-              {users.map((u) => <option key={u.user_id || u.userId} value={u.user_id || u.userId}>{u.name}</option>)}
-            </select>
+            <MultiSelectFilter
+              options={assigneeOptions}
+              value={filters.assignees}
+              onChange={(assignees) => setFilters((f) => ({ ...f, assignees }))}
+              allLabel="All assignees"
+            />
           )}
-          <select value={filters.source} onChange={(e) => setFilters((f) => ({ ...f, source: e.target.value }))}
-            className="border border-gray-200 rounded-lg px-3 py-2 text-sm">
-            <option value="">All sources</option>
-            {LEAD_SOURCES.map((s) => <option key={s}>{s}</option>)}
-          </select>
-          <select value={filters.inquiry_type} onChange={(e) => setFilters((f) => ({ ...f, inquiry_type: e.target.value }))}
-            className="border border-gray-200 rounded-lg px-3 py-2 text-sm">
-            <option value="">All inquiry types</option>
-            {INQUIRY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
+          <MultiSelectFilter
+            options={LEAD_SOURCES}
+            value={filters.sources}
+            onChange={(sources) => setFilters((f) => ({ ...f, sources }))}
+            allLabel="All sources"
+          />
+          <MultiSelectFilter
+            options={inquiryTypeOptions}
+            value={filters.inquiry_types}
+            onChange={(inquiry_types) => setFilters((f) => ({ ...f, inquiry_types }))}
+            allLabel="All inquiry types"
+          />
           <select value={filters.follow_up} onChange={(e) => setFilters((f) => ({ ...f, follow_up: e.target.value }))}
             className="border border-gray-200 rounded-lg px-3 py-2 text-sm">
             <option value="">Follow-up filter</option>
@@ -288,7 +317,7 @@ export default function LeadListPage() {
             toLabel="Created to"
           />
         </div>
-        <button type="button" onClick={() => setFilters({ search: '', statuses: [], assigned_to: '', source: '', inquiry_type: '', date_from: '', date_to: '', follow_up: '' })}
+        <button type="button" onClick={() => setFilters({ search: '', statuses: [], assignees: [], sources: [], inquiry_types: [], date_from: '', date_to: '', follow_up: '' })}
           className="text-sm text-blue-600 mt-2 hover:underline">Clear filters</button>
       </div>
 
@@ -456,7 +485,7 @@ export default function LeadListPage() {
                   e.target.value = '';
                 }}>
                   <option value="">Assign to...</option>
-                  {users.map((u) => <option key={u.user_id || u.userId} value={u.user_id || u.userId}>{u.name}</option>)}
+                  {assignableUsers.map((u) => <option key={u.user_id || u.userId} value={u.user_id || u.userId}>{u.name}</option>)}
                 </select>
               </div>
             </PermissionGate>
