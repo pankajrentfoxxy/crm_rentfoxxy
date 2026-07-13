@@ -107,7 +107,7 @@ function SignatureModal({ title, onSave, onClose }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4">
+    <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center p-4">
       <button type="button" className="absolute inset-0 bg-black/40" onClick={onClose} aria-label="Close" />
       <div className="relative bg-white rounded-t-2xl sm:rounded-xl shadow-xl w-full max-w-md p-4 space-y-3">
         <h3 className="font-semibold">{title}</h3>
@@ -697,22 +697,6 @@ export default function VendorRepairDcDetailPage() {
         </div>
       ) : null}
 
-      {activeSign ? (
-        <SignatureModal
-          title={
-            activeSign === 'wh_dispatch' ? 'Warehouse signature'
-              : activeSign === 'vendor_dispatch' ? 'Vendor signature (optional)'
-                : 'Warehouse receive signature'
-          }
-          onClose={() => setActiveSign(null)}
-          onSave={async (dataUrl) => {
-            if (activeSign === 'wh_dispatch') setPendingWhDispatch(dataUrl);
-            else if (activeSign === 'vendor_dispatch') setPendingVendorDispatch(dataUrl);
-            else if (activeSign === 'wh_receive') setReceiveForm((prev) => ({ ...prev, wh_esign: dataUrl }));
-          }}
-        />
-      ) : null}
-
       {receiveOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 print:hidden">
           <button type="button" className="absolute inset-0 bg-black/40" onClick={() => { setReceiveOpen(false); setReceiveTargetItem(null); }} aria-label="Close" />
@@ -804,6 +788,22 @@ export default function VendorRepairDcDetailPage() {
             )}
           </div>
         </div>
+      ) : null}
+
+      {activeSign ? (
+        <SignatureModal
+          title={
+            activeSign === 'wh_dispatch' ? 'Warehouse signature'
+              : activeSign === 'vendor_dispatch' ? 'Vendor signature (optional)'
+                : 'Warehouse receive signature'
+          }
+          onClose={() => setActiveSign(null)}
+          onSave={async (dataUrl) => {
+            if (activeSign === 'wh_dispatch') setPendingWhDispatch(dataUrl);
+            else if (activeSign === 'vendor_dispatch') setPendingVendorDispatch(dataUrl);
+            else if (activeSign === 'wh_receive') setReceiveForm((prev) => ({ ...prev, wh_esign: dataUrl }));
+          }}
+        />
       ) : null}
     </div>
   );
