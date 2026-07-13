@@ -6,6 +6,7 @@ import { useAuth } from '../../../context/AuthContext';
 import { getBackendOrigin } from '../../../utils/api';
 import {
   downloadVendorRepairPdf,
+  downloadVendorRepairReceivePdf,
   fetchVendorRepairDc,
   markVendorRepairDeliveredToVendor,
   receiveVendorRepairBack,
@@ -116,6 +117,9 @@ export default function VendorRepairDcDetailPage() {
   const [dc, setDc] = useState(null);
   const [receiveOpen, setReceiveOpen] = useState(false);
   const [receiveSelected, setReceiveSelected] = useState(new Set());
+  const [receiveItemModes, setReceiveItemModes] = useState({});
+  const [receiveBusy, setReceiveBusy] = useState(false);
+  const [receivePdfBusy, setReceivePdfBusy] = useState(false);
   const [whReturnSign, setWhReturnSign] = useState(null);
   const [vendorReturnSign, setVendorReturnSign] = useState(null);
   const [pendingWhDispatch, setPendingWhDispatch] = useState(null);
@@ -145,6 +149,27 @@ export default function VendorRepairDcDetailPage() {
       delivery_person_id: head.delivery_person_id ? String(head.delivery_person_id) : '',
     });
   }, []);
+
+  const handleDownloadReceivePdf = async () => {
+    setReceivePdfBusy(true);
+    try {
+      await downloadVendorRepairReceivePdf(dcNumber);
+      toast.success('Receive challan PDF downloaded');
+    } catch {
+      toast.error('Receive PDF download failed');
+    } finally {
+      setReceivePdfBusy(false);
+    }
+  };
+
+  const itemStatusLabel = (item) => {
+    const s = item.item_status || '';
+    if (s === 'dispatched') return 'Out for repair';
+    if (s === 'received') return 'Received (repaired)';
+    if (s === 'replacement_received') return 'Replacement received';
+    if (s === 'draft') return 'Pending dispatch';
+    return s.replace(/_/g, ' ');
+  };
 
   const handleDownloadPdf = async () => {
     setPdfBusy(true);
@@ -231,7 +256,10 @@ export default function VendorRepairDcDetailPage() {
       invalidateInventoryManagement();
       load();
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Dispatch failed');
+      const msg = err.code === 'ECONNABORTED'
+        ? 'Dispatch timed out — check if status updated and retry if still draft'
+        : (err.response?.data?.message || 'Dispatch failed');
+      toast.error(msg);
     } finally {
       setDispatchBusy(false);
     }
@@ -284,20 +312,48 @@ export default function VendorRepairDcDetailPage() {
       toast.error('Select at least one laptop to receive');
       return;
     }
+    const items = ticketIds.map((ticketId) => {
+      const mode = receiveItemModes[ticketId] || { receive_mode: 'repaired' };
+      return {
+        ticket_id: ticketId,
+        receive_mode: mode.receive_mode || 'repaired',
+        replacement_serial_number: mode.replacement_serial_number || '',
+        replacement_brand: mode.replacement_brand || '',
+        replacement_model: mode.replacement_model || '',
+      };
+    });
+    for (const row of items) {
+      if (row.receive_mode === 'replacement') {
+        if (!row.replacement_serial_number?.trim()) {
+          toast.error(`Enter replacement serial for ticket #${row.ticket_id}`);
+          return;
+        }
+        if (!row.replacement_brand?.trim() || !row.replacement_model?.trim()) {
+          toast.error(`Enter replacement brand and model for ticket #${row.ticket_id}`);
+          return;
+        }
+      }
+    }
     if (!window.confirm(`Receive ${ticketIds.length} laptop(s)? They will move to Floor Manager.`)) return;
+    setReceiveBusy(true);
     try {
       const { data } = await receiveVendorRepairBack(dcNumber, {
         warehouse_esign: whReturnSign,
         vendor_esign: vendorReturnSign,
-        ticket_ids: ticketIds,
+        items,
       });
       toast.success(data.message || 'Received at warehouse — Floor Manager');
       setReceiveOpen(false);
       setReceiveSelected(new Set());
+      setReceiveItemModes({});
+      setWhReturnSign(null);
+      setVendorReturnSign(null);
       invalidateInventoryManagement();
       load();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Receive back failed');
+    } finally {
+      setReceiveBusy(false);
     }
   };
 
@@ -344,14 +400,28 @@ export default function VendorRepairDcDetailPage() {
             onClick={handleDownloadPdf}
             className="inline-flex items-center gap-1 px-3 py-2 border rounded-lg text-sm disabled:opacity-50"
           >
-            <Download className="w-4 h-4" /> {pdfBusy ? 'PDF…' : 'PDF'}
+            <Download className="w-4 h-4" /> {pdfBusy ? 'PDF…' : 'Dispatch PDF'}
           </button>
+          {(dc.receive_dc_number || dc.receive_pdf_path || (dc.items || []).some((i) => i.receive_dc_number)) ? (
+            <button
+              type="button"
+              disabled={receivePdfBusy}
+              onClick={handleDownloadReceivePdf}
+              className="inline-flex items-center gap-1 px-3 py-2 border rounded-lg text-sm disabled:opacity-50"
+            >
+              <Download className="w-4 h-4" /> {receivePdfBusy ? 'PDF…' : 'Receive PDF'}
+            </button>
+          ) : null}
           <button type="button" onClick={() => window.print()} className="inline-flex items-center gap-1 px-3 py-2 border rounded-lg text-sm">
             <Printer className="w-4 h-4" /> Print
           </button>
           {canProcess && ['dispatched', 'partially_returned'].includes(dc.status) && dispatchedItems.length ? (
             <button type="button" onClick={() => {
-              setReceiveSelected(new Set(dispatchedItems.map((i) => i.ticket_id)));
+              const ids = dispatchedItems.map((i) => i.ticket_id);
+              setReceiveSelected(new Set(ids));
+              const modes = {};
+              ids.forEach((id) => { modes[id] = { receive_mode: 'repaired' }; });
+              setReceiveItemModes(modes);
               setReceiveOpen(true);
             }} className="inline-flex items-center gap-1 px-3 py-2 bg-green-700 text-white rounded-lg text-sm font-semibold">
               <RotateCcw className="w-4 h-4" /> Receive Back ({dispatchedItems.length})
@@ -398,6 +468,7 @@ export default function VendorRepairDcDetailPage() {
               <th className="p-3 text-center w-16">Qty.</th>
               <th className="p-3 text-left">Remarks</th>
               <th className="p-3 text-left">Status</th>
+              <th className="p-3 text-left">Sent / Received</th>
               <th className="p-3 text-left">Ticket</th>
             </tr>
           </thead>
@@ -415,7 +486,19 @@ export default function VendorRepairDcDetailPage() {
                   </td>
                   <td className="p-3 text-xs text-center">1 Pcs.</td>
                   <td className="p-3 text-xs max-w-[180px]">{item.item_remarks || item.diagnosis_failed_reason || '—'}</td>
-                  <td className="p-3 text-xs capitalize">{item.item_status || item.ticket_status || '—'}</td>
+                  <td className="p-3 text-xs capitalize">{itemStatusLabel(item)}</td>
+                  <td className="p-3 text-xs text-slate-600">
+                    {dc.dispatched_at ? <p>Sent: {fmtVendorRepairDate(dc.dispatched_at)}</p> : null}
+                    {item.returned_at ? <p>Received: {fmtVendorRepairDate(item.returned_at)}</p> : null}
+                    {item.receive_dc_number ? <p className="font-mono text-[10px]">{item.receive_dc_number}</p> : null}
+                    {item.replacement_dc_number ? (
+                      <p className="text-purple-800 font-mono text-[10px]">Rep: {item.replacement_dc_number}</p>
+                    ) : null}
+                    {item.replacement_serial_number ? (
+                      <p className="font-mono text-[10px]">{item.replacement_serial_number} · {item.replacement_ttspl_id || '—'}</p>
+                    ) : null}
+                    {!dc.dispatched_at && !item.returned_at ? '—' : null}
+                  </td>
                   <td className="p-3">
                     <Link to={`/floor-pipeline/tickets/${item.ticket_id}`} className="text-blue-600">#{item.ticket_id}</Link>
                   </td>
@@ -589,25 +672,92 @@ export default function VendorRepairDcDetailPage() {
           <div className="relative bg-white rounded-xl shadow-xl max-w-lg w-full p-5 space-y-3">
             <h3 className="font-semibold">Receive Back to Warehouse</h3>
             <p className="text-xs text-slate-500">Select laptops received today. Remaining units stay on Out for Repair until received later. Tickets move to Floor Manager.</p>
-            <div className="max-h-40 overflow-y-auto border rounded-lg divide-y">
-              {dispatchedItems.map((item) => (
-                <label key={item.id} className="flex items-start gap-2 p-2 text-xs cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={receiveSelected.has(item.ticket_id)}
-                    onChange={() => setReceiveSelected((prev) => {
-                      const next = new Set(prev);
-                      if (next.has(item.ticket_id)) next.delete(item.ticket_id);
-                      else next.add(item.ticket_id);
-                      return next;
-                    })}
-                  />
-                  <span>
-                    <span className="font-mono">{item.ttspl_id}</span>
-                    {item.item_remarks ? ` — ${item.item_remarks}` : ''}
-                  </span>
-                </label>
-              ))}
+            <div className="max-h-56 overflow-y-auto border rounded-lg divide-y">
+              {dispatchedItems.map((item) => {
+                const mode = receiveItemModes[item.ticket_id] || { receive_mode: 'repaired' };
+                return (
+                  <div key={item.id} className="p-2 text-xs space-y-2">
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={receiveSelected.has(item.ticket_id)}
+                        onChange={() => setReceiveSelected((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(item.ticket_id)) next.delete(item.ticket_id);
+                          else next.add(item.ticket_id);
+                          return next;
+                        })}
+                      />
+                      <span>
+                        <span className="font-mono">{item.ttspl_id}</span>
+                        {item.item_remarks ? ` — ${item.item_remarks}` : ''}
+                      </span>
+                    </label>
+                    {receiveSelected.has(item.ticket_id) ? (
+                      <div className="ml-6 space-y-2 border-l pl-2">
+                        <div className="flex flex-wrap gap-3">
+                          <label className="inline-flex items-center gap-1">
+                            <input
+                              type="radio"
+                              name={`recv-${item.ticket_id}`}
+                              checked={mode.receive_mode !== 'replacement'}
+                              onChange={() => setReceiveItemModes((prev) => ({
+                                ...prev,
+                                [item.ticket_id]: { ...mode, receive_mode: 'repaired' },
+                              }))}
+                            />
+                            Repaired return
+                          </label>
+                          <label className="inline-flex items-center gap-1">
+                            <input
+                              type="radio"
+                              name={`recv-${item.ticket_id}`}
+                              checked={mode.receive_mode === 'replacement'}
+                              onChange={() => setReceiveItemModes((prev) => ({
+                                ...prev,
+                                [item.ticket_id]: { receive_mode: 'replacement', replacement_serial_number: '', replacement_brand: '', replacement_model: '' },
+                              }))}
+                            />
+                            Vendor replacement
+                          </label>
+                        </div>
+                        {mode.receive_mode === 'replacement' ? (
+                          <div className="grid grid-cols-1 gap-1.5">
+                            <input
+                              className="border rounded px-2 py-1.5 text-xs"
+                              placeholder="New serial number *"
+                              value={mode.replacement_serial_number || ''}
+                              onChange={(e) => setReceiveItemModes((prev) => ({
+                                ...prev,
+                                [item.ticket_id]: { ...mode, replacement_serial_number: e.target.value },
+                              }))}
+                            />
+                            <input
+                              className="border rounded px-2 py-1.5 text-xs"
+                              placeholder="Brand *"
+                              value={mode.replacement_brand || ''}
+                              onChange={(e) => setReceiveItemModes((prev) => ({
+                                ...prev,
+                                [item.ticket_id]: { ...mode, replacement_brand: e.target.value },
+                              }))}
+                            />
+                            <input
+                              className="border rounded px-2 py-1.5 text-xs"
+                              placeholder="Model *"
+                              value={mode.replacement_model || ''}
+                              onChange={(e) => setReceiveItemModes((prev) => ({
+                                ...prev,
+                                [item.ticket_id]: { ...mode, replacement_model: e.target.value },
+                              }))}
+                            />
+                            <p className="text-[10px] text-slate-500">A replacement receive challan (REP) and new TTSPL will be created.</p>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
             <div className="grid grid-cols-2 gap-2">
               <button type="button" onClick={() => setActiveSign('wh_return')} className="py-2 border rounded-lg text-sm">
@@ -619,8 +769,8 @@ export default function VendorRepairDcDetailPage() {
             </div>
             <div className="flex justify-end gap-2">
               <button type="button" onClick={() => setReceiveOpen(false)} className="px-4 py-2 border rounded-lg text-sm">Cancel</button>
-              <button type="button" onClick={submitReceiveBack} className="px-4 py-2 bg-green-700 text-white rounded-lg text-sm font-semibold">
-                Confirm receive
+              <button type="button" disabled={receiveBusy} onClick={submitReceiveBack} className="px-4 py-2 bg-green-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50">
+                {receiveBusy ? 'Receiving…' : 'Confirm receive'}
               </button>
             </div>
           </div>

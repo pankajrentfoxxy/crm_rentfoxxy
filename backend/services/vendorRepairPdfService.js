@@ -371,7 +371,17 @@ async function generateVendorRepairReceivePdf(dcNumber, receiveDcNumber, itemIds
   const vendorBilling = dc.vendor_billing_display || dc.vendor_address || dc.vendor_name || '—';
   const vendorShipping = dc.vendor_shipping_display || dc.shipping_address || dc.vendor_address || '—';
   const ids = (itemIds || []).map(Number).filter(Boolean);
-  const items = (dc.items || []).filter((it) => !ids.length || ids.includes(Number(it.id)));
+  const items = (dc.items || []).filter((it) => !ids.length || ids.includes(Number(it.id))).map((it) => {
+    if (it.receive_mode === 'replacement' || it.item_status === 'replacement_received') {
+      const rep = [it.replacement_brand, it.replacement_model].filter(Boolean).join(' ');
+      const repIds = [it.replacement_serial_number, it.replacement_ttspl_id].filter(Boolean).join(' · ');
+      return {
+        ...it,
+        item_remarks: `Vendor replacement — ${rep} (${repIds})${it.replacement_dc_number ? ` · ${it.replacement_dc_number}` : ''}`,
+      };
+    }
+    return it;
+  });
 
   const dir = path.join(__dirname, '../uploads/vendor-repair');
   fs.mkdirSync(dir, { recursive: true });

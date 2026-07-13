@@ -89,3 +89,14 @@ module.exports = {
   dcRoute,
   dcSuffixPattern,
 };
+/** Vendor repair DC routes (VRDC/26-27/0001 may contain slashes). */
+function vrdcSuffixPattern(suffix) {
+  const esc = String(suffix || '').replace(/\//g, '\\/');
+  return new RegExp(`^/dc/(.+)${esc}$`);
+}
+
+function vrdcRoute(suffix, ...handlers) {
+  return [vrdcSuffixPattern(suffix), bindDcNumber, ...handlers];
+}
+
+module.exports = { dcRoute, vrdcRoute, bindDcNumber, dcSuffixPattern, vrdcSuffixPattern };
