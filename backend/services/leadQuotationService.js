@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const PDFDocument = require('pdfkit');
 const nodemailer = require('nodemailer');
+const { formatPdfDateIst, formatPdfDateTimeIst } = require('../utils/pdfDateTimeUtils');
 
 const LOGO_PATH = path.join(__dirname, '../assets/rentfoxxy-logo.png');
 
@@ -128,24 +129,11 @@ function formatMoney(x) {
 }
 
 function formatEstimateDate(d) {
-  const dt = d instanceof Date ? d : new Date();
-  const dd = String(dt.getDate()).padStart(2, '0');
-  const mm = String(dt.getMonth() + 1).padStart(2, '0');
-  const yyyy = dt.getFullYear();
-  return `${dd}/${mm}/${yyyy}`;
+  return formatPdfDateIst(d, { fallback: '—' });
 }
 
 function formatSentAtLine(d) {
-  const dt = d instanceof Date ? d : new Date();
-  return dt.toLocaleString('en-IN', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-    timeZone: 'Asia/Kolkata'
-  });
+  return formatPdfDateTimeIst(d, { fallback: '—' });
 }
 
 function escapeHtml(s) {

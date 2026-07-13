@@ -24,13 +24,6 @@ function ensureUploadDir() {
   if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
 
-function formatPdfDate(value) {
-  if (!value) return null;
-  const dt = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(dt.getTime())) return null;
-  return dt.toLocaleDateString('en-GB');
-}
-
 function getMailTransport() {
   const host = process.env.SMTP_HOST;
   const user = process.env.SMTP_USER;
@@ -43,6 +36,12 @@ function getMailTransport() {
 
 const { mergeCompany, formatCompanyBlock, TRUETECH } = require('../utils/companyDefaults');
 const { normalizeDeliveryAddress, formatDeliveryAddressLine } = require('../utils/deliveryAddressUtils');
+const {
+  formatPdfDateIst,
+  formatPdfDateIstOrDash,
+  formatPdfDateTimeLabel,
+  formatPdfNowIst,
+} = require('../utils/pdfDateTimeUtils');
 
 async function loadCompany(entityCode) {
   const code = entityCode === 'gorefurbo' ? 'gorefurbo' : 'rentfoxxy';
@@ -307,8 +306,8 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
     y += 12;
 
     // ── Seller block + type/dispatch ─────────────────────────────────────
-    const docDate = formatPdfDate(header.dc_date || header.created_at) || new Date().toLocaleDateString('en-GB');
-    const dispatchDate = formatPdfDate(header.dispatched_at || header.dispatch_date);
+    const docDate = formatPdfDateIst(header.dc_date || header.created_at) || formatPdfNowIst();
+    const dispatchDate = formatPdfDateIst(header.dispatched_at || header.dispatch_date, { fallback: null });
     doc.font('Helvetica').fontSize(9).fillColor(C.sub)
       .text(`Date: ${docDate}`, L, y);
     y += 14;
@@ -589,7 +588,7 @@ async function generateReturnDcPdf({ returnDcNumber, header = {}, units = [], es
 
     const dateCell = (label, value, x) => {
       doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink)
-        .text(formatPdfDate(value) || '—', x, y, { width: 165, align: 'center' });
+        .text(formatPdfDateIstOrDash(value), x, y, { width: 165, align: 'center' });
       doc.font('Helvetica').fontSize(7).fillColor(C.sub)
         .text(label, x, y + 14, { width: 165, align: 'center' });
     };
@@ -697,7 +696,7 @@ async function generateReturnDcPdf({ returnDcNumber, header = {}, units = [], es
       doc.font('Helvetica').fontSize(8).fillColor(C.ink)
         .text(`Name: ${name || '____________________'}`, x + 10, y + 76);
       doc.font('Helvetica').fontSize(7.5).fillColor(C.sub)
-        .text(at ? `Date: ${new Date(at).toLocaleString('en-IN')}` : (note || ''), x + 10, y + 90, { width: half - 20 });
+        .text(at ? formatPdfDateTimeLabel('Signed at: ', at) : (note || ''), x + 10, y + 90, { width: half - 20 });
     };
     signBox(L, 'Technician (Sign-out at customer site)', techSign, esign.technician_name, esign.technician_at,
       esign.customer_otp_verified ? 'Customer OTP verified at handover' : 'Pending customer OTP');
