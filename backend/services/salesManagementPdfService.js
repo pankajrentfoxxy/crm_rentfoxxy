@@ -346,15 +346,23 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
     // ── Customer + Shipping two-column ───────────────────────────────────
     const colW = (W - 12) / 2;
     const boxTop = y;
-    const addrBlock = (x, title, name, a, extra) => {
+    const addrBlock = (x, title, a, extra, titlePrefix) => {
       let yy = boxTop + 8;
-      doc.font('Helvetica-Bold').fontSize(10).fillColor(C.ink).text(title, x + 10, yy, { width: colW - 20 });
-      yy += 16;
+      if (titlePrefix) {
+        doc.font('Helvetica-Bold').fontSize(10).fillColor(C.ink).text(titlePrefix, x + 10, yy, { width: colW - 20 });
+        yy = doc.y + 2;
+        doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink).text(title, x + 10, yy, { width: colW - 20 });
+        yy = doc.y + 4;
+      } else {
+        doc.font('Helvetica-Bold').fontSize(10).fillColor(C.ink).text(title, x + 10, yy, { width: colW - 20 });
+        yy = doc.y + 4;
+      }
       doc.font('Helvetica').fontSize(8.5).fillColor(C.ink);
       const row = (lab, val) => {
         if (val == null || val === '') return;
-        doc.font('Helvetica-Bold').text(`${lab}: `, x + 10, yy, { continued: true, width: colW - 20 })
-          .font('Helvetica').text(String(val));
+        doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.ink)
+          .text(`${lab}: `, x + 10, yy, { continued: true, width: colW - 20 })
+          .font('Helvetica').text(String(val), { width: colW - 20 });
         yy = doc.y + 2;
       };
       row('Email', a.email || extra?.email);
@@ -369,9 +377,8 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
     };
     const custName = header.customer_name || billing.name || 'Customer';
     const shipName = shippingAddr.name || custName;
-    // measure heights by drawing into temp? Simpler: draw then compute box height after.
-    const leftEnd = addrBlock(L, custName, custName, { ...billing, email: header.customer_email || billing.email, phone: header.customer_mobile || billing.phone }, { email: header.customer_email, phone: header.customer_mobile, gst: header.gst_number || billing.gst_number });
-    const rightEnd = addrBlock(L + colW + 12, `Shipping To: ${shipName}`, shipName, shippingAddr, {});
+    const leftEnd = addrBlock(L, custName, { ...billing, email: header.customer_email || billing.email, phone: header.customer_mobile || billing.phone }, { email: header.customer_email, phone: header.customer_mobile, gst: header.gst_number || billing.gst_number });
+    const rightEnd = addrBlock(L + colW + 12, shipName, shippingAddr, {}, 'Shipping To:');
     const boxBottom = Math.max(leftEnd, rightEnd) + 8;
     doc.roundedRect(L, boxTop, colW, boxBottom - boxTop, 6).strokeColor(C.line).lineWidth(1).stroke();
     doc.roundedRect(L + colW + 12, boxTop, colW, boxBottom - boxTop, 6).strokeColor(C.line).lineWidth(1).stroke();
@@ -611,13 +618,15 @@ async function generateReturnDcPdf({ returnDcNumber, header = {}, units = [], es
     // Pickup-from box
     const boxTop = y;
     let yy = boxTop + 8;
-    doc.font('Helvetica-Bold').fontSize(10).fillColor(C.ink).text(`Picked up from: ${header.customer_name || addr.name || 'Customer'}`, L + 10, yy, { width: W - 20 });
-    yy += 16;
+    const pickupTitle = `Picked up from: ${header.customer_name || addr.name || 'Customer'}`;
+    doc.font('Helvetica-Bold').fontSize(10).fillColor(C.ink).text(pickupTitle, L + 10, yy, { width: W - 20 });
+    yy = doc.y + 4;
     doc.font('Helvetica').fontSize(8.5).fillColor(C.ink);
     const row = (lab, val) => {
       if (val == null || val === '') return;
-      doc.font('Helvetica-Bold').text(`${lab}: `, L + 10, yy, { continued: true, width: W - 20 })
-        .font('Helvetica').text(String(val));
+      doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.ink)
+        .text(`${lab}: `, L + 10, yy, { continued: true, width: W - 20 })
+        .font('Helvetica').text(String(val), { width: W - 20 });
       yy = doc.y + 2;
     };
     row('Phone', header.customer_phone || addr.phone);
