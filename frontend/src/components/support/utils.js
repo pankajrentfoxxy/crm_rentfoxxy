@@ -305,7 +305,21 @@ export const itemAllowsTechnicianAssign = (item) => {
   const method = String(item.pickup_method || '').trim().toLowerCase();
   if (method === 'courier' || method === 'porter') return false;
   if (item.item_type === 'pickup' && item.status === 'pending_dispatch') return false;
+  if (item.item_type === 'complaint' && item.visited_at) return false;
   return true;
+};
+
+/** Return pickup assignee can change before technician marks reached / OTP. */
+export const isPickupAssignmentEditable = (item) => {
+  if (!item || item.item_type !== 'pickup') return false;
+  if (['resolved', 'closed', 'inventory_updated', 'cancelled'].includes(String(item.status || ''))) {
+    return false;
+  }
+  if (item.visited_at || item.customer_otp_verified_at || item.warehouse_received_at) return false;
+  if (item.technician_esign_at || item.picked_up_at) return false;
+  const es = item.effective_current_step;
+  if (es === 'pending_dispatch') return false;
+  return !!(item.pickup_method || item.pickup_assigned_to || item.assigned_to);
 };
 
 export const ticketHasUnassignedTechnicianSlots = (ticket) => (

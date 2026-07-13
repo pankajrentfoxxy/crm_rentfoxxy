@@ -35,6 +35,7 @@ export const getDCMeta = (so) => api.get(`${base}/delivery-challans/meta/add`, {
 export const getDcQcStatus = (n) => api.get(`${base}/delivery-challans/${encDc(n)}/qc-status`);
 export const createDcQcTickets = (n) => api.post(`${base}/delivery-challans/${encDc(n)}/qc-ticket`);
 export const dispatchDC = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}/dispatch`, d);
+export const updateDcAssignment = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}/assignment`, d);
 export const markDelivered = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}/delivered`, d);
 export const markRejected = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}/rejected`, d);
 export const markCustomerRejected = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}/customer-rejected`, d);

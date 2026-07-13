@@ -62,7 +62,7 @@ const sosCtrl = require('../controllers/salesOrderSerialController');
 const flowCtrl = require('../controllers/deliveryFlowController');
 const supportCtrl = require('../controllers/supportController');
 const { soRoute, bindSoNumber, bindSoSerialDetach } = require('../middleware/soNumberRoutes');
-const { dcRoute, bindDcNumber } = require('../middleware/dcNumberRoutes');
+const { dcRoute, bindDcNumber, rejectDcActionSuffix } = require('../middleware/dcNumberRoutes');
 
 router.use(authMiddleware);
 
@@ -122,6 +122,7 @@ router.post(...dcRoute('/verify-otp', dcEdit, ctrl.verifyDeliveryOtp));
 router.post(...dcRoute('/delivery-register', dcEdit, ctrl.submitDeliveryRegister));
 router.post(...dcRoute('/qc-ticket', dcEdit, ctrl.createPreDispatchQcTicket));
 router.get(...dcRoute('/qc-status', soDcView, ctrl.getDcQcStatus));
+router.patch(...dcRoute('/assignment', soDcEdit, ctrl.updateDcAssignment));
 router.patch(...dcRoute('/dispatch', soDcEdit, ctrl.updateDcDispatch));
 router.patch(...dcRoute('/cancel', soDcEdit, ctrl.cancelDeliveryChallan));
 router.patch(...dcRoute('/delivered', soDcEdit, ctrl.markDcDelivered));
@@ -134,7 +135,7 @@ router.patch(...dcRoute('/courier-rejected', soDcEdit, flowCtrl.markCourierRejec
 // otherwise swallow specific sub-paths like /qc-status, /dispatch, /delivered.
 router.get(/^\/delivery-challans\/(.+)$/, bindDcNumber, soDcView, ctrl.getDeliveryChallan);
 // Edit an existing DC in place — Super Admin only.
-router.patch(/^\/delivery-challans\/(.+)$/, bindDcNumber, checkRole('super_admin'), ctrl.updateDeliveryChallan);
+router.patch(/^\/delivery-challans\/(.+)$/, rejectDcActionSuffix, bindDcNumber, checkRole('super_admin'), ctrl.updateDeliveryChallan);
 
 router.get('/return-dc', rdcView, ctrl.listReturnDeliveryChallans);
 router.get('/return-dc/:rdcNumber/detail', rdcView, ctrl.getReturnDcDetail);

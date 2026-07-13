@@ -4,17 +4,18 @@ import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
 import DispatchModal from '../components/DispatchModal';
+import ChangeAssigneeModal from '../components/ChangeAssigneeModal';
 import EInvoicePanel from '../components/EInvoicePanel';
 import QcStatusBadge from '../components/QcStatusBadge';
 import {
-  createDcQcTickets, getDC, getDcQcStatus, getSalesOrderFull,
+  createDcQcTickets, getDC, getDcQcStatus, getDCMeta, getSalesOrderFull,
   markDelivered, markRejected, regenerateDcPdf,
   sendDeliveryOtp, sendWarehouseReturnOtp, verifyDeliveryOtp, verifyWarehouseReturnOtp,
   updateDC, dispatchDC,
 } from '../salesPipelineApi';
 import {
   DC_STATUS_STYLES, formatConfig, formatCurrency, formatDate, formatDateTime,
-  parseSerials, salesOrderDetailPath, statusLabel,
+  isDcAssignmentEditable, parseSerials, salesOrderDetailPath, statusLabel,
 } from '../salesPipelineUtils';
 import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
@@ -63,6 +64,10 @@ export default function DeliveryChallanDetailPage() {
   const [rejectRemarks, setRejectRemarks] = useState('');
   const [warehouseOtp, setWarehouseOtp] = useState('');
   const [editOpen, setEditOpen] = useState(false);
+  const [changeAssigneeOpen, setChangeAssigneeOpen] = useState(false);
+  const [assignmentEditable, setAssignmentEditable] = useState(false);
+  const [assignmentHistory, setAssignmentHistory] = useState([]);
+  const [technicians, setTechnicians] = useState([]);
 
   const head = lines[0] || {};
   const summaryLines = billingLines.length ? billingLines : lines;
@@ -83,6 +88,8 @@ export default function DeliveryChallanDetailPage() {
       setLines(res.data?.lines || []);
       setBillingLines(res.data?.billing_lines || []);
       setTotals(res.data?.totals || null);
+      setAssignmentEditable(res.data?.assignment_editable ?? isDcAssignmentEditable(res.data?.lines?.[0]?.status));
+      setAssignmentHistory(res.data?.assignment_history || []);
       if (res.data?.lines?.[0]?.sales_order_number) {
         const soRes = await getSalesOrderFull(res.data.lines[0].sales_order_number);
         setPaymentSummary(soRes.data?.summary);
@@ -94,6 +101,19 @@ export default function DeliveryChallanDetailPage() {
   }, [dcNumber, loadQc]);
 
   useEffect(() => { load(); }, [load]);
+
+  const openChangeAssignee = async () => {
+    const so = lines[0]?.sales_order_number;
+    if (so) {
+      try {
+        const meta = await getDCMeta(so);
+        setTechnicians(meta.data?.delivery_technicians || []);
+      } catch {
+        setTechnicians([]);
+      }
+    }
+    setChangeAssigneeOpen(true);
+  };
 
   const initiateQc = async () => {
     try {
@@ -470,9 +490,48 @@ export default function DeliveryChallanDetailPage() {
                 <p>Mode: <strong className="capitalize">{head.dispatch_mode || head.ship_by || '—'}</strong></p>
                 {head.courier_name && <p>Courier: {head.courier_name} · AWB: {head.awb_number || '—'}</p>}
                 {(head.dispatch_mode === 'inhouse' || head.ship_by === 'by_hand') && (
-                  <p>Assigned to delivery technician — visible in their delivery bucket.</p>
+                  <p>Technician: <strong>{head.delivery_person_name || head.technician_name || 'Not assigned'}</strong></p>
+                )}
+                {(head.dispatch_mode === 'porter' || head.ship_by === 'by_porter') && (
+                  <p>Porter: <strong>{head.porter_tracking_id || head.porter_order_id || '—'}</strong></p>
+                )}
+                {(head.dispatch_mode === 'inhouse' || head.ship_by === 'by_hand') && (
+                  <p className="text-xs text-gray-500">Assigned delivery technician — visible in their delivery bucket.</p>
                 )}
               </div>
+              {assignmentEditable ? (
+                <PermissionGate section="dispatch_ops" action="edit">
+                  <button
+                    type="button"
+                    onClick={openChangeAssignee}
+                    className="px-4 py-2 border border-blue-200 text-blue-700 rounded-lg text-sm hover:bg-blue-50"
+                  >
+                    Change Assignee
+                  </button>
+                  <p className="text-xs text-gray-500">
+                    You can reassign technician, courier, or porter until pickup/delivery starts (status: reached or later).
+                  </p>
+                </PermissionGate>
+              ) : (
+                <p className="text-xs text-gray-500">Assignee is locked — pickup/delivery has already started or completed.</p>
+              )}
+              {assignmentHistory.length > 0 && (
+                <div className="border rounded-lg p-3 space-y-2">
+                  <h3 className="text-sm font-semibold text-gray-800">Assignment History</h3>
+                  <ul className="space-y-2 text-xs text-gray-600">
+                    {assignmentHistory.map((row) => (
+                      <li key={row.id} className="border-b border-gray-100 pb-2 last:border-0 last:pb-0">
+                        <p><strong>{row.previous_assignee_label || '—'}</strong> → <strong>{row.new_assignee_label || '—'}</strong></p>
+                        <p className="text-gray-400">
+                          {formatDateTime(row.changed_at)}
+                          {row.changed_by_name ? ` · ${row.changed_by_name}` : ''}
+                          {row.reason ? ` · ${row.reason}` : ''}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               {head.status === 'pending' && (
                 <PermissionGate section="dispatch_ops" action="edit">
                   <p className="text-amber-700 text-xs">This DC is not dispatched yet.</p>
@@ -602,6 +661,15 @@ export default function DeliveryChallanDetailPage() {
       </div>
 
       <DispatchModal open={dispatchOpen} dcNumber={dcNumber} qcBlocked={qc?.total_count > 0 && !qc?.all_passed} onClose={() => setDispatchOpen(false)} onDispatched={load} />
+
+      <ChangeAssigneeModal
+        open={changeAssigneeOpen}
+        dcNumber={dcNumber}
+        head={head}
+        technicians={technicians}
+        onClose={() => setChangeAssigneeOpen(false)}
+        onSaved={load}
+      />
 
       {otpModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">

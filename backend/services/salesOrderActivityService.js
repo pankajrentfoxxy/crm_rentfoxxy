@@ -39,6 +39,7 @@ const ACTION_TITLES = {
   dc_laptop_removed: 'Laptop Removed from DC',
   dispatch_started: 'Dispatch Started',
   dispatch_completed: 'Dispatch Completed',
+  assignee_changed: 'Assignee Changed',
   payment_added: 'Payment Added',
   payment_updated: 'Payment Updated',
   payment_deleted: 'Payment Deleted',

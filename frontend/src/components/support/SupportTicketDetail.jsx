@@ -18,12 +18,14 @@ import RaisePartRequestForm from '../../features/support/components/RaisePartReq
 import PickupItemCard from './components/PickupItemCard';
 import CreatePickupModal from './components/CreatePickupModal';
 import PickupSetupForm from './components/PickupSetupForm';
+import AssignmentHistoryList, { actionLabel } from './components/AssignmentHistoryList';
 import {
   formatItemId,
   formatTicketId,
   formatAddress,
   initials,
   itemAllowsTechnicianAssign,
+  isPickupAssignmentEditable,
   podUrl as podUrlFor,
   compressImageFile
 } from './utils';
@@ -60,7 +62,8 @@ function ItemCard({
   technicians,
   canAssign,
   otpNote,
-  workflowActions
+  workflowActions,
+  assignmentHistory = [],
 }) {
   const { user } = useAuth();
   const [comment, setComment] = useState('');
@@ -144,7 +147,12 @@ function ItemCard({
         <ItemStepper item={item} replacementOrder={replacementOrder} />
 
         {isNewPickup ? (
-          <PickupItemCard item={item} ticket={ticket} onRefresh={onRefresh} />
+          <PickupItemCard
+            item={item}
+            ticket={ticket}
+            onRefresh={onRefresh}
+            assignmentHistory={assignmentHistory}
+          />
         ) : (
         <SpecGrid item={item} />
         )}
@@ -434,9 +442,11 @@ function WorkflowActionsBar({ workflowActions, item }) {
     );
 }
 
-function ReplacementOrderBanner({ ticket, replacementOrders, pickups, ticketId, isLead, onRefresh }) {
+function ReplacementOrderBanner({ ticket, replacementOrders, pickups, ticketId, isLead, onRefresh, assignmentHistory = [] }) {
   const [showAssign, setShowAssign] = useState(false);
+  const [showChangeAssignee, setShowChangeAssignee] = useState(false);
   const [assignBusy, setAssignBusy] = useState(false);
+  const [changeBusy, setChangeBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
 
   if (!ticket.sales_order_number) return null;
@@ -448,6 +458,8 @@ function ReplacementOrderBanner({ ticket, replacementOrders, pickups, ticketId, 
   const pendingPickup = linkedPickups.some(
     (p) => p.status === 'pending_dispatch' || (!p.pickup_method && !p.assigned_to && !p.pickup_assigned_to)
   );
+  const editablePickup = linkedPickups.find((p) => isPickupAssignmentEditable(p));
+  const canChangeAssignee = isLead && !pendingPickup && !!editablePickup;
   const migratedPickupStuck = linkedPickups.some(
     (p) => ['resolved', 'inventory_updated', 'closed'].includes(p.status)
       || p.customer_otp_verified_at
@@ -478,6 +490,37 @@ function ReplacementOrderBanner({ ticket, replacementOrders, pickups, ticketId, 
       setAssignBusy(false);
     }
   };
+
+  const changePickupAssignee = async (form) => {
+    setChangeBusy(true);
+    try {
+      await api.patch(`/support/tickets/${ticketId}/return-pickup-assignment`, {
+        dispatch_mode: form.dispatch_mode,
+        technician_user_id: form.technician_user_id,
+        courier_name: form.courier_name,
+        awb_number: form.awb_number,
+        porter_tracking_id: form.porter_tracking_id,
+        porter_order_id: form.porter_order_id,
+        reason: form.reason,
+      });
+      toast.success('Pickup assignee updated');
+      setShowChangeAssignee(false);
+      onRefresh?.();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Failed to update assignee');
+    } finally {
+      setChangeBusy(false);
+    }
+  };
+
+  const changeInitialValues = editablePickup ? {
+    dispatch_mode: editablePickup.pickup_method || 'technician',
+    technician_user_id: editablePickup.pickup_assigned_to || editablePickup.assigned_to,
+    courier_name: editablePickup.pickup_courier_name,
+    awb_number: editablePickup.pickup_awb,
+    porter_tracking_id: editablePickup.porter_tracking_id,
+    porter_order_id: editablePickup.porter_order_id,
+  } : null;
 
   const cancelReturnPickup = async (force = false) => {
     const reason = window.prompt(
@@ -547,7 +590,7 @@ function ReplacementOrderBanner({ ticket, replacementOrders, pickups, ticketId, 
                 Assign return pickup
               </button>
             ) : (
-              <div className="rounded-lg border border-pink-100 bg-white p-3">
+              <div className="rounded-lg border border-pink-100 bg-white p-3 w-full">
                 <PickupSetupForm
                   ticket={ticket}
                   dispatchOnly
@@ -560,6 +603,40 @@ function ReplacementOrderBanner({ ticket, replacementOrders, pickups, ticketId, 
                 </button>
               </div>
             )}
+          </div>
+        )}
+        {canChangeAssignee && (
+          <div className="pt-2 border-t border-pink-100">
+            {!showChangeAssignee ? (
+              <button
+                type="button"
+                className="support-btn-outline min-h-[40px] text-sm text-blue-700 border-blue-200"
+                onClick={() => setShowChangeAssignee(true)}
+              >
+                Change pickup assignee
+              </button>
+            ) : (
+              <div className="rounded-lg border border-blue-100 bg-white p-3">
+                <PickupSetupForm
+                  ticket={ticket}
+                  dispatchOnly
+                  changeMode
+                  initialValues={changeInitialValues}
+                  saving={changeBusy}
+                  submitLabel="Save assignee"
+                  onSubmit={changePickupAssignee}
+                  onCancel={() => setShowChangeAssignee(false)}
+                />
+              </div>
+            )}
+            <p className="text-xs text-slate-500 mt-1">
+              Reassign technician, courier, or porter until pickup starts (before reached).
+            </p>
+          </div>
+        )}
+        {assignmentHistory.length > 0 && (
+          <div className="pt-2 border-t border-pink-100">
+            <AssignmentHistoryList rows={assignmentHistory} />
           </div>
         )}
         {canForceVoidPickup && (
@@ -597,7 +674,7 @@ function ReplacementOrderBanner({ ticket, replacementOrders, pickups, ticketId, 
   );
 }
 
-function PickupStatusBanner({ ticket, pickups, ticketId, isLead, onRefresh }) {
+function PickupStatusBanner({ ticket, pickups, ticketId, isLead, onRefresh, assignmentHistory = [] }) {
   const [cancelBusy, setCancelBusy] = useState(false);
   const active = pickups.find((p) => !['resolved', 'closed', 'inventory_updated', 'cancelled'].includes(p.status));
   const pendingAssign = pickups.some(
@@ -698,6 +775,11 @@ function PickupStatusBanner({ ticket, pickups, ticketId, isLead, onRefresh }) {
           >
             {cancelBusy ? 'Cancelling…' : `Cancel Return DC ${ticket.return_dc_number}`}
           </button>
+        </div>
+      )}
+      {assignmentHistory.length > 0 && (
+        <div className="mt-3 pt-3 border-t border-slate-100">
+          <AssignmentHistoryList rows={assignmentHistory} />
         </div>
       )}
     </section>
@@ -817,6 +899,7 @@ export default function SupportTicketDetail() {
     ticket,
     items: rawItems,
     audit: rawAudit,
+    assignment_history: assignmentHistory = [],
     replacement_orders: replacementOrders = [],
     customer_addresses: customerAddresses = [],
     otp_phase_note: otpNote
@@ -1025,6 +1108,7 @@ export default function SupportTicketDetail() {
               ticketId={ticket.id}
               isLead={isSupportLead(user)}
               onRefresh={load}
+              assignmentHistory={assignmentHistory}
             />
           )}
 
@@ -1035,6 +1119,7 @@ export default function SupportTicketDetail() {
               ticketId={ticket.id}
               isLead={isSupportLead(user)}
               onRefresh={load}
+              assignmentHistory={assignmentHistory}
             />
           )}
 
@@ -1068,6 +1153,7 @@ export default function SupportTicketDetail() {
                   canAssign={!isCancelled && isSupportLead(user) && itemAllowsTechnicianAssign(item)}
                   otpNote={otpNote}
                   workflowActions={workflowForItem(item)}
+                  assignmentHistory={assignmentHistory}
                 />
               ))}
             </div>
@@ -1084,7 +1170,14 @@ export default function SupportTicketDetail() {
                       {' · '}
                       <span className="font-medium">{entry.user_name || 'System'}</span>
                       {' · '}
-                      {entry.action.replace(/_/g, ' ')}
+                      {actionLabel(entry.action)}
+                      {entry.detail?.previous_assignee && entry.detail?.new_assignee
+                        ? `: ${entry.detail.previous_assignee} → ${entry.detail.new_assignee}`
+                        : ''}
+                      {!entry.detail?.previous_assignee && entry.detail?.new_assignee
+                        ? `: ${entry.detail.new_assignee}`
+                        : ''}
+                      {entry.detail?.reason ? ` (${entry.detail.reason})` : ''}
                       {entry.detail?.remark ? `: ${entry.detail.remark}` : ''}
                       {entry.detail?.text ? `: ${entry.detail.text}` : ''}
                     </p>

@@ -35,6 +35,11 @@ export const DISPATCH_MODE_STYLES = {
   inhouse: 'bg-teal-100 text-teal-800',
 };
 
+/** DC assignee can be changed while pending/assigned and before reached/delivered. */
+export function isDcAssignmentEditable(status) {
+  return ['pending', 'processing', 'in_transit', 'shipped'].includes(String(status || '').toLowerCase());
+}
+
 export function formatCurrency(n) {
   const v = Number(n) || 0;
   return `₹ ${v.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;

@@ -41,6 +41,11 @@ const {
   safeLogSalesOrderActivity,
   listSalesOrderActivities,
 } = require('../services/salesOrderActivityService');
+const {
+  isAssignmentEditable,
+  listAssignmentHistory,
+  updateDcAssignment: applyDcAssignmentChange,
+} = require('../services/dcAssignmentService');
 
 /**
  * Resolve a vendor_serial_numbers.serial_id from a parsed DC serial entry,
@@ -950,12 +955,25 @@ exports.getDeliveryChallan = async (req, res) => {
       supplyState: resolveSupplyStateFromAddress(head.customer_shipping_address, head.supply_state),
     });
 
+    let assignmentHistory = [];
+    try {
+      assignmentHistory = await listAssignmentHistory(req.params.dcNumber);
+    } catch (histErr) {
+      console.warn('dc assignment history:', histErr.message);
+    }
+
+    const lineStatuses = [...new Set(lines.map((l) => String(l.status || '').toLowerCase()))];
+    const assignmentEditable = lineStatuses.length > 0
+      && lineStatuses.every((s) => isAssignmentEditable(s));
+
     res.json({
       success: true,
       dc_number: req.params.dcNumber,
       lines,
       billing_lines: billingLines,
       totals,
+      assignment_editable: assignmentEditable,
+      assignment_history: assignmentHistory,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -2452,6 +2470,44 @@ async function assertDcQcComplete(dcNumber) {
   }
   return { ok: true };
 }
+
+exports.updateDcAssignment = async (req, res) => {
+  try {
+    const dcNumber = req.params.dcNumber;
+    const result = await applyDcAssignmentChange({
+      dcNumber,
+      body: req.body || {},
+      user: req.user,
+    });
+    if (!result.ok) {
+      return res.status(result.status || 400).json({ success: false, message: result.message });
+    }
+
+    if (result.sales_order_number && result.activity) {
+      const { previousLabel, newLabel, previousMeta, nextMeta, reason } = result.activity;
+      await safeLogSalesOrderActivity({
+        salesOrderNumber: result.sales_order_number,
+        activityType: ACTIVITY_TYPES.DELIVERY_CHALLAN,
+        action: 'assignee_changed',
+        description: `Assignee changed for ${dcNumber}: ${previousLabel} → ${newLabel}`,
+        remarks: reason,
+        metadata: {
+          dc_number: dcNumber,
+          previous_assignee: previousLabel,
+          new_assignee: newLabel,
+          previous_dispatch_mode: previousMeta.dispatch_mode,
+          new_dispatch_mode: nextMeta.dispatch_mode,
+        },
+        user: req.user,
+      });
+    }
+
+    res.json({ success: true, message: 'Assignee updated', data: result.data });
+  } catch (error) {
+    console.error('updateDcAssignment:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
 
 exports.updateDcDispatch = async (req, res) => {
   try {

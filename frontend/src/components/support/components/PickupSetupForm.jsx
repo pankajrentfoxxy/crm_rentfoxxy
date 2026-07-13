@@ -16,7 +16,10 @@ export default function PickupSetupForm({
   hideMachinePreview = false,
   dispatchOptional = false,
   dispatchOnly = false,
+  changeMode = false,
+  initialValues = null,
   onSubmit,
+  onCancel,
   saving = false,
   submitLabel = 'Create Pickup + Return DC',
 }) {
@@ -28,6 +31,7 @@ export default function PickupSetupForm({
   const [technicianId, setTechnicianId] = useState('');
   const [courier, setCourier] = useState({ name: '', awb: '' });
   const [porter, setPorter] = useState({ tracking_id: '', order_id: '' });
+  const [reason, setReason] = useState('');
   const [technicians, setTechnicians] = useState([]);
   const [loadingAddr, setLoadingAddr] = useState(false);
   const [dcRef, setDcRef] = useState(null);
@@ -46,6 +50,22 @@ export default function PickupSetupForm({
       .then((r) => setTechnicians(r.data.technicians || []))
       .catch(() => setTechnicians([]));
   }, []);
+
+  useEffect(() => {
+    if (!initialValues) return;
+    const mode = initialValues.dispatch_mode || '';
+    setDispatchMode(mode);
+    setTechnicianId(initialValues.technician_user_id ? String(initialValues.technician_user_id) : '');
+    setCourier({
+      name: initialValues.courier_name || '',
+      awb: initialValues.awb_number || '',
+    });
+    setPorter({
+      tracking_id: initialValues.porter_tracking_id || '',
+      order_id: initialValues.porter_order_id || '',
+    });
+    setReason('');
+  }, [initialValues]);
 
   useEffect(() => {
     setPickupAddress((a) => ({
@@ -96,6 +116,7 @@ export default function PickupSetupForm({
       awb_number: dispatchMode === 'courier' ? courier.awb : null,
       porter_tracking_id: dispatchMode === 'porter' ? porter.tracking_id : null,
       porter_order_id: dispatchMode === 'porter' ? porter.order_id : null,
+      reason: changeMode ? reason : undefined,
     });
   };
 
@@ -190,9 +211,20 @@ export default function PickupSetupForm({
 
       <div>
         <label className="text-sm font-semibold text-gray-700 block mb-1">
-          {dispatchOnly ? 'Assign pickup*' : dispatchOptional ? 'Assign pickup now (optional)' : 'Dispatch Method*'}
+          {changeMode
+            ? 'Change pickup assignee*'
+            : dispatchOnly
+              ? 'Assign pickup*'
+              : dispatchOptional
+                ? 'Assign pickup now (optional)'
+                : 'Dispatch Method*'}
         </label>
-        {dispatchOptional && (
+        {changeMode && (
+          <p className="text-xs text-slate-500 mb-2">
+            Update technician, courier, or porter before pickup starts. Changes are logged in activity history.
+          </p>
+        )}
+        {dispatchOptional && !changeMode && (
           <p className="text-xs text-slate-500 mb-2">Skip if you don&apos;t have technician or tracking details yet — assign later from the ticket.</p>
         )}
         <div className="grid grid-cols-3 gap-2">
@@ -265,14 +297,36 @@ export default function PickupSetupForm({
         )}
       </div>
 
-      <button
-        type="button"
-        disabled={!canSubmit || saving}
-        onClick={handleSubmit}
-        className="w-full py-4 bg-orange-600 text-white rounded-2xl font-bold text-base disabled:opacity-50 active:scale-[0.98]"
-      >
-        {saving ? 'Creating…' : submitLabel}
-      </button>
+      {changeMode && (
+        <textarea
+          className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm"
+          rows={2}
+          placeholder="Reason for change (optional)"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+        />
+      )}
+
+      <div className={changeMode && onCancel ? 'flex gap-2' : ''}>
+        {changeMode && onCancel && (
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={saving}
+            className="flex-1 py-3 border border-gray-200 rounded-2xl font-semibold text-sm"
+          >
+            Cancel
+          </button>
+        )}
+        <button
+          type="button"
+          disabled={!canSubmit || saving}
+          onClick={handleSubmit}
+          className={`${changeMode && onCancel ? 'flex-1' : 'w-full'} py-4 bg-orange-600 text-white rounded-2xl font-bold text-base disabled:opacity-50 active:scale-[0.98]`}
+        >
+          {saving ? 'Saving…' : submitLabel}
+        </button>
+      </div>
     </div>
   );
 }

@@ -4,19 +4,23 @@ import toast from 'react-hot-toast';
 import api from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
 import { isSupportLead, isSupportTechnician } from '../../../utils/supportAccess';
-import { podUrl as podUrlFor, compressImageFile, uploadAssetUrl } from '../utils';
+import { podUrl as podUrlFor, compressImageFile, uploadAssetUrl, isPickupAssignmentEditable } from '../utils';
+import PickupSetupForm from './PickupSetupForm';
+import AssignmentHistoryList from './AssignmentHistoryList';
 
 /**
  * PickupItemCard — Phase 20 step-by-step pickup flow.
  * Assigned -> Reached (GPS) -> POD photo -> Customer OTP -> Warehouse e-sign.
  * Rendered for item_type='pickup' items that carry a pickup_type.
  */
-export default function PickupItemCard({ item, ticket, onRefresh }) {
+export default function PickupItemCard({ item, ticket, onRefresh, assignmentHistory = [] }) {
   const { user } = useAuth();
   const [esignOpen, setEsignOpen] = useState(false);
   const [techSignOpen, setTechSignOpen] = useState(false);
   const [otpInput, setOtpInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const [changeAssigneeOpen, setChangeAssigneeOpen] = useState(false);
+  const [changeBusy, setChangeBusy] = useState(false);
 
   const run = async (fn) => {
     setBusy(true);
@@ -91,6 +95,38 @@ export default function PickupItemCard({ item, ticket, onRefresh }) {
   const otpVerified = !!item.customer_otp_verified_at;
   const whDone = !!item.warehouse_received_at;
   const addr = ticket?.pickup_address && typeof ticket.pickup_address === 'object' ? ticket.pickup_address : null;
+  const canChangeAssignee = lead && isPickupAssignmentEditable(item);
+
+  const changeAssignee = async (form) => {
+    setChangeBusy(true);
+    try {
+      await api.patch(`/support/tickets/${ticket.id}/return-pickup-assignment`, {
+        dispatch_mode: form.dispatch_mode,
+        technician_user_id: form.technician_user_id,
+        courier_name: form.courier_name,
+        awb_number: form.awb_number,
+        porter_tracking_id: form.porter_tracking_id,
+        porter_order_id: form.porter_order_id,
+        reason: form.reason,
+      });
+      toast.success('Pickup assignee updated');
+      setChangeAssigneeOpen(false);
+      onRefresh?.();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Failed to update assignee');
+    } finally {
+      setChangeBusy(false);
+    }
+  };
+
+  const pickupInitialValues = {
+    dispatch_mode: item.pickup_method || 'technician',
+    technician_user_id: item.pickup_assigned_to || item.assigned_to,
+    courier_name: item.pickup_courier_name,
+    awb_number: item.pickup_awb,
+    porter_tracking_id: item.porter_tracking_id,
+    porter_order_id: item.porter_order_id,
+  };
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
@@ -192,6 +228,39 @@ export default function PickupItemCard({ item, ticket, onRefresh }) {
           {isCourier && item.pickup_awb && <p><strong>AWB:</strong> {item.pickup_awb}</p>}
           {isPorter && item.porter_tracking_id && <p><strong>Porter ID:</strong> {item.porter_tracking_id}</p>}
           {isPorter && item.porter_order_id && <p><strong>Order ID:</strong> {item.porter_order_id}</p>}
+        </div>
+      )}
+
+      {canChangeAssignee && (
+        <div className="mx-4 mt-3">
+          {!changeAssigneeOpen ? (
+            <button
+              type="button"
+              className="w-full py-2.5 text-sm font-semibold border border-blue-200 text-blue-700 rounded-xl bg-blue-50"
+              onClick={() => setChangeAssigneeOpen(true)}
+            >
+              Change pickup assignee
+            </button>
+          ) : (
+            <div className="rounded-xl border border-blue-100 bg-white p-3">
+              <PickupSetupForm
+                ticket={ticket}
+                dispatchOnly
+                changeMode
+                initialValues={pickupInitialValues}
+                saving={changeBusy}
+                submitLabel="Save assignee"
+                onSubmit={changeAssignee}
+                onCancel={() => setChangeAssigneeOpen(false)}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      {assignmentHistory.length > 0 && (
+        <div className="mx-4 mt-3 mb-3">
+          <AssignmentHistoryList rows={assignmentHistory} compact />
         </div>
       )}
 

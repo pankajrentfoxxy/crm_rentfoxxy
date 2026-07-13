@@ -17,6 +17,7 @@ const { nextDocumentNumber } = require('../services/salesManagementService');
 const { regenerateReturnDcPdf, regenerateReturnDcPdfByRdc } = require('../services/returnDcPdfService');
 const replacementFlow = require('../services/supportReplacementFlowService');
 const { preserveCustomerAssetsOnCancel, forceRestoreCustomerAssetsOnCancel } = require('../services/supportCancelInventoryService');
+const { applyReturnPickupAssignment } = require('../services/supportPickupAssignmentService');
 const { validateIndianMobile, normalizeIndianMobile } = require('../utils/phoneValidation');
 
 function normalizeSupportPhoneFields(body) {
@@ -552,6 +553,52 @@ const logAudit = async (client, { itemId, ticketId, userId, action, detail }) =>
     );
 };
 
+const ASSIGNMENT_AUDIT_ACTIONS = new Set([
+    'return_pickup_assignee_changed',
+    'return_pickup_assigned',
+    'technician_assigned',
+    'technician_reassigned',
+]);
+
+function parseAuditDetail(raw) {
+    if (!raw) return {};
+    if (typeof raw === 'object') return raw;
+    try {
+        return JSON.parse(raw);
+    } catch {
+        return {};
+    }
+}
+
+function buildAssignmentHistory(auditRows = []) {
+    return auditRows
+        .filter((row) => ASSIGNMENT_AUDIT_ACTIONS.has(row.action))
+        .map((row) => {
+            const detail = parseAuditDetail(row.detail);
+            return {
+                id: row.id,
+                action: row.action,
+                changed_at: row.created_at,
+                changed_by: row.user_name || null,
+                previous_assignee: detail.previous_assignee
+                    || (detail.previous_assigned_to ? `User #${detail.previous_assigned_to}` : null),
+                new_assignee: detail.new_assignee
+                    || (detail.assigned_to ? `User #${detail.assigned_to}` : null),
+                reason: detail.reason || null,
+                return_dc_number: detail.return_dc_number || null,
+                dispatch_mode: detail.new_dispatch_mode || detail.dispatch_mode || null,
+            };
+        })
+        .reverse();
+}
+
+async function resolveUserDisplayName(client, userId) {
+    if (!userId) return null;
+    const db = client || pool;
+    const r = await db.query('SELECT name FROM users WHERE user_id = $1', [userId]);
+    return r.rows[0]?.name || `User #${userId}`;
+}
+
 const bumpTicketActivity = async (client, ticketId) => {
     await client.query(
         `UPDATE support_tickets
@@ -721,9 +768,13 @@ const getTicketWithItems = async (ticketId, user) => {
          FROM support_ticket_item_audit a
          LEFT JOIN users u ON u.user_id = a.user_id
          WHERE a.ticket_id = $1
-         ORDER BY a.created_at ASC`,
+         ORDER BY a.created_at DESC`,
         [ticketId]
     );
+    const auditRows = auditRes.rows.map((row) => ({
+        ...row,
+        detail: parseAuditDetail(row.detail),
+    }));
 
     let customerAddresses = [];
     if (leadView) {
@@ -743,7 +794,8 @@ const getTicketWithItems = async (ticketId, user) => {
             display_phone: ticket.ticket_phone_override || ticket.customer_phone
         },
         items: items.map((i) => ({ ...i, comments: commentsByItem[i.id] || [] })),
-        audit: auditRes.rows,
+        audit: auditRows,
+        assignment_history: buildAssignmentHistory(auditRows),
         replacement_orders: replacementRows,
         customer_addresses: customerAddresses,
         otp_phase_note:
@@ -1658,19 +1710,35 @@ exports.assignItem = async (req, res) => {
             return res.status(e.status || 400).json({ success: false, message: e.message });
         }
     }
+    if (item.visited_at && item.item_type === 'complaint' && assignedTo !== item.assigned_to) {
+        return res.status(409).json({
+            success: false,
+            message: 'Technician cannot be changed after the visit has started.',
+        });
+    }
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
+        const previousName = item.assigned_to
+            ? await resolveUserDisplayName(client, item.assigned_to)
+            : null;
+        const newName = assignedTo ? await resolveUserDisplayName(client, assignedTo) : null;
         await client.query(
             `UPDATE support_ticket_items SET assigned_to = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
             [itemId, assignedTo]
         );
+        const isReassign = item.assigned_to && assignedTo && item.assigned_to !== assignedTo;
         await logAudit(client, {
             itemId,
             ticketId: item.ticket_id,
             userId: req.user.user_id,
-            action: 'technician_assigned',
-            detail: { assigned_to: assignedTo }
+            action: isReassign ? 'technician_reassigned' : 'technician_assigned',
+            detail: {
+                assigned_to: assignedTo,
+                previous_assigned_to: item.assigned_to || null,
+                previous_assignee: previousName,
+                new_assignee: newName,
+            },
         });
         await bumpTicketActivity(client, item.ticket_id);
         await recomputeTicketStatus(client, item.ticket_id);
@@ -3728,110 +3796,47 @@ exports.assignReturnPickupDispatch = async (req, res) => {
         return res.status(403).json({ success: false, message: 'Only support lead can assign pickup' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
-    const body = req.body || {};
-    const {
-        dispatch_mode,
-        technician_user_id,
-        courier_name,
-        awb_number,
-        porter_tracking_id,
-        porter_order_id,
-    } = body;
-
-    if (!['technician', 'courier', 'porter'].includes(dispatch_mode)) {
-        return res.status(400).json({ success: false, message: 'Select technician, courier, or porter' });
-    }
-    if (dispatch_mode === 'technician' && !technician_user_id) {
-        return res.status(400).json({ success: false, message: 'Select a technician' });
-    }
-
-    const client = await pool.connect();
     try {
-        await client.query('BEGIN');
-        const ticketRes = await client.query('SELECT * FROM support_tickets WHERE id = $1', [ticketId]);
-        if (!ticketRes.rows.length) {
-            throw Object.assign(new Error('Ticket not found'), { status: 404 });
-        }
-        const ticket = ticketRes.rows[0];
-        if (!ticket.return_dc_number) {
-            throw Object.assign(new Error('No Return DC on this ticket'), { status: 400 });
-        }
-
-        const dcRes = await client.query(
-            `SELECT status, dispatch_mode FROM delivery_challan_lines
-              WHERE dc_number = $1 AND movement_type = 'return' LIMIT 1`,
-            [ticket.return_dc_number]
-        );
-        if (!dcRes.rows.length) {
-            throw Object.assign(new Error('Return DC not found'), { status: 404 });
-        }
-        const dcRow = dcRes.rows[0];
-        if (dcRow.dispatch_mode && !['pending', 'draft'].includes(String(dcRow.status || '').toLowerCase())) {
-            throw Object.assign(new Error('Pickup is already assigned for this Return DC'), { status: 400 });
-        }
-
-        const techId = dispatch_mode === 'technician' ? parseInt(technician_user_id, 10) : null;
-        const dcDispatchMode = dispatch_mode === 'technician' ? 'inhouse' : dispatch_mode;
-        const newStatus = dcDispatchMode === 'inhouse' ? 'in_transit' : 'shipped';
-
-        await client.query(
-            `UPDATE support_ticket_items SET
-                assigned_to = $2,
-                pickup_assigned_to = $2,
-                pickup_method = $3,
-                pickup_courier_name = $4,
-                pickup_awb = $5,
-                porter_tracking_id = $6,
-                porter_order_id = $7,
-                status = 'assigned',
-                updated_at = NOW()
-             WHERE ticket_id = $1 AND item_type = 'pickup' AND return_dc_number = $8`,
-            [
-                ticketId,
-                techId,
-                dispatch_mode,
-                dispatch_mode === 'courier' ? (courier_name || null) : null,
-                dispatch_mode === 'courier' ? (awb_number || null) : null,
-                dispatch_mode === 'porter' ? (porter_tracking_id || null) : null,
-                dispatch_mode === 'porter' ? (porter_order_id || null) : null,
-                ticket.return_dc_number,
-            ]
-        );
-
-        await client.query(
-            `UPDATE delivery_challan_lines SET
-                dispatch_mode = $2,
-                delivery_person_id = $3,
-                courier_name = $4,
-                awb_number = $5,
-                porter_tracking_id = $6,
-                porter_order_id = $7,
-                status = $8,
-                dispatched_at = NOW(),
-                updated_at = NOW()
-             WHERE dc_number = $1 AND movement_type = 'return'`,
-            [
-                ticket.return_dc_number,
-                dcDispatchMode,
-                techId,
-                dispatch_mode === 'courier' ? (courier_name || null) : null,
-                dispatch_mode === 'courier' ? (awb_number || null) : null,
-                dispatch_mode === 'porter' ? (porter_tracking_id || null) : null,
-                dispatch_mode === 'porter' ? (porter_order_id || null) : null,
-                newStatus,
-            ]
-        );
-
-        await logAudit(client, {
+        const result = await applyReturnPickupAssignment({
             ticketId,
-            userId: req.user.user_id,
-            action: 'return_pickup_assigned',
-            detail: { return_dc_number: ticket.return_dc_number, dispatch_mode },
+            body: req.body || {},
+            allowChange: false,
         });
-        await bumpTicketActivity(client, ticketId);
-        await client.query('COMMIT');
+        if (!result.ok) {
+            return res.status(result.status || 400).json({ success: false, message: result.message });
+        }
 
-        try { await regenerateReturnDcPdfByRdc(pool, ticket.return_dc_number); } catch (pdfErr) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const pickupItem = await client.query(
+                `SELECT id FROM support_ticket_items
+                  WHERE ticket_id = $1 AND item_type = 'pickup' LIMIT 1`,
+                [ticketId]
+            );
+            await logAudit(client, {
+                itemId: pickupItem.rows[0]?.id || null,
+                ticketId,
+                userId: req.user.user_id,
+                action: 'return_pickup_assigned',
+                detail: {
+                    return_dc_number: result.data.return_dc_number,
+                    dispatch_mode: result.data.dispatch_mode,
+                    previous_assignee: 'Unassigned',
+                    new_assignee: result.data.new_assignee,
+                    new_dispatch_mode: result.data.dispatch_mode,
+                },
+            });
+            await bumpTicketActivity(client, ticketId);
+            await client.query('COMMIT');
+        } catch (e) {
+            await client.query('ROLLBACK');
+            throw e;
+        } finally {
+            client.release();
+        }
+
+        try { await regenerateReturnDcPdfByRdc(pool, result.data.return_dc_number); } catch (pdfErr) {
             console.error('[support] return DC pdf (assign):', pdfErr.message);
         }
 
@@ -3839,15 +3844,79 @@ exports.assignReturnPickupDispatch = async (req, res) => {
         res.json({
             success: true,
             message: 'Return pickup assigned',
-            return_dc_number: ticket.return_dc_number,
-            dispatch_mode,
+            return_dc_number: result.data.return_dc_number,
+            dispatch_mode: result.data.dispatch_mode,
             ...data,
         });
     } catch (e) {
-        await client.query('ROLLBACK');
-        return res.status(e.status || 400).json({ success: false, message: e.message || 'Failed to assign pickup' });
-    } finally {
-        client.release();
+        console.error('assignReturnPickupDispatch:', e);
+        return res.status(e.status || 500).json({ success: false, message: e.message || 'Failed to assign pickup' });
+    }
+};
+
+/** Change return pickup assignee before pickup starts (technician / courier / porter). */
+exports.changeReturnPickupAssignment = async (req, res) => {
+    if (!isSupportLead(req.user)) {
+        return res.status(403).json({ success: false, message: 'Only support lead can change pickup assignment' });
+    }
+    const ticketId = parseInt(req.params.ticketId, 10);
+    try {
+        const result = await applyReturnPickupAssignment({
+            ticketId,
+            body: req.body || {},
+            allowChange: true,
+        });
+        if (!result.ok) {
+            return res.status(result.status || 400).json({ success: false, message: result.message });
+        }
+
+        const { previousLabel, newLabel, previousMeta, nextMeta, reason, return_dc_number } = result.activity;
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const pickupItem = await client.query(
+                `SELECT id FROM support_ticket_items
+                  WHERE ticket_id = $1 AND item_type = 'pickup' AND return_dc_number = $2
+                  LIMIT 1`,
+                [ticketId, return_dc_number]
+            );
+            await logAudit(client, {
+                itemId: pickupItem.rows[0]?.id || null,
+                ticketId,
+                userId: req.user.user_id,
+                action: 'return_pickup_assignee_changed',
+                detail: {
+                    return_dc_number,
+                    previous_assignee: previousLabel,
+                    new_assignee: newLabel,
+                    previous_dispatch_mode: previousMeta.dispatch_mode,
+                    new_dispatch_mode: nextMeta.dispatch_mode,
+                    reason,
+                },
+            });
+            await bumpTicketActivity(client, ticketId);
+            await client.query('COMMIT');
+        } catch (e) {
+            await client.query('ROLLBACK');
+            throw e;
+        } finally {
+            client.release();
+        }
+
+        try { await regenerateReturnDcPdfByRdc(pool, return_dc_number); } catch (pdfErr) {
+            console.error('[support] return DC pdf (change assignee):', pdfErr.message);
+        }
+
+        const data = await getTicketWithItems(ticketId, req.user);
+        res.json({
+            success: true,
+            message: 'Pickup assignee updated',
+            data: result.data,
+            ...data,
+        });
+    } catch (e) {
+        console.error('changeReturnPickupAssignment:', e);
+        return res.status(e.status || 500).json({ success: false, message: e.message || 'Failed to update pickup assignee' });
     }
 };
 

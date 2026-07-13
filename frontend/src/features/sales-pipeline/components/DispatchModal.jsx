@@ -81,7 +81,9 @@ export default function DispatchModal({
             <select className="w-full border rounded-lg px-3 py-2 text-sm" value={form.delivery_person_id} onChange={(e) => setForm((f) => ({ ...f, delivery_person_id: e.target.value }))} disabled={qcBlocked}>
               <option value="">Select technician *</option>
               {technicians.map((t) => (
-                <option key={t.user_id || t.id} value={t.user_id || t.id}>{t.name}</option>
+                <option key={t.technician_id || t.user_id} value={t.technician_id || t.id}>
+                  {[t.first_name, t.last_name].filter(Boolean).join(' ') || t.name || t.email}
+                </option>
               ))}
             </select>
           )}

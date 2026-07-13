@@ -30,6 +30,7 @@ const ACTION_ICONS = {
   dc_laptop_added: '➕',
   dc_laptop_removed: '➖',
   dispatch_started: '🚀',
+  assignee_changed: '👤',
   dispatch_completed: '✅',
   payment_added: '💰',
   payment_updated: '💳',
