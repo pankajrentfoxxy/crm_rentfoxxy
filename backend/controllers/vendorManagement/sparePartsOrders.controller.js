@@ -7,9 +7,26 @@ const pool = require('../../config/db');
 const { getTotalAmountOfPurchaseOrder } = require('../../utils/purchaseOrderGst');
 const { nextSparePartsPurchaseOrderNumber } = require('../../services/vendorNumberService');
 const { logVendorAudit } = require('../../services/vendorAuditLogService');
-const { allocateTtsplCodes } = require('../../services/vendorInventoryAssetCodeService');
-const { createPartInstances } = require('../../services/partIdService');
+const { allocatePartAssetCodes, createPartInstances } = require('../../services/partIdService');
 const { listActiveSpareBrandsForDropdown } = require('../../services/assetConfigurationService');
+
+/** Resolve display name for spare PO line (used for PRT_{SHORTCUT}_{NNNN} codes). */
+async function resolveSpareLinePartName(line) {
+  let name = line.name || line.part_name || line.spare_part_name || line.product_name || null;
+  const rawId = line.product_detail_id ?? line.part_id ?? line.product_id ?? line.pro_id ?? line.id;
+  if (!name && rawId != null && /^\d+$/.test(String(rawId))) {
+    const cat = await pool.query(
+      `SELECT name FROM vendor_spare_parts_catalog WHERE part_id = $1`,
+      [Number(rawId)]
+    );
+    name = cat.rows[0]?.name || null;
+    if (!name) {
+      const floor = await pool.query(`SELECT part_name FROM parts WHERE part_id = $1`, [Number(rawId)]);
+      name = floor.rows[0]?.part_name || null;
+    }
+  }
+  return String(name || 'PART').trim();
+}
 
 /**
  * Phase 16 (best-effort): when spare units are received, mirror them into the
@@ -809,12 +826,14 @@ async function receiveSpareLineSerial(req, res) {
   }
 
   const pd = line.product_detail_id ?? line.part_id ?? line.product_id ?? line.pro_id ?? line.id;
+  const partName = await resolveSpareLinePartName(line);
   const extra = { line_index: lineIndex };
   if (pd != null && String(pd).trim() !== '') extra.part_id = String(pd);
 
   const client = await pool.connect();
   let finalGrnId;
   let serialId;
+  let inventoryAssetCode = null;
   try {
     await client.query('BEGIN');
 
@@ -843,10 +862,15 @@ async function receiveSpareLineSerial(req, res) {
       }
     }
 
+    const [assetCode] = await allocatePartAssetCodes(client, partName, 1);
+    inventoryAssetCode = assetCode;
+    extra.unique_product_serial = assetCode;
+    extra.part_asset_code = assetCode;
+
     const insS = await client.query(
-      `INSERT INTO vendor_serial_numbers (spo_id, grn_id, serial_number, extra)
-       VALUES ($1,$2,$3,$4::jsonb) RETURNING serial_id`,
-      [spoId, finalGrnId, serial_number, JSON.stringify(extra)]
+      `INSERT INTO vendor_serial_numbers (spo_id, grn_id, serial_number, inventory_asset_code, extra)
+       VALUES ($1,$2,$3,$4,$5::jsonb) RETURNING serial_id`,
+      [spoId, finalGrnId, serial_number, inventoryAssetCode, JSON.stringify(extra)]
     );
     serialId = insS.rows[0].serial_id;
 
@@ -883,12 +907,14 @@ async function receiveSpareLineSerial(req, res) {
 
   res.status(201).json({
     success: true,
-    message: 'Serial recorded against this spare PO line.',
-    data: { grn_id: finalGrnId, serial_id: serialId, lines: lines2 }
+    message: inventoryAssetCode
+      ? `Spare unit received — ${inventoryAssetCode}`
+      : 'Serial recorded against this spare PO line.',
+    data: { grn_id: finalGrnId, serial_id: serialId, inventory_asset_code: inventoryAssetCode, lines: lines2 }
   });
 }
 
-/** Multi-unit spare receive — manual serials per row + global TTSPL sequence (migration 036). */
+/** Multi-unit spare receive — manual serials per row + PRT asset codes (never TTSPL). */
 const RECEIVE_SPARE_BULK_CAP = 250;
 
 const receiveSpareLineBulkValidators = [
@@ -959,6 +985,7 @@ async function receiveSpareLineBulk(req, res) {
   }
 
   const pd = line.product_detail_id ?? line.part_id ?? line.product_id ?? line.pro_id ?? line.id;
+  const partName = await resolveSpareLinePartName(line);
 
   const client = await pool.connect();
   let finalGrnId;
@@ -1005,14 +1032,15 @@ async function receiveSpareLineBulk(req, res) {
       }
     }
 
-    const assetCodes = await allocateTtsplCodes(client, quantity);
+    const assetCodes = await allocatePartAssetCodes(client, partName, quantity);
 
     for (let i = 0; i < quantity; i += 1) {
       const serial_number = serialsNorm[i];
       const inventory_asset_code = assetCodes[i];
       const extra = {
         line_index: lineIndex,
-        unique_product_serial: inventory_asset_code
+        unique_product_serial: inventory_asset_code,
+        part_asset_code: inventory_asset_code,
       };
       if (pd != null && String(pd).trim() !== '') extra.part_id = String(pd);
 
@@ -1067,7 +1095,7 @@ async function receiveSpareLineBulk(req, res) {
 
   res.status(201).json({
     success: true,
-    message: `${quantity} spare unit(s) received with asset codes.`,
+    message: `${quantity} spare unit(s) received with PRT asset codes.`,
     data: {
       grn_id: finalGrnId,
       created: createdRows,

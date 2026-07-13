@@ -1,5 +1,6 @@
 /**
- * Sequential inventory asset identifiers for PO receiving (TTSPL0001 …).
+ * Sequential inventory asset identifiers for LAPTOP PO receiving (TTSPL0001 …).
+ * Spare parts use PRT_{SHORTCUT}_{NNNN} via partIdService.allocatePartAssetCodes — never TTSPL.
  * Uses singleton row vendor_inventory_asset_sequence (migration 036).
  *
  * Allocation fills the lowest unused numbers first so a failed/aborted receive
