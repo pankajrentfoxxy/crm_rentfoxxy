@@ -10,7 +10,7 @@ import {
   assignLeads, exportLeadsCsv, getAssignableUsers, getLeads, getLeadRecentActivity, importLeadsCsv, updateLeadStatus,
 } from '../leadCrmApi';
 import {
-  formatFollowUpDateTime, followUpTone, formatLeadDate, filterAssignableUsers,
+  followUpTone, formatLeadDate, filterAssignableUsers,
 } from '../leadCrmUtils';
 import LeadCard from '../components/LeadCard';
 import LeadFormDrawer from '../components/LeadFormDrawer';
@@ -18,6 +18,7 @@ import LeadCompactCell from '../components/LeadCompactCell';
 import LeadConfigCell from '../components/LeadConfigCell';
 import LeadListExpandPanel from '../components/LeadListExpandPanel';
 import QuickStatusUpdate from '../components/QuickStatusUpdate';
+import LeadFollowUpCell from '../components/LeadFollowUpCell';
 import MultiSelectFilter from '../components/MultiSelectFilter';
 
 const PAGE_SIZE = 25;
@@ -384,7 +385,6 @@ export default function LeadListPage() {
                     <td colSpan={TABLE_COLS} className="p-8 text-center text-gray-500">No leads</td>
                   </tr>
                 ) : paged.map((lead) => {
-                  const fu = followUpTone(lead.followUpDate);
                   const isExpanded = expandedId === lead.leadId;
                   const ExpandIcon = isExpanded ? ChevronDown : ChevronRight;
                   return (
@@ -430,10 +430,8 @@ export default function LeadListPage() {
                           ) : null}
                         </td>
                         <td className="p-2.5 align-top text-xs text-gray-700">{lead.assignedUser?.name || '—'}</td>
-                        <td className={`p-2.5 align-top text-xs whitespace-nowrap ${
-                          fu === 'overdue' ? 'text-red-600 font-medium' : fu === 'today' ? 'text-amber-600' : 'text-gray-600'
-                        }`}>
-                          {formatFollowUpDateTime(lead.followUpDate, lead.followUpTime)}
+                        <td className="p-2.5 align-top">
+                          <LeadFollowUpCell lead={lead} onUpdated={refreshList} />
                         </td>
                         <td className="p-2.5 align-top">
                           <button type="button" onClick={() => navigate(`/lead-crm/leads/${lead.leadId}`)}
