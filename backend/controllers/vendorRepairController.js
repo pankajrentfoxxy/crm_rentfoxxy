@@ -157,53 +157,90 @@ exports.markDeliveredToVendor = async (req, res) => {
 
 exports.signDispatch = async (req, res) => {
   const client = await pool.connect();
+  let dcNumber = req.params.dcNumber;
+  let result = null;
   try {
     await svc.ensureVendorRepairSchema();
     await client.query('BEGIN');
-    const result = await svc.signDispatchDc(client, {
-      dcNumber: req.params.dcNumber,
+    result = await svc.signDispatchDc(client, {
+      dcNumber,
       warehouseEsign: req.body.warehouse_esign,
       vendorEsign: req.body.vendor_esign,
       dispatchBody: req.body,
       dispatchPod: req.body.dispatch_pod || req.body.dispatch_pod_data || null,
       actorUserId: req.user.user_id,
-      actorName: req.user.name,
+      actorName: req.user.name || req.user.email,
     });
     await client.query('COMMIT');
-    const msg = result.already_dispatched ? 'Already dispatched' : 'Dispatched to vendor';
-    res.json({ success: true, message: msg, ...result });
   } catch (err) {
     await client.query('ROLLBACK');
-    res.status(400).json({ success: false, message: err.message || 'Dispatch signing failed' });
+    return res.status(400).json({ success: false, message: err.message || 'Dispatch signing failed' });
   } finally {
     client.release();
   }
+
+  let pdfPath = null;
+  if (result && !result.already_dispatched) {
+    try {
+      const { generateVendorRepairPdf } = require('../services/vendorRepairPdfService');
+      pdfPath = await generateVendorRepairPdf(dcNumber);
+    } catch (pdfErr) {
+      console.error('[vendorRepair] dispatch PDF failed:', pdfErr.message);
+    }
+  }
+
+  const msg = result?.already_dispatched ? 'Already dispatched' : 'Dispatched to vendor';
+  res.json({ success: true, message: msg, pdf_path: pdfPath, ...result });
 };
 
 exports.receiveBack = async (req, res) => {
   const client = await pool.connect();
+  const dcNumber = req.params.dcNumber;
+  let result = null;
   try {
     await svc.ensureVendorRepairSchema();
     await client.query('BEGIN');
-    const result = await svc.receiveFromVendor(client, {
-      dcNumber: req.params.dcNumber,
+    result = await svc.receiveFromVendor(client, {
+      dcNumber,
       ticketIds: req.body.ticket_ids || req.body.ticketIds || null,
+      receiveItems: req.body.items || req.body.receive_items || null,
       warehouseEsign: req.body.warehouse_esign,
       vendorEsign: req.body.vendor_esign,
       actorUserId: req.user.user_id,
-      actorName: req.user.name,
+      actorName: req.user.name || req.user.email,
     });
     await client.query('COMMIT');
-    const msg = result.status === 'returned'
-      ? 'All laptops received — moved to Floor Manager'
-      : `Received ${result.tickets_updated} laptop(s) — ${result.items_pending} still out for repair`;
-    res.json({ success: true, message: msg, ...result });
   } catch (err) {
     await client.query('ROLLBACK');
-    res.status(400).json({ success: false, message: err.message || 'Receive back failed' });
+    return res.status(400).json({ success: false, message: err.message || 'Receive back failed' });
   } finally {
     client.release();
   }
+
+  let receivePdfPath = null;
+  if (result?.receive_dc_number && result.received_item_ids?.length) {
+    try {
+      const { generateVendorRepairReceivePdf } = require('../services/vendorRepairPdfService');
+      receivePdfPath = await generateVendorRepairReceivePdf(
+        dcNumber,
+        result.receive_dc_number,
+        result.received_item_ids
+      );
+      if (receivePdfPath) {
+        await pool.query(
+          `UPDATE vendor_repair_delivery_challans SET receive_pdf_path = $2, updated_at = NOW() WHERE dc_number = $1`,
+          [dcNumber, receivePdfPath]
+        );
+      }
+    } catch (pdfErr) {
+      console.error('[vendorRepair] receive PDF failed:', pdfErr.message);
+    }
+  }
+
+  const msg = result.status === 'returned'
+    ? 'All laptops received — moved to Floor Manager'
+    : `Received ${result.tickets_updated} laptop(s) — ${result.items_pending} still out for repair`;
+  res.json({ success: true, message: msg, receive_pdf_path: receivePdfPath, ...result });
 };
 
 /** POST /vendor-repair/inventory/erp/:serialId/receive-back — legacy ERP out_for_repare units */
@@ -237,7 +274,7 @@ exports.downloadReceivePdf = async (req, res) => {
     const dc = await svc.getVendorRepairDc(req.params.dcNumber);
     if (!dc?.receive_pdf_path) {
       const { generateVendorRepairReceivePdf } = require('../services/vendorRepairPdfService');
-      const itemIds = (dc?.items || []).filter((i) => i.item_status === 'received').map((i) => i.id);
+      const itemIds = (dc?.items || []).filter((i) => ['received', 'replacement_received'].includes(i.item_status)).map((i) => i.id);
       if (!itemIds.length) return res.status(404).json({ success: false, message: 'Receive PDF not found' });
       const rel = await generateVendorRepairReceivePdf(req.params.dcNumber, dc.receive_dc_number || `${req.params.dcNumber}-R01`, itemIds);
       if (!rel) return res.status(404).json({ success: false, message: 'PDF not found' });

@@ -23,7 +23,7 @@ export function fetchVendorRepairDc(dcNumber) {
 }
 
 export function signVendorRepairDispatch(dcNumber, body) {
-  return api.post(`${base}/dc/${encodeURIComponent(dcNumber)}/dispatch-sign`, body);
+  return api.post(`${base}/dc/${encodeURIComponent(dcNumber)}/dispatch-sign`, body, { timeout: 120000 });
 }
 
 export function updateVendorRepairDispatchDetails(dcNumber, body) {
@@ -35,7 +35,7 @@ export function markVendorRepairDeliveredToVendor(dcNumber) {
 }
 
 export function receiveVendorRepairBack(dcNumber, body) {
-  return api.post(`${base}/dc/${encodeURIComponent(dcNumber)}/receive-back`, body);
+  return api.post(`${base}/dc/${encodeURIComponent(dcNumber)}/receive-back`, body, { timeout: 120000 });
 }
 
 export function vendorRepairPdfUrl(dcNumber) {
