@@ -81,14 +81,6 @@ function dcRoute(suffix, ...handlers) {
   return [dcSuffixPattern(suffix), bindDcNumber, ...handlers];
 }
 
-module.exports = {
-  DC_ACTION_SUFFIXES,
-  normalizeDcNumber,
-  bindDcNumber,
-  rejectDcActionSuffix,
-  dcRoute,
-  dcSuffixPattern,
-};
 /** Vendor repair DC routes (VRDC/26-27/0001 may contain slashes). */
 function vrdcSuffixPattern(suffix) {
   const esc = String(suffix || '').replace(/\//g, '\\/');
@@ -99,4 +91,13 @@ function vrdcRoute(suffix, ...handlers) {
   return [vrdcSuffixPattern(suffix), bindDcNumber, ...handlers];
 }
 
-module.exports = { dcRoute, vrdcRoute, bindDcNumber, dcSuffixPattern, vrdcSuffixPattern };
+module.exports = {
+  DC_ACTION_SUFFIXES,
+  normalizeDcNumber,
+  bindDcNumber,
+  rejectDcActionSuffix,
+  dcRoute,
+  dcSuffixPattern,
+  vrdcRoute,
+  vrdcSuffixPattern,
+};
