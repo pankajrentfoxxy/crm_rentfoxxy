@@ -41,7 +41,7 @@ async function ensureVendorRepairSchema() {
   if (schemaEnsured) return;
   if (!schemaEnsurePromise) {
     schemaEnsurePromise = (async () => {
-      for (const file of ['121_diagnosis_failed_vendor_repair.sql', '124_vendor_repair_enhancements.sql', '125_vendor_repair_dispatch.sql', '129_vendor_repair_dispatch_pod.sql', '130_vendor_repair_replacement.sql']) {
+      for (const file of ['121_diagnosis_failed_vendor_repair.sql', '124_vendor_repair_enhancements.sql', '125_vendor_repair_dispatch.sql', '129_vendor_repair_dispatch_pod.sql', '130_vendor_repair_replacement.sql', '131_vendor_repair_signatures.sql']) {
         const migrationPath = path.join(__dirname, '../migrations', file);
         if (fs.existsSync(migrationPath)) {
           await pool.query(fs.readFileSync(migrationPath, 'utf8'));
@@ -122,9 +122,15 @@ function normalizeReceiveItems(bodyItems, ticketIds) {
       if (!tid) continue;
       map.set(tid, {
         receive_mode: row.receive_mode === 'replacement' ? 'replacement' : 'repaired',
+        verified_serial: row.verified_serial || row.verifiedSerial || '',
+        wh_esign: row.wh_esign || row.warehouse_esign || null,
+        wh_signer_name: row.wh_signer_name || row.whSignerName || '',
+        vendor_esign: row.vendor_esign || null,
+        vendor_signer_name: row.vendor_signer_name || row.vendorSignerName || '',
         replacement_serial_number: row.replacement_serial_number || row.replacementSerialNumber || '',
         replacement_brand: row.replacement_brand || row.replacementBrand || '',
         replacement_model: row.replacement_model || row.replacementModel || '',
+        replacement_generation: row.replacement_generation || row.replacementGeneration || '',
       });
     }
   }
@@ -136,11 +142,38 @@ function normalizeReceiveItems(bodyItems, ticketIds) {
   return map;
 }
 
+function serialMatchesExpected(verified, item) {
+  const v = String(verified || '').trim().toUpperCase();
+  if (!v) return false;
+  const candidates = [
+    item.serial_number,
+    item.ttspl_id,
+    item.ticket_serial_number,
+  ].map((s) => String(s || '').trim().toUpperCase()).filter(Boolean);
+  return candidates.includes(v);
+}
+
+function parseItemConfiguration(item) {
+  const parts = String(item.configuration || '').split('·').map((s) => s.trim()).filter(Boolean);
+  return {
+    brand: parts[0] || '',
+    model: parts[1] || '',
+    processor: parts[2] || '',
+    generation: parts[3] || '',
+    ram: parts[4] || '',
+    storage: parts[5] || '',
+  };
+}
+
 async function upsertReplacementSerial(client, {
   serialNumber,
   brand,
   model,
+  generation,
   vendorId,
+  originalTtsplId,
+  originalSerial,
+  replacementDcNumber,
 }) {
   const sn = String(serialNumber || '').trim();
   if (!sn) throw new Error('Replacement serial number is required');
@@ -152,11 +185,31 @@ async function upsertReplacementSerial(client, {
       LIMIT 1`,
     [sn]
   );
-  if (existing.rows[0]) return existing.rows[0];
+  if (existing.rows[0]) {
+    await client.query(
+      `UPDATE vendor_serial_numbers SET
+          extra = COALESCE(extra, '{}'::jsonb) || $2::jsonb,
+          updated_at = NOW()
+        WHERE serial_id = $1`,
+      [
+        existing.rows[0].serial_id,
+        JSON.stringify({
+          asset_tag: 'replacement',
+          brand: brand || null,
+          model: model || null,
+          generation: generation || null,
+          replaced_ttspl_id: originalTtsplId || null,
+          replaced_serial: originalSerial || null,
+          replacement_dc_number: replacementDcNumber || null,
+        }),
+      ]
+    );
+    return existing.rows[0];
+  }
 
   const { allocateTtsplCodes } = require('./vendorInventoryAssetCodeService');
   const [ttspl] = await allocateTtsplCodes(client, 1);
-  const configuration = [brand, model].filter(Boolean).join(' · ');
+  const configuration = [brand, model, generation].filter(Boolean).join(' · ');
   const ins = await client.query(
     `INSERT INTO vendor_serial_numbers (
         serial_number, inventory_asset_code, qc_status, inventory_status, extra, updated_at
@@ -166,11 +219,16 @@ async function upsertReplacementSerial(client, {
       sn,
       ttspl,
       JSON.stringify({
+        asset_tag: 'replacement',
         brand: brand || null,
         model: model || null,
+        generation: generation || null,
         source: 'vendor_repair_replacement',
         vendor_id: vendorId || null,
         configuration,
+        replaced_ttspl_id: originalTtsplId || null,
+        replaced_serial: originalSerial || null,
+        replacement_dc_number: replacementDcNumber || null,
       }),
     ]
   );
@@ -836,7 +894,7 @@ async function markDeliveredToVendor(client, { dcNumber, actorUserId, actorName 
   );
 
   for (const item of itemsRes.rows) {
-    await logTtsplEvent({
+    await safeLogTtsplEvent({
       ttsplId: item.ttspl_id || item.ticket_ttspl,
       vendorSerialId: item.vendor_serial_id,
       eventType: 'delivered_to_vendor',
@@ -854,15 +912,7 @@ async function markDeliveredToVendor(client, { dcNumber, actorUserId, actorName 
     });
   }
 
-  const pdfPath = await generateVendorRepairPdf(dcNumber);
-  if (pdfPath) {
-    await client.query(
-      `UPDATE vendor_repair_delivery_challans SET pdf_path = $2, updated_at = NOW() WHERE dc_number = $1`,
-      [dcNumber, pdfPath]
-    );
-  }
-
-  return { dc_number: dcNumber, vendor_delivered_at: new Date().toISOString(), pdf_path: pdfPath };
+  return { dc_number: dcNumber, vendor_delivered_at: new Date().toISOString(), pdf_pending: true };
 }
 
 async function signDispatchDc(client, {
@@ -904,8 +954,11 @@ async function signDispatchDc(client, {
   }
 
   const whUrl = warehouseEsign ? saveEsign('wh_dispatch', dcNumber, warehouseEsign) : head.warehouse_dispatch_esign_url;
-  const vUrl = vendorEsign ? saveEsign('vendor_dispatch', dcNumber, vendorEsign) : head.vendor_dispatch_esign_url;
-  if (!whUrl || !vUrl) throw new Error('Warehouse and vendor dispatch e-signatures are required');
+  const vUrl = vendorEsign ? saveEsign('vendor_dispatch', dcNumber, vendorEsign) : head.vendor_dispatch_esign_url || null;
+  if (!whUrl) throw new Error('Warehouse dispatch e-signature is required');
+
+  const whSignerName = (dispatchBody?.warehouse_signer_name || dispatchBody?.warehouseSignerName || '').trim() || null;
+  const vendorSignerName = (dispatchBody?.vendor_signer_name || dispatchBody?.vendorSignerName || '').trim() || null;
 
   const podPath = dispatchPod ? saveDispatchPod(dcNumber, dispatchPod) : head.dispatch_pod_path || null;
 
@@ -913,6 +966,8 @@ async function signDispatchDc(client, {
     `UPDATE vendor_repair_delivery_challans SET
         warehouse_dispatch_esign_url = $2,
         vendor_dispatch_esign_url = $3,
+        warehouse_dispatch_signer_name = COALESCE($14, warehouse_dispatch_signer_name),
+        vendor_dispatch_signer_name = COALESCE($15, vendor_dispatch_signer_name),
         ship_by = $4,
         dispatch_mode = $5,
         courier_name = $6,
@@ -942,6 +997,8 @@ async function signDispatchDc(client, {
       dispatch.porter_booking_url,
       dispatch.delivery_person_id,
       podPath,
+      whSignerName,
+      vendorSignerName,
     ]
   );
 
@@ -1027,10 +1084,6 @@ async function receiveItemsFromVendor(client, {
     throw new Error('DC must be dispatched before receiving items back');
   }
 
-  const whUrl = warehouseEsign ? saveEsign('wh_return', dcNumber, warehouseEsign) : head.warehouse_return_esign_url;
-  const vUrl = vendorEsign ? saveEsign('vendor_return', dcNumber, vendorEsign) : head.vendor_return_esign_url;
-  if (!whUrl || !vUrl) throw new Error('Warehouse and vendor return e-signatures are required');
-
   const fmStageRes = await client.query(`SELECT stage_id, team_id FROM stages WHERE stage_name = 'Floor Manager' LIMIT 1`);
   const fmStageId = fmStageRes.rows[0]?.stage_id || null;
   const fmTeamId = fmStageRes.rows[0]?.team_id || null;
@@ -1040,7 +1093,7 @@ async function receiveItemsFromVendor(client, {
   if (!selectedTicketIds.length) throw new Error('Select at least one laptop to receive');
 
   let itemsQuery = `
-    SELECT i.*, t.*
+    SELECT i.*, t.serial_number AS ticket_serial_number, t.*
       FROM vendor_repair_dc_items i
       JOIN tickets t ON t.ticket_id = i.ticket_id
      WHERE i.dc_number = $1 AND COALESCE(i.item_status, 'dispatched') = 'dispatched'`;
@@ -1055,6 +1108,19 @@ async function receiveItemsFromVendor(client, {
   for (const item of itemsRes.rows) {
     const receiveSpec = receiveMap.get(item.ticket_id) || { receive_mode: 'repaired' };
     const isReplacement = receiveSpec.receive_mode === 'replacement';
+
+    const itemWhEsign = receiveSpec.wh_esign || warehouseEsign;
+    const itemWhSigner = (receiveSpec.wh_signer_name || '').trim() || actorName || null;
+    if (!itemWhEsign) throw new Error(`Warehouse signature required for ticket #${item.ticket_id}`);
+    if (!itemWhSigner) throw new Error(`Signer name required for ticket #${item.ticket_id}`);
+
+    const whItemUrl = saveEsign(`wh_recv_${item.ticket_id}`, dcNumber, itemWhEsign);
+    const vendorItemUrl = receiveSpec.vendor_esign
+      ? saveEsign(`vendor_recv_${item.ticket_id}`, dcNumber, receiveSpec.vendor_esign)
+      : (vendorEsign ? saveEsign(`vendor_recv_${item.ticket_id}`, dcNumber, vendorEsign) : null);
+    const vendorItemSigner = (receiveSpec.vendor_signer_name || '').trim() || null;
+    const signedAt = new Date();
+
     let replacementDcNumber = null;
     let replacementRow = null;
 
@@ -1070,47 +1136,85 @@ async function receiveItemsFromVendor(client, {
         serialNumber: receiveSpec.replacement_serial_number,
         brand: receiveSpec.replacement_brand.trim(),
         model: receiveSpec.replacement_model.trim(),
+        generation: (receiveSpec.replacement_generation || '').trim() || null,
         vendorId: head.vendor_id,
+        originalTtsplId: item.ttspl_id,
+        originalSerial: item.serial_number,
+        replacementDcNumber,
       });
+    } else {
+      if (!serialMatchesExpected(receiveSpec.verified_serial, item)) {
+        throw new Error(
+          `Serial verification failed for ticket #${item.ticket_id}. `
+          + `Expected ${item.serial_number || item.ttspl_id || '—'}`
+        );
+      }
     }
 
+    const origCfg = parseItemConfiguration(item);
     const itemStatus = isReplacement ? 'replacement_received' : 'received';
     const replacementConfig = isReplacement
-      ? [receiveSpec.replacement_brand, receiveSpec.replacement_model].filter(Boolean).join(' · ')
+      ? [
+        receiveSpec.replacement_brand,
+        receiveSpec.replacement_model,
+        origCfg.processor,
+        receiveSpec.replacement_generation || origCfg.generation,
+        origCfg.ram,
+        origCfg.storage,
+      ].filter(Boolean).join(' · ')
       : null;
 
     await client.query(
       `UPDATE vendor_repair_dc_items SET
           item_status = $3,
-          returned_at = NOW(),
+          returned_at = $12,
           receive_dc_number = $2,
           receive_mode = $4,
-          replacement_serial_number = $5,
-          replacement_ttspl_id = $6,
-          replacement_brand = $7,
-          replacement_model = $8,
-          replacement_configuration = $9,
-          replacement_dc_number = $10,
-          replacement_serial_id = $11
+          receive_verified_serial = $5,
+          receive_wh_esign_url = $6,
+          receive_wh_signer_name = $7,
+          receive_wh_signed_at = $12,
+          receive_vendor_esign_url = $8,
+          receive_vendor_signer_name = $9,
+          receive_vendor_signed_at = CASE WHEN $8 IS NOT NULL THEN $12 ELSE NULL END,
+          replacement_serial_number = $10,
+          replacement_ttspl_id = $11,
+          replacement_brand = $13,
+          replacement_model = $14,
+          replacement_generation = $15,
+          replacement_configuration = $16,
+          replacement_dc_number = $17,
+          replacement_serial_id = $18,
+          replaced_original_ttspl_id = $19,
+          replaced_original_serial = $20
         WHERE id = $1`,
       [
         item.id,
-        receiveDcNumber,
+        isReplacement ? replacementDcNumber : receiveDcNumber,
         itemStatus,
         isReplacement ? 'replacement' : 'repaired',
+        isReplacement ? null : String(receiveSpec.verified_serial || '').trim(),
+        whItemUrl,
+        itemWhSigner,
+        vendorItemUrl,
+        vendorItemSigner,
         isReplacement ? receiveSpec.replacement_serial_number.trim() : null,
         isReplacement ? replacementRow.inventory_asset_code : null,
+        signedAt,
         isReplacement ? receiveSpec.replacement_brand.trim() : null,
         isReplacement ? receiveSpec.replacement_model.trim() : null,
+        isReplacement ? ((receiveSpec.replacement_generation || '').trim() || origCfg.generation || null) : null,
         isReplacement ? replacementConfig : null,
         replacementDcNumber,
         isReplacement ? replacementRow.serial_id : null,
+        isReplacement ? item.ttspl_id : null,
+        isReplacement ? item.serial_number : null,
       ]
     );
     receivedItemIds.push(item.id);
 
     const highlightReason = isReplacement
-      ? `Vendor sent replacement ${replacementRow.serial_number} (${replacementRow.inventory_asset_code}) — Floor Manager triage`
+      ? `Vendor replacement ${replacementRow.serial_number} (${replacementRow.inventory_asset_code}) for ${item.ttspl_id} — Floor Manager`
       : 'Returned from vendor repair — Floor Manager triage';
 
     await client.query(
@@ -1168,10 +1272,13 @@ async function receiveItemsFromVendor(client, {
           replacementRow.serial_id,
           JSON.stringify({
             location: 'warehouse_floor',
+            asset_tag: 'replacement',
             vendor_repair_dc: dcNumber,
-            receive_dc: receiveDcNumber,
+            receive_dc: replacementDcNumber,
             replacement_dc_number: replacementDcNumber,
             replaced_ticket_id: item.ticket_id,
+            replaced_ttspl_id: item.ttspl_id,
+            replaced_serial: item.serial_number,
           }),
         ]
       );
@@ -1185,14 +1292,21 @@ async function receiveItemsFromVendor(client, {
           WHERE serial_id = $1`,
         [
           item.vendor_serial_id || item.serial_id,
-          JSON.stringify({ location: 'warehouse_floor', vendor_repair_dc: dcNumber, receive_dc: receiveDcNumber }),
+          JSON.stringify({
+            location: 'warehouse_floor',
+            vendor_repair_dc: dcNumber,
+            receive_dc: receiveDcNumber,
+            received_by: itemWhSigner,
+            received_at: signedAt.toISOString(),
+          }),
         ]
       );
     }
 
+    const challanRef = isReplacement ? replacementDcNumber : receiveDcNumber;
     const activityNotes = isReplacement
-      ? `Replacement received via ${replacementDcNumber} (dispatch ${dcNumber}) — ${replacementRow.serial_number}`
-      : `Received from vendor via ${receiveDcNumber} (dispatch ${dcNumber}) — Floor Manager`;
+      ? `Replacement received via ${challanRef} (dispatch ${dcNumber}) — ${replacementRow.serial_number} by ${itemWhSigner}`
+      : `Repaired return via ${challanRef} — verified ${receiveSpec.verified_serial} — received by ${itemWhSigner}`;
 
     await logTicketActivity(client, {
       ticketId: item.ticket_id,
@@ -1209,12 +1323,14 @@ async function receiveItemsFromVendor(client, {
       description: activityNotes,
       metadata: {
         dc_number: dcNumber,
-        receive_dc_number: receiveDcNumber,
+        receive_dc_number: isReplacement ? null : receiveDcNumber,
         replacement_dc_number: replacementDcNumber,
         original_ttspl: item.ttspl_id,
+        received_by: itemWhSigner,
+        received_at: signedAt.toISOString(),
       },
       actorUserId,
-      actorName,
+      actorName: itemWhSigner,
       db: client,
     });
   }
@@ -1232,15 +1348,12 @@ async function receiveItemsFromVendor(client, {
 
   await client.query(
     `UPDATE vendor_repair_delivery_challans SET
-        warehouse_return_esign_url = COALESCE(warehouse_return_esign_url, $2),
-        vendor_return_esign_url = COALESCE(vendor_return_esign_url, $3),
-        receive_dc_number = $4,
-        status = $5,
-        items_received_count = $6,
-        returned_at = CASE WHEN $5 = 'returned' THEN NOW() ELSE returned_at END,
+        status = $2,
+        items_received_count = $3,
+        returned_at = CASE WHEN $2 = 'returned' THEN NOW() ELSE returned_at END,
         updated_at = NOW()
       WHERE dc_number = $1`,
-    [dcNumber, whUrl, vUrl, receiveDcNumber, nextStatus, received]
+    [dcNumber, nextStatus, received]
   );
 
   return {

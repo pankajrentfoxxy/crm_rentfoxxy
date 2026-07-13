@@ -17,7 +17,9 @@ import { ticketStatusLabel } from '../floorPipelineUi';
 import {
   DEFAULT_BILLING_ADDRESS,
   fmtVendorRepairDate,
+  fmtVendorRepairDateTimeIst,
   formatVrdcProductLines,
+  parseVrdcItemConfig,
   vendorDeliveryStatusClass,
   vendorDeliveryStatusLabel,
   vendorRepairDispatchModeLabel,
@@ -34,18 +36,31 @@ function uploadUrl(p) {
   return `${getBackendOrigin().replace(/\/$/, '')}/uploads/${p.replace(/^\/?uploads\//, '')}`;
 }
 
-function EsignBox({ label, url, previewUrl, onSign, canSign, disabled }) {
+function EsignBox({ label, url, previewUrl, onSign, canSign, disabled, signerName, onSignerNameChange, optional }) {
   const display = previewUrl || url;
   return (
     <div className="rounded-xl border p-3 space-y-2">
       <div className="flex items-center justify-between">
-        <h4 className="text-xs font-semibold uppercase text-slate-500">{label}</h4>
+        <h4 className="text-xs font-semibold uppercase text-slate-500">
+          {label}{optional ? ' (optional)' : ''}
+        </h4>
         {canSign && !display ? (
           <button type="button" disabled={disabled} onClick={onSign} className="text-xs text-blue-600 inline-flex items-center gap-1">
             <PenLine className="w-3.5 h-3.5" /> Sign
           </button>
         ) : null}
       </div>
+      {onSignerNameChange ? (
+        <input
+          className="w-full border rounded-lg px-2 py-1.5 text-xs"
+          placeholder="Signer name *"
+          value={signerName || ''}
+          onChange={(e) => onSignerNameChange(e.target.value)}
+          disabled={disabled}
+        />
+      ) : signerName ? (
+        <p className="text-xs text-slate-600">Signed by: <strong>{signerName}</strong></p>
+      ) : null}
       {display ? (
         <img src={display.startsWith('data:') ? display : uploadUrl(display)} alt={label} className="w-full max-h-24 object-contain border rounded bg-white" />
       ) : (
@@ -116,12 +131,21 @@ export default function VendorRepairDcDetailPage() {
   const [loading, setLoading] = useState(true);
   const [dc, setDc] = useState(null);
   const [receiveOpen, setReceiveOpen] = useState(false);
-  const [receiveSelected, setReceiveSelected] = useState(new Set());
-  const [receiveItemModes, setReceiveItemModes] = useState({});
+  const [receiveTargetItem, setReceiveTargetItem] = useState(null);
+  const [receiveForm, setReceiveForm] = useState({
+    receive_mode: 'repaired',
+    verified_serial: '',
+    wh_signer_name: '',
+    wh_esign: null,
+    replacement_serial_number: '',
+    replacement_brand: '',
+    replacement_model: '',
+    replacement_generation: '',
+  });
   const [receiveBusy, setReceiveBusy] = useState(false);
   const [receivePdfBusy, setReceivePdfBusy] = useState(false);
-  const [whReturnSign, setWhReturnSign] = useState(null);
-  const [vendorReturnSign, setVendorReturnSign] = useState(null);
+  const [whDispatchSignerName, setWhDispatchSignerName] = useState('');
+  const [vendorDispatchSignerName, setVendorDispatchSignerName] = useState('');
   const [pendingWhDispatch, setPendingWhDispatch] = useState(null);
   const [pendingVendorDispatch, setPendingVendorDispatch] = useState(null);
   const [activeSign, setActiveSign] = useState(null);
@@ -189,6 +213,8 @@ export default function VendorRepairDcDetailPage() {
       const { data } = await fetchVendorRepairDc(dcNumber);
       setDc(data.data);
       syncDispatchFromDc(data.data);
+      if (data.data.warehouse_dispatch_signer_name) setWhDispatchSignerName(data.data.warehouse_dispatch_signer_name);
+      if (data.data.vendor_dispatch_signer_name) setVendorDispatchSignerName(data.data.vendor_dispatch_signer_name);
     } catch {
       toast.error('Vendor repair DC not found');
       setDc(null);
@@ -197,6 +223,28 @@ export default function VendorRepairDcDetailPage() {
     }
   }, [dcNumber, syncDispatchFromDc]);
 
+  useEffect(() => {
+    if (user?.name) {
+      setWhDispatchSignerName((prev) => prev || user.name);
+      setReceiveForm((prev) => ({ ...prev, wh_signer_name: prev.wh_signer_name || user.name }));
+    }
+  }, [user?.name]);
+
+  const openReceiveForItem = (item) => {
+    const cfg = parseVrdcItemConfig(item);
+    setReceiveTargetItem(item);
+    setReceiveForm({
+      receive_mode: 'repaired',
+      verified_serial: '',
+      wh_signer_name: user?.name || '',
+      wh_esign: null,
+      replacement_serial_number: '',
+      replacement_brand: cfg.brand,
+      replacement_model: cfg.model,
+      replacement_generation: cfg.generation,
+    });
+    setReceiveOpen(true);
+  };
   useEffect(() => {
     fetchDeliveryTechnicians({ limit: 200 })
       .then((data) => setDeliveryTechnicians(data?.data || data?.technicians || []))
@@ -230,9 +278,12 @@ export default function VendorRepairDcDetailPage() {
 
   const completeDispatchSign = async () => {
     const wh = pendingWhDispatch || dc?.warehouse_dispatch_esign_url;
-    const vendor = pendingVendorDispatch || dc?.vendor_dispatch_esign_url;
-    if (!wh || !vendor) {
-      toast.error('Both warehouse and vendor dispatch signatures are required');
+    if (!wh) {
+      toast.error('Warehouse dispatch signature is required');
+      return;
+    }
+    if (!whDispatchSignerName?.trim()) {
+      toast.error('Enter warehouse signer name');
       return;
     }
     const dispatchErr = validateVrdcDispatch(effectiveShipBy, dispatchFields);
@@ -247,6 +298,8 @@ export default function VendorRepairDcDetailPage() {
         ...dispatchFields,
         warehouse_esign: pendingWhDispatch || undefined,
         vendor_esign: pendingVendorDispatch || undefined,
+        warehouse_signer_name: whDispatchSignerName.trim(),
+        vendor_signer_name: vendorDispatchSignerName.trim() || undefined,
         dispatch_pod: pendingDispatchPod || undefined,
       });
       toast.success('Dispatched to vendor');
@@ -300,58 +353,55 @@ export default function VendorRepairDcDetailPage() {
     }
   };
 
-  const submitReceiveBack = async () => {
-    if (!whReturnSign || !vendorReturnSign) {
-      toast.error('Both return signatures are required');
+  const submitReceiveOne = async () => {
+    if (!receiveTargetItem) return;
+    if (!receiveForm.wh_signer_name?.trim()) {
+      toast.error('Enter receiver name');
       return;
     }
-    const ticketIds = receiveSelected.size
-      ? [...receiveSelected]
-      : dispatchedItems.map((i) => i.ticket_id);
-    if (!ticketIds.length) {
-      toast.error('Select at least one laptop to receive');
+    if (!receiveForm.wh_esign) {
+      toast.error('Warehouse signature is required');
       return;
     }
-    const items = ticketIds.map((ticketId) => {
-      const mode = receiveItemModes[ticketId] || { receive_mode: 'repaired' };
-      return {
-        ticket_id: ticketId,
-        receive_mode: mode.receive_mode || 'repaired',
-        replacement_serial_number: mode.replacement_serial_number || '',
-        replacement_brand: mode.replacement_brand || '',
-        replacement_model: mode.replacement_model || '',
-      };
-    });
-    for (const row of items) {
-      if (row.receive_mode === 'replacement') {
-        if (!row.replacement_serial_number?.trim()) {
-          toast.error(`Enter replacement serial for ticket #${row.ticket_id}`);
-          return;
-        }
-        if (!row.replacement_brand?.trim() || !row.replacement_model?.trim()) {
-          toast.error(`Enter replacement brand and model for ticket #${row.ticket_id}`);
-          return;
-        }
+    if (receiveForm.receive_mode === 'repaired') {
+      const expected = (receiveTargetItem.serial_number || '').trim().toUpperCase();
+      const entered = receiveForm.verified_serial.trim().toUpperCase();
+      if (!entered || entered !== expected) {
+        toast.error(`Serial must match ${receiveTargetItem.serial_number || receiveTargetItem.ttspl_id}`);
+        return;
+      }
+    } else {
+      if (!receiveForm.replacement_serial_number?.trim()) {
+        toast.error('Enter replacement serial number');
+        return;
+      }
+      if (!receiveForm.replacement_brand?.trim() || !receiveForm.replacement_model?.trim()) {
+        toast.error('Enter replacement brand and model');
+        return;
       }
     }
-    if (!window.confirm(`Receive ${ticketIds.length} laptop(s)? They will move to Floor Manager.`)) return;
     setReceiveBusy(true);
     try {
       const { data } = await receiveVendorRepairBack(dcNumber, {
-        warehouse_esign: whReturnSign,
-        vendor_esign: vendorReturnSign,
-        items,
+        items: [{
+          ticket_id: receiveTargetItem.ticket_id,
+          receive_mode: receiveForm.receive_mode,
+          verified_serial: receiveForm.verified_serial.trim(),
+          wh_esign: receiveForm.wh_esign,
+          wh_signer_name: receiveForm.wh_signer_name.trim(),
+          replacement_serial_number: receiveForm.replacement_serial_number,
+          replacement_brand: receiveForm.replacement_brand,
+          replacement_model: receiveForm.replacement_model,
+          replacement_generation: receiveForm.replacement_generation,
+        }],
       });
-      toast.success(data.message || 'Received at warehouse — Floor Manager');
+      toast.success(data.message || 'Laptop received');
       setReceiveOpen(false);
-      setReceiveSelected(new Set());
-      setReceiveItemModes({});
-      setWhReturnSign(null);
-      setVendorReturnSign(null);
+      setReceiveTargetItem(null);
       invalidateInventoryManagement();
       load();
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Receive back failed');
+      toast.error(err.response?.data?.message || 'Receive failed');
     } finally {
       setReceiveBusy(false);
     }
@@ -364,7 +414,7 @@ export default function VendorRepairDcDetailPage() {
 
   const dispatchReady = dc.status === 'draft'
     && (pendingWhDispatch || dc.warehouse_dispatch_esign_url)
-    && (pendingVendorDispatch || dc.vendor_dispatch_esign_url);
+    && whDispatchSignerName?.trim();
 
   return (
     <div className="p-4 md:p-6 max-w-5xl mx-auto space-y-4">
@@ -416,14 +466,7 @@ export default function VendorRepairDcDetailPage() {
             <Printer className="w-4 h-4" /> Print
           </button>
           {canProcess && ['dispatched', 'partially_returned'].includes(dc.status) && dispatchedItems.length ? (
-            <button type="button" onClick={() => {
-              const ids = dispatchedItems.map((i) => i.ticket_id);
-              setReceiveSelected(new Set(ids));
-              const modes = {};
-              ids.forEach((id) => { modes[id] = { receive_mode: 'repaired' }; });
-              setReceiveItemModes(modes);
-              setReceiveOpen(true);
-            }} className="inline-flex items-center gap-1 px-3 py-2 bg-green-700 text-white rounded-lg text-sm font-semibold">
+            <button type="button" onClick={() => setReceiveOpen(true)} className="inline-flex items-center gap-1 px-3 py-2 bg-green-700 text-white rounded-lg text-sm font-semibold">
               <RotateCcw className="w-4 h-4" /> Receive Back ({dispatchedItems.length})
             </button>
           ) : null}
@@ -489,7 +532,8 @@ export default function VendorRepairDcDetailPage() {
                   <td className="p-3 text-xs capitalize">{itemStatusLabel(item)}</td>
                   <td className="p-3 text-xs text-slate-600">
                     {dc.dispatched_at ? <p>Sent: {fmtVendorRepairDate(dc.dispatched_at)}</p> : null}
-                    {item.returned_at ? <p>Received: {fmtVendorRepairDate(item.returned_at)}</p> : null}
+                    {item.returned_at ? <p>Received: {fmtVendorRepairDateTimeIst(item.returned_at)}</p> : null}
+                    {item.receive_wh_signer_name ? <p>By: {item.receive_wh_signer_name}</p> : null}
                     {item.receive_dc_number ? <p className="font-mono text-[10px]">{item.receive_dc_number}</p> : null}
                     {item.replacement_dc_number ? (
                       <p className="text-purple-800 font-mono text-[10px]">Rep: {item.replacement_dc_number}</p>
@@ -562,7 +606,7 @@ export default function VendorRepairDcDetailPage() {
       {canProcess && dc.status === 'draft' ? (
         <div className="rounded-xl border bg-white p-4 space-y-3 print:hidden">
           <h3 className="font-semibold">Dispatch e-signatures</h3>
-          <p className="text-xs text-slate-500">Both signatures are required before laptops leave the warehouse.</p>
+          <p className="text-xs text-slate-500">Warehouse signature and name are required. Vendor signature is optional.</p>
           <div className="grid md:grid-cols-2 gap-3">
             <EsignBox
               label="Warehouse e-sign"
@@ -570,6 +614,8 @@ export default function VendorRepairDcDetailPage() {
               previewUrl={pendingWhDispatch}
               canSign={canProcess}
               onSign={() => setActiveSign('wh_dispatch')}
+              signerName={whDispatchSignerName}
+              onSignerNameChange={setWhDispatchSignerName}
             />
             <EsignBox
               label="Vendor e-sign"
@@ -577,6 +623,9 @@ export default function VendorRepairDcDetailPage() {
               previewUrl={pendingVendorDispatch}
               canSign={canProcess}
               onSign={() => setActiveSign('vendor_dispatch')}
+              signerName={vendorDispatchSignerName}
+              onSignerNameChange={setVendorDispatchSignerName}
+              optional
             />
           </div>
           <div className="rounded-lg border border-dashed p-3 space-y-2">
@@ -632,8 +681,8 @@ export default function VendorRepairDcDetailPage() {
       {canProcess && dc.status === 'dispatched' && dc.warehouse_dispatch_esign_url ? (
         <div className="space-y-3 print:hidden">
           <div className="grid md:grid-cols-2 gap-3">
-            <EsignBox label="Warehouse dispatch sign" url={dc.warehouse_dispatch_esign_url} />
-            <EsignBox label="Vendor dispatch sign" url={dc.vendor_dispatch_esign_url} />
+            <EsignBox label="Warehouse dispatch sign" url={dc.warehouse_dispatch_esign_url} signerName={dc.warehouse_dispatch_signer_name} />
+            <EsignBox label="Vendor dispatch sign" url={dc.vendor_dispatch_esign_url} signerName={dc.vendor_dispatch_signer_name} optional />
           </div>
           {dc.dispatch_pod_path ? (
             <div className="rounded-xl border p-3">
@@ -652,127 +701,107 @@ export default function VendorRepairDcDetailPage() {
         <SignatureModal
           title={
             activeSign === 'wh_dispatch' ? 'Warehouse signature'
-              : activeSign === 'vendor_dispatch' ? 'Vendor signature'
-                : activeSign === 'wh_return' ? 'Warehouse return signature'
-                  : 'Vendor return signature'
+              : activeSign === 'vendor_dispatch' ? 'Vendor signature (optional)'
+                : 'Warehouse receive signature'
           }
           onClose={() => setActiveSign(null)}
           onSave={async (dataUrl) => {
             if (activeSign === 'wh_dispatch') setPendingWhDispatch(dataUrl);
             else if (activeSign === 'vendor_dispatch') setPendingVendorDispatch(dataUrl);
-            else if (activeSign === 'wh_return') setWhReturnSign(dataUrl);
-            else if (activeSign === 'vendor_return') setVendorReturnSign(dataUrl);
+            else if (activeSign === 'wh_receive') setReceiveForm((prev) => ({ ...prev, wh_esign: dataUrl }));
           }}
         />
       ) : null}
 
       {receiveOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 print:hidden">
-          <button type="button" className="absolute inset-0 bg-black/40" onClick={() => setReceiveOpen(false)} aria-label="Close" />
-          <div className="relative bg-white rounded-xl shadow-xl max-w-lg w-full p-5 space-y-3">
-            <h3 className="font-semibold">Receive Back to Warehouse</h3>
-            <p className="text-xs text-slate-500">Select laptops received today. Remaining units stay on Out for Repair until received later. Tickets move to Floor Manager.</p>
-            <div className="max-h-56 overflow-y-auto border rounded-lg divide-y">
-              {dispatchedItems.map((item) => {
-                const mode = receiveItemModes[item.ticket_id] || { receive_mode: 'repaired' };
-                return (
-                  <div key={item.id} className="p-2 text-xs space-y-2">
-                    <label className="flex items-start gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={receiveSelected.has(item.ticket_id)}
-                        onChange={() => setReceiveSelected((prev) => {
-                          const next = new Set(prev);
-                          if (next.has(item.ticket_id)) next.delete(item.ticket_id);
-                          else next.add(item.ticket_id);
-                          return next;
-                        })}
-                      />
-                      <span>
-                        <span className="font-mono">{item.ttspl_id}</span>
-                        {item.item_remarks ? ` — ${item.item_remarks}` : ''}
-                      </span>
-                    </label>
-                    {receiveSelected.has(item.ticket_id) ? (
-                      <div className="ml-6 space-y-2 border-l pl-2">
-                        <div className="flex flex-wrap gap-3">
-                          <label className="inline-flex items-center gap-1">
-                            <input
-                              type="radio"
-                              name={`recv-${item.ticket_id}`}
-                              checked={mode.receive_mode !== 'replacement'}
-                              onChange={() => setReceiveItemModes((prev) => ({
-                                ...prev,
-                                [item.ticket_id]: { ...mode, receive_mode: 'repaired' },
-                              }))}
-                            />
-                            Repaired return
-                          </label>
-                          <label className="inline-flex items-center gap-1">
-                            <input
-                              type="radio"
-                              name={`recv-${item.ticket_id}`}
-                              checked={mode.receive_mode === 'replacement'}
-                              onChange={() => setReceiveItemModes((prev) => ({
-                                ...prev,
-                                [item.ticket_id]: { receive_mode: 'replacement', replacement_serial_number: '', replacement_brand: '', replacement_model: '' },
-                              }))}
-                            />
-                            Vendor replacement
-                          </label>
+          <button type="button" className="absolute inset-0 bg-black/40" onClick={() => { setReceiveOpen(false); setReceiveTargetItem(null); }} aria-label="Close" />
+          <div className="relative bg-white rounded-xl shadow-xl max-w-lg w-full p-5 space-y-3 max-h-[90vh] overflow-y-auto">
+            {!receiveTargetItem ? (
+              <>
+                <h3 className="font-semibold">Receive Back — one laptop at a time</h3>
+                <p className="text-xs text-slate-500">Verify serial, sign with your name, and receive each laptop individually. Timestamp recorded in IST.</p>
+                <div className="border rounded-lg divide-y">
+                  {dispatchedItems.map((item) => {
+                    const prod = formatVrdcProductLines(item);
+                    return (
+                      <div key={item.id} className="p-3 flex items-center justify-between gap-2">
+                        <div className="text-xs">
+                          <p className="font-mono font-semibold">{item.ttspl_id} · {item.serial_number}</p>
+                          <p className="text-slate-500">{prod.title}</p>
                         </div>
-                        {mode.receive_mode === 'replacement' ? (
-                          <div className="grid grid-cols-1 gap-1.5">
-                            <input
-                              className="border rounded px-2 py-1.5 text-xs"
-                              placeholder="New serial number *"
-                              value={mode.replacement_serial_number || ''}
-                              onChange={(e) => setReceiveItemModes((prev) => ({
-                                ...prev,
-                                [item.ticket_id]: { ...mode, replacement_serial_number: e.target.value },
-                              }))}
-                            />
-                            <input
-                              className="border rounded px-2 py-1.5 text-xs"
-                              placeholder="Brand *"
-                              value={mode.replacement_brand || ''}
-                              onChange={(e) => setReceiveItemModes((prev) => ({
-                                ...prev,
-                                [item.ticket_id]: { ...mode, replacement_brand: e.target.value },
-                              }))}
-                            />
-                            <input
-                              className="border rounded px-2 py-1.5 text-xs"
-                              placeholder="Model *"
-                              value={mode.replacement_model || ''}
-                              onChange={(e) => setReceiveItemModes((prev) => ({
-                                ...prev,
-                                [item.ticket_id]: { ...mode, replacement_model: e.target.value },
-                              }))}
-                            />
-                            <p className="text-[10px] text-slate-500">A replacement receive challan (REP) and new TTSPL will be created.</p>
-                          </div>
-                        ) : null}
+                        <button type="button" onClick={() => openReceiveForItem(item)} className="px-3 py-1.5 bg-green-700 text-white rounded-lg text-xs font-semibold shrink-0">
+                          Receive
+                        </button>
                       </div>
-                    ) : null}
+                    );
+                  })}
+                </div>
+                <button type="button" onClick={() => setReceiveOpen(false)} className="w-full px-4 py-2 border rounded-lg text-sm">Close</button>
+              </>
+            ) : (
+              <>
+                <h3 className="font-semibold">Receive {receiveTargetItem.ttspl_id}</h3>
+                <p className="text-xs text-slate-500 font-mono">{receiveTargetItem.serial_number} · Ticket #{receiveTargetItem.ticket_id}</p>
+                <div className="flex flex-wrap gap-3 text-xs">
+                  <label className="inline-flex items-center gap-1">
+                    <input type="radio" checked={receiveForm.receive_mode === 'repaired'} onChange={() => setReceiveForm((p) => ({ ...p, receive_mode: 'repaired' }))} />
+                    Repaired return
+                  </label>
+                  <label className="inline-flex items-center gap-1">
+                    <input type="radio" checked={receiveForm.receive_mode === 'replacement'} onChange={() => setReceiveForm((p) => ({ ...p, receive_mode: 'replacement' }))} />
+                    Vendor replacement
+                  </label>
+                </div>
+                {receiveForm.receive_mode === 'repaired' ? (
+                  <div className="space-y-2">
+                    <p className="text-xs text-slate-600">Scan/type serial to verify it matches the laptop sent for repair.</p>
+                    <input
+                      className="w-full border rounded-lg px-3 py-2 text-sm font-mono"
+                      placeholder={`Expected: ${receiveTargetItem.serial_number || '—'}`}
+                      value={receiveForm.verified_serial}
+                      onChange={(e) => setReceiveForm((p) => ({ ...p, verified_serial: e.target.value }))}
+                    />
                   </div>
-                );
-              })}
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <button type="button" onClick={() => setActiveSign('wh_return')} className="py-2 border rounded-lg text-sm">
-                {whReturnSign ? 'Warehouse signed ✓' : 'Warehouse e-sign'}
-              </button>
-              <button type="button" onClick={() => setActiveSign('vendor_return')} className="py-2 border rounded-lg text-sm">
-                {vendorReturnSign ? 'Vendor signed ✓' : 'Vendor return e-sign'}
-              </button>
-            </div>
-            <div className="flex justify-end gap-2">
-              <button type="button" onClick={() => setReceiveOpen(false)} className="px-4 py-2 border rounded-lg text-sm">Cancel</button>
-              <button type="button" disabled={receiveBusy} onClick={submitReceiveBack} className="px-4 py-2 bg-green-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50">
-                {receiveBusy ? 'Receiving…' : 'Confirm receive'}
-              </button>
-            </div>
+                ) : (
+                  <div className="space-y-2 text-xs">
+                    <p className="text-slate-600 font-medium">Original config (sent for repair)</p>
+                    <div className="bg-slate-50 border rounded-lg p-2 space-y-1">
+                      {(() => {
+                        const cfg = parseVrdcItemConfig(receiveTargetItem);
+                        return (
+                          <>
+                            <p>{cfg.brand} {cfg.model} · Gen {cfg.generation || '—'}</p>
+                            <p className="text-slate-500">{cfg.processor} · {cfg.ram} · {cfg.storage}</p>
+                            <p className="font-mono">Replaces: {receiveTargetItem.ttspl_id} / {receiveTargetItem.serial_number}</p>
+                          </>
+                        );
+                      })()}
+                    </div>
+                    <input className="w-full border rounded-lg px-3 py-2 text-sm font-mono" placeholder="New serial number *" value={receiveForm.replacement_serial_number} onChange={(e) => setReceiveForm((p) => ({ ...p, replacement_serial_number: e.target.value }))} />
+                    <div className="grid grid-cols-3 gap-2">
+                      <input className="border rounded-lg px-2 py-1.5" placeholder="Brand *" value={receiveForm.replacement_brand} onChange={(e) => setReceiveForm((p) => ({ ...p, replacement_brand: e.target.value }))} />
+                      <input className="border rounded-lg px-2 py-1.5" placeholder="Model *" value={receiveForm.replacement_model} onChange={(e) => setReceiveForm((p) => ({ ...p, replacement_model: e.target.value }))} />
+                      <input className="border rounded-lg px-2 py-1.5" placeholder="Generation" value={receiveForm.replacement_generation} onChange={(e) => setReceiveForm((p) => ({ ...p, replacement_generation: e.target.value }))} />
+                    </div>
+                    <p className="text-[10px] text-slate-500">Creates Replacement Receive Challan (REP) and tags asset as replacement.</p>
+                  </div>
+                )}
+                <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Receiver name *" value={receiveForm.wh_signer_name} onChange={(e) => setReceiveForm((p) => ({ ...p, wh_signer_name: e.target.value }))} />
+                <button type="button" onClick={() => setActiveSign('wh_receive')} className="w-full py-2 border rounded-lg text-sm">
+                  {receiveForm.wh_esign ? 'Signature captured ✓ — tap to re-sign' : 'Warehouse e-sign *'}
+                </button>
+                {receiveForm.wh_esign ? (
+                  <img src={receiveForm.wh_esign} alt="Receive sign" className="w-full max-h-20 object-contain border rounded" />
+                ) : null}
+                <div className="flex justify-end gap-2">
+                  <button type="button" onClick={() => setReceiveTargetItem(null)} className="px-4 py-2 border rounded-lg text-sm">Back</button>
+                  <button type="button" disabled={receiveBusy} onClick={submitReceiveOne} className="px-4 py-2 bg-green-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50">
+                    {receiveBusy ? 'Receiving…' : 'Confirm receive'}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       ) : null}

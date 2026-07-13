@@ -133,26 +133,36 @@ exports.updateDispatchDetails = async (req, res) => {
 
 exports.markDeliveredToVendor = async (req, res) => {
   const client = await pool.connect();
+  const dcNumber = req.params.dcNumber;
+  let result = null;
   try {
     await svc.ensureVendorRepairSchema();
     await client.query('BEGIN');
-    const result = await svc.markDeliveredToVendor(client, {
-      dcNumber: req.params.dcNumber,
+    result = await svc.markDeliveredToVendor(client, {
+      dcNumber,
       actorUserId: req.user.user_id,
-      actorName: req.user.name,
+      actorName: req.user.name || req.user.email,
     });
     await client.query('COMMIT');
-    res.json({
-      success: true,
-      message: result.already_delivered ? 'Already marked delivered to vendor' : 'Marked delivered to vendor',
-      ...result,
-    });
   } catch (err) {
     await client.query('ROLLBACK');
-    res.status(400).json({ success: false, message: err.message || 'Failed to mark delivered' });
+    return res.status(400).json({ success: false, message: err.message || 'Failed to mark delivered' });
   } finally {
     client.release();
   }
+
+  let pdfPath = null;
+  if (result && !result.already_delivered) {
+    try {
+      const { generateVendorRepairPdf } = require('../services/vendorRepairPdfService');
+      pdfPath = await generateVendorRepairPdf(dcNumber);
+    } catch (pdfErr) {
+      console.error('[vendorRepair] delivered PDF failed:', pdfErr.message);
+    }
+  }
+
+  const msg = result?.already_delivered ? 'Already marked delivered to vendor' : 'Marked delivered to vendor';
+  res.json({ success: true, message: msg, pdf_path: pdfPath, ...result });
 };
 
 exports.signDispatch = async (req, res) => {
@@ -218,13 +228,18 @@ exports.receiveBack = async (req, res) => {
   }
 
   let receivePdfPath = null;
-  if (result?.receive_dc_number && result.received_item_ids?.length) {
+  if (result?.received_item_ids?.length) {
     try {
+      const dc = await svc.getVendorRepairDc(dcNumber);
+      const allReceivedIds = (dc?.items || [])
+        .filter((i) => ['received', 'replacement_received'].includes(i.item_status))
+        .map((i) => i.id);
+      const receiveDcNumber = result.receive_dc_number || dc?.receive_dc_number;
       const { generateVendorRepairReceivePdf } = require('../services/vendorRepairPdfService');
       receivePdfPath = await generateVendorRepairReceivePdf(
         dcNumber,
-        result.receive_dc_number,
-        result.received_item_ids
+        receiveDcNumber || `${dcNumber}-R01`,
+        allReceivedIds.length ? allReceivedIds : result.received_item_ids
       );
       if (receivePdfPath) {
         await pool.query(

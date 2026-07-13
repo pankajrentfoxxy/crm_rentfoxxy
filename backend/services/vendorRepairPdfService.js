@@ -188,6 +188,144 @@ function writeVendorAddressBoxes(doc, y, vendorBilling, vendorShipping) {
   return boxBottom + 14;
 }
 
+function resolveSignFile(url) {
+  if (!url) return null;
+  const clean = String(url).replace(/^\/?uploads\//, '').replace(/^\//, '');
+  const candidates = [
+    path.join(__dirname, '..', 'uploads', clean),
+    path.join(__dirname, '..', clean),
+  ];
+  return candidates.find((p) => fs.existsSync(p)) || null;
+}
+
+function fmtIst(dt) {
+  if (!dt) return '—';
+  try {
+    return new Date(dt).toLocaleString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    });
+  } catch {
+    return String(dt);
+  }
+}
+
+function drawDispatchSignatures(doc, y, dc) {
+  if (y > 620) { doc.addPage(); y = 40; }
+  const L = 40;
+  const W = 515;
+  const half = (W - 12) / 2;
+  const whSign = resolveSignFile(dc.warehouse_dispatch_esign_url);
+  const vSign = resolveSignFile(dc.vendor_dispatch_esign_url);
+
+  const signBox = (x, title, signAbs, name, optional = false) => {
+    const h = 100;
+    doc.roundedRect(x, y, half, h, 6).strokeColor(C.line).lineWidth(1).stroke();
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink)
+      .text(`${title}${optional ? ' (optional)' : ''}`, x + 10, y + 8, { width: half - 20 });
+    if (signAbs) {
+      try { doc.image(signAbs, x + 12, y + 22, { fit: [half - 24, 40] }); } catch (_) { /* ignore */ }
+    } else {
+      doc.font('Helvetica').fontSize(8).fillColor(C.sub)
+        .text(optional ? 'Not provided' : '______________________', x + 10, y + 48);
+    }
+    doc.font('Helvetica').fontSize(8).fillColor(C.ink)
+      .text(`Name: ${name || '—'}`, x + 10, y + 72, { width: half - 20 });
+    if (dc.dispatched_at) {
+      doc.font('Helvetica').fontSize(7).fillColor(C.sub)
+        .text(`Signed: ${fmtIst(dc.dispatched_at)}`, x + 10, y + 86, { width: half - 20 });
+    }
+  };
+
+  signBox(L, 'Warehouse dispatch sign', whSign, dc.warehouse_dispatch_signer_name, false);
+  signBox(L + half + 12, 'Vendor dispatch sign', vSign, dc.vendor_dispatch_signer_name, true);
+  return y + 112;
+}
+
+function writeReceiveItemsTable(doc, y, items) {
+  const L = 40;
+  const R = 555;
+  const W = R - L;
+
+  doc.font('Helvetica-Bold').fontSize(11).fillColor(C.ink).text('Laptops Received', L, y);
+  y += 14;
+
+  const cols = [
+    { label: 'Product / Serial', w: 175 },
+    { label: 'Mode', w: 55 },
+    { label: 'Received by', w: 90 },
+    { label: 'Sign', w: 70 },
+    { label: 'Date & time (IST)', w: W - 390 },
+  ];
+
+  const drawHeader = (yy) => {
+    doc.rect(L, yy, W, 22).fill(C.teal);
+    let cx = L;
+    doc.fillColor(C.white).font('Helvetica-Bold').fontSize(8);
+    for (const c of cols) {
+      doc.text(c.label, cx + 4, yy + 7, { width: c.w - 8 });
+      cx += c.w;
+    }
+    return yy + 22;
+  };
+
+  y = drawHeader(y);
+
+  for (const item of items || []) {
+    const p = parseItemProduct(item);
+    const isRep = item.receive_mode === 'replacement' || item.item_status === 'replacement_received';
+    const serialLine = isRep
+      ? `${item.replacement_serial_number || '—'} · ${item.replacement_ttspl_id || ''}`
+      : (item.receive_verified_serial || p.l5);
+    const modeLabel = isRep ? 'Replacement' : 'Repaired';
+    const signer = item.receive_wh_signer_name || '—';
+    const signAbs = resolveSignFile(item.receive_wh_esign_url);
+    const signedAt = fmtIst(item.receive_wh_signed_at || item.returned_at);
+    const challan = isRep ? item.replacement_dc_number : item.receive_dc_number;
+    const rowH = 58;
+
+    if (y + rowH > 760) { doc.addPage(); y = 40; y = drawHeader(y); }
+
+    let cx = L;
+    for (const c of cols) {
+      doc.rect(cx, y, c.w, rowH).strokeColor(C.line).lineWidth(0.6).stroke();
+      cx += c.w;
+    }
+
+    doc.font('Helvetica-Bold').fontSize(7.5).fillColor(C.ink)
+      .text(p.l1 || '—', L + 4, y + 4, { width: cols[0].w - 8 });
+    doc.font('Helvetica').fontSize(7).fillColor(C.sub)
+      .text(serialLine, L + 4, y + 16, { width: cols[0].w - 8 });
+    if (challan) {
+      doc.font('Helvetica').fontSize(6.5).fillColor(C.accent)
+        .text(challan, L + 4, y + 28, { width: cols[0].w - 8 });
+    }
+    if (isRep && item.replaced_original_ttspl_id) {
+      doc.font('Helvetica').fontSize(6.5).fillColor(C.sub)
+        .text(`Replaces: ${item.replaced_original_ttspl_id} / ${item.replaced_original_serial || '—'}`, L + 4, y + 38, { width: cols[0].w - 8 });
+    }
+
+    let x = L + cols[0].w;
+    doc.font('Helvetica').fontSize(7.5).fillColor(C.ink).text(modeLabel, x + 4, y + 20, { width: cols[1].w - 8 });
+    x += cols[1].w;
+    doc.text(signer, x + 4, y + 20, { width: cols[2].w - 8 });
+    x += cols[2].w;
+    if (signAbs) {
+      try { doc.image(signAbs, x + 4, y + 6, { fit: [cols[3].w - 8, 36] }); } catch (_) { /* ignore */ }
+    }
+    x += cols[3].w;
+    doc.font('Helvetica').fontSize(7).fillColor(C.ink).text(signedAt, x + 4, y + 20, { width: cols[4].w - 8 });
+
+    y += rowH;
+  }
+  return y + 10;
+}
+
 function parseItemProduct(item) {
   const parts = String(item.configuration || '').split('·').map((s) => s.trim()).filter(Boolean);
   const brand = parts[0] || '';
@@ -349,7 +487,10 @@ async function generateVendorRepairPdf(dcNumber) {
       y += 4;
       doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink).text('DC Remarks:', 40, y);
       doc.font('Helvetica').fontSize(9).text(dc.remarks, 40, y + 12, { width: 515 });
+      y += 28;
     }
+
+    y = drawDispatchSignatures(doc, y, dc);
 
     doc.end();
     stream.on('finish', resolve);
@@ -403,13 +544,11 @@ async function generateVendorRepairReceivePdf(dcNumber, receiveDcNumber, itemIds
 
     doc.font('Helvetica').fontSize(9).fillColor(C.sub);
     doc.text(`Original Dispatch DC: ${dc.dc_number}`, 40, y);
-    doc.text(`Receive Date: ${new Date().toLocaleDateString('en-IN')}`, 300, y);
+    doc.text(`Generated: ${fmtIst(new Date())}`, 300, y);
     y += 20;
 
     y = writeVendorAddressBoxes(doc, y, vendorBilling, vendorShipping);
-    y = writeItemsTable(doc, y, items, { title: 'Laptops Received' });
-    doc.font('Helvetica').fontSize(8).fillColor(C.sub)
-      .text('Warehouse POD + Vendor acknowledgement captured via e-sign in CRM.', 40, y);
+    y = writeReceiveItemsTable(doc, y, items);
 
     doc.end();
     stream.on('finish', resolve);

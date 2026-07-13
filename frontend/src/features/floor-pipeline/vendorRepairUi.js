@@ -11,6 +11,33 @@ export function fmtVendorRepairDate(v) {
   return d.toLocaleDateString('en-IN');
 }
 
+export function fmtVendorRepairDateTimeIst(v) {
+  if (!v) return '—';
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return String(v);
+  return d.toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+}
+
+export function parseVrdcItemConfig(item) {
+  const parts = String(item?.configuration || '').split('·').map((s) => s.trim()).filter(Boolean);
+  return {
+    brand: parts[0] || '',
+    model: parts[1] || '',
+    processor: parts[2] || '',
+    generation: parts[3] || '',
+    ram: parts[4] || '',
+    storage: parts[5] || '',
+  };
+}
+
 /** Registered / billing address lines from a vendor master record. */
 export function formatVendorBillingFromVendor(vendor, { includeName = true } = {}) {
   if (!vendor) return '';
