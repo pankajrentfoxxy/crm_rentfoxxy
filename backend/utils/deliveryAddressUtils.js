@@ -35,13 +35,20 @@ function unwrapJsonValue(value, depth = 0) {
 
   if (typeof value === 'object' && !Array.isArray(value)) {
     const out = { ...value };
-    if (typeof out.address === 'string' && looksLikeEncodedJson(out.address)) {
-      const unwrapped = unwrapJsonValue(out.address, depth + 1);
-      if (typeof unwrapped === 'object' && unwrapped !== null && !Array.isArray(unwrapped)) {
-        Object.assign(out, unwrapped);
-      } else if (typeof unwrapped === 'string' && !looksLikeEncodedJson(unwrapped)) {
-        out.address = unwrapped;
+    for (const key of ['address', 'address_line_1', 'line1', 'address_line']) {
+      if (typeof out[key] === 'string' && looksLikeEncodedJson(out[key])) {
+        const unwrapped = unwrapJsonValue(out[key], depth + 1);
+        if (typeof unwrapped === 'object' && unwrapped !== null && !Array.isArray(unwrapped)) {
+          Object.assign(out, unwrapped);
+        } else if (typeof unwrapped === 'string' && !looksLikeEncodedJson(unwrapped)) {
+          out.address = unwrapped;
+        }
+        break;
       }
+    }
+    if (!out.address || looksLikeEncodedJson(String(out.address))) {
+      const street = out.address_line_1 || out.line1 || out.address_line;
+      if (street && !looksLikeEncodedJson(String(street))) out.address = street;
     }
     if (out.zip_code && !out.pincode) out.pincode = out.zip_code;
     return out;
@@ -64,7 +71,8 @@ function normalizeDeliveryAddress(raw) {
 function formatDeliveryAddressLine(raw) {
   const a = normalizeDeliveryAddress(raw);
   if (!a) return null;
-  const line = [a.address, a.city, a.state, a.pincode || a.zip_code]
+  const street = a.address || a.address_line_1 || a.line1 || a.address_line;
+  const line = [street, a.city, a.state, a.pincode || a.zip_code]
     .filter((part) => part && !looksLikeEncodedJson(String(part)))
     .join(', ');
   return line || null;

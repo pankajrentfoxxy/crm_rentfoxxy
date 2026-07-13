@@ -42,8 +42,13 @@ const generateOtp = () => String(Math.floor(100000 + Math.random() * 900000));
 
 const parseAddressJson = (raw) => {
     if (!raw) return {};
-    if (typeof raw === 'object') return raw;
-    try { return JSON.parse(raw); } catch { return {}; }
+    try {
+        const { normalizeDeliveryAddress } = require('../utils/deliveryAddressUtils');
+        return normalizeDeliveryAddress(raw) || {};
+    } catch {
+        if (typeof raw === 'object') return raw;
+        try { return JSON.parse(raw); } catch { return {}; }
+    }
 };
 
 /** Resolve pickup address + phone from the outbound DC that delivered this unit. */
@@ -65,14 +70,15 @@ const resolvePickupDeliveryContext = async (db, customerId, code) => {
     if (!r.rows.length) return null;
     const row = r.rows[0];
     const addr = parseAddressJson(row.customer_shipping_address);
+    const street = addr.address || addr.address_line_1 || addr.line1 || addr.address_line || '';
     return {
         pickup_address: {
             name: addr.name || row.customer_name || '',
             phone: addr.phone || row.customer_phone || '',
-            address: addr.address || addr.line1 || '',
+            address: street,
             city: addr.city || '',
             state: addr.state || '',
-            pincode: addr.pincode || addr.postal_code || '',
+            pincode: addr.pincode || addr.zip_code || '',
         },
         original_dc_number: row.original_dc_number,
         sales_order_number: row.sales_order_number,
@@ -202,6 +208,12 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
     }
 
     let pickupAddr = pickup_address || parseAddressJson(ticket.pickup_address);
+    if (pickupAddr) {
+        pickupAddr = parseAddressJson(pickupAddr);
+        if (pickupAddr.address_line_1 && !pickupAddr.address) {
+            pickupAddr.address = pickupAddr.address_line_1;
+        }
+    }
     if (!pickupAddr?.address) {
         const firstCode = machines[0].ttspl_id || machines[0].unique_serial_number || machines[0].serial_number;
         const ctx = await resolvePickupDeliveryContext(client, ticket.customer_id, firstCode);

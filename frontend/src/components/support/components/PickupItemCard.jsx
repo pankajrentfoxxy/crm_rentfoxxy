@@ -5,6 +5,7 @@ import api from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
 import { isSupportLead, isSupportTechnician } from '../../../utils/supportAccess';
 import { podUrl as podUrlFor, compressImageFile, uploadAssetUrl, isPickupAssignmentEditable } from '../utils';
+import { formatDeliveryAddressLine, parseDeliveryAddress } from '../../../features/sales-pipeline/salesPipelineUtils';
 import PickupSetupForm from './PickupSetupForm';
 import AssignmentHistoryList from './AssignmentHistoryList';
 
@@ -94,7 +95,8 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
   const podDone = !!(item.pod_image_path || item.proof_of_completion_path);
   const otpVerified = !!item.customer_otp_verified_at;
   const whDone = !!item.warehouse_received_at;
-  const addr = ticket?.pickup_address && typeof ticket.pickup_address === 'object' ? ticket.pickup_address : null;
+  const addr = parseDeliveryAddress(ticket?.pickup_address);
+  const addrLine = formatDeliveryAddressLine(ticket?.pickup_address);
   const canChangeAssignee = lead && isPickupAssignmentEditable(item);
 
   const changeAssignee = async (form) => {
@@ -188,20 +190,15 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
       )}
 
       {/* Pickup address */}
-      {addr && (addr.address || addr.city) && (
+      {addr && (addrLine || addr.name || addr.phone) && (
         <div className="mx-4 mt-3 p-3 bg-gray-50 rounded-xl text-sm">
           <p className="text-xs text-gray-400 font-medium uppercase tracking-wide mb-1">Pickup Address</p>
           {addr.name && <p className="font-medium text-gray-800">{addr.name}</p>}
           {addr.phone && <p className="text-gray-600">{addr.phone}</p>}
-          {addr.address && <p className="text-gray-600">{addr.address}</p>}
-          <p className="text-gray-500 text-xs">
-            {[addr.city, addr.state, addr.pincode].filter(Boolean).join(', ')}
-          </p>
-          {(addr.address || addr.city) && (
+          {addrLine && <p className="text-gray-600">{addrLine}</p>}
+          {addrLine && (
             <a
-              href={`https://www.google.com/maps/search/${encodeURIComponent(
-                [addr.address, addr.city, addr.state].filter(Boolean).join(', ')
-              )}`}
+              href={`https://www.google.com/maps/search/${encodeURIComponent(addrLine)}`}
               target="_blank" rel="noopener noreferrer"
               className="text-xs text-blue-600 mt-1 inline-block"
             >

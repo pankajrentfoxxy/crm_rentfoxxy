@@ -90,6 +90,9 @@ async function main() {
         dispatch_mode: dcl.dispatch_mode || item.pickup_method,
         courier_name: dcl.courier_name,
         awb_number: dcl.awb_number,
+        pickup_created_at: dcl.created_at || item.created_at || null,
+        pickup_date: item.picked_up_at || null,
+        warehouse_received_at: item.warehouse_received_at || null,
       },
       units: [{
         brand: spec.brand || dcl.brand,

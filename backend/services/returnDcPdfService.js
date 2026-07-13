@@ -36,6 +36,15 @@ async function resolveUnitSpec(db, code) {
 }
 
 /** Build units list from pickup items and/or DC serial JSON. */
+function earliestTimestamp(items, field) {
+  const values = items.map((i) => i[field]).filter(Boolean);
+  if (!values.length) return null;
+  return values.reduce((min, value) => {
+    if (!min) return value;
+    return new Date(value) < new Date(min) ? value : min;
+  }, null);
+}
+
 async function buildUnitsForRdc(db, dcl, pickupItems) {
   const units = [];
   const seen = new Set();
@@ -130,6 +139,9 @@ async function regenerateReturnDcPdfByRdc(db, rdcNumber) {
         dispatch_mode: dcl.dispatch_mode || primary.pickup_method || null,
         courier_name: dcl.courier_name || null,
         awb_number: dcl.awb_number || null,
+        pickup_created_at: dcl.created_at || primary.created_at || null,
+        pickup_date: earliestTimestamp(pickupItems, 'picked_up_at'),
+        warehouse_received_at: earliestTimestamp(pickupItems, 'warehouse_received_at'),
       },
       units: units.length ? units : [{
         brand: dcl.brand,

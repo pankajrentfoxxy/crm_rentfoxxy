@@ -42,6 +42,7 @@ function getMailTransport() {
 }
 
 const { mergeCompany, formatCompanyBlock, TRUETECH } = require('../utils/companyDefaults');
+const { normalizeDeliveryAddress, formatDeliveryAddressLine } = require('../utils/deliveryAddressUtils');
 
 async function loadCompany(entityCode) {
   const code = entityCode === 'gorefurbo' ? 'gorefurbo' : 'rentfoxxy';
@@ -543,7 +544,7 @@ async function generateReturnDcPdf({ returnDcNumber, header = {}, units = [], es
   const company = await loadCompany(header.entity_code);
   const accent = company.code === 'gorefurbo' ? C.gorefurbo : C.rentfoxxy;
   const pickupTypeLabel = header.pickup_type === 'repair' ? 'Repair Pickup' : 'Return Pickup';
-  const addr = parseJson(header.pickup_address, {}) || {};
+  const addr = normalizeDeliveryAddress(header.pickup_address) || {};
 
   const resolveSign = (url) => {
     if (!url) return null;
@@ -586,10 +587,20 @@ async function generateReturnDcPdf({ returnDcNumber, header = {}, units = [], es
     doc.moveTo(L, y).lineTo(R, y).strokeColor(C.line).lineWidth(1).stroke();
     y += 12;
 
-    // Seller + date
-    doc.font('Helvetica').fontSize(9).fillColor(C.sub)
-      .text(`Date: ${header.dc_date || new Date().toLocaleDateString('en-GB')}`, L, y);
-    y += 14;
+    const dateCell = (label, value, x) => {
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink)
+        .text(formatPdfDate(value) || '—', x, y, { width: 165, align: 'center' });
+      doc.font('Helvetica').fontSize(7).fillColor(C.sub)
+        .text(label, x, y + 14, { width: 165, align: 'center' });
+    };
+    dateCell('Pick-Up Created Date', header.pickup_created_at || header.dc_date || header.created_at, L);
+    dateCell('Pick-Up Date', header.pickup_date, L + 180);
+    dateCell('Warehouse Received Date', header.warehouse_received_at, L + 360);
+    y += 34;
+    doc.moveTo(L, y).lineTo(R, y).strokeColor(C.line).lineWidth(1).stroke();
+    y += 12;
+
+    // Seller
     doc.font('Helvetica-Bold').fontSize(12).fillColor(accent).text(company.legal_name, L, y);
     y += 16;
     doc.font('Helvetica').fontSize(9).fillColor(C.ink);
@@ -631,7 +642,7 @@ async function generateReturnDcPdf({ returnDcNumber, header = {}, units = [], es
     };
     row('Phone', header.customer_phone || addr.phone);
     row('Email', header.customer_email);
-    row('Address', [addr.address, addr.city, addr.state, addr.pincode].filter(Boolean).join(', '));
+    row('Address', formatDeliveryAddressLine(header.pickup_address));
     const boxBottom = yy + 8;
     doc.roundedRect(L, boxTop, W, boxBottom - boxTop, 6).strokeColor(C.line).lineWidth(1).stroke();
     y = boxBottom + 14;
