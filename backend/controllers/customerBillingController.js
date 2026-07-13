@@ -11,6 +11,7 @@ const {
   recordFullPayment,
   listPayments,
 } = require('../services/paymentLedgerService');
+const { formatPdfDateIstOrDash } = require('../utils/pdfDateTimeUtils');
 
 const UPLOAD_DIR = path.join(__dirname, '../uploads/customer-invoices');
 
@@ -24,22 +25,9 @@ async function nextCreditNoteNumber() {
   return res.rows[0].number;
 }
 
-// Format 'YYYY-MM-DD' (or a Date) as e.g. "15 May 2026".
+// Format billing / invoice dates for PDF output (IST, explicit label).
 function fmtDate(d) {
-  if (!d) return '—';
-  let s;
-  if (typeof d === 'string') {
-    s = d.slice(0, 10);
-  } else {
-    // Use LOCAL components: a `date` column returns a JS Date at midnight;
-    // toISOString() would shift it back a day in IST.
-    const dt = new Date(d);
-    s = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
-  }
-  const [y, m, day] = s.split('-');
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  if (!y || !m || !day) return s;
-  return `${parseInt(day, 10)} ${months[parseInt(m, 10) - 1]} ${y}`;
+  return formatPdfDateIstOrDash(d);
 }
 function fmtMoney(n) {
   return `Rs ${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;

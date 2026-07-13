@@ -3,6 +3,7 @@ const fs   = require('fs');
 const path = require('path');
 const PDFDocument = require('pdfkit');
 const pool = require('../config/db');
+const { formatPdfDateIstOrDash, formatPdfNowIst } = require('../utils/pdfDateTimeUtils');
 
 const UPLOAD_DIR = path.join(__dirname, '..', 'uploads', 'support-parts');
 const C = {
@@ -118,13 +119,9 @@ async function generateChallanPdf(challanId, challanNumber, esignUrl = null) {
     doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink).text('ISSUED TO', rCol, y);
     doc.font('Helvetica').fontSize(10).fillColor(C.ink).text(ch.tech_name || '-', rCol, y + 11);
     doc.font('Helvetica').fontSize(8).fillColor(C.sub).text(ch.tech_email || '', rCol, y + 23);
-    doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink).text('DATE', rCol, y + 37);
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink).text('DATE (IST)', rCol, y + 37);
     doc.font('Helvetica').fontSize(9).fillColor(C.sub)
-       .text(
-         (ch.issued_at ? new Date(ch.issued_at) : new Date())
-           .toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
-         rCol, y + 48
-       );
+       .text(formatPdfDateIstOrDash(ch.issued_at || new Date()), rCol, y + 48);
 
     y += 70;
 
@@ -230,7 +227,7 @@ async function generateChallanPdf(challanId, challanNumber, esignUrl = null) {
 
     doc.font('Helvetica').fontSize(7).fillColor(C.sub)
        .text(
-         `Generated: ${new Date().toLocaleString('en-IN')} - ${ch.challan_number}`,
+         `Generated: ${formatPdfNowIst()} — ${ch.challan_number}`,
          L, y, { width: W, align: 'center' }
        );
 

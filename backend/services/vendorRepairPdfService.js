@@ -3,6 +3,7 @@ const path = require('path');
 const PDFDocument = require('pdfkit');
 const pool = require('../config/db');
 const { mergeCompany, formatCompanyBlock } = require('../utils/companyDefaults');
+const { formatPdfDateIstOrDash, formatPdfNowIst } = require('../utils/pdfDateTimeUtils');
 
 const C = {
   ink: '#1f2937',
@@ -328,11 +329,11 @@ async function generateVendorRepairPdf(dcNumber) {
 
     doc.font('Helvetica').fontSize(9).fillColor(C.sub);
     const deliveryLabel = dc.vendor_delivered_at
-      ? `Delivered to vendor: ${new Date(dc.vendor_delivered_at).toLocaleDateString('en-IN')}`
+      ? `Delivered to vendor: ${formatPdfDateIstOrDash(dc.vendor_delivered_at)}`
       : (dc.dispatched_at ? 'In transit to vendor' : 'Pending dispatch');
     doc.text(`Status: ${dc.status || '—'} · ${deliveryLabel}`, 40, y);
-    doc.text(`Out Date: ${dc.out_date ? new Date(dc.out_date).toLocaleDateString('en-IN') : '—'}`, 40, y + 12);
-    doc.text(`Expected Return: ${dc.expected_return_date ? new Date(dc.expected_return_date).toLocaleDateString('en-IN') : '—'}`, 280, y + 12);
+    doc.text(`Out Date: ${formatPdfDateIstOrDash(dc.out_date)}`, 40, y + 12);
+    doc.text(`Expected Return: ${formatPdfDateIstOrDash(dc.expected_return_date)}`, 280, y + 12);
     y += 28;
 
     y = drawDispatchTags(doc, y, dispatchTagsForDc(dc));
@@ -403,7 +404,7 @@ async function generateVendorRepairReceivePdf(dcNumber, receiveDcNumber, itemIds
 
     doc.font('Helvetica').fontSize(9).fillColor(C.sub);
     doc.text(`Original Dispatch DC: ${dc.dc_number}`, 40, y);
-    doc.text(`Receive Date: ${new Date().toLocaleDateString('en-IN')}`, 300, y);
+    doc.text(`Receive Date: ${formatPdfNowIst()}`, 300, y);
     y += 20;
 
     y = writeVendorAddressBoxes(doc, y, vendorBilling, vendorShipping);

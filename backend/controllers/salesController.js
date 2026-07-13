@@ -1,6 +1,7 @@
 const pool = require('../config/db');
 const { researchCompany } = require('../services/perplexityService');
 const PDFDocument = require('pdfkit');
+const { formatPdfDateIstOrDash, formatPdfNowIst } = require('../utils/pdfDateTimeUtils');
 
 const logOrderStatusHistory = async (db, { orderId, fromStatus = null, toStatus, changedBy = null, notes = null }) => {
     if (!toStatus) return;
@@ -33,7 +34,7 @@ const safeMoney = (v) => {
   return (Math.round(clamped * 100) / 100).toFixed(2);
 };
 const roundMoney = (v) => Number(safeMoney(v));
-const formatDate = (value) => (value ? new Date(value).toLocaleDateString('en-IN') : '-');
+const formatDate = (value) => formatPdfDateIstOrDash(value);
 const supplierStateCode = (COMPANY_DETAILS.gst || '').slice(0, 2);
 const extractStateCode = (gst) => {
     const value = String(gst || '').trim();
@@ -422,7 +423,7 @@ const renderEwayPdf = (res, bundle) => {
     doc.rect(left, 36, pageWidth, 56).stroke('#1f2937');
     doc.font('Helvetica-Bold').fontSize(15).text('FORM GST EWB-01 (ERP FORMAT)', left, 48, { width: pageWidth, align: 'center' });
     doc.font('Helvetica').fontSize(9).text(`E-Way Bill No: ${order.eway_bill_number || '-'}`, left, 72, { width: pageWidth / 2 });
-    doc.text(`Generated: ${formatDate(order.eway_bill_generated_at || new Date())}`, left + pageWidth / 2, 72, { width: pageWidth / 2, align: 'right' });
+    doc.text(`Generated: ${formatPdfNowIst()}`, left + pageWidth / 2, 72, { width: pageWidth / 2, align: 'right' });
 
     let y = 104;
     doc.font('Helvetica-Bold').fontSize(11).text('Part - A (Consignment Details)', left, y);

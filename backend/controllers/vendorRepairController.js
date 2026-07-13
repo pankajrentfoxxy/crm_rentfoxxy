@@ -433,6 +433,7 @@ exports.exportOutForRepairPdf = async (req, res) => {
       gpu: req.query.gpu,
     });
     const PDFDocument = require('pdfkit');
+    const { formatPdfDateIstOrDash } = require('../utils/pdfDateTimeUtils');
     const doc = new PDFDocument({ margin: 40, size: 'A4', layout: 'landscape' });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'attachment; filename="out_for_repair_inventory.pdf"');
@@ -442,7 +443,7 @@ exports.exportOutForRepairPdf = async (req, res) => {
     doc.fontSize(9);
     (data || []).forEach((r, idx) => {
       doc.text(
-        `${idx + 1}. ${r.ttspl_id || '—'} | SN ${r.serial_number || '—'} | ${r.vendor_name || '—'} | DC ${r.dc_number || '—'} | Out ${r.out_date || '—'}`
+        `${idx + 1}. ${r.ttspl_id || '—'} | SN ${r.serial_number || '—'} | ${r.vendor_name || '—'} | DC ${r.dc_number || '—'} | Out ${formatPdfDateIstOrDash(r.out_date)}`
       );
     });
     if (!data?.length) doc.text('No laptops currently out for repair.');
