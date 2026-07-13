@@ -545,11 +545,8 @@ async function generateVendorRepairReceivePdf(dcNumber, receiveDcNumber, itemIds
 
     doc.font('Helvetica').fontSize(9).fillColor(C.sub);
     doc.text(`Original Dispatch DC: ${dc.dc_number}`, 40, y);
-<<<<<<< HEAD
     doc.text(`Generated: ${fmtIst(new Date())}`, 300, y);
-=======
     doc.text(`Receive Date: ${formatPdfNowIst()}`, 300, y);
->>>>>>> 06c613216b50a8ada7225373e435b394529f8f33
     y += 20;
 
     y = writeVendorAddressBoxes(doc, y, vendorBilling, vendorShipping);

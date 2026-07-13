@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Send } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
@@ -20,6 +20,7 @@ const TABS = ['Activity & Remarks', 'Lead Profile', 'Follow-ups', 'Quotations', 
 export default function LeadDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const [lead, setLead] = useState(null);
   const [conversion, setConversion] = useState(null);
   const [tab, setTab] = useState(0);
@@ -45,6 +46,12 @@ export default function LeadDetailPage() {
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (typeof location.state?.focusTab === 'number') {
+      setTab(location.state.focusTab);
+    }
+  }, [location.state?.focusTab]);
 
   useEffect(() => {
     if (tab !== 3 || !lead?.leadId) return;
@@ -111,9 +118,13 @@ export default function LeadDetailPage() {
 
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto">
-      <button type="button" onClick={() => navigate('/lead-crm/leads')}
-        className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 mb-4">
-        <ArrowLeft className="w-4 h-4" /> Back to Leads
+      <button
+        type="button"
+        onClick={() => navigate(location.state?.fromFollowUps ? '/lead-crm/follow-ups' : '/lead-crm/leads')}
+        className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 mb-4"
+      >
+        <ArrowLeft className="w-4 h-4" />
+        {location.state?.fromFollowUps ? 'Back to Follow-ups' : 'Back to Leads'}
       </button>
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
