@@ -118,7 +118,7 @@ function groupByProcessor(detailRows) {
   }
 
   return [...map.values()]
-    .filter((g) => COUNT_FIELDS.some((f) => g[f] > 0))
+    .filter((g) => g.generations.length > 0)
     .map((g) => ({
       ...g,
       generations: g.generations.sort((a, b) => b.ordered - a.ordered || String(a.generation).localeCompare(String(b.generation))),
@@ -126,9 +126,9 @@ function groupByProcessor(detailRows) {
     .sort((a, b) => b.ordered - a.ordered || String(a.processor).localeCompare(String(b.processor)));
 }
 
-function detailRowsFromMap(map) {
+function detailRowsFromMap(map, orderConfigKeys) {
   return [...map.values()]
-    .filter((r) => COUNT_FIELDS.some((f) => r[f] > 0))
+    .filter((r) => orderConfigKeys.has(r.key))
     .sort((a, b) => b.ordered - a.ordered || String(a.processor).localeCompare(String(b.processor)));
 }
 
@@ -284,6 +284,7 @@ function classifyLineSerials(lineSerials, range) {
 
 function buildScopeTable(lines, serials, stock, qcUnits, range) {
   const map = new Map();
+  const orderConfigKeys = new Set();
   const serialsByLine = serials.reduce((acc, s) => {
     const lid = Number(s.line_id);
     if (!acc[lid]) acc[lid] = [];
@@ -296,8 +297,16 @@ function buildScopeTable(lines, serials, stock, qcUnits, range) {
     const counts = classifyLineSerials(lineSerials, range);
     const activeSerials = lineSerials.filter((s) => !isSerialDelivered(s)).length;
     const pending = Math.max(0, Number(line.line_qty || 0) - counts.delivered - activeSerials);
+    const showOrdered = pending > 0 && (range.live || inDateRange(line.created_at, range));
 
-    if (pending > 0 && (range.live || inDateRange(line.created_at, range))) {
+    const hasPipeline = showOrdered || counts.attachedPending || counts.dispatchQcDone
+      || counts.challan || counts.dispatched;
+    if (!hasPipeline) continue;
+
+    const cfgKey = specKey(line.processor, line.generation);
+    orderConfigKeys.add(cfgKey);
+
+    if (showOrdered) {
       bumpRow(map, line.processor, line.generation, 'ordered', pending);
     }
     if (counts.attachedPending) bumpRow(map, line.processor, line.generation, 'attached', counts.attachedPending);
@@ -307,13 +316,17 @@ function buildScopeTable(lines, serials, stock, qcUnits, range) {
   }
 
   for (const row of stock) {
+    const key = specKey(row.processor, row.generation);
+    if (!orderConfigKeys.has(key)) continue;
     bumpRow(map, row.processor, row.generation, 'available', 1);
   }
   for (const row of qcUnits) {
+    const key = specKey(row.processor, row.generation);
+    if (!orderConfigKeys.has(key)) continue;
     bumpRow(map, row.processor, row.generation, 'qc_process', 1);
   }
 
-  const detailRows = detailRowsFromMap(map);
+  const detailRows = detailRowsFromMap(map, orderConfigKeys);
   return {
     detail_rows: detailRows,
     processors: groupByProcessor(detailRows),
