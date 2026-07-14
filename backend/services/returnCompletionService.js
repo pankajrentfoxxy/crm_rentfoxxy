@@ -88,7 +88,7 @@ async function processReturnedSerials(db, {
 
   // Resolve the originating support pickup ticket (if any) once all units processed.
   if (supportTicketId) {
-    const replRes = await replacementFlow.onReplacementReturnPickedUp(client, {
+    const replRes = await replacementFlow.onReplacementReturnPickedUp(db, {
       supportTicketId,
       returnDcNumber: dcNumber,
     });

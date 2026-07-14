@@ -1057,6 +1057,35 @@ const ACTIVE_FROM_SQL = `
   WHERE vsn.current_customer_id = $1
     AND vsn.deleted_at IS NULL
     AND vsn.inventory_status = ANY($2::text[])
+    AND NOT EXISTS (
+      SELECT 1
+        FROM delivery_challan_lines rl
+        LEFT JOIN LATERAL (
+          SELECT COUNT(*)::int AS cnt,
+                 BOOL_AND(sti.warehouse_received_at IS NOT NULL) AS all_received
+            FROM support_ticket_items sti
+           WHERE sti.return_dc_number = rl.dc_number
+             AND sti.item_type = 'pickup'
+        ) wh ON TRUE
+       WHERE rl.movement_type = 'return'
+         AND rl.customer_id = $1
+         AND COALESCE(rl.status, '') NOT IN ('cancelled')
+         AND (wh.cnt IS NULL OR wh.cnt = 0 OR wh.all_received IS NOT TRUE)
+         AND (
+           vsn.inventory_asset_code = NULLIF(split_part(rl.serial_number->>0, '|', 3), '')
+           OR vsn.serial_number = NULLIF(split_part(rl.serial_number->>0, '|', 2), '')
+           OR EXISTS (
+             SELECT 1 FROM support_ticket_items sti2
+              WHERE sti2.return_dc_number = rl.dc_number
+                AND sti2.item_type = 'pickup'
+                AND (
+                  sti2.ttspl_id = vsn.inventory_asset_code
+                  OR sti2.unique_serial_number = vsn.inventory_asset_code
+                  OR sti2.serial_number = vsn.serial_number
+                )
+           )
+         )
+    )
 `;
 
 const ACTIVE_SELECT_SQL = `

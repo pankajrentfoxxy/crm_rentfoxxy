@@ -234,17 +234,23 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
                       <p className="text-xs text-gray-400">{formatDateTime(detail.esign.warehouse_at)}</p>
                     </>
                   ) : (
-                    <p className="text-sm text-gray-400">Pending warehouse confirmation</p>
+                    <p className="text-sm text-amber-700">Pending warehouse confirmation</p>
                   )}
                 </div>
               </div>
 
-              {detail.can_warehouse_confirm && (
+              {detail.warehouse_receive_pending && !detail.can_warehouse_confirm && detail.warehouse_block_reason ? (
+                <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  {detail.warehouse_block_reason}
+                </p>
+              ) : null}
+
+              {detail.can_warehouse_confirm ? (
                 <WarehouseSignPanel
                   rdcNumber={rdcNumber}
                   onSigned={() => { load(); onUpdated?.(); }}
                 />
-              )}
+              ) : null}
             </>
           )}
         </div>

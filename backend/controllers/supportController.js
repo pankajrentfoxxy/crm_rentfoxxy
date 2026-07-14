@@ -13,7 +13,7 @@ const inventorySM = require('../services/inventoryStateMachine');
 const { DEPLOYED_WITH_CUSTOMER_STATUSES } = require('../services/customerDeployedAssets');
 const { processReturnedSerials } = require('../services/returnCompletionService');
 const { createFloorTicketFromSupportPickup, resetVendorSerialForQcReentry } = require('../services/grnTicketService');
-const { nextDocumentNumber } = require('../services/salesManagementService');
+const { nextDocumentNumber, ensureReturnDcPickupItems } = require('../services/salesManagementService');
 const { regenerateReturnDcPdf, regenerateReturnDcPdfByRdc } = require('../services/returnDcPdfService');
 const replacementFlow = require('../services/supportReplacementFlowService');
 const { preserveCustomerAssetsOnCancel, forceRestoreCustomerAssetsOnCancel } = require('../services/supportCancelInventoryService');
@@ -2906,7 +2906,7 @@ const warehouseReceiveSinglePickupItem = async (client, it, userId, esignUrl, si
     return { floorTicketId };
 };
 
-const warehouseReceiveReturnDcBatch = async (client, triggerItem, userId, esignUrl, signerName) => {
+const warehouseReceiveReturnDcBatch = async (client, triggerItem, userId, esignUrl, signerName, dcl = null) => {
     let siblings = [triggerItem];
     if (triggerItem.return_dc_number) {
         const sibRes = await client.query(
@@ -2918,9 +2918,10 @@ const warehouseReceiveReturnDcBatch = async (client, triggerItem, userId, esignU
         if (sibRes.rows.length) siblings = sibRes.rows;
     }
 
+    const isDelivered = dcl && (dcl.status === 'delivered' || !!dcl.delivered_at);
     for (const s of siblings) {
         const isInhouse = s.pickup_method !== 'courier' && s.pickup_method !== 'porter';
-        if (isInhouse && !s.customer_otp_verified_at) {
+        if (isInhouse && !s.customer_otp_verified_at && !isDelivered) {
             throw Object.assign(
                 new Error('Customer OTP must be verified for all units before warehouse can confirm receipt'),
                 { status: 400 }
@@ -3028,24 +3029,36 @@ exports.confirmReturnDcWarehouseReceipt = async (req, res) => {
         return res.status(400).json({ success: false, message: 'Warehouse e-sign required' });
     }
 
-    const pendingRes = await pool.query(
-        `SELECT * FROM support_ticket_items
-          WHERE return_dc_number = $1 AND item_type = 'pickup' AND warehouse_received_at IS NULL
-          ORDER BY id ASC LIMIT 1`,
+    const dclRes = await pool.query(
+        `SELECT * FROM delivery_challan_lines
+          WHERE dc_number = $1 AND movement_type = 'return' LIMIT 1`,
         [rdcNumber]
     );
-    if (!pendingRes.rows.length) {
-        return res.status(400).json({ success: false, message: 'All units on this Return DC are already received' });
+    const dcl = dclRes.rows[0];
+    if (!dcl) {
+        return res.status(404).json({ success: false, message: 'Return DC not found' });
     }
-    const trigger = pendingRes.rows[0];
 
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
         await ensureSupportTicketItemV3Columns(client);
+        await ensureReturnDcPickupItems(client, dcl);
+
+        const pendingRes = await client.query(
+            `SELECT * FROM support_ticket_items
+              WHERE return_dc_number = $1 AND item_type = 'pickup' AND warehouse_received_at IS NULL
+              ORDER BY id ASC LIMIT 1`,
+            [rdcNumber]
+        );
+        if (!pendingRes.rows.length) {
+            throw Object.assign(new Error('All units on this Return DC are already received'), { status: 400 });
+        }
+        const trigger = pendingRes.rows[0];
+
         const esignUrl = saveWarehouseEsignPng(trigger.id, esign_data);
         const { floorTicketIds, unitCount } = await warehouseReceiveReturnDcBatch(
-            client, trigger, req.user.user_id, esignUrl, signer_name
+            client, trigger, req.user.user_id, esignUrl, signer_name, dcl
         );
         await client.query('COMMIT');
 
