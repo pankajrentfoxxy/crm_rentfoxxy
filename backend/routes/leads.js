@@ -40,6 +40,8 @@ router.get('/export-csv', leadsView, leadController.exportLeadsCsv);
 router.get('/stages', leadsView, leadController.getLeadStages);
 router.get('/', leadsView, leadController.getLeads);
 router.get('/follow-ups', leadsView, leadController.getFollowUps);
+router.get('/follow-up-reminders', leadsView, leadController.getFollowUpReminders);
+router.post('/follow-up-reminders/:id/ack', leadsView, leadController.ackFollowUpReminder);
 router.get('/orders', leadsView, leadController.getLeadOrders);
 router.get('/reports', leadsView, leadController.getReports);
 router.get('/auto-assign-config', leadsView, leadController.getAutoAssignConfig);

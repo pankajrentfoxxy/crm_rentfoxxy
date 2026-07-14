@@ -1319,14 +1319,25 @@ exports.updateFollowUp = async (req, res) => {
 
     const leadId = parseInt(id, 10);
     const followUpTime = normalizeFollowUpTimeForDb(req.body.follow_up_time);
+    const uid = currentUserId(req.user);
+    // Sales operators must be assignee for in-app reminders; claim unassigned leads on set.
+    const claimAssignee =
+      isSalesLeadOperator(req.user) && uid != null && lead.assignedUserId == null;
 
     await pool.query(
       `UPDATE leads SET
         follow_up_date = $1,
         follow_up_time = $2::time,
+        assigned_user_id = CASE WHEN $4::boolean THEN $5::integer ELSE assigned_user_id END,
         updated_at = NOW()
        WHERE lead_id = $3`,
-      [follow_up_date ? new Date(follow_up_date) : null, followUpTime, leadId]
+      [
+        follow_up_date ? new Date(follow_up_date) : null,
+        followUpTime,
+        leadId,
+        claimAssignee,
+        uid,
+      ]
     );
 
     const updated = await prisma.lead.findUnique({ where: { leadId } });
@@ -1382,6 +1393,235 @@ exports.getFollowUps = async (req, res) => {
   } catch (error) {
     console.error('Follow-up error:', error);
     res.status(500).json({ success: false, message: 'Server error fetching follow-ups' });
+  }
+};
+
+/** Ensure in-app reminder ack table exists (idempotent). */
+async function ensureFollowUpInAppRemindersTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS lead_followup_in_app_reminders (
+      id              SERIAL PRIMARY KEY,
+      lead_id         INTEGER NOT NULL REFERENCES leads(lead_id) ON DELETE CASCADE,
+      user_id         INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+      follow_up_at    TIMESTAMPTZ NOT NULL,
+      status          VARCHAR(20) NOT NULL DEFAULT 'shown',
+      snooze_until    TIMESTAMPTZ,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT lead_followup_in_app_reminders_unique
+        UNIQUE (lead_id, user_id, follow_up_at)
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_lead_followup_in_app_user
+      ON lead_followup_in_app_reminders (user_id, status)
+  `);
+}
+
+/** Calendar YYYY-MM-DD in IST for a stored follow_up_date (date string or timestamptz). */
+function followUpCalendarYmdIst(followUpDate) {
+  if (followUpDate == null || followUpDate === '') return null;
+  if (typeof followUpDate === 'string') {
+    const m = followUpDate.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (m) return m[1];
+  }
+  const base = new Date(followUpDate);
+  if (Number.isNaN(base.getTime())) return null;
+  return base.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+/**
+ * Combine follow_up_date + follow_up_time into an absolute Date (IST clock).
+ * Requires a real follow_up_time — date-only rows do not fire timed reminders.
+ */
+function resolveFollowUpDueAt(followUpDate, followUpTime) {
+  const ymd = followUpCalendarYmdIst(followUpDate);
+  if (!ymd) return null;
+
+  const timeStr = formatFollowUpTime(followUpTime);
+  if (!timeStr) return null;
+
+  const [hh, mm] = timeStr.split(':').map((n) => parseInt(n, 10));
+  // "00:00:00" from empty/default DB can mean "no real time" — still treat as midnight IST.
+  const iso = `${ymd}T${String(hh || 0).padStart(2, '0')}:${String(mm || 0).padStart(2, '0')}:00+05:30`;
+  const due = new Date(iso);
+  return Number.isNaN(due.getTime()) ? null : due;
+}
+
+function reminderMatchesDue(ackFollowUpAt, dueAt) {
+  if (!ackFollowUpAt || !dueAt) return false;
+  return Math.abs(new Date(ackFollowUpAt).getTime() - dueAt.getTime()) < 60 * 1000;
+}
+
+/**
+ * Sales-team-only upcoming follow-up reminders.
+ * Returns leads assigned to the current sales user that are due within the
+ * 2-minute pre-notify window (and not dismissed / still snoozed).
+ */
+exports.getFollowUpReminders = async (req, res) => {
+  try {
+    // Sales role / sales_access operators only — never Admin / other modules.
+    if (!isSalesLeadOperator(req.user)) {
+      return res.json({ success: true, reminders: [], sales_only: true });
+    }
+
+    const uid = currentUserId(req.user);
+    if (!uid) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    await ensureFollowUpInAppRemindersTable();
+
+    // follow_up_date is calendar midnight (not due clock); match by IST calendar day.
+    const leadsRes = await pool.query(
+      `SELECT l.lead_id, l.name, l.company_name, l.follow_up_date, l.follow_up_time, l.status,
+              l.assigned_user_id
+         FROM leads l
+        WHERE l.assigned_user_id = $1
+          AND l.follow_up_date IS NOT NULL
+          AND l.follow_up_time IS NOT NULL
+          AND l.status NOT IN ('Rejected', 'Gone')
+          AND ((l.follow_up_date AT TIME ZONE 'Asia/Kolkata')::date)
+              BETWEEN ((NOW() AT TIME ZONE 'Asia/Kolkata')::date - 1)
+                  AND ((NOW() AT TIME ZONE 'Asia/Kolkata')::date + 1)`,
+      [uid]
+    );
+
+    const ackRes = await pool.query(
+      `SELECT lead_id, follow_up_at, status, snooze_until
+         FROM lead_followup_in_app_reminders
+        WHERE user_id = $1
+          AND follow_up_at >= (CURRENT_TIMESTAMP - INTERVAL '1 day')
+          AND follow_up_at <= (CURRENT_TIMESTAMP + INTERVAL '1 day')`,
+      [uid]
+    );
+    const acks = ackRes.rows;
+
+    const now = Date.now();
+    const WINDOW_MS = 2 * 60 * 1000;
+    const GRACE_AFTER_MS = 15 * 60 * 1000;
+    const reminders = [];
+
+    for (const row of leadsRes.rows) {
+      const dueAt = resolveFollowUpDueAt(row.follow_up_date, row.follow_up_time);
+      if (!dueAt) continue;
+      const dueMs = dueAt.getTime();
+      const triggerMs = dueMs - WINDOW_MS;
+
+      if (now < triggerMs || now > dueMs + GRACE_AFTER_MS) continue;
+
+      const ack = acks.find(
+        (a) => Number(a.lead_id) === Number(row.lead_id) && reminderMatchesDue(a.follow_up_at, dueAt)
+      );
+      if (ack?.status === 'dismissed') continue;
+      if (ack?.status === 'shown') continue;
+      if (ack?.status === 'snoozed' && ack.snooze_until && new Date(ack.snooze_until).getTime() > now) {
+        continue;
+      }
+
+      // Log as pending when first eligible so the table is audited even if client ack fails.
+      if (!ack) {
+        try {
+          await pool.query(
+            `INSERT INTO lead_followup_in_app_reminders
+               (lead_id, user_id, follow_up_at, status, snooze_until, created_at, updated_at)
+             VALUES ($1, $2, $3, 'pending', NULL, NOW(), NOW())
+             ON CONFLICT (lead_id, user_id, follow_up_at) DO NOTHING`,
+            [row.lead_id, uid, dueAt.toISOString()]
+          );
+        } catch (insErr) {
+          console.warn('follow-up reminder pending insert:', insErr.message);
+        }
+      }
+
+      reminders.push({
+        leadId: row.lead_id,
+        leadName: row.name || '—',
+        customerName: row.company_name || '—',
+        followUpAt: dueAt.toISOString(),
+        followUpDate: row.follow_up_date,
+        followUpTime: formatFollowUpTime(row.follow_up_time),
+        status: row.status,
+        minutesUntil: Math.max(0, Math.round((dueMs - now) / 60000)),
+      });
+    }
+
+    reminders.sort((a, b) => new Date(a.followUpAt) - new Date(b.followUpAt));
+    res.json({ success: true, reminders });
+  } catch (error) {
+    console.error('getFollowUpReminders error:', error);
+    res.status(500).json({ success: false, message: 'Server error fetching reminders' });
+  }
+};
+
+/**
+ * Ack a sales follow-up reminder: shown | dismiss | snooze.
+ * Body: { follow_up_at, action, snooze_minutes? }
+ */
+exports.ackFollowUpReminder = async (req, res) => {
+  try {
+    if (!isSalesLeadOperator(req.user)) {
+      return res.status(403).json({ success: false, message: 'Sales team only' });
+    }
+    const uid = currentUserId(req.user);
+    const leadId = parseInt(req.params.id, 10);
+    const { follow_up_at, action, snooze_minutes } = req.body || {};
+    if (!uid || !leadId || !follow_up_at) {
+      return res.status(400).json({ success: false, message: 'lead, follow_up_at required' });
+    }
+    const act = String(action || 'shown').toLowerCase();
+    if (!['shown', 'dismiss', 'dismissed', 'snooze', 'snoozed'].includes(act)) {
+      return res.status(400).json({ success: false, message: 'Invalid action' });
+    }
+
+    await ensureFollowUpInAppRemindersTable();
+
+    const leadRes = await pool.query(
+      `SELECT lead_id, assigned_user_id, follow_up_date, follow_up_time, status
+         FROM leads WHERE lead_id = $1`,
+      [leadId]
+    );
+    if (!leadRes.rows.length) {
+      return res.status(404).json({ success: false, message: 'Lead not found' });
+    }
+    const lead = leadRes.rows[0];
+    if (parseInt(lead.assigned_user_id, 10) !== uid) {
+      return res.status(403).json({ success: false, message: 'Only assigned sales user can acknowledge' });
+    }
+
+    const dueAt = new Date(follow_up_at);
+    if (Number.isNaN(dueAt.getTime())) {
+      return res.status(400).json({ success: false, message: 'Invalid follow_up_at' });
+    }
+
+    let status = 'shown';
+    let snoozeUntil = null;
+    if (act === 'dismiss' || act === 'dismissed') status = 'dismissed';
+    if (act === 'snooze' || act === 'snoozed') {
+      status = 'snoozed';
+      const mins = Math.min(60, Math.max(1, parseInt(snooze_minutes, 10) || 5));
+      snoozeUntil = new Date(Date.now() + mins * 60 * 1000);
+    }
+
+    await pool.query(
+      `INSERT INTO lead_followup_in_app_reminders
+         (lead_id, user_id, follow_up_at, status, snooze_until, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+       ON CONFLICT (lead_id, user_id, follow_up_at)
+       DO UPDATE SET status = EXCLUDED.status,
+                     snooze_until = EXCLUDED.snooze_until,
+                     updated_at = NOW()`,
+      [leadId, uid, dueAt.toISOString(), status, snoozeUntil]
+    );
+
+    res.json({
+      success: true,
+      status,
+      snooze_until: snoozeUntil ? snoozeUntil.toISOString() : null,
+    });
+  } catch (error) {
+    console.error('ackFollowUpReminder error:', error);
+    res.status(500).json({ success: false, message: 'Server error acknowledging reminder' });
   }
 };
 
