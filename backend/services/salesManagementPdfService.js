@@ -51,9 +51,45 @@ async function loadCompany(entityCode) {
        FROM companies WHERE code = $1`,
       [code]
     );
-    if (r.rows.length) return mergeCompany(r.rows[0]);
+    if (r.rows.length) return mergeCompany({ ...r.rows[0], code });
   } catch (_) { /* pre-migration */ }
-  return mergeCompany({ ...TRUETECH, code });
+  return mergeCompany({ code });
+}
+
+/** Resolve on-disk logo for a company record. */
+function resolveCompanyLogoAbs(company) {
+  const candidates = [];
+  if (company?.logo_url) {
+    const clean = String(company.logo_url).replace(/^\//, '');
+    candidates.push(path.join(__dirname, '..', clean));
+  }
+  // Sale / Gorefurbo always prefers the branded long-mark file.
+  if (company?.code === 'gorefurbo') {
+    candidates.push(path.join(__dirname, '..', 'assets', 'gorefurbo-logo.png'));
+  } else {
+    candidates.push(path.join(__dirname, '..', 'assets', 'rentfoxxy-logo.png'));
+  }
+  return candidates.find((p) => fs.existsSync(p)) || null;
+}
+
+/**
+ * Draw branded header logo (transparent PNG supported).
+ * @returns {{ drawn: boolean, height: number, width: number }}
+ */
+function drawCompanyLogo(doc, company, x, y, { maxHeight = 36, maxWidth = 210 } = {}) {
+  const logoAbs = resolveCompanyLogoAbs(company);
+  if (!logoAbs) return { drawn: false, height: 0, width: 0 };
+
+  const isGorefurbo = company?.code === 'gorefurbo';
+  const height = isGorefurbo ? Math.min(maxHeight, 38) : Math.min(maxHeight, 34);
+  const width = isGorefurbo ? maxWidth : Math.min(maxWidth, 160);
+
+  try {
+    doc.image(logoAbs, x, y, { height, fit: [width, height] });
+    return { drawn: true, height, width };
+  } catch (_) {
+    return { drawn: false, height: 0, width: 0 };
+  }
 }
 
 function parseJson(v, fallback = null) {
@@ -235,11 +271,14 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
   const filePath = path.join(UPLOAD_DIR, fileName);
   const relativePath = `uploads/sales-documents/${fileName}`;
 
-  const company = await loadCompany(header.entity_code);
-  const accent = company.code === 'gorefurbo' ? C.gorefurbo : C.rentfoxxy;
   const qtype = await resolveQuotationType(docType, header);
   const isSale = qtype === 'sale' || qtype === 'sales';
   const isDemo = qtype === 'demo';
+  // Sale documents always brand as Gorefurbo (logo + accent).
+  const entityCode = header.entity_code
+    || (isSale ? 'gorefurbo' : 'rentfoxxy');
+  const company = await loadCompany(entityCode);
+  const accent = company.code === 'gorefurbo' ? C.gorefurbo : C.rentfoxxy;
   const docLabel = docType === 'quotation' ? 'Quotation' : docType === 'sales_order' ? 'Sales Order' : 'Delivery Challan';
   const typeLabel = isSale ? 'Sale' : isDemo ? 'Demo' : 'Rental';
 
@@ -283,14 +322,11 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
 
     // ── Header band ──────────────────────────────────────────────────────
     let y = 40;
-    const logoAbs = company.logo_url
-      ? path.join(__dirname, '..', company.logo_url.replace(/^\//, ''))
-      : null;
-    let logoDrawn = false;
-    if (logoAbs && fs.existsSync(logoAbs)) {
-      try { doc.image(logoAbs, L, y, { height: 34 }); logoDrawn = true; } catch (_) { /* ignore */ }
-    }
-    if (!logoDrawn) {
+    const logo = drawCompanyLogo(doc, company, L, y, {
+      maxHeight: isSale ? 38 : 34,
+      maxWidth: isSale ? 220 : 160,
+    });
+    if (!logo.drawn) {
       doc.fillColor(accent).font('Helvetica-Bold').fontSize(22).text(company.code, L, y + 4);
     }
     // Doc numbers (right cluster)
@@ -540,8 +576,9 @@ async function generateReturnDcPdf({ returnDcNumber, header = {}, units = [], es
   const filePath = path.join(UPLOAD_DIR, fileName);
   const relativePath = `uploads/sales-documents/${fileName}`;
 
-  const company = await loadCompany(header.entity_code);
-  const accent = company.code === 'gorefurbo' ? C.gorefurbo : C.rentfoxxy;
+  // Support return pickups are always Rentfoxxy-branded (not Gorefurbo sales).
+  const company = await loadCompany('rentfoxxy');
+  const accent = C.rentfoxxy;
   const pickupTypeLabel = header.pickup_type === 'repair' ? 'Repair Pickup' : 'Return Pickup';
   const addr = normalizeDeliveryAddress(header.pickup_address) || {};
 
@@ -560,13 +597,11 @@ async function generateReturnDcPdf({ returnDcNumber, header = {}, units = [], es
     const L = 36; const R = 559; const W = R - L;
     let y = 40;
 
-    // Header band
-    const logoAbs = company.logo_url ? path.join(__dirname, '..', company.logo_url.replace(/^\//, '')) : null;
-    let logoDrawn = false;
-    if (logoAbs && fs.existsSync(logoAbs)) {
-      try { doc.image(logoAbs, L, y, { height: 34 }); logoDrawn = true; } catch (_) { /* ignore */ }
+    // Header band — Rentfoxxy logo
+    const logo = drawCompanyLogo(doc, company, L, y, { maxHeight: 36, maxWidth: 170 });
+    if (!logo.drawn) {
+      doc.fillColor(accent).font('Helvetica-Bold').fontSize(22).text('rentfoxxy', L, y + 4);
     }
-    if (!logoDrawn) doc.fillColor(accent).font('Helvetica-Bold').fontSize(22).text(company.code, L, y + 4);
 
     doc.font('Helvetica-Bold').fontSize(16).fillColor(accent).text('RETURN DELIVERY CHALLAN', 250, y, { width: 273, align: 'right' });
     doc.font('Helvetica').fontSize(8).fillColor(C.sub).text(pickupTypeLabel, 250, y + 20, { width: 273, align: 'right' });

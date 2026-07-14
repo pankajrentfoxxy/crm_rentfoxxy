@@ -128,7 +128,7 @@ async function regenerateReturnDcPdfByRdc(db, rdcNumber) {
     const pdfPath = await generateReturnDcPdf({
       returnDcNumber: rdcNumber,
       header: {
-        entity_code: dcl.entity_code || null,
+        entity_code: 'rentfoxxy',
         customer_name: dcl.customer_name || null,
         customer_email: dcl.email || null,
         customer_phone: dcl.customer_phone || null,

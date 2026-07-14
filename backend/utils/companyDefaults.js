@@ -9,16 +9,29 @@ const TRUETECH = {
   logo_url: 'assets/rentfoxxy-logo.png',
 };
 
+const GOREFURBO = {
+  ...TRUETECH,
+  code: 'gorefurbo',
+  logo_url: 'assets/gorefurbo-logo.png',
+};
+
+function defaultsForCode(code) {
+  return code === 'gorefurbo' ? GOREFURBO : TRUETECH;
+}
+
 function mergeCompany(row) {
-  if (!row) return { ...TRUETECH };
+  const code = row?.code === 'gorefurbo' ? 'gorefurbo' : (row?.code || 'rentfoxxy');
+  const defaults = defaultsForCode(code);
+  if (!row) return { ...defaults };
   return {
-    ...TRUETECH,
+    ...defaults,
     ...row,
-    legal_name: row.legal_name || TRUETECH.legal_name,
-    email: row.email || TRUETECH.email,
-    gstin: row.gstin || TRUETECH.gstin,
-    address: row.address || TRUETECH.address,
-    logo_url: row.logo_url || TRUETECH.logo_url,
+    code,
+    legal_name: row.legal_name || defaults.legal_name,
+    email: row.email || defaults.email,
+    gstin: row.gstin || defaults.gstin,
+    address: row.address || defaults.address,
+    logo_url: row.logo_url || defaults.logo_url,
   };
 }
 
@@ -31,4 +44,4 @@ function formatCompanyBlock(company) {
   return lines.join('\n');
 }
 
-module.exports = { TRUETECH, mergeCompany, formatCompanyBlock };
+module.exports = { TRUETECH, GOREFURBO, mergeCompany, formatCompanyBlock };

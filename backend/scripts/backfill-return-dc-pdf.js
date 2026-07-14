@@ -80,7 +80,7 @@ async function main() {
     const pdfPath = await generateReturnDcPdf({
       returnDcNumber: dcl.dc_number,
       header: {
-        entity_code: null,
+        entity_code: 'rentfoxxy',
         customer_name: dcl.customer_name,
         customer_email: dcl.email,
         pickup_address: dcl.customer_shipping_address,
