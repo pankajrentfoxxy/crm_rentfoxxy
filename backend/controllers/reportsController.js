@@ -1,6 +1,7 @@
 const pool = require('../config/db');
 const { getDisplayTeams, getTeamIdsForFilter } = require('../utils/teamUtils');
 const { getLaptopReport, getTicketRows, getStagePerformanceTickets } = require('../services/laptopReportService');
+const { getSalesOrderReport, getSalesOrderReportDrilldown } = require('../services/salesOrderReportService');
 
 function formatDuration(seconds) {
     if (seconds == null || !Number.isFinite(seconds)) return '—';
@@ -2058,5 +2059,25 @@ exports.getLaptopReportTickets = async (req, res) => {
     } catch (error) {
         console.error('getLaptopReportTickets error:', error);
         res.status(500).json({ success: false, message: error.message || 'Server error loading laptop report tickets' });
+    }
+};
+
+exports.getSalesOrderReport = async (req, res) => {
+    try {
+        const data = await getSalesOrderReport(req.query);
+        res.json({ success: true, ...data });
+    } catch (error) {
+        console.error('getSalesOrderReport error:', error);
+        res.status(500).json({ success: false, message: error.message || 'Server error generating sales order report' });
+    }
+};
+
+exports.getSalesOrderReportDrilldown = async (req, res) => {
+    try {
+        const data = await getSalesOrderReportDrilldown(req.query);
+        res.json({ success: true, ...data });
+    } catch (error) {
+        console.error('getSalesOrderReportDrilldown error:', error);
+        res.status(500).json({ success: false, message: error.message || 'Server error loading drilldown' });
     }
 };
