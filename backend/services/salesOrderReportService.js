@@ -1,23 +1,23 @@
 /**
- * Sales Order Operations Report — live pipeline by processor + generation.
- * Rental and Sale scopes; date filters apply per-step timestamps for KPIs / table.
+ * Sales Order Operations Report — pipeline by processor (+ generation drill-down).
+ * CRM operations counted from 2026-07-01 only (excludes legacy ERP migration noise).
  */
 const pool = require('../config/db');
 const { compareKey } = require('../utils/assetConfigNormalize');
 const { appleChipGeneration } = require('../utils/soInventorySpecMatch');
 const { salesOrderScopeWhere } = require('./salesManagementService');
 
-const DC_NOT_DELIVERED_STATUSES = new Set(['delivered', 'rejected', 'cancelled']);
+const CRM_START_DATE = '2026-07-01';
+
+const DC_TERMINAL_STATUSES = new Set(['delivered', 'rejected', 'cancelled']);
 const DC_CHALLAN_STATUSES = new Set(['pending', 'processing']);
-const DC_TRANSIT_STATUSES = new Set(['pending', 'processing', 'in_transit', 'shipped', 'reached']);
+const DC_DISPATCHED_STATUSES = new Set(['in_transit', 'shipped', 'reached']);
+const DEPLOYED_INVENTORY = new Set(['rented', 'sold', 'on_demo']);
 
-function isChallanOnlyStatus(dcStatus) {
-  return DC_CHALLAN_STATUSES.has(String(dcStatus || 'pending').toLowerCase());
-}
-
-function isInTransitStatus(dcStatus) {
-  return DC_TRANSIT_STATUSES.has(String(dcStatus || 'pending').toLowerCase());
-}
+const COUNT_FIELDS = [
+  'ordered', 'attached', 'dispatch_qc_done', 'challan_generated',
+  'dispatched', 'available', 'qc_process',
+];
 
 function istDateString(d = new Date()) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(d);
@@ -31,47 +31,67 @@ function addDays(dateStr, days) {
 
 function parseDateRange(query = {}) {
   const preset = String(query.preset || 'all').toLowerCase();
-  if (preset === 'all') return { preset, from: null, to: null };
   const today = istDateString();
-  if (preset === 'today') return { preset, from: today, to: today };
+
+  if (preset === 'all') {
+    return { preset, from: CRM_START_DATE, to: today, live: true };
+  }
+  if (preset === 'today') return { preset, from: today, to: today, live: false };
   if (preset === 'yesterday') {
     const y = addDays(today, -1);
-    return { preset, from: y, to: y };
+    return { preset, from: y, to: y, live: false };
   }
-  if (preset === 'last7') return { preset, from: addDays(today, -6), to: today };
-  const from = query.from || query.date_from || null;
+  if (preset === 'last7') return { preset, from: addDays(today, -6), to: today, live: false };
+  const from = query.from || query.date_from || CRM_START_DATE;
   const to = query.to || query.date_to || today;
-  if (from) return { preset: 'custom', from, to };
-  return { preset: 'all', from: null, to: null };
+  return { preset: 'custom', from, to, live: false };
+}
+
+function effectiveFrom(range) {
+  const from = range.from || CRM_START_DATE;
+  return from < CRM_START_DATE ? CRM_START_DATE : from;
 }
 
 function inDateRange(ts, range) {
-  if (!range.from || !ts) return !range.from;
+  if (!ts) return false;
   const day = istDateString(new Date(ts));
-  return day >= range.from && day <= range.to;
+  const from = effectiveFrom(range);
+  const to = range.to || istDateString();
+  return day >= from && day <= to;
+}
+
+function onOrAfterCrmStart(ts) {
+  if (!ts) return false;
+  return istDateString(new Date(ts)) >= CRM_START_DATE;
 }
 
 function resolveGeneration(processor, generation) {
   return generation || appleChipGeneration(processor) || '—';
 }
 
-function specKey(processor, generation) {
-  const gen = resolveGeneration(processor, generation);
-  return `${compareKey('processors', processor || '—')}::${compareKey('generations', gen)}`;
+function processorKey(processor) {
+  return compareKey('processors', processor || '—');
 }
 
-function emptyRow(processor, generation) {
+function specKey(processor, generation) {
   const gen = resolveGeneration(processor, generation);
+  return `${processorKey(processor)}::${compareKey('generations', gen)}`;
+}
+
+function emptyRow(processor, generation = null) {
+  const gen = generation != null ? resolveGeneration(processor, generation) : null;
   return {
-    key: specKey(processor, generation),
+    key: generation != null ? specKey(processor, generation) : processorKey(processor),
     processor: processor || '—',
     generation: gen,
+    is_group: generation == null,
     ordered: 0,
     attached: 0,
+    dispatch_qc_done: 0,
     challan_generated: 0,
+    dispatched: 0,
     available: 0,
     qc_process: 0,
-    dispatched: 0,
   };
 }
 
@@ -81,24 +101,72 @@ function bumpRow(map, processor, generation, field, n = 1) {
   map.get(key)[field] += n;
 }
 
-function rowsFromMap(map) {
+function sumFields(target, source) {
+  for (const f of COUNT_FIELDS) target[f] += source[f] || 0;
+}
+
+function groupByProcessor(detailRows) {
+  const map = new Map();
+  for (const row of detailRows) {
+    const pk = processorKey(row.processor);
+    if (!map.has(pk)) {
+      map.set(pk, { ...emptyRow(row.processor, null), generations: [] });
+    }
+    const group = map.get(pk);
+    sumFields(group, row);
+    group.generations.push(row);
+  }
+
   return [...map.values()]
-    .filter((r) => r.ordered + r.attached + r.challan_generated + r.available + r.qc_process + r.dispatched > 0)
-    .sort((a, b) => {
-      const o = b.ordered - a.ordered;
-      if (o) return o;
-      return String(a.processor).localeCompare(String(b.processor));
-    });
+    .filter((g) => COUNT_FIELDS.some((f) => g[f] > 0))
+    .map((g) => ({
+      ...g,
+      generations: g.generations.sort((a, b) => b.ordered - a.ordered || String(a.generation).localeCompare(String(b.generation))),
+    }))
+    .sort((a, b) => b.ordered - a.ordered || String(a.processor).localeCompare(String(b.processor)));
+}
+
+function detailRowsFromMap(map) {
+  return [...map.values()]
+    .filter((r) => COUNT_FIELDS.some((f) => r[f] > 0))
+    .sort((a, b) => b.ordered - a.ordered || String(a.processor).localeCompare(String(b.processor)));
 }
 
 function isDeliveredDc(dcStatus) {
-  return DC_NOT_DELIVERED_STATUSES.has(String(dcStatus || '').toLowerCase());
+  return DC_TERMINAL_STATUSES.has(String(dcStatus || '').toLowerCase());
+}
+
+function isSerialDelivered(s) {
+  if (isDeliveredDc(s.dc_status)) return true;
+  if (s.delivered_at) return true;
+  const inv = String(s.inventory_status || '').toLowerCase();
+  return DEPLOYED_INVENTORY.has(inv) && s.alloc_status === 'dispatched';
+}
+
+function isDispatchQcPending(s) {
+  return s.alloc_status === 'attached' && String(s.qc_status || 'pending').toLowerCase() !== 'passed';
+}
+
+function isDispatchQcDone(s) {
+  return s.alloc_status === 'attached' && String(s.qc_status || '').toLowerCase() === 'passed';
+}
+
+function isChallanGenerated(s) {
+  if (s.alloc_status !== 'dispatched' || !s.dc_number || isSerialDelivered(s)) return false;
+  return DC_CHALLAN_STATUSES.has(String(s.dc_status || 'pending').toLowerCase());
+}
+
+function isDispatchedInTransit(s) {
+  if (s.alloc_status !== 'dispatched' || !s.dc_number || isSerialDelivered(s)) return false;
+  return DC_DISPATCHED_STATUSES.has(String(s.dc_status || '').toLowerCase());
 }
 
 function scopeSql(scope, alias = 'sol') {
   const sql = salesOrderScopeWhere(scope, alias);
   return sql ? ` AND ${sql}` : '';
 }
+
+const CRM_DATE_FILTER = `AND sol.created_at >= ($1::date AT TIME ZONE 'Asia/Kolkata')`;
 
 async function fetchSoLines(scope) {
   const res = await pool.query(
@@ -107,9 +175,11 @@ async function fetchSoLines(scope) {
             COALESCE(sol.main_qty, sol.quantity, 1)::int AS line_qty, sol.created_at
        FROM sales_order_lines sol
       WHERE LOWER(COALESCE(sol.status, '')) <> 'cancelled'
-        ${scopeSql(scope, 'sol')}`
+        ${CRM_DATE_FILTER}
+        ${scopeSql(scope, 'sol')}`,
+    [CRM_START_DATE]
   );
-  return res.rows;
+  return res.rows.filter((l) => onOrAfterCrmStart(l.created_at));
 }
 
 async function fetchSoSerials(scope) {
@@ -118,19 +188,23 @@ async function fetchSoSerials(scope) {
             sos.ttspl_id, sos.serial_number, sos.status AS alloc_status, sos.qc_status,
             sos.dc_number, sos.created_at AS attached_at, sos.updated_at AS alloc_updated_at,
             sol.processor, sol.generation, sol.brand, sol.model_name, sol.ram, sol.storage,
-            sol.gpu, sol.screen_size,
+            sol.gpu, sol.screen_size, sol.created_at AS so_line_created_at,
             dcl.status AS dc_status, dcl.dispatch_mode, dcl.ship_by, dcl.dispatched_at,
             dcl.delivered_at, dcl.created_at AS dc_created_at,
             dcl.delivery_person_id,
-            u.name AS delivery_person_name
+            u.name AS delivery_person_name,
+            vsn.inventory_status
        FROM sales_order_serials sos
        JOIN sales_order_lines sol ON sol.id = sos.line_id
        LEFT JOIN delivery_challan_lines dcl ON dcl.dc_number = sos.dc_number
        LEFT JOIN users u ON u.user_id = dcl.delivery_person_id
+       LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = sos.serial_id
       WHERE sos.status <> 'removed'
-        ${scopeSql(scope, 'sol')}`
+        ${CRM_DATE_FILTER}
+        ${scopeSql(scope, 'sol')}`,
+    [CRM_START_DATE]
   );
-  return res.rows;
+  return res.rows.filter((s) => onOrAfterCrmStart(s.so_line_created_at || s.attached_at));
 }
 
 async function fetchAvailableStock() {
@@ -182,10 +256,34 @@ async function fetchQcProcessUnits() {
   return res.rows;
 }
 
+function classifyLineSerials(lineSerials, range) {
+  let delivered = 0;
+  let attachedPending = 0;
+  let dispatchQcDone = 0;
+  let challan = 0;
+  let dispatched = 0;
+
+  for (const s of lineSerials) {
+    if (isSerialDelivered(s)) {
+      delivered += 1;
+      continue;
+    }
+    if (isDispatchQcPending(s)) {
+      if (range.live || inDateRange(s.attached_at, range)) attachedPending += 1;
+    } else if (isDispatchQcDone(s)) {
+      if (range.live || inDateRange(s.alloc_updated_at, range)) dispatchQcDone += 1;
+    } else if (isChallanGenerated(s)) {
+      if (range.live || inDateRange(s.dc_created_at, range)) challan += 1;
+    } else if (isDispatchedInTransit(s)) {
+      if (range.live || inDateRange(s.dispatched_at || s.dc_created_at, range)) dispatched += 1;
+    }
+  }
+
+  return { delivered, attachedPending, dispatchQcDone, challan, dispatched };
+}
+
 function buildScopeTable(lines, serials, stock, qcUnits, range) {
   const map = new Map();
-  const live = !range.from;
-
   const serialsByLine = serials.reduce((acc, s) => {
     const lid = Number(s.line_id);
     if (!acc[lid]) acc[lid] = [];
@@ -195,42 +293,17 @@ function buildScopeTable(lines, serials, stock, qcUnits, range) {
 
   for (const line of lines) {
     const lineSerials = serialsByLine[line.line_id] || [];
-    let delivered = 0;
-    let attached = 0;
-    let dispatched = 0;
-    let challan = 0;
+    const counts = classifyLineSerials(lineSerials, range);
+    const activeSerials = lineSerials.filter((s) => !isSerialDelivered(s)).length;
+    const pending = Math.max(0, Number(line.line_qty || 0) - counts.delivered - activeSerials);
 
-    for (const s of lineSerials) {
-      if (isDeliveredDc(s.dc_status)) {
-        delivered += 1;
-        continue;
-      }
-      if (s.alloc_status === 'attached') {
-        if (!live && !inDateRange(s.attached_at, range)) continue;
-        attached += 1;
-      } else if (s.alloc_status === 'dispatched' && s.dc_number) {
-        const challanOnly = isChallanOnlyStatus(s.dc_status);
-        const inTransit = isInTransitStatus(s.dc_status);
-        if (!live) {
-          if (inTransit && inDateRange(s.dispatched_at || s.dc_created_at, range)) dispatched += 1;
-          else if (challanOnly && inDateRange(s.dc_created_at, range)) challan += 1;
-        } else if (isChallanOnlyStatus(s.dc_status)) {
-          challan += 1;
-        } else {
-          dispatched += 1;
-        }
-      }
+    if (pending > 0 && (range.live || inDateRange(line.created_at, range))) {
+      bumpRow(map, line.processor, line.generation, 'ordered', pending);
     }
-
-    const pending = Math.max(0, Number(line.line_qty || 0) - delivered - attached - dispatched - challan);
-    if (pending > 0) {
-      if (live || inDateRange(line.created_at, range)) {
-        bumpRow(map, line.processor, line.generation, 'ordered', pending);
-      }
-    }
-    if (attached) bumpRow(map, line.processor, line.generation, 'attached', attached);
-    if (challan) bumpRow(map, line.processor, line.generation, 'challan_generated', challan);
-    if (dispatched) bumpRow(map, line.processor, line.generation, 'dispatched', dispatched);
+    if (counts.attachedPending) bumpRow(map, line.processor, line.generation, 'attached', counts.attachedPending);
+    if (counts.dispatchQcDone) bumpRow(map, line.processor, line.generation, 'dispatch_qc_done', counts.dispatchQcDone);
+    if (counts.challan) bumpRow(map, line.processor, line.generation, 'challan_generated', counts.challan);
+    if (counts.dispatched) bumpRow(map, line.processor, line.generation, 'dispatched', counts.dispatched);
   }
 
   for (const row of stock) {
@@ -240,13 +313,15 @@ function buildScopeTable(lines, serials, stock, qcUnits, range) {
     bumpRow(map, row.processor, row.generation, 'qc_process', 1);
   }
 
-  return rowsFromMap(map);
+  const detailRows = detailRowsFromMap(map);
+  return {
+    detail_rows: detailRows,
+    processors: groupByProcessor(detailRows),
+  };
 }
 
 function buildSummary(lines, serials, range) {
-  const live = !range.from;
-
-  if (live) {
+  if (range.live) {
     const serialsByLine = serials.reduce((acc, s) => {
       const lid = Number(s.line_id);
       if (!acc[lid]) acc[lid] = [];
@@ -257,17 +332,18 @@ function buildSummary(lines, serials, range) {
     let ordered = 0;
     for (const line of lines) {
       const lineSerials = serialsByLine[line.line_id] || [];
-      const delivered = lineSerials.filter((s) => isDeliveredDc(s.dc_status)).length;
+      const delivered = lineSerials.filter((s) => isSerialDelivered(s)).length;
+      const active = lineSerials.filter((s) => !isSerialDelivered(s)).length;
       ordered += Math.max(0, Number(line.line_qty || 0) - delivered);
     }
 
     return {
       ordered,
-      attached: serials.filter((s) => s.alloc_status === 'attached' && !isDeliveredDc(s.dc_status)).length,
-      dispatch_qc: serials.filter((s) => s.qc_status === 'passed' && s.alloc_status === 'attached').length,
-      challan_generated: serials.filter((s) => s.dc_number && !isDeliveredDc(s.dc_status)).length,
-      in_transit: serials.filter((s) => s.alloc_status === 'dispatched' && s.dc_number && !isDeliveredDc(s.dc_status)).length,
-      delivered: serials.filter((s) => isDeliveredDc(s.dc_status)).length,
+      attached: serials.filter((s) => isDispatchQcPending(s)).length,
+      dispatch_qc: serials.filter((s) => isDispatchQcDone(s)).length,
+      challan_generated: serials.filter((s) => isChallanGenerated(s)).length,
+      in_transit: serials.filter((s) => isDispatchedInTransit(s)).length,
+      delivered: serials.filter((s) => isSerialDelivered(s)).length,
     };
   }
 
@@ -285,14 +361,11 @@ function buildSummary(lines, serials, range) {
   }
 
   for (const s of serials) {
-    if (s.alloc_status === 'attached' && inDateRange(s.attached_at, range)) attached += 1;
-    if (s.qc_status === 'passed' && inDateRange(s.alloc_updated_at, range)) dispatchQc += 1;
-    if (s.dc_number && inDateRange(s.dc_created_at, range)) challanGenerated += 1;
-    if (s.alloc_status === 'dispatched' && s.dc_number
-      && inDateRange(s.dispatched_at || s.dc_created_at, range)) {
-      inTransit += 1;
-    }
-    if (isDeliveredDc(s.dc_status) && inDateRange(s.delivered_at, range)) delivered += 1;
+    if (isDispatchQcPending(s) && inDateRange(s.attached_at, range)) attached += 1;
+    if (isDispatchQcDone(s) && inDateRange(s.alloc_updated_at, range)) dispatchQc += 1;
+    if (isChallanGenerated(s) && inDateRange(s.dc_created_at, range)) challanGenerated += 1;
+    if (isDispatchedInTransit(s) && inDateRange(s.dispatched_at || s.dc_created_at, range)) inTransit += 1;
+    if (isSerialDelivered(s) && inDateRange(s.delivered_at || s.dc_created_at, range)) delivered += 1;
   }
 
   return {
@@ -313,9 +386,12 @@ async function buildScopeReport(scope, range) {
     fetchQcProcessUnits(),
   ]);
 
+  const table = buildScopeTable(lines, serials, stock, qcUnits, range);
+
   return {
     summary: buildSummary(lines, serials, range),
-    rows: buildScopeTable(lines, serials, stock, qcUnits, range),
+    processors: table.processors,
+    rows: table.detail_rows,
   };
 }
 
@@ -328,8 +404,9 @@ async function getSalesOrderReport(query = {}) {
 
   return {
     preset: range.preset,
-    from: range.from,
+    from: effectiveFrom(range),
     to: range.to,
+    crm_start_date: CRM_START_DATE,
     generated_at: new Date().toISOString(),
     summary: {
       rental: rental.summary,
@@ -343,12 +420,18 @@ async function getSalesOrderReport(query = {}) {
         delivered: rental.summary.delivered + sale.summary.delivered,
       },
     },
-    rental: { rows: rental.rows },
-    sale: { rows: sale.rows },
+    rental: { processors: rental.processors, rows: rental.rows },
+    sale: { processors: sale.processors, rows: sale.rows },
   };
 }
 
+function matchesProcessor(row, processor) {
+  return processorKey(row.processor) === processorKey(processor);
+}
+
 function matchesSpec(row, processor, generation) {
+  if (!matchesProcessor(row, processor)) return false;
+  if (!generation || generation === '*' || generation === 'all') return true;
   return specKey(row.processor, row.generation) === specKey(processor, generation);
 }
 
@@ -358,7 +441,6 @@ async function getSalesOrderReportDrilldown(query = {}) {
   const processor = query.processor || '';
   const generation = query.generation || '';
   const range = parseDateRange(query);
-  const live = !range.from;
 
   const [lines, serials, stock, qcUnits] = await Promise.all([
     fetchSoLines(scope),
@@ -380,17 +462,14 @@ async function getSalesOrderReportDrilldown(query = {}) {
     for (const line of lines) {
       if (!matchesSpec(line, processor, generation)) continue;
       const lineSerials = serialsByLine[line.line_id] || [];
-      let delivered = 0;
-      let active = 0;
-      for (const s of lineSerials) {
-        if (isDeliveredDc(s.dc_status)) delivered += 1;
-        else active += 1;
-      }
+      const delivered = lineSerials.filter((s) => isSerialDelivered(s)).length;
+      const active = lineSerials.filter((s) => !isSerialDelivered(s)).length;
       const pending = Math.max(0, Number(line.line_qty || 0) - delivered - active);
       if (pending <= 0) continue;
-      if (!live && !inDateRange(line.created_at, range)) continue;
+      if (!range.live && !inDateRange(line.created_at, range)) continue;
       items.push({
         sales_order_number: line.sales_order_number,
+        sales_order_date: line.created_at,
         brand: line.brand,
         model_name: line.model_name,
         processor: line.processor,
@@ -400,17 +479,17 @@ async function getSalesOrderReportDrilldown(query = {}) {
         gpu: line.gpu,
         screen_size: line.screen_size,
         quantity: pending,
-        created_at: line.created_at,
         link_type: 'sales_order',
       });
     }
   } else if (bucket === 'attached') {
     for (const s of serials) {
       if (!matchesSpec(s, processor, generation)) continue;
-      if (s.alloc_status !== 'attached' || isDeliveredDc(s.dc_status)) continue;
-      if (!live && !inDateRange(s.attached_at, range)) continue;
+      if (!isDispatchQcPending(s)) continue;
+      if (!range.live && !inDateRange(s.attached_at, range)) continue;
       items.push({
         sales_order_number: s.sales_order_number,
+        sales_order_date: s.so_line_created_at,
         allocation_id: s.allocation_id,
         ttspl_id: s.ttspl_id,
         serial_number: s.serial_number,
@@ -427,16 +506,39 @@ async function getSalesOrderReportDrilldown(query = {}) {
         link_type: 'sales_order',
       });
     }
+  } else if (bucket === 'dispatch_qc' || bucket === 'dispatch_qc_done') {
+    for (const s of serials) {
+      if (!matchesSpec(s, processor, generation)) continue;
+      if (!isDispatchQcDone(s)) continue;
+      if (!range.live && !inDateRange(s.alloc_updated_at, range)) continue;
+      items.push({
+        sales_order_number: s.sales_order_number,
+        sales_order_date: s.so_line_created_at,
+        allocation_id: s.allocation_id,
+        ttspl_id: s.ttspl_id,
+        serial_number: s.serial_number,
+        brand: s.brand,
+        model_name: s.model_name,
+        processor: s.processor,
+        generation: resolveGeneration(s.processor, s.generation),
+        ram: s.ram,
+        storage: s.storage,
+        gpu: s.gpu,
+        screen_size: s.screen_size,
+        qc_status: s.qc_status,
+        qc_passed_at: s.alloc_updated_at,
+        link_type: 'sales_order',
+      });
+    }
   } else if (bucket === 'challan' || bucket === 'challan_generated') {
     for (const s of serials) {
       if (!matchesSpec(s, processor, generation)) continue;
-      if (!s.dc_number || isDeliveredDc(s.dc_status)) continue;
-      const challanOnly = ['pending', 'processing'].includes(String(s.dc_status || 'pending'));
-      if (!challanOnly && bucket === 'challan_generated') continue;
-      if (!live && !inDateRange(s.dc_created_at, range)) continue;
+      if (!isChallanGenerated(s)) continue;
+      if (!range.live && !inDateRange(s.dc_created_at, range)) continue;
       items.push({
         dc_number: s.dc_number,
         sales_order_number: s.sales_order_number,
+        sales_order_date: s.so_line_created_at,
         ttspl_id: s.ttspl_id,
         serial_number: s.serial_number,
         brand: s.brand,
@@ -458,11 +560,12 @@ async function getSalesOrderReportDrilldown(query = {}) {
   } else if (bucket === 'dispatched') {
     for (const s of serials) {
       if (!matchesSpec(s, processor, generation)) continue;
-      if (s.alloc_status !== 'dispatched' || !s.dc_number || isDeliveredDc(s.dc_status)) continue;
-      if (!live && !inDateRange(s.dispatched_at || s.dc_created_at, range)) continue;
+      if (!isDispatchedInTransit(s)) continue;
+      if (!range.live && !inDateRange(s.dispatched_at || s.dc_created_at, range)) continue;
       items.push({
         dc_number: s.dc_number,
         sales_order_number: s.sales_order_number,
+        sales_order_date: s.so_line_created_at,
         ttspl_id: s.ttspl_id,
         serial_number: s.serial_number,
         brand: s.brand,
@@ -525,15 +628,17 @@ async function getSalesOrderReportDrilldown(query = {}) {
     scope,
     bucket,
     processor,
-    generation: resolveGeneration(processor, generation),
+    generation: generation && generation !== 'all' ? resolveGeneration(processor, generation) : 'All',
     count: items.length,
     items,
   };
 }
 
 module.exports = {
+  CRM_START_DATE,
   getSalesOrderReport,
   getSalesOrderReportDrilldown,
   parseDateRange,
   specKey,
+  processorKey,
 };

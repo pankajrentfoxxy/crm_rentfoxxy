@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   Loader2, X, Cpu, Package, Link2, Truck, ClipboardList,
   Warehouse, ShieldCheck, ShoppingCart, RefreshCw, Calendar,
-  ChevronRight, FileText,
+  ChevronRight, ChevronDown, FileText,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getSalesOrderReport, getSalesOrderReportDrilldown } from '../reportingApi';
@@ -26,7 +26,7 @@ const C = {
 };
 
 const PRESETS = [
-  { key: 'all', label: 'All (Live)' },
+  { key: 'all', label: 'All (from 1 Jul 2026)' },
   { key: 'today', label: 'Today' },
   { key: 'yesterday', label: 'Yesterday' },
   { key: 'last7', label: 'Last 7 Days' },
@@ -35,27 +35,94 @@ const PRESETS = [
 
 const KPI_META = [
   { key: 'ordered', label: 'Laptops Ordered', icon: ShoppingCart, color: C.blue },
-  { key: 'attached', label: 'Attached', icon: Link2, color: C.violet },
+  { key: 'attached', label: 'Attached (QC Pending)', icon: Link2, color: C.violet },
   { key: 'dispatch_qc', label: 'Dispatch QC Done', icon: ShieldCheck, color: C.emerald },
   { key: 'challan_generated', label: 'DC Generated', icon: FileText, color: C.amber },
-  { key: 'in_transit', label: 'In Transit', icon: Truck, color: C.cyan },
+  { key: 'in_transit', label: 'Dispatched / In Transit', icon: Truck, color: C.cyan },
   { key: 'delivered', label: 'Delivered', icon: Package, color: C.rose },
 ];
 
 const TABLE_COLS = [
-  { key: 'processor', label: 'Processor', sticky: true },
-  { key: 'generation', label: 'Generation', sticky: true },
+  { key: 'processor', label: 'Processor', sticky: true, isLabel: true },
+  { key: 'generation', label: 'Generation', sticky: true, isLabel: true, childOnly: true },
   { key: 'ordered', label: 'Ordered', bucket: 'ordered', color: C.blue },
-  { key: 'attached', label: 'Attached', bucket: 'attached', color: C.violet },
+  { key: 'attached', label: 'Attached', sub: 'QC Pending', bucket: 'attached', color: C.violet },
+  { key: 'dispatch_qc_done', label: 'Dispatch QC', sub: 'Done', bucket: 'dispatch_qc_done', color: C.emerald },
   { key: 'challan_generated', label: 'DC Generated', bucket: 'challan', color: C.amber },
+  { key: 'dispatched', label: 'Dispatched', bucket: 'dispatched', color: C.cyan },
   { key: 'available', label: 'Ready Stock', bucket: 'available', color: C.emerald },
   { key: 'qc_process', label: 'QC1 / QC2', bucket: 'qc', color: '#9333EA' },
-  { key: 'dispatched', label: 'Dispatched', bucket: 'dispatched', color: C.cyan },
 ];
+
+const DRILL_COLUMNS = {
+  ordered: [
+    { key: 'sales_order_number', label: 'Sales Order' },
+    { key: 'sales_order_date', label: 'SO Date', format: 'date' },
+    { key: 'config', label: 'Configuration' },
+    { key: 'quantity', label: 'Qty' },
+  ],
+  attached: [
+    { key: 'sales_order_number', label: 'Sales Order' },
+    { key: 'ttspl_id', label: 'TTSPL' },
+    { key: 'config', label: 'Configuration' },
+    { key: 'qc_status', label: 'QC Status' },
+    { key: 'attached_at', label: 'Attached', format: 'datetime' },
+  ],
+  dispatch_qc_done: [
+    { key: 'sales_order_number', label: 'Sales Order' },
+    { key: 'ttspl_id', label: 'TTSPL' },
+    { key: 'config', label: 'Configuration' },
+    { key: 'qc_passed_at', label: 'QC Passed', format: 'datetime' },
+  ],
+  challan: [
+    { key: 'dc_number', label: 'DC Number' },
+    { key: 'sales_order_number', label: 'Sales Order' },
+    { key: 'config', label: 'Configuration' },
+    { key: 'dispatch_mode', label: 'Transport' },
+    { key: 'dc_created_at', label: 'DC Created', format: 'datetime' },
+  ],
+  dispatched: [
+    { key: 'dc_number', label: 'DC Number' },
+    { key: 'sales_order_number', label: 'Sales Order' },
+    { key: 'config', label: 'Configuration' },
+    { key: 'dispatch_mode', label: 'Transport' },
+    { key: 'dispatched_at', label: 'Dispatched', format: 'datetime' },
+  ],
+  available: [
+    { key: 'ttspl_id', label: 'TTSPL' },
+    { key: 'serial_number', label: 'Serial' },
+    { key: 'config', label: 'Configuration' },
+  ],
+  qc: [
+    { key: 'ticket_id', label: 'Ticket' },
+    { key: 'ttspl_id', label: 'TTSPL' },
+    { key: 'config', label: 'Configuration' },
+    { key: 'ticket_stage', label: 'Stage' },
+  ],
+};
 
 function fmtDate(v) {
   if (!v) return '—';
   return new Date(v).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function fmtDateOnly(v) {
+  if (!v) return '—';
+  return new Date(v).toLocaleDateString('en-IN', { dateStyle: 'medium' });
+}
+
+function configStr(item) {
+  return [
+    item.brand || item.model_name || item.model,
+    item.processor, item.generation, item.ram, item.storage, item.gpu, item.screen_size,
+  ].filter(Boolean).join(' · ');
+}
+
+function drillValue(item, col) {
+  if (col.key === 'config') return configStr(item);
+  if (col.format === 'date') return fmtDateOnly(item[col.key]);
+  if (col.format === 'datetime') return fmtDate(item[col.key]);
+  return item[col.key] ?? '—';
 }
 
 function CountBtn({ value, color, onClick }) {
@@ -101,7 +168,66 @@ function KpiCard({ meta, value, loading }) {
   );
 }
 
-function ConfigTable({ title, accent, rows, scope, filters, onCellClick }) {
+function DataRow({
+  row, scope, isChild, expanded, onToggle, onCellClick,
+}) {
+  const bg = isChild ? '#FAFBFD' : C.surface;
+  const metricCols = TABLE_COLS.filter((c) => c.bucket);
+  const generation = isChild ? row.generation : 'all';
+
+  return (
+    <tr style={{ borderTop: `1px solid ${C.border}`, background: bg }}>
+      <td
+        colSpan={2}
+        style={{
+          padding: '11px 14px', fontWeight: isChild ? 500 : 700,
+          position: 'sticky', left: 0, background: bg, zIndex: 1, minWidth: 200,
+          paddingLeft: isChild ? 36 : 14,
+          color: isChild ? C.dim : C.text,
+        }}
+      >
+        {isChild ? (
+          <span>{row.generation}</span>
+        ) : (
+          <button
+            type="button"
+            onClick={onToggle}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              border: 'none', background: 'transparent', cursor: 'pointer',
+              fontWeight: 800, fontSize: 14, color: C.text,
+            }}
+          >
+            {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+            {row.processor}
+            <span style={{ fontSize: 11, color: C.dim, fontWeight: 600 }}>
+              ({row.generations?.length || 0} gen)
+            </span>
+          </button>
+        )}
+      </td>
+      {metricCols.map((col) => (
+        <td key={col.key} style={{ padding: '11px 10px', textAlign: 'center', background: bg }}>
+          <CountBtn
+            value={row[col.key]}
+            color={col.color}
+            onClick={() => row[col.key] > 0 && onCellClick({
+              scope, bucket: col.bucket, processor: row.processor, generation,
+            })}
+          />
+        </td>
+      ))}
+    </tr>
+  );
+}
+
+function ConfigTable({ title, accent, processors, scope, onCellClick }) {
+  const [expanded, setExpanded] = useState({});
+
+  const toggle = (key) => setExpanded((prev) => ({ ...prev, [key]: !prev[key] }));
+
+  const metricCols = TABLE_COLS.filter((c) => c.bucket);
+
   return (
     <div style={{
       background: C.surface, borderRadius: 16, border: `1px solid ${C.border}`,
@@ -121,64 +247,68 @@ function ConfigTable({ title, accent, rows, scope, filters, onCellClick }) {
           background: `${accent}18`, padding: '4px 10px', borderRadius: 20,
         }}
         >
-          {rows.length} config{rows.length !== 1 ? 's' : ''}
+          {processors.length} processor{processors.length !== 1 ? 's' : ''}
         </span>
       </div>
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
             <tr style={{ background: '#F8FAFC' }}>
-              {TABLE_COLS.map((col) => (
+              <th
+                colSpan={2}
+                style={{
+                  textAlign: 'left', padding: '12px 14px', fontWeight: 700, color: C.dim,
+                  fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em',
+                  position: 'sticky', left: 0, background: '#F8FAFC', zIndex: 2, minWidth: 200,
+                }}
+              >
+                Processor / Generation
+              </th>
+              {metricCols.map((col) => (
                 <th
                   key={col.key}
                   style={{
-                    textAlign: col.key === 'processor' || col.key === 'generation' ? 'left' : 'center',
-                    padding: '12px 14px', fontWeight: 700, color: C.dim, fontSize: 11,
-                    textTransform: 'uppercase', letterSpacing: '0.04em',
-                    position: col.sticky ? 'sticky' : 'static', left: col.key === 'generation' ? 140 : col.key === 'processor' ? 0 : 'auto',
-                    background: '#F8FAFC', zIndex: col.sticky ? 2 : 0,
-                    minWidth: col.sticky ? 140 : 90,
+                    textAlign: 'center', padding: '12px 10px', fontWeight: 700, color: C.dim,
+                    fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', minWidth: 88,
                   }}
                 >
-                  {col.label}
+                  <div>{col.label}</div>
+                  {col.sub && <div style={{ fontSize: 9, fontWeight: 500, textTransform: 'none' }}>{col.sub}</div>}
                 </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 ? (
+            {processors.length === 0 ? (
               <tr>
-                <td colSpan={TABLE_COLS.length} style={{ padding: 32, textAlign: 'center', color: C.dim }}>
+                <td colSpan={metricCols.length + 1} style={{ padding: 32, textAlign: 'center', color: C.dim }}>
                   No pending pipeline for this scope
                 </td>
               </tr>
-            ) : rows.map((row) => (
-              <tr key={row.key} style={{ borderTop: `1px solid ${C.border}` }}>
-                {TABLE_COLS.map((col) => (
-                  <td
-                    key={col.key}
-                    style={{
-                      padding: '11px 14px',
-                      textAlign: col.bucket ? 'center' : 'left',
-                      fontWeight: col.sticky ? 600 : 400,
-                      position: col.sticky ? 'sticky' : 'static',
-                      left: col.key === 'generation' ? 140 : col.key === 'processor' ? 0 : 'auto',
-                      background: C.surface, zIndex: col.sticky ? 1 : 0,
-                    }}
-                  >
-                    {col.bucket ? (
-                      <CountBtn
-                        value={row[col.key]}
-                        color={col.color}
-                        onClick={() => row[col.key] > 0 && onCellClick({
-                          scope, bucket: col.bucket, processor: row.processor, generation: row.generation,
-                        })}
-                      />
-                    ) : row[col.key]}
-                  </td>
-                ))}
-              </tr>
-            ))}
+            ) : processors.map((group) => {
+              const isOpen = !!expanded[group.key];
+              return (
+                <React.Fragment key={group.key}>
+                  <DataRow
+                    row={group}
+                    scope={scope}
+                    isChild={false}
+                    expanded={isOpen}
+                    onToggle={() => toggle(group.key)}
+                    onCellClick={onCellClick}
+                  />
+                  {isOpen && (group.generations || []).map((child) => (
+                    <DataRow
+                      key={child.key}
+                      row={child}
+                      scope={scope}
+                      isChild
+                      onCellClick={onCellClick}
+                    />
+                  ))}
+                </React.Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -186,9 +316,10 @@ function ConfigTable({ title, accent, rows, scope, filters, onCellClick }) {
   );
 }
 
-function DrilldownModal({ open, onClose, title, loading, items, scope }) {
+function DrilldownModal({ open, onClose, title, loading, items, scope, bucket }) {
   if (!open) return null;
   const scopeCfg = SO_SCOPES[scope] || SO_SCOPES.rental;
+  const cols = DRILL_COLUMNS[bucket] || DRILL_COLUMNS.ordered;
 
   const linkFor = (item) => {
     if (item.link_type === 'sales_order' && item.sales_order_number) {
@@ -216,7 +347,7 @@ function DrilldownModal({ open, onClose, title, loading, items, scope }) {
     }}
     >
       <div style={{
-        background: C.surface, borderRadius: 16, width: 'min(960px, 100%)',
+        background: C.surface, borderRadius: 16, width: 'min(1100px, 100%)',
         maxHeight: '85vh', display: 'flex', flexDirection: 'column',
         boxShadow: '0 20px 60px rgba(0,0,0,0.2)',
       }}
@@ -243,33 +374,24 @@ function DrilldownModal({ open, onClose, title, loading, items, scope }) {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
               <thead>
                 <tr style={{ background: '#F8FAFC' }}>
-                  {['ID', 'Config', 'Details', ''].map((h) => (
-                    <th key={h} style={{ textAlign: 'left', padding: '10px 12px', color: C.dim, fontSize: 11 }}>{h}</th>
+                  {cols.map((col) => (
+                    <th key={col.key} style={{ textAlign: 'left', padding: '10px 12px', color: C.dim, fontSize: 11 }}>{col.label}</th>
                   ))}
+                  <th style={{ textAlign: 'left', padding: '10px 12px', color: C.dim, fontSize: 11 }} />
                 </tr>
               </thead>
               <tbody>
                 {items.map((item, idx) => {
                   const href = linkFor(item);
-                  const primary = item.sales_order_number || item.dc_number || item.ttspl_id || item.ticket_id;
-                  const config = [item.brand || item.model_name || item.model, item.processor, item.generation, item.ram, item.storage, item.gpu, item.screen_size]
-                    .filter(Boolean).join(' · ');
-                  const extra = [
-                    item.serial_number && `SN: ${item.serial_number}`,
-                    item.qc_status && `QC: ${item.qc_status}`,
-                    item.dispatch_mode && `Mode: ${item.dispatch_mode}`,
-                    item.delivery_person_name && `Assigned: ${item.delivery_person_name}`,
-                    item.ticket_stage && `Stage: ${item.ticket_stage}`,
-                    item.quantity && `Qty: ${item.quantity}`,
-                    item.attached_at && fmtDate(item.attached_at),
-                    item.dispatched_at && fmtDate(item.dispatched_at),
-                  ].filter(Boolean).join(' · ');
-
                   return (
                     <tr key={idx} style={{ borderTop: `1px solid ${C.border}` }}>
-                      <td style={{ padding: '10px 12px', fontWeight: 700, fontFamily: 'monospace' }}>{primary || '—'}</td>
-                      <td style={{ padding: '10px 12px', maxWidth: 280 }}>{config || '—'}</td>
-                      <td style={{ padding: '10px 12px', color: C.dim, fontSize: 11 }}>{extra || '—'}</td>
+                      {cols.map((col) => (
+                        <td key={col.key} style={{ padding: '10px 12px', maxWidth: col.key === 'config' ? 300 : undefined }}>
+                          {col.key === 'sales_order_number' || col.key === 'dc_number' || col.key === 'ttspl_id' || col.key === 'ticket_id' ? (
+                            <span style={{ fontFamily: 'monospace', fontWeight: 700 }}>{drillValue(item, col)}</span>
+                          ) : drillValue(item, col)}
+                        </td>
+                      ))}
                       <td style={{ padding: '10px 12px' }}>
                         {href ? (
                           <Link
@@ -308,7 +430,7 @@ export default function SalesOrderReportPage() {
   const filters = useMemo(() => {
     const f = { preset };
     if (preset === 'custom') {
-      f.from = from;
+      f.from = from || '2026-07-01';
       f.to = to;
     }
     return f;
@@ -331,12 +453,13 @@ export default function SalesOrderReportPage() {
 
   const openDrill = async ({ scope, bucket, processor, generation }) => {
     const col = TABLE_COLS.find((c) => c.bucket === bucket);
+    const genLabel = generation === 'all' ? 'All generations' : generation;
     setDrill({
       scope,
       bucket,
       processor,
       generation,
-      title: `${col?.label || bucket} — ${processor} / ${generation} (${scope === 'sale' ? 'Sale' : 'Rental'})`,
+      title: `${col?.label || bucket} — ${processor} / ${genLabel} (${scope === 'sale' ? 'Sale' : 'Rental'})`,
     });
     setDrillLoading(true);
     setDrillItems([]);
@@ -357,14 +480,14 @@ export default function SalesOrderReportPage() {
   return (
     <div style={{ background: C.bg, minHeight: '100%', padding: '20px 24px 40px' }}>
       <div style={{ maxWidth: 1400, margin: '0 auto' }}>
-        {/* Header */}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-start', marginBottom: 20 }}>
           <div style={{ flex: 1, minWidth: 260 }}>
             <h1 style={{ margin: 0, fontSize: 24, fontWeight: 900, color: C.text, letterSpacing: '-0.02em' }}>
               Sales Order Operations
             </h1>
-            <p style={{ margin: '6px 0 0', color: C.dim, fontSize: 14, maxWidth: 560 }}>
-              Live warehouse dashboard by processor &amp; generation — orders, attachments, stock, QC, and dispatch pipeline.
+            <p style={{ margin: '6px 0 0', color: C.dim, fontSize: 14, maxWidth: 600 }}>
+              Live warehouse pipeline by processor. Data from 1 Jul 2026 only — legacy ERP migration excluded.
+              Click a processor to expand generations.
             </p>
           </div>
           <button
@@ -381,7 +504,6 @@ export default function SalesOrderReportPage() {
           </button>
         </div>
 
-        {/* Date filters */}
         <div style={{
           background: C.surface, borderRadius: 14, border: `1px solid ${C.border}`,
           padding: 16, marginBottom: 20, display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center',
@@ -405,19 +527,29 @@ export default function SalesOrderReportPage() {
           ))}
           {preset === 'custom' && (
             <>
-              <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '7px 10px' }} />
+              <input
+                type="date"
+                min="2026-07-01"
+                value={from}
+                onChange={(e) => setFrom(e.target.value)}
+                style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '7px 10px' }}
+              />
               <span style={{ color: C.dim }}>to</span>
-              <input type="date" value={to} onChange={(e) => setTo(e.target.value)} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '7px 10px' }} />
+              <input
+                type="date"
+                value={to}
+                onChange={(e) => setTo(e.target.value)}
+                style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '7px 10px' }}
+              />
             </>
           )}
           {data?.generated_at && (
             <span style={{ marginLeft: 'auto', fontSize: 11, color: C.dim }}>
-              Updated {fmtDate(data.generated_at)}
+              CRM from {data.crm_start_date || '2026-07-01'} · Updated {fmtDate(data.generated_at)}
             </span>
           )}
         </div>
 
-        {/* KPI row */}
         <div style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
@@ -429,32 +561,32 @@ export default function SalesOrderReportPage() {
           ))}
         </div>
 
-        {/* Pipeline legend */}
         <div style={{
           display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 16, fontSize: 12, color: C.dim,
         }}
         >
-          <span><Warehouse size={14} style={{ verticalAlign: -2 }} /> Delivered laptops are excluded from pipeline tables</span>
+          <span><Warehouse size={14} style={{ verticalAlign: -2 }} /> Delivered laptops excluded from pipeline</span>
           <span>·</span>
-          <span>Click any count to see details and open the record</span>
+          <span><strong>Attached</strong> = Dispatch QC pending</span>
+          <span>·</span>
+          <span><strong>DC Generated</strong> = challan created, not yet in transit</span>
+          <span>·</span>
+          <span><strong>Dispatched</strong> = in transit / shipped</span>
         </div>
 
-        {/* Tables */}
         <div style={{ display: 'grid', gap: 24 }}>
           <ConfigTable
             title="Rental Orders (Rentfoxxy)"
             accent={C.rental}
-            rows={data?.rental?.rows || []}
+            processors={data?.rental?.processors || []}
             scope="rental"
-            filters={filters}
             onCellClick={openDrill}
           />
           <ConfigTable
             title="Sale Orders (Gorefurbo)"
             accent={C.sale}
-            rows={data?.sale?.rows || []}
+            processors={data?.sale?.processors || []}
             scope="sale"
-            filters={filters}
             onCellClick={openDrill}
           />
         </div>
@@ -467,6 +599,7 @@ export default function SalesOrderReportPage() {
         loading={drillLoading}
         items={drillItems}
         scope={drill?.scope || 'rental'}
+        bucket={drill?.bucket || 'ordered'}
       />
     </div>
   );
