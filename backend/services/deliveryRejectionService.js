@@ -8,15 +8,17 @@ const inventorySM = require('./inventoryStateMachine');
 const { createTicketFromReturn } = require('./grnTicketService');
 const { emailDocument } = require('./salesManagementPdfService');
 const { getDeliveryChallanLines } = require('./salesManagementService');
+const { LEGACY_OTP_ROLES } = require('./deliveryOtpAccess');
 
 const REJECTABLE_STATUSES = new Set(['in_transit', 'reached', 'shipped', 'processing', 'pending']);
 
-const WAREHOUSE_OTP_VIEW_ROLES = new Set([
-  'admin', 'manager', 'super_admin', 'warehouse', 'support_lead', 'floor_manager',
-]);
+const { userCanViewDeliveryRegisterOtp } = require('../services/deliveryOtpAccess');
 
 function canViewWarehouseOtp(user) {
-  return WAREHOUSE_OTP_VIEW_ROLES.has(user?.role) || process.env.NODE_ENV !== 'production';
+  if (!user) return false;
+  if (user.role === 'super_admin') return true;
+  if (user.effective_permissions?.delivery_register_otp?.can_view) return true;
+  return LEGACY_OTP_ROLES.has(user.role);
 }
 
 let schemaEnsured = false;
