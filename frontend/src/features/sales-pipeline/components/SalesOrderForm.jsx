@@ -3,6 +3,7 @@ import { X, Eye } from 'lucide-react';
 import toast from 'react-hot-toast';
 import AssetDetailsForm, { emptyLineItem, lineItemsToPayload } from '../../operation-management/components/AssetDetailsForm';
 import { BillingAddressPanel, ShippingAddressPanel } from '../../operation-management/components/CustomerAddressPanels';
+import SearchableSelect from '../../operation-management/components/SearchableSelect';
 import { branchForQuotationType } from '../../operation-management/utils/quotationHelpers';
 import {
   createSalesOrder, getCustomerAddresses, getCustomerDetail, getQuotation, getSalesOrderMeta, listQuotations,
@@ -256,6 +257,14 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
     return opt?.address || null;
   }, [selectedShippingValue, shippingOptions, manualShipping]);
 
+  const customerOptions = useMemo(
+    () => customers.map((c) => ({
+      value: String(c.customer_id),
+      label: c.company_name || c.name || `Customer #${c.customer_id}`,
+    })),
+    [customers]
+  );
+
   const totalValue = useMemo(() => sumLines(lines), [lines]);
   const shippingCharges = Number(form.shiping_charges) || 0;
   // '1 month rental' security = sum of each line's monthly rate x qty.
@@ -347,11 +356,15 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
           ) : null}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-medium text-gray-600">Customer *</label>
-              <select className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" value={form.customer_id} onChange={(e) => onCustomerChange(e.target.value)}>
-                <option value="">Select</option>
-                {customers.map((c) => <option key={c.customer_id} value={c.customer_id}>{c.company_name || c.name}</option>)}
-              </select>
+              <SearchableSelect
+                id="so-customer"
+                label="Customer"
+                required
+                value={form.customer_id ? String(form.customer_id) : ''}
+                onChange={onCustomerChange}
+                options={customerOptions}
+                placeholder="Select customer"
+              />
             </div>
             <div>
               <label className="text-xs font-medium text-gray-600">Type *</label>

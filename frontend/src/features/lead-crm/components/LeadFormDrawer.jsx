@@ -9,6 +9,7 @@ import { INDIAN_STATES } from '../../../constants/indianStates';
 import { createLead, getAssignableUsers, updateLeadBasic, updateLeadProfile } from '../leadCrmApi';
 import toast from 'react-hot-toast';
 import { formatIndianMobileInput, indianMobileError, normalizeIndianMobile } from '../../../utils/phoneValidation';
+import SearchableSelect from '../../operation-management/components/SearchableSelect';
 
 const emptyForm = () => ({
   company_name: '', company_brand: '', name: '', designation: '', email: '', phone: '', whatsapp_number: '',
@@ -152,26 +153,40 @@ export default function LeadFormDrawer({ open, lead, onClose, onSaved }) {
 
   const field = (key, label, opts = {}) => (
     <div>
-      <label className="text-xs text-gray-500">{label}{opts.required ? ' *' : ''}</label>
-      {opts.type === 'select' ? (
-        <select value={form[key]} onChange={(e) => set(key, e.target.value)} onBlur={validate}
-          className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm ${errors[key] ? 'border-red-400' : 'border-gray-200'}`}>
-          <option value="">Select</option>
-          {(opts.options || []).map((o) => <option key={o} value={o}>{o}</option>)}
-        </select>
-      ) : opts.type === 'textarea' ? (
-        <textarea value={form[key]} onChange={(e) => set(key, e.target.value)} rows={opts.rows || 2}
-          className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
-      ) : (
-        <input
-          type={opts.mobile ? 'tel' : (opts.type || 'text')}
-          inputMode={opts.mobile ? 'numeric' : undefined}
-          maxLength={opts.mobile ? 10 : undefined}
-          value={form[key]}
-          onChange={(e) => set(key, opts.mobile ? formatIndianMobileInput(e.target.value) : e.target.value)}
-          onBlur={validate}
-          className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm ${errors[key] ? 'border-red-400' : 'border-gray-200'}`}
+      {opts.type === 'searchable' ? (
+        <SearchableSelect
+          id={`lead-${key}`}
+          label={label}
+          required={!!opts.required}
+          value={form[key] || ''}
+          onChange={(v) => set(key, v)}
+          options={opts.options || []}
+          placeholder={opts.placeholder || 'Select'}
         />
+      ) : (
+        <>
+          <label className="text-xs text-gray-500">{label}{opts.required ? ' *' : ''}</label>
+          {opts.type === 'select' ? (
+            <select value={form[key]} onChange={(e) => set(key, e.target.value)} onBlur={validate}
+              className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm ${errors[key] ? 'border-red-400' : 'border-gray-200'}`}>
+              <option value="">Select</option>
+              {(opts.options || []).map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+          ) : opts.type === 'textarea' ? (
+            <textarea value={form[key]} onChange={(e) => set(key, e.target.value)} rows={opts.rows || 2}
+              className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+          ) : (
+            <input
+              type={opts.mobile ? 'tel' : (opts.type || 'text')}
+              inputMode={opts.mobile ? 'numeric' : undefined}
+              maxLength={opts.mobile ? 10 : undefined}
+              value={form[key]}
+              onChange={(e) => set(key, opts.mobile ? formatIndianMobileInput(e.target.value) : e.target.value)}
+              onBlur={validate}
+              className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm ${errors[key] ? 'border-red-400' : 'border-gray-200'}`}
+            />
+          )}
+        </>
       )}
       {errors[key] && <p className="text-xs text-red-500 mt-0.5">{errors[key]}</p>}
     </div>
@@ -206,11 +221,11 @@ export default function LeadFormDrawer({ open, lead, onClose, onSaved }) {
           <section>
             <h3 className="text-sm font-semibold text-gray-800 mb-3">Requirement</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {field('brand', 'Laptop Brand', { type: 'select', options: LAPTOP_BRANDS })}
-              {field('processor', 'Processor', { type: 'select', options: PROCESSORS })}
-              {field('generation', 'Generation', { type: 'select', options: GENERATIONS })}
-              {field('ram', 'RAM', { type: 'select', options: RAM_OPTIONS })}
-              {field('storage', 'Storage', { type: 'select', options: STORAGE_OPTIONS })}
+              {field('brand', 'Laptop Brand', { type: 'searchable', options: LAPTOP_BRANDS })}
+              {field('processor', 'Processor', { type: 'searchable', options: PROCESSORS })}
+              {field('generation', 'Generation', { type: 'searchable', options: GENERATIONS })}
+              {field('ram', 'RAM', { type: 'searchable', options: RAM_OPTIONS })}
+              {field('storage', 'Storage', { type: 'searchable', options: STORAGE_OPTIONS })}
               {field('quantity_required', 'Quantity', { type: 'number' })}
               {field('monthly_budget', 'Monthly Budget (₹)', { type: 'number' })}
               {field('rental_duration', 'Rental Duration (months)', { type: 'number' })}
