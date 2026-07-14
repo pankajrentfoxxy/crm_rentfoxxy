@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { FileText, KeyRound, RotateCcw, Search } from 'lucide-react';
+import { FileText, KeyRound, PackageCheck, RotateCcw, Search } from 'lucide-react';
 import ReturnDcDetailModal from '../components/ReturnDcDetailModal';
 import { listReturnDCs } from '../salesPipelineApi';
 import { DC_STATUS_STYLES, formatDate, statusLabel } from '../salesPipelineUtils';
@@ -61,6 +61,7 @@ export default function ReturnDcListPage() {
     total: pagination.total || rows.length,
     delivered: rows.filter((r) => r.status === 'delivered').length,
     inTransit: rows.filter((r) => r.status === 'in_transit' || r.status === 'processing' || r.status === 'shipped').length,
+    pendingWarehouse: rows.filter((r) => r.warehouse_receive_pending).length,
   }), [rows, pagination.total]);
 
   const otpCell = (row) => {
@@ -128,6 +129,24 @@ export default function ReturnDcListPage() {
       ),
     },
     {
+      key: 'warehouse',
+      header: 'Warehouse',
+      render: (row) => (
+        row.warehouse_receive_pending ? (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setDetailRdc(row.return_dc_number || row.rdc_number); }}
+            className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 inline-flex items-center gap-1 hover:bg-amber-200"
+          >
+            <PackageCheck className="w-3.5 h-3.5" />
+            Receive
+          </button>
+        ) : (
+          <span className="text-xs text-emerald-700">Received</span>
+        )
+      ),
+    },
+    {
       key: 'pdf',
       header: 'Signed PDF',
       render: (row) => pdfCell(row, (e) => e.stopPropagation()),
@@ -152,7 +171,18 @@ export default function ReturnDcListPage() {
           {row.sales_order_number && <span className="font-mono">SO {row.sales_order_number}</span>}
         </div>
         <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
-          {otpCell(row)}
+          {row.warehouse_receive_pending ? (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setDetailRdc(rdc); }}
+              className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 inline-flex items-center gap-1"
+            >
+              <PackageCheck className="w-3.5 h-3.5" />
+              Warehouse receive
+            </button>
+          ) : (
+            <span className="text-xs text-emerald-700">Warehouse received</span>
+          )}
           {pdfCell(row)}
         </div>
       </div>
@@ -170,10 +200,11 @@ export default function ReturnDcListPage() {
         icon={RotateCcw}
       />
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
         <StatCard label="Total" value={stats.total} tone="gray" />
         <StatCard label="Delivered (this page)" value={stats.delivered} tone="green" />
         <StatCard label="In transit (this page)" value={stats.inTransit} tone="amber" />
+        <StatCard label="Pending warehouse (this page)" value={stats.pendingWarehouse} tone="amber" />
       </div>
 
       <div className="flex flex-wrap gap-3 mb-4">

@@ -13,6 +13,7 @@ const pool = require('../config/db');
 const { ensureLinkedDeliveryTechnician } = require('../services/deliveryTechnicianService');
 const { emailDocument, generateDocumentPdf } = require('../services/salesManagementPdfService');
 const { getDeliveryChallanLines } = require('../services/salesManagementService');
+const { userCanViewDeliveryRegisterOtp } = require('../services/deliveryOtpAccess');
 const sm = require('./salesManagementController');
 
 // Rebuild the branded DC PDF so freshly-saved data (e.g. the technician's
@@ -188,6 +189,7 @@ async function buildDcFlow(where, params, { includeOtp = false } = {}) {
       otp_code: includeOtp
         ? (first.otp_code || first.d_otp || first.delivery_otp || first.support_otp_code)
         : undefined,
+      can_view_otp: includeOtp,
       otp_pending: Boolean(
         first.otp_sent_at || first.delivery_otp_sent_at || first.d_otp || first.support_otp_sent_at
       ) && !(first.otp_verified_at || first.d_otp_verified_at || first.support_otp_verified_at),
@@ -214,7 +216,8 @@ async function buildDcFlow(where, params, { includeOtp = false } = {}) {
 exports.listDeliveryFlow = async (req, res) => {
   try {
     const status = String(req.query.status || 'active').toLowerCase();
-    const isAdmin = ADMIN_ROLES.includes(req.user.role);
+    const permissionCache = {};
+    const includeOtp = await userCanViewDeliveryRegisterOtp(req.user, permissionCache);
     const conditions = [];
     const params = [];
 
@@ -287,7 +290,7 @@ exports.listDeliveryFlow = async (req, res) => {
       }
       const pageParams = [...params, dcNumbers];
       const pageWhere = `${where} AND d.dc_number = ANY($${pageParams.length}::text[])`;
-      const items = await buildDcFlow(pageWhere, pageParams, { includeOtp: isAdmin });
+      const items = await buildDcFlow(pageWhere, pageParams, { includeOtp });
       return res.json({
         success: true,
         items,
@@ -295,7 +298,7 @@ exports.listDeliveryFlow = async (req, res) => {
       });
     }
 
-    const items = await buildDcFlow(where, params, { includeOtp: isAdmin });
+    const items = await buildDcFlow(where, params, { includeOtp });
     res.json({ success: true, items });
   } catch (error) {
     console.error('listDeliveryFlow:', error);
@@ -431,8 +434,8 @@ exports.verifySerialAndGenerateOtp = async (req, res) => {
       }
     }
 
-    const isAdmin = ADMIN_ROLES.includes(req.user.role);
-    if (isAdmin) {
+    const includeOtp = await userCanViewDeliveryRegisterOtp(req.user);
+    if (includeOtp) {
       return res.json({ success: true, otp_visible: otp, message: 'OTP generated and emailed to sales.' });
     }
     res.json({ success: true, message: 'OTP sent. Ask the customer for the OTP.' });

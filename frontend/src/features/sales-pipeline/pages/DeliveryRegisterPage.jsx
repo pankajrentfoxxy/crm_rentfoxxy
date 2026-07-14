@@ -197,6 +197,8 @@ export default function DeliveryRegisterPage() {
                     <button type="button" onClick={() => setOtpModal(row)} className="font-mono text-blue-700 inline-flex items-center gap-1">
                       <KeyRound className="w-3.5 h-3.5" />{row.otp_code}
                     </button>
+                  ) : row.otp_pending ? (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">OTP sent</span>
                   ) : row.otp_sent_at ? (
                     <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">Sent</span>
                   ) : (

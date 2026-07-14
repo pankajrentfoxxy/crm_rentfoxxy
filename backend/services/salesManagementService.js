@@ -729,6 +729,113 @@ async function healReturnDcPickupLinks() {
   `).catch(() => {});
 }
 
+/** Link or create pickup rows so warehouse receive can complete legacy / stuck Return DCs. */
+async function ensureReturnDcPickupItems(db, dcl) {
+  const rdcNumber = dcl.dc_number;
+  const ticketId = dcl.support_ticket_id;
+
+  if (ticketId) {
+    await db.query(
+      `UPDATE support_ticket_items
+          SET return_dc_number = $1, updated_at = NOW()
+        WHERE ticket_id = $2 AND item_type = 'pickup' AND return_dc_number IS NULL`,
+      [rdcNumber, ticketId]
+    );
+  }
+
+  const isDelivered = dcl.status === 'delivered' || !!dcl.delivered_at;
+  const isCourier = ['courier', 'porter'].includes(String(dcl.dispatch_mode || ''));
+  if (isDelivered || isCourier) {
+    await db.query(
+      `UPDATE support_ticket_items SET
+          customer_otp_verified_at = COALESCE(customer_otp_verified_at, NOW()),
+          picked_up_at = COALESCE(picked_up_at, NOW()),
+          status = CASE
+            WHEN status IN ('pending_dispatch', 'assigned', 'reached') THEN 'picked_up'
+            ELSE status
+          END,
+          updated_at = NOW()
+        WHERE return_dc_number = $1
+          AND item_type = 'pickup'
+          AND warehouse_received_at IS NULL`,
+      [rdcNumber]
+    );
+  }
+
+  const existingRes = await db.query(
+    `SELECT * FROM support_ticket_items
+      WHERE return_dc_number = $1 AND item_type = 'pickup'
+      ORDER BY id ASC`,
+    [rdcNumber]
+  );
+  if (existingRes.rows.length) return existingRes.rows;
+  if (!ticketId) return [];
+
+  const { buildUnitsForRdc } = require('./returnDcPdfService');
+  const units = await buildUnitsForRdc(db, dcl, []);
+  const inserted = [];
+  for (const unit of units) {
+    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    const ins = await db.query(
+      `INSERT INTO support_ticket_items (
+          ticket_id, serial_number, unique_serial_number, ttspl_id,
+          brand, model, item_type, pickup_type, status, return_dc_number,
+          pickup_method, otp_code, customer_otp_code, customer_otp_sent_at,
+          customer_otp_verified_at, picked_up_at
+       ) VALUES (
+          $1, $2, $3, $4, $5, $6, 'pickup', 'return',
+          $7, $8, $9, $10, $10, NOW(), $11, $12
+       )
+       RETURNING *`,
+      [
+        ticketId,
+        unit.serial || null,
+        unit.ttspl || null,
+        unit.ttspl || null,
+        unit.brand || dcl.brand || null,
+        unit.model || dcl.model_name || null,
+        isDelivered ? 'picked_up' : 'assigned',
+        rdcNumber,
+        dcl.dispatch_mode || null,
+        otp,
+        (isDelivered || isCourier) ? new Date() : null,
+        isDelivered ? new Date() : null,
+      ]
+    );
+    inserted.push(ins.rows[0]);
+  }
+  return inserted;
+}
+
+function evaluateReturnDcWarehouseConfirm(pickupItems, units, dcl) {
+  const anyReceived = pickupItems.some((i) => i.warehouse_received_at);
+  if (anyReceived && pickupItems.every((i) => i.warehouse_received_at)) {
+    return { can_warehouse_confirm: false, warehouse_block_reason: null, warehouse_receive_pending: false };
+  }
+
+  const pendingItems = pickupItems.filter((i) => !i.warehouse_received_at);
+  const hasUnits = (units || []).length > 0;
+  const needsReceive = pendingItems.length > 0 || (pickupItems.length === 0 && hasUnits);
+  if (!needsReceive) {
+    return { can_warehouse_confirm: false, warehouse_block_reason: null, warehouse_receive_pending: false };
+  }
+
+  const isDelivered = dcl.status === 'delivered' || !!dcl.delivered_at;
+  const itemsToCheck = pendingItems.length ? pendingItems : pickupItems;
+  const otpBlocked = itemsToCheck.some((i) => {
+    const isInhouse = i.pickup_method !== 'courier' && i.pickup_method !== 'porter';
+    return isInhouse && !i.customer_otp_verified_at && !isDelivered;
+  });
+
+  return {
+    can_warehouse_confirm: !otpBlocked,
+    warehouse_block_reason: otpBlocked
+      ? 'Customer OTP must be verified before warehouse can confirm receipt (or mark Return DC delivered first).'
+      : null,
+    warehouse_receive_pending: true,
+  };
+}
+
 /** Return DC list — sourced from the actual Return DC rows
  *  (delivery_challan_lines with movement_type='return'), one row per RDC. */
 async function listReturnDeliveryChallans({ page = 1, limit = 25, search = '', dateFrom, dateTo } = {}) {
@@ -824,6 +931,7 @@ async function listReturnDeliveryChallans({ page = 1, limit = 25, search = '', d
        COALESCE(sti_rdc.customer_otp_code, sti_tkt.customer_otp_code) AS customer_otp_code,
        COALESCE(sti_rdc.customer_otp_verified_at, sti_tkt.customer_otp_verified_at) AS customer_otp_verified_at,
        COALESCE(sti_rdc.warehouse_received_at, sti_tkt.warehouse_received_at) AS warehouse_received_at,
+       (COALESCE(sti_rdc.warehouse_received_at, sti_tkt.warehouse_received_at) IS NULL) AS warehouse_receive_pending,
        COALESCE(
          sti_rdc.ttspl_id,
          sti_tkt.ttspl_id,
@@ -855,6 +963,8 @@ async function listReturnDeliveryChallans({ page = 1, limit = 25, search = '', d
 
 /** Full Return DC detail — units, pickup items, POD, e-signatures, PDF. */
 async function getReturnDcDetail(rdcNumber) {
+  await healReturnDcPickupLinks();
+
   const dclRes = await pool.query(
     `SELECT dcl.*, st.customer_phone, st.ticket_email
        FROM delivery_challan_lines dcl
@@ -866,6 +976,8 @@ async function getReturnDcDetail(rdcNumber) {
   const dcl = dclRes.rows[0];
   if (!dcl) return null;
 
+  await ensureReturnDcPickupItems(pool, dcl);
+
   const itemsRes = await pool.query(
     `SELECT sti.*,
             u1.name AS tech_name,
@@ -873,11 +985,23 @@ async function getReturnDcDetail(rdcNumber) {
        FROM support_ticket_items sti
        LEFT JOIN users u1 ON u1.user_id = COALESCE(sti.pickup_assigned_to, sti.assigned_to)
        LEFT JOIN users u2 ON u2.user_id = sti.warehouse_received_by
-      WHERE sti.return_dc_number = $1 AND sti.item_type = 'pickup'
+      WHERE sti.item_type = 'pickup'
+        AND (
+          sti.return_dc_number = $1
+          OR (sti.return_dc_number IS NULL AND sti.ticket_id = $2)
+        )
       ORDER BY sti.id ASC`,
-    [rdcNumber]
+    [rdcNumber, dcl.support_ticket_id]
   );
-  const pickupItems = itemsRes.rows;
+  let pickupItems = itemsRes.rows;
+  if (pickupItems.some((i) => !i.return_dc_number)) {
+    await pool.query(
+      `UPDATE support_ticket_items SET return_dc_number = $1, updated_at = NOW()
+        WHERE ticket_id = $2 AND item_type = 'pickup' AND return_dc_number IS NULL`,
+      [rdcNumber, dcl.support_ticket_id]
+    );
+    pickupItems = pickupItems.map((i) => ({ ...i, return_dc_number: i.return_dc_number || rdcNumber }));
+  }
 
   const { buildUnitsForRdc } = require('./returnDcPdfService');
   const units = await buildUnitsForRdc(pool, dcl, pickupItems);
@@ -955,11 +1079,7 @@ async function getReturnDcDetail(rdcNumber) {
       warehouse_name: whItem?.warehouse_receiver_name || null,
       warehouse_at: whItem?.warehouse_esign_at || whItem?.warehouse_received_at || null,
     },
-    can_warehouse_confirm: pickupItems.some((i) => !i.warehouse_received_at)
-      && pickupItems.filter((i) => !i.warehouse_received_at).every((i) => {
-        const isInhouse = i.pickup_method !== 'courier' && i.pickup_method !== 'porter';
-        return !isInhouse || i.customer_otp_verified_at;
-      }),
+    ...evaluateReturnDcWarehouseConfirm(pickupItems, units, dcl),
   };
 }
 
@@ -1573,6 +1693,9 @@ module.exports = {
   getDeliveryChallanLines,
   listReturnDeliveryChallans,
   getReturnDcDetail,
+  healReturnDcPickupLinks,
+  ensureReturnDcPickupItems,
+  evaluateReturnDcWarehouseConfirm,
   getOperationCounts,
   searchAvailableInventory,
   healStaleReturnedPassedSerials,

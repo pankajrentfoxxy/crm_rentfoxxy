@@ -1726,14 +1726,14 @@ exports.sendDeliveryOtp = async (req, res) => {
       }
     }
 
-    const adminRoles = ['admin', 'manager', 'super_admin', 'support_lead'];
+    const { userCanViewDeliveryRegisterOtp } = require('../services/deliveryOtpAccess');
     const payload = {
       success: true,
       message: customerEmail
         ? 'OTP sent to customer and sales email.'
         : 'OTP generated and emailed to sales.',
     };
-    if (adminRoles.includes(req.user?.role)) payload.otp_visible = otp;
+    if (await userCanViewDeliveryRegisterOtp(req.user)) payload.otp_visible = otp;
     res.json(payload);
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
