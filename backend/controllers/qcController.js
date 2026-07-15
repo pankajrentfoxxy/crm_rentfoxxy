@@ -339,9 +339,8 @@ exports.submitQC = async (req, res) => {
             if (qcStage === 'QC1') {
                 nextStage = 'QC2';
             } else if (qcStage === 'QC2' || qcStage === 'Dispatch QC') {
-                // QC2 and the pre-dispatch "Dispatch QC" both pass straight to Inventory
-                // (ready for DC). Dispatch QC never routes to QC2.
-                nextStage = 'Inventory';
+                // Dispatch QC still goes to Inventory. Floor QC2 goes to Pending Inventory.
+                nextStage = qcStage === 'Dispatch QC' ? 'Inventory' : 'Pending Inventory';
             }
         } else {
             // FAIL routing depends on the stage:
@@ -359,6 +358,7 @@ exports.submitQC = async (req, res) => {
         if (stageRes.rows.length > 0) {
             const { stage_id, team_id } = stageRes.rows[0];
             const isCompleted = nextStage === 'Inventory';
+            const isPendingInventory = nextStage === 'Pending Inventory';
             let assignedUserId = null;
             if (result === 'PASS' && qcStage === 'QC1') {
                 const manualId = assignToUserId != null && assignToUserId !== ''
@@ -457,7 +457,39 @@ exports.submitQC = async (req, res) => {
                 );
             }
 
-            if (isCompleted && result === 'PASS' && ticketMeta.ticket_type === 'sales_order_qc') {
+            if (isPendingInventory && result === 'PASS') {
+                await client.query(
+                    `UPDATE tickets SET qc2_passed_at = NOW() WHERE ticket_id = $1`,
+                    [id]
+                );
+                try {
+                    const paSvc = require('../services/productionAssetService');
+                    let pa = await paSvc.getByTicket(client, Number(id));
+                    if (!pa && ticketMeta.vendor_serial_id) {
+                        pa = await paSvc.getByVendorSerial(client, ticketMeta.vendor_serial_id);
+                    }
+                    if (!pa) {
+                        pa = await paSvc.createFromGrn(client, {
+                            ticketId: Number(id),
+                            serialNumber: ticketMeta.serial_number,
+                            ttsplId: ticketMeta.ttspl_id,
+                            vendorSerialId: ticketMeta.vendor_serial_id,
+                            configSource: ticketMeta,
+                        });
+                    }
+                    if (pa?.production_asset_id) {
+                        await paSvc.markPendingInventory(client, pa.production_asset_id, userId);
+                    }
+                } catch (paErr) {
+                    console.error('QC submit pending inventory mark failed:', paErr.message);
+                }
+                if (serialNumber || machineNumber) {
+                    await client.query(
+                        `UPDATE inventory SET stage = $1 WHERE serial_number = $2 OR machine_number = $3`,
+                        [nextStage, serialNumber, machineNumber]
+                    );
+                }
+            } else if (isCompleted && result === 'PASS' && ticketMeta.ticket_type === 'sales_order_qc') {
                 // Pre-dispatch "Dispatch QC" pass on a Sales Order laptop must mirror the
                 // stage-move path: mark the SO allocation / DC QC / vendor serial as passed
                 // and keep the unit RESERVED for its order (not generic ready stock),

@@ -89,6 +89,8 @@ app.use('/api/diagnosis', require('./routes/diagnosis'));
 app.use('/api/chip-repair', require('./routes/chipLevel'));
 app.use('/api/quotation', require('./routes/quotationPublic'));
 app.use('/api/grn-capture', require('./routes/grnCapturePublic'));
+app.use('/api/qc2-capture', require('./routes/qc2CapturePublic'));
+app.use('/api/qc2', require('./routes/qc2'));
 app.use('/api/grn-access-public', require('./routes/grnAccessPublic'));
 app.use('/api/grn-access', require('./routes/grnAccess'));
 app.use('/api/leads', require('./routes/leads'));
@@ -108,6 +110,7 @@ app.use('/api/finance-overview', require('./routes/financeOverview'));
 app.use('/api/demo', require('./routes/demo'));
 app.use('/api/companies', require('./routes/companies'));
 app.use('/api/asset-configuration', require('./routes/assetConfiguration'));
+app.use('/api/production-assets', require('./routes/productionAssets'));
 app.use('/api/vendor-repair', require('./routes/vendorRepair'));
 app.use('/api/utils', require('./routes/utils'));
 

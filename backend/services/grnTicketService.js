@@ -128,7 +128,8 @@ async function createTicketFromGrnReceive(db, {
   po,
   line,
   actorUserId,
-  initialConditionOverride
+  initialConditionOverride,
+  grnId,
 }) {
   const blocking = await db.query(
     `SELECT ticket_id FROM tickets WHERE serial_number = $1 AND status IN ('in_progress', 'on_hold')`,
@@ -227,6 +228,31 @@ async function createTicketFromGrnReceive(db, {
       actorUserId: actorUserId,
       db
     });
+  }
+
+  // Production Asset (working copy) — seeded from frozen GRN snapshot when available
+  try {
+    const { createFromGrn } = require('./productionAssetService');
+    const frozenRes = await db.query(
+      `SELECT grn_received_config, grn_id, po_id FROM vendor_serial_numbers WHERE serial_id = $1`,
+      [serialId]
+    );
+    const frozenRow = frozenRes.rows[0] || {};
+    const frozenCfg = frozenRow.grn_received_config && typeof frozenRow.grn_received_config === 'object'
+      ? frozenRow.grn_received_config
+      : null;
+    await createFromGrn(db, {
+      ticketId,
+      grnId: grnId || frozenRow.grn_id || po?.grn_id || line?.grn_id || null,
+      grnLineId: line?.product_detail_id || line?.grn_line_id || null,
+      poId: po?.po_id || frozenRow.po_id || null,
+      serialNumber,
+      ttsplId: ttspl,
+      vendorSerialId: serialId,
+      configSource: frozenCfg || { ...specs, ...line, storage: specs.storage || line?.storage || line?.ssd },
+    });
+  } catch (paErr) {
+    console.error('Production asset create failed (non-fatal):', paErr.message);
   }
 
   return { ok: true, ticket_id: ticketId, serial_number: serialNumber };

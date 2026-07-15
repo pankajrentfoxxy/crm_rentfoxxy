@@ -4,9 +4,12 @@ import toast from 'react-hot-toast';
 import { updateTicketConfig } from '../floorPipelineApi';
 
 const FIELDS = [
+  { key: 'brand', label: 'Brand' },
+  { key: 'model', label: 'Model' },
   { key: 'processor', label: 'Processor' },
+  { key: 'generation', label: 'Generation' },
   { key: 'ram', label: 'RAM' },
-  { key: 'storage', label: 'Storage' },
+  { key: 'storage', label: 'Storage / SSD' },
   { key: 'gpu', label: 'GPU' },
   { key: 'screen_size', label: 'Screen Size' },
   { key: 'os', label: 'OS' }
@@ -21,9 +24,12 @@ export default function ConfigUpdateModal({ open, onClose, ticket, extra = {}, o
   useEffect(() => {
     if (!open || !ticket) return;
     setForm({
+      brand: ticket.brand || extra.brand || '',
+      model: ticket.model || extra.model || '',
       processor: ticket.processor || extra.processor || '',
+      generation: extra.generation || ticket.generation || '',
       ram: ticket.ram || extra.ram || '',
-      storage: ticket.storage || extra.storage || '',
+      storage: ticket.storage || extra.storage || extra.ssd || '',
       gpu: extra.gpu || '',
       screen_size: extra.screen_size || '',
       os: extra.os || ''
@@ -35,9 +41,9 @@ export default function ConfigUpdateModal({ open, onClose, ticket, extra = {}, o
   if (!open) return null;
 
   const diffs = FIELDS.filter((f) => {
-    const orig = f.key === 'processor' || f.key === 'ram' || f.key === 'storage'
+    const orig = ['processor', 'ram', 'storage', 'brand', 'model'].includes(f.key)
       ? (ticket[f.key] || extra[f.key] || '')
-      : (extra[f.key] || '');
+      : (extra[f.key] || ticket[f.key] || '');
     return String(form[f.key] || '').trim() !== String(orig).trim();
   });
 
@@ -75,6 +81,9 @@ export default function ConfigUpdateModal({ open, onClose, ticket, extra = {}, o
           <h3 className="font-semibold text-slate-900">Update laptop config</h3>
           <button type="button" onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
         </div>
+        <p className="text-xs text-slate-500 -mt-2">
+          Saves to the Production Asset (working config). PO/GRN original vendor config stays locked.
+        </p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {FIELDS.map((f) => (
             <label key={f.key} className="text-sm">

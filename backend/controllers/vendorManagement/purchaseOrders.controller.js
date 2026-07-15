@@ -22,7 +22,10 @@ const {
   resolveReceiveConfig,
   mergeConfigIntoExtra,
   loadGrnLineConfigsForPo,
-  applyGrnConfigToLine
+  applyGrnConfigToLine,
+  freezeAcceptedReceiveConfig,
+  configFromPlainObject,
+  ensureLockColumns,
 } = require('../../services/grnReceivedConfigService');
 const { generatePurchaseOrderPdf } = require('../../services/vendorPurchaseOrderPdfService');
 const {
@@ -520,6 +523,12 @@ async function receiveProductSerial(req, res) {
       [poId, finalGrnId, serial_number, JSON.stringify(extra)]
     );
     serialId = insS.rows[0].serial_id;
+    await freezeAcceptedReceiveConfig(client, {
+      serialId,
+      grnId: finalGrnId,
+      productDetailId: pd,
+      config: buildConfigExtraFromLine(line),
+    });
 
     await client.query('COMMIT');
   } catch (e) {
@@ -774,8 +783,15 @@ async function receivePoLineBulk(req, res) {
          VALUES ($1,$2,$3,$4,$5::date,'pending',$6::jsonb) RETURNING serial_id`,
         [poId, finalGrnId, serial_number, inventory_asset_code, rental_start_date, JSON.stringify(extra)]
       );
+      const serialId = insS.rows[0].serial_id;
+      await freezeAcceptedReceiveConfig(client, {
+        serialId,
+        grnId: finalGrnId,
+        productDetailId: pd,
+        config: buildConfigExtraFromLine(line),
+      });
       createdRows.push({
-        serial_id: insS.rows[0].serial_id,
+        serial_id: serialId,
         serial_number,
         inventory_asset_code
       });
@@ -1050,6 +1066,12 @@ async function receivePoLineUnit(req, res) {
       serial_number,
       inventory_asset_code
     };
+    await freezeAcceptedReceiveConfig(client, {
+      serialId: createdRow.serial_id,
+      grnId: finalGrnId,
+      productDetailId: pd,
+      config: receiveConfig,
+    });
 
     await client.query('COMMIT');
   } catch (e) {
@@ -1119,6 +1141,7 @@ async function receivePoLineUnit(req, res) {
       line: receiveLine,
       actorUserId: req.user?.user_id,
       initialConditionOverride: initialCondition,
+      grnId: finalGrnId,
     });
   } catch (ticketErr) {
     console.error('GRN ticket creation failed (unit receive):', ticketErr);
@@ -1255,6 +1278,8 @@ async function getGrnReceivedProducts(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
 
+  await ensureLockColumns(pool);
+
   const poId = Number(req.params.poId);
   const grnId = Number(req.params.grnId);
 
@@ -1275,7 +1300,9 @@ async function getGrnReceivedProducts(req, res) {
   const legacyIds = parseLineItemsJson(poR.rows[0]?.product_details_legacy_ids);
 
   const serials = await pool.query(
-    `SELECT serial_id, serial_number, inventory_asset_code, rental_start_date, extra, created_at FROM vendor_serial_numbers
+    `SELECT serial_id, serial_number, inventory_asset_code, rental_start_date, extra,
+            grn_received_config, config_locked_at, created_at
+       FROM vendor_serial_numbers
      WHERE po_id = $1 AND grn_id = $2 AND deleted_at IS NULL
      ORDER BY serial_id`,
     [poId, grnId]
@@ -1285,7 +1312,11 @@ async function getGrnReceivedProducts(req, res) {
   const items = serials.rows.map((s) => {
     const ex = s.extra && typeof s.extra === 'object' && s.extra !== null && !Array.isArray(s.extra) ? s.extra : {};
     const line = resolveLineItem(lineItems, ex, { legacyProductIds: legacyIds }) || {};
-    const config = { ...buildConfigExtraFromLine(line), ...buildConfigExtraFromLine(ex) };
+    // Locked GRN snapshot first; fall back to original PO line — never live editable extra
+    const config = {
+      ...buildConfigExtraFromLine(line),
+      ...(configFromPlainObject(s.grn_received_config) || {}),
+    };
     const rep = ex.is_replaced === true || ex.is_replaced === 1 || String(ex.is_replaced) === '1';
     const repa = ex.is_repaired === true || ex.is_repaired === 1 || String(ex.is_repaired) === '1';
     return {
@@ -1306,6 +1337,7 @@ async function getGrnReceivedProducts(req, res) {
       gpu: config.gpu ?? null,
       screen_size: config.screen_size ?? null,
       physical_damage_remark: ex.physical_damage_remark ?? null,
+      config_locked: !!s.config_locked_at,
       grn_date: grn.updated_at ?? grn.created_at
     };
   });

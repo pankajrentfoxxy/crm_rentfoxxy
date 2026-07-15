@@ -91,11 +91,28 @@ function ItemDescriptionCard({ line }) {
     .filter((x) => x != null && String(x).trim() !== '')
     .map((x) => String(x).trim());
 
+  const locked = !!line.config_locked || Number(line.receivedQty) > 0;
+
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50/90 shadow-sm px-3 py-2.5 text-left max-w-md">
-      <h3 className="text-sm font-semibold text-slate-900 leading-snug">{title}</h3>
+      <div className="flex items-start justify-between gap-2">
+        <h3 className="text-sm font-semibold text-slate-900 leading-snug">{title}</h3>
+        {locked ? (
+          <span
+            className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-emerald-800 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5"
+            title="PO/GRN ordered & received config is locked. Floor/inventory edits go to the Production Asset only."
+          >
+            Locked
+          </span>
+        ) : null}
+      </div>
       {specs.length > 0 ? (
         <p className="text-xs text-slate-600 mt-1 mb-0 leading-relaxed">{specs.join(' | ')}</p>
+      ) : null}
+      {locked ? (
+        <p className="text-[10px] text-slate-500 mt-1.5 mb-0">
+          Original vendor config (read-only). Inventory edits do not change this.
+        </p>
       ) : null}
     </div>
   );

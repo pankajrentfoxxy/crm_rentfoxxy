@@ -53,7 +53,7 @@ import useAutoRefresh from '../hooks/useAutoRefresh';
 const HW_WORK_STAGES = ['Assembly & Software', 'Final Testing', 'Chip Level Repair', 'Body & Paint'];
 const HW_SW_DIAGNOSIS_STAGES = ['Diagnosis', ...HW_WORK_STAGES];
 // Stages where the assignee must scan/confirm the machine and run a work timer.
-const TIMED_WORK_STAGES = ['Diagnosis', 'Assembly & Software', 'Final Testing', 'Chip Level Repair', 'Body & Paint', 'QC1', 'QC2', 'Dispatch QC'];
+const TIMED_WORK_STAGES = ['Diagnosis', 'Assembly & Software', 'Final Testing', 'Chip Level Repair', 'Body & Paint', 'QC1', 'QC2', 'Dispatch QC', 'Pending Inventory'];
 const STAGE_TASK_STAGES = ['Assembly & Software', 'Final Testing'];
 
 function fmtElapsed(ms) {
@@ -523,7 +523,7 @@ export default function TicketDetailPage() {
   }
   if ((qc || canManageTickets) && stage === 'QC2') {
     stageButtons.push(
-      { label: 'QC2 PASS — Mark Inventory Ready', action: () => move('Inventory'), success: true },
+      { label: 'QC2 PASS — Move to Pending Inventory', action: () => move('Pending Inventory'), success: true },
       { label: 'QC2 FAIL — Send back to QC1', action: openQc2FailPicker, danger: true, needsReason: true }
     );
   }

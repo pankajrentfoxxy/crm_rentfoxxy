@@ -90,8 +90,15 @@ async function main() {
       await pool.query(
         `UPDATE vendor_product_details
             SET po_id = COALESCE(po_id, $2),
-                brand = $3, model = $4, processor = $5, generation = $6,
-                ram = $7, storage = $8, gpu = $9, screen_size = $10, updated_at = NOW()
+                brand = CASE WHEN config_locked_at IS NULL THEN $3 ELSE brand END,
+                model = CASE WHEN config_locked_at IS NULL THEN $4 ELSE model END,
+                processor = CASE WHEN config_locked_at IS NULL THEN $5 ELSE processor END,
+                generation = CASE WHEN config_locked_at IS NULL THEN $6 ELSE generation END,
+                ram = CASE WHEN config_locked_at IS NULL THEN $7 ELSE ram END,
+                storage = CASE WHEN config_locked_at IS NULL THEN $8 ELSE storage END,
+                gpu = CASE WHEN config_locked_at IS NULL THEN $9 ELSE gpu END,
+                screen_size = CASE WHEN config_locked_at IS NULL THEN $10 ELSE screen_size END,
+                updated_at = NOW()
           WHERE old_product_id = $1`,
         [
           productId,

@@ -116,6 +116,7 @@ function deriveAction({
 
   if (source === 'markDiagnosisFailed') return 'Diagnosis Failed';
   if (source === 'markQcFailed') return 'QC Failed Return to Vendor';
+  if (source === 'pendingInventoryReceive') return 'Received into Inventory';
 
   if (source === 'submitDiagnosis') {
     if (to === 'Body & Paint') return 'Sent to Body & Paint';
@@ -147,8 +148,8 @@ function deriveAction({
   if (before?.technician_id && !after?.technician_id) {
     return 'Technician Unassigned';
   }
-  if (before?.status !== after?.status && after?.status) {
-    return `Status Changed: ${before.status || '—'} → ${after.status}`;
+  if ((before?.status ?? null) !== (after?.status ?? null) && after?.status) {
+    return `Status Changed: ${before?.status || '—'} → ${after.status}`;
   }
 
   return source ? source.replace(/_/g, ' ') : 'Workflow Updated';

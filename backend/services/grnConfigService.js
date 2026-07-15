@@ -327,10 +327,20 @@ async function verifyConfiguration({ tokenRow, actual, ip }) {
   return { ...result, expected };
 }
 
+/**
+ * Compare any expected config object against script-detected actual (QC2 / Production Asset).
+ * Does not touch GRN capture tables.
+ */
+function verifyConfigurationAgainst(expected, actual) {
+  const result = compareConfig(expected || {}, actual || {});
+  return { ...result, expected: expected || {} };
+}
+
 module.exports = {
   loadExpectedConfig,
   compareConfig,
   verifyConfiguration,
+  verifyConfigurationAgainst,
   // exported for tests / reuse
   norm,
   cpuType,

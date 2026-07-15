@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { CheckCircle, AlertTriangle, Save, ChevronDown, ChevronUp } from 'lucide-react';
 import api from '../utils/api';
 import HwReworkAssignModal from '../features/floor-pipeline/components/HwReworkAssignModal';
+import Qc1SpecChecklist from '../features/floor-pipeline/components/Qc1SpecChecklist';
+import Qc2SpecVerifyPanel from '../features/floor-pipeline/components/Qc2SpecVerifyPanel';
 
 const GRADE_OPTIONS = ['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C', 'D'];
 
@@ -98,11 +100,26 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
     const [processing, setProcessing] = useState(false);
     const [saving, setSaving] = useState(false);
     const [bitlockerModal, setBitlockerModal] = useState(false);
+    const [specChecklistReady, setSpecChecklistReady] = useState(qcStage !== 'QC1');
+    const [qc2Verified, setQc2Verified] = useState(qcStage !== 'QC2');
     const [assigneeModal, setAssigneeModal] = useState(false);
     const [qc2Assignees, setQc2Assignees] = useState([]);
     const [selectedAssigneeId, setSelectedAssigneeId] = useState('');
     const [loadingAssignees, setLoadingAssignees] = useState(false);
     const [hwFailPickerOpen, setHwFailPickerOpen] = useState(false);
+
+    const syncHeaderFromSpec = useCallback((h) => {
+        setHeader({
+            processor: h.processor || '',
+            generation: h.generation || '',
+            storage_type: h.storage_type || h.ssd || '',
+            ram_size: h.ram_size || h.ram || '',
+        });
+    }, []);
+
+    const handleQc2Verified = useCallback((ok) => {
+        setQc2Verified(!!ok);
+    }, []);
 
     const loadQCData = useCallback(async () => {
         try {
@@ -229,8 +246,21 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
     };
 
     const handleSubmit = async () => {
-        // Validate header
+        if (qcStage === 'QC1' && !specChecklistReady) {
+            return alert('Please complete the specification checklist (all 6 fields)');
+        }
+        if (qcStage === 'QC2' && !qc2Verified) {
+            return alert('Complete QC2 spec verification before testing');
+        }
+        // Keep header fields populated for legacy API payload
         if (!header.processor || !header.generation || !header.storage_type || !header.ram_size) {
+            if (qcStage === 'QC1' || qcStage === 'QC2') {
+                // Spec checklist may have synced — still require something for API
+            } else {
+                return alert('Please complete the header section (Processor, Generation, Storage Type, RAM Size)');
+            }
+        }
+        if ((qcStage !== 'QC1' && qcStage !== 'QC2') && (!header.processor || !header.generation || !header.storage_type || !header.ram_size)) {
             return alert('Please complete the header section (Processor, Generation, Storage Type, RAM Size)');
         }
 
@@ -346,7 +376,20 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
                 </div>
             </div>
 
-            {/* Header Section */}
+            {/* Spec checklist (QC1) or classic header (Dispatch QC) */}
+            {qcStage === 'QC1' ? (
+                <Qc1SpecChecklist
+                    ticket={ticket}
+                    onReadyChange={setSpecChecklistReady}
+                    onHeaderSync={syncHeaderFromSpec}
+                />
+            ) : qcStage === 'QC2' ? (
+                <Qc2SpecVerifyPanel
+                    ticket={ticket}
+                    onVerified={handleQc2Verified}
+                    onHeaderSync={syncHeaderFromSpec}
+                />
+            ) : (
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
                 <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
                     <span className="text-red-600">*</span> Header Information
@@ -413,7 +456,14 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
                     </div>
                 </div>
             </div>
+            )}
 
+            {qcStage === 'QC2' && !qc2Verified ? (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
+                    Specs must match first. When they do, review them above and click <strong>Continue to QC2 Testing</strong>.
+                </div>
+            ) : (
+            <>
             {/* Body & Physical Section */}
             <ChecklistSection
                 title="Body & Physical"
@@ -694,6 +744,8 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
                     {processing || loadingAssignees ? 'Submitting...' : `Submit ${qcStage}`}
                 </button>
             </div>
+            </>
+            )}
 
             {/* QC2 assignee selection (after QC1 pass + Bitlocker confirm) */}
             {assigneeModal && (

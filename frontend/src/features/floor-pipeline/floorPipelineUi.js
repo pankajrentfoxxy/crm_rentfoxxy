@@ -13,6 +13,7 @@ export const KANBAN_STAGES = [
   'Body & Paint',
   'QC1',
   'QC2',
+  'Pending Inventory',
   'Dispatch QC',
   'Inventory'
 ];
@@ -25,6 +26,7 @@ export const MAIN_STAGE_ORDER = [
   'Final Testing',
   'QC1',
   'QC2',
+  'Pending Inventory',
   'Dispatch QC',
   'Inventory',
 ];

@@ -242,7 +242,18 @@ exports.moveToStage = async (req, res) => {
     const ticket = ticketRes.rows[0];
     const currentStage = await getStageById(client, ticket.current_stage_id);
     const currentStageName = currentStage?.stage_name;
-    const nextStage = await getStageByName(client, to_stage_name);
+    // Production path: QC2 pass goes to Pending Inventory (not directly Inventory).
+    // Dispatch QC / sales_order_qc still go straight to Inventory.
+    let effectiveToStage = to_stage_name;
+    if (
+      currentStageName === 'QC2'
+      && to_stage_name === 'Inventory'
+      && ticket.ticket_type !== 'sales_order_qc'
+    ) {
+      effectiveToStage = 'Pending Inventory';
+    }
+
+    const nextStage = await getStageByName(client, effectiveToStage);
 
     if (!nextStage) {
       await client.query('ROLLBACK');
@@ -250,13 +261,15 @@ exports.moveToStage = async (req, res) => {
     }
 
     let conditionHint = null;
-    if (currentStageName === 'QC1' && to_stage_name === 'Assembly & Software') conditionHint = 'qc1_failed';
-    if (currentStageName === 'QC1' && to_stage_name === 'QC2') conditionHint = 'qc1_passed';
-    if (currentStageName === 'QC1' && to_stage_name === 'Dispatch QC') conditionHint = 'qc1_passed_so';
-    if (currentStageName === 'QC2' && to_stage_name === 'QC1') conditionHint = 'qc2_failed';
-    if (currentStageName === 'QC2' && to_stage_name === 'Inventory') conditionHint = 'qc2_passed';
-    if (currentStageName === 'Dispatch QC' && to_stage_name === 'Inventory') conditionHint = 'dispatch_qc_passed';
-    if (currentStageName === 'Dispatch QC' && to_stage_name === 'Assembly & Software') conditionHint = 'dispatch_qc_failed';
+    if (currentStageName === 'QC1' && effectiveToStage === 'Assembly & Software') conditionHint = 'qc1_failed';
+    if (currentStageName === 'QC1' && effectiveToStage === 'QC2') conditionHint = 'qc1_passed';
+    if (currentStageName === 'QC1' && effectiveToStage === 'Dispatch QC') conditionHint = 'qc1_passed_so';
+    if (currentStageName === 'QC2' && effectiveToStage === 'QC1') conditionHint = 'qc2_failed';
+    if (currentStageName === 'QC2' && effectiveToStage === 'Pending Inventory') conditionHint = 'qc2_passed';
+    if (currentStageName === 'QC2' && effectiveToStage === 'Inventory') conditionHint = 'qc2_passed';
+    if (currentStageName === 'Pending Inventory' && effectiveToStage === 'Inventory') conditionHint = 'inventory_received';
+    if (currentStageName === 'Dispatch QC' && effectiveToStage === 'Inventory') conditionHint = 'dispatch_qc_passed';
+    if (currentStageName === 'Dispatch QC' && effectiveToStage === 'Assembly & Software') conditionHint = 'dispatch_qc_failed';
 
     const privileged = PRIVILEGED_ROLES.includes(req.user.role);
     if (!privileged && req.user.role === 'qc' && !QC_STAGES.includes(currentStageName)) {
@@ -265,8 +278,8 @@ exports.moveToStage = async (req, res) => {
     }
 
     const managerRoutes = MANAGER_ROUTING_FROM[currentStageName];
-    if (managerRoutes?.includes(to_stage_name) && !isStageRouter(req.user)) {
-      const techRepairOk = await canMarkDiagnosisRepair(req, ticket, to_stage_name);
+    if (managerRoutes?.includes(effectiveToStage) && !isStageRouter(req.user)) {
+      const techRepairOk = await canMarkDiagnosisRepair(req, ticket, effectiveToStage);
       if (!techRepairOk) {
         await client.query('ROLLBACK');
         return res.status(403).json({
@@ -278,7 +291,7 @@ exports.moveToStage = async (req, res) => {
 
     if (
       currentStageName === 'Diagnosis'
-      && to_stage_name === 'Assembly & Software'
+      && effectiveToStage === 'Assembly & Software'
       && req.user.role !== 'super_admin'
       && !PRIVILEGED_ROLES.includes(req.user.role)
     ) {
@@ -289,7 +302,7 @@ exports.moveToStage = async (req, res) => {
       });
     }
 
-    const transition = await validateTransition(currentStageName, to_stage_name, conditionHint);
+    const transition = await validateTransition(currentStageName, effectiveToStage, conditionHint);
     if (!transition.ok && !privileged) {
       await client.query('ROLLBACK');
       return res.status(400).json({ success: false, message: transition.message });
@@ -302,7 +315,7 @@ exports.moveToStage = async (req, res) => {
     let highlightedReason = ticket.highlighted_reason;
     let qcFailCount = ticket.qc_fail_count || 0;
 
-    if (currentStageName === 'QC1' && to_stage_name === 'Assembly & Software') {
+    if (currentStageName === 'QC1' && effectiveToStage === 'Assembly & Software') {
       if (!reason?.trim()) {
         await client.query('ROLLBACK');
         return res.status(400).json({ success: false, message: 'QC1 fail reason is required' });
@@ -342,7 +355,7 @@ exports.moveToStage = async (req, res) => {
       });
     }
 
-    if (currentStageName === 'QC1' && to_stage_name === 'QC2') {
+    if (currentStageName === 'QC1' && effectiveToStage === 'QC2') {
       updates.push(`qc1_passed_at = NOW()`);
       updates.push(`highlighted = FALSE`);
       updates.push(`highlighted_reason = NULL`);
@@ -350,7 +363,7 @@ exports.moveToStage = async (req, res) => {
       highlightedReason = null;
     }
 
-    if (currentStageName === 'QC1' && to_stage_name === 'Dispatch QC') {
+    if (currentStageName === 'QC1' && effectiveToStage === 'Dispatch QC') {
       updates.push(`qc1_passed_at = NOW()`);
       updates.push(`highlighted = FALSE`);
       updates.push(`highlighted_reason = NULL`);
@@ -358,7 +371,7 @@ exports.moveToStage = async (req, res) => {
       highlightedReason = null;
     }
 
-    if (currentStageName === 'Dispatch QC' && to_stage_name === 'Assembly & Software') {
+    if (currentStageName === 'Dispatch QC' && effectiveToStage === 'Assembly & Software') {
       if (!reason?.trim() || reason.trim().length < 5) {
         await client.query('ROLLBACK');
         return res.status(400).json({ success: false, message: 'Dispatch QC fail reason is required (min 5 characters)' });
@@ -381,14 +394,14 @@ exports.moveToStage = async (req, res) => {
       });
     }
 
-    if (currentStageName === 'Dispatch QC' && to_stage_name === 'Inventory') {
+    if (currentStageName === 'Dispatch QC' && effectiveToStage === 'Inventory') {
       updates.push(`highlighted = FALSE`);
       updates.push(`highlighted_reason = NULL`);
       highlighted = false;
       highlightedReason = null;
     }
 
-    if (currentStageName === 'QC2' && to_stage_name === 'QC1') {
+    if (currentStageName === 'QC2' && effectiveToStage === 'QC1') {
       if (!reason?.trim()) {
         await client.query('ROLLBACK');
         return res.status(400).json({ success: false, message: 'QC2 fail reason is required' });
@@ -427,21 +440,49 @@ exports.moveToStage = async (req, res) => {
       });
     }
 
-    if (to_stage_name === 'QC1' && ticket.qc1_failed_at && currentStageName !== 'QC2') {
+    if (effectiveToStage === 'QC1' && ticket.qc1_failed_at && currentStageName !== 'QC2') {
       highlighted = true;
       highlightedReason = `QC1 previously failed: ${ticket.qc1_fail_reason || 'see history'}`;
       updates.push(`highlighted = TRUE`);
       updates.push(`highlighted_reason = $${pi++}`); params.push(highlightedReason);
     }
 
-    if (to_stage_name === 'Assembly & Software' && ['technician', 'team_member', 'team_lead'].includes(req.user.role)) {
+    if (effectiveToStage === 'Assembly & Software' && ['technician', 'team_member', 'team_lead'].includes(req.user.role)) {
       updates.push(`highlighted = FALSE`);
       updates.push(`highlighted_reason = NULL`);
       highlighted = false;
     }
 
     let isCompleted = false;
-    if (to_stage_name === 'Inventory') {
+    if (effectiveToStage === 'Pending Inventory') {
+      // QC2 pass — hold for serial-verified receive; do NOT stock yet
+      updates.push(`qc2_passed_at = NOW()`);
+      updates.push(`highlighted = FALSE`);
+      updates.push(`highlighted_reason = NULL`);
+      highlighted = false;
+      try {
+        const paSvc = require('../services/productionAssetService');
+        let pa = await paSvc.getByTicket(client, ticket.ticket_id);
+        if (!pa && ticket.vendor_serial_id) pa = await paSvc.getByVendorSerial(client, ticket.vendor_serial_id);
+        if (pa) {
+          await paSvc.markPendingInventory(client, pa.production_asset_id, req.user.user_id);
+        } else {
+          await paSvc.createFromGrn(client, {
+            ticketId: ticket.ticket_id,
+            serialNumber: ticket.serial_number,
+            ttsplId: ticket.ttspl_id,
+            vendorSerialId: ticket.vendor_serial_id,
+            configSource: ticket,
+          }).then(async (created) => {
+            if (created?.production_asset_id) {
+              await paSvc.markPendingInventory(client, created.production_asset_id, req.user.user_id);
+            }
+          });
+        }
+      } catch (paErr) {
+        console.error('markPendingInventory failed:', paErr.message);
+      }
+    } else if (effectiveToStage === 'Inventory') {
       isCompleted = true;
       updates.push(`status = 'completed'`);
       updates.push(`completed_at = NOW()`);
@@ -508,14 +549,14 @@ exports.moveToStage = async (req, res) => {
       'Body & Paint',
     ]);
 
-    const transitionKey = `${currentStageName}→${to_stage_name}`;
-    const bothHwSw = HW_SW_STAGES.has(currentStageName) && HW_SW_STAGES.has(to_stage_name);
+    const transitionKey = `${currentStageName}→${effectiveToStage}`;
+    const bothHwSw = HW_SW_STAGES.has(currentStageName) && HW_SW_STAGES.has(effectiveToStage);
 
     if (ROUND_ROBIN_TRANSITIONS.has(transitionKey) && nextStage.team_id) {
       assignedUserId = await resolveQcAssignee(client, {
         teamId: nextStage.team_id,
         ticketId: ticket.ticket_id,
-        targetStageName: to_stage_name,
+        targetStageName: effectiveToStage,
         transitionKey
       });
     } else if (KEEP_SAME_TECH_TRANSITIONS.has(transitionKey) || bothHwSw) {
@@ -524,7 +565,7 @@ exports.moveToStage = async (req, res) => {
 
     // Side-routes to repair vendors: unassign so Body & Paint / Chip tech can be picked.
     if (
-      (to_stage_name === 'Body & Paint' || to_stage_name === 'Chip Level Repair')
+      (effectiveToStage === 'Body & Paint' || effectiveToStage === 'Chip Level Repair')
       && !overrideAssignee
     ) {
       assignedUserId = null;
@@ -533,7 +574,7 @@ exports.moveToStage = async (req, res) => {
     // Manual picker (e.g. Final Testing -> QC1, QC2 fail -> QC1) wins over round-robin/keep-same.
     if (overrideAssignee) {
       assignedUserId = overrideAssignee;
-      if (currentStageName === 'QC2' && to_stage_name === 'QC1' && nextStage.team_id) {
+      if (currentStageName === 'QC2' && effectiveToStage === 'QC1' && nextStage.team_id) {
         await recordAssigneeForTeam(client, nextStage.team_id, overrideAssignee);
       }
     }
@@ -550,7 +591,7 @@ exports.moveToStage = async (req, res) => {
     if (ticket.serial_number) {
       await client.query(
         `UPDATE inventory SET stage = $1 WHERE serial_number = $2`,
-        [to_stage_name, ticket.serial_number]
+        [effectiveToStage, ticket.serial_number]
       );
     }
 
@@ -569,7 +610,7 @@ exports.moveToStage = async (req, res) => {
       });
     }
 
-    const activityNotes = notes || reason || `Moved to ${to_stage_name}`;
+    const activityNotes = notes || reason || `Moved to ${effectiveToStage}`;
     await client.query(
       `INSERT INTO activities (ticket_id, stage_id, user_id, action, notes)
        VALUES ($1, $2, $3, 'stage_changed', $4)`,
@@ -580,8 +621,8 @@ exports.moveToStage = async (req, res) => {
       ttsplId: ticket.ttspl_id,
       vendorSerialId: ticket.vendor_serial_id,
       eventType: 'stage_changed',
-      description: `${currentStageName} → ${to_stage_name}`,
-      metadata: { from: currentStageName, to: to_stage_name, reason: reason || null },
+      description: `${currentStageName} → ${effectiveToStage}`,
+      metadata: { from: currentStageName, to: effectiveToStage, reason: reason || null },
       actorUserId: req.user.user_id,
       actorName: req.user.name,
       db: client
@@ -591,7 +632,7 @@ exports.moveToStage = async (req, res) => {
       ticketBefore: ticket,
       ticketAfter: newTicket,
       beforeStageName: currentStageName,
-      afterStageName: to_stage_name,
+      afterStageName: effectiveToStage,
       source: 'moveToStage',
       hint: conditionHint,
       remarks: activityNotes,
@@ -620,7 +661,7 @@ exports.moveToStage = async (req, res) => {
       success: true,
       message: isCompleted
         ? 'Ticket completed — moved to Inventory'
-        : `Moved to ${to_stage_name}${assignNote}`,
+        : `Moved to ${effectiveToStage}${assignNote}`,
       ticket: newTicket,
       assigned_user_name: assignedUserName,
       completed: isCompleted
@@ -771,8 +812,8 @@ exports.markQcFailed = async (req, res) => {
 
 exports.updateTtsplConfig = async (req, res) => {
   const { id } = req.params;
-  const { processor, ram, storage, gpu, screen_size, os, change_type, notes } = req.body;
-  const fields = { processor, ram, storage, gpu, screen_size, os };
+  const { processor, ram, storage, gpu, screen_size, os, change_type, notes, brand, model, generation } = req.body;
+  const fields = { processor, ram, storage, gpu, screen_size, os, brand, model, generation };
   if (!notes?.trim()) {
     return res.status(400).json({ success: false, message: 'Notes are required for config changes' });
   }
@@ -789,57 +830,98 @@ exports.updateTtsplConfig = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Ticket has no TTSPL ID' });
     }
 
-    let extra = {};
-    if (ticket.vendor_serial_id) {
-      const vs = await pool.query(
-        `SELECT extra FROM vendor_serial_numbers WHERE serial_id = $1`,
-        [ticket.vendor_serial_id]
-      );
-      extra = vs.rows[0]?.extra || {};
-      if (typeof extra === 'string') {
-        try { extra = JSON.parse(extra); } catch { extra = {}; }
-      }
+    const paSvc = require('../services/productionAssetService');
+    let pa = await paSvc.getByTicket(pool, ticket.ticket_id);
+    if (!pa && ticket.vendor_serial_id) {
+      pa = await paSvc.getByVendorSerial(pool, ticket.vendor_serial_id);
     }
-
-    const current = {
-      processor: ticket.processor || extra.processor || '',
-      ram: ticket.ram || extra.ram || '',
-      storage: ticket.storage || extra.storage || '',
-      gpu: extra.gpu || '',
-      screen_size: extra.screen_size || '',
-      os: extra.os || ''
-    };
-
-    const changes = [];
-    for (const [field, newVal] of Object.entries(fields)) {
-      if (newVal === undefined || newVal === null) continue;
-      const oldVal = current[field] || '';
-      if (String(newVal).trim() === String(oldVal).trim()) continue;
-      await ttsplAuditService.logConfigChange({
-        ttsplId,
-        vendorSerialId: ticket.vendor_serial_id,
+    if (!pa) {
+      pa = await paSvc.createFromGrn(pool, {
         ticketId: ticket.ticket_id,
-        changedBy: req.user.user_id,
-        changeType,
-        fieldName: field,
-        oldValue: oldVal,
-        newValue: newVal,
-        notes: notes.trim()
+        serialNumber: ticket.serial_number,
+        ttsplId: ticket.ttspl_id,
+        vendorSerialId: ticket.vendor_serial_id,
+        configSource: ticket,
       });
-      changes.push({ field, oldValue: oldVal, newValue: newVal });
-      extra[field] = newVal;
-      if (['processor', 'ram', 'storage'].includes(field)) {
-        await pool.query(
-          `UPDATE tickets SET ${field} = $1 WHERE ticket_id = $2`,
-          [newVal, id]
-        );
+    }
+
+    const stageRes = await pool.query(
+      `SELECT stage_name FROM stages WHERE stage_id = $1`,
+      [ticket.current_stage_id]
+    );
+    const stageName = stageRes.rows[0]?.stage_name || null;
+
+    const patch = {
+      processor,
+      ram,
+      ssd: storage,
+      storage,
+      gpu,
+      screen_size,
+      brand,
+      model,
+      generation,
+    };
+    const paResult = await paSvc.updateConfig(
+      pool,
+      pa.production_asset_id,
+      patch,
+      req.user.user_id,
+      stageName
+    );
+
+    // Keep config audit trail; do NOT write hardware config into VSN.extra
+    // (that leaked into PO/GRN receive view). Non-config meta in extra is untouched.
+    const changes = (paResult.changes || []).map((c) => ({
+      field: c.field === 'ssd' ? 'storage' : c.field,
+      oldValue: c.old_value,
+      newValue: c.new_value,
+    }));
+
+    for (const ch of changes) {
+      if (['processor', 'ram', 'storage', 'gpu', 'screen_size', 'os', 'brand', 'model', 'generation'].includes(ch.field)) {
+        await ttsplAuditService.logConfigChange({
+          ttsplId,
+          vendorSerialId: ticket.vendor_serial_id,
+          ticketId: ticket.ticket_id,
+          changedBy: req.user.user_id,
+          changeType,
+          fieldName: ch.field,
+          oldValue: ch.oldValue,
+          newValue: ch.newValue,
+          notes: notes.trim()
+        });
       }
     }
 
-    if (ticket.vendor_serial_id && changes.length) {
+    // Mirror display fields to inventory only (not GRN snapshot / VPD / locked extra)
+    if (changes.length && ticket.serial_number) {
+      const latest = paResult.production_asset || {};
       await pool.query(
-        `UPDATE vendor_serial_numbers SET extra = $1::jsonb, updated_at = NOW() WHERE serial_id = $2`,
-        [JSON.stringify(extra), ticket.vendor_serial_id]
+        `UPDATE inventory SET
+             brand = COALESCE(NULLIF($2, ''), brand),
+             model = COALESCE(NULLIF($3, ''), model),
+             processor = COALESCE(NULLIF($4, ''), processor),
+             generation = COALESCE(NULLIF($5, ''), generation),
+             ram = COALESCE(NULLIF($6, ''), ram),
+             storage = COALESCE(NULLIF($7, ''), storage),
+             gpu = COALESCE(NULLIF($8, ''), gpu),
+             screen_size = COALESCE(NULLIF($9, ''), screen_size),
+             updated_at = CURRENT_TIMESTAMP
+         WHERE LOWER(serial_number) = LOWER($1)
+            OR machine_number = $10`,
+        [
+          ticket.serial_number,
+          latest.brand,
+          latest.model,
+          latest.processor,
+          latest.generation,
+          latest.ram,
+          latest.ssd,
+          latest.gpu,
+          latest.screen_size,
+          ticket.ttspl_id || '',
+        ]
       );
     }
 
@@ -848,14 +930,19 @@ exports.updateTtsplConfig = async (req, res) => {
         ttsplId,
         vendorSerialId: ticket.vendor_serial_id,
         eventType: 'config_updated',
-        description: `Config updated: ${changes.map((c) => `${c.field} ${c.oldValue} → ${c.newValue}`).join(', ')}`,
-        metadata: { changes },
+        description: `Config updated on Production Asset: ${changes.map((c) => `${c.field} ${c.oldValue} → ${c.newValue}`).join(', ')}`,
+        metadata: { changes, production_asset_id: pa.production_asset_id },
         actorUserId: req.user.user_id,
         actorName: req.user.name
       });
     }
 
-    res.json({ success: true, message: 'Configuration updated', changes });
+    res.json({
+      success: true,
+      message: 'Configuration updated',
+      changes,
+      production_asset: paSvc.rowToDisplayConfig(paResult.production_asset),
+    });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message || 'Config update failed' });
   }

@@ -351,7 +351,8 @@ async function syncVendorProductDetails(client) {
         `UPDATE vendor_product_details
             SET ${field} = $1, updated_at = NOW()
           WHERE LOWER(TRIM(${field})) = $2
-            AND TRIM(COALESCE(${field}, '')) <> $1`,
+            AND TRIM(COALESCE(${field}, '')) <> $1
+            AND config_locked_at IS NULL`,
         [newVal, oldKey]
       );
       stats.vpdUpdated += r.rowCount || 0;

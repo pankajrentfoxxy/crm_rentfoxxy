@@ -125,3 +125,37 @@ export function getStageTask(id, stageId) {
 export function saveStageTask(id, body) {
   return api.post(`${base}/${id}/stage-task`, body);
 }
+
+/** Production Assets */
+export function getProductionAssetByTicket(ticketId) {
+  return api.get(`/production-assets/by-ticket/${ticketId}`);
+}
+
+export function updateProductionAssetConfig(id, body) {
+  return api.patch(`/production-assets/${id}/config`, body);
+}
+
+export function saveQc1SpecChecklist(id, body) {
+  return api.post(`/production-assets/${id}/qc1-checklist`, body);
+}
+
+export function verifyQc2Specs(id, body) {
+  return api.post(`/production-assets/${id}/qc2-verify`, body);
+}
+
+export function fetchPendingInventory() {
+  return api.get('/production-assets/pending-inventory');
+}
+
+export function receiveProductionAsset(id, body) {
+  return api.post(`/production-assets/${id}/receive`, body);
+}
+
+export function createQc2CaptureToken(ticketId) {
+  return api.post(`/qc2/tickets/${ticketId}/capture-token`);
+}
+
+export function getQc2CaptureStatus(ticketId) {
+  return api.get(`/qc2/tickets/${ticketId}/capture-status`);
+}
+
