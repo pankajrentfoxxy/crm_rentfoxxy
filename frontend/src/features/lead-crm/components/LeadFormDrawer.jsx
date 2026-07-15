@@ -84,7 +84,9 @@ export default function LeadFormDrawer({ open, lead, onClose, onSaved }) {
   const validate = () => {
     const e = {};
     if (!form.company_name?.trim()) e.company_name = 'Company name is required';
-    const phoneErr = indianMobileError(form.phone, { required: true, label: 'Phone' });
+    if (!form.email?.trim()) e.email = 'Email is required';
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) e.email = 'Enter a valid email';
+    const phoneErr = indianMobileError(form.phone, { required: false, label: 'Phone' });
     if (phoneErr) e.phone = phoneErr;
     const whatsappErr = indianMobileError(form.whatsapp_number, { label: 'WhatsApp number' });
     if (whatsappErr) e.whatsapp_number = whatsappErr;
@@ -100,7 +102,8 @@ export default function LeadFormDrawer({ open, lead, onClose, onSaved }) {
     try {
       const payload = {
         ...form,
-        phone: normalizeIndianMobile(form.phone),
+        email: form.email.trim().toLowerCase(),
+        phone: form.phone?.trim() ? normalizeIndianMobile(form.phone) : null,
         whatsapp_number: form.whatsapp_number?.trim() ? normalizeIndianMobile(form.whatsapp_number) : '',
         quantity_required: form.quantity_required ? parseInt(form.quantity_required, 10) : null,
         monthly_budget: form.monthly_budget ? parseFloat(form.monthly_budget) : null,
@@ -208,8 +211,8 @@ export default function LeadFormDrawer({ open, lead, onClose, onSaved }) {
               {field('company_brand', 'Brand')}
               {field('name', 'Contact Name', { required: true })}
               {field('designation', 'Designation')}
-              {field('email', 'Email', { type: 'email' })}
-              {field('phone', 'Phone', { required: true, mobile: true })}
+              {field('email', 'Email', { type: 'email', required: true })}
+              {field('phone', 'Phone', { mobile: true })}
               {field('whatsapp_number', 'WhatsApp', { mobile: true })}
               {field('source', 'Source', { type: 'select', options: LEAD_SOURCES, required: true })}
               {field('inquiry_type', 'Inquiry Type', { type: 'select', options: INQUIRY_TYPES, required: true })}

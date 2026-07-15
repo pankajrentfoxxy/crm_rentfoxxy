@@ -877,11 +877,18 @@ exports.acceptLeadQuotation = async (req, res) => {
 exports.createLead = async (req, res) => {
   const payload = buildLeadPayload(req.body || {});
 
-  const phoneError = validateIndianMobile(payload.phone, { required: true, label: 'Phone' });
+  if (!payload.email) {
+    return res.status(400).json({ success: false, message: 'Email is required' });
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email)) {
+    return res.status(400).json({ success: false, message: 'Enter a valid email' });
+  }
+
+  const phoneError = validateIndianMobile(payload.phone, { required: false, label: 'Phone' });
   if (phoneError) {
     return res.status(400).json({ success: false, message: phoneError });
   }
-  payload.phone = normalizeIndianMobile(payload.phone);
+  payload.phone = payload.phone?.trim() ? normalizeIndianMobile(payload.phone) : null;
 
   const body = req.body || {};
   const whatsappRaw = body.whatsapp_number ?? body.whatsappNumber;
@@ -1839,11 +1846,17 @@ exports.updateLeadBasicDetails = async (req, res) => {
     // Only update email/phone if explicitly provided - otherwise keep existing (fixes bug when only personal_remarks is sent)
     const nextName = (name ?? existing.name)?.trim() || existing.name;
     const nextEmail = email !== undefined ? (normalizeEmail(email) || null) : existing.email;
+    if (email !== undefined && !nextEmail) {
+      return res.status(400).json({ success: false, message: 'Email is required' });
+    }
+    if (nextEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail)) {
+      return res.status(400).json({ success: false, message: 'Enter a valid email' });
+    }
     let nextPhone = existing.phone;
     if (phone !== undefined) {
-      const phoneError = validateIndianMobile(phone, { required: true, label: 'Phone' });
+      const phoneError = validateIndianMobile(phone, { required: false, label: 'Phone' });
       if (phoneError) return res.status(400).json({ success: false, message: phoneError });
-      nextPhone = normalizeIndianMobile(phone);
+      nextPhone = String(phone ?? '').trim() ? normalizeIndianMobile(phone) : null;
     }
     const nextCity = normalizedCity !== undefined ? (normalizedCity || null) : existing.city;
     const nextPersonalRemarksVal = nextPersonalRemarks !== undefined ? nextPersonalRemarks : (existing.personalRemarks ?? existing.personal_remarks);
