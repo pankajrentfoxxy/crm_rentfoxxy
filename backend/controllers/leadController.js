@@ -1343,13 +1343,16 @@ exports.updateFollowUp = async (req, res) => {
     const updated = await prisma.lead.findUnique({ where: { leadId } });
     serializeLeadFollowUpTime(updated);
 
+    const cleared = !follow_up_date;
     const timeNote = followUpTime ? ` at ${followUpTime}` : '';
     await prisma.leadActivity.create({
       data: {
         leadId: updated.leadId,
         userId: req.user.user_id,
-        action: 'follow_up_set',
-        notes: notes || `Follow-up scheduled for ${follow_up_date || '—'}${timeNote}`
+        action: cleared ? 'follow_up_cleared' : 'follow_up_set',
+        notes: notes || (cleared
+          ? 'Follow-up cleared'
+          : `Follow-up scheduled for ${follow_up_date}${timeNote}`)
       }
     });
 

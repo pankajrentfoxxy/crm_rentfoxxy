@@ -109,14 +109,8 @@ export default function LeadListPage() {
     }
   }, [load, expandedId]);
 
-  const toggleExpand = useCallback(async (leadId, e) => {
-    e?.stopPropagation();
-    if (expandedId === leadId) {
-      setExpandedId(null);
-      return;
-    }
-    setExpandedId(leadId);
-    if (activityCache[leadId]) return;
+  const loadActivitiesFor = useCallback(async (leadId, { force = false } = {}) => {
+    if (!force && activityCache[leadId]) return;
     setActivityLoading(leadId);
     try {
       const res = await getLeadRecentActivity(leadId, 5);
@@ -127,7 +121,17 @@ export default function LeadListPage() {
     } finally {
       setActivityLoading(null);
     }
-  }, [expandedId, activityCache]);
+  }, [activityCache]);
+
+  const toggleExpand = useCallback(async (leadId, e) => {
+    e?.stopPropagation();
+    if (expandedId === leadId) {
+      setExpandedId(null);
+      return;
+    }
+    setExpandedId(leadId);
+    await loadActivitiesFor(leadId);
+  }, [expandedId, loadActivitiesFor]);
 
   useEffect(() => {
     if (!hasPermission('leads', 'edit')) return;
@@ -389,8 +393,12 @@ export default function LeadListPage() {
                   const ExpandIcon = isExpanded ? ChevronDown : ChevronRight;
                   return (
                     <React.Fragment key={lead.leadId}>
-                      <tr className={`border-t border-gray-100 hover:bg-gray-50/60 ${isExpanded ? 'bg-blue-50/30' : ''}`}>
-                        <td className="p-2.5 align-top">
+                      <tr
+                        className={`border-t border-gray-100 hover:bg-gray-50/60 cursor-pointer ${isExpanded ? 'bg-blue-50/30' : ''}`}
+                        onClick={(e) => toggleExpand(lead.leadId, e)}
+                        aria-expanded={isExpanded}
+                      >
+                        <td className="p-2.5 align-top" onClick={(e) => e.stopPropagation()}>
                           <input type="checkbox" checked={selected.has(lead.leadId)}
                             onChange={(e) => {
                               const next = new Set(selected);
@@ -400,15 +408,12 @@ export default function LeadListPage() {
                             }} />
                         </td>
                         <td className="p-2.5 align-top">
-                          <button
-                            type="button"
-                            aria-expanded={isExpanded}
-                            aria-label={isExpanded ? 'Collapse activities' : 'Expand activities'}
-                            onClick={(e) => toggleExpand(lead.leadId, e)}
-                            className="p-1 rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors"
+                          <span
+                            aria-hidden="true"
+                            className="inline-flex p-1 rounded-md text-gray-500"
                           >
                             <ExpandIcon className="w-4 h-4" />
-                          </button>
+                          </span>
                         </td>
                         <td className="p-2.5 align-top font-mono text-xs text-gray-500 whitespace-nowrap">
                           #{lead.leadId}
@@ -423,17 +428,17 @@ export default function LeadListPage() {
                           <LeadConfigCell lead={lead} />
                         </td>
                         <td className="p-2.5 align-top text-xs text-gray-600">{lead.source || '—'}</td>
-                        <td className="p-2.5 align-top">
+                        <td className="p-2.5 align-top" onClick={(e) => e.stopPropagation()}>
                           <QuickStatusUpdate lead={lead} onUpdated={refreshList} />
                           {lead.leadStage ? (
                             <p className="text-[11px] text-gray-500 mt-1 max-w-[140px] truncate">{lead.leadStage}</p>
                           ) : null}
                         </td>
                         <td className="p-2.5 align-top text-xs text-gray-700">{lead.assignedUser?.name || '—'}</td>
-                        <td className="p-2.5 align-top">
+                        <td className="p-2.5 align-top" onClick={(e) => e.stopPropagation()}>
                           <LeadFollowUpCell lead={lead} onUpdated={refreshList} />
                         </td>
-                        <td className="p-2.5 align-top">
+                        <td className="p-2.5 align-top" onClick={(e) => e.stopPropagation()}>
                           <button type="button" onClick={() => navigate(`/lead-crm/leads/${lead.leadId}`)}
                             className="text-blue-600 text-xs font-medium hover:underline whitespace-nowrap">
                             View
@@ -445,8 +450,11 @@ export default function LeadListPage() {
                           <td colSpan={TABLE_COLS} className="p-0">
                             <div className="px-4 py-3 border-l-4 border-l-blue-500">
                               <LeadListExpandPanel
+                                leadId={lead.leadId}
+                                user={user}
                                 loading={activityLoading === lead.leadId}
                                 activities={activityCache[lead.leadId] || []}
+                                onRemarkSaved={() => loadActivitiesFor(lead.leadId, { force: true })}
                               />
                             </div>
                           </td>

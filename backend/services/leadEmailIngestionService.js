@@ -263,11 +263,10 @@ const updateExistingLeadFromEmail = async (leadId, { name, email, phone, city, s
             email = COALESCE($2, email),
             phone = COALESCE($3, phone),
             city = COALESCE($4, city),
-            personal_remarks = COALESCE($5, personal_remarks),
             updated_at = NOW(),
             last_activity_at = NOW()
-         WHERE lead_id = $6`,
-        [name, email, phone, city, safeNotes, leadId]
+         WHERE lead_id = $5`,
+        [name, email, phone, city, leadId]
     );
 
     await pool.query(
@@ -286,12 +285,13 @@ const insertLeadFromEmail = async ({ parsedFields, subject, fromAddress, sentAt 
     const phone = truncateText(normalizePhone(parsedFields.phone), 50);
     const city = truncateText(sanitizeCity(parsedFields.city), 100);
     const companyName = truncateText(extractDomain(email), 255);
+    // Import details belong in lead_activities only — personal_remarks stays empty for manual sales notes.
     const notes = buildLeadNotes({ parsedFields, subject, fromAddress, sentAt });
-    const safeNotes = truncateText(notes, 255);
+    const activityNotes = notes || 'Lead imported from enquiry email';
 
     const existingLeadId = await findExistingLeadId({ email, phone });
     if (existingLeadId) {
-        await updateExistingLeadFromEmail(existingLeadId, { name, email, phone, city, safeNotes });
+        await updateExistingLeadFromEmail(existingLeadId, { name, email, phone, city, safeNotes: activityNotes });
         return existingLeadId;
     }
 
@@ -304,14 +304,14 @@ const insertLeadFromEmail = async ({ parsedFields, subject, fromAddress, sentAt 
 
     const autoAssignee = await getNextAutoAssignee();
     const assignCols = autoAssignee
-        ? 'name, company_name, email, phone, city, source, status, personal_remarks, inquiry_type, created_at, updated_at, assigned_user_id, assigned_at'
-        : 'name, company_name, email, phone, city, source, status, personal_remarks, inquiry_type, created_at, updated_at';
+        ? 'name, company_name, email, phone, city, source, status, inquiry_type, created_at, updated_at, assigned_user_id, assigned_at'
+        : 'name, company_name, email, phone, city, source, status, inquiry_type, created_at, updated_at';
     const assignVals = autoAssignee
-        ? `$1, $2, $3, $4, $5, 'Email', 'Pending', $8, 'rental', $6, $6, $7, $6`
-        : `$1, $2, $3, $4, $5, 'Email', 'Pending', $7, 'rental', $6, $6`;
+        ? `$1, $2, $3, $4, $5, 'Email', 'Pending', 'rental', $6, $6, $7, $6`
+        : `$1, $2, $3, $4, $5, 'Email', 'Pending', 'rental', $6, $6`;
     const assignParams = autoAssignee
-        ? [name, companyName, email, phone, city, safeReceivedAt, autoAssignee, safeNotes]
-        : [name, companyName, email, phone, city, safeReceivedAt, safeNotes];
+        ? [name, companyName, email, phone, city, safeReceivedAt, autoAssignee]
+        : [name, companyName, email, phone, city, safeReceivedAt];
 
     const leadResult = await pool.query(
         `INSERT INTO leads (${assignCols}) VALUES (${assignVals}) RETURNING lead_id`,
@@ -323,7 +323,7 @@ const insertLeadFromEmail = async ({ parsedFields, subject, fromAddress, sentAt 
     await pool.query(
         `INSERT INTO lead_activities (lead_id, user_id, action, status_from, status_to, notes, created_at)
          VALUES ($1, NULL, 'email_imported', NULL, 'Pending', $2, CURRENT_TIMESTAMP)`,
-        [leadId, safeNotes]
+        [leadId, activityNotes]
     );
 
     return leadId;

@@ -269,7 +269,9 @@ export default function LeadDetailPage() {
               <button type="button" onClick={() => setStatusOpen(true)}
                 className="w-full py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50">Change Status</button>
               <button type="button" onClick={() => setTab(2)}
-                className="w-full py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50">Set Follow-up</button>
+                className="w-full py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50">
+                {lead.followUpDate ? 'Update Follow-up' : 'Set Follow-up'}
+              </button>
               <button type="button" onClick={navigateToQuotation}
                 className="w-full py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50">Send Quotation</button>
               {canConvert && (

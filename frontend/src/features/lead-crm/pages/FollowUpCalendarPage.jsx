@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { AlertTriangle, Calendar } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getFollowUps } from '../leadCrmApi';
 import { STATUS_COLORS } from '../leadConstants';
+import SetFollowUpModal from '../components/SetFollowUpModal';
 
 function followUpDueAt(lead) {
   if (!lead?.followUpDate) return null;
@@ -36,7 +37,7 @@ function formatFollowUpCell(lead) {
   );
 }
 
-function FollowUpTable({ items, variant, onOpenLead }) {
+function FollowUpTable({ items, variant, onUpdateFollowUp }) {
   const isOverdue = variant === 'overdue';
 
   return (
@@ -77,7 +78,7 @@ function FollowUpTable({ items, variant, onOpenLead }) {
                 <td className="px-2 py-2 truncate" title={lead.name}>
                   <Link
                     to={`/lead-crm/leads/${lead.leadId}`}
-                    state={{ focusTab: 0, fromFollowUps: true }}
+                    state={{ focusTab: 2, fromFollowUps: true }}
                     className="text-slate-800 hover:text-blue-600 hover:underline font-medium"
                   >
                     {lead.name || '—'}
@@ -106,7 +107,7 @@ function FollowUpTable({ items, variant, onOpenLead }) {
                 <td className="px-2 py-2 align-top">
                   <button
                     type="button"
-                    onClick={() => onOpenLead(lead)}
+                    onClick={() => onUpdateFollowUp(lead)}
                     className="text-indigo-600 hover:text-indigo-700 font-medium text-xs"
                   >
                     Update
@@ -129,10 +130,10 @@ function FollowUpTable({ items, variant, onOpenLead }) {
 }
 
 export default function FollowUpCalendarPage() {
-  const navigate = useNavigate();
   const [today, setToday] = useState([]);
   const [overdue, setOverdue] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [editLead, setEditLead] = useState(null);
 
   const loadFollowUps = useCallback(async () => {
     setLoading(true);
@@ -151,10 +152,6 @@ export default function FollowUpCalendarPage() {
   useEffect(() => {
     loadFollowUps();
   }, [loadFollowUps]);
-
-  const openLeadDetail = (lead) => {
-    navigate(`/lead-crm/leads/${lead.leadId}`, { state: { focusTab: 0, fromFollowUps: true } });
-  };
 
   if (loading) {
     return <div className="text-center py-12 text-slate-500 text-sm">Loading follow-ups…</div>;
@@ -175,7 +172,7 @@ export default function FollowUpCalendarPage() {
           <div className="px-3 py-2 bg-slate-50 border-b border-slate-100">
             <h3 className="text-xs font-medium text-slate-600">Today ({today.length})</h3>
           </div>
-          <FollowUpTable items={today} variant="today" onOpenLead={openLeadDetail} />
+          <FollowUpTable items={today} variant="today" onUpdateFollowUp={setEditLead} />
         </div>
 
         <div className="border border-slate-200 rounded-lg bg-white overflow-hidden shadow-sm">
@@ -183,9 +180,16 @@ export default function FollowUpCalendarPage() {
             <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
             <h3 className="text-xs font-medium text-amber-800">Overdue ({overdue.length})</h3>
           </div>
-          <FollowUpTable items={overdue} variant="overdue" onOpenLead={openLeadDetail} />
+          <FollowUpTable items={overdue} variant="overdue" onUpdateFollowUp={setEditLead} />
         </div>
       </div>
+
+      <SetFollowUpModal
+        open={Boolean(editLead)}
+        lead={editLead}
+        onClose={() => setEditLead(null)}
+        onSaved={loadFollowUps}
+      />
     </div>
   );
 }
