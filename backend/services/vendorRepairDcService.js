@@ -165,6 +165,65 @@ function parseItemConfiguration(item) {
   };
 }
 
+async function resolveReplacementPoGrn(client, { originalSerialId, vendorId, replacementDcNumber }) {
+  if (originalSerialId) {
+    const orig = await client.query(
+      `SELECT po_id, grn_id FROM vendor_serial_numbers
+        WHERE serial_id = $1 AND deleted_at IS NULL`,
+      [originalSerialId]
+    );
+    const row = orig.rows[0];
+    if (row?.po_id && row?.grn_id) {
+      return { poId: row.po_id, grnId: row.grn_id };
+    }
+    if (row?.grn_id) {
+      const grn = await client.query(
+        `SELECT po_id FROM vendor_goods_received_notes WHERE grn_id = $1`,
+        [row.grn_id]
+      );
+      if (grn.rows[0]?.po_id) {
+        return { poId: grn.rows[0].po_id, grnId: row.grn_id };
+      }
+    }
+  }
+
+  if (!vendorId) {
+    throw new Error('Vendor is required to register a replacement laptop');
+  }
+
+  const poNumber = `VR-REP-${String(replacementDcNumber || Date.now()).replace(/\//g, '-')}`;
+  const today = new Date().toISOString().slice(0, 10);
+  const poIns = await client.query(
+    `INSERT INTO vendor_purchase_orders (
+       purchase_order_number, purchase_order_date, purchase_order_type, vendor_id,
+       po_state, is_same_state, sub_total_amount, total_amount,
+       line_items, assets_details, remarks, status, invoice_created
+     ) VALUES ($1, $2::date, 'vendor_repair_replacement', $3, 'Warehouse', TRUE, 0, 0,
+       '[]'::jsonb, '{}'::jsonb, $4, 'approved', FALSE)
+     RETURNING po_id`,
+    [
+      poNumber,
+      today,
+      vendorId,
+      `Vendor repair replacement intake — ${replacementDcNumber || ''}`,
+    ]
+  );
+  const poId = poIns.rows[0].po_id;
+  const grnIns = await client.query(
+    `INSERT INTO vendor_goods_received_notes (po_id, meta, bill_status)
+     VALUES ($1, $2::jsonb, 'pending')
+     RETURNING grn_id`,
+    [
+      poId,
+      JSON.stringify({
+        intake_source: 'vendor_repair_replacement',
+        replacement_dc_number: replacementDcNumber || null,
+      }),
+    ]
+  );
+  return { poId, grnId: grnIns.rows[0].grn_id };
+}
+
 async function upsertReplacementSerial(client, {
   serialNumber,
   brand,
@@ -173,6 +232,7 @@ async function upsertReplacementSerial(client, {
   vendorId,
   originalTtsplId,
   originalSerial,
+  originalSerialId,
   replacementDcNumber,
 }) {
   const sn = String(serialNumber || '').trim();
@@ -210,12 +270,19 @@ async function upsertReplacementSerial(client, {
   const { allocateTtsplCodes } = require('./vendorInventoryAssetCodeService');
   const [ttspl] = await allocateTtsplCodes(client, 1);
   const configuration = [brand, model, generation].filter(Boolean).join(' · ');
+  const { poId, grnId } = await resolveReplacementPoGrn(client, {
+    originalSerialId,
+    vendorId,
+    replacementDcNumber,
+  });
   const ins = await client.query(
     `INSERT INTO vendor_serial_numbers (
-        serial_number, inventory_asset_code, qc_status, inventory_status, extra, updated_at
-     ) VALUES ($1, $2, 'pending', 'in_stock', $3::jsonb, NOW())
+        po_id, grn_id, serial_number, inventory_asset_code, qc_status, inventory_status, extra, updated_at
+     ) VALUES ($1, $2, $3, $4, 'pending', 'in_stock', $5::jsonb, NOW())
      RETURNING serial_id, inventory_asset_code, serial_number`,
     [
+      poId,
+      grnId,
       sn,
       ttspl,
       JSON.stringify({
@@ -1140,6 +1207,7 @@ async function receiveItemsFromVendor(client, {
         vendorId: head.vendor_id,
         originalTtsplId: item.ttspl_id,
         originalSerial: item.serial_number,
+        originalSerialId: item.vendor_serial_id || item.serial_id || null,
         replacementDcNumber,
       });
     } else {
