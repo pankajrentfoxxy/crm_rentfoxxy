@@ -1,16 +1,20 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Loader2, MessageSquarePlus, Pencil, Save } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { useAuth } from '../../../context/AuthContext';
 import { formatActivityDateTime } from '../leadCrmUtils';
 import { addLeadRemark, getLead, updateLeadBasic } from '../leadCrmApi';
 
 export default function LeadListExpandPanel({
   leadId,
-  user,
+  user: userProp,
   loading,
   activities = [],
   onRemarkSaved,
 }) {
+  const { user: authUser, hasPermission, isAssignedDataOnly } = useAuth();
+  const user = userProp || authUser;
+
   const [lead, setLead] = useState(null);
   const [leadLoading, setLeadLoading] = useState(true);
   const [remarkText, setRemarkText] = useState('');
@@ -18,24 +22,37 @@ export default function LeadListExpandPanel({
   const [personalRemarks, setPersonalRemarks] = useState('');
   const [savingPersonalRemarks, setSavingPersonalRemarks] = useState(false);
   const [editingPersonalRemarks, setEditingPersonalRemarks] = useState(false);
+  const [loadError, setLoadError] = useState(null);
 
   const currentUserId = user?.user_id ?? user?.userId;
   const assignedId = lead?.assignedUserId ?? lead?.assigned_user_id;
+  const role = String(user?.role || '').toLowerCase();
+
+  // Prefer RBAC (matches production permission matrix). Fall back to roles used locally.
+  const canEditByPermission = typeof hasPermission === 'function' && hasPermission('leads', 'edit');
+  const canEditByRole = ['super_admin', 'admin', 'manager', 'sales'].includes(role);
+  const assignedOnly = typeof isAssignedDataOnly === 'function' && isAssignedDataOnly('leads');
+  const isAssignee =
+    assignedId == null || String(assignedId) === String(currentUserId);
+
   const canEditPersonalRemarks =
-    ['admin', 'manager', 'sales'].includes(user?.role) &&
-    (user?.role !== 'sales' || String(assignedId) === String(currentUserId));
+    (canEditByPermission || canEditByRole) && (!assignedOnly || isAssignee);
+
+  const canAddRemark = canEditPersonalRemarks;
 
   const loadLead = useCallback(async () => {
     if (!leadId) return;
     setLeadLoading(true);
+    setLoadError(null);
     try {
       const { data } = await getLead(leadId);
       const next = data?.lead || data;
-      setLead(next);
+      setLead(next || null);
       setPersonalRemarks(next?.personalRemarks ?? next?.personal_remarks ?? '');
       setEditingPersonalRemarks(false);
-    } catch {
-      toast.error('Failed to load lead remarks');
+    } catch (err) {
+      setLoadError(err.response?.data?.message || 'Failed to load lead remarks');
+      toast.error(err.response?.data?.message || 'Failed to load lead remarks');
     } finally {
       setLeadLoading(false);
     }
@@ -48,8 +65,12 @@ export default function LeadListExpandPanel({
   const handleSavePersonalRemarks = async () => {
     setSavingPersonalRemarks(true);
     try {
-      await updateLeadBasic(leadId, { personal_remarks: personalRemarks });
-      setLead((prev) => ({ ...prev, personalRemarks }));
+      const { data } = await updateLeadBasic(leadId, { personal_remarks: personalRemarks });
+      const updated = data?.lead;
+      const saved =
+        updated?.personalRemarks ?? updated?.personal_remarks ?? personalRemarks;
+      setLead((prev) => ({ ...(prev || {}), personalRemarks: saved, personal_remarks: saved }));
+      setPersonalRemarks(saved || '');
       setEditingPersonalRemarks(false);
       toast.success('Personal remarks saved');
     } catch (err) {
@@ -132,7 +153,18 @@ export default function LeadListExpandPanel({
               </button>
             ) : null}
           </div>
-          {canEditPersonalRemarks && editingPersonalRemarks ? (
+          {loadError ? (
+            <div className="text-xs text-red-600">
+              {loadError}
+              <button
+                type="button"
+                onClick={loadLead}
+                className="ml-2 text-indigo-600 hover:underline"
+              >
+                Retry
+              </button>
+            </div>
+          ) : canEditPersonalRemarks && editingPersonalRemarks ? (
             <div className="space-y-2">
               <textarea
                 value={personalRemarks}
@@ -170,28 +202,30 @@ export default function LeadListExpandPanel({
           )}
         </div>
 
-        <form
-          onSubmit={handleAddRemark}
-          className="border border-gray-200 rounded-lg p-3 bg-white"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <label className="block text-xs font-medium text-gray-600 mb-1">Add Remark</label>
-          <textarea
-            value={remarkText}
-            onChange={(e) => setRemarkText(e.target.value)}
-            placeholder="Customer query or note..."
-            rows={2}
-            className="w-full text-xs border border-gray-200 rounded px-2 py-1.5 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
-          />
-          <button
-            type="submit"
-            disabled={savingRemark || !remarkText.trim()}
-            className="mt-2 w-full py-1.5 text-xs font-medium bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-1"
+        {canAddRemark ? (
+          <form
+            onSubmit={handleAddRemark}
+            className="border border-gray-200 rounded-lg p-3 bg-white"
+            onClick={(e) => e.stopPropagation()}
           >
-            <MessageSquarePlus className="w-3 h-3" />
-            {savingRemark ? 'Saving...' : '+ Save'}
-          </button>
-        </form>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Add Remark</label>
+            <textarea
+              value={remarkText}
+              onChange={(e) => setRemarkText(e.target.value)}
+              placeholder="Customer query or note..."
+              rows={2}
+              className="w-full text-xs border border-gray-200 rounded px-2 py-1.5 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
+            />
+            <button
+              type="submit"
+              disabled={savingRemark || !remarkText.trim()}
+              className="mt-2 w-full py-1.5 text-xs font-medium bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-1"
+            >
+              <MessageSquarePlus className="w-3 h-3" />
+              {savingRemark ? 'Saving...' : '+ Save'}
+            </button>
+          </form>
+        ) : null}
       </div>
     </div>
   );
