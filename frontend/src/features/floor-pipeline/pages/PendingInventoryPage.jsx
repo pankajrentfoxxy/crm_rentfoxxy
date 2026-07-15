@@ -2,10 +2,8 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Loader2, PackageCheck, X } from 'lucide-react';
-import { useAuth } from '../../../context/AuthContext';
+import usePermission from '../../../hooks/usePermission';
 import { fetchPendingInventory, receiveProductionAsset } from '../floorPipelineApi';
-
-const RECEIVE_ROLES = new Set(['admin', 'super_admin', 'manager', 'warehouse']);
 
 function fmtConfig(row) {
   return [row.brand, row.model, row.processor, row.generation, row.ram, row.ssd || row.storage]
@@ -19,8 +17,8 @@ function fmtWhen(v) {
 }
 
 export default function PendingInventoryPage() {
-  const { user } = useAuth();
-  const canReceive = RECEIVE_ROLES.has(user?.role);
+  const { canEdit } = usePermission();
+  const canReceive = canEdit('pending_inventory');
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState([]);
   const [receiveFor, setReceiveFor] = useState(null);

@@ -56,7 +56,7 @@ export default function FloorPipelineApp() {
       <Route path="diagnosis-failed" element={g(FLOOR_DASHBOARD_SECTIONS, <DiagnosisFailedPage />)} />
       <Route
         path="pending-inventory"
-        element={g(['inventory_management', 'floor_pipeline'], <PendingInventoryPage />)}
+        element={g(['pending_inventory'], <PendingInventoryPage />)}
       />
       <Route path="vendor-repair-dc" element={g(FLOOR_DASHBOARD_SECTIONS, <VendorRepairDcListPage />)} />
       <Route path="vendor-repair-dc/:dcNumber" element={g(FLOOR_DASHBOARD_SECTIONS, <VendorRepairDcDetailPage />)} />

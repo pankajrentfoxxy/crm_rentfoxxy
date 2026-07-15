@@ -435,6 +435,20 @@ exports.getFloorNavCounts = async (req, res) => {
       return hasPermission(userId, role, section, 'can_view', cache);
     };
 
+    let pendingInventory = 0;
+    if (await canViewSection('pending_inventory')) {
+      try {
+        const pi = await pool.query(
+          `SELECT COUNT(*)::int AS n
+             FROM production_assets
+            WHERE status = 'pending_inventory'`
+        );
+        pendingInventory = pi.rows[0]?.n || 0;
+      } catch {
+        pendingInventory = 0;
+      }
+    }
+
     res.json({
       success: true,
       counts: {
@@ -443,6 +457,7 @@ exports.getFloorNavCounts = async (req, res) => {
         chip_level: (await canViewSection('chip_level_repair')) ? (r.chip_level || 0) : 0,
         body_paint: (await canViewSection('floor_pipeline')) ? (r.body_paint || 0) : 0,
         diagnosis_failed: (await canViewSection('floor_pipeline')) ? (r.diagnosis_failed || 0) : 0,
+        pending_inventory: pendingInventory,
       },
     });
   } catch (error) {

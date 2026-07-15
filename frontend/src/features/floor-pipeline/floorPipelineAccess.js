@@ -42,6 +42,7 @@ export function firstAllowedFloorTicketsPath(canView) {
   if (canView('floor_tickets')) return '/floor-pipeline/tickets';
   if (canView('chip_level_repair')) return '/floor-pipeline/tickets?stage=Chip+Level+Repair';
   if (canView('qc_management')) return '/floor-pipeline/tickets?stage=QC1,QC2';
+  if (canView('pending_inventory')) return '/floor-pipeline/pending-inventory';
   if (canView('floor_pipeline')) return '/floor-pipeline/dashboard';
   return null;
 }
