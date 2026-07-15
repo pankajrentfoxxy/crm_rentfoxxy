@@ -74,6 +74,40 @@ function normalizeFollowUpTimeForDb(value) {
   return `${m[1].padStart(2, '0')}:${m[2]}:${m[3] || '00'}`;
 }
 
+/** Calendar YYYY-MM-DD in Asia/Kolkata. */
+function calendarYmdIst(date = new Date()) {
+  return date.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+/**
+ * Store follow-up calendar day as noon IST so the date never shifts across timezones.
+ * Accepts YYYY-MM-DD or any Date/ISO string.
+ */
+function normalizeFollowUpDateForDb(value) {
+  if (value == null || value === '') return null;
+  let ymd = null;
+  if (typeof value === 'string') {
+    const m = value.trim().match(/^(\d{4}-\d{2}-\d{2})/);
+    if (m) ymd = m[1];
+  }
+  if (!ymd) {
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return null;
+    ymd = calendarYmdIst(d);
+  }
+  return new Date(`${ymd}T12:00:00+05:30`);
+}
+
+/** Start / end of "today" in IST as absolute timestamps (for Prisma filters). */
+function istTodayBounds() {
+  const ymd = calendarYmdIst();
+  return {
+    start: new Date(`${ymd}T00:00:00+05:30`),
+    end: new Date(`${ymd}T23:59:59.999+05:30`),
+    ymd,
+  };
+}
+
 function serializeLeadFollowUpTime(lead) {
   if (!lead || lead.followUpTime === undefined) return lead;
   lead.followUpTime = formatFollowUpTime(lead.followUpTime);
@@ -483,11 +517,7 @@ function applyLeadListFilters(leads, req) {
     out = out.filter((l) => types.includes(l.inquiryType || 'rental'));
   }
   if (follow_up) {
-    const now = new Date();
-    const startOfDay = new Date(now);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(now);
-    endOfDay.setHours(23, 59, 59, 999);
+    const { start: startOfDay, end: endOfDay, ymd: todayYmd } = istTodayBounds();
     const filter = String(follow_up).toLowerCase();
     out = out.filter((l) => {
       if (!l.followUpDate) return false;
@@ -495,12 +525,19 @@ function applyLeadListFilters(leads, req) {
       if (filter === 'today') return fd >= startOfDay && fd <= endOfDay;
       if (filter === 'overdue') return fd < startOfDay;
       if (filter === 'this_week') {
-        const startOfWeek = new Date(startOfDay);
-        startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
-        const endOfWeek = new Date(startOfWeek);
-        endOfWeek.setDate(endOfWeek.getDate() + 6);
-        endOfWeek.setHours(23, 59, 59, 999);
-        return fd >= startOfWeek && fd <= endOfWeek;
+        // IST calendar week containing today (Mon–Sun)
+        const [y, m, d] = todayYmd.split('-').map(Number);
+        const todayNoon = new Date(Date.UTC(y, m - 1, d, 6, 30)); // ~noon IST
+        const day = todayNoon.getUTCDay(); // 0=Sun
+        const mondayOffset = day === 0 ? -6 : 1 - day;
+        const weekStart = new Date(todayNoon);
+        weekStart.setUTCDate(weekStart.getUTCDate() + mondayOffset);
+        const weekStartYmd = weekStart.toISOString().slice(0, 10);
+        const weekEnd = new Date(weekStart);
+        weekEnd.setUTCDate(weekEnd.getUTCDate() + 6);
+        const weekEndYmd = weekEnd.toISOString().slice(0, 10);
+        const fdYmd = calendarYmdIst(fd);
+        return fdYmd >= weekStartYmd && fdYmd <= weekEndYmd;
       }
       return true;
     });
@@ -1319,6 +1356,7 @@ exports.updateFollowUp = async (req, res) => {
 
     const leadId = parseInt(id, 10);
     const followUpTime = normalizeFollowUpTimeForDb(req.body.follow_up_time);
+    const followUpDate = normalizeFollowUpDateForDb(follow_up_date);
     const uid = currentUserId(req.user);
     // Sales operators must be assignee for in-app reminders; claim unassigned leads on set.
     const claimAssignee =
@@ -1332,7 +1370,7 @@ exports.updateFollowUp = async (req, res) => {
         updated_at = NOW()
        WHERE lead_id = $3`,
       [
-        follow_up_date ? new Date(follow_up_date) : null,
+        followUpDate,
         followUpTime,
         leadId,
         claimAssignee,
@@ -1343,8 +1381,11 @@ exports.updateFollowUp = async (req, res) => {
     const updated = await prisma.lead.findUnique({ where: { leadId } });
     serializeLeadFollowUpTime(updated);
 
-    const cleared = !follow_up_date;
+    const cleared = !followUpDate;
     const timeNote = followUpTime ? ` at ${followUpTime}` : '';
+    const dateLabel = follow_up_date
+      ? (String(follow_up_date).match(/^(\d{4}-\d{2}-\d{2})/) || [])[1] || String(follow_up_date).slice(0, 10)
+      : null;
     await prisma.leadActivity.create({
       data: {
         leadId: updated.leadId,
@@ -1352,7 +1393,7 @@ exports.updateFollowUp = async (req, res) => {
         action: cleared ? 'follow_up_cleared' : 'follow_up_set',
         notes: notes || (cleared
           ? 'Follow-up cleared'
-          : `Follow-up scheduled for ${follow_up_date}${timeNote}`)
+          : `Follow-up scheduled for ${dateLabel}${timeNote}`)
       }
     });
 
@@ -1365,17 +1406,16 @@ exports.updateFollowUp = async (req, res) => {
 
 exports.getFollowUps = async (req, res) => {
   try {
-    const now = new Date();
-    const endOfDay = new Date(now);
-    endOfDay.setHours(23, 59, 59, 999);
+    const { start: startOfDay, end: endOfDay } = istTodayBounds();
     const assignedOnly = await leadsAssignedOnly(req);
     const uid = currentUserId(req.user);
     const baseWhere = assignedOnly && uid != null ? { assignedUserId: uid } : {};
 
+    // Calendar-day buckets in IST — do NOT use "date < now" (midnight today would be overdue).
     const overdue = await prisma.lead.findMany({
       where: {
         ...baseWhere,
-        followUpDate: { lt: now },
+        followUpDate: { lt: startOfDay },
         status: { notIn: ['Rejected', 'Gone'] }
       },
       orderBy: { followUpDate: 'asc' },
@@ -1385,12 +1425,26 @@ exports.getFollowUps = async (req, res) => {
     const todayLeads = await prisma.lead.findMany({
       where: {
         ...baseWhere,
-        followUpDate: { gte: now, lte: endOfDay },
+        followUpDate: { gte: startOfDay, lte: endOfDay },
         status: { notIn: ['Rejected', 'Gone'] }
       },
       orderBy: { followUpDate: 'asc' },
       include: { assignedUser: { select: { userId: true, name: true } } }
     });
+
+    // Sort each bucket by date + time (IST due clock)
+    const sortByDue = (a, b) => {
+      const da = resolveFollowUpDueAt(a.followUpDate, a.followUpTime)
+        || (a.followUpDate ? new Date(a.followUpDate) : new Date(0));
+      const db = resolveFollowUpDueAt(b.followUpDate, b.followUpTime)
+        || (b.followUpDate ? new Date(b.followUpDate) : new Date(0));
+      return da.getTime() - db.getTime();
+    };
+    overdue.sort(sortByDue);
+    todayLeads.sort(sortByDue);
+
+    overdue.forEach(serializeLeadFollowUpTime);
+    todayLeads.forEach(serializeLeadFollowUpTime);
 
     res.json({ success: true, today: todayLeads, overdue });
   } catch (error) {

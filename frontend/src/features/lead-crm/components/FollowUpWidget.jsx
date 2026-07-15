@@ -2,9 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { Calendar } from 'lucide-react';
 import { addLeadRemark, updateFollowUp } from '../leadCrmApi';
 import toast from 'react-hot-toast';
+import { followUpCalendarYmd } from '../leadCrmUtils';
+import { refreshLeadCrmCounts } from '../hooks/useLeadCrmCounts';
 
 export default function FollowUpWidget({ leadId, initialDate, initialTime, onSaved, compact = false }) {
-  const [date, setDate] = useState(initialDate ? String(initialDate).slice(0, 10) : '');
+  const [date, setDate] = useState(followUpCalendarYmd(initialDate) || '');
   const [time, setTime] = useState(initialTime ? String(initialTime).slice(0, 5) : '');
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
@@ -12,7 +14,7 @@ export default function FollowUpWidget({ leadId, initialDate, initialTime, onSav
   const hasExisting = Boolean(initialDate);
 
   useEffect(() => {
-    setDate(initialDate ? String(initialDate).slice(0, 10) : '');
+    setDate(followUpCalendarYmd(initialDate) || '');
     setTime(initialTime ? String(initialTime).slice(0, 5) : '');
   }, [initialDate, initialTime]);
 
@@ -46,6 +48,7 @@ export default function FollowUpWidget({ leadId, initialDate, initialTime, onSav
       }
       setNotes('');
       onSaved?.();
+      refreshLeadCrmCounts();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to save follow-up');
     } finally {

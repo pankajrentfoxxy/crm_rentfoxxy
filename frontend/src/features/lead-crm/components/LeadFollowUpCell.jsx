@@ -4,7 +4,7 @@ import SetFollowUpModal from './SetFollowUpModal';
 
 export default function LeadFollowUpCell({ lead, onUpdated }) {
   const [open, setOpen] = useState(false);
-  const tone = followUpTone(lead.followUpDate);
+  const tone = followUpTone(lead.followUpDate, lead.followUpTime);
   const hasFollowUp = Boolean(lead.followUpDate);
 
   return (

@@ -5,36 +5,16 @@ import toast from 'react-hot-toast';
 import { getFollowUps } from '../leadCrmApi';
 import { STATUS_COLORS } from '../leadConstants';
 import SetFollowUpModal from '../components/SetFollowUpModal';
-
-function followUpDueAt(lead) {
-  if (!lead?.followUpDate) return null;
-  const d = new Date(lead.followUpDate);
-  if (lead.followUpTime) {
-    const [h, m] = String(lead.followUpTime).split(':');
-    d.setHours(parseInt(h, 10) || 0, parseInt(m, 10) || 0, 0, 0);
-  }
-  return d;
-}
+import { formatFollowUpDateTime, followUpDueAt, followUpTone } from '../leadCrmUtils';
 
 function getFollowUpState(lead) {
-  const due = followUpDueAt(lead);
+  const tone = followUpTone(lead.followUpDate, lead.followUpTime);
+  if (tone === 'overdue') return 'overdue';
+  const due = followUpDueAt(lead.followUpDate, lead.followUpTime);
   if (!due) return 'normal';
   const diff = due.getTime() - Date.now();
-  if (diff < 0) return 'overdue';
-  if (diff <= 10 * 60 * 1000) return 'upcoming_10m';
+  if (diff >= 0 && diff <= 10 * 60 * 1000) return 'upcoming_10m';
   return 'normal';
-}
-
-function formatFollowUpCell(lead) {
-  const due = followUpDueAt(lead);
-  if (!due) return '—';
-  const dateStr = due.toLocaleDateString('en-IN');
-  const timeStr = due.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true });
-  return (
-    <div className="leading-tight">
-      <div>{dateStr} {timeStr}</div>
-    </div>
-  );
 }
 
 function FollowUpTable({ items, variant, onUpdateFollowUp }) {
@@ -96,7 +76,9 @@ function FollowUpTable({ items, variant, onUpdateFollowUp }) {
                   {lead.assignedUser?.name || '—'}
                 </td>
                 <td className={`px-2 py-2 align-top ${isOverdue || state === 'overdue' ? 'text-red-600' : 'text-slate-600'}`}>
-                  {formatFollowUpCell(lead)}
+                  <div className="leading-tight">
+                    {formatFollowUpDateTime(lead.followUpDate, lead.followUpTime)}
+                  </div>
                   {state === 'upcoming_10m' && (
                     <div className="text-xs text-emerald-600 font-medium mt-0.5">Due in 10 min</div>
                   )}

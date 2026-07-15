@@ -8,7 +8,7 @@ import QuickStatusUpdate from './QuickStatusUpdate';
 export default function LeadCard({ lead, onDragStart, onDragEnd, onRefresh }) {
   const navigate = useNavigate();
   const statusStyle = STATUS_COLORS[lead.status] || STATUS_COLORS.Pending;
-  const fuTone = followUpTone(lead.followUpDate);
+  const fuTone = followUpTone(lead.followUpDate, lead.followUpTime);
 
   return (
     <div

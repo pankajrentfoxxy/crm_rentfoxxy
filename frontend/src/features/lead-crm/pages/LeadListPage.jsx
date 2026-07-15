@@ -23,7 +23,7 @@ import MultiSelectFilter from '../components/MultiSelectFilter';
 
 const PAGE_SIZE = 25;
 const VIEW_KEY = 'lead_crm_view_mode';
-const TABLE_COLS = 11;
+const TABLE_COLS = 10;
 
 export default function LeadListPage() {
   const { user, isAssignedDataOnly, hasPermission } = useAuth();
@@ -145,7 +145,7 @@ export default function LeadListPage() {
     return {
       total: leads.length,
       active: leads.filter((l) => !['Gone', 'Rejected'].includes(l.status)).length,
-      followToday: leads.filter((l) => l.followUpDate && followUpTone(l.followUpDate) === 'today').length,
+      followToday: leads.filter((l) => l.followUpDate && followUpTone(l.followUpDate, l.followUpTime) === 'today').length,
       converted: leads.filter((l) => ['Deal', 'Demo'].includes(l.status)).length,
       totalItems: leads.reduce((sum, l) => sum + (Number(l.quantityRequired) || 0), 0),
     };
@@ -371,7 +371,6 @@ export default function LeadListPage() {
                       else setSelected(new Set());
                     }} />
                   </th>
-                  <th className="p-2.5 w-8" aria-label="Expand" />
                   <th className="p-2.5 whitespace-nowrap">ID</th>
                   <th className="p-2.5 whitespace-nowrap">Date</th>
                   <th className="p-2.5 whitespace-nowrap min-w-[200px]">Lead</th>
@@ -393,12 +392,8 @@ export default function LeadListPage() {
                   const ExpandIcon = isExpanded ? ChevronDown : ChevronRight;
                   return (
                     <React.Fragment key={lead.leadId}>
-                      <tr
-                        className={`border-t border-gray-100 hover:bg-gray-50/60 cursor-pointer ${isExpanded ? 'bg-blue-50/30' : ''}`}
-                        onClick={(e) => toggleExpand(lead.leadId, e)}
-                        aria-expanded={isExpanded}
-                      >
-                        <td className="p-2.5 align-top" onClick={(e) => e.stopPropagation()}>
+                      <tr className={`border-t border-gray-100 hover:bg-gray-50/60 ${isExpanded ? 'bg-blue-50/30' : ''}`}>
+                        <td className="p-2.5 align-top">
                           <input type="checkbox" checked={selected.has(lead.leadId)}
                             onChange={(e) => {
                               const next = new Set(selected);
@@ -406,14 +401,6 @@ export default function LeadListPage() {
                               else next.delete(lead.leadId);
                               setSelected(next);
                             }} />
-                        </td>
-                        <td className="p-2.5 align-top">
-                          <span
-                            aria-hidden="true"
-                            className="inline-flex p-1 rounded-md text-gray-500"
-                          >
-                            <ExpandIcon className="w-4 h-4" />
-                          </span>
                         </td>
                         <td className="p-2.5 align-top font-mono text-xs text-gray-500 whitespace-nowrap">
                           #{lead.leadId}
@@ -427,18 +414,31 @@ export default function LeadListPage() {
                         <td className="p-2.5 align-top">
                           <LeadConfigCell lead={lead} />
                         </td>
-                        <td className="p-2.5 align-top text-xs text-gray-600">{lead.source || '—'}</td>
-                        <td className="p-2.5 align-top" onClick={(e) => e.stopPropagation()}>
+                        <td className="p-2.5 align-top">
+                          <div className="flex items-start gap-1.5">
+                            <button
+                              type="button"
+                              aria-expanded={isExpanded}
+                              aria-label={isExpanded ? 'Collapse activities' : 'Expand activities'}
+                              onClick={(e) => toggleExpand(lead.leadId, e)}
+                              className="mt-0.5 p-0.5 rounded text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors shrink-0"
+                            >
+                              <ExpandIcon className="w-4 h-4" />
+                            </button>
+                            <span className="text-xs text-gray-600">{lead.source || '—'}</span>
+                          </div>
+                        </td>
+                        <td className="p-2.5 align-top">
                           <QuickStatusUpdate lead={lead} onUpdated={refreshList} />
                           {lead.leadStage ? (
                             <p className="text-[11px] text-gray-500 mt-1 max-w-[140px] truncate">{lead.leadStage}</p>
                           ) : null}
                         </td>
                         <td className="p-2.5 align-top text-xs text-gray-700">{lead.assignedUser?.name || '—'}</td>
-                        <td className="p-2.5 align-top" onClick={(e) => e.stopPropagation()}>
+                        <td className="p-2.5 align-top">
                           <LeadFollowUpCell lead={lead} onUpdated={refreshList} />
                         </td>
-                        <td className="p-2.5 align-top" onClick={(e) => e.stopPropagation()}>
+                        <td className="p-2.5 align-top">
                           <button type="button" onClick={() => navigate(`/lead-crm/leads/${lead.leadId}`)}
                             className="text-blue-600 text-xs font-medium hover:underline whitespace-nowrap">
                             View

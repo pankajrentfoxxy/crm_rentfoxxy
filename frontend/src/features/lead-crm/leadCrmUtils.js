@@ -135,27 +135,64 @@ export function relativeTime(value) {
   return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-export function followUpTone(followUpDate) {
-  if (!followUpDate) return 'neutral';
+export function followUpCalendarYmd(followUpDate) {
+  if (!followUpDate) return null;
+  if (typeof followUpDate === 'string') {
+    const m = followUpDate.match(/^(\d{4}-\d{2}-\d{2})/);
+    // Prefer explicit calendar date when string starts with YYYY-MM-DD (date inputs / noon IST storage)
+    if (m && !/T/.test(followUpDate.slice(0, 11))) return m[1];
+  }
   const d = new Date(followUpDate);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const fd = new Date(d);
-  fd.setHours(0, 0, 0, 0);
-  if (fd < today) return 'overdue';
-  if (fd.getTime() === today.getTime()) return 'today';
-  return 'future';
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+export function followUpTone(followUpDate, followUpTime) {
+  if (!followUpDate) return 'neutral';
+  const ymd = followUpCalendarYmd(followUpDate);
+  if (!ymd) return 'neutral';
+  const todayYmd = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  if (ymd < todayYmd) return 'overdue';
+  if (ymd > todayYmd) return 'future';
+  // Today: if time is set and already passed, treat as overdue for display tone
+  if (followUpTime) {
+    const due = followUpDueAt(followUpDate, followUpTime);
+    if (due && due.getTime() < Date.now()) return 'overdue';
+  }
+  return 'today';
+}
+
+/** Absolute due Date from follow_up_date + follow_up_time (IST). */
+export function followUpDueAt(followUpDate, followUpTime) {
+  const ymd = followUpCalendarYmd(followUpDate);
+  if (!ymd) return null;
+  const timeStr = followUpTime ? String(followUpTime).slice(0, 5) : '12:00';
+  const m = timeStr.match(/^(\d{1,2}):(\d{2})/);
+  const hh = m ? String(parseInt(m[1], 10)).padStart(2, '0') : '12';
+  const mm = m ? m[2] : '00';
+  const due = new Date(`${ymd}T${hh}:${mm}:00+05:30`);
+  return Number.isNaN(due.getTime()) ? null : due;
 }
 
 export function formatFollowUpDateTime(date, time) {
   if (!date) return '—';
-  const d = new Date(date);
-  let out = d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+  const ymd = followUpCalendarYmd(date);
+  const d = ymd ? new Date(`${ymd}T12:00:00+05:30`) : new Date(date);
+  if (Number.isNaN(d.getTime())) return '—';
+  let out = d.toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'Asia/Kolkata',
+  });
   if (time) {
     const [h, m] = String(time).split(':');
-    const t = new Date();
-    t.setHours(parseInt(h, 10) || 0, parseInt(m, 10) || 0);
-    out += ` ${t.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' })}`;
+    const t = new Date(`${ymd || '2000-01-01'}T${String(h).padStart(2, '0')}:${String(m || '00').padStart(2, '0')}:00+05:30`);
+    out += ` ${t.toLocaleTimeString('en-IN', {
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZone: 'Asia/Kolkata',
+    })}`;
   }
   return out;
 }
