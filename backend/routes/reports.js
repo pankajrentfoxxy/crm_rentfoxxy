@@ -15,6 +15,8 @@ router.get('/collections', authMiddleware, reportsView, reportsController.getCol
 router.get('/vendor-spend', authMiddleware, reportsView, reportsController.getVendorSpendReport);
 router.get('/laptop-report', authMiddleware, reportsView, reportsController.getLaptopReport);
 router.get('/laptop-report/tickets', authMiddleware, reportsView, reportsController.getLaptopReportTickets);
+router.get('/sales-order-report', authMiddleware, reportsView, reportsController.getSalesOrderReport);
+router.get('/sales-order-report/drilldown', authMiddleware, reportsView, reportsController.getSalesOrderReportDrilldown);
 router.post('/export', authMiddleware, cp('reports_export', 'create'), reportsController.exportToExcel);
 router.get('/support-stats', authMiddleware, reportsView, reportsController.getSupportStats);
 
