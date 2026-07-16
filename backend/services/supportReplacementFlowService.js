@@ -420,7 +420,30 @@ async function tagReplacementOutboundDc(client, dcNumber, salesOrderNumber) {
   );
 }
 
+/**
+ * Default Return DC remarks for replacement pickups — names the laptop(s) being replaced.
+ */
+function buildReplacementRdcRemarks(machines = []) {
+  const blocks = (machines || [])
+    .map((m) => {
+      const ttspl = String(m.ttspl_id || m.unique_serial_number || m.ttspl || '').trim();
+      const serial = String(m.serial_number || m.serial || '').trim();
+      if (!ttspl && !serial) return null;
+      const lines = [];
+      if (ttspl) lines.push(`TTSPL: ${ttspl}`);
+      if (serial) lines.push(`Serial No: ${serial}`);
+      return lines.join('\n');
+    })
+    .filter(Boolean);
+
+  if (!blocks.length) {
+    return 'Replacement against:\n\n(TTSPL / Serial not available)';
+  }
+  return `Replacement against:\n\n${blocks.join('\n\n')}`;
+}
+
 module.exports = {
+  buildReplacementRdcRemarks,
   resolveConfigFromComplaint,
   listEligibleComplaintItems,
   buildTicketReplacementContext,

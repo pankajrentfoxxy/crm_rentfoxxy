@@ -716,6 +716,17 @@ async function generateReturnDcPdf({ returnDcNumber, header = {}, units = [], es
     });
     y += 18;
 
+    // Remarks (replacement RDC names the laptop being swapped, etc.)
+    const remarksText = String(header.remarks || '').trim();
+    if (remarksText) {
+      if (y > 680) { doc.addPage(); y = 40; }
+      doc.font('Helvetica-Bold').fontSize(11).fillColor(C.teal).text('Remarks', L, y);
+      y += 14;
+      doc.font('Helvetica').fontSize(9).fillColor(C.ink)
+        .text(remarksText, L, y, { width: W, lineGap: 2 });
+      y = doc.y + 16;
+    }
+
     // Signature blocks (technician sign-out + warehouse receipt)
     if (y > 640) { doc.addPage(); y = 40; }
     const half = (W - 12) / 2;

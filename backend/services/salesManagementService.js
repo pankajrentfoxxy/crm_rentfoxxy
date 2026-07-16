@@ -1032,6 +1032,7 @@ async function getReturnDcDetail(rdcNumber) {
     dispatch_mode: dcl.dispatch_mode,
     sales_order_number: dcl.sales_order_number,
     original_dc_number: dcl.original_dc_number,
+    remarks: (dcl.remarks || '').trim() || null,
     created_at: dcl.created_at,
     dispatched_at: dcl.dispatched_at,
     delivered_at: dcl.delivered_at,

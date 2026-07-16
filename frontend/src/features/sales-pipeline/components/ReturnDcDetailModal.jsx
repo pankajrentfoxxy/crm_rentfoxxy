@@ -162,6 +162,13 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
                 <p className="text-xs text-gray-500 mt-2">Technician POD photos are shown below. The challan PDF embeds technician and warehouse e-signatures.</p>
               </div>
 
+              {detail.remarks ? (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-sm font-semibold text-gray-900 mb-2">Remarks</p>
+                  <pre className="text-xs text-slate-700 whitespace-pre-wrap font-sans m-0">{detail.remarks}</pre>
+                </div>
+              ) : null}
+
               {(detail.floor_ticket_ids?.length > 0) && (
                 <div className="text-sm">
                   <p className="font-semibold text-gray-700 mb-1">Floor tickets</p>

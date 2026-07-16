@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../../../utils/api';
 import PickupSetupForm from './PickupSetupForm';
@@ -9,8 +9,27 @@ function specLine(item) {
     .join(' · ');
 }
 
+/** Default RDC remarks naming the laptop(s) being replaced. */
+export function buildReplacementRdcRemarks(items = []) {
+  const blocks = (items || [])
+    .map((m) => {
+      const ttspl = String(m.ttspl_id || m.unique_serial_number || '').trim();
+      const serial = String(m.serial_number || '').trim();
+      if (!ttspl && !serial) return null;
+      const lines = [];
+      if (ttspl) lines.push(`TTSPL: ${ttspl}`);
+      if (serial) lines.push(`Serial No: ${serial}`);
+      return lines.join('\n');
+    })
+    .filter(Boolean);
+  if (!blocks.length) return 'Replacement against:\n\n(TTSPL / Serial not available)';
+  return `Replacement against:\n\n${blocks.join('\n\n')}`;
+}
+
 export default function ReplacementPanel({ ticketId, ticket, customerId, onDone, onCancel }) {
   const [reason, setReason] = useState('');
+  const [rdcRemarks, setRdcRemarks] = useState('');
+  const [remarksTouched, setRemarksTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [eligibleItems, setEligibleItems] = useState([]);
@@ -26,6 +45,8 @@ export default function ReplacementPanel({ ticketId, ticket, customerId, onDone,
         setSelectedIds(new Set(items.map((i) => String(i.id))));
         setDeliveryDefaults(r.data.delivery_defaults || null);
         setReason(items[0]?.replacement_flag_reason || '');
+        setRdcRemarks(buildReplacementRdcRemarks(items));
+        setRemarksTouched(false);
         if (r.data.active_order?.sales_order_number) {
           toast.error('A replacement order already exists on this ticket');
         }
@@ -36,6 +57,17 @@ export default function ReplacementPanel({ ticketId, ticket, customerId, onDone,
       })
       .finally(() => setLoading(false));
   }, [ticketId]);
+
+  const selectedItems = useMemo(
+    () => eligibleItems.filter((i) => selectedIds.has(String(i.id))),
+    [eligibleItems, selectedIds]
+  );
+
+  // Keep default remarks in sync with selection until the user edits them
+  useEffect(() => {
+    if (remarksTouched) return;
+    setRdcRemarks(buildReplacementRdcRemarks(selectedItems));
+  }, [selectedItems, remarksTouched]);
 
   const toggleItem = (id) => {
     setSelectedIds((prev) => {
@@ -58,6 +90,7 @@ export default function ReplacementPanel({ ticketId, ticket, customerId, onDone,
       const res = await api.post(`/support/tickets/${ticketId}/replacements`, {
         source_item_ids: ids,
         reason,
+        remarks: rdcRemarks,
         contact_name: addr.name,
         contact_phone: addr.phone,
         pickup_address: addr,
@@ -81,7 +114,7 @@ export default function ReplacementPanel({ ticketId, ticket, customerId, onDone,
     }
   };
 
-  const referenceItem = eligibleItems.find((i) => selectedIds.has(String(i.id))) || eligibleItems[0];
+  const referenceItem = selectedItems[0] || eligibleItems[0];
 
   if (loading) {
     return (
@@ -128,6 +161,9 @@ export default function ReplacementPanel({ ticketId, ticket, customerId, onDone,
             <div className="min-w-0 flex-1 text-sm">
               <p className="font-mono font-semibold text-slate-800">{item.ttspl_id}</p>
               <p className="text-slate-600">{specLine(item) || item.model || '—'}</p>
+              {item.serial_number ? (
+                <p className="text-xs text-slate-500 mt-0.5 font-mono">S/N {item.serial_number}</p>
+              ) : null}
               {item.rent_monthly_rate != null && (
                 <p className="text-xs text-slate-500 mt-0.5">
                   Rent ₹{Number(item.rent_monthly_rate).toLocaleString('en-IN')}/mo → carried to replacement SO line
@@ -144,6 +180,21 @@ export default function ReplacementPanel({ ticketId, ticket, customerId, onDone,
         value={reason}
         onChange={(e) => setReason(e.target.value)}
       />
+
+      <div>
+        <label className="text-sm font-semibold text-slate-700 block mb-1">Return DC remarks</label>
+        <p className="text-xs text-slate-500 mb-2">
+          Pre-filled with the laptop being replaced. Edit or append before creating the Return DC PDF.
+        </p>
+        <textarea
+          className="w-full border rounded-lg p-3 min-h-[120px] text-sm font-mono"
+          value={rdcRemarks}
+          onChange={(e) => {
+            setRemarksTouched(true);
+            setRdcRemarks(e.target.value);
+          }}
+        />
+      </div>
 
       <div className="rounded-lg bg-blue-50 border border-blue-100 p-3 text-xs text-blue-900 space-y-1">
         <p className="font-semibold">After you submit</p>

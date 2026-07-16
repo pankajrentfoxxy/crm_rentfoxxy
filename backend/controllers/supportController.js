@@ -144,6 +144,7 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
         customer_inventory_id,
         machines: machinesRaw,
         dc_purpose,
+        remarks: remarksOpt,
     } = opts;
 
     await ensureSupportTicketItemV3Columns(client);
@@ -313,17 +314,24 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
     }
 
     const firstMachine = machines[0];
+    let dcRemarks = remarksOpt != null && String(remarksOpt).trim()
+      ? String(remarksOpt).trim()
+      : null;
+    if (!dcRemarks && String(dc_purpose || '') === 'replacement') {
+      dcRemarks = replacementFlow.buildReplacementRdcRemarks(machines);
+    }
+
     await client.query(
         `INSERT INTO delivery_challan_lines
             (dc_number, movement_type, support_ticket_id, customer_id, customer_name, email,
              customer_shipping_address, brand, model_name, quantity, serial_number,
              dispatch_mode, delivery_person_id, courier_name, awb_number,
              porter_tracking_id, porter_order_id,
-             sales_order_number, original_dc_number, dc_purpose,
+             sales_order_number, original_dc_number, dc_purpose, remarks,
              status, dispatched_at, created_by, created_at, updated_at)
          VALUES ($1,'return',$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16,
-                 $17,$18,COALESCE($19,'standard'),
-                 $20,CASE WHEN $21 THEN NOW() ELSE NULL END,$22,NOW(),NOW())`,
+                 $17,$18,COALESCE($19,'standard'),$20,
+                 $21,CASE WHEN $22 THEN NOW() ELSE NULL END,$23,NOW(),NOW())`,
         [
             rdc, ticketId, ticket.customer_id, ticket.customer_name, ticket.ticket_email || null,
             JSON.stringify(pickupAddr || {}),
@@ -337,6 +345,7 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
             hasDispatch && dispatch_mode === 'porter' ? (porter_order_id || null) : null,
             salesOrderNumber, originalDcNumber,
             dc_purpose || 'standard',
+            dcRemarks,
             dcStatus,
             hasDispatch,
             userId,
@@ -3280,6 +3289,7 @@ exports.initiateReplacement = async (req, res) => {
         source_item_ids: sourceItemIdsRaw,
         source_item_id,
         reason,
+        remarks: remarksBody,
         contact_name,
         contact_phone,
         pickup_address,
@@ -3468,6 +3478,10 @@ exports.initiateReplacement = async (req, res) => {
             customer_inventory_id: src.customer_inventory_id,
         }));
 
+        const rdcRemarks = remarksBody != null && String(remarksBody).trim()
+            ? String(remarksBody).trim()
+            : replacementFlow.buildReplacementRdcRemarks(machines);
+
         const pickupResult = await executePickupWithReturnDc(client, ticket, ticketId, req.user.user_id, {
             pickup_type: 'return',
             pickup_address: shippingAddress,
@@ -3479,6 +3493,7 @@ exports.initiateReplacement = async (req, res) => {
             porter_order_id,
             machines,
             dc_purpose: 'replacement',
+            remarks: rdcRemarks,
         });
 
         for (let i = 0; i < replacementOrderIds.length; i += 1) {

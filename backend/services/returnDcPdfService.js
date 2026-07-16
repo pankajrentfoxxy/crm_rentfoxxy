@@ -142,6 +142,7 @@ async function regenerateReturnDcPdfByRdc(db, rdcNumber) {
         pickup_created_at: dcl.created_at || primary.created_at || null,
         pickup_date: earliestTimestamp(pickupItems, 'picked_up_at'),
         warehouse_received_at: earliestTimestamp(pickupItems, 'warehouse_received_at'),
+        remarks: (dcl.remarks || '').trim() || null,
       },
       units: units.length ? units : [{
         brand: dcl.brand,
