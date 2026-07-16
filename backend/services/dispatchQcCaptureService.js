@@ -177,6 +177,32 @@ async function routeMismatchToPendingInventory(client, {
       WHERE allocation_id = $1`,
     [alloc.allocation_id]
   );
+
+  // Detach must free the shelf reservation — otherwise the unit stays
+  // inventory_status=reserved and disappears from SO attach search.
+  if (alloc.serial_id) {
+    try {
+      const inventorySM = require('./inventoryStateMachine');
+      await inventorySM.backToStock(client, alloc.serial_id, {
+        reason: `Released after Dispatch QC fail on ${alloc.sales_order_number}`,
+        actorUserId: actorUserId || null,
+      });
+    } catch (releaseErr) {
+      console.warn(
+        `routeMismatchToPendingInventory: backToStock failed for serial ${alloc.serial_id}: ${releaseErr.message}`
+      );
+      await client.query(
+        `UPDATE vendor_serial_numbers
+            SET inventory_status = 'in_stock',
+                current_customer_id = NULL,
+                current_dc_number = NULL,
+                status_changed_at = NOW(),
+                updated_at = NOW()
+          WHERE serial_id = $1 AND deleted_at IS NULL`,
+        [alloc.serial_id]
+      );
+    }
+  }
 }
 
 async function createDispatchQcToken({ ticketId, createdBy, req }) {

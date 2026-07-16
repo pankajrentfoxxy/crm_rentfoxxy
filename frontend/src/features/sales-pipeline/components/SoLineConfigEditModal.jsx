@@ -20,7 +20,7 @@ export default function SoLineConfigEditModal({ open, line, onClose, onSaved }) 
       storage: line.storage || '',
       gpu: line.gpu || '',
       screen_size: line.screen_size || '',
-      quantity: line.ordered_qty || 1,
+      quantity: line.ordered_qty || line.quantity || line.main_qty || 1,
       rate: line.rate || '',
     }]);
     getSalesOrderMeta()
@@ -36,6 +36,11 @@ export default function SoLineConfigEditModal({ open, line, onClose, onSaved }) 
       toast.error('Processor, generation, RAM, and storage are required');
       return;
     }
+    const quantity = Number(row.quantity);
+    if (!Number.isInteger(quantity) || quantity < 1) {
+      toast.error('Quantity must be a whole number of at least 1');
+      return;
+    }
     setSaving(true);
     try {
       await updateSoLineConfig(line.line_id, {
@@ -47,6 +52,7 @@ export default function SoLineConfigEditModal({ open, line, onClose, onSaved }) 
         storage: row.storage,
         gpu: row.gpu,
         screen_size: row.screen_size,
+        quantity,
       });
       toast.success('Line config updated');
       onSaved?.();
@@ -65,7 +71,7 @@ export default function SoLineConfigEditModal({ open, line, onClose, onSaved }) 
           <div>
             <h3 className="font-semibold text-gray-900">Edit order line config</h3>
             <p className="text-xs text-gray-500 mt-0.5">
-              Super Admin only — correct processor, generation, RAM, and storage so inventory can be matched.
+              Super Admin only — correct quantity and specs so inventory can be matched.
             </p>
           </div>
           <button type="button" onClick={onClose} className="p-1 rounded hover:bg-gray-100">
@@ -78,7 +84,8 @@ export default function SoLineConfigEditModal({ open, line, onClose, onSaved }) 
             onChange={setLines}
             catalog={catalog}
             quotationType={line.quotation_type || 'rental'}
-            requiredFields={['brand', 'model_name', 'processor', 'generation', 'ram', 'storage']}
+            requiredFields={['brand', 'model_name', 'processor', 'generation', 'ram', 'storage', 'quantity']}
+            useCascadeApi
           />
         </div>
         <div className="sticky bottom-0 bg-gray-50 border-t px-5 py-4 flex justify-end gap-2">

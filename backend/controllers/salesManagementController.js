@@ -1430,18 +1430,9 @@ exports.createDcsByAddress = async (req, res) => {
       });
     }
 
-    const dispatchQcCapture = require('../services/dispatchQcCaptureService');
-    const notSpecVerified = [];
-    for (const row of allocRes.rows) {
-      const verified = await dispatchQcCapture.allocationHasSpecVerification(client, row.allocation_id);
-      if (!verified) notSpecVerified.push(row);
-    }
-    if (notSpecVerified.length) {
-      return res.status(400).json({
-        success: false,
-        message: `Dispatch QC hardware verification required before DC creation: ${notSpecVerified.map((r) => r.ttspl_id || r.serial_number).join(', ')}`,
-      });
-    }
+    // Hardware script verification (dispatch_qc_capture_tokens) is optional for DC
+    // creation: Dispatch QC already marks qc_status=passed. Requiring a matched
+    // capture token blocked every SO completed through the normal QC flow.
 
     const soLines = await getSalesOrderLines(sales_order_number);
     if (!soLines.length) {
@@ -3285,7 +3276,7 @@ exports.updateSoLineAddress = async (req, res) => {
   }
 };
 
-/** PATCH /so-lines/:lineId/config — Super Admin only. Correct sales-side catalog config. */
+/** PATCH /so-lines/:lineId/config — Super Admin only. Correct sales-side catalog config / qty. */
 exports.updateSoLineConfig = async (req, res) => {
   const client = await pool.connect();
   try {
@@ -3307,11 +3298,23 @@ exports.updateSoLineConfig = async (req, res) => {
       });
     }
 
+    const hasQuantity = body.quantity != null && body.quantity !== '';
+    let quantity = null;
+    if (hasQuantity) {
+      quantity = parseInt(body.quantity, 10);
+      if (!Number.isInteger(quantity) || quantity < 1) {
+        return res.status(400).json({
+          success: false,
+          message: 'quantity must be a whole number of at least 1',
+        });
+      }
+    }
+
     await client.query('BEGIN');
 
     const lineRes = await client.query(
       `SELECT id, sales_order_number, brand, model_name, processor, generation, ram, storage,
-              gpu, screen_size, status
+              gpu, screen_size, quantity, main_qty, status
          FROM sales_order_lines WHERE id = $1 FOR UPDATE`,
       [lineId]
     );
@@ -3322,7 +3325,10 @@ exports.updateSoLineConfig = async (req, res) => {
     const line = lineRes.rows[0];
     if (String(line.status || '').toLowerCase() === 'cancelled') {
       await client.query('ROLLBACK');
-      return res.status(409).json({ success: false, message: 'Sales order line is cancelled' });
+      return res.status(409).json({
+        success: false,
+        message: 'Sales order line is cancelled',
+      });
     }
 
     const attachedRes = await client.query(
@@ -3330,7 +3336,24 @@ exports.updateSoLineConfig = async (req, res) => {
         WHERE line_id = $1 AND status <> 'removed'`,
       [lineId]
     );
-    if (Number(attachedRes.rows[0]?.n || 0) > 0) {
+    const attachedCount = Number(attachedRes.rows[0]?.n || 0);
+
+    const brand = body.brand != null ? String(body.brand).trim() : line.brand;
+    const modelName = body.model_name != null ? String(body.model_name).trim() : line.model_name;
+    const gpu = body.gpu != null ? String(body.gpu).trim() : line.gpu;
+    const screenSize = body.screen_size != null ? String(body.screen_size).trim() : line.screen_size;
+
+    const specsChanged =
+      String(brand || '') !== String(line.brand || '')
+      || String(modelName || '') !== String(line.model_name || '')
+      || String(processor || '') !== String(line.processor || '')
+      || String(generation || '') !== String(line.generation || '')
+      || String(ram || '') !== String(line.ram || '')
+      || String(storage || '') !== String(line.storage || '')
+      || String(gpu || '') !== String(line.gpu || '')
+      || String(screenSize || '') !== String(line.screen_size || '');
+
+    if (specsChanged && attachedCount > 0) {
       await client.query('ROLLBACK');
       return res.status(409).json({
         success: false,
@@ -3338,18 +3361,24 @@ exports.updateSoLineConfig = async (req, res) => {
       });
     }
 
-    const brand = body.brand != null ? String(body.brand).trim() : line.brand;
-    const modelName = body.model_name != null ? String(body.model_name).trim() : line.model_name;
-    const gpu = body.gpu != null ? String(body.gpu).trim() : line.gpu;
-    const screenSize = body.screen_size != null ? String(body.screen_size).trim() : line.screen_size;
+    const nextQuantity = hasQuantity ? quantity : Number(line.quantity || line.main_qty || 1);
+    if (nextQuantity < attachedCount) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: `Quantity cannot be less than attached units (${attachedCount}).`,
+      });
+    }
 
     const upd = await client.query(
       `UPDATE sales_order_lines
           SET brand = $1, model_name = $2, processor = $3, generation = $4,
-              ram = $5, storage = $6, gpu = $7, screen_size = $8, updated_at = NOW()
-        WHERE id = $9
-        RETURNING id, sales_order_number, brand, model_name, processor, generation, ram, storage, gpu, screen_size`,
-      [brand, modelName, processor, generation, ram, storage, gpu, screenSize, lineId]
+              ram = $5, storage = $6, gpu = $7, screen_size = $8,
+              quantity = $9, main_qty = $9, updated_at = NOW()
+        WHERE id = $10
+        RETURNING id, sales_order_number, brand, model_name, processor, generation,
+                  ram, storage, gpu, screen_size, quantity, main_qty`,
+      [brand, modelName, processor, generation, ram, storage, gpu, screenSize, nextQuantity, lineId]
     );
 
     await client.query('COMMIT');
@@ -3377,11 +3406,17 @@ exports.updateSoLineConfig = async (req, res) => {
       salesOrderNumber: soNumber,
       activityType: ACTIVITY_TYPES.LAPTOP,
       action: 'configuration_updated',
-      description: `${req.user?.name || 'User'} updated configuration for ${brand} ${modelName} (${processor}, ${generation}, ${ram}, ${storage}).`,
+      description: `${req.user?.name || 'User'} updated configuration for ${brand} ${modelName} (${processor}, ${generation}, ${ram}, ${storage}, qty ${nextQuantity}).`,
       metadata: {
         line_id: lineId,
-        old: { processor: line.processor, generation: line.generation, ram: line.ram, storage: line.storage },
-        new: { processor, generation, ram, storage },
+        old: {
+          processor: line.processor,
+          generation: line.generation,
+          ram: line.ram,
+          storage: line.storage,
+          quantity: line.quantity,
+        },
+        new: { processor, generation, ram, storage, quantity: nextQuantity },
       },
       user: req.user,
     });
