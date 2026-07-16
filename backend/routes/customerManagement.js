@@ -21,7 +21,13 @@ router.use(authMiddleware);
 
 router.get('/customers/meta/add', cp('customers', 'view'), ctrl.getAddCustomerMeta);
 router.get('/customers/export.xlsx', checkRole('admin', 'super_admin'), ctrl.exportCustomersExcel);
+router.get('/customers/ids', cp('customers', 'view'), ctrl.listCustomerIds);
 router.get('/customers', cp('customers', 'view'), ctrl.listCustomers);
+router.patch(
+  '/customers/bulk-customer-type',
+  checkRole('admin', 'super_admin'),
+  ctrl.bulkUpdateCustomerType
+);
 router.post(
   '/customers',
   cp('customers', 'create'),

@@ -11,6 +11,16 @@ function fmtConfig(row) {
     .join(' · ') || '—';
 }
 
+function fmtSource(row) {
+  const v = row.qc2_verification || {};
+  if (v.source === 'dispatch_qc') {
+    const reason = v.reason === 'config_mismatch' ? 'config mismatch' : (v.reason || 'failed');
+    return `Dispatch QC · ${reason}`;
+  }
+  if (v.source === 'qc2_script' || v.source === 'qc2') return 'QC2';
+  return v.source || 'QC2';
+}
+
 function fmtWhen(v) {
   if (!v) return '—';
   return new Date(v).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
@@ -69,7 +79,7 @@ export default function PendingInventoryPage() {
             Pending Inventory
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            QC2-passed units awaiting serial-verified receive into Ready stock.
+            Units awaiting serial-verified receive into Ready stock (from QC2 or Dispatch QC).
           </p>
         </div>
         <button
@@ -97,6 +107,7 @@ export default function PendingInventoryPage() {
                 <th className="px-3 py-2">Ticket</th>
                 <th className="px-3 py-2">TTSPL</th>
                 <th className="px-3 py-2">Configuration</th>
+                <th className="px-3 py-2">Source</th>
                 <th className="px-3 py-2">QC2 By</th>
                 <th className="px-3 py-2">QC2 Time</th>
                 <th className="px-3 py-2">Status</th>
@@ -115,6 +126,7 @@ export default function PendingInventoryPage() {
                   </td>
                   <td className="px-3 py-2 font-medium">{row.ttspl_id || '—'}</td>
                   <td className="px-3 py-2 max-w-xs truncate" title={fmtConfig(row)}>{fmtConfig(row)}</td>
+                  <td className="px-3 py-2 whitespace-nowrap text-xs">{fmtSource(row)}</td>
                   <td className="px-3 py-2">{row.qc2_completed_by_name || '—'}</td>
                   <td className="px-3 py-2 whitespace-nowrap">{fmtWhen(row.qc2_completed_at)}</td>
                   <td className="px-3 py-2">

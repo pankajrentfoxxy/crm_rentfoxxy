@@ -1,47 +1,84 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Building2, Download } from 'lucide-react';
+import { Plus, Building2, Download, Tags } from 'lucide-react';
 import { listSalesOrders } from '../../sales-pipeline/salesPipelineApi';
-import { exportCustomersExcel, getCustomers } from '../leadCrmApi';
+import { bulkUpdateCustomerType, exportCustomersExcel, getCustomerIds, getCustomers } from '../leadCrmApi';
 import CustomerFormDrawer from '../components/CustomerFormDrawer';
+import BulkCustomerTypeModal from '../components/BulkCustomerTypeModal';
 import { PageHeader, StatCard, Button, ResponsiveTable } from '../../../components/ui/primitives';
 import { useAuth } from '../../../context/AuthContext';
 import toast from 'react-hot-toast';
+import {
+  CUSTOMER_TYPE_OPTIONS,
+  customerTypeBadgeClass,
+  customerTypeLabel,
+} from '../../../utils/customerType';
 
 const EXPORT_ROLES = new Set(['admin', 'super_admin']);
+const TYPE_EDIT_ROLES = new Set(['admin', 'super_admin']);
+const PAGE_SIZE = 25;
+
+function formatSelectedCount(n) {
+  return `${Number(n || 0).toLocaleString('en-IN')} Customer${n === 1 ? '' : 's'} Selected`;
+}
 
 export default function CustomerListPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const canExportCustomers = EXPORT_ROLES.has(user?.role);
+  const canBulkEditType = TYPE_EDIT_ROLES.has(user?.role);
   const [customers, setCustomers] = useState([]);
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
   const [search, setSearch] = useState('');
   const [sortDir, setSortDir] = useState('asc');
   const [kycFilter, setKycFilter] = useState('');
+  const [customerType, setCustomerType] = useState('all');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editCustomer, setEditCustomer] = useState(null);
   const [activeOrderCounts, setActiveOrderCounts] = useState({});
   const [exporting, setExporting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [selectedMeta, setSelectedMeta] = useState(() => new Map());
+  const [selectAllMatching, setSelectAllMatching] = useState(false);
+  const [selectingAll, setSelectingAll] = useState(false);
+  const [bulkModalOpen, setBulkModalOpen] = useState(false);
+  const [bulkSaving, setBulkSaving] = useState(false);
+
+  const listFilterParams = useMemo(() => ({
+    search: search || undefined,
+    customer_type: customerType === 'all' ? undefined : customerType,
+    kyc: kycFilter || undefined,
+  }), [search, customerType, kycFilter]);
+
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+    setSelectedMeta(new Map());
+    setSelectAllMatching(false);
+  }, []);
 
   const load = useCallback(async () => {
     try {
       const res = await getCustomers({
         page,
-        limit: 25,
-        search: search || undefined,
+        limit: PAGE_SIZE,
         sort_by: 'customer_id',
         sort_dir: sortDir,
+        ...listFilterParams,
       });
       setCustomers(res.data?.customers || []);
       setPagination(res.data?.pagination || { page: 1, totalPages: 1, total: 0 });
     } catch {
       toast.error('Failed to load customers');
     }
-  }, [page, search, sortDir]);
+  }, [page, sortDir, listFilterParams]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Reset selection when filters/search change (not when paging)
+  useEffect(() => {
+    clearSelection();
+  }, [search, customerType, kycFilter, clearSelection]);
 
   useEffect(() => {
     listSalesOrders({ limit: 500 })
@@ -59,11 +96,96 @@ export default function CustomerListPage() {
       .catch(() => setActiveOrderCounts({}));
   }, []);
 
-  const filtered = useMemo(() => {
-    if (kycFilter === 'verified') return customers.filter((c) => c.kyc_verified);
-    if (kycFilter === 'pending') return customers.filter((c) => !c.kyc_verified);
-    return customers;
-  }, [customers, kycFilter]);
+  const pageIds = useMemo(
+    () => customers.map((c) => c.customer_id),
+    [customers]
+  );
+
+  const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
+  const somePageSelected = pageIds.some((id) => selectedIds.has(id));
+
+  const selectedCustomers = useMemo(() => {
+    const list = [];
+    selectedIds.forEach((id) => {
+      const fromPage = customers.find((c) => c.customer_id === id);
+      const fromMeta = selectedMeta.get(id);
+      list.push(fromPage || fromMeta || { customer_id: id });
+    });
+    return list.sort((a, b) => Number(a.customer_id) - Number(b.customer_id));
+  }, [selectedIds, selectedMeta, customers]);
+
+  const mergeMeta = (rows) => {
+    setSelectedMeta((prev) => {
+      const next = new Map(prev);
+      (rows || []).forEach((c) => {
+        if (c?.customer_id != null) next.set(c.customer_id, c);
+      });
+      return next;
+    });
+  };
+
+  const toggleOne = (customer, checked) => {
+    const id = customer.customer_id;
+    setSelectAllMatching(false);
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+    setSelectedMeta((prev) => {
+      const next = new Map(prev);
+      if (checked) next.set(id, customer);
+      else next.delete(id);
+      return next;
+    });
+  };
+
+  const selectCurrentPage = () => {
+    setSelectAllMatching(false);
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      customers.forEach((c) => next.add(c.customer_id));
+      return next;
+    });
+    mergeMeta(customers);
+  };
+
+  const deselectCurrentPage = () => {
+    setSelectAllMatching(false);
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      pageIds.forEach((id) => next.delete(id));
+      return next;
+    });
+    setSelectedMeta((prev) => {
+      const next = new Map(prev);
+      pageIds.forEach((id) => next.delete(id));
+      return next;
+    });
+  };
+
+  const toggleCurrentPage = (checked) => {
+    if (checked) selectCurrentPage();
+    else deselectCurrentPage();
+  };
+
+  const selectAllMatchingCustomers = async () => {
+    setSelectingAll(true);
+    try {
+      const res = await getCustomerIds(listFilterParams);
+      const rows = res.data?.customers || [];
+      const ids = res.data?.customer_ids || rows.map((c) => c.customer_id);
+      setSelectedIds(new Set(ids));
+      setSelectedMeta(new Map(rows.map((c) => [c.customer_id, c])));
+      setSelectAllMatching(true);
+      toast.success(formatSelectedCount(ids.length));
+    } catch {
+      toast.error('Failed to select matching customers');
+    } finally {
+      setSelectingAll(false);
+    }
+  };
 
   const stats = useMemo(() => ({
     total: pagination.total || customers.length,
@@ -114,9 +236,86 @@ export default function CustomerListPage() {
     }
   };
 
+  const removeFromSelection = (customerId) => {
+    setSelectAllMatching(false);
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(customerId);
+      return next;
+    });
+    setSelectedMeta((prev) => {
+      const next = new Map(prev);
+      next.delete(customerId);
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    if (bulkModalOpen && selectedIds.size === 0) {
+      setBulkModalOpen(false);
+    }
+  }, [bulkModalOpen, selectedIds]);
+
+  const handleBulkTypeSave = async (nextType) => {
+    const ids = Array.from(selectedIds);
+    if (!ids.length) return;
+    setBulkSaving(true);
+    try {
+      const { data } = await bulkUpdateCustomerType({
+        customer_ids: ids,
+        customer_type: nextType,
+      });
+      toast.success(data.message || `Updated ${data.updated_count} customer(s)`);
+      setBulkModalOpen(false);
+      clearSelection();
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Bulk update failed');
+    } finally {
+      setBulkSaving(false);
+    }
+  };
+
+  const selectHeader = canBulkEditType ? (
+    <input
+      type="checkbox"
+      checked={allPageSelected}
+      ref={(el) => {
+        if (el) el.indeterminate = somePageSelected && !allPageSelected;
+      }}
+      onChange={(e) => toggleCurrentPage(e.target.checked)}
+      onClick={(e) => e.stopPropagation()}
+      aria-label="Select current page"
+      className="rounded border-slate-300"
+      title="Select current page"
+    />
+  ) : null;
+
   const columns = [
+    ...(canBulkEditType ? [{
+      key: 'select',
+      header: selectHeader,
+      className: 'w-10',
+      render: (c) => (
+        <input
+          type="checkbox"
+          checked={selectedIds.has(c.customer_id)}
+          onChange={(e) => toggleOne(c, e.target.checked)}
+          onClick={(e) => e.stopPropagation()}
+          aria-label={`Select customer ${c.customer_id}`}
+          className="rounded border-slate-300"
+        />
+      ),
+    }] : []),
     { key: 'id', header: 'ID', sortable: true, sortKey: 'customer_id', render: (c) => `#${c.customer_id}` },
-    { key: 'company', header: 'Company', render: (c) => <span className="font-medium">{c.company_name || c.customer_name}</span> },
+    { key: 'company', header: 'Company', render: (c) => (
+      <span className="font-medium inline-flex items-center gap-2 flex-wrap">
+        {c.company_name || c.customer_name}
+        <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${customerTypeBadgeClass(c.customer_type)}`}>
+          {customerTypeLabel(c.customer_type)}
+        </span>
+      </span>
+    ) },
     { key: 'contact', header: 'Contact', render: (c) => c.contact_person_name || c.customer_name },
     { key: 'phone', header: 'Phone', render: (c) => c.customer_number || c.phone },
     { key: 'email', header: 'Email', render: (c) => c.email || '—' },
@@ -131,8 +330,25 @@ export default function CustomerListPage() {
 
   const renderCard = (c) => (
     <div className="space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <span className="font-semibold text-slate-800">{c.company_name || c.customer_name}</span>
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-start gap-2 min-w-0">
+          {canBulkEditType ? (
+            <input
+              type="checkbox"
+              checked={selectedIds.has(c.customer_id)}
+              onChange={(e) => toggleOne(c, e.target.checked)}
+              onClick={(e) => e.stopPropagation()}
+              className="mt-1 rounded border-slate-300"
+              aria-label={`Select customer ${c.customer_id}`}
+            />
+          ) : null}
+          <span className="font-semibold text-slate-800 inline-flex items-center gap-2 flex-wrap">
+            {c.company_name || c.customer_name}
+            <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${customerTypeBadgeClass(c.customer_type)}`}>
+              {customerTypeLabel(c.customer_type)}
+            </span>
+          </span>
+        </div>
         {kycBadge(c)}
       </div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
@@ -174,7 +390,14 @@ export default function CustomerListPage() {
       <div className="flex flex-wrap gap-3 mb-4">
         <input placeholder="Search..." value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }}
           className="border border-gray-200 rounded-lg px-3 py-2 text-sm flex-1 min-w-[200px]" />
-        <select value={kycFilter} onChange={(e) => setKycFilter(e.target.value)}
+        <select value={customerType} onChange={(e) => { setCustomerType(e.target.value); setPage(1); }}
+          className="border border-gray-200 rounded-lg px-3 py-2 text-sm">
+          <option value="all">All types</option>
+          {CUSTOMER_TYPE_OPTIONS.filter((o) => o.value !== 'both').map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+        <select value={kycFilter} onChange={(e) => { setKycFilter(e.target.value); setPage(1); }}
           className="border border-gray-200 rounded-lg px-3 py-2 text-sm">
           <option value="">All KYC</option>
           <option value="verified">Verified</option>
@@ -182,9 +405,57 @@ export default function CustomerListPage() {
         </select>
       </div>
 
+      {canBulkEditType ? (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+          <button
+            type="button"
+            onClick={selectCurrentPage}
+            disabled={!customers.length}
+            className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-50"
+          >
+            Select Current Page
+          </button>
+          <button
+            type="button"
+            onClick={selectAllMatchingCustomers}
+            disabled={selectingAll || !pagination.total}
+            className="text-sm px-3 py-1.5 rounded-lg border border-teal-300 bg-white text-teal-800 hover:bg-teal-50 disabled:opacity-50 font-medium"
+          >
+            {selectingAll
+              ? 'Selecting…'
+              : `Select All Matching Customers${pagination.total ? ` (${pagination.total.toLocaleString('en-IN')})` : ''}`}
+          </button>
+          {selectAllMatching ? (
+            <span className="text-xs text-teal-700">All matching filters selected</span>
+          ) : null}
+        </div>
+      ) : null}
+
+      {canBulkEditType && selectedIds.size > 0 ? (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-teal-200 bg-teal-50 px-4 py-3">
+          <span className="text-sm font-semibold text-teal-900">
+            {formatSelectedCount(selectedIds.size)}
+          </span>
+          <Button
+            variant="secondary"
+            icon={Tags}
+            onClick={() => setBulkModalOpen(true)}
+          >
+            Edit type
+          </Button>
+          <button
+            type="button"
+            onClick={clearSelection}
+            className="text-sm text-teal-800 hover:underline"
+          >
+            Clear selection
+          </button>
+        </div>
+      ) : null}
+
       <ResponsiveTable
         columns={columns}
-        rows={filtered}
+        rows={customers}
         keyField="customer_id"
         renderCard={renderCard}
         onRowClick={(c) => navigate(`/lead-crm/customers/${c.customer_id}`)}
@@ -196,7 +467,7 @@ export default function CustomerListPage() {
       {pagination.totalPages > 1 && (
         <div className="flex items-center justify-between mt-4">
           <p className="text-sm text-gray-500">
-            Showing {(page - 1) * 25 + 1}–{Math.min(page * 25, pagination.total)} of {pagination.total}
+            Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, pagination.total)} of {pagination.total}
           </p>
           <div className="flex gap-2">
             <Button variant="secondary" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Prev</Button>
@@ -207,6 +478,14 @@ export default function CustomerListPage() {
       )}
 
       <CustomerFormDrawer open={drawerOpen} customer={editCustomer} onClose={() => setDrawerOpen(false)} onSaved={() => load()} />
+      <BulkCustomerTypeModal
+        open={bulkModalOpen}
+        customers={selectedCustomers}
+        saving={bulkSaving}
+        onClose={() => setBulkModalOpen(false)}
+        onConfirm={handleBulkTypeSave}
+        onRemove={removeFromSelection}
+      />
     </div>
   );
 }

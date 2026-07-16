@@ -12,6 +12,11 @@ import {
   formatCurrency, sumLines, formatDate, formatConfig, lineTotal, typeLabel, countLaptops,
 } from '../salesPipelineUtils';
 import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
+import {
+  customerTypeMismatchMessage,
+  filterCustomersForQuotation,
+  isCustomerEligibleForQuotation,
+} from '../../../utils/customerType';
 
 const DEFAULT_TERMS = 'Payment terms as agreed. Goods remain property of Rentfoxxy until full payment.';
 
@@ -229,18 +234,49 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
   }, [prefill?.customer_id, customers.length]);
 
   const onTypeChange = (quotationType) => {
-    setForm((prev) => ({
-      ...prev,
-      quotation_type: quotationType,
-      branch: branchForQuotationType(quotationType),
-    }));
+    setForm((prev) => {
+      const stillOk = !prev.customer_id || isCustomerEligibleForQuotation(
+        customers.find((c) => String(c.customer_id) === String(prev.customer_id))?.customer_type,
+        quotationType
+      );
+      if (!stillOk) {
+        toast.error(customerTypeMismatchMessage(
+          customers.find((c) => String(c.customer_id) === String(prev.customer_id))?.customer_type,
+          quotationType
+        ));
+        setCustomerDetail(null);
+        setBillingAddress(null);
+        setShippingOptions([]);
+        setSelectedShippingValue('');
+      }
+      return {
+        ...prev,
+        quotation_type: quotationType,
+        branch: branchForQuotationType(quotationType),
+        ...(stillOk ? {} : { customer_id: '', customer_name: '', GST_number: '', email: '', customer_mobile: '' }),
+      };
+    });
   };
+
+  const eligibleCustomers = useMemo(
+    () => filterCustomersForQuotation(customers, form.quotation_type),
+    [customers, form.quotation_type]
+  );
 
   const totalValue = sumLines(lines);
   const security = form.security_type === 'one_month_rental' ? totalValue : (Number(form.security_amount) || 0);
   const isSaleType = form.quotation_type === 'sale' || form.quotation_type === 'sales';
 
   const submit = async (andSend) => {
+    if (!form.customer_id) {
+      toast.error('Select a customer');
+      return;
+    }
+    const selectedCustomer = customers.find((c) => String(c.customer_id) === String(form.customer_id));
+    if (selectedCustomer && !isCustomerEligibleForQuotation(selectedCustomer.customer_type, form.quotation_type)) {
+      toast.error(customerTypeMismatchMessage(selectedCustomer.customer_type, form.quotation_type));
+      return;
+    }
     if (!selectedShippingAddress) {
       toast.error('Select a shipping address');
       return;
@@ -292,7 +328,7 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
               <label className="text-xs font-medium text-gray-600">Customer *</label>
               <select className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" value={form.customer_id} onChange={(e) => onCustomerChange(e.target.value)}>
                 <option value="">Select customer</option>
-                {customers.map((c) => <option key={c.customer_id} value={c.customer_id}>{c.company_name || c.name}</option>)}
+                {eligibleCustomers.map((c) => <option key={c.customer_id} value={c.customer_id}>{c.company_name || c.name}</option>)}
               </select>
             </div>
             <div>

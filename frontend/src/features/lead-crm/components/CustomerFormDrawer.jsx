@@ -13,12 +13,19 @@ import {
   indianMobileError,
   normalizeIndianMobile,
 } from '../../../utils/phoneValidation';
+import {
+  CUSTOMER_TYPE_OPTIONS,
+  customerTypeLabel,
+  normalizeCustomerType,
+} from '../../../utils/customerType';
+import { useAuth } from '../../../context/AuthContext';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const empty = () => ({
   customer_name: '', email: '', customer_number: '', company_name: '',
   gst_number: '', pan_number: '', company_type: '', industry: '',
+  customer_type: 'both',
   billing_address: '', billing_city: '', billing_state: '', billing_pincode: '',
   shipping_same: true, shipping_address: '', shipping_city: '', shipping_state: '', shipping_pincode: '',
   whatsapp_number: '', designation: '', notes: '',
@@ -31,6 +38,8 @@ const emptyAddrForm = () => ({
 });
 
 export default function CustomerFormDrawer({ open, customer, onClose, onSaved }) {
+  const { user } = useAuth();
+  const canEditType = user?.role === 'admin' || user?.role === 'super_admin';
   const [form, setForm] = useState(empty());
   const [shippingSame, setShippingSame] = useState(true);
   const [savedAddresses, setSavedAddresses] = useState([]);
@@ -53,6 +62,7 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
         pan_number: customer.pan_number || customer.pan_card_number || '',
         company_type: customer.company_type || '',
         industry: customer.industry || '',
+        customer_type: normalizeCustomerType(customer.customer_type),
         billing_address: typeof customer.billing_address === 'string' ? customer.billing_address : customer.billing_address?.address || '',
         billing_city: customer.billing_city || '',
         billing_state: resolveStateSelectValue(customer.billing_state || ''),
@@ -347,6 +357,23 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
             <label className="text-xs text-gray-500">Industry</label>
             <input value={form.industry} onChange={(e) => set('industry', e.target.value)}
               className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+          </div>
+          <div>
+            <label className="text-xs text-gray-500">Customer Type</label>
+            <select
+              value={form.customer_type}
+              onChange={(e) => set('customer_type', e.target.value)}
+              disabled={!canEditType}
+              className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm disabled:bg-gray-50 disabled:text-gray-500"
+              title={canEditType ? undefined : 'Only Admin / Super Admin can change Customer Type'}
+            >
+              {CUSTOMER_TYPE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+            {!canEditType ? (
+              <p className="mt-1 text-[11px] text-gray-400">{customerTypeLabel(form.customer_type)} (read-only)</p>
+            ) : null}
           </div>
           <div className="sm:col-span-2">
             <label className="text-xs text-gray-500">Billing Address</label>

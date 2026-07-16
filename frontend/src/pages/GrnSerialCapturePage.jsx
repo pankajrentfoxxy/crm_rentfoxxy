@@ -152,6 +152,25 @@ export default function GrnSerialCapturePage() {
     navigator.clipboard.writeText(text).then(() => toast.success(`${label} copied`));
   };
 
+  const downloadWindowsExe = async () => {
+    if (!token) return;
+    try {
+      const res = await publicApi().get(`/grn-capture/${token}/windows-exe`, {
+        responseType: 'blob',
+      });
+      const blob = new Blob([res.data], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'rentfoxxy-grn-capture.exe';
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success('Windows app downloaded — double-click to run on this laptop');
+    } catch {
+      toast.error('Failed to download Windows app');
+    }
+  };
+
   const downloadWindowsScript = () => {
     const content = buildPs1FileContent(apiBase, token);
     const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
@@ -293,25 +312,33 @@ export default function GrnSerialCapturePage() {
               <ol className="text-sm text-slate-700 space-y-2 list-decimal list-inside leading-relaxed">
                 <li>You are on the <strong>received laptop</strong> (this machine).</li>
                 <li>
-                  <strong>Windows:</strong> download the script below, or copy the PowerShell one-liner → paste in
-                  PowerShell → Enter.
+                  <strong>Windows:</strong> download the app (.exe) and double-click it.
+                  If SmartScreen warns, choose <em>More info → Run anyway</em>.
                 </li>
                 <li>
                   <strong>Mac:</strong> copy the Terminal command → paste in Terminal → Enter.
                 </li>
                 <li>
-                  The script first <strong>verifies the hardware</strong> against the expected GRN config, then
+                  The app first <strong>verifies the hardware</strong> against the expected GRN config, then
                   sends the serial only if it matches — no CRM install needed on this laptop.
                 </li>
               </ol>
 
               <button
                 type="button"
-                onClick={downloadWindowsScript}
+                onClick={downloadWindowsExe}
                 className="w-full py-3 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-semibold text-sm flex items-center justify-center gap-2"
               >
                 <Download className="w-4 h-4" />
-                Download Windows script (easiest — double-click or Run with PowerShell)
+                Download Windows app (.exe)
+              </button>
+
+              <button
+                type="button"
+                onClick={downloadWindowsScript}
+                className="w-full py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-medium text-sm flex items-center justify-center gap-2"
+              >
+                Download PowerShell script (.ps1) instead
               </button>
 
               <div className="space-y-3 border-t border-slate-100 pt-4">

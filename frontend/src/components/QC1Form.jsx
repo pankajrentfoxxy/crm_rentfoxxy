@@ -4,6 +4,7 @@ import api from '../utils/api';
 import HwReworkAssignModal from '../features/floor-pipeline/components/HwReworkAssignModal';
 import Qc1SpecChecklist from '../features/floor-pipeline/components/Qc1SpecChecklist';
 import Qc2SpecVerifyPanel from '../features/floor-pipeline/components/Qc2SpecVerifyPanel';
+import DispatchQcSpecVerifyPanel from '../features/floor-pipeline/components/DispatchQcSpecVerifyPanel';
 
 const GRADE_OPTIONS = ['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C', 'D'];
 
@@ -102,6 +103,7 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
     const [bitlockerModal, setBitlockerModal] = useState(false);
     const [specChecklistReady, setSpecChecklistReady] = useState(qcStage !== 'QC1');
     const [qc2Verified, setQc2Verified] = useState(qcStage !== 'QC2');
+    const [dispatchQcVerified, setDispatchQcVerified] = useState(qcStage !== 'Dispatch QC');
     const [assigneeModal, setAssigneeModal] = useState(false);
     const [qc2Assignees, setQc2Assignees] = useState([]);
     const [selectedAssigneeId, setSelectedAssigneeId] = useState('');
@@ -119,6 +121,10 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
 
     const handleQc2Verified = useCallback((ok) => {
         setQc2Verified(!!ok);
+    }, []);
+
+    const handleDispatchQcVerified = useCallback((ok) => {
+        setDispatchQcVerified(!!ok);
     }, []);
 
     const loadQCData = useCallback(async () => {
@@ -252,6 +258,9 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
         if (qcStage === 'QC2' && !qc2Verified) {
             return alert('Complete QC2 spec verification before testing');
         }
+        if (qcStage === 'Dispatch QC' && !dispatchQcVerified) {
+            return alert('Complete Dispatch QC spec verification before testing');
+        }
         // Keep header fields populated for legacy API payload
         if (!header.processor || !header.generation || !header.storage_type || !header.ram_size) {
             if (qcStage === 'QC1' || qcStage === 'QC2') {
@@ -260,7 +269,7 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
                 return alert('Please complete the header section (Processor, Generation, Storage Type, RAM Size)');
             }
         }
-        if ((qcStage !== 'QC1' && qcStage !== 'QC2') && (!header.processor || !header.generation || !header.storage_type || !header.ram_size)) {
+        if ((qcStage !== 'QC1' && qcStage !== 'QC2' && qcStage !== 'Dispatch QC') && (!header.processor || !header.generation || !header.storage_type || !header.ram_size)) {
             return alert('Please complete the header section (Processor, Generation, Storage Type, RAM Size)');
         }
 
@@ -389,6 +398,12 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
                     onVerified={handleQc2Verified}
                     onHeaderSync={syncHeaderFromSpec}
                 />
+            ) : qcStage === 'Dispatch QC' ? (
+                <DispatchQcSpecVerifyPanel
+                    ticket={ticket}
+                    onVerified={handleDispatchQcVerified}
+                    onHeaderSync={syncHeaderFromSpec}
+                />
             ) : (
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
                 <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
@@ -461,6 +476,10 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
             {qcStage === 'QC2' && !qc2Verified ? (
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
                     Specs must match first. When they do, review them above and click <strong>Continue to QC2 Testing</strong>.
+                </div>
+            ) : qcStage === 'Dispatch QC' && !dispatchQcVerified ? (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
+                    Specs must match first. When they do, review them above and click <strong>Proceed to Dispatch QC Testing</strong>.
                 </div>
             ) : (
             <>

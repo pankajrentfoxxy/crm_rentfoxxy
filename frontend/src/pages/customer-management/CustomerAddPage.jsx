@@ -4,6 +4,8 @@ import { INDIAN_STATES, slugifyState } from '../../constants/indianStates';
 import { applyPincodeAutofill } from '../../utils/pincodeLookup';
 import { createCustomerManagement, fetchCustomerManagementMeta } from '../../utils/customerManagementApi';
 import { formatIndianMobileInput, indianMobileError, normalizeIndianMobile } from '../../utils/phoneValidation';
+import { CUSTOMER_TYPE_OPTIONS } from '../../utils/customerType';
+import { useAuth } from '../../context/AuthContext';
 
 const emptyForm = {
   customer_name: '',
@@ -23,12 +25,15 @@ const emptyForm = {
   shipping_address_1: '',
   shipping_address_2: '',
   business_type: '',
+  customer_type: 'both',
   gst_number: '',
   pan_card_number: '',
 };
 
 export default function CustomerAddPage() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const canEditType = user?.role === 'admin' || user?.role === 'super_admin';
   const [form, setForm] = useState(emptyForm);
   const [uploadDocs, setUploadDocs] = useState([]);
   const [profile, setProfile] = useState(null);
@@ -183,6 +188,23 @@ export default function CustomerAddPage() {
                 <option value="regular">Regular</option>
                 <option value="supplier">Supplier</option>
               </select>
+            </Field>
+            <Field label="Customer Type" required>
+              <select
+                required
+                className="field-input"
+                value={form.customer_type}
+                onChange={(e) => update('customer_type', e.target.value)}
+                disabled={!canEditType}
+                title={canEditType ? undefined : 'Only Admin / Super Admin can set Customer Type'}
+              >
+                {CUSTOMER_TYPE_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+              {!canEditType ? (
+                <p className="text-[11px] text-gray-400 mt-1">Defaults to Both — Admin can change later</p>
+              ) : null}
             </Field>
             <Field label="GST Number">
               <input className="field-input uppercase" value={form.gst_number} onChange={(e) => update('gst_number', e.target.value.toUpperCase())} />

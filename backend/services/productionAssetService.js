@@ -412,16 +412,24 @@ async function verifyQc2Specs(db, productionAssetId, { actual, remarks, userId, 
   return { production_asset: upd.rows[0], verification, ok: result.configurationMatched };
 }
 
-async function markPendingInventory(db, productionAssetId, userId) {
+async function markPendingInventory(db, productionAssetId, userId, meta = {}) {
+  const verification = {
+    pending_at: new Date().toISOString(),
+    source: meta.source || 'qc2',
+    reason: meta.reason || 'qc2_passed',
+    remarks: meta.remarks || null,
+    ...meta,
+  };
   const r = await db.query(
     `UPDATE production_assets
         SET status = 'pending_inventory',
+            qc2_verification = COALESCE(qc2_verification, '{}'::jsonb) || $3::jsonb,
             qc2_completed_by = $2,
             qc2_completed_at = NOW(),
             updated_at = NOW()
       WHERE production_asset_id = $1
       RETURNING *`,
-    [productionAssetId, userId || null]
+    [productionAssetId, userId || null, JSON.stringify(verification)]
   );
   return r.rows[0];
 }

@@ -159,3 +159,11 @@ export function getQc2CaptureStatus(ticketId) {
   return api.get(`/qc2/tickets/${ticketId}/capture-status`);
 }
 
+export function createDispatchQcCaptureToken(ticketId) {
+  return api.post(`/dispatch-qc/tickets/${ticketId}/capture-token`);
+}
+
+export function getDispatchQcCaptureStatus(ticketId) {
+  return api.get(`/dispatch-qc/tickets/${ticketId}/capture-status`);
+}
+

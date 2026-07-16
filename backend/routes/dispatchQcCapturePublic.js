@@ -1,5 +1,5 @@
 const express = require('express');
-const ctrl = require('../controllers/qc2Capture.controller');
+const ctrl = require('../controllers/dispatchQcCapture.controller');
 
 const router = express.Router();
 

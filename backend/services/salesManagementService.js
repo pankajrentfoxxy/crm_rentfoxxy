@@ -56,31 +56,21 @@ function salesOrderScopeWhere(scope, alias = '') {
 }
 
 async function listCustomersForOrderScope(scope) {
-  const saleExists = `EXISTS (
-    SELECT 1 FROM sales_order_lines sol
-    WHERE sol.customer_id = c.customer_id
-      AND (LOWER(COALESCE(sol.quotation_type, '')) IN ('sale', 'sales')
-        OR LOWER(COALESCE(sol.entity_code, '')) = 'gorefurbo')
-  )`;
-  const rentalExists = `EXISTS (
-    SELECT 1 FROM sales_order_lines sol
-    WHERE sol.customer_id = c.customer_id
-      AND (LOWER(COALESCE(sol.quotation_type, '')) = 'rental'
-        OR (LOWER(COALESCE(sol.quotation_type, '')) = 'demo'
-          AND LOWER(COALESCE(sol.entity_code, 'rentfoxxy')) = 'rentfoxxy'))
-  )`;
-  const noOrders = `NOT EXISTS (SELECT 1 FROM sales_order_lines sol WHERE sol.customer_id = c.customer_id)`;
-  const scopeFilter = scope === 'sale'
-    ? `(${saleExists} OR ${noOrders})`
-    : scope === 'rental'
-      ? `(${rentalExists} OR ${noOrders})`
-      : 'TRUE';
+  const {
+    customerTypeSqlCondition,
+    customerTypeFilterForQuotation,
+  } = require('../utils/customerType');
+  // scope: 'sale' | 'rental' — map onto customer_type eligibility
+  const typeKey = scope === 'sale' || scope === 'sales'
+    ? 'sales'
+    : customerTypeFilterForQuotation(scope === 'rental' ? 'rental' : scope);
+  const typeSql = customerTypeSqlCondition(typeKey) || 'TRUE';
 
   const { rows } = await pool.query(
-    `SELECT customer_id, name, company_name, email, phone, gst_no, address, details
+    `SELECT customer_id, name, company_name, email, phone, gst_no, address, details, customer_type
        FROM customers c
       WHERE COALESCE(c.status, 1) = 1
-        AND ${scopeFilter}
+        AND ${typeSql}
       ORDER BY company_name ASC NULLS LAST, name ASC
       LIMIT 500`
   );
@@ -1272,7 +1262,7 @@ async function searchAvailableInventory({
        COALESCE(vsn.extra->>'processor', vpd.processor) AS processor,
        COALESCE(vsn.extra->>'generation', vpd.generation) AS generation,
        COALESCE(vsn.extra->>'ram', vpd.ram) AS ram,
-       COALESCE(vsn.extra->>'storage', vpd.storage) AS storage,
+       COALESCE(NULLIF(vsn.extra->>'storage', ''), NULLIF(vsn.extra->>'ssd', ''), vpd.storage) AS storage,
        vpo.purchase_order_type
      FROM vendor_serial_numbers vsn
      LEFT JOIN vendor_product_details vpd

@@ -28,6 +28,7 @@ const {
   searchAvailableInventory,
   getDcSerialRateLookup,
   lookupSerialRemark,
+  entityDocType,
 } = require('../services/salesManagementService');
 const { generateDocumentPdf } = require('../services/salesManagementPdfService');
 const { emailDocument } = require('../services/salesManagementPdfService');
@@ -46,6 +47,12 @@ const {
   listAssignmentHistory,
   updateDcAssignment: applyDcAssignmentChange,
 } = require('../services/dcAssignmentService');
+const {
+  customerTypeSqlCondition,
+  customerTypeFilterForQuotation,
+  isCustomerEligibleForQuotation,
+  customerTypeMismatchMessage,
+} = require('../utils/customerType');
 
 /**
  * Resolve a vendor_serial_numbers.serial_id from a parsed DC serial entry,
@@ -203,6 +210,7 @@ function normalizeCustomerForQuotation(row) {
     phone: row.phone,
     gst_no: row.gst_no,
     address: row.address,
+    customer_type: row.customer_type || 'both',
     billing_address: billing,
     shipping_addresses: shippingList,
   };
@@ -291,8 +299,23 @@ const normalizeLineItems = (body) => {
 
 exports.getAddQuotationMeta = async (req, res) => {
   try {
+    const typeFilter = String(
+      req.query.customer_type || req.query.for_order || req.query.quotation_type || ''
+    ).trim().toLowerCase();
+    const mapped = typeFilter
+      ? customerTypeFilterForQuotation(typeFilter === 'sales' || typeFilter === 'sale' ? 'sales' : typeFilter)
+      : null;
+    const typeSql = mapped ? customerTypeSqlCondition(mapped) : null;
+
     const [customersRes, quotationNumber, catalog] = await Promise.all([
-      pool.query(`SELECT customer_id, name, company_name, email, phone, gst_no, address, details FROM customers ORDER BY company_name ASC NULLS LAST, name ASC LIMIT 500`),
+      pool.query(
+        `SELECT customer_id, name, company_name, email, phone, gst_no, address, details, customer_type
+           FROM customers c
+          WHERE COALESCE(c.status, 1) = 1
+            ${typeSql ? `AND ${typeSql}` : ''}
+          ORDER BY company_name ASC NULLS LAST, name ASC
+          LIMIT 500`
+      ),
       nextDocumentNumber('quotation'),
       fetchCatalogAttributeOptions(),
     ]);
@@ -362,6 +385,27 @@ exports.storeQuotation = async (req, res) => {
       billing = { ...billing, name: body.customer_name };
     }
     const supplyState = resolveSupplyStateFromAddress(shipping, body.supply_state);
+
+    const quotationType = body.quotation_type || 'rental';
+    const quoteCustomerId = toNullableInt(body.customer_id);
+    if (quoteCustomerId) {
+      const custRes = await pool.query(
+        `SELECT customer_id, customer_type FROM customers WHERE customer_id = $1 LIMIT 1`,
+        [quoteCustomerId]
+      );
+      if (!custRes.rows.length) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid customer_id (${quoteCustomerId}). Please reselect customer and try again.`,
+        });
+      }
+      if (!isCustomerEligibleForQuotation(custRes.rows[0].customer_type, quotationType)) {
+        return res.status(400).json({
+          success: false,
+          message: customerTypeMismatchMessage(custRes.rows[0].customer_type, quotationType),
+        });
+      }
+    }
 
     await client.query('BEGIN');
     for (const item of lineItems) {
@@ -533,7 +577,7 @@ exports.getAddSalesOrderMeta = async (req, res) => {
     const customers = entityScope === 'sale' || entityScope === 'rental'
       ? await listCustomersForOrderScope(entityScope)
       : (await pool.query(
-        `SELECT customer_id, name, company_name, email, phone, gst_no, address, details
+        `SELECT customer_id, name, company_name, email, phone, gst_no, address, details, customer_type
            FROM customers WHERE COALESCE(status, 1) = 1
            ORDER BY company_name ASC NULLS LAST, name ASC LIMIT 500`
       )).rows;
@@ -609,13 +653,20 @@ exports.storeSalesOrder = async (req, res) => {
 
     if (customerId) {
       const customerExists = await pool.query(
-        `SELECT 1 FROM customers WHERE customer_id = $1 LIMIT 1`,
+        `SELECT customer_id, customer_type FROM customers WHERE customer_id = $1 LIMIT 1`,
         [customerId]
       );
       if (!customerExists.rows.length) {
         return res.status(400).json({
           success: false,
           message: `Invalid customer_id (${customerId}). Please reselect customer and try again.`,
+        });
+      }
+      const soQuotationType = body.quotation_type || 'rental';
+      if (!isCustomerEligibleForQuotation(customerExists.rows[0].customer_type, soQuotationType)) {
+        return res.status(400).json({
+          success: false,
+          message: customerTypeMismatchMessage(customerExists.rows[0].customer_type, soQuotationType),
         });
       }
     }
@@ -1330,6 +1381,19 @@ exports.createDcsByAddress = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: `Laptops must pass Dispatch QC before DC creation: ${notPassed.map((r) => r.ttspl_id || r.serial_number).join(', ')}`,
+      });
+    }
+
+    const dispatchQcCapture = require('../services/dispatchQcCaptureService');
+    const notSpecVerified = [];
+    for (const row of allocRes.rows) {
+      const verified = await dispatchQcCapture.allocationHasSpecVerification(client, row.allocation_id);
+      if (!verified) notSpecVerified.push(row);
+    }
+    if (notSpecVerified.length) {
+      return res.status(400).json({
+        success: false,
+        message: `Dispatch QC hardware verification required before DC creation: ${notSpecVerified.map((r) => r.ttspl_id || r.serial_number).join(', ')}`,
       });
     }
 

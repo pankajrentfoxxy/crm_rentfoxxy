@@ -1,5 +1,5 @@
 const { validationResult, body, param } = require('express-validator');
-const qc2Capture = require('../services/qc2CaptureService');
+const dispatchQcCapture = require('../services/dispatchQcCaptureService');
 const { buildSessionExe } = require('../services/hwCaptureExeService');
 
 function clientIp(req) {
@@ -20,30 +20,28 @@ function parseActual(body = {}) {
   };
 }
 
-/** Auth — mint access number for QC2 ticket */
 async function createTicketCaptureToken(req, res) {
   try {
     const ticketId = parseInt(req.params.ticketId, 10);
     if (!ticketId) {
       return res.status(400).json({ success: false, message: 'Invalid ticket id' });
     }
-    const data = await qc2Capture.createQc2Token({
+    const data = await dispatchQcCapture.createDispatchQcToken({
       ticketId,
       createdBy: req.user?.user_id,
       req,
     });
     res.json({ success: true, data });
   } catch (e) {
-    console.error('createTicketCaptureToken:', e);
+    console.error('createDispatchQcCaptureToken:', e);
     res.status(e.status || 500).json({ success: false, message: e.message || 'Failed to create token' });
   }
 }
 
-/** Auth — poll latest token status for QC2 screen */
 async function getTicketCaptureStatus(req, res) {
   try {
     const ticketId = parseInt(req.params.ticketId, 10);
-    const row = await qc2Capture.getLatestTokenForTicket(ticketId);
+    const row = await dispatchQcCapture.getLatestTokenForTicket(ticketId);
     if (!row) {
       return res.json({ success: true, data: null });
     }
@@ -59,15 +57,16 @@ async function getTicketCaptureStatus(req, res) {
         actual_config: row.actual_config,
         serial_number: row.serial_number,
         configurationMatched: row.status === 'matched',
+        sales_order_number: row.sales_order_number,
+        allocation_id: row.allocation_id,
       },
     });
   } catch (e) {
-    console.error('getTicketCaptureStatus:', e);
+    console.error('getDispatchQcCaptureStatus:', e);
     res.status(500).json({ success: false, message: e.message || 'Failed to load status' });
   }
 }
 
-/** Public — resolve access number → session (reveal script) */
 const resolveValidators = [
   body('access_number').isString().trim().isLength({ min: 4, max: 8 }),
 ];
@@ -78,7 +77,7 @@ async function resolveAccessNumber(req, res) {
     return res.status(400).json({ success: false, message: 'Invalid access number', errors: errors.array() });
   }
   try {
-    const result = await qc2Capture.resolveByAccessNumber(req.body.access_number);
+    const result = await dispatchQcCapture.resolveByAccessNumber(req.body.access_number);
     if (!result.ok) {
       return res.status(result.code || 400).json({ success: false, message: result.message });
     }
@@ -88,43 +87,42 @@ async function resolveAccessNumber(req, res) {
         token: result.token,
         expires_at: result.expires_at,
         ticket_id: result.ticket_id,
+        sales_order_number: result.sales_order_number,
         expected_config: result.expected_config,
         ttspl_id: result.ttspl_id,
-        api_base_url: qc2Capture.apiBaseUrl(req),
+        api_base_url: dispatchQcCapture.apiBaseUrl(req),
       },
     });
   } catch (e) {
-    console.error('resolveAccessNumber:', e);
+    console.error('resolveAccessNumber dispatch-qc:', e);
     res.status(500).json({ success: false, message: e.message || 'Resolve failed' });
   }
 }
 
-/** Public — session by token UUID */
 async function getPublicSession(req, res) {
   try {
-    const session = await qc2Capture.getPublicSession(req.params.token);
+    const session = await dispatchQcCapture.getPublicSession(req.params.token);
     if (!session) {
       return res.status(404).json({ success: false, message: 'Link not found or expired' });
     }
     res.json({ success: true, data: session });
   } catch (e) {
-    console.error('getPublicSession qc2:', e);
+    console.error('getPublicSession dispatch-qc:', e);
     res.status(500).json({ success: false, message: e.message });
   }
 }
 
-/** Public — download per-session Windows EXE for hardware capture */
 async function downloadWindowsExe(req, res) {
   try {
-    const session = await qc2Capture.getPublicSession(req.params.token);
+    const session = await dispatchQcCapture.getPublicSession(req.params.token);
     if (!session) {
       return res.status(404).json({ success: false, message: 'Link not found or expired' });
     }
     const { buffer, filename } = buildSessionExe({
-      apiBase: qc2Capture.apiBaseUrl(req),
+      apiBase: dispatchQcCapture.apiBaseUrl(req),
       token: req.params.token,
-      apiPrefix: 'qc2-capture',
-      brand: 'QC2',
+      apiPrefix: 'dispatch-qc-capture',
+      brand: 'Dispatch QC',
     });
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
@@ -132,7 +130,7 @@ async function downloadWindowsExe(req, res) {
     res.setHeader('Cache-Control', 'no-store');
     return res.send(buffer);
   } catch (e) {
-    console.error('downloadWindowsExe qc2:', e);
+    console.error('downloadWindowsExe dispatch-qc:', e);
     res.status(e.status || 500).json({ success: false, message: e.message || 'EXE build failed' });
   }
 }
@@ -146,7 +144,7 @@ async function verifyConfiguration(req, res) {
   }
   try {
     const actual = parseActual(req.body);
-    const result = await qc2Capture.verifyQc2Configuration(
+    const result = await dispatchQcCapture.verifyDispatchQcConfiguration(
       req.params.token,
       actual,
       clientIp(req)
@@ -164,11 +162,12 @@ async function verifyConfiguration(req, res) {
       checks: result.checks,
       errors: result.errors,
       expected: result.expected,
-      qc2_failed: result.qc2_failed || false,
+      dispatch_qc_failed: result.dispatch_qc_failed || false,
+      routed_to_pending_inventory: result.routed_to_pending_inventory || false,
       remarks: result.remarks || null,
     });
   } catch (e) {
-    console.error('verifyConfiguration qc2:', e);
+    console.error('verifyConfiguration dispatch-qc:', e);
     res.status(500).json({ success: false, message: e.message || 'Verify failed' });
   }
 }
@@ -184,13 +183,13 @@ async function submitSerial(req, res) {
     return res.status(400).json({ success: false, errors: errors.array() });
   }
   try {
-    const result = await qc2Capture.submitQc2Serial(req.params.token, req.body.serial_number);
+    const result = await dispatchQcCapture.submitDispatchQcSerial(req.params.token, req.body.serial_number);
     if (!result.ok) {
       return res.status(result.code || 400).json({ success: false, message: result.message });
     }
     res.json({ success: true, serial_number: result.serial_number });
   } catch (e) {
-    console.error('submitSerial qc2:', e);
+    console.error('submitSerial dispatch-qc:', e);
     res.status(500).json({ success: false, message: e.message || 'Submit failed' });
   }
 }

@@ -30,11 +30,14 @@ export const getAssignableUsers = () => api.get('/leads/assignable-users');
 export const getUsers = () => getAssignableUsers();
 
 export const getCustomers = (params) => api.get('/customer-management/customers', { params });
+export const getCustomerIds = (params) => api.get('/customer-management/customers/ids', { params });
 export const exportCustomersExcel = (params = {}) =>
   api.get('/customer-management/customers/export.xlsx', { params, responseType: 'blob' });
 export const getCustomer = (id) => api.get(`/customer-management/customers/${id}`);
 export const createCustomer = (data) => api.post('/customer-management/customers', data);
 export const updateCustomer = (id, data) => api.put(`/customer-management/customers/${id}`, data);
+export const bulkUpdateCustomerType = (data) =>
+  api.patch('/customer-management/customers/bulk-customer-type', data);
 export const verifyCustomerKyc = (id) => api.put(`/customer-management/customers/${id}/verify-kyc`);
 export const getCustomerLaptops = (id, params) => api.get(`/customer-management/customers/${id}/laptops`, { params });
 export const getCustomerAddresses = (id) => api.get(`/customer-management/customers/${id}/addresses`);

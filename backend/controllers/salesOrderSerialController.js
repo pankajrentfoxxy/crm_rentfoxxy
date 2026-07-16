@@ -22,7 +22,7 @@ const SPEC_SELECT = `
          COALESCE(vsn.extra->>'processor', vpd.processor) AS processor,
          COALESCE(vsn.extra->>'generation', vpd.generation) AS generation,
          COALESCE(vsn.extra->>'ram', vpd.ram) AS ram,
-         COALESCE(vsn.extra->>'storage', vpd.storage) AS storage,
+         COALESCE(NULLIF(vsn.extra->>'storage', ''), NULLIF(vsn.extra->>'ssd', ''), vpd.storage) AS storage,
          COALESCE(vsn.extra->>'gpu', vpd.gpu) AS gpu,
          COALESCE(vsn.extra->>'screen_size', vpd.screen_size) AS screen_size
   FROM vendor_serial_numbers vsn
@@ -57,7 +57,7 @@ exports.listSerials = async (req, res) => {
               COALESCE(vsn.extra->>'processor', vpd.processor) AS serial_processor,
               COALESCE(vsn.extra->>'generation', vpd.generation) AS serial_generation,
               COALESCE(vsn.extra->>'ram', vpd.ram) AS serial_ram,
-              COALESCE(vsn.extra->>'storage', vpd.storage) AS serial_storage
+              COALESCE(NULLIF(vsn.extra->>'storage', ''), NULLIF(vsn.extra->>'ssd', ''), vpd.storage) AS serial_storage
          FROM sales_order_serials sos
          LEFT JOIN tickets t ON t.ticket_id = sos.qc_ticket_id
          LEFT JOIN stages s ON s.stage_id = t.current_stage_id
@@ -309,6 +309,8 @@ exports.detachSerial = async (req, res) => {
   const client = await pool.connect();
   try {
     const allocId = parseInt(req.params.allocId, 10);
+    const toPendingInventory = !!req.body?.to_pending_inventory;
+    const pendingReason = String(req.body?.reason || 'dispatch_qc_failed').trim();
     await client.query('BEGIN');
     const aRes = await client.query(
       `SELECT * FROM sales_order_serials WHERE allocation_id = $1 FOR UPDATE`, [allocId]
@@ -323,8 +325,33 @@ exports.detachSerial = async (req, res) => {
       return res.status(409).json({ success: false, message: 'Cannot detach a dispatched serial' });
     }
 
-    // Return unit to stock.
-    if (alloc.serial_id) {
+    if (toPendingInventory && alloc.serial_id) {
+      try {
+        const paSvc = require('../services/productionAssetService');
+        let pa = await paSvc.getByVendorSerial(client, alloc.serial_id);
+        if (!pa) {
+          pa = await paSvc.createFromGrn(client, {
+            ticketId: alloc.qc_ticket_id || null,
+            serialNumber: alloc.serial_number,
+            ttsplId: alloc.ttspl_id,
+            vendorSerialId: alloc.serial_id,
+            configSource: alloc,
+          });
+        }
+        if (pa?.production_asset_id) {
+          await paSvc.markPendingInventory(client, pa.production_asset_id, req.user.user_id, {
+            source: 'dispatch_qc',
+            reason: pendingReason,
+            remarks: req.body?.remarks || `Detached from ${alloc.sales_order_number}`,
+            sales_order_number: alloc.sales_order_number,
+            allocation_id: alloc.allocation_id,
+          });
+        }
+      } catch (paErr) {
+        console.error('detachSerial pending inventory:', paErr.message);
+      }
+    } else if (alloc.serial_id) {
+      // Return unit to stock.
       try {
         await inventorySM.backToStock(client, alloc.serial_id, {
           reason: `Detached from ${alloc.sales_order_number}`,

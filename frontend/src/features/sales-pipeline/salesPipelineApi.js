@@ -9,7 +9,7 @@ export const listQuotations = (p) => api.get(`${base}/quotations`, { params: p }
 export const getQuotation = (n) => api.get(`${base}/quotations/${n}`);
 export const createQuotation = (d) => api.post(`${base}/quotations`, d);
 export const updateQuotationStatus = (n, d) => api.patch(`${base}/quotations/${n}/status`, d);
-export const getQuotationMeta = () => api.get(`${base}/quotations/meta/add`);
+export const getQuotationMeta = (p) => api.get(`${base}/quotations/meta/add`, { params: p });
 
 export const listSalesOrders = (p) => api.get(`${base}/sales-orders`, { params: p });
 export const getSalesOrder = (n) => api.get(`${base}/sales-orders/${encSo(n)}`);

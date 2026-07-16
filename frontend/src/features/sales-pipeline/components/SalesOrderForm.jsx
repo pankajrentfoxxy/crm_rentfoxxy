@@ -14,6 +14,11 @@ import {
 } from '../salesPipelineUtils';
 import { getSoScopeConfig, orderMatchesScope } from '../salesOrderScope';
 import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
+import {
+  customerTypeMismatchMessage,
+  filterCustomersForQuotation,
+  isCustomerEligibleForQuotation,
+} from '../../../utils/customerType';
 
 function getField(obj, snake, camel) {
   if (!obj) return '';
@@ -258,11 +263,11 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
   }, [selectedShippingValue, shippingOptions, manualShipping]);
 
   const customerOptions = useMemo(
-    () => customers.map((c) => ({
+    () => filterCustomersForQuotation(customers, form.quotation_type).map((c) => ({
       value: String(c.customer_id),
       label: c.company_name || c.name || `Customer #${c.customer_id}`,
     })),
-    [customers]
+    [customers, form.quotation_type]
   );
 
   const totalValue = useMemo(() => sumLines(lines), [lines]);
@@ -288,6 +293,11 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
   const submit = async () => {
     if (!form.customer_id) {
       toast.error('Select a customer');
+      return;
+    }
+    const selectedCustomer = customers.find((c) => String(c.customer_id) === String(form.customer_id));
+    if (selectedCustomer && !isCustomerEligibleForQuotation(selectedCustomer.customer_type, form.quotation_type)) {
+      toast.error(customerTypeMismatchMessage(selectedCustomer.customer_type, form.quotation_type));
       return;
     }
     if (!selectedShippingAddress) {
@@ -373,11 +383,28 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
                 value={form.quotation_type}
                 onChange={(e) => {
                   const nextType = e.target.value;
-                  setForm((f) => ({
-                    ...f,
-                    quotation_type: nextType,
-                    branch: resolveBranch(nextType),
-                  }));
+                  setForm((f) => {
+                    const stillOk = !f.customer_id || isCustomerEligibleForQuotation(
+                      customers.find((c) => String(c.customer_id) === String(f.customer_id))?.customer_type,
+                      nextType
+                    );
+                    if (!stillOk) {
+                      toast.error(customerTypeMismatchMessage(
+                        customers.find((c) => String(c.customer_id) === String(f.customer_id))?.customer_type,
+                        nextType
+                      ));
+                      setCustomerDetail(null);
+                      setBillingAddress(null);
+                      setShippingOptions([]);
+                      setSelectedShippingValue('');
+                    }
+                    return {
+                      ...f,
+                      quotation_type: nextType,
+                      branch: resolveBranch(nextType),
+                      ...(stillOk ? {} : { customer_id: '', customer_name: '', GST_number: '' }),
+                    };
+                  });
                 }}
               >
                 {(scopeConfig?.typeOptions || [

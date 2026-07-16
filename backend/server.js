@@ -17,6 +17,8 @@ const allowedOrigins = [
   'http://localhost:3001',
   'http://localhost:3002',
   'http://localhost:5001',
+  'http://127.0.0.2:5001',
+  'http://127.0.0.2:3000',
   'https://rentfoxxy.vercel.app',
   'http://187.77.187.213',
   'https://187.77.187.213',
@@ -91,6 +93,8 @@ app.use('/api/quotation', require('./routes/quotationPublic'));
 app.use('/api/grn-capture', require('./routes/grnCapturePublic'));
 app.use('/api/qc2-capture', require('./routes/qc2CapturePublic'));
 app.use('/api/qc2', require('./routes/qc2'));
+app.use('/api/dispatch-qc-capture', require('./routes/dispatchQcCapturePublic'));
+app.use('/api/dispatch-qc', require('./routes/dispatchQc'));
 app.use('/api/grn-access-public', require('./routes/grnAccessPublic'));
 app.use('/api/grn-access', require('./routes/grnAccess'));
 app.use('/api/leads', require('./routes/leads'));

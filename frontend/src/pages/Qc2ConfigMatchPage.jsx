@@ -32,18 +32,18 @@ function encodePsCommand(script) {
 const PS_ERR =
   "$e=$_.ErrorDetails.Message;if(-not $e){try{$rs=$_.Exception.Response.GetResponseStream();$e=(New-Object System.IO.StreamReader($rs)).ReadToEnd()}catch{$e=$_.Exception.Message}}";
 
-function buildPsCommand(apiBase, token) {
-  const base = `${apiBase}/qc2-capture/${token}`;
+function buildPsCommand(apiBase, token, apiPrefix = 'qc2-capture') {
+  const base = `${apiBase}/${apiPrefix}/${token}`;
   return `$cs=Get-CimInstance Win32_ComputerSystem;$csp=Get-CimInstance Win32_ComputerSystemProduct;$cpu=(Get-CimInstance Win32_Processor).Name;$gpu=(Get-CimInstance Win32_VideoController|Select-Object -First 1).Name;$ram=[math]::Round((Get-CimInstance Win32_PhysicalMemory|Measure-Object -Property Capacity -Sum).Sum/1GB);if(-not $ram){$ram=[math]::Round($cs.TotalPhysicalMemory/1GB)};$ssd=[math]::Round((Get-PhysicalDisk|Select-Object -First 1).Size/1000000000);$gen='';if($cpu -match '(\\d{1,2})(?:st|nd|rd|th)\\s*Gen'){$gen=$matches[1]}elseif($cpu -match 'i[3579][- ]?(\\d{3,5})'){$n=$matches[1];if($n.Length -ge 5){$gen=$n.Substring(0,2)}elseif($n.Length -eq 4){if($n.Substring(0,1) -eq '1'){$gen=$n.Substring(0,2)}else{$gen=$n.Substring(0,1)}}else{$gen=$n.Substring(0,1)}};$cfg=@{manufacturer=$cs.Manufacturer;model=$cs.Model;model_version=$csp.Version;system_family=$cs.SystemFamily;processor=$cpu;generation=$gen;ram=$ram;ssd=$ssd;gpu=$gpu}|ConvertTo-Json;try{$v=Invoke-RestMethod -Uri "${base}/verify-configuration" -Method Post -Body $cfg -ContentType "application/json"}catch{${PS_ERR};Write-Host "Verify failed: $e" -ForegroundColor Red;Read-Host "Press Enter to close";return};if(-not $v.configurationMatched){Write-Host "Config mismatch:" -ForegroundColor Red;$v.errors|%{Write-Host (" - "+$_.field+": expected '"+$_.expected+"', found '"+$_.actual+"'") -ForegroundColor Red};Read-Host "Press Enter to close";return};$s=(Get-CimInstance Win32_BIOS).SerialNumber.Trim().ToUpper();try{Invoke-RestMethod -Uri "${base}" -Method Post -Body (@{serial_number=$s}|ConvertTo-Json) -ContentType "application/json"|Out-Null;Write-Host "Verified + serial sent: $s" -ForegroundColor Green}catch{${PS_ERR};Write-Host "Serial submit failed: $e" -ForegroundColor Red};Read-Host "Press Enter to close"`;
 }
 
-function buildMacCommand(apiBase, token) {
-  const base = `${apiBase}/qc2-capture/${token}`;
+function buildMacCommand(apiBase, token, apiPrefix = 'qc2-capture') {
+  const base = `${apiBase}/${apiPrefix}/${token}`;
   return `M=$(sysctl -n hw.model);C=$(sysctl -n machdep.cpu.brand_string 2>/dev/null||echo "Apple Silicon");R=$(( $(sysctl -n hw.memsize)/1073741824 ));S=$(system_profiler SPNVMeDataType SPSerialATADataType 2>/dev/null|awk '/Capacity/{print;exit}'|grep -oE '[0-9]+(\\.[0-9]+)?'|head -1);V=$(curl -s -X POST "${base}/verify-configuration" -H "Content-Type: application/json" -d "{\\"manufacturer\\":\\"Apple\\",\\"model\\":\\"$M\\",\\"processor\\":\\"$C\\",\\"ram\\":\\"$R\\",\\"ssd\\":\\"$S\\",\\"gpu\\":\\"\\"}");if echo "$V"|grep -q '"configurationMatched":true';then SERIAL=$(ioreg -rd1 -c IOPlatformExpertDevice|awk '/IOPlatformSerialNumber/{print $3;exit}'|tr -d '"');curl -s -X POST "${base}" -H "Content-Type: application/json" -d "{\\"serial_number\\":\\"$SERIAL\\"}";echo "Verified + serial sent: $SERIAL";else echo "Verification failed / config mismatch:";echo "$V";fi`;
 }
 
-function buildPs1FileContent(apiBase, token) {
-  const base = `${apiBase}/qc2-capture/${token}`;
+function buildPs1FileContent(apiBase, token, apiPrefix = 'qc2-capture') {
+  const base = `${apiBase}/${apiPrefix}/${token}`;
   return `# Rentfoxxy QC2 — run on the laptop under test (Windows PowerShell)
 # Verifies hardware against Production Asset, then submits serial.
 $cs  = Get-CimInstance Win32_ComputerSystem
@@ -94,10 +94,36 @@ Read-Host 'Press Enter to close'
 }
 
 /**
- * Public page: enter QC2 access number → reveal hardware verification script.
+ * Public page: enter access number → reveal hardware verification script.
  * Layout mirrors GrnSerialCapturePage.
  */
-export default function Qc2ConfigMatchPage() {
+const CAPTURE_UI = {
+  qc2: {
+    apiPrefix: 'qc2-capture',
+    brand: 'QC2',
+    accessHint: 'QC2 ticket',
+    screenHint: 'QC2 screen',
+    successHint: 'QC2 ticket — testing checklist is unlocked',
+    scriptFile: 'rentfoxxy-qc2-verify.ps1',
+    exeFile: 'rentfoxxy-qc2-verify.exe',
+    laptopHint: 'laptop under QC2',
+    ps1Title: 'QC2',
+  },
+  'dispatch-qc': {
+    apiPrefix: 'dispatch-qc-capture',
+    brand: 'Dispatch QC',
+    accessHint: 'Dispatch QC ticket',
+    screenHint: 'Dispatch QC screen',
+    successHint: 'Dispatch QC ticket — testing checklist is unlocked',
+    scriptFile: 'rentfoxxy-dispatch-qc-verify.ps1',
+    exeFile: 'rentfoxxy-dispatch-qc-verify.exe',
+    laptopHint: 'laptop under Dispatch QC',
+    ps1Title: 'Dispatch QC',
+  },
+};
+
+export default function Qc2ConfigMatchPage({ captureKind = 'qc2' }) {
+  const ui = CAPTURE_UI[captureKind] || CAPTURE_UI.qc2;
   const [accessInput, setAccessInput] = useState('');
   const [resolving, setResolving] = useState(false);
   const [token, setToken] = useState(null);
@@ -108,20 +134,20 @@ export default function Qc2ConfigMatchPage() {
 
   const apiBase = getPublicApiBase();
   const psScript = useMemo(
-    () => (token ? buildPsCommand(apiBase, token) : ''),
-    [apiBase, token]
+    () => (token ? buildPsCommand(apiBase, token, ui.apiPrefix) : ''),
+    [apiBase, token, ui.apiPrefix]
   );
   const psEncoded = useMemo(() => (psScript ? encodePsCommand(psScript) : ''), [psScript]);
   const macScript = useMemo(
-    () => (token ? buildMacCommand(apiBase, token) : ''),
-    [apiBase, token]
+    () => (token ? buildMacCommand(apiBase, token, ui.apiPrefix) : ''),
+    [apiBase, token, ui.apiPrefix]
   );
 
   const loadSession = useCallback(async () => {
     if (!token) return;
     setSessionWarning(null);
     try {
-      const { data } = await publicApi().get(`/qc2-capture/${token}`);
+      const { data } = await publicApi().get(`/${ui.apiPrefix}/${token}`);
       if (data.success) {
         setSession(data.data);
         if (data.data.status === 'matched') {
@@ -135,7 +161,7 @@ export default function Qc2ConfigMatchPage() {
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [token, ui.apiPrefix]);
 
   useEffect(() => {
     if (!token) return undefined;
@@ -149,12 +175,12 @@ export default function Qc2ConfigMatchPage() {
     e?.preventDefault?.();
     const code = accessInput.trim();
     if (!code) {
-      toast.error('Enter the access number from the QC2 screen');
+      toast.error(`Enter the access number from the ${ui.brand} screen`);
       return;
     }
     setResolving(true);
     try {
-      const { data } = await publicApi().post('/qc2-capture/resolve', { access_number: code });
+      const { data } = await publicApi().post(`/${ui.apiPrefix}/resolve`, { access_number: code });
       if (!data.success) {
         toast.error(data.message || 'Invalid access number');
         return;
@@ -177,14 +203,50 @@ export default function Qc2ConfigMatchPage() {
     navigator.clipboard.writeText(text).then(() => toast.success(`${label} copied`));
   };
 
+  const downloadWindowsExe = async () => {
+    if (!token) return;
+    try {
+      const res = await publicApi().get(`/${ui.apiPrefix}/${token}/windows-exe`, {
+        responseType: 'blob',
+      });
+      const contentType = String(res.headers['content-type'] || '');
+      if (contentType.includes('application/json')) {
+        const text = await res.data.text();
+        const parsed = JSON.parse(text);
+        toast.error(parsed.message || 'Failed to download Windows app');
+        return;
+      }
+      const blob = new Blob([res.data], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = ui.exeFile || 'rentfoxxy-hw-verify.exe';
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success('Windows app downloaded — double-click to run on this laptop');
+    } catch (err) {
+      let message = 'Failed to download Windows app';
+      try {
+        if (err.response?.data instanceof Blob) {
+          const text = await err.response.data.text();
+          const parsed = JSON.parse(text);
+          if (parsed.message) message = parsed.message;
+        } else if (err.response?.data?.message) {
+          message = err.response.data.message;
+        }
+      } catch { /* ignore */ }
+      toast.error(message);
+    }
+  };
+
   const downloadWindowsScript = () => {
     if (!token) return;
-    const content = buildPs1FileContent(apiBase, token);
+    const content = buildPs1FileContent(apiBase, token, ui.apiPrefix);
     const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'rentfoxxy-qc2-verify.ps1';
+    a.download = ui.scriptFile;
     a.click();
     URL.revokeObjectURL(url);
     toast.success('Script downloaded — right-click → Run with PowerShell');
@@ -215,9 +277,9 @@ export default function Qc2ConfigMatchPage() {
             <div className="flex items-center gap-3">
               <KeyRound className="w-8 h-8 shrink-0 opacity-90" />
               <div>
-                <p className="text-xs uppercase tracking-wide text-indigo-100 font-semibold">Rentfoxxy QC2</p>
+                <p className="text-xs uppercase tracking-wide text-indigo-100 font-semibold">Rentfoxxy {ui.brand}</p>
                 <h1 className="text-lg font-bold">Config match</h1>
-                <p className="text-sm text-indigo-100 mt-0.5">Enter the access number from the QC2 ticket</p>
+                <p className="text-sm text-indigo-100 mt-0.5">Enter the access number from the {ui.accessHint}</p>
               </div>
             </div>
           </div>
@@ -241,7 +303,7 @@ export default function Qc2ConfigMatchPage() {
               {resolving ? 'Checking…' : 'Continue'}
             </button>
             <p className="text-xs text-slate-500 text-center">
-              Open this page on the laptop under QC2. The access number is shown on the CRM QC2 screen.
+              Open this page on the {ui.laptopHint}. The access number is shown on the CRM {ui.screenHint}.
             </p>
           </form>
         </div>
@@ -264,7 +326,7 @@ export default function Qc2ConfigMatchPage() {
           <div className="flex items-center gap-3">
             <Laptop className="w-8 h-8 shrink-0 opacity-90" />
             <div>
-              <p className="text-xs uppercase tracking-wide text-indigo-100 font-semibold">Rentfoxxy QC2</p>
+              <p className="text-xs uppercase tracking-wide text-indigo-100 font-semibold">Rentfoxxy {ui.brand}</p>
               <h1 className="text-lg font-bold">Hardware verification</h1>
               <p className="text-sm text-indigo-100 mt-0.5">
                 {session?.ttspl_id ? `TTSPL ${session.ttspl_id}` : 'Production Asset match'}
@@ -292,7 +354,7 @@ export default function Qc2ConfigMatchPage() {
               <CheckCircle2 className="w-14 h-14 text-emerald-500 mx-auto mb-3" />
               <h2 className="text-lg font-semibold text-slate-900">Specs verified</h2>
               <p className="text-sm text-slate-500 mt-3">
-                Return to the QC2 ticket — testing checklist is unlocked. You can close this tab.
+                Return to the {ui.successHint}. You can close this tab.
               </p>
             </div>
           ) : (
@@ -347,19 +409,28 @@ export default function Qc2ConfigMatchPage() {
               ) : null}
 
               <ol className="text-sm text-slate-700 space-y-2 list-decimal list-inside leading-relaxed">
-                <li>You are on the <strong>laptop under QC2</strong>.</li>
+                <li>You are on the <strong>{ui.laptopHint}</strong>.</li>
                 <li>
-                  <strong>Windows:</strong> download the script, or copy the PowerShell one-liner → paste in PowerShell → Enter.
+                  <strong>Windows:</strong> download the app (.exe) and double-click it.
+                  If SmartScreen warns, choose <em>More info → Run anyway</em>.
                 </li>
-                <li>On match, return to the CRM QC2 screen — testing unlocks automatically.</li>
+                <li>On match, return to the CRM {ui.screenHint} — testing unlocks automatically.</li>
               </ol>
 
               <button
                 type="button"
-                onClick={downloadWindowsScript}
+                onClick={downloadWindowsExe}
                 className="w-full flex items-center justify-center gap-2 py-3 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700"
               >
-                <Download className="w-4 h-4" /> Download Windows script
+                <Download className="w-4 h-4" /> Download Windows app (.exe)
+              </button>
+
+              <button
+                type="button"
+                onClick={downloadWindowsScript}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border border-slate-200 bg-white text-slate-700 text-sm font-medium hover:bg-slate-50"
+              >
+                Download PowerShell script (.ps1) instead
               </button>
 
               <div className="space-y-2">

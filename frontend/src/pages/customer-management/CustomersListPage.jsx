@@ -3,6 +3,11 @@ import { Link } from 'react-router-dom';
 import { exportRowsToCsv } from '../../features/operation-management/utils/quotationHelpers';
 import { getBackendOrigin } from '../../utils/api';
 import { deleteCustomerManagement, fetchCustomerManagementList } from '../../utils/customerManagementApi';
+import {
+  CUSTOMER_TYPE_OPTIONS,
+  customerTypeBadgeClass,
+  customerTypeLabel,
+} from '../../utils/customerType';
 
 const PAGE_SIZES = [10, 25, 50, 100];
 
@@ -26,6 +31,7 @@ export default function CustomersListPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
+  const [customerType, setCustomerType] = useState('all');
   const [error, setError] = useState('');
 
   const load = useCallback(async () => {
@@ -36,6 +42,7 @@ export default function CustomersListPage() {
         search,
         page: pagination.page,
         limit: pagination.limit,
+        customer_type: customerType === 'all' ? undefined : customerType,
       });
       setRows(data.customers || []);
       if (data.pagination) setPagination((prev) => ({ ...prev, ...data.pagination }));
@@ -44,7 +51,7 @@ export default function CustomersListPage() {
     } finally {
       setLoading(false);
     }
-  }, [search, pagination.page, pagination.limit]);
+  }, [search, customerType, pagination.page, pagination.limit]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -114,7 +121,23 @@ export default function CustomersListPage() {
           </button>
         </div>
 
-        <div className="px-4 py-2 border-b flex justify-end">
+        <div className="px-4 py-2 border-b flex flex-wrap items-center justify-between gap-3">
+          <label className="text-sm text-gray-600 flex items-center gap-2">
+            Customer Type:
+            <select
+              className="border border-gray-200 rounded px-2 py-1 text-sm"
+              value={customerType}
+              onChange={(e) => {
+                setCustomerType(e.target.value);
+                setPagination((p) => ({ ...p, page: 1 }));
+              }}
+            >
+              <option value="all">All</option>
+              {CUSTOMER_TYPE_OPTIONS.filter((o) => o.value !== 'both').map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </label>
           <label className="text-sm text-gray-600 flex items-center gap-2">
             Search:
             <input
@@ -161,7 +184,12 @@ export default function CustomersListPage() {
                         <div className="w-12 h-12 rounded bg-gray-100 border flex items-center justify-center text-gray-400 text-xs">N/A</div>
                       )}
                       <div>
-                        <div className="font-semibold text-cyan-700">{row.customer_name}</div>
+                        <div className="font-semibold text-cyan-700 flex items-center gap-2 flex-wrap">
+                          {row.customer_name}
+                          <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold ${customerTypeBadgeClass(row.customer_type)}`}>
+                            {customerTypeLabel(row.customer_type)}
+                          </span>
+                        </div>
                         <div className="text-xs text-gray-500">{row.email}</div>
                       </div>
                     </div>

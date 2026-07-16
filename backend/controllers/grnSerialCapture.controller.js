@@ -8,6 +8,7 @@ const {
 } = require('../services/grnSerialCaptureService');
 const grnAccessService = require('../services/grnAccessService');
 const grnConfigService = require('../services/grnConfigService');
+const { buildSessionExe } = require('../services/hwCaptureExeService');
 
 /** Authenticated — create a capture link for one unit in a GRN receive batch */
 const createTokenValidators = [
@@ -108,6 +109,30 @@ async function getPublicCaptureSession(req, res) {
   }
 }
 
+/** Public — download per-session Windows EXE for hardware capture */
+async function downloadWindowsExe(req, res) {
+  try {
+    const status = await getTokenStatus(req.params.token);
+    if (!status) {
+      return res.status(404).json({ success: false, message: 'Link not found or expired' });
+    }
+    const { buffer, filename } = buildSessionExe({
+      apiBase: apiBaseUrl(req),
+      token: req.params.token,
+      apiPrefix: 'grn-capture',
+      brand: 'GRN',
+    });
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', buffer.length);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.send(buffer);
+  } catch (e) {
+    console.error('downloadWindowsExe grn:', e);
+    res.status(e.status || 500).json({ success: false, message: e.message || 'EXE build failed' });
+  }
+}
+
 /** Public — verify the actual laptop config matches the expected GRN item config */
 const verifyConfigValidators = [param('token').isUUID()];
 
@@ -187,6 +212,7 @@ module.exports = {
   createGrnCaptureToken,
   getGrnCaptureTokenStatus,
   getPublicCaptureSession,
+  downloadWindowsExe,
   verifyConfigValidators,
   verifyCaptureConfiguration,
   submitCaptureValidators,

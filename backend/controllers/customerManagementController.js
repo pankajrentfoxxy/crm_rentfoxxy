@@ -12,6 +12,11 @@ const {
   normalizeIndianMobile,
   validateIndianMobile,
 } = require('../utils/phoneValidation');
+const {
+  normalizeCustomerType,
+  canEditCustomerType,
+  customerTypeSqlCondition,
+} = require('../utils/customerType');
 
 function parseDetails(value) {
   if (value == null) return {};
@@ -166,6 +171,7 @@ function formatCustomerRow(row) {
     pan_number: row.pan_number || details.pan_card_number || '',
     business_type: details.business_type || row.company_type || '',
     company_type: row.company_type || details.business_type || '',
+    customer_type: normalizeCustomerType(row.customer_type),
     company_size: row.company_size || null,
     industry: row.industry || null,
     profile: details.profile || null,
@@ -328,7 +334,12 @@ function buildAddressExportColumnOrder(maxBilling, maxShipping) {
 }
 
 async function ensureCustomerManagementSchema() {
-  for (const file of ['045_customer_management_module.sql', '064_customer_addresses.sql', '068_phase6_support_customer_portal.sql']) {
+  for (const file of [
+    '045_customer_management_module.sql',
+    '064_customer_addresses.sql',
+    '068_phase6_support_customer_portal.sql',
+    '147_customer_type.sql',
+  ]) {
     const migrationPath = path.join(__dirname, '../migrations', file);
     if (!fs.existsSync(migrationPath)) continue;
     const sql = fs.readFileSync(migrationPath, 'utf8');
@@ -342,11 +353,44 @@ exports.getAddCustomerMeta = async (req, res) => {
   res.json({ success: true, generated_password: generatePassword() });
 };
 
+/** Shared list filters for paginated customers + bulk ID selection. */
+function buildCustomerListFilters(query = {}) {
+  const params = [];
+  const conditions = ['c.status = 1'];
+
+  const typeFilter = String(query.customer_type || query.for_order || 'all').trim().toLowerCase();
+  const typeSql = customerTypeSqlCondition(typeFilter);
+  if (typeSql) conditions.push(typeSql);
+
+  const search = String(query.search || '').trim();
+  if (search) {
+    params.push(`%${search}%`);
+    const idx = params.length;
+    conditions.push(`(
+      c.name ILIKE $${idx} OR c.email ILIKE $${idx} OR c.phone ILIKE $${idx}
+      OR c.gst_no ILIKE $${idx} OR c.company_name ILIKE $${idx}
+      OR c.details->>'contact_person_name' ILIKE $${idx}
+      OR c.details->>'pan_card_number' ILIKE $${idx}
+    )`);
+  }
+
+  const kyc = String(query.kyc || query.kyc_filter || '').trim().toLowerCase();
+  if (kyc === 'verified') {
+    conditions.push('COALESCE(c.kyc_verified, FALSE) = TRUE');
+  } else if (kyc === 'pending') {
+    conditions.push('COALESCE(c.kyc_verified, FALSE) = FALSE');
+  }
+
+  return {
+    params,
+    where: conditions.length ? `WHERE ${conditions.join(' AND ')}` : '',
+  };
+}
+
 exports.listCustomers = async (req, res) => {
   try {
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
     const limit = Math.min(parseInt(req.query.limit, 10) || 10, 100);
-    const search = (req.query.search || '').trim();
     const sortByRaw = (req.query.sort_by || 'customer_id').trim();
     const sortDirRaw = (req.query.sort_dir || 'asc').toLowerCase();
     const SORT_COLUMNS = {
@@ -355,21 +399,8 @@ exports.listCustomers = async (req, res) => {
     };
     const orderBy = SORT_COLUMNS[sortByRaw] || SORT_COLUMNS.customer_id;
     const orderDir = sortDirRaw === 'desc' ? 'DESC' : 'ASC';
-    const params = [];
-    const conditions = ['c.status = 1'];
+    const { params, where } = buildCustomerListFilters(req.query);
 
-    if (search) {
-      params.push(`%${search}%`);
-      const idx = params.length;
-      conditions.push(`(
-        c.name ILIKE $${idx} OR c.email ILIKE $${idx} OR c.phone ILIKE $${idx}
-        OR c.gst_no ILIKE $${idx} OR c.company_name ILIKE $${idx}
-        OR c.details->>'contact_person_name' ILIKE $${idx}
-        OR c.details->>'pan_card_number' ILIKE $${idx}
-      )`);
-    }
-
-    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const countResult = await pool.query(
       `SELECT COUNT(*)::int AS total FROM customers c ${where}`,
       params
@@ -411,6 +442,41 @@ exports.listCustomers = async (req, res) => {
     });
   } catch (error) {
     console.error('listCustomers:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * GET — all matching customer IDs for the current filters (no pagination).
+ * Used by bulk "Select all matching customers".
+ */
+exports.listCustomerIds = async (req, res) => {
+  try {
+    const { params, where } = buildCustomerListFilters(req.query);
+    const result = await pool.query(
+      `SELECT c.customer_id, c.name, c.company_name, c.email, c.phone, c.customer_type, c.kyc_verified
+         FROM customers c
+         ${where}
+         ORDER BY c.customer_id ASC`,
+      params
+    );
+    res.json({
+      success: true,
+      total: result.rows.length,
+      customer_ids: result.rows.map((r) => r.customer_id),
+      customers: result.rows.map((r) => ({
+        customer_id: r.customer_id,
+        name: r.name,
+        customer_name: r.name,
+        company_name: r.company_name || r.name,
+        email: r.email,
+        phone: r.phone,
+        customer_type: normalizeCustomerType(r.customer_type),
+        kyc_verified: !!r.kyc_verified,
+      })),
+    });
+  } catch (error) {
+    console.error('listCustomerIds:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -814,6 +880,11 @@ exports.storeCustomer = async (req, res) => {
       return res.status(400).json({ success: false, message: contactValidationErrors[0] });
     }
 
+    let customerType = 'both';
+    if (canEditCustomerType(req.user) && body.customer_type != null && String(body.customer_type).trim() !== '') {
+      customerType = normalizeCustomerType(body.customer_type);
+    }
+
     const details = {
       contact_person_name: body.contact_person_name,
       contact_person_number: contactPersonNumber,
@@ -828,8 +899,8 @@ exports.storeCustomer = async (req, res) => {
     applyFinanceSpockDetails(details, body);
 
     const result = await pool.query(
-      `INSERT INTO customers (name, company_name, email, phone, gst_no, address, type, details, status, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, NOW(), NOW())
+      `INSERT INTO customers (name, company_name, email, phone, gst_no, address, type, customer_type, details, status, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, NOW(), NOW())
        RETURNING *`,
       [
         body.customer_name,
@@ -839,6 +910,7 @@ exports.storeCustomer = async (req, res) => {
         body.gst_number || null,
         billingAddress.address,
         body.business_type === 'supplier' ? 'Supplier' : 'Regular',
+        customerType,
         JSON.stringify(details),
       ]
     );
@@ -917,6 +989,24 @@ exports.updateCustomer = async (req, res) => {
       ]
     );
 
+    if (body.customer_type != null && String(body.customer_type).trim() !== '') {
+      if (!canEditCustomerType(req.user)) {
+        const requested = normalizeCustomerType(body.customer_type);
+        const current = normalizeCustomerType(row.customer_type);
+        if (requested !== current) {
+          return res.status(403).json({
+            success: false,
+            message: 'Only Admin / Super Admin can update Customer Type',
+          });
+        }
+      } else {
+        await pool.query(
+          `UPDATE customers SET customer_type = $1, updated_at = NOW() WHERE customer_id = $2`,
+          [normalizeCustomerType(body.customer_type), customerId]
+        );
+      }
+    }
+
     let detailsChanged = false;
     if (body.contact_person_name !== undefined) {
       details.contact_person_name = body.contact_person_name || null;
@@ -945,6 +1035,57 @@ exports.updateCustomer = async (req, res) => {
     res.json({ success: true, customer: formatCustomerRow(updated.rows[0]) });
   } catch (error) {
     console.error('updateCustomer:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/** PATCH — Admin/Super Admin bulk set customer_type for many customers. */
+exports.bulkUpdateCustomerType = async (req, res) => {
+  try {
+    if (!canEditCustomerType(req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only Admin / Super Admin can update Customer Type',
+      });
+    }
+    const customerType = normalizeCustomerType(req.body?.customer_type);
+    const rawIds = Array.isArray(req.body?.customer_ids) ? req.body.customer_ids : [];
+    const customerIds = [...new Set(
+      rawIds.map((id) => parseInt(id, 10)).filter((id) => Number.isFinite(id) && id > 0)
+    )];
+    if (!customerIds.length) {
+      return res.status(400).json({ success: false, message: 'Select at least one customer' });
+    }
+    if (!['sales', 'rental', 'both'].includes(String(req.body?.customer_type || '').toLowerCase())) {
+      return res.status(400).json({
+        success: false,
+        message: 'customer_type must be sales, rental, or both',
+      });
+    }
+
+    const result = await pool.query(
+      `UPDATE customers
+          SET customer_type = $1, updated_at = NOW()
+        WHERE customer_id = ANY($2::int[])
+          AND COALESCE(status, 1) = 1
+        RETURNING customer_id, name, company_name, customer_type`,
+      [customerType, customerIds]
+    );
+
+    res.json({
+      success: true,
+      message: `Updated ${result.rowCount} customer(s) to ${customerType}`,
+      updated_count: result.rowCount,
+      customer_type: customerType,
+      customers: result.rows.map((row) => ({
+        customer_id: row.customer_id,
+        name: row.name,
+        company_name: row.company_name,
+        customer_type: row.customer_type,
+      })),
+    });
+  } catch (error) {
+    console.error('bulkUpdateCustomerType:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };
