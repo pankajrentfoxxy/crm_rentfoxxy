@@ -350,6 +350,14 @@ exports.detachSerial = async (req, res) => {
       } catch (paErr) {
         console.error('detachSerial pending inventory:', paErr.message);
       }
+      // Always free reserved shelf status so the unit can be re-attached / searched.
+      try {
+        await inventorySM.backToStock(client, alloc.serial_id, {
+          reason: `Detached from ${alloc.sales_order_number} (pending inventory)`,
+          actorUserId: req.user.user_id,
+          actorName: req.user.name,
+        });
+      } catch (_) { /* tolerate non-canonical state */ }
     } else if (alloc.serial_id) {
       // Return unit to stock.
       try {
