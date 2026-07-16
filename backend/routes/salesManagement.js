@@ -80,6 +80,8 @@ router.patch('/so-lines/:lineId/address', soSerialsEdit, ctrl.updateSoLineAddres
 router.patch('/so-lines/:lineId/config', checkRole('super_admin'), ctrl.updateSoLineConfig);
 // Super Admin — correct monthly rate (regenerates SO + linked DC PDFs)
 router.patch('/so-lines/:lineId/rate', checkRole('super_admin'), ctrl.updateSoLineRate);
+// Admin / Super Admin — override line HSN/SAC
+router.patch('/so-lines/:lineId/hsn', checkRole('admin', 'super_admin'), ctrl.updateSoLineHsn);
 
 // Phase 13 — delivery flow (technician bucket / my deliveries / OTP / POD)
 router.get('/delivery-flow', drView, flowCtrl.listDeliveryFlow);
@@ -131,6 +133,7 @@ router.patch(...dcRoute('/customer-rejected', tbEdit, flowCtrl.markCustomerRejec
 router.post(...dcRoute('/warehouse-return-otp', whReturnEdit, flowCtrl.sendWarehouseReturnOtp));
 router.post(...dcRoute('/warehouse-return-otp/verify', whReturnEdit, flowCtrl.verifyWarehouseReturnOtp));
 router.patch(...dcRoute('/courier-rejected', soDcEdit, flowCtrl.markCourierRejected));
+router.patch(...dcRoute('/hsn', checkRole('admin', 'super_admin'), ctrl.updateDcHsn));
 // Catch-all DC routes MUST be registered last: their greedy (.+) pattern would
 // otherwise swallow specific sub-paths like /qc-status, /dispatch, /delivered.
 router.get(/^\/delivery-challans\/(.+)$/, bindDcNumber, soDcView, ctrl.getDeliveryChallan);

@@ -37,6 +37,7 @@ export default function DiagnosisFailedPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const canProcess = WAREHOUSE_ROLES.has(user?.role);
+  const canOverrideHsn = user?.role === 'admin' || user?.role === 'super_admin';
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState([]);
   const [selected, setSelected] = useState(new Set());
@@ -46,6 +47,10 @@ export default function DiagnosisFailedPage() {
   const [shipBy, setShipBy] = useState('');
   const [dispatchFields, setDispatchFields] = useState({});
   const [itemRemarks, setItemRemarks] = useState({});
+  const [itemPrices, setItemPrices] = useState({});
+  const [itemHsnCodes, setItemHsnCodes] = useState({});
+  const [defaultHsn, setDefaultHsn] = useState('847330');
+  const [ewayThreshold, setEwayThreshold] = useState(50000);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [specFilters, setSpecFilters] = useState(EMPTY_SPEC_FILTERS);
@@ -62,6 +67,8 @@ export default function DiagnosisFailedPage() {
     remarks: '',
     warehouse_name: '',
     warehouse_address: '',
+    eway_bill_number: '',
+    eway_bill_date: '',
   });
 
   const load = useCallback(async () => {
@@ -84,7 +91,13 @@ export default function DiagnosisFailedPage() {
   useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
-    fetchVendorRepairCompanyDefaults().catch(() => {});
+    fetchVendorRepairCompanyDefaults()
+      .then((res) => {
+        const d = res?.data || {};
+        if (d.hsn_code) setDefaultHsn(String(d.hsn_code));
+        if (d.eway_value_threshold) setEwayThreshold(Number(d.eway_value_threshold) || 50000);
+      })
+      .catch(() => {});
     fetchDeliveryTechnicians({ limit: 200 })
       .then((data) => setDeliveryTechnicians(data?.data || data?.technicians || []))
       .catch(() => {});
@@ -111,12 +124,28 @@ export default function DiagnosisFailedPage() {
 
   const openModal = () => {
     const remarksInit = {};
+    const pricesInit = {};
+    const hsnInit = {};
     selectedRows.forEach((r) => {
       remarksInit[r.ticket_id] = r.diagnosis_failed_reason || '';
+      pricesInit[r.ticket_id] = '';
+      hsnInit[r.ticket_id] = defaultHsn;
     });
     setItemRemarks(remarksInit);
+    setItemPrices(pricesInit);
+    setItemHsnCodes(hsnInit);
+    setForm((f) => ({ ...f, eway_bill_number: '', eway_bill_date: '' }));
     setModalOpen(true);
   };
+
+  const totalDeclaredValue = useMemo(
+    () => selectedRows.reduce((sum, r) => {
+      const n = Number(itemPrices[r.ticket_id]);
+      return sum + (Number.isFinite(n) && n > 0 ? n : 0);
+    }, 0),
+    [selectedRows, itemPrices]
+  );
+  const ewayRequired = totalDeclaredValue >= ewayThreshold;
 
   const onVendorChange = async (vendorId) => {
     if (!vendorId) {
@@ -161,6 +190,17 @@ export default function DiagnosisFailedPage() {
       toast.error(dispatchErr);
       return;
     }
+    if (ewayRequired && !form.eway_bill_number.trim()) {
+      toast.error(`E-way Bill is required when consignment value is ₹${ewayThreshold.toLocaleString('en-IN')} or more`);
+      return;
+    }
+    for (const r of selectedRows) {
+      const hsn = String(itemHsnCodes[r.ticket_id] || '').trim();
+      if (hsn && !/^\d{4,8}$/.test(hsn)) {
+        toast.error(`Invalid HSN for ${r.ttspl_id || `#${r.ticket_id}`}`);
+        return;
+      }
+    }
     if (form.contact_mobile?.trim()) {
       const mobileErr = indianMobileError(form.contact_mobile, { label: 'Contact mobile' });
       if (mobileErr) {
@@ -184,6 +224,10 @@ export default function DiagnosisFailedPage() {
         warehouse_name: form.warehouse_name.trim() || undefined,
         warehouse_address: DEFAULT_BILLING_ADDRESS,
         item_remarks: itemRemarks,
+        item_prices: itemPrices,
+        item_hsn_codes: canOverrideHsn ? itemHsnCodes : undefined,
+        eway_bill_number: form.eway_bill_number.trim() || undefined,
+        eway_bill_date: form.eway_bill_date || undefined,
         ship_by: shipBy,
         courier_name: dispatchFields.courier_name,
         awb_number: dispatchFields.awb_number,
@@ -348,6 +392,32 @@ export default function DiagnosisFailedPage() {
               <label className="block text-xs font-medium text-slate-600 mb-1">Expected return date</label>
               <input type="date" className="w-full border rounded-lg px-3 py-2 text-sm" value={form.expected_return_date} onChange={(e) => setForm({ ...form, expected_return_date: e.target.value })} />
             </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">
+                  E-way Bill number{ewayRequired ? ' *' : ''}
+                </label>
+                <input
+                  className="w-full border rounded-lg px-3 py-2 text-sm uppercase"
+                  value={form.eway_bill_number}
+                  onChange={(e) => setForm({ ...form, eway_bill_number: e.target.value.toUpperCase() })}
+                  placeholder={ewayRequired ? 'Required (≥ ₹50,000)' : 'Optional'}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">E-way Bill date</label>
+                <input
+                  type="date"
+                  className="w-full border rounded-lg px-3 py-2 text-sm"
+                  value={form.eway_bill_date}
+                  onChange={(e) => setForm({ ...form, eway_bill_date: e.target.value })}
+                />
+              </div>
+            </div>
+            <p className="text-[11px] text-slate-500">
+              Declared value: ₹{totalDeclaredValue.toLocaleString('en-IN')}
+              {ewayRequired ? ' — E-way Bill required' : ` — E-way Bill optional below ₹${ewayThreshold.toLocaleString('en-IN')}`}
+            </p>
             <div className="rounded-lg border p-3 bg-slate-50/80">
               <p className="text-xs font-semibold uppercase text-slate-500 mb-2">Send to vendor</p>
               <VrdcDispatchFields
@@ -363,11 +433,40 @@ export default function DiagnosisFailedPage() {
               <textarea className="w-full border rounded-lg px-3 py-2 text-sm min-h-[50px]" value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value })} />
             </div>
             <div className="border rounded-lg overflow-hidden">
-              <div className="bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">Per-laptop remarks (shown on challan & vendor portal)</div>
-              <div className="divide-y max-h-48 overflow-y-auto">
+              <div className="bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
+                Per-laptop Price / HSN / remarks
+              </div>
+              <div className="divide-y max-h-64 overflow-y-auto">
                 {selectedRows.map((r) => (
-                  <div key={r.ticket_id} className="p-3 space-y-1">
+                  <div key={r.ticket_id} className="p-3 space-y-2">
                     <p className="text-xs font-mono text-slate-700">{r.ttspl_id || '—'} · #{r.ticket_id}</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[10px] font-medium text-slate-500 mb-0.5">Price (₹)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          className="w-full border rounded-lg px-2 py-1.5 text-xs"
+                          value={itemPrices[r.ticket_id] ?? ''}
+                          onChange={(e) => setItemPrices((m) => ({ ...m, [r.ticket_id]: e.target.value }))}
+                          placeholder="Declared value"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-medium text-slate-500 mb-0.5">
+                          HSN {canOverrideHsn ? '(admin override)' : '(auto)'}
+                        </label>
+                        <input
+                          className="w-full border rounded-lg px-2 py-1.5 text-xs font-mono"
+                          value={itemHsnCodes[r.ticket_id] ?? defaultHsn}
+                          onChange={(e) => setItemHsnCodes((m) => ({ ...m, [r.ticket_id]: e.target.value }))}
+                          placeholder={defaultHsn}
+                          readOnly={!canOverrideHsn}
+                          disabled={!canOverrideHsn}
+                        />
+                      </div>
+                    </div>
                     <textarea
                       className="w-full border rounded-lg px-2 py-1.5 text-xs"
                       rows={2}

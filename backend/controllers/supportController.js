@@ -321,6 +321,19 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
       dcRemarks = replacementFlow.buildReplacementRdcRemarks(machines);
     }
 
+    const { resolveHsnForPersist } = require('../constants/hsnDefaults');
+    const { resolveTxnTypeForDc } = require('../utils/hsnDocResolve');
+    const { entityForQuotationType } = require('../services/salesManagementService');
+    const rdcTxn = await resolveTxnTypeForDc(client, {
+      salesOrderNumber,
+      originalDcNumber,
+    });
+    const rdcHsn = resolveHsnForPersist({
+      transactionType: rdcTxn,
+      role: null, // auto-assign only on create; admin override via PATCH later
+    });
+    const rdcEntity = entityForQuotationType(rdcTxn === 'sale' ? 'sales' : 'rental');
+
     await client.query(
         `INSERT INTO delivery_challan_lines
             (dc_number, movement_type, support_ticket_id, customer_id, customer_name, email,
@@ -328,10 +341,11 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
              dispatch_mode, delivery_person_id, courier_name, awb_number,
              porter_tracking_id, porter_order_id,
              sales_order_number, original_dc_number, dc_purpose, remarks,
-             status, dispatched_at, created_by, created_at, updated_at)
+             status, dispatched_at, created_by, created_at, updated_at,
+             entity_code, hsn_code)
          VALUES ($1,'return',$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16,
                  $17,$18,COALESCE($19,'standard'),$20,
-                 $21,CASE WHEN $22 THEN NOW() ELSE NULL END,$23,NOW(),NOW())`,
+                 $21,CASE WHEN $22 THEN NOW() ELSE NULL END,$23,NOW(),NOW(),$24,$25)`,
         [
             rdc, ticketId, ticket.customer_id, ticket.customer_name, ticket.ticket_email || null,
             JSON.stringify(pickupAddr || {}),
@@ -349,6 +363,8 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
             dcStatus,
             hasDispatch,
             userId,
+            rdcEntity,
+            rdcHsn,
         ]
     );
 

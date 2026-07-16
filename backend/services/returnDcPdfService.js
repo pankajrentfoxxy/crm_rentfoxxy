@@ -125,10 +125,26 @@ async function regenerateReturnDcPdfByRdc(db, rdcNumber) {
     const allOtpVerified = pickupItems.length > 0
       && pickupItems.every((i) => i.customer_otp_verified_at);
 
+    const { resolveTxnTypeForDc } = require('../utils/hsnDocResolve');
+    const { resolveHsnForDisplay } = require('../constants/hsnDefaults');
+    const { entityForQuotationType } = require('./salesManagementService');
+
+    const txnType = await resolveTxnTypeForDc(db, {
+      salesOrderNumber: dcl.sales_order_number,
+      originalDcNumber: dcl.original_dc_number,
+      entityCode: dcl.entity_code,
+    });
+    const entityCode = dcl.entity_code
+      || entityForQuotationType(txnType === 'sale' ? 'sales' : 'rental');
+    const hsnCode = resolveHsnForDisplay(dcl.hsn_code, { transactionType: txnType });
+
     const pdfPath = await generateReturnDcPdf({
       returnDcNumber: rdcNumber,
       header: {
-        entity_code: 'rentfoxxy',
+        entity_code: entityCode,
+        quotation_type: txnType === 'sale' ? 'sales' : 'rental',
+        transaction_type: txnType,
+        hsn_code: hsnCode,
         customer_name: dcl.customer_name || null,
         customer_email: dcl.email || null,
         customer_phone: dcl.customer_phone || null,
@@ -144,11 +160,12 @@ async function regenerateReturnDcPdfByRdc(db, rdcNumber) {
         warehouse_received_at: earliestTimestamp(pickupItems, 'warehouse_received_at'),
         remarks: (dcl.remarks || '').trim() || null,
       },
-      units: units.length ? units : [{
+      units: units.length ? units.map((u) => ({ ...u, hsn_code: hsnCode })) : [{
         brand: dcl.brand,
         model: dcl.model_name,
         ttspl: '—',
         serial: '—',
+        hsn_code: hsnCode,
       }],
       esign: {
         technician_url: techItem.technician_esign_url || null,

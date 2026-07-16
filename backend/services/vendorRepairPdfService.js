@@ -4,6 +4,7 @@ const PDFDocument = require('pdfkit');
 const pool = require('../config/db');
 const { mergeCompany, formatCompanyBlock } = require('../utils/companyDefaults');
 const { formatPdfDateIstOrDash, formatPdfNowIst } = require('../utils/pdfDateTimeUtils');
+const { resolveHsnForDisplay } = require('../constants/hsnDefaults');
 
 const C = {
   ink: '#1f2937',
@@ -12,6 +13,7 @@ const C = {
   accent: '#f26b21',
   teal: '#0e7490',
   panel: '#f9fafb',
+  white: '#ffffff',
 };
 
 async function loadCompany() {
@@ -267,7 +269,7 @@ function writeReceiveItemsTable(doc, y, items) {
   const drawHeader = (yy) => {
     doc.rect(L, yy, W, 22).fill(C.teal);
     let cx = L;
-    doc.fillColor(C.white).font('Helvetica-Bold').fontSize(8);
+    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(8);
     for (const c of cols) {
       doc.text(c.label, cx + 4, yy + 7, { width: c.w - 8 });
       cx += c.w;
@@ -351,17 +353,19 @@ function writeItemsTable(doc, y, items, { title = 'Laptops' } = {}) {
   y += 14;
 
   const cols = [
-    { key: 'product', label: 'Product', w: 320, align: 'left' },
-    { key: 'qty', label: 'Qty.', w: 55, align: 'center' },
+    { key: 'product', label: 'Product', w: 210, align: 'left' },
+    { key: 'hsn', label: 'HSN', w: 55, align: 'center' },
+    { key: 'price', label: 'Price', w: 70, align: 'right' },
+    { key: 'qty', label: 'Qty.', w: 40, align: 'center' },
     { key: 'remarks', label: 'Remarks', w: W - 375, align: 'left' },
   ];
 
   const drawTableHeader = (yy) => {
     doc.rect(L, yy, W, 22).fill(C.teal);
     let cx = L;
-    doc.fillColor(C.white).font('Helvetica-Bold').fontSize(9);
+    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(9);
     for (const c of cols) {
-      doc.text(c.label, cx + 6, yy + 6, { width: c.w - 12, align: c.align });
+      doc.text(c.label, cx + 4, yy + 6, { width: c.w - 8, align: c.align });
       cx += c.w;
     }
     return yy + 22;
@@ -388,22 +392,34 @@ function writeItemsTable(doc, y, items, { title = 'Laptops' } = {}) {
 
     let py = y + 6;
     if (p.l1) {
-      doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.ink).text(p.l1, L + 6, py, { width: cols[0].w - 12 });
+      doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.ink).text(p.l1, L + 4, py, { width: cols[0].w - 8 });
       py += 11;
     }
     doc.font('Helvetica').fontSize(8).fillColor(C.sub);
-    if (p.l2) { doc.text(p.l2, L + 6, py, { width: cols[0].w - 12 }); py += 10; }
-    if (p.l3) { doc.text(p.l3, L + 6, py, { width: cols[0].w - 12 }); py += 10; }
+    if (p.l2) { doc.text(p.l2, L + 4, py, { width: cols[0].w - 8 }); py += 10; }
+    if (p.l3) { doc.text(p.l3, L + 4, py, { width: cols[0].w - 8 }); py += 10; }
     if (p.l5) {
-      doc.font('Helvetica-Bold').fontSize(8).fillColor(C.ink).text(p.l5, L + 6, py, { width: cols[0].w - 12 });
+      doc.font('Helvetica-Bold').fontSize(8).fillColor(C.ink).text(p.l5, L + 4, py, { width: cols[0].w - 8 });
     }
 
-    const qtyX = L + cols[0].w;
-    doc.font('Helvetica').fontSize(8.5).fillColor(C.ink)
-      .text('1 Pcs.', qtyX + 6, y + rowH / 2 - 5, { width: cols[1].w - 12, align: 'center' });
+    const hsnX = L + cols[0].w;
+    const priceX = hsnX + cols[1].w;
+    const qtyX = priceX + cols[2].w;
+    const remX = qtyX + cols[3].w;
+    const priceStr = item.price != null && item.price !== ''
+      ? `Rs ${Number(item.price).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
+      : '—';
 
-    const remX = qtyX + cols[1].w;
-    doc.text(String(item.item_remarks || '—'), remX + 6, y + 8, { width: cols[2].w - 12, align: 'left' });
+    doc.font('Helvetica').fontSize(8).fillColor(C.ink)
+      .text(
+        String(resolveHsnForDisplay(item.hsn_code, { transactionType: 'repair' })),
+        hsnX + 4,
+        y + rowH / 2 - 5,
+        { width: cols[1].w - 8, align: 'center' }
+      );
+    doc.text(priceStr, priceX + 4, y + rowH / 2 - 5, { width: cols[2].w - 8, align: 'right' });
+    doc.text('1', qtyX + 4, y + rowH / 2 - 5, { width: cols[3].w - 8, align: 'center' });
+    doc.text(String(item.item_remarks || '—'), remX + 4, y + 8, { width: cols[4].w - 8, align: 'left' });
 
     y += rowH;
   });
@@ -473,6 +489,13 @@ async function generateVendorRepairPdf(dcNumber) {
     doc.text(`Out Date: ${formatPdfDateIstOrDash(dc.out_date)}`, 40, y + 12);
     doc.text(`Expected Return: ${formatPdfDateIstOrDash(dc.expected_return_date)}`, 280, y + 12);
     y += 28;
+    doc.font('Helvetica').fontSize(9).fillColor(C.ink)
+      .text(
+        `E-way Bill: ${dc.eway_bill_number || '—'}${dc.eway_bill_number && dc.eway_bill_date ? ` · Date: ${formatPdfDateIstOrDash(dc.eway_bill_date)}` : ''}`,
+        40,
+        y
+      );
+    y += 14;
 
     y = drawDispatchTags(doc, y, dispatchTagsForDc(dc));
 
@@ -484,6 +507,20 @@ async function generateVendorRepairPdf(dcNumber) {
     y += 16;
 
     y = writeItemsTable(doc, y, dc.items);
+    const totalDeclared = (dc.items || []).reduce((sum, it) => {
+      const n = Number(it.price);
+      return sum + (Number.isFinite(n) ? n : 0);
+    }, 0);
+    if (totalDeclared > 0) {
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink)
+        .text(
+          `Total declared value: Rs ${totalDeclared.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`,
+          40,
+          y,
+          { width: 515, align: 'right' }
+        );
+      y += 16;
+    }
     if (dc.remarks) {
       y += 4;
       doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink).text('DC Remarks:', 40, y);

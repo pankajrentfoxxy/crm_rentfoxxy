@@ -165,17 +165,19 @@ async function createConfigSalesOrder(client, {
   const lineIds = [];
 
   for (const cfg of lineConfigs) {
+    const { resolveHsnForPersist } = require('../constants/hsnDefaults');
+    const lineHsn = resolveHsnForPersist({ quotationType: 'rental' });
     const ins = await client.query(
       `INSERT INTO sales_order_lines (
          sales_order_number, quotation_number, customer_id, customer_name, customer_email, customer_mobile,
          customer_shipping_address, customer_billing_address, gst_number, supply_state, security_amount,
          shiping_charges, quotation_type, branch, brand, model_name, processor, generation, ram, storage,
          gpu, screen_size, quantity, main_qty, rate, locking_period, battery_charger_warranty,
-         technical_warranty, remark, status, token, created_by
+         technical_warranty, remark, status, token, created_by, hsn_code
        ) VALUES (
          $1,'N/A',$2,$3,$4,$5,$6,$7,$8,$9,0,0,'rental','rentfoxxy',
          $10,$11,$12,$13,$14,$15,$16,$17,1,1,$18,0,0,0,
-         'Support replacement','pending',$19,$20
+         'Support replacement','pending',$19,$20,$21
        ) RETURNING id`,
       [
         salesOrderNumber,
@@ -198,6 +200,7 @@ async function createConfigSalesOrder(client, {
         cfg.monthly_rate || 0,
         token,
         userId,
+        lineHsn,
       ]
     );
     lineIds.push(ins.rows[0].id);

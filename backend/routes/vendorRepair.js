@@ -21,6 +21,7 @@ router.post('/out-for-repair', ctrl.requireWarehouse, ctrl.createOutForRepair);
 router.get(...vrdcRoute('/pdf', floorView, ctrl.downloadPdf));
 router.get(...vrdcRoute('/receive-pdf', floorView, ctrl.downloadReceivePdf));
 router.patch(...vrdcRoute('/dispatch-details', ctrl.requireWarehouse, ctrl.updateDispatchDetails));
+router.patch(...vrdcRoute('/commercial-details', ctrl.requireWarehouse, ctrl.updateCommercialDetails));
 router.post(...vrdcRoute('/mark-delivered-to-vendor', ctrl.requireWarehouse, ctrl.markDeliveredToVendor));
 router.post(...vrdcRoute('/dispatch-sign', ctrl.requireWarehouse, ctrl.signDispatch));
 router.post(...vrdcRoute('/receive-back', ctrl.requireWarehouse, ctrl.receiveBack));

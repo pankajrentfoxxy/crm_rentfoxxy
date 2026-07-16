@@ -72,6 +72,10 @@ export const updateSoLineConfig = (lineId, d) =>
   api.patch(`${base}/so-lines/${lineId}/config`, d);
 export const updateSoLineRate = (lineId, d) =>
   api.patch(`${base}/so-lines/${lineId}/rate`, d);
+export const updateSoLineHsn = (lineId, d) =>
+  api.patch(`${base}/so-lines/${lineId}/hsn`, d);
+export const updateDcHsn = (dcNumber, d) =>
+  api.patch(`${base}/delivery-challans/${encodeURIComponent(dcNumber)}/hsn`, d);
 
 // Phase 13 — delivery flow
 export const listDeliveryFlow = (params) => api.get(`${base}/delivery-flow`, { params });

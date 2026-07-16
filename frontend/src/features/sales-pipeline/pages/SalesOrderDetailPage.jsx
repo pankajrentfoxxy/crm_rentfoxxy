@@ -8,6 +8,7 @@ import DCForm from '../components/DCForm';
 import SoSerialPanel from '../components/SoSerialPanel';
 import SoDeliveryAddressPanel from '../components/SoDeliveryAddressPanel';
 import SoLineRateEditModal from '../components/SoLineRateEditModal';
+import SoLineHsnEditModal from '../components/SoLineHsnEditModal';
 import SoActivityPanel from '../components/SoActivityPanel';
 import { cancelSalesOrder, getQuotation, getSalesOrderFull, listPayments, logSoDocumentActivity, regenerateSalesOrderPdf } from '../salesPipelineApi';
 import { getBackendOrigin } from '../../../utils/api';
@@ -51,6 +52,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
   const soNumber = resolveSoNumber(params);
   const { user } = useAuth();
   const isSuperAdmin = user?.role === 'super_admin';
+  const canOverrideHsn = user?.role === 'admin' || user?.role === 'super_admin';
   const [tab, setTab] = useState('overview');
   const [data, setData] = useState(null);
   const [payments, setPayments] = useState([]);
@@ -58,6 +60,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [dcOpen, setDcOpen] = useState(false);
   const [editRateLine, setEditRateLine] = useState(null);
+  const [editHsnLine, setEditHsnLine] = useState(null);
   const [activityRefreshKey, setActivityRefreshKey] = useState(0);
 
   const load = useCallback(async () => {
@@ -240,10 +243,11 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
                 <tr>
                   <th className="px-4 py-2 text-left">Brand</th>
                   <th className="px-4 py-2 text-left">Config</th>
+                  <th className="px-4 py-2 text-center">HSN/SAC</th>
                   <th className="px-4 py-2 text-right">Qty</th>
                   <th className="px-4 py-2 text-right">Rate</th>
                   <th className="px-4 py-2 text-right">Total</th>
-                  {isSuperAdmin ? <th className="px-4 py-2 text-right"> </th> : null}
+                  {isSuperAdmin || canOverrideHsn ? <th className="px-4 py-2 text-right"> </th> : null}
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -251,18 +255,30 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
                   <tr key={i}>
                     <td className="px-4 py-2">{l.brand}</td>
                     <td className="px-4 py-2"><ConfigCard line={l} /></td>
+                    <td className="px-4 py-2 text-center font-mono text-xs">{l.hsn_code || '—'}</td>
                     <td className="px-4 py-2 text-right">{l.main_qty || l.quantity}</td>
                     <td className="px-4 py-2 text-right">{formatCurrency(l.rate)}</td>
                     <td className="px-4 py-2 text-right">{formatCurrency((l.main_qty || l.quantity || 0) * (l.rate || 0))}</td>
-                    {isSuperAdmin ? (
-                      <td className="px-4 py-2 text-right">
-                        <button
-                          type="button"
-                          onClick={() => setEditRateLine(l)}
-                          className="text-xs text-amber-700 hover:underline"
-                        >
-                          Edit rate
-                        </button>
+                    {isSuperAdmin || canOverrideHsn ? (
+                      <td className="px-4 py-2 text-right space-x-2 whitespace-nowrap">
+                        {canOverrideHsn ? (
+                          <button
+                            type="button"
+                            onClick={() => setEditHsnLine(l)}
+                            className="text-xs text-teal-700 hover:underline"
+                          >
+                            Edit HSN
+                          </button>
+                        ) : null}
+                        {isSuperAdmin ? (
+                          <button
+                            type="button"
+                            onClick={() => setEditRateLine(l)}
+                            className="text-xs text-amber-700 hover:underline"
+                          >
+                            Edit rate
+                          </button>
+                        ) : null}
                       </td>
                     ) : null}
                   </tr>
@@ -374,6 +390,12 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
         open={Boolean(editRateLine)}
         line={editRateLine}
         onClose={() => setEditRateLine(null)}
+        onSaved={load}
+      />
+      <SoLineHsnEditModal
+        open={Boolean(editHsnLine)}
+        line={editHsnLine}
+        onClose={() => setEditHsnLine(null)}
         onSaved={load}
       />
     </div>

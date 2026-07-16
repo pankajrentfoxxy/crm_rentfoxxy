@@ -4,6 +4,7 @@ const PDFDocument = require('pdfkit');
 const nodemailer = require('nodemailer');
 const pool = require('../config/db');
 const { computeGstBreakdown, resolveSupplyStateFromAddress } = require('./salesManagementService');
+const { resolveHsnForDisplay, txnTypeFromQuotation } = require('../constants/hsnDefaults');
 
 const UPLOAD_DIR = path.join(__dirname, '../uploads/sales-documents');
 
@@ -200,6 +201,7 @@ async function resolveDcUnitRows(lines, dcNumber) {
         technical_warranty: line.technical_warranty,
         battery_charger_warranty: line.battery_charger_warranty,
         qty: 1,
+        hsn_code: line.hsn_code,
         remarks: (line.remarks || line.remark || '').trim()
           || lookupSerialRemark(serialLookup, { serialId, serialNumber, ttspl })
           || '',
@@ -294,6 +296,7 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
       serial: '', ttspl: '', rate: l.rate, locking_period: l.locking_period,
       technical_warranty: l.technical_warranty, battery_charger_warranty: l.battery_charger_warranty,
       qty: l.quantity || 1,
+      hsn_code: l.hsn_code,
     }));
 
   // Totals
@@ -422,23 +425,29 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
 
     // ── Product table ────────────────────────────────────────────────────
     // Columns depend on type.
+    const defaultHsn = resolveHsnForDisplay(null, {
+      quotationType: qtype,
+      transactionType: txnTypeFromQuotation(qtype),
+    });
     let cols;
     if (isSale) {
       cols = [
-        { key: 'product', label: 'Product', w: 200, align: 'left' },
-        { key: 'tech', label: 'Tech. Wty.', w: 70, align: 'center' },
-        { key: 'bat', label: 'Bat./Chg. Wty.', w: 78, align: 'center' },
-        { key: 'qty', label: 'Qty.', w: 40, align: 'center' },
-        { key: 'rate', label: 'Rate', w: 65, align: 'right' },
-        { key: 'amount', label: 'Amount', w: 70, align: 'right' },
+        { key: 'product', label: 'Product', w: 170, align: 'left' },
+        { key: 'hsn', label: 'HSN', w: 55, align: 'center' },
+        { key: 'tech', label: 'Tech. Wty.', w: 62, align: 'center' },
+        { key: 'bat', label: 'Bat./Chg. Wty.', w: 70, align: 'center' },
+        { key: 'qty', label: 'Qty.', w: 38, align: 'center' },
+        { key: 'rate', label: 'Rate', w: 60, align: 'right' },
+        { key: 'amount', label: 'Amount', w: 68, align: 'right' },
       ];
     } else {
       cols = [
-        { key: 'product', label: 'Product', w: 243, align: 'left' },
-        { key: 'lock', label: 'Locking', w: 75, align: 'center' },
-        { key: 'qty', label: 'Qty.', w: 45, align: 'center' },
-        { key: 'rate', label: 'Rate', w: 80, align: 'right' },
-        { key: 'amount', label: 'Amount', w: 80, align: 'right' },
+        { key: 'product', label: 'Product', w: 200, align: 'left' },
+        { key: 'hsn', label: 'HSN/SAC', w: 58, align: 'center' },
+        { key: 'lock', label: 'Locking', w: 65, align: 'center' },
+        { key: 'qty', label: 'Qty.', w: 40, align: 'center' },
+        { key: 'rate', label: 'Rate', w: 76, align: 'right' },
+        { key: 'amount', label: 'Amount', w: 84, align: 'right' },
       ];
     }
     // header row
@@ -483,6 +492,12 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
       // other cells
       cx = L + cols[0].w;
       const cellText = (key) => {
+        if (key === 'hsn') {
+          return resolveHsnForDisplay(r.hsn_code, {
+            quotationType: qtype,
+            transactionType: txnTypeFromQuotation(qtype),
+          }) || defaultHsn;
+        }
         if (key === 'lock') return fmtMonths(r.locking_period);
         if (key === 'tech') return fmtMonths(r.technical_warranty);
         if (key === 'bat') return fmtMonths(r.battery_charger_warranty);
@@ -576,9 +591,10 @@ async function generateReturnDcPdf({ returnDcNumber, header = {}, units = [], es
   const filePath = path.join(UPLOAD_DIR, fileName);
   const relativePath = `uploads/sales-documents/${fileName}`;
 
-  // Support return pickups are always Rentfoxxy-branded (not Gorefurbo sales).
-  const company = await loadCompany('rentfoxxy');
-  const accent = C.rentfoxxy;
+  const entityCode = header.entity_code
+    || (String(header.transaction_type || '').toLowerCase() === 'sale' ? 'gorefurbo' : 'rentfoxxy');
+  const company = await loadCompany(entityCode);
+  const accent = company.code === 'gorefurbo' ? C.gorefurbo : C.rentfoxxy;
   const pickupTypeLabel = header.pickup_type === 'repair' ? 'Repair Pickup' : 'Return Pickup';
   const addr = normalizeDeliveryAddress(header.pickup_address) || {};
 
@@ -597,10 +613,10 @@ async function generateReturnDcPdf({ returnDcNumber, header = {}, units = [], es
     const L = 36; const R = 559; const W = R - L;
     let y = 40;
 
-    // Header band — Rentfoxxy logo
+    // Header band — entity logo (derived from original SO/DC type)
     const logo = drawCompanyLogo(doc, company, L, y, { maxHeight: 36, maxWidth: 170 });
     if (!logo.drawn) {
-      doc.fillColor(accent).font('Helvetica-Bold').fontSize(22).text('rentfoxxy', L, y + 4);
+      doc.fillColor(accent).font('Helvetica-Bold').fontSize(22).text(company.code || 'rentfoxxy', L, y + 4);
     }
 
     doc.font('Helvetica-Bold').fontSize(16).fillColor(accent).text('RETURN DELIVERY CHALLAN', 250, y, { width: 273, align: 'right' });
@@ -682,10 +698,15 @@ async function generateReturnDcPdf({ returnDcNumber, header = {}, units = [], es
     y = boxBottom + 14;
 
     // Product table
+    const rdcHsn = resolveHsnForDisplay(header.hsn_code, {
+      quotationType: header.quotation_type,
+      transactionType: header.transaction_type || txnTypeFromQuotation(header.quotation_type || 'rental'),
+    });
     const cols = [
       { key: 'idx', label: '#', w: 28, align: 'center' },
-      { key: 'product', label: 'Laptop / Product', w: 280, align: 'left' },
-      { key: 'ttspl', label: 'Machine No.', w: 110, align: 'left' },
+      { key: 'product', label: 'Laptop / Product', w: 230, align: 'left' },
+      { key: 'hsn', label: 'HSN/SAC', w: 60, align: 'center' },
+      { key: 'ttspl', label: 'Machine No.', w: 100, align: 'left' },
       { key: 'serial', label: 'Serial No.', w: 105, align: 'left' },
     ];
     const drawHeader = (yh) => {
@@ -708,10 +729,16 @@ async function generateReturnDcPdf({ returnDcNumber, header = {}, units = [], es
       let px = L + cols[0].w + 6; let py = y + 6;
       doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.ink).text(l1, px, py, { width: cols[1].w - 12 });
       if (l2) { doc.font('Helvetica').fontSize(8).fillColor(C.sub).text(l2, px, py + 11, { width: cols[1].w - 12 }); }
+      const unitHsn = resolveHsnForDisplay(u.hsn_code || header.hsn_code, {
+        quotationType: header.quotation_type,
+        transactionType: header.transaction_type || txnTypeFromQuotation(header.quotation_type || 'rental'),
+      }) || rdcHsn;
+      doc.font('Helvetica').fontSize(8).fillColor(C.ink)
+        .text(unitHsn, L + cols[0].w + cols[1].w + 4, y + rowH / 2 - 5, { width: cols[2].w - 8, align: 'center' });
       doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.ink)
-        .text(dash(u.ttspl), L + cols[0].w + cols[1].w + 6, y + rowH / 2 - 5, { width: cols[2].w - 12 });
+        .text(dash(u.ttspl), L + cols[0].w + cols[1].w + cols[2].w + 6, y + rowH / 2 - 5, { width: cols[3].w - 12 });
       doc.font('Helvetica').fontSize(8.5).fillColor(C.ink)
-        .text(dash(u.serial), L + cols[0].w + cols[1].w + cols[2].w + 6, y + rowH / 2 - 5, { width: cols[3].w - 12 });
+        .text(dash(u.serial), L + cols[0].w + cols[1].w + cols[2].w + cols[3].w + 6, y + rowH / 2 - 5, { width: cols[4].w - 12 });
       y += rowH;
     });
     y += 18;

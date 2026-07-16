@@ -11,7 +11,7 @@ import {
   createDcQcTickets, getDC, getDcQcStatus, getDCMeta, getSalesOrderFull,
   markDelivered, markRejected, regenerateDcPdf,
   sendDeliveryOtp, sendWarehouseReturnOtp, verifyDeliveryOtp, verifyWarehouseReturnOtp,
-  updateDC, dispatchDC,
+  updateDC, dispatchDC, updateDcHsn,
 } from '../salesPipelineApi';
 import {
   DC_STATUS_STYLES, formatConfig, formatCurrency, formatDate, formatDateTime,
@@ -49,6 +49,7 @@ export default function DeliveryChallanDetailPage() {
   const dcNumber = resolveDcNumber(params);
   const { user } = useAuth();
   const isSuperAdmin = user?.role === 'super_admin';
+  const canOverrideHsn = user?.role === 'admin' || user?.role === 'super_admin';
   const [tab, setTab] = useState('details');
   const [lines, setLines] = useState([]);
   const [billingLines, setBillingLines] = useState([]);
@@ -68,6 +69,8 @@ export default function DeliveryChallanDetailPage() {
   const [assignmentEditable, setAssignmentEditable] = useState(false);
   const [assignmentHistory, setAssignmentHistory] = useState([]);
   const [technicians, setTechnicians] = useState([]);
+  const [hsnDraft, setHsnDraft] = useState('');
+  const [hsnSaving, setHsnSaving] = useState(false);
 
   const head = lines[0] || {};
   const summaryLines = billingLines.length ? billingLines : lines;
@@ -90,6 +93,7 @@ export default function DeliveryChallanDetailPage() {
       setTotals(res.data?.totals || null);
       setAssignmentEditable(res.data?.assignment_editable ?? isDcAssignmentEditable(res.data?.lines?.[0]?.status));
       setAssignmentHistory(res.data?.assignment_history || []);
+      setHsnDraft(res.data?.lines?.[0]?.hsn_code || '');
       if (res.data?.lines?.[0]?.sales_order_number) {
         const soRes = await getSalesOrderFull(res.data.lines[0].sales_order_number);
         setPaymentSummary(soRes.data?.summary);
@@ -403,6 +407,7 @@ export default function DeliveryChallanDetailPage() {
                   <thead className="bg-gray-50 text-xs uppercase text-gray-500">
                     <tr>
                       <th className="px-4 py-2 text-left">Item</th>
+                      <th className="px-4 py-2 text-center">HSN/SAC</th>
                       <th className="px-4 py-2 text-right">Qty</th>
                       <th className="px-4 py-2 text-right">Rate</th>
                       <th className="px-4 py-2 text-right">Amount</th>
@@ -412,6 +417,7 @@ export default function DeliveryChallanDetailPage() {
                     {summaryLines.map((l, i) => (
                       <tr key={i}>
                         <td className="px-4 py-2">{[l.brand, l.model_name].filter(Boolean).join(' ') || '—'}</td>
+                        <td className="px-4 py-2 text-center font-mono text-xs">{l.hsn_code || head.hsn_code || '—'}</td>
                         <td className="px-4 py-2 text-right">{l.quantity || l.main_qty || 1}</td>
                         <td className="px-4 py-2 text-right">{formatCurrency(l.rate)}</td>
                         <td className="px-4 py-2 text-right">{formatCurrency(l.amount ?? (Number(l.rate || 0) * Number(l.quantity || l.main_qty || 1)))}</td>
@@ -420,6 +426,43 @@ export default function DeliveryChallanDetailPage() {
                   </tbody>
                 </table>
               </div>
+              {canOverrideHsn ? (
+                <div className="border-t px-4 py-3 flex flex-wrap items-end gap-2">
+                  <div>
+                    <label className="block text-[10px] font-medium text-gray-500 mb-0.5">Override HSN/SAC</label>
+                    <input
+                      className="border rounded-lg px-2 py-1.5 text-xs font-mono w-36"
+                      value={hsnDraft}
+                      onChange={(e) => setHsnDraft(e.target.value)}
+                      placeholder="997315"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    disabled={hsnSaving}
+                    onClick={async () => {
+                      const trimmed = String(hsnDraft || '').trim();
+                      if (!/^\d{4,8}$/.test(trimmed)) {
+                        toast.error('HSN/SAC must be 4–8 digits');
+                        return;
+                      }
+                      setHsnSaving(true);
+                      try {
+                        await updateDcHsn(dcNumber, { hsn_code: trimmed });
+                        toast.success('HSN updated');
+                        load();
+                      } catch (err) {
+                        toast.error(err.response?.data?.message || 'Failed to update HSN');
+                      } finally {
+                        setHsnSaving(false);
+                      }
+                    }}
+                    className="px-3 py-1.5 text-xs bg-teal-700 text-white rounded-lg disabled:opacity-60"
+                  >
+                    {hsnSaving ? 'Saving…' : 'Save HSN'}
+                  </button>
+                </div>
+              ) : null}
               {totals && (
                 <div className="border-t p-4 text-sm space-y-1.5 max-w-xs ml-auto">
                   <div className="flex justify-between"><span className="text-gray-500">Subtotal</span><strong>{formatCurrency(totals.subtotal)}</strong></div>

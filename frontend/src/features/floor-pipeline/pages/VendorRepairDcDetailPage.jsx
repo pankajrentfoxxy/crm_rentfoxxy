@@ -11,6 +11,7 @@ import {
   markVendorRepairDeliveredToVendor,
   receiveVendorRepairBack,
   signVendorRepairDispatch,
+  updateVendorRepairCommercialDetails,
   updateVendorRepairDispatchDetails,
 } from '../vendorRepairApi';
 import { ticketStatusLabel } from '../floorPipelineUi';
@@ -128,6 +129,7 @@ export default function VendorRepairDcDetailPage() {
   const dcNumber = decodeURIComponent(rawDc || '');
   const { user } = useAuth();
   const canProcess = WAREHOUSE_ROLES.has(user?.role);
+  const canOverrideHsn = user?.role === 'admin' || user?.role === 'super_admin';
   const [loading, setLoading] = useState(true);
   const [dc, setDc] = useState(null);
   const [receiveOpen, setReceiveOpen] = useState(false);
@@ -157,6 +159,11 @@ export default function VendorRepairDcDetailPage() {
   const [dispatchBusy, setDispatchBusy] = useState(false);
   const [pendingDispatchPod, setPendingDispatchPod] = useState(null);
   const [deliverBusy, setDeliverBusy] = useState(false);
+  const [ewayBillNumber, setEwayBillNumber] = useState('');
+  const [ewayBillDate, setEwayBillDate] = useState('');
+  const [itemPrices, setItemPrices] = useState({});
+  const [itemHsnCodes, setItemHsnCodes] = useState({});
+  const [commercialSaving, setCommercialSaving] = useState(false);
 
   const syncDispatchFromDc = useCallback((head) => {
     if (!head) return;
@@ -215,6 +222,16 @@ export default function VendorRepairDcDetailPage() {
       syncDispatchFromDc(data.data);
       if (data.data.warehouse_dispatch_signer_name) setWhDispatchSignerName(data.data.warehouse_dispatch_signer_name);
       if (data.data.vendor_dispatch_signer_name) setVendorDispatchSignerName(data.data.vendor_dispatch_signer_name);
+      setEwayBillNumber(data.data.eway_bill_number || '');
+      setEwayBillDate(data.data.eway_bill_date ? String(data.data.eway_bill_date).slice(0, 10) : '');
+      const prices = {};
+      const hsns = {};
+      (data.data.items || []).forEach((it) => {
+        prices[it.ticket_id] = it.price != null ? String(it.price) : '';
+        hsns[it.ticket_id] = it.hsn_code || '';
+      });
+      setItemPrices(prices);
+      setItemHsnCodes(hsns);
     } catch {
       toast.error('Vendor repair DC not found');
       setDc(null);
@@ -265,6 +282,42 @@ export default function VendorRepairDcDetailPage() {
     () => (dc?.items || []).filter((i) => (i.item_status || 'dispatched') === 'dispatched'),
     [dc]
   );
+
+  const canEditCommercial = Boolean(canProcess && dc && dc.status !== 'returned');
+  const canEditHsn = Boolean(canEditCommercial && canOverrideHsn);
+
+  const declaredTotal = useMemo(() => {
+    return (dc?.items || []).reduce((sum, it) => {
+      const raw = itemPrices[it.ticket_id] ?? itemPrices[String(it.ticket_id)];
+      const n = Number(raw !== undefined && raw !== '' ? raw : it.price);
+      return sum + (Number.isFinite(n) ? n : 0);
+    }, 0);
+  }, [dc, itemPrices]);
+
+  const saveCommercialDetails = async () => {
+    if (!dc || !canEditCommercial) return;
+    setCommercialSaving(true);
+    try {
+      const prices = {};
+      const hsns = {};
+      (dc.items || []).forEach((it) => {
+        prices[it.ticket_id] = itemPrices[it.ticket_id] ?? '';
+        hsns[it.ticket_id] = itemHsnCodes[it.ticket_id] ?? '';
+      });
+      await updateVendorRepairCommercialDetails(dcNumber, {
+        eway_bill_number: ewayBillNumber.trim() || null,
+        eway_bill_date: ewayBillDate || null,
+        item_prices: prices,
+        item_hsn_codes: hsns,
+      });
+      toast.success('Price, HSN & E-way Bill saved — PDF will refresh on download');
+      await load();
+    } catch (err) {
+      toast.error(err?.response?.data?.message || err?.message || 'Failed to save commercial details');
+    } finally {
+      setCommercialSaving(false);
+    }
+  };
 
   const effectiveShipBy = useMemo(() => {
     if (shipBy) return shipBy;
@@ -488,6 +541,42 @@ export default function VendorRepairDcDetailPage() {
           <p className="text-slate-600 whitespace-pre-wrap">{dc.vendor_shipping_display || dc.shipping_address || dc.vendor_address || '—'}</p>
           <p className="text-slate-600 pt-2">{dc.contact_person || '—'} · {dc.contact_mobile || '—'}</p>
           <p className="text-slate-600">Expected return: {fmtVendorRepairDate(dc.expected_return_date)}</p>
+          {canEditCommercial ? (
+            <div className="pt-2 space-y-2 border-t border-slate-100 mt-2">
+              <p className="text-xs font-semibold uppercase text-slate-500">E-way Bill</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <input
+                  className="border rounded-lg px-2 py-1.5 text-xs font-mono"
+                  placeholder="E-way Bill number"
+                  value={ewayBillNumber}
+                  onChange={(e) => setEwayBillNumber(e.target.value)}
+                />
+                <input
+                  type="date"
+                  className="border rounded-lg px-2 py-1.5 text-xs"
+                  value={ewayBillDate}
+                  onChange={(e) => setEwayBillDate(e.target.value)}
+                />
+              </div>
+              {declaredTotal >= 50000 ? (
+                <p className="text-[11px] text-amber-700">Required when declared value ≥ ₹50,000</p>
+              ) : null}
+            </div>
+          ) : (
+            <p className="text-slate-700 pt-1">
+              <span className="font-semibold">E-way Bill:</span>{' '}
+              {dc.eway_bill_number ? (
+                <>
+                  <span className="font-mono">{dc.eway_bill_number}</span>
+                  {dc.eway_bill_date ? (
+                    <span className="text-slate-500"> · {fmtVendorRepairDate(dc.eway_bill_date)}</span>
+                  ) : null}
+                </>
+              ) : (
+                '—'
+              )}
+            </p>
+          )}
           {dc.items_received_count != null ? (
             <p className="text-slate-600 font-medium pt-1">
               Received: {dc.items_received_count || 0} / {dc.items_dispatched_count || dc.items?.length || 0}
@@ -504,10 +593,31 @@ export default function VendorRepairDcDetailPage() {
       ) : null}
 
       <div className="rounded-xl border bg-white overflow-hidden">
+        <div className="flex items-center justify-between gap-2 px-3 py-2 border-b bg-slate-50 print:hidden">
+          <p className="text-xs text-slate-600">
+            Declared value:{' '}
+            <span className="font-semibold text-slate-900">
+              ₹{declaredTotal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+            </span>
+          </p>
+          {canEditCommercial ? (
+            <button
+              type="button"
+              disabled={commercialSaving}
+              onClick={saveCommercialDetails}
+              className="inline-flex items-center gap-1 px-3 py-1.5 bg-teal-700 text-white rounded-lg text-xs font-semibold disabled:opacity-60"
+            >
+              {commercialSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+              Save Price / HSN / E-way
+            </button>
+          ) : null}
+        </div>
         <table className="min-w-full text-sm">
           <thead className="bg-teal-700 text-xs uppercase text-white">
             <tr>
               <th className="p-3 text-left">Product</th>
+              <th className="p-3 text-center w-28">HSN</th>
+              <th className="p-3 text-right w-28">Price</th>
               <th className="p-3 text-center w-16">Qty.</th>
               <th className="p-3 text-left">Remarks</th>
               <th className="p-3 text-left">Status</th>
@@ -526,6 +636,35 @@ export default function VendorRepairDcDetailPage() {
                       <p key={line} className="text-gray-500">{line}</p>
                     ))}
                     {prod.ids ? <p className="font-mono font-semibold text-gray-800 mt-1">{prod.ids}</p> : null}
+                  </td>
+                  <td className="p-3 text-xs text-center">
+                    {canEditHsn ? (
+                      <input
+                        className="w-full max-w-[7rem] mx-auto border rounded px-1.5 py-1 text-xs font-mono text-center"
+                        placeholder="HSN"
+                        value={itemHsnCodes[item.ticket_id] ?? ''}
+                        onChange={(e) => setItemHsnCodes((prev) => ({ ...prev, [item.ticket_id]: e.target.value }))}
+                      />
+                    ) : (
+                      <span className="font-mono">{item.hsn_code || '847330'}</span>
+                    )}
+                  </td>
+                  <td className="p-3 text-xs text-right whitespace-nowrap">
+                    {canEditCommercial ? (
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        className="w-full max-w-[7.5rem] ml-auto border rounded px-1.5 py-1 text-xs text-right"
+                        placeholder="0.00"
+                        value={itemPrices[item.ticket_id] ?? ''}
+                        onChange={(e) => setItemPrices((prev) => ({ ...prev, [item.ticket_id]: e.target.value }))}
+                      />
+                    ) : (
+                      item.price != null && item.price !== ''
+                        ? `₹${Number(item.price).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
+                        : '—'
+                    )}
                   </td>
                   <td className="p-3 text-xs text-center">1 Pcs.</td>
                   <td className="p-3 text-xs max-w-[180px]">{item.item_remarks || item.diagnosis_failed_reason || '—'}</td>

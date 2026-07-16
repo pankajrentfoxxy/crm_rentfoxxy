@@ -19,11 +19,23 @@ const {
   findBlockingTicket,
   findActiveVrdcItemForSerial,
 } = require('../utils/floorTicketSerialGuard');
+const { transitionAsset, STATUS } = require('./inventoryStateMachine');
+const {
+  HSN_DEFAULTS,
+  resolveDefaultHsn: defaultHsnForTxn,
+  resolveHsnForPersist,
+  resolveHsnForDisplay,
+  canOverrideHsn,
+  normalizeHsnCode,
+} = require('../constants/hsnDefaults');
 
 const WAREHOUSE_ROLES = new Set(['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'support_lead']);
 const HW_SW_STAGES = new Set([
   'Diagnosis', 'Assembly & Software', 'Final Testing', 'Chip Level Repair', 'Body & Paint',
 ]);
+const EWAY_VALUE_THRESHOLD = 50000;
+/** @deprecated Use defaultHsnForTxn('repair') — kept for controller compat */
+const DEFAULT_HSN = HSN_DEFAULTS.repair;
 
 let schemaEnsured = false;
 let schemaEnsurePromise = null;
@@ -41,7 +53,15 @@ async function ensureVendorRepairSchema() {
   if (schemaEnsured) return;
   if (!schemaEnsurePromise) {
     schemaEnsurePromise = (async () => {
-      for (const file of ['121_diagnosis_failed_vendor_repair.sql', '124_vendor_repair_enhancements.sql', '125_vendor_repair_dispatch.sql', '129_vendor_repair_dispatch_pod.sql', '130_vendor_repair_replacement.sql', '131_vendor_repair_signatures.sql']) {
+      for (const file of [
+        '121_diagnosis_failed_vendor_repair.sql',
+        '124_vendor_repair_enhancements.sql',
+        '125_vendor_repair_dispatch.sql',
+        '129_vendor_repair_dispatch_pod.sql',
+        '130_vendor_repair_replacement.sql',
+        '131_vendor_repair_signatures.sql',
+        '148_vrdc_price_hsn_eway.sql',
+      ]) {
         const migrationPath = path.join(__dirname, '../migrations', file);
         if (fs.existsSync(migrationPath)) {
           await pool.query(fs.readFileSync(migrationPath, 'utf8'));
@@ -58,6 +78,80 @@ async function ensureVendorRepairSchema() {
 function configString(ticket) {
   return [ticket.brand, ticket.model, ticket.processor, ticket.generation, ticket.ram, ticket.storage]
     .filter(Boolean).join(' · ');
+}
+
+async function resolveDefaultHsn(_client) {
+  return defaultHsnForTxn('repair');
+}
+
+function parseItemPrice(raw) {
+  if (raw == null || raw === '') return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) throw new Error('Price must be a non-negative number');
+  return Math.round(n * 100) / 100;
+}
+
+function normalizeHsn(raw, fallback) {
+  const n = normalizeHsnCode(raw);
+  return n || fallback || HSN_DEFAULTS.repair;
+}
+
+function normalizeEwayBillNumber(raw) {
+  const s = String(raw || '').trim().toUpperCase();
+  if (!s) return null;
+  if (!/^[A-Z0-9\/-]{8,30}$/.test(s)) {
+    throw new Error('E-way Bill number format is invalid');
+  }
+  return s;
+}
+
+function validateEwayForConsignment({ totalValue, ewayBillNumber, ewayBillDate }) {
+  const needsEway = Number(totalValue || 0) >= EWAY_VALUE_THRESHOLD;
+  const num = normalizeEwayBillNumber(ewayBillNumber);
+  const date = ewayBillDate ? String(ewayBillDate).trim() || null : null;
+  if (needsEway && !num) {
+    throw new Error(`E-way Bill number is required when consignment value is ₹${EWAY_VALUE_THRESHOLD.toLocaleString('en-IN')} or more`);
+  }
+  if (num && date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new Error('E-way Bill date must be YYYY-MM-DD');
+  }
+  return { eway_bill_number: num, eway_bill_date: date || null, eway_required: needsEway };
+}
+
+/** Transition inventory via state machine; also updates qc_status / extra when provided. */
+async function transitionRepairSerial(client, {
+  serialId,
+  toStatus,
+  reason,
+  dcNumber,
+  actorUserId,
+  actorName,
+  qcStatus = null,
+  extraPatch = null,
+}) {
+  if (!serialId) return null;
+  const result = await transitionAsset(client, {
+    serialId,
+    toStatus,
+    reason,
+    dcNumber: dcNumber || null,
+    actorUserId: actorUserId || null,
+    actorName: actorName || null,
+  });
+  if (qcStatus != null || extraPatch) {
+    await client.query(
+      `UPDATE vendor_serial_numbers SET
+          qc_status = COALESCE($2, qc_status),
+          extra = CASE
+            WHEN $3::jsonb IS NULL THEN extra
+            ELSE COALESCE(extra, '{}'::jsonb) || $3::jsonb
+          END,
+          updated_at = NOW()
+        WHERE serial_id = $1`,
+      [serialId, qcStatus, extraPatch ? JSON.stringify(extraPatch) : null]
+    );
+  }
+  return result;
 }
 
 function saveEsign(prefix, dcNumber, dataUrl) {
@@ -551,6 +645,10 @@ async function createOutForRepairDc(client, {
   warehouseName,
   warehouseAddress,
   itemRemarks = {},
+  itemPrices = {},
+  itemHsnCodes = {},
+  ewayBillNumber,
+  ewayBillDate,
   ship_by,
   shipBy,
   dispatch_mode,
@@ -563,6 +661,7 @@ async function createOutForRepairDc(client, {
   delivery_person_id,
   actorUserId,
   actorName,
+  actorRole,
 }) {
   if (!Array.isArray(ticketIds) || !ticketIds.length) {
     throw new Error('Select at least one laptop');
@@ -628,6 +727,28 @@ async function createOutForRepairDc(client, {
     }
   }
 
+  const defaultHsn = defaultHsnForTxn('repair');
+  let totalDeclared = 0;
+  const itemFieldMap = {};
+  for (const ticket of tRes.rows) {
+    const tid = ticket.ticket_id;
+    const price = parseItemPrice(
+      itemPrices[tid] ?? itemPrices[String(tid)] ?? null
+    );
+    const hsn = resolveHsnForPersist({
+      transactionType: 'repair',
+      override: itemHsnCodes[tid] ?? itemHsnCodes[String(tid)] ?? null,
+      role: actorRole,
+    });
+    if (price != null) totalDeclared += price;
+    itemFieldMap[tid] = { price, hsn };
+  }
+  const eway = validateEwayForConsignment({
+    totalValue: totalDeclared,
+    ewayBillNumber,
+    ewayBillDate,
+  });
+
   const dcNumber = await nextVendorRepairDcNumber(client);
   await client.query(
     `INSERT INTO vendor_repair_delivery_challans (
@@ -636,8 +757,9 @@ async function createOutForRepairDc(client, {
         expected_return_date, remarks, warehouse_name, warehouse_address, status, created_by,
         items_dispatched_count, items_received_count,
         ship_by, dispatch_mode, courier_name, awb_number, courier_tracking_url,
-        porter_tracking_id, porter_order_id, porter_booking_url, delivery_person_id
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'draft',$13,0,0,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
+        porter_tracking_id, porter_order_id, porter_booking_url, delivery_person_id,
+        eway_bill_number, eway_bill_date
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'draft',$13,0,0,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
     [
       dcNumber,
       vendorId || null,
@@ -661,6 +783,8 @@ async function createOutForRepairDc(client, {
       dispatch.porter_order_id,
       dispatch.porter_booking_url,
       dispatch.delivery_person_id,
+      eway.eway_bill_number,
+      eway.eway_bill_date,
     ]
   );
 
@@ -670,11 +794,16 @@ async function createOutForRepairDc(client, {
       || itemRemarks[String(ticket.ticket_id)]
       || ticket.diagnosis_failed_reason
       || null;
+    const fields = itemFieldMap[ticket.ticket_id] || { price: null, hsn: defaultHsn };
     await client.query(
       `INSERT INTO vendor_repair_dc_items (
-          dc_number, ticket_id, serial_id, ttspl_id, serial_number, configuration, item_remarks, item_status
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,'draft')`,
-      [dcNumber, ticket.ticket_id, ticket.vendor_serial_id, ticket.ttspl_id, ticket.serial_number, configuration, itemRemark]
+          dc_number, ticket_id, serial_id, ttspl_id, serial_number, configuration, item_remarks, item_status,
+          price, hsn_code
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8,$9)`,
+      [
+        dcNumber, ticket.ticket_id, ticket.vendor_serial_id, ticket.ttspl_id, ticket.serial_number,
+        configuration, itemRemark, fields.price, fields.hsn,
+      ]
     );
     await client.query(
       `UPDATE tickets SET vendor_repair_dc_number = $2, current_location = 'Warehouse — pending dispatch', updated_at = NOW()
@@ -932,6 +1061,105 @@ async function updateVendorRepairDispatchDetails(client, { dcNumber, body, actor
   return { dc_number: dcNumber, ...dispatch };
 }
 
+/** Update Price / HSN / E-way Bill (preview + PDF). Allowed until DC is fully returned.
+ *  HSN overrides require Admin / Super Admin; others keep existing/default repair HSN. */
+async function updateVendorRepairCommercialDetails(client, { dcNumber, body, actorRole }) {
+  const headRes = await client.query(
+    `SELECT * FROM vendor_repair_delivery_challans WHERE dc_number = $1 FOR UPDATE`,
+    [dcNumber]
+  );
+  const head = headRes.rows[0];
+  if (!head) throw new Error('Vendor repair DC not found');
+  if (head.status === 'returned') {
+    throw new Error('Cannot edit commercial details after DC is fully returned');
+  }
+
+  const itemsRes = await client.query(
+    `SELECT id, ticket_id, price, hsn_code FROM vendor_repair_dc_items WHERE dc_number = $1 ORDER BY id`,
+    [dcNumber]
+  );
+  const itemPrices = body.item_prices || body.itemPrices || {};
+  const itemHsnCodes = body.item_hsn_codes || body.itemHsnCodes || {};
+  const defaultHsn = defaultHsnForTxn('repair');
+  const allowHsnOverride = canOverrideHsn(actorRole);
+  let totalDeclared = 0;
+
+  for (const row of itemsRes.rows) {
+    const tid = row.ticket_id;
+    const hasPrice = Object.prototype.hasOwnProperty.call(itemPrices, tid)
+      || Object.prototype.hasOwnProperty.call(itemPrices, String(tid));
+    const hasHsnRaw = Object.prototype.hasOwnProperty.call(itemHsnCodes, tid)
+      || Object.prototype.hasOwnProperty.call(itemHsnCodes, String(tid));
+    const hasHsn = hasHsnRaw && allowHsnOverride;
+    const price = hasPrice
+      ? parseItemPrice(itemPrices[tid] ?? itemPrices[String(tid)])
+      : (row.price != null ? Number(row.price) : null);
+    const hsn = hasHsn
+      ? resolveHsnForPersist({
+        transactionType: 'repair',
+        override: itemHsnCodes[tid] ?? itemHsnCodes[String(tid)],
+        role: actorRole,
+      })
+      : null;
+    if (price != null) totalDeclared += price;
+    if (hasPrice || hasHsn) {
+      await client.query(
+        `UPDATE vendor_repair_dc_items SET
+            price = CASE WHEN $3::boolean THEN $4::numeric ELSE price END,
+            hsn_code = CASE WHEN $5::boolean THEN $6::text ELSE hsn_code END
+          WHERE id = $1 AND dc_number = $2`,
+        [row.id, dcNumber, hasPrice, price, hasHsn, hsn]
+      );
+    }
+  }
+
+  // Recompute total after updates
+  const sumRes = await client.query(
+    `SELECT COALESCE(SUM(price), 0)::float AS total FROM vendor_repair_dc_items WHERE dc_number = $1`,
+    [dcNumber]
+  );
+  totalDeclared = Number(sumRes.rows[0]?.total || 0);
+
+  // Ensure no blank HSN remains
+  await client.query(
+    `UPDATE vendor_repair_dc_items
+        SET hsn_code = $2
+      WHERE dc_number = $1
+        AND (hsn_code IS NULL OR TRIM(hsn_code) = '')`,
+    [dcNumber, defaultHsn]
+  );
+
+  const ewayNum = body.eway_bill_number !== undefined || body.ewayBillNumber !== undefined
+    ? (body.eway_bill_number ?? body.ewayBillNumber)
+    : head.eway_bill_number;
+  const ewayDate = body.eway_bill_date !== undefined || body.ewayBillDate !== undefined
+    ? (body.eway_bill_date ?? body.ewayBillDate)
+    : head.eway_bill_date;
+  const eway = validateEwayForConsignment({
+    totalValue: totalDeclared,
+    ewayBillNumber: ewayNum,
+    ewayBillDate: ewayDate,
+  });
+
+  await client.query(
+    `UPDATE vendor_repair_delivery_challans SET
+        eway_bill_number = $2,
+        eway_bill_date = $3,
+        pdf_path = NULL,
+        updated_at = NOW()
+      WHERE dc_number = $1`,
+    [dcNumber, eway.eway_bill_number, eway.eway_bill_date]
+  );
+
+  return {
+    dc_number: dcNumber,
+    eway_bill_number: eway.eway_bill_number,
+    eway_bill_date: eway.eway_bill_date,
+    total_declared: totalDeclared,
+    hsn_override_applied: allowHsnOverride,
+  };
+}
+
 async function markDeliveredToVendor(client, { dcNumber, actorUserId, actorName }) {
   const headRes = await client.query(
     `SELECT * FROM vendor_repair_delivery_challans WHERE dc_number = $1 FOR UPDATE`,
@@ -1088,22 +1316,26 @@ async function signDispatchDc(client, {
         WHERE ticket_id = $1`,
       [item.ticket_id, `Out for repair — ${head.vendor_name}`]
     );
-    if (item.vendor_serial_id || item.serial_id) {
-      await client.query(
-        `UPDATE vendor_serial_numbers SET
-            qc_status = 'out_for_repair',
-            extra = COALESCE(extra, '{}'::jsonb) || $2::jsonb,
-            updated_at = NOW()
-          WHERE serial_id = $1`,
-        [
-          item.vendor_serial_id || item.serial_id,
-          JSON.stringify({ location: 'out_for_repair', vendor_repair_dc: dcNumber }),
-        ]
-      );
+    const serialId = item.vendor_serial_id || item.serial_id;
+    if (serialId) {
+      await transitionRepairSerial(client, {
+        serialId,
+        toStatus: STATUS.IN_REPAIR,
+        reason: `Dispatched to vendor on VRDC ${dcNumber}`,
+        dcNumber,
+        actorUserId,
+        actorName,
+        qcStatus: 'out_for_repair',
+        extraPatch: {
+          location: 'out_for_repair',
+          vendor_repair_dc: dcNumber,
+          action_status: 'in_repair',
+        },
+      });
     }
     await safeLogTtsplEvent({
       ttsplId: item.ttspl_id || item.ticket_ttspl,
-      vendorSerialId: item.vendor_serial_id || item.serial_id,
+      vendorSerialId: serialId,
       eventType: 'dispatched_to_vendor',
       description: `Dispatched to vendor via ${dcNumber}`,
       metadata: { dc_number: dcNumber, vendor_name: head.vendor_name },
@@ -1113,7 +1345,7 @@ async function signDispatchDc(client, {
     });
     await safeLogTtsplEvent({
       ttsplId: item.ttspl_id || item.ticket_ttspl,
-      vendorSerialId: item.vendor_serial_id || item.serial_id,
+      vendorSerialId: serialId,
       eventType: 'esign_completed',
       description: `Dispatch e-sign completed for ${dcNumber}`,
       metadata: { dc_number: dcNumber },
@@ -1312,28 +1544,26 @@ async function receiveItemsFromVendor(client, {
     );
 
     if (isReplacement && (item.vendor_serial_id || item.serial_id)) {
-      await client.query(
-        `UPDATE vendor_serial_numbers SET
-            qc_status = 'unrepairable',
-            inventory_status = 'scrapped',
-            extra = COALESCE(extra, '{}'::jsonb) || $2::jsonb,
-            updated_at = NOW()
-          WHERE serial_id = $1`,
-        [
-          item.vendor_serial_id || item.serial_id,
-          JSON.stringify({
-            location: 'scrapped',
-            vendor_repair_dc: dcNumber,
-            replaced_by_serial: replacementRow.serial_number,
-            replaced_by_ttspl: replacementRow.inventory_asset_code,
-            replacement_dc_number: replacementDcNumber,
-          }),
-        ]
-      );
+      await transitionRepairSerial(client, {
+        serialId: item.vendor_serial_id || item.serial_id,
+        toStatus: STATUS.SCRAPPED,
+        reason: `Vendor replacement on ${replacementDcNumber} — original unit scrapped`,
+        dcNumber,
+        actorUserId,
+        actorName: itemWhSigner,
+        qcStatus: 'unrepairable',
+        extraPatch: {
+          location: 'scrapped',
+          vendor_repair_dc: dcNumber,
+          replaced_by_serial: replacementRow.serial_number,
+          replaced_by_ttspl: replacementRow.inventory_asset_code,
+          replacement_dc_number: replacementDcNumber,
+        },
+      });
+      // New replacement serial is inserted as in_stock; refresh qc/extra only.
       await client.query(
         `UPDATE vendor_serial_numbers SET
             qc_status = 'pending',
-            inventory_status = COALESCE(inventory_status, 'in_stock'),
             extra = COALESCE(extra, '{}'::jsonb) || $2::jsonb,
             updated_at = NOW()
           WHERE serial_id = $1`,
@@ -1351,25 +1581,32 @@ async function receiveItemsFromVendor(client, {
           }),
         ]
       );
+      // If the replacement row already existed with a non-stock status, move via SM.
+      await transitionRepairSerial(client, {
+        serialId: replacementRow.serial_id,
+        toStatus: STATUS.IN_STOCK,
+        reason: `Vendor replacement received on ${replacementDcNumber}`,
+        dcNumber: replacementDcNumber,
+        actorUserId,
+        actorName: itemWhSigner,
+      });
     } else if (item.vendor_serial_id || item.serial_id) {
-      await client.query(
-        `UPDATE vendor_serial_numbers SET
-            qc_status = 'pending',
-            inventory_status = COALESCE(inventory_status, 'in_stock'),
-            extra = COALESCE(extra, '{}'::jsonb) || $2::jsonb,
-            updated_at = NOW()
-          WHERE serial_id = $1`,
-        [
-          item.vendor_serial_id || item.serial_id,
-          JSON.stringify({
-            location: 'warehouse_floor',
-            vendor_repair_dc: dcNumber,
-            receive_dc: receiveDcNumber,
-            received_by: itemWhSigner,
-            received_at: signedAt.toISOString(),
-          }),
-        ]
-      );
+      await transitionRepairSerial(client, {
+        serialId: item.vendor_serial_id || item.serial_id,
+        toStatus: STATUS.IN_STOCK,
+        reason: `Repaired return via ${receiveDcNumber}`,
+        dcNumber: receiveDcNumber,
+        actorUserId,
+        actorName: itemWhSigner,
+        qcStatus: 'pending',
+        extraPatch: {
+          location: 'warehouse_floor',
+          vendor_repair_dc: dcNumber,
+          receive_dc: receiveDcNumber,
+          received_by: itemWhSigner,
+          received_at: signedAt.toISOString(),
+        },
+      });
     }
 
     const challanRef = isReplacement ? replacementDcNumber : receiveDcNumber;
@@ -1466,22 +1703,24 @@ function effectiveQcStatusSql(alias = 'vsn') {
   )`;
 }
 
-/** ERP / migrated laptops marked out_for_repare (not on an active vendor-repair DC). */
+/** ERP / migrated laptops marked out for repair (canonical `in_repair` + legacy typo). */
 function erpOutForRepareSql(alias = 'vsn') {
   const eff = effectiveQcStatusSql(alias);
   return `${alias}.deleted_at IS NULL
     AND ${alias}.po_id IS NOT NULL
     AND (
-      ${eff} = 'out_for_repare'
-      OR ${alias}.inventory_status IN ('out_for_repare', 'in_repair')
-      OR COALESCE(NULLIF(TRIM(${alias}.extra->>'action_status'), ''), '') = 'out_for_repare'
+      ${alias}.inventory_status = 'in_repair'
+      OR ${alias}.inventory_status = 'out_for_repare'
+      OR ${eff} IN ('out_for_repare', 'out_for_repair')
+      OR COALESCE(NULLIF(TRIM(${alias}.extra->>'action_status'), ''), '') IN ('out_for_repare', 'in_repair')
     )
     AND NOT EXISTS (
       SELECT 1
         FROM vendor_repair_dc_items vri
         JOIN vendor_repair_delivery_challans vrd ON vrd.dc_number = vri.dc_number
         JOIN tickets vt ON vt.ticket_id = vri.ticket_id
-       WHERE vrd.status = 'dispatched'
+       WHERE vrd.status IN ('dispatched', 'partially_returned')
+         AND COALESCE(vri.item_status, 'dispatched') = 'dispatched'
          AND vt.status = 'out_for_repair'
          AND (
            vri.serial_id = ${alias}.serial_id
@@ -1526,6 +1765,10 @@ function mapErpOutForRepareRow(row) {
 
 function mapVendorDcRow(r) {
   const extra = typeof r.vsn_extra === 'object' && r.vsn_extra ? r.vsn_extra : {};
+  const outTs = r.dispatched_at || r.out_date || null;
+  const daysOut = outTs
+    ? Math.max(0, Math.floor((Date.now() - new Date(outTs).getTime()) / 86400000))
+    : null;
   return {
     id: `vdc:${r.id}`,
     source: 'vendor_dc',
@@ -1558,6 +1801,13 @@ function mapVendorDcRow(r) {
     item_remarks: r.item_remarks,
     items_received_count: r.items_received_count,
     items_dispatched_count: r.items_dispatched_count,
+    price: r.price != null ? Number(r.price) : null,
+    hsn_code: resolveHsnForDisplay(r.hsn_code, { transactionType: 'repair' }),
+    eway_bill_number: r.eway_bill_number || null,
+    eway_bill_date: r.eway_bill_date || null,
+    ship_by: r.ship_by || null,
+    dispatch_mode: r.dispatch_mode || null,
+    days_out: daysOut,
     sort_ts: r.dispatched_at,
   };
 }
@@ -1698,12 +1948,13 @@ async function listOutForRepairInventory({
   const [vendorRowsR, erpRowsR] = await Promise.all([
     pool.query(
       `SELECT i.id, i.ticket_id, i.ttspl_id, i.serial_number, i.serial_id, i.configuration,
-              i.item_remarks, i.item_status,
+              i.item_remarks, i.item_status, i.price, i.hsn_code,
               t.status AS ticket_status,
               t.brand AS ticket_brand, t.model AS ticket_model,
               d.dc_number, d.vendor_name, d.vendor_address, d.billing_address, d.shipping_address,
               d.out_date, d.expected_return_date, d.remarks, d.dispatched_at,
               d.items_received_count, d.items_dispatched_count,
+              d.eway_bill_number, d.eway_bill_date, d.ship_by, d.dispatch_mode,
               vsn.extra AS vsn_extra
        ${vendorFrom}
        ORDER BY d.dispatched_at DESC NULLS LAST, i.id DESC
@@ -1888,15 +2139,15 @@ async function receiveErpRepairBack(client, { serialId, actorUserId, actorName, 
   extra.came_from = extra.came_from || 'External vendor';
   extra.repair_received_at = new Date().toISOString();
 
-  await client.query(
-    `UPDATE vendor_serial_numbers
-        SET qc_status = 'pending',
-            inventory_status = 'in_stock',
-            extra = $1::jsonb,
-            updated_at = NOW()
-      WHERE serial_id = $2`,
-    [JSON.stringify(extra), sid]
-  );
+  await transitionRepairSerial(client, {
+    serialId: sid,
+    toStatus: STATUS.IN_STOCK,
+    reason: 'Received back from external repair — QC Process',
+    actorUserId,
+    actorName,
+    qcStatus: 'pending',
+    extraPatch: extra,
+  });
 
   const ttsplId = row.inventory_asset_code || row.serial_number;
   await logTtsplEvent({
@@ -1932,11 +2183,15 @@ async function receiveErpRepairBack(client, { serialId, actorUserId, actorName, 
 module.exports = {
   ensureVendorRepairSchema,
   WAREHOUSE_ROLES,
+  EWAY_VALUE_THRESHOLD,
+  DEFAULT_HSN,
+  resolveDefaultHsn,
   markDiagnosisFailed,
   listDiagnosisFailedTickets,
   createOutForRepairDc,
   getVendorRepairDc,
   updateVendorRepairDispatchDetails,
+  updateVendorRepairCommercialDetails,
   markDeliveredToVendor,
   listVendorRepairDcs,
   signDispatchDc,

@@ -11,7 +11,6 @@ import {
   fetchOutForRepairInventory,
   receiveErpRepairBack,
 } from '../../floor-pipeline/vendorRepairApi';
-import { ticketStatusLabel } from '../../floor-pipeline/floorPipelineUi';
 import { invalidateInventoryManagement } from '../inventoryCountsEvents';
 import InventorySpecFilterBar from '../components/InventorySpecFilterBar';
 import { EMPTY_SPEC_FILTERS } from '../inventorySpecFilters';
@@ -190,13 +189,14 @@ export default function OutForRepairInventoryPage() {
                   <th className="p-3">TTSPL</th>
                   <th className="p-3">Serial</th>
                   <th className="p-3">Brand / Model</th>
-                  <th className="p-3">Configuration</th>
-                  <th className="p-3">Ticket</th>
                   <th className="p-3">Vendor</th>
-                  <th className="p-3">Vendor Address</th>
                   <th className="p-3">DC Number</th>
+                  <th className="p-3">Ship</th>
                   <th className="p-3">Out Date</th>
-                  <th className="p-3">Expected Return</th>
+                  <th className="p-3">Days</th>
+                  <th className="p-3">Price</th>
+                  <th className="p-3">HSN</th>
+                  <th className="p-3">E-way Bill</th>
                   <th className="p-3">Status</th>
                   <th className="p-3">Remarks</th>
                   {canReceive ? <th className="p-3">Actions</th> : null}
@@ -207,36 +207,43 @@ export default function OutForRepairInventoryPage() {
                   <tr key={r.id} className="border-t hover:bg-slate-50/80 align-top">
                     <td className="p-3 font-mono text-xs">{r.ttspl_id || '—'}</td>
                     <td className="p-3 font-mono text-xs">{r.serial_number || '—'}</td>
-                    <td className="p-3 text-xs">{[r.brand, r.model].filter(Boolean).join(' / ') || '—'}</td>
-                    <td className="p-3 text-xs max-w-[180px]">{r.configuration || '—'}</td>
-                    <td className="p-3">
-                      {r.ticket_id ? (
-                        <Link to={`/floor-pipeline/tickets/${r.ticket_id}`} className="text-blue-600 font-mono text-xs">
-                          #{r.ticket_id}
-                        </Link>
-                      ) : (
-                        <span className="text-slate-400 text-xs">—</span>
-                      )}
+                    <td className="p-3 text-xs">
+                      <div>{[r.brand, r.model].filter(Boolean).join(' / ') || '—'}</div>
+                      <div className="text-slate-400 max-w-[160px] truncate">{r.configuration || ''}</div>
                     </td>
-                    <td className="p-3 text-xs">{r.vendor_name || '—'}</td>
-                    <td className="p-3 text-xs max-w-[160px]">{r.shipping_address || r.vendor_address || '—'}</td>
+                    <td className="p-3 text-xs max-w-[140px]">
+                      <div className="font-medium">{r.vendor_name || '—'}</div>
+                      <div className="text-slate-400 truncate">{r.vendor_address || ''}</div>
+                    </td>
                     <td className="p-3">
                       {r.dc_number ? (
-                        <Link to={`/floor-pipeline/vendor-repair-dc/${encodeURIComponent(r.dc_number)}`} className="text-purple-700 font-mono text-xs hover:underline">
+                        <Link
+                          to={`/floor-pipeline/vendor-repair-dc/${encodeURIComponent(r.dc_number)}`}
+                          className="font-mono text-xs text-blue-700 hover:underline"
+                        >
                           {r.dc_number}
                         </Link>
                       ) : (
-                        <span className="text-xs text-slate-500">{r.dc_label || 'ERP / Legacy'}</span>
+                        <span className="text-xs text-slate-400">{r.dc_label || '—'}</span>
                       )}
                     </td>
+                    <td className="p-3 text-xs">{r.ship_by || r.dispatch_mode || '—'}</td>
                     <td className="p-3 text-xs whitespace-nowrap">{fmtDate(r.out_date)}</td>
-                    <td className="p-3 text-xs whitespace-nowrap">{fmtDate(r.expected_return_date)}</td>
-                    <td className="p-3">
-                      <span className={`px-2 py-0.5 rounded-full text-xs ${r.source === 'erp' ? 'bg-amber-100 text-amber-900' : 'bg-purple-100 text-purple-900'}`}>
-                        {r.current_status || (r.source === 'erp' ? 'Out For Repare' : ticketStatusLabel('out_for_repair'))}
-                      </span>
+                    <td className="p-3 text-xs">{r.days_out != null ? r.days_out : '—'}</td>
+                    <td className="p-3 text-xs whitespace-nowrap">
+                      {r.price != null ? `₹${Number(r.price).toLocaleString('en-IN')}` : '—'}
                     </td>
-                    <td className="p-3 text-xs max-w-[140px]">{r.item_remarks || r.remarks || '—'}</td>
+                    <td className="p-3 font-mono text-xs">{r.hsn_code || '—'}</td>
+                    <td className="p-3 text-xs">
+                      {r.eway_bill_number ? (
+                        <div>
+                          <div className="font-mono">{r.eway_bill_number}</div>
+                          <div className="text-slate-400">{fmtDate(r.eway_bill_date)}</div>
+                        </div>
+                      ) : '—'}
+                    </td>
+                    <td className="p-3 text-xs">{r.current_status || '—'}</td>
+                    <td className="p-3 text-xs max-w-[140px]">{r.remarks || '—'}</td>
                     {canReceive ? (
                       <td className="p-3">
                         {r.source === 'erp' ? (
@@ -252,7 +259,7 @@ export default function OutForRepairInventoryPage() {
                             to={`/floor-pipeline/vendor-repair-dc/${encodeURIComponent(r.dc_number)}`}
                             className="inline-flex items-center gap-1 text-xs font-semibold text-green-700 hover:underline"
                           >
-                            Receive Back
+                            Take in
                           </Link>
                         )}
                       </td>

@@ -53,6 +53,10 @@ exports.createOutForRepair = async (req, res) => {
       warehouseName: req.body.warehouse_name || req.body.warehouseName,
       warehouseAddress: req.body.warehouse_address || req.body.warehouseAddress,
       itemRemarks: req.body.item_remarks || req.body.itemRemarks || {},
+      itemPrices: req.body.item_prices || req.body.itemPrices || {},
+      itemHsnCodes: req.body.item_hsn_codes || req.body.itemHsnCodes || {},
+      ewayBillNumber: req.body.eway_bill_number || req.body.ewayBillNumber,
+      ewayBillDate: req.body.eway_bill_date || req.body.ewayBillDate,
       ship_by: req.body.ship_by || req.body.shipBy,
       dispatch_mode: req.body.dispatch_mode || req.body.dispatchMode,
       courier_name: req.body.courier_name || req.body.courierName,
@@ -64,6 +68,7 @@ exports.createOutForRepair = async (req, res) => {
       delivery_person_id: req.body.delivery_person_id || req.body.deliveryPersonId,
       actorUserId: req.user.user_id,
       actorName: req.user.name,
+      actorRole: req.user.role,
     });
     await client.query('COMMIT');
     res.json({ success: true, message: 'Vendor repair DC created', ...result });
@@ -78,7 +83,14 @@ exports.createOutForRepair = async (req, res) => {
 exports.getCompanyDefaults = async (_req, res) => {
   try {
     const { formatCompanyBlock } = require('../utils/companyDefaults');
-    res.json({ success: true, billing_address: formatCompanyBlock() });
+    const { HSN_DEFAULTS } = require('../constants/hsnDefaults');
+    res.json({
+      success: true,
+      billing_address: formatCompanyBlock(),
+      hsn_code: HSN_DEFAULTS.repair,
+      hsn_defaults: HSN_DEFAULTS,
+      eway_value_threshold: svc.EWAY_VALUE_THRESHOLD,
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message || 'Failed to load company defaults' });
   }
@@ -123,6 +135,26 @@ exports.updateDispatchDetails = async (req, res) => {
     });
     await client.query('COMMIT');
     res.json({ success: true, message: 'Dispatch details updated', ...result });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ success: false, message: err.message || 'Update failed' });
+  } finally {
+    client.release();
+  }
+};
+
+exports.updateCommercialDetails = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await svc.ensureVendorRepairSchema();
+    await client.query('BEGIN');
+    const result = await svc.updateVendorRepairCommercialDetails(client, {
+      dcNumber: req.params.dcNumber,
+      body: req.body,
+      actorRole: req.user?.role,
+    });
+    await client.query('COMMIT');
+    res.json({ success: true, message: 'Price / HSN / E-way Bill updated', ...result });
   } catch (err) {
     await client.query('ROLLBACK');
     res.status(400).json({ success: false, message: err.message || 'Update failed' });
@@ -313,7 +345,8 @@ exports.listVendorPortalRepairDcs = async (req, res) => {
               (SELECT json_agg(json_build_object(
                 'id', i.id, 'ttspl_id', i.ttspl_id, 'serial_number', i.serial_number,
                 'configuration', i.configuration, 'item_remarks', i.item_remarks,
-                'item_status', i.item_status, 'receive_dc_number', i.receive_dc_number
+                'item_status', i.item_status, 'receive_dc_number', i.receive_dc_number,
+                'price', i.price, 'hsn_code', i.hsn_code
               ) ORDER BY i.id)
                FROM vendor_repair_dc_items i WHERE i.dc_number = d.dc_number) AS items
          FROM vendor_repair_delivery_challans d
@@ -411,8 +444,14 @@ exports.exportOutForRepairExcel = async (req, res) => {
       'Vendor Name': r.vendor_name || '',
       'Vendor Address': r.vendor_address || '',
       'DC Number': r.dc_number || r.dc_label || '',
+      'Ship By': r.ship_by || r.dispatch_mode || '',
       'Out Date': r.out_date || '',
+      'Days Out': r.days_out != null ? r.days_out : '',
       'Expected Return': r.expected_return_date || '',
+      Price: r.price != null ? r.price : '',
+      HSN: r.hsn_code || '',
+      'E-way Bill': r.eway_bill_number || '',
+      'E-way Date': r.eway_bill_date || '',
       Status: r.current_status || 'Out for Repair',
       Remarks: r.remarks || '',
     }));
@@ -458,7 +497,7 @@ exports.exportOutForRepairPdf = async (req, res) => {
     doc.fontSize(9);
     (data || []).forEach((r, idx) => {
       doc.text(
-        `${idx + 1}. ${r.ttspl_id || '—'} | SN ${r.serial_number || '—'} | ${r.vendor_name || '—'} | DC ${r.dc_number || '—'} | Out ${formatPdfDateIstOrDash(r.out_date)}`
+        `${idx + 1}. ${r.ttspl_id || '—'} | SN ${r.serial_number || '—'} | ${r.vendor_name || '—'} | DC ${r.dc_number || '—'} | Out ${formatPdfDateIstOrDash(r.out_date)} | Price ${r.price != null ? r.price : '—'} | HSN ${r.hsn_code || '—'} | EWB ${r.eway_bill_number || '—'}`
       );
     });
     if (!data?.length) doc.text('No laptops currently out for repair.');

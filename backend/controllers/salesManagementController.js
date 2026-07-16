@@ -48,6 +48,16 @@ const {
   updateDcAssignment: applyDcAssignmentChange,
 } = require('../services/dcAssignmentService');
 const {
+  resolveHsnForPersist,
+  resolveHsnForDisplay,
+  canOverrideHsn,
+  normalizeHsnCode,
+} = require('../constants/hsnDefaults');
+const {
+  resolveHsnFromSalesOrder,
+  resolveTxnTypeForDc,
+} = require('../utils/hsnDocResolve');
+const {
   customerTypeSqlCondition,
   customerTypeFilterForQuotation,
   isCustomerEligibleForQuotation,
@@ -672,15 +682,21 @@ exports.storeSalesOrder = async (req, res) => {
     }
 
     await client.query('BEGIN');
+    const soQuotationTypeForHsn = body.quotation_type || 'rental';
     for (const item of lineItems) {
+      const lineHsn = resolveHsnForPersist({
+        quotationType: soQuotationTypeForHsn,
+        override: item.hsn_code ?? item.hsnCode ?? body.hsn_code,
+        role: req.user?.role,
+      });
       await client.query(
         `INSERT INTO sales_order_lines (
           sales_order_number, quotation_number, customer_id, customer_name, customer_email, customer_mobile,
           customer_shipping_address, customer_billing_address, gst_number, supply_state, security_amount,
           shiping_charges, quotation_type, branch, brand, model_name, processor, generation, ram, storage,
           gpu, screen_size, quantity, main_qty, rate, locking_period, battery_charger_warranty,
-          technical_warranty, remark, status, token, created_by
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,'pending',$30,$31)`,
+          technical_warranty, remark, status, token, created_by, hsn_code
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,'pending',$30,$31,$32)`,
         [
           salesOrderNumber,
           quotationNumber,
@@ -694,7 +710,7 @@ exports.storeSalesOrder = async (req, res) => {
           supplyState,
           body.security_amount || 0,
           body.shiping_charges || 0,
-          body.quotation_type || 'rental',
+          soQuotationTypeForHsn,
           body.branch || 'rentfoxxy',
           item.brand,
           item.model_name,
@@ -713,6 +729,7 @@ exports.storeSalesOrder = async (req, res) => {
           item.remark,
           generateToken(),
           req.user?.user_id,
+          lineHsn,
         ]
       );
     }
@@ -1017,6 +1034,30 @@ exports.getDeliveryChallan = async (req, res) => {
     const assignmentEditable = lineStatuses.length > 0
       && lineStatuses.every((s) => isAssignmentEditable(s));
 
+    let soQuotationType = null;
+    if (son) {
+      try {
+        const qtRes = await pool.query(
+          `SELECT quotation_type FROM sales_order_lines WHERE sales_order_number = $1 LIMIT 1`,
+          [son]
+        );
+        soQuotationType = qtRes.rows[0]?.quotation_type || null;
+      } catch (_) { /* ignore */ }
+    }
+    const headLine = lines[0] || {};
+    const dcTxn = await resolveTxnTypeForDc(pool, {
+      salesOrderNumber: son || headLine.sales_order_number,
+      originalDcNumber: headLine.original_dc_number,
+      entityCode: headLine.entity_code,
+      quotationType: soQuotationType,
+    });
+    for (const line of lines) {
+      line.hsn_code = resolveHsnForDisplay(line.hsn_code, {
+        quotationType: soQuotationType,
+        transactionType: soQuotationType ? undefined : dcTxn,
+      });
+    }
+
     res.json({
       success: true,
       dc_number: req.params.dcNumber,
@@ -1145,14 +1186,18 @@ exports.storeDeliveryChallan = async (req, res) => {
         [qty, body.sales_order_number, model, processor, generation]
       );
 
+      const dcLineHsn = await resolveHsnFromSalesOrder(client, body.sales_order_number, {
+        role: req.user?.role,
+        override: (body.hsn_code || [])[i] ?? body.hsn_code,
+      });
       await client.query(
         `INSERT INTO delivery_challan_lines (
           dc_number, sales_order_number, quotation_number, customer_id, customer_name, email, gst_number,
           supply_state, security_amount, shiping_charges, branch, entity_code, customer_billing_address,
           customer_shipping_address, brand, model_name, quantity, main_qty, serial_number, ship_by,
           courier_name, awb_number, delivery_person_id, remarks, status, created_by,
-          courier_tracking_url, porter_tracking_id, porter_order_id, porter_booking_url
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,'pending',$25,$26,$27,$28,$29)`,
+          courier_tracking_url, porter_tracking_id, porter_order_id, porter_booking_url, hsn_code
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,'pending',$25,$26,$27,$28,$29,$30)`,
         [
           dcNumber,
           body.sales_order_number,
@@ -1183,6 +1228,7 @@ exports.storeDeliveryChallan = async (req, res) => {
           shipBy === 'by_porter' ? (body.porter_tracking_id || null) : null,
           shipBy === 'by_porter' ? (body.porter_order_id || null) : null,
           shipBy === 'by_porter' ? (body.porter_booking_url || null) : null,
+          dcLineHsn,
         ]
       );
       inserted += 1;
@@ -1489,6 +1535,19 @@ exports.createDcsByAddress = async (req, res) => {
         .filter(Boolean);
       const dcRemarks = [...new Set(groupRemarks)].join('; ') || null;
 
+      const soLineHsns = groupLineIds
+        .map((lid) => {
+          const soLine = soLines.find((l) => Number(l.id) === Number(lid));
+          return String(soLine?.hsn_code || '').trim();
+        })
+        .filter(Boolean);
+      const dcHsn = soLineHsns[0]
+        || resolveHsnForPersist({
+          quotationType: soHead.quotation_type || 'rental',
+          role: req.user?.role,
+          override: group.hsn_code || body.hsn_code,
+        });
+
       await client.query(
         `INSERT INTO delivery_challan_lines (
           dc_number, sales_order_number, quotation_number, customer_id, customer_name,
@@ -1498,11 +1557,11 @@ exports.createDcsByAddress = async (req, res) => {
           ship_by, courier_name, awb_number, courier_tracking_url,
           porter_tracking_id, porter_order_id, porter_booking_url,
           delivery_person_id, dispatch_mode, dispatched_at,
-          remarks, status, created_by
+          remarks, status, created_by, hsn_code
         ) VALUES (
           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
           $15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,NOW(),
-          $29,'in_transit',$30
+          $29,'in_transit',$30,$31
         )`,
         [
           dcNumber, sales_order_number, soHead.quotation_number, soHead.customer_id || null,
@@ -1520,7 +1579,7 @@ exports.createDcsByAddress = async (req, res) => {
           ship_by === 'by_porter' ? (group.porter_order_id || body.porter_order_id || null) : null,
           ship_by === 'by_porter' ? (group.porter_booking_url || body.porter_booking_url || null) : null,
           ship_by === 'by_hand' && groupDeliveryPersonId ? Number(groupDeliveryPersonId) : null,
-          dispatchMode, dcRemarks, req.user?.user_id,
+          dispatchMode, dcRemarks, req.user?.user_id, dcHsn,
         ]
       );
 
@@ -1987,19 +2046,32 @@ exports.generateReturnDc = async (req, res) => {
     const deliveryPersonId = dispatchMode === 'inhouse' && technician_user_id
       ? parseInt(technician_user_id, 10) : null;
 
+    const rdcTxn = await resolveTxnTypeForDc(client, {
+      salesOrderNumber: t.sales_order_number || null,
+      originalDcNumber: t.dc_number || null,
+    });
+    const rdcHsn = resolveHsnForPersist({
+      transactionType: rdcTxn,
+      role: req.user?.role,
+      override: body.hsn_code,
+    });
+    const rdcEntity = entityForQuotationType(rdcTxn === 'sale' ? 'sales' : 'rental');
+
     await client.query('BEGIN');
     await client.query(
       `INSERT INTO delivery_challan_lines
          (dc_number, movement_type, support_ticket_id, customer_id, customer_name, email,
           customer_shipping_address, brand, model_name, quantity, serial_number,
           dispatch_mode, delivery_person_id, courier_name, awb_number, status,
-          dispatched_at, created_by, created_at, updated_at)
-       VALUES ($1,'return',$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,'in_transit',NOW(),$15,NOW(),NOW())`,
+          dispatched_at, created_by, created_at, updated_at,
+          sales_order_number, original_dc_number, entity_code, hsn_code)
+       VALUES ($1,'return',$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,'in_transit',NOW(),$15,NOW(),NOW(),$16,$17,$18,$19)`,
       [
         rdc, ticketId, t.customer_id, t.customer_name, t.ticket_email || null,
         JSON.stringify(pickupAddr), firstSpec.brand || null, firstSpec.model || firstSpec.model_name || null,
         entries.length, JSON.stringify(entries), dispatchMode, deliveryPersonId,
         courier_name, awb_number, req.user?.user_id || null,
+        t.sales_order_number || null, t.dc_number || null, rdcEntity, rdcHsn,
       ]
     );
     await client.query(
@@ -2062,6 +2134,7 @@ exports.ensureSalesManagementSchema = async () => {
     '061_phase4_sales_pipeline.sql',
     '065_quotation_lead_link.sql',
     '066_quotation_sent_status.sql',
+    '149_so_dc_line_hsn.sql',
   ]) {
     const sqlPath = path.join(__dirname, '../migrations', file);
     if (!fs.existsSync(sqlPath)) continue;
@@ -2188,6 +2261,7 @@ exports.getSoWithPayments = async (req, res) => {
       if (!laptopQty) laptopQty += qty;
       l.amount = +(Number(l.rate || 0) * qty).toFixed(2);
       totalValue += l.amount;
+      l.hsn_code = resolveHsnForDisplay(l.hsn_code, { quotationType: l.quotation_type });
     });
     const totalPaid = payRes.rows.reduce((s, p) => s + Number(p.amount || 0), 0);
     const totals = computeGstBreakdown({
@@ -3402,6 +3476,163 @@ exports.updateSoLineRate = async (req, res) => {
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('updateSoLineRate:', error);
+    res.status(500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
+  }
+};
+
+/** PATCH /so-lines/:lineId/hsn — Admin / Super Admin only. Override line HSN/SAC. */
+exports.updateSoLineHsn = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    if (!canOverrideHsn(req.user?.role)) {
+      return res.status(403).json({ success: false, message: 'Only Admin / Super Admin can override HSN' });
+    }
+    const lineId = parseInt(req.params.lineId, 10);
+    if (!lineId) {
+      return res.status(400).json({ success: false, message: 'Invalid line id' });
+    }
+    let hsn;
+    try {
+      hsn = normalizeHsnCode(req.body?.hsn_code ?? req.body?.hsnCode);
+    } catch (e) {
+      return res.status(400).json({ success: false, message: e.message });
+    }
+    if (!hsn) {
+      return res.status(400).json({ success: false, message: 'HSN/SAC code is required' });
+    }
+
+    await client.query('BEGIN');
+    const lineRes = await client.query(
+      `SELECT id, sales_order_number, brand, model_name, hsn_code, quotation_type, status
+         FROM sales_order_lines WHERE id = $1 FOR UPDATE`,
+      [lineId]
+    );
+    if (!lineRes.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Sales order line not found' });
+    }
+    const line = lineRes.rows[0];
+    if (String(line.status || '').toLowerCase() === 'cancelled') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: 'Sales order line is cancelled' });
+    }
+
+    const upd = await client.query(
+      `UPDATE sales_order_lines SET hsn_code = $1, updated_at = NOW()
+        WHERE id = $2
+        RETURNING id, sales_order_number, brand, model_name, hsn_code, quotation_type`,
+      [hsn, lineId]
+    );
+
+    // Keep open DC lines for this SO in sync when they still match the old HSN / are blank.
+    await client.query(
+      `UPDATE delivery_challan_lines
+          SET hsn_code = $1, updated_at = NOW(), pdf_path = NULL
+        WHERE sales_order_number = $2
+          AND COALESCE(movement_type, 'outbound') <> 'return'
+          AND (
+            hsn_code IS NULL OR TRIM(hsn_code) = ''
+            OR hsn_code = $3
+          )`,
+      [hsn, line.sales_order_number, line.hsn_code || '']
+    );
+
+    await client.query('COMMIT');
+
+    let regen = { so_pdf_path: null, dc_pdfs: [] };
+    try {
+      regen = await regenerateSoAndLinkedDcPdfs(line.sales_order_number);
+    } catch (pdfErr) {
+      console.warn('PDF regeneration after HSN update:', pdfErr.message);
+    }
+
+    res.json({
+      success: true,
+      message: 'HSN updated — PDFs regenerated',
+      line: upd.rows[0],
+      pdf_path: regen.so_pdf_path,
+      dc_pdfs: regen.dc_pdfs,
+    });
+
+    await safeLogSalesOrderActivity({
+      salesOrderNumber: line.sales_order_number,
+      activityType: ACTIVITY_TYPES.PRICING,
+      action: 'hsn_changed',
+      description: `HSN for ${line.brand} ${line.model_name} changed from ${line.hsn_code || '—'} to ${hsn} by ${req.user?.name || 'User'}.`,
+      metadata: { line_id: lineId, old_hsn: line.hsn_code, new_hsn: hsn },
+      user: req.user,
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('updateSoLineHsn:', error);
+    res.status(500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
+  }
+};
+
+/** PATCH /delivery-challans/:dcNumber/hsn — Admin / Super Admin only. */
+exports.updateDcHsn = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    if (!canOverrideHsn(req.user?.role)) {
+      return res.status(403).json({ success: false, message: 'Only Admin / Super Admin can override HSN' });
+    }
+    const dcNumber = req.params.dcNumber;
+    let hsn;
+    try {
+      hsn = normalizeHsnCode(req.body?.hsn_code ?? req.body?.hsnCode);
+    } catch (e) {
+      return res.status(400).json({ success: false, message: e.message });
+    }
+    if (!hsn) {
+      return res.status(400).json({ success: false, message: 'HSN/SAC code is required' });
+    }
+
+    await client.query('BEGIN');
+    const upd = await client.query(
+      `UPDATE delivery_challan_lines
+          SET hsn_code = $1, updated_at = NOW(), pdf_path = NULL
+        WHERE dc_number = $2
+        RETURNING id, dc_number, hsn_code, sales_order_number, movement_type`,
+      [hsn, dcNumber]
+    );
+    if (!upd.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Delivery challan not found' });
+    }
+    await client.query('COMMIT');
+
+    let pdfPath = null;
+    try {
+      if (String(upd.rows[0].movement_type || '') === 'return') {
+        const { regenerateReturnDcPdfByRdc } = require('../services/returnDcPdfService');
+        pdfPath = await regenerateReturnDcPdfByRdc(pool, dcNumber);
+      } else {
+        const lines = await getDeliveryChallanLines(dcNumber);
+        pdfPath = await generateDocumentPdf({
+          docType: 'delivery_challan',
+          docNumber: dcNumber,
+          header: lines[0],
+          lines,
+        });
+      }
+    } catch (pdfErr) {
+      console.warn('PDF regeneration after DC HSN update:', pdfErr.message);
+    }
+
+    res.json({
+      success: true,
+      message: 'HSN updated',
+      hsn_code: hsn,
+      pdf_path: pdfPath,
+      lines: upd.rows,
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('updateDcHsn:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
     client.release();
