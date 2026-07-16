@@ -62,8 +62,8 @@ export function requestTicketPart(id, body) {
   return api.post(`${base}/${id}/part-request`, body);
 }
 
-export function searchParts(search) {
-  return api.get('/parts', { params: { search } });
+export function searchParts(search = '', limit = 100) {
+  return api.get('/parts', { params: { search: search || undefined, limit } });
 }
 
 export function saveTicketQc(id, body) {

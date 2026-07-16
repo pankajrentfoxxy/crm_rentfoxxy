@@ -14,6 +14,7 @@ const FULL_SELECT = `
   SELECT pr.*,
          COALESCE(pr.part_name, p.part_name) AS part_name,
          p.category, p.part_type, p.cost AS catalog_cost, p.quantity AS stock_qty,
+         p.model_number AS catalog_model_number, p.pin_size AS catalog_pin_size,
          pi.prt_id, pi.location_code, pi.status AS instance_status, pi.unit_cost AS instance_cost,
          t.ttspl_id, t.brand, t.model, t.processor, t.ram, t.storage,
          t.vendor_serial_id, t.current_stage_id,
@@ -33,6 +34,30 @@ const FULL_SELECT = `
 
 const PRIVILEGED = ['admin', 'manager', 'super_admin'];
 
+function isBatteryPart(part) {
+  const cat = String(part?.category || part?.part_type || '').toLowerCase().trim();
+  const name = String(part?.part_name || '').toLowerCase();
+  return cat === 'battery' || cat.includes('battery') || name.includes('battery');
+}
+
+function normalizeBatteryPhotos(raw) {
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    return raw.map((u) => String(u || '').trim()).filter(Boolean);
+  }
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.map((u) => String(u || '').trim()).filter(Boolean);
+      }
+    } catch (_) { /* single URL */ }
+    const s = raw.trim();
+    return s ? [s] : [];
+  }
+  return [];
+}
+
 // POST /api/part-requests
 exports.createPartRequest = async (req, res) => {
   const client = await pool.connect();
@@ -40,10 +65,11 @@ exports.createPartRequest = async (req, res) => {
     const {
       ticket_id, request_type = 'replacement', part_id, quantity = 1,
       description, config_field, old_value, new_value, blocks_stage = true,
+      battery_model_number, battery_photos,
     } = req.body || {};
 
     if (!ticket_id) return res.status(400).json({ success: false, message: 'ticket_id required' });
-    if (!part_id) return res.status(400).json({ success: false, message: 'part_id required' });
+    if (!part_id) return res.status(400).json({ success: false, message: 'part_id required — select a part from the catalog' });
     if (!['replacement', 'upgrade', 'consumable'].includes(request_type)) {
       return res.status(400).json({ success: false, message: 'Invalid request_type' });
     }
@@ -52,10 +78,32 @@ exports.createPartRequest = async (req, res) => {
     }
 
     const partRes = await client.query(
-      `SELECT part_id, part_name, quantity, cost FROM parts WHERE part_id = $1`, [part_id]
+      `SELECT part_id, part_name, quantity, cost, category, part_type, model_number, pin_size
+         FROM parts WHERE part_id = $1`,
+      [part_id]
     );
-    if (!partRes.rows.length) return res.status(404).json({ success: false, message: 'Part not found' });
+    if (!partRes.rows.length) {
+      return res.status(404).json({ success: false, message: 'Part not found in catalog' });
+    }
     const part = partRes.rows[0];
+
+    const battery = isBatteryPart(part);
+    const batteryModel = String(battery_model_number || '').trim();
+    const photos = normalizeBatteryPhotos(battery_photos);
+    if (battery) {
+      if (!batteryModel) {
+        return res.status(400).json({
+          success: false,
+          message: 'Battery Model Number is required for battery parts',
+        });
+      }
+      if (!photos.length) {
+        return res.status(400).json({
+          success: false,
+          message: 'At least one battery photo is required for battery parts',
+        });
+      }
+    }
 
     const tRes = await client.query(
       `SELECT ticket_id, ttspl_id, vendor_serial_id, current_stage_id FROM tickets WHERE ticket_id = $1`,
@@ -82,15 +130,17 @@ exports.createPartRequest = async (req, res) => {
          (ticket_id, requested_by, part_name, description, status, request_number,
           request_type, part_id, quantity, stage_name, ticket_stage_id,
           config_field, old_value, new_value, blocks_stage,
-          escalated_by, escalated_at, updated_at)
+          escalated_by, escalated_at, battery_model_number, battery_photos, updated_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
-               $16,$17,NOW())
+               $16,$17,$18,$19::jsonb,NOW())
        RETURNING request_id`,
       [
         ticket_id, req.user.user_id, part.part_name, description || null, status, reqNumber,
         request_type, part_id, Number(quantity) || 1, stageName, ticket.current_stage_id || null,
         config_field || null, old_value || null, new_value || null, blocks,
         inStock ? null : req.user.user_id, inStock ? null : new Date(),
+        battery ? batteryModel : null,
+        battery ? JSON.stringify(photos) : null,
       ]
     );
     const requestId = ins.rows[0].request_id;
@@ -113,7 +163,12 @@ exports.createPartRequest = async (req, res) => {
       vendorSerialId: ticket.vendor_serial_id,
       eventType: 'part_requested',
       description: `Part requested: ${part.part_name} (${request_type})${inStock ? '' : ' — out of stock, escalated to procurement'}`,
-      metadata: { request_id: requestId, request_number: reqNumber, part_id, request_type, config_field, old_value, new_value },
+      metadata: {
+        request_id: requestId, request_number: reqNumber, part_id, request_type,
+        config_field, old_value, new_value,
+        battery_model_number: battery ? batteryModel : undefined,
+        battery_photo_count: battery ? photos.length : undefined,
+      },
       actorUserId: req.user.user_id,
       actorName: req.user.name,
       db: client,
@@ -135,6 +190,21 @@ exports.createPartRequest = async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   } finally {
     client.release();
+  }
+};
+
+/** POST /api/part-requests/upload-photos — battery (or part) photos; returns relative upload URLs */
+exports.uploadPartRequestPhotos = async (req, res) => {
+  try {
+    const files = req.files || [];
+    if (!files.length) {
+      return res.status(400).json({ success: false, message: 'At least one photo is required' });
+    }
+    const urls = files.map((f) => `uploads/part-requests/${f.filename}`);
+    res.json({ success: true, urls, count: urls.length });
+  } catch (err) {
+    console.error('uploadPartRequestPhotos:', err);
+    res.status(500).json({ success: false, message: err.message || 'Upload failed' });
   }
 };
 

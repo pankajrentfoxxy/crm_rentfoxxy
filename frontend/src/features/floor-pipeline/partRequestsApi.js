@@ -3,6 +3,12 @@ import api from '../../utils/api';
 const base = '/part-requests';
 
 export const createPartRequest = (body) => api.post(base, body);
+export const uploadPartRequestPhotos = (files) => {
+  const form = new FormData();
+  (files || []).forEach((f) => form.append('photos', f));
+  // Do not set Content-Type — axios/browser must add multipart boundary.
+  return api.post(`${base}/upload-photos`, form);
+};
 export const listPartRequests = (params) => api.get(base, { params });
 export const getTicketPartRequests = (ticketId) => api.get(`${base}/ticket/${ticketId}`);
 export const getPartRequest = (id) => api.get(`${base}/${id}`);

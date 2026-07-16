@@ -14,9 +14,9 @@ const partsCatalogView = checkAnySectionPermission(
 );
 
 // @route   GET /api/parts
-// @desc    Get all parts
-// @access  Private
-router.get('/', cp('parts_inventory', 'view'), getAllParts);
+// @desc    Get / search parts by part_name (?search=)
+// @access  Private (inventory OR floor catalog viewers)
+router.get('/', partsCatalogView, getAllParts);
 
 // @route   GET /api/parts/grouped
 // @desc    Get parts grouped by category (diagnosis dropdown + inventory)

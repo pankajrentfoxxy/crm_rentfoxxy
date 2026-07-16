@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Loader2, Search, PackagePlus, Wrench } from 'lucide-react';
+import { Loader2, Search, PackagePlus, Wrench, X, Camera } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { addPartWithConfig, searchParts } from '../floorPipelineApi';
-import { createPartRequest, attachPartToRequest, cancelPartRequest } from '../partRequestsApi';
+import { createPartRequest, attachPartToRequest, cancelPartRequest, uploadPartRequestPhotos } from '../partRequestsApi';
+import { getBackendOrigin } from '../../../utils/api';
 
 const CONFIG_FIELDS = ['RAM', 'Storage', 'Processor', 'GPU', 'Screen', 'OS', 'Other'];
 const STATUS_ORDER = ['pending', 'escalated', 'ordered', 'received', 'approved', 'attached'];
@@ -10,6 +11,19 @@ const statusOrder = (s) => {
   const i = STATUS_ORDER.indexOf(s);
   return i === -1 ? 0 : i;
 };
+
+function isBatteryPart(part) {
+  if (!part) return false;
+  const cat = String(part.category || part.part_type || '').toLowerCase().trim();
+  const name = String(part.part_name || '').toLowerCase();
+  return cat === 'battery' || cat.includes('battery') || name.includes('battery');
+}
+
+function photoUrl(p) {
+  if (!p) return null;
+  if (String(p).startsWith('http') || String(p).startsWith('blob:')) return p;
+  return `${getBackendOrigin().replace(/\/$/, '')}/${String(p).replace(/^\//, '')}`;
+}
 
 function StatusBadge({ status }) {
   const map = {
@@ -29,7 +43,6 @@ function StatusBadge({ status }) {
   );
 }
 
-// ── Attach + return-old modal ────────────────────────────────────────────────
 function AttachPartModal({ request, onAttached, onClose }) {
   const [oldPartReturned, setOldPartReturned] = useState(true);
   const [oldPartCondition, setOldPartCondition] = useState('defective');
@@ -111,15 +124,14 @@ function AttachPartModal({ request, onAttached, onClose }) {
 }
 
 export default function PartsConfigPanel({ ticket, parts = [], configHistory = [], partRequests = [], onUpdated }) {
-  const [mode, setMode] = useState('request'); // 'request' | 'direct'
+  const [mode, setMode] = useState('request');
 
-  // Shared part search
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
   const [searching, setSearching] = useState(false);
   const [selected, setSelected] = useState(null);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
 
-  // Request-flow state
   const [requestType, setRequestType] = useState('replacement');
   const [quantity, setQuantity] = useState(1);
   const [description, setDescription] = useState('');
@@ -130,7 +142,12 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
   const [submitting, setSubmitting] = useState(false);
   const [attachModal, setAttachModal] = useState(null);
 
-  // Direct-attach state
+  const [batteryModelNumber, setBatteryModelNumber] = useState('');
+  const [batteryPhotos, setBatteryPhotos] = useState([]);
+  const [batteryPhotoPreviews, setBatteryPhotoPreviews] = useState([]);
+  const [uploadingPhotos, setUploadingPhotos] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState({});
+
   const [dQuantity, setDQuantity] = useState(1);
   const [dIsUpgrade, setDIsUpgrade] = useState(false);
   const [dConfigField, setDConfigField] = useState('RAM');
@@ -146,21 +163,22 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
     os: ticket?.os || '—',
   }), [ticket]);
 
+  const selectedIsBattery = isBatteryPart(selected);
+
   const search = useCallback(async (q) => {
-    if (q.length < 1) { setResults([]); return; }
     setSearching(true);
     try {
-      const { data } = await searchParts(q);
+      const { data } = await searchParts(q || '', 100);
       setResults(data.parts || []);
     } catch { setResults([]); } finally { setSearching(false); }
   }, []);
 
   useEffect(() => {
+    if (selected) return undefined;
     const t = setTimeout(() => search(query), 300);
     return () => clearTimeout(t);
-  }, [query, search]);
+  }, [query, search, selected]);
 
-  // Auto-fill old value from ticket config when picking an upgrade field (request flow)
   useEffect(() => {
     if (requestType !== 'upgrade' || !configField) return;
     const auto = { ram: ticket?.ram, storage: ticket?.storage, display: ticket?.screen_size, processor: ticket?.processor, gpu: ticket?.gpu }[configField] || '';
@@ -184,14 +202,93 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
     [partRequests]
   );
 
-  const resetSelection = () => { setSelected(null); setQuery(''); setResults([]); };
+  const resetBattery = () => {
+    setBatteryModelNumber('');
+    setBatteryPhotos([]);
+    setBatteryPhotoPreviews((prev) => {
+      prev.forEach((u) => { try { URL.revokeObjectURL(u); } catch (_) { /* ignore */ } });
+      return [];
+    });
+    setFieldErrors({});
+  };
+
+  const resetSelection = () => {
+    setSelected(null);
+    setQuery('');
+    setResults([]);
+    setDropdownOpen(false);
+    resetBattery();
+  };
+
+  const selectPart = (p) => {
+    setSelected(p);
+    setQuery(p.part_name);
+    setResults([]);
+    setDropdownOpen(false);
+    resetBattery();
+    setFieldErrors({});
+  };
+
+  const handleBatteryFiles = async (fileList) => {
+    const files = Array.from(fileList || []).filter((f) => f.type?.startsWith('image/'));
+    if (!files.length) {
+      toast.error('Select image files only');
+      return;
+    }
+    setUploadingPhotos(true);
+    try {
+      const { data } = await uploadPartRequestPhotos(files);
+      const urls = data.urls || [];
+      setBatteryPhotos((prev) => [...prev, ...urls]);
+      setBatteryPhotoPreviews((prev) => [
+        ...prev,
+        ...files.map((f) => URL.createObjectURL(f)),
+      ]);
+      setFieldErrors((e) => ({ ...e, batteryPhotos: undefined }));
+      toast.success(`${urls.length} photo(s) uploaded`);
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Photo upload failed');
+    } finally {
+      setUploadingPhotos(false);
+    }
+  };
+
+  const removeBatteryPhoto = (idx) => {
+    setBatteryPhotos((prev) => prev.filter((_, i) => i !== idx));
+    setBatteryPhotoPreviews((prev) => {
+      const next = [...prev];
+      const [removed] = next.splice(idx, 1);
+      if (removed) {
+        try { URL.revokeObjectURL(removed); } catch (_) { /* ignore */ }
+      }
+      return next;
+    });
+  };
+
+  const validateBattery = () => {
+    if (!selectedIsBattery) return true;
+    const errs = {};
+    if (!String(batteryModelNumber || '').trim()) {
+      errs.batteryModel = 'Battery Model Number is required';
+    }
+    if (!batteryPhotos.length) {
+      errs.batteryPhotos = 'At least one battery photo is required';
+    }
+    setFieldErrors(errs);
+    if (errs.batteryModel || errs.batteryPhotos) {
+      toast.error(errs.batteryModel || errs.batteryPhotos);
+      return false;
+    }
+    return true;
+  };
 
   const handleSubmitRequest = async () => {
-    if (!selected) { toast.error('Select a part from the catalog'); return; }
+    if (!selected?.part_id) { toast.error('Select a part from the catalog dropdown'); return; }
     if (requestType === 'upgrade' && (!configField || !newValue.trim())) {
       toast.error('Upgrade needs a config field and new value');
       return;
     }
+    if (!validateBattery()) return;
     setSubmitting(true);
     try {
       const { data } = await createPartRequest({
@@ -204,6 +301,8 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
         config_field: requestType === 'upgrade' ? configField : undefined,
         old_value: requestType === 'upgrade' ? oldValue : undefined,
         new_value: requestType === 'upgrade' ? newValue : undefined,
+        battery_model_number: selectedIsBattery ? batteryModelNumber.trim() : undefined,
+        battery_photos: selectedIsBattery ? batteryPhotos : undefined,
       });
       toast.success(data.message || 'Request submitted');
       resetSelection();
@@ -215,10 +314,11 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
   };
 
   const handleDirectAttach = async () => {
-    if (!selected) { toast.error('Select a part'); return; }
+    if (!selected?.part_id) { toast.error('Select a part from the catalog dropdown'); return; }
     const max = selected.quantity || 0;
     if (dQuantity < 1 || dQuantity > max) { toast.error(`Quantity must be 1–${max}`); return; }
     if (dIsUpgrade && !dNewValue.trim()) { toast.error('New value required for upgrades'); return; }
+    if (!validateBattery()) return;
     setSubmitting(true);
     try {
       const { data } = await addPartWithConfig(ticket.ticket_id, {
@@ -259,9 +359,90 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
     </span>
   );
 
+  const partDetailsCard = selected ? (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm grid sm:grid-cols-3 gap-3">
+      <div>
+        <p className="text-[10px] font-semibold uppercase text-slate-500">Part Name</p>
+        <p className="font-medium text-slate-900">{selected.part_name}</p>
+      </div>
+      <div>
+        <p className="text-[10px] font-semibold uppercase text-slate-500">Model Number</p>
+        <p className="font-mono text-slate-800">{selected.model_number || '—'}</p>
+      </div>
+      <div>
+        <p className="text-[10px] font-semibold uppercase text-slate-500">Pin Size</p>
+        <p className="font-mono text-slate-800">{selected.pin_size || '—'}</p>
+        <p className="text-[10px] text-slate-400 mt-0.5">Reference only</p>
+      </div>
+    </div>
+  ) : null;
+
+  const batteryFields = selectedIsBattery ? (
+    <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-3">
+      <p className="text-xs font-semibold text-amber-900">Battery details (required)</p>
+      <div>
+        <label className="block text-xs font-medium text-slate-700 mb-1">Battery Model Number *</label>
+        <input
+          className={`w-full border rounded-lg px-3 py-2 text-sm font-mono ${fieldErrors.batteryModel ? 'border-red-400' : ''}`}
+          value={batteryModelNumber}
+          onChange={(e) => {
+            setBatteryModelNumber(e.target.value);
+            setFieldErrors((err) => ({ ...err, batteryModel: undefined }));
+          }}
+          placeholder="e.g. L19C3PD4"
+        />
+        {fieldErrors.batteryModel ? (
+          <p className="text-xs text-red-600 mt-1">{fieldErrors.batteryModel}</p>
+        ) : null}
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-slate-700 mb-1">Battery Photos *</label>
+        <label className="flex items-center justify-center gap-2 border border-dashed rounded-lg px-3 py-4 text-sm text-slate-600 cursor-pointer hover:bg-white">
+          <Camera className="w-4 h-4" />
+          {uploadingPhotos ? 'Uploading…' : 'Upload photos'}
+          <input
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            disabled={uploadingPhotos}
+            onChange={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const files = e.target.files;
+              handleBatteryFiles(files);
+              e.target.value = '';
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        </label>
+        {fieldErrors.batteryPhotos ? (
+          <p className="text-xs text-red-600 mt-1">{fieldErrors.batteryPhotos}</p>
+        ) : (
+          <p className="text-[11px] text-slate-500 mt-1">At least one photo of the installed battery is required.</p>
+        )}
+        {batteryPhotos.length > 0 && (
+          <div className="flex flex-wrap gap-2 mt-2">
+            {batteryPhotos.map((url, idx) => (
+              <div key={`${url}-${idx}`} className="relative w-16 h-16 rounded border overflow-hidden bg-white">
+                <img src={photoUrl(batteryPhotoPreviews[idx] || url)} alt="" className="w-full h-full object-cover" />
+                <button
+                  type="button"
+                  onClick={() => removeBatteryPhoto(idx)}
+                  className="absolute top-0.5 right-0.5 bg-black/60 text-white rounded p-0.5"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  ) : null;
+
   return (
     <div className="space-y-6">
-      {/* Active part requests */}
       {activeRequests.length > 0 && (
         <section className="space-y-2">
           <h4 className="text-xs font-semibold uppercase text-gray-500">Active Part Requests</h4>
@@ -271,6 +452,9 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
                 <div>
                   <span className="font-mono text-xs text-blue-700">{req.request_number}</span>
                   <p className="font-medium text-sm mt-0.5">{req.part_name}</p>
+                  {req.battery_model_number ? (
+                    <p className="text-xs text-amber-800 mt-0.5">Battery model: <span className="font-mono">{req.battery_model_number}</span></p>
+                  ) : null}
                   {req.request_type === 'upgrade' && (
                     <p className="text-xs text-blue-600 capitalize">
                       ⬆ {req.config_field}: {req.old_value || '—'} → {req.new_value}
@@ -281,7 +465,6 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
                 <StatusBadge status={req.status} />
               </div>
 
-              {/* Timeline */}
               <div className="flex items-center gap-1 mt-2">
                 {['pending', 'approved', 'attached'].map((s, i) => (
                   <React.Fragment key={s}>
@@ -320,7 +503,6 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
         </section>
       )}
 
-      {/* Mode tabs */}
       <section className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm space-y-3">
         <div className="flex gap-2">
           <button type="button" onClick={() => { setMode('request'); resetSelection(); }}
@@ -340,7 +522,6 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
             : 'For consumables / minor items: attach immediately without approval.'}
         </p>
 
-        {/* Request type (request mode) */}
         {mode === 'request' && (
           <div className="grid grid-cols-3 gap-2">
             {[
@@ -358,26 +539,59 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
           </div>
         )}
 
-        {/* Part search */}
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-          <input className="w-full rounded-lg border pl-9 pr-3 py-2 text-sm" placeholder="Search parts catalog…"
-            value={query} onChange={(e) => setQuery(e.target.value)} />
+          <label className="block text-xs font-medium text-slate-600 mb-1">Select part from catalog *</label>
+          <Search className="absolute left-3 top-[34px] w-4 h-4 text-slate-400" />
+          <input
+            className="w-full rounded-lg border pl-9 pr-20 py-2 text-sm"
+            placeholder="Search by part name…"
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setSelected(null);
+              setDropdownOpen(true);
+              resetBattery();
+            }}
+            onFocus={() => {
+              setDropdownOpen(true);
+              if (!results.length) search(query);
+            }}
+            autoComplete="off"
+            readOnly={Boolean(selected)}
+          />
+          {selected ? (
+            <button
+              type="button"
+              onClick={resetSelection}
+              className="absolute right-2 top-[30px] text-xs text-slate-500 underline"
+            >
+              Change
+            </button>
+          ) : null}
+          {dropdownOpen && !selected && (
+            <ul className="absolute z-20 mt-1 w-full border rounded-lg bg-white shadow-lg divide-y max-h-48 overflow-y-auto text-sm">
+              {searching ? (
+                <li className="flex justify-center py-3"><Loader2 className="w-5 h-5 animate-spin text-blue-600" /></li>
+              ) : results.length ? (
+                results.map((p) => (
+                  <li key={p.part_id}>
+                    <button type="button" className="w-full text-left px-3 py-2 hover:bg-slate-50"
+                      onClick={() => selectPart(p)}>
+                      <span className="font-medium">{p.part_name}</span>
+                      <span className="text-xs text-slate-500 ml-2">
+                        {p.category || p.part_type}
+                        {p.model_number ? ` · ${p.model_number}` : ''}
+                        {' · '}Available: {p.quantity}
+                      </span>
+                    </button>
+                  </li>
+                ))
+              ) : (
+                <li className="p-3 text-sm text-slate-500">No matching parts — choose from catalog only</li>
+              )}
+            </ul>
+          )}
         </div>
-        {searching && <div className="flex justify-center py-3"><Loader2 className="w-5 h-5 animate-spin text-blue-600" /></div>}
-        {results.length > 0 && !selected && (
-          <ul className="border rounded-lg divide-y max-h-40 overflow-y-auto text-sm">
-            {results.map((p) => (
-              <li key={p.part_id}>
-                <button type="button" className="w-full text-left px-3 py-2 hover:bg-slate-50"
-                  onClick={() => { setSelected(p); setQuery(p.part_name); setResults([]); }}>
-                  <span className="font-medium">{p.part_name}</span>
-                  <span className="text-xs text-slate-500 ml-2">{p.category || p.part_type} · Available: {p.quantity} · ₹{p.cost || 0}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
 
         {selected && (
           <div className="rounded-lg bg-blue-50 border border-blue-100 p-3 text-sm space-y-3">
@@ -385,6 +599,8 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
               <p className="font-medium">{selected.part_name}</p>
               {stockBadge(selected.quantity || 0)}
             </div>
+            {partDetailsCard}
+            {batteryFields}
 
             {mode === 'request' ? (
               <>
@@ -425,7 +641,7 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
                 </label>
                 <div className="flex gap-2">
                   <button type="button" onClick={resetSelection} className="px-3 py-1.5 rounded border text-xs">Clear</button>
-                  <button type="button" disabled={submitting} onClick={handleSubmitRequest}
+                  <button type="button" disabled={submitting || uploadingPhotos} onClick={handleSubmitRequest}
                     className="flex-1 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold disabled:opacity-50">
                     {submitting ? 'Submitting…' : (selected.quantity > 0 ? 'Submit for Warehouse Approval' : 'Submit for Procurement')}
                   </button>
@@ -462,7 +678,7 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
                 </label>
                 <div className="flex gap-2">
                   <button type="button" onClick={resetSelection} className="px-3 py-1.5 rounded border text-xs">Clear</button>
-                  <button type="button" disabled={submitting} onClick={handleDirectAttach}
+                  <button type="button" disabled={submitting || uploadingPhotos} onClick={handleDirectAttach}
                     className="flex-1 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold disabled:opacity-50">
                     {submitting ? 'Attaching…' : 'Attach Part'}
                   </button>
@@ -473,7 +689,6 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
         )}
       </section>
 
-      {/* Config history */}
       <section className="rounded-xl border overflow-hidden">
         <h3 className="font-semibold text-slate-900 px-4 py-3 bg-slate-50 border-b text-sm">Config History</h3>
         {configHistory.length ? (
@@ -514,7 +729,6 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
         </div>
       </section>
 
-      {/* Parts used */}
       <section className="rounded-xl border overflow-hidden">
         <h3 className="font-semibold text-slate-900 px-4 py-3 bg-slate-50 border-b text-sm">Parts Used on This Ticket</h3>
         <table className="min-w-full text-sm">

@@ -1,10 +1,40 @@
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
 const router = require('express').Router();
 const ctrl = require('../controllers/partRequestController');
 const { authMiddleware, checkRole, checkSectionPermission } = require('../middleware/auth');
+const { multerLimits, wrapMulter } = require('../config/uploadLimits');
+
+const photoDir = path.join(__dirname, '..', 'uploads', 'part-requests');
+fs.mkdirSync(photoDir, { recursive: true });
+
+const photoUpload = multer({
+  storage: multer.diskStorage({
+    destination: photoDir,
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname || '') || '.jpg';
+      cb(null, `battery_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`);
+    },
+  }),
+  limits: multerLimits(),
+  fileFilter: (_req, file, cb) => {
+    if (!file.mimetype?.startsWith('image/')) {
+      return cb(new Error('Only image files are allowed'));
+    }
+    cb(null, true);
+  },
+});
 
 router.use(authMiddleware);
 
 router.post('/', checkSectionPermission('parts_requests', 'create'), ctrl.createPartRequest);
+router.post(
+  '/upload-photos',
+  checkSectionPermission('parts_requests', 'create'),
+  wrapMulter(photoUpload.array('photos', 8)),
+  ctrl.uploadPartRequestPhotos
+);
 router.get('/', checkSectionPermission('parts_requests', 'view'), ctrl.listPartRequests);
 
 // Specific routes before the generic :requestId matcher

@@ -112,8 +112,9 @@ export default function TicketDetailPage() {
     return () => clearInterval(t);
   }, [activeLog]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (opts = {}) => {
+    const soft = opts === true || opts?.soft === true;
+    if (!soft) setLoading(true);
     try {
       const { data: res } = await fetchTicketDetail(id);
       if (res.success) {
@@ -134,14 +135,15 @@ export default function TicketDetailPage() {
     } catch (e) {
       toast.error(e.response?.data?.message || 'Failed to load ticket');
     } finally {
-      setLoading(false);
+      if (!soft) setLoading(false);
     }
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
 
   const refresh = useCallback(() => {
-    load();
+    // Soft refresh: do not flip loading / unmount tabs (file picker focus would wipe Parts form).
+    load({ soft: true });
     loadActiveLog();
   }, [load, loadActiveLog]);
   useAutoRefresh(refresh);
@@ -444,7 +446,7 @@ export default function TicketDetailPage() {
       .slice(0, 20);
   }, [data?.activities]);
 
-  if (loading) {
+  if (loading && !data) {
     return <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>;
   }
   if (!ticket) return <p className="text-red-600">Ticket not found or you do not have access to view it.</p>;
@@ -700,7 +702,7 @@ export default function TicketDetailPage() {
               parts={data.parts}
               configHistory={configHistory}
               partRequests={data.part_requests}
-              onUpdated={load}
+              onUpdated={() => load({ soft: true })}
             />
           )}
           {tab === 'diagnosis' && (

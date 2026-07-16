@@ -1,22 +1,43 @@
 const pool = require('../config/db');
 
-// Get All Parts
+function isBatteryPart(part) {
+  const cat = String(part?.category || part?.part_type || '').toLowerCase().trim();
+  const name = String(part?.part_name || '').toLowerCase();
+  return cat === 'battery' || cat.includes('battery') || name.includes('battery');
+}
+
+// Get All Parts — optional ?search= filters by part_name (case-insensitive)
 exports.getAllParts = async (req, res) => {
   try {
+    const search = String(req.query.search || req.query.q || '').trim();
+    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
+    const params = [];
+    let where = 'WHERE 1=1';
+    if (search) {
+      params.push(`%${search}%`);
+      where += ` AND part_name ILIKE $${params.length}`;
+    }
+    params.push(limit);
     const result = await pool.query(
-      'SELECT * FROM parts ORDER BY part_name ASC'
+      `SELECT part_id, part_name, part_type, category, quantity, vendor, cost,
+              location_code, model_number, pin_size, part_sku, description
+         FROM parts
+        ${where}
+        ORDER BY part_name ASC
+        LIMIT $${params.length}`,
+      params
     );
 
     res.json({
       success: true,
       count: result.rows.length,
-      parts: result.rows
+      parts: result.rows,
     });
   } catch (error) {
     console.error('Get parts error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error fetching parts'
+      message: 'Server error fetching parts',
     });
   }
 };
@@ -35,37 +56,37 @@ exports.createPart = async (req, res) => {
   const {
     part_name, part_type, quantity, vendor, cost, location_code,
     category, description, part_sku, compatible_brands, is_consumable,
-    warranty_months, notes, min_threshold
+    warranty_months, notes, min_threshold, model_number, pin_size,
   } = req.body;
 
   try {
-    // category drives the spare-parts catalog link; default to part_type.
     const cat = (category || part_type || 'general').toString();
     const result = await pool.query(
       `INSERT INTO parts
          (part_name, part_type, quantity, vendor, cost, location_code,
           category, description, part_sku, compatible_brands, is_consumable,
-          warranty_months, notes, min_threshold)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+          warranty_months, notes, min_threshold, model_number, pin_size)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
        RETURNING *`,
       [
         part_name, part_type, quantity || 0, vendor, cost || 0, location_code,
         cat, description || null, part_sku || null, toBrandArray(compatible_brands),
         is_consumable === true || is_consumable === 'true',
         Number(warranty_months) || 0, notes || null,
-        Number.isFinite(Number(min_threshold)) ? Number(min_threshold) : 5
+        Number.isFinite(Number(min_threshold)) ? Number(min_threshold) : 5,
+        model_number ? String(model_number).trim() : null,
+        pin_size ? String(pin_size).trim() : null,
       ]
     );
 
     const part = result.rows[0];
 
-    // Keep the spare-parts (SPO) catalog in sync so the part is orderable.
     try {
       await pool.query(
-        `INSERT INTO vendor_spare_parts_catalog (name, active, floor_part_id, category)
-         SELECT $1, true, $2, $3
+        `INSERT INTO vendor_spare_parts_catalog (name, active, floor_part_id, category, model_number, pin_size)
+         SELECT $1, true, $2, $3, $4, $5
           WHERE NOT EXISTS (SELECT 1 FROM vendor_spare_parts_catalog WHERE floor_part_id = $2)`,
-        [part.part_name, part.part_id, cat]
+        [part.part_name, part.part_id, cat, part.model_number || null, part.pin_size || null]
       );
     } catch (e) {
       console.warn('[createPart] catalog sync (non-fatal):', e.message);
@@ -74,24 +95,24 @@ exports.createPart = async (req, res) => {
     res.status(201).json({
       success: true,
       message: 'Part created successfully',
-      part
+      part,
     });
   } catch (error) {
     console.error('Create part error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error creating part'
+      message: 'Server error creating part',
     });
   }
 };
 
-// Update Part Details (Name, Location, Cost, etc.)
+// Update Part Details
 exports.updatePart = async (req, res) => {
   const { id } = req.params;
   const {
     part_name, part_type, vendor, cost, location_code,
     category, description, part_sku, compatible_brands, is_consumable,
-    warranty_months, notes, min_threshold
+    warranty_months, notes, min_threshold, model_number, pin_size,
   } = req.body;
 
   try {
@@ -111,6 +132,8 @@ exports.updatePart = async (req, res) => {
            warranty_months = COALESCE($12, warranty_months),
            notes = COALESCE($13, notes),
            min_threshold = COALESCE($14, min_threshold),
+           model_number = COALESCE($15, model_number),
+           pin_size = COALESCE($16, pin_size),
            updated_at = NOW()
        WHERE part_id = $6
        RETURNING *`,
@@ -120,7 +143,9 @@ exports.updatePart = async (req, res) => {
         typeof is_consumable === 'boolean' ? is_consumable : null,
         warranty_months != null && warranty_months !== '' ? Number(warranty_months) : null,
         notes || null,
-        min_threshold != null && min_threshold !== '' ? Number(min_threshold) : null
+        min_threshold != null && min_threshold !== '' ? Number(min_threshold) : null,
+        model_number !== undefined ? (model_number ? String(model_number).trim() : null) : null,
+        pin_size !== undefined ? (pin_size ? String(pin_size).trim() : null) : null,
       ]
     );
 
@@ -128,10 +153,24 @@ exports.updatePart = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Part not found' });
     }
 
+    const part = result.rows[0];
+    try {
+      await pool.query(
+        `UPDATE vendor_spare_parts_catalog
+            SET name = COALESCE($2, name),
+                category = COALESCE($3, category),
+                model_number = COALESCE($4, model_number),
+                pin_size = COALESCE($5, pin_size),
+                updated_at = NOW()
+          WHERE floor_part_id = $1`,
+        [id, part.part_name, part.category, part.model_number, part.pin_size]
+      );
+    } catch (_) { /* catalog sync optional */ }
+
     res.json({
       success: true,
       message: 'Part updated successfully',
-      part: result.rows[0]
+      part,
     });
   } catch (error) {
     console.error('Update part error:', error);
@@ -166,10 +205,9 @@ exports.getPartUsage = async (req, res) => {
   }
 };
 
-// Update Part Quantity (Restock or Consume)
 exports.updatePartQuantity = async (req, res) => {
   const { id } = req.params;
-  const { quantity } = req.body; // Can be positive (add) or negative (consume)
+  const { quantity } = req.body;
 
   try {
     const result = await pool.query(
@@ -180,20 +218,22 @@ exports.updatePartQuantity = async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Part not found'
+        message: 'Part not found',
       });
     }
 
     res.json({
       success: true,
       message: 'Part quantity updated successfully',
-      part: result.rows[0]
+      part: result.rows[0],
     });
   } catch (error) {
     console.error('Update part error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error updating part'
+      message: 'Server error updating part',
     });
   }
 };
+
+exports.isBatteryPart = isBatteryPart;
