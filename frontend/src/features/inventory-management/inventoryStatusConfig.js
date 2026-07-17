@@ -24,6 +24,7 @@ export const INVENTORY_SEGMENT_BY_ROUTE = {
   'qc-pending': 'qc_pending',
   'qc-process': 'qc_process',
   'dead-laptops': 'dead_laptops',
+  'missing-laptops': 'missing_laptops',
   'rent-to-own': 'rent_to_own',
   'rental-purchase': 'rental_purchase',
   'direct-purchase': 'direct_purchase',
@@ -58,6 +59,12 @@ export const INVENTORY_PAGE_META = {
     erpSegment: 'dead_laptops',
     countKey: 'dead_laptops',
     description: 'Non-working units held for future floor re-evaluation or parts.'
+  },
+  'missing-laptops': {
+    title: 'Missing Laptops',
+    erpSegment: 'missing_laptops',
+    countKey: 'missing_laptops',
+    description: 'Units marked missing from warehouse — use Asset Movement to reclassify when found.'
   },
   'rent-to-own': {
     title: 'Rent To Own',

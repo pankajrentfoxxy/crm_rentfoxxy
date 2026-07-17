@@ -13,7 +13,8 @@ const MOVEMENT_TARGETS = {
   qc_pending: { qcStatus: 'qc_pending', inventoryStatus: 'in_stock', createTicket: false },
   qc_process: { qcStatus: 'pending', inventoryStatus: 'in_stock', createTicket: true },
   passed: { qcStatus: 'passed', inventoryStatus: 'in_stock', createTicket: false },
-  dead: { qcStatus: 'dead', inventoryStatus: 'scrapped', createTicket: false }
+  dead: { qcStatus: 'dead', inventoryStatus: 'scrapped', createTicket: false },
+  missing: { qcStatus: 'missing', inventoryStatus: 'missing', createTicket: false }
 };
 
 const BLOCKED_INVENTORY_STATUSES = new Set([
@@ -35,22 +36,88 @@ function targetLabel(target) {
     qc_pending: 'QC Pending',
     qc_process: 'QC Process',
     passed: 'Ready to Rent/Sell',
-    dead: 'Dead Laptop'
+    dead: 'Dead Laptop',
+    missing: 'Missing Laptop'
   };
   return labels[target] || target;
 }
 
+/** Split pasted serial/TTSPL lists (comma, newline, semicolon, tab). */
+function parseSearchTerms(q) {
+  return [...new Set(
+    String(q || '')
+      .split(/[,;\n\r\t]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+  )];
+}
+
+function mapMovementRow(row) {
+  const ex = parseExtra(row.extra);
+  const effectiveQc = String(row.qc_status || ex.status || 'pending').trim();
+  const inv = String(row.inventory_status || 'in_stock').trim();
+  const blocked = BLOCKED_INVENTORY_STATUSES.has(inv);
+  return {
+    serial_id: row.serial_id,
+    serial_number: row.serial_number,
+    unique_product_serial: row.inventory_asset_code || ex.unique_product_serial || '',
+    purchase_order_number: row.purchase_order_number || '',
+    qc_status: effectiveQc,
+    inventory_status: inv,
+    remark: row.remark || ex.action_remark || '',
+    blocked,
+    block_reason: blocked ? `Unit is ${inv.replace(/_/g, ' ')} and cannot be moved` : null
+  };
+}
+
 /**
  * Search laptops eligible for asset movement by serial number or TTSPL.
+ * Supports comma-separated exact matches for bulk paste.
  */
 async function searchLaptopsForMovement(db, { q, limit = 50 }) {
-  const term = String(q || '').trim();
-  if (term.length < 2) {
-    return { ok: true, data: [] };
+  const terms = parseSearchTerms(q);
+  if (!terms.length) {
+    return { ok: true, data: [], meta: { terms: [], not_found: [] } };
   }
 
-  const like = `%${term}%`;
-  const r = await db.query(
+  const maxLimit = Math.min(Math.max(Number(limit) || 50, 1), 200);
+
+  if (terms.length === 1 && terms[0].length < 2) {
+    return { ok: true, data: [], meta: { terms, not_found: terms } };
+  }
+
+  let r;
+  if (terms.length === 1) {
+    const like = `%${terms[0]}%`;
+    r = await db.query(
+      `SELECT s.serial_id,
+              s.serial_number,
+              s.inventory_asset_code,
+              s.qc_status,
+              s.inventory_status,
+              s.remark,
+              s.extra,
+              p.purchase_order_number
+         FROM vendor_serial_numbers s
+         LEFT JOIN vendor_purchase_orders p ON p.po_id = s.po_id AND p.deleted_at IS NULL
+        WHERE s.deleted_at IS NULL
+          AND s.po_id IS NOT NULL
+          AND s.spo_id IS NULL
+          AND (
+            s.serial_number ILIKE $1
+            OR s.inventory_asset_code ILIKE $1
+            OR COALESCE(s.extra->>'unique_product_serial', '') ILIKE $1
+          )
+        ORDER BY s.updated_at DESC NULLS LAST, s.serial_id DESC
+        LIMIT $2`,
+      [like, maxLimit]
+    );
+    const data = r.rows.map(mapMovementRow);
+    return { ok: true, data, meta: { terms, not_found: [] } };
+  }
+
+  const upperTerms = terms.map((t) => t.toUpperCase());
+  r = await db.query(
     `SELECT s.serial_id,
             s.serial_number,
             s.inventory_asset_code,
@@ -65,34 +132,24 @@ async function searchLaptopsForMovement(db, { q, limit = 50 }) {
         AND s.po_id IS NOT NULL
         AND s.spo_id IS NULL
         AND (
-          s.serial_number ILIKE $1
-          OR s.inventory_asset_code ILIKE $1
-          OR COALESCE(s.extra->>'unique_product_serial', '') ILIKE $1
+          UPPER(s.serial_number) = ANY($1::text[])
+          OR UPPER(s.inventory_asset_code) = ANY($1::text[])
+          OR UPPER(COALESCE(s.extra->>'unique_product_serial', '')) = ANY($1::text[])
         )
       ORDER BY s.updated_at DESC NULLS LAST, s.serial_id DESC
       LIMIT $2`,
-    [like, Math.min(Math.max(Number(limit) || 50, 1), 100)]
+    [upperTerms, Math.max(maxLimit, upperTerms.length)]
   );
 
-  const data = r.rows.map((row) => {
-    const ex = parseExtra(row.extra);
-    const effectiveQc = String(row.qc_status || ex.status || 'pending').trim();
-    const inv = String(row.inventory_status || 'in_stock').trim();
-    const blocked = BLOCKED_INVENTORY_STATUSES.has(inv);
-    return {
-      serial_id: row.serial_id,
-      serial_number: row.serial_number,
-      unique_product_serial: row.inventory_asset_code || ex.unique_product_serial || '',
-      purchase_order_number: row.purchase_order_number || '',
-      qc_status: effectiveQc,
-      inventory_status: inv,
-      remark: row.remark || ex.action_remark || '',
-      blocked,
-      block_reason: blocked ? `Unit is ${inv.replace(/_/g, ' ')} and cannot be moved` : null
-    };
-  });
+  const data = r.rows.map(mapMovementRow);
+  const matchedKeys = new Set();
+  for (const row of data) {
+    matchedKeys.add(String(row.serial_number || '').toUpperCase());
+    matchedKeys.add(String(row.unique_product_serial || '').toUpperCase());
+  }
+  const notFound = terms.filter((t) => !matchedKeys.has(t.toUpperCase()));
 
-  return { ok: true, data };
+  return { ok: true, data, meta: { terms, not_found: notFound } };
 }
 
 async function applyMovementTarget(db, row, targetKey, actorUserId) {
@@ -124,6 +181,9 @@ async function applyMovementTarget(db, row, targetKey, actorUserId) {
   }
   if (targetKey === 'dead') {
     ex.dead_marked_at = new Date().toISOString();
+  }
+  if (targetKey === 'missing') {
+    ex.missing_marked_at = new Date().toISOString();
   }
   if (targetKey === 'passed') {
     ex.passed_via = ex.passed_via || 'asset_movement';
@@ -184,7 +244,7 @@ async function applyMovementTarget(db, row, targetKey, actorUserId) {
 async function bulkMoveAssets(db, { serialIds, target, remark }, actorUserId) {
   const targetKey = normalizeTarget(target);
   if (!targetKey) {
-    return { ok: false, status: 400, message: 'Invalid target. Use qc_pending, qc_process, passed, or dead.' };
+    return { ok: false, status: 400, message: 'Invalid target. Use qc_pending, qc_process, passed, dead, or missing.' };
   }
 
   const ids = [...new Set((serialIds || []).map((id) => Number(id)).filter((id) => id > 0))];
@@ -339,6 +399,7 @@ module.exports = {
   MOVEMENT_TARGETS,
   normalizeTarget,
   targetLabel,
+  parseSearchTerms,
   searchLaptopsForMovement,
   bulkMoveAssets,
   updateSerialRemark

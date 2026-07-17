@@ -6,6 +6,7 @@ import ReadyToRentOrSellPage from './pages/ReadyToRentOrSellPage';
 import QcProcessPage from './pages/QcProcessPage';
 import QcPendingPage from './pages/QcPendingPage';
 import DeadLaptopPage from './pages/DeadLaptopPage';
+import MissingLaptopPage from './pages/MissingLaptopPage';
 import AssetMovementPage from './pages/AssetMovementPage';
 import RentToOwnPage from './pages/RentToOwnPage';
 import RentalPurchasePage from './pages/RentalPurchasePage';
@@ -28,7 +29,7 @@ const g = (section, node) => (
 
 function InventoryIndexRedirect() {
   const { canView } = usePermission();
-  if (canView('inventory_management')) return <Navigate to="universal-search" replace />;
+  if (canView('inventory_management')) return <Navigate to="qc-process" replace />;
   if (canView('inventory_asset_movement')) return <Navigate to="asset-movement" replace />;
   if (canView('parts_inventory')) return <Navigate to="parts" replace />;
   if (canView('customer_inventory')) return <Navigate to="customer-assets" replace />;
@@ -50,6 +51,7 @@ export default function InventoryManagementApp() {
         <Route path="qc-pending" element={g('inventory_management', <QcPendingPage />)} />
         <Route path="qc-process" element={g('inventory_management', <QcProcessPage />)} />
         <Route path="dead-laptops" element={g('inventory_management', <DeadLaptopPage />)} />
+        <Route path="missing-laptops" element={g('inventory_management', <MissingLaptopPage />)} />
         <Route path="asset-movement" element={g('inventory_asset_movement', <AssetMovementPage />)} />
         <Route path="out-for-repair" element={g('inventory_management', <OutForRepairInventoryPage />)} />
         <Route path="rent-to-own" element={g('inventory_management', <RentToOwnPage />)} />

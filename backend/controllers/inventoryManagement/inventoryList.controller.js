@@ -266,7 +266,7 @@ async function exportInventoryExcel(req, res) {
 
 async function getListCounts(req, res) {
   try {
-    const keys = ['passed', 'qc_pending', 'qc_process', 'dead_laptops', 'rent_to_own', 'rental_purchase', 'direct_purchase', 'out_for_repare', 'failed', 'spare_parts'];
+    const keys = ['passed', 'qc_pending', 'qc_process', 'dead_laptops', 'missing_laptops', 'rent_to_own', 'rental_purchase', 'direct_purchase', 'out_for_repare', 'failed', 'spare_parts'];
     const counts = {};
     for (const seg of keys) {
       const params = [];

@@ -15,6 +15,7 @@ const ALLOWED_QC_STATUSES = new Set([
   'passed',
   'failed',
   'dead',
+  'missing',
 ]);
 
 function inventoryStatusForQc(qcStatus) {
@@ -33,6 +34,8 @@ function inventoryStatusForQc(qcStatus) {
       return 'qc_failed';
     case 'dead':
       return 'scrapped';
+    case 'missing':
+      return 'missing';
     default:
       return qcStatus;
   }

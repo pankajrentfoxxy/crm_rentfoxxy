@@ -6,7 +6,7 @@ const {
 } = require('../../services/inventoryAssetMovementService');
 
 const searchValidators = [
-  query('q').notEmpty().trim().isLength({ min: 2, max: 80 })
+  query('q').notEmpty().trim().isLength({ min: 1, max: 8000 })
 ];
 
 async function searchAssets(req, res) {
@@ -18,7 +18,7 @@ async function searchAssets(req, res) {
       q: req.query.q,
       limit: req.query.limit
     });
-    res.json({ success: true, data: result.data });
+    res.json({ success: true, data: result.data, meta: result.meta || null });
   } catch (e) {
     console.error('searchAssetsForMovement', e);
     res.status(500).json({ success: false, message: e.message || 'Search failed' });
@@ -28,7 +28,7 @@ async function searchAssets(req, res) {
 const bulkMoveValidators = [
   body('serial_ids').isArray({ min: 1, max: 100 }),
   body('serial_ids.*').isInt({ min: 1 }).toInt(),
-  body('target').isIn(['qc_pending', 'qc_process', 'passed', 'dead']),
+  body('target').isIn(['qc_pending', 'qc_process', 'passed', 'dead', 'missing']),
   body('remark').optional().isString().trim()
 ];
 

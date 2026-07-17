@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { ArrowRightLeft, Loader2, Search } from 'lucide-react';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
-import { SearchField } from '../../../components/ui/primitives';
 import {
   bulkMoveInventoryAssets,
   searchInventoryAssetsForMovement
@@ -13,13 +12,31 @@ const TARGET_OPTIONS = [
   { value: 'qc_pending', label: 'QC Pending' },
   { value: 'qc_process', label: 'QC Process (creates ticket)' },
   { value: 'passed', label: 'Ready to Rent/Sell' },
-  { value: 'dead', label: 'Dead Laptop' }
+  { value: 'dead', label: 'Dead Laptop' },
+  { value: 'missing', label: 'Missing Laptop' }
 ];
+
+function parseTerms(input) {
+  return [...new Set(
+    String(input || '')
+      .split(/[,;\n\r\t]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+  )];
+}
+
+function canSearch(input) {
+  const terms = parseTerms(input);
+  if (!terms.length) return false;
+  if (terms.length > 1) return true;
+  return terms[0].length >= 2;
+}
 
 export default function AssetMovementPage() {
   const [searchInput, setSearchInput] = useState('');
-  const search = useDebouncedValue(searchInput.trim(), 350);
+  const search = useDebouncedValue(searchInput.trim(), 400);
   const [rows, setRows] = useState([]);
+  const [searchMeta, setSearchMeta] = useState(null);
   const [loading, setLoading] = useState(false);
   const [selectedIds, setSelectedIds] = useState([]);
   const [target, setTarget] = useState('qc_pending');
@@ -27,14 +44,22 @@ export default function AssetMovementPage() {
   const [moving, setMoving] = useState(false);
 
   const load = useCallback(async () => {
-    if (search.length < 2) {
+    if (!canSearch(search)) {
       setRows([]);
+      setSearchMeta(null);
       return;
     }
     setLoading(true);
     try {
       const { data } = await searchInventoryAssetsForMovement(search);
-      if (data.success) setRows(data.data || []);
+      if (data.success) {
+        setRows(data.data || []);
+        setSearchMeta(data.meta || null);
+        const found = (data.data || []).filter((r) => !r.blocked);
+        if (found.length && parseTerms(search).length > 1) {
+          setSelectedIds(found.map((r) => r.serial_id));
+        }
+      }
     } catch (e) {
       toast.error(e.response?.data?.message || 'Search failed');
     } finally {
@@ -46,8 +71,13 @@ export default function AssetMovementPage() {
     load();
   }, [load]);
 
+  useEffect(() => {
+    setSelectedIds([]);
+  }, [search]);
+
   const selectableRows = useMemo(() => rows.filter((r) => !r.blocked), [rows]);
   const allSelected = selectableRows.length > 0 && selectableRows.every((r) => selectedIds.includes(r.serial_id));
+  const pastedCount = parseTerms(searchInput).length;
 
   const toggleAll = () => {
     if (allSelected) {
@@ -92,6 +122,8 @@ export default function AssetMovementPage() {
     }
   };
 
+  const showEmptyPrompt = !canSearch(search);
+
   return (
     <div className="space-y-4">
       <div>
@@ -100,17 +132,37 @@ export default function AssetMovementPage() {
           Asset Movement
         </h1>
         <p className="text-sm text-slate-600 mt-1">
-          Search by serial number or TTSPL, select multiple laptops, and move them between inventory buckets.
+          Search one serial/TTSPL, or paste a comma-separated list to find and move many laptops at once.
         </p>
       </div>
 
       <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3 shadow-sm">
-        <SearchField
-          value={searchInput}
-          onChange={(e) => setSearchInput(e.target.value)}
-          placeholder="Search serial number or TTSPL (min 2 chars)…"
-          className="max-w-xl"
-        />
+        <label className="block text-sm max-w-3xl">
+          <span className="text-xs font-medium text-slate-600">
+            Serial numbers or TTSPLs {pastedCount > 1 ? `(${pastedCount} pasted)` : ''}
+          </span>
+          <textarea
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="Single search or paste comma-separated: TTSPL001, TTSPL002, ABC123…"
+            rows={3}
+            className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono resize-y min-h-[72px]"
+          />
+        </label>
+
+        {searchMeta?.not_found?.length ? (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            <span className="font-semibold">Not found ({searchMeta.not_found.length}):</span>{' '}
+            {searchMeta.not_found.slice(0, 20).join(', ')}
+            {searchMeta.not_found.length > 20 ? ` … +${searchMeta.not_found.length - 20} more` : ''}
+          </div>
+        ) : null}
+
+        {rows.length > 0 ? (
+          <p className="text-xs text-slate-600">
+            Found {rows.length} laptop(s){selectedIds.length ? ` · ${selectedIds.length} selected` : ''}
+          </p>
+        ) : null}
 
         <div className="flex flex-wrap items-end gap-3">
           <label className="block text-sm">
@@ -148,10 +200,10 @@ export default function AssetMovementPage() {
       </div>
 
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-x-auto">
-        {search.length < 2 ? (
+        {showEmptyPrompt ? (
           <div className="py-16 text-center text-slate-500 text-sm flex flex-col items-center gap-2">
             <Search className="w-8 h-8 text-slate-300" />
-            Enter a serial number or TTSPL to find laptops
+            Enter a serial/TTSPL (min 2 chars) or paste comma-separated values
           </div>
         ) : loading ? (
           <div className="py-16 text-center text-slate-500 text-sm flex items-center justify-center gap-2">

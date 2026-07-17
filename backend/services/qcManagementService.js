@@ -8,6 +8,7 @@ const VALID_STATUSES = new Set([
   'passed',
   'failed',
   'dead',
+  'missing',
   'require_for_parts'
 ]);
 

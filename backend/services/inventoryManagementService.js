@@ -17,6 +17,7 @@ const LIST_SEGMENT_MAP = {
   // Other non-passed statuses (failed, out_for_repare, dead, …) have their own inventory tabs.
   qc_process: { mode: 'status', status: 'pending' },
   dead_laptops: { mode: 'status', status: 'dead' },
+  missing_laptops: { mode: 'status', status: 'missing' },
   rent_to_own: { mode: 'po_passed', poType: 'rent_to_own' },
   rental_purchase: { mode: 'po_passed', poType: 'rental_purchase' },
   direct_purchase: { mode: 'po_passed', poType: 'direct_purchase' },
@@ -32,6 +33,7 @@ const ROUTE_TO_SEGMENT = {
   'qc-pending': 'qc_pending',
   'qc-process': 'qc_process',
   'dead-laptops': 'dead_laptops',
+  'missing-laptops': 'missing_laptops',
   'rent-to-own': 'rent_to_own',
   'rental-purchase': 'rental_purchase',
   'direct-purchase': 'direct_purchase',
@@ -52,6 +54,7 @@ function listTitleForSegment(segment) {
     qc_pending: 'QC Pending',
     qc_process: 'QC Process Laptops',
     dead_laptops: 'Dead Laptops',
+    missing_laptops: 'Missing Laptops',
     rent_to_own: 'Rent To Own',
     rental_purchase: 'Rental Purchase',
     direct_purchase: 'Direct Purchase',

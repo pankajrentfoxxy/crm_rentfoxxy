@@ -61,6 +61,7 @@ const READY_TO_RENT_STAT_CARDS = [
   { label: 'In Repair', countKey: 'out_for_repare', to: '/inventory-management/out-for-repare' },
   { label: 'In QC', countKey: 'qc_process', to: '/inventory-management/qc-process' },
   { label: 'Dead', countKey: 'dead_laptops', to: '/inventory-management/dead-laptops' },
+  { label: 'Missing', countKey: 'missing_laptops', to: '/inventory-management/missing-laptops' },
   { label: 'QC Failed', countKey: 'failed', to: '/qc-management/failed' }
 ];
 
@@ -783,6 +784,7 @@ export default function InventoryListTable({ routeKey }) {
   const showQcAddLaptop = ['qc-process', 'qc-pending'].includes(routeKey) && isInventoryAdmin;
   const isQcPending = routeKey === 'qc-pending';
   const isDeadLaptops = routeKey === 'dead-laptops';
+  const isMissingLaptops = routeKey === 'missing-laptops';
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -885,7 +887,7 @@ export default function InventoryListTable({ routeKey }) {
   if (!meta) return <p className="text-sm text-red-600">Unknown inventory route.</p>;
 
   const showOutForRepareExtras = routeKey === 'out-for-repare';
-  const showRemarkColumn = isQcPending || isQcProcess || isDeadLaptops;
+  const showRemarkColumn = isQcPending || isQcProcess || isDeadLaptops || isMissingLaptops;
   const showQcPendingAction = isQcPending && isInventoryAdmin;
   const showDeadReevalAction = isDeadLaptops && isInventoryAdmin;
   const showTicketStage = isQcProcess;
