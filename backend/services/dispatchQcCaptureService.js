@@ -19,6 +19,7 @@ const {
   workingToCompareShape,
   getById,
   markPendingInventory,
+  hydrateEmptyWorkingConfigFromVendorSerial,
 } = require('./productionAssetService');
 
 const TOKEN_TTL_MINUTES = 30;
@@ -110,6 +111,7 @@ async function resolveProductionAssetForDispatch(db, ticket, alloc) {
       configSource: ticket,
     });
   }
+  pa = await hydrateEmptyWorkingConfigFromVendorSerial(db, pa);
   return pa;
 }
 
@@ -444,14 +446,36 @@ async function verifyDispatchQcConfiguration(tokenId, actual, ip) {
       `SELECT * FROM production_assets WHERE production_asset_id = $1 FOR UPDATE`,
       [row.production_asset_id]
     );
-    const pa = paRes.rows[0];
+    let pa = paRes.rows[0];
     if (!pa) {
       await client.query('ROLLBACK');
       return { ok: false, code: 404, message: 'Production Asset not found' };
     }
+    pa = await hydrateEmptyWorkingConfigFromVendorSerial(client, pa);
 
     const expected = workingToCompareShape(pa);
     const configResult = verifyConfigurationAgainst(expected, actual);
+
+    // Diagnostic: log compare inputs when mismatch (no PII beyond asset ids)
+    if (!configResult.configurationMatched) {
+      console.warn('[dispatch-qc-verify] mismatch', JSON.stringify({
+        token_id: tokenId,
+        ticket_id: row.ticket_id,
+        production_asset_id: pa.production_asset_id,
+        vendor_serial_id: pa.vendor_serial_id,
+        ttspl_id: pa.ttspl_id,
+        serial_number: pa.serial_number,
+        expected: Object.fromEntries(
+          Object.entries(expected).map(([k, v]) => [k, { json: JSON.stringify(v), length: String(v ?? '').length }])
+        ),
+        actual: Object.fromEntries(
+          ['manufacturer', 'model', 'model_version', 'system_family', 'processor', 'generation', 'ram', 'ssd', 'gpu']
+            .map((k) => [k, { json: JSON.stringify(actual?.[k]), length: String(actual?.[k] ?? '').length }])
+        ),
+        failed: (configResult.errors || []).map((e) => e.field),
+      }));
+    }
+
     const soLine = await getSoLineForAllocation(row);
     const detectedSpec = actualToSoLineShape(actual, expected);
     const soLineMatched = soLine ? serialMatchesSoLine(soLine, detectedSpec) : true;
