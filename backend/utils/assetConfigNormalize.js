@@ -123,38 +123,10 @@ function normalizeStorage(name) {
   return normalizeStorageSegment(s);
 }
 
-/**
- * Intel Ultra 5/7/9 catalog labels (Settings often store "Ultra 7") vs GRN/extra
- * strings like Intel(R) Core(TM) Ultra 7 165U → Ultra 7.
- */
-function normalizeIntelUltra(name) {
-  const s = collapseSpaces(name);
-  if (!s) return null;
-
-  const short = s.match(/^(?:intel(?:\s+core)?\s+)?ultra\s*([579])(?:\s+\d+[a-z]*)?$/i);
-  if (short) return `Ultra ${short[1]}`;
-
-  // Verbose: Intel(R) Core(TM) Ultra 7 165U / Intel Core Ultra 5 125H
-  const verbose = s.match(
-    /intel(?:\([^)]*\))?\s*core(?:\([^)]*\))?\s*ultra\s*([579])(?:\s+\d+[a-z]*)?/i
-  );
-  if (verbose) return `Ultra ${verbose[1]}`;
-
-  if (/\bultra\s*([579])\b/i.test(s) && /intel|core/i.test(s)) {
-    const m = s.match(/\bultra\s*([579])\b/i);
-    if (m) return `Ultra ${m[1]}`;
-  }
-
-  return null;
-}
-
-/** Intel i5 / I5 → Intel Core i5; Ultra 7 / Intel Ultra 7 165U → Ultra 7; M1 → Apple M1 */
+/** Intel i5 / I5 → Intel Core i5; M1 → Apple M1 */
 function normalizeProcessor(name) {
   let s = collapseSpaces(name);
   if (!s) return s;
-
-  const ultra = normalizeIntelUltra(s);
-  if (ultra) return ultra;
 
   const intelShort = s.match(/^I([3579])$/i);
   if (intelShort) return `Intel Core i${intelShort[1]}`;
@@ -247,7 +219,6 @@ module.exports = {
   normalizeGeneration,
   normalizeRam,
   normalizeStorage,
-  normalizeIntelUltra,
   normalizeProcessor,
   normalizeGpu,
   normalizeScreenSize,

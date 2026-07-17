@@ -233,28 +233,6 @@ async function getByVendorSerial(db, vendorSerialId) {
 }
 
 /**
- * When a Production Asset was created without working specs (common for vendor-repair
- * replacements), seed brand/model/CPU/RAM/SSD from vendor_serial_numbers.extra so
- * Dispatch QC / QC2 compare against real expected hardware — not empty strings.
- */
-async function hydrateEmptyWorkingConfigFromVendorSerial(db, pa) {
-  if (!pa?.production_asset_id || !pa.vendor_serial_id) return pa;
-  const hasAny = CONFIG_FIELDS.some((f) => String(pa[f] || '').trim() !== '');
-  if (hasAny) return pa;
-
-  const vRes = await db.query(
-    `SELECT extra FROM vendor_serial_numbers WHERE serial_id = $1 AND deleted_at IS NULL`,
-    [pa.vendor_serial_id]
-  );
-  const extra = vRes.rows[0]?.extra || {};
-  const working = normalizeWorkingConfig(extra);
-  if (!CONFIG_FIELDS.some((f) => String(working[f] || '').trim() !== '')) return pa;
-
-  const updated = await updateConfig(db, pa.production_asset_id, working, null, 'hydrate_from_vsn');
-  return updated?.production_asset || pa;
-}
-
-/**
  * Resolve config for display: Production Asset → ticket/VSN/GRN fallback.
  */
 async function getConfigForTicket(db, ticket) {
@@ -764,7 +742,6 @@ module.exports = {
   getById,
   getByTicket,
   getByVendorSerial,
-  hydrateEmptyWorkingConfigFromVendorSerial,
   getConfigForTicket,
   updateConfig,
   saveQc1Checklist,
