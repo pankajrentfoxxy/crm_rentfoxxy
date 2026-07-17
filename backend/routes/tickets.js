@@ -60,7 +60,12 @@ const ftEdit = checkSectionPermission('floor_tickets', 'edit');
 const ftAssign = checkAnySectionPermission(['floor_tickets', 'floor_pipeline', 'tickets'], 'edit');
 const floorPipelineView = checkSectionPermission('floor_pipeline', 'view');
 const floorQueueView = checkAnySectionPermission(['floor_pipeline', 'floor_tickets'], 'view');
-const ttsplHistoryView = checkSectionPermission('ttspl_history', 'view');
+// Floor / Dispatch QC users need laptop history on ticket screens even without
+// the dedicated ttspl_history menu permission.
+const ttsplHistoryView = checkAnySectionPermission(
+  ['ttspl_history', 'dispatch_qc', 'floor_pipeline', 'floor_tickets', 'qc_management'],
+  'view'
+);
 
 // All routes require authentication
 router.use(authMiddleware);

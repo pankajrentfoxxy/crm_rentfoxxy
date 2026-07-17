@@ -166,6 +166,13 @@ export default function Qc2SpecVerifyPanel({ ticket, onVerified, onHeaderSync })
   };
 
   const continueToTesting = () => {
+    const exp = expectedConfig || {};
+    onHeaderSyncRef.current?.({
+      processor: exp.processor || '',
+      generation: exp.generation || '-',
+      storage_type: exp.ssd || '',
+      ram_size: exp.ram || '',
+    });
     setTestingStarted(true);
     onVerifiedRef.current?.(true);
     toast.success('QC2 testing unlocked');

@@ -198,9 +198,16 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
     const submitQC = async (assignToUserId = null) => {
         setProcessing(true);
         try {
+            // Spec panels own config; fill legacy header fields so API never depends on the old form.
+            const safeHeader = {
+                processor: header.processor || ticket.processor || '-',
+                generation: header.generation || ticket.generation || '-',
+                storage_type: header.storage_type || ticket.storage_type || ticket.storage || '-',
+                ram_size: header.ram_size || ticket.ram_size || ticket.ram || '-',
+            };
             const payload = {
                 qcStage,
-                header,
+                header: safeHeader,
                 checklist,
                 grading,
                 remarks,
@@ -260,17 +267,6 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
         }
         if (qcStage === 'Dispatch QC' && !dispatchQcVerified) {
             return alert('Complete Dispatch QC spec verification before testing');
-        }
-        // Keep header fields populated for legacy API payload
-        if (!header.processor || !header.generation || !header.storage_type || !header.ram_size) {
-            if (qcStage === 'QC1' || qcStage === 'QC2') {
-                // Spec checklist may have synced — still require something for API
-            } else {
-                return alert('Please complete the header section (Processor, Generation, Storage Type, RAM Size)');
-            }
-        }
-        if ((qcStage !== 'QC1' && qcStage !== 'QC2' && qcStage !== 'Dispatch QC') && (!header.processor || !header.generation || !header.storage_type || !header.ram_size)) {
-            return alert('Please complete the header section (Processor, Generation, Storage Type, RAM Size)');
         }
 
         // Validate all checklist items

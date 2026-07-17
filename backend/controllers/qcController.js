@@ -596,7 +596,11 @@ exports.submitQC = async (req, res) => {
     } catch (error) {
         await client.query('ROLLBACK');
         console.error('Submit QC error:', error);
-        res.status(500).json({ success: false, message: 'Server error' });
+        const detail = String(error?.message || '');
+        const message = detail.includes('value too long')
+            ? 'QC header value too long for database column. Please retry — columns were widened for full processor names.'
+            : 'Server error';
+        res.status(500).json({ success: false, message });
     } finally {
         client.release();
     }

@@ -163,6 +163,15 @@ export default function DispatchQcSpecVerifyPanel({ ticket, onVerified, onHeader
   };
 
   const continueToTesting = () => {
+    // Ensure legacy QC payload header is filled from expected/matched specs
+    // (generation may be blank — use '-' so submit is not blocked).
+    const exp = expectedConfig || {};
+    onHeaderSyncRef.current?.({
+      processor: exp.processor || '',
+      generation: exp.generation || '-',
+      storage_type: exp.ssd || '',
+      ram_size: exp.ram || '',
+    });
     setTestingStarted(true);
     onVerifiedRef.current?.(true);
     toast.success('Dispatch QC testing unlocked');
