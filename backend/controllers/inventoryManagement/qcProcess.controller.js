@@ -3,6 +3,8 @@ const pool = require('../../config/db');
 const {
   addLaptopToQcProcess,
   movePassedSerialToQcProcess,
+  moveQcPendingToQcProcess,
+  moveDeadOrFailedToQcProcess,
   createProductionTicketForQcSerial,
   PO_TYPES
 } = require('../../services/qcProcessIntakeService');
@@ -33,7 +35,8 @@ const addLaptopValidators = [
   body('os').optional().isString().trim(),
   body('unit_price').optional().isFloat({ min: 0 }),
   body('purchase_amount').optional().isFloat({ min: 0 }),
-  body('remarks').optional().isString()
+  body('remarks').optional().isString(),
+  body('intake_target').optional().isIn(['qc_pending', 'pending'])
 ];
 
 async function addLaptop(req, res) {
@@ -46,11 +49,14 @@ async function addLaptop(req, res) {
       return res.status(result.status || 400).json({ success: false, message: result.message });
     }
     const ticketId = result.data.ticket?.ticket_id;
+    const isPending = result.data.qc_status === 'qc_pending';
     res.status(201).json({
       success: true,
       message: ticketId
         ? `Laptop added to QC Process. Floor ticket #${ticketId} created.`
-        : 'Laptop added to QC Process.',
+        : isPending
+          ? 'Laptop added to QC Pending.'
+          : 'Laptop added to QC Process.',
       data: result.data
     });
   } catch (e) {
@@ -83,6 +89,62 @@ async function moveToQcProcess(req, res) {
     res.json({ success: true, message: result.message, data: result.data });
   } catch (e) {
     console.error('moveToQcProcess', e);
+    res.status(500).json({ success: false, message: e.message || 'Failed to move to QC Process' });
+  }
+}
+
+const moveFromQcPendingValidators = [
+  body('serial_number_id').isInt({ min: 1 }).toInt(),
+  body('serial_number').notEmpty().trim()
+];
+
+async function moveFromQcPending(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  try {
+    const result = await moveQcPendingToQcProcess(
+      pool,
+      {
+        serialId: req.body.serial_number_id,
+        serialNumber: String(req.body.serial_number).trim()
+      },
+      req.user?.user_id
+    );
+    if (!result.ok) {
+      return res.status(result.status || 400).json({ success: false, message: result.message });
+    }
+    res.json({ success: true, message: result.message, data: result.data });
+  } catch (e) {
+    console.error('moveFromQcPending', e);
+    res.status(500).json({ success: false, message: e.message || 'Failed to move to QC Process' });
+  }
+}
+
+const moveDeadToQcValidators = [
+  body('serial_number_id').isInt({ min: 1 }).toInt(),
+  body('serial_number').notEmpty().trim()
+];
+
+async function moveDeadToQcProcess(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  try {
+    const result = await moveDeadOrFailedToQcProcess(
+      pool,
+      {
+        serialId: req.body.serial_number_id,
+        serialNumber: String(req.body.serial_number).trim()
+      },
+      req.user?.user_id
+    );
+    if (!result.ok) {
+      return res.status(result.status || 400).json({ success: false, message: result.message });
+    }
+    res.json({ success: true, message: result.message, data: result.data });
+  } catch (e) {
+    console.error('moveDeadToQcProcess', e);
     res.status(500).json({ success: false, message: e.message || 'Failed to move to QC Process' });
   }
 }
@@ -124,6 +186,10 @@ module.exports = {
   addLaptop,
   moveToQcValidators,
   moveToQcProcess,
+  moveFromQcPendingValidators,
+  moveFromQcPending,
+  moveDeadToQcValidators,
+  moveDeadToQcProcess,
   createProductionTicketValidators,
   createProductionTicket
 };

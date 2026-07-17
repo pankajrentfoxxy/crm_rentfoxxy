@@ -3,6 +3,7 @@
  */
 
 const VALID_STATUSES = new Set([
+  'qc_pending',
   'pending',
   'passed',
   'failed',

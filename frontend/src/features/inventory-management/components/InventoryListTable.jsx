@@ -11,8 +11,11 @@ import {
   fetchInventoryListCounts,
   exportInventoryListExcel,
   movePassedToQcProcess,
+  moveQcPendingToQcProcess,
+  moveDeadToQcProcess,
   tagInventorySerial,
   updateInventoryItemDescription,
+  updateInventorySerialRemark,
   updateReadyToRentSaleAction
 } from '../inventoryManagementApi';
 import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
@@ -52,10 +55,12 @@ function InventoryTableSkeleton({ colSpan = 12, rows = 8 }) {
 /** Dashboard stat cards on Ready to Rent/Sell — link to the list that owns each bucket. */
 const READY_TO_RENT_STAT_CARDS = [
   { label: 'QC Passed Available', countKey: 'passed' },
+  { label: 'QC Pending', countKey: 'qc_pending', to: '/inventory-management/qc-pending' },
   { label: 'Currently Rented', countKey: 'rented', to: '/inventory-management/customer-assets?status=rented' },
   { label: 'Sold', countKey: 'sold', to: '/inventory-management/customer-assets?status=sold' },
   { label: 'In Repair', countKey: 'out_for_repare', to: '/inventory-management/out-for-repare' },
   { label: 'In QC', countKey: 'qc_process', to: '/inventory-management/qc-process' },
+  { label: 'Dead', countKey: 'dead_laptops', to: '/inventory-management/dead-laptops' },
   { label: 'QC Failed', countKey: 'failed', to: '/qc-management/failed' }
 ];
 
@@ -445,6 +450,80 @@ function InventoryTagButtons({ row, onUpdated }) {
   );
 }
 
+function InventoryRemarkCell({ row, canEdit, onUpdated }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState(row.remark || row.action_remark || '');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!open) setText(row.remark || row.action_remark || '');
+  }, [open, row.remark, row.action_remark]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const { data } = await updateInventorySerialRemark(row.serial_id, text);
+      if (data.success) {
+        toast.success(data.message || 'Remark saved');
+        setOpen(false);
+        onUpdated?.();
+      }
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Failed to save remark');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="flex items-start gap-1 max-w-[180px]">
+        <ReadMoreText text={row.remark || row.action_remark} />
+        {canEdit ? (
+          <button
+            type="button"
+            className="shrink-0 p-1 rounded hover:bg-slate-100 text-slate-500"
+            title="Edit remark"
+            onClick={() => setOpen(true)}
+          >
+            <Pencil className="w-3 h-3" />
+          </button>
+        ) : null}
+      </div>
+      {open ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
+          <div className="w-full max-w-md rounded-xl bg-white shadow-xl border border-slate-200">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+              <h3 className="font-semibold text-slate-900">Edit remark</h3>
+              <button type="button" className="p-2 rounded-lg hover:bg-slate-100" onClick={() => setOpen(false)}>
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4">
+              <p className="text-xs font-mono text-slate-500 mb-2">{row.unique_product_serial || row.serial_number}</p>
+              <textarea
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                rows={4}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                placeholder="Notes about this laptop…"
+              />
+            </div>
+            <div className="flex gap-2 px-4 py-3 border-t border-slate-100">
+              <button type="button" className="flex-1 rounded-lg border border-slate-200 py-2 text-sm" onClick={() => setOpen(false)} disabled={saving}>
+                Cancel
+              </button>
+              <button type="button" className="flex-1 rounded-lg bg-teal-700 text-white py-2 text-sm font-semibold disabled:opacity-50" onClick={save} disabled={saving}>
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 async function moveSerialToQcProcess(row) {
   const { data } = await movePassedToQcProcess({
     serial_number_id: row.serial_id,
@@ -456,6 +535,82 @@ async function moveSerialToQcProcess(row) {
   invalidateInventoryManagement();
   invalidateQcCounts();
   return data;
+}
+
+function MoveFromQcPendingButton({ row, onUpdated }) {
+  const [saving, setSaving] = useState(false);
+
+  const handleClick = async () => {
+    const ttspl = row.unique_product_serial || row.inventory_asset_code || row.serial_number;
+    if (!window.confirm(`Move ${ttspl} to QC Process?\n\nA Production/Floor ticket will be created.`)) {
+      return;
+    }
+    setSaving(true);
+    try {
+      const { data } = await moveQcPendingToQcProcess({
+        serial_number_id: row.serial_id,
+        serial_number: row.serial_number
+      });
+      if (!data.success) throw new Error(data.message || 'Failed');
+      toast.success(data.message || 'Moved to QC Process');
+      invalidateInventoryManagement();
+      invalidateQcCounts();
+      onUpdated?.();
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to move to QC Process');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      disabled={saving}
+      className="inline-flex items-center justify-center rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-[11px] font-semibold text-sky-800 hover:bg-sky-100 disabled:opacity-50 whitespace-nowrap"
+    >
+      {saving ? 'Moving…' : 'Move to QC Process'}
+    </button>
+  );
+}
+
+function MoveDeadToQcProcessButton({ row, onUpdated }) {
+  const [saving, setSaving] = useState(false);
+
+  const handleClick = async () => {
+    const ttspl = row.unique_product_serial || row.inventory_asset_code || row.serial_number;
+    if (!window.confirm(`Send ${ttspl} to floor for re-evaluation?\n\nA Production/Floor ticket will be created.`)) {
+      return;
+    }
+    setSaving(true);
+    try {
+      const { data } = await moveDeadToQcProcess({
+        serial_number_id: row.serial_id,
+        serial_number: row.serial_number
+      });
+      if (!data.success) throw new Error(data.message || 'Failed');
+      toast.success(data.message || 'Sent to QC Process');
+      invalidateInventoryManagement();
+      invalidateQcCounts();
+      onUpdated?.();
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to send to QC Process');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      disabled={saving}
+      className="inline-flex items-center justify-center rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50 whitespace-nowrap"
+    >
+      {saving ? 'Sending…' : 'Send to QC Process'}
+    </button>
+  );
 }
 
 function MoveToQcProcessButton({ row, onUpdated }) {
@@ -625,7 +780,9 @@ export default function InventoryListTable({ routeKey }) {
   const meta = INVENTORY_PAGE_META[routeKey];
   const apiSegment = INVENTORY_API_SEGMENT_BY_ROUTE[routeKey];
   const isSpare = routeKey === 'spare-parts';
-  const showQcAddLaptop = routeKey === 'qc-process' && isInventoryAdmin;
+  const showQcAddLaptop = ['qc-process', 'qc-pending'].includes(routeKey) && isInventoryAdmin;
+  const isQcPending = routeKey === 'qc-pending';
+  const isDeadLaptops = routeKey === 'dead-laptops';
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -728,6 +885,9 @@ export default function InventoryListTable({ routeKey }) {
   if (!meta) return <p className="text-sm text-red-600">Unknown inventory route.</p>;
 
   const showOutForRepareExtras = routeKey === 'out-for-repare';
+  const showRemarkColumn = isQcPending || isQcProcess || isDeadLaptops;
+  const showQcPendingAction = isQcPending && isInventoryAdmin;
+  const showDeadReevalAction = isDeadLaptops && isInventoryAdmin;
   const showTicketStage = isQcProcess;
   const showQcCreateTicket = isQcProcess;
   const showExportExcel = ['ready-to-rent-or-sell', 'qc-process'].includes(routeKey);
@@ -930,6 +1090,9 @@ export default function InventoryListTable({ routeKey }) {
                   ) : null}
                   {showReadyToRentAction ? <th className="px-3 py-3">Action</th> : null}
                   {showQcCreateTicket ? <th className="px-3 py-3">Action</th> : null}
+                  {showQcPendingAction ? <th className="px-3 py-3">Action</th> : null}
+                  {showDeadReevalAction ? <th className="px-3 py-3">Action</th> : null}
+                  {showRemarkColumn ? <th className="px-3 py-3">Remark</th> : null}
                   {showTagColumn ? <th className="px-3 py-3">Tagged As</th> : null}
                   <th className="px-3 py-3">Status</th>
                 </>
@@ -1104,6 +1267,21 @@ export default function InventoryListTable({ routeKey }) {
                       <CreateProductionTicketButton row={row} onUpdated={load} />
                     </td>
                   ) : null}
+                  {showQcPendingAction ? (
+                    <td className="px-3 py-3">
+                      <MoveFromQcPendingButton row={row} onUpdated={load} />
+                    </td>
+                  ) : null}
+                  {showDeadReevalAction ? (
+                    <td className="px-3 py-3">
+                      <MoveDeadToQcProcessButton row={row} onUpdated={load} />
+                    </td>
+                  ) : null}
+                  {showRemarkColumn ? (
+                    <td className="px-3 py-3">
+                      <InventoryRemarkCell row={row} canEdit={isInventoryAdmin} onUpdated={load} />
+                    </td>
+                  ) : null}
                   {showTagColumn ? (
                     <td className="px-3 py-3">
                       <InventoryTagButtons row={row} onUpdated={load} />
@@ -1141,6 +1319,7 @@ export default function InventoryListTable({ routeKey }) {
         open={showAddLaptopModal}
         onClose={() => setShowAddLaptopModal(false)}
         onSuccess={() => load()}
+        intakeTarget={isQcPending ? 'qc_pending' : 'pending'}
       />
     </div>
   );

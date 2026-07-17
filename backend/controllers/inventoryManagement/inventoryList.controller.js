@@ -266,7 +266,7 @@ async function exportInventoryExcel(req, res) {
 
 async function getListCounts(req, res) {
   try {
-    const keys = ['passed', 'qc_process', 'rent_to_own', 'rental_purchase', 'direct_purchase', 'out_for_repare', 'failed', 'spare_parts'];
+    const keys = ['passed', 'qc_pending', 'qc_process', 'dead_laptops', 'rent_to_own', 'rental_purchase', 'direct_purchase', 'out_for_repare', 'failed', 'spare_parts'];
     const counts = {};
     for (const seg of keys) {
       const params = [];
@@ -762,6 +762,33 @@ async function updateSerialQcStatus(req, res) {
   }
 }
 
+const remarkValidators = [
+  param('id').isInt().toInt(),
+  body('remark').optional({ nullable: true }).isString().trim()
+];
+
+/** Admin — update inventory remark on QC Pending / QC Process / Dead lists. */
+async function updateSerialRemark(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  try {
+    const { updateSerialRemark: applyRemark } = require('../../services/inventoryAssetMovementService');
+    const result = await applyRemark(
+      pool,
+      { serialId: req.params.id, remark: req.body.remark },
+      req.user?.user_id
+    );
+    if (!result.ok) {
+      return res.status(result.status || 400).json({ success: false, message: result.message });
+    }
+    res.json({ success: true, message: result.message, data: result.data });
+  } catch (e) {
+    console.error('updateSerialRemark', e);
+    res.status(500).json({ success: false, message: e.message || 'Failed to update remark' });
+  }
+}
+
 module.exports = {
   listValidators,
   listInventory,
@@ -777,6 +804,8 @@ module.exports = {
   updateItemDescription,
   qcStatusValidators,
   updateSerialQcStatus,
+  remarkValidators,
+  updateSerialRemark,
   customerAssetsValidators,
   customerAssets
 };

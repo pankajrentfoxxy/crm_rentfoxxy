@@ -50,9 +50,12 @@ export const floorPipelineAccordionChildren = [
 /** Inventory accordion — each child maps to the RBAC section the route/API enforces. */
 export const inventoryAccordionChildren = [
   { label: 'Stock Management', path: '/inventory-management/universal-search', section: 'inventory_management' },
+  { label: 'QC Pending', path: '/inventory-management/qc-pending', countKey: 'qc_pending', section: 'inventory_management' },
   { label: 'QC Process Laptops', path: '/inventory-management/qc-process', countKey: 'qc_process', section: 'inventory_management' },
+  { label: 'Dead Laptops', path: '/inventory-management/dead-laptops', countKey: 'dead_laptops', section: 'inventory_management' },
   { label: 'Out for Repair', path: '/inventory-management/out-for-repair', countKey: 'out_for_repair', section: 'inventory_management' },
   { label: 'Ready to Rent/Sell', path: '/inventory-management/ready-to-rent-or-sell', countKey: 'passed', section: 'inventory_management' },
+  { label: 'Asset Movement', path: '/inventory-management/asset-movement', section: 'inventory_asset_movement' },
   { label: 'Parts Inventory', path: '/inventory-management/parts', section: 'parts_inventory' },
   { label: 'Parts Movement History', path: '/inventory-management/parts-history', section: 'parts_inventory' },
   { label: 'Parts Approval', path: '/inventory-management/parts-approval', countKey: 'parts_pending', section: 'parts_inventory' },
