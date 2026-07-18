@@ -42,6 +42,27 @@ function targetLabel(target) {
   return labels[target] || target;
 }
 
+function effectiveQcStatus(row) {
+  const ex = parseExtra(row.extra);
+  return String(row.qc_status || ex.status || 'pending').trim().toLowerCase();
+}
+
+/** Map qc_status to movement bucket key (for Move From filter). */
+function bucketKeyFromQcStatus(qcStatus) {
+  const s = String(qcStatus || '').trim().toLowerCase();
+  if (s === 'qc_pending') return 'qc_pending';
+  if (s === 'pending') return 'qc_process';
+  if (s === 'passed') return 'passed';
+  if (s === 'dead') return 'dead';
+  if (s === 'missing') return 'missing';
+  return null;
+}
+
+function qcStatusForBucket(bucketKey) {
+  const cfg = MOVEMENT_TARGETS[bucketKey];
+  return cfg ? cfg.qcStatus : null;
+}
+
 /** Split pasted serial/TTSPL lists (comma, newline, semicolon, tab). */
 function parseSearchTerms(q) {
   return [...new Set(
@@ -54,7 +75,7 @@ function parseSearchTerms(q) {
 
 function mapMovementRow(row) {
   const ex = parseExtra(row.extra);
-  const effectiveQc = String(row.qc_status || ex.status || 'pending').trim();
+  const effectiveQc = effectiveQcStatus(row);
   const inv = String(row.inventory_status || 'in_stock').trim();
   const blocked = BLOCKED_INVENTORY_STATUSES.has(inv);
   return {
@@ -63,6 +84,7 @@ function mapMovementRow(row) {
     unique_product_serial: row.inventory_asset_code || ex.unique_product_serial || '',
     purchase_order_number: row.purchase_order_number || '',
     qc_status: effectiveQc,
+    bucket: bucketKeyFromQcStatus(effectiveQc),
     inventory_status: inv,
     remark: row.remark || ex.action_remark || '',
     blocked,
@@ -241,11 +263,21 @@ async function applyMovementTarget(db, row, targetKey, actorUserId) {
 /**
  * Move multiple serials to a target bucket.
  */
-async function bulkMoveAssets(db, { serialIds, target, remark }, actorUserId) {
+async function bulkMoveAssets(db, { serialIds, target, fromTarget, remark }, actorUserId) {
   const targetKey = normalizeTarget(target);
   if (!targetKey) {
     return { ok: false, status: 400, message: 'Invalid target. Use qc_pending, qc_process, passed, dead, or missing.' };
   }
+
+  const fromKey = normalizeTarget(fromTarget);
+  if (!fromKey) {
+    return { ok: false, status: 400, message: 'Move From category is required.' };
+  }
+  if (fromKey === targetKey) {
+    return { ok: false, status: 400, message: 'Move From and Move To must be different categories.' };
+  }
+
+  const expectedFromQc = qcStatusForBucket(fromKey);
 
   const ids = [...new Set((serialIds || []).map((id) => Number(id)).filter((id) => id > 0))];
   if (!ids.length) {
@@ -282,6 +314,17 @@ async function bulkMoveAssets(db, { serialIds, target, remark }, actorUserId) {
         serial_number: row.serial_number,
         ok: false,
         message: `Blocked — unit is ${inv.replace(/_/g, ' ')}`
+      });
+      continue;
+    }
+
+    const actualQc = effectiveQcStatus(row);
+    if (actualQc !== expectedFromQc) {
+      results.push({
+        serial_id: row.serial_id,
+        serial_number: row.serial_number,
+        ok: false,
+        message: `Not in ${targetLabel(fromKey)} — currently ${actualQc.replace(/_/g, ' ')}`
       });
       continue;
     }
@@ -326,10 +369,12 @@ async function bulkMoveAssets(db, { serialIds, target, remark }, actorUserId) {
   invalidateInventoryListCachesFireAndForget();
 
   const label = targetLabel(targetKey);
+  const fromLabel = targetLabel(fromKey);
   return {
     ok: true,
-    message: `Moved ${moved} of ${cur.rows.length} laptop(s) to ${label}.${missing.length ? ` ${missing.length} id(s) not found.` : ''}`,
+    message: `Moved ${moved} of ${cur.rows.length} laptop(s) from ${fromLabel} to ${label}.${missing.length ? ` ${missing.length} id(s) not found.` : ''}`,
     data: {
+      from: fromKey,
       target: targetKey,
       moved,
       total_requested: ids.length,
@@ -399,6 +444,7 @@ module.exports = {
   MOVEMENT_TARGETS,
   normalizeTarget,
   targetLabel,
+  bucketKeyFromQcStatus,
   parseSearchTerms,
   searchLaptopsForMovement,
   bulkMoveAssets,

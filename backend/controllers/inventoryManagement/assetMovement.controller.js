@@ -28,6 +28,7 @@ async function searchAssets(req, res) {
 const bulkMoveValidators = [
   body('serial_ids').isArray({ min: 1, max: 100 }),
   body('serial_ids.*').isInt({ min: 1 }).toInt(),
+  body('from_target').isIn(['qc_pending', 'qc_process', 'passed', 'dead', 'missing']),
   body('target').isIn(['qc_pending', 'qc_process', 'passed', 'dead', 'missing']),
   body('remark').optional().isString().trim()
 ];
@@ -42,6 +43,7 @@ async function bulkMove(req, res) {
       {
         serialIds: req.body.serial_ids,
         target: req.body.target,
+        fromTarget: req.body.from_target,
         remark: req.body.remark
       },
       req.user?.user_id
