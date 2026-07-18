@@ -9,7 +9,7 @@ const {
   frontendBaseUrl,
   resolvePublicFrontendUrl,
 } = require('./grnSerialCaptureService');
-const { verifyConfigurationAgainst } = require('./grnConfigService');
+const { verifyConfigurationAgainst, sizeNum } = require('./grnConfigService');
 const { serialMatchesSoLine, configMismatchMessage } = require('../utils/soInventorySpecMatch');
 const { getSalesOrderLines } = require('./salesManagementService');
 const {
@@ -126,6 +126,26 @@ async function getSoLineForAllocation(alloc) {
   if (!alloc?.sales_order_number || !alloc?.line_id) return null;
   const lines = await getSalesOrderLines(alloc.sales_order_number);
   return lines.find((l) => Number(l.line_id) === Number(alloc.line_id)) || null;
+}
+
+/**
+ * Dispatch QC expected config: production_assets working columns, overlaid with
+ * the SO line when present. Order storage/RAM/processor are the sales truth and
+ * must win over a stale PA.ssd (common when extra.ssd lagged behind storage).
+ */
+function expectedConfigForDispatchQc(pa, soLine = null) {
+  const base = workingToCompareShape(pa || {});
+  if (!soLine) return base;
+  const overlay = {};
+  if (soLine.processor) overlay.processor = soLine.processor;
+  if (soLine.generation && String(soLine.generation).trim() !== '-') {
+    overlay.generation = soLine.generation;
+  }
+  if (soLine.ram) overlay.ram = soLine.ram;
+  if (soLine.storage) overlay.ssd = soLine.storage;
+  if (soLine.brand) overlay.brand = soLine.brand;
+  if (soLine.model_name || soLine.model) overlay.model = soLine.model_name || soLine.model;
+  return { ...base, ...overlay };
 }
 
 async function routeMismatchToPendingInventory(client, {
@@ -354,7 +374,8 @@ async function resolveByAccessNumber(accessNumber) {
   }
 
   const pa = await getById(pool, row.production_asset_id);
-  const expected = workingToCompareShape(pa || {});
+  const soLine = await getSoLineForAllocation(row);
+  const expected = expectedConfigForDispatchQc(pa, soLine);
   return {
     ok: true,
     token: row.token_id,
@@ -380,7 +401,8 @@ async function getPublicSession(tokenId) {
   const row = await getTokenRow(tokenId);
   if (!row) return null;
   const pa = await getById(pool, row.production_asset_id);
-  const expected = workingToCompareShape(pa || {});
+  const soLine = await getSoLineForAllocation(row);
+  const expected = expectedConfigForDispatchQc(pa, soLine);
   return {
     token: row.token_id,
     status: row.status,
@@ -450,9 +472,23 @@ async function verifyDispatchQcConfiguration(tokenId, actual, ip) {
       return { ok: false, code: 404, message: 'Production Asset not found' };
     }
 
-    const expected = workingToCompareShape(pa);
-    const configResult = verifyConfigurationAgainst(expected, actual);
     const soLine = await getSoLineForAllocation(row);
+    const expected = expectedConfigForDispatchQc(pa, soLine);
+    // Keep PA working SSD in sync when SO line storage differs from stale PA.ssd.
+    if (soLine?.storage) {
+      const lineGb = sizeNum(soLine.storage);
+      const paGb = sizeNum(pa.ssd);
+      if (lineGb != null && (paGb == null || lineGb !== paGb)) {
+        await client.query(
+          `UPDATE production_assets
+              SET ssd = $2, updated_at = NOW()
+            WHERE production_asset_id = $1`,
+          [pa.production_asset_id, soLine.storage]
+        );
+        pa.ssd = soLine.storage;
+      }
+    }
+    const configResult = verifyConfigurationAgainst(expected, actual);
     const detectedSpec = actualToSoLineShape(actual, expected);
     const soLineMatched = soLine ? serialMatchesSoLine(soLine, detectedSpec) : true;
 

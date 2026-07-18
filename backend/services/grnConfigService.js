@@ -161,15 +161,17 @@ function processorsMatch(expectedProcessor, actualProcessor) {
 }
 
 function modelsMatch(expectedModel, actual) {
+  // Always return { matched, matchedRaw }. Returning a bare boolean breaks
+  // compareConfig (modelResult.matched === undefined → false fail).
   const e = normModel(expectedModel);
-  if (!e) return true;
+  if (!e) return { matched: true, matchedRaw: actual?.model || '' };
   const rawCandidates = [actual.model, actual.model_version, actual.system_family].filter(Boolean);
   const candidates = rawCandidates.map(normModel).filter((c) => c.length >= 2);
   const hit = candidates.find((c) => bothContain(c, e));
   if (hit) return { matched: true, matchedRaw: rawCandidates[candidates.indexOf(hit)] || actual.model };
 
   const expectedTokens = modelTokens(expectedModel);
-  if (!expectedTokens.length) return { matched: true, matchedRaw: actual.model };
+  if (!expectedTokens.length) return { matched: true, matchedRaw: actual.model || '' };
 
   for (let i = 0; i < rawCandidates.length; i += 1) {
     const raw = rawCandidates[i];
@@ -182,7 +184,7 @@ function modelsMatch(expectedModel, actual) {
     );
     if (allFound) return { matched: true, matchedRaw: raw };
   }
-  return { matched: false, matchedRaw: actual.model };
+  return { matched: false, matchedRaw: actual.model || '' };
 }
 
 /**

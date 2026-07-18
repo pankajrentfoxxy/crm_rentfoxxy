@@ -1247,6 +1247,14 @@ async function searchAvailableInventory({
     'out_for_repare', 'out_for_return',
   ];
   const offShelfList = OFF_SHELF_INVENTORY_STATUSES.map((s) => `'${s}'`).join(', ');
+  // Never offer units already allocated on any SO (even if inventory_status drifted
+  // back to in_stock after Dispatch QC pass).
+  const notAlreadyAttachedSql = `
+       AND NOT EXISTS (
+         SELECT 1 FROM sales_order_serials sos_att
+          WHERE sos_att.serial_id = vsn.serial_id
+            AND sos_att.status = 'attached'
+       )`;
 
   const result = await pool.query(
     `SELECT
@@ -1273,6 +1281,7 @@ async function searchAvailableInventory({
      WHERE vsn.deleted_at IS NULL
        AND COALESCE(vsn.qc_status, vsn.extra->>'status', 'pending') = 'passed'
        AND COALESCE(vsn.inventory_status, 'in_stock') NOT IN (${offShelfList})
+       ${notAlreadyAttachedSql}
        ${searchSql}
      ORDER BY vsn.serial_id DESC
      LIMIT ${candidateLimit}`,
@@ -1317,6 +1326,11 @@ async function searchAvailableInventory({
          AND NOT EXISTS (
            SELECT 1 FROM vendor_product_inventory vpi2
            WHERE vpi2.serial_id = vsn.serial_id AND vpi2.status = 'out_stock'
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM sales_order_serials sos_att
+            WHERE sos_att.serial_id = vsn.serial_id
+              AND sos_att.status = 'attached'
          )
        ORDER BY vsn.serial_id DESC
        LIMIT ${candidateLimit}`
