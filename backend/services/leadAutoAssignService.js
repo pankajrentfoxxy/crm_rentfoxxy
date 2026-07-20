@@ -9,7 +9,12 @@
  */
 const pool = require('../config/db');
 
+/** Direct override — highest priority. Example: LEAD_AUTO_ASSIGN_USER_ID=31 */
+const FORCED_ASSIGN_USER_ID = parseInt(process.env.LEAD_AUTO_ASSIGN_USER_ID || '', 10);
+/** Email override — second priority. Example: LEAD_AUTO_ASSIGN_EMAIL=harshit@rentfoxxy.com */
 const FORCED_ASSIGN_EMAIL = (process.env.LEAD_AUTO_ASSIGN_EMAIL || '').trim();
+/** Default when config table is empty (Harshit). Override via env if needed. */
+const DEFAULT_AUTO_ASSIGN_EMAIL = 'harshit@rentfoxxy.com';
 
 async function resolveSalesUserIdByEmail(email) {
   if (!email) return null;
@@ -20,16 +25,31 @@ async function resolveSalesUserIdByEmail(email) {
   return res.rows[0]?.user_id || null;
 }
 
+async function resolveForcedAutoAssignee() {
+  if (Number.isFinite(FORCED_ASSIGN_USER_ID) && FORCED_ASSIGN_USER_ID > 0) {
+    const res = await pool.query(
+      `SELECT user_id FROM users WHERE user_id = $1 AND role = 'sales' LIMIT 1`,
+      [FORCED_ASSIGN_USER_ID],
+    );
+    if (res.rows[0]?.user_id) return res.rows[0].user_id;
+    console.warn(`LEAD_AUTO_ASSIGN_USER_ID=${FORCED_ASSIGN_USER_ID} — no matching sales user`);
+  }
+  const email = FORCED_ASSIGN_EMAIL || DEFAULT_AUTO_ASSIGN_EMAIL;
+  const byEmail = await resolveSalesUserIdByEmail(email);
+  if (byEmail) return byEmail;
+  if (FORCED_ASSIGN_EMAIL) {
+    console.warn(`LEAD_AUTO_ASSIGN_EMAIL=${FORCED_ASSIGN_EMAIL} — no matching sales user found`);
+  }
+  return null;
+}
+
 /**
  * Get the next user_id for auto-assignment (round-robin).
  * Returns null if no config or empty user_ids.
  */
 async function getNextAutoAssignee() {
-  if (FORCED_ASSIGN_EMAIL) {
-    const forcedId = await resolveSalesUserIdByEmail(FORCED_ASSIGN_EMAIL);
-    if (forcedId) return forcedId;
-    console.warn(`LEAD_AUTO_ASSIGN_EMAIL=${FORCED_ASSIGN_EMAIL} — no matching sales user found`);
-  }
+  const forcedId = await resolveForcedAutoAssignee();
+  if (forcedId) return forcedId;
 
   const client = await pool.connect();
   try {
@@ -111,4 +131,9 @@ async function getAutoAssignConfig() {
   }
 }
 
-module.exports = { getNextAutoAssignee, updateAutoAssignConfig, getAutoAssignConfig };
+module.exports = {
+  getNextAutoAssignee,
+  updateAutoAssignConfig,
+  getAutoAssignConfig,
+  resolveForcedAutoAssignee,
+};

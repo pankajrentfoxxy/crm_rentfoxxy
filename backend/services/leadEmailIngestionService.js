@@ -2,7 +2,7 @@ const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
 const pool = require('../config/db');
 const prisma = require('../prisma/client');
-const { getNextAutoAssignee } = require('./leadAutoAssignService');
+const { getNextAutoAssignee, resolveForcedAutoAssignee } = require('./leadAutoAssignService');
 const { ensureResearch } = require('./leadResearchService');
 
 const LEAD_EMAIL_LOOKBACK_DAYS = parseInt(process.env.LEAD_EMAIL_LOOKBACK_DAYS || '14', 10);
@@ -512,8 +512,20 @@ const startLeadEmailIngestionWorker = async () => {
     await startLeadEmailIdleService();
 };
 
-const getLeadEmailSyncStatus = () => {
+const getLeadEmailSyncStatus = async () => {
     const { getLeadEmailIdleStatus } = require('./leadEmailIdleService');
+    let autoAssignUserId = null;
+    let autoAssignEmail = null;
+    try {
+        autoAssignUserId = await resolveForcedAutoAssignee();
+        if (!autoAssignUserId) autoAssignUserId = await getNextAutoAssignee();
+        if (autoAssignUserId) {
+            const u = await pool.query('SELECT user_id, name, email FROM users WHERE user_id = $1', [autoAssignUserId]);
+            autoAssignEmail = u.rows[0]?.email || null;
+        }
+    } catch (e) {
+        console.warn('Lead auto-assign status lookup failed:', e.message);
+    }
     return {
         configured: isLeadEmailConfigured(),
         ...getLeadEmailIdleStatus(),
@@ -521,6 +533,8 @@ const getLeadEmailSyncStatus = () => {
         lastSuccessfulSyncAt: lastSuccessfulSyncAt ? lastSuccessfulSyncAt.toISOString() : null,
         lookbackDays: LEAD_EMAIL_LOOKBACK_DAYS,
         mailboxes: LEAD_EMAIL_MAILBOXES,
+        autoAssignUserId,
+        autoAssignEmail,
     };
 };
 

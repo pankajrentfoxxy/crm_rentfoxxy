@@ -2860,7 +2860,8 @@ exports.getLeadRecentActivity = async (req, res) => {
 
 exports.getEmailSyncStatus = async (_req, res) => {
   try {
-    res.json({ success: true, ...getLeadEmailSyncStatus() });
+    const status = await getLeadEmailSyncStatus();
+    res.json({ success: true, ...status });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -2868,7 +2869,7 @@ exports.getEmailSyncStatus = async (_req, res) => {
 
 exports.triggerEmailSync = async (_req, res) => {
   try {
-    const status = getLeadEmailSyncStatus();
+    const status = await getLeadEmailSyncStatus();
     if (!status.configured) {
       return res.status(400).json({
         success: false,
@@ -2876,7 +2877,8 @@ exports.triggerEmailSync = async (_req, res) => {
       });
     }
     const summary = await runLeadEmailSync();
-    res.json({ success: true, summary, ...getLeadEmailSyncStatus() });
+    const after = await getLeadEmailSyncStatus();
+    res.json({ success: true, summary, ...after });
   } catch (error) {
     console.error('triggerEmailSync error:', error);
     res.status(500).json({ success: false, message: error.message });
