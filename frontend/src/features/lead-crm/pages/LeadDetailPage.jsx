@@ -159,7 +159,8 @@ export default function LeadDetailPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div><span className="text-gray-500">Company</span><p>{lead.companyName || '—'}</p></div>
                 <div><span className="text-gray-500">Contact</span><p>{lead.name}</p></div>
-                <div><span className="text-gray-500">Phone</span><p>{lead.phone}</p></div>
+                <div><span className="text-gray-500">Email</span><p>{lead.email || '—'}</p></div>
+                <div><span className="text-gray-500">Phone</span><p>{lead.phone || '—'}</p></div>
                 <div><span className="text-gray-500">Inquiry</span><p>{formatInquiry(lead.inquiryType)}</p></div>
                 <div><span className="text-gray-500">Config</span><p>{formatConfig(lead)}</p></div>
                 <div><span className="text-gray-500">Qty / Budget</span>
@@ -283,6 +284,7 @@ export default function LeadDetailPage() {
             </div>
             <div className="text-sm space-y-2 border-t pt-3">
               <p><span className="text-gray-500">Lead ID:</span> #{lead.leadId}</p>
+              <p><span className="text-gray-500">Email:</span> {lead.email || '—'}</p>
               <p><span className="text-gray-500">Created:</span> {new Date(lead.createdAt).toLocaleDateString('en-IN')}</p>
               <p><span className="text-gray-500">Last Activity:</span> {relativeTime(lead.lastActivityAt || lead.updatedAt)}</p>
               <p><span className="text-gray-500">Assigned:</span> {lead.assignedUser?.name || 'Unassigned'}</p>

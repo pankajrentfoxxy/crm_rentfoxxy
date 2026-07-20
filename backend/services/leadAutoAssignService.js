@@ -3,14 +3,34 @@
  * When manager selects sales users and clicks "Auto Assign Unassigned",
  * we save the config. All new leads (manual, upload, email) and unassigned
  * leads get assigned to these users in round-robin.
+ *
+ * Optional env override: LEAD_AUTO_ASSIGN_EMAIL=harshit@rentfoxxy.com
+ * When set, every auto-assigned lead goes to that user (ignores round-robin pool).
  */
 const pool = require('../config/db');
+
+const FORCED_ASSIGN_EMAIL = (process.env.LEAD_AUTO_ASSIGN_EMAIL || '').trim();
+
+async function resolveSalesUserIdByEmail(email) {
+  if (!email) return null;
+  const res = await pool.query(
+    `SELECT user_id FROM users WHERE LOWER(email) = LOWER($1) AND role = 'sales' LIMIT 1`,
+    [email],
+  );
+  return res.rows[0]?.user_id || null;
+}
 
 /**
  * Get the next user_id for auto-assignment (round-robin).
  * Returns null if no config or empty user_ids.
  */
 async function getNextAutoAssignee() {
+  if (FORCED_ASSIGN_EMAIL) {
+    const forcedId = await resolveSalesUserIdByEmail(FORCED_ASSIGN_EMAIL);
+    if (forcedId) return forcedId;
+    console.warn(`LEAD_AUTO_ASSIGN_EMAIL=${FORCED_ASSIGN_EMAIL} — no matching sales user found`);
+  }
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
