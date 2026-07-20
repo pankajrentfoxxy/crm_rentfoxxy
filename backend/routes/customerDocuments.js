@@ -23,6 +23,7 @@ const upload = multer({
 });
 
 router.use(authMiddleware);
+router.use(require('../middleware/customerScope')); // Customer Access scope -> req.allowedCustomerTypes
 
 router.get('/:customerId', cp('customer_documents', 'view'), ctrl.listDocuments);
 router.post('/:customerId/upload', cp('customer_documents', 'create'), upload.single('file'), ctrl.uploadDocument);

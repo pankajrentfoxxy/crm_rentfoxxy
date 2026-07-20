@@ -2,6 +2,10 @@ const pool = require('../config/db');
 
 const VALID_ACTIONS = new Set(['can_view', 'can_create', 'can_edit', 'can_delete']);
 
+// Customer Access selector on the customers permission row (all/sales/rental).
+// Sibling of data_scope — do NOT conflate the two.
+const CUSTOMER_ACCESS_VALUES = new Set(['all', 'sales', 'rental']);
+
 const SECTION_ALIASES = {
   reports_access: ['reports_access', 'reports'],
   reports: ['reports', 'reports_access'],
@@ -72,7 +76,7 @@ async function getUserRole(userId) {
 
 async function getRolePermissionRow(role, section) {
   const result = await pool.query(
-    `SELECT can_view, can_create, can_edit, can_delete, data_scope
+    `SELECT can_view, can_create, can_edit, can_delete, data_scope, customer_access
      FROM role_permissions
      WHERE role = $1 AND section = $2`,
     [role, section]
@@ -82,7 +86,7 @@ async function getRolePermissionRow(role, section) {
 
 async function getUserPermissionRow(userId, section) {
   const result = await pool.query(
-    `SELECT can_view, can_create, can_edit, can_delete, data_scope
+    `SELECT can_view, can_create, can_edit, can_delete, data_scope, customer_access
      FROM user_permissions
      WHERE user_id = $1 AND section = $2`,
     [userId, section]
@@ -124,7 +128,7 @@ async function hasPermission(userId, role, section, action, cache) {
 
 async function listRolePermissions(role) {
   const result = await pool.query(
-    `SELECT role, section, can_view, can_create, can_edit, can_delete, data_scope
+    `SELECT role, section, can_view, can_create, can_edit, can_delete, data_scope, customer_access
      FROM role_permissions
      WHERE role = $1
      ORDER BY section ASC`,
@@ -135,7 +139,7 @@ async function listRolePermissions(role) {
 
 async function listAllRolePermissions() {
   const result = await pool.query(
-    `SELECT role, section, can_view, can_create, can_edit, can_delete, data_scope
+    `SELECT role, section, can_view, can_create, can_edit, can_delete, data_scope, customer_access
      FROM role_permissions
      ORDER BY role ASC, section ASC`
   );
@@ -145,7 +149,7 @@ async function listAllRolePermissions() {
 async function listUserPermissionOverrides(userId) {
   const result = await pool.query(
     `SELECT id, user_id, section, can_view, can_create, can_edit, can_delete,
-            data_scope, granted_by, granted_at
+            data_scope, customer_access, granted_by, granted_at
      FROM user_permissions
      WHERE user_id = $1
      ORDER BY section ASC`,
@@ -192,6 +196,14 @@ async function buildUserPermissionsPayload(userId) {
     effective[section].data_scope = userScope === 'all' || userScope === 'assigned'
       ? userScope
       : (roleScope === 'assigned' ? 'assigned' : 'all');
+
+    // Customer Access (all/sales/rental): user override beats role default,
+    // mirroring data_scope. Meaningful only on the customers section rows.
+    const userAccess = userMap[section]?.customer_access;
+    const roleAccess = roleMap[section]?.customer_access;
+    effective[section].customer_access = CUSTOMER_ACCESS_VALUES.has(userAccess)
+      ? userAccess
+      : (CUSTOMER_ACCESS_VALUES.has(roleAccess) ? roleAccess : 'all');
   }
 
   return {
@@ -206,21 +218,23 @@ async function buildUserPermissionsPayload(userId) {
 async function upsertRolePermissions(role, permissions) {
   const results = [];
   for (const perm of permissions) {
-    const { section, can_view, can_create, can_edit, can_delete, data_scope } = perm;
+    const { section, can_view, can_create, can_edit, can_delete, data_scope, customer_access } = perm;
     if (!section) continue;
     const scope = data_scope === 'assigned' ? 'assigned' : 'all';
+    const access = CUSTOMER_ACCESS_VALUES.has(customer_access) ? customer_access : 'all';
     const result = await pool.query(
-      `INSERT INTO role_permissions (role, section, can_view, can_create, can_edit, can_delete, data_scope)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO role_permissions (role, section, can_view, can_create, can_edit, can_delete, data_scope, customer_access)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (role, section)
        DO UPDATE SET
          can_view = EXCLUDED.can_view,
          can_create = EXCLUDED.can_create,
          can_edit = EXCLUDED.can_edit,
          can_delete = EXCLUDED.can_delete,
-         data_scope = EXCLUDED.data_scope
-       RETURNING role, section, can_view, can_create, can_edit, can_delete, data_scope`,
-      [role, section, !!can_view, !!can_create, !!can_edit, !!can_delete, scope]
+         data_scope = EXCLUDED.data_scope,
+         customer_access = EXCLUDED.customer_access
+       RETURNING role, section, can_view, can_create, can_edit, can_delete, data_scope, customer_access`,
+      [role, section, !!can_view, !!can_create, !!can_edit, !!can_delete, scope, access]
     );
     results.push(result.rows[0]);
   }
@@ -230,13 +244,15 @@ async function upsertRolePermissions(role, permissions) {
 async function upsertUserPermissions(userId, permissions, grantedBy) {
   const results = [];
   for (const perm of permissions) {
-    const { section, can_view, can_create, can_edit, can_delete, data_scope } = perm;
+    const { section, can_view, can_create, can_edit, can_delete, data_scope, customer_access } = perm;
     if (!section) continue;
     const scope = data_scope === 'all' || data_scope === 'assigned' ? data_scope : null;
+    // NULL = inherit role default
+    const access = CUSTOMER_ACCESS_VALUES.has(customer_access) ? customer_access : null;
     const result = await pool.query(
       `INSERT INTO user_permissions
-        (user_id, section, can_view, can_create, can_edit, can_delete, data_scope, granted_by, granted_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+        (user_id, section, can_view, can_create, can_edit, can_delete, data_scope, customer_access, granted_by, granted_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
        ON CONFLICT (user_id, section)
        DO UPDATE SET
          can_view = EXCLUDED.can_view,
@@ -244,11 +260,12 @@ async function upsertUserPermissions(userId, permissions, grantedBy) {
          can_edit = EXCLUDED.can_edit,
          can_delete = EXCLUDED.can_delete,
          data_scope = EXCLUDED.data_scope,
+         customer_access = EXCLUDED.customer_access,
          granted_by = EXCLUDED.granted_by,
          granted_at = NOW()
        RETURNING id, user_id, section, can_view, can_create, can_edit, can_delete, data_scope,
-                 granted_by, granted_at`,
-      [userId, section, can_view ?? null, can_create ?? null, can_edit ?? null, can_delete ?? null, scope, grantedBy]
+                 customer_access, granted_by, granted_at`,
+      [userId, section, can_view ?? null, can_create ?? null, can_edit ?? null, can_delete ?? null, scope, access, grantedBy]
     );
     results.push(result.rows[0]);
   }
@@ -266,6 +283,7 @@ async function buildEffectivePermissionsForUser(userId, role) {
         can_edit: true,
         can_delete: true,
         data_scope: 'all',
+        customer_access: 'all',
       };
     }
     return effective;

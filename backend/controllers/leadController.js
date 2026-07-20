@@ -2044,13 +2044,18 @@ exports.getLeadCustomerProfile = async (req, res) => {
     if (!canEditLead(req.user, lead)) return res.status(403).json({ success: false, message: 'Access denied' });
 
     const customerRes = await pool.query(
-      `SELECT customer_id, name, company_name, email, phone, gst_no
+      `SELECT customer_id, name, company_name, email, phone, gst_no, customer_type
        FROM customers
        WHERE source_lead_id = $1
        LIMIT 1`,
       [id]
     );
     if (!customerRes.rows.length) return res.json({ success: true, customer: null, addresses: [] });
+    // Customer Access scope — hide converted customers outside the caller's scope
+    const { isCustomerTypeAllowed } = require('../services/customerAccessScope');
+    if (!isCustomerTypeAllowed(req.allowedCustomerTypes, customerRes.rows[0].customer_type)) {
+      return res.json({ success: true, customer: null, addresses: [] });
+    }
     const customer = customerRes.rows[0];
     const addressesRes = await pool.query(
       `SELECT customer_address_id, concern_person, mobile_no, address, pincode, is_head_office, address_type

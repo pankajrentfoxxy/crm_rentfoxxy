@@ -63,6 +63,10 @@ const {
   isCustomerEligibleForQuotation,
   customerTypeMismatchMessage,
 } = require('../utils/customerType');
+const {
+  appendCustomerTypeCondition,
+  isCustomerTypeAllowed,
+} = require('../services/customerAccessScope');
 
 /**
  * Resolve a vendor_serial_numbers.serial_id from a parsed DC serial entry,
@@ -317,14 +321,21 @@ exports.getAddQuotationMeta = async (req, res) => {
       : null;
     const typeSql = mapped ? customerTypeSqlCondition(mapped) : null;
 
+    // Role-based Customer Access scope (all/sales/rental)
+    const scopeParams = [];
+    const scopeConds = [];
+    appendCustomerTypeCondition(req.allowedCustomerTypes, scopeConds, scopeParams);
+
     const [customersRes, quotationNumber, catalog] = await Promise.all([
       pool.query(
         `SELECT customer_id, name, company_name, email, phone, gst_no, address, details, customer_type
            FROM customers c
           WHERE COALESCE(c.status, 1) = 1
             ${typeSql ? `AND ${typeSql}` : ''}
+            ${scopeConds.length ? `AND ${scopeConds[0]}` : ''}
           ORDER BY company_name ASC NULLS LAST, name ASC
-          LIMIT 500`
+          LIMIT 500`,
+        scopeParams
       ),
       nextDocumentNumber('quotation'),
       fetchCatalogAttributeOptions(),
@@ -413,6 +424,12 @@ exports.storeQuotation = async (req, res) => {
         return res.status(400).json({
           success: false,
           message: customerTypeMismatchMessage(custRes.rows[0].customer_type, quotationType),
+        });
+      }
+      if (!isCustomerTypeAllowed(req.allowedCustomerTypes, custRes.rows[0].customer_type)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied: customer is outside your Customer Access scope',
         });
       }
     }
@@ -584,12 +601,17 @@ exports.getAddSalesOrderMeta = async (req, res) => {
     if (quotationNumber) {
       quotationLines = await getQuotationLines(quotationNumber);
     }
+    const scopeParams = [];
+    const scopeConds = [];
+    appendCustomerTypeCondition(req.allowedCustomerTypes, scopeConds, scopeParams, 'customer_type');
     const customers = entityScope === 'sale' || entityScope === 'rental'
-      ? await listCustomersForOrderScope(entityScope)
+      ? await listCustomersForOrderScope(entityScope, req.allowedCustomerTypes)
       : (await pool.query(
         `SELECT customer_id, name, company_name, email, phone, gst_no, address, details, customer_type
            FROM customers WHERE COALESCE(status, 1) = 1
-           ORDER BY company_name ASC NULLS LAST, name ASC LIMIT 500`
+           ${scopeConds.length ? `AND ${scopeConds[0]}` : ''}
+           ORDER BY company_name ASC NULLS LAST, name ASC LIMIT 500`,
+        scopeParams
       )).rows;
     res.json({
       success: true,
@@ -677,6 +699,12 @@ exports.storeSalesOrder = async (req, res) => {
         return res.status(400).json({
           success: false,
           message: customerTypeMismatchMessage(customerExists.rows[0].customer_type, soQuotationType),
+        });
+      }
+      if (!isCustomerTypeAllowed(req.allowedCustomerTypes, customerExists.rows[0].customer_type)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied: customer is outside your Customer Access scope',
         });
       }
     }
@@ -3728,9 +3756,12 @@ exports.storeCustomerShippingAddress = async (req, res) => {
     if (!name || !phone || !state || !city || !zip_code || !address) {
       return res.status(400).json({ success: false, message: 'All address fields are required' });
     }
-    const result = await pool.query(`SELECT customer_id, details FROM customers WHERE customer_id = $1`, [req.params.customerId]);
+    const result = await pool.query(`SELECT customer_id, details, customer_type FROM customers WHERE customer_id = $1`, [req.params.customerId]);
     if (!result.rows.length) {
       return res.status(404).json({ success: false, message: 'Customer not found' });
+    }
+    if (!isCustomerTypeAllowed(req.allowedCustomerTypes, result.rows[0].customer_type)) {
+      return res.status(403).json({ success: false, message: 'Access denied: customer is outside your Customer Access scope' });
     }
     const details = parseJsonSafe(result.rows[0].details, {}) || {};
     const shipping = Array.isArray(details.shipping_address) ? details.shipping_address : [];

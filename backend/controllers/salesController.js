@@ -2,6 +2,7 @@ const pool = require('../config/db');
 const { researchCompany } = require('../services/perplexityService');
 const PDFDocument = require('pdfkit');
 const { formatPdfDateIstOrDash, formatPdfNowIst } = require('../utils/pdfDateTimeUtils');
+const { appendCustomerTypeCondition, isCustomerTypeAllowed } = require('../services/customerAccessScope');
 
 const logOrderStatusHistory = async (db, { orderId, fromStatus = null, toStatus, changedBy = null, notes = null }) => {
     if (!toStatus) return;
@@ -540,6 +541,9 @@ exports.getCustomerById = async (req, res) => {
     try {
         const result = await pool.query('SELECT * FROM customers WHERE customer_id = $1', [id]);
         if (!result.rows.length) return res.status(404).json({ message: 'Customer not found' });
+        if (!isCustomerTypeAllowed(req.allowedCustomerTypes, result.rows[0].customer_type)) {
+            return res.status(403).json({ message: 'Access denied: customer is outside your Customer Access scope' });
+        }
         const addrRes = await pool.query(
             `SELECT customer_address_id, customer_id, concern_person, mobile_no, address, pincode, is_head_office, address_type
              FROM customer_addresses WHERE customer_id = $1 ORDER BY is_head_office DESC, customer_address_id ASC`,
@@ -558,12 +562,24 @@ exports.getCustomers = async (req, res) => {
         let result;
         if (search && String(search).trim()) {
             const term = `%${String(search).trim()}%`;
+            const params = [term];
+            const conditions = ['(name ILIKE $1 OR company_name ILIKE $1 OR email ILIKE $1 OR phone ILIKE $1 OR gst_no ILIKE $1)'];
+            // Role-based Customer Access scope (all/sales/rental)
+            appendCustomerTypeCondition(req.allowedCustomerTypes, conditions, params, 'customer_type');
             result = await pool.query(
-                `SELECT * FROM customers WHERE name ILIKE $1 OR company_name ILIKE $1 OR email ILIKE $1 OR phone ILIKE $1 OR gst_no ILIKE $1 ORDER BY created_at DESC`,
-                [term]
+                `SELECT * FROM customers WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC`,
+                params
             );
         } else {
-            result = await pool.query('SELECT * FROM customers ORDER BY created_at DESC');
+            const params = [];
+            const conditions = [];
+            appendCustomerTypeCondition(req.allowedCustomerTypes, conditions, params, 'customer_type');
+            result = await pool.query(
+                `SELECT * FROM customers
+                 ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
+                 ORDER BY created_at DESC`,
+                params
+            );
         }
         const addrRes = await pool.query(
             `SELECT customer_address_id, customer_id, concern_person, mobile_no, address, pincode, is_head_office, address_type
@@ -591,6 +607,11 @@ exports.updateCustomer = async (req, res) => {
     const { name, company_name, email, phone, gst_no, type, address } = req.body;
 
     try {
+        const existing = await pool.query('SELECT customer_type FROM customers WHERE customer_id = $1', [id]);
+        if (!existing.rows.length) return res.status(404).json({ message: 'Customer not found' });
+        if (!isCustomerTypeAllowed(req.allowedCustomerTypes, existing.rows[0].customer_type)) {
+            return res.status(403).json({ message: 'Access denied: customer is outside your Customer Access scope' });
+        }
         await pool.query(
             `UPDATE customers SET
               name = COALESCE($1, name),

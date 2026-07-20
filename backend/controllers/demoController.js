@@ -6,6 +6,7 @@
  */
 const pool = require('../config/db');
 const inventorySM = require('../services/inventoryStateMachine');
+const { isRestricted } = require('../services/customerAccessScope');
 
 exports.listDemoAgreements = async (req, res) => {
   try {
@@ -15,6 +16,12 @@ exports.listDemoAgreements = async (req, res) => {
     if (status === 'pending') where = "d.decision = 'pending'";
     else if (status === 'overdue') where = "d.decision = 'pending' AND d.decision_due_at < NOW()";
     else if (status === 'decided') where = "d.decision <> 'pending'";
+
+    // Customer Access scope — hide demos for customers outside the caller's scope
+    if (isRestricted(req.allowedCustomerTypes)) {
+      params.push(req.allowedCustomerTypes);
+      where += ` AND (d.customer_id IS NULL OR c.customer_type = ANY($${params.length}::text[]))`;
+    }
 
     const { rows } = await pool.query(
       `SELECT d.*, c.company_name, c.name AS customer_name,

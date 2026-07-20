@@ -32,6 +32,7 @@ const upload = multer({
 });
 
 router.use(authMiddleware);
+router.use(require('../middleware/customerScope')); // Customer Access scope -> req.allowedCustomerTypes
 
 router.get('/quotation-email-config', leadsView, leadController.getQuotationEmailConfig);
 router.get('/email-sync-status', leadsView, leadController.getEmailSyncStatus);

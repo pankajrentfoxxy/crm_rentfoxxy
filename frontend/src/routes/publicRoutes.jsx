@@ -18,6 +18,6 @@ export const publicRoutes = [
   { path: '/qc2-config-match', element: <Qc2ConfigMatchPage /> },
   { path: '/dispatch-qc-config-match', element: <DispatchQcConfigMatchPage /> },
   { path: '/access', element: <AccessPage /> },
-  // Permission-aware landing — routes each role to their first accessible module.
   { path: '/', element: <HomeRedirect /> },
 ];
+

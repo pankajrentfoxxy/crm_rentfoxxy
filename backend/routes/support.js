@@ -116,6 +116,7 @@ const uploadPodFile = (req, res, next) => {
 };
 
 router.use(authMiddleware);
+router.use(require('../middleware/customerScope')); // Customer Access scope -> req.allowedCustomerTypes
 
 // Warehouse receipt confirmation must be reachable by the warehouse / manager
 // roles too (they are not "support" roles), so it is registered before the

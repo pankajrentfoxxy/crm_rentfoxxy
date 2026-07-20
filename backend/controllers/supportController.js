@@ -19,6 +19,7 @@ const replacementFlow = require('../services/supportReplacementFlowService');
 const { preserveCustomerAssetsOnCancel, forceRestoreCustomerAssetsOnCancel } = require('../services/supportCancelInventoryService');
 const { applyReturnPickupAssignment } = require('../services/supportPickupAssignmentService');
 const { validateIndianMobile, normalizeIndianMobile } = require('../utils/phoneValidation');
+const { appendCustomerTypeCondition, isCustomerTypeAllowed } = require('../services/customerAccessScope');
 
 function normalizeSupportPhoneFields(body) {
     const out = { ...body };
@@ -887,6 +888,10 @@ exports.searchCustomers = async (req, res) => {
                 OR COALESCE(c.phone, '') ILIKE $1 OR COALESCE(c.whatsapp_number, '') ILIKE $1
             )`;
         }
+        // Role-based Customer Access scope (all/sales/rental)
+        const scopeConds = [];
+        appendCustomerTypeCondition(req.allowedCustomerTypes, scopeConds, params);
+        if (scopeConds.length) where += ` AND ${scopeConds[0]}`;
         params.push(limit);
         const { rows } = await pool.query(
             `SELECT c.customer_id,
@@ -896,7 +901,7 @@ exports.searchCustomers = async (req, res) => {
                     c.phone AS customer_number,
                     c.email
              FROM customers c ${where}
-             ORDER BY COALESCE(c.company_name, c.name) NULLS LAST LIMIT $${term ? 2 : 1}`,
+             ORDER BY COALESCE(c.company_name, c.name) NULLS LAST LIMIT $${params.length}`,
             params
         );
         res.json({ success: true, items: rows });
@@ -917,14 +922,19 @@ exports.getCustomerDetail = async (req, res) => {
                     c.phone AS customer_number,
                     c.email,
                     COALESCE(c.billing_address, c.address) AS billing_address,
-                    c.shipping_address
+                    c.shipping_address,
+                    c.customer_type
              FROM customers c WHERE c.customer_id = $1`,
             [customerId]
         );
         if (!rows.length) {
             return res.status(404).json({ success: false, message: 'Customer not found' });
         }
-        res.json({ success: true, customer: rows[0] });
+        if (!isCustomerTypeAllowed(req.allowedCustomerTypes, rows[0].customer_type)) {
+            return res.status(403).json({ success: false, message: 'Access denied: customer is outside your Customer Access scope' });
+        }
+        const { customer_type, ...customer } = rows[0];
+        res.json({ success: true, customer });
     } catch (e) {
         console.error('support getCustomerDetail', e);
         res.status(500).json({ success: false, message: 'Failed to load customer' });

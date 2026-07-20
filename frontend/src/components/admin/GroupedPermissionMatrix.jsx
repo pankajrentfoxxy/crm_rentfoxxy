@@ -22,6 +22,15 @@ const ACTION_COLORS = {
   can_delete: 'text-red-600 accent-red-600',
 };
 
+// Customer Access selector (All / Sales / Rental) — customers row only.
+// Filters which customer_type values the role can see across the whole CRM.
+const CUSTOMER_ACCESS_SECTIONS = new Set(['customers', 'customer_management']);
+const CUSTOMER_ACCESS_OPTIONS = [
+  { value: 'all', label: 'All' },
+  { value: 'sales', label: 'Sales' },
+  { value: 'rental', label: 'Rental' },
+];
+
 function applyCheckboxRules(section, action, value, current) {
   const next = { ...current, [action]: value };
   if (action !== 'can_view' && value) {
@@ -60,7 +69,9 @@ export default function GroupedPermissionMatrix({
     if (!baselineMatrix?.[section]) return false;
     const scopeChanged = showDataScope
       && (matrix[section]?.data_scope || 'all') !== (baselineMatrix[section]?.data_scope || 'all');
-    return scopeChanged || PERMISSION_ACTIONS.some(
+    const accessChanged = CUSTOMER_ACCESS_SECTIONS.has(section)
+      && (matrix[section]?.customer_access || 'all') !== (baselineMatrix[section]?.customer_access || 'all');
+    return scopeChanged || accessChanged || PERMISSION_ACTIONS.some(
       (action) => !!matrix[section]?.[action] !== !!baselineMatrix[section]?.[action]
     );
   };
@@ -70,8 +81,14 @@ export default function GroupedPermissionMatrix({
     onChange(section, { ...current, data_scope: dataScope });
   };
 
+  const handleCustomerAccessChange = (section, customerAccess) => {
+    const current = matrix[section] || emptyPermissionRow();
+    onChange(section, { ...current, customer_access: customerAccess });
+  };
+
   const emptyPermissionRow = () => ({
-    can_view: false, can_create: false, can_edit: false, can_delete: false, data_scope: 'all',
+    can_view: false, can_create: false, can_edit: false, can_delete: false,
+    data_scope: 'all', customer_access: 'all',
   });
 
   return (
@@ -79,6 +96,7 @@ export default function GroupedPermissionMatrix({
       {Object.entries(SECTION_GROUPS).map(([group, sections]) => {
         const colorClass = GROUP_COLORS[group] || GROUP_COLORS.Core;
         const isOpen = !collapsed[group];
+        const hasCustomerAccess = sections.some((s) => CUSTOMER_ACCESS_SECTIONS.has(s));
 
         return (
           <div key={group} className="border border-gray-200 rounded-xl overflow-hidden bg-white">
@@ -110,6 +128,11 @@ export default function GroupedPermissionMatrix({
                       {showDataScope ? (
                         <th className="px-3 py-2 text-center text-xs font-medium uppercase text-violet-600">
                           Data Scope
+                        </th>
+                      ) : null}
+                      {hasCustomerAccess ? (
+                        <th className="px-3 py-2 text-center text-xs font-medium uppercase text-cyan-600">
+                          Customer Access
                         </th>
                       ) : null}
                     </tr>
@@ -151,6 +174,25 @@ export default function GroupedPermissionMatrix({
                               <option value="all">All Data</option>
                               <option value="assigned">Assigned Only</option>
                             </select>
+                          </td>
+                        ) : null}
+                        {hasCustomerAccess ? (
+                          <td className="px-3 py-2.5 text-center">
+                            {CUSTOMER_ACCESS_SECTIONS.has(section) ? (
+                              <select
+                                value={matrix[section]?.customer_access || 'all'}
+                                disabled={disabled}
+                                onChange={(e) => handleCustomerAccessChange(section, e.target.value)}
+                                title="Which customer types this role can see everywhere (Both-type customers are visible to Sales and Rental)"
+                                className="text-xs border border-gray-300 rounded-md px-2 py-1 bg-white max-w-[110px]"
+                              >
+                                {CUSTOMER_ACCESS_OPTIONS.map((opt) => (
+                                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <span className="text-gray-300">—</span>
+                            )}
                           </td>
                         ) : null}
                       </tr>

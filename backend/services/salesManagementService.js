@@ -55,24 +55,32 @@ function salesOrderScopeWhere(scope, alias = '') {
   return '';
 }
 
-async function listCustomersForOrderScope(scope) {
+async function listCustomersForOrderScope(scope, allowedCustomerTypes = null) {
   const {
     customerTypeSqlCondition,
     customerTypeFilterForQuotation,
   } = require('../utils/customerType');
+  const { appendCustomerTypeCondition } = require('./customerAccessScope');
   // scope: 'sale' | 'rental' — map onto customer_type eligibility
   const typeKey = scope === 'sale' || scope === 'sales'
     ? 'sales'
     : customerTypeFilterForQuotation(scope === 'rental' ? 'rental' : scope);
   const typeSql = customerTypeSqlCondition(typeKey) || 'TRUE';
 
+  // Role-based Customer Access scope (all/sales/rental) intersects the order scope
+  const params = [];
+  const conditions = [];
+  appendCustomerTypeCondition(allowedCustomerTypes, conditions, params);
+
   const { rows } = await pool.query(
     `SELECT customer_id, name, company_name, email, phone, gst_no, address, details, customer_type
        FROM customers c
       WHERE COALESCE(c.status, 1) = 1
         AND ${typeSql}
+        ${conditions.length ? `AND ${conditions[0]}` : ''}
       ORDER BY company_name ASC NULLS LAST, name ASC
-      LIMIT 500`
+      LIMIT 500`,
+    params
   );
   return rows;
 }

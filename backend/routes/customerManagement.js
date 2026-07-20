@@ -4,6 +4,7 @@ const path = require('path');
 const multer = require('multer');
 const { multerLimits } = require('../config/uploadLimits');
 const { authMiddleware, checkSectionPermission, checkRole } = require('../middleware/auth');
+const customerScope = require('../middleware/customerScope');
 const ctrl = require('../controllers/customerManagementController');
 
 const router = express.Router();
@@ -18,6 +19,7 @@ const upload = multer({
 });
 
 router.use(authMiddleware);
+router.use(customerScope); // resolves req.allowedCustomerTypes (Customer Access role permission)
 
 router.get('/customers/meta/add', cp('customers', 'view'), ctrl.getAddCustomerMeta);
 router.get('/customers/export.xlsx', checkRole('admin', 'super_admin'), ctrl.exportCustomersExcel);

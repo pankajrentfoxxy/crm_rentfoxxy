@@ -21,6 +21,9 @@ function countChanges(matrix, baseline) {
     ['can_view', 'can_create', 'can_edit', 'can_delete'].forEach((action) => {
       if (!!matrix[section]?.[action] !== !!baseline[section]?.[action]) n += 1;
     });
+    if ((matrix[section]?.customer_access || 'all') !== (baseline[section]?.customer_access || 'all')) {
+      n += 1;
+    }
   });
   return n;
 }

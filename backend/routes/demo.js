@@ -6,6 +6,7 @@ const ctrl = require('../controllers/demoController');
 const cp = checkSectionPermission;
 
 router.use(authMiddleware);
+router.use(require('../middleware/customerScope')); // Customer Access scope -> req.allowedCustomerTypes
 
 router.get('/agreements', cp('demo_management', 'view'), ctrl.listDemoAgreements);
 router.post('/agreements/:demoId/decide', cp('demo_management', 'edit'), ctrl.decideDemo);

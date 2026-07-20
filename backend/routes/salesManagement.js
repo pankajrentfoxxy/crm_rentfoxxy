@@ -65,6 +65,7 @@ const { soRoute, bindSoNumber, bindSoSerialDetach } = require('../middleware/soN
 const { dcRoute, bindDcNumber, rejectDcActionSuffix } = require('../middleware/dcNumberRoutes');
 
 router.use(authMiddleware);
+router.use(require('../middleware/customerScope')); // Customer Access scope -> req.allowedCustomerTypes
 
 // SO-level serial allocation (warehouse attaches laptops -> 1 QC ticket each)
 router.get(...soRoute('/serials', soSerialsView, sosCtrl.listSerials));

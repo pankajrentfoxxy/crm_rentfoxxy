@@ -95,6 +95,12 @@ export async function resetUserPermissions(userId) {
   return data;
 }
 
+export const CUSTOMER_ACCESS_VALUES = ['all', 'sales', 'rental'];
+
+function normalizeCustomerAccess(value) {
+  return CUSTOMER_ACCESS_VALUES.includes(value) ? value : 'all';
+}
+
 export function emptyPermissionRow() {
   return {
     can_view: false,
@@ -102,6 +108,7 @@ export function emptyPermissionRow() {
     can_edit: false,
     can_delete: false,
     data_scope: 'all',
+    customer_access: 'all',
   };
 }
 
@@ -118,6 +125,7 @@ export function permissionsArrayToMatrix(permissions, sections = RBAC_SECTIONS) 
       can_edit: !!row.can_edit,
       can_delete: !!row.can_delete,
       data_scope: row.data_scope === 'assigned' ? 'assigned' : 'all',
+      customer_access: normalizeCustomerAccess(row.customer_access),
     };
   });
   return matrix;
@@ -131,6 +139,7 @@ export function matrixToPermissionsArray(matrix) {
     can_edit: !!values.can_edit,
     can_delete: !!values.can_delete,
     data_scope: values.data_scope === 'assigned' ? 'assigned' : 'all',
+    customer_access: normalizeCustomerAccess(values.customer_access),
   }));
 }
 
@@ -154,6 +163,7 @@ export function buildOverrideMatrix(rolePermissions, userPermissions, sections =
       can_edit: !!roleMap[section]?.can_edit,
       can_delete: !!roleMap[section]?.can_delete,
       data_scope: roleMap[section]?.data_scope === 'assigned' ? 'assigned' : 'all',
+      customer_access: normalizeCustomerAccess(roleMap[section]?.customer_access),
     };
     overrides[section] = {
       can_view: userMap[section]?.can_view ?? null,
@@ -161,6 +171,7 @@ export function buildOverrideMatrix(rolePermissions, userPermissions, sections =
       can_edit: userMap[section]?.can_edit ?? null,
       can_delete: userMap[section]?.can_delete ?? null,
       data_scope: userMap[section]?.data_scope ?? null,
+      customer_access: userMap[section]?.customer_access ?? null,
     };
   });
 
@@ -186,6 +197,7 @@ export function effectiveObjectToMatrix(effective, sections = RBAC_SECTIONS) {
       can_edit: !!row.can_edit,
       can_delete: !!row.can_delete,
       data_scope: row.data_scope === 'assigned' ? 'assigned' : 'all',
+      customer_access: normalizeCustomerAccess(row.customer_access),
     };
   });
   return matrix;
@@ -198,7 +210,9 @@ export function matrixDiffToOverridePayload(matrix, roleDefaultsMatrix) {
       const role = roleDefaultsMatrix[section] || emptyPermissionRow();
       const permDiffers = RBAC_ACTIONS.some((action) => !!values[action] !== !!role[action]);
       const scopeDiffers = (values.data_scope || 'all') !== (role.data_scope || 'all');
-      if (!permDiffers && !scopeDiffers) return null;
+      const accessDiffers = normalizeCustomerAccess(values.customer_access)
+        !== normalizeCustomerAccess(role.customer_access);
+      if (!permDiffers && !scopeDiffers && !accessDiffers) return null;
       return {
         section,
         can_view: !!values.can_view,
@@ -206,6 +220,7 @@ export function matrixDiffToOverridePayload(matrix, roleDefaultsMatrix) {
         can_edit: !!values.can_edit,
         can_delete: !!values.can_delete,
         data_scope: values.data_scope === 'assigned' ? 'assigned' : 'all',
+        customer_access: normalizeCustomerAccess(values.customer_access),
       };
     })
     .filter(Boolean);
@@ -218,6 +233,10 @@ export function countMatrixChanges(matrix, baseline) {
       if (!!matrix[section]?.[action] !== !!baseline[section]?.[action]) n += 1;
     });
     if ((matrix[section]?.data_scope || 'all') !== (baseline[section]?.data_scope || 'all')) {
+      n += 1;
+    }
+    if (normalizeCustomerAccess(matrix[section]?.customer_access)
+      !== normalizeCustomerAccess(baseline[section]?.customer_access)) {
       n += 1;
     }
   });

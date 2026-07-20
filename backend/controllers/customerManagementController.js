@@ -17,6 +17,30 @@ const {
   canEditCustomerType,
   customerTypeSqlCondition,
 } = require('../utils/customerType');
+const {
+  appendCustomerTypeCondition,
+  isCustomerTypeAllowed,
+} = require('../services/customerAccessScope');
+
+/**
+ * Customer Access guard for single-record endpoints (GET/PUT/DELETE /customers/:id
+ * and sub-resources). Loads the customer's type and checks it against the
+ * caller's allowed types (req.allowedCustomerTypes from customerScope middleware).
+ * Returns { ok, status, message } — 404 when missing, 403 when out of scope.
+ */
+async function checkCustomerAccessById(req, customerId) {
+  const id = parseInt(customerId, 10);
+  if (!id) return { ok: false, status: 400, message: 'Invalid customer id' };
+  const r = await pool.query(
+    `SELECT customer_type FROM customers WHERE customer_id = $1`,
+    [id]
+  );
+  if (!r.rows.length) return { ok: false, status: 404, message: 'Customer not found' };
+  if (!isCustomerTypeAllowed(req.allowedCustomerTypes, r.rows[0].customer_type)) {
+    return { ok: false, status: 403, message: 'Access denied: customer is outside your Customer Access scope' };
+  }
+  return { ok: true };
+}
 
 function parseDetails(value) {
   if (value == null) return {};
@@ -354,13 +378,16 @@ exports.getAddCustomerMeta = async (req, res) => {
 };
 
 /** Shared list filters for paginated customers + bulk ID selection. */
-function buildCustomerListFilters(query = {}) {
+function buildCustomerListFilters(query = {}, allowedCustomerTypes = null) {
   const params = [];
   const conditions = ['c.status = 1'];
 
   const typeFilter = String(query.customer_type || query.for_order || 'all').trim().toLowerCase();
   const typeSql = customerTypeSqlCondition(typeFilter);
   if (typeSql) conditions.push(typeSql);
+
+  // Role-based Customer Access scope (all/sales/rental)
+  appendCustomerTypeCondition(allowedCustomerTypes, conditions, params);
 
   const search = String(query.search || '').trim();
   if (search) {
@@ -399,7 +426,7 @@ exports.listCustomers = async (req, res) => {
     };
     const orderBy = SORT_COLUMNS[sortByRaw] || SORT_COLUMNS.customer_id;
     const orderDir = sortDirRaw === 'desc' ? 'DESC' : 'ASC';
-    const { params, where } = buildCustomerListFilters(req.query);
+    const { params, where } = buildCustomerListFilters(req.query, req.allowedCustomerTypes);
 
     const countResult = await pool.query(
       `SELECT COUNT(*)::int AS total FROM customers c ${where}`,
@@ -452,7 +479,7 @@ exports.listCustomers = async (req, res) => {
  */
 exports.listCustomerIds = async (req, res) => {
   try {
-    const { params, where } = buildCustomerListFilters(req.query);
+    const { params, where } = buildCustomerListFilters(req.query, req.allowedCustomerTypes);
     const result = await pool.query(
       `SELECT c.customer_id, c.name, c.company_name, c.email, c.phone, c.customer_type, c.kyc_verified
          FROM customers c
@@ -608,6 +635,9 @@ exports.getCustomer = async (req, res) => {
     if (!result.rows.length) {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
+    if (!isCustomerTypeAllowed(req.allowedCustomerTypes, result.rows[0].customer_type)) {
+      return res.status(403).json({ success: false, message: 'Access denied: customer is outside your Customer Access scope' });
+    }
     const addrRes = await pool.query(
       `SELECT customer_address_id, customer_id, concern_person, mobile_no, address, city, state, pincode,
               is_head_office, address_type, created_at, updated_at
@@ -629,6 +659,10 @@ exports.getCustomerAddresses = async (req, res) => {
     const customerId = parseInt(req.params.customerId, 10);
     if (!customerId) {
       return res.status(400).json({ success: false, message: 'Invalid customer id' });
+    }
+    const access = await checkCustomerAccessById(req, customerId);
+    if (!access.ok && access.status === 403) {
+      return res.status(403).json({ success: false, message: access.message });
     }
     const { rows } = await pool.query(
       `SELECT customer_address_id, customer_id, concern_person, mobile_no, address, city, state, pincode,
@@ -652,9 +686,9 @@ exports.addCustomerAddress = async (req, res) => {
   try {
     const customerId = parseInt(req.params.customerId, 10);
     const body = req.body || {};
-    const check = await pool.query('SELECT 1 FROM customers WHERE customer_id = $1', [customerId]);
-    if (!check.rows.length) {
-      return res.status(404).json({ success: false, message: 'Customer not found' });
+    const access = await checkCustomerAccessById(req, customerId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, message: access.message });
     }
     if (!body.address) {
       return res.status(400).json({ success: false, message: 'Address is required' });
@@ -934,6 +968,9 @@ exports.updateCustomer = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
     const row = existing.rows[0];
+    if (!isCustomerTypeAllowed(req.allowedCustomerTypes, row.customer_type)) {
+      return res.status(403).json({ success: false, message: 'Access denied: customer is outside your Customer Access scope' });
+    }
     const body = req.body || {};
     const details = parseDetails(row.details);
 
@@ -1365,6 +1402,10 @@ async function queryCustomerReturnedAssets(customerId, { search = '', limit, off
 exports.getCustomerLaptops = async (req, res) => {
   try {
     const customerId = parseInt(req.params.customerId, 10);
+    const access = await checkCustomerAccessById(req, customerId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, message: access.message });
+    }
     const page = Math.max(1, parseInt(req.query.page, 10) || 0);
     const limitRaw = parseInt(req.query.limit, 10) || 0;
     const limit = limitRaw > 0 ? Math.min(100, Math.max(1, limitRaw)) : 0;
@@ -1417,6 +1458,9 @@ exports.deleteCustomer = async (req, res) => {
     if (!result.rows.length) {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
+    if (!isCustomerTypeAllowed(req.allowedCustomerTypes, result.rows[0].customer_type)) {
+      return res.status(403).json({ success: false, message: 'Access denied: customer is outside your Customer Access scope' });
+    }
     const details = parseDetails(result.rows[0].details);
     const files = [...(details.upload_docs || [])];
     if (details.profile) files.push(details.profile);
@@ -1444,6 +1488,9 @@ exports.enableCustomerPortal = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
     const row = existing.rows[0];
+    if (!isCustomerTypeAllowed(req.allowedCustomerTypes, row.customer_type)) {
+      return res.status(403).json({ success: false, message: 'Access denied: customer is outside your Customer Access scope' });
+    }
 
     if (enabled === false) {
       await pool.query(

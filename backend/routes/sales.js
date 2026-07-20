@@ -4,6 +4,7 @@ const multer = require('multer');
 const { multerLimits } = require('../config/uploadLimits');
 const fs = require('fs');
 const { authMiddleware } = require('../middleware/auth');
+const customerScope = require('../middleware/customerScope');
 const {
     // researchCompanyData,
     createCustomer,
@@ -164,11 +165,11 @@ const requireCustomersOrSalesAccess = (req, res, next) => {
         res.status(403).json({ message: 'Access denied' });
     }
 };
-router.get('/customers', authMiddleware, requireCustomersOrSalesAccess, getCustomers);
-router.get('/customers/:id', authMiddleware, requireCustomersOrSalesAccess, getCustomerById);
-router.put('/customers/:id', authMiddleware, requireCustomersEdit, updateCustomer);
-router.put('/customers/:id/addresses/:addr_id', authMiddleware, requireAddressAccess, updateCustomerAddress);
-router.post('/customers/:id/addresses', authMiddleware, requireAddressAccess, addCustomerAddress);
+router.get('/customers', authMiddleware, requireCustomersOrSalesAccess, customerScope, getCustomers);
+router.get('/customers/:id', authMiddleware, requireCustomersOrSalesAccess, customerScope, getCustomerById);
+router.put('/customers/:id', authMiddleware, requireCustomersEdit, customerScope, updateCustomer);
+router.put('/customers/:id/addresses/:addr_id', authMiddleware, requireAddressAccess, customerScope, updateCustomerAddress);
+router.post('/customers/:id/addresses', authMiddleware, requireAddressAccess, customerScope, addCustomerAddress);
 router.post('/orders', authMiddleware, requireSalesAccess, createOrder);
 router.get('/orders', authMiddleware, getOrders); // All logged-in users can fetch orders (filtered by role)
 router.get('/orders/export-csv', authMiddleware, exportOrdersCsv);
