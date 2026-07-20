@@ -902,7 +902,7 @@ export default function InventoryListTable({ routeKey }) {
   const showDeadReevalAction = isDeadLaptops && isInventoryAdmin;
   const showTicketStage = isQcProcess;
   const showQcCreateTicket = isQcProcess;
-  const showExportExcel = ['ready-to-rent-or-sell', 'qc-process'].includes(routeKey);
+  const showExportExcel = ['ready-to-rent-or-sell', 'qc-process', 'qc-pending'].includes(routeKey);
   const showPassedStatus = showReadyToRentAction || ['rent-to-own', 'rental-purchase', 'direct-purchase'].includes(routeKey);
   const showTagColumn = showReadyToRentAction || routeKey === 'ready-to-rent-or-sell';
 
