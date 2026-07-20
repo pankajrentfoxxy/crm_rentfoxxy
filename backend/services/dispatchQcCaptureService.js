@@ -129,12 +129,12 @@ async function getSoLineForAllocation(alloc) {
 }
 
 /**
- * Dispatch QC expected config: production_assets working columns, overlaid with
- * the SO line when present. Order storage/RAM/processor are the sales truth and
- * must win over a stale PA.ssd (common when extra.ssd lagged behind storage).
+ * Dispatch QC expected config: latest Inventory Asset configuration (not the
+ * GRN snapshot), overlaid with the SO line when present. Order storage/RAM/
+ * processor are the sales truth and must win over a stale ssd value.
  */
-function expectedConfigForDispatchQc(pa, soLine = null) {
-  const base = workingToCompareShape(pa || {});
+async function expectedConfigForDispatchQc(db, pa, soLine = null) {
+  const { expected: base } = await getInventoryExpectedConfig(db, pa || {});
   if (!soLine) return base;
   const overlay = {};
   if (soLine.processor) overlay.processor = soLine.processor;
@@ -374,10 +374,9 @@ async function resolveByAccessNumber(accessNumber) {
   }
 
   const pa = await getById(pool, row.production_asset_id);
-  // Expected config = latest Inventory Asset configuration (not the GRN snapshot)
-  const { expected } = await getInventoryExpectedConfig(pool, pa || {});
+  // Expected config = latest Inventory Asset configuration + SO line overlay
   const soLine = await getSoLineForAllocation(row);
-  const expected = expectedConfigForDispatchQc(pa, soLine);
+  const expected = await expectedConfigForDispatchQc(pool, pa, soLine);
   return {
     ok: true,
     token: row.token_id,
@@ -403,9 +402,8 @@ async function getPublicSession(tokenId) {
   const row = await getTokenRow(tokenId);
   if (!row) return null;
   const pa = await getById(pool, row.production_asset_id);
-  const { expected } = await getInventoryExpectedConfig(pool, pa || {});
   const soLine = await getSoLineForAllocation(row);
-  const expected = expectedConfigForDispatchQc(pa, soLine);
+  const expected = await expectedConfigForDispatchQc(pool, pa, soLine);
   return {
     token: row.token_id,
     status: row.status,
@@ -475,11 +473,10 @@ async function verifyDispatchQcConfiguration(tokenId, actual, ip) {
       return { ok: false, code: 404, message: 'Production Asset not found' };
     }
 
-    // Compare against the latest Inventory Asset configuration, not the GRN snapshot
-    const { expected } = await getInventoryExpectedConfig(client, pa);
-    const configResult = verifyConfigurationAgainst(expected, actual);
+    // Compare against the latest Inventory Asset configuration (not the GRN
+    // snapshot), with SO line values overlaid as the sales truth.
     const soLine = await getSoLineForAllocation(row);
-    const expected = expectedConfigForDispatchQc(pa, soLine);
+    const expected = await expectedConfigForDispatchQc(client, pa, soLine);
     // Keep PA working SSD in sync when SO line storage differs from stale PA.ssd.
     if (soLine?.storage) {
       const lineGb = sizeNum(soLine.storage);
