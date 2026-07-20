@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { Clock, ExternalLink, FileImage, FileSpreadsheet, FileText, History, Loader2, Pencil, Plus, RefreshCw, X } from 'lucide-react';
 import { SearchField, ListPagination, DateRangeFilter } from '../../../components/ui/primitives';
-import useDebouncedValue from '../../../hooks/useDebouncedValue';
+import { useUrlFilters, useDebouncedUrlSearch, listReturnState } from '../../../hooks/useUrlFilters';
 import { useAuth } from '../../../context/AuthContext';
 import {
   createProductionTicket,
@@ -31,12 +31,20 @@ import { invalidateQcCounts } from '../../qc-management/qcCountsEvents';
 import { INVENTORY_LIST_INVALIDATE } from '../inventoryCountsEvents';
 import ReturnRepareActionModal from '../../qc-management/components/ReturnRepareActionModal';
 import InventorySpecFilterBar from './InventorySpecFilterBar';
-import { EMPTY_SPEC_FILTERS } from '../inventorySpecFilters';
+import { EMPTY_SPEC_FILTERS, SPEC_FILTER_KEYS } from '../inventorySpecFilters';
 import useDebouncedSpecParams from '../hooks/useDebouncedSpecParams';
 import { getBackendOrigin } from '../../../utils/api';
 import { salesOrderDetailPath } from '../../sales-pipeline/salesOrderScope';
 
 const PAGE_SIZE = 25;
+const INVENTORY_FILTER_DEFAULTS = {
+  page: 1,
+  search: '',
+  dateFrom: '',
+  dateTo: '',
+  qcStage: 'all',
+  ...EMPTY_SPEC_FILTERS,
+};
 
 function InventoryTableSkeleton({ colSpan = 12, rows = 8 }) {
   return (
@@ -337,7 +345,7 @@ function soScopeFromQuotationType(type) {
   return key === 'sale' || key === 'sales' ? 'sale' : 'rental';
 }
 
-function SoAttachedBadge({ attachment }) {
+function SoAttachedBadge({ attachment, returnState }) {
   const [open, setOpen] = useState(false);
   const popoverRef = useRef(null);
 
@@ -371,6 +379,7 @@ function SoAttachedBadge({ attachment }) {
           <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Sales Order</p>
           <Link
             to={soPath}
+            state={returnState}
             className="mt-1 block text-xs font-semibold text-sky-700 hover:underline break-all"
             onClick={() => setOpen(false)}
           >
@@ -659,7 +668,7 @@ async function createProductionTicketForRow(row) {
   return data;
 }
 
-function CreateProductionTicketButton({ row, onUpdated }) {
+function CreateProductionTicketButton({ row, onUpdated, returnState }) {
   const [saving, setSaving] = useState(false);
   const activeTicketId = row.active_floor_ticket_id;
 
@@ -669,6 +678,7 @@ function CreateProductionTicketButton({ row, onUpdated }) {
         Ticket{' '}
         <Link
           to={`/floor-pipeline/tickets/${activeTicketId}`}
+          state={returnState}
           className="font-semibold text-blue-700 hover:underline"
         >
           #{activeTicketId}
@@ -776,6 +786,7 @@ function SparePartRow({ row }) {
 
 export default function InventoryListTable({ routeKey }) {
   const { user } = useAuth();
+  const location = useLocation();
   const isInventoryAdmin = ['admin', 'super_admin'].includes(user?.role);
   const isSuperAdmin = user?.role === 'super_admin';
   const meta = INVENTORY_PAGE_META[routeKey];
@@ -791,26 +802,25 @@ export default function InventoryListTable({ routeKey }) {
   const [refreshing, setRefreshing] = useState(false);
   const listAbortRef = useRef(null);
   const hasLoadedOnceRef = useRef(false);
-  const [page, setPage] = useState(1);
-  const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
-  const [searchInput, setSearchInput] = useState('');
-  const search = useDebouncedValue(searchInput.trim(), 320);
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
-  const [specFilters, setSpecFilters] = useState(EMPTY_SPEC_FILTERS);
+  const { filters, setFilters } = useUrlFilters(INVENTORY_FILTER_DEFAULTS);
+  const { page, dateFrom, dateTo, qcStage: qcStageFilter } = filters;
+  const { searchInput, setSearchInput, debouncedSearch: search } = useDebouncedUrlSearch(filters, setFilters);
+  const specFilters = useMemo(() => {
+    const out = { ...EMPTY_SPEC_FILTERS };
+    SPEC_FILTER_KEYS.forEach((k) => { out[k] = filters[k] || ''; });
+    return out;
+  }, [filters]);
   const showDateFilter = ['qc-process', 'ready-to-rent-or-sell'].includes(routeKey);
   const showSpecFilter = showDateFilter;
   const debouncedSpecParams = useDebouncedSpecParams(specFilters);
-  const specFilterKey = JSON.stringify(debouncedSpecParams);
+  const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [listCounts, setListCounts] = useState(null);
   const [historyTtspl, setHistoryTtspl] = useState(null);
   const [selectedIds, setSelectedIds] = useState([]);
   const [showAddLaptopModal, setShowAddLaptopModal] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [qcStageFilter, setQcStageFilter] = useState('all');
   const isQcProcess = routeKey === 'qc-process';
-
-  useEffect(() => { setPage(1); }, [search, dateFrom, dateTo, specFilterKey, qcStageFilter]);
+  const listReturn = listReturnState(location);
 
   const total = pagination.total || 0;
 
@@ -1014,7 +1024,7 @@ export default function InventoryListTable({ routeKey }) {
             <button
               key={opt.key}
               type="button"
-              onClick={() => setQcStageFilter(opt.key)}
+              onClick={() => setFilters({ qcStage: opt.key })}
               className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
                 qcStageFilter === opt.key
                   ? 'bg-sky-600 text-white shadow-sm'
@@ -1039,8 +1049,9 @@ export default function InventoryListTable({ routeKey }) {
             <DateRangeFilter
               dateFrom={dateFrom}
               dateTo={dateTo}
-              onDateFromChange={setDateFrom}
-              onDateToChange={setDateTo}
+              onRangeChange={(range) => setFilters(range)}
+              onDateFromChange={(v) => setFilters({ dateFrom: v })}
+              onDateToChange={(v) => setFilters({ dateTo: v })}
               fromLabel="Updated from"
               toLabel="Updated to"
             />
@@ -1049,8 +1060,8 @@ export default function InventoryListTable({ routeKey }) {
         {showSpecFilter ? (
           <InventorySpecFilterBar
             filters={specFilters}
-            onChange={setSpecFilters}
-            onClear={() => setSpecFilters(EMPTY_SPEC_FILTERS)}
+            onChange={(next) => setFilters(next)}
+            onClear={() => setFilters(Object.fromEntries(SPEC_FILTER_KEYS.map((k) => [k, ''])))}
           />
         ) : null}
       </div>
@@ -1146,7 +1157,7 @@ export default function InventoryListTable({ routeKey }) {
                             {row.unique_product_serial || row.inventory_asset_code}
                           </button>
                           {showReadyToRentAction ? (
-                            <SoAttachedBadge attachment={row.so_attachment} />
+                            <SoAttachedBadge attachment={row.so_attachment} returnState={listReturn} />
                           ) : null}
                         </div>
                         <button
@@ -1167,6 +1178,7 @@ export default function InventoryListTable({ routeKey }) {
                         row.active_floor_ticket_id ? (
                           <Link
                             to={`/floor-pipeline/tickets/${row.active_floor_ticket_id}`}
+                            state={listReturn}
                             className="inline-flex rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-semibold text-indigo-800 hover:bg-indigo-100"
                           >
                             {row.ticket_stage_name}
@@ -1266,7 +1278,7 @@ export default function InventoryListTable({ routeKey }) {
                   ) : null}
                   {showQcCreateTicket ? (
                     <td className="px-3 py-3">
-                      <CreateProductionTicketButton row={row} onUpdated={load} />
+                      <CreateProductionTicketButton row={row} onUpdated={load} returnState={listReturn} />
                     </td>
                   ) : null}
                   {showQcPendingAction ? (
@@ -1308,7 +1320,7 @@ export default function InventoryListTable({ routeKey }) {
         totalPages={pagination.totalPages || 1}
         total={pagination.total || 0}
         pageSize={PAGE_SIZE}
-        onPageChange={setPage}
+        onPageChange={(p) => setFilters({ page: p })}
       />
 
       <TtsplHistoryDrawer

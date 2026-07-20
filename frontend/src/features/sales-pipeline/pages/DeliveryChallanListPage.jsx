@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Plus, Truck } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
@@ -9,26 +9,29 @@ import DispatchModal from '../components/DispatchModal';
 import QcStatusBadge from '../components/QcStatusBadge';
 import { listDCs } from '../salesPipelineApi';
 import { DC_STATUS_STYLES, DISPATCH_MODE_STYLES, formatDate, statusLabel, deliveryChallanDetailPath } from '../salesPipelineUtils';
-import useDebouncedValue from '../../../hooks/useDebouncedValue';
+import { useUrlFilters, useDebouncedUrlSearch, listReturnState } from '../../../hooks/useUrlFilters';
 
 const TABS = ['all', 'pending', 'in_transit', 'delivered', 'rejected'];
 const PAGE_SIZE = 25;
+const DC_FILTER_DEFAULTS = {
+  page: 1,
+  search: '',
+  dateFrom: '',
+  dateTo: '',
+  tab: 'all',
+};
 
 export default function DeliveryChallanListPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const { filters, setFilters } = useUrlFilters(DC_FILTER_DEFAULTS);
+  const { page, dateFrom, dateTo, tab } = filters;
+  const { searchInput, setSearchInput, debouncedSearch: search } = useDebouncedUrlSearch(filters, setFilters);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState('all');
-  const [page, setPage] = useState(1);
-  const [searchInput, setSearchInput] = useState('');
-  const search = useDebouncedValue(searchInput.trim(), 320);
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [dcDrawer, setDcDrawer] = useState(false);
   const [dispatchDc, setDispatchDc] = useState(null);
-
-  useEffect(() => { setPage(1); }, [search, tab, dateFrom, dateTo]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -66,7 +69,7 @@ export default function DeliveryChallanListPage() {
     const canDispatch = (row.status === 'pending' || !row.status) && qc?.all_passed;
     return (
       <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
-        <button type="button" className="text-blue-600 text-sm font-semibold" onClick={() => navigate(deliveryChallanDetailPath(row.dc_number))}>View</button>
+        <button type="button" className="text-blue-600 text-sm font-semibold" onClick={() => navigate(deliveryChallanDetailPath(row.dc_number), { state: listReturnState(location) })}>View</button>
         {canDispatch && (
           <PermissionGate section="dispatch_ops" action="edit">
             <button type="button" className="text-sm text-teal-700 font-semibold" onClick={() => setDispatchDc(row.dc_number)}>Dispatch</button>
@@ -157,7 +160,7 @@ export default function DeliveryChallanListPage() {
 
       <div className="flex flex-wrap gap-2 mb-4">
         {TABS.map((t) => (
-          <button key={t} type="button" onClick={() => setTab(t)} className={`px-3 min-h-[36px] rounded-full text-xs font-medium capitalize ${tab === t ? 'bg-blue-600 text-white' : 'bg-gray-100'}`}>{t.replace('_', ' ')}</button>
+          <button key={t} type="button" onClick={() => setFilters({ tab: t })} className={`px-3 min-h-[36px] rounded-full text-xs font-medium capitalize ${tab === t ? 'bg-blue-600 text-white' : 'bg-gray-100'}`}>{t.replace('_', ' ')}</button>
         ))}
       </div>
 
@@ -170,8 +173,9 @@ export default function DeliveryChallanListPage() {
         <DateRangeFilter
           dateFrom={dateFrom}
           dateTo={dateTo}
-          onDateFromChange={setDateFrom}
-          onDateToChange={setDateTo}
+          onRangeChange={(range) => setFilters(range)}
+          onDateFromChange={(v) => setFilters({ dateFrom: v })}
+          onDateToChange={(v) => setFilters({ dateTo: v })}
           fromLabel="Created from"
           toLabel="Created to"
         />
@@ -183,7 +187,7 @@ export default function DeliveryChallanListPage() {
         keyField="dc_number"
         loading={loading}
         renderCard={renderCard}
-        onRowClick={(r) => navigate(deliveryChallanDetailPath(r.dc_number))}
+        onRowClick={(r) => navigate(deliveryChallanDetailPath(r.dc_number), { state: listReturnState(location) })}
       />
 
       <ListPagination
@@ -191,7 +195,7 @@ export default function DeliveryChallanListPage() {
         totalPages={pagination.totalPages || 1}
         total={pagination.total || 0}
         pageSize={PAGE_SIZE}
-        onPageChange={setPage}
+        onPageChange={(p) => setFilters({ page: p })}
       />
 
       <DCForm open={dcDrawer} onClose={() => setDcDrawer(false)} />

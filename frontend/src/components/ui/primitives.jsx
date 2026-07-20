@@ -276,6 +276,7 @@ export function DateRangeFilter({
   dateTo,
   onDateFromChange,
   onDateToChange,
+  onRangeChange,
   fromLabel = 'From',
   toLabel = 'To',
   className = '',
@@ -289,18 +290,19 @@ export function DateRangeFilter({
   const preset = detectDatePreset(dateFrom, dateTo);
 
   const applyPreset = (key) => {
-    if (key === 'all') {
-      onDateFromChange('');
-      onDateToChange('');
-    } else if (key === 'today') {
-      const t = todayDateInput();
-      onDateFromChange(t);
-      onDateToChange(t);
+    let from = '';
+    let to = '';
+    if (key === 'today') {
+      from = to = todayDateInput();
     } else if (key === 'yesterday') {
-      const y = yesterdayDateInput();
-      onDateFromChange(y);
-      onDateToChange(y);
+      from = to = yesterdayDateInput();
     }
+    if (onRangeChange) {
+      onRangeChange({ dateFrom: from, dateTo: to });
+      return;
+    }
+    onDateFromChange(from);
+    onDateToChange(to);
   };
 
   const presetBtnClass = controlClassName || 'px-3 py-2 text-xs font-semibold min-h-[44px]';

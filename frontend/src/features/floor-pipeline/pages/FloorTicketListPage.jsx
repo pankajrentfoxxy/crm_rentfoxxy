@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { LayoutGrid, List, Loader2, Search, Factory } from 'lucide-react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { PageHeader, ListPagination, DateRangeFilter } from '../../../components/ui/primitives';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
+import { useUrlFilters, useDebouncedUrlSearch, listReturnState } from '../../../hooks/useUrlFilters';
 import { useAuth } from '../../../context/AuthContext';
 import usePermission from '../../../hooks/usePermission';
 import { fetchFloorTickets } from '../floorPipelineApi';
@@ -11,7 +12,7 @@ import useAutoRefresh from '../hooks/useAutoRefresh';
 import TicketCard from '../components/TicketCard';
 import AssignmentModal from '../components/AssignmentModal';
 import FloorPipelineFilterPanel, { FILTER_CTL } from '../components/FloorPipelineFilterPanel';
-import { EMPTY_SPEC_FILTERS } from '../../inventory-management/inventorySpecFilters';
+import { EMPTY_SPEC_FILTERS, SPEC_FILTER_KEYS } from '../../inventory-management/inventorySpecFilters';
 import useDebouncedSpecParams from '../../inventory-management/hooks/useDebouncedSpecParams';
 import {
   canAssignFloorTickets,
@@ -36,40 +37,47 @@ import {
 
 const VIEW_KEY = 'floor_pipeline_view';
 const PAGE_SIZE = 25;
+const FLOOR_FILTER_DEFAULTS = {
+  page: 1,
+  search: '',
+  stage: '',
+  priority: '',
+  type: '',
+  dateFrom: '',
+  dateTo: '',
+  ...EMPTY_SPEC_FILTERS,
+};
 
 export default function FloorTicketListPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user, isAssignedDataOnly } = useAuth();
   const { canEdit } = usePermission();
   const canAssign = canAssignFloorTickets(canEdit, isAssignedDataOnly);
   const allDataScope = !isFloorAssignedDataOnly(isAssignedDataOnly);
-  const [searchParams, setSearchParams] = useSearchParams();
+  const { filters, setFilters } = useUrlFilters(FLOOR_FILTER_DEFAULTS);
+  const {
+    page,
+    stage: stageFilter,
+    priority: priorityFilter,
+    type: typeFilter,
+    dateFrom,
+    dateTo,
+  } = filters;
+  const { searchInput, setSearchInput, debouncedSearch } = useDebouncedUrlSearch(filters, setFilters);
+  const specFilters = useMemo(() => {
+    const out = { ...EMPTY_SPEC_FILTERS };
+    SPEC_FILTER_KEYS.forEach((k) => { out[k] = filters[k] || ''; });
+    return out;
+  }, [filters]);
+  const debouncedSpecParams = useDebouncedSpecParams(specFilters);
   const [view, setView] = useState(() => localStorage.getItem(VIEW_KEY) || 'kanban');
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const debouncedSearch = useDebouncedValue(search.trim(), 320);
-  const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
-  const stageFilter = searchParams.get('stage') || '';
-  const [priorityFilter, setPriorityFilter] = useState('');
-  const [typeFilter, setTypeFilter] = useState('');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
-  const [specFilters, setSpecFilters] = useState(EMPTY_SPEC_FILTERS);
-  const debouncedSpecParams = useDebouncedSpecParams(specFilters);
-  const specFilterKey = JSON.stringify(debouncedSpecParams);
   const [assignTicket, setAssignTicket] = useState(null);
 
   const fm = isFloorManagerRole(user?.role);
-
-  const updateStageFilter = useCallback((value) => {
-    setPage(1);
-    const next = new URLSearchParams(searchParams);
-    if (value) next.set('stage', value);
-    else next.delete('stage');
-    setSearchParams(next, { replace: true });
-  }, [searchParams, setSearchParams]);
 
   const subtitle = useMemo(() => {
     if (stageFilter === 'QC1,QC2') return 'QC Queue';
@@ -111,8 +119,6 @@ export default function FloorTicketListPage() {
     }
   }, [debouncedSearch, priorityFilter, typeFilter, stageFilter, page, dateFrom, dateTo, debouncedSpecParams]);
 
-  useEffect(() => { setPage(1); }, [debouncedSearch, priorityFilter, typeFilter, stageFilter, view, dateFrom, dateTo, specFilterKey]);
-
   useEffect(() => { load(); }, [load]);
   useAutoRefresh(load);
 
@@ -136,7 +142,7 @@ export default function FloorTicketListPage() {
     if (canAssign && ticket.stage_name === 'Floor Manager') {
       setAssignTicket(ticket);
     } else {
-      navigate(`/floor-pipeline/tickets/${ticket.ticket_id}`);
+      navigate(`/floor-pipeline/tickets/${ticket.ticket_id}`, { state: listReturnState(location) });
     }
   };
 
@@ -175,14 +181,14 @@ export default function FloorTicketListPage() {
           <div className="flex rounded-lg border border-slate-200 overflow-hidden">
             <button
               type="button"
-              onClick={() => { setPage(1); setViewMode('kanban'); }}
+              onClick={() => { setFilters({ page: 1 }); setViewMode('kanban'); }}
               className={`px-3 min-h-[40px] text-sm flex items-center gap-1 ${view === 'kanban' ? 'bg-blue-600 text-white' : 'bg-white'}`}
             >
               <LayoutGrid className="w-4 h-4" /> Kanban
             </button>
             <button
               type="button"
-              onClick={() => { setPage(1); setViewMode('table'); }}
+              onClick={() => { setFilters({ page: 1 }); setViewMode('table'); }}
               className={`px-3 min-h-[40px] text-sm flex items-center gap-1 ${view === 'table' ? 'bg-blue-600 text-white' : 'bg-white'}`}
             >
               <List className="w-4 h-4" /> Table
@@ -193,8 +199,8 @@ export default function FloorTicketListPage() {
 
       <FloorPipelineFilterPanel
         specFilters={specFilters}
-        onSpecFiltersChange={setSpecFilters}
-        onSpecFiltersClear={() => setSpecFilters(EMPTY_SPEC_FILTERS)}
+        onSpecFiltersChange={(next) => setFilters(next)}
+        onSpecFiltersClear={() => setFilters(Object.fromEntries(SPEC_FILTER_KEYS.map((k) => [k, ''])))}
       >
         <div className="relative min-w-[12rem] flex-1 max-w-sm shrink-0">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -202,14 +208,14 @@ export default function FloorTicketListPage() {
               type="search"
               className={`${FILTER_CTL} w-full pl-8 pr-2`}
               placeholder="TTSPL ID, serial, model…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
             />
           </div>
           <select
             className={`${FILTER_CTL} min-w-[7.5rem] max-w-[9rem]`}
             value={stageFilter}
-            onChange={(e) => updateStageFilter(e.target.value)}
+            onChange={(e) => setFilters({ stage: e.target.value })}
             aria-label="Stage"
           >
             <option value="">All stages</option>
@@ -221,7 +227,7 @@ export default function FloorTicketListPage() {
           <select
             className={`${FILTER_CTL} min-w-[6.5rem] max-w-[8rem]`}
             value={priorityFilter}
-            onChange={(e) => { setPage(1); setPriorityFilter(e.target.value); }}
+            onChange={(e) => setFilters({ priority: e.target.value })}
             aria-label="Priority"
           >
             <option value="">All priorities</option>
@@ -232,7 +238,7 @@ export default function FloorTicketListPage() {
           <select
             className={`${FILTER_CTL} min-w-[6rem] max-w-[7.5rem]`}
             value={typeFilter}
-            onChange={(e) => { setPage(1); setTypeFilter(e.target.value); }}
+            onChange={(e) => setFilters({ type: e.target.value })}
             aria-label="Type"
           >
             <option value="">All types</option>
@@ -246,8 +252,9 @@ export default function FloorTicketListPage() {
             controlClassName="h-9 px-2 text-sm min-h-0"
             dateFrom={dateFrom}
             dateTo={dateTo}
-            onDateFromChange={setDateFrom}
-            onDateToChange={setDateTo}
+            onRangeChange={(range) => setFilters(range)}
+            onDateFromChange={(v) => setFilters({ dateFrom: v })}
+            onDateToChange={(v) => setFilters({ dateTo: v })}
             fromLabel="Created from"
             toLabel="Created to"
         />
@@ -307,7 +314,7 @@ export default function FloorTicketListPage() {
           totalPages={pagination.totalPages || 1}
           total={pagination.total || 0}
           pageSize={PAGE_SIZE}
-          onPageChange={setPage}
+          onPageChange={(p) => setFilters({ page: p })}
         />
         </>
       ) : (
@@ -362,7 +369,7 @@ export default function FloorTicketListPage() {
                   <tr key={t.ticket_id} className="border-t hover:bg-slate-50">
                     <td className="px-3 py-3">{rowNum}</td>
                     <td className="px-3 py-3">
-                      <Link to={`/floor-pipeline/tickets/${t.ticket_id}`} className="font-mono font-semibold text-blue-700">
+                      <Link to={`/floor-pipeline/tickets/${t.ticket_id}`} state={listReturnState(location)} className="font-mono font-semibold text-blue-700">
                         {ttspl || '—'}
                       </Link>
                       <p className="text-[10px] text-slate-400 font-mono mt-0.5">#{t.ticket_id}</p>
@@ -401,7 +408,7 @@ export default function FloorTicketListPage() {
           totalPages={pagination.totalPages || 1}
           total={pagination.total || 0}
           pageSize={PAGE_SIZE}
-          onPageChange={setPage}
+          onPageChange={(p) => setFilters({ page: p })}
         />
         </>
       )}

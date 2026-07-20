@@ -6,8 +6,10 @@ import { listReturnDCs } from '../salesPipelineApi';
 import { DC_STATUS_STYLES, formatDate, statusLabel } from '../salesPipelineUtils';
 import { getBackendOrigin } from '../../../utils/api';
 import { PageHeader, StatCard, Button, ResponsiveTable, DateRangeFilter } from '../../../components/ui/primitives';
+import { useUrlFilters, useDebouncedUrlSearch } from '../../../hooks/useUrlFilters';
 
 const PAGE_SIZE = 25;
+const RDC_FILTER_DEFAULTS = { page: 1, search: '', dateFrom: '', dateTo: '' };
 
 function pdfUrl(p) {
   if (!p) return null;
@@ -16,25 +18,13 @@ function pdfUrl(p) {
 }
 
 export default function ReturnDcListPage() {
+  const { filters, setFilters } = useUrlFilters(RDC_FILTER_DEFAULTS);
+  const { page, dateFrom, dateTo } = filters;
+  const { searchInput, setSearchInput, debouncedSearch: search } = useDebouncedUrlSearch(filters, setFilters);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(1);
-  const [searchInput, setSearchInput] = useState('');
-  const [search, setSearch] = useState('');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [detailRdc, setDetailRdc] = useState(null);
-
-  useEffect(() => {
-    const id = setTimeout(() => {
-      setSearch(searchInput.trim());
-      setPage(1);
-    }, 300);
-    return () => clearTimeout(id);
-  }, [searchInput]);
-
-  useEffect(() => { setPage(1); }, [dateFrom, dateTo]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -221,8 +211,9 @@ export default function ReturnDcListPage() {
         <DateRangeFilter
           dateFrom={dateFrom}
           dateTo={dateTo}
-          onDateFromChange={setDateFrom}
-          onDateToChange={setDateTo}
+          onRangeChange={(range) => setFilters(range)}
+          onDateFromChange={(v) => setFilters({ dateFrom: v })}
+          onDateToChange={(v) => setFilters({ dateTo: v })}
           fromLabel="Created from"
           toLabel="Created to"
         />
@@ -244,9 +235,9 @@ export default function ReturnDcListPage() {
             Showing {showingFrom}–{showingTo} of {pagination.total}
           </p>
           <div className="flex items-center gap-2">
-            <Button variant="secondary" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Prev</Button>
+            <Button variant="secondary" disabled={page <= 1} onClick={() => setFilters({ page: page - 1 })}>Prev</Button>
             <span className="text-sm text-gray-600 py-2">Page {page} of {pagination.totalPages}</span>
-            <Button variant="secondary" disabled={page >= pagination.totalPages} onClick={() => setPage((p) => p + 1)}>Next</Button>
+            <Button variant="secondary" disabled={page >= pagination.totalPages} onClick={() => setFilters({ page: page + 1 })}>Next</Button>
           </div>
         </div>
       )}

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
@@ -46,7 +46,11 @@ function uploadUrl(p) {
 
 export default function DeliveryChallanDetailPage() {
   const params = useParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   const dcNumber = resolveDcNumber(params);
+  const listPath = '/sales-pipeline/delivery-challans';
+  const cameFromElsewhere = Boolean(location.state?.from);
   const { user } = useAuth();
   const isSuperAdmin = user?.role === 'super_admin';
   const canOverrideHsn = user?.role === 'admin' || user?.role === 'super_admin';
@@ -261,7 +265,13 @@ export default function DeliveryChallanDetailPage() {
     <div className="p-4 max-w-7xl mx-auto">
       <div className="flex flex-wrap items-start justify-between gap-4 mb-4">
         <div>
-          <Link to="/sales-pipeline/delivery-challans" className="text-sm text-blue-600">← Back</Link>
+          <button
+            type="button"
+            onClick={() => (cameFromElsewhere ? navigate(-1) : navigate(listPath))}
+            className="text-sm text-blue-600 hover:underline"
+          >
+            ← Back
+          </button>
           <h1 className={`text-2xl font-semibold font-mono mt-1 ${isRejected ? 'text-red-700 line-through decoration-red-400' : ''}`}>{dcNumber}</h1>
           <p className="text-gray-600">{head.customer_name || '—'} · SO: <Link className="text-blue-600" to={salesOrderDetailPath(head.sales_order_number)}>{head.sales_order_number}</Link></p>
           <p className="text-sm text-gray-500 mt-1">

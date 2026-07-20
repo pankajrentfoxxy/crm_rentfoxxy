@@ -1,9 +1,9 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Download, FileSpreadsheet, Loader2, RefreshCw, Wrench } from 'lucide-react';
 import { PageHeader, ListPagination, SearchField, DateRangeFilter } from '../../../components/ui/primitives';
-import useDebouncedValue from '../../../hooks/useDebouncedValue';
+import { useUrlFilters, useDebouncedUrlSearch, useDebouncedUrlField, listReturnState } from '../../../hooks/useUrlFilters';
 import { useAuth } from '../../../context/AuthContext';
 import {
   exportOutForRepairExcel,
@@ -13,12 +13,22 @@ import {
 } from '../../floor-pipeline/vendorRepairApi';
 import { invalidateInventoryManagement } from '../inventoryCountsEvents';
 import InventorySpecFilterBar from '../components/InventorySpecFilterBar';
-import { EMPTY_SPEC_FILTERS } from '../inventorySpecFilters';
+import { EMPTY_SPEC_FILTERS, SPEC_FILTER_KEYS } from '../inventorySpecFilters';
 import useDebouncedSpecParams from '../hooks/useDebouncedSpecParams';
 
 const PAGE_SIZE = 25;
 const WAREHOUSE_ROLES = new Set(['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'support_lead']);
 const INPUT_CLS = 'rounded-md border border-slate-200 px-2 py-1.5 text-xs min-h-[32px] min-w-[120px]';
+
+const OUT_FOR_REPAIR_FILTER_DEFAULTS = {
+  page: 1,
+  search: '',
+  vendor: '',
+  dc: '',
+  dateFrom: '',
+  dateTo: '',
+  ...EMPTY_SPEC_FILTERS,
+};
 
 function fmtDate(v) {
   if (!v) return '—';
@@ -27,22 +37,23 @@ function fmtDate(v) {
 
 export default function OutForRepairInventoryPage() {
   const { user } = useAuth();
+  const location = useLocation();
   const canReceive = WAREHOUSE_ROLES.has(user?.role);
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
-  const [page, setPage] = useState(1);
-  const [search, setSearch] = useState('');
-  const [vendorFilter, setVendorFilter] = useState('');
-  const [dcFilter, setDcFilter] = useState('');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
-  const [specFilters, setSpecFilters] = useState(EMPTY_SPEC_FILTERS);
-  const debouncedSearch = useDebouncedValue(search.trim(), 320);
-  const debouncedVendor = useDebouncedValue(vendorFilter.trim(), 320);
-  const debouncedDc = useDebouncedValue(dcFilter.trim(), 320);
+  const { filters, setFilters } = useUrlFilters(OUT_FOR_REPAIR_FILTER_DEFAULTS);
+  const { page, dateFrom, dateTo } = filters;
+  const { searchInput, setSearchInput, debouncedSearch } = useDebouncedUrlSearch(filters, setFilters);
+  const { input: vendorFilter, setInput: setVendorFilter, debounced: debouncedVendor } = useDebouncedUrlField(filters, setFilters, 'vendor');
+  const { input: dcFilter, setInput: setDcFilter, debounced: debouncedDc } = useDebouncedUrlField(filters, setFilters, 'dc');
+  const specFilters = useMemo(() => {
+    const out = { ...EMPTY_SPEC_FILTERS };
+    SPEC_FILTER_KEYS.forEach((k) => { out[k] = filters[k] || ''; });
+    return out;
+  }, [filters]);
   const debouncedSpecParams = useDebouncedSpecParams(specFilters);
-  const specFilterKey = JSON.stringify(debouncedSpecParams);
+  const listReturn = listReturnState(location);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -67,9 +78,6 @@ export default function OutForRepairInventoryPage() {
     }
   }, [debouncedSearch, debouncedVendor, debouncedDc, page, dateFrom, dateTo, debouncedSpecParams]);
 
-  useEffect(() => {
-    setPage(1);
-  }, [debouncedSearch, debouncedVendor, debouncedDc, dateFrom, dateTo, specFilterKey]);
   useEffect(() => { load(); }, [load]);
 
   const exportParams = {
@@ -132,8 +140,8 @@ export default function OutForRepairInventoryPage() {
       <div className="rounded-lg border border-slate-200 bg-white px-2 py-2 space-y-1.5">
         <div className="flex flex-wrap items-end gap-2">
           <SearchField
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
             placeholder="TTSPL, serial, vendor, DC…"
             className="min-w-[160px] flex-1 max-w-sm"
           />
@@ -158,8 +166,9 @@ export default function OutForRepairInventoryPage() {
           <DateRangeFilter
             dateFrom={dateFrom}
             dateTo={dateTo}
-            onDateFromChange={setDateFrom}
-            onDateToChange={setDateTo}
+            onRangeChange={(range) => setFilters(range)}
+            onDateFromChange={(v) => setFilters({ dateFrom: v })}
+            onDateToChange={(v) => setFilters({ dateTo: v })}
             fromLabel="Out from"
             toLabel="Out to"
           />
@@ -173,8 +182,8 @@ export default function OutForRepairInventoryPage() {
         </div>
         <InventorySpecFilterBar
           filters={specFilters}
-          onChange={setSpecFilters}
-          onClear={() => setSpecFilters(EMPTY_SPEC_FILTERS)}
+          onChange={(next) => setFilters(next)}
+          onClear={() => setFilters(Object.fromEntries(SPEC_FILTER_KEYS.map((k) => [k, ''])))}
         />
       </div>
 
@@ -219,6 +228,7 @@ export default function OutForRepairInventoryPage() {
                       {r.dc_number ? (
                         <Link
                           to={`/floor-pipeline/vendor-repair-dc/${encodeURIComponent(r.dc_number)}`}
+                          state={listReturn}
                           className="font-mono text-xs text-blue-700 hover:underline"
                         >
                           {r.dc_number}
@@ -257,6 +267,7 @@ export default function OutForRepairInventoryPage() {
                         ) : (
                           <Link
                             to={`/floor-pipeline/vendor-repair-dc/${encodeURIComponent(r.dc_number)}`}
+                            state={listReturn}
                             className="inline-flex items-center gap-1 text-xs font-semibold text-green-700 hover:underline"
                           >
                             Take in
@@ -281,7 +292,7 @@ export default function OutForRepairInventoryPage() {
             totalPages={pagination.totalPages || 1}
             total={pagination.total || 0}
             pageSize={PAGE_SIZE}
-            onPageChange={setPage}
+            onPageChange={(p) => setFilters({ page: p })}
           />
         </>
       )}

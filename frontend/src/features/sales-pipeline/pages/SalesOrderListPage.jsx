@@ -14,9 +14,17 @@ import {
   salesOrderDetailPath,
   soPermissionSectionsForGate,
 } from '../salesOrderScope';
-import useDebouncedValue from '../../../hooks/useDebouncedValue';
+import { useUrlFilters, useDebouncedUrlSearch, listReturnState } from '../../../hooks/useUrlFilters';
 
 const PAGE_SIZE = 25;
+const SO_FILTER_DEFAULTS = {
+  page: 1,
+  search: '',
+  dateFrom: '',
+  dateTo: '',
+  status: '',
+  customerId: '',
+};
 const SO_STATUS_OPTIONS = [
   { value: '', label: 'All statuses' },
   { value: 'pending', label: 'Pending' },
@@ -92,15 +100,12 @@ export default function SalesOrderListPage({ scope }) {
   const permissionSections = soPermissionSectionsForGate();
   const navigate = useNavigate();
   const location = useLocation();
+  const returnTo = `${location.pathname}${location.search}`;
+  const { filters, setFilters } = useUrlFilters(SO_FILTER_DEFAULTS);
+  const { page, dateFrom, dateTo, status: statusFilter, customerId } = filters;
+  const { searchInput, setSearchInput, debouncedSearch: search } = useDebouncedUrlSearch(filters, setFilters);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(1);
-  const [searchInput, setSearchInput] = useState('');
-  const search = useDebouncedValue(searchInput.trim(), 320);
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
-  const [customerId, setCustomerId] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
   const [customers, setCustomers] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [stats, setStats] = useState({
@@ -111,8 +116,6 @@ export default function SalesOrderListPage({ scope }) {
   const [paymentSo, setPaymentSo] = useState(null);
   const [prefillQuote, setPrefillQuote] = useState(location.state?.fromQuote || null);
   const [prefillSo, setPrefillSo] = useState(null);
-
-  useEffect(() => { setPage(1); }, [search, dateFrom, dateTo, customerId, statusFilter]);
 
   useEffect(() => {
     getSalesOrderMeta(scope ? { entity_scope: scope } : undefined)
@@ -176,7 +179,7 @@ export default function SalesOrderListPage({ scope }) {
           label="View"
           icon={Eye}
           tone="blue"
-          onClick={() => navigate(salesOrderDetailPath(row.sales_order_number, scope))}
+          onClick={() => navigate(salesOrderDetailPath(row.sales_order_number, scope), { state: listReturnState(location) })}
         />
         {!cancelled && (
           <>
@@ -329,7 +332,7 @@ export default function SalesOrderListPage({ scope }) {
           <select
             className="min-w-[180px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
             value={customerId}
-            onChange={(e) => setCustomerId(e.target.value)}
+            onChange={(e) => setFilters({ customerId: e.target.value })}
           >
             <option value="">All customers</option>
             {customers.map((c) => (
@@ -344,7 +347,7 @@ export default function SalesOrderListPage({ scope }) {
           <select
             className="min-w-[140px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
+            onChange={(e) => setFilters({ status: e.target.value })}
           >
             {SO_STATUS_OPTIONS.map((opt) => (
               <option key={opt.value || 'all'} value={opt.value}>{opt.label}</option>
@@ -354,8 +357,9 @@ export default function SalesOrderListPage({ scope }) {
         <DateRangeFilter
           dateFrom={dateFrom}
           dateTo={dateTo}
-          onDateFromChange={setDateFrom}
-          onDateToChange={setDateTo}
+          onRangeChange={(range) => setFilters(range)}
+          onDateFromChange={(v) => setFilters({ dateFrom: v })}
+          onDateToChange={(v) => setFilters({ dateTo: v })}
           fromLabel="Created from"
           toLabel="Created to"
         />
@@ -367,7 +371,7 @@ export default function SalesOrderListPage({ scope }) {
         keyField="sales_order_number"
         loading={loading}
         renderCard={renderCard}
-        onRowClick={(r) => navigate(salesOrderDetailPath(r.sales_order_number, scope))}
+        onRowClick={(r) => navigate(salesOrderDetailPath(r.sales_order_number, scope), { state: listReturnState(location) })}
       />
 
       <ListPagination
@@ -375,7 +379,7 @@ export default function SalesOrderListPage({ scope }) {
         totalPages={pagination.totalPages || 1}
         total={pagination.total || 0}
         pageSize={PAGE_SIZE}
-        onPageChange={setPage}
+        onPageChange={(p) => setFilters({ page: p })}
       />
 
       <SalesOrderForm

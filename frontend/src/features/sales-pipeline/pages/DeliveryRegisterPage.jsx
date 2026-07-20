@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { KeyRound, Map as MapIcon, CheckCircle2, ExternalLink, Image as ImageIcon, Users, XCircle } from 'lucide-react';
 import { ListPagination, SearchField } from '../../../components/ui/primitives';
 import { listDeliveryFlow, markRejected } from '../salesPipelineApi';
 import { deliveryChallanDetailPath } from '../salesPipelineUtils';
 import { DISPATCH_MODE_STYLES, formatDateTime, statusLabel } from '../salesPipelineUtils';
-import useDebouncedValue from '../../../hooks/useDebouncedValue';
+import { useUrlFilters, useDebouncedUrlSearch, listReturnState } from '../../../hooks/useUrlFilters';
 import { getBackendOrigin } from '../../../utils/api';
 import AdminDeliverModal from '../components/AdminDeliverModal';
 import ReturnWarehouseReceiveModal from '../components/ReturnWarehouseReceiveModal';
@@ -22,6 +22,7 @@ const TABS = [
 ];
 
 const PAGE_SIZE = 25;
+const REGISTER_FILTER_DEFAULTS = { page: 1, search: '', tab: 'all' };
 
 function uploadUrl(p) {
   if (!p) return null;
@@ -30,12 +31,12 @@ function uploadUrl(p) {
 }
 
 export default function DeliveryRegisterPage() {
-  const [tab, setTab] = useState('all');
+  const location = useLocation();
+  const { filters, setFilters } = useUrlFilters(REGISTER_FILTER_DEFAULTS);
+  const { page, tab } = filters;
+  const { searchInput, setSearchInput, debouncedSearch: search } = useDebouncedUrlSearch(filters, setFilters);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(1);
-  const [searchInput, setSearchInput] = useState('');
-  const search = useDebouncedValue(searchInput.trim(), 320);
   const [pagination, setPagination] = useState({
     page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE,
   });
@@ -48,8 +49,6 @@ export default function DeliveryRegisterPage() {
 
   const isDelivered = tab === 'delivered';
   const isRejectedTab = tab === 'rejected';
-
-  useEffect(() => { setPage(1); }, [tab, search]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -94,7 +93,7 @@ export default function DeliveryRegisterPage() {
     }
   };
 
-  const selectTab = (id) => setTab(id);
+  const selectTab = (id) => setFilters({ tab: id });
 
   return (
     <div className="p-4 max-w-7xl mx-auto">
@@ -229,6 +228,7 @@ export default function DeliveryRegisterPage() {
                         ) : (
                           <Link
                             to={deliveryChallanDetailPath(row.dc_number)}
+                            state={listReturnState(location)}
                             className="text-xs text-red-700 inline-flex items-center gap-1"
                           >
                             <XCircle className="w-3.5 h-3.5" /> Warehouse return
@@ -261,7 +261,7 @@ export default function DeliveryRegisterPage() {
         totalPages={pagination.totalPages || 1}
         total={pagination.total || 0}
         pageSize={PAGE_SIZE}
-        onPageChange={setPage}
+        onPageChange={(p) => setFilters({ page: p })}
       />
 
       {otpModal && (

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { AlertTriangle, History, Loader2 } from 'lucide-react';
 import api from '../../../utils/api';
@@ -67,7 +67,10 @@ function fmtElapsed(ms) {
 
 export default function TicketDetailPage() {
   const { id } = useParams();
+  const location = useLocation();
   const navigate = useNavigate();
+  const listPath = '/floor-pipeline/tickets';
+  const cameFromElsewhere = Boolean(location.state?.from);
   const { user, isAssignedDataOnly } = useAuth();
   const { canEdit } = usePermission();
   const canManageTickets = canManageFloorTickets(canEdit, isAssignedDataOnly);
@@ -564,7 +567,13 @@ export default function TicketDetailPage() {
     <div className="pb-10">
       <div className="rounded-xl border border-gray-100 bg-white shadow-sm px-4 py-3 mb-4">
         <div className="flex flex-wrap items-center gap-3">
-          <Link to="/floor-pipeline/tickets" className="text-sm text-blue-600 hover:underline">← Back</Link>
+          <button
+            type="button"
+            onClick={() => (cameFromElsewhere ? navigate(-1) : navigate(listPath))}
+            className="text-sm text-blue-600 hover:underline"
+          >
+            ← Back
+          </button>
           <span className="text-slate-300">|</span>
           <span className="font-mono font-bold">#{ticket.ticket_id}</span>
           <span className="inline-flex items-baseline gap-1.5 font-mono">
