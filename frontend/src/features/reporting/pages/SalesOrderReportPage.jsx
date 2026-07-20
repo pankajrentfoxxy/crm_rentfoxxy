@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import {
   Loader2, X, Cpu, Package, Link2, Truck, ClipboardList,
   Warehouse, ShieldCheck, ShoppingCart, RefreshCw, Calendar,
@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getSalesOrderReport, getSalesOrderReportDrilldown } from '../reportingApi';
+import { useUrlFilterPatch } from '../hooks/useReportFiltersFromUrl';
 import { SO_SCOPES } from '../../sales-pipeline/salesOrderScope';
 
 const C = {
@@ -316,7 +317,13 @@ function ConfigTable({ title, accent, processors, scope, onCellClick }) {
   );
 }
 
-function DrilldownModal({ open, onClose, title, loading, items, scope, bucket }) {
+function drillTitle({ scope, bucket, processor, generation }) {
+  const col = TABLE_COLS.find((c) => c.bucket === bucket);
+  const genLabel = generation === 'all' ? 'All generations' : generation;
+  return `${col?.label || bucket} — ${processor} / ${genLabel} (${scope === 'sale' ? 'Sale' : 'Rental'})`;
+}
+
+function DrilldownModal({ open, onClose, title, loading, items, scope, bucket, returnTo }) {
   if (!open) return null;
   const scopeCfg = SO_SCOPES[scope] || SO_SCOPES.rental;
   const cols = DRILL_COLUMNS[bucket] || DRILL_COLUMNS.ordered;
@@ -396,6 +403,7 @@ function DrilldownModal({ open, onClose, title, loading, items, scope, bucket })
                         {href ? (
                           <Link
                             to={href}
+                            state={{ from: returnTo }}
                             style={{
                               display: 'inline-flex', alignItems: 'center', gap: 4,
                               color: C.blue, fontWeight: 600, textDecoration: 'none', fontSize: 12,
@@ -418,12 +426,20 @@ function DrilldownModal({ open, onClose, title, loading, items, scope, bucket })
 }
 
 export default function SalesOrderReportPage() {
-  const [preset, setPreset] = useState('all');
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
+  const location = useLocation();
+  const { setFilter, get } = useUrlFilterPatch();
+  const preset = get('preset', 'all');
+  const from = get('from');
+  const to = get('to');
+  const drillScope = get('scope');
+  const drillBucket = get('bucket');
+  const drillProcessor = get('processor');
+  const drillGeneration = get('generation', 'all');
+  const drillOpen = Boolean(drillScope && drillBucket && drillProcessor);
+  const returnTo = `${location.pathname}${location.search}`;
+
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState(null);
-  const [drill, setDrill] = useState(null);
   const [drillLoading, setDrillLoading] = useState(false);
   const [drillItems, setDrillItems] = useState([]);
 
@@ -451,29 +467,63 @@ export default function SalesOrderReportPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  const openDrill = async ({ scope, bucket, processor, generation }) => {
-    const col = TABLE_COLS.find((c) => c.bucket === bucket);
-    const genLabel = generation === 'all' ? 'All generations' : generation;
-    setDrill({
+  useEffect(() => {
+    if (!drillOpen) {
+      setDrillItems([]);
+      setDrillLoading(false);
+      return undefined;
+    }
+    let cancelled = false;
+    (async () => {
+      setDrillLoading(true);
+      try {
+        const { data: res } = await getSalesOrderReportDrilldown({
+          ...filters,
+          scope: drillScope,
+          bucket: drillBucket,
+          processor: drillProcessor,
+          generation: drillGeneration || 'all',
+        });
+        if (!cancelled) setDrillItems(res?.items || []);
+      } catch (err) {
+        if (!cancelled) toast.error(err.message || 'Could not load details');
+      } finally {
+        if (!cancelled) setDrillLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [drillOpen, drillScope, drillBucket, drillProcessor, drillGeneration, filters]);
+
+  const openDrill = ({ scope, bucket, processor, generation }) => {
+    setFilter({
       scope,
       bucket,
       processor,
-      generation,
-      title: `${col?.label || bucket} — ${processor} / ${genLabel} (${scope === 'sale' ? 'Sale' : 'Rental'})`,
-    });
-    setDrillLoading(true);
-    setDrillItems([]);
-    try {
-      const { data: res } = await getSalesOrderReportDrilldown({
-        ...filters, scope, bucket, processor, generation,
-      });
-      setDrillItems(res?.items || []);
-    } catch (err) {
-      toast.error(err.message || 'Could not load details');
-    } finally {
-      setDrillLoading(false);
-    }
+      generation: generation || 'all',
+    }, { replace: false });
   };
+
+  const closeDrill = () => {
+    setFilter({
+      scope: null,
+      bucket: null,
+      processor: null,
+      generation: null,
+    }, { replace: true });
+  };
+
+  const drill = drillOpen ? {
+    scope: drillScope,
+    bucket: drillBucket,
+    processor: drillProcessor,
+    generation: drillGeneration || 'all',
+    title: drillTitle({
+      scope: drillScope,
+      bucket: drillBucket,
+      processor: drillProcessor,
+      generation: drillGeneration || 'all',
+    }),
+  } : null;
 
   const summary = data?.summary?.combined || {};
 
@@ -514,7 +564,7 @@ export default function SalesOrderReportPage() {
             <button
               key={p.key}
               type="button"
-              onClick={() => setPreset(p.key)}
+              onClick={() => setFilter({ preset: p.key })}
               style={{
                 padding: '7px 14px', borderRadius: 8, fontSize: 12.5, fontWeight: 700,
                 border: preset === p.key ? `2px solid ${C.blue}` : `1px solid ${C.border}`,
@@ -531,14 +581,14 @@ export default function SalesOrderReportPage() {
                 type="date"
                 min="2026-07-01"
                 value={from}
-                onChange={(e) => setFrom(e.target.value)}
+                onChange={(e) => setFilter({ from: e.target.value })}
                 style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '7px 10px' }}
               />
               <span style={{ color: C.dim }}>to</span>
               <input
                 type="date"
                 value={to}
-                onChange={(e) => setTo(e.target.value)}
+                onChange={(e) => setFilter({ to: e.target.value })}
                 style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '7px 10px' }}
               />
             </>
@@ -594,12 +644,13 @@ export default function SalesOrderReportPage() {
 
       <DrilldownModal
         open={!!drill}
-        onClose={() => setDrill(null)}
+        onClose={closeDrill}
         title={drill?.title || ''}
         loading={drillLoading}
         items={drillItems}
         scope={drill?.scope || 'rental'}
         bucket={drill?.bucket || 'ordered'}
+        returnTo={returnTo}
       />
     </div>
   );

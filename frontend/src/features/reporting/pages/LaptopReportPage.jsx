@@ -8,6 +8,7 @@ import {
 import toast from 'react-hot-toast';
 import { getLaptopReport, getLaptopReportTickets } from '../reportingApi';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
+import { useUrlFilterPatch } from '../hooks/useReportFiltersFromUrl';
 
 const C = {
   bg: '#F5F6F8',
@@ -412,22 +413,39 @@ function PopupModal({ title, baseParams, popupParams, columns, onClose }) {
 }
 
 export default function LaptopReportPage() {
-  const [dateMode, setDateMode] = useState('Today');
-  const [customFrom, setCustomFrom] = useState('');
-  const [customTo, setCustomTo] = useState('');
-  const [searchInput, setSearchInput] = useState('');
+  const { setFilter, get } = useUrlFilterPatch();
+  const dateMode = get('dateMode', 'Today');
+  const customFrom = get('customFrom');
+  const customTo = get('customTo');
+  const searchInput = get('q');
   const search = useDebouncedValue(searchInput.trim(), 320);
 
-  const [fStage, setFStage] = useState('All');
-  const [fTeam, setFTeam] = useState('All');
-  const [fTech, setFTech] = useState('All');
-  const [fStatus, setFStatus] = useState('All');
-  const [fBrand, setFBrand] = useState('All');
-  const [fModel, setFModel] = useState('All');
-  const [fProcessor, setFProcessor] = useState('All');
-  const [fGeneration, setFGeneration] = useState('All');
-  const [fRam, setFRam] = useState('All');
-  const [fSsd, setFSsd] = useState('All');
+  const fStage = get('fStage', 'All');
+  const fTeam = get('fTeam', 'All');
+  const fTech = get('fTech', 'All');
+  const fStatus = get('fStatus', 'All');
+  const fBrand = get('fBrand', 'All');
+  const fModel = get('fModel', 'All');
+  const fProcessor = get('fProcessor', 'All');
+  const fGeneration = get('fGeneration', 'All');
+  const fRam = get('fRam', 'All');
+  const fSsd = get('fSsd', 'All');
+
+  const patchFilter = (patch) => setFilter(patch, { replace: true });
+  const setDateMode = (value) => patchFilter({ dateMode: value, customFrom: null, customTo: null });
+  const setCustomFrom = (value) => patchFilter({ customFrom: value });
+  const setCustomTo = (value) => patchFilter({ customTo: value });
+  const setSearchInput = (value) => patchFilter({ q: value });
+  const setFStage = (value) => patchFilter({ fStage: value });
+  const setFTeam = (value) => patchFilter({ fTeam: value });
+  const setFTech = (value) => patchFilter({ fTech: value });
+  const setFStatus = (value) => patchFilter({ fStatus: value });
+  const setFBrand = (value) => patchFilter({ fBrand: value });
+  const setFModel = (value) => patchFilter({ fModel: value });
+  const setFProcessor = (value) => patchFilter({ fProcessor: value });
+  const setFGeneration = (value) => patchFilter({ fGeneration: value });
+  const setFRam = (value) => patchFilter({ fRam: value });
+  const setFSsd = (value) => patchFilter({ fSsd: value });
 
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -460,7 +478,7 @@ export default function LaptopReportPage() {
     loadReport();
   }, [loadReport]);
 
-  const filters = report?.filters || {};
+  const filterOptions = report?.filters || {};
   const summaryCounts = report?.summary || { Total: 0 };
   const techAgg = report?.technicians || [];
   const configAgg = report?.configurations || [];
@@ -476,9 +494,19 @@ export default function LaptopReportPage() {
   const activeFilterCount = [fStage, fTeam, fTech, fStatus, fBrand, fModel, fProcessor, fGeneration, fRam, fSsd].filter((f) => f !== 'All').length;
 
   const clearAllFilters = () => {
-    setFStage('All'); setFTeam('All'); setFTech('All'); setFStatus('All');
-    setFBrand('All'); setFModel('All'); setFProcessor('All'); setFGeneration('All'); setFRam('All'); setFSsd('All');
-    setSearchInput('');
+    patchFilter({
+      fStage: null,
+      fTeam: null,
+      fTech: null,
+      fStatus: null,
+      fBrand: null,
+      fModel: null,
+      fProcessor: null,
+      fGeneration: null,
+      fRam: null,
+      fSsd: null,
+      q: null,
+    });
   };
 
   const openPopup = (title, popupParams, columns = DEFAULT_POPUP_COLUMNS) => setPopup({ title, popupParams, columns });
@@ -574,10 +602,10 @@ export default function LaptopReportPage() {
             style={{ width: '100%', background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: '7px 10px 7px 28px', fontSize: 12.5, color: C.text }}
           />
         </div>
-        <Select label="All stages" value={fStage} onChange={setFStage} options={(filters.stages || STAGE_LIST).map((s) => s.label)} />
-        <Select label="All teams" value={fTeam} onChange={setFTeam} options={filters.teams || []} />
-        <Select label="All technicians" value={fTech} onChange={setFTech} options={filters.technicians || []} icon={User} />
-        <Select label="All statuses" value={fStatus} onChange={setFStatus} options={filters.statuses || STATUS_LIST} />
+        <Select label="All stages" value={fStage} onChange={setFStage} options={(filterOptions.stages || STAGE_LIST).map((s) => s.label)} />
+        <Select label="All teams" value={fTeam} onChange={setFTeam} options={filterOptions.teams || []} />
+        <Select label="All technicians" value={fTech} onChange={setFTech} options={filterOptions.technicians || []} icon={User} />
+        <Select label="All statuses" value={fStatus} onChange={setFStatus} options={filterOptions.statuses || STATUS_LIST} />
 
         <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
           {['All', 'Today', 'Yesterday'].map((d) => (
@@ -593,12 +621,12 @@ export default function LaptopReportPage() {
 
       <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 20 }}>
         <span style={{ fontSize: 10.5, color: C.dim2, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, marginRight: 2 }}>Attributes</span>
-        <Select label="Brand" value={fBrand} onChange={setFBrand} options={filters.brands || []} />
-        <Select label="Model" value={fModel} onChange={setFModel} options={filters.models || []} />
-        <Select label="Processor" value={fProcessor} onChange={setFProcessor} options={filters.processors || []} icon={Cpu} />
-        <Select label="Gen" value={fGeneration} onChange={setFGeneration} options={filters.generations || []} />
-        <Select label="RAM" value={fRam} onChange={setFRam} options={filters.rams || []} />
-        <Select label="SSD" value={fSsd} onChange={setFSsd} options={filters.ssds || []} />
+        <Select label="Brand" value={fBrand} onChange={setFBrand} options={filterOptions.brands || []} />
+        <Select label="Model" value={fModel} onChange={setFModel} options={filterOptions.models || []} />
+        <Select label="Processor" value={fProcessor} onChange={setFProcessor} options={filterOptions.processors || []} icon={Cpu} />
+        <Select label="Gen" value={fGeneration} onChange={setFGeneration} options={filterOptions.generations || []} />
+        <Select label="RAM" value={fRam} onChange={setFRam} options={filterOptions.rams || []} />
+        <Select label="SSD" value={fSsd} onChange={setFSsd} options={filterOptions.ssds || []} />
         {activeFilterCount > 0 && (
           <button type="button" onClick={clearAllFilters} style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'rgba(196,48,43,0.06)', border: '1px solid rgba(196,48,43,0.35)', color: C.red, borderRadius: 8, padding: '7px 11px', fontSize: 12, cursor: 'pointer', fontWeight: 600, marginLeft: 'auto' }}>
             <X size={12} /> Clear {activeFilterCount} filter{activeFilterCount > 1 ? 's' : ''}

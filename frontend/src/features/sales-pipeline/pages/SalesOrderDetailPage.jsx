@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import { Button } from '../../../components/ui/primitives';
@@ -49,6 +49,8 @@ const TABS = ['overview', 'laptops', 'addresses', 'payments', 'dcs', 'activity',
 
 export default function SalesOrderDetailPage({ scope: scopeProp }) {
   const params = useParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   const soNumber = resolveSoNumber(params);
   const { user } = useAuth();
   const isSuperAdmin = user?.role === 'super_admin';
@@ -110,6 +112,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
     || (orderMatchesScope(head, 'sale') ? 'sale' : orderMatchesScope(head, 'rental') ? 'rental' : null);
   const scopeConfig = getSoScopeConfig(resolvedScope);
   const listPath = salesOrderListPath(resolvedScope);
+  const cameFromElsewhere = Boolean(location.state?.from);
 
   const handleCancel = useCallback(async () => {
     if (!window.confirm(`Cancel sales order ${soNumber}? Attached laptops will be released back to inventory. This cannot be undone.`)) return;
@@ -126,7 +129,13 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
     <div className="p-4 max-w-6xl mx-auto">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div>
-          <Link to={listPath} className="text-sm text-blue-600">← Back</Link>
+          <button
+            type="button"
+            onClick={() => (cameFromElsewhere ? navigate(-1) : navigate(listPath))}
+            className="text-sm text-blue-600 hover:underline"
+          >
+            ← Back
+          </button>
           <div className="flex flex-wrap items-center gap-2 mt-1">
             <h1 className="text-2xl font-semibold font-mono">{soNumber}</h1>
             {scopeConfig && (
