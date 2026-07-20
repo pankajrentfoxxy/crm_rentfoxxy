@@ -231,12 +231,16 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
                 </div>
                 <div className="border rounded-xl p-3">
                   <p className="text-xs text-gray-500 uppercase mb-1">Warehouse received</p>
-                  {detail.esign?.warehouse_url ? (
+                  {detail.esign?.warehouse_url || (detail.esign?.warehouse_at && !detail.warehouse_receive_pending) ? (
                     <>
-                      <a href={assetUrl(detail.esign.warehouse_url)} target="_blank" rel="noreferrer"
-                        className="text-xs text-blue-600 inline-flex items-center gap-1 mb-1">
-                        <ImageIcon className="w-3.5 h-3.5" /> View signature
-                      </a>
+                      {detail.esign?.warehouse_url ? (
+                        <a href={assetUrl(detail.esign.warehouse_url)} target="_blank" rel="noreferrer"
+                          className="text-xs text-blue-600 inline-flex items-center gap-1 mb-1">
+                          <ImageIcon className="w-3.5 h-3.5" /> View signature
+                        </a>
+                      ) : (
+                        <p className="text-sm text-emerald-700">Received at warehouse</p>
+                      )}
                       <p className="text-sm">{detail.esign.warehouse_name || '—'}</p>
                       <p className="text-xs text-gray-400">{formatDateTime(detail.esign.warehouse_at)}</p>
                     </>
