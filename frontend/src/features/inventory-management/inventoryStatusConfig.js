@@ -21,7 +21,10 @@ export const MOVE_TO_QC_PROCESS_ACTION = {
 /** CRM route segment → Laravel admin.inventory.inventoryList segment */
 export const INVENTORY_SEGMENT_BY_ROUTE = {
   'ready-to-rent-or-sell': 'passed',
+  'qc-pending': 'qc_pending',
   'qc-process': 'qc_process',
+  'dead-laptops': 'dead_laptops',
+  'missing-laptops': 'missing_laptops',
   'rent-to-own': 'rent_to_own',
   'rental-purchase': 'rental_purchase',
   'direct-purchase': 'direct_purchase',
@@ -39,11 +42,29 @@ export const INVENTORY_PAGE_META = {
     countKey: 'passed',
     description: 'QC passed assets ready for rent or sale (Laravel inventory-list/passed).'
   },
+  'qc-pending': {
+    title: 'QC Pending',
+    erpSegment: 'qc_pending',
+    countKey: 'qc_pending',
+    description: 'Laptops received but not yet in QC Process — move to QC Process when ready.'
+  },
   'qc-process': {
     title: 'QC Process Laptops',
     erpSegment: 'qc_process',
     countKey: 'qc_process',
     description: 'Laptops still in the QC pipeline — QC status is not yet passed.'
+  },
+  'dead-laptops': {
+    title: 'Dead Laptops',
+    erpSegment: 'dead_laptops',
+    countKey: 'dead_laptops',
+    description: 'Non-working units held for future floor re-evaluation or parts.'
+  },
+  'missing-laptops': {
+    title: 'Missing Laptops',
+    erpSegment: 'missing_laptops',
+    countKey: 'missing_laptops',
+    description: 'Units marked missing from warehouse — use Asset Movement to reclassify when found.'
   },
   'rent-to-own': {
     title: 'Rent To Own',

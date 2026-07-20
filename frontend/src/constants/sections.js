@@ -31,6 +31,7 @@ export const APPLICATION_SECTIONS = [
   'tickets',
   'inventory',
   'inventory_management',
+  'inventory_asset_movement',
   'parts',
   'parts_inventory',
   'customer_inventory',
@@ -92,6 +93,7 @@ export const SECTION_LABELS = {
   tickets: 'Tickets (Legacy)',
   inventory: 'Inventory',
   inventory_management: 'Inventory Management',
+  inventory_asset_movement: 'Inventory — Asset Movement',
   parts: 'Parts (Legacy)',
   parts_inventory: 'Parts Inventory',
   customer_inventory: 'Customer Inventory',
@@ -131,7 +133,7 @@ export const SECTION_GROUPS = {
   'Vendor & Procurement': ['vendor_management', 'procurement', 'sales_pipeline'],
   'Floor & Quality': ['floor_pipeline', 'floor_tickets', 'chip_level_repair', 'qc_management', 'dispatch_qc', 'pending_inventory', 'tickets'],
   'Inventory & Parts': [
-    'inventory', 'inventory_management', 'parts', 'parts_inventory', 'customer_inventory', 'ttspl_history',
+    'inventory', 'inventory_management', 'inventory_asset_movement', 'parts', 'parts_inventory', 'customer_inventory', 'ttspl_history',
   ],
   'Warehouse & Dispatch': ['warehouse', 'dispatch', 'dispatch_ops'],
   'Finance & Billing': [

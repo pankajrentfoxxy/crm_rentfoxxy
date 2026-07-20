@@ -31,7 +31,8 @@ const EMPTY_FORM = {
   remarks: ''
 };
 
-export default function AddLaptopToQcModal({ open, onClose, onSuccess }) {
+export default function AddLaptopToQcModal({ open, onClose, onSuccess, intakeTarget = 'pending' }) {
+  const isQcPending = intakeTarget === 'qc_pending';
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
 
@@ -52,11 +53,12 @@ export default function AddLaptopToQcModal({ open, onClose, onSuccess }) {
       const payload = {
         ...form,
         vendor_id: form.vendor_id ? Number(form.vendor_id) : undefined,
-        unit_price: form.unit_price === '' ? undefined : Number(form.unit_price)
+        unit_price: form.unit_price === '' ? undefined : Number(form.unit_price),
+        intake_target: intakeTarget
       };
       const { data } = await addLaptopToQcProcess(payload);
       if (data.success) {
-        toast.success(data.message || 'Laptop added to QC Process');
+        toast.success(data.message || (isQcPending ? 'Laptop added to QC Pending' : 'Laptop added to QC Process'));
         invalidateInventoryManagement();
         invalidateQcCounts();
         resetAndClose();
@@ -76,9 +78,13 @@ export default function AddLaptopToQcModal({ open, onClose, onSuccess }) {
       <div className="bg-white rounded-xl shadow-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-slate-200">
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 sticky top-0 bg-white z-10">
           <div>
-            <h3 className="font-bold text-slate-900">Add Laptop to QC Process</h3>
+            <h3 className="font-bold text-slate-900">
+              {isQcPending ? 'Add Laptop to QC Pending' : 'Add Laptop to QC Process'}
+            </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              Creates inventory in QC pending and a linked Production/Floor ticket.
+              {isQcPending
+                ? 'Creates PO + GRN + serial in QC Pending (no floor ticket until moved to QC Process).'
+                : 'Creates PO + GRN + pending serial and a floor Production ticket.'}
             </p>
           </div>
           <button type="button" onClick={resetAndClose} className="p-1 rounded hover:bg-slate-100">

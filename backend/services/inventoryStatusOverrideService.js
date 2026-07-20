@@ -8,12 +8,14 @@ const { logTtsplEvent } = require('./ttsplAuditService');
 const { invalidateInventoryListCachesFireAndForget } = require('./inventoryListCache');
 
 const ALLOWED_QC_STATUSES = new Set([
+  'qc_pending',
   'out_for_repare',
   'out_for_return',
   'pending',
   'passed',
   'failed',
   'dead',
+  'missing',
 ]);
 
 function inventoryStatusForQc(qcStatus) {
@@ -24,12 +26,16 @@ function inventoryStatusForQc(qcStatus) {
       return 'out_for_return';
     case 'pending':
       return 'in_stock';
+    case 'qc_pending':
+      return 'in_stock';
     case 'passed':
       return 'in_stock';
     case 'failed':
       return 'qc_failed';
     case 'dead':
       return 'scrapped';
+    case 'missing':
+      return 'missing';
     default:
       return qcStatus;
   }

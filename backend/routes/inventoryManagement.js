@@ -7,6 +7,7 @@ const inventoryList = require('../controllers/inventoryManagement/inventoryList.
 const qcProcess = require('../controllers/inventoryManagement/qcProcess.controller');
 const serialStatus = require('../controllers/inventoryManagement/serialStatus.controller');
 const universalSearch = require('../controllers/inventoryManagement/universalSearch.controller');
+const assetMovement = require('../controllers/inventoryManagement/assetMovement.controller');
 
 const router = express.Router();
 
@@ -16,12 +17,16 @@ const invAdmin = [
   checkRole('admin', 'super_admin'),
   checkSectionPermission('inventory_management', 'edit')
 ];
+const assetMovementAccess = [
+  authMiddleware,
+  checkAnySectionPermission(['inventory_asset_movement'], 'edit')
+];
 const superAdminOnly = [authMiddleware, checkRole('super_admin')];
 const custInvView = [authMiddleware, checkSectionPermission('customer_inventory', 'view')];
 const moduleEntry = [
   authMiddleware,
   checkAnySectionPermission(
-    ['inventory', 'inventory_management', 'parts', 'parts_inventory', 'customer_inventory', 'ttspl_history'],
+    ['inventory', 'inventory_management', 'inventory_asset_movement', 'parts', 'parts_inventory', 'customer_inventory', 'ttspl_history'],
     'view'
   ),
 ];
@@ -39,7 +44,11 @@ router.get('/', moduleEntry, (req, res) =>
       '/ready-to-rent-action',
       '/qc-process/add-laptop',
       '/qc-process/move-from-passed',
-      '/qc-process/create-production-ticket'
+      '/qc-process/move-from-qc-pending',
+      '/qc-process/create-production-ticket',
+      '/asset-movement/search',
+      '/asset-movement/bulk-move',
+      '/:id/remark'
     ]
   })
 );
@@ -57,10 +66,30 @@ router.post(
   qcProcess.moveToQcProcess
 );
 router.post(
+  '/qc-process/move-from-qc-pending',
+  invAdmin,
+  qcProcess.moveFromQcPendingValidators,
+  qcProcess.moveFromQcPending
+);
+router.post(
+  '/qc-process/move-dead-to-qc-process',
+  invAdmin,
+  qcProcess.moveDeadToQcValidators,
+  qcProcess.moveDeadToQcProcess
+);
+router.post(
   '/qc-process/create-production-ticket',
   invView,
   qcProcess.createProductionTicketValidators,
   qcProcess.createProductionTicket
+);
+
+router.get('/asset-movement/search', assetMovementAccess, assetMovement.searchValidators, assetMovement.searchAssets);
+router.post(
+  '/asset-movement/bulk-move',
+  assetMovementAccess,
+  assetMovement.bulkMoveValidators,
+  assetMovement.bulkMove
 );
 
 router.get('/lists/counts', invView, inventoryList.getListCounts);
@@ -87,6 +116,12 @@ router.get('/spare-parts', invView, (req, res) => {
   return inventoryList.listInventory(req, res);
 });
 
+router.patch(
+  '/:id/remark',
+  invAdmin,
+  inventoryList.remarkValidators,
+  inventoryList.updateSerialRemark
+);
 router.patch(
   '/:id/tag',
   invView,

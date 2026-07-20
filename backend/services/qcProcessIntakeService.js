@@ -293,6 +293,9 @@ async function addLaptopToQcProcess(db, body, actorUserId) {
     return { ok: false, status: 400, message: 'Invalid purchase order type' };
   }
 
+  const intakeTarget =
+    String(body.intake_target || '').trim().toLowerCase() === 'qc_pending' ? 'qc_pending' : 'pending';
+
   for (const field of ['brand', 'model', 'processor', 'ram']) {
     if (!String(body[field] || '').trim()) {
       return { ok: false, status: 400, message: `${field.replace(/_/g, ' ')} is required` };
@@ -421,7 +424,7 @@ async function addLaptopToQcProcess(db, body, actorUserId) {
       line_index: 0,
       rental_start_date: rentalStartDate,
       unique_product_serial: inventoryAssetCode,
-      intake_source: 'qc_process_add',
+      intake_source: intakeTarget === 'qc_pending' ? 'qc_pending_add' : 'qc_process_add',
       ...buildConfigExtra(body)
     };
     if (body.remarks) extra.intake_remarks = String(body.remarks).trim();
@@ -430,9 +433,9 @@ async function addLaptopToQcProcess(db, body, actorUserId) {
       `INSERT INTO vendor_serial_numbers (
          po_id, grn_id, serial_number, inventory_asset_code, rental_start_date,
          qc_status, inventory_status, extra
-       ) VALUES ($1,$2,$3,$4,$5::date,'pending','in_stock',$6::jsonb)
+       ) VALUES ($1,$2,$3,$4,$5::date,$6,'in_stock',$7::jsonb)
        RETURNING serial_id, serial_number, inventory_asset_code`,
-      [poId, grnId, serialNumber, inventoryAssetCode, rentalStartDate, JSON.stringify(extra)]
+      [poId, grnId, serialNumber, inventoryAssetCode, rentalStartDate, intakeTarget, JSON.stringify(extra)]
     );
     serialId = serialIns.rows[0].serial_id;
 
@@ -470,15 +473,18 @@ async function addLaptopToQcProcess(db, body, actorUserId) {
     console.error('QC intake GRN audit failed:', auditErr);
   }
 
-  const ticketResult = await ensureFloorTicketForQcSerial(db, {
-    serialId,
-    serialNumber,
-    inventoryAssetCode,
-    po,
-    line,
-    actorUserId,
-    sourceNote: `QC Process intake — PO ${purchaseOrderNumber}`
-  });
+  const ticketResult =
+    intakeTarget === 'pending'
+      ? await ensureFloorTicketForQcSerial(db, {
+          serialId,
+          serialNumber,
+          inventoryAssetCode,
+          po,
+          line,
+          actorUserId,
+          sourceNote: `QC Process intake — PO ${purchaseOrderNumber}`
+        })
+      : { skipped: true, reason: 'qc_pending_intake' };
 
   return {
     ok: true,
@@ -489,6 +495,7 @@ async function addLaptopToQcProcess(db, body, actorUserId) {
       po_id: poId,
       purchase_order_number: purchaseOrderNumber,
       grn_id: grnId,
+      qc_status: intakeTarget,
       ticket: ticketResult
     }
   };
@@ -611,6 +618,158 @@ async function movePassedSerialToQcProcess(db, { serialId, serialNumber }, actor
       inventory_asset_code: row.inventory_asset_code,
       qc_status: 'pending',
       ticket: ticketResult
+    }
+  };
+}
+
+/**
+ * Move QC Pending serial into QC Process (pending) and create floor ticket.
+ */
+async function moveQcPendingToQcProcess(db, { serialId, serialNumber }, actorUserId) {
+  const r = await db.query(
+    `SELECT s.serial_id, s.serial_number, s.inventory_asset_code, s.extra, s.qc_status, s.po_id,
+            p.purchase_order_number
+       FROM vendor_serial_numbers s
+       INNER JOIN vendor_purchase_orders p ON p.po_id = s.po_id AND p.deleted_at IS NULL
+      WHERE s.serial_id = $1
+        AND s.serial_number = $2
+        AND s.deleted_at IS NULL
+        AND s.po_id IS NOT NULL`,
+    [serialId, serialNumber]
+  );
+
+  if (!r.rows.length) {
+    return { ok: false, status: 404, message: 'Serial not found' };
+  }
+
+  const row = r.rows[0];
+  const effectiveQc = String(row.qc_status || parseExtra(row.extra).status || 'pending').trim();
+  if (effectiveQc !== 'qc_pending') {
+    return {
+      ok: false,
+      status: 400,
+      message: 'Only laptops in QC Pending can be moved to QC Process this way'
+    };
+  }
+
+  const ex = parseExtra(row.extra);
+  ex.status = 'pending';
+  ex.action_status = 'pending';
+  ex.came_from = 'QC Pending';
+
+  await db.query(
+    `UPDATE vendor_serial_numbers
+        SET qc_status = 'pending',
+            inventory_status = 'in_stock',
+            extra = $1::jsonb,
+            updated_at = NOW()
+      WHERE serial_id = $2`,
+    [JSON.stringify(ex), row.serial_id]
+  );
+
+  const ticketResult = await createProductionTicketForQcSerial(
+    db,
+    { serialId: row.serial_id, serialNumber: row.serial_number },
+    actorUserId
+  );
+
+  if (!ticketResult.ok && ticketResult.status !== 409) {
+    return {
+      ok: false,
+      status: ticketResult.status || 500,
+      message: ticketResult.message || 'Failed to create Production ticket'
+    };
+  }
+
+  const ticketId = ticketResult.data?.ticket_id || ticketResult.data?.ticket?.ticket_id || null;
+  const ticketNote = ticketId
+    ? ` Floor ticket #${ticketId}${ticketResult.data?.reopened ? ' reopened' : ' created'}.`
+    : '';
+
+  return {
+    ok: true,
+    message: `Moved to QC Process.${ticketNote}`.trim(),
+    data: {
+      serial_id: row.serial_id,
+      serial_number: row.serial_number,
+      inventory_asset_code: row.inventory_asset_code,
+      qc_status: 'pending',
+      ticket_id: ticketId,
+      ticket: ticketResult.data
+    }
+  };
+}
+
+/**
+ * Re-evaluate dead (or failed) laptop on floor — pending + production ticket.
+ */
+async function moveDeadOrFailedToQcProcess(db, { serialId, serialNumber }, actorUserId) {
+  const r = await db.query(
+    `SELECT s.serial_id, s.serial_number, s.inventory_asset_code, s.extra, s.qc_status, s.po_id,
+            p.purchase_order_number
+       FROM vendor_serial_numbers s
+       INNER JOIN vendor_purchase_orders p ON p.po_id = s.po_id AND p.deleted_at IS NULL
+      WHERE s.serial_id = $1
+        AND s.serial_number = $2
+        AND s.deleted_at IS NULL
+        AND s.po_id IS NOT NULL`,
+    [serialId, serialNumber]
+  );
+
+  if (!r.rows.length) {
+    return { ok: false, status: 404, message: 'Serial not found' };
+  }
+
+  const row = r.rows[0];
+  const effectiveQc = String(row.qc_status || parseExtra(row.extra).status || 'pending').trim();
+  if (!['dead', 'failed'].includes(effectiveQc)) {
+    return {
+      ok: false,
+      status: 400,
+      message: 'Only dead or failed laptops can be sent to QC Process this way'
+    };
+  }
+
+  const ex = parseExtra(row.extra);
+  ex.status = 'pending';
+  ex.action_status = 'pending';
+  ex.came_from = effectiveQc === 'dead' ? 'Dead Laptop re-evaluation' : 'Failed QC re-evaluation';
+
+  await db.query(
+    `UPDATE vendor_serial_numbers
+        SET qc_status = 'pending',
+            inventory_status = 'in_stock',
+            extra = $1::jsonb,
+            updated_at = NOW()
+      WHERE serial_id = $2`,
+    [JSON.stringify(ex), row.serial_id]
+  );
+
+  const ticketResult = await createProductionTicketForQcSerial(
+    db,
+    { serialId: row.serial_id, serialNumber: row.serial_number },
+    actorUserId
+  );
+
+  if (!ticketResult.ok && ticketResult.status !== 409) {
+    return {
+      ok: false,
+      status: ticketResult.status || 500,
+      message: ticketResult.message || 'Failed to create Production ticket'
+    };
+  }
+
+  const ticketId = ticketResult.data?.ticket_id || null;
+  return {
+    ok: true,
+    message: ticketId
+      ? `Sent to QC Process. Floor ticket #${ticketId} created.`
+      : 'Sent to QC Process.',
+    data: {
+      serial_id: row.serial_id,
+      serial_number: row.serial_number,
+      qc_status: 'pending',
+      ticket_id: ticketId
     }
   };
 }
@@ -774,6 +933,8 @@ module.exports = {
   PO_TYPES,
   addLaptopToQcProcess,
   movePassedSerialToQcProcess,
+  moveQcPendingToQcProcess,
+  moveDeadOrFailedToQcProcess,
   createProductionTicketForQcSerial,
   ensureFloorTicketForQcSerial,
   findActiveFloorTicket,

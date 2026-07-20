@@ -11,9 +11,13 @@ const {
 
 const LIST_SEGMENT_MAP = {
   passed: { mode: 'status', status: 'passed' },
+  // Staging bucket — not yet in QC Process (no floor ticket until moved).
+  qc_pending: { mode: 'status', status: 'qc_pending' },
   // ERP "QC Processing List" (/admin/qc/orders/qc-orders/pending) — status = 'pending' only.
   // Other non-passed statuses (failed, out_for_repare, dead, …) have their own inventory tabs.
   qc_process: { mode: 'status', status: 'pending' },
+  dead_laptops: { mode: 'status', status: 'dead' },
+  missing_laptops: { mode: 'status', status: 'missing' },
   rent_to_own: { mode: 'po_passed', poType: 'rent_to_own' },
   rental_purchase: { mode: 'po_passed', poType: 'rental_purchase' },
   direct_purchase: { mode: 'po_passed', poType: 'direct_purchase' },
@@ -26,7 +30,10 @@ const LIST_SEGMENT_MAP = {
 
 const ROUTE_TO_SEGMENT = {
   'ready-to-rent-or-sell': 'passed',
+  'qc-pending': 'qc_pending',
   'qc-process': 'qc_process',
+  'dead-laptops': 'dead_laptops',
+  'missing-laptops': 'missing_laptops',
   'rent-to-own': 'rent_to_own',
   'rental-purchase': 'rental_purchase',
   'direct-purchase': 'direct_purchase',
@@ -44,7 +51,10 @@ function normalizeListSegment(input) {
 function listTitleForSegment(segment) {
   const titles = {
     passed: 'Ready to Rent or Sell',
+    qc_pending: 'QC Pending',
     qc_process: 'QC Process Laptops',
+    dead_laptops: 'Dead Laptops',
+    missing_laptops: 'Missing Laptops',
     rent_to_own: 'Rent To Own',
     rental_purchase: 'Rental Purchase',
     direct_purchase: 'Direct Purchase',

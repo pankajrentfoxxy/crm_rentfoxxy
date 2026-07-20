@@ -90,3 +90,28 @@ export function movePassedToQcProcess(body) {
 export function createProductionTicket(body) {
   return api.post(`${base}/qc-process/create-production-ticket`, body);
 }
+
+/** Move QC Pending serial to QC Process + floor ticket */
+export function moveQcPendingToQcProcess(body) {
+  return api.post(`${base}/qc-process/move-from-qc-pending`, body);
+}
+
+/** Send dead laptop to QC Process for floor re-evaluation */
+export function moveDeadToQcProcess(body) {
+  return api.post(`${base}/qc-process/move-dead-to-qc-process`, body);
+}
+
+/** Admin — update remark on QC Pending / QC Process / Dead lists */
+export function updateInventorySerialRemark(serialId, remark) {
+  return api.patch(`${base}/${serialId}/remark`, { remark });
+}
+
+/** Asset movement — search laptops by serial or TTSPL */
+export function searchInventoryAssetsForMovement(q) {
+  return api.get(`${base}/asset-movement/search`, { params: { q } });
+}
+
+/** Asset movement — bulk move to qc_pending | qc_process | passed | dead */
+export function bulkMoveInventoryAssets(body) {
+  return api.post(`${base}/asset-movement/bulk-move`, body);
+}

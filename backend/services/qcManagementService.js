@@ -3,10 +3,12 @@
  */
 
 const VALID_STATUSES = new Set([
+  'qc_pending',
   'pending',
   'passed',
   'failed',
   'dead',
+  'missing',
   'require_for_parts'
 ]);
 

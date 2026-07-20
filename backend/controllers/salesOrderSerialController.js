@@ -17,14 +17,48 @@ const { invalidateInventoryListCachesFireAndForget } = require('../services/inve
 // Resolve a serial's full specs from the authoritative source.
 const SPEC_SELECT = `
   SELECT vsn.serial_id, vsn.serial_number, vsn.inventory_asset_code, vsn.qc_status, vsn.inventory_status,
-         COALESCE(vsn.extra->>'brand', vpd.brand) AS brand,
-         COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', vpd.model) AS model,
-         COALESCE(vsn.extra->>'processor', vpd.processor) AS processor,
-         COALESCE(vsn.extra->>'generation', vpd.generation) AS generation,
-         COALESCE(vsn.extra->>'ram', vpd.ram) AS ram,
-         COALESCE(NULLIF(vsn.extra->>'storage', ''), NULLIF(vsn.extra->>'ssd', ''), vpd.storage) AS storage,
-         COALESCE(vsn.extra->>'gpu', vpd.gpu) AS gpu,
-         COALESCE(vsn.extra->>'screen_size', vpd.screen_size) AS screen_size
+         COALESCE(
+           NULLIF(TRIM(vsn.extra->>'brand'), ''),
+           NULLIF(TRIM(vsn.grn_received_config->>'brand'), ''),
+           NULLIF(TRIM(vpd.brand), '')
+         ) AS brand,
+         COALESCE(
+           NULLIF(TRIM(vsn.extra->>'model'), ''),
+           NULLIF(TRIM(vsn.extra->>'model_name'), ''),
+           NULLIF(TRIM(vsn.grn_received_config->>'model'), ''),
+           NULLIF(TRIM(vpd.model), '')
+         ) AS model,
+         COALESCE(
+           NULLIF(TRIM(vsn.extra->>'processor'), ''),
+           NULLIF(TRIM(vsn.grn_received_config->>'processor'), ''),
+           NULLIF(TRIM(vpd.processor), '')
+         ) AS processor,
+         COALESCE(
+           NULLIF(TRIM(vsn.extra->>'generation'), ''),
+           NULLIF(TRIM(vsn.grn_received_config->>'generation'), ''),
+           NULLIF(TRIM(vpd.generation), '')
+         ) AS generation,
+         COALESCE(
+           NULLIF(TRIM(vsn.extra->>'ram'), ''),
+           NULLIF(TRIM(vsn.grn_received_config->>'ram'), ''),
+           NULLIF(TRIM(vpd.ram), '')
+         ) AS ram,
+         COALESCE(
+           NULLIF(TRIM(vsn.extra->>'storage'), ''),
+           NULLIF(TRIM(vsn.extra->>'ssd'), ''),
+           NULLIF(TRIM(vsn.grn_received_config->>'storage'), ''),
+           NULLIF(TRIM(vpd.storage), '')
+         ) AS storage,
+         COALESCE(
+           NULLIF(TRIM(vsn.extra->>'gpu'), ''),
+           NULLIF(TRIM(vsn.grn_received_config->>'gpu'), ''),
+           NULLIF(TRIM(vpd.gpu), '')
+         ) AS gpu,
+         COALESCE(
+           NULLIF(TRIM(vsn.extra->>'screen_size'), ''),
+           NULLIF(TRIM(vsn.grn_received_config->>'screen_size'), ''),
+           NULLIF(TRIM(vpd.screen_size), '')
+         ) AS screen_size
   FROM vendor_serial_numbers vsn
   LEFT JOIN vendor_product_details vpd
     ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id', '')::int
@@ -52,12 +86,38 @@ exports.listSerials = async (req, res) => {
 
     const allocRes = await pool.query(
       `SELECT sos.*, t.status AS ticket_status, s.stage_name AS ticket_stage,
-              COALESCE(vsn.extra->>'brand', vpd.brand) AS serial_brand,
-              COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', vpd.model) AS serial_model,
-              COALESCE(vsn.extra->>'processor', vpd.processor) AS serial_processor,
-              COALESCE(vsn.extra->>'generation', vpd.generation) AS serial_generation,
-              COALESCE(vsn.extra->>'ram', vpd.ram) AS serial_ram,
-              COALESCE(NULLIF(vsn.extra->>'storage', ''), NULLIF(vsn.extra->>'ssd', ''), vpd.storage) AS serial_storage
+              COALESCE(
+                NULLIF(TRIM(vsn.extra->>'brand'), ''),
+                NULLIF(TRIM(vsn.grn_received_config->>'brand'), ''),
+                NULLIF(TRIM(vpd.brand), '')
+              ) AS serial_brand,
+              COALESCE(
+                NULLIF(TRIM(vsn.extra->>'model'), ''),
+                NULLIF(TRIM(vsn.extra->>'model_name'), ''),
+                NULLIF(TRIM(vsn.grn_received_config->>'model'), ''),
+                NULLIF(TRIM(vpd.model), '')
+              ) AS serial_model,
+              COALESCE(
+                NULLIF(TRIM(vsn.extra->>'processor'), ''),
+                NULLIF(TRIM(vsn.grn_received_config->>'processor'), ''),
+                NULLIF(TRIM(vpd.processor), '')
+              ) AS serial_processor,
+              COALESCE(
+                NULLIF(TRIM(vsn.extra->>'generation'), ''),
+                NULLIF(TRIM(vsn.grn_received_config->>'generation'), ''),
+                NULLIF(TRIM(vpd.generation), '')
+              ) AS serial_generation,
+              COALESCE(
+                NULLIF(TRIM(vsn.extra->>'ram'), ''),
+                NULLIF(TRIM(vsn.grn_received_config->>'ram'), ''),
+                NULLIF(TRIM(vpd.ram), '')
+              ) AS serial_ram,
+              COALESCE(
+                NULLIF(TRIM(vsn.extra->>'storage'), ''),
+                NULLIF(TRIM(vsn.extra->>'ssd'), ''),
+                NULLIF(TRIM(vsn.grn_received_config->>'storage'), ''),
+                NULLIF(TRIM(vpd.storage), '')
+              ) AS serial_storage
          FROM sales_order_serials sos
          LEFT JOIN tickets t ON t.ticket_id = sos.qc_ticket_id
          LEFT JOIN stages s ON s.stage_id = t.current_stage_id

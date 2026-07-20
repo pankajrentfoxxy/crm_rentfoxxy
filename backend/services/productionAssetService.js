@@ -29,7 +29,9 @@ function pick(obj, ...keys) {
 
 /** Normalize any config-like object into production_assets working columns. */
 function normalizeWorkingConfig(source = {}) {
-  const storage = pick(source, 'ssd', 'storage', 'Storage');
+  // Prefer canonical `storage` over legacy `ssd` — inventory often keeps a fresh
+  // storage value while ssd stays stale (e.g. storage=512, ssd=256).
+  const storage = pick(source, 'storage', 'Storage', 'ssd');
   return {
     brand: pick(source, 'brand', 'Brand'),
     model: pick(source, 'model', 'Model', 'product_name', 'model_name'),

@@ -9,9 +9,15 @@ function partialSpecMatch(dbValue, inputValue) {
   return String(dbValue || '').toLowerCase().includes(String(inputValue).toLowerCase());
 }
 
+/** Placeholder / blank generation on SO lines must not block attach. */
+function isBlankSpec(value) {
+  const s = String(value || '').trim();
+  return !s || s === '-' || s.toLowerCase() === 'n/a' || s.toLowerCase() === 'na';
+}
+
 function normalizedSpecMatch(dbValue, inputValue, entityKey, context = {}) {
-  if (!inputValue) return true;
-  if (!dbValue) return false;
+  if (isBlankSpec(inputValue)) return true;
+  if (isBlankSpec(dbValue)) return false;
   return compareKey(entityKey, dbValue, context) === compareKey(entityKey, inputValue, context);
 }
 
@@ -52,10 +58,10 @@ function enrichSerialSpecs(serial) {
  *  labels (e.g. catalog "Assamble") must not block attaching real inventory units. */
 function serialMatchesSoLine(line, serial) {
   const s = enrichSerialSpecs(serial);
-  if (line.processor && !normalizedSpecMatch(s.processor, line.processor, 'processors')) return false;
-  if (line.generation && !normalizedSpecMatch(s.generation, line.generation, 'generations')) return false;
-  if (line.ram && !normalizedSpecMatch(s.ram, line.ram, 'ram')) return false;
-  if (line.storage && !normalizedSpecMatch(s.storage, line.storage, 'storage')) return false;
+  if (!isBlankSpec(line.processor) && !normalizedSpecMatch(s.processor, line.processor, 'processors')) return false;
+  if (!isBlankSpec(line.generation) && !normalizedSpecMatch(s.generation, line.generation, 'generations')) return false;
+  if (!isBlankSpec(line.ram) && !normalizedSpecMatch(s.ram, line.ram, 'ram')) return false;
+  if (!isBlankSpec(line.storage) && !normalizedSpecMatch(s.storage, line.storage, 'storage')) return false;
 
   return true;
 }
@@ -64,16 +70,16 @@ function configMismatchMessage(line, serial) {
   const s = enrichSerialSpecs(serial);
   const parts = [];
 
-  if (line.processor && !normalizedSpecMatch(s.processor, line.processor, 'processors')) {
+  if (!isBlankSpec(line.processor) && !normalizedSpecMatch(s.processor, line.processor, 'processors')) {
     parts.push(`processor line=${line.processor} serial=${s.processor || '—'}`);
   }
-  if (line.generation && !normalizedSpecMatch(s.generation, line.generation, 'generations')) {
+  if (!isBlankSpec(line.generation) && !normalizedSpecMatch(s.generation, line.generation, 'generations')) {
     parts.push(`generation line=${line.generation} serial=${s.generation || '—'}`);
   }
-  if (line.ram && !normalizedSpecMatch(s.ram, line.ram, 'ram')) {
+  if (!isBlankSpec(line.ram) && !normalizedSpecMatch(s.ram, line.ram, 'ram')) {
     parts.push(`ram line=${line.ram} serial=${s.ram || '—'}`);
   }
-  if (line.storage && !normalizedSpecMatch(s.storage, line.storage, 'storage')) {
+  if (!isBlankSpec(line.storage) && !normalizedSpecMatch(s.storage, line.storage, 'storage')) {
     parts.push(`storage line=${line.storage} serial=${s.storage || '—'}`);
   }
 
@@ -85,6 +91,7 @@ function configMismatchMessage(line, serial) {
 
 module.exports = {
   partialSpecMatch,
+  isBlankSpec,
   normalizedSpecMatch,
   normalizedModelMatch,
   brandMatchesRow,

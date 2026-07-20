@@ -57,6 +57,7 @@ export function childSectionsForParent(parentSection) {
 export const INVENTORY_UMBRELLA_SECTIONS = [
   'inventory',
   'inventory_management',
+  'inventory_asset_movement',
   'parts',
   'parts_inventory',
   'customer_inventory',
