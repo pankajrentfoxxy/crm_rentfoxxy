@@ -181,7 +181,7 @@ async function exportInventoryExcel(req, res) {
   const dateTo = req.query.date_to;
   const specFilters = pickSpecFilters(req.query);
   const ticketStageFilter = req.query.ticket_stage_filter === 'qc1_qc2' ? 'qc1_qc2' : 'all';
-  const limit = Math.min(5000, Math.max(1, parseInt(req.query.limit, 10) || 5000));
+  const limit = Math.min(20000, Math.max(1, parseInt(req.query.limit, 10) || 20000));
 
   try {
     const useBatchTickets = segment === 'passed';
@@ -239,6 +239,9 @@ async function exportInventoryExcel(req, res) {
       };
       if (segment === 'qc_process') {
         return { ...base, 'Ticket Stage': r.ticket_stage_name || '' };
+      }
+      if (segment === 'qc_pending') {
+        return { ...base, Remark: r.remark || r.action_remark || '' };
       }
       if (segment === 'passed') {
         return {
