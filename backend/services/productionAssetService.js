@@ -56,6 +56,64 @@ function workingToCompareShape(row) {
   };
 }
 
+/**
+ * Latest Inventory Asset configuration — used by QC2 / Dispatch QC verification.
+ * Reads vendor_serial_numbers.extra (the current inventory record, where Super
+ * Admin corrections and post-GRN updates land) and falls back to the Production
+ * Asset working config for fields the inventory record does not carry.
+ * The GRN snapshot (grn_config / grn_received_config) is intentionally NOT used.
+ */
+async function getInventoryExpectedConfig(db, pa) {
+  const paShape = workingToCompareShape(pa || {});
+
+  let serialRow = null;
+  if (pa?.vendor_serial_id) {
+    const r = await db.query(
+      `SELECT extra FROM vendor_serial_numbers
+        WHERE serial_id = $1 AND deleted_at IS NULL`,
+      [pa.vendor_serial_id]
+    );
+    serialRow = r.rows[0] || null;
+  }
+  if (!serialRow && pa?.serial_number) {
+    const r = await db.query(
+      `SELECT extra FROM vendor_serial_numbers
+        WHERE deleted_at IS NULL AND LOWER(serial_number) = LOWER($1)
+        ORDER BY serial_id DESC LIMIT 1`,
+      [String(pa.serial_number).trim()]
+    );
+    serialRow = r.rows[0] || null;
+  }
+  if (!serialRow && pa?.ttspl_id) {
+    const r = await db.query(
+      `SELECT extra FROM vendor_serial_numbers
+        WHERE deleted_at IS NULL AND inventory_asset_code = $1
+        ORDER BY serial_id DESC LIMIT 1`,
+      [String(pa.ttspl_id).trim()]
+    );
+    serialRow = r.rows[0] || null;
+  }
+  if (!serialRow) return { expected: paShape, source: 'production_asset' };
+
+  let extra = serialRow.extra;
+  try {
+    extra = typeof extra === 'string' ? JSON.parse(extra) : (extra || {});
+  } catch {
+    extra = {};
+  }
+  // Inventory screens (and super-admin edits) treat extra.storage as the truth,
+  // so it must win over a stale extra.ssd left by older flows.
+  const inv = normalizeWorkingConfig({
+    ...extra,
+    ssd: pick(extra, 'storage', 'ssd', 'Storage'),
+  });
+  const expected = {};
+  for (const field of CONFIG_FIELDS) {
+    expected[field] = inv[field] || paShape[field] || '';
+  }
+  return { expected, source: 'inventory_asset' };
+}
+
 function rowToDisplayConfig(row) {
   if (!row) return null;
   return {
@@ -247,7 +305,21 @@ async function getConfigForTicket(db, ticket) {
     pa = null;
   }
   if (pa) {
-    return { source: 'production_asset', config: rowToDisplayConfig(pa), production_asset: pa };
+    // Overlay the latest Inventory Asset configuration so QC screens always
+    // show/verify against the current inventory record, not the GRN-era snapshot.
+    let display = rowToDisplayConfig(pa);
+    try {
+      const { expected, source } = await getInventoryExpectedConfig(db, pa);
+      display = {
+        ...display,
+        ...expected,
+        storage: expected.ssd || display.storage,
+        config_source: source,
+      };
+    } catch {
+      // Keep PA working config if the inventory lookup fails
+    }
+    return { source: 'production_asset', config: display, production_asset: pa };
   }
   // Legacy fallback
   const fallback = normalizeWorkingConfig({
@@ -310,6 +382,44 @@ async function updateConfig(db, productionAssetId, patch, userId, stageName) {
     );
   }
 
+  // Mirror to the Inventory Asset record (vendor_serial_numbers.extra) so QC2 /
+  // Dispatch QC verification and inventory screens always see the latest config.
+  if (changes.length) {
+    let vendorSerialId = current.vendor_serial_id || null;
+    if (!vendorSerialId && current.serial_number) {
+      const vs = await db.query(
+        `SELECT serial_id FROM vendor_serial_numbers
+          WHERE deleted_at IS NULL AND LOWER(serial_number) = LOWER($1)
+          ORDER BY serial_id DESC LIMIT 1`,
+        [String(current.serial_number).trim()]
+      );
+      vendorSerialId = vs.rows[0]?.serial_id || null;
+    }
+    if (vendorSerialId) {
+      await db.query(
+        `UPDATE vendor_serial_numbers
+            SET extra = COALESCE(extra, '{}'::jsonb) || $2::jsonb,
+                updated_at = NOW()
+          WHERE serial_id = $1 AND deleted_at IS NULL`,
+        [
+          vendorSerialId,
+          JSON.stringify({
+            brand: next.brand || undefined,
+            model: next.model || undefined,
+            model_name: next.model || undefined,
+            processor: next.processor || undefined,
+            generation: next.generation || undefined,
+            ram: next.ram || undefined,
+            storage: next.ssd || undefined,
+            ssd: next.ssd || undefined,
+            gpu: next.gpu || undefined,
+            screen_size: next.screen_size || undefined,
+          }),
+        ]
+      );
+    }
+  }
+
   // Mirror to ticket denorm columns for list/search (GRN untouched)
   if (current.ticket_id) {
     await db.query(
@@ -362,7 +472,8 @@ async function verifyQc2Specs(db, productionAssetId, { actual, remarks, userId, 
   const pa = await getById(db, productionAssetId);
   if (!pa) throw new Error('Production asset not found');
 
-  const expected = workingToCompareShape(pa);
+  // Verify against the latest Inventory Asset configuration (not the GRN snapshot)
+  const { expected } = await getInventoryExpectedConfig(db, pa);
   let result;
 
   if (matchedFlags && typeof matchedFlags === 'object') {
@@ -736,6 +847,7 @@ module.exports = {
   QC1_CHECK_FIELDS,
   normalizeWorkingConfig,
   workingToCompareShape,
+  getInventoryExpectedConfig,
   rowToDisplayConfig,
   ensureTables,
   createFromGrn,

@@ -59,12 +59,12 @@ export default function DispatchQcSpecVerifyPanel({ ticket, onVerified, onHeader
     };
     setExpectedConfig(exp);
 
-    const matched =
-      !!paConfig?.qc2_verification?.configurationMatched
-      || data?.status === 'matched';
+    // Only the Dispatch QC capture token counts — the production asset's
+    // qc2_verification is the QC2-stage result and must NOT unlock dispatch.
+    const matched = data?.status === 'matched';
 
     if (matched) {
-      const mr = data?.match_result || paConfig?.qc2_verification || null;
+      const mr = data?.match_result || null;
       setMatchDetail(mr);
       setFailedDetail(null);
       setSpecsMatched(true);
@@ -88,8 +88,8 @@ export default function DispatchQcSpecVerifyPanel({ ticket, onVerified, onHeader
       return;
     }
 
-    if (data?.status === 'failed' || paConfig?.qc2_verification?.configurationMatched === false) {
-      const mr = data?.match_result || paConfig?.qc2_verification || null;
+    if (data?.status === 'failed') {
+      const mr = data?.match_result || null;
       setFailedDetail(mr);
       setMatchDetail(null);
       setSpecsMatched(false);
@@ -208,7 +208,7 @@ export default function DispatchQcSpecVerifyPanel({ ticket, onVerified, onHeader
           Dispatch QC Spec Verification (script)
         </h3>
         <p className="text-xs text-slate-500 mt-1">
-          Verify physical specs against the working asset and SO line before challan generation.
+          Verify physical specs against the latest Inventory Asset configuration and SO line before challan generation.
           {tokenInfo?.sales_order_number ? ` SO ${tokenInfo.sales_order_number}.` : ''}
         </p>
       </div>

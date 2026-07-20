@@ -63,12 +63,13 @@ export default function Qc2SpecVerifyPanel({ ticket, onVerified, onHeaderSync })
     };
     setExpectedConfig(exp);
 
-    const matched =
-      !!paConfig?.qc2_verification?.configurationMatched
-      || data?.status === 'matched';
+    // Only this ticket's capture token counts — the production asset's
+    // qc2_verification may be left over from a previous QC cycle and must
+    // not auto-unlock testing without a fresh script match.
+    const matched = data?.status === 'matched';
 
     if (matched) {
-      const mr = data?.match_result || paConfig?.qc2_verification || null;
+      const mr = data?.match_result || null;
       setMatchDetail(mr);
       setFailedDetail(null);
       setSpecsMatched(true);
@@ -92,8 +93,8 @@ export default function Qc2SpecVerifyPanel({ ticket, onVerified, onHeaderSync })
       return;
     }
 
-    if (data?.status === 'failed' || paConfig?.qc2_verification?.configurationMatched === false) {
-      const mr = data?.match_result || paConfig?.qc2_verification || null;
+    if (data?.status === 'failed') {
+      const mr = data?.match_result || null;
       setFailedDetail(mr);
       setMatchDetail(null);
       setSpecsMatched(false);
@@ -211,7 +212,7 @@ export default function Qc2SpecVerifyPanel({ ticket, onVerified, onHeaderSync })
         </h3>
         <p className="text-xs text-slate-500 mt-1">
           Generate an access number, open the config-match page on the laptop, and run the PowerShell script.
-          When specs match they appear here — then click to open QC2 testing.
+          Specs are verified against the latest Inventory Asset configuration — then click to open QC2 testing.
         </p>
       </div>
 

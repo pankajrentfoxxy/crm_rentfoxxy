@@ -15,7 +15,7 @@ const {
   getByTicket,
   getByVendorSerial,
   createFromGrn,
-  workingToCompareShape,
+  getInventoryExpectedConfig,
   getById,
 } = require('./productionAssetService');
 
@@ -195,7 +195,8 @@ async function resolveByAccessNumber(accessNumber) {
   }
 
   const pa = await getById(pool, row.production_asset_id);
-  const expected = workingToCompareShape(pa || {});
+  // Expected config = latest Inventory Asset configuration (not the GRN snapshot)
+  const { expected } = await getInventoryExpectedConfig(pool, pa || {});
   return {
     ok: true,
     token: row.token_id,
@@ -220,7 +221,7 @@ async function getPublicSession(tokenId) {
   const row = await getTokenRow(tokenId);
   if (!row) return null;
   const pa = await getById(pool, row.production_asset_id);
-  const expected = workingToCompareShape(pa || {});
+  const { expected } = await getInventoryExpectedConfig(pool, pa || {});
   return {
     token: row.token_id,
     status: row.status,
@@ -292,7 +293,8 @@ async function verifyQc2Configuration(tokenId, actual, ip) {
       return { ok: false, code: 404, message: 'Production Asset not found' };
     }
 
-    const expected = workingToCompareShape(pa);
+    // Compare against the latest Inventory Asset configuration, not the GRN snapshot
+    const { expected } = await getInventoryExpectedConfig(client, pa);
     const result = verifyConfigurationAgainst(expected, actual);
     const matchPayload = {
       configurationMatched: result.configurationMatched,
