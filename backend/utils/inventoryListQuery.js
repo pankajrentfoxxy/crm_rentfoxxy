@@ -1,6 +1,7 @@
 /**
  * Shared SQL builder for inventory list + export (vendor_serial_numbers segments).
  */
+const { buildListWhere } = require('../services/inventoryManagementService');
 const { appendInventoryTagAccessFilter } = require('../services/inventoryTagAccessScope');
 const { appendDateRangeClauses } = require('./dateRangeFilter');
 const { buildSerialSpecFilter } = require('./inventorySpecFilter');
