@@ -35,7 +35,7 @@ const { emailDocument } = require('../services/salesManagementPdfService');
 const { createSalesOrderQcTicket } = require('../services/grnTicketService');
 const { logTtsplEvent } = require('../services/ttsplAuditService');
 const replacementFlow = require('../services/supportReplacementFlowService');
-const { regenerateReturnDcPdf } = require('../services/returnDcPdfService');
+const { regenerateReturnDcPdf, regenerateReturnDcPdfByRdc } = require('../services/returnDcPdfService');
 const { isRestrictedToAssigned, scopeUserId } = require('../services/dataScopeService');
 const {
   ACTIVITY_TYPES,
@@ -2014,10 +2014,11 @@ exports.generateReturnDc = async (req, res) => {
   const client = await pool.connect();
   try {
     const ticketId = parseInt(req.params.ticketId, 10);
+    const body = req.body || {};
     const {
       pickup_mode = 'technician', technician_user_id = null,
       courier_name = null, awb_number = null,
-    } = req.body || {};
+    } = body;
     const dispatchMode = { technician: 'inhouse', courier: 'courier', porter: 'porter' }[pickup_mode] || 'inhouse';
 
     const tRes = await client.query(`SELECT * FROM support_tickets WHERE id = $1`, [ticketId]);
@@ -2027,26 +2028,53 @@ exports.generateReturnDc = async (req, res) => {
       return res.status(400).json({ success: false, message: `Return DC already generated (${t.return_dc_number})` });
     }
 
-    const itemsRes = await client.query(
+    // Prefer open pickup items; if none (migrated/completed pre-CRM pickups),
+    // backfill from any pickup item that still lacks a Return DC.
+    let itemsRes = await client.query(
       `SELECT * FROM support_ticket_items
         WHERE ticket_id = $1 AND item_type = 'pickup'
-          AND status NOT IN ('resolved','closed','inventory_updated')`,
+          AND status NOT IN ('resolved','closed','inventory_updated')
+          AND return_dc_number IS NULL
+        ORDER BY id ASC`,
       [ticketId]
     );
+    let isBackfill = false;
     if (!itemsRes.rows.length) {
-      return res.status(400).json({ success: false, message: 'No open pickup items on this ticket' });
+      itemsRes = await client.query(
+        `SELECT * FROM support_ticket_items
+          WHERE ticket_id = $1 AND item_type = 'pickup'
+            AND return_dc_number IS NULL
+          ORDER BY id ASC`,
+        [ticketId]
+      );
+      isBackfill = itemsRes.rows.length > 0;
+    }
+    if (!itemsRes.rows.length) {
+      return res.status(400).json({ success: false, message: 'No pickup items without Return DC on this ticket' });
     }
 
     const entries = [];
     let firstSpec = {};
+    let brand = null;
+    let modelName = null;
     for (const it of itemsRes.rows) {
       const code = it.ttspl_id || it.unique_serial_number || it.serial_number;
       if (!code) continue;
+      // Prefer inventory_asset_code match so duplicate TTSPL aliases don't win.
       const sr = await client.query(
         `SELECT serial_id, serial_number, inventory_asset_code, extra
            FROM vendor_serial_numbers
           WHERE deleted_at IS NULL
-            AND (inventory_asset_code = $1 OR serial_number = $1 OR extra->>'ttspl_id' = $1)
+            AND (
+              inventory_asset_code = $1
+              OR serial_number = $1
+              OR extra->>'ttspl_id' = $1
+              OR extra->>'unique_product_serial' = $1
+            )
+          ORDER BY
+            CASE WHEN inventory_asset_code = $1 THEN 0 ELSE 1 END,
+            CASE WHEN serial_number = $1 THEN 0 ELSE 1 END,
+            serial_id ASC
           LIMIT 1`,
         [code]
       );
@@ -2057,13 +2085,17 @@ exports.generateReturnDc = async (req, res) => {
       } else {
         entries.push(`|${code}|${code}`);
       }
+      if (!brand) brand = it.brand || null;
+      if (!modelName) modelName = it.model || null;
     }
     if (!entries.length) return res.status(400).json({ success: false, message: 'No serials resolved for pickup' });
 
+    const firstItem = itemsRes.rows[0];
     const rdc = await nextDocumentNumber('return_dc');
     const pickupAddr = (typeof t.pickup_address === 'string' ? JSON.parse(t.pickup_address) : t.pickup_address) || {};
     const deliveryPersonId = dispatchMode === 'inhouse' && technician_user_id
-      ? parseInt(technician_user_id, 10) : null;
+      ? parseInt(technician_user_id, 10)
+      : (firstItem.assigned_to || firstItem.pickup_assigned_to || null);
 
     const rdcTxn = await resolveTxnTypeForDc(client, {
       salesOrderNumber: t.sales_order_number || null,
@@ -2076,32 +2108,58 @@ exports.generateReturnDc = async (req, res) => {
     });
     const rdcEntity = entityForQuotationType(rdcTxn === 'sale' ? 'sales' : 'rental');
 
+    // Completed pickups get a delivered RDC with timestamps copied from the item.
+    const dcStatus = isBackfill && (firstItem.warehouse_received_at || firstItem.picked_up_at || firstItem.resolved_at)
+      ? 'delivered'
+      : 'in_transit';
+    const itemDispatchMode = firstItem.pickup_method === 'courier' ? 'courier'
+      : firstItem.pickup_method === 'porter' ? 'porter'
+      : (firstItem.pickup_method === 'technician' || firstItem.pickup_method === 'inhouse') ? 'inhouse'
+      : dispatchMode;
+
     await client.query('BEGIN');
     await client.query(
       `INSERT INTO delivery_challan_lines
          (dc_number, movement_type, support_ticket_id, customer_id, customer_name, email,
           customer_shipping_address, brand, model_name, quantity, serial_number,
           dispatch_mode, delivery_person_id, courier_name, awb_number, status,
-          dispatched_at, created_by, created_at, updated_at,
-          sales_order_number, original_dc_number, entity_code, hsn_code)
-       VALUES ($1,'return',$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,'in_transit',NOW(),$15,NOW(),NOW(),$16,$17,$18,$19)`,
+          dispatched_at, delivered_at, return_to_warehouse_at,
+          created_by, created_at, updated_at,
+          sales_order_number, original_dc_number, entity_code, hsn_code,
+          remarks, dc_purpose)
+       VALUES ($1,'return',$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,
+               COALESCE($16::timestamptz, NOW()), $17::timestamptz, $18::timestamptz,
+               $19, COALESCE($20::timestamptz, NOW()), NOW(),
+               $21,$22,$23,$24,$25,'standard')`,
       [
         rdc, ticketId, t.customer_id, t.customer_name, t.ticket_email || null,
-        JSON.stringify(pickupAddr), firstSpec.brand || null, firstSpec.model || firstSpec.model_name || null,
-        entries.length, JSON.stringify(entries), dispatchMode, deliveryPersonId,
-        courier_name, awb_number, req.user?.user_id || null,
+        JSON.stringify(pickupAddr),
+        brand || firstSpec.brand || null,
+        modelName || firstSpec.model || firstSpec.model_name || null,
+        entries.length, JSON.stringify(entries),
+        itemDispatchMode, deliveryPersonId,
+        courier_name || firstItem.pickup_courier_name || null,
+        awb_number || firstItem.pickup_awb || null,
+        dcStatus,
+        firstItem.picked_up_at || firstItem.visited_at || firstItem.created_at || null,
+        dcStatus === 'delivered' ? (firstItem.customer_otp_verified_at || firstItem.picked_up_at || firstItem.resolved_at || null) : null,
+        dcStatus === 'delivered' ? (firstItem.warehouse_received_at || firstItem.resolved_at || null) : null,
+        req.user?.user_id || firstItem.warehouse_received_by || firstItem.assigned_to || null,
+        firstItem.created_at || null,
         t.sales_order_number || null, t.dc_number || null, rdcEntity, rdcHsn,
+        firstItem.remarks || (isBackfill ? 'Return DC backfilled for pre-CRM / completed pickup' : null),
       ]
     );
     await client.query(
       `UPDATE support_tickets
           SET return_dc_number = $1, complaint_type = COALESCE(complaint_type, 'pickup'),
+              ticket_category = COALESCE(ticket_category, 'pickup'),
               status = CASE WHEN status = 'open' THEN 'in_progress' ELSE status END,
               updated_at = NOW()
         WHERE id = $2`,
       [rdc, ticketId]
     );
-    // Link pickup items and mint customer OTP (legacy generate path skipped this).
+    // Link ALL pickup items missing RDC (open or completed backfill).
     await client.query(
       `UPDATE support_ticket_items SET
          return_dc_number = $1,
@@ -2114,28 +2172,28 @@ exports.generateReturnDc = async (req, res) => {
            pickup_type,
            CASE WHEN source_item_id IS NOT NULL THEN 'repair' ELSE 'return' END
          ),
-         pickup_method = COALESCE(NULLIF(pickup_method, ''), 'inhouse'),
+         pickup_method = COALESCE(NULLIF(pickup_method, ''), $3),
          pickup_assigned_to = COALESCE(pickup_assigned_to, assigned_to),
          updated_at = NOW()
        WHERE ticket_id = $2 AND item_type = 'pickup'
-         AND status NOT IN ('resolved', 'closed', 'inventory_updated')`,
-      [rdc, ticketId]
+         AND return_dc_number IS NULL`,
+      [rdc, ticketId, firstItem.pickup_method || 'technician']
     );
     await client.query('COMMIT');
 
     try {
-      const items = (await pool.query(
-        `SELECT * FROM support_ticket_items
-          WHERE ticket_id = $1 AND item_type = 'pickup' AND return_dc_number = $2
-          ORDER BY id DESC LIMIT 1`,
-        [ticketId, rdc]
-      )).rows;
-      if (items.length) await regenerateReturnDcPdf(pool, items[0]);
+      await regenerateReturnDcPdfByRdc(pool, rdc);
     } catch (pdfErr) {
       console.error('[sales] return DC pdf (generate):', pdfErr.message);
     }
 
-    res.json({ success: true, return_dc_number: rdc, dispatch_mode: dispatchMode, delivery_person_id: deliveryPersonId });
+    res.json({
+      success: true,
+      return_dc_number: rdc,
+      dispatch_mode: itemDispatchMode,
+      delivery_person_id: deliveryPersonId,
+      backfill: isBackfill,
+    });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('generateReturnDc:', error);

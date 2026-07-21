@@ -805,13 +805,26 @@ async function ensureReturnDcPickupItems(db, dcl) {
   return inserted;
 }
 
+/** Pickup marked received but inventory never left customer / no floor ticket. */
+function isIncompleteWarehouseReceive(item) {
+  if (!item) return false;
+  if (!item.warehouse_received_at) return false;
+  if (!item.floor_ticket_id) return true;
+  const inv = String(item.inventory_status || '').toLowerCase();
+  if (['rented', 'on_demo', 'in_transit', 'out_stock'].includes(inv)) return true;
+  return false;
+}
+
 function evaluateReturnDcWarehouseConfirm(pickupItems, units, dcl) {
-  const anyReceived = pickupItems.some((i) => i.warehouse_received_at);
-  if (anyReceived && pickupItems.every((i) => i.warehouse_received_at)) {
+  const pendingItems = (pickupItems || []).filter(
+    (i) => !i.warehouse_received_at || isIncompleteWarehouseReceive(i)
+  );
+  const fullyDone = pickupItems.length > 0
+    && pickupItems.every((i) => i.warehouse_received_at && !isIncompleteWarehouseReceive(i));
+  if (fullyDone) {
     return { can_warehouse_confirm: false, warehouse_block_reason: null, warehouse_receive_pending: false };
   }
 
-  const pendingItems = pickupItems.filter((i) => !i.warehouse_received_at);
   const hasUnits = (units || []).length > 0;
   const needsReceive = pendingItems.length > 0 || (pickupItems.length === 0 && hasUnits);
   if (!needsReceive) {
@@ -889,7 +902,7 @@ async function listReturnDeliveryChallans({ page = 1, limit = 25, search = '', d
      ),
      pickup_by_rdc AS (
        SELECT DISTINCT ON (return_dc_number)
-              return_dc_number, pickup_type, ttspl_id, serial_number,
+              return_dc_number, pickup_type, ttspl_id, serial_number, floor_ticket_id,
               COALESCE(customer_otp_code, otp_code) AS customer_otp_code,
               customer_otp_verified_at, warehouse_received_at
          FROM support_ticket_items
@@ -898,7 +911,7 @@ async function listReturnDeliveryChallans({ page = 1, limit = 25, search = '', d
      ),
      pickup_by_ticket AS (
        SELECT DISTINCT ON (ticket_id)
-              ticket_id, pickup_type, ttspl_id, serial_number,
+              ticket_id, pickup_type, ttspl_id, serial_number, floor_ticket_id,
               COALESCE(customer_otp_code, otp_code) AS customer_otp_code,
               customer_otp_verified_at, warehouse_received_at
          FROM support_ticket_items
@@ -929,7 +942,19 @@ async function listReturnDeliveryChallans({ page = 1, limit = 25, search = '', d
        COALESCE(sti_rdc.customer_otp_code, sti_tkt.customer_otp_code) AS customer_otp_code,
        COALESCE(sti_rdc.customer_otp_verified_at, sti_tkt.customer_otp_verified_at) AS customer_otp_verified_at,
        COALESCE(sti_rdc.warehouse_received_at, sti_tkt.warehouse_received_at) AS warehouse_received_at,
-       (COALESCE(sti_rdc.warehouse_received_at, sti_tkt.warehouse_received_at) IS NULL) AS warehouse_receive_pending,
+       (
+         COALESCE(sti_rdc.warehouse_received_at, sti_tkt.warehouse_received_at) IS NULL
+         OR COALESCE(sti_rdc.floor_ticket_id, sti_tkt.floor_ticket_id) IS NULL
+         OR EXISTS (
+           SELECT 1 FROM vendor_serial_numbers v_pending
+            WHERE v_pending.deleted_at IS NULL
+              AND (
+                v_pending.inventory_asset_code = COALESCE(sti_rdc.ttspl_id, sti_tkt.ttspl_id, NULLIF(split_part(rl.serial_number->>0, '|', 3), ''))
+                OR v_pending.serial_number = COALESCE(sti_rdc.serial_number, sti_tkt.serial_number, NULLIF(split_part(rl.serial_number->>0, '|', 2), ''))
+              )
+              AND COALESCE(v_pending.inventory_status, '') IN ('rented','on_demo','in_transit','out_stock')
+          )
+       ) AS warehouse_receive_pending,
        COALESCE(
          sti_rdc.ttspl_id,
          sti_tkt.ttspl_id,
@@ -979,10 +1004,24 @@ async function getReturnDcDetail(rdcNumber) {
   const itemsRes = await pool.query(
     `SELECT sti.*,
             u1.name AS tech_name,
-            u2.name AS warehouse_receiver_name
+            u2.name AS warehouse_receiver_name,
+            vsn.inventory_status
        FROM support_ticket_items sti
        LEFT JOIN users u1 ON u1.user_id = COALESCE(sti.pickup_assigned_to, sti.assigned_to)
        LEFT JOIN users u2 ON u2.user_id = sti.warehouse_received_by
+       LEFT JOIN LATERAL (
+         SELECT v.inventory_status
+           FROM vendor_serial_numbers v
+          WHERE v.deleted_at IS NULL
+            AND (
+              v.inventory_asset_code = COALESCE(sti.ttspl_id, sti.unique_serial_number)
+              OR v.serial_number = sti.serial_number
+            )
+          ORDER BY
+            CASE WHEN v.inventory_asset_code = COALESCE(sti.ttspl_id, sti.unique_serial_number) THEN 0 ELSE 1 END,
+            v.serial_id ASC
+          LIMIT 1
+       ) vsn ON TRUE
       WHERE sti.item_type = 'pickup'
         AND (
           sti.return_dc_number = $1

@@ -2892,7 +2892,16 @@ const warehouseReceiveSinglePickupItem = async (client, it, userId, esignUrl, si
     const vsnRes = await client.query(
         `SELECT serial_id, inventory_asset_code FROM vendor_serial_numbers
           WHERE deleted_at IS NULL
-            AND (inventory_asset_code = $1 OR serial_number = $1 OR extra->>'ttspl_id' = $1)
+            AND (
+              inventory_asset_code = $1
+              OR serial_number = $1
+              OR extra->>'ttspl_id' = $1
+              OR extra->>'unique_product_serial' = $1
+            )
+          ORDER BY
+            CASE WHEN inventory_asset_code = $1 THEN 0 ELSE 1 END,
+            CASE WHEN serial_number = $1 THEN 0 ELSE 1 END,
+            serial_id ASC
           LIMIT 1`,
         [code]
     );
@@ -2902,6 +2911,7 @@ const warehouseReceiveSinglePickupItem = async (client, it, userId, esignUrl, si
             `UPDATE vendor_serial_numbers SET
                 inventory_status = 'returned',
                 current_customer_id = NULL,
+                current_dc_number = NULL,
                 status_changed_at = NOW(),
                 updated_at = NOW()
              WHERE serial_id = $1`,
@@ -2945,12 +2955,44 @@ const warehouseReceiveReturnDcBatch = async (client, triggerItem, userId, esignU
     let siblings = [triggerItem];
     if (triggerItem.return_dc_number) {
         const sibRes = await client.query(
-            `SELECT * FROM support_ticket_items
-              WHERE return_dc_number = $1 AND item_type = 'pickup' AND warehouse_received_at IS NULL
-              ORDER BY id ASC`,
-            [triggerItem.return_dc_number]
+            `SELECT sti.*
+               FROM support_ticket_items sti
+               LEFT JOIN LATERAL (
+                 SELECT v.inventory_status
+                   FROM vendor_serial_numbers v
+                  WHERE v.deleted_at IS NULL
+                    AND (
+                      v.inventory_asset_code = COALESCE(sti.ttspl_id, sti.unique_serial_number)
+                      OR v.serial_number = sti.serial_number
+                    )
+                  ORDER BY
+                    CASE WHEN v.inventory_asset_code = COALESCE(sti.ttspl_id, sti.unique_serial_number) THEN 0 ELSE 1 END,
+                    v.serial_id ASC
+                  LIMIT 1
+               ) vsn ON TRUE
+              WHERE sti.return_dc_number = $1 AND sti.item_type = 'pickup'
+                AND (
+                  sti.warehouse_received_at IS NULL
+                  OR sti.id = $2
+                  OR sti.floor_ticket_id IS NULL
+                  OR COALESCE(vsn.inventory_status, '') IN ('rented','on_demo','in_transit','out_stock')
+                )
+              ORDER BY sti.id ASC`,
+            [triggerItem.return_dc_number, triggerItem.id]
         );
         if (sibRes.rows.length) siblings = sibRes.rows;
+        // Clear stale incomplete timestamps so warehouseReceiveSinglePickupItem can re-run.
+        for (const s of siblings) {
+            if (s.warehouse_received_at) {
+                await client.query(
+                    `UPDATE support_ticket_items
+                        SET warehouse_received_at = NULL, updated_at = NOW()
+                      WHERE id = $1`,
+                    [s.id]
+                );
+                s.warehouse_received_at = null;
+            }
+        }
     }
 
     const isDelivered = dcl && (dcl.status === 'delivered' || !!dcl.delivered_at);
@@ -3014,7 +3056,43 @@ exports.confirmWarehouseReceipt = async (req, res) => {
         const it = itemRes.rows[0];
 
         if (it.item_type !== 'pickup') throw Object.assign(new Error('Only for pickup items'), { status: 400 });
-        if (it.warehouse_received_at) throw Object.assign(new Error('Already confirmed at warehouse'), { status: 400 });
+        // Allow retry when a prior confirm left inventory still with the customer
+        // (warehouse_received_at set but no floor ticket / still rented).
+        if (it.warehouse_received_at && it.floor_ticket_id) {
+            const code = it.ttspl_id || it.unique_serial_number || it.serial_number;
+            const inv = code ? await client.query(
+                `SELECT inventory_status FROM vendor_serial_numbers
+                  WHERE deleted_at IS NULL
+                    AND (inventory_asset_code = $1 OR serial_number = $1)
+                  ORDER BY CASE WHEN inventory_asset_code = $1 THEN 0 ELSE 1 END
+                  LIMIT 1`,
+                [code]
+            ) : { rows: [] };
+            const st = String(inv.rows[0]?.inventory_status || '').toLowerCase();
+            const stillOut = ['rented', 'on_demo', 'in_transit', 'out_stock'].includes(st);
+            if (!stillOut) {
+                throw Object.assign(new Error('Already confirmed at warehouse'), { status: 400 });
+            }
+            await client.query(
+                `UPDATE support_ticket_items
+                    SET warehouse_received_at = NULL, warehouse_esign_url = NULL,
+                        warehouse_esign_at = NULL, warehouse_esign_by = NULL,
+                        updated_at = NOW()
+                  WHERE id = $1`,
+                [it.id]
+            );
+            it.warehouse_received_at = null;
+        } else if (it.warehouse_received_at && !it.floor_ticket_id) {
+            await client.query(
+                `UPDATE support_ticket_items
+                    SET warehouse_received_at = NULL, warehouse_esign_url = NULL,
+                        warehouse_esign_at = NULL, warehouse_esign_by = NULL,
+                        updated_at = NOW()
+                  WHERE id = $1`,
+                [it.id]
+            );
+            it.warehouse_received_at = null;
+        }
 
         const esignUrl = saveWarehouseEsignPng(it.id, esign_data);
         const { floorTicketIds, unitCount } = await warehouseReceiveReturnDcBatch(
@@ -3080,16 +3158,47 @@ exports.confirmReturnDcWarehouseReceipt = async (req, res) => {
         await ensureSupportTicketItemV3Columns(client);
         await ensureReturnDcPickupItems(client, dcl);
 
+        // Include incomplete receives: timestamp set but still rented / no floor ticket.
         const pendingRes = await client.query(
-            `SELECT * FROM support_ticket_items
-              WHERE return_dc_number = $1 AND item_type = 'pickup' AND warehouse_received_at IS NULL
-              ORDER BY id ASC LIMIT 1`,
+            `SELECT sti.*
+               FROM support_ticket_items sti
+               LEFT JOIN LATERAL (
+                 SELECT v.inventory_status
+                   FROM vendor_serial_numbers v
+                  WHERE v.deleted_at IS NULL
+                    AND (
+                      v.inventory_asset_code = COALESCE(sti.ttspl_id, sti.unique_serial_number)
+                      OR v.serial_number = sti.serial_number
+                    )
+                  ORDER BY
+                    CASE WHEN v.inventory_asset_code = COALESCE(sti.ttspl_id, sti.unique_serial_number) THEN 0 ELSE 1 END,
+                    v.serial_id ASC
+                  LIMIT 1
+               ) vsn ON TRUE
+              WHERE sti.return_dc_number = $1 AND sti.item_type = 'pickup'
+                AND (
+                  sti.warehouse_received_at IS NULL
+                  OR sti.floor_ticket_id IS NULL
+                  OR COALESCE(vsn.inventory_status, '') IN ('rented','on_demo','in_transit','out_stock')
+                )
+              ORDER BY sti.id ASC LIMIT 1`,
             [rdcNumber]
         );
         if (!pendingRes.rows.length) {
             throw Object.assign(new Error('All units on this Return DC are already received'), { status: 400 });
         }
         const trigger = pendingRes.rows[0];
+        if (trigger.warehouse_received_at) {
+            await client.query(
+                `UPDATE support_ticket_items
+                    SET warehouse_received_at = NULL, warehouse_esign_url = NULL,
+                        warehouse_esign_at = NULL, warehouse_esign_by = NULL,
+                        updated_at = NOW()
+                  WHERE id = $1`,
+                [trigger.id]
+            );
+            trigger.warehouse_received_at = null;
+        }
 
         const esignUrl = saveWarehouseEsignPng(trigger.id, esign_data);
         const { floorTicketIds, unitCount } = await warehouseReceiveReturnDcBatch(
