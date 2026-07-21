@@ -79,6 +79,16 @@ const OFF_SHELF_STATUSES = [
   'in_transit', 'rented', 'on_demo', 'sold', 'returned', 'scrapped'
 ];
 
+/** Units awaiting serial-verified warehouse receive must not appear on rentable shelf lists. */
+function pendingInventoryReceiveFilterSql(alias = 's') {
+  return ` AND COALESCE(${alias}.extra->>'awaiting_inventory_receive', 'false') <> 'true'
+           AND NOT EXISTS (
+             SELECT 1 FROM production_assets pa
+              WHERE pa.vendor_serial_id = ${alias}.serial_id
+                AND pa.status = 'pending_inventory'
+           )`;
+}
+
 /** QC-passed units on DC or with a customer must not appear in Ready to Rent or Sell. */
 function offShelfInventoryFilterSql(alias = 's') {
   const list = OFF_SHELF_STATUSES.map((s) => `'${s}'`).join(', ');
@@ -100,7 +110,7 @@ function buildListWhere(segment, params, alias = 's') {
     params.push('passed', cfg.poType);
     return {
       sql: ` AND ${alias}.po_id IS NOT NULL AND ${effectiveStatusSql(alias)} = $${params.length - 1}
-             AND p.purchase_order_type = $${params.length}${offShelfInventoryFilterSql(alias)}`,
+             AND p.purchase_order_type = $${params.length}${offShelfInventoryFilterSql(alias)}${pendingInventoryReceiveFilterSql(alias)}`,
       params
     };
   }
@@ -145,8 +155,12 @@ function buildListWhere(segment, params, alias = 's') {
   }
 
   const shelfSql = cfg.status === 'passed' ? offShelfInventoryFilterSql(alias) : '';
+  const pendingReceiveSql = cfg.status === 'passed' ? pendingInventoryReceiveFilterSql(alias) : '';
+  const qcPendingReceiveSql = cfg.status === 'pending'
+    ? ` AND COALESCE(${alias}.extra->>'awaiting_inventory_receive', 'false') <> 'true'`
+    : '';
   return {
-    sql: ` AND ${alias}.po_id IS NOT NULL AND ${effectiveStatusSql(alias)} = $${i}${shelfSql}`,
+    sql: ` AND ${alias}.po_id IS NOT NULL AND ${effectiveStatusSql(alias)} = $${i}${shelfSql}${pendingReceiveSql}${qcPendingReceiveSql}`,
     params
   };
 }

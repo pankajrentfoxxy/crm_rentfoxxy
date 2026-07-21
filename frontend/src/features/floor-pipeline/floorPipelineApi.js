@@ -147,6 +147,12 @@ export function fetchPendingInventory() {
   return api.get('/production-assets/pending-inventory');
 }
 
+export function fetchCarretAvailability(carret) {
+  return api.get('/production-assets/carret-availability', {
+    params: carret != null ? { carret } : {},
+  });
+}
+
 export function receiveProductionAsset(id, body) {
   return api.post(`/production-assets/${id}/receive`, body);
 }

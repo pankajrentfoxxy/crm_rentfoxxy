@@ -413,11 +413,12 @@ const TAG_BADGE_STYLES = {
   both: 'bg-sky-100 text-sky-800'
 };
 
-function InventoryTagButtons({ row, onUpdated }) {
+function InventoryTagButtons({ row, onUpdated, canEditTag = false }) {
   const [saving, setSaving] = useState(false);
   const tag = normalizeTag(row.inventory_tag || row.extra?.inventory_tag);
 
   const applyTag = async (next) => {
+    if (!canEditTag) return;
     setSaving(true);
     try {
       const { data } = await tagInventorySerial(row.serial_id, next);
@@ -443,7 +444,7 @@ function InventoryTagButtons({ row, onUpdated }) {
       ) : (
         <span className="text-[10px] text-slate-400">Untagged</span>
       )}
-      {TAG_OPTIONS.map((opt) => (
+      {canEditTag ? TAG_OPTIONS.map((opt) => (
         <button
           key={opt.value}
           type="button"
@@ -455,7 +456,7 @@ function InventoryTagButtons({ row, onUpdated }) {
         >
           {opt.label}
         </button>
-      ))}
+      )) : null}
     </div>
   );
 }
@@ -905,6 +906,8 @@ export default function InventoryListTable({ routeKey }) {
   const showExportExcel = ['ready-to-rent-or-sell', 'qc-process', 'qc-pending'].includes(routeKey);
   const showPassedStatus = showReadyToRentAction || ['rent-to-own', 'rental-purchase', 'direct-purchase'].includes(routeKey);
   const showTagColumn = showReadyToRentAction || routeKey === 'ready-to-rent-or-sell';
+  const showLocationColumn = routeKey === 'ready-to-rent-or-sell';
+  const canEditInventoryTag = isSuperAdmin && showTagColumn;
 
   const bulkTag = async (tag) => {
     if (!selectedIds.length) {
@@ -949,7 +952,7 @@ export default function InventoryListTable({ routeKey }) {
           ))}
         </div>
       ) : null}
-      {showReadyToRentAction && selectedIds.length ? (
+      {canEditInventoryTag && selectedIds.length ? (
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => bulkTag('rental')} className="text-xs px-3 py-1.5 rounded-lg bg-violet-600 text-white">
             Tag as Rental ({selectedIds.length})
@@ -1106,6 +1109,7 @@ export default function InventoryListTable({ routeKey }) {
                   {showQcPendingAction ? <th className="px-3 py-3">Action</th> : null}
                   {showDeadReevalAction ? <th className="px-3 py-3">Action</th> : null}
                   {showRemarkColumn ? <th className="px-3 py-3">Remark</th> : null}
+                  {showLocationColumn ? <th className="px-3 py-3">Location</th> : null}
                   {showTagColumn ? <th className="px-3 py-3">Tagged As</th> : null}
                   <th className="px-3 py-3">Status</th>
                 </>
@@ -1296,9 +1300,17 @@ export default function InventoryListTable({ routeKey }) {
                       <InventoryRemarkCell row={row} canEdit={isInventoryAdmin} onUpdated={load} />
                     </td>
                   ) : null}
+                  {showLocationColumn ? (
+                    <td className="px-3 py-3 text-xs whitespace-nowrap">
+                      {row.warehouse_location
+                        || (row.warehouse_carret && row.warehouse_carret_slot
+                          ? `Carret ${row.warehouse_carret} / Slot ${row.warehouse_carret_slot}`
+                          : '—')}
+                    </td>
+                  ) : null}
                   {showTagColumn ? (
                     <td className="px-3 py-3">
-                      <InventoryTagButtons row={row} onUpdated={load} />
+                      <InventoryTagButtons row={row} onUpdated={load} canEditTag={canEditInventoryTag} />
                     </td>
                   ) : null}
                   <td className="px-3 py-3 text-xs">

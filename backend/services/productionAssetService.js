@@ -6,6 +6,11 @@ const { configFromPlainObject } = require('./grnReceivedConfigService');
 const { compareConfig } = require('./grnConfigService');
 const { transitionAsset } = require('./inventoryStateMachine');
 const { logProductionHistory } = require('./ticketWorkflowHistoryService');
+const {
+  INVENTORY_TAGS,
+  assignWarehouseLocation,
+  formatLocation,
+} = require('./warehouseLocationService');
 
 // Lazy require to avoid cycle with grnTicketService
 function markVendorSerialReadyForRent(...args) {
@@ -525,25 +530,112 @@ async function verifyQc2Specs(db, productionAssetId, { actual, remarks, userId, 
   return { production_asset: upd.rows[0], verification, ok: result.configurationMatched };
 }
 
+async function resolvePurchaseOrderType(db, pa) {
+  if (pa?.po_id) {
+    const r = await db.query(
+      `SELECT purchase_order_type FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL`,
+      [pa.po_id]
+    );
+    if (r.rows[0]?.purchase_order_type) return r.rows[0].purchase_order_type;
+  }
+  if (pa?.vendor_serial_id) {
+    const r = await db.query(
+      `SELECT p.purchase_order_type
+         FROM vendor_serial_numbers s
+         INNER JOIN vendor_purchase_orders p ON p.po_id = s.po_id AND p.deleted_at IS NULL
+        WHERE s.serial_id = $1`,
+      [pa.vendor_serial_id]
+    );
+    if (r.rows[0]?.purchase_order_type) return r.rows[0].purchase_order_type;
+  }
+  return null;
+}
+
+function normalizeTagValue(raw) {
+  const tag = String(raw || '').trim().toLowerCase();
+  if (tag === 'sales') return 'sale';
+  return tag;
+}
+
+async function resolveInventoryTag(db, pa, requestedTag, { requireTag = true } = {}) {
+  const poType = await resolvePurchaseOrderType(db, pa);
+  if (poType === 'rental_purchase') return 'rental';
+
+  const tag = normalizeTagValue(requestedTag);
+  if (!tag) {
+    if (requireTag) {
+      const err = new Error('Inventory tag is required (rental, sale, or both)');
+      err.status = 400;
+      throw err;
+    }
+    return null;
+  }
+  if (!INVENTORY_TAGS.includes(tag)) {
+    const err = new Error('Invalid inventory tag — use rental, sale, or both');
+    err.status = 400;
+    throw err;
+  }
+  return tag;
+}
+
+async function holdVendorSerialForPendingInventory(db, vendorSerialId) {
+  if (!vendorSerialId) return;
+  await db.query(
+    `UPDATE vendor_serial_numbers
+        SET qc_status = 'pending',
+            extra = COALESCE(extra, '{}'::jsonb)
+              || jsonb_build_object('awaiting_inventory_receive', true, 'status', 'pending'),
+            updated_at = NOW()
+      WHERE serial_id = $1 AND deleted_at IS NULL`,
+    [vendorSerialId]
+  );
+}
+
 async function markPendingInventory(db, productionAssetId, userId, meta = {}) {
+  const pa = await getById(db, productionAssetId);
+  if (!pa) {
+    const err = new Error('Production asset not found');
+    err.status = 404;
+    throw err;
+  }
+
+  const source = meta.source || 'qc2';
+  const requireTag = source === 'qc2' || source === 'qc2_script';
+  const inventoryTag = await resolveInventoryTag(db, pa, meta.inventory_tag ?? meta.inventoryTag, {
+    requireTag,
+  });
+
   const verification = {
     pending_at: new Date().toISOString(),
-    source: meta.source || 'qc2',
+    source,
     reason: meta.reason || 'qc2_passed',
     remarks: meta.remarks || null,
+    inventory_tag: inventoryTag,
     ...meta,
   };
+
   const r = await db.query(
     `UPDATE production_assets
         SET status = 'pending_inventory',
+            inventory_tag = $4,
             qc2_verification = COALESCE(qc2_verification, '{}'::jsonb) || $3::jsonb,
             qc2_completed_by = $2,
             qc2_completed_at = NOW(),
             updated_at = NOW()
       WHERE production_asset_id = $1
       RETURNING *`,
-    [productionAssetId, userId || null, JSON.stringify(verification)]
+    [
+      productionAssetId,
+      userId || null,
+      JSON.stringify(verification),
+      inventoryTag,
+    ]
   );
+
+  if (pa.vendor_serial_id) {
+    await holdVendorSerialForPendingInventory(db, pa.vendor_serial_id);
+  }
+
   return r.rows[0];
 }
 
@@ -552,6 +644,8 @@ async function markPendingInventory(db, productionAssetId, userId, meta = {}) {
  */
 async function receiveIntoInventory(db, productionAssetId, {
   serialNumber,
+  warehouseCarret,
+  warehouseCarretSlot,
   actorUserId,
   actorName,
 }) {
@@ -576,56 +670,67 @@ async function receiveIntoInventory(db, productionAssetId, {
     throw err;
   }
 
-  // Apply latest production config onto vendor serial extra (inventory reflects PA)
-  if (pa.vendor_serial_id) {
-    const cfg = workingToCompareShape(pa);
+  if (!pa.vendor_serial_id) {
+    const err = new Error('Production asset has no linked vendor serial');
+    err.status = 400;
+    throw err;
+  }
+
+  const location = await assignWarehouseLocation(
+    db,
+    pa.vendor_serial_id,
+    warehouseCarret,
+    warehouseCarretSlot
+  );
+
+  const inventoryTag = pa.inventory_tag || null;
+  const cfg = workingToCompareShape(pa);
+  const extraPatch = {
+    brand: cfg.brand,
+    model: cfg.model,
+    processor: cfg.processor,
+    generation: cfg.generation,
+    ram: cfg.ram,
+    storage: cfg.ssd,
+    ssd: cfg.ssd,
+    gpu: cfg.gpu,
+    screen_size: cfg.screen_size,
+    awaiting_inventory_receive: false,
+  };
+  if (inventoryTag) extraPatch.inventory_tag = inventoryTag;
+
+  await db.query(
+    `UPDATE vendor_serial_numbers
+        SET extra = (COALESCE(extra, '{}'::jsonb) - 'awaiting_inventory_receive') || $2::jsonb,
+            updated_at = NOW()
+      WHERE serial_id = $1 AND deleted_at IS NULL`,
+    [pa.vendor_serial_id, JSON.stringify(extraPatch)]
+  );
+
+  // Prefer in_repair / returned / null → in_stock via state machine
+  try {
+    await transitionAsset(db, {
+      serialId: pa.vendor_serial_id,
+      toStatus: 'in_stock',
+      reason: 'pending_inventory_receive',
+      actorUserId,
+      actorName,
+      allowOverride: true,
+    });
+  } catch (e) {
+    if (!/not found/i.test(e.message || '')) throw e;
+    console.warn(
+      `receiveIntoInventory: transitionAsset skipped for serial ${pa.vendor_serial_id}: ${e.message}`
+    );
     await db.query(
       `UPDATE vendor_serial_numbers
-          SET extra = COALESCE(extra, '{}'::jsonb) || $2::jsonb,
+          SET inventory_status = 'in_stock',
+              qc_status = 'passed',
+              status_changed_at = NOW(),
               updated_at = NOW()
-        WHERE serial_id = $1 AND deleted_at IS NULL`,
-      [
-        pa.vendor_serial_id,
-        JSON.stringify({
-          brand: cfg.brand,
-          model: cfg.model,
-          processor: cfg.processor,
-          generation: cfg.generation,
-          ram: cfg.ram,
-          storage: cfg.ssd,
-          ssd: cfg.ssd,
-          gpu: cfg.gpu,
-          screen_size: cfg.screen_size,
-        }),
-      ]
+        WHERE serial_id = $1`,
+      [pa.vendor_serial_id]
     );
-
-    // Prefer in_repair / returned / null → in_stock via state machine
-    try {
-      await transitionAsset(db, {
-        serialId: pa.vendor_serial_id,
-        toStatus: 'in_stock',
-        reason: 'pending_inventory_receive',
-        actorUserId,
-        actorName,
-        allowOverride: true,
-      });
-    } catch (e) {
-      // Soft-deleted / missing serial should not block PA receive — fall back below
-      if (!/not found/i.test(e.message || '')) throw e;
-      console.warn(
-        `receiveIntoInventory: transitionAsset skipped for serial ${pa.vendor_serial_id}: ${e.message}`
-      );
-      await db.query(
-        `UPDATE vendor_serial_numbers
-            SET inventory_status = 'in_stock',
-                qc_status = COALESCE(qc_status, 'passed'),
-                status_changed_at = NOW(),
-                updated_at = NOW()
-          WHERE serial_id = $1`,
-        [pa.vendor_serial_id]
-      );
-    }
   }
 
   if (pa.ticket_id) {
@@ -682,7 +787,7 @@ async function receiveIntoInventory(db, productionAssetId, {
         beforeStageName: null,
         afterStageName: 'Inventory',
         source: 'pendingInventoryReceive',
-        remarks: `Received into inventory (serial verified: ${entered})`,
+        remarks: `Received into inventory (serial verified: ${entered}, ${location.label})`,
         actor: { user_id: actorUserId, name: actorName },
         assignmentType: 'receive',
       });
@@ -700,7 +805,10 @@ async function receiveIntoInventory(db, productionAssetId, {
     [productionAssetId, actorUserId || null]
   );
 
-  return upd.rows[0];
+  return {
+    ...upd.rows[0],
+    warehouse_location: location,
+  };
 }
 
 /**
@@ -826,11 +934,14 @@ async function listPendingInventory(db) {
             t.ticket_id AS ticket_ref,
             t.status AS ticket_status,
             u.name AS qc2_completed_by_name,
-            s.stage_name
+            s.stage_name,
+            p.purchase_order_type
        FROM production_assets pa
        LEFT JOIN tickets t ON t.ticket_id = pa.ticket_id
        LEFT JOIN users u ON u.user_id = pa.qc2_completed_by
        LEFT JOIN stages s ON s.stage_id = t.current_stage_id
+       LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = pa.vendor_serial_id
+       LEFT JOIN vendor_purchase_orders p ON p.po_id = COALESCE(pa.po_id, vsn.po_id) AND p.deleted_at IS NULL
       WHERE pa.status = 'pending_inventory'
          OR (s.stage_name = 'Pending Inventory' AND t.status NOT IN ('completed', 'cancelled', 'qc_failed_return_vendor'))
       ORDER BY COALESCE(pa.qc2_completed_at, pa.updated_at) DESC NULLS LAST`
@@ -841,6 +952,8 @@ async function listPendingInventory(db) {
     qc2_completed_by_name: row.qc2_completed_by_name,
     ticket_status: row.ticket_status,
     stage_name: row.stage_name,
+    inventory_tag: row.inventory_tag || row.qc2_verification?.inventory_tag || null,
+    purchase_order_type: row.purchase_order_type || null,
   }));
 }
 
@@ -862,6 +975,8 @@ module.exports = {
   verifyQc2Specs,
   markPendingInventory,
   receiveIntoInventory,
+  resolvePurchaseOrderType,
+  resolveInventoryTag,
   backfillOpenTickets,
   syncWorkingConfigFromInventory,
   listPendingInventory,

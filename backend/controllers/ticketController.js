@@ -536,6 +536,7 @@ exports.getTicketById = async (req, res) => {
                 NULLIF(TRIM(t.machine_number), '')
               ) AS ttspl_display,
               vsn.serial_number AS vsn_serial_number,
+              vpo.purchase_order_type,
               COALESCE(NULLIF(TRIM(t.serial_number), ''), vsn.serial_number) AS resolved_serial_number,
               vsn.extra AS vsn_extra
        FROM tickets t
@@ -543,6 +544,7 @@ exports.getTicketById = async (req, res) => {
        LEFT JOIN teams tm ON t.assigned_team_id = tm.team_id
        LEFT JOIN users u ON t.assigned_user_id = u.user_id
        LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = t.vendor_serial_id
+       LEFT JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id AND vpo.deleted_at IS NULL
        WHERE t.ticket_id = $1`,
       [id]
     );

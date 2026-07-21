@@ -471,6 +471,11 @@ function enrichSerialRow(row, specContext = null) {
     rental_period: row.rental_start_date || line?.rental_period || null,
     product_warranty: line?.warranty_months ?? line?.product_warranty ?? null,
     inventory_tag: ex.inventory_tag || null,
+    warehouse_carret: row.warehouse_carret ?? null,
+    warehouse_carret_slot: row.warehouse_carret_slot ?? null,
+    warehouse_location: row.warehouse_carret && row.warehouse_carret_slot
+      ? `Carret ${row.warehouse_carret} / Slot ${row.warehouse_carret_slot}`
+      : null,
     ticket_id: row.ticket_id ?? null,
     active_floor_ticket_id: row.active_floor_ticket_id ?? null,
     ticket_stage_name: row.ticket_stage_name ?? null,

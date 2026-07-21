@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const productionAssetService = require('../services/productionAssetService');
+const warehouseLocationService = require('../services/warehouseLocationService');
 
 function parseId(v) {
   const n = parseInt(v, 10);
@@ -84,12 +85,11 @@ exports.verifyQc2 = async (req, res) => {
     res.json({
       success: true,
       ok: result.ok,
-      verification: result.verification,
       production_asset: productionAssetService.rowToDisplayConfig(result.production_asset),
+      verification: result.verification,
     });
   } catch (e) {
-    const status = e.message === 'Production asset not found' ? 404 : 500;
-    res.status(status).json({ success: false, message: e.message || 'Verify failed' });
+    res.status(500).json({ success: false, message: e.message || 'QC2 verify failed' });
   }
 };
 
@@ -103,14 +103,46 @@ exports.listPending = async (req, res) => {
   }
 };
 
+exports.getCarretAvailability = async (req, res) => {
+  try {
+    const carret = req.query.carret != null ? parseInt(req.query.carret, 10) : null;
+    if (carret != null && !warehouseLocationService.isValidCarret(carret)) {
+      return res.status(400).json({ success: false, message: 'Invalid carret number' });
+    }
+    const data = await warehouseLocationService.getCarretOccupancy(pool, carret);
+    const payload = carret != null
+      ? {
+          ...data,
+          next_available_slot: warehouseLocationService.findNextAvailableSlot(data),
+        }
+      : data;
+    res.json({ success: true, data: payload });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message || 'Failed to load carret availability' });
+  }
+};
+
 exports.receive = async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const id = parseId(req.params.id);
     const serial = req.body?.serial_number;
+    const warehouseCarret = req.body?.warehouse_carret ?? req.body?.carret;
+    const warehouseCarretSlot = req.body?.warehouse_carret_slot ?? req.body?.carret_slot ?? req.body?.slot;
+
+    if (warehouseCarret == null || warehouseCarretSlot == null) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Warehouse carret and slot are required',
+      });
+    }
+
     const row = await productionAssetService.receiveIntoInventory(client, id, {
       serialNumber: serial,
+      warehouseCarret,
+      warehouseCarretSlot,
       actorUserId: req.user?.user_id,
       actorName: req.user?.name,
     });
@@ -119,6 +151,7 @@ exports.receive = async (req, res) => {
       success: true,
       message: 'Received into inventory',
       production_asset: productionAssetService.rowToDisplayConfig(row),
+      warehouse_location: row.warehouse_location || null,
     });
   } catch (e) {
     await client.query('ROLLBACK');

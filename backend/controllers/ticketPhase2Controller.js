@@ -2,6 +2,7 @@ const pool = require('../config/db');
 const { resolveQcAssignee, recordAssigneeForTeam, fetchOrderedMemberIds } = require('../services/qcRoundRobinService');
 const { syncWorkLogForTicketState, closeOpenWorkLogs, startWorkLog } = require('../services/ticketWorkLogService');
 const { markVendorSerialReadyForRent } = require('../services/grnTicketService');
+const { vacateWarehouseLocation } = require('../services/warehouseLocationService');
 const ttsplAuditService = require('../services/ttsplAuditService');
 const { logProductionHistory } = require('../services/ticketWorkflowHistoryService');
 const { sendHighlightedTicketAlert } = require('../services/highlightedTicketAlertService');
@@ -232,7 +233,7 @@ exports.getFloorDashboard = async (req, res) => {
 
 exports.moveToStage = async (req, res) => {
   const { id } = req.params;
-  const { to_stage_name, reason, notes } = req.body;
+  const { to_stage_name, reason, notes, inventory_tag } = req.body;
   // Optional manual assignee (e.g. Final Testing -> QC1 picker). Overrides round-robin.
   const overrideAssignee = req.body.assigned_user_id ? Number(req.body.assigned_user_id) : null;
 
@@ -476,7 +477,10 @@ exports.moveToStage = async (req, res) => {
         let pa = await paSvc.getByTicket(client, ticket.ticket_id);
         if (!pa && ticket.vendor_serial_id) pa = await paSvc.getByVendorSerial(client, ticket.vendor_serial_id);
         if (pa) {
-          await paSvc.markPendingInventory(client, pa.production_asset_id, req.user.user_id);
+          await paSvc.markPendingInventory(client, pa.production_asset_id, req.user.user_id, {
+            source: 'qc2',
+            inventory_tag,
+          });
         } else {
           await paSvc.createFromGrn(client, {
             ticketId: ticket.ticket_id,
@@ -486,11 +490,18 @@ exports.moveToStage = async (req, res) => {
             configSource: ticket,
           }).then(async (created) => {
             if (created?.production_asset_id) {
-              await paSvc.markPendingInventory(client, created.production_asset_id, req.user.user_id);
+              await paSvc.markPendingInventory(client, created.production_asset_id, req.user.user_id, {
+                source: 'qc2',
+                inventory_tag,
+              });
             }
           });
         }
       } catch (paErr) {
+        if (paErr.status === 400) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ success: false, message: paErr.message });
+        }
         console.error('markPendingInventory failed:', paErr.message);
       }
     } else if (effectiveToStage === 'Inventory') {
@@ -526,6 +537,7 @@ exports.moveToStage = async (req, res) => {
                AND COALESCE(inventory_status,'in_stock') NOT IN ('rented','sold','on_demo','in_transit','returned')`,
             [ticket.vendor_serial_id]
           );
+          await vacateWarehouseLocation(client, ticket.vendor_serial_id);
         }
       }
     } else {

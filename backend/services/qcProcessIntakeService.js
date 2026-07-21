@@ -14,6 +14,7 @@ const {
   resolveItemDescription,
   buildSerialSpecContext
 } = require('./qcManagementService');
+const { vacateWarehouseLocation } = require('./warehouseLocationService');
 
 const PO_TYPES = ['rental_purchase', 'rent_to_own', 'direct_purchase'];
 const DEFAULT_PO_STATE = 'Maharashtra';
@@ -573,6 +574,8 @@ async function movePassedSerialToQcProcess(db, { serialId, serialNumber }, actor
       [JSON.stringify(extra), serialId]
     );
 
+    await vacateWarehouseLocation(client, serialId);
+
     await client.query('COMMIT');
   } catch (e) {
     try {
@@ -850,6 +853,8 @@ async function createProductionTicketForQcSerial(db, { serialId, serialNumber },
     `UPDATE vendor_serial_numbers SET extra = $1::jsonb, updated_at = NOW() WHERE serial_id = $2`,
     [JSON.stringify(mergedExtra), row.serial_id]
   );
+
+  await vacateWarehouseLocation(db, row.serial_id);
 
   if (blocked?.status === 'diagnosis_failed') {
     const reopenResult = await reopenDiagnosisFailedTicketForQcProcess(db, blocked.ticket_id, {

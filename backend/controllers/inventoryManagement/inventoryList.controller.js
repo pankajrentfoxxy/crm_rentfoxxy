@@ -596,10 +596,17 @@ const tagInventoryValidators = [
   body('tag').isIn(INVENTORY_TAGS)
 ];
 
-/** Tag a vendor serial as rental / sale / both (stored in extra.inventory_tag) */
+/** Tag a vendor serial as rental / sale / both (stored in extra.inventory_tag) — super_admin only after receive. */
 async function tagInventoryItem(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  if (req.user?.role !== 'super_admin') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only Super Admin can change inventory tags after receive'
+    });
+  }
 
   const serialId = req.params.id;
   const tag = req.body.tag === 'sales' ? 'sale' : req.body.tag;

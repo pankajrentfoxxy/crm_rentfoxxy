@@ -47,6 +47,7 @@ import StageTaskPanel from '../components/StageTaskPanel';
 import AssignmentModal from '../components/AssignmentModal';
 import Qc1ReworkAssignModal from '../components/Qc1ReworkAssignModal';
 import HwReworkAssignModal from '../components/HwReworkAssignModal';
+import Qc2InventoryTagModal from '../components/Qc2InventoryTagModal';
 import TtsplHistoryDrawer from '../components/TtsplHistoryDrawer';
 import useAutoRefresh from '../hooks/useAutoRefresh';
 
@@ -94,6 +95,7 @@ export default function TicketDetailPage() {
   const [qc2FailConfirming, setQc2FailConfirming] = useState(false);
   const [qc1FailPickerOpen, setQc1FailPickerOpen] = useState(false);
   const [qc1FailConfirming, setQc1FailConfirming] = useState(false);
+  const [qc2PassTagOpen, setQc2PassTagOpen] = useState(false);
   const [qcMembers, setQcMembers] = useState([]);
   const [chosenAssignee, setChosenAssignee] = useState('');
 
@@ -379,7 +381,7 @@ export default function TicketDetailPage() {
   };
 
   const movingRef = useRef(false);
-  const move = async (toStage, reason, assignedUserId, { minReasonLen = 10, bypassTransition = false } = {}) => {
+  const move = async (toStage, reason, assignedUserId, { minReasonLen = 10, bypassTransition = false, inventoryTag = null } = {}) => {
     if (reason !== undefined && (!reason || reason.trim().length < minReasonLen)) {
       toast.error(`Reason required (min ${minReasonLen} characters) for fail actions`);
       return;
@@ -392,6 +394,7 @@ export default function TicketDetailPage() {
       const payload = {
         to_stage_name: toStage, reason, notes: reason, assigned_user_id: assignedUserId,
       };
+      if (inventoryTag) payload.inventory_tag = inventoryTag;
       if (bypassTransition) payload.bypass_transition = true;
       const { data: res } = await moveTicketStage(id, payload);
       if (res.success) {
@@ -541,7 +544,7 @@ export default function TicketDetailPage() {
   }
   if ((qc || canManageTickets) && stage === 'QC2') {
     stageButtons.push(
-      { label: 'QC2 PASS — Move to Pending Inventory', action: () => move('Pending Inventory'), success: true },
+      { label: 'QC2 PASS — Move to Pending Inventory', action: () => setQc2PassTagOpen(true), success: true },
       { label: 'QC2 FAIL — Send back to QC1', action: openQc2FailPicker, danger: true, needsReason: true }
     );
   }
@@ -959,6 +962,16 @@ export default function TicketDetailPage() {
         onClose={() => setQc1FailPickerOpen(false)}
         onConfirm={confirmQc1FailToAssembly}
         confirming={qc1FailConfirming}
+      />
+      <Qc2InventoryTagModal
+        open={qc2PassTagOpen}
+        onClose={() => setQc2PassTagOpen(false)}
+        onConfirm={(tag) => {
+          setQc2PassTagOpen(false);
+          move('Pending Inventory', undefined, undefined, { inventoryTag: tag });
+        }}
+        purchaseOrderType={ticket?.purchase_order_type}
+        title="QC2 Pass — Inventory Tag"
       />
       <TtsplHistoryDrawer ttsplId={resolveTicketTtspl(ticket)} open={historyOpen} onClose={() => setHistoryOpen(false)} />
 

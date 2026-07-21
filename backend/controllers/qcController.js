@@ -6,6 +6,7 @@ const {
 } = require('../services/qcRoundRobinService');
 const { syncWorkLogForTicketState } = require('../services/ticketWorkLogService');
 const { markVendorSerialReadyForRent } = require('../services/grnTicketService');
+const { vacateWarehouseLocation } = require('../services/warehouseLocationService');
 const ttsplAuditService = require('../services/ttsplAuditService');
 const { logProductionHistory } = require('../services/ticketWorkflowHistoryService');
 
@@ -251,7 +252,7 @@ exports.saveQC = async (req, res) => {
 // Submit QC and route ticket
 exports.submitQC = async (req, res) => {
     const { id } = req.params;
-    const { qcStage, header, checklist, grading, remarks, replacedParts, signOff, assignToUserId } = req.body;
+    const { qcStage, header, checklist, grading, remarks, replacedParts, signOff, assignToUserId, inventory_tag } = req.body;
     const userId = req.user.user_id;
 
     const client = await pool.connect();
@@ -478,9 +479,16 @@ exports.submitQC = async (req, res) => {
                         });
                     }
                     if (pa?.production_asset_id) {
-                        await paSvc.markPendingInventory(client, pa.production_asset_id, userId);
+                        await paSvc.markPendingInventory(client, pa.production_asset_id, userId, {
+                            source: 'qc2',
+                            inventory_tag,
+                        });
                     }
                 } catch (paErr) {
+                    if (paErr.status === 400) {
+                        await client.query('ROLLBACK');
+                        return res.status(400).json({ success: false, message: paErr.message });
+                    }
                     console.error('QC submit pending inventory mark failed:', paErr.message);
                 }
                 if (serialNumber || machineNumber) {
@@ -517,6 +525,7 @@ exports.submitQC = async (req, res) => {
                             AND COALESCE(inventory_status,'in_stock') NOT IN ('rented','sold','on_demo','in_transit','returned')`,
                         [ticketMeta.vendor_serial_id]
                     );
+                    await vacateWarehouseLocation(client, ticketMeta.vendor_serial_id);
                 }
             } else if (isCompleted && result === 'PASS') {
                 if (serialNumber || machineNumber) {

@@ -5,6 +5,7 @@ import HwReworkAssignModal from '../features/floor-pipeline/components/HwReworkA
 import Qc1SpecChecklist from '../features/floor-pipeline/components/Qc1SpecChecklist';
 import Qc2SpecVerifyPanel from '../features/floor-pipeline/components/Qc2SpecVerifyPanel';
 import DispatchQcSpecVerifyPanel from '../features/floor-pipeline/components/DispatchQcSpecVerifyPanel';
+import Qc2InventoryTagModal from '../features/floor-pipeline/components/Qc2InventoryTagModal';
 
 const GRADE_OPTIONS = ['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C', 'D'];
 
@@ -109,6 +110,8 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
     const [selectedAssigneeId, setSelectedAssigneeId] = useState('');
     const [loadingAssignees, setLoadingAssignees] = useState(false);
     const [hwFailPickerOpen, setHwFailPickerOpen] = useState(false);
+    const [qc2TagModalOpen, setQc2TagModalOpen] = useState(false);
+    const [pendingQc2AssigneeId, setPendingQc2AssigneeId] = useState(null);
 
     const syncHeaderFromSpec = useCallback((h) => {
         setHeader({
@@ -195,7 +198,7 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
         return !criticalFailures.some(Boolean);
     };
 
-    const submitQC = async (assignToUserId = null) => {
+    const submitQC = async (assignToUserId = null, inventoryTag = null) => {
         setProcessing(true);
         try {
             // Spec panels own config; fill legacy header fields so API never depends on the old form.
@@ -217,6 +220,9 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
             if (assignToUserId != null) {
                 payload.assignToUserId = assignToUserId;
             }
+            if (inventoryTag) {
+                payload.inventory_tag = inventoryTag;
+            }
             const res = await api.post(`/tickets/${ticket.ticket_id}/qc/submit`, payload);
 
             if (res.data.success) {
@@ -235,6 +241,8 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
             setAssigneeModal(false);
             setSelectedAssigneeId('');
             setHwFailPickerOpen(false);
+            setQc2TagModalOpen(false);
+            setPendingQc2AssigneeId(null);
         }
     };
 
@@ -302,6 +310,10 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
             setHwFailPickerOpen(true);
             return;
         }
+        if (qcStage === 'QC2' && willPassQC()) {
+            setQc2TagModalOpen(true);
+            return;
+        }
         if (!needsQc2Assignee) {
             await submitQC();
             return;
@@ -339,6 +351,11 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
             return alert('Please select a QC2 team member to assign this ticket');
         }
         await submitQC(parseInt(selectedAssigneeId, 10));
+    };
+
+    const handleQc2TagConfirm = async (inventoryTag) => {
+        setQc2TagModalOpen(false);
+        await submitQC(pendingQc2AssigneeId, inventoryTag);
     };
 
     const confirmHwFailAssign = async (userId) => {
@@ -910,6 +927,13 @@ function ChecklistSection({ title, icon, items, checklist, setChecklist }) {
                     ))}
                 </div>
             )}
+            <Qc2InventoryTagModal
+                open={qc2TagModalOpen}
+                onClose={() => setQc2TagModalOpen(false)}
+                onConfirm={handleQc2TagConfirm}
+                saving={processing}
+                purchaseOrderType={ticket.purchase_order_type}
+            />
         </div>
     );
 }

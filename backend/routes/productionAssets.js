@@ -10,6 +10,11 @@ router.get(
   checkSectionPermission('pending_inventory', 'view'),
   ctrl.listPending
 );
+router.get(
+  '/carret-availability',
+  checkSectionPermission('pending_inventory', 'view'),
+  ctrl.getCarretAvailability
+);
 router.post('/backfill', checkRole('admin', 'super_admin'), ctrl.backfill);
 router.get('/by-ticket/:ticketId', ctrl.getByTicket);
 router.get('/:id', ctrl.getById);
