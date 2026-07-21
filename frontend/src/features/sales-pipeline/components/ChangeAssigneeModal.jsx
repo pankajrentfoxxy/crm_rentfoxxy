@@ -68,13 +68,13 @@ export default function ChangeAssigneeModal({
     }
     setSaving(true);
     try {
-      await updateDcAssignment(dcNumber, {
+      const { data } = await updateDcAssignment(dcNumber, {
         dispatch_mode: mode,
         ...form,
         reason: form.reason?.trim() || undefined,
       });
-      toast.success('Assignee updated');
-      onSaved?.();
+      toast.success(data?.message || 'Assignee updated — DC PDF regenerated');
+      onSaved?.(data);
       onClose();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to update assignee');
@@ -129,7 +129,7 @@ export default function ChangeAssigneeModal({
           <div className="flex justify-end gap-2">
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm border rounded-lg">Cancel</button>
             <button type="submit" disabled={saving} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
-              {saving ? 'Saving…' : 'Save Assignee'}
+              {saving ? 'Saving…' : 'Save & regenerate PDF'}
             </button>
           </div>
         </form>

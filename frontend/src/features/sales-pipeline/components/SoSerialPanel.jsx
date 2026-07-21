@@ -209,7 +209,7 @@ export default function SoSerialPanel({ soNumber }) {
                   Edit rate
                 </button>
               )}
-              {isSuperAdmin && line.attached_count === 0 && (
+              {isSuperAdmin && (
                 <button
                   type="button"
                   onClick={() => setEditLine(line)}

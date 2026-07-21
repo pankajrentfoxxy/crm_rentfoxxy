@@ -265,6 +265,7 @@ export default function TicketDetailPage() {
   const tech = isTechnicianRole(user?.role);
   const qc = isQcRole(user?.role);
   const dqc = canActAsDispatchQc(user, canEdit);
+  const isSuperAdmin = user?.role === 'super_admin';
   const canSeeStageRouting = canDiagnosisToAssembly || stageRouting;
 
   // The CURRENT stage's task is always the first tab so the assignee sees their
@@ -378,7 +379,7 @@ export default function TicketDetailPage() {
   };
 
   const movingRef = useRef(false);
-  const move = async (toStage, reason, assignedUserId, { minReasonLen = 10 } = {}) => {
+  const move = async (toStage, reason, assignedUserId, { minReasonLen = 10, bypassTransition = false } = {}) => {
     if (reason !== undefined && (!reason || reason.trim().length < minReasonLen)) {
       toast.error(`Reason required (min ${minReasonLen} characters) for fail actions`);
       return;
@@ -388,9 +389,11 @@ export default function TicketDetailPage() {
     if (movingRef.current) return;
     movingRef.current = true;
     try {
-      const { data: res } = await moveTicketStage(id, {
-        to_stage_name: toStage, reason, notes: reason, assigned_user_id: assignedUserId
-      });
+      const payload = {
+        to_stage_name: toStage, reason, notes: reason, assigned_user_id: assignedUserId,
+      };
+      if (bypassTransition) payload.bypass_transition = true;
+      const { data: res } = await moveTicketStage(id, payload);
       if (res.success) {
         setQcPickerOpen(false);
         setQc2FailPickerOpen(false);
@@ -525,6 +528,16 @@ export default function TicketDetailPage() {
         needsReason: true
       }
     );
+  }
+  if (isSuperAdmin && stage === 'Dispatch QC') {
+    stageButtons.push({
+      label: 'Bypass — Mark Ready for DC',
+      action: () => {
+        if (!window.confirm('Bypass Dispatch QC transition rules and mark this laptop ready for DC?')) return;
+        move('Inventory', undefined, undefined, { bypassTransition: true });
+      },
+      warn: true,
+    });
   }
   if ((qc || canManageTickets) && stage === 'QC2') {
     stageButtons.push(

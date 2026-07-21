@@ -1558,13 +1558,29 @@ function rateForDcLine(line, rateMap) {
 async function getDcSerialRateLookup(dcNumber, salesOrderNumber) {
   const r = await pool.query(
     `SELECT sos.serial_id, sos.ttspl_id, sos.serial_number,
-            sol.brand, sol.model_name, sol.rate, sol.remark
+            sol.brand, sol.model_name, sol.processor, sol.generation,
+            sol.ram, sol.storage, sol.gpu, sol.screen_size,
+            sol.rate, sol.remark
        FROM sales_order_serials sos
        INNER JOIN sales_order_lines sol
          ON sol.id = sos.line_id AND sol.sales_order_number = sos.sales_order_number
-      WHERE sos.dc_number = $1
-        AND sos.sales_order_number = $2
-        AND sos.status <> 'removed'`,
+      WHERE sos.sales_order_number = $2
+        AND sos.status <> 'removed'
+        AND (
+          sos.dc_number = $1
+          OR EXISTS (
+            SELECT 1
+              FROM delivery_challan_lines dcl
+             WHERE dcl.dc_number = $1
+               AND dcl.sales_order_number = $2
+               AND COALESCE(dcl.movement_type, 'outbound') <> 'return'
+               AND (
+                 dcl.serial_number::text ILIKE '%' || COALESCE(sos.serial_number, '') || '%'
+                 OR (sos.ttspl_id IS NOT NULL AND dcl.serial_number::text ILIKE '%' || sos.ttspl_id || '%')
+                 OR (sos.serial_id IS NOT NULL AND dcl.serial_number::text ILIKE '%' || sos.serial_id::text || '%')
+               )
+          )
+        )`,
     [dcNumber, salesOrderNumber]
   );
   const bySerialId = new Map();
@@ -1575,6 +1591,12 @@ async function getDcSerialRateLookup(dcNumber, salesOrderNumber) {
       rate: Number(row.rate || 0),
       brand: row.brand || '',
       model_name: row.model_name || '',
+      processor: row.processor || '',
+      generation: row.generation || '',
+      ram: row.ram || '',
+      storage: row.storage || '',
+      gpu: row.gpu || '',
+      screen_size: row.screen_size || '',
       remark: (row.remark || '').trim(),
     };
     if (row.serial_id) bySerialId.set(Number(row.serial_id), payload);
@@ -1605,15 +1627,31 @@ function lookupSerialRate(lookup, { serialId, serialNumber, ttspl } = {}) {
 /** Billing rows grouped by SO line for DC detail UI / totals. */
 async function getDcBillingLines(dcNumber, salesOrderNumber) {
   const r = await pool.query(
-    `SELECT sol.brand, sol.model_name, sol.rate,
+    `SELECT sol.brand, sol.model_name, sol.processor, sol.generation,
+            sol.ram, sol.storage, sol.gpu, sol.screen_size, sol.rate,
             COUNT(*)::int AS quantity
        FROM sales_order_serials sos
        INNER JOIN sales_order_lines sol
          ON sol.id = sos.line_id AND sol.sales_order_number = sos.sales_order_number
-      WHERE sos.dc_number = $1
-        AND sos.sales_order_number = $2
+      WHERE sos.sales_order_number = $2
         AND sos.status <> 'removed'
-      GROUP BY sol.id, sol.brand, sol.model_name, sol.rate
+        AND (
+          sos.dc_number = $1
+          OR EXISTS (
+            SELECT 1
+              FROM delivery_challan_lines dcl
+             WHERE dcl.dc_number = $1
+               AND dcl.sales_order_number = $2
+               AND COALESCE(dcl.movement_type, 'outbound') <> 'return'
+               AND (
+                 dcl.serial_number::text ILIKE '%' || COALESCE(sos.serial_number, '') || '%'
+                 OR (sos.ttspl_id IS NOT NULL AND dcl.serial_number::text ILIKE '%' || sos.ttspl_id || '%')
+                 OR (sos.serial_id IS NOT NULL AND dcl.serial_number::text ILIKE '%' || sos.serial_id::text || '%')
+               )
+          )
+        )
+      GROUP BY sol.id, sol.brand, sol.model_name, sol.processor, sol.generation,
+               sol.ram, sol.storage, sol.gpu, sol.screen_size, sol.rate
       ORDER BY MIN(sos.allocation_id)`,
     [dcNumber, salesOrderNumber]
   );
@@ -1623,6 +1661,12 @@ async function getDcBillingLines(dcNumber, salesOrderNumber) {
     return {
       brand: row.brand || '',
       model_name: row.model_name || '',
+      processor: row.processor || '',
+      generation: row.generation || '',
+      ram: row.ram || '',
+      storage: row.storage || '',
+      gpu: row.gpu || '',
+      screen_size: row.screen_size || '',
       rate,
       quantity: qty,
       amount: +(rate * qty).toFixed(2),

@@ -17,9 +17,19 @@ const MANAGER_ROUTING_FROM = {
   Diagnosis: ['Assembly & Software', 'Chip Level Repair', 'Body & Paint'],
 };
 
+function isSuperAdmin(user) {
+  return user?.role === 'super_admin';
+}
+
+function canBypassTransitionRules(user, body) {
+  if (!user) return false;
+  if (isSuperAdmin(user)) return true;
+  return PRIVILEGED_ROLES.includes(user.role);
+}
+
 function isStageRouter(user) {
   if (!user) return false;
-  if (user.role === 'super_admin') return true;
+  if (isSuperAdmin(user)) return true;
   return STAGE_ROUTING_ROLES.includes(user.role);
 }
 
@@ -272,6 +282,7 @@ exports.moveToStage = async (req, res) => {
     if (currentStageName === 'Dispatch QC' && effectiveToStage === 'Assembly & Software') conditionHint = 'dispatch_qc_failed';
 
     const privileged = PRIVILEGED_ROLES.includes(req.user.role);
+    const bypassTransitionRules = canBypassTransitionRules(req.user, req.body);
     if (!privileged && req.user.role === 'qc' && !QC_STAGES.includes(currentStageName)) {
       await client.query('ROLLBACK');
       return res.status(403).json({ success: false, message: 'QC team can only act on QC stages' });
@@ -303,7 +314,7 @@ exports.moveToStage = async (req, res) => {
     }
 
     const transition = await validateTransition(currentStageName, effectiveToStage, conditionHint);
-    if (!transition.ok && !privileged) {
+    if (!transition.ok && !bypassTransitionRules) {
       await client.query('ROLLBACK');
       return res.status(400).json({ success: false, message: transition.message });
     }
@@ -611,10 +622,13 @@ exports.moveToStage = async (req, res) => {
     }
 
     const activityNotes = notes || reason || `Moved to ${effectiveToStage}`;
+    const bypassNote = isSuperAdmin(req.user) && req.body.bypass_transition
+      ? '[Super Admin bypass] '
+      : '';
     await client.query(
       `INSERT INTO activities (ticket_id, stage_id, user_id, action, notes)
        VALUES ($1, $2, $3, 'stage_changed', $4)`,
-      [id, nextStage.stage_id, req.user.user_id, activityNotes]
+      [id, nextStage.stage_id, req.user.user_id, `${bypassNote}${activityNotes}`]
     );
 
     await ttsplAuditService.logTtsplEvent({

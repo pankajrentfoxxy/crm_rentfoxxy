@@ -186,14 +186,14 @@ async function resolveDcUnitRows(lines, dcNumber) {
       const priced = lookupSerialRate(serialLookup, { serialId, serialNumber, ttspl });
       const spec = await loadSerialInventorySpec({ serialId, serialNumber, ttspl }) || {};
       rows.push({
-        brand: spec.brand || line.brand,
-        model_name: spec.model || line.model_name,
-        processor: spec.processor || line.processor,
-        generation: spec.generation || line.generation,
-        ram: spec.ram || line.ram,
-        storage: spec.storage || line.storage,
-        gpu: spec.gpu || line.gpu,
-        screen_size: spec.screen_size || line.screen_size,
+        brand: priced?.brand || spec.brand || line.brand,
+        model_name: priced?.model_name || spec.model || line.model_name,
+        processor: priced?.processor || spec.processor || line.processor,
+        generation: priced?.generation || spec.generation || line.generation,
+        ram: priced?.ram || spec.ram || line.ram,
+        storage: priced?.storage || spec.storage || line.storage,
+        gpu: priced?.gpu || spec.gpu || line.gpu,
+        screen_size: priced?.screen_size || spec.screen_size || line.screen_size,
         serial: spec.serial_number || serialNumber,
         ttspl: spec.inventory_asset_code || ttspl || '',
         rate: priced?.rate ?? (rateMap ? rateForDcLine(line, rateMap) : line.rate),
@@ -352,6 +352,11 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
     y += 14;
     if (dispatchDate) {
       doc.text(`Dispatch Date: ${dispatchDate}`, L, y);
+      y += 14;
+    }
+    const estimatedDelivery = formatPdfDateIst(header.estimated_delivery, { fallback: null });
+    if (estimatedDelivery) {
+      doc.text(`Estimated Delivery: ${estimatedDelivery}`, L, y);
       y += 14;
     }
     doc.font('Helvetica-Bold').fontSize(13).fillColor(accent).text(company.legal_name, L, y);

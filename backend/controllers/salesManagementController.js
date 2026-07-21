@@ -27,6 +27,7 @@ const {
   getOperationCounts,
   searchAvailableInventory,
   getDcSerialRateLookup,
+  lookupSerialRate,
   lookupSerialRemark,
   entityDocType,
 } = require('../services/salesManagementService');
@@ -132,6 +133,50 @@ async function recalcSoSecurityIfNeeded(db, salesOrderNumber) {
   return oneMonth;
 }
 
+/** Keep linked outbound DC header rows aligned when an SO line config changes. */
+async function syncDcLinesFromSoLine(db, {
+  lineId,
+  salesOrderNumber,
+  brand,
+  modelName,
+  oldBrand,
+  oldModelName,
+}) {
+  await db.query(
+    `UPDATE delivery_challan_lines dcl
+        SET brand = $1,
+            model_name = $2,
+            updated_at = NOW(),
+            pdf_path = NULL
+      WHERE dcl.sales_order_number = $3
+        AND COALESCE(dcl.movement_type, 'outbound') <> 'return'
+        AND (
+          dcl.dc_number IN (
+            SELECT DISTINCT sos.dc_number
+              FROM sales_order_serials sos
+             WHERE sos.line_id = $4
+               AND sos.sales_order_number = $3
+               AND sos.status <> 'removed'
+               AND sos.dc_number IS NOT NULL
+          )
+          OR dcl.dc_number IN (
+            SELECT DISTINCT vsn.current_dc_number
+              FROM sales_order_serials sos
+              JOIN vendor_serial_numbers vsn ON vsn.serial_id = sos.serial_id
+             WHERE sos.line_id = $4
+               AND sos.sales_order_number = $3
+               AND sos.status <> 'removed'
+               AND vsn.current_dc_number IS NOT NULL
+          )
+          OR (
+            LOWER(TRIM(COALESCE(dcl.brand, ''))) = LOWER(TRIM($5))
+            AND LOWER(TRIM(COALESCE(dcl.model_name, ''))) = LOWER(TRIM($6))
+          )
+        )`,
+    [brand, modelName, salesOrderNumber, lineId, oldBrand || '', oldModelName || '']
+  );
+}
+
 /** Pro-rate updated SO security across existing DCs for that order. */
 async function syncDcSecurityForSo(db, salesOrderNumber, totalSecurity) {
   const sec = Number(totalSecurity || 0);
@@ -181,20 +226,27 @@ async function regenerateSoAndLinkedDcPdfs(salesOrderNumber) {
   );
   const dcPdfs = [];
   for (const { dc_number: dcNumber } of dcRes.rows) {
-    const dcLines = await getDeliveryChallanLines(dcNumber);
-    const pdfPath = await generateDocumentPdf({
-      docType: 'delivery_challan',
-      docNumber: dcNumber,
-      header: dcLines[0] || {},
-      lines: dcLines,
-    });
-    await pool.query(
-      `UPDATE delivery_challan_lines SET pdf_path = $1 WHERE dc_number = $2`,
-      [pdfPath, dcNumber]
-    );
-    dcPdfs.push({ dc_number: dcNumber, pdf_path: pdfPath });
+    const pdfPath = await regenerateDcPdfForNumber(dcNumber);
+    if (pdfPath) dcPdfs.push({ dc_number: dcNumber, pdf_path: pdfPath });
   }
   return { so_pdf_path: soPdfPath, dc_pdfs: dcPdfs };
+}
+
+/** Regenerate a single DC PDF from current delivery_challan_lines (assignee, dates, specs). */
+async function regenerateDcPdfForNumber(dcNumber) {
+  const lines = await getDeliveryChallanLines(dcNumber);
+  if (!lines.length) return null;
+  const pdfPath = await generateDocumentPdf({
+    docType: 'delivery_challan',
+    docNumber: dcNumber,
+    header: lines[0] || {},
+    lines,
+  });
+  await pool.query(
+    `UPDATE delivery_challan_lines SET pdf_path = $1, updated_at = NOW() WHERE dc_number = $2`,
+    [pdfPath, dcNumber]
+  );
+  return pdfPath;
 }
 
 function normalizeCustomerForQuotation(row) {
@@ -1018,18 +1070,25 @@ exports.getDeliveryChallan = async (req, res) => {
             ttspl: e.ttsplId,
           })
           : '';
+        const priced = serialLookup
+          ? lookupSerialRate(serialLookup, {
+            serialId: e.serialId,
+            serialNumber: e.serialNumber,
+            ttspl: e.ttsplId,
+          })
+          : null;
         const remark = dcLineRemark || soRemark;
         return {
           ttspl: d.inventory_asset_code || e.ttsplId || e.serialNumber,
           serial_number: d.serial_number || e.serialNumber,
-          brand: d.brand || line.brand || '',
-          model: d.model || line.model_name || '',
-          processor: d.processor || '',
-          generation: d.generation || '',
-          ram: d.ram || '',
-          storage: d.storage || '',
-          gpu: d.gpu || '',
-          screen_size: d.screen_size || '',
+          brand: priced?.brand || d.brand || line.brand || '',
+          model: priced?.model_name || d.model || line.model_name || '',
+          processor: priced?.processor || d.processor || '',
+          generation: priced?.generation || d.generation || '',
+          ram: priced?.ram || d.ram || '',
+          storage: priced?.storage || d.storage || '',
+          gpu: priced?.gpu || d.gpu || '',
+          screen_size: priced?.screen_size || d.screen_size || '',
           status: d.inventory_status || '',
           remark,
         };
@@ -2524,10 +2583,8 @@ exports.regenerateSalesOrderPdf = async (req, res) => {
 exports.regenerateDcPdf = async (req, res) => {
   try {
     const n = req.params.dcNumber;
-    const lines = await getDeliveryChallanLines(n);
-    if (!lines.length) return res.status(404).json({ success: false, message: 'DC not found' });
-    const pdf = await generateDocumentPdf({ docType: 'delivery_challan', docNumber: n, header: lines[0], lines });
-    await pool.query(`UPDATE delivery_challan_lines SET pdf_path = $1 WHERE dc_number = $2`, [pdf, n]);
+    const pdf = await regenerateDcPdfForNumber(n);
+    if (!pdf) return res.status(404).json({ success: false, message: 'DC not found' });
     res.json({ success: true, pdf_path: pdf });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 };
@@ -2698,13 +2755,20 @@ exports.updateDcAssignment = async (req, res) => {
       return res.status(result.status || 400).json({ success: false, message: result.message });
     }
 
+    let pdfPath = null;
+    try {
+      pdfPath = await regenerateDcPdfForNumber(dcNumber);
+    } catch (pdfErr) {
+      console.warn('DC PDF regeneration after assignment update:', pdfErr.message);
+    }
+
     if (result.sales_order_number && result.activity) {
-      const { previousLabel, newLabel, previousMeta, nextMeta, reason } = result.activity;
+      const { description, previousLabel, newLabel, previousMeta, nextMeta, reason } = result.activity;
       await safeLogSalesOrderActivity({
         salesOrderNumber: result.sales_order_number,
         activityType: ACTIVITY_TYPES.DELIVERY_CHALLAN,
         action: 'assignee_changed',
-        description: `Assignee changed for ${dcNumber}: ${previousLabel} → ${newLabel}`,
+        description,
         remarks: reason,
         metadata: {
           dc_number: dcNumber,
@@ -2712,12 +2776,20 @@ exports.updateDcAssignment = async (req, res) => {
           new_assignee: newLabel,
           previous_dispatch_mode: previousMeta.dispatch_mode,
           new_dispatch_mode: nextMeta.dispatch_mode,
+          previous_estimated_delivery: previousMeta.estimated_delivery,
+          new_estimated_delivery: nextMeta.estimated_delivery,
+          pdf_regenerated: Boolean(pdfPath),
         },
         user: req.user,
       });
     }
 
-    res.json({ success: true, message: 'Assignee updated', data: result.data });
+    res.json({
+      success: true,
+      message: pdfPath ? 'Assignee updated — DC PDF regenerated' : 'Assignee updated',
+      pdf_path: pdfPath,
+      data: result.data,
+    });
   } catch (error) {
     console.error('updateDcAssignment:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -3429,24 +3501,6 @@ exports.updateSoLineConfig = async (req, res) => {
     const gpu = body.gpu != null ? String(body.gpu).trim() : line.gpu;
     const screenSize = body.screen_size != null ? String(body.screen_size).trim() : line.screen_size;
 
-    const specsChanged =
-      String(brand || '') !== String(line.brand || '')
-      || String(modelName || '') !== String(line.model_name || '')
-      || String(processor || '') !== String(line.processor || '')
-      || String(generation || '') !== String(line.generation || '')
-      || String(ram || '') !== String(line.ram || '')
-      || String(storage || '') !== String(line.storage || '')
-      || String(gpu || '') !== String(line.gpu || '')
-      || String(screenSize || '') !== String(line.screen_size || '');
-
-    if (specsChanged && attachedCount > 0) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({
-        success: false,
-        message: 'Cannot edit config while laptops are attached. Detach all units first.',
-      });
-    }
-
     const nextQuantity = hasQuantity ? quantity : Number(line.quantity || line.main_qty || 1);
     if (nextQuantity < attachedCount) {
       await client.query('ROLLBACK');
@@ -3467,6 +3521,15 @@ exports.updateSoLineConfig = async (req, res) => {
       [brand, modelName, processor, generation, ram, storage, gpu, screenSize, nextQuantity, lineId]
     );
 
+    await syncDcLinesFromSoLine(client, {
+      lineId,
+      salesOrderNumber: line.sales_order_number,
+      brand,
+      modelName,
+      oldBrand: line.brand,
+      oldModelName: line.model_name,
+    });
+
     await client.query('COMMIT');
 
     const soNumber = upd.rows[0]?.sales_order_number || line.sales_order_number;
@@ -3480,9 +3543,12 @@ exports.updateSoLineConfig = async (req, res) => {
       console.warn('SO PDF regeneration after config update:', pdfErr.message);
     }
 
+    const dcCount = dcPdfs.length;
     res.json({
       success: true,
-      message: 'Sales order line config updated',
+      message: dcCount
+        ? `Config updated — SO and ${dcCount} DC PDF(s) regenerated`
+        : 'Config updated — SO PDF regenerated',
       line: upd.rows[0],
       pdf_path: pdfPath,
       dc_pdfs: dcPdfs,

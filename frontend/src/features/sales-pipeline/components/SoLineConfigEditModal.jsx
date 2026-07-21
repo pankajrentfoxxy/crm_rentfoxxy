@@ -43,7 +43,7 @@ export default function SoLineConfigEditModal({ open, line, onClose, onSaved }) 
     }
     setSaving(true);
     try {
-      await updateSoLineConfig(line.line_id, {
+      const { data } = await updateSoLineConfig(line.line_id, {
         brand: row.brand,
         model_name: row.model_name,
         processor: row.processor,
@@ -54,7 +54,12 @@ export default function SoLineConfigEditModal({ open, line, onClose, onSaved }) 
         screen_size: row.screen_size,
         quantity,
       });
-      toast.success('Line config updated');
+      const dcCount = data?.dc_pdfs?.length || 0;
+      toast.success(
+        dcCount
+          ? (data?.message || `Config updated — SO and ${dcCount} DC PDF(s) regenerated`)
+          : (data?.message || 'Line config updated')
+      );
       onSaved?.();
       onClose();
     } catch (err) {
@@ -71,7 +76,7 @@ export default function SoLineConfigEditModal({ open, line, onClose, onSaved }) 
           <div>
             <h3 className="font-semibold text-gray-900">Edit order line config</h3>
             <p className="text-xs text-gray-500 mt-0.5">
-              Super Admin only — correct quantity and specs so inventory can be matched.
+              Super Admin only — correct quantity and specs; linked DC rows and PDFs refresh automatically.
             </p>
           </div>
           <button type="button" onClick={onClose} className="p-1 rounded hover:bg-gray-100">
@@ -79,6 +84,12 @@ export default function SoLineConfigEditModal({ open, line, onClose, onSaved }) 
           </button>
         </div>
         <div className="p-5">
+          {Number(line.attached_count) > 0 && (
+            <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              {line.attached_count} unit(s) already attached. Saving updates the order config and regenerates SO/DC PDFs;
+              attached inventory units are not changed automatically.
+            </p>
+          )}
           <AssetDetailsForm
             lines={lines}
             onChange={setLines}
@@ -98,7 +109,7 @@ export default function SoLineConfigEditModal({ open, line, onClose, onSaved }) 
             onClick={handleSave}
             className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg disabled:opacity-50"
           >
-            {saving ? 'Saving…' : 'Save config'}
+            {saving ? 'Saving…' : 'Save & regenerate PDFs'}
           </button>
         </div>
       </div>

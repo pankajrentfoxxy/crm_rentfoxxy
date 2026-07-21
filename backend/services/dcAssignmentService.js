@@ -27,6 +27,16 @@ function shipByForMode(mode) {
   return 'by_courier';
 }
 
+function normalizeEstimatedDelivery(v) {
+  if (v == null || v === '') return '';
+  const s = String(v);
+  const iso = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (iso) return iso[1];
+  const d = new Date(s);
+  if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+  return s.trim();
+}
+
 function assigneeMetadataFromBody(body, dispatchMode) {
   if (dispatchMode === 'inhouse') {
     const deliveryPersonId = body.delivery_person_id != null && body.delivery_person_id !== ''
@@ -43,7 +53,7 @@ function assigneeMetadataFromBody(body, dispatchMode) {
       porter_tracking_id: null,
       porter_order_id: null,
       porter_booking_url: null,
-      estimated_delivery: body.estimated_delivery || null,
+      estimated_delivery: normalizeEstimatedDelivery(body.estimated_delivery) || null,
     };
   }
   if (dispatchMode === 'porter') {
@@ -59,7 +69,7 @@ function assigneeMetadataFromBody(body, dispatchMode) {
       porter_tracking_id: trackingId,
       porter_order_id: body.porter_order_id || null,
       porter_booking_url: body.porter_booking_url || null,
-      estimated_delivery: body.estimated_delivery || null,
+      estimated_delivery: normalizeEstimatedDelivery(body.estimated_delivery) || null,
     };
   }
   return {
@@ -73,7 +83,7 @@ function assigneeMetadataFromBody(body, dispatchMode) {
     porter_tracking_id: null,
     porter_order_id: null,
     porter_booking_url: null,
-    estimated_delivery: body.estimated_delivery || null,
+    estimated_delivery: normalizeEstimatedDelivery(body.estimated_delivery) || null,
   };
 }
 
@@ -153,9 +163,40 @@ function metadataEqual(a, b) {
   const keys = [
     'dispatch_mode', 'delivery_person_id', 'courier_name', 'awb_number',
     'courier_tracking_url', 'porter_booking_id', 'porter_tracking_id',
-    'porter_order_id', 'porter_booking_url',
+    'porter_order_id', 'porter_booking_url', 'estimated_delivery',
   ];
-  return keys.every((k) => String(a[k] ?? '') === String(b[k] ?? ''));
+  return keys.every((k) => {
+    if (k === 'estimated_delivery') {
+      return normalizeEstimatedDelivery(a[k]) === normalizeEstimatedDelivery(b[k]);
+    }
+    return String(a[k] ?? '') === String(b[k] ?? '');
+  });
+}
+
+function formatAssignmentActivityDescription(
+  dcNumber,
+  previousLabel,
+  newLabel,
+  previousMeta,
+  nextMeta,
+  reason
+) {
+  const parts = [`Assignee updated for ${dcNumber}`];
+  if (previousLabel !== newLabel) {
+    parts.push(`${previousLabel} → ${newLabel}`);
+  } else {
+    parts.push(newLabel);
+  }
+  const prevDate = normalizeEstimatedDelivery(previousMeta.estimated_delivery);
+  const nextDate = normalizeEstimatedDelivery(nextMeta.estimated_delivery);
+  if (prevDate !== nextDate) {
+    parts.push(`Est. delivery ${prevDate || '—'} → ${nextDate || '—'}`);
+  }
+  if (previousMeta.dispatch_mode !== nextMeta.dispatch_mode) {
+    parts.push(`Mode ${previousMeta.dispatch_mode} → ${nextMeta.dispatch_mode}`);
+  }
+  if (reason) parts.push(`Reason: ${reason}`);
+  return parts.join(' · ');
 }
 
 async function listAssignmentHistory(dcNumber, limit = 30) {
@@ -223,15 +264,19 @@ async function updateDcAssignment({ dcNumber, body, user }) {
     if (nextMeta.dispatch_mode === 'inhouse') {
       nextMeta.delivery_person_id = await resolveTechnicianId(client, nextMeta.delivery_person_id);
     }
+    if (previousMeta.dispatch_mode === 'inhouse') {
+      previousMeta.delivery_person_id = await resolveTechnicianId(client, previousMeta.delivery_person_id);
+    }
 
-    if (metadataEqual(previousMeta, nextMeta)) {
+    const reason = body.reason != null ? String(body.reason).trim() || null : null;
+
+    if (metadataEqual(previousMeta, nextMeta) && !reason) {
       await client.query('ROLLBACK');
       return { ok: false, status: 400, message: 'No assignment changes detected' };
     }
 
     const previousLabel = await assigneeLabel(client, previousMeta, head);
     const newLabel = await assigneeLabel(client, nextMeta, head);
-    const reason = body.reason != null ? String(body.reason).trim() || null : null;
 
     await client.query(
       `UPDATE delivery_challan_lines SET
@@ -245,7 +290,8 @@ async function updateDcAssignment({ dcNumber, body, user }) {
           porter_tracking_id = $8,
           porter_order_id = $9,
           porter_booking_url = $10,
-          estimated_delivery = COALESCE($11, estimated_delivery),
+          estimated_delivery = $11,
+          pdf_path = NULL,
           updated_at = NOW()
        WHERE dc_number = $12`,
       [
@@ -300,6 +346,14 @@ async function updateDcAssignment({ dcNumber, body, user }) {
       },
       sales_order_number: head.sales_order_number,
       activity: {
+        description: formatAssignmentActivityDescription(
+          resolvedDcNumber,
+          previousLabel,
+          newLabel,
+          previousMeta,
+          nextMeta,
+          reason
+        ),
         previousLabel,
         newLabel,
         previousMeta,
