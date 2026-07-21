@@ -837,6 +837,14 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
                 confirming={processing}
             />
 
+            <Qc2InventoryTagModal
+                open={qc2TagModalOpen}
+                onClose={() => setQc2TagModalOpen(false)}
+                onConfirm={handleQc2TagConfirm}
+                saving={processing}
+                purchaseOrderType={ticket.purchase_order_type}
+            />
+
             {/* Bitlocker Reminder Modal */}
             {bitlockerModal && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-[60]">
@@ -927,13 +935,6 @@ function ChecklistSection({ title, icon, items, checklist, setChecklist }) {
                     ))}
                 </div>
             )}
-            <Qc2InventoryTagModal
-                open={qc2TagModalOpen}
-                onClose={() => setQc2TagModalOpen(false)}
-                onConfirm={handleQc2TagConfirm}
-                saving={processing}
-                purchaseOrderType={ticket.purchase_order_type}
-            />
         </div>
     );
 }
