@@ -27,7 +27,7 @@ function shipByForMode(mode) {
   return 'by_courier';
 }
 
-function normalizeEstimatedDelivery(v) {
+function normalizeDateField(v) {
   if (v == null || v === '') return '';
   const s = String(v);
   const iso = s.match(/^(\d{4}-\d{2}-\d{2})/);
@@ -37,7 +37,19 @@ function normalizeEstimatedDelivery(v) {
   return s.trim();
 }
 
+function normalizeEstimatedDelivery(v) {
+  return normalizeDateField(v);
+}
+
+function scheduleFieldsFromBody(body) {
+  return {
+    estimated_delivery: normalizeDateField(body.estimated_delivery) || null,
+    dispatched_at: normalizeDateField(body.dispatched_at ?? body.dispatch_date) || null,
+  };
+}
+
 function assigneeMetadataFromBody(body, dispatchMode) {
+  const schedule = scheduleFieldsFromBody(body);
   if (dispatchMode === 'inhouse') {
     const deliveryPersonId = body.delivery_person_id != null && body.delivery_person_id !== ''
       ? parseInt(body.delivery_person_id, 10)
@@ -53,7 +65,7 @@ function assigneeMetadataFromBody(body, dispatchMode) {
       porter_tracking_id: null,
       porter_order_id: null,
       porter_booking_url: null,
-      estimated_delivery: normalizeEstimatedDelivery(body.estimated_delivery) || null,
+      ...schedule,
     };
   }
   if (dispatchMode === 'porter') {
@@ -69,7 +81,7 @@ function assigneeMetadataFromBody(body, dispatchMode) {
       porter_tracking_id: trackingId,
       porter_order_id: body.porter_order_id || null,
       porter_booking_url: body.porter_booking_url || null,
-      estimated_delivery: normalizeEstimatedDelivery(body.estimated_delivery) || null,
+      ...schedule,
     };
   }
   return {
@@ -83,7 +95,7 @@ function assigneeMetadataFromBody(body, dispatchMode) {
     porter_tracking_id: null,
     porter_order_id: null,
     porter_booking_url: null,
-    estimated_delivery: normalizeEstimatedDelivery(body.estimated_delivery) || null,
+    ...schedule,
   };
 }
 
@@ -98,6 +110,7 @@ function assigneeMetadataFromRow(row) {
     porter_order_id: row.porter_order_id,
     porter_booking_url: row.porter_booking_url,
     estimated_delivery: row.estimated_delivery,
+    dispatched_at: row.dispatched_at,
   }, normalizeDispatchMode(row));
 }
 
@@ -163,11 +176,11 @@ function metadataEqual(a, b) {
   const keys = [
     'dispatch_mode', 'delivery_person_id', 'courier_name', 'awb_number',
     'courier_tracking_url', 'porter_booking_id', 'porter_tracking_id',
-    'porter_order_id', 'porter_booking_url', 'estimated_delivery',
+    'porter_order_id', 'porter_booking_url', 'estimated_delivery', 'dispatched_at',
   ];
   return keys.every((k) => {
-    if (k === 'estimated_delivery') {
-      return normalizeEstimatedDelivery(a[k]) === normalizeEstimatedDelivery(b[k]);
+    if (k === 'estimated_delivery' || k === 'dispatched_at') {
+      return normalizeDateField(a[k]) === normalizeDateField(b[k]);
     }
     return String(a[k] ?? '') === String(b[k] ?? '');
   });
@@ -187,10 +200,15 @@ function formatAssignmentActivityDescription(
   } else {
     parts.push(newLabel);
   }
-  const prevDate = normalizeEstimatedDelivery(previousMeta.estimated_delivery);
-  const nextDate = normalizeEstimatedDelivery(nextMeta.estimated_delivery);
-  if (prevDate !== nextDate) {
-    parts.push(`Est. delivery ${prevDate || '—'} → ${nextDate || '—'}`);
+  const prevEst = normalizeDateField(previousMeta.estimated_delivery);
+  const nextEst = normalizeDateField(nextMeta.estimated_delivery);
+  if (prevEst !== nextEst) {
+    parts.push(`Est. delivery ${prevEst || '—'} → ${nextEst || '—'}`);
+  }
+  const prevDispatch = normalizeDateField(previousMeta.dispatched_at);
+  const nextDispatch = normalizeDateField(nextMeta.dispatched_at);
+  if (prevDispatch !== nextDispatch) {
+    parts.push(`Dispatch date ${prevDispatch || '—'} → ${nextDispatch || '—'}`);
   }
   if (previousMeta.dispatch_mode !== nextMeta.dispatch_mode) {
     parts.push(`Mode ${previousMeta.dispatch_mode} → ${nextMeta.dispatch_mode}`);
@@ -291,9 +309,10 @@ async function updateDcAssignment({ dcNumber, body, user }) {
           porter_order_id = $9,
           porter_booking_url = $10,
           estimated_delivery = $11,
+          dispatched_at = $12,
           pdf_path = NULL,
           updated_at = NOW()
-       WHERE dc_number = $12`,
+       WHERE dc_number = $13`,
       [
         nextMeta.dispatch_mode,
         nextMeta.ship_by,
@@ -306,6 +325,7 @@ async function updateDcAssignment({ dcNumber, body, user }) {
         nextMeta.porter_order_id,
         nextMeta.porter_booking_url,
         nextMeta.estimated_delivery,
+        nextMeta.dispatched_at,
         resolvedDcNumber,
       ]
     );

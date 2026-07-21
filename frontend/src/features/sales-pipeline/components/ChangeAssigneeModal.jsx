@@ -27,6 +27,7 @@ export default function ChangeAssigneeModal({
     porter_order_id: '',
     porter_booking_url: '',
     delivery_person_id: '',
+    dispatch_date: '',
     estimated_delivery: '',
     reason: '',
   });
@@ -45,6 +46,7 @@ export default function ChangeAssigneeModal({
       porter_order_id: head.porter_order_id || '',
       porter_booking_url: head.porter_booking_url || '',
       delivery_person_id: head.delivery_person_id ? String(head.delivery_person_id) : '',
+      dispatch_date: head.dispatched_at ? String(head.dispatched_at).slice(0, 10) : '',
       estimated_delivery: head.estimated_delivery ? String(head.estimated_delivery).slice(0, 10) : '',
       reason: '',
     });
@@ -89,7 +91,7 @@ export default function ChangeAssigneeModal({
       <div className="relative bg-white rounded-xl shadow-xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
         <h2 className="text-lg font-semibold text-gray-900 mb-1">Change Assignee</h2>
         <p className="text-xs text-gray-500 mb-4">
-          Update technician, courier, or porter before pickup/delivery starts. Changes are logged in activity history.
+          Update assignee, dispatch date, and estimated delivery before pickup starts. Changes are logged and the DC PDF is regenerated.
         </p>
         <form onSubmit={submit} className="space-y-4">
           <div className="flex flex-wrap gap-4 text-sm">
@@ -124,7 +126,26 @@ export default function ChangeAssigneeModal({
               ))}
             </select>
           )}
-          <input type="date" className="w-full border rounded-lg px-3 py-2 text-sm" value={form.estimated_delivery} onChange={(e) => setForm((f) => ({ ...f, estimated_delivery: e.target.value }))} />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label className="block text-xs text-gray-600">
+              Dispatch date
+              <input
+                type="date"
+                className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                value={form.dispatch_date}
+                onChange={(e) => setForm((f) => ({ ...f, dispatch_date: e.target.value }))}
+              />
+            </label>
+            <label className="block text-xs text-gray-600">
+              Estimated delivery
+              <input
+                type="date"
+                className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                value={form.estimated_delivery}
+                onChange={(e) => setForm((f) => ({ ...f, estimated_delivery: e.target.value }))}
+              />
+            </label>
+          </div>
           <textarea className="w-full border rounded-lg px-3 py-2 text-sm" rows={2} placeholder="Reason for change (optional)" value={form.reason} onChange={(e) => setForm((f) => ({ ...f, reason: e.target.value }))} />
           <div className="flex justify-end gap-2">
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm border rounded-lg">Cancel</button>

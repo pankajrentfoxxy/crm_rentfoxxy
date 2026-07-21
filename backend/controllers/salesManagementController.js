@@ -2778,6 +2778,8 @@ exports.updateDcAssignment = async (req, res) => {
           new_dispatch_mode: nextMeta.dispatch_mode,
           previous_estimated_delivery: previousMeta.estimated_delivery,
           new_estimated_delivery: nextMeta.estimated_delivery,
+          previous_dispatched_at: previousMeta.dispatched_at,
+          new_dispatched_at: nextMeta.dispatched_at,
           pdf_regenerated: Boolean(pdfPath),
         },
         user: req.user,
