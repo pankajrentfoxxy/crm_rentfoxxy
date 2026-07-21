@@ -96,14 +96,29 @@ export async function resetUserPermissions(userId) {
 }
 
 export const CUSTOMER_ACCESS_VALUES = ['all', 'sales', 'rental'];
-export const INVENTORY_TAG_ACCESS_VALUES = ['all', 'sales', 'rental'];
+export const INVENTORY_TAG_ACCESS_VALUES = [
+  'all',
+  'rental_only',
+  'rental_both',
+  'sale_only',
+  'sale_both',
+  'sales',
+  'rental',
+];
+
+const LEGACY_INVENTORY_TAG_ACCESS = {
+  sales: 'sale_both',
+  rental: 'rental_both',
+};
 
 function normalizeCustomerAccess(value) {
   return CUSTOMER_ACCESS_VALUES.includes(value) ? value : 'all';
 }
 
 function normalizeInventoryTagAccess(value) {
-  return INVENTORY_TAG_ACCESS_VALUES.includes(value) ? value : 'all';
+  const raw = String(value || 'all').trim();
+  if (LEGACY_INVENTORY_TAG_ACCESS[raw]) return LEGACY_INVENTORY_TAG_ACCESS[raw];
+  return INVENTORY_TAG_ACCESS_VALUES.includes(raw) ? raw : 'all';
 }
 
 export function emptyPermissionRow() {

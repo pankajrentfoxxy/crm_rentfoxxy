@@ -32,9 +32,11 @@ const CUSTOMER_ACCESS_OPTIONS = [
   { value: 'rental', label: 'Rental' },
 ];
 const INVENTORY_TAG_ACCESS_OPTIONS = [
-  { value: 'all', label: 'All stock' },
-  { value: 'sales', label: 'Sale + Both' },
-  { value: 'rental', label: 'Rental + Both' },
+  { value: 'all', label: 'All' },
+  { value: 'rental_only', label: 'Rental only' },
+  { value: 'rental_both', label: 'Rental + Both' },
+  { value: 'sale_only', label: 'Sale only' },
+  { value: 'sale_both', label: 'Sale + Both' },
 ];
 
 function applyCheckboxRules(section, action, value, current) {
@@ -221,8 +223,8 @@ export default function GroupedPermissionMatrix({
                                 value={matrix[section]?.inventory_tag_access || 'all'}
                                 disabled={disabled}
                                 onChange={(e) => handleInventoryTagAccessChange(section, e.target.value)}
-                                title="Ready to Rent/Sell visibility: Sale team sees Sale+Both; Rental team sees Rental+Both; SO-attached laptops hidden when narrowed"
-                                className="text-xs border border-gray-300 rounded-md px-2 py-1 bg-white max-w-[120px]"
+                                title="Ready to Rent/Sell: filter by laptop tag. SO-attached units are hidden when not All."
+                                className="text-xs border border-gray-300 rounded-md px-2 py-1 bg-white max-w-[130px]"
                               >
                                 {INVENTORY_TAG_ACCESS_OPTIONS.map((opt) => (
                                   <option key={opt.value} value={opt.value}>{opt.label}</option>

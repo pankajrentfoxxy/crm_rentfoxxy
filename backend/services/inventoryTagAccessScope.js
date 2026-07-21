@@ -2,20 +2,52 @@
  * Ready to Rent/Sell tag visibility (Roles & Permissions -> inventory_management row).
  *
  * inventory_tag_access:
- *   all    -> no filter; SO-attached units visible with badge
- *   sales  -> extra.inventory_tag in (sale, both); hide SO-attached
- *   rental -> extra.inventory_tag in (rental, both); hide SO-attached
+ *   all          -> no filter; SO-attached units visible with badge
+ *   rental_only  -> rental tag only; hide SO-attached
+ *   rental_both  -> rental + both; hide SO-attached
+ *   sale_only    -> sale tag only; hide SO-attached
+ *   sale_both    -> sale + both; hide SO-attached
+ *
+ * Legacy: sales -> sale_both, rental -> rental_both
  */
 const pool = require('../config/db');
 
 const INVENTORY_SECTIONS = ['inventory_management', 'inventory'];
-const VALID_ACCESS = new Set(['all', 'sales', 'rental']);
+
+const CANONICAL_ACCESS = [
+  'all',
+  'rental_only',
+  'rental_both',
+  'sale_only',
+  'sale_both',
+];
+
+const LEGACY_ACCESS_MAP = {
+  sales: 'sale_both',
+  rental: 'rental_both',
+};
+
+const VALID_ACCESS = new Set([
+  ...CANONICAL_ACCESS,
+  ...Object.keys(LEGACY_ACCESS_MAP),
+]);
 
 const ACCESS_LABELS = {
   all: 'All stock',
-  sales: 'Sale + Both only',
-  rental: 'Rental + Both only',
+  rental_only: 'Rental only',
+  rental_both: 'Rental + Both',
+  sale_only: 'Sale only',
+  sale_both: 'Sale + Both',
+  sales: 'Sale + Both',
+  rental: 'Rental + Both',
 };
+
+function normalizeAccess(access) {
+  const raw = String(access || 'all').trim();
+  if (LEGACY_ACCESS_MAP[raw]) return LEGACY_ACCESS_MAP[raw];
+  if (CANONICAL_ACCESS.includes(raw)) return raw;
+  return 'all';
+}
 
 function normalizeTagExpr(alias = 's') {
   return `LOWER(CASE
@@ -31,7 +63,10 @@ async function getInventoryTagAccess(user) {
 
   const fromEffective = user.effective_permissions?.inventory_management?.inventory_tag_access
     || user.effective_permissions?.inventory?.inventory_tag_access;
-  if (VALID_ACCESS.has(fromEffective)) return fromEffective;
+  if (fromEffective) {
+    const normalized = normalizeAccess(fromEffective);
+    if (normalized !== 'all' || fromEffective === 'all') return normalized;
+  }
 
   const userId = user.userId || user.user_id;
   if (userId) {
@@ -41,7 +76,9 @@ async function getInventoryTagAccess(user) {
         LIMIT 1`,
       [userId, INVENTORY_SECTIONS]
     );
-    if (VALID_ACCESS.has(u.rows[0]?.inventory_tag_access)) return u.rows[0].inventory_tag_access;
+    if (u.rows[0]?.inventory_tag_access) {
+      return normalizeAccess(u.rows[0].inventory_tag_access);
+    }
   }
 
   if (user.role) {
@@ -51,20 +88,32 @@ async function getInventoryTagAccess(user) {
         LIMIT 1`,
       [user.role, INVENTORY_SECTIONS]
     );
-    if (VALID_ACCESS.has(r.rows[0]?.inventory_tag_access)) return r.rows[0].inventory_tag_access;
+    if (r.rows[0]?.inventory_tag_access) {
+      return normalizeAccess(r.rows[0].inventory_tag_access);
+    }
   }
 
   return 'all';
 }
 
 function allowedTagsForAccess(access) {
-  if (access === 'sales') return ['sale', 'both'];
-  if (access === 'rental') return ['rental', 'both'];
-  return null;
+  const normalized = normalizeAccess(access);
+  switch (normalized) {
+    case 'rental_only':
+      return ['rental'];
+    case 'rental_both':
+      return ['rental', 'both'];
+    case 'sale_only':
+      return ['sale'];
+    case 'sale_both':
+      return ['sale', 'both'];
+    default:
+      return null;
+  }
 }
 
 function isRestricted(access) {
-  return access === 'sales' || access === 'rental';
+  return normalizeAccess(access) !== 'all';
 }
 
 /**
@@ -75,6 +124,8 @@ function appendInventoryTagAccessFilter(access, params, alias = 's') {
   if (!isRestricted(access)) return '';
 
   const tags = allowedTagsForAccess(access);
+  if (!tags?.length) return '';
+
   params.push(tags);
   const tagExpr = normalizeTagExpr(alias);
   const tagParam = params.length;
@@ -88,12 +139,14 @@ function appendInventoryTagAccessFilter(access, params, alias = 's') {
 }
 
 function accessLabel(access) {
-  return ACCESS_LABELS[access] || ACCESS_LABELS.all;
+  return ACCESS_LABELS[normalizeAccess(access)] || ACCESS_LABELS.all;
 }
 
 module.exports = {
   INVENTORY_SECTIONS,
+  CANONICAL_ACCESS,
   VALID_ACCESS,
+  normalizeAccess,
   getInventoryTagAccess,
   allowedTagsForAccess,
   isRestricted,

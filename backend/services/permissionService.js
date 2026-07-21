@@ -5,7 +5,15 @@ const VALID_ACTIONS = new Set(['can_view', 'can_create', 'can_edit', 'can_delete
 // Customer Access selector on the customers permission row (all/sales/rental).
 // Sibling of data_scope — do NOT conflate the two.
 const CUSTOMER_ACCESS_VALUES = new Set(['all', 'sales', 'rental']);
-const INVENTORY_TAG_ACCESS_VALUES = new Set(['all', 'sales', 'rental']);
+const INVENTORY_TAG_ACCESS_VALUES = new Set([
+  'all',
+  'rental_only',
+  'rental_both',
+  'sale_only',
+  'sale_both',
+  'sales',
+  'rental',
+]);
 
 const SECTION_ALIASES = {
   reports_access: ['reports_access', 'reports'],
