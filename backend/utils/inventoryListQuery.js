@@ -1,7 +1,7 @@
 /**
  * Shared SQL builder for inventory list + export (vendor_serial_numbers segments).
  */
-const { buildListWhere } = require('../services/inventoryManagementService');
+const { appendInventoryTagAccessFilter } = require('./inventoryTagAccessScope');
 const { appendDateRangeClauses } = require('./dateRangeFilter');
 const { buildSerialSpecFilter } = require('./inventorySpecFilter');
 
@@ -95,6 +95,7 @@ function buildInventorySerialListQuery({
   includeTicketJoins = true,
   includeGrnJoin = true,
   ticketStageFilter = 'all',
+  inventoryTagAccess = 'all',
 }) {
   const params = [];
   const { sql: segmentSql } = buildListWhere(segment, params);
@@ -130,6 +131,10 @@ function buildInventorySerialListQuery({
 
   const specFilter = buildSerialSpecFilter(specFilters, params);
 
+  const tagAccessSql = segment === 'passed'
+    ? appendInventoryTagAccessFilter(inventoryTagAccess, params)
+    : '';
+
   const grnJoinSql = includeGrnJoin
     ? 'LEFT JOIN vendor_goods_received_notes g ON g.grn_id = s.grn_id AND g.deleted_at IS NULL'
     : '';
@@ -146,6 +151,7 @@ function buildInventorySerialListQuery({
     WHERE s.deleted_at IS NULL
     ${segmentSql}
     ${ticketStageSql}
+    ${tagAccessSql}
     ${searchSql}${dateSql}${specFilter.whereSql}
   `;
 

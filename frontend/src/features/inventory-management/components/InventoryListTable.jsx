@@ -820,6 +820,7 @@ export default function InventoryListTable({ routeKey }) {
   const [selectedIds, setSelectedIds] = useState([]);
   const [showAddLaptopModal, setShowAddLaptopModal] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [scopeNote, setScopeNote] = useState(null);
   const isQcProcess = routeKey === 'qc-process';
   const listReturn = listReturnState(location);
 
@@ -847,6 +848,7 @@ export default function InventoryListTable({ routeKey }) {
       if (data.success) {
         setRows(data.data || []);
         setPagination(data.pagination || { page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
+        setScopeNote(data.inventory_scope_note || null);
         setSelectedIds([]);
         hasLoadedOnceRef.current = true;
       } else {
@@ -963,6 +965,11 @@ export default function InventoryListTable({ routeKey }) {
           <button type="button" onClick={() => bulkTag('both')} className="text-xs px-3 py-1.5 rounded-lg bg-sky-600 text-white">
             Tag as Both ({selectedIds.length})
           </button>
+        </div>
+      ) : null}
+      {scopeNote ? (
+        <div className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm text-teal-900">
+          {scopeNote}
         </div>
       ) : null}
       <div className="flex flex-wrap items-center gap-2">

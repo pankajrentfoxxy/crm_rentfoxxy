@@ -21,6 +21,7 @@ function buildQueries(options) {
     specFilters = {},
     cursor,
     ticketStageFilter = 'all',
+    inventoryTagAccess = 'all',
   } = options;
 
   const batchTickets = useBatchTickets(segment);
@@ -33,6 +34,7 @@ function buildQueries(options) {
     includeTicketJoins: !batchTickets,
     includeGrnJoin: true,
     ticketStageFilter,
+    inventoryTagAccess,
   });
   const countQuery = buildInventorySerialListQuery({
     segment,
@@ -43,6 +45,7 @@ function buildQueries(options) {
     includeTicketJoins: false,
     includeGrnJoin: false,
     ticketStageFilter,
+    inventoryTagAccess,
   });
 
   let cursorSql = '';

@@ -3,7 +3,7 @@
  */
 const { cacheGet, cacheSet, cacheDelPattern } = require('../utils/cacheService');
 
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = 'v2';
 const LIST_TTL_SEC = parseInt(process.env.CACHE_TTL_INVENTORY_LIST_SEC || '300', 10);
 const COUNT_TTL_SEC = parseInt(process.env.CACHE_TTL_INVENTORY_COUNT_SEC || '600', 10);
 
@@ -23,21 +23,22 @@ function stableFilterKey(specFilters = {}) {
   return parts.length ? parts.join('&') : '-';
 }
 
-function buildListCacheKey({ segment, page, limit, search, dateFrom, dateTo, specFilters, cursor, ticketStageFilter }) {
+function buildListCacheKey({ segment, page, limit, search, dateFrom, dateTo, specFilters, cursor, ticketStageFilter, inventoryTagAccess = 'all' }) {
   const filters = stableFilterKey(specFilters);
   const searchPart = sanitizePart(search);
   const from = sanitizePart(dateFrom);
   const to = sanitizePart(dateTo);
   const stagePart = sanitizePart(ticketStageFilter || 'all');
+  const tagAccessPart = sanitizePart(inventoryTagAccess || 'all');
   if (cursor) {
-    return `inventory:${CACHE_VERSION}:${segment}:cursor:${sanitizePart(cursor)}:${limit}:${searchPart}:${filters}:${from}:${to}:${stagePart}`;
+    return `inventory:${CACHE_VERSION}:${segment}:cursor:${sanitizePart(cursor)}:${limit}:${searchPart}:${filters}:${from}:${to}:${stagePart}:${tagAccessPart}`;
   }
-  return `inventory:${CACHE_VERSION}:${segment}:${page}:${limit}:${searchPart}:${filters}:${from}:${to}:${stagePart}`;
+  return `inventory:${CACHE_VERSION}:${segment}:${page}:${limit}:${searchPart}:${filters}:${from}:${to}:${stagePart}:${tagAccessPart}`;
 }
 
-function buildCountCacheKey({ segment, search, dateFrom, dateTo, specFilters, ticketStageFilter }) {
+function buildCountCacheKey({ segment, search, dateFrom, dateTo, specFilters, ticketStageFilter, inventoryTagAccess = 'all' }) {
   const filters = stableFilterKey(specFilters);
-  return `inventory_count:${CACHE_VERSION}:${segment}:${sanitizePart(search)}:${filters}:${sanitizePart(dateFrom)}:${sanitizePart(dateTo)}:${sanitizePart(ticketStageFilter || 'all')}`;
+  return `inventory_count:${CACHE_VERSION}:${segment}:${sanitizePart(search)}:${filters}:${sanitizePart(dateFrom)}:${sanitizePart(dateTo)}:${sanitizePart(ticketStageFilter || 'all')}:${sanitizePart(inventoryTagAccess || 'all')}`;
 }
 
 async function getCachedList(key) {

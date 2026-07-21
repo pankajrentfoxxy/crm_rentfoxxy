@@ -24,6 +24,9 @@ function countChanges(matrix, baseline) {
     if ((matrix[section]?.customer_access || 'all') !== (baseline[section]?.customer_access || 'all')) {
       n += 1;
     }
+    if ((matrix[section]?.inventory_tag_access || 'all') !== (baseline[section]?.inventory_tag_access || 'all')) {
+      n += 1;
+    }
   });
   return n;
 }

@@ -96,9 +96,14 @@ export async function resetUserPermissions(userId) {
 }
 
 export const CUSTOMER_ACCESS_VALUES = ['all', 'sales', 'rental'];
+export const INVENTORY_TAG_ACCESS_VALUES = ['all', 'sales', 'rental'];
 
 function normalizeCustomerAccess(value) {
   return CUSTOMER_ACCESS_VALUES.includes(value) ? value : 'all';
+}
+
+function normalizeInventoryTagAccess(value) {
+  return INVENTORY_TAG_ACCESS_VALUES.includes(value) ? value : 'all';
 }
 
 export function emptyPermissionRow() {
@@ -109,6 +114,7 @@ export function emptyPermissionRow() {
     can_delete: false,
     data_scope: 'all',
     customer_access: 'all',
+    inventory_tag_access: 'all',
   };
 }
 
@@ -126,6 +132,7 @@ export function permissionsArrayToMatrix(permissions, sections = RBAC_SECTIONS) 
       can_delete: !!row.can_delete,
       data_scope: row.data_scope === 'assigned' ? 'assigned' : 'all',
       customer_access: normalizeCustomerAccess(row.customer_access),
+      inventory_tag_access: normalizeInventoryTagAccess(row.inventory_tag_access),
     };
   });
   return matrix;
@@ -140,6 +147,7 @@ export function matrixToPermissionsArray(matrix) {
     can_delete: !!values.can_delete,
     data_scope: values.data_scope === 'assigned' ? 'assigned' : 'all',
     customer_access: normalizeCustomerAccess(values.customer_access),
+    inventory_tag_access: normalizeInventoryTagAccess(values.inventory_tag_access),
   }));
 }
 
@@ -164,6 +172,7 @@ export function buildOverrideMatrix(rolePermissions, userPermissions, sections =
       can_delete: !!roleMap[section]?.can_delete,
       data_scope: roleMap[section]?.data_scope === 'assigned' ? 'assigned' : 'all',
       customer_access: normalizeCustomerAccess(roleMap[section]?.customer_access),
+      inventory_tag_access: normalizeInventoryTagAccess(roleMap[section]?.inventory_tag_access),
     };
     overrides[section] = {
       can_view: userMap[section]?.can_view ?? null,
@@ -172,6 +181,7 @@ export function buildOverrideMatrix(rolePermissions, userPermissions, sections =
       can_delete: userMap[section]?.can_delete ?? null,
       data_scope: userMap[section]?.data_scope ?? null,
       customer_access: userMap[section]?.customer_access ?? null,
+      inventory_tag_access: userMap[section]?.inventory_tag_access ?? null,
     };
   });
 
@@ -198,6 +208,7 @@ export function effectiveObjectToMatrix(effective, sections = RBAC_SECTIONS) {
       can_delete: !!row.can_delete,
       data_scope: row.data_scope === 'assigned' ? 'assigned' : 'all',
       customer_access: normalizeCustomerAccess(row.customer_access),
+      inventory_tag_access: normalizeInventoryTagAccess(row.inventory_tag_access),
     };
   });
   return matrix;
@@ -212,7 +223,9 @@ export function matrixDiffToOverridePayload(matrix, roleDefaultsMatrix) {
       const scopeDiffers = (values.data_scope || 'all') !== (role.data_scope || 'all');
       const accessDiffers = normalizeCustomerAccess(values.customer_access)
         !== normalizeCustomerAccess(role.customer_access);
-      if (!permDiffers && !scopeDiffers && !accessDiffers) return null;
+      const tagAccessDiffers = normalizeInventoryTagAccess(values.inventory_tag_access)
+        !== normalizeInventoryTagAccess(role.inventory_tag_access);
+      if (!permDiffers && !scopeDiffers && !accessDiffers && !tagAccessDiffers) return null;
       return {
         section,
         can_view: !!values.can_view,
@@ -221,6 +234,7 @@ export function matrixDiffToOverridePayload(matrix, roleDefaultsMatrix) {
         can_delete: !!values.can_delete,
         data_scope: values.data_scope === 'assigned' ? 'assigned' : 'all',
         customer_access: normalizeCustomerAccess(values.customer_access),
+        inventory_tag_access: normalizeInventoryTagAccess(values.inventory_tag_access),
       };
     })
     .filter(Boolean);
@@ -237,6 +251,10 @@ export function countMatrixChanges(matrix, baseline) {
     }
     if (normalizeCustomerAccess(matrix[section]?.customer_access)
       !== normalizeCustomerAccess(baseline[section]?.customer_access)) {
+      n += 1;
+    }
+    if (normalizeInventoryTagAccess(matrix[section]?.inventory_tag_access)
+      !== normalizeInventoryTagAccess(baseline[section]?.inventory_tag_access)) {
       n += 1;
     }
   });

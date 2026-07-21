@@ -27,6 +27,7 @@ const {
   listSelectSql,
   attachSerialTicketIds,
 } = require('../../utils/inventoryListQuery');
+const { getInventoryTagAccess } = require('../../services/inventoryTagAccessScope');
 
 const READY_TO_RENT_SALE_VALUES = [
   'normal_sale',
@@ -155,6 +156,7 @@ async function listInventory(req, res) {
       specFilters,
       cursor,
       ticketStageFilter,
+      user: req.user,
     });
     if (perfEnabled() && perf?.total != null) {
       res.setHeader('X-Perf-Total-Ms', String(perf.total));
@@ -184,6 +186,9 @@ async function exportInventoryExcel(req, res) {
   const limit = Math.min(20000, Math.max(1, parseInt(req.query.limit, 10) || 20000));
 
   try {
+    const inventoryTagAccess = segment === 'passed'
+      ? await getInventoryTagAccess(req.user)
+      : 'all';
     const useBatchTickets = segment === 'passed';
     const listQuery = buildInventorySerialListQuery({
       segment,
@@ -194,6 +199,7 @@ async function exportInventoryExcel(req, res) {
       includeTicketJoins: !useBatchTickets,
       includeGrnJoin: true,
       ticketStageFilter,
+      inventoryTagAccess,
     });
     const listParams = [...listQuery.params, limit];
     const selectSql = listSelectSql(!useBatchTickets);

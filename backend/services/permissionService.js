@@ -5,6 +5,7 @@ const VALID_ACTIONS = new Set(['can_view', 'can_create', 'can_edit', 'can_delete
 // Customer Access selector on the customers permission row (all/sales/rental).
 // Sibling of data_scope — do NOT conflate the two.
 const CUSTOMER_ACCESS_VALUES = new Set(['all', 'sales', 'rental']);
+const INVENTORY_TAG_ACCESS_VALUES = new Set(['all', 'sales', 'rental']);
 
 const SECTION_ALIASES = {
   reports_access: ['reports_access', 'reports'],
@@ -76,7 +77,7 @@ async function getUserRole(userId) {
 
 async function getRolePermissionRow(role, section) {
   const result = await pool.query(
-    `SELECT can_view, can_create, can_edit, can_delete, data_scope, customer_access
+    `SELECT can_view, can_create, can_edit, can_delete, data_scope, customer_access, inventory_tag_access
      FROM role_permissions
      WHERE role = $1 AND section = $2`,
     [role, section]
@@ -86,7 +87,7 @@ async function getRolePermissionRow(role, section) {
 
 async function getUserPermissionRow(userId, section) {
   const result = await pool.query(
-    `SELECT can_view, can_create, can_edit, can_delete, data_scope, customer_access
+    `SELECT can_view, can_create, can_edit, can_delete, data_scope, customer_access, inventory_tag_access
      FROM user_permissions
      WHERE user_id = $1 AND section = $2`,
     [userId, section]
@@ -128,7 +129,7 @@ async function hasPermission(userId, role, section, action, cache) {
 
 async function listRolePermissions(role) {
   const result = await pool.query(
-    `SELECT role, section, can_view, can_create, can_edit, can_delete, data_scope, customer_access
+    `SELECT role, section, can_view, can_create, can_edit, can_delete, data_scope, customer_access, inventory_tag_access
      FROM role_permissions
      WHERE role = $1
      ORDER BY section ASC`,
@@ -139,7 +140,7 @@ async function listRolePermissions(role) {
 
 async function listAllRolePermissions() {
   const result = await pool.query(
-    `SELECT role, section, can_view, can_create, can_edit, can_delete, data_scope, customer_access
+    `SELECT role, section, can_view, can_create, can_edit, can_delete, data_scope, customer_access, inventory_tag_access
      FROM role_permissions
      ORDER BY role ASC, section ASC`
   );
@@ -149,7 +150,7 @@ async function listAllRolePermissions() {
 async function listUserPermissionOverrides(userId) {
   const result = await pool.query(
     `SELECT id, user_id, section, can_view, can_create, can_edit, can_delete,
-            data_scope, customer_access, granted_by, granted_at
+            data_scope, customer_access, inventory_tag_access, granted_by, granted_at
      FROM user_permissions
      WHERE user_id = $1
      ORDER BY section ASC`,
@@ -204,6 +205,12 @@ async function buildUserPermissionsPayload(userId) {
     effective[section].customer_access = CUSTOMER_ACCESS_VALUES.has(userAccess)
       ? userAccess
       : (CUSTOMER_ACCESS_VALUES.has(roleAccess) ? roleAccess : 'all');
+
+    const userTagAccess = userMap[section]?.inventory_tag_access;
+    const roleTagAccess = roleMap[section]?.inventory_tag_access;
+    effective[section].inventory_tag_access = INVENTORY_TAG_ACCESS_VALUES.has(userTagAccess)
+      ? userTagAccess
+      : (INVENTORY_TAG_ACCESS_VALUES.has(roleTagAccess) ? roleTagAccess : 'all');
   }
 
   return {
@@ -218,13 +225,14 @@ async function buildUserPermissionsPayload(userId) {
 async function upsertRolePermissions(role, permissions) {
   const results = [];
   for (const perm of permissions) {
-    const { section, can_view, can_create, can_edit, can_delete, data_scope, customer_access } = perm;
+    const { section, can_view, can_create, can_edit, can_delete, data_scope, customer_access, inventory_tag_access } = perm;
     if (!section) continue;
     const scope = data_scope === 'assigned' ? 'assigned' : 'all';
     const access = CUSTOMER_ACCESS_VALUES.has(customer_access) ? customer_access : 'all';
+    const tagAccess = INVENTORY_TAG_ACCESS_VALUES.has(inventory_tag_access) ? inventory_tag_access : 'all';
     const result = await pool.query(
-      `INSERT INTO role_permissions (role, section, can_view, can_create, can_edit, can_delete, data_scope, customer_access)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO role_permissions (role, section, can_view, can_create, can_edit, can_delete, data_scope, customer_access, inventory_tag_access)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT (role, section)
        DO UPDATE SET
          can_view = EXCLUDED.can_view,
@@ -232,9 +240,10 @@ async function upsertRolePermissions(role, permissions) {
          can_edit = EXCLUDED.can_edit,
          can_delete = EXCLUDED.can_delete,
          data_scope = EXCLUDED.data_scope,
-         customer_access = EXCLUDED.customer_access
-       RETURNING role, section, can_view, can_create, can_edit, can_delete, data_scope, customer_access`,
-      [role, section, !!can_view, !!can_create, !!can_edit, !!can_delete, scope, access]
+         customer_access = EXCLUDED.customer_access,
+         inventory_tag_access = EXCLUDED.inventory_tag_access
+       RETURNING role, section, can_view, can_create, can_edit, can_delete, data_scope, customer_access, inventory_tag_access`,
+      [role, section, !!can_view, !!can_create, !!can_edit, !!can_delete, scope, access, tagAccess]
     );
     results.push(result.rows[0]);
   }
@@ -244,15 +253,15 @@ async function upsertRolePermissions(role, permissions) {
 async function upsertUserPermissions(userId, permissions, grantedBy) {
   const results = [];
   for (const perm of permissions) {
-    const { section, can_view, can_create, can_edit, can_delete, data_scope, customer_access } = perm;
+    const { section, can_view, can_create, can_edit, can_delete, data_scope, customer_access, inventory_tag_access } = perm;
     if (!section) continue;
     const scope = data_scope === 'all' || data_scope === 'assigned' ? data_scope : null;
-    // NULL = inherit role default
     const access = CUSTOMER_ACCESS_VALUES.has(customer_access) ? customer_access : null;
+    const tagAccess = INVENTORY_TAG_ACCESS_VALUES.has(inventory_tag_access) ? inventory_tag_access : null;
     const result = await pool.query(
       `INSERT INTO user_permissions
-        (user_id, section, can_view, can_create, can_edit, can_delete, data_scope, customer_access, granted_by, granted_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+        (user_id, section, can_view, can_create, can_edit, can_delete, data_scope, customer_access, inventory_tag_access, granted_by, granted_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
        ON CONFLICT (user_id, section)
        DO UPDATE SET
          can_view = EXCLUDED.can_view,
@@ -261,11 +270,12 @@ async function upsertUserPermissions(userId, permissions, grantedBy) {
          can_delete = EXCLUDED.can_delete,
          data_scope = EXCLUDED.data_scope,
          customer_access = EXCLUDED.customer_access,
+         inventory_tag_access = EXCLUDED.inventory_tag_access,
          granted_by = EXCLUDED.granted_by,
          granted_at = NOW()
        RETURNING id, user_id, section, can_view, can_create, can_edit, can_delete, data_scope,
-                 customer_access, granted_by, granted_at`,
-      [userId, section, can_view ?? null, can_create ?? null, can_edit ?? null, can_delete ?? null, scope, access, grantedBy]
+                 customer_access, inventory_tag_access, granted_by, granted_at`,
+      [userId, section, can_view ?? null, can_create ?? null, can_edit ?? null, can_delete ?? null, scope, access, tagAccess, grantedBy]
     );
     results.push(result.rows[0]);
   }
@@ -284,6 +294,7 @@ async function buildEffectivePermissionsForUser(userId, role) {
         can_delete: true,
         data_scope: 'all',
         customer_access: 'all',
+        inventory_tag_access: 'all',
       };
     }
     return effective;

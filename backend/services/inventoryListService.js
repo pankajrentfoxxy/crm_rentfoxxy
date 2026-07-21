@@ -12,6 +12,7 @@ const {
   setCachedCount,
 } = require('./inventoryListCache');
 const { countInventoryRows, fetchInventoryPage } = require('../repositories/inventoryListRepository');
+const { getInventoryTagAccess, accessLabel, isRestricted } = require('./inventoryTagAccessScope');
 const { createPerfLogger } = require('../utils/performanceLogger');
 
 async function listInventorySerials(options) {
@@ -26,16 +27,23 @@ async function listInventorySerials(options) {
     specFilters,
     cursor,
     ticketStageFilter = 'all',
+    user = null,
   } = options;
+
+  const inventoryTagAccess = segment === 'passed'
+    ? await getInventoryTagAccess(user)
+    : 'all';
 
   const perf = createPerfLogger(`inventory.list.${segment}`);
   perf.start('total');
 
   const listKey = buildListCacheKey({
     segment, page, limit, search, dateFrom, dateTo, specFilters, cursor, ticketStageFilter,
+    inventoryTagAccess,
   });
   const countKey = buildCountCacheKey({
     segment, search, dateFrom, dateTo, specFilters, ticketStageFilter,
+    inventoryTagAccess,
   });
 
   perf.start('cache_read');
@@ -50,6 +58,7 @@ async function listInventorySerials(options) {
   perf.start('sql');
   const rowsPromise = fetchInventoryPage({
     segment, limit, offset, search, dateFrom, dateTo, specFilters, cursor, ticketStageFilter,
+    inventoryTagAccess,
   });
   const cachedTotal = await getCachedCount(countKey);
 
@@ -60,7 +69,9 @@ async function listInventorySerials(options) {
     rows = await rowsPromise;
   } else {
     [total, rows] = await Promise.all([
-      countInventoryRows({ segment, search, dateFrom, dateTo, specFilters, ticketStageFilter }),
+      countInventoryRows({
+        segment, search, dateFrom, dateTo, specFilters, ticketStageFilter, inventoryTagAccess,
+      }),
       rowsPromise,
     ]);
     await setCachedCount(countKey, total);
@@ -82,6 +93,7 @@ async function listInventorySerials(options) {
     total,
     rows,
     cursor,
+    inventoryTagAccess,
   });
 
   perf.start('cache_write');
@@ -93,7 +105,7 @@ async function listInventorySerials(options) {
   return { payload, perf: perf.summary(), cacheHit: false };
 }
 
-function buildResponse({ segment, data, page, limit, total, rows, cursor }) {
+function buildResponse({ segment, data, page, limit, total, rows, cursor, inventoryTagAccess = 'all' }) {
   const pagination = {
     page,
     limit,
@@ -110,6 +122,11 @@ function buildResponse({ segment, data, page, limit, total, rows, cursor }) {
     title: listTitleForSegment(segment),
     data,
     pagination,
+    inventory_tag_access: inventoryTagAccess,
+    inventory_scope_label: isRestricted(inventoryTagAccess) ? accessLabel(inventoryTagAccess) : null,
+    inventory_scope_note: isRestricted(inventoryTagAccess)
+      ? 'Showing available laptops for your team only. SO-attached units are hidden.'
+      : null,
   };
 }
 

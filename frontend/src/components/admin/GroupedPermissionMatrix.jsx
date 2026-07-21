@@ -25,10 +25,16 @@ const ACTION_COLORS = {
 // Customer Access selector (All / Sales / Rental) — customers row only.
 // Filters which customer_type values the role can see across the whole CRM.
 const CUSTOMER_ACCESS_SECTIONS = new Set(['customers', 'customer_management']);
+const INVENTORY_TAG_ACCESS_SECTIONS = new Set(['inventory_management', 'inventory']);
 const CUSTOMER_ACCESS_OPTIONS = [
   { value: 'all', label: 'All' },
   { value: 'sales', label: 'Sales' },
   { value: 'rental', label: 'Rental' },
+];
+const INVENTORY_TAG_ACCESS_OPTIONS = [
+  { value: 'all', label: 'All stock' },
+  { value: 'sales', label: 'Sale + Both' },
+  { value: 'rental', label: 'Rental + Both' },
 ];
 
 function applyCheckboxRules(section, action, value, current) {
@@ -71,7 +77,9 @@ export default function GroupedPermissionMatrix({
       && (matrix[section]?.data_scope || 'all') !== (baselineMatrix[section]?.data_scope || 'all');
     const accessChanged = CUSTOMER_ACCESS_SECTIONS.has(section)
       && (matrix[section]?.customer_access || 'all') !== (baselineMatrix[section]?.customer_access || 'all');
-    return scopeChanged || accessChanged || PERMISSION_ACTIONS.some(
+    const tagAccessChanged = INVENTORY_TAG_ACCESS_SECTIONS.has(section)
+      && (matrix[section]?.inventory_tag_access || 'all') !== (baselineMatrix[section]?.inventory_tag_access || 'all');
+    return scopeChanged || accessChanged || tagAccessChanged || PERMISSION_ACTIONS.some(
       (action) => !!matrix[section]?.[action] !== !!baselineMatrix[section]?.[action]
     );
   };
@@ -86,9 +94,14 @@ export default function GroupedPermissionMatrix({
     onChange(section, { ...current, customer_access: customerAccess });
   };
 
+  const handleInventoryTagAccessChange = (section, inventoryTagAccess) => {
+    const current = matrix[section] || emptyPermissionRow();
+    onChange(section, { ...current, inventory_tag_access: inventoryTagAccess });
+  };
+
   const emptyPermissionRow = () => ({
     can_view: false, can_create: false, can_edit: false, can_delete: false,
-    data_scope: 'all', customer_access: 'all',
+    data_scope: 'all', customer_access: 'all', inventory_tag_access: 'all',
   });
 
   return (
@@ -97,6 +110,7 @@ export default function GroupedPermissionMatrix({
         const colorClass = GROUP_COLORS[group] || GROUP_COLORS.Core;
         const isOpen = !collapsed[group];
         const hasCustomerAccess = sections.some((s) => CUSTOMER_ACCESS_SECTIONS.has(s));
+        const hasInventoryTagAccess = sections.some((s) => INVENTORY_TAG_ACCESS_SECTIONS.has(s));
 
         return (
           <div key={group} className="border border-gray-200 rounded-xl overflow-hidden bg-white">
@@ -133,6 +147,11 @@ export default function GroupedPermissionMatrix({
                       {hasCustomerAccess ? (
                         <th className="px-3 py-2 text-center text-xs font-medium uppercase text-cyan-600">
                           Customer Access
+                        </th>
+                      ) : null}
+                      {hasInventoryTagAccess ? (
+                        <th className="px-3 py-2 text-center text-xs font-medium uppercase text-teal-600">
+                          Ready Stock
                         </th>
                       ) : null}
                     </tr>
@@ -187,6 +206,25 @@ export default function GroupedPermissionMatrix({
                                 className="text-xs border border-gray-300 rounded-md px-2 py-1 bg-white max-w-[110px]"
                               >
                                 {CUSTOMER_ACCESS_OPTIONS.map((opt) => (
+                                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <span className="text-gray-300">—</span>
+                            )}
+                          </td>
+                        ) : null}
+                        {hasInventoryTagAccess ? (
+                          <td className="px-3 py-2.5 text-center">
+                            {INVENTORY_TAG_ACCESS_SECTIONS.has(section) ? (
+                              <select
+                                value={matrix[section]?.inventory_tag_access || 'all'}
+                                disabled={disabled}
+                                onChange={(e) => handleInventoryTagAccessChange(section, e.target.value)}
+                                title="Ready to Rent/Sell visibility: Sale team sees Sale+Both; Rental team sees Rental+Both; SO-attached laptops hidden when narrowed"
+                                className="text-xs border border-gray-300 rounded-md px-2 py-1 bg-white max-w-[120px]"
+                              >
+                                {INVENTORY_TAG_ACCESS_OPTIONS.map((opt) => (
                                   <option key={opt.value} value={opt.value}>{opt.label}</option>
                                 ))}
                               </select>
