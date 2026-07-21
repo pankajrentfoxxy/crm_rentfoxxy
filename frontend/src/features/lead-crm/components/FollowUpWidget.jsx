@@ -4,8 +4,17 @@ import { addLeadRemark, updateFollowUp } from '../leadCrmApi';
 import toast from 'react-hot-toast';
 import { followUpCalendarYmd } from '../leadCrmUtils';
 import { refreshLeadCrmCounts } from '../hooks/useLeadCrmCounts';
+import PersonalRemarksPanel from './PersonalRemarksPanel';
 
-export default function FollowUpWidget({ leadId, initialDate, initialTime, onSaved, compact = false }) {
+export default function FollowUpWidget({
+  leadId,
+  initialDate,
+  initialTime,
+  initialPersonalRemarks,
+  assignedUserId,
+  onSaved,
+  compact = false,
+}) {
   const [date, setDate] = useState(followUpCalendarYmd(initialDate) || '');
   const [time, setTime] = useState(initialTime ? String(initialTime).slice(0, 5) : '');
   const [notes, setNotes] = useState('');
@@ -57,7 +66,15 @@ export default function FollowUpWidget({ leadId, initialDate, initialTime, onSav
   };
 
   return (
-    <div className={`rounded-xl border border-gray-100 bg-white shadow-sm ${compact ? 'p-3' : 'p-4'}`}>
+    <div className="space-y-4">
+      <PersonalRemarksPanel
+        leadId={leadId}
+        value={initialPersonalRemarks}
+        assignedUserId={assignedUserId}
+        onSaved={() => onSaved?.()}
+        compact={compact}
+      />
+      <div className={`rounded-xl border border-gray-100 bg-white shadow-sm ${compact ? 'p-3' : 'p-4'}`}>
       <div className="flex items-center gap-2 mb-3">
         <Calendar className="w-4 h-4 text-blue-600" />
         <h4 className="font-medium text-gray-900 text-sm">
@@ -112,6 +129,7 @@ export default function FollowUpWidget({ leadId, initialDate, initialTime, onSav
       >
         {saving ? 'Saving...' : 'Save'}
       </button>
+      </div>
     </div>
   );
 }

@@ -166,12 +166,21 @@ export default function LeadDetailPage() {
                 <div><span className="text-gray-500">Qty / Budget</span>
                   <p>{lead.quantityRequired || '—'} · {formatCurrency(lead.monthlyBudget)}/mo</p></div>
                 <div className="col-span-2"><span className="text-gray-500">Billing</span><p>{lead.billingAddress || '—'}</p></div>
+                <div className="col-span-2"><span className="text-gray-500">Personal Remarks</span>
+                  <p className="whitespace-pre-wrap">{lead.personalRemarks || lead.personal_remarks || '—'}</p></div>
               </div>
             </div>
           )}
 
           {tab === 2 && (
-            <FollowUpWidget leadId={lead.leadId} initialDate={lead.followUpDate} initialTime={lead.followUpTime} onSaved={load} />
+            <FollowUpWidget
+              leadId={lead.leadId}
+              initialDate={lead.followUpDate}
+              initialTime={lead.followUpTime}
+              initialPersonalRemarks={lead.personalRemarks ?? lead.personal_remarks ?? ''}
+              assignedUserId={lead.assignedUserId ?? lead.assigned_user_id}
+              onSaved={load}
+            />
           )}
 
           {tab === 3 && (

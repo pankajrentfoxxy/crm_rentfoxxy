@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { addLeadRemark, updateFollowUp } from '../leadCrmApi';
 import { leadDisplayLabel, followUpCalendarYmd } from '../leadCrmUtils';
 import { refreshLeadCrmCounts } from '../hooks/useLeadCrmCounts';
+import PersonalRemarksPanel from './PersonalRemarksPanel';
 
 export default function SetFollowUpModal({ open, lead, onClose, onSaved }) {
   const [date, setDate] = useState('');
@@ -63,7 +64,7 @@ export default function SetFollowUpModal({ open, lead, onClose, onSaved }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-sm">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between p-4 border-b border-gray-100">
           <div className="flex items-center gap-2">
             <Calendar className="w-4 h-4 text-blue-600" />
@@ -80,6 +81,13 @@ export default function SetFollowUpModal({ open, lead, onClose, onSaved }) {
         </div>
 
         <form onSubmit={handleSubmit} className="p-4 space-y-3">
+          <PersonalRemarksPanel
+            leadId={lead.leadId}
+            value={lead.personalRemarks ?? lead.personal_remarks ?? ''}
+            assignedUserId={lead.assignedUserId ?? lead.assigned_user_id}
+            onSaved={onSaved}
+            compact
+          />
           <div>
             <label className="text-sm font-medium text-gray-700">Follow-up date</label>
             <input
