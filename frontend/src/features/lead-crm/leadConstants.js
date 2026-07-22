@@ -59,7 +59,7 @@ export const INQUIRY_TYPES = ['rental', 'sales', 'both'];
 export const EXCLUDED_LEAD_ASSIGNEES = ['Pradeep'];
 
 export const LEAD_SOURCES = [
-  'Email', 'Walk-in', 'Reference', 'Website', 'Cold Call', 'LinkedIn',
+  'Email', 'Teams', 'Reference', 'Website', 'Cold Call', 'LinkedIn',
   'WhatsApp', 'Just Dial', 'IndiaMART', 'Other',
 ];
 

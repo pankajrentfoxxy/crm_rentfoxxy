@@ -877,10 +877,8 @@ exports.acceptLeadQuotation = async (req, res) => {
 exports.createLead = async (req, res) => {
   const payload = buildLeadPayload(req.body || {});
 
-  if (!payload.email) {
-    return res.status(400).json({ success: false, message: 'Email is required' });
-  }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email)) {
+  // Email is optional; validate format only when provided.
+  if (payload.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email)) {
     return res.status(400).json({ success: false, message: 'Enter a valid email' });
   }
 
@@ -1845,10 +1843,8 @@ exports.updateLeadBasicDetails = async (req, res) => {
     // Use raw SQL for full update to avoid Prisma client sync issues with company_brand
     // Only update email/phone if explicitly provided - otherwise keep existing (fixes bug when only personal_remarks is sent)
     const nextName = (name ?? existing.name)?.trim() || existing.name;
+    // Email is optional; validate format only when a non-empty value is provided.
     const nextEmail = email !== undefined ? (normalizeEmail(email) || null) : existing.email;
-    if (email !== undefined && !nextEmail) {
-      return res.status(400).json({ success: false, message: 'Email is required' });
-    }
     if (nextEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail)) {
       return res.status(400).json({ success: false, message: 'Enter a valid email' });
     }

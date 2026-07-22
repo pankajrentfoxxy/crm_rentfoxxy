@@ -281,6 +281,7 @@ exports.moveToStage = async (req, res) => {
     if (currentStageName === 'Pending Inventory' && effectiveToStage === 'Inventory') conditionHint = 'inventory_received';
     if (currentStageName === 'Dispatch QC' && effectiveToStage === 'Inventory') conditionHint = 'dispatch_qc_passed';
     if (currentStageName === 'Dispatch QC' && effectiveToStage === 'Assembly & Software') conditionHint = 'dispatch_qc_failed';
+    if (currentStageName === 'Dispatch QC' && effectiveToStage === 'Diagnosis') conditionHint = 'dispatch_qc_failed';
 
     const privileged = PRIVILEGED_ROLES.includes(req.user.role);
     const bypassTransitionRules = canBypassTransitionRules(req.user, req.body);
@@ -401,7 +402,10 @@ exports.moveToStage = async (req, res) => {
       highlightedReason = null;
     }
 
-    if (currentStageName === 'Dispatch QC' && effectiveToStage === 'Assembly & Software') {
+    if (
+      currentStageName === 'Dispatch QC'
+      && (effectiveToStage === 'Assembly & Software' || effectiveToStage === 'Diagnosis')
+    ) {
       if (!reason?.trim() || reason.trim().length < 5) {
         await client.query('ROLLBACK');
         return res.status(400).json({ success: false, message: 'Dispatch QC fail reason is required (min 5 characters)' });
@@ -422,6 +426,33 @@ exports.moveToStage = async (req, res) => {
         actorName: req.user.name,
         db: client
       });
+
+      // Dispatch QC fail → detach from the Sales Order, recalc totals, mark the
+      // asset qc_failed (drops off Ready to Rent/Sell) and write SO/asset audits.
+      // Ticket stage move itself is handled below by this function.
+      const allocRes = await client.query(
+        `SELECT allocation_id FROM sales_order_serials
+          WHERE qc_ticket_id = $1 AND status <> 'removed'
+          ORDER BY allocation_id DESC LIMIT 1`,
+        [ticket.ticket_id]
+      );
+      if (allocRes.rows.length) {
+        const { applyDispatchQcFailure } = require('../services/dispatchQcCaptureService');
+        const paRes = await client.query(
+          `SELECT production_asset_id FROM production_assets
+            WHERE ticket_id = $1 OR (vendor_serial_id IS NOT NULL AND vendor_serial_id = $2)
+            ORDER BY production_asset_id DESC LIMIT 1`,
+          [ticket.ticket_id, ticket.vendor_serial_id || null]
+        );
+        await applyDispatchQcFailure(client, {
+          allocationId: allocRes.rows[0].allocation_id,
+          pa: paRes.rows[0] || null,
+          remarks: reason.trim(),
+          actorUserId: req.user.user_id,
+          actorName: req.user.name,
+          moveTicketToDiagnosis: false,
+        });
+      }
     }
 
     if (currentStageName === 'Dispatch QC' && effectiveToStage === 'Inventory') {
@@ -609,6 +640,11 @@ exports.moveToStage = async (req, res) => {
       (effectiveToStage === 'Body & Paint' || effectiveToStage === 'Chip Level Repair')
       && !overrideAssignee
     ) {
+      assignedUserId = null;
+    }
+
+    // Dispatch QC fail → Diagnosis: back to the Diagnosis team queue for triage.
+    if (currentStageName === 'Dispatch QC' && effectiveToStage === 'Diagnosis' && !overrideAssignee) {
       assignedUserId = null;
     }
 

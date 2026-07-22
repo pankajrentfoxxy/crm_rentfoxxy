@@ -9,13 +9,13 @@ import EInvoicePanel from '../components/EInvoicePanel';
 import QcStatusBadge from '../components/QcStatusBadge';
 import {
   createDcQcTickets, getDC, getDcQcStatus, getDCMeta, getSalesOrderFull,
-  markDelivered, markRejected, regenerateDcPdf,
+  markDelivered, markRejected, regenerateDcPdf, cancelDC,
   sendDeliveryOtp, sendWarehouseReturnOtp, verifyDeliveryOtp, verifyWarehouseReturnOtp,
   updateDC, dispatchDC, updateDcHsn,
 } from '../salesPipelineApi';
 import {
   DC_STATUS_STYLES, formatConfig, formatCurrency, formatDate, formatDateTime,
-  isDcAssignmentEditable, parseSerials, salesOrderDetailPath, statusLabel,
+  isDcAssignmentEditable, isDcCancellable, parseSerials, salesOrderDetailPath, statusLabel,
 } from '../salesPipelineUtils';
 import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
@@ -75,6 +75,9 @@ export default function DeliveryChallanDetailPage() {
   const [technicians, setTechnicians] = useState([]);
   const [hsnDraft, setHsnDraft] = useState('');
   const [hsnSaving, setHsnSaving] = useState(false);
+  const [cancelModal, setCancelModal] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelSaving, setCancelSaving] = useState(false);
 
   const head = lines[0] || {};
   const summaryLines = billingLines.length ? billingLines : lines;
@@ -217,7 +220,24 @@ export default function DeliveryChallanDetailPage() {
     }
   };
 
+  const handleCancelDc = async () => {
+    setCancelSaving(true);
+    try {
+      const res = await cancelDC(dcNumber, { reason: cancelReason.trim() || undefined });
+      toast.success(res.data?.message || 'Delivery challan cancelled');
+      setCancelModal(false);
+      setCancelReason('');
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Could not cancel delivery challan');
+    } finally {
+      setCancelSaving(false);
+    }
+  };
+
   const isRejected = head.status === 'rejected';
+  const isCancelled = head.status === 'cancelled';
+  const canCancelDc = isSuperAdmin && isDcCancellable(head);
   const isCourier = head.dispatch_mode === 'courier' || head.ship_by === 'by_courier';
   const pendingWarehouseReturn = isRejected && !head.return_to_warehouse_at;
 
@@ -272,7 +292,7 @@ export default function DeliveryChallanDetailPage() {
           >
             ← Back
           </button>
-          <h1 className={`text-2xl font-semibold font-mono mt-1 ${isRejected ? 'text-red-700 line-through decoration-red-400' : ''}`}>{dcNumber}</h1>
+          <h1 className={`text-2xl font-semibold font-mono mt-1 ${isRejected || isCancelled ? 'text-red-700 line-through decoration-red-400' : ''}`}>{dcNumber}</h1>
           <p className="text-gray-600">{head.customer_name || '—'} · SO: <Link className="text-blue-600" to={salesOrderDetailPath(head.sales_order_number)}>{head.sales_order_number}</Link></p>
           <p className="text-sm text-gray-500 mt-1">
             Created: {formatDate(head.created_at)}
@@ -313,6 +333,15 @@ export default function DeliveryChallanDetailPage() {
             <button type="button" onClick={() => setEditOpen(true)}
               className="inline-flex items-center px-4 min-h-[40px] text-sm font-semibold bg-amber-600 text-white rounded-xl hover:bg-amber-700">Edit DC</button>
           )}
+          {canCancelDc && (
+            <button
+              type="button"
+              onClick={() => setCancelModal(true)}
+              className="inline-flex items-center px-4 min-h-[40px] text-sm font-semibold border border-red-300 text-red-700 rounded-xl hover:bg-red-50"
+            >
+              Cancel DC
+            </button>
+          )}
         </div>
       </div>
 
@@ -328,6 +357,11 @@ export default function DeliveryChallanDetailPage() {
 
           {tab === 'details' && (
             <>
+            {isCancelled && (
+              <div className="p-3 mb-4 bg-slate-100 border border-slate-300 rounded-lg text-sm text-slate-800">
+                This delivery challan was cancelled. Laptops are attached on the sales order again — open the SO and create new DC(s), one per package if needed.
+              </div>
+            )}
             <div className="bg-white border rounded-xl overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -731,6 +765,47 @@ export default function DeliveryChallanDetailPage() {
             <h3 className="font-semibold mb-3">Verify OTP</h3>
             <input className="w-full border rounded-lg px-3 py-2 mb-3" value={otpValue} onChange={(e) => setOtpValue(e.target.value)} placeholder="Enter OTP" />
             <button type="button" onClick={handleVerifyDeliver} className="w-full py-2 bg-blue-600 text-white rounded-lg text-sm">Verify & Deliver</button>
+          </div>
+        </div>
+      )}
+
+      {cancelModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <button type="button" className="absolute inset-0 bg-black/40" onClick={() => !cancelSaving && setCancelModal(false)} aria-label="Close" />
+          <div className="relative bg-white rounded-xl p-6 w-full max-w-md space-y-3">
+            <h3 className="font-semibold">Cancel delivery challan</h3>
+            <p className="text-sm text-gray-600">
+              All laptops on this DC will return to <strong>Attached</strong> on sales order{' '}
+              <strong>{head.sales_order_number || '—'}</strong>. You can then create separate DCs (e.g. one per package).
+            </p>
+            <p className="text-xs text-amber-700">
+              If an e-invoice was generated for this DC, cancel or void it separately before re-dispatching.
+            </p>
+            <textarea
+              className="w-full border rounded-lg px-3 py-2 text-sm"
+              rows={2}
+              placeholder="Reason (optional)"
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+            />
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={cancelSaving}
+                onClick={() => setCancelModal(false)}
+                className="flex-1 py-2 border border-gray-300 rounded-lg text-sm"
+              >
+                Keep DC
+              </button>
+              <button
+                type="button"
+                disabled={cancelSaving}
+                onClick={handleCancelDc}
+                className="flex-1 py-2 bg-red-600 text-white rounded-lg text-sm disabled:opacity-60"
+              >
+                {cancelSaving ? 'Cancelling…' : 'Cancel DC'}
+              </button>
+            </div>
           </div>
         </div>
       )}

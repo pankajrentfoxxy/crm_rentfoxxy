@@ -27,7 +27,17 @@ export const DC_STATUS_STYLES = {
   in_transit: 'bg-amber-100 text-amber-800',
   delivered: 'bg-emerald-100 text-emerald-800',
   rejected: 'bg-red-100 text-red-800',
+  cancelled: 'bg-slate-200 text-slate-700 line-through',
 };
+
+const TERMINAL_DC_STATUSES = new Set(['cancelled', 'delivered', 'rejected']);
+
+/** Super-admin may cancel before delivery to re-attach laptops on the SO. */
+export function isDcCancellable(head) {
+  if (!head) return false;
+  if (String(head.movement_type || '').toLowerCase() === 'return') return false;
+  return !TERMINAL_DC_STATUSES.has(String(head.status || '').toLowerCase());
+}
 
 export const DISPATCH_MODE_STYLES = {
   courier: 'bg-blue-100 text-blue-800',

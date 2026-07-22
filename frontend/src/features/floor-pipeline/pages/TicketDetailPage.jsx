@@ -646,6 +646,15 @@ export default function TicketDetailPage() {
       danger: true,
       needsReason: true,
     });
+    stageButtons.push(
+      { label: 'DISPATCH QC PASS — Laptop Ready for DC', action: () => move('Inventory'), success: true },
+      {
+        label: 'DISPATCH QC FAIL — Remove from SO & send to Diagnosis',
+        action: () => move('Diagnosis', failReason, undefined, { minReasonLen: 5 }),
+        danger: true,
+        needsReason: true
+      }
+    );
   }
   if (isSuperAdmin && stage === 'Dispatch QC') {
     stageButtons.push({
