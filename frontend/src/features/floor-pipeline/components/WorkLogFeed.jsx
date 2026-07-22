@@ -10,7 +10,8 @@ const EVENT_LABELS = {
   qc1_passed: 'QC1 passed',
   qc2_passed: 'QC2 passed',
   assigned: 'Assigned',
-  note_added: 'Note added'
+  note_added: 'Note added',
+  dispatch_qc_snoozed: 'QC reminder snoozed',
 };
 
 export default function WorkLogFeed({ activities = [], parts = [], auditLog = [] }) {

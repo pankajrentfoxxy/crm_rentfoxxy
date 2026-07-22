@@ -558,6 +558,35 @@ exports.getTicketById = async (req, res) => {
 
     const ticket = result.rows[0];
 
+    let dispatchQcEta = null;
+    if (ticket.sales_order_number && ticket.stage_name === 'Dispatch QC') {
+      const wfRes = await pool.query(
+        `SELECT dw.id, dw.assigned_user_id, dw.accepted_by, dw.qc_started_at, dw.qc_due_at, dw.qc_overdue,
+                dw.qc_alert_snoozed_until, dw.qc_alert_snooze_remark, dw.status,
+                sol.customer_name,
+                sol.quotation_type AS order_type
+           FROM dispatch_workflow dw
+           LEFT JOIN LATERAL (
+             SELECT customer_name, quotation_type
+               FROM sales_order_lines
+              WHERE sales_order_number = dw.sales_order_number
+              ORDER BY id ASC
+              LIMIT 1
+           ) sol ON TRUE
+          WHERE dw.sales_order_number = $1
+            AND dw.status = 'dispatch_qc'
+          LIMIT 1`,
+        [ticket.sales_order_number]
+      );
+      if (wfRes.rows[0]) {
+        dispatchQcEta = {
+          ...wfRes.rows[0],
+          ticket_assignee_user_id: ticket.assigned_user_id,
+          ticket_id: ticket.ticket_id,
+        };
+      }
+    }
+
     const allowed = await canAccessTicketRecord(req, ticket);
     if (!allowed) {
       return res.status(403).json({
@@ -640,7 +669,8 @@ exports.getTicketById = async (req, res) => {
         initial_cost: initialCost,
         parts_total: partsTotal,
         services_total: servicesTotal,
-        grand_total: grandTotal
+        grand_total: grandTotal,
+        dispatch_qc_eta: dispatchQcEta,
       },
       activities: activities.rows,
       photos: photos.rows,

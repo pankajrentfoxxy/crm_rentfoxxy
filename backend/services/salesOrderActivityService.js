@@ -8,6 +8,7 @@ const ACTIVITY_TYPES = {
   DELIVERY_CHALLAN: 'delivery_challan',
   PAYMENT: 'payment',
   DOCUMENT: 'document',
+  DISPATCH: 'dispatch',
 };
 
 const ACTION_TITLES = {
@@ -48,6 +49,22 @@ const ACTION_TITLES = {
   printed: 'Sales Order Printed',
   shared: 'Sales Order Shared',
   pdf_generated: 'PDF Generated',
+  dispatch_assigned: 'Dispatch Assigned',
+  dispatch_notification_sent: 'Dispatch Notification Sent',
+  dispatch_accepted: 'Dispatch Accepted',
+  laptop_available: 'Laptop Available',
+  purchase_request_created: 'Purchase Request Created',
+  purchase_request_received: 'Purchase Request Received',
+  dispatch_qc_started: 'Dispatch QC Started',
+  dispatch_qc_passed: 'Dispatch QC Passed',
+  dispatch_qc_failed: 'Dispatch QC Failed',
+  ready_for_dispatch: 'Ready for Dispatch',
+  dispatch_reminder_sent: 'Dispatch Reminder Sent',
+  dispatch_alert_snoozed: 'Dispatch Alert Snoozed',
+  dispatch_qc_alert_snoozed: 'Dispatch QC Alert Snoozed',
+  dispatch_qc_reminder_sent: 'Dispatch QC Reminder Sent',
+  dispatch_qc_overdue: 'Dispatch QC Overdue',
+  customer_asset_created: 'Customer Asset Created',
 };
 
 function actorFromUser(user = {}) {

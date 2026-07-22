@@ -17,7 +17,12 @@ import { SO_PERMISSION_SECTIONS } from './salesOrderScope';
 
 const g = (section, node) => <ProtectedRoute section={section} action="view">{node}</ProtectedRoute>;
 const gSo = (node) => (
-  <ProtectedRoute sections={SO_PERMISSION_SECTIONS} action="view">{node}</ProtectedRoute>
+  <ProtectedRoute
+    sections={[...SO_PERMISSION_SECTIONS, 'dispatch_workflow', 'dispatch_pending_orders']}
+    action="view"
+  >
+    {node}
+  </ProtectedRoute>
 );
 
 function SalesOrdersLegacyRedirect() {

@@ -63,6 +63,11 @@ export const inventoryAccordionChildren = [
   { label: 'TTSPL History', path: '/inventory-management/ttspl-history', section: 'ttspl_history' },
 ];
 
+/** Dispatch — pending acceptance queue only. */
+export const dispatchAccordionChildren = [
+  { label: 'Pending Orders', path: '/dispatch/pending-orders', section: 'dispatch_pending_orders', countKey: 'pending_orders' },
+];
+
 /** Sales Pipeline. Each child uses the GRANULAR section its backend API enforces
  *  (sales_quotations / sales_orders_doc / delivery_challans / ...), so a user only
  *  sees the documents they can actually open — e.g. warehouse has delivery_challans
@@ -176,6 +181,19 @@ export const MENU_GROUPS = [
     ],
   },
   {
+    key: 'dispatch',
+    label: 'Dispatch',
+    items: [
+      {
+        type: 'dispatchAccordion',
+        icon: Truck,
+        label: 'Dispatch',
+        section: 'dispatch_pending_orders',
+        children: dispatchAccordionChildren,
+      },
+    ],
+  },
+  {
     key: 'floor_quality',
     label: 'Production',
     items: [
@@ -281,6 +299,10 @@ export function isMenuItemVisible(item, canView) {
     return (item.sections || []).some((section) => canView(section));
   }
 
+  if (item.type === 'dispatchAccordion') {
+    return (item.children || []).some((child) => isDispatchChildVisible(child, canView));
+  }
+
   if (item.type === 'salesPipelineAccordion') {
     return (item.children || []).some((child) => isSalesPipelineChildVisible(child, canView));
   }
@@ -314,6 +336,7 @@ export function isMenuItemVisible(item, canView) {
 
   if (
     item.type === 'vendorAccordion'
+    || item.type === 'dispatchAccordion'
     || item.type === 'salesPipelineAccordion'
     || item.type === 'financeAccordion'
     || item.type === 'reportsAccordion'
@@ -336,6 +359,11 @@ export function isLeadCrmChildVisible(child, canView) {
 }
 
 export function isOperationChildVisible(child, canView) {
+  if (child.section) return canView(child.section);
+  return false;
+}
+
+export function isDispatchChildVisible(child, canView) {
   if (child.section) return canView(child.section);
   return false;
 }

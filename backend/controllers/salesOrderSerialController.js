@@ -305,6 +305,13 @@ exports.attachSerial = async (req, res) => {
     await client.query('COMMIT');
     invalidateInventoryListCachesFireAndForget();
 
+    const dispatchWf = require('../services/dispatchWorkflowService');
+    await dispatchWf.onAttached(null, {
+      salesOrderNumber: soNumber,
+      serialId: serialForAttach.serial_id,
+      user: req.user,
+    });
+
     let qcTicket = null;
     if (ticket.ticket_id) {
       const tRes = await pool.query(
@@ -440,6 +447,18 @@ exports.detachSerial = async (req, res) => {
       `UPDATE sales_order_serials SET status = 'removed', updated_at = NOW() WHERE allocation_id = $1`,
       [allocId]
     );
+    if (toPendingInventory && alloc.sales_order_number) {
+      try {
+        const dispatchWf = require('../services/dispatchWorkflowService');
+        await dispatchWf.onQcFailed(client, {
+          salesOrderNumber: alloc.sales_order_number,
+          reason: pendingReason,
+          user: req.user,
+        });
+      } catch (wfErr) {
+        console.error('onQcFailed after detach:', wfErr.message);
+      }
+    }
     await client.query('COMMIT');
     invalidateInventoryListCachesFireAndForget();
     res.json({ success: true, message: 'Serial detached' });

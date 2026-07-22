@@ -248,9 +248,20 @@ export function isDispatchQcRole(role) {
   return role === 'dispatch_qc';
 }
 
-/** Dispatch QC role, Dispatch QC Team, or dispatch_qc permission (EDIT). */
+export function isDispatchRole(role) {
+  return role === 'dispatch';
+}
+
+/** Admin / super_admin only — mark Dispatch QC passed → Inventory (Ready for DC). */
+export function canDispatchQcPassReady(user) {
+  const role = user?.role;
+  return role === 'super_admin' || role === 'admin';
+}
+
+/** Dispatch QC role, Dispatch team, or dispatch_qc permission (EDIT). Fail / checklist only — not pass-to-DC. */
 export function canActAsDispatchQc(user, canEdit) {
   if (!user) return false;
+  if (isDispatchRole(user.role)) return true;
   if (isDispatchQcRole(user.role)) return true;
   const names = user.team_names || [];
   if (names.some((n) => String(n).trim().toLowerCase() === DISPATCH_QC_TEAM_NAME.toLowerCase())) {

@@ -23,6 +23,7 @@ import {
   configBadges,
   isQcRole,
   canActAsDispatchQc,
+  canDispatchQcPassReady,
   isTechnicianRole,
   priorityBadge,
   resolveTicketTtspl,
@@ -48,8 +49,16 @@ import AssignmentModal from '../components/AssignmentModal';
 import Qc1ReworkAssignModal from '../components/Qc1ReworkAssignModal';
 import HwReworkAssignModal from '../components/HwReworkAssignModal';
 import Qc2InventoryTagModal from '../components/Qc2InventoryTagModal';
+import DispatchQcEtaBadge from '../components/DispatchQcEtaBadge';
+import DispatchQcSnoozeActivityModal from '../components/DispatchQcSnoozeActivityModal';
+import DispatchQcReminderModal, {
+  isDispatchQcDueCrossed,
+  isDispatchQcTicketAssignee,
+} from '../../../components/notifications/DispatchQcReminderModal';
+import { snoozeDispatchQcAlert } from '../../../utils/dispatchWorkflowApi';
 import TtsplHistoryDrawer from '../components/TtsplHistoryDrawer';
 import useAutoRefresh from '../hooks/useAutoRefresh';
+import { useDispatchRealtime } from '../../dispatch/DispatchRealtimeProvider';
 
 const HW_WORK_STAGES = ['Assembly & Software', 'Final Testing', 'Chip Level Repair', 'Body & Paint'];
 const HW_SW_DIAGNOSIS_STAGES = ['Diagnosis', ...HW_WORK_STAGES];
@@ -75,7 +84,14 @@ export default function TicketDetailPage() {
   const { user, isAssignedDataOnly } = useAuth();
   const { canEdit } = usePermission();
   const canManageTickets = canManageFloorTickets(canEdit, isAssignedDataOnly);
+  const { upsertQcAlertFromTicket, applyLocalQcSnooze, notifyQcOverdueIfNeeded } = useDispatchRealtime();
   const [loading, setLoading] = useState(true);
+  const [qcReminderOpen, setQcReminderOpen] = useState(false);
+  const [qcSnoozeUntil, setQcSnoozeUntil] = useState(null);
+  const [qcSnoozeRemark, setQcSnoozeRemark] = useState('');
+  const [qcSnoozeMinutes, setQcSnoozeMinutes] = useState(5);
+  const [qcSnoozing, setQcSnoozing] = useState(false);
+  const [qcSnoozeActivityOpen, setQcSnoozeActivityOpen] = useState(false);
   const [data, setData] = useState(null);
   const [tab, setTab] = useState('overview');
   const [failReason, setFailReason] = useState('');
@@ -232,6 +248,97 @@ export default function TicketDetailPage() {
   }, [id, stage, data?.ticket?.assigned_user_id, user?.user_id, privileged, navigate, reloadTicketHistory, loadActiveLog]);
 
   const ticket = data?.ticket;
+
+  useEffect(() => {
+    const eta = ticket?.dispatch_qc_eta;
+    if (!eta?.qc_due_at || !ticket?.sales_order_number) return;
+    upsertQcAlertFromTicket({
+      ...eta,
+      workflow_id: eta.id,
+      sales_order_number: ticket.sales_order_number,
+      ticket_id: ticket.ticket_id,
+      ticket_assignee_user_id: ticket.assigned_user_id,
+      customer_name: eta.customer_name,
+      order_type: eta.order_type,
+    });
+  }, [
+    ticket?.ticket_id,
+    ticket?.assigned_user_id,
+    ticket?.sales_order_number,
+    ticket?.dispatch_qc_eta?.id,
+    ticket?.dispatch_qc_eta?.qc_due_at,
+    ticket?.dispatch_qc_eta?.qc_alert_snoozed_until,
+    upsertQcAlertFromTicket,
+  ]);
+
+  useEffect(() => {
+    const eta = ticket?.dispatch_qc_eta;
+    const alertRow = eta && ticket?.assigned_user_id
+      ? { ...eta, ticket_assignee_user_id: ticket.assigned_user_id }
+      : null;
+    if (!isDispatchQcTicketAssignee(user, alertRow)) {
+      setQcReminderOpen(false);
+      return undefined;
+    }
+    const snoozedUntil = qcSnoozeUntil || eta?.qc_alert_snoozed_until;
+    const evaluate = () => {
+      const due = isDispatchQcDueCrossed(eta, snoozedUntil);
+      setQcReminderOpen(due);
+      if (due && ticket?.sales_order_number) {
+        notifyQcOverdueIfNeeded(ticket.sales_order_number);
+      }
+    };
+    evaluate();
+    const id = setInterval(evaluate, 1000);
+    return () => clearInterval(id);
+  }, [
+    user,
+    ticket?.sales_order_number,
+    ticket?.dispatch_qc_eta,
+    qcSnoozeUntil,
+    notifyQcOverdueIfNeeded,
+  ]);
+
+  const handleTicketQcSnooze = async () => {
+    const eta = ticket?.dispatch_qc_eta;
+    if (!eta || qcSnoozing || !ticket?.sales_order_number) return;
+    const trimmed = qcSnoozeRemark.trim();
+    if (!trimmed) {
+      toast.error('Remark is required to snooze');
+      return;
+    }
+    setQcSnoozing(true);
+    try {
+      const { data } = await snoozeDispatchQcAlert(ticket.sales_order_number, {
+        remark: trimmed,
+        snoozeMinutes: qcSnoozeMinutes,
+      });
+      setQcSnoozeUntil(data.snoozed_until);
+      setQcSnoozeRemark('');
+      setQcReminderOpen(false);
+      setData((prev) => {
+        if (!prev?.ticket?.dispatch_qc_eta) return prev;
+        return {
+          ...prev,
+          ticket: {
+            ...prev.ticket,
+            dispatch_qc_eta: {
+              ...prev.ticket.dispatch_qc_eta,
+              qc_alert_snoozed_until: data.snoozed_until,
+              qc_alert_snooze_remark: trimmed,
+            },
+          },
+        };
+      });
+      applyLocalQcSnooze(ticket.sales_order_number, data.snoozed_until, trimmed);
+      toast.success(`QC reminder snoozed for ${data.snooze_minutes || qcSnoozeMinutes} min`);
+      await load({ soft: true });
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Could not snooze alert');
+    } finally {
+      setQcSnoozing(false);
+    }
+  };
 
   useEffect(() => {
     if (!ticket?.ticket_id) return;
@@ -455,6 +562,10 @@ export default function TicketDetailPage() {
       .slice(0, 20);
   }, [data?.activities]);
 
+  const qcSnoozeActivities = useMemo(() => (
+    (data?.activities || []).filter((a) => a.action === 'dispatch_qc_snoozed')
+  ), [data?.activities]);
+
   if (loading && !data) {
     return <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>;
   }
@@ -521,7 +632,20 @@ export default function TicketDetailPage() {
       { label: 'QC1 FAIL — Send back', action: openQc1FailPicker, danger: true, needsReason: true }
     );
   }
+  if (canDispatchQcPassReady(user) && stage === 'Dispatch QC') {
+    stageButtons.push({
+      label: 'DISPATCH QC PASS — Laptop Ready for DC',
+      action: () => move('Inventory'),
+      success: true,
+    });
+  }
   if ((qc || canManageTickets || dqc) && stage === 'Dispatch QC') {
+    stageButtons.push({
+      label: 'DISPATCH QC FAIL — Send back to tech',
+      action: () => move('Assembly & Software', failReason, undefined, { minReasonLen: 5 }),
+      danger: true,
+      needsReason: true,
+    });
     stageButtons.push(
       { label: 'DISPATCH QC PASS — Laptop Ready for DC', action: () => move('Inventory'), success: true },
       {
@@ -568,7 +692,7 @@ export default function TicketDetailPage() {
   const showVerifyBlock = needsStart;
   const showDiagnosisRepairMarks = stage === 'Diagnosis' && canDiagnosisRepairMark;
   const showOtherRouting = (canSeeStageRouting || qc || dqc)
-    && (!needsStart || canSeeStageRouting)
+    && (!needsStart || canSeeStageRouting || (stage === 'Dispatch QC' && dqc))
     && stageButtons.some((b) => !b.label.startsWith('Mark '));
   const showRoutingButtons = showDiagnosisRepairMarks || showOtherRouting;
   const showStageActionsSection = showVerifyBlock || showRoutingButtons;
@@ -604,6 +728,30 @@ export default function TicketDetailPage() {
             <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-orange-100 text-orange-800 border border-orange-200">
               Sales Order
             </span>
+          ) : null}
+          {stage === 'Dispatch QC' && ticket.dispatch_qc_eta ? (
+            <>
+              <DispatchQcEtaBadge
+                dispatchQcEta={{
+                  ...ticket.dispatch_qc_eta,
+                  qc_alert_snoozed_until: qcSnoozeUntil || ticket.dispatch_qc_eta.qc_alert_snoozed_until,
+                }}
+                snoozedUntil={qcSnoozeUntil || ticket.dispatch_qc_eta.qc_alert_snoozed_until}
+              />
+              <button
+                type="button"
+                onClick={() => setQcSnoozeActivityOpen(true)}
+                className="inline-flex items-center gap-1 rounded-full border border-orange-200 bg-orange-50 px-2.5 py-0.5 text-xs font-semibold text-orange-800 hover:bg-orange-100"
+              >
+                <History className="w-3.5 h-3.5" />
+                View Activity
+                {qcSnoozeActivities.length ? (
+                  <span className="ml-0.5 rounded-full bg-orange-200 px-1.5 text-[10px] tabular-nums">
+                    {qcSnoozeActivities.length}
+                  </span>
+                ) : null}
+              </button>
+            </>
           ) : null}
         </div>
         <div className="flex flex-wrap gap-1 mt-2">
@@ -1006,6 +1154,39 @@ export default function TicketDetailPage() {
           </div>
         </div>
       ) : null}
+
+      <DispatchQcReminderModal
+        open={qcReminderOpen}
+        alert={ticket?.dispatch_qc_eta && ticket?.sales_order_number ? {
+          sales_order_number: ticket.sales_order_number,
+          qc_due_at: ticket.dispatch_qc_eta.qc_due_at,
+          qc_started_at: ticket.dispatch_qc_eta.qc_started_at,
+          customer_name: ticket.dispatch_qc_eta.customer_name,
+          order_type: ticket.dispatch_qc_eta.order_type,
+          ticket_id: ticket.ticket_id,
+          brand: ticket.brand,
+          model_name: ticket.model_name || ticket.model,
+          processor: ticket.processor,
+          generation: ticket.generation,
+          ram: ticket.ram,
+          storage: ticket.storage,
+        } : null}
+        remark={qcSnoozeRemark}
+        snoozeMinutes={qcSnoozeMinutes}
+        snoozing={qcSnoozing}
+        onRemarkChange={setQcSnoozeRemark}
+        onSnoozeMinutesChange={setQcSnoozeMinutes}
+        onSnooze={handleTicketQcSnooze}
+        hideTicketButton
+      />
+
+      <DispatchQcSnoozeActivityModal
+        open={qcSnoozeActivityOpen}
+        onClose={() => setQcSnoozeActivityOpen(false)}
+        activities={data?.activities || []}
+        dispatchQcEta={ticket?.dispatch_qc_eta}
+        snoozedUntil={qcSnoozeUntil || ticket?.dispatch_qc_eta?.qc_alert_snoozed_until}
+      />
     </div>
   );
 }

@@ -74,6 +74,8 @@ app.use('/api/user-permissions', require('./routes/userPermissions'));
 app.use('/api/tickets', require('./routes/tickets'));
 app.use('/api/sales', require('./routes/sales'));
 app.use('/api/sales-management', require('./routes/salesManagement'));
+app.use('/api/dispatch-workflow', require('./routes/dispatchWorkflow'));
+app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/delivery-register-management', require('./routes/deliveryRegisterManagement'));
 app.use('/api/technician-auth', require('./routes/technicianAuth'));
 app.use('/api/technicians-bucket-list', require('./routes/techniciansBucketList'));
@@ -173,7 +175,12 @@ app.use((req, res) => {
   });
 });
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
+const http = require('http');
+const server = http.createServer(app);
+const { initSocketServer } = require('./socket');
+initSocketServer(server, { allowedOrigins });
+
+server.listen(PORT, () => {
   if (process.env.NODE_ENV !== 'production') {
     console.log(`Server running on port ${PORT} (${process.env.NODE_ENV || 'development'})`);
   }
@@ -183,6 +190,8 @@ app.listen(PORT, () => {
   if (workersOn) {
     startEmailQueueWorker().catch((err) => console.error('Email queue worker failed:', err.message));
     startLeadEmailIngestionWorker().catch((err) => console.error('Lead email ingestion worker failed:', err.message));
+    const { startDispatchSlaWorker } = require('./services/dispatchSlaWorker');
+    startDispatchSlaWorker();
     // startInventorySyncWorker().catch((err) => console.error('ERP inventory sync worker failed:', err.message));
     // startCustomerInventorySyncWorker().catch((err) => console.error('Customer inventory ERP worker failed:', err.message));
   }

@@ -11,6 +11,76 @@ const {
 const columnExistsCache = new Map();
 const { appendDateRangeClauses, appendDateRangeToWhere } = require('../utils/dateRangeFilter');
 
+/** Dispatch role only: pending SOs live in Pending Orders; Sales Orders list after accept. */
+function dispatchWorkflowListFilterClauses(params, { role, userId } = {}) {
+  if (role !== 'dispatch' || !userId) {
+    return { sql: '' };
+  }
+
+  params.push(userId);
+  const p = `$${params.length}`;
+  const clauses = [
+    `NOT EXISTS (
+      SELECT 1 FROM dispatch_workflow dw
+      WHERE dw.sales_order_number = sales_order_lines.sales_order_number
+        AND dw.status = 'waiting_acceptance'
+    )`,
+    `(
+      NOT EXISTS (
+        SELECT 1 FROM dispatch_workflow dw
+        WHERE dw.sales_order_number = sales_order_lines.sales_order_number
+      )
+      OR EXISTS (
+        SELECT 1 FROM dispatch_workflow dw
+        WHERE dw.sales_order_number = sales_order_lines.sales_order_number
+          AND (dw.assigned_user_id = ${p} OR dw.accepted_by = ${p})
+      )
+    )`,
+  ];
+
+  return {
+    sql: clauses.map((c) => `(${c})`).join(' AND '),
+  };
+}
+
+function appendDispatchWorkflowListFilters(where, params, viewer = {}) {
+  const { sql } = dispatchWorkflowListFilterClauses(params, viewer);
+  if (!sql) return where;
+  if (!where) return `WHERE ${sql}`;
+  return `${where} AND ${sql}`;
+}
+
+async function assertSalesOrderVisibleToUser(salesOrderNumber, user) {
+  const role = user?.role;
+  const userId = user?.user_id;
+  if (role === 'super_admin' || role === 'admin') return;
+
+  const r = await pool.query(
+    `SELECT status, assigned_user_id, accepted_by
+       FROM dispatch_workflow
+      WHERE sales_order_number = $1
+      LIMIT 1`,
+    [salesOrderNumber]
+  );
+  if (!r.rows.length) return;
+
+  const wf = r.rows[0];
+
+  if (role === 'dispatch') {
+    if (wf.status === 'waiting_acceptance') {
+      const err = new Error('Accept this order from Dispatch Pending Orders first');
+      err.status = 403;
+      throw err;
+    }
+    if (wf.assigned_user_id === userId || wf.accepted_by === userId) return;
+    const err = new Error('This sales order is not assigned to you for dispatch');
+    err.status = 403;
+    throw err;
+  }
+
+  // Sales and other roles keep normal SO access while dispatch acceptance is pending.
+}
+
 const DOC_TYPES = {
   quotation: { prefix: 'EST-', pad: 6 },
   sales_order: { prefix: 'SO-', pad: 6 },
@@ -423,6 +493,7 @@ async function getQuotationLines(quotationNumber) {
 async function listSalesOrdersGrouped({
   page = 1, limit = 20, search = '', assignedUserId = null, dateFrom, dateTo,
   customerId = null, status = '', entityScope = '',
+  viewerRole = null, viewerUserId = null,
 } = {}) {
   const hasEntityCode = await tableColumnExists('sales_order_lines', 'entity_code');
   const entitySelect = hasEntityCode ? 'entity_code' : `'rentfoxxy' AS entity_code`;
@@ -430,7 +501,7 @@ async function listSalesOrdersGrouped({
   let where = '';
   if (search) {
     params.push(`%${search}%`);
-    where = `WHERE sales_order_number ILIKE $1 OR customer_name ILIKE $1 OR gst_number ILIKE $1`;
+    where = `WHERE (sales_order_number ILIKE $1 OR customer_name ILIKE $1 OR gst_number ILIKE $1)`;
   }
   if (assignedUserId) {
     params.push(assignedUserId);
@@ -472,6 +543,10 @@ async function listSalesOrdersGrouped({
   if (scopeSql) {
     where += where ? ` AND ${scopeSql}` : `WHERE ${scopeSql}`;
   }
+  where = appendDispatchWorkflowListFilters(where, params, {
+    role: viewerRole,
+    userId: viewerUserId,
+  });
   const statsQuery = `
     WITH filtered AS (
       SELECT DISTINCT sales_order_number
@@ -1138,14 +1213,23 @@ async function countReturnDcPickupPairs() {
   return pairs.size;
 }
 
-async function getOperationCounts() {
+async function getOperationCounts({ role = null, userId = null } = {}) {
   const saleScope = salesOrderScopeWhere('sale');
   const rentalScope = salesOrderScopeWhere('rental');
+  const saleParams = [];
+  const rentalParams = [];
+  const allParams = [];
+  const saleDispatchFilter = dispatchWorkflowListFilterClauses(saleParams, { role, userId }).sql;
+  const rentalDispatchFilter = dispatchWorkflowListFilterClauses(rentalParams, { role, userId }).sql;
+  const allDispatchFilter = dispatchWorkflowListFilterClauses(allParams, { role, userId }).sql;
+  const saleWhere = saleDispatchFilter ? `WHERE ${saleScope} AND ${saleDispatchFilter}` : `WHERE ${saleScope}`;
+  const rentalWhere = rentalDispatchFilter ? `WHERE ${rentalScope} AND ${rentalDispatchFilter}` : `WHERE ${rentalScope}`;
+  const allWhere = allDispatchFilter ? `WHERE ${allDispatchFilter}` : '';
   const [q, so, soSale, soRental, dc, rdcPairs, rdcLines] = await Promise.all([
     pool.query(`SELECT COUNT(DISTINCT quotation_number)::int AS c FROM sales_quotations`),
-    pool.query(`SELECT COUNT(DISTINCT sales_order_number)::int AS c FROM sales_order_lines`),
-    pool.query(`SELECT COUNT(DISTINCT sales_order_number)::int AS c FROM sales_order_lines WHERE ${saleScope}`),
-    pool.query(`SELECT COUNT(DISTINCT sales_order_number)::int AS c FROM sales_order_lines WHERE ${rentalScope}`),
+    pool.query(`SELECT COUNT(DISTINCT sales_order_number)::int AS c FROM sales_order_lines ${allWhere}`, allParams),
+    pool.query(`SELECT COUNT(DISTINCT sales_order_number)::int AS c FROM sales_order_lines ${saleWhere}`, saleParams),
+    pool.query(`SELECT COUNT(DISTINCT sales_order_number)::int AS c FROM sales_order_lines ${rentalWhere}`, rentalParams),
     pool.query(`SELECT COUNT(*)::int AS c FROM delivery_challan_lines WHERE COALESCE(movement_type, 'outbound') = 'outbound'`),
     countReturnDcPickupPairs(),
     pool.query(`SELECT COUNT(DISTINCT dc_number)::int AS c FROM delivery_challan_lines WHERE movement_type = 'return'`),
@@ -1795,4 +1879,5 @@ module.exports = {
   getOperationCounts,
   searchAvailableInventory,
   healStaleReturnedPassedSerials,
+  assertSalesOrderVisibleToUser,
 };

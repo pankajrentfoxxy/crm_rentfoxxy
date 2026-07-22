@@ -527,6 +527,13 @@ exports.submitQC = async (req, res) => {
                     );
                     await vacateWarehouseLocation(client, ticketMeta.vendor_serial_id);
                 }
+                if (ticketMeta.sales_order_number) {
+                    const dispatchWf = require('../services/dispatchWorkflowService');
+                    await dispatchWf.onQcPassed(client, {
+                        salesOrderNumber: ticketMeta.sales_order_number,
+                        user: { user_id: userId, name: req.user?.name, role: req.user?.role },
+                    });
+                }
             } else if (isCompleted && result === 'PASS') {
                 if (serialNumber || machineNumber) {
                     await client.query(

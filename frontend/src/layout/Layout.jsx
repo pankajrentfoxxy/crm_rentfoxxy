@@ -53,6 +53,10 @@ import {
   Search,
 } from 'lucide-react';
 
+import NotificationBell from '../components/notifications/NotificationBell';
+import DispatchAssignmentAlert from '../components/notifications/DispatchAssignmentAlert';
+import DispatchQcReminderAlert from '../components/notifications/DispatchQcReminderAlert';
+import DispatchRealtimeProvider from '../features/dispatch/DispatchRealtimeProvider';
 import { canAccessSupportModule } from '../utils/supportAccess';
 import { useQcStatusCounts } from '../features/qc-management/hooks/useQcStatusCounts';
 import { useInventoryListCounts } from '../features/inventory-management/hooks/useInventoryListCounts';
@@ -63,6 +67,7 @@ import { useLeadCrmCounts } from '../features/lead-crm/hooks/useLeadCrmCounts';
 import { useFinanceCounts } from '../features/finance-overview/hooks/useFinanceCounts';
 import { useSupportCounts } from '../features/support-module/hooks/useSupportCounts';
 import { useFloorCounts } from '../features/floor-pipeline/hooks/useFloorCounts';
+import useDispatchPendingCount from '../features/dispatch/hooks/useDispatchPendingCount';
 import { isFloorPipelineNavActive } from '../features/floor-pipeline/floorPipelineAccess';
 import {
   FLAT_MENU_ITEMS,
@@ -74,6 +79,7 @@ import {
   settingsAccordionChildren,
   operationAccordionChildren,
   salesPipelineAccordionChildren,
+  dispatchAccordionChildren,
   financeMenuItems,
   reportsMenuItems,
   deliveryRegisterAccordionChildren,
@@ -81,6 +87,7 @@ import {
   isSettingsChildVisible,
   isOperationChildVisible,
   isSalesPipelineChildVisible,
+  isDispatchChildVisible,
   isFinanceChildVisible,
   isReportsChildVisible,
   isDeliveryRegisterChildVisible,
@@ -145,6 +152,10 @@ export default function Layout({ children }) {
   const showSupportNav = canView('support_tickets');
   const { counts: supportCounts } = useSupportCounts(showSupportNav);
 
+  const showDispatchAccordion = (user?.role === 'dispatch' || user?.role === 'super_admin')
+    && canView('dispatch_pending_orders');
+  const { count: dispatchPendingCount } = useDispatchPendingCount(showDispatchAccordion);
+
   const { counts: operationCounts } = useOperationCounts(showSalesPipelineAccordion);
   const { counts: financeCounts } = useFinanceCounts(showFinanceAccordion);
 
@@ -206,6 +217,10 @@ export default function Layout({ children }) {
     location.pathname.startsWith('/sales-pipeline')
   );
 
+  const [dispatchAccordionOpen, setDispatchAccordionOpen] = useState(() =>
+    location.pathname.startsWith('/dispatch')
+  );
+
   const [deliveryRegisterAccordionOpen, setDeliveryRegisterAccordionOpen] = useState(() =>
     location.pathname.startsWith('/delivery-register-management')
   );
@@ -260,6 +275,10 @@ export default function Layout({ children }) {
       setSalesPipelineAccordionOpen(true);
     }
 
+    if (location.pathname.startsWith('/dispatch')) {
+      setDispatchAccordionOpen(true);
+    }
+
     if (location.pathname.startsWith('/delivery-register-management')) {
       setDeliveryRegisterAccordionOpen(true);
     }
@@ -298,6 +317,7 @@ export default function Layout({ children }) {
   const reportsVisibleChildren = reportsMenuItems.filter((c) => isReportsChildVisible(c, canView, user?.role));
   const leadCrmVisibleChildren = leadCrmAccordionChildren.filter((c) => isLeadCrmChildVisible(c, canView));
   const salesVisibleChildren = salesPipelineAccordionChildren.filter((c) => isSalesPipelineChildVisible(c, canView));
+  const dispatchVisibleChildren = dispatchAccordionChildren.filter((c) => isDispatchChildVisible(c, canView));
   const floorVisibleChildren = floorPipelineAccordionChildren.filter((c) => isFloorPipelineChildVisible(c, canView));
   const inventoryVisibleChildren = inventoryAccordionChildren.filter((c) => isInventoryChildVisible(c, canView));
   const financeVisibleChildren = financeMenuItems.filter((c) => isFinanceChildVisible(c, canView));
@@ -311,6 +331,7 @@ export default function Layout({ children }) {
     master_data: canView('customers') || canView('vendor_management'),
     lead_crm: showLeadCrmAccordion && leadCrmVisibleChildren.length > 0,
     sales_pipeline: showSalesPipelineAccordion && salesVisibleChildren.length > 0,
+    dispatch: showDispatchAccordion && dispatchVisibleChildren.length > 0,
     floor_quality: floorVisibleChildren.length > 0,
     inventory: inventoryVisibleChildren.length > 0,
     vendor: showVendorAccordion,
@@ -323,6 +344,7 @@ export default function Layout({ children }) {
     reportsAccordion: 'reports',
     leadCrmAccordion: 'lead_crm',
     salesPipelineAccordion: 'sales_pipeline',
+    dispatchAccordion: 'dispatch',
     floorPipelineAccordion: 'floor_quality',
     inventoryAccordion: 'inventory',
     vendorAccordion: 'vendor',
@@ -358,6 +380,7 @@ export default function Layout({ children }) {
     ['Reports & Analytics', reportsVisibleChildren],
     ['Lead & Sales CRM', leadCrmVisibleChildren],
     ['Sales Pipeline', salesVisibleChildren],
+    ['Dispatch', dispatchVisibleChildren],
     ['Production', floorVisibleChildren],
     ['Inventory', inventoryVisibleChildren],
     ['Finance', financeVisibleChildren],
@@ -389,7 +412,10 @@ export default function Layout({ children }) {
 
   return (
 
+    <DispatchRealtimeProvider>
     <div className="min-h-screen bg-gray-50">
+      <DispatchAssignmentAlert />
+      <DispatchQcReminderAlert />
 
       {sidebarOpen && (
 
@@ -1057,6 +1083,64 @@ export default function Layout({ children }) {
               );
             }
 
+            if (item.type === 'dispatchAccordion') {
+              return (
+                <div key="dispatch-accordion" className="space-y-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setDispatchAccordionOpen((o) => !o)}
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors text-left hover:bg-gray-100 ${
+                      location.pathname.startsWith('/dispatch') ? 'text-sky-700 bg-sky-50/60' : 'text-gray-800'
+                    }`}
+                  >
+                    <Truck className="w-5 h-5 text-gray-600 shrink-0" />
+                    <span className="flex-1">Dispatch</span>
+                    {dispatchPendingCount > 0 ? (
+                      <span className="shrink-0 rounded-full bg-red-100 text-red-800 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums">
+                        {dispatchPendingCount}
+                      </span>
+                    ) : null}
+                    <ChevronDown
+                      className={`w-4 h-4 text-gray-500 shrink-0 transition-transform duration-200 ${
+                        dispatchAccordionOpen ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </button>
+                  {dispatchAccordionOpen && (
+                    <div className="mt-1 ml-2 pl-3 border-l border-sky-100 space-y-0.5">
+                      {dispatchAccordionChildren.filter((child) => isDispatchChildVisible(child, canView)).map((child) => {
+                        const badge = child.countKey && child.section && canView(child.section)
+                          ? dispatchPendingCount
+                          : null;
+                        return (
+                          <NavLink
+                            key={child.path}
+                            to={child.path}
+                            onClick={() => setSidebarOpen(false)}
+                            className={({ isActive }) =>
+                              [
+                                'flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-xs transition-colors',
+                                isActive
+                                  ? 'bg-sky-100 text-sky-900 font-semibold'
+                                  : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900',
+                              ].join(' ')
+                            }
+                          >
+                            <span>{child.label}</span>
+                            {badge != null && badge > 0 ? (
+                              <span className="shrink-0 rounded-full bg-red-100 text-red-800 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums">
+                                {badge}
+                              </span>
+                            ) : null}
+                          </NavLink>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
             if (item.type === 'salesPipelineAccordion') {
               return (
                 <div key="sales-pipeline-accordion" className="space-y-0.5">
@@ -1349,6 +1433,8 @@ export default function Layout({ children }) {
 
             <div className="flex items-center gap-3">
 
+              <NotificationBell />
+
               <div className="hidden md:flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200">
 
                 <div className="w-8 h-8 bg-orange-100 rounded-full flex items-center justify-center">
@@ -1396,6 +1482,7 @@ export default function Layout({ children }) {
       </div>
 
     </div>
+    </DispatchRealtimeProvider>
 
   );
 

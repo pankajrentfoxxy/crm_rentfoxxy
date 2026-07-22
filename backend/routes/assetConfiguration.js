@@ -20,13 +20,14 @@ router.get('/cascade/brands/:brandName/processors', ctrl.listCascadeProcessorsFo
 router.get('/cascade/brands/:brandName/models', ctrl.listCascadeModelsForBrand);
 router.get('/cascade/brands/:brandName/generations', ctrl.listCascadeGenerationsForBrand);
 router.get('/cascade/brands/:brandName/processors/:processorName/generations', ctrl.listCascadeGenerationsForBrandProcessor);
+// Read-only spec tree — floor pipeline filters, QC, SO forms (any authenticated user)
+router.get('/mappings/laptop-spec/tree', ctrl.getLaptopSpecMapping);
 
 // Settings CRUD meta
 router.get('/types', view, ctrl.listEntityTypes);
 router.get('/parents/:entity', view, ctrl.getParentOptions);
 
 // Brand flat mapping (models, processors, generations per brand)
-router.get('/mappings/laptop-spec/tree', view, ctrl.getLaptopSpecMapping);
 router.post('/mappings/laptop-spec/models/bulk-add', create, ctrl.bulkAddBrandModels);
 router.post('/mappings/laptop-spec/processors/bulk-add', create, ctrl.bulkAddBrandProcessors);
 router.post('/mappings/laptop-spec/generations/bulk-add', create, ctrl.bulkAddBrandGenerations);
