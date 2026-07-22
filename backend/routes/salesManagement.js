@@ -127,7 +127,7 @@ router.post(...dcRoute('/qc-ticket', dcEdit, ctrl.createPreDispatchQcTicket));
 router.get(...dcRoute('/qc-status', soDcView, ctrl.getDcQcStatus));
 router.patch(...dcRoute('/assignment', soDcEdit, ctrl.updateDcAssignment));
 router.patch(...dcRoute('/dispatch', soDcEdit, ctrl.updateDcDispatch));
-router.patch(...dcRoute('/cancel', soDcEdit, ctrl.cancelDeliveryChallan));
+router.patch(...dcRoute('/cancel', checkRole('super_admin'), ctrl.cancelDeliveryChallan));
 router.patch(...dcRoute('/delivered', soDcEdit, ctrl.markDcDelivered));
 router.patch(...dcRoute('/rejected', soDcEdit, ctrl.markDcRejected));
 router.patch(...dcRoute('/customer-rejected', tbEdit, flowCtrl.markCustomerRejected));

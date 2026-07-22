@@ -3162,6 +3162,36 @@ exports.cancelDeliveryChallan = async (req, res) => {
       [dcNumber]
     );
 
+    // Re-reserve units still attached to the SO so they stay off Ready stock and
+    // can be picked again in Create DC (one laptop per DC if needed).
+    const soNumber = head.sales_order_number;
+    if (soNumber && serialIds.length) {
+      const soMetaRes = await client.query(
+        `SELECT customer_id, entity_code, quotation_type
+           FROM sales_orders WHERE sales_order_number = $1 LIMIT 1`,
+        [soNumber]
+      );
+      const soMeta = soMetaRes.rows[0] || {};
+      const entityCode = soMeta.entity_code || entityForQuotationType(soMeta.quotation_type || 'rental');
+      for (const serialId of serialIds) {
+        const attached = await client.query(
+          `SELECT 1 FROM sales_order_serials
+            WHERE serial_id = $1 AND status = 'attached' LIMIT 1`,
+          [serialId]
+        );
+        if (!attached.rows.length) continue;
+        await inventorySM.transitionAsset(client, {
+          serialId,
+          toStatus: inventorySM.STATUS.RESERVED,
+          customerId: soMeta.customer_id || null,
+          entityCode,
+          reason: `Re-reserved after ${dcNumber} cancelled`,
+          actorUserId: req.user?.user_id,
+          actorName: req.user?.name,
+        }).catch(() => {});
+      }
+    }
+
     await client.query(`DELETE FROM dc_qc_tickets WHERE dc_number = $1`, [dcNumber]).catch(() => {});
 
     await client.query(
@@ -3172,13 +3202,12 @@ exports.cancelDeliveryChallan = async (req, res) => {
 
     await client.query('COMMIT');
 
-    const soNumber = head.sales_order_number;
     if (soNumber) {
       await safeLogSalesOrderActivity({
         salesOrderNumber: soNumber,
         activityType: ACTIVITY_TYPES.DELIVERY_CHALLAN,
         action: 'dc_cancelled',
-        description: `${dcNumber} was cancelled${reason ? `: ${reason}` : ''}. Laptops returned to inventory.`,
+        description: `${dcNumber} was cancelled${reason ? `: ${reason}` : ''}. Laptops re-attached to the sales order — create new DC(s) from the SO.`,
         metadata: { dc_number: dcNumber, serial_ids: serialIds },
         remarks: reason,
         user: req.user,
@@ -3187,7 +3216,7 @@ exports.cancelDeliveryChallan = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Delivery challan cancelled; laptops returned to Ready to Rent or Sell',
+      message: 'Delivery challan cancelled. Laptops are attached on the sales order again — you can create new DC(s).',
       dc_number: dcNumber,
       serials_released: serialIds.length,
     });
