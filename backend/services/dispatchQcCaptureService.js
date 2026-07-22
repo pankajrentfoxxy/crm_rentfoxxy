@@ -18,7 +18,6 @@ const {
   createFromGrn,
   getInventoryExpectedConfig,
   getById,
-  markPendingInventory,
 } = require('./productionAssetService');
 
 const TOKEN_TTL_MINUTES = 30;
@@ -148,47 +147,49 @@ async function expectedConfigForDispatchQc(db, pa, soLine = null) {
   return { ...base, ...overlay };
 }
 
-async function routeMismatchToPendingInventory(client, {
-  tokenRow,
-  pa,
+/**
+ * Unified "Dispatch QC failed" flow. Runs inside the CALLER's transaction
+ * (pass an open pg client) so every step commits or rolls back together:
+ *
+ *   1. Remove the asset from the Sales Order (allocation status = removed).
+ *   2. Recalculate stored SO totals (one-month-rental security amount; line
+ *      totals themselves are always derived from quantity × rate at render).
+ *   3. Move the linked QC ticket to Diagnosis (unless the caller moves the
+ *      ticket itself, e.g. the manual moveToStage path).
+ *   4. Mark the asset failed: inventory_status = qc_failed + qc_status =
+ *      failed — this removes it from Ready to Rent/Sell (which requires
+ *      effective QC status "passed") and lists it under QC Failed instead.
+ *   5. Audit entries for the asset (ttspl_audit_log + status transition),
+ *      the ticket (activities + production_ticket_history) and the sales
+ *      order (sales_order_activities).
+ */
+async function applyDispatchQcFailure(client, {
+  allocationId,
+  pa = null,
   remarks,
-  matchPayload,
-  actorUserId,
+  matchPayload = null,
+  tokenId = null,
+  actorUserId = null,
+  actorName = null,
+  moveTicketToDiagnosis = true,
 }) {
+  const { logTtsplEvent } = require('./ttsplAuditService');
+  const { logSalesOrderActivity, ACTIVITY_TYPES } = require('./salesOrderActivityService');
+  const { logProductionHistory } = require('./ticketWorkflowHistoryService');
+  const inventorySM = require('./inventoryStateMachine');
+
   const allocRes = await client.query(
     `SELECT * FROM sales_order_serials WHERE allocation_id = $1 FOR UPDATE`,
-    [tokenRow.allocation_id]
+    [allocationId]
   );
   const alloc = allocRes.rows[0];
-  if (!alloc) return;
+  if (!alloc) return null;
 
-  await markPendingInventory(client, pa.production_asset_id, actorUserId, {
-    source: 'dispatch_qc',
-    reason: 'config_mismatch',
-    remarks,
-    configurationMatched: false,
-    checks: matchPayload.checks,
-    errors: matchPayload.errors,
-    sales_order_number: alloc.sales_order_number,
-    allocation_id: alloc.allocation_id,
-    token_id: tokenRow.token_id,
-    verified_at: matchPayload.verified_at,
-  });
+  const soNumber = alloc.sales_order_number;
+  const label = alloc.ttspl_id || alloc.serial_number || `serial ${alloc.serial_id}`;
+  const failReason = String(remarks || 'Dispatch QC failed').slice(0, 2000);
 
-  if (alloc.qc_ticket_id) {
-    const failReason = remarks.slice(0, 2000);
-    await client.query(
-      `UPDATE tickets
-          SET status = 'cancelled',
-              highlighted = TRUE,
-              highlighted_reason = $2,
-              updated_at = NOW()
-        WHERE ticket_id = $1
-          AND status NOT IN ('completed', 'cancelled')`,
-      [alloc.qc_ticket_id, `Dispatch QC failed: ${failReason}`.slice(0, 500)]
-    );
-  }
-
+  // 1. Remove the asset from the Sales Order.
   await client.query(
     `UPDATE sales_order_serials
         SET status = 'removed',
@@ -198,31 +199,204 @@ async function routeMismatchToPendingInventory(client, {
     [alloc.allocation_id]
   );
 
-  // Detach must free the shelf reservation — otherwise the unit stays
-  // inventory_status=reserved and disappears from SO attach search.
-  if (alloc.serial_id) {
-    try {
-      const inventorySM = require('./inventoryStateMachine');
-      await inventorySM.backToStock(client, alloc.serial_id, {
-        reason: `Released after Dispatch QC fail on ${alloc.sales_order_number}`,
-        actorUserId: actorUserId || null,
-      });
-    } catch (releaseErr) {
-      console.warn(
-        `routeMismatchToPendingInventory: backToStock failed for serial ${alloc.serial_id}: ${releaseErr.message}`
+  // 2. Recalculate stored SO totals (security amount for one_month_rental SOs).
+  const secTypeRes = await client.query(
+    `SELECT security_type FROM sales_order_lines WHERE sales_order_number = $1 LIMIT 1`,
+    [soNumber]
+  );
+  if (String(secTypeRes.rows[0]?.security_type || '').toLowerCase() === 'one_month_rental') {
+    await client.query(
+      `UPDATE sales_order_lines sol
+          SET security_amount = t.one_month
+         FROM (
+           SELECT COALESCE(SUM(COALESCE(rate, 0) * COALESCE(quantity, 1)), 0) AS one_month
+             FROM sales_order_lines WHERE sales_order_number = $1
+         ) t
+        WHERE sol.sales_order_number = $1`,
+      [soNumber]
+    );
+  }
+
+  // 3. Move the linked QC ticket to Diagnosis.
+  if (alloc.qc_ticket_id && moveTicketToDiagnosis) {
+    const tRes = await client.query(
+      `SELECT * FROM tickets WHERE ticket_id = $1 FOR UPDATE`,
+      [alloc.qc_ticket_id]
+    );
+    const ticket = tRes.rows[0];
+    if (ticket && !['completed', 'cancelled'].includes(ticket.status)) {
+      const stRes = await client.query(
+        `SELECT stage_id, stage_name, team_id FROM stages WHERE stage_name = 'Diagnosis' LIMIT 1`
       );
-      await client.query(
-        `UPDATE vendor_serial_numbers
-            SET inventory_status = 'in_stock',
-                current_customer_id = NULL,
-                current_dc_number = NULL,
-                status_changed_at = NOW(),
-                updated_at = NOW()
-          WHERE serial_id = $1 AND deleted_at IS NULL`,
-        [alloc.serial_id]
-      );
+      const diag = stRes.rows[0];
+      if (diag) {
+        const highlightedReason = `Dispatch QC failed: ${failReason}`.slice(0, 500);
+        const updRes = await client.query(
+          `UPDATE tickets
+              SET current_stage_id = $2,
+                  assigned_team_id = $3,
+                  assigned_user_id = NULL,
+                  status = 'in_progress',
+                  qc_fail_count = COALESCE(qc_fail_count, 0) + 1,
+                  highlighted = TRUE,
+                  highlighted_reason = $4,
+                  updated_at = NOW()
+            WHERE ticket_id = $1
+            RETURNING *`,
+          [ticket.ticket_id, diag.stage_id, diag.team_id, highlightedReason]
+        );
+        const newTicket = updRes.rows[0];
+
+        if (ticket.serial_number) {
+          await client.query(
+            `UPDATE inventory SET stage = 'Diagnosis' WHERE serial_number = $1`,
+            [ticket.serial_number]
+          );
+        }
+
+        await client.query(
+          `INSERT INTO activities (ticket_id, stage_id, user_id, action, notes)
+           VALUES ($1, $2, $3, 'stage_changed', $4)`,
+          [ticket.ticket_id, diag.stage_id, actorUserId, `Dispatch QC failed — moved to Diagnosis. ${failReason}`.slice(0, 500)]
+        );
+
+        await logTtsplEvent({
+          ttsplId: ticket.ttspl_id,
+          vendorSerialId: ticket.vendor_serial_id,
+          eventType: 'stage_changed',
+          description: 'Dispatch QC → Diagnosis (Dispatch QC failed)',
+          metadata: { from: 'Dispatch QC', to: 'Diagnosis', reason: failReason, sales_order_number: soNumber },
+          actorUserId,
+          actorName,
+          db: client,
+        });
+
+        try {
+          await logProductionHistory(client, {
+            ticketBefore: ticket,
+            ticketAfter: newTicket,
+            beforeStageName: 'Dispatch QC',
+            afterStageName: 'Diagnosis',
+            source: 'dispatch_qc_fail',
+            hint: 'dispatch_qc_failed',
+            remarks: failReason,
+            failureReason: failReason,
+            actor: actorUserId ? { user_id: actorUserId, name: actorName } : null,
+            assignmentType: 'dispatch_qc_failed',
+          });
+        } catch (histErr) {
+          console.warn(`applyDispatchQcFailure: production history log failed: ${histErr.message}`);
+        }
+      }
     }
   }
+
+  // 4. Asset status → qc_failed / Dispatch QC Failed (off Ready to Rent/Sell).
+  if (alloc.serial_id) {
+    await inventorySM.transitionAsset(client, {
+      serialId: alloc.serial_id,
+      toStatus: 'qc_failed',
+      reason: `Dispatch QC failed on ${soNumber}: ${failReason}`.slice(0, 500),
+      actorUserId: actorUserId || null,
+      actorName: actorName || null,
+      allowOverride: true, // reserved → qc_failed is a deliberate exception
+    });
+    await client.query(
+      `UPDATE vendor_serial_numbers
+          SET qc_status = 'failed',
+              current_customer_id = NULL,
+              current_dc_number = NULL,
+              extra = (COALESCE(extra, '{}'::jsonb) - 'awaiting_inventory_receive')
+                      || jsonb_build_object('status', 'failed', 'dispatch_qc_failed_at', NOW()::text),
+              updated_at = NOW()
+        WHERE serial_id = $1 AND deleted_at IS NULL`,
+      [alloc.serial_id]
+    );
+  }
+
+  // Production asset mirrors the failure (kept out of pending-inventory receive).
+  const paId = pa?.production_asset_id || null;
+  if (paId) {
+    await client.query(
+      `UPDATE production_assets
+          SET status = 'dispatch_qc_failed',
+              qc2_verification = COALESCE(qc2_verification, '{}'::jsonb) || $2::jsonb,
+              updated_at = NOW()
+        WHERE production_asset_id = $1`,
+      [
+        paId,
+        JSON.stringify({
+          source: 'dispatch_qc',
+          reason: 'dispatch_qc_failed',
+          remarks: failReason,
+          configurationMatched: false,
+          checks: matchPayload?.checks || [],
+          errors: matchPayload?.errors || [],
+          sales_order_number: soNumber,
+          allocation_id: alloc.allocation_id,
+          token_id: tokenId,
+          failed_at: new Date().toISOString(),
+        }),
+      ]
+    );
+  }
+
+  // 5. Audit trail — asset + sales order (ticket audited above).
+  await logTtsplEvent({
+    ttsplId: alloc.ttspl_id || null,
+    vendorSerialId: alloc.serial_id || null,
+    eventType: 'dispatch_qc_failed',
+    description: `Dispatch QC failed on ${soNumber} — removed from SO, sent to Diagnosis. ${failReason}`.slice(0, 1000),
+    metadata: {
+      sales_order_number: soNumber,
+      allocation_id: alloc.allocation_id,
+      ticket_id: alloc.qc_ticket_id || null,
+      reason: failReason,
+      errors: matchPayload?.errors || [],
+    },
+    actorUserId,
+    actorName,
+    db: client,
+  });
+
+  await logSalesOrderActivity({
+    client,
+    salesOrderNumber: soNumber,
+    activityType: ACTIVITY_TYPES.LAPTOP,
+    action: 'laptop_removed',
+    title: 'Laptop Removed — Dispatch QC Failed',
+    description: `${label} failed Dispatch QC and was removed from this Sales Order. Ticket moved to Diagnosis.`,
+    remarks: failReason,
+    metadata: {
+      allocation_id: alloc.allocation_id,
+      serial_id: alloc.serial_id,
+      ttspl_id: alloc.ttspl_id,
+      serial_number: alloc.serial_number,
+      ticket_id: alloc.qc_ticket_id || null,
+      dispatch_qc_failed: true,
+    },
+    user: actorUserId ? { user_id: actorUserId, name: actorName } : null,
+  });
+
+  return alloc;
+}
+
+/** Back-compat wrapper — the config-mismatch capture path calls this name. */
+async function routeMismatchToPendingInventory(client, {
+  tokenRow,
+  pa,
+  remarks,
+  matchPayload,
+  actorUserId,
+}) {
+  return applyDispatchQcFailure(client, {
+    allocationId: tokenRow.allocation_id,
+    pa,
+    remarks,
+    matchPayload,
+    tokenId: tokenRow.token_id,
+    actorUserId,
+  });
 }
 
 async function createDispatchQcToken({ ticketId, createdBy, req }) {
@@ -600,7 +774,8 @@ async function verifyDispatchQcConfiguration(tokenId, actual, ip) {
       expected,
       remarks,
       dispatch_qc_failed: true,
-      routed_to_pending_inventory: true,
+      routed_to_pending_inventory: true, // legacy field name kept for capture clients
+      routed_to_diagnosis: true,
     };
   } catch (e) {
     await client.query('ROLLBACK');
@@ -660,6 +835,7 @@ module.exports = {
   getPublicSession,
   verifyDispatchQcConfiguration,
   submitDispatchQcSerial,
+  applyDispatchQcFailure,
   routeMismatchToPendingInventory,
   apiBaseUrl,
 };
