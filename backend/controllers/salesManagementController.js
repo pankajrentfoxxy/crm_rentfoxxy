@@ -3168,7 +3168,10 @@ exports.cancelDeliveryChallan = async (req, res) => {
     if (soNumber && serialIds.length) {
       const soMetaRes = await client.query(
         `SELECT customer_id, entity_code, quotation_type
-           FROM sales_orders WHERE sales_order_number = $1 LIMIT 1`,
+           FROM sales_order_lines
+          WHERE sales_order_number = $1
+          ORDER BY id ASC
+          LIMIT 1`,
         [soNumber]
       );
       const soMeta = soMetaRes.rows[0] || {};
