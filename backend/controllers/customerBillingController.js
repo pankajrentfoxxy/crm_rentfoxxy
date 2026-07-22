@@ -6,8 +6,20 @@ const { emailDocument } = require('../services/salesManagementPdfService');
 const {
   generateCustomerInvoice,
 } = require('../services/billingSchedulerService');
+const {
+  recordPayment,
+  recordFullPayment,
+  listPayments,
+} = require('../services/paymentLedgerService');
+const { formatPdfDateIstOrDash } = require('../utils/pdfDateTimeUtils');
+const { mergeCompany } = require('../utils/companyDefaults');
 
 const UPLOAD_DIR = path.join(__dirname, '../uploads/customer-invoices');
+
+function resolveRentfoxxyLogoAbs() {
+  const p = path.join(__dirname, '../assets/rentfoxxy-logo.png');
+  return fs.existsSync(p) ? p : null;
+}
 
 async function nextCreditNoteNumber() {
   const res = await pool.query(
@@ -19,6 +31,14 @@ async function nextCreditNoteNumber() {
   return res.rows[0].number;
 }
 
+// Format billing / invoice dates for PDF output (IST, explicit label).
+function fmtDate(d) {
+  return formatPdfDateIstOrDash(d);
+}
+function fmtMoney(n) {
+  return `Rs ${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 async function generateInvoicePdf(invoice) {
   if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
   const fileName = `${invoice.invoice_number}_${Date.now()}.pdf`;
@@ -27,29 +47,107 @@ async function generateInvoicePdf(invoice) {
   const lineItems = typeof invoice.line_items === 'string'
     ? JSON.parse(invoice.line_items)
     : (invoice.line_items || []);
+  const company = mergeCompany({ code: 'rentfoxxy' });
+  const logoAbs = resolveRentfoxxyLogoAbs();
 
   await new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 40, size: 'A4' });
     const stream = fs.createWriteStream(filePath);
     doc.pipe(stream);
-    doc.fontSize(18).text('Rentfoxxy — Customer Invoice', { align: 'center' });
-    doc.moveDown();
-    doc.fontSize(11).text(`Invoice No: ${invoice.invoice_number}`);
-    doc.text(`Customer: ${invoice.customer_name || invoice.customer_id}`);
-    doc.text(`Period: ${invoice.from_date} to ${invoice.to_date}`);
-    doc.moveDown();
-    lineItems.forEach((line, idx) => {
-      doc.fontSize(10).text(
-        `${idx + 1}. ${line.brand || ''} ${line.model || ''} | Days: ${line.days_in_month} | Amount: ₹${line.amount}`
-      );
-    });
-    doc.moveDown();
-    doc.text(`Subtotal: ₹${invoice.subtotal}`);
-    doc.text(`GST (${invoice.gst_percent}%): ₹${invoice.gst_amount}`);
-    if (parseFloat(invoice.credit_note_adjustment) > 0) {
-      doc.text(`Credit Adjustment: -₹${invoice.credit_note_adjustment}`);
+
+    // ── Header (logo left, title right) ──────────────────────────────────
+    const headerY = 40;
+    let logoDrawn = false;
+    if (logoAbs) {
+      try {
+        doc.image(logoAbs, 40, headerY, { height: 34 });
+        logoDrawn = true;
+      } catch (_) { /* ignore */ }
     }
-    doc.fontSize(12).text(`Grand Total: ₹${invoice.grand_total}`, { underline: true });
+    if (!logoDrawn) {
+      doc.fontSize(18).font('Helvetica-Bold').fillColor('#f26b21')
+        .text('Rentfoxxy', 40, headerY + 4);
+    }
+
+    doc.fontSize(14).font('Helvetica-Bold').fillColor('#111827')
+      .text('Customer Invoice (Prepaid Rental)', 250, headerY, { width: 305, align: 'right' });
+    doc.fontSize(8).font('Helvetica').fillColor('#6b7280')
+      .text(company.legal_name || 'TRUETECH SERVICES PRIVATE LIMITED', 250, headerY + 20, {
+        width: 305,
+        align: 'right',
+      });
+
+    doc.fillColor('#000');
+    let y = headerY + 48;
+    doc.moveTo(40, y).lineTo(555, y).strokeColor('#e5e7eb').lineWidth(1).stroke();
+    y += 14;
+
+    doc.font('Helvetica').fontSize(10).fillColor('#111827');
+    const leftX = 40;
+    const rightX = 320;
+    doc.text(`Invoice No: ${invoice.invoice_number}`, leftX, y);
+    doc.text(`Customer: ${invoice.customer_name || invoice.customer_id}`, rightX, y);
+    y += 14;
+    doc.text(`Invoice Date: ${fmtDate(invoice.invoice_date)}`, leftX, y);
+    if (invoice.gst_number) doc.text(`GSTIN: ${invoice.gst_number}`, rightX, y);
+    y += 14;
+    doc.text(`Billing Period: ${fmtDate(invoice.from_date)}  to  ${fmtDate(invoice.to_date)}`, leftX, y, { width: 280 });
+    doc.y = y + 20;
+
+    // ── Line item table ───────────────────────────────────────
+    const x = { idx: 40, asset: 64, item: 200, period: 330, days: 450, amount: 510 };
+    const drawHead = () => {
+      const hy = doc.y;
+      doc.font('Helvetica-Bold').fontSize(9).fillColor('#111827');
+      doc.text('#', x.idx, hy);
+      doc.text('TTSPL / Serial', x.asset, hy);
+      doc.text('Item', x.item, hy);
+      doc.text('Period', x.period, hy);
+      doc.text('Days', x.days, hy, { width: 50, align: 'right' });
+      doc.text('Amount', x.amount, hy, { width: 55, align: 'right' });
+      doc.moveTo(40, doc.y + 2).lineTo(565, doc.y + 2).strokeColor('#e5e7eb').stroke();
+      doc.moveDown(0.5);
+    };
+    drawHead();
+    doc.font('Helvetica').fontSize(9);
+
+    lineItems.forEach((line, idx) => {
+      if (doc.y > 740) { doc.addPage(); drawHead(); doc.font('Helvetica').fontSize(9); }
+      const rowY = doc.y;
+      doc.fillColor('#000').text(String(idx + 1), x.idx, rowY);
+      // TTSPL id with Serial Number directly below it
+      doc.font('Helvetica-Bold').text(line.ttspl_id || '—', x.asset, rowY, { width: 130 });
+      doc.font('Helvetica').fillColor('#555').fontSize(8)
+         .text(line.serial_number ? `SN: ${line.serial_number}` : '', x.asset, doc.y, { width: 130 });
+      doc.fillColor('#000').fontSize(9);
+      doc.text(`${line.brand || ''} ${line.model || ''}`.trim() || '—', x.item, rowY, { width: 125 });
+      doc.text(`${fmtDate(line.rent_start)} - ${fmtDate(line.rent_end)}${line.is_catchup ? '  (catch-up)' : ''}${line.returned ? '  (returned)' : ''}`,
+        x.period, rowY, { width: 118 });
+      doc.text(`${line.days_in_month}${line.month_days ? `/${line.month_days}` : ''}`, x.days, rowY, { width: 50, align: 'right' });
+      doc.text(fmtMoney(line.amount), x.amount, rowY, { width: 55, align: 'right' });
+      doc.moveDown(0.8);
+    });
+
+    doc.moveTo(40, doc.y + 2).lineTo(565, doc.y + 2).stroke();
+    doc.moveDown(0.6);
+
+    // ── Totals ────────────────────────────────────────────────
+    const totRow = (label, val, opts = {}) => {
+      const ty = doc.y;
+      doc.font(opts.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(opts.bold ? 11 : 10);
+      if (opts.color) doc.fillColor(opts.color);
+      doc.text(label, 360, ty, { width: 120, align: 'right' });
+      doc.text(val, 485, ty, { width: 80, align: 'right' });
+      doc.fillColor('#000');
+      doc.moveDown(0.4);
+    };
+    totRow('Subtotal', fmtMoney(invoice.subtotal));
+    totRow(`GST (${invoice.gst_percent}%)`, fmtMoney(invoice.gst_amount));
+    if (parseFloat(invoice.credit_note_adjustment) > 0) {
+      totRow('Credit Notes', `- ${fmtMoney(invoice.credit_note_adjustment)}`, { color: '#b00' });
+    }
+    totRow('Grand Total', fmtMoney(invoice.grand_total), { bold: true });
+
     doc.end();
     stream.on('finish', resolve);
     stream.on('error', reject);
@@ -57,6 +155,9 @@ async function generateInvoicePdf(invoice) {
 
   return relativePath;
 }
+
+// Exposed for tests / scripts.
+exports._generateInvoicePdf = generateInvoicePdf;
 
 exports.ensureBillingEngineSchema = async () => {
   const sqlPath = path.join(__dirname, '../migrations/067_phase5_billing_engine.sql');
@@ -92,7 +193,7 @@ exports.listInvoices = async (req, res) => {
     const [listRes, summaryRes] = await Promise.all([
       pool.query(
         `SELECT ci.*, c.company_name AS customer_name, c.email AS customer_email,
-                jsonb_array_length(ci.line_items) AS laptop_count
+                COALESCE(jsonb_array_length(ci.line_items), 0) AS laptop_count
          FROM customer_invoices ci
          LEFT JOIN customers c ON c.customer_id = ci.customer_id
          WHERE ${where.join(' AND ')}
@@ -192,10 +293,8 @@ exports.sendInvoice = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Invoice not found' });
     }
     const invoice = result.rows[0];
-    const pdfPath = invoice.pdf_path || await generateInvoicePdf(invoice);
-    if (!invoice.pdf_path) {
-      await pool.query('UPDATE customer_invoices SET pdf_path = $1 WHERE invoice_id = $2', [pdfPath, id]);
-    }
+    const pdfPath = await generateInvoicePdf(invoice);
+    await pool.query('UPDATE customer_invoices SET pdf_path = $1 WHERE invoice_id = $2', [pdfPath, id]);
     const to = to_email || invoice.customer_email;
     const cc = Array.isArray(cc_emails) ? cc_emails.join(',') : cc_emails;
     const sent = await emailDocument({
@@ -220,18 +319,72 @@ exports.sendInvoice = async (req, res) => {
 exports.markPaid = async (req, res) => {
   try {
     const { id } = req.params;
-    const { payment_reference } = req.body || {};
-    const result = await pool.query(
-      `UPDATE customer_invoices
-       SET status = 'paid', paid_at = NOW(), payment_reference = $1, updated_at = NOW()
-       WHERE invoice_id = $2
-       RETURNING *`,
-      [payment_reference || null, id]
+    const { payment_reference, method } = req.body || {};
+    const result = await recordFullPayment(pool, {
+      partyType: 'customer',
+      invoiceId: Number(id),
+      reference: payment_reference || null,
+      method: method || 'adjustment',
+      recordedBy: req.user?.user_id || null,
+    });
+    if (result.skipped) {
+      const inv = await pool.query(`SELECT * FROM customer_invoices WHERE invoice_id = $1`, [id]);
+      if (!inv.rows.length) {
+        return res.status(404).json({ success: false, message: 'Invoice not found' });
+      }
+      return res.json({ success: true, invoice: inv.rows[0], message: result.reason });
+    }
+    const inv = await pool.query(`SELECT * FROM customer_invoices WHERE invoice_id = $1`, [id]);
+    res.json({ success: true, invoice: inv.rows[0], payment: result.payment });
+  } catch (err) {
+    res.status(err.message === 'Invoice not found' ? 404 : 500).json({ success: false, message: err.message });
+  }
+};
+
+exports.recordInvoicePayment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { amount, payment_date, method, reference, notes } = req.body || {};
+    if (!amount) {
+      return res.status(400).json({ success: false, message: 'amount is required' });
+    }
+    const result = await recordPayment(pool, {
+      partyType: 'customer',
+      invoiceId: Number(id),
+      amount,
+      paymentDate: payment_date,
+      method,
+      reference,
+      notes,
+      recordedBy: req.user?.user_id || null,
+    });
+    const inv = await pool.query(`SELECT * FROM customer_invoices WHERE invoice_id = $1`, [id]);
+    res.status(201).json({
+      success: true,
+      payment: result.payment,
+      amount_paid: result.amount_paid,
+      status: result.status,
+      invoice: inv.rows[0],
+    });
+  } catch (err) {
+    const code = err.message === 'Invoice not found' ? 404 : 500;
+    res.status(code).json({ success: false, message: err.message });
+  }
+};
+
+exports.listInvoicePayments = async (req, res) => {
+  try {
+    const { invoiceId, id } = req.params;
+    const targetId = invoiceId || id;
+    const payments = await listPayments({ invoiceId: Number(targetId) });
+    const inv = await pool.query(
+      `SELECT invoice_id, grand_total, amount_paid, status FROM customer_invoices WHERE invoice_id = $1`,
+      [targetId]
     );
-    if (!result.rows.length) {
+    if (!inv.rows.length) {
       return res.status(404).json({ success: false, message: 'Invoice not found' });
     }
-    res.json({ success: true, invoice: result.rows[0] });
+    res.json({ success: true, payments, invoice: inv.rows[0] });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -239,9 +392,12 @@ exports.markPaid = async (req, res) => {
 
 exports.downloadInvoicePdf = async (req, res) => {
   try {
-    const { id } = req.params;
+    // Route param is :invoiceId (older code read :id, which was always undefined
+    // and made every PDF download 404). Accept either for safety.
+    const id = req.params.invoiceId || req.params.id;
     const result = await pool.query(
-      `SELECT ci.*, c.company_name AS customer_name FROM customer_invoices ci
+      `SELECT ci.*, c.company_name AS customer_name, c.gst_no AS gst_number
+       FROM customer_invoices ci
        LEFT JOIN customers c ON c.customer_id = ci.customer_id
        WHERE ci.invoice_id = $1`,
       [id]
@@ -250,16 +406,9 @@ exports.downloadInvoicePdf = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Invoice not found' });
     }
     const invoice = result.rows[0];
-    let pdfPath = invoice.pdf_path;
-    if (!pdfPath) {
-      pdfPath = await generateInvoicePdf(invoice);
-      await pool.query('UPDATE customer_invoices SET pdf_path = $1 WHERE invoice_id = $2', [pdfPath, id]);
-    }
-    const abs = path.join(__dirname, '..', pdfPath);
-    if (!fs.existsSync(abs)) {
-      pdfPath = await generateInvoicePdf(invoice);
-      await pool.query('UPDATE customer_invoices SET pdf_path = $1 WHERE invoice_id = $2', [pdfPath, id]);
-    }
+    // Always regenerate so branding/logo updates apply to existing invoices.
+    const pdfPath = await generateInvoicePdf(invoice);
+    await pool.query('UPDATE customer_invoices SET pdf_path = $1 WHERE invoice_id = $2', [pdfPath, id]);
     res.download(path.join(__dirname, '..', pdfPath));
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

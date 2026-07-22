@@ -44,6 +44,11 @@ export function fetchVendorLookup(vendor_id) {
   return api.get(`${base}/vendors/info`, { params: { vendor_id } });
 }
 
+/** All laptops (serial units) supplied by a vendor + Active/Returned counts. */
+export function fetchVendorLaptops(id, params) {
+  return api.get(`${base}/vendors/${id}/laptops`, { params });
+}
+
 export function createVendor(formData) {
   return api.post(`${base}/vendors`, formData);
 }
@@ -90,6 +95,14 @@ export function fetchPurchaseOrder(id) {
   return api.get(`${base}/purchase-orders/${id}`);
 }
 
+export function listPoActivities(poId, params) {
+  return api.get(`${base}/purchase-orders/${poId}/activities`, { params });
+}
+
+export function logPoDocumentActivity(poId, body) {
+  return api.post(`${base}/purchase-orders/${poId}/activities`, body);
+}
+
 /** Laravel addProductReceived: vendor + PO stats + lines with received counts + GRNs */
 export function fetchProductReceivedContext(poId) {
   return api.get(`${base}/purchase-orders/${poId}/product-received`);
@@ -103,6 +116,35 @@ export function receivePoLineSerial(poId, body) {
 /** Multi-unit receive: rental start date + N serials + auto TTSPL codes per unit */
 export function receivePoLineBulk(poId, body) {
   return api.post(`${base}/purchase-orders/${poId}/product-received/receive-bulk`, body);
+}
+
+/** Sequential receive — one unit at a time with TTSPL + ticket */
+export function receivePoLineUnit(poId, body) {
+  return api.post(`${base}/purchase-orders/${poId}/product-received/receive-unit`, body);
+}
+
+/** Create laptop-side capture link for auto serial read */
+export function createGrnCaptureToken(poId, body) {
+  return api.post(`${base}/purchase-orders/${poId}/grn-capture-tokens`, body);
+}
+
+/** Poll capture token until serial is submitted from laptop */
+export function fetchGrnCaptureTokenStatus(token) {
+  return api.get(`${base}/grn-capture-tokens/${token}`);
+}
+
+// ── GRN Access Numbers (admin) ────────────────────────────────────
+export function listGrnAccessNumbers(params = {}) {
+  return api.get('/grn-access', { params });
+}
+export function fetchGrnAccessAttempts(params = {}) {
+  return api.get('/grn-access/attempts', { params });
+}
+export function expireGrnAccessNumber(id) {
+  return api.patch(`/grn-access/${id}/expire`);
+}
+export function deleteGrnAccessNumber(id) {
+  return api.delete(`/grn-access/${id}`);
 }
 
 /** Laravel view_purchase_order_detail: vendor + KPIs + grouped GRNs */
@@ -143,6 +185,18 @@ export function fetchNextSpoNumber() {
 /** Next SP-PO number + vendors + brands + spare parts catalog (Laravel add_po_parts parity). */
 export function fetchSparePartsFormMeta() {
   return api.get(`${base}/spare-parts-orders/form-meta`);
+}
+
+export function fetchSparePartsCatalog(params) {
+  return api.get(`${base}/spare-parts-catalog`, { params });
+}
+
+export function createSparePartsCatalogItem(body) {
+  return api.post(`${base}/spare-parts-catalog`, body);
+}
+
+export function updateSparePartsCatalogItem(id, body) {
+  return api.patch(`${base}/spare-parts-catalog/${id}`, body);
 }
 
 export function fetchSparePartsOrder(id) {

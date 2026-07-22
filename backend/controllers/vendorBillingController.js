@@ -1,5 +1,10 @@
 const pool = require('../config/db');
 const { generateVendorBill } = require('../services/billingSchedulerService');
+const {
+  recordPayment,
+  recordFullPayment,
+  listPayments,
+} = require('../services/paymentLedgerService');
 
 async function nextDebitNoteNumber() {
   const res = await pool.query(
@@ -13,7 +18,17 @@ async function nextDebitNoteNumber() {
 
 exports.listVendorBills = async (req, res) => {
   try {
-    const { vendor_id, month, year, status, page = 1, limit = 50 } = req.query;
+    const {
+      vendor_id,
+      month,
+      year,
+      status,
+      search,
+      page = 1,
+      limit = 25,
+    } = req.query;
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const pageSize = Math.min(parseInt(limit, 10) || 25, 100);
     const params = [];
     const where = ['1=1'];
     if (vendor_id) {
@@ -32,38 +47,67 @@ exports.listVendorBills = async (req, res) => {
       params.push(status);
       where.push(`vb.status = $${params.length}`);
     }
-    const offset = (Math.max(1, parseInt(page, 10)) - 1) * parseInt(limit, 10);
-    params.push(parseInt(limit, 10), offset);
+    const qSearch = String(search || '').trim();
+    if (qSearch) {
+      params.push(`%${qSearch}%`);
+      const n = params.length;
+      where.push(`(
+        vb.bill_number ILIKE $${n}
+        OR COALESCE(v.business_name, '') ILIKE $${n}
+        OR COALESCE(v.first_name, '') ILIKE $${n}
+        OR COALESCE(v.last_name, '') ILIKE $${n}
+        OR COALESCE(vb.notes, '') ILIKE $${n}
+      )`);
+    }
+    const whereSql = where.join(' AND ');
+    const offset = (pageNum - 1) * pageSize;
+    const listParams = [...params, pageSize, offset];
 
-    const [listRes, summaryRes] = await Promise.all([
+    const [listRes, countRes, summaryRes] = await Promise.all([
       pool.query(
         `SELECT vb.*, COALESCE(v.business_name, v.first_name) AS vendor_name,
-                jsonb_array_length(vb.line_items) AS unit_count
+                jsonb_array_length(COALESCE(vb.line_items, '[]'::jsonb)) AS unit_count
          FROM vendor_monthly_bills vb
          LEFT JOIN vendors v ON v.vendor_id = vb.vendor_id
-         WHERE ${where.join(' AND ')}
-         ORDER BY vb.bill_year DESC, vb.bill_month DESC
-         LIMIT $${params.length - 1} OFFSET $${params.length}`,
+         WHERE ${whereSql}
+         ORDER BY vb.bill_year DESC, vb.bill_month DESC, vb.bill_id DESC
+         LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+        listParams
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS total
+         FROM vendor_monthly_bills vb
+         LEFT JOIN vendors v ON v.vendor_id = vb.vendor_id
+         WHERE ${whereSql}`,
         params
       ),
       pool.query(
         `SELECT
-           COUNT(*) FILTER (WHERE status = 'generated')::int AS generated_count,
-           COALESCE(SUM(total_payable) FILTER (WHERE status = 'generated'), 0) AS generated_total,
-           COUNT(*) FILTER (WHERE status = 'approved')::int AS approved_count,
-           COALESCE(SUM(total_payable) FILTER (WHERE status = 'approved'), 0) AS approved_total,
-           COUNT(*) FILTER (WHERE status = 'paid')::int AS paid_count,
-           COALESCE(SUM(total_payable) FILTER (WHERE status = 'paid'), 0) AS paid_total
+           COUNT(*) FILTER (WHERE vb.status = 'generated')::int AS generated_count,
+           COALESCE(SUM(vb.total_payable) FILTER (WHERE vb.status = 'generated'), 0) AS generated_total,
+           COUNT(*) FILTER (WHERE vb.status = 'approved')::int AS approved_count,
+           COALESCE(SUM(vb.total_payable) FILTER (WHERE vb.status = 'approved'), 0) AS approved_total,
+           COUNT(*) FILTER (WHERE vb.status = 'paid')::int AS paid_count,
+           COALESCE(SUM(vb.total_payable) FILTER (WHERE vb.status = 'paid'), 0) AS paid_total
          FROM vendor_monthly_bills vb
-         WHERE ${where.join(' AND ')}`,
-        params.slice(0, params.length - 2)
+         LEFT JOIN vendors v ON v.vendor_id = vb.vendor_id
+         WHERE ${whereSql}`,
+        params
       ),
     ]);
+
+    const total = countRes.rows[0]?.total || 0;
 
     res.json({
       success: true,
       bills: listRes.rows,
       summary: summaryRes.rows[0] || {},
+      pagination: {
+        page: pageNum,
+        limit: pageSize,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      },
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -133,18 +177,72 @@ exports.approveVendorBill = async (req, res) => {
 exports.markVendorBillPaid = async (req, res) => {
   try {
     const { id } = req.params;
-    const { payment_reference, payment_date } = req.body || {};
-    const result = await pool.query(
-      `UPDATE vendor_monthly_bills
-       SET status = 'paid', payment_reference = $1, payment_date = $2, updated_at = NOW()
-       WHERE bill_id = $3
-       RETURNING *`,
-      [payment_reference || null, payment_date || new Date().toISOString().slice(0, 10), id]
+    const { payment_reference, payment_date, method } = req.body || {};
+    const result = await recordFullPayment(pool, {
+      partyType: 'vendor',
+      billId: Number(id),
+      reference: payment_reference || null,
+      method: method || 'adjustment',
+      recordedBy: req.user?.user_id || null,
+    });
+    if (result.skipped) {
+      const bill = await pool.query(`SELECT * FROM vendor_monthly_bills WHERE bill_id = $1`, [id]);
+      if (!bill.rows.length) {
+        return res.status(404).json({ success: false, message: 'Bill not found' });
+      }
+      return res.json({ success: true, bill: bill.rows[0], message: result.reason });
+    }
+    const bill = await pool.query(`SELECT * FROM vendor_monthly_bills WHERE bill_id = $1`, [id]);
+    res.json({ success: true, bill: bill.rows[0], payment: result.payment });
+  } catch (err) {
+    res.status(err.message === 'Bill not found' ? 404 : 500).json({ success: false, message: err.message });
+  }
+};
+
+exports.recordBillPayment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { amount, payment_date, method, reference, notes } = req.body || {};
+    if (!amount) {
+      return res.status(400).json({ success: false, message: 'amount is required' });
+    }
+    const result = await recordPayment(pool, {
+      partyType: 'vendor',
+      billId: Number(id),
+      amount,
+      paymentDate: payment_date,
+      method,
+      reference,
+      notes,
+      recordedBy: req.user?.user_id || null,
+    });
+    const bill = await pool.query(`SELECT * FROM vendor_monthly_bills WHERE bill_id = $1`, [id]);
+    res.status(201).json({
+      success: true,
+      payment: result.payment,
+      amount_paid: result.amount_paid,
+      status: result.status,
+      bill: bill.rows[0],
+    });
+  } catch (err) {
+    const code = err.message === 'Bill not found' ? 404 : 500;
+    res.status(code).json({ success: false, message: err.message });
+  }
+};
+
+exports.listBillPayments = async (req, res) => {
+  try {
+    const { billId, id } = req.params;
+    const targetId = billId || id;
+    const payments = await listPayments({ billId: Number(targetId) });
+    const bill = await pool.query(
+      `SELECT bill_id, total_payable, amount_paid, status FROM vendor_monthly_bills WHERE bill_id = $1`,
+      [targetId]
     );
-    if (!result.rows.length) {
+    if (!bill.rows.length) {
       return res.status(404).json({ success: false, message: 'Bill not found' });
     }
-    res.json({ success: true, bill: result.rows[0] });
+    res.json({ success: true, payments, bill: bill.rows[0] });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -176,6 +274,55 @@ exports.listDebitNotes = async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 };
+
+/**
+ * Auto-create a DRAFT debit note when a floor ticket Force-Fails a unit back to
+ * the vendor. Amount starts at 0 for accounts to fill; linked to the return
+ * ticket + serial + PO. Idempotent per return ticket. Runs on the given db
+ * (pool or a caller's client).
+ * @returns {Promise<object|null>} the debit note row, or null if skipped.
+ */
+async function createReturnDebitNote(db, { ticket, reason, actorUserId = null }) {
+  const client = db || pool;
+  if (!ticket || !ticket.vendor_serial_id) return null;
+
+  const existing = await client.query(
+    `SELECT debit_note_id FROM vendor_debit_notes WHERE return_ticket_id = $1`,
+    [ticket.ticket_id]
+  );
+  if (existing.rows.length) return null; // already raised
+
+  const vp = await client.query(
+    `SELECT vpo.vendor_id, vpo.po_id,
+            COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id
+       FROM vendor_serial_numbers vsn
+       JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id
+      WHERE vsn.serial_id = $1`,
+    [ticket.vendor_serial_id]
+  );
+  if (!vp.rows.length || !vp.rows[0].vendor_id) return null;
+  const { vendor_id, po_id, ttspl_id } = vp.rows[0];
+
+  const dnNumber = await nextDebitNoteNumber();
+  const ins = await client.query(
+    `INSERT INTO vendor_debit_notes
+      (debit_note_number, vendor_id, po_id, reason, description, amount,
+       quantity, unit_rate, ttspl_ids, created_by, serial_id, return_ticket_id)
+     VALUES ($1,$2,$3,$4,$5,0,1,0,$6::jsonb,$7,$8,$9)
+     RETURNING *`,
+    [
+      dnNumber, vendor_id, po_id || null,
+      'Return to vendor',
+      `Unit ${ttspl_id || ticket.serial_number} returned to vendor via floor QC fail` +
+        `${reason ? ` — ${reason}` : ''}. Set amount and approve to adjust the next vendor bill.`,
+      JSON.stringify([ttspl_id].filter(Boolean)),
+      actorUserId, ticket.vendor_serial_id, ticket.ticket_id,
+    ]
+  );
+  console.log(`[vendor-return] Draft debit note ${dnNumber} for vendor ${vendor_id}, ticket ${ticket.ticket_id}`);
+  return ins.rows[0];
+}
+exports.createReturnDebitNote = createReturnDebitNote;
 
 exports.createDebitNote = async (req, res) => {
   try {

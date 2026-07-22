@@ -1,57 +1,126 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { LayoutGrid, List, Loader2, Search } from 'lucide-react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { LayoutGrid, List, Loader2, Search, Factory } from 'lucide-react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import { PageHeader, ListPagination, DateRangeFilter } from '../../../components/ui/primitives';
+import useDebouncedValue from '../../../hooks/useDebouncedValue';
+import { useUrlFilters, useDebouncedUrlSearch, listReturnState } from '../../../hooks/useUrlFilters';
 import { useAuth } from '../../../context/AuthContext';
+import usePermission from '../../../hooks/usePermission';
 import { fetchFloorTickets } from '../floorPipelineApi';
+import useAutoRefresh from '../hooks/useAutoRefresh';
 import TicketCard from '../components/TicketCard';
+import AssignmentModal from '../components/AssignmentModal';
+import FloorPipelineFilterPanel, { FILTER_CTL } from '../components/FloorPipelineFilterPanel';
+import { EMPTY_SPEC_FILTERS, SPEC_FILTER_KEYS } from '../../inventory-management/inventorySpecFilters';
+import useDebouncedSpecParams from '../../inventory-management/hooks/useDebouncedSpecParams';
 import {
-  KANBAN_STAGES,
+  canAssignFloorTickets,
+  isFloorAssignedDataOnly,
+} from '../floorPipelineAccess';
+import {
+  STAGE_GROUPS,
   STAGE_COLUMN_STYLE,
   configSummary,
   isFloorManagerRole,
   isQcRole,
+  canActAsDispatchQc,
   priorityBadge,
-  ticketAgeDays
+  stageCategory,
+  stageCategoryBadge,
+  ticketAgeDays,
+  resolveTicketTtspl,
+  resolveTicketSerial,
+  ticketStatusLabel,
+  ticketStatusBadgeClass,
 } from '../floorPipelineUi';
 
 const VIEW_KEY = 'floor_pipeline_view';
+const PAGE_SIZE = 25;
+const FLOOR_FILTER_DEFAULTS = {
+  page: 1,
+  search: '',
+  stage: '',
+  priority: '',
+  type: '',
+  dateFrom: '',
+  dateTo: '',
+  ...EMPTY_SPEC_FILTERS,
+};
 
 export default function FloorTicketListPage() {
-  const { user } = useAuth();
-  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { user, isAssignedDataOnly } = useAuth();
+  const { canEdit } = usePermission();
+  const canAssign = canAssignFloorTickets(canEdit, isAssignedDataOnly);
+  const allDataScope = !isFloorAssignedDataOnly(isAssignedDataOnly);
+  const { filters, setFilters } = useUrlFilters(FLOOR_FILTER_DEFAULTS);
+  const {
+    page,
+    stage: stageFilter,
+    priority: priorityFilter,
+    type: typeFilter,
+    dateFrom,
+    dateTo,
+  } = filters;
+  const { searchInput, setSearchInput, debouncedSearch } = useDebouncedUrlSearch(filters, setFilters);
+  const specFilters = useMemo(() => {
+    const out = { ...EMPTY_SPEC_FILTERS };
+    SPEC_FILTER_KEYS.forEach((k) => { out[k] = filters[k] || ''; });
+    return out;
+  }, [filters]);
+  const debouncedSpecParams = useDebouncedSpecParams(specFilters);
   const [view, setView] = useState(() => localStorage.getItem(VIEW_KEY) || 'kanban');
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [stageFilter, setStageFilter] = useState(searchParams.get('stage') || '');
-  const [priorityFilter, setPriorityFilter] = useState('');
-  const [typeFilter, setTypeFilter] = useState('');
+  const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
+  const [assignTicket, setAssignTicket] = useState(null);
+
+  const fm = isFloorManagerRole(user?.role);
 
   const subtitle = useMemo(() => {
-    if (isFloorManagerRole(user?.role)) return 'All tickets';
+    if (stageFilter === 'QC1,QC2') return 'QC Queue';
+    if (stageFilter === 'Chip Level Repair') return 'Chip Level Repair';
+    if (stageFilter === 'Body & Paint') return 'Body & Paint';
+    if (stageFilter) return stageFilter;
+    if (allDataScope && (canAssign || fm)) return 'All tickets';
+    if (canActAsDispatchQc(user, canEdit)) return 'Dispatch QC queue';
     if (isQcRole(user?.role)) return 'QC queue';
     return 'My tickets';
-  }, [user?.role]);
+  }, [stageFilter, user, canEdit, fm, canAssign, allDataScope]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const params = { view: 'in_progress' };
-      if (search.trim()) params.search = search.trim();
+      if (debouncedSearch) params.search = debouncedSearch;
       if (priorityFilter) params.priority = priorityFilter;
       if (typeFilter) params.ticket_type = typeFilter;
       if (stageFilter) params.stage_names = stageFilter;
+      if (dateFrom) params.date_from = dateFrom;
+      if (dateTo) params.date_to = dateTo;
+      Object.assign(params, debouncedSpecParams);
+      params.page = page;
+      params.limit = PAGE_SIZE;
       const { data } = await fetchFloorTickets(params);
-      if (data.success) setTickets(data.tickets || []);
+      if (data.success) {
+        setTickets(data.tickets || []);
+        if (data.pagination) {
+          setPagination(data.pagination);
+        } else {
+          setPagination({ page: 1, totalPages: 1, total: data.tickets?.length || 0, limit: PAGE_SIZE });
+        }
+      }
     } catch (e) {
       toast.error(e.response?.data?.message || 'Failed to load tickets');
     } finally {
       setLoading(false);
     }
-  }, [search, priorityFilter, typeFilter, stageFilter]);
+  }, [debouncedSearch, priorityFilter, typeFilter, stageFilter, page, dateFrom, dateTo, debouncedSpecParams]);
 
   useEffect(() => { load(); }, [load]);
+  useAutoRefresh(load);
 
   const setViewMode = (v) => {
     setView(v);
@@ -60,133 +129,296 @@ export default function FloorTicketListPage() {
 
   const byStage = useMemo(() => {
     const map = {};
-    KANBAN_STAGES.forEach((s) => { map[s] = []; });
+    STAGE_GROUPS.forEach((g) => g.stages.forEach((s) => { map[s] = []; }));
     tickets.forEach((t) => {
       const key = t.stage_name === 'Inventory' ? 'Inventory' : t.stage_name;
       if (map[key]) map[key].push(t);
-      else if (!map[key]) map[key] = [t];
+      else map[key] = [t];
     });
     return map;
   }, [tickets]);
 
+  const handleFloorManagerClick = (ticket) => {
+    if (canAssign && ticket.stage_name === 'Floor Manager') {
+      setAssignTicket(ticket);
+    } else {
+      navigate(`/floor-pipeline/tickets/${ticket.ticket_id}`, { state: listReturnState(location) });
+    }
+  };
+
+  const renderAssignAction = (ticket) => {
+    if (!canAssign) return null;
+    if (ticket.stage_name === 'Floor Manager') {
+      return (
+        <button
+          type="button"
+          onClick={() => setAssignTicket(ticket)}
+          className="text-xs text-blue-600 font-semibold hover:underline"
+        >
+          Assign
+        </button>
+      );
+    }
+    if (ticket.stage_name === 'Inventory') return '—';
+    return (
+      <button
+        type="button"
+        onClick={() => setAssignTicket(ticket)}
+        className="text-xs text-slate-600 font-semibold hover:underline"
+      >
+        Reassign
+      </button>
+    );
+  };
+
   return (
     <div className="space-y-4 pb-8">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">Floor Pipeline</h1>
-          <p className="text-sm text-slate-500">{subtitle}</p>
-        </div>
-        <div className="flex rounded-lg border border-slate-200 overflow-hidden">
-          <button
-            type="button"
-            onClick={() => setViewMode('kanban')}
-            className={`px-3 py-2 text-sm flex items-center gap-1 ${view === 'kanban' ? 'bg-blue-600 text-white' : 'bg-white'}`}
-          >
-            <LayoutGrid className="w-4 h-4" /> Kanban
-          </button>
-          <button
-            type="button"
-            onClick={() => setViewMode('table')}
-            className={`px-3 py-2 text-sm flex items-center gap-1 ${view === 'table' ? 'bg-blue-600 text-white' : 'bg-white'}`}
-          >
-            <List className="w-4 h-4" /> Table
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title="Floor Pipeline"
+        subtitle={subtitle}
+        icon={Factory}
+        actions={(
+          <div className="flex rounded-lg border border-slate-200 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => { setFilters({ page: 1 }); setViewMode('kanban'); }}
+              className={`px-3 min-h-[40px] text-sm flex items-center gap-1 ${view === 'kanban' ? 'bg-blue-600 text-white' : 'bg-white'}`}
+            >
+              <LayoutGrid className="w-4 h-4" /> Kanban
+            </button>
+            <button
+              type="button"
+              onClick={() => { setFilters({ page: 1 }); setViewMode('table'); }}
+              className={`px-3 min-h-[40px] text-sm flex items-center gap-1 ${view === 'table' ? 'bg-blue-600 text-white' : 'bg-white'}`}
+            >
+              <List className="w-4 h-4" /> Table
+            </button>
+          </div>
+        )}
+      />
 
-      <div className="flex flex-wrap gap-2">
-        <div className="relative flex-1 min-w-[200px] max-w-md">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-          <input
-            className="w-full rounded-lg border pl-9 pr-3 py-2 text-sm"
-            placeholder="TTSPL ID, serial, model…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </div>
-        <select className="rounded-lg border px-3 py-2 text-sm" value={stageFilter} onChange={(e) => setStageFilter(e.target.value)}>
-          <option value="">All stages</option>
-          {KANBAN_STAGES.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
-        <select className="rounded-lg border px-3 py-2 text-sm" value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}>
-          <option value="">All priorities</option>
-          <option value="normal">Normal</option>
-          <option value="high">High</option>
-          <option value="sales_order">Sales Order</option>
-        </select>
-        <select className="rounded-lg border px-3 py-2 text-sm" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
-          <option value="">All types</option>
-          <option value="grn_qc">GRN QC</option>
-          <option value="sales_order_qc">Sales Order QC</option>
-          <option value="support">Support</option>
-          <option value="general">General</option>
-        </select>
-      </div>
+      <FloorPipelineFilterPanel
+        specFilters={specFilters}
+        onSpecFiltersChange={(next) => setFilters(next)}
+        onSpecFiltersClear={() => setFilters(Object.fromEntries(SPEC_FILTER_KEYS.map((k) => [k, ''])))}
+      >
+        <div className="relative min-w-[12rem] flex-1 max-w-sm shrink-0">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              type="search"
+              className={`${FILTER_CTL} w-full pl-8 pr-2`}
+              placeholder="TTSPL ID, serial, model…"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+            />
+          </div>
+          <select
+            className={`${FILTER_CTL} min-w-[7.5rem] max-w-[9rem]`}
+            value={stageFilter}
+            onChange={(e) => setFilters({ stage: e.target.value })}
+            aria-label="Stage"
+          >
+            <option value="">All stages</option>
+            <option value="QC1,QC2">QC Queue</option>
+            {STAGE_GROUPS.flatMap((g) => g.stages).map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+          <select
+            className={`${FILTER_CTL} min-w-[6.5rem] max-w-[8rem]`}
+            value={priorityFilter}
+            onChange={(e) => setFilters({ priority: e.target.value })}
+            aria-label="Priority"
+          >
+            <option value="">All priorities</option>
+            <option value="normal">Normal</option>
+            <option value="high">High</option>
+            <option value="sales_order">Sales Order</option>
+          </select>
+          <select
+            className={`${FILTER_CTL} min-w-[6rem] max-w-[7.5rem]`}
+            value={typeFilter}
+            onChange={(e) => setFilters({ type: e.target.value })}
+            aria-label="Type"
+          >
+            <option value="">All types</option>
+            <option value="grn_qc">GRN QC</option>
+            <option value="sales_order_qc">Sales Order QC</option>
+            <option value="support">Support</option>
+            <option value="general">General</option>
+          </select>
+          <DateRangeFilter
+            layout="inline"
+            controlClassName="h-9 px-2 text-sm min-h-0"
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            onRangeChange={(range) => setFilters(range)}
+            onDateFromChange={(v) => setFilters({ dateFrom: v })}
+            onDateToChange={(v) => setFilters({ dateTo: v })}
+            fromLabel="Created from"
+            toLabel="Created to"
+        />
+      </FloorPipelineFilterPanel>
 
       {loading ? (
         <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>
       ) : view === 'kanban' ? (
-        <div className="flex gap-3 overflow-x-auto pb-2 min-h-[420px]">
-          {KANBAN_STAGES.map((stage) => {
-            const col = byStage[stage] || [];
-            const style = STAGE_COLUMN_STYLE[stage] || STAGE_COLUMN_STYLE.default;
-            return (
-              <div key={stage} className={`min-w-[260px] w-[260px] shrink-0 rounded-xl border-2 ${style} p-2 flex flex-col`}>
-                <div className="flex items-center justify-between px-1 py-2 mb-2">
-                  <h3 className="text-xs font-bold text-slate-800">{stage}</h3>
-                  <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold">{col.length}</span>
-                </div>
-                <div className="space-y-2 flex-1">
-                  {col.map((t) => (
-                    <TicketCard key={t.ticket_id} ticket={t} pendingParts={t.part_requests_pending} />
-                  ))}
+        <>
+        <div className="flex gap-4 overflow-x-auto pb-2 min-h-[420px]">
+          {STAGE_GROUPS.map((group) => (
+            <div key={group.label} className="flex gap-3 shrink-0">
+              <div className="flex flex-col gap-3">
+                <div className={`text-[10px] font-bold uppercase tracking-wider ${group.color} px-1 py-2 writing-mode-vertical`} style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>
+                  {group.label}
                 </div>
               </div>
-            );
-          })}
+              {group.stages.map((stage) => {
+                const col = byStage[stage] || [];
+                const style = STAGE_COLUMN_STYLE[stage] || STAGE_COLUMN_STYLE.default;
+                return (
+                  <div key={stage} className={`min-w-[260px] w-[260px] shrink-0 rounded-xl border-2 ${style} p-2 flex flex-col`}>
+                    <div className="flex items-center justify-between px-1 py-2 mb-2">
+                      <h3 className="text-xs font-bold text-slate-800">{stage}</h3>
+                      <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold">{col.length}</span>
+                    </div>
+                    <div className="space-y-2 flex-1">
+                      {col.map((t) => (
+                        <div key={t.ticket_id}>
+                          <TicketCard
+                            ticket={t}
+                            pendingParts={t.part_requests_pending}
+                            onCardClick={canAssign && stage === 'Floor Manager' ? handleFloorManagerClick : undefined}
+                          />
+                          {canAssign && stage !== 'Floor Manager' && stage !== 'Inventory' ? (
+                            <div className="mt-1 flex justify-end px-1">
+                              <button
+                                type="button"
+                                onClick={() => setAssignTicket(t)}
+                                className="text-[11px] text-slate-600 font-semibold hover:underline"
+                              >
+                                Reassign
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
         </div>
+        <ListPagination
+          page={page}
+          totalPages={pagination.totalPages || 1}
+          total={pagination.total || 0}
+          pageSize={PAGE_SIZE}
+          onPageChange={(p) => setFilters({ page: p })}
+        />
+        </>
       ) : (
-        <div className="rounded-xl border border-gray-100 bg-white shadow-sm overflow-x-auto">
+        <>
+        {/* Mobile: cards */}
+        <div className="grid gap-3 sm:hidden">
+          {tickets.length === 0 ? (
+            <p className="text-center text-sm text-slate-500 py-8">No tickets</p>
+          ) : tickets.map((t) => (
+            <div key={t.ticket_id} className="relative">
+              <TicketCard
+                ticket={t}
+                pendingParts={t.part_requests_pending}
+                onCardClick={canAssign && t.stage_name === 'Floor Manager' ? handleFloorManagerClick : undefined}
+              />
+              {canAssign && t.stage_name !== 'Inventory' ? (
+                <div className="mt-1 flex justify-end px-1">
+                  {renderAssignAction(t)}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+        <div className="hidden sm:block rounded-xl border border-gray-100 bg-white shadow-sm overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500">
               <tr>
                 <th className="px-3 py-3 text-left">#</th>
                 <th className="px-3 py-3 text-left">TTSPL</th>
+                <th className="px-3 py-3 text-left">Serial</th>
                 <th className="px-3 py-3 text-left">Config</th>
                 <th className="px-3 py-3 text-left">Stage</th>
+                <th className="px-3 py-3 text-left">Category</th>
                 <th className="px-3 py-3 text-left">Priority</th>
                 <th className="px-3 py-3 text-left">Assigned</th>
                 <th className="px-3 py-3 text-left">QC Fails</th>
                 <th className="px-3 py-3 text-left">Age</th>
+                {canAssign ? <th className="px-3 py-3 text-left">Actions</th> : null}
               </tr>
             </thead>
             <tbody>
-              {tickets.map((t, i) => {
+              {tickets.length === 0 ? (
+                <tr>
+                  <td colSpan={canAssign ? 11 : 10} className="px-3 py-8 text-center text-slate-500">No tickets</td>
+                </tr>
+              ) : tickets.map((t, i) => {
                 const pri = priorityBadge(t.priority);
+                const cat = stageCategory(t.stage_name);
+                const rowNum = (page - 1) * PAGE_SIZE + i + 1;
+                const ttspl = resolveTicketTtspl(t);
                 return (
                   <tr key={t.ticket_id} className="border-t hover:bg-slate-50">
-                    <td className="px-3 py-3">{i + 1}</td>
+                    <td className="px-3 py-3">{rowNum}</td>
                     <td className="px-3 py-3">
-                      <Link to={`/floor-pipeline/tickets/${t.ticket_id}`} className="font-mono font-semibold text-blue-700">
-                        {t.ttspl_id || '—'}
+                      <Link to={`/floor-pipeline/tickets/${t.ticket_id}`} state={listReturnState(location)} className="font-mono font-semibold text-blue-700">
+                        {ttspl || '—'}
                       </Link>
+                      <p className="text-[10px] text-slate-400 font-mono mt-0.5">#{t.ticket_id}</p>
+                      {['diagnosis_failed', 'out_for_repair'].includes(t.status) ? (
+                        <span className={`inline-block mt-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${ticketStatusBadgeClass(t.status)}`}>
+                          {ticketStatusLabel(t.status)}
+                        </span>
+                      ) : null}
                       {t.highlighted ? <span className="ml-1" title={t.highlighted_reason}>⚠</span> : null}
+                    </td>
+                    <td className="px-3 py-3 font-mono text-xs text-slate-700">
+                      {resolveTicketSerial(t) || '—'}
                     </td>
                     <td className="px-3 py-3 text-xs">{configSummary(t)}</td>
                     <td className="px-3 py-3">{t.stage_name}</td>
+                    <td className="px-3 py-3">
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${stageCategoryBadge(t.stage_name)}`}>{cat}</span>
+                    </td>
                     <td className="px-3 py-3">
                       <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${pri.className}`}>{pri.label}</span>
                     </td>
                     <td className="px-3 py-3">{t.assigned_user_name || '—'}</td>
                     <td className="px-3 py-3">{t.qc_fail_count || 0}</td>
                     <td className="px-3 py-3">{ticketAgeDays(t.created_at)}</td>
+                    {canAssign ? (
+                      <td className="px-3 py-3">{renderAssignAction(t)}</td>
+                    ) : null}
                   </tr>
                 );
               })}
             </tbody>
           </table>
         </div>
+        <ListPagination
+          page={page}
+          totalPages={pagination.totalPages || 1}
+          total={pagination.total || 0}
+          pageSize={PAGE_SIZE}
+          onPageChange={(p) => setFilters({ page: p })}
+        />
+        </>
       )}
+
+      <AssignmentModal
+        ticket={assignTicket}
+        open={!!assignTicket}
+        onClose={() => setAssignTicket(null)}
+        onAssigned={load}
+      />
     </div>
   );
 }

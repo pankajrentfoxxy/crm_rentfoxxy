@@ -9,4 +9,8 @@ export const getSalespersonReport = (p) => api.get('/reports/salesperson', { par
 export const getCollectionsReport = (p) => api.get('/reports/collections', { params: p });
 export const getVendorSpendReport = (p) => api.get('/reports/vendor-spend', { params: p });
 export const getTechnicianReport = (p) => api.get('/reports/technician-performance', { params: p });
+export const getLaptopReport = (p) => api.get('/reports/laptop-report', { params: p });
+export const getLaptopReportTickets = (p) => api.get('/reports/laptop-report/tickets', { params: p });
+export const getSalesOrderReport = (p) => api.get('/reports/sales-order-report', { params: p });
+export const getSalesOrderReportDrilldown = (p) => api.get('/reports/sales-order-report/drilldown', { params: p });
 export const exportReport = (d) => api.post('/reports/export', d, { responseType: 'blob' });

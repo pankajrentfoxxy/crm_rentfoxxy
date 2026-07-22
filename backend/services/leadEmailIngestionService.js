@@ -2,10 +2,9 @@ const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
 const pool = require('../config/db');
 const prisma = require('../prisma/client');
-const { getNextAutoAssignee } = require('./leadAutoAssignService');
+const { getNextAutoAssignee, resolveForcedAutoAssignee } = require('./leadAutoAssignService');
 const { ensureResearch } = require('./leadResearchService');
 
-const LEAD_EMAIL_POLL_INTERVAL_MS = parseInt(process.env.LEAD_EMAIL_POLL_INTERVAL_MS || '120000', 10);
 const LEAD_EMAIL_LOOKBACK_DAYS = parseInt(process.env.LEAD_EMAIL_LOOKBACK_DAYS || '14', 10);
 const LEAD_EMAIL_MAILBOXES = (process.env.LEAD_EMAIL_MAILBOXES || 'Sent,INBOX,[Gmail]/Sent Mail')
     .split(',')
@@ -19,9 +18,31 @@ const PERSONAL_EMAIL_DOMAINS = new Set(
         .filter(Boolean)
 );
 
-let intervalRef = null;
-let running = false;
+let syncInProgress = false;
+let syncPending = false;
 let lastSuccessfulSyncAt = null;
+
+const isLeadEmailConfigured = () => !!(
+    process.env.LEAD_EMAIL_IMAP_HOST &&
+    process.env.LEAD_EMAIL_IMAP_USER &&
+    process.env.LEAD_EMAIL_IMAP_PASS
+);
+
+const createLeadEmailImapClient = () => {
+    const host = process.env.LEAD_EMAIL_IMAP_HOST;
+    const user = process.env.LEAD_EMAIL_IMAP_USER;
+    const pass = process.env.LEAD_EMAIL_IMAP_PASS;
+    const port = parseInt(process.env.LEAD_EMAIL_IMAP_PORT || '993', 10);
+    const secure = String(process.env.LEAD_EMAIL_IMAP_SECURE || 'true').toLowerCase() !== 'false';
+
+    return new ImapFlow({
+        host,
+        port,
+        secure,
+        auth: { user, pass },
+        logger: false,
+    });
+};
 
 const normalizeText = (value) => {
     if (value === undefined || value === null) return null;
@@ -39,8 +60,9 @@ const truncateText = (value, maxLength) => {
 const normalizePhone = (value) => {
     const text = normalizeText(value);
     if (!text) return null;
-    const digits = text.replace(/\D/g, '');
-    return digits.length ? digits : null;
+    const { normalizeIndianMobile, isValidIndianMobile } = require('../utils/phoneValidation');
+    const normalized = normalizeIndianMobile(text);
+    return isValidIndianMobile(normalized) ? normalized : null;
 };
 
 const sanitizeCity = (value) => {
@@ -233,6 +255,27 @@ const hasMessageProcessed = async (messageId) => {
     return result.rows.length > 0;
 };
 
+/** Refresh an existing lead when the same enquiry email/phone arrives again. */
+const updateExistingLeadFromEmail = async (leadId, { name, email, phone, city, safeNotes }) => {
+    await pool.query(
+        `UPDATE leads SET
+            name = COALESCE(NULLIF($1, ''), name),
+            email = COALESCE($2, email),
+            phone = COALESCE($3, phone),
+            city = COALESCE($4, city),
+            updated_at = NOW(),
+            last_activity_at = NOW()
+         WHERE lead_id = $5`,
+        [name, email, phone, city, leadId]
+    );
+
+    await pool.query(
+        `INSERT INTO lead_activities (lead_id, user_id, action, status_from, status_to, notes, created_at)
+         VALUES ($1, NULL, 'email_reingested', NULL, NULL, $2, CURRENT_TIMESTAMP)`,
+        [leadId, safeNotes || 'Lead refreshed from enquiry email']
+    );
+};
+
 const insertLeadFromEmail = async ({ parsedFields, subject, fromAddress, sentAt }) => {
     const combinedName = normalizeText(
         `${normalizeText(parsedFields.first_name) || ''} ${normalizeText(parsedFields.last_name) || ''}`.trim()
@@ -242,12 +285,18 @@ const insertLeadFromEmail = async ({ parsedFields, subject, fromAddress, sentAt 
     const phone = truncateText(normalizePhone(parsedFields.phone), 50);
     const city = truncateText(sanitizeCity(parsedFields.city), 100);
     const companyName = truncateText(extractDomain(email), 255);
+    // Import details belong in lead_activities only — personal_remarks stays empty for manual sales notes.
     const notes = buildLeadNotes({ parsedFields, subject, fromAddress, sentAt });
-    const safeNotes = truncateText(notes, 255);
+    const activityNotes = notes || 'Lead imported from enquiry email';
 
     const existingLeadId = await findExistingLeadId({ email, phone });
     if (existingLeadId) {
+        await updateExistingLeadFromEmail(existingLeadId, { name, email, phone, city, safeNotes: activityNotes });
         return existingLeadId;
+    }
+
+    if (!email && !phone) {
+        return null;
     }
 
     const receivedAt = sentAt ? new Date(sentAt) : new Date();
@@ -255,14 +304,14 @@ const insertLeadFromEmail = async ({ parsedFields, subject, fromAddress, sentAt 
 
     const autoAssignee = await getNextAutoAssignee();
     const assignCols = autoAssignee
-        ? 'name, company_name, email, phone, city, source, status, personal_remarks, inquiry_type, created_at, updated_at, assigned_user_id, assigned_at'
-        : 'name, company_name, email, phone, city, source, status, personal_remarks, inquiry_type, created_at, updated_at';
+        ? 'name, company_name, email, phone, city, source, status, inquiry_type, created_at, updated_at, assigned_user_id, assigned_at'
+        : 'name, company_name, email, phone, city, source, status, inquiry_type, created_at, updated_at';
     const assignVals = autoAssignee
-        ? `$1, $2, $3, $4, $5, 'Email', 'Pending', $8, 'rental', $6, $6, $7, $6`
-        : `$1, $2, $3, $4, $5, 'Email', 'Pending', $7, 'rental', $6, $6`;
+        ? `$1, $2, $3, $4, $5, 'Email', 'Pending', 'rental', $6, $6, $7, $6`
+        : `$1, $2, $3, $4, $5, 'Email', 'Pending', 'rental', $6, $6`;
     const assignParams = autoAssignee
-        ? [name, companyName, email, phone, city, safeReceivedAt, autoAssignee, safeNotes]
-        : [name, companyName, email, phone, city, safeReceivedAt, safeNotes];
+        ? [name, companyName, email, phone, city, safeReceivedAt, autoAssignee]
+        : [name, companyName, email, phone, city, safeReceivedAt];
 
     const leadResult = await pool.query(
         `INSERT INTO leads (${assignCols}) VALUES (${assignVals}) RETURNING lead_id`,
@@ -274,7 +323,7 @@ const insertLeadFromEmail = async ({ parsedFields, subject, fromAddress, sentAt 
     await pool.query(
         `INSERT INTO lead_activities (lead_id, user_id, action, status_from, status_to, notes, created_at)
          VALUES ($1, NULL, 'email_imported', NULL, 'Pending', $2, CURRENT_TIMESTAMP)`,
-        [leadId, safeNotes]
+        [leadId, activityNotes]
     );
 
     return leadId;
@@ -318,37 +367,39 @@ const getSyncSinceDate = () => {
     return new Date(lastSuccessfulSyncAt.getTime() - 5 * 60 * 1000);
 };
 
-const runLeadEmailSync = async () => {
-    const host = process.env.LEAD_EMAIL_IMAP_HOST;
-    const user = process.env.LEAD_EMAIL_IMAP_USER;
-    const pass = process.env.LEAD_EMAIL_IMAP_PASS;
-    const port = parseInt(process.env.LEAD_EMAIL_IMAP_PORT || '993', 10);
-    const secure = String(process.env.LEAD_EMAIL_IMAP_SECURE || 'true').toLowerCase() !== 'false';
+const runLeadEmailSync = async (options = {}) => {
+    const { client: externalClient = null } = options;
+    const ownConnection = !externalClient;
 
-    if (!host || !user || !pass) {
+    if (syncInProgress) {
+        syncPending = true;
+        console.log('Lead email sync already in progress; coalescing into a single follow-up run');
+        return { coalesced: true };
+    }
+    syncInProgress = true;
+
+    if (!isLeadEmailConfigured()) {
+        syncInProgress = false;
         console.warn('⚠️ Lead email sync skipped: IMAP credentials are missing');
         return;
     }
 
-    const client = new ImapFlow({
-        host,
-        port,
-        secure,
-        auth: { user, pass },
-        logger: false
-    });
-    client.on('error', (error) => {
-        console.error(`⚠️ Lead email IMAP connection issue: ${error.message}`);
-    });
-
+    let client = externalClient;
     try {
-        await client.connect();
+        if (ownConnection) {
+            client = createLeadEmailImapClient();
+            client.on('error', (error) => {
+                console.error(`⚠️ Lead email IMAP connection issue: ${error.message}`);
+            });
+            await client.connect();
+        }
+
         const mailboxes = await getAvailableMailboxes(client);
 
         const sinceDate = getSyncSinceDate();
 
         let created = 0;
-        let deduped = 0;
+        let updated = 0;
         let skipped = 0;
         for (const mailbox of mailboxes) {
             try {
@@ -403,9 +454,18 @@ const runLeadEmailSync = async () => {
                             fromAddress,
                             sentAt: message.envelope?.date || parsed.date || null
                         });
+                        if (!leadId) {
+                            await markMessageProcessed({ messageId, mailbox, subject, leadId: null });
+                            skipped++;
+                            continue;
+                        }
                         await markMessageProcessed({ messageId, mailbox, subject, leadId });
-                        if (beforeInsertLeadId) deduped++;
-                        else {
+                        if (beforeInsertLeadId) {
+                            updated++;
+                            prisma.lead.findUnique({ where: { leadId } })
+                                .then((lead) => lead && ensureResearch(lead, { force: true }))
+                                .catch((err) => console.error('Lead research refresh error:', err));
+                        } else {
                             created++;
                             if (leadId) {
                                 prisma.lead.findUnique({ where: { leadId } })
@@ -423,46 +483,71 @@ const runLeadEmailSync = async () => {
             }
         }
 
-        if (process.env.NODE_ENV !== 'production') {
-            console.log(`Lead email sync: created=${created}, deduped=${deduped}, skipped=${skipped}`);
-        }
+        const summary = { created, updated, skipped };
+        console.log(`Lead email sync: ${JSON.stringify(summary)}`);
         lastSuccessfulSyncAt = new Date();
+        return summary;
     } finally {
-        try {
-            await client.logout();
-        } catch {
-            // Ignore logout errors.
+        syncInProgress = false;
+        const shouldRerun = syncPending;
+        syncPending = false;
+
+        if (ownConnection && client) {
+            try {
+                await client.logout();
+            } catch {
+                // Ignore logout errors.
+            }
+        }
+
+        if (shouldRerun) {
+            return runLeadEmailSync(options);
         }
     }
 };
 
 const startLeadEmailIngestionWorker = async () => {
     await ensureIngestionTable();
+    const { startLeadEmailIdleService } = require('./leadEmailIdleService');
+    await startLeadEmailIdleService();
+};
 
-    if (!running) {
-        running = true;
-        await runLeadEmailSync().catch((error) => {
-            console.error('❌ Lead email sync failed:', error.message);
-        });
-        running = false;
+const getLeadEmailSyncStatus = async () => {
+    const { getLeadEmailIdleStatus } = require('./leadEmailIdleService');
+    let autoAssignUserId = null;
+    let autoAssignEmail = null;
+    try {
+        autoAssignUserId = await resolveForcedAutoAssignee();
+        if (!autoAssignUserId) autoAssignUserId = await getNextAutoAssignee();
+        if (autoAssignUserId) {
+            const u = await pool.query('SELECT user_id, name, email FROM users WHERE user_id = $1', [autoAssignUserId]);
+            autoAssignEmail = u.rows[0]?.email || null;
+        }
+    } catch (e) {
+        console.warn('Lead auto-assign status lookup failed:', e.message);
     }
+    return {
+        configured: isLeadEmailConfigured(),
+        ...getLeadEmailIdleStatus(),
+        syncInProgress,
+        lastSuccessfulSyncAt: lastSuccessfulSyncAt ? lastSuccessfulSyncAt.toISOString() : null,
+        lookbackDays: LEAD_EMAIL_LOOKBACK_DAYS,
+        mailboxes: LEAD_EMAIL_MAILBOXES,
+        autoAssignUserId,
+        autoAssignEmail,
+    };
+};
 
-    if (!intervalRef) {
-        intervalRef = setInterval(async () => {
-            if (running) return;
-            running = true;
-            try {
-                await runLeadEmailSync();
-            } catch (error) {
-                console.error('❌ Lead email sync failed:', error.message);
-            } finally {
-                running = false;
-            }
-        }, LEAD_EMAIL_POLL_INTERVAL_MS);
-    }
+const stopLeadEmailIngestionWorker = async () => {
+    const { stopLeadEmailIdleService } = require('./leadEmailIdleService');
+    await stopLeadEmailIdleService();
 };
 
 module.exports = {
     startLeadEmailIngestionWorker,
-    runLeadEmailSync
+    stopLeadEmailIngestionWorker,
+    runLeadEmailSync,
+    getLeadEmailSyncStatus,
+    createLeadEmailImapClient,
+    isLeadEmailConfigured,
 };

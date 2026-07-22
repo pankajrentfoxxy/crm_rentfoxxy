@@ -1,11 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Loader2, Search, Plus, Download } from 'lucide-react';
+import { Loader2, Search, Download } from 'lucide-react';
 import api from '../../utils/api';
-import { isSupportLead } from '../../utils/supportAccess';
+import { canCloseSupportTicket, isSupportLead } from '../../utils/supportAccess';
 import { useAuth } from '../../context/AuthContext';
-import { displayStatus, formatRelative, formatTicketId } from './utils';
+import { displayStatus, formatRelative, formatTicketId, podUrl, ticketHasUnassignedTechnicianSlots } from './utils';
 import TtsplHistoryDrawer from '../../features/floor-pipeline/components/TtsplHistoryDrawer';
+
+const TYPE_CHIPS = [
+  { key: '', label: 'All', countKey: 'all' },
+  { key: 'complaint', label: 'Complaint', countKey: 'complaint' },
+  { key: 'pickup', label: 'Pickup', countKey: 'pickup' },
+  { key: 'replacement', label: 'Replacement', countKey: 'replacement' },
+];
 
 const STATUS_TABS = [
   { key: 'all', label: 'All', view: 'all' },
@@ -40,7 +47,7 @@ function assignedLabel(ticket) {
 }
 
 function isUnassigned(ticket) {
-  return (ticket.unassigned_item_count || 0) > 0;
+  return ticketHasUnassignedTechnicianSlots(ticket);
 }
 
 export default function SupportTicketList() {
@@ -61,6 +68,7 @@ export default function SupportTicketList() {
   const [assignFilter, setAssignFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [typeCounts, setTypeCounts] = useState({ all: 0, complaint: 0, pickup: 0, replacement: 0 });
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(search.trim()), 300);
@@ -69,24 +77,41 @@ export default function SupportTicketList() {
 
   const activeTab = STATUS_TABS.find((t) => t.key === statusTab) || STATUS_TABS[0];
 
+  const buildFilterParams = useCallback(() => {
+    const params = new URLSearchParams();
+    if (debounced) params.set('search', debounced);
+    params.set('view', activeTab.view);
+    if (activeTab.status === 'in_progress') params.set('status_tab', 'in_progress');
+    else if (statusTab === 'open') params.set('status_tab', 'open');
+    if (priorityFilter) params.set('priority', priorityFilter);
+    if (assignFilter) params.set('assignee', assignFilter);
+    if (dateFrom) params.set('date_from', dateFrom);
+    if (dateTo) params.set('date_to', dateTo);
+    return params;
+  }, [debounced, activeTab.view, activeTab.status, statusTab, priorityFilter, assignFilter, dateFrom, dateTo]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (debounced) params.set('search', debounced);
+      const params = buildFilterParams();
       if (typeFilter && ['complaint', 'pickup', 'replacement'].includes(typeFilter)) {
         params.set('type', typeFilter);
       }
-      params.set('view', activeTab.view);
       params.set('limit', '100');
-      const { data } = await api.get(`/support/tickets?${params}`);
+      const countParams = buildFilterParams();
+      const [{ data }, countsRes] = await Promise.all([
+        api.get(`/support/tickets?${params}`),
+        api.get(`/support/tickets/counts?${countParams}`)
+      ]);
       setTickets(data.tickets || []);
+      setTypeCounts(countsRes.data.counts || { all: 0, complaint: 0, pickup: 0, replacement: 0 });
     } catch {
       setTickets([]);
+      setTypeCounts({ all: 0, complaint: 0, pickup: 0, replacement: 0 });
     } finally {
       setLoading(false);
     }
-  }, [debounced, typeFilter, activeTab.view]);
+  }, [buildFilterParams, typeFilter]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -99,36 +124,11 @@ export default function SupportTicketList() {
 
   const filtered = useMemo(() => {
     let list = tickets;
-    if (activeTab.status) {
-      list = list.filter((t) => t.status === activeTab.status);
-    } else if (statusTab === 'open') {
-      list = list.filter((t) => t.status !== 'closed' && t.status !== 'in_progress');
-    }
     if (typeFilter === 'loan') {
       list = list.filter((t) => (t.items || []).some((i) => i.item_type === 'loan'));
     }
-    if (priorityFilter === 'high') {
-      list = list.filter((t) => t.priority === 'high' || t.priority === 'urgent');
-    } else if (priorityFilter === 'normal') {
-      list = list.filter((t) => !t.priority || t.priority === 'normal');
-    }
-    if (assignFilter === 'unassigned') {
-      list = list.filter(isUnassigned);
-    } else if (assignFilter === 'me') {
-      list = list.filter((t) => (t.items || []).some((i) => i.assigned_to === user?.user_id));
-    } else if (assignFilter && assignFilter !== 'all') {
-      list = list.filter((t) => (t.items || []).some((i) => String(i.assigned_to) === assignFilter));
-    }
-    if (dateFrom) {
-      const from = new Date(dateFrom).getTime();
-      list = list.filter((t) => new Date(t.created_at).getTime() >= from);
-    }
-    if (dateTo) {
-      const to = new Date(dateTo).getTime() + 86400000;
-      list = list.filter((t) => new Date(t.created_at).getTime() < to);
-    }
-    return list;
-  }, [tickets, activeTab, statusTab, typeFilter, priorityFilter, assignFilter, dateFrom, dateTo, user?.user_id]);
+    return [...list].sort((a, b) => Number(b.id) - Number(a.id));
+  }, [tickets, typeFilter]);
 
   const handleAssign = async (ticketId, assignedTo) => {
     await api.post(`/support/tickets/${ticketId}/assign-all`, { assigned_to: Number(assignedTo) });
@@ -188,15 +188,6 @@ export default function SupportTicketList() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <h1 className="text-xl font-bold text-slate-900">All tickets</h1>
-        {isSupportLead(user) && (
-          <Link to="/support/tickets/new" className="support-btn-primary inline-flex items-center gap-2">
-            <Plus className="w-4 h-4" /> New ticket
-          </Link>
-        )}
-      </div>
-
       <div className="flex flex-wrap gap-1 border-b border-slate-200 pb-1">
         {STATUS_TABS.map((tab) => {
           const count = tab.key === 'overdue' ? badges.overdue_tickets
@@ -224,6 +215,19 @@ export default function SupportTicketList() {
         })}
       </div>
 
+      <div className="flex flex-wrap gap-2">
+        {TYPE_CHIPS.map((chip) => (
+          <button
+            key={chip.key || 'all'}
+            type="button"
+            className={`support-filter-chip ${chip.key || 'all'}${typeFilter === chip.key ? ' active' : ''}`}
+            onClick={() => setTypeFilter(chip.key)}
+          >
+            {chip.label} ({typeCounts[chip.countKey] ?? 0})
+          </button>
+        ))}
+      </div>
+
       <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <div className="relative sm:col-span-2">
@@ -238,9 +242,9 @@ export default function SupportTicketList() {
           </div>
           <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm">
             <option value="">All types</option>
-            <option value="complaint">Complaint</option>
-            <option value="replacement">Replacement</option>
-            <option value="pickup">Pickup</option>
+            <option value="complaint">Complaint ({typeCounts.complaint ?? 0})</option>
+            <option value="replacement">Replacement ({typeCounts.replacement ?? 0})</option>
+            <option value="pickup">Pickup ({typeCounts.pickup ?? 0})</option>
             <option value="loan">Loan</option>
           </select>
           <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm">
@@ -293,7 +297,60 @@ export default function SupportTicketList() {
           <p className="font-medium text-slate-700">No tickets match your filters</p>
         </div>
       ) : (
-        <div className="overflow-x-auto bg-white rounded-xl border border-slate-200">
+        <>
+        {/* Mobile: stacked cards (the 12-column table is desktop-only) */}
+        <div className="grid gap-3 sm:hidden">
+          {filtered.map((ticket) => {
+            const st = displayStatus(ticket);
+            const pType = primaryType(ticket);
+            const overdue = ticket.is_overdue || (ticket.hours_since_last_update >= 48);
+            const podItem = (ticket.items || []).find((it) => it.proof_of_completion_path || it.pod_image_path);
+            const url = podItem && podUrl(podItem.proof_of_completion_path || podItem.pod_image_path);
+            return (
+              <div key={ticket.id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-mono text-xs text-slate-400">{formatTicketId(ticket.id)}</p>
+                    <p className="font-semibold text-slate-900 truncate">{ticket.customer_name || '—'}</p>
+                  </div>
+                  <span className={`support-status-badge shrink-0 ${st.className}`}>{st.label}</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                  <span className={`text-xs px-2 py-0.5 rounded-full capitalize ${TYPE_BADGE[pType] || 'bg-slate-100'}`}>{pType}</span>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 capitalize">{ticket.priority || 'normal'}</span>
+                  {ticket.ttspl_id && (
+                    <button type="button" onClick={() => setHistoryTtspl(ticket.ttspl_id)} className="text-xs font-mono text-blue-600">
+                      {ticket.ttspl_id}
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center justify-between gap-2 mt-2 text-xs">
+                  <span className="text-slate-500 truncate">{primaryCategory(ticket)}</span>
+                  <span className={overdue ? 'text-red-600 font-medium' : 'text-slate-400'}>{formatRelative(ticket.created_at)}</span>
+                </div>
+                <p className="text-xs text-slate-400 mt-1">{assignedLabel(ticket)}</p>
+                <div className="flex flex-wrap items-center gap-3 mt-3 pt-3 border-t border-slate-100">
+                  <Link to={`/support/tickets/${ticket.id}`} className="text-sm font-semibold text-blue-600 min-h-[36px] inline-flex items-center">View</Link>
+                  {url && <a href={url} target="_blank" rel="noopener noreferrer" className="text-sm text-emerald-600 min-h-[36px] inline-flex items-center">POD</a>}
+                  {isSupportLead(user) && isUnassigned(ticket) && (
+                    <select
+                      className="text-xs border rounded-lg px-2 min-h-[36px] ml-auto"
+                      defaultValue=""
+                      onChange={(e) => { if (e.target.value) handleAssign(ticket.id, e.target.value); e.target.value = ''; }}
+                    >
+                      <option value="">Assign</option>
+                      {technicians.map((tech) => (<option key={tech.user_id} value={tech.user_id}>{tech.name}</option>))}
+                    </select>
+                  )}
+                  {canCloseSupportTicket(user) && ticket.status !== 'closed' && (
+                    <button type="button" onClick={() => handleClose(ticket.id)} className="text-sm text-red-600 min-h-[36px] inline-flex items-center">Close</button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="hidden sm:block overflow-x-auto bg-white rounded-xl border border-slate-200">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs text-slate-600 uppercase">
@@ -360,6 +417,13 @@ export default function SupportTicketList() {
                     <td className="p-3">
                       <div className="flex flex-wrap gap-2">
                         <Link to={`/support/tickets/${ticket.id}`} className="text-blue-600 hover:underline text-xs">View</Link>
+                        {(() => {
+                          const podItem = (ticket.items || []).find((it) => it.proof_of_completion_path || it.pod_image_path);
+                          const url = podItem && podUrl(podItem.proof_of_completion_path || podItem.pod_image_path);
+                          return url ? (
+                            <a href={url} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline text-xs">POD</a>
+                          ) : null;
+                        })()}
                         {isSupportLead(user) && isUnassigned(ticket) && (
                           <select
                             className="text-xs border rounded px-1 py-0.5 max-w-[100px]"
@@ -372,7 +436,7 @@ export default function SupportTicketList() {
                             ))}
                           </select>
                         )}
-                        {isSupportLead(user) && ticket.status !== 'closed' && (
+                        {canCloseSupportTicket(user) && ticket.status !== 'closed' && (
                           <button type="button" onClick={() => handleClose(ticket.id)} className="text-xs text-red-600 hover:underline">
                             Close
                           </button>
@@ -385,6 +449,7 @@ export default function SupportTicketList() {
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       <TtsplHistoryDrawer

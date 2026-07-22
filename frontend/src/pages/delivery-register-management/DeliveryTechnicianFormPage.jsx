@@ -9,6 +9,7 @@ import {
   fetchTechnicianAddMeta,
   updateDeliveryTechnician,
 } from '../../utils/deliveryRegisterApi';
+import { formatIndianMobileInput, indianMobileError, normalizeIndianMobile } from '../../utils/phoneValidation';
 
 const IDENTITY_TYPES = [
   { value: 'passport', label: 'Passport' },
@@ -112,6 +113,11 @@ export default function DeliveryTechnicianFormPage() {
       setError('Phone is required');
       return;
     }
+    const phoneErr = indianMobileError(form.phone, { required: true, label: 'Phone' });
+    if (phoneErr) {
+      setError(phoneErr);
+      return;
+    }
     if (!form.email.trim()) {
       setError('Email is required');
       return;
@@ -129,7 +135,7 @@ export default function DeliveryTechnicianFormPage() {
     fd.append('first_name', form.first_name.trim());
     fd.append('last_name', form.last_name.trim());
     fd.append('country_code', form.country_code);
-    fd.append('phone', form.phone.trim());
+    fd.append('phone', normalizeIndianMobile(form.phone));
     fd.append('identity_type', form.identity_type);
     fd.append('identity_number', form.identity_number.trim());
     fd.append('address', form.address);
@@ -198,7 +204,7 @@ export default function DeliveryTechnicianFormPage() {
                 </select>
                 <input required className="flex-1 border rounded-lg px-3 py-2 text-sm" value={form.phone}
                   maxLength={10} inputMode="numeric" placeholder="Enter 10 digits"
-                  onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value.replace(/\D/g, '').slice(0, 10) }))} />
+                  onChange={(e) => setForm((f) => ({ ...f, phone: formatIndianMobileInput(e.target.value) }))} />
               </div>
             </div>
             <div>

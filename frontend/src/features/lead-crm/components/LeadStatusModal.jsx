@@ -23,7 +23,7 @@ export default function LeadStatusModal({ open, lead, onClose, onSaved }) {
   if (!open || !lead) return null;
 
   const stages = stagesByStatus[status] || [];
-  const showStage = stages.length > 0 && !['Deal', 'Demo', 'Call Back'].includes(status);
+  const showStage = stages.length > 1 && !['Demo', 'Call Back'].includes(status);
   const showRejection = status === 'Rejected';
   const statusStyle = STATUS_COLORS[status] || STATUS_COLORS.Pending;
 
@@ -37,7 +37,7 @@ export default function LeadStatusModal({ open, lead, onClose, onSaved }) {
     try {
       const payload = {
         status,
-        lead_stage: showStage ? stage : (showRejection ? stage : null),
+        lead_stage: stages.length === 1 ? stages[0] : (showStage ? stage : (showRejection ? stage : null)),
         rejection_reason: showRejection ? stage : undefined,
         notes: remarks,
       };

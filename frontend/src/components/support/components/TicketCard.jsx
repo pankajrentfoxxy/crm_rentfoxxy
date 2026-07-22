@@ -7,7 +7,8 @@ import {
   formatTicketId,
   formatUpdatedLabel,
   initials,
-  isUrgentPickup
+  isUrgentPickup,
+  ticketHasUnassignedTechnicianSlots
 } from '../utils';
 
 export default function TicketCard({ ticket, closed, technicians = [], canAssign, onAssigned }) {
@@ -17,6 +18,7 @@ export default function TicketCard({ ticket, closed, technicians = [], canAssign
   const status = displayStatus(ticket);
   const urgent = isUrgentPickup(ticket.items);
   const techs = [...new Map((ticket.items || []).filter((i) => i.assigned_to_name).map((i) => [i.assigned_to, i.assigned_to_name])).values()];
+  const canShowAssign = canAssign && ticketHasUnassignedTechnicianSlots(ticket);
   const resolved = ticket.resolved_item_count || 0;
   const total = ticket.item_count || (ticket.items || []).length || 0;
   const hours = ticket.hours_since_last_update || 0;
@@ -90,7 +92,7 @@ export default function TicketCard({ ticket, closed, technicians = [], canAssign
                 </span>
               ))}
             </div>
-          ) : canAssign ? (
+          ) : canShowAssign ? (
             <div className="relative">
               <button type="button" className="support-btn-assign" disabled={assigning} onClick={() => setOpenAssign((v) => !v)}>
                 <Plus className="w-3.5 h-3.5" /> Assign technician

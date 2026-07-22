@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Eye, EyeOff } from 'lucide-react';
+import { formatIndianMobileInput, indianMobileError, normalizeIndianMobile } from '../../utils/phoneValidation';
 
 const API_BASE = (process.env.REACT_APP_API_URL || process.env.VITE_API_URL || '').replace(/\/$/, '');
 
@@ -22,7 +23,10 @@ export default function VendorRegister() {
 
   const handleChange = (e) => {
     const { name, value } = e.target;
-    setForm((prev) => ({ ...prev, [name]: value }));
+    setForm((prev) => ({
+      ...prev,
+      [name]: name === 'mobile_no' ? formatIndianMobileInput(value) : value,
+    }));
     setError('');
   };
 
@@ -30,6 +34,8 @@ export default function VendorRegister() {
     if (!form.name || !form.email || !form.mobile_no || !form.company_name || !form.password || !form.confirmPassword) {
       return 'Please fill all required fields';
     }
+    const mobileErr = indianMobileError(form.mobile_no, { required: true, label: 'Mobile number' });
+    if (mobileErr) return mobileErr;
     if (form.password.length < 8) return 'Password must be at least 8 characters';
     if (form.password !== form.confirmPassword) return 'Passwords do not match';
     return '';
@@ -53,7 +59,7 @@ export default function VendorRegister() {
           name: form.name,
           email: form.email,
           password: form.password,
-          mobile_no: form.mobile_no,
+          mobile_no: normalizeIndianMobile(form.mobile_no),
           company_name: form.company_name,
           gst_number: form.gst_number,
         }),
@@ -115,6 +121,8 @@ export default function VendorRegister() {
                     onChange={handleChange}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     required={field.required}
+                    maxLength={field.name === 'mobile_no' ? 10 : undefined}
+                    inputMode={field.name === 'mobile_no' ? 'numeric' : undefined}
                   />
                 </div>
               ))}

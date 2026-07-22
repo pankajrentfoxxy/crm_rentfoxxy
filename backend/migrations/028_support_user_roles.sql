@@ -22,6 +22,7 @@ ALTER TABLE public.users
   ADD CONSTRAINT users_role_check
   CHECK (
     role IN (
+      'super_admin',
       'admin',
       'manager',
       'team_member',
@@ -32,8 +33,13 @@ ALTER TABLE public.users
       'qc',
       'dispatch',
       'warehouse',
+      'accounts',
       'support_lead',
-      'support_tech'
+      'support_tech',
+      'dispatch_qc',
+      'customer',
+      'vendor',
+      'technician'
     )
   );
 

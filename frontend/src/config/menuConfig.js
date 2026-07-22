@@ -23,38 +23,61 @@ import {
   Headphones,
 } from 'lucide-react';
 
-/** Vendor Management accordion */
+/** Vendor Management accordion (procurement only — billing lives under Finance).
+ *  GRN / receiving happens inside the Purchase Orders page, so there is no
+ *  separate "GRN" item (that was a duplicate link to Purchase Orders). */
 export const vendorAccordionChildren = [
   { label: 'Purchase Orders', path: '/vendor-management/purchase-orders' },
   { label: 'Spare Parts PO', path: '/vendor-management/spare-parts-po' },
-  { label: 'GRN / Received', path: '/vendor-management/purchase-orders' },
-  { label: 'Vendor Billing', path: '/vendor-management/billing/vendor-overview' },
-  { label: 'Monthly Bills', path: '/vendor-management/billing/pending' },
+  { label: 'Serial Numbers', path: '/vendor-management/serial-numbers' },
+  { label: 'Replaced Products', path: '/vendor-management/replaced-products' },
 ];
 
-/** Floor & Quality accordion (includes Parts) */
+/** Production accordion (formerly Floor & Quality).
+ *  Each child uses the granular RBAC section its page enforces — parent floor_pipeline
+ *  does NOT unlock children (see sectionHierarchy.js). */
 export const floorPipelineAccordionChildren = [
   { label: 'Floor Dashboard', path: '/floor-pipeline/dashboard', section: 'floor_pipeline' },
-  { label: 'All Tickets', path: '/floor-pipeline/tickets', section: 'floor_pipeline' },
-  { label: 'QC Queue', path: '/floor-pipeline/tickets?stage=QC1,QC2', section: 'floor_pipeline' },
-  { label: 'Chip Level Repair', path: '/floor-pipeline/tickets?stage=Chip+Level+Repair', section: 'chip_level_repair' },
-  { label: 'Body & Paint', path: '/floor-pipeline/tickets?stage=Body+%26+Paint', section: 'floor_pipeline' },
+  { label: 'All Tickets', path: '/floor-pipeline/tickets', section: 'floor_tickets', countKey: 'all_tickets' },
+  { label: 'QC Queue', path: '/floor-pipeline/tickets?stage=QC1,QC2', section: 'qc_management', countKey: 'qc_queue' },
+  { label: 'Chip Level Repair', path: '/floor-pipeline/tickets?stage=Chip+Level+Repair', section: 'chip_level_repair', countKey: 'chip_level' },
+  { label: 'Body & Paint', path: '/floor-pipeline/tickets?stage=Body+%26+Paint', section: 'floor_pipeline', countKey: 'body_paint' },
+  { label: 'Diagnosis Failed', path: '/floor-pipeline/diagnosis-failed', section: 'floor_pipeline', countKey: 'diagnosis_failed' },
+  { label: 'Pending Inventory', path: '/floor-pipeline/pending-inventory', section: 'pending_inventory', countKey: 'pending_inventory' },
+  { label: 'Vendor Repair DC', path: '/floor-pipeline/vendor-repair-dc', section: 'floor_pipeline' },
 ];
 
-/** Inventory accordion (simplified) */
+/** Inventory accordion — each child maps to the RBAC section the route/API enforces. */
 export const inventoryAccordionChildren = [
-  { label: 'Stock Management', path: '/inventory-management/universal-search', section: 'inventory_management' },
+  { label: 'QC Process Laptops', path: '/inventory-management/qc-process', countKey: 'qc_process', section: 'inventory_management' },
+  { label: 'Out for Repair', path: '/inventory-management/out-for-repair', countKey: 'out_for_repair', section: 'inventory_management' },
   { label: 'Ready to Rent/Sell', path: '/inventory-management/ready-to-rent-or-sell', countKey: 'passed', section: 'inventory_management' },
+  { label: 'QC Pending', path: '/inventory-management/qc-pending', countKey: 'qc_pending', section: 'inventory_management' },
+  { label: 'Dead Laptops', path: '/inventory-management/dead-laptops', countKey: 'dead_laptops', section: 'inventory_management' },
+  { label: 'Missing Laptops', path: '/inventory-management/missing-laptops', countKey: 'missing_laptops', section: 'inventory_management' },
+  { label: 'Asset Movement', path: '/inventory-management/asset-movement', section: 'inventory_asset_movement' },
   { label: 'Parts Inventory', path: '/inventory-management/parts', section: 'parts_inventory' },
-  { label: 'Customer Inventory', path: '/customer-inventory', section: 'customer_inventory' },
+  { label: 'Parts Movement History', path: '/inventory-management/parts-history', section: 'parts_inventory' },
+  { label: 'Parts Approval', path: '/inventory-management/parts-approval', countKey: 'parts_pending', section: 'parts_inventory' },
+  { label: 'Deployed Fleet (All Customers)', path: '/inventory-management/customer-assets', section: 'customer_inventory' },
+  { label: 'TTSPL History', path: '/inventory-management/ttspl-history', section: 'ttspl_history' },
 ];
 
+/** Sales Pipeline. Each child uses the GRANULAR section its backend API enforces
+ *  (sales_quotations / sales_orders_doc / delivery_challans / ...), so a user only
+ *  sees the documents they can actually open — e.g. warehouse has delivery_challans
+ *  but not sales_quotations, so it sees only Delivery Challans. */
 export const salesPipelineAccordionChildren = [
   { label: 'Quotations', path: '/sales-pipeline/quotations', section: 'sales_quotations', countKey: 'quotations' },
-  { label: 'Sales Orders', path: '/sales-pipeline/sales-orders', section: 'sales_orders_doc', countKey: 'sales_orders' },
+  { label: 'Sales Orders – Sale', path: '/sales-pipeline/sales-orders-sale', section: 'sales_orders_sale', countKey: 'sales_orders_sale' },
+  { label: 'Sales Orders – Rental', path: '/sales-pipeline/sales-orders-rental', section: 'sales_orders_rental', countKey: 'sales_orders_rental' },
   { label: 'Delivery Challans', path: '/sales-pipeline/delivery-challans', section: 'delivery_challans', countKey: 'delivery_challans' },
   { label: 'Delivery Register', path: '/sales-pipeline/delivery-register', section: 'delivery_register_management' },
+  { label: 'Delivery Technicians', path: '/delivery-register-management/technicians', section: 'technician_bucket' },
+  { label: 'Technician Bucket', path: '/sales-pipeline/technician-bucket', section: 'technician_bucket' },
+  { label: 'My Deliveries', path: '/sales-pipeline/my-deliveries', section: 'technician_bucket' },
   { label: 'Return DC', path: '/sales-pipeline/return-dc', section: 'return_dc', countKey: 'return_dc' },
+  { label: 'Demo Agreements', path: '/sales-pipeline/demo', section: 'demo_management' },
 ];
 
 export const reportsMenuItems = [
@@ -67,8 +90,12 @@ export const reportsMenuItems = [
   { icon: CreditCard, label: 'Collections', path: '/reports/collections', section: 'reports_access' },
   { icon: Building2, label: 'Vendor Spend', path: '/reports/vendor-spend', section: 'reports_access' },
   { icon: Wrench, label: 'Technician', path: '/reports/technician', section: 'reports_access' },
+  { icon: ClipboardCheck, label: 'Laptop Report', path: '/reports/laptop-report', section: 'reports_access' },
+  { icon: ShoppingCart, label: 'Sales Order Report', path: '/reports/sales-order-report', section: 'reports_access' },
 ];
 
+// Each section matches that page's REAL backend + route guard exactly, so a user
+// sees a finance item only if they can actually open it (no "permission denied").
 export const financeMenuItems = [
   { icon: LayoutDashboard, label: 'Finance Dashboard', path: '/finance/dashboard', section: 'billing_dashboard' },
   { icon: FileText, label: 'Customer Invoices', path: '/customer-billing/invoices', section: 'customer_billing', countKey: 'draft_invoices' },
@@ -90,9 +117,15 @@ export const masterDataMenuItems = [
 ];
 
 export const settingsAccordionChildren = [
-  { label: 'Users', path: '/settings/user-permissions', section: 'user_permissions' },
+  { label: 'Users', path: '/settings/users', section: 'users' },
   { label: 'Role Permissions', path: '/settings/role-permissions', section: 'role_permissions' },
-  { label: 'Teams', path: '/teams', section: 'teams' },
+  { label: 'User Overrides', path: '/settings/user-permissions', section: 'user_permissions' },
+  { label: 'Roles', path: '/settings/roles', section: 'roles' },
+  { label: 'Role Reference', path: '/settings/role-reference', section: 'roles' },
+  // (role-reference shares the 'roles' section so Settings never shows for non-admins)
+  { label: 'Companies', path: '/settings/companies', section: 'company_settings' },
+  { label: 'Laptop Configuration', path: '/asset-configuration/laptop', section: 'asset_configuration' },
+  { label: 'Spare Parts Configuration', path: '/asset-configuration/spare-parts', section: 'asset_configuration' },
 ];
 
 /** Legacy exports — kept for Layout imports; not shown in sidebar */
@@ -105,10 +138,16 @@ export const operationAccordionChildren = salesPipelineAccordionChildren;
  */
 export const MENU_GROUPS = [
   {
-    key: 'home',
-    label: 'Overview',
+    key: 'reports',
+    label: 'Reports & Analytics',
     items: [
-      { icon: BarChart3, label: 'Dashboard', path: '/dashboard', section: 'dashboard' },
+      {
+        type: 'reportsAccordion',
+        icon: BarChart2,
+        label: 'Reports & Analytics',
+        section: 'analytics_dashboard',
+        children: reportsMenuItems,
+      },
     ],
   },
   {
@@ -138,13 +177,13 @@ export const MENU_GROUPS = [
   },
   {
     key: 'floor_quality',
-    label: 'Floor & Quality',
+    label: 'Production',
     items: [
       {
         type: 'floorPipelineAccordion',
         section: 'floor_pipeline',
         icon: Wrench,
-        label: 'Floor & Quality',
+        label: 'Production',
       },
     ],
   },
@@ -154,7 +193,7 @@ export const MENU_GROUPS = [
     items: [
       {
         type: 'inventoryAccordion',
-        sections: ['inventory_management', 'customer_inventory', 'parts_inventory'],
+        sections: ['inventory', 'inventory_management', 'parts', 'parts_inventory', 'customer_inventory', 'ttspl_history'],
         section: 'inventory_management',
         icon: Package,
         label: 'Inventory',
@@ -192,18 +231,18 @@ export const MENU_GROUPS = [
         section: 'support_tickets',
         countKey: 'open_tickets',
       },
-    ],
-  },
-  {
-    key: 'reports',
-    label: 'Reports & Analytics',
-    items: [
       {
-        type: 'reportsAccordion',
-        icon: BarChart2,
-        label: 'Reports & Analytics',
-        section: 'analytics_dashboard',
-        children: reportsMenuItems,
+        icon: ClipboardCheck,
+        label: 'Support Part Queue',
+        path: '/support-parts/queue',
+        section: 'support_part_challan',
+        countKey: 'support_part_requests',
+      },
+      {
+        icon: Package,
+        label: 'Technician Parts Bucket',
+        path: '/support-parts/tech-bucket',
+        section: 'support_part_requests',
       },
     ],
   },
@@ -215,7 +254,7 @@ export const MENU_GROUPS = [
         type: 'settingsAccordion',
         icon: Settings,
         label: 'Settings',
-        sections: ['users', 'user_permissions', 'role_permissions', 'teams', 'roles'],
+        sections: ['users', 'user_permissions', 'role_permissions', 'roles'],
       },
     ],
   },
@@ -243,17 +282,15 @@ export function isMenuItemVisible(item, canView) {
   }
 
   if (item.type === 'salesPipelineAccordion') {
-    if (item.section && canView(item.section)) return true;
-    return (item.children || []).some((child) => (child.section ? canView(child.section) : true));
+    return (item.children || []).some((child) => isSalesPipelineChildVisible(child, canView));
   }
 
   if (item.type === 'financeAccordion') {
-    if (item.section && canView(item.section)) return true;
-    return (item.children || []).some((child) => (child.section ? canView(child.section) : true));
+    return (item.children || []).some((child) => isFinanceChildVisible(child, canView));
   }
 
   if (item.type === 'reportsAccordion') {
-    return (item.children || []).some((child) => (child.section ? canView(child.section) : true));
+    return (item.children || []).some((child) => isReportsChildVisible(child, canView));
   }
 
   if (item.type === 'deliveryRegisterAccordion') {
@@ -267,10 +304,16 @@ export function isMenuItemVisible(item, canView) {
     return item.section ? canView(item.section) : false;
   }
 
+  if (item.type === 'floorPipelineAccordion') {
+    return floorPipelineAccordionChildren.some((child) => isFloorPipelineChildVisible(child, canView));
+  }
+
+  if (item.type === 'leadCrmAccordion') {
+    return leadCrmAccordionChildren.some((child) => isLeadCrmChildVisible(child, canView));
+  }
+
   if (
     item.type === 'vendorAccordion'
-    || item.type === 'floorPipelineAccordion'
-    || item.type === 'leadCrmAccordion'
     || item.type === 'salesPipelineAccordion'
     || item.type === 'financeAccordion'
     || item.type === 'reportsAccordion'
@@ -289,25 +332,25 @@ export function isMenuItemVisible(item, canView) {
 
 export function isLeadCrmChildVisible(child, canView) {
   if (child.section) return canView(child.section);
-  return true;
+  return false;
 }
 
 export function isOperationChildVisible(child, canView) {
   if (child.section) return canView(child.section);
-  return true;
+  return false;
 }
 
 export function isSalesPipelineChildVisible(child, canView) {
   if (child.section) return canView(child.section);
-  return true;
+  return false;
 }
 
 export function isFinanceChildVisible(child, canView) {
   if (child.section) return canView(child.section);
-  return true;
+  return false;
 }
 
-export function isReportsChildVisible(child, canView, userRole) {
+export function isReportsChildVisible(child, canView, userRole = null) {
   if (child.path === '/reports/manager-dashboard' && userRole === 'sales') return false;
   if (child.path === '/reports/sales-dashboard' && !['admin', 'manager', 'sales'].includes(userRole)) {
     return canView(child.section);
@@ -316,25 +359,25 @@ export function isReportsChildVisible(child, canView, userRole) {
     return canView('reports_access') || canView('reports');
   }
   if (child.section) return canView(child.section);
-  return true;
+  return false;
 }
 
 export function isSettingsChildVisible(child, canView) {
   if (child.section) return canView(child.section);
-  return true;
+  return false;
 }
 
 export function isInventoryChildVisible(child, canView) {
   if (child.section) return canView(child.section);
-  return true;
+  return false;
 }
 
 export function isDeliveryRegisterChildVisible(child, canView) {
   if (child.section) return canView(child.section);
-  return true;
+  return false;
 }
 
 export function isFloorPipelineChildVisible(child, canView) {
   if (child.section) return canView(child.section);
-  return true;
+  return false;
 }

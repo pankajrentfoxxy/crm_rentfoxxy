@@ -1,7 +1,7 @@
 /**
  * Lead status ↔ lead stage. Mirror: backend/constants/leadStages.js
  */
-export const STATUSES_WITHOUT_STAGE_CHOICE = ['Deal', 'Call Back', 'Demo'];
+export const STATUSES_WITHOUT_STAGE_CHOICE = ['Call Back', 'Demo', 'Pending'];
 
 export const STAGES_BY_STATUS = {
   Cold: ['Proposal Shared', 'In Follow Up', 'Nurturing'],
@@ -27,8 +27,10 @@ export const STAGES_BY_STATUS = {
     'Delivery/Support Charges',
     'Enquiry Raised By Mistake',
     'Service Not Feasible',
-    'Need Local Vendor'
-  ]
+    'Need Local Vendor',
+  ],
+  Deal: ['Deal'],
+  Repeat: ['Repeat Customer'],
 };
 
 export function stagesForStatus(status) {

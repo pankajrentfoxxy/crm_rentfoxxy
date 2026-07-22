@@ -42,7 +42,68 @@ export const uploadBase = () => {
   return window.location.origin;
 };
 
-export const podUrl = (path) => (path ? `${uploadBase()}/uploads/${path}` : null);
+export const uploadAssetUrl = (path) => {
+  if (!path) return null;
+  if (String(path).startsWith('http')) return path;
+  return `${uploadBase().replace(/\/$/, '')}/${String(path).replace(/^\//, '')}`;
+};
+
+export const podUrl = (path) => (path ? `${uploadBase()}/uploads/${String(path).replace(/^\/?uploads\//, '')}` : null);
+
+// Client-side image compression so large phone-camera photos (often 5-15 MB)
+// are shrunk before upload and never trip the server's size limit. Resizes to a
+// max edge and re-encodes as JPEG, stepping quality down until under maxBytes.
+// Non-image files (e.g. PDF) and any failure fall back to the original file.
+export const compressImageFile = async (file, opts = {}) => {
+  const { maxDimension = 1600, quality = 0.7, maxBytes = 1.5 * 1024 * 1024 } = opts;
+  if (!file || !file.type || !file.type.startsWith('image/')) return file;
+
+  const readAsDataURL = (f) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(f);
+  });
+
+  const loadImage = (src) => new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+
+  const canvasToBlob = (canvas, q) => new Promise((resolve) => {
+    canvas.toBlob((b) => resolve(b), 'image/jpeg', q);
+  });
+
+  try {
+    const dataUrl = await readAsDataURL(file);
+    const img = await loadImage(dataUrl);
+    const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
+    const width = Math.max(1, Math.round(img.width * scale));
+    const height = Math.max(1, Math.round(img.height * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, width, height);
+
+    let q = quality;
+    let blob = await canvasToBlob(canvas, q);
+    while (blob && blob.size > maxBytes && q > 0.4) {
+      q -= 0.1;
+      // eslint-disable-next-line no-await-in-loop
+      blob = await canvasToBlob(canvas, q);
+    }
+    if (!blob) return file;
+
+    const baseName = (file.name || 'photo').replace(/\.[^.]+$/, '');
+    return new File([blob], `${baseName}.jpg`, { type: 'image/jpeg', lastModified: Date.now() });
+  } catch {
+    return file;
+  }
+};
 
 export const displayStatus = (ticket) => {
   if (ticket.status === 'closed') return { label: 'Closed', className: 'closed' };
@@ -114,19 +175,21 @@ const isClosed = (item) => ['resolved', 'closed', 'inventory_updated'].includes(
 export const getItemStepperV3Complaint = (item) => {
   const es = item.effective_current_step || (item.assigned_to ? 'assigned' : 'unassigned');
   const steps = [
-    { key: 'assigned', label: 'Assigned' },
-    { key: 'visited', label: 'Visited' },
+    { key: 'reached', label: 'Reached' },
+    { key: 'verify', label: 'Verify' },
     { key: 'outcome', label: 'Outcome' },
-    { key: 'pod', label: 'POD' },
+    { key: 'poc', label: 'Proof' },
     { key: 'otp', label: 'Customer OTP' },
     { key: 'closed', label: 'Closed' }
   ];
   const idxMap = {
     unassigned: 0,
     assigned: 0,
-    visited: 1,
+    verify_ttspl: 1,
+    visited: 2,
     working: 2,
     replacement_required: 2,
+    picked_up_for_repair: 3,
     fixed_pending_pod: 3,
     pod_uploaded: 4,
     otp_verified: 5
@@ -137,23 +200,33 @@ export const getItemStepperV3Complaint = (item) => {
 };
 
 export const getItemStepperV3Pickup = (item) => {
-  const es = item.effective_current_step || (item.assigned_to ? 'assigned' : 'unassigned');
+  const es = item.effective_current_step || (item.assigned_to || item.pickup_assigned_to ? 'assigned' : 'unassigned');
   const steps = [
     { key: 'assigned', label: 'Assigned' },
-    { key: 'pickup', label: 'Pickup' },
-    { key: 'pod', label: 'POD' },
-    { key: 'wh', label: 'Warehouse OTP' },
-    { key: 'closed', label: 'Closed' }
+    { key: 'reached', label: 'Reached' },
+    { key: 'pod', label: 'POD Photo' },
+    { key: 'customer_otp', label: 'Customer OTP' },
+    { key: 'warehouse_confirmed', label: 'Warehouse' },
+    { key: 'closed', label: 'Done' }
   ];
   const idxMap = {
     unassigned: 0,
     assigned: 0,
-    wait_72h: 0,
-    pickup_action: 1,
-    fixed_pending_pod: 2,
+    in_transit: 0, // legacy
+    wait_72h: 0, // legacy
+    pickup_action: 0, // legacy
+    reached: 1,
+    visited: 1, // legacy alias
     pod_uploaded: 2,
-    warehouse_otp: 3,
-    otp_verified: 4
+    fixed_pending_pod: 2, // legacy alias
+    customer_otp: 3,
+    picked_up: 3, // legacy alias
+    warehouse_confirmed: 4,
+    reached_warehouse: 4, // legacy alias
+    inventory_updated: 5,
+    resolved: 5,
+    otp_verified: 5,
+    closed: 5
   };
   let currentIndex = idxMap[es] ?? 0;
   if (isClosed(item)) currentIndex = steps.length - 1;
@@ -225,3 +298,34 @@ export const pickupMinScheduleDate = (loanDeliveredAt) => {
 };
 
 export const isLeadRole = (role) => role === 'admin' || role === 'support_lead';
+
+/** True when an item may receive assigned_to (technician visit handling only). */
+export const itemAllowsTechnicianAssign = (item) => {
+  if (!item) return true;
+  const method = String(item.pickup_method || '').trim().toLowerCase();
+  if (method === 'courier' || method === 'porter') return false;
+  if (item.item_type === 'pickup' && item.status === 'pending_dispatch') return false;
+  if (item.item_type === 'complaint' && item.visited_at) return false;
+  return true;
+};
+
+/** Return pickup assignee can change before technician marks reached / OTP. */
+export const isPickupAssignmentEditable = (item) => {
+  if (!item || item.item_type !== 'pickup') return false;
+  if (['resolved', 'closed', 'inventory_updated', 'cancelled'].includes(String(item.status || ''))) {
+    return false;
+  }
+  if (item.visited_at || item.customer_otp_verified_at || item.warehouse_received_at) return false;
+  if (item.technician_esign_at || item.picked_up_at) return false;
+  const es = item.effective_current_step;
+  if (es === 'pending_dispatch') return false;
+  return !!(item.pickup_method || item.pickup_assigned_to || item.assigned_to);
+};
+
+export const ticketHasUnassignedTechnicianSlots = (ticket) => (
+  (ticket?.items || []).some(
+    (item) => itemAllowsTechnicianAssign(item)
+      && !item.assigned_to
+      && !['resolved', 'closed'].includes(item.status)
+  )
+);

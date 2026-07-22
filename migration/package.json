@@ -1,0 +1,24 @@
+{
+  "name": "crm-erp-migration",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ERP MySQL → CRM PostgreSQL migration toolkit",
+  "scripts": {
+    "extract": "node tools/extract-schemas.js && node tools/generate-docs.js",
+    "migrate": "node migrate-all.js",
+    "migrate:force": "node migrate-all.js --force",
+    "validate": "node validate-migration.js",
+    "validate:baseline": "node validate-migration.js --baseline",
+    "reconcile:qc-parts": "node tools/reconcile-qc-parts.js",
+    "migrate:qc-parts": "node run-qc-parts-resync.js",
+    "migrate:qc-parts:force": "node run-qc-parts-resync.js --force",
+    "reconcile:leads-tickets": "node tools/reconcile-leads-tickets.js",
+    "migrate:leads-tickets": "node run-leads-tickets-resync.js",
+    "migrate:leads-tickets:force": "node run-leads-tickets-resync.js --force"
+  },
+  "dependencies": {
+    "dotenv": "^16.3.1",
+    "mysql2": "^3.11.0",
+    "pg": "^8.11.3"
+  }
+}

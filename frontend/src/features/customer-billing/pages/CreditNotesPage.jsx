@@ -1,8 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, Clock, FileMinus } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import CreditNoteForm from '../components/CreditNoteForm';
+import TtsplHistoryModal from '../../../components/TtsplHistoryModal';
+import { PageHeader, Button } from '../../../components/ui/primitives';
 import { approveCreditNote, listCreditNotes } from '../customerBillingApi';
 
 const STATUS_STYLES = {
@@ -16,11 +19,18 @@ function fmt(n) {
   return `₹${Number(n || 0).toLocaleString('en-IN')}`;
 }
 
+function ttsplList(ids) {
+  if (!ids) return [];
+  if (Array.isArray(ids)) return ids;
+  try { const p = JSON.parse(ids); return Array.isArray(p) ? p : []; } catch { return []; }
+}
+
 export default function CreditNotesPage() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [formOpen, setFormOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState('');
+  const [historyTtspl, setHistoryTtspl] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -50,33 +60,70 @@ export default function CreditNotesPage() {
 
   return (
     <div className="p-4 max-w-7xl mx-auto">
-      <div className="flex flex-wrap items-start justify-between gap-4 mb-6">
-        <div>
-          <h1 className="text-2xl font-semibold text-gray-900">Credit Notes</h1>
-          <p className="text-sm text-gray-500">CN-* series</p>
-        </div>
-        <PermissionGate section="credit_notes" action="create">
-          <button type="button" onClick={() => setFormOpen(true)} className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">
-            <Plus className="w-4 h-4" /> Create Credit Note
-          </button>
-        </PermissionGate>
-      </div>
+      <PageHeader
+        title="Credit Notes"
+        subtitle="CN-* series"
+        icon={FileMinus}
+        actions={(
+          <PermissionGate section="credit_notes" action="create">
+            <Button icon={Plus} onClick={() => setFormOpen(true)}>Create Credit Note</Button>
+          </PermissionGate>
+        )}
+      />
 
-      <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="mb-4 border rounded-lg px-3 py-1.5 text-sm">
+      <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="mb-4 border rounded-lg px-3 py-2 text-sm">
         <option value="">All statuses</option>
         {['pending', 'approved', 'applied', 'cancelled'].map((s) => <option key={s} value={s}>{s}</option>)}
       </select>
 
-      <div className="bg-white border rounded-xl overflow-x-auto">
+      {/* Mobile cards */}
+      <div className="grid gap-3 sm:hidden">
+        {loading ? (
+          <p className="text-center text-sm text-gray-500 py-8">Loading…</p>
+        ) : rows.length === 0 ? (
+          <p className="text-center text-sm text-gray-500 py-8">No credit notes</p>
+        ) : rows.map((r) => {
+          const ttspls = ttsplList(r.ttspl_ids);
+          return (
+            <div key={r.credit_note_id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-semibold text-slate-900">{r.credit_note_number}</span>
+                <span className={`px-2 py-0.5 rounded-full text-xs capitalize ${STATUS_STYLES[r.status] || ''}`}>{r.status}</span>
+              </div>
+              <p className="font-medium text-slate-800">{r.customer_name}</p>
+              <p className="text-sm text-slate-600">{r.reason}</p>
+              {ttspls.length > 0 && <p className="text-xs text-slate-500">Laptop: {ttspls.join(', ')}</p>}
+              {r.invoice_number && <p className="text-xs text-slate-400">Applied in {r.invoice_number}</p>}
+              <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
+                <span className="text-base font-bold text-slate-900">{fmt(r.amount)}</span>
+                <div className="flex flex-wrap items-center gap-3">
+                  {ttspls[0] && (
+                    <button type="button" onClick={() => setHistoryTtspl(ttspls[0])} className="flex items-center gap-1 text-blue-600 text-sm font-semibold">
+                      <Clock className="w-3.5 h-3.5" /> History
+                    </button>
+                  )}
+                  {r.status === 'pending' && (
+                    <PermissionGate section="credit_notes" action="edit">
+                      <button type="button" onClick={() => handleApprove(r.credit_note_id)} className="text-sm text-blue-600 font-semibold">Approve</button>
+                    </PermissionGate>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="hidden sm:block bg-white border rounded-xl overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
             <tr>
               <th className="px-4 py-3 text-left">CN #</th>
               <th className="px-4 py-3 text-left">Customer</th>
-              <th className="px-4 py-3 text-left">Invoice</th>
-              <th className="px-4 py-3 text-left">Reason</th>
-              <th className="px-4 py-3 text-left">Amount</th>
+              <th className="px-4 py-3 text-left">Justification</th>
+              <th className="px-4 py-3 text-right">Amount</th>
               <th className="px-4 py-3 text-left">Status</th>
+              <th className="px-4 py-3 text-left">Links</th>
               <th className="px-4 py-3 text-left">Actions</th>
             </tr>
           </thead>
@@ -85,15 +132,42 @@ export default function CreditNotesPage() {
               <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-500">Loading…</td></tr>
             ) : rows.length === 0 ? (
               <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-500">No credit notes</td></tr>
-            ) : rows.map((r) => (
-              <tr key={r.credit_note_id}>
+            ) : rows.map((r) => {
+              const ttspls = ttsplList(r.ttspl_ids);
+              return (
+              <tr key={r.credit_note_id} className="align-top">
                 <td className="px-4 py-3 font-medium">{r.credit_note_number}</td>
                 <td className="px-4 py-3">{r.customer_name}</td>
-                <td className="px-4 py-3">{r.invoice_number || '—'}</td>
-                <td className="px-4 py-3">{r.reason}</td>
-                <td className="px-4 py-3">{fmt(r.amount)}</td>
+                <td className="px-4 py-3">
+                  <div className="font-medium">{r.reason}</div>
+                  {ttspls.length > 0 && (
+                    <div className="text-xs text-gray-600 mt-0.5">
+                      Laptop: {ttspls.join(', ')}
+                    </div>
+                  )}
+                  {(r.from_date || r.to_date) && (
+                    <div className="text-xs text-gray-500">
+                      {String(r.from_date || '').slice(0, 10)} → {String(r.to_date || '').slice(0, 10)}
+                      {r.quantity ? ` · ${r.quantity} day(s)` : ''}{r.unit_rate ? ` × ${fmt(r.unit_rate)}/day` : ''}
+                    </div>
+                  )}
+                  {r.invoice_number && <div className="text-xs text-gray-400">Applied in {r.invoice_number}</div>}
+                </td>
+                <td className="px-4 py-3 text-right font-medium">{fmt(r.amount)}</td>
                 <td className="px-4 py-3">
                   <span className={`px-2 py-0.5 rounded-full text-xs capitalize ${STATUS_STYLES[r.status] || ''}`}>{r.status}</span>
+                </td>
+                <td className="px-4 py-3 text-xs space-y-1">
+                  {ttspls[0] && (
+                    <button type="button" onClick={() => setHistoryTtspl(ttspls[0])} className="flex items-center gap-1 text-blue-600 hover:underline">
+                      <Clock className="w-3 h-3" /> Laptop history
+                    </button>
+                  )}
+                  {r.return_ticket_id && (
+                    <Link to={`/floor-pipeline/tickets/${r.return_ticket_id}`} className="block text-blue-600 hover:underline">
+                      Return ticket #{r.return_ticket_id}
+                    </Link>
+                  )}
                 </td>
                 <td className="px-4 py-3">
                   {r.status === 'pending' && (
@@ -103,12 +177,13 @@ export default function CreditNotesPage() {
                   )}
                 </td>
               </tr>
-            ))}
+            ); })}
           </tbody>
         </table>
       </div>
 
       <CreditNoteForm open={formOpen} onClose={() => setFormOpen(false)} onCreated={load} />
+      {historyTtspl && <TtsplHistoryModal ttsplId={historyTtspl} onClose={() => setHistoryTtspl(null)} />}
     </div>
   );
 }

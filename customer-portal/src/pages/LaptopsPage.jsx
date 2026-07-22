@@ -45,12 +45,18 @@ export default function LaptopsPage() {
               <p className="text-sm">Monthly Rate: {inr(lap.monthly_rate)}/month</p>
               <p className="text-xs text-slate-500">DC: {lap.dc_number || '—'}</p>
               <span className="inline-flex px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-700 capitalize">{lap.status || 'active'}</span>
-              <div className="pt-2">
+              <div className="pt-2 flex items-center gap-4">
                 <Link
                   to={`/support?ttspl=${encodeURIComponent(lap.ttspl_id || '')}`}
                   className="text-sm text-brand font-semibold hover:underline"
                 >
                   Raise Support Ticket
+                </Link>
+                <Link
+                  to={`/support?ttspl=${encodeURIComponent(lap.ttspl_id || '')}&type=${encodeURIComponent('Return Request')}`}
+                  className="text-sm text-amber-700 font-semibold hover:underline"
+                >
+                  Request Return
                 </Link>
               </div>
             </div>

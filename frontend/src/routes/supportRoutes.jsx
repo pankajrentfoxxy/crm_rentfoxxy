@@ -1,25 +1,17 @@
 import React from 'react';
-import api from '../utils/api';
+import { Navigate } from 'react-router-dom';
 import Layout from '../layout/Layout';
 import ProtectedRoute from '../router/ProtectedRoute';
 import SupportProtectedRoute from '../router/SupportProtectedRoute';
-import CustomerInventory from '../components/CustomerInventory';
 import SupportModuleApp from '../features/support-module/SupportModuleApp';
-
-const withInventoryPadding = (node) => (
-  <Layout>
-    <div className="p-6">{node}</div>
-  </Layout>
-);
-
-function guard(section, action, element) {
-  return <ProtectedRoute section={section} action={action}>{element}</ProtectedRoute>;
-}
+import SupportPartsApp from '../features/support/SupportPartsApp';
 
 export const supportRoutes = [
   {
+    // DEPRECATED: customer_inventory is no longer a source of truth.
+    // "Assets with Customer" is now a tab on the customer detail page.
     path: '/customer-inventory',
-    element: guard('customer_inventory', 'view', withInventoryPadding(<CustomerInventory api={api} />)),
+    element: <Navigate to="/lead-crm/customers" replace />,
   },
   {
     path: '/support/*',
@@ -30,6 +22,18 @@ export const supportRoutes = [
             <SupportModuleApp />
           </Layout>
         </SupportProtectedRoute>
+      </ProtectedRoute>
+    ),
+  },
+  {
+    // Standalone parts-bucket / challan flow — reachable by warehouse staff who
+    // are not part of the support module (guarded by the parts permissions).
+    path: '/support-parts/*',
+    element: (
+      <ProtectedRoute sections={['support_part_requests', 'support_part_challan']} action="view">
+        <Layout>
+          <SupportPartsApp />
+        </Layout>
       </ProtectedRoute>
     ),
   },

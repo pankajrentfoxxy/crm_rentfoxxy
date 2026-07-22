@@ -1,7 +1,7 @@
 import React from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useLocation, Navigate } from 'react-router-dom';
-import { isSupportTechnician, canAccessCustomerInventory } from '../utils/supportAccess';
+import { isSupportTechnician, supportTechnicianMayAccessPath } from '../utils/supportAccess';
 import { hasPermission as checkPermission } from '../utils/permissionHelper';
 
 /**
@@ -11,6 +11,7 @@ import { hasPermission as checkPermission } from '../utils/permissionHelper';
 export default function ProtectedRoute({
   children,
   section,
+  sections,
   action = 'view',
   allowedRoles,
   allowedPermissions,
@@ -29,7 +30,10 @@ export default function ProtectedRoute({
 
   let allowed = true;
 
-  if (section) {
+  if (Array.isArray(sections) && sections.length) {
+    // Allow if the user can view ANY of the given sections (module umbrella guard).
+    allowed = sections.some((s) => checkPermission(user, effectivePermissions, s, action));
+  } else if (section) {
     allowed = checkPermission(user, effectivePermissions, section, action);
   } else if (allowedRoles || allowedPermissions) {
     const perms = Array.isArray(user?.permissions) ? user.permissions : [];
@@ -44,9 +48,8 @@ export default function ProtectedRoute({
   }
 
   if (isSupportTechnician(user)) {
-    const customerInvOk =
-      location.pathname.startsWith('/customer-inventory') && canAccessCustomerInventory(user);
-    if (!location.pathname.startsWith('/support') && !customerInvOk) {
+    const canViewSection = (s) => checkPermission(user, effectivePermissions, s, 'view');
+    if (!supportTechnicianMayAccessPath(location.pathname, canViewSection)) {
       return <Navigate to="/support/my-tickets" replace />;
     }
   }

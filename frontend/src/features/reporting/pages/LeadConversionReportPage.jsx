@@ -7,9 +7,12 @@ import ChartCard from '../components/ChartCard';
 import ReportFilters from '../components/ReportFilters';
 import DataTable from '../components/DataTable';
 import ExportButton from '../components/ExportButton';
+import { useReportFiltersFromUrl } from '../hooks/useReportFiltersFromUrl';
+
+const DATE_RANGE_KEYS = ['from', 'to'];
 
 export default function LeadConversionReportPage() {
-  const [filters, setFilters] = useState(() => defaultRange());
+  const [filters, setFilters] = useReportFiltersFromUrl(defaultRange(), DATE_RANGE_KEYS);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -25,7 +28,7 @@ export default function LeadConversionReportPage() {
     }
   }, [filters]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(filters); }, []);
 
   const funnel = data?.funnel || [];
   const total = funnel.reduce((s, r) => s + (r.count || 0), 0);

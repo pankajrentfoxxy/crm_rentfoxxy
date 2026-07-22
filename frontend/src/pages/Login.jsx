@@ -24,7 +24,7 @@ export default function Login() {
     setLoading(true);
     try {
       const data = await login(email, password);
-      navigate(postLoginPath(data.user));
+      navigate(postLoginPath());
     } catch (err) {
       const msg = err.response?.data?.message || err.message || 'Login failed';
       setError(msg === 'Network Error' ? 'Cannot reach server. Check if backend is running.' : msg);

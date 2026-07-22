@@ -176,6 +176,11 @@
   color: var(--support-closed-text);
 }
 
+.support-pill.cancelled {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
 .support-pill.replacement {
   background: #fbeaf0;
   color: #72243e;
@@ -607,6 +612,29 @@
   border-radius: 6px;
   padding: 10px 12px;
   margin-top: 10px;
+}
+
+.support-v3-proof-view {
+  border: 0.5px solid var(--color-border, #e2e8f0);
+  background: var(--color-surface-muted, #f8fafc);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.support-v3-proof-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.support-v3-proof-thumb {
+  max-height: 140px;
+  max-width: 100%;
+  border-radius: 8px;
+  border: 0.5px solid var(--color-border, #e2e8f0);
+  display: block;
+  margin-bottom: 4px;
 }
 
 .support-v3-tabs {
@@ -1175,3 +1203,103 @@
 .support-filter-chip.complaint.active { background: #eff6ff; color: #1d4ed8; border-color: #93c5fd; }
 .support-filter-chip.pickup.active { background: #fff7ed; color: #c2410c; border-color: #fdba74; }
 .support-filter-chip.replacement.active { background: #fdf2f8; color: #be185d; border-color: #f9a8d4; }
+
+/* ============================================================
+   PHASE 18 — MOBILE-FIRST OVERRIDES (technician field view)
+   ============================================================ */
+@media (max-width: 640px) {
+  /* Larger touch targets for the primary support actions */
+  .support-btn-primary,
+  .support-btn-outline,
+  .support-btn-danger-outline,
+  button[class*="support-btn"] {
+    min-height: 48px;
+    font-size: 16px; /* prevents iOS auto-zoom */
+    border-radius: 14px;
+  }
+
+  /* Outcome buttons: full width, stacked, comfortable height */
+  .support-v3-outcome-row {
+    flex-direction: column;
+    gap: 12px;
+  }
+  .support-v3-outcome-row > button {
+    width: 100%;
+    min-height: 60px;
+    justify-content: flex-start;
+    padding: 0 16px;
+    font-size: 15px;
+  }
+
+  /* Form fields: 16px to prevent iOS zoom on focus */
+  .support-detail-layout input,
+  .support-detail-layout textarea,
+  .support-detail-layout select {
+    font-size: 16px;
+  }
+
+  /* Compact stepper so the wizard fits a 375px screen */
+  .support-stepper {
+    gap: 2px;
+  }
+  .support-stepper-label {
+    font-size: 10px;
+  }
+
+  /* Item card uses the full width on phones */
+  .support-item-card.support-v3-card {
+    border-radius: 16px;
+  }
+
+  /* Ticket detail: tighter cards so more content fits the viewport */
+  .support-v3-card {
+    padding: 12px;
+    border-radius: 14px;
+  }
+  .support-item-card.support-v3-card > div.p-4 {
+    padding: 12px;
+  }
+  .support-item-card-header {
+    padding: 10px 12px;
+  }
+  .support-ticket-title {
+    font-size: 17px;
+    line-height: 1.3;
+  }
+
+  /* Spec grid: two even columns instead of wide auto-fill tracks */
+  .support-v3-spec-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 10px;
+    padding: 10px;
+  }
+
+  /* Tabs fit as equal thirds without horizontal scrolling */
+  .support-v3-tabs {
+    gap: 6px;
+  }
+  .support-v3-tab {
+    min-width: 0;
+    font-size: 12px;
+    padding: 0 6px;
+  }
+
+  /* Item card header: keep the model name on its own line, pills below */
+  .support-item-card-header .support-pill {
+    font-size: 11px;
+  }
+
+  .support-v3-proof-thumb {
+    max-height: 120px;
+  }
+
+  /* Comfortable spacing between stacked action blocks */
+  .support-item-card.support-v3-card > div.p-4 > * + * {
+    margin-top: 12px;
+  }
+}
+
+/* Safe-area padding for notched phones */
+.support-detail-layout {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}

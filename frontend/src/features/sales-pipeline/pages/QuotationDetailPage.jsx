@@ -2,8 +2,37 @@ import React, { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
-import { getQuotation, updateQuotationStatus } from '../salesPipelineApi';
-import { formatConfig, formatCurrency, formatDate, lineTotal, QUOTE_STATUS_STYLES, TYPE_STYLES, typeLabel } from '../salesPipelineUtils';
+import { Button } from '../../../components/ui/primitives';
+import { getQuotation, updateQuotationStatus, regenerateQuotationPdf } from '../salesPipelineApi';
+import { getBackendOrigin } from '../../../utils/api';
+import { formatCurrency, formatDate, lineTotal, QUOTE_STATUS_STYLES, TYPE_STYLES, typeLabel } from '../salesPipelineUtils';
+
+function pdfUrl(p) {
+  if (!p) return null;
+  if (p.startsWith('http')) return p;
+  return `${getBackendOrigin().replace(/\/$/, '')}/${p.replace(/^\//, '')}`;
+}
+
+function ConfigCard({ line }) {
+  const title = [line.brand, line.model_name || line.model].filter(Boolean).join(' - ');
+  const specs = [line.processor, line.generation, line.ram, line.storage, line.gpu].filter(Boolean).join(' | ');
+  return (
+    <div className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm min-w-[220px]">
+      <h5 className="font-semibold text-gray-900 leading-snug">
+        {title || '—'}
+        {line.screen_size ? <span className="font-normal text-gray-600"> | {line.screen_size}</span> : null}
+      </h5>
+      {specs ? <p className="mt-1 text-xs text-gray-600">{specs}</p> : null}
+    </div>
+  );
+}
+
+function lockMonths(v) {
+  if (v == null || v === '') return '—';
+  const n = Number(v);
+  if (Number.isNaN(n)) return String(v);
+  return `${n} Month${n === 1 ? '' : 's'}`;
+}
 
 export default function QuotationDetailPage() {
   const { quotationNumber } = useParams();
@@ -18,7 +47,11 @@ export default function QuotationDetailPage() {
   }, [quotationNumber]);
 
   const head = lines[0] || {};
-  const total = lines.reduce((s, l) => s + lineTotal(l), 0);
+  const subTotal = lines.reduce((s, l) => s + lineTotal(l), 0);
+  const shipping = Number(head.shiping_charges) || 0;
+  const security = Number(head.security_amount) || 0;
+  const grandTotal = subTotal + shipping + security;
+  const isSale = ['sale', 'sales'].includes(String(head.quotation_type || '').toLowerCase());
 
   const changeStatus = async (status) => {
     try {
@@ -46,14 +79,21 @@ export default function QuotationDetailPage() {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" onClick={async () => {
+            try {
+              let url = pdfUrl(head.pdf_path);
+              if (!url) { const r = await regenerateQuotationPdf(quotationNumber); url = pdfUrl(r.data?.pdf_path); }
+              if (url) window.open(url, '_blank'); else toast.error('PDF not available');
+            } catch { toast.error('Could not open PDF'); }
+          }}>Download PDF</Button>
           <PermissionGate section="sales_quotations" action="edit">
             {head.status === 'approved' && (
-              <button type="button" onClick={() => navigate('/sales-pipeline/sales-orders', { state: { fromQuote: quotationNumber } })} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">Create SO</button>
+              <Button onClick={() => navigate('/sales-pipeline/sales-orders', { state: { fromQuote: quotationNumber } })}>Create SO</Button>
             )}
             {['pending', 'draft', 'sent'].includes(head.status) && (
               <>
-                <button type="button" onClick={() => changeStatus('approved')} className="px-3 py-2 text-sm border rounded-lg text-emerald-700">Approve</button>
-                <button type="button" onClick={() => changeStatus('rejected')} className="px-3 py-2 text-sm border rounded-lg text-red-700">Reject</button>
+                <Button variant="secondary" className="text-emerald-700" onClick={() => changeStatus('approved')}>Approve</Button>
+                <Button variant="secondary" className="text-red-700" onClick={() => changeStatus('rejected')}>Reject</Button>
               </>
             )}
           </PermissionGate>
@@ -66,6 +106,7 @@ export default function QuotationDetailPage() {
             <tr>
               <th className="px-4 py-3 text-left">Brand</th>
               <th className="px-4 py-3 text-left">Config</th>
+              {!isSale && <th className="px-4 py-3 text-center">Lock-in</th>}
               <th className="px-4 py-3 text-right">Qty</th>
               <th className="px-4 py-3 text-right">Rate</th>
               <th className="px-4 py-3 text-right">Total</th>
@@ -75,20 +116,35 @@ export default function QuotationDetailPage() {
             {lines.map((l, i) => (
               <tr key={i}>
                 <td className="px-4 py-3">{l.brand}</td>
-                <td className="px-4 py-3 text-gray-600">{formatConfig(l)}</td>
+                <td className="px-4 py-3"><ConfigCard line={l} /></td>
+                {!isSale && <td className="px-4 py-3 text-center text-gray-600">{lockMonths(l.locking_period)}</td>}
                 <td className="px-4 py-3 text-right">{l.quantity}</td>
                 <td className="px-4 py-3 text-right">{formatCurrency(l.rate)}</td>
                 <td className="px-4 py-3 text-right font-medium">{formatCurrency(lineTotal(l))}</td>
               </tr>
             ))}
           </tbody>
-          <tfoot>
-            <tr className="bg-gray-50 font-semibold">
-              <td colSpan={4} className="px-4 py-3 text-right">Total</td>
-              <td className="px-4 py-3 text-right">{formatCurrency(total)}</td>
-            </tr>
-          </tfoot>
         </table>
+        <div className="border-t bg-gray-50 px-4 py-3 flex justify-end">
+          <dl className="w-full max-w-xs text-sm space-y-1.5">
+            <div className="flex justify-between text-gray-600">
+              <dt>Sub Total</dt>
+              <dd className="font-medium text-gray-900">{formatCurrency(subTotal)}</dd>
+            </div>
+            <div className="flex justify-between text-gray-600">
+              <dt>Shipping Charges</dt>
+              <dd className="font-medium text-gray-900">{formatCurrency(shipping)}</dd>
+            </div>
+            <div className="flex justify-between text-gray-600">
+              <dt>Security Amount</dt>
+              <dd className="font-medium text-gray-900">{formatCurrency(security)}</dd>
+            </div>
+            <div className="flex justify-between border-t pt-1.5 text-base font-semibold text-gray-900">
+              <dt>Total</dt>
+              <dd>{formatCurrency(grandTotal)}</dd>
+            </div>
+          </dl>
+        </div>
       </div>
     </div>
   );

@@ -1,10 +1,33 @@
 const express = require('express');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const { multerLimits, wrapMulter } = require('../config/uploadLimits');
+
+const qcPhotoDir = path.join('uploads', 'qc-photos');
+if (!fs.existsSync(qcPhotoDir)) fs.mkdirSync(qcPhotoDir, { recursive: true });
+
+const qcPhotoUpload = multer({
+  storage: multer.diskStorage({
+    destination: qcPhotoDir,
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname || '') || '.jpg';
+      cb(null, `qc-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`);
+    },
+  }),
+  limits: multerLimits(),
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype && file.mimetype.startsWith('image/')) return cb(null, true);
+    return cb(new Error('Only image files are allowed'));
+  },
+});
 const router = express.Router();
 const {
   createTicket,
   getTickets,
   getMyTickets,
   getTicketById,
+  getProductionHistory,
   updateTicket,
   moveToNextStage,
   assignTicket,
@@ -19,11 +42,30 @@ const {
   startWork,
   endWork,
   getActiveWorkLog,
-  bulkMoveTickets
+  saveStageTask,
+  getStageTask,
+  bulkMoveTickets,
+  getFloorManagerQueue,
+  getTeamMembers,
+  getNextAssignee,
+  addPartToTicketWithConfig,
+  logNote,
+  getFloorNavCounts
 } = require('../controllers/ticketController');
 const qcController = require('../controllers/qcController');
 const phase2 = require('../controllers/ticketPhase2Controller');
-const { authMiddleware, checkRole } = require('../middleware/auth');
+const { authMiddleware, checkSectionPermission, checkAnySectionPermission } = require('../middleware/auth');
+const ftView = checkSectionPermission('floor_tickets', 'view');
+const ftEdit = checkSectionPermission('floor_tickets', 'edit');
+const ftAssign = checkAnySectionPermission(['floor_tickets', 'floor_pipeline', 'tickets'], 'edit');
+const floorPipelineView = checkSectionPermission('floor_pipeline', 'view');
+const floorQueueView = checkAnySectionPermission(['floor_pipeline', 'floor_tickets'], 'view');
+// Floor / Dispatch QC users need laptop history on ticket screens even without
+// the dedicated ttspl_history menu permission.
+const ttsplHistoryView = checkAnySectionPermission(
+  ['ttspl_history', 'dispatch_qc', 'floor_pipeline', 'floor_tickets', 'qc_management'],
+  'view'
+);
 
 // All routes require authentication
 router.use(authMiddleware);
@@ -51,23 +93,33 @@ router.get('/my', getMyTickets);
 // @route   POST /api/tickets/bulk-move
 // @desc    Bulk move all tickets from one stage to another
 // @access  Private (Admin, Manager, Floor Manager)
-router.post('/bulk-move', checkRole('admin', 'manager', 'floor_manager'), bulkMoveTickets);
+router.post('/bulk-move', ftEdit, bulkMoveTickets);
 
 // QC assignee list (must be before /:id)
 router.get('/qc/qc2-assignees', qcController.getQC2Assignees);
 
 // Phase 2 — floor pipeline (must be before /:id)
-router.get('/floor-dashboard', phase2.getFloorDashboard);
-router.get('/ttspl/:ttsplId/history', phase2.getTtsplHistory);
+router.get('/floor-counts', getFloorNavCounts);
+router.get('/floor-dashboard', floorPipelineView, phase2.getFloorDashboard);
+router.get(
+  '/floor-manager-queue',
+  floorQueueView,
+  getFloorManagerQueue
+);
+router.get('/team-members', getTeamMembers);
+router.get('/:id/next-assignee', getNextAssignee);
+router.get('/:id/production-history', ftView, getProductionHistory);
+router.get('/ttspl/:ttsplId/history', ttsplHistoryView, phase2.getTtsplHistory);
 router.get('/ttspl/:ttsplId', phase2.getTicketsByTtsplId);
 router.post('/:id/move-stage', phase2.moveToStage);
 router.patch('/:id/chip-repair', phase2.markChipRepairRequired);
 router.patch('/:id/body-paint', phase2.markBodyPaintRequired);
 router.patch(
   '/:id/floor-manager-fail',
-  checkRole('admin', 'manager', 'floor_manager'),
+  ftEdit,
   phase2.markQcFailed
 );
+router.patch('/:id/diagnosis-failed', phase2.markDiagnosisFailed);
 router.patch('/:id/config', phase2.updateTtsplConfig);
 
 // @route   GET /api/tickets/:id
@@ -88,7 +140,7 @@ router.post('/:id/next-stage', moveToNextStage);
 // @route   POST /api/tickets/:id/assign
 // @desc    Assign ticket to a user
 // @access  Private (Team Lead, Manager, Floor Manager, Admin)
-router.post('/:id/assign', checkRole('team_lead', 'manager', 'floor_manager', 'admin'), assignTicket);
+router.post('/:id/assign', ftAssign, assignTicket);
 
 // @route   POST /api/tickets/:id/claim
 // @desc    Claim an unassigned ticket for your team
@@ -109,6 +161,12 @@ router.post('/:id/notes', addNote);
 // @desc    Add part to ticket
 // @access  Private
 router.post('/:id/parts', addPartToTicket);
+router.post(
+  '/:id/parts-with-config',
+  ftEdit,
+  addPartToTicketWithConfig
+);
+router.post('/:id/log-note', logNote);
 
 // Cost & Parts System
 router.post('/:id/part-request', requestPart);
@@ -119,11 +177,15 @@ router.post('/:id/work/start', startWork);
 router.post('/:id/work/end', endWork);
 router.get('/:id/work/active', getActiveWorkLog);
 
+// Stage task checklist (Assembly & Software, Final Testing, ...)
+router.get('/:id/stage-task', getStageTask);
+router.post('/:id/stage-task', saveStageTask);
+
 // QC Routes
 router.get('/:id/qc', qcController.getQCData);
 router.post('/:id/qc/save', qcController.saveQC);
 router.post('/:id/qc/submit', qcController.submitQC);
-router.post('/qc/:qc_id/upload-photo', qcController.uploadPhoto);
+router.post('/qc/:qc_id/upload-photo', wrapMulter(qcPhotoUpload.single('photo')), qcController.uploadPhoto);
 router.get('/:ticket_id/qc/history', qcController.getQCHistory);
 
 

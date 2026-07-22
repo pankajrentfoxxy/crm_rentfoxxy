@@ -45,7 +45,33 @@ export default function DebitNotesPage() {
         <h1 className="text-xl font-bold text-slate-900">Debit Notes</h1>
         <p className="text-sm text-slate-500 mt-1">Adjustments applied to your bills</p>
       </div>
-      <div className="bg-white rounded-xl border overflow-hidden shadow-sm">
+      {/* Mobile cards */}
+      <div className="grid gap-3 md:hidden">
+        {loading ? (
+          <p className="p-8 text-center text-slate-500 animate-pulse">Loading…</p>
+        ) : rows.length === 0 ? (
+          <p className="bg-white border rounded-xl p-8 text-center text-slate-500">No debit notes raised against you.</p>
+        ) : rows.map((r) => (
+          <div key={r.debit_note_id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-slate-900">{r.debit_note_number}</span>
+              <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${statusBadge(r.status)}`}>{r.status}</span>
+            </div>
+            <p className="text-sm text-slate-700">{r.reason}</p>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+              <span>{r.created_at ? format(new Date(r.created_at), 'dd MMM yyyy') : '—'}</span>
+              {(r.po_number || r.po_id) && <span className="font-mono">PO {r.po_number || r.po_id}</span>}
+              {r.return_ticket_id && <span className="font-mono">Ticket #{r.return_ticket_id}</span>}
+            </div>
+            <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
+              <span className="text-base font-bold text-slate-900">{inr(r.amount)}</span>
+              {r.applied_bill_number && <span className="text-xs text-slate-500">Applied in {r.applied_bill_number}</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="hidden md:block bg-white rounded-xl border overflow-hidden shadow-sm">
         {loading ? (
           <p className="p-8 text-center text-slate-500 animate-pulse">Loading…</p>
         ) : rows.length === 0 ? (
@@ -54,7 +80,7 @@ export default function DebitNotesPage() {
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
               <tr>
-                {['DN #', 'Date', 'Related PO', 'Reason', 'Amount', 'Status', 'Bill Applied In'].map((h) => (
+                {['DN #', 'Date', 'Related PO', 'Reason', 'Return Ticket', 'Amount', 'Status', 'Bill Applied In'].map((h) => (
                   <th key={h} className="p-3">{h}</th>
                 ))}
               </tr>
@@ -66,6 +92,7 @@ export default function DebitNotesPage() {
                   <td className="p-3 text-xs">{r.created_at ? format(new Date(r.created_at), 'dd MMM yyyy') : '—'}</td>
                   <td className="p-3 font-mono text-xs">{r.po_number || r.po_id || '—'}</td>
                   <td className="p-3">{r.reason}</td>
+                  <td className="p-3 font-mono text-xs">{r.return_ticket_id ? `#${r.return_ticket_id}` : '—'}</td>
                   <td className="p-3 tabular-nums">{inr(r.amount)}</td>
                   <td className="p-3">
                     <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${statusBadge(r.status)}`}>

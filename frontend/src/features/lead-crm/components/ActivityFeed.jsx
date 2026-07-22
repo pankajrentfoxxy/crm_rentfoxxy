@@ -10,8 +10,8 @@ const FILTERS = [
 ];
 
 function describeActivity(item) {
-  if (item.type === 'remark') {
-    return { text: item.note, kind: 'remarks' };
+  if (item._type === 'remark' || item.remarkId != null) {
+    return { text: item.note || '—', kind: 'remarks' };
   }
   const action = item.action || '';
   if (action.includes('status') || item.statusFrom || item.statusTo) {

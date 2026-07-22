@@ -55,7 +55,36 @@ export default function InvoicesPage() {
           </button>
         ))}
       </div>
-      <div className="bg-white rounded-xl border overflow-x-auto">
+      {/* Mobile cards */}
+      <div className="grid gap-3 md:hidden">
+        {loading ? (
+          <p className="p-8 text-center text-slate-500">Loading…</p>
+        ) : invoices.length === 0 ? (
+          <p className="p-8 text-center text-slate-500">No invoices</p>
+        ) : invoices.map((inv) => (
+          <div key={inv.invoice_id} className={`bg-white border rounded-2xl p-4 shadow-sm space-y-2 ${inv.status === 'sent' ? 'border-red-200' : 'border-slate-200'}`}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-slate-900">{inv.invoice_number}</span>
+              <span className={`px-2 py-0.5 rounded-full text-xs capitalize ${statusBadge(inv.status)}`}>
+                {inv.status}{inv.status === 'sent' && ' · overdue'}
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+              <span>{MONTHS[inv.invoice_month]} {inv.invoice_year}</span>
+              <span>{inv.from_date} – {inv.to_date}</span>
+            </div>
+            <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
+              <span className="text-base font-bold text-slate-900">{inr(inv.grand_total)}</span>
+              <div className="flex items-center gap-3">
+                {inv.pdf_path && <button type="button" onClick={() => handleDownload(inv)} className="text-brand text-sm font-semibold">PDF</button>}
+                <Link to={`/invoices/${inv.invoice_id}`} className="text-brand text-sm font-semibold">View</Link>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="hidden md:block bg-white rounded-xl border overflow-x-auto">
         {loading ? <p className="p-8 text-center text-slate-500">Loading…</p> : (
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500 text-left">

@@ -28,7 +28,14 @@ export default function SalesOrderDetailModal({ salesOrderNumber, onClose }) {
         <div className="p-5 space-y-3 max-h-[70vh] overflow-y-auto">
           <div className="rounded-lg border border-cyan-200 bg-cyan-50 p-3">
             <p className="text-xs text-cyan-700 mb-1">Sales Order Number</p>
-            <h3 className="text-lg font-bold text-cyan-900">{salesOrderNumber}</h3>
+            <div className="flex items-center gap-2">
+              <h3 className="text-lg font-bold text-cyan-900">{salesOrderNumber}</h3>
+              {lines[0]?.entity_code && (
+                <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${lines[0].entity_code === 'gorefurbo' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
+                  {lines[0].entity_code === 'gorefurbo' ? 'Gorefurbo' : 'Rentfoxxy'}
+                </span>
+              )}
+            </div>
           </div>
           {loading ? <p className="text-sm text-gray-500">Loading...</p> : null}
           {error ? <p className="text-sm text-red-600">{error}</p> : null}

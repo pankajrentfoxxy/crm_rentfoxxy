@@ -1,23 +1,20 @@
-import React from 'react';
-import { KANBAN_STAGES } from '../floorPipelineUi';
+import React, { useMemo } from 'react';
+import { KANBAN_STAGES, computeStageStatuses, STAGE_TIMELINE_STYLES } from '../floorPipelineUi';
 
-export default function StageTimeline({ currentStage }) {
-  const idx = KANBAN_STAGES.indexOf(currentStage);
+export default function StageTimeline({ currentStage, ticket = null }) {
+  const statuses = useMemo(
+    () => computeStageStatuses(currentStage, ticket || {}),
+    [currentStage, ticket]
+  );
+
   return (
     <ol className="flex flex-wrap gap-1">
-      {KANBAN_STAGES.map((stage, i) => {
-        const done = idx >= 0 && i < idx;
-        const active = stage === currentStage;
+      {KANBAN_STAGES.map((stage) => {
+        const state = statuses[stage] || 'pending';
         return (
           <li
             key={stage}
-            className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-              active
-                ? 'bg-blue-600 text-white'
-                : done
-                  ? 'bg-emerald-100 text-emerald-800'
-                  : 'bg-slate-100 text-slate-500'
-            }`}
+            className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${STAGE_TIMELINE_STYLES[state] || STAGE_TIMELINE_STYLES.pending}`}
             title={stage}
           >
             {stage}

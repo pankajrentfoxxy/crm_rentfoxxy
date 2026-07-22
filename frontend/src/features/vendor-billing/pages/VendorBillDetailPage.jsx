@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import VendorBillStatusBadge from '../components/VendorBillStatusBadge';
+import { Button } from '../../../components/ui/primitives';
 import { approveVendorBill, getVendorBill, markVendorBillPaid } from '../vendorBillingApi';
 
 function fmt(n) {
@@ -63,18 +64,37 @@ export default function VendorBillDetailPage() {
         <div className="flex gap-2">
           {bill.status === 'generated' && (
             <PermissionGate section="vendor_billing_mgmt" action="edit">
-              <button type="button" onClick={handleApprove} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg">Approve</button>
+              <Button onClick={handleApprove}>Approve</Button>
             </PermissionGate>
           )}
           {bill.status === 'approved' && (
             <PermissionGate section="vendor_billing_mgmt" action="edit">
-              <button type="button" onClick={handlePaid} className="px-4 py-2 text-sm border rounded-lg">Mark Paid</button>
+              <Button variant="secondary" onClick={handlePaid}>Mark Paid</Button>
             </PermissionGate>
           )}
         </div>
       </div>
 
-      <div className="bg-white border rounded-xl overflow-x-auto mb-4">
+      {/* Mobile line-item cards */}
+      <div className="grid gap-3 sm:hidden mb-4">
+        {lineItems.map((line, idx) => (
+          <div key={idx} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-medium text-slate-900">{line.ttspl_id || '—'}</span>
+              <span className="font-semibold text-slate-900">{fmt(line.amount)}</span>
+            </div>
+            {line.serial_number && <p className="text-xs text-slate-500">SN: {line.serial_number}</p>}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+              <span>Recv {line.received_date || '—'}</span>
+              <span>Ret {line.return_date || '—'}</span>
+              <span>{line.days_in_month} days</span>
+              <span>{fmt(line.monthly_rate)}/mo</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="hidden sm:block bg-white border rounded-xl overflow-x-auto mb-4">
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
             <tr>

@@ -1,11 +1,20 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Loader2, Search, Plus, CheckCircle2 } from 'lucide-react';
+import toast from 'react-hot-toast';
 import api from '../../utils/api';
 import { isSupportLead } from '../../utils/supportAccess';
+import { ticketHasUnassignedTechnicianSlots } from './utils';
 import { useAuth } from '../../context/AuthContext';
 import TicketCard from './components/TicketCard';
 import SupportTicketList from './SupportTicketList';
+
+const TYPE_CHIPS = [
+  { key: '', label: 'All', countKey: 'all' },
+  { key: 'complaint', label: 'Complaint', countKey: 'complaint' },
+  { key: 'pickup', label: 'Pickup', countKey: 'pickup' },
+  { key: 'replacement', label: 'Replacement', countKey: 'replacement' },
+];
 
 const emptyCopy = {
   active: { title: 'No support tickets yet', body: 'Create your first ticket to get started.' },
@@ -25,18 +34,24 @@ function SupportTicketsViewCards({ view = 'active', showFilters = true, splitSec
   const [closedOffset, setClosedOffset] = useState(0);
   const [closedTotal, setClosedTotal] = useState(0);
   const [technicians, setTechnicians] = useState([]);
+  const [typeCounts, setTypeCounts] = useState({ all: 0, complaint: 0, pickup: 0, replacement: 0 });
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(search.trim()), 300);
     return () => clearTimeout(t);
   }, [search]);
 
+  const buildFilterParams = useCallback(() => {
+    const base = new URLSearchParams();
+    if (debounced) base.set('search', debounced);
+    base.set('view', view === 'all' ? 'active' : view);
+    return base;
+  }, [debounced, view]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const base = new URLSearchParams();
-      if (debounced) base.set('search', debounced);
-      if (typeFilter) base.set('type', typeFilter);
+      const base = buildFilterParams();
 
       if (splitSections) {
         const activeParams = new URLSearchParams(base);
@@ -45,28 +60,41 @@ function SupportTicketsViewCards({ view = 'active', showFilters = true, splitSec
         closedParams.set('view', 'closed');
         closedParams.set('limit', '50');
         closedParams.set('offset', String(closedOffset));
-        const [activeRes, closedRes] = await Promise.all([
+        const countParams = new URLSearchParams(base);
+        countParams.set('view', view === 'all' ? 'active' : view);
+        const [activeRes, closedRes, countsRes] = await Promise.all([
           api.get(`/support/tickets?${activeParams}`),
-          api.get(`/support/tickets?${closedParams}`)
+          api.get(`/support/tickets?${closedParams}`),
+          api.get(`/support/tickets/counts?${countParams}`)
         ]);
         setActiveTickets(activeRes.data.tickets || []);
         setClosedTickets(closedRes.data.tickets || []);
         setClosedTotal(closedRes.data.total || 0);
+        setTypeCounts(countsRes.data.counts || { all: 0, complaint: 0, pickup: 0, replacement: 0 });
       } else {
         const params = new URLSearchParams(base);
         params.set('view', view);
-        const { data } = await api.get(`/support/tickets?${params}`);
+        if (typeFilter) params.set('type', typeFilter);
+        const countParams = new URLSearchParams(base);
+        countParams.set('view', view);
+        const [{ data }, countsRes] = await Promise.all([
+          api.get(`/support/tickets?${params}`),
+          api.get(`/support/tickets/counts?${countParams}`)
+        ]);
         setActiveTickets(data.tickets || []);
         setClosedTickets([]);
         setClosedTotal(0);
+        setTypeCounts(countsRes.data.counts || { all: 0, complaint: 0, pickup: 0, replacement: 0 });
       }
     } catch (e) {
       setActiveTickets([]);
       setClosedTickets([]);
+      setTypeCounts({ all: 0, complaint: 0, pickup: 0, replacement: 0 });
+      toast.error(e.response?.data?.message || e.message || 'Failed to load support tickets');
     } finally {
       setLoading(false);
     }
-  }, [debounced, typeFilter, view, splitSections, closedOffset]);
+  }, [buildFilterParams, typeFilter, view, splitSections, closedOffset]);
 
   useEffect(() => {
     load();
@@ -114,14 +142,14 @@ function SupportTicketsViewCards({ view = 'active', showFilters = true, splitSec
             />
           </div>
           <div className="flex flex-wrap gap-2">
-            {['', 'complaint', 'pickup', 'replacement'].map((chip) => (
+            {TYPE_CHIPS.map((chip) => (
               <button
-                key={chip || 'all'}
+                key={chip.key || 'all'}
                 type="button"
-                className={`support-filter-chip ${chip || 'all'}${typeFilter === chip ? ' active' : ''}`}
-                onClick={() => setTypeFilter(chip)}
+                className={`support-filter-chip ${chip.key || 'all'}${typeFilter === chip.key ? ' active' : ''}`}
+                onClick={() => setTypeFilter(chip.key)}
               >
-                {chip ? chip.charAt(0).toUpperCase() + chip.slice(1) : 'All'}
+                {chip.label} ({typeCounts[chip.countKey] ?? 0})
               </button>
             ))}
             {view === 'all' && isSupportLead(user) && (
@@ -151,7 +179,7 @@ function SupportTicketsViewCards({ view = 'active', showFilters = true, splitSec
                     key={ticket.id}
                     ticket={ticket}
                     technicians={technicians}
-                    canAssign={isSupportLead(user)}
+                    canAssign={isSupportLead(user) && ticketHasUnassignedTechnicianSlots(ticket)}
                     onAssigned={handleAssign}
                   />
                 ))}

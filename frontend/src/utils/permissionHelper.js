@@ -1,4 +1,9 @@
 import { normalizeAction } from '../constants/sections';
+import {
+  childSectionsForParent,
+  isChildModuleSection,
+  sectionsToCheck,
+} from '../constants/sectionHierarchy';
 
 /** Legacy users.permissions[] strings → section access (backward compat) */
 const LEGACY_STRING_TO_SECTIONS = {
@@ -27,7 +32,7 @@ const LEGACY_ROLE_SECTIONS = {
     'lead_orders', 'customers', 'manager_dashboard', 'reports', 'parts', 'parts_inventory',
     'procurement', 'vendor_management', 'warehouse', 'qc_management',
     'inventory_management', 'dispatch', 'support_tickets', 'customer_inventory',
-    'teams', 'roles', 'role_permissions', 'user_permissions',
+    'teams', 'roles', 'role_permissions', 'user_permissions', 'users',
     'analytics_dashboard', 'reports_export', 'reports_access',
   ],
   manager: [
@@ -35,6 +40,7 @@ const LEGACY_ROLE_SECTIONS = {
     'lead_orders', 'customers', 'manager_dashboard', 'reports', 'reports_access', 'analytics_dashboard', 'reports_export', 'parts', 'parts_inventory',
     'procurement', 'vendor_management', 'warehouse', 'qc_management',
     'inventory_management', 'dispatch', 'support_tickets', 'customer_inventory', 'teams',
+    'users', 'role_permissions', 'user_permissions',
   ],
   sales: ['dashboard', 'leads', 'sales_orders', 'follow_ups', 'lead_orders', 'customers', 'analytics_dashboard'],
   accounts: ['customer_billing', 'vendor_billing_mgmt', 'credit_notes', 'debit_notes', 'reports', 'reports_export'],
@@ -58,7 +64,9 @@ const LEGACY_ROLE_SECTIONS = {
 function legacyStringGrantsView(user, section) {
   const perms = Array.isArray(user?.permissions) ? user.permissions : [];
   for (const [legacyKey, sections] of Object.entries(LEGACY_STRING_TO_SECTIONS)) {
-    if (perms.includes(legacyKey) && sections.includes(section)) return true;
+    if (perms.includes(legacyKey) && sectionsToCheck(section).some((s) => sections.includes(s))) {
+      return true;
+    }
   }
   return false;
 }
@@ -67,21 +75,12 @@ function legacyRoleGrants(user, section, actionKey) {
   if (user?.role === 'super_admin') return true;
   const sections = LEGACY_ROLE_SECTIONS[user?.role];
   if (!sections) return false;
-  if (actionKey === 'can_view') return sections.includes(section);
+  const keys = sectionsToCheck(section);
+  if (actionKey === 'can_view') return keys.some((key) => sections.includes(key));
   if (['can_create', 'can_edit', 'can_delete'].includes(actionKey)) {
-    return ['admin', 'manager'].includes(user?.role) && sections.includes(section);
+    return ['admin', 'manager'].includes(user?.role) && keys.some((key) => sections.includes(key));
   }
   return false;
-}
-
-/** RBAC section aliases — menu may use reports_access while DB stores reports */
-const SECTION_ALIASES = {
-  reports_access: ['reports_access', 'reports'],
-  reports: ['reports', 'reports_access'],
-};
-
-function sectionsToCheck(section) {
-  return SECTION_ALIASES[section] || [section];
 }
 
 export function resolveEffectivePermission(effectivePermissions, section, action) {
@@ -100,8 +99,16 @@ export function hasPermission(user, effectivePermissions, section, action) {
   if (!actionKey) return false;
 
   if (effectivePermissions && Object.keys(effectivePermissions).length > 0) {
+    // Child modules require an explicit grant on the child (or alias) section.
+    if (isChildModuleSection(section)) {
+      return resolveEffectivePermission(effectivePermissions, section, actionKey);
+    }
+
     return resolveEffectivePermission(effectivePermissions, section, actionKey);
   }
+
+  // Legacy fallback only for non-granular child modules.
+  if (isChildModuleSection(section)) return false;
 
   if (legacyStringGrantsView(user, section) && actionKey === 'can_view') return true;
   return legacyRoleGrants(user, section, actionKey);
@@ -109,4 +116,46 @@ export function hasPermission(user, effectivePermissions, section, action) {
 
 export function canViewSection(user, effectivePermissions, section) {
   return hasPermission(user, effectivePermissions, section, 'view');
+}
+
+export function canViewAnySection(user, effectivePermissions, sections) {
+  return (sections || []).some((section) => canViewSection(user, effectivePermissions, section));
+}
+
+/** Accordion visibility: explicit parent grant OR any child with view access. */
+export function canViewParentModule(user, effectivePermissions, parentSection) {
+  if (!user) return false;
+  if (user.role === 'super_admin') return true;
+  if (
+    effectivePermissions &&
+    Object.keys(effectivePermissions).length > 0 &&
+    resolveEffectivePermission(effectivePermissions, parentSection, 'view')
+  ) {
+    return true;
+  }
+  return childSectionsForParent(parentSection).some((child) =>
+    canViewSection(user, effectivePermissions, child)
+  );
+}
+
+export function getDataScope(user, effectivePermissions, section) {
+  if (!user) return 'all';
+  if (user.role === 'super_admin') return 'all';
+  if (!effectivePermissions || !Object.keys(effectivePermissions).length) {
+    return 'all';
+  }
+  const keys = sectionsToCheck(section);
+  for (const key of keys) {
+    const scope = effectivePermissions?.[key]?.data_scope;
+    if (scope === 'all') return 'all';
+  }
+  for (const key of keys) {
+    const scope = effectivePermissions?.[key]?.data_scope;
+    if (scope === 'assigned') return 'assigned';
+  }
+  return 'all';
+}
+
+export function isAssignedDataOnly(user, effectivePermissions, section) {
+  return getDataScope(user, effectivePermissions, section) === 'assigned';
 }

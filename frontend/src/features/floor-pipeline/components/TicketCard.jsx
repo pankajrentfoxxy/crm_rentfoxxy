@@ -1,15 +1,13 @@
 import React from 'react';
 import { AlertTriangle, Clock, User, Wrench } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { configSummary, priorityBadge, ticketAgeDays } from '../floorPipelineUi';
+import { configSummary, priorityBadge, ticketAgeDays, resolveTicketTtspl } from '../floorPipelineUi';
 
-export default function TicketCard({ ticket, pendingParts }) {
+export default function TicketCard({ ticket, pendingParts, onCardClick }) {
   const pri = priorityBadge(ticket.priority);
-  return (
-    <Link
-      to={`/floor-pipeline/tickets/${ticket.ticket_id}`}
-      className="block rounded-xl border border-gray-100 bg-white p-3 shadow-sm hover:shadow-md transition-shadow"
-    >
+  const className = 'block w-full text-left rounded-xl border border-gray-100 bg-white p-3 shadow-sm hover:shadow-md transition-shadow';
+  const inner = (
+    <>
       <div className="flex items-start justify-between gap-2 mb-2">
         <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${pri.className}`}>
           {pri.label}
@@ -18,7 +16,7 @@ export default function TicketCard({ ticket, pendingParts }) {
           {ticket.stage_name}
         </span>
       </div>
-      <p className="font-mono font-bold text-slate-900 text-sm">{ticket.ttspl_id || ticket.machine_number || '—'}</p>
+      <p className="font-mono font-bold text-slate-900 text-sm">{resolveTicketTtspl(ticket) || '—'}</p>
       <p className="text-xs text-slate-600 mt-1 line-clamp-2">{configSummary(ticket)}</p>
       {ticket.highlighted ? (
         <div className="mt-2 flex gap-1.5 rounded-lg bg-amber-50 border border-amber-200 px-2 py-1.5 text-xs text-amber-900">
@@ -27,9 +25,16 @@ export default function TicketCard({ ticket, pendingParts }) {
         </div>
       ) : null}
       <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-        <span className="inline-flex items-center gap-1">
-          <User className="w-3 h-3" />
-          {ticket.assigned_user_name || 'Unassigned'}
+        <span className="inline-flex flex-col gap-0.5 min-w-0">
+          <span className="inline-flex items-center gap-1">
+            <User className="w-3 h-3 shrink-0" />
+            {ticket.assigned_user_name || 'Unassigned'}
+          </span>
+          {ticket.assigned_team_name || ticket.team_name ? (
+            <span className="text-slate-400 pl-4 truncate">
+              {ticket.assigned_team_name || ticket.team_name}
+            </span>
+          ) : null}
         </span>
         <span className="inline-flex items-center gap-1">
           <Clock className="w-3 h-3" />
@@ -42,6 +47,19 @@ export default function TicketCard({ ticket, pendingParts }) {
           Parts pending
         </span>
       ) : null}
+    </>
+  );
+
+  if (onCardClick) {
+    return (
+      <button type="button" onClick={() => onCardClick(ticket)} className={className}>
+        {inner}
+      </button>
+    );
+  }
+  return (
+    <Link to={`/floor-pipeline/tickets/${ticket.ticket_id}`} className={className}>
+      {inner}
     </Link>
   );
 }

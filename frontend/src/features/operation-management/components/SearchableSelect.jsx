@@ -1,6 +1,18 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Search } from 'lucide-react';
 
+function normalizeOptions(options = []) {
+  return (options || []).map((opt) => {
+    if (opt != null && typeof opt === 'object' && !Array.isArray(opt)) {
+      const value = opt.value != null ? String(opt.value) : '';
+      const label = opt.label != null ? String(opt.label) : value;
+      return { value, label };
+    }
+    const s = String(opt);
+    return { value: s, label: s };
+  });
+}
+
 export default function SearchableSelect({
   label,
   required = false,
@@ -16,16 +28,22 @@ export default function SearchableSelect({
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
 
-  const normalizedOptions = useMemo(
-    () => (options || []).map((opt) => (typeof opt === 'string' ? opt : String(opt))),
-    [options]
-  );
+  const normalizedOptions = useMemo(() => normalizeOptions(options), [options]);
 
   const filteredOptions = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return normalizedOptions;
-    return normalizedOptions.filter((opt) => opt.toLowerCase().includes(q));
+    return normalizedOptions.filter(
+      (opt) =>
+        opt.label.toLowerCase().includes(q)
+        || opt.value.toLowerCase().includes(q)
+    );
   }, [normalizedOptions, search]);
+
+  const selected = useMemo(
+    () => normalizedOptions.find((opt) => String(opt.value) === String(value ?? '')),
+    [normalizedOptions, value]
+  );
 
   useEffect(() => {
     if (!open) return undefined;
@@ -43,7 +61,7 @@ export default function SearchableSelect({
     };
   }, [open]);
 
-  const displayValue = value || placeholder;
+  const displayValue = selected?.label || placeholder;
 
   return (
     <div ref={rootRef}>
@@ -66,7 +84,7 @@ export default function SearchableSelect({
           }}
           className="w-full flex items-center justify-between gap-2 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white text-left disabled:opacity-60 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-teal-600/20 focus:border-teal-600"
         >
-          <span className={value ? 'text-gray-900 truncate' : 'text-gray-400 truncate'}>{displayValue}</span>
+          <span className={selected ? 'text-gray-900 truncate' : 'text-gray-400 truncate'}>{displayValue}</span>
           <ChevronDown className={`w-4 h-4 shrink-0 text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`} />
         </button>
 
@@ -107,23 +125,23 @@ export default function SearchableSelect({
                 <li className="px-3 py-4 text-center text-gray-500 text-xs">No options match your search.</li>
               ) : (
                 filteredOptions.map((opt) => {
-                  const selected = value === opt;
+                  const isSelected = String(value ?? '') === String(opt.value);
                   return (
-                    <li key={opt}>
+                    <li key={opt.value}>
                       <button
                         type="button"
                         role="option"
-                        aria-selected={selected}
+                        aria-selected={isSelected}
                         onClick={() => {
-                          onChange(opt);
+                          onChange(opt.value);
                           setOpen(false);
                           setSearch('');
                         }}
                         className={`w-full text-left px-3 py-2 hover:bg-teal-50 ${
-                          selected ? 'bg-teal-50 text-teal-900 font-medium' : 'text-gray-800'
+                          isSelected ? 'bg-teal-50 text-teal-900 font-medium' : 'text-gray-800'
                         }`}
                       >
-                        {opt}
+                        {opt.label}
                       </button>
                     </li>
                   );
@@ -138,13 +156,13 @@ export default function SearchableSelect({
           tabIndex={-1}
           aria-hidden
           className="sr-only"
-          value={value}
+          value={value ?? ''}
           onChange={() => {}}
           required
         >
           <option value="">Please Select</option>
           {normalizedOptions.map((opt) => (
-            <option key={opt} value={opt}>{opt}</option>
+            <option key={opt.value} value={opt.value}>{opt.label}</option>
           ))}
         </select>
       ) : null}

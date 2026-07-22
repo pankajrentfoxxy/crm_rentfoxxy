@@ -1,7 +1,8 @@
 import React from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { isSupportLead, isSupportTechnician } from '../../utils/supportAccess';
+import { isSupportLead, isSupportTechnician, canCancelSupportTicket } from '../../utils/supportAccess';
+import CancelledTicketsPage from './CancelledTicketsPage';
 import SupportShell from './SupportShell';
 import SupportDashboard from './SupportDashboard';
 import SupportOverviewPage from '../../features/support-module/pages/SupportOverviewPage';
@@ -11,6 +12,11 @@ import SupportTicketCreate from './SupportTicketCreate';
 import SupportTicketDetail from './SupportTicketDetail';
 import SupportSettings from './SupportSettings';
 import SupportTechnicians from './SupportTechnicians';
+import MyDeliveriesPage from '../../features/sales-pipeline/pages/MyDeliveriesPage';
+import TechnicianDeliveryBucketPage from '../../features/sales-pipeline/pages/TechnicianDeliveryBucketPage';
+import SupportTechBucketPage from '../../features/support/pages/SupportTechBucketPage';
+import SupportPartsQueuePage from '../../features/support/pages/SupportPartsQueuePage';
+import ChallanViewPage from '../../features/support/pages/ChallanViewPage';
 
 function SupportHomeRedirect() {
   const { user } = useAuth();
@@ -28,7 +34,7 @@ function LeadOnly({ children }) {
 
 function StatsOnly({ children }) {
   const { user } = useAuth();
-  if (!['admin', 'manager', 'support_lead'].includes(user?.role)) {
+  if (!['super_admin', 'admin', 'manager', 'support_lead'].includes(user?.role)) {
     return <Navigate to="/support/overview" replace />;
   }
   return children;
@@ -37,6 +43,20 @@ function StatsOnly({ children }) {
 function AdminOnly({ children }) {
   const { user } = useAuth();
   if (user?.role !== 'admin') return <Navigate to="/support/overview" replace />;
+  return children;
+}
+
+function PartsQueueOnly({ children }) {
+  const { user } = useAuth();
+  if (!['warehouse', 'admin', 'manager', 'support_lead', 'super_admin'].includes(user?.role)) {
+    return <Navigate to="/support/overview" replace />;
+  }
+  return children;
+}
+
+function CancelSectionOnly({ children }) {
+  const { user } = useAuth();
+  if (!canCancelSupportTicket(user)) return <Navigate to="/support/overview" replace />;
   return children;
 }
 
@@ -53,8 +73,14 @@ export default function SupportApp() {
         <Route path="overdue" element={<SupportTicketsView view="overdue" showFilters />} />
         <Route path="pickups" element={<SupportTicketsView view="pickups" showFilters />} />
         <Route path="complaints" element={<SupportTicketsView view="complaints" showFilters />} />
+        <Route path="cancelled-tickets" element={<CancelSectionOnly><CancelledTicketsPage /></CancelSectionOnly>} />
         <Route path="my-tickets" element={<SupportTicketsView view="my_open" showFilters />} />
+        <Route path="my-pickups" element={<MyDeliveriesPage movement="return" />} />
+        <Route path="pickup-bucket" element={<StatsOnly><TechnicianDeliveryBucketPage movement="return" /></StatsOnly>} />
         <Route path="my-resolved" element={<SupportTicketsView view="my_resolved" showFilters />} />
+        <Route path="tech-bucket" element={<SupportTechBucketPage />} />
+        <Route path="parts-queue" element={<PartsQueueOnly><SupportPartsQueuePage /></PartsQueueOnly>} />
+        <Route path="challans/:challanId" element={<ChallanViewPage />} />
         <Route path="technicians" element={<LeadOnly><SupportTechnicians /></LeadOnly>} />
         <Route path="settings" element={<AdminOnly><SupportSettings /></AdminOnly>} />
         <Route path="tickets/new" element={<LeadOnly><SupportTicketCreate /></LeadOnly>} />

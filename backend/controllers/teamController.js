@@ -1,21 +1,51 @@
 const pool = require('../config/db');
+const { getDisplayTeams } = require('../utils/teamUtils');
 
 // Get All Teams (optionally for ticket assignment: ordered by stage, excludes QC/Dispatch/Procurement)
 exports.getAllTeams = async (req, res) => {
   const forAssignment = req.query.for_assignment === '1' || req.query.for_assignment === 'true';
 
   try {
-    let orderClause;
-    let whereClause = '';
-
     if (forAssignment) {
-      // Order by stage_order (same as ticket workflow), exclude QC, Dispatch, Procurement
-      whereClause = ` WHERE t.team_name NOT ILIKE 'QC%' AND t.team_name NOT ILIKE 'Dispatch%' AND t.team_name NOT ILIKE 'Procurement%'`;
-      orderClause = ` ORDER BY (
-        SELECT MIN(s.stage_order) FROM stages s WHERE s.team_id = t.team_id
-      ) ASC NULLS LAST, t.team_name ASC`;
-    } else {
-      orderClause = ` ORDER BY 
+      const allTeams = await getDisplayTeams();
+      const excluded = (name) =>
+        /^qc/i.test(name) || /^dispatch/i.test(name) || /^procurement/i.test(name);
+      const filtered = allTeams.filter((t) => !excluded(String(t.team_name || '')));
+      const ids = filtered.map((t) => t.team_id);
+      if (!ids.length) {
+        return res.json({ success: true, count: 0, teams: [] });
+      }
+      const result = await pool.query(
+        `SELECT t.*, u.name as manager_name,
+                (SELECT COUNT(*) FROM users WHERE team_id = t.team_id AND active = true) as member_count
+         FROM teams t
+         LEFT JOIN users u ON t.manager_id = u.user_id
+         WHERE t.team_id = ANY($1::int[])
+         ORDER BY (
+           SELECT MIN(s.stage_order) FROM stages s WHERE s.team_id = t.team_id
+         ) ASC NULLS LAST, t.team_name ASC`,
+        [ids]
+      );
+      return res.json({
+        success: true,
+        count: result.rows.length,
+        teams: result.rows,
+      });
+    }
+
+    const displayTeams = await getDisplayTeams();
+    const ids = displayTeams.map((t) => t.team_id);
+    if (!ids.length) {
+      return res.json({ success: true, count: 0, teams: [] });
+    }
+
+    const result = await pool.query(
+      `SELECT t.*, u.name as manager_name,
+              (SELECT COUNT(*) FROM users WHERE team_id = t.team_id AND active = true) as member_count
+       FROM teams t
+       LEFT JOIN users u ON t.manager_id = u.user_id
+       WHERE t.team_id = ANY($1::int[])
+       ORDER BY 
        CASE 
          WHEN t.team_name = 'Floor Entry' THEN 1
          WHEN t.team_name LIKE 'Cleaning%' THEN 2
@@ -28,16 +58,8 @@ exports.getAllTeams = async (req, res) => {
          WHEN t.team_name LIKE 'Warehouse%' THEN 9
          WHEN t.team_name = 'Admin' THEN 10
          ELSE 11
-       END ASC, t.team_name ASC`;
-    }
-
-    const result = await pool.query(
-      `SELECT t.*, u.name as manager_name,
-              (SELECT COUNT(*) FROM users WHERE team_id = t.team_id AND active = true) as member_count
-       FROM teams t
-       LEFT JOIN users u ON t.manager_id = u.user_id
-       ${whereClause}
-       ${orderClause}`
+       END ASC, t.team_name ASC`,
+      [ids]
     );
 
     res.json({

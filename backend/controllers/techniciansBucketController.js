@@ -23,8 +23,22 @@ exports.fetchDetails = async (req, res) => {
       return res.json({ success: true, type, items: [], total: 0 });
     }
 
-    const items = await fetchBucketDetails({ technicianId, type, search });
-    res.json({ success: true, type, items, total: items.length });
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 10));
+
+    const result = await fetchBucketDetails({ technicianId, type, search, page, limit });
+    res.json({
+      success: true,
+      type,
+      items: result.items,
+      total: result.total,
+      pagination: {
+        page: result.page,
+        limit: result.limit,
+        total: result.total,
+        totalPages: result.totalPages,
+      },
+    });
   } catch (e) {
     console.error('techniciansBucket fetchDetails', e);
     res.status(500).json({ success: false, message: e.message });

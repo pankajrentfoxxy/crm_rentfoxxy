@@ -68,6 +68,11 @@ export async function updateDeliveryTechnicianStatus(id, status) {
   return data;
 }
 
+export async function changeDeliveryTechnicianPassword(id, body) {
+  const { data } = await api.post(`${base}/technicians/${id}/password`, body);
+  return data;
+}
+
 export async function deleteDeliveryTechnician(id) {
   const { data } = await api.delete(`${base}/technicians/${id}`);
   return data;

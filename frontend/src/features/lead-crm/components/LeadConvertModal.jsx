@@ -3,12 +3,39 @@ import { X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { convertToCustomer } from '../leadCrmApi';
 import toast from 'react-hot-toast';
+import { INDIAN_STATES } from '../../../constants/indianStates';
+import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
+import { formatIndianMobileInput, indianMobileError, INDIAN_MOBILE_RE } from '../../../utils/phoneValidation';
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MOBILE_RE = INDIAN_MOBILE_RE;
+
+const emptyForm = () => ({
+  customer_name: '',
+  company_name: '',
+  email: '',
+  phone: '',
+  gst_number: '',
+  pan_number: '',
+  billing_address: '',
+  billing_city: '',
+  billing_state: '',
+  billing_pincode: '',
+  shipping_address: '',
+  shipping_city: '',
+  shipping_state: '',
+  shipping_pincode: '',
+  spock_person_name: '',
+  spock_person_email: '',
+  spock_person_mobile: '',
+});
 
 export default function LeadConvertModal({ open, lead, onClose }) {
   const navigate = useNavigate();
-  const [form, setForm] = useState({});
+  const [form, setForm] = useState(emptyForm());
   const [shippingSame, setShippingSame] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState({});
 
   useEffect(() => {
     if (lead) {
@@ -27,17 +54,77 @@ export default function LeadConvertModal({ open, lead, onClose }) {
         shipping_city: lead.city || '',
         shipping_state: lead.state || '',
         shipping_pincode: lead.pincode || '',
+        spock_person_name: '',
+        spock_person_email: '',
+        spock_person_mobile: '',
       });
       setShippingSame(lead.shippingSameAsBilling !== false);
+      setFieldErrors({});
     }
   }, [lead, open]);
 
   if (!open || !lead) return null;
 
-  const set = (key, value) => setForm((f) => ({ ...f, [key]: value }));
+  const set = (key, value) => {
+    setForm((f) => ({ ...f, [key]: value }));
+    setFieldErrors((prev) => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
+
+  const setMobile = (key, value) => set(key, formatIndianMobileInput(value));
+
+  const validateForm = () => {
+    const errors = {};
+    const phoneErr = indianMobileError(form.phone, { label: 'Phone' });
+    if (phoneErr) errors.phone = phoneErr;
+    const requiredSpokeFields = [
+      ['spock_person_name', 'Name'],
+      ['spock_person_email', 'Email'],
+      ['spock_person_mobile', 'Mobile Number'],
+    ];
+    requiredSpokeFields.forEach(([key, label]) => {
+      const value = String(form[key] || '').trim();
+      const errorLabel = `Spoke person ${label.toLowerCase()}`;
+      if (!value) {
+        errors[key] = `${errorLabel} is required`;
+        return;
+      }
+      if (key.endsWith('_email') && !EMAIL_RE.test(value)) errors[key] = `${errorLabel} is invalid`;
+      if (key.endsWith('_mobile') && !MOBILE_RE.test(value)) errors[key] = `${errorLabel} must be a 10-digit number`;
+    });
+    setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const renderField = (field, label, { type = 'text', mobile = false, required = false } = {}) => (
+    <div key={field}>
+      <label className="text-xs text-gray-500">
+        {label}
+        {required && <span className="text-red-500"> *</span>}
+      </label>
+      <input
+        type={type}
+        value={form[field] || ''}
+        onChange={(e) => (mobile ? setMobile(field, e.target.value) : set(field, e.target.value))}
+        maxLength={mobile ? 10 : undefined}
+        className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm ${
+          fieldErrors[field] ? 'border-red-300' : 'border-gray-200'
+        }`}
+      />
+      {fieldErrors[field] && <p className="mt-1 text-xs text-red-600">{fieldErrors[field]}</p>}
+    </div>
+  );
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!validateForm()) {
+      toast.error('Please fill all required Spoke Person fields');
+      return;
+    }
     setSaving(true);
     try {
       const res = await convertToCustomer(lead.leadId, {
@@ -73,8 +160,25 @@ export default function LeadConvertModal({ open, lead, onClose }) {
           {['billing_address', 'billing_city', 'billing_state', 'billing_pincode'].map((field) => (
             <div key={field}>
               <label className="text-xs text-gray-500 capitalize">{field.replace(/billing_/, '')} *</label>
-              <input value={form[field] || ''} onChange={(e) => set(field, e.target.value)} required={field !== 'billing_address' || true}
-                className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              {field === 'billing_state' ? (
+                <select value={form.billing_state || ''} onChange={(e) => set('billing_state', e.target.value)} required
+                  className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white">
+                  <option value="">Select state</option>
+                  {INDIAN_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              ) : field === 'billing_pincode' ? (
+                <input value={form.billing_pincode || ''} required
+                  onChange={(e) => applyPincodeAutofill(e.target.value, setForm, {
+                    pinKey: 'billing_pincode', cityKey: 'billing_city', stateKey: 'billing_state',
+                  })}
+                  onBlur={(e) => applyPincodeAutofill(e.target.value, setForm, {
+                    pinKey: 'billing_pincode', cityKey: 'billing_city', stateKey: 'billing_state',
+                  })}
+                  className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              ) : (
+                <input value={form[field] || ''} onChange={(e) => set(field, e.target.value)} required={field !== 'billing_address' || true}
+                  className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              )}
             </div>
           ))}
           <label className="flex items-center gap-2 text-sm">
@@ -87,12 +191,35 @@ export default function LeadConvertModal({ open, lead, onClose }) {
               {['shipping_address', 'shipping_city', 'shipping_state', 'shipping_pincode'].map((field) => (
                 <div key={field}>
                   <label className="text-xs text-gray-500 capitalize">{field.replace(/shipping_/, '')}</label>
-                  <input value={form[field] || ''} onChange={(e) => set(field, e.target.value)}
-                    className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                  {field === 'shipping_state' ? (
+                    <select value={form.shipping_state || ''} onChange={(e) => set('shipping_state', e.target.value)}
+                      className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white">
+                      <option value="">Select state</option>
+                      {INDIAN_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  ) : field === 'shipping_pincode' ? (
+                    <input value={form.shipping_pincode || ''}
+                      onChange={(e) => applyPincodeAutofill(e.target.value, setForm, {
+                        pinKey: 'shipping_pincode', cityKey: 'shipping_city', stateKey: 'shipping_state',
+                      })}
+                      onBlur={(e) => applyPincodeAutofill(e.target.value, setForm, {
+                        pinKey: 'shipping_pincode', cityKey: 'shipping_city', stateKey: 'shipping_state',
+                      })}
+                      className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                  ) : (
+                    <input value={form[field] || ''} onChange={(e) => set(field, e.target.value)}
+                      className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                  )}
                 </div>
               ))}
             </>
           )}
+          <div className="pt-2 border-t space-y-3">
+            <p className="text-sm font-medium text-gray-700">Spoke Person</p>
+            {renderField('spock_person_name', 'Name', { required: true })}
+            {renderField('spock_person_email', 'Email', { type: 'email', required: true })}
+            {renderField('spock_person_mobile', 'Mobile Number', { mobile: true, required: true })}
+          </div>
           <div className="flex gap-2 justify-end pt-3">
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm border border-gray-200 rounded-lg">Cancel</button>
             <button type="submit" disabled={saving}

@@ -1,6 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+const { multerLimits, wrapMulter } = require('../config/uploadLimits');
 const pool = require('../config/db');
 
 const {emailDocument} = require('../services/salesManagementPdfService');
@@ -30,7 +31,7 @@ const podUpload = multer({
     destination: (_req, _file, cb) => cb(null, podUploadDir),
     filename: safeFilename,
   }),
-  limits: { fileSize: 15 * 1024 * 1024, files: 10 },
+  limits: multerLimits(),
 });
 
 const technicianUploadDir = path.join(__dirname, '..', '..', 'uploads', technicianService.UPLOAD_SUBDIR);
@@ -43,7 +44,7 @@ const technicianUpload = multer({
     destination: (_req, _file, cb) => cb(null, technicianUploadDir),
     filename: safeFilename,
   }),
-  limits: { fileSize: 10 * 1024 * 1024, files: 6 },
+  limits: multerLimits({ files: 6 }),
 });
 
 function parseProductsField(raw) {
@@ -167,7 +168,7 @@ exports.verifyOtp = async (req, res) => {
 };
 
 exports.submitPod = [
-  podUpload.array('files', 10),
+  wrapMulter(podUpload.array('files', 10)),
   async (req, res) => {
     const client = await pool.connect();
     try {
@@ -258,6 +259,31 @@ exports.submitPod = [
         );
       }
 
+      // Return DC completed by courier/porter (warehouse uploaded POD): fire the
+      // return lifecycle (mark returned -> QC re-entry -> credit note).
+      if (nextStatus === 'delivered') {
+        const mv = await client.query(
+          `SELECT movement_type, support_ticket_id FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
+          [dcNumber]
+        );
+        if (mv.rows[0]?.movement_type === 'return') {
+          const idsRes = await client.query(
+            `SELECT serial_id FROM vendor_serial_numbers
+              WHERE deleted_at IS NULL
+                AND (serial_number = ANY($1::text[]) OR inventory_asset_code = ANY($1::text[]))`,
+            [deliveredSerials.length ? deliveredSerials : ['']]
+          );
+          const returnSvc = require('../services/returnCompletionService');
+          await returnSvc.processReturnedSerials(client, {
+            serialIds: idsRes.rows.map((r) => r.serial_id),
+            dcNumber,
+            supportTicketId: mv.rows[0].support_ticket_id || null,
+            actorUserId: req.user?.user_id || null,
+            actorName: req.user?.name || null,
+          });
+        }
+      }
+
       await client.query('COMMIT');
       res.json({ success: true, message: 'Delivery status updated successfully' });
     } catch (e) {
@@ -305,10 +331,10 @@ exports.getTechnician = async (req, res) => {
 };
 
 exports.createTechnician = [
-  technicianUpload.fields([
+  wrapMulter(technicianUpload.fields([
     { name: 'image', maxCount: 1 },
     { name: 'identity_image', maxCount: 5 },
-  ]),
+  ])),
   async (req, res) => {
     try {
       const result = await technicianService.createTechnician(req.body, req.files || {});
@@ -335,10 +361,10 @@ exports.createTechnician = [
 ];
 
 exports.updateTechnician = [
-  technicianUpload.fields([
+  wrapMulter(technicianUpload.fields([
     { name: 'image', maxCount: 1 },
     { name: 'identity_image', maxCount: 5 },
-  ]),
+  ])),
   async (req, res) => {
     try {
       const result = await technicianService.updateTechnician(
@@ -355,6 +381,24 @@ exports.updateTechnician = [
     }
   },
 ];
+
+exports.changeTechnicianPassword = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { password, confirm_password: confirmPassword } = req.body;
+    if (!password) return res.status(400).json({ success: false, message: 'Password is required' });
+    if (confirmPassword !== undefined && password !== confirmPassword) {
+      return res.status(400).json({ success: false, message: 'Passwords do not match' });
+    }
+    const result = await technicianService.changeTechnicianPassword(id, password);
+    if (!result.ok) {
+      return res.status(result.status || 400).json({ success: false, message: result.message });
+    }
+    res.json({ success: true, message: 'Password changed successfully' });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
 
 exports.updateTechnicianStatus = async (req, res) => {
   try {

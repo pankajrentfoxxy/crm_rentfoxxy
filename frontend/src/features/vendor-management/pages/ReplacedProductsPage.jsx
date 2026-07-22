@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
-import { ExternalLink, Loader2, RefreshCw, Search } from 'lucide-react';
+import { ExternalLink, Loader2, RefreshCw, Search, RotateCcw } from 'lucide-react';
 import { fetchReplacedInventorySerials, fetchVendors } from '../vendorManagementApi';
+import { PageHeader } from '../../../components/ui/primitives';
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100];
 
@@ -101,10 +102,7 @@ export default function ReplacedProductsPage() {
 
   return (
     <div className="space-y-6 max-w-[100rem]">
-      <div>
-        <h1 className="text-xl font-bold text-slate-900">Replaced products (inventory)</h1>
-        <p className="text-xs text-slate-500 mt-1 max-w-3xl">{emptyHint}</p>
-      </div>
+      <PageHeader title="Replaced Products (Inventory)" subtitle={emptyHint} icon={RotateCcw} />
 
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100 bg-slate-50/80 flex flex-wrap items-center gap-3">
@@ -174,7 +172,40 @@ export default function ReplacedProductsPage() {
         </div>
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+      {/* Mobile cards */}
+      <div className="grid gap-3 md:hidden">
+        {loading ? (
+          <div className="flex items-center justify-center gap-2 py-16 text-slate-500"><Loader2 className="w-6 h-6 animate-spin" /> Loading…</div>
+        ) : !rows.length ? (
+          <p className="text-center text-sm text-slate-500 py-8">No replaced serial rows yet.</p>
+        ) : rows.map((r) => (
+          <div key={r.serial_id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-medium text-slate-900">{r.purchase_order_number || `PO-${r.po_id}`}</span>
+              <span className="inline-flex px-2 py-0.5 rounded-md bg-slate-900 text-white text-[11px] font-semibold">Replaced</span>
+            </div>
+            <p className="text-xs text-slate-600">{r.line_summary}</p>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+              <span>{formatGrn(r.grn_id)}</span>
+              <span>{formatPoType(r.purchase_order_type)}</span>
+              <span>{r.vendor_display}</span>
+            </div>
+            <div className="grid grid-cols-1 gap-0.5 text-[11px] font-mono text-slate-600">
+              <span>Serial: {r.serial_number}</span>
+              <span>Unique: {r.unique_display}</span>
+              <span className="text-amber-900">Old: {r.old_serial_number}</span>
+            </div>
+            <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100 text-xs text-slate-500">
+              <span>{formatWhen(r.updated_at)}</span>
+              <Link to={`/vendor-management/purchase-orders/${r.po_id}/receive`} className="inline-flex items-center gap-1 text-teal-700 font-semibold">
+                Receive <ExternalLink className="w-3 h-3" />
+              </Link>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="hidden md:block overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
         {loading ? (
           <div className="flex items-center justify-center gap-2 py-20 text-slate-500">
             <Loader2 className="w-6 h-6 animate-spin" />

@@ -3,6 +3,7 @@ const csv = require('csv-parser');
 const fs = require('fs');
 const { syncInventoryFromErp, syncSingleInventoryFromErp } = require('../services/inventoryErpSyncService');
 const { syncInventoryEditToLinkedPlaces } = require('../services/inventoryLinkedSyncService');
+const productionAssetService = require('../services/productionAssetService');
 
 const ensureLaptopCatalogTable = async () => {
     await pool.query(`
@@ -349,13 +350,27 @@ exports.updateInventory = async (req, res) => {
             linkedSync = await syncInventoryEditToLinkedPlaces(client, result.rows[0]);
         }
 
+        let productionAssetSync = null;
+        if (shouldSyncLinked && specFieldsTouched) {
+            try {
+                productionAssetSync = await productionAssetService.syncWorkingConfigFromInventory(
+                    client,
+                    result.rows[0],
+                    req.user?.user_id
+                );
+            } catch (paErr) {
+                console.error('Production asset sync from inventory edit failed:', paErr.message);
+            }
+        }
+
         await client.query('COMMIT');
 
         res.json({
             success: true,
             message: 'Inventory item updated successfully',
             item: result.rows[0],
-            linked_sync: linkedSync
+            linked_sync: linkedSync,
+            production_asset_changes: productionAssetSync?.changes || null,
         });
     } catch (error) {
         try {

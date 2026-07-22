@@ -2,9 +2,10 @@ const { query, body, param, validationResult } = require('express-validator');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+const { multerLimits } = require('../../config/uploadLimits');
 const pool = require('../../config/db');
 const { getTotalAmountOfPurchaseOrder } = require('../../utils/purchaseOrderGst');
-const { nextPurchaseOrderNumber } = require('../../services/vendorNumberService');
+const { peekNextPurchaseOrderNumber, allocatePurchaseOrderNumber } = require('../../services/vendorNumberService');
 const { logVendorAudit } = require('../../services/vendorAuditLogService');
 const { allocateTtsplCodes } = require('../../services/vendorInventoryAssetCodeService');
 const {
@@ -13,9 +14,112 @@ const {
   lineSubtotalFromRows,
   insertProductDetailsForPo
 } = require('../../services/purchaseOrderProductDetailsService');
+const { resolveLineItem } = require('../../services/qcManagementService');
 const { createTicketFromGrnReceive } = require('../../services/grnTicketService');
+const { logGrnReceive } = require('../../services/ttsplAuditService');
+const { markTokenUsed } = require('../../services/grnSerialCaptureService');
+const {
+  resolveReceiveConfig,
+  mergeConfigIntoExtra,
+  loadGrnLineConfigsForPo,
+  applyGrnConfigToLine,
+  freezeAcceptedReceiveConfig,
+  configFromPlainObject,
+  ensureLockColumns,
+} = require('../../services/grnReceivedConfigService');
 const { generatePurchaseOrderPdf } = require('../../services/vendorPurchaseOrderPdfService');
-const { sendPurchaseOrderApprovedEmail } = require('../../services/vendorPoEmailService');
+const {
+  sendPurchaseOrderApprovedEmail,
+  sendPoPendingApprovalEmailToManagers,
+} = require('../../services/vendorPoEmailService');
+const {
+  ACTIVITY_TYPES,
+  safeLogPurchaseOrderActivity,
+  listPurchaseOrderActivities,
+} = require('../../services/purchaseOrderActivityService');
+
+async function logReceiveActivities({
+  poId, user, grnId, grnWasNew, unitCount, ttsplCodes = [], ticketCount = 0, poNumber,
+}) {
+  if (grnWasNew && grnId) {
+    await safeLogPurchaseOrderActivity({
+      poId,
+      activityType: ACTIVITY_TYPES.GRN,
+      action: 'grn_created',
+      description: `GRN-${grnId} was created against this Purchase Order.`,
+      metadata: { grn_id: grnId },
+      user,
+    });
+  }
+  if (unitCount > 0) {
+    await safeLogPurchaseOrderActivity({
+      poId,
+      activityType: ACTIVITY_TYPES.GRN,
+      action: 'laptop_accepted',
+      description: `${unitCount} laptop${unitCount === 1 ? '' : 's'} were accepted into inventory.`,
+      metadata: { grn_id: grnId, count: unitCount },
+      user,
+    });
+    await safeLogPurchaseOrderActivity({
+      poId,
+      activityType: ACTIVITY_TYPES.INVENTORY,
+      action: 'inventory_added',
+      description: `${unitCount} laptop${unitCount === 1 ? '' : 's'} added to inventory for ${poNumber || `PO #${poId}`}.`,
+      metadata: { grn_id: grnId, count: unitCount },
+      user,
+    });
+  }
+  if (ttsplCodes.length) {
+    await safeLogPurchaseOrderActivity({
+      poId,
+      activityType: ACTIVITY_TYPES.INVENTORY,
+      action: 'ttspl_generated',
+      description: `${ttsplCodes.length} TTSPL code${ttsplCodes.length === 1 ? '' : 's'} generated.`,
+      metadata: { grn_id: grnId, ttspl_codes: ttsplCodes.slice(0, 50) },
+      user,
+    });
+  }
+  if (ticketCount > 0) {
+    await safeLogPurchaseOrderActivity({
+      poId,
+      activityType: ACTIVITY_TYPES.INVENTORY,
+      action: 'qc_started',
+      description: `${ticketCount} laptop${ticketCount === 1 ? '' : 's'} moved to QC Process.`,
+      metadata: { grn_id: grnId, ticket_count: ticketCount },
+      user,
+    });
+  }
+}
+
+/**
+ * Extract the laptop configuration from a PO line so it can be persisted on the
+ * received serial's `extra`. The floor ticket detail view reads gpu / screen_size
+ * / generation / os from `vendor_serial_numbers.extra`, so we capture the full
+ * config at GRN receive time (otherwise those fields render blank on the ticket).
+ * Returns only the non-empty fields to keep `extra` clean.
+ */
+function buildConfigExtraFromLine(line) {
+  if (!line || typeof line !== 'object') return {};
+  const pick = (...keys) => {
+    for (const k of keys) {
+      const v = line[k];
+      if (v != null && String(v).trim() !== '') return String(v).trim();
+    }
+    return '';
+  };
+  const config = {
+    brand: pick('brand', 'Brand', 'brand_name'),
+    model: pick('model', 'Model', 'product_name', 'model_name'),
+    processor: pick('processor', 'Processor', 'cpu'),
+    generation: pick('generation', 'Generation'),
+    ram: pick('ram', 'RAM'),
+    storage: pick('storage', 'Storage'),
+    gpu: pick('gpu', 'GPU', 'graphics'),
+    screen_size: pick('screen_size', 'Screen size', 'screen_size_inches', 'screen', 'display_size'),
+    os: pick('os', 'OS', 'operating_system'),
+  };
+  return Object.fromEntries(Object.entries(config).filter(([, v]) => v !== ''));
+}
 
 /** Normalize JSONB/array/string line_items → array */
 function parseLineItemsJson(raw) {
@@ -108,10 +212,13 @@ function enrichLineItemsWithReceived(lineItems, info) {
   return out;
 }
 
-function attachProductDetails(poRow, qtyMaps) {
+function attachProductDetails(poRow, qtyMaps, grnLineConfigs = null) {
   const lines = parseLineItemsJson(poRow.line_items);
   const ri = qtyMaps.get(Number(poRow.po_id));
-  const enriched = enrichLineItemsWithReceived(lines, ri);
+  const legacyIds = parseLineItemsJson(poRow.product_details_legacy_ids);
+  const enriched = enrichLineItemsWithReceived(lines, ri).map((line, idx) =>
+    applyGrnConfigToLine(line, grnLineConfigs, idx)
+  );
   return {
     ...poRow,
     line_items: enriched,
@@ -119,16 +226,48 @@ function attachProductDetails(poRow, qtyMaps) {
   };
 }
 
-/** Receive page (view GRN stats) opens only once PO is approved. */
-function receiveViewAllowed(poRow) {
-  const st = String(poRow?.status || '').toLowerCase();
-  return st === 'approved' || st === 'processing' || st === 'completed';
+async function attachProductDetailsWithGrn(db, poRow, qtyMaps) {
+  const legacyRaw = poRow.product_details_legacy_ids;
+  let legacyIds = [];
+  if (Array.isArray(legacyRaw)) legacyIds = legacyRaw;
+  else if (typeof legacyRaw === 'string') {
+    try {
+      const p = JSON.parse(legacyRaw);
+      if (Array.isArray(p)) legacyIds = p;
+    } catch {
+      legacyIds = [];
+    }
+  }
+  const grnLineConfigs = await loadGrnLineConfigsForPo(db, poRow.po_id, legacyIds);
+  return attachProductDetails(poRow, qtyMaps, grnLineConfigs);
 }
 
-/** New serial receipts allowed while PO is approved (first units) or in progress — not once fully closed. */
+/** Receive page opens after manager approval (incl. vendor accepted / in progress). */
+function receiveViewAllowed(poRow) {
+  const st = String(poRow?.status || '').toLowerCase();
+  return ['approved', 'vendor_accepted', 'sent', 'processing', 'completed'].includes(st);
+}
+
+/** New serial receipts while PO is approved, vendor-accepted, or in progress. */
 function receiveMutationAllowed(poRow) {
   const st = String(poRow?.status || '').toLowerCase();
-  return st === 'approved' || st === 'processing';
+  return ['approved', 'vendor_accepted', 'sent', 'processing'].includes(st);
+}
+
+async function syncPoBillFromGrn(poId, billName, billFiles = []) {
+  if (!billName && (!billFiles || !billFiles.length)) return;
+  const filesJson = JSON.stringify(Array.isArray(billFiles) ? billFiles : []);
+  await pool.query(
+    `UPDATE vendor_purchase_orders
+     SET bill_name = COALESCE(bill_name, $1),
+         bill_files = CASE
+           WHEN bill_files IS NULL OR bill_files = '[]'::jsonb THEN $2::jsonb
+           ELSE bill_files
+         END,
+         updated_at = NOW()
+     WHERE po_id = $3 AND deleted_at IS NULL`,
+    [billName || null, filesJson, poId]
+  );
 }
 
 async function computeReceiveTotalsForPoId(poId) {
@@ -159,7 +298,7 @@ async function syncPoReceiveProgressStatus(poId, actorUserId) {
   );
   if (!cur.rows.length) return;
   const st = String(cur.rows[0].status || '').toLowerCase();
-  if (!['approved', 'processing'].includes(st)) return;
+  if (!['approved', 'vendor_accepted', 'sent', 'processing'].includes(st)) return;
 
   const totals = await computeReceiveTotalsForPoId(poId);
   if (!totals || totals.orderQty <= 0) return;
@@ -181,6 +320,25 @@ async function syncPoReceiveProgressStatus(poId, actorUserId) {
       entityId: poId,
       action: 'status_auto_receive_progress',
       payload: { from: st, to: next }
+    });
+    const action = next === 'completed' ? 'grn_complete_received' : 'grn_partial_received';
+    await safeLogPurchaseOrderActivity({
+      poId,
+      activityType: ACTIVITY_TYPES.GRN,
+      action,
+      description: next === 'completed'
+        ? 'All ordered units have been received for this Purchase Order.'
+        : 'Partial goods receipt recorded against this Purchase Order.',
+      metadata: { from_status: st, to_status: next, received_qty: totals.receivedQty, order_qty: totals.orderQty },
+      user: actorUserId ? { user_id: actorUserId } : null,
+    });
+    await safeLogPurchaseOrderActivity({
+      poId,
+      activityType: ACTIVITY_TYPES.PURCHASE_ORDER,
+      action: 'status_changed',
+      description: `Purchase Order status changed from ${st} to ${next}.`,
+      metadata: { from: st, to: next },
+      user: actorUserId ? { user_id: actorUserId } : null,
     });
   }
 }
@@ -214,12 +372,12 @@ async function getProductReceivedContext(req, res) {
     return res.status(403).json({
       success: false,
       message:
-        'Open receiving after approving the PO: upload a bill on the Purchase orders list, then choose Approve.'
+        'Goods receiving opens after manager approval. Approve the PO first, then use the receive (eye) action.'
     });
   }
 
   const qtyMaps = await buildReceivedQtyMapsForPoIds([poId]);
-  const enriched = attachProductDetails(row, qtyMaps);
+  const enriched = await attachProductDetailsWithGrn(pool, row, qtyMaps);
   const lines = enriched.product_details || [];
 
   const grnsR = await pool.query(
@@ -323,12 +481,13 @@ async function receiveProductSerial(req, res) {
   }
 
   const pd = line.product_detail_id ?? line.product_id ?? line.pro_id ?? line.id;
-  const extra = { line_index: lineIndex };
+  const extra = { line_index: lineIndex, ...buildConfigExtraFromLine(line) };
   if (pd != null && String(pd).trim() !== '') extra.product_detail_id = String(pd);
 
   const client = await pool.connect();
   let finalGrnId;
   let serialId;
+  let grnWasNew = false;
   try {
     await client.query('BEGIN');
 
@@ -354,6 +513,7 @@ async function receiveProductSerial(req, res) {
           [poId]
         );
         finalGrnId = insG.rows[0].grn_id;
+        grnWasNew = true;
       }
     }
 
@@ -363,6 +523,12 @@ async function receiveProductSerial(req, res) {
       [poId, finalGrnId, serial_number, JSON.stringify(extra)]
     );
     serialId = insS.rows[0].serial_id;
+    await freezeAcceptedReceiveConfig(client, {
+      serialId,
+      grnId: finalGrnId,
+      productDetailId: pd,
+      config: buildConfigExtraFromLine(line),
+    });
 
     await client.query('COMMIT');
   } catch (e) {
@@ -388,6 +554,18 @@ async function receiveProductSerial(req, res) {
     action: 'receive_on_po_line',
     payload: { po_id: poId, grn_id: finalGrnId, line_index: lineIndex }
   });
+
+  try {
+    await logGrnReceive({
+      ttsplId: serial_number,
+      vendorSerialId: serialId,
+      serialNumber: serial_number,
+      poLabel: po.purchase_order_number || String(po.po_id),
+      actorUserId: req.user?.user_id
+    });
+  } catch (auditErr) {
+    console.error('GRN audit log failed (single receive):', auditErr);
+  }
 
   await syncPoReceiveProgressStatus(poId, req.user?.user_id);
 
@@ -415,6 +593,17 @@ async function receiveProductSerial(req, res) {
 
   const qtyMaps2 = await buildReceivedQtyMapsForPoIds([poId]);
   const lines2 = enrichLineItemsWithReceived(parseLineItemsJson(po.line_items), qtyMaps2.get(poId));
+
+  await logReceiveActivities({
+    poId,
+    user: req.user,
+    grnId: finalGrnId,
+    grnWasNew,
+    unitCount: 1,
+    ttsplCodes: [],
+    ticketCount: ticketResult?.ok ? 1 : 0,
+    poNumber: po.purchase_order_number,
+  });
 
   res.status(201).json({
     success: true,
@@ -512,6 +701,7 @@ async function receivePoLineBulk(req, res) {
 
   const client = await pool.connect();
   let finalGrnId;
+  let grnWasNew = false;
   const createdRows = [];
 
   try {
@@ -552,6 +742,7 @@ async function receivePoLineBulk(req, res) {
           [poId]
         );
         finalGrnId = insG.rows[0].grn_id;
+        grnWasNew = true;
       }
     }
 
@@ -565,6 +756,15 @@ async function receivePoLineBulk(req, res) {
       [billStatus, billName, finalGrnId]
     );
 
+    if (billStatus === 'received' && billName) {
+      await client.query(
+        `UPDATE vendor_purchase_orders
+         SET bill_name = COALESCE(bill_name, $1), updated_at = NOW()
+         WHERE po_id = $2 AND deleted_at IS NULL`,
+        [billName, poId]
+      );
+    }
+
     const assetCodes = await allocateTtsplCodes(client, quantity);
 
     for (let i = 0; i < quantity; i += 1) {
@@ -573,7 +773,8 @@ async function receivePoLineBulk(req, res) {
       const extra = {
         line_index: lineIndex,
         rental_start_date,
-        unique_product_serial: inventory_asset_code
+        unique_product_serial: inventory_asset_code,
+        ...buildConfigExtraFromLine(line)
       };
       if (pd != null && String(pd).trim() !== '') extra.product_detail_id = String(pd);
 
@@ -582,8 +783,15 @@ async function receivePoLineBulk(req, res) {
          VALUES ($1,$2,$3,$4,$5::date,'pending',$6::jsonb) RETURNING serial_id`,
         [poId, finalGrnId, serial_number, inventory_asset_code, rental_start_date, JSON.stringify(extra)]
       );
+      const serialId = insS.rows[0].serial_id;
+      await freezeAcceptedReceiveConfig(client, {
+        serialId,
+        grnId: finalGrnId,
+        productDetailId: pd,
+        config: buildConfigExtraFromLine(line),
+      });
       createdRows.push({
-        serial_id: insS.rows[0].serial_id,
+        serial_id: serialId,
         serial_number,
         inventory_asset_code
       });
@@ -621,6 +829,21 @@ async function receivePoLineBulk(req, res) {
     }
   });
 
+  const poLabel = po.purchase_order_number || String(po.po_id);
+  for (const row of createdRows) {
+    try {
+      await logGrnReceive({
+        ttsplId: row.inventory_asset_code || row.serial_number,
+        vendorSerialId: row.serial_id,
+        serialNumber: row.serial_number,
+        poLabel,
+        actorUserId: req.user?.user_id
+      });
+    } catch (auditErr) {
+      console.error('GRN audit log failed (bulk receive):', row.serial_number, auditErr);
+    }
+  }
+
   await syncPoReceiveProgressStatus(poId, req.user?.user_id);
 
   const ticketResults = [];
@@ -645,6 +868,18 @@ async function receivePoLineBulk(req, res) {
   const linesAfter = enrichLineItemsWithReceived(parseLineItemsJson(po.line_items), qtyMapsAfter.get(poId));
 
   const ticketsCreated = ticketResults.filter((t) => t.ok).length;
+
+  await logReceiveActivities({
+    poId,
+    user: req.user,
+    grnId: finalGrnId,
+    grnWasNew,
+    unitCount: quantity,
+    ttsplCodes: createdRows.map((row) => row.inventory_asset_code).filter(Boolean),
+    ticketCount: ticketsCreated,
+    poNumber: po.purchase_order_number,
+  });
+
   res.status(201).json({
     success: true,
     message:
@@ -657,6 +892,287 @@ async function receivePoLineBulk(req, res) {
       created: createdRows,
       lines: linesAfter,
       tickets: ticketResults
+    }
+  });
+}
+
+/** Single-unit receive (sequential GRN wizard) — one serial + TTSPL + ticket per call */
+const receivePoLineUnitValidators = [
+  param('poId').isInt().toInt(),
+  body('line_index').isInt({ min: 0 }).toInt(),
+  body('rental_start_date')
+    .notEmpty()
+    .matches(/^\d{4}-\d{2}-\d{2}$/)
+    .withMessage('rental_start_date must be YYYY-MM-DD'),
+  body('serial_number').trim().notEmpty(),
+  body('grn_id').optional({ nullable: true }).isInt().toInt(),
+  body('bill_status').optional().isIn(['pending', 'received']),
+  body('bill_name').optional({ nullable: true }).isString().trim().isLength({ max: 255 }),
+  body('apply_bill_settings').optional().isBoolean().toBoolean(),
+  body('capture_token').optional({ nullable: true }).isUUID(),
+  body('physical_damage_remark').optional({ nullable: true }).isString().trim().isLength({ max: 2000 }),
+];
+
+async function receivePoLineUnit(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  const poId = Number(req.params.poId);
+  const lineIndex = Number(req.body.line_index);
+  const rental_start_date = String(req.body.rental_start_date).trim();
+  const serial_number = String(req.body.serial_number || '').trim().toUpperCase();
+  const applyBill = req.body.apply_bill_settings === true || req.body.apply_bill_settings === 'true';
+  const captureToken = req.body.capture_token || null;
+  const physicalDamageRemark = String(req.body.physical_damage_remark || '').trim();
+
+  let grnId =
+    req.body.grn_id === '' || req.body.grn_id === undefined || req.body.grn_id === null
+      ? null
+      : Number(req.body.grn_id);
+
+  const r = await pool.query(`SELECT * FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL`, [
+    poId
+  ]);
+  if (!r.rows.length) return res.status(404).json({ success: false, message: 'Not found' });
+  const po = r.rows[0];
+  if (!receiveMutationAllowed(po)) {
+    const stPo = String(po.status || '').toLowerCase();
+    if (stPo === 'completed') {
+      return res.status(403).json({
+        success: false,
+        message: 'This purchase order is fully received; receipts are closed.'
+      });
+    }
+    return res.status(403).json({
+      success: false,
+      message:
+        'Receiving opens only once the PO is approved (invoice uploaded and Approved on the purchase order list).'
+    });
+  }
+
+  const qtyMapsBefore = await buildReceivedQtyMapsForPoIds([poId]);
+  const linesBefore = enrichLineItemsWithReceived(parseLineItemsJson(po.line_items), qtyMapsBefore.get(poId));
+  const line = linesBefore[lineIndex];
+  if (!line) {
+    return res.status(400).json({ success: false, message: 'Invalid line_index for this PO' });
+  }
+
+  const ordered = Number(line.quantity) || 0;
+  const currentReceived = Number(line.receivedQty) || 0;
+  if (currentReceived + 1 > ordered) {
+    return res.status(400).json({
+      success: false,
+      message: 'Cannot receive more units than ordered for this line.'
+    });
+  }
+
+  const pd = line.product_detail_id ?? line.product_id ?? line.pro_id ?? line.id;
+  const client = await pool.connect();
+  let finalGrnId;
+  let grnWasNew = false;
+  let createdRow = null;
+  let receiveConfig = buildConfigExtraFromLine(line);
+
+  try {
+    await client.query('BEGIN');
+
+    const dup = await client.query(
+      `SELECT serial_number FROM vendor_serial_numbers
+       WHERE deleted_at IS NULL AND LOWER(serial_number) = LOWER($1)`,
+      [serial_number]
+    );
+    if (dup.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: `Serial already exists in inventory: ${dup.rows[0].serial_number}`
+      });
+    }
+
+    if (grnId != null && Number.isFinite(grnId)) {
+      const g = await client.query(
+        `SELECT grn_id FROM vendor_goods_received_notes WHERE grn_id = $1 AND po_id = $2 AND deleted_at IS NULL`,
+        [grnId, poId]
+      );
+      if (!g.rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: 'Invalid GRN for this purchase order.' });
+      }
+      finalGrnId = grnId;
+    } else {
+      const last = await client.query(
+        `SELECT grn_id FROM vendor_goods_received_notes WHERE po_id = $1 AND deleted_at IS NULL ORDER BY grn_id DESC LIMIT 1`,
+        [poId]
+      );
+      if (last.rows.length) finalGrnId = last.rows[0].grn_id;
+      else {
+        const insG = await client.query(
+          `INSERT INTO vendor_goods_received_notes (po_id, meta) VALUES ($1, '{}'::jsonb) RETURNING grn_id`,
+          [poId]
+        );
+        finalGrnId = insG.rows[0].grn_id;
+        grnWasNew = true;
+      }
+    }
+
+    if (applyBill) {
+      const billStatus = String(req.body.bill_status || 'pending').toLowerCase() === 'received' ? 'received' : 'pending';
+      const billName = billStatus === 'received' ? String(req.body.bill_name || '').trim() || null : null;
+
+      await client.query(
+        `UPDATE vendor_goods_received_notes
+         SET bill_status = $1, bill_name = COALESCE($2, bill_name), updated_at = NOW()
+         WHERE grn_id = $3`,
+        [billStatus, billName, finalGrnId]
+      );
+
+      if (billStatus === 'received' && billName) {
+        await client.query(
+          `UPDATE vendor_purchase_orders
+           SET bill_name = COALESCE(bill_name, $1), updated_at = NOW()
+           WHERE po_id = $2 AND deleted_at IS NULL`,
+          [billName, poId]
+        );
+      }
+    }
+
+    const assetCodes = await allocateTtsplCodes(client, 1);
+    const inventory_asset_code = assetCodes[0];
+    receiveConfig =
+      (await resolveReceiveConfig(client, {
+        poId,
+        line,
+        captureToken,
+        productDetailId: pd
+      })) || buildConfigExtraFromLine(line);
+    const extra = mergeConfigIntoExtra(
+      {
+        line_index: lineIndex,
+        rental_start_date,
+        unique_product_serial: inventory_asset_code
+      },
+      receiveConfig
+    );
+    if (pd != null && String(pd).trim() !== '') extra.product_detail_id = String(pd);
+    if (physicalDamageRemark) extra.physical_damage_remark = physicalDamageRemark;
+
+    const insS = await client.query(
+      `INSERT INTO vendor_serial_numbers (po_id, grn_id, serial_number, inventory_asset_code, rental_start_date, qc_status, extra)
+       VALUES ($1,$2,$3,$4,$5::date,'pending',$6::jsonb) RETURNING serial_id`,
+      [poId, finalGrnId, serial_number, inventory_asset_code, rental_start_date, JSON.stringify(extra)]
+    );
+    createdRow = {
+      serial_id: insS.rows[0].serial_id,
+      serial_number,
+      inventory_asset_code
+    };
+    await freezeAcceptedReceiveConfig(client, {
+      serialId: createdRow.serial_id,
+      grnId: finalGrnId,
+      productDetailId: pd,
+      config: receiveConfig,
+    });
+
+    await client.query('COMMIT');
+  } catch (e) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (_) {
+      /* ignore */
+    }
+    if (String(e.code) === '23505') {
+      return res.status(409).json({ success: false, message: 'Serial number or inventory code already exists' });
+    }
+    console.error(e);
+    return res.status(500).json({ success: false, message: e.message || 'Receive failed' });
+  } finally {
+    client.release();
+  }
+
+  if (captureToken) {
+    try {
+      await markTokenUsed(captureToken);
+    } catch (tokenErr) {
+      console.warn('markTokenUsed failed:', tokenErr.message);
+    }
+  }
+
+  await logVendorAudit({
+    actorUserId: req.user?.user_id,
+    vendorId: po.vendor_id || null,
+    entityType: 'serial_number',
+    entityId: String(createdRow.serial_id),
+    action: 'receive_unit_on_po_line',
+    payload: {
+      po_id: poId,
+      grn_id: finalGrnId,
+      line_index: lineIndex,
+      rental_start_date,
+      inventory_asset_code: createdRow.inventory_asset_code
+    }
+  });
+
+  try {
+    await logGrnReceive({
+      ttsplId: createdRow.inventory_asset_code || createdRow.serial_number,
+      vendorSerialId: createdRow.serial_id,
+      serialNumber: createdRow.serial_number,
+      poLabel: po.purchase_order_number || String(po.po_id),
+      actorUserId: req.user?.user_id
+    });
+  } catch (auditErr) {
+    console.error('GRN audit log failed (unit receive):', auditErr);
+  }
+
+  await syncPoReceiveProgressStatus(poId, req.user?.user_id);
+
+  let ticketResult = null;
+  try {
+    const receiveLine = { ...line, ...receiveConfig };
+    const poLabel = po.purchase_order_number || String(po.po_id);
+    const initialCondition = physicalDamageRemark
+      ? `GRN receive — PO ${poLabel}. Physical damage: ${physicalDamageRemark}`
+      : undefined;
+    ticketResult = await createTicketFromGrnReceive(pool, {
+      serialId: createdRow.serial_id,
+      serialNumber: createdRow.serial_number,
+      inventoryAssetCode: createdRow.inventory_asset_code,
+      po,
+      line: receiveLine,
+      actorUserId: req.user?.user_id,
+      initialConditionOverride: initialCondition,
+      grnId: finalGrnId,
+    });
+  } catch (ticketErr) {
+    console.error('GRN ticket creation failed (unit receive):', ticketErr);
+    ticketResult = { ok: false, error: ticketErr.message };
+  }
+
+  const qtyMapsAfter = await buildReceivedQtyMapsForPoIds([poId]);
+  const linesAfter = enrichLineItemsWithReceived(parseLineItemsJson(po.line_items), qtyMapsAfter.get(poId));
+
+  await logReceiveActivities({
+    poId,
+    user: req.user,
+    grnId: finalGrnId,
+    grnWasNew,
+    unitCount: 1,
+    ttsplCodes: createdRow?.inventory_asset_code ? [createdRow.inventory_asset_code] : [],
+    ticketCount: ticketResult?.ok ? 1 : 0,
+    poNumber: po.purchase_order_number,
+  });
+
+  res.status(201).json({
+    success: true,
+    message: ticketResult?.ok
+      ? `Unit received as ${createdRow.inventory_asset_code}. Repair ticket created for Floor Manager.`
+      : `Unit received as ${createdRow.inventory_asset_code}.`,
+    data: {
+      grn_id: finalGrnId,
+      rental_start_date,
+      created: createdRow,
+      lines: linesAfter,
+      ticket: ticketResult
     }
   });
 }
@@ -688,7 +1204,7 @@ async function getGeneratedGrnOverview(req, res) {
 
   const row = r.rows[0];
   const qtyMaps = await buildReceivedQtyMapsForPoIds([poId]);
-  const enriched = attachProductDetails(row, qtyMaps);
+  const enriched = await attachProductDetailsWithGrn(pool, row, qtyMaps);
   const lines = enriched.product_details || [];
 
   let orderQty = 0;
@@ -762,6 +1278,8 @@ async function getGrnReceivedProducts(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
 
+  await ensureLockColumns(pool);
+
   const poId = Number(req.params.poId);
   const grnId = Number(req.params.grnId);
 
@@ -774,13 +1292,17 @@ async function getGrnReceivedProducts(req, res) {
   }
 
   const poR = await pool.query(
-    `SELECT line_items FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL`,
+    `SELECT line_items, product_details_legacy_ids
+       FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL`,
     [poId]
   );
   const lineItems = parseLineItemsJson(poR.rows[0]?.line_items);
+  const legacyIds = parseLineItemsJson(poR.rows[0]?.product_details_legacy_ids);
 
   const serials = await pool.query(
-    `SELECT serial_id, serial_number, inventory_asset_code, rental_start_date, extra, created_at FROM vendor_serial_numbers
+    `SELECT serial_id, serial_number, inventory_asset_code, rental_start_date, extra,
+            grn_received_config, config_locked_at, created_at
+       FROM vendor_serial_numbers
      WHERE po_id = $1 AND grn_id = $2 AND deleted_at IS NULL
      ORDER BY serial_id`,
     [poId, grnId]
@@ -789,8 +1311,12 @@ async function getGrnReceivedProducts(req, res) {
   const grn = g.rows[0];
   const items = serials.rows.map((s) => {
     const ex = s.extra && typeof s.extra === 'object' && s.extra !== null && !Array.isArray(s.extra) ? s.extra : {};
-    const li = Number(ex.line_index);
-    const line = Number.isFinite(li) && li >= 0 && lineItems[li] ? lineItems[li] : {};
+    const line = resolveLineItem(lineItems, ex, { legacyProductIds: legacyIds }) || {};
+    // Locked GRN snapshot first; fall back to original PO line — never live editable extra
+    const config = {
+      ...buildConfigExtraFromLine(line),
+      ...(configFromPlainObject(s.grn_received_config) || {}),
+    };
     const rep = ex.is_replaced === true || ex.is_replaced === 1 || String(ex.is_replaced) === '1';
     const repa = ex.is_repaired === true || ex.is_repaired === 1 || String(ex.is_repaired) === '1';
     return {
@@ -802,14 +1328,16 @@ async function getGrnReceivedProducts(req, res) {
         ex.unique_product_serial ?? ex.unique_number ?? s.inventory_asset_code ?? null,
       is_replaced: rep ? 1 : 0,
       is_repaired: repa ? 1 : 0,
-      brand: line.brand ?? null,
-      model: line.model ?? null,
-      processor: line.processor ?? null,
-      generation: line.generation ?? null,
-      ram: line.ram ?? null,
-      storage: line.storage ?? null,
-      gpu: line.gpu ?? null,
-      screen_size: line.screen_size ?? null,
+      brand: config.brand ?? null,
+      model: config.model ?? null,
+      processor: config.processor ?? null,
+      generation: config.generation ?? null,
+      ram: config.ram ?? null,
+      storage: config.storage ?? null,
+      gpu: config.gpu ?? null,
+      screen_size: config.screen_size ?? null,
+      physical_damage_remark: ex.physical_damage_remark ?? null,
+      config_locked: !!s.config_locked_at,
       grn_date: grn.updated_at ?? grn.created_at
     };
   });
@@ -919,103 +1447,33 @@ async function list(req, res) {
 }
 
 async function nextNumber(req, res) {
-  const num = await nextPurchaseOrderNumber();
+  const num = await peekNextPurchaseOrderNumber();
   res.json({ success: true, purchase_order_number: num });
 }
 
-/** Dropdown source for Laravel-style PO asset rows (`laptop_catalog` + inventory fallbacks). */
+/** Dropdown source for PO asset rows — Settings → Asset Configuration (DB). */
 async function fetchPoAssetCatalogOptions() {
-  const out = {
-    brands: [],
-    models: [],
-    processors: [],
-    generations: [],
-    rams: [],
-    storages: [],
-    gpus: [],
-    screen_sizes: []
+  const { getAssetCatalogForApi } = require('../../services/assetConfigurationService');
+  const cat = await getAssetCatalogForApi({ includeLegacyRows: true });
+  return {
+    brands: cat.brands,
+    models: cat.models_flat,
+    models_by_brand: cat.models_by_brand,
+    processors: cat.processors,
+    generations: cat.generations_flat,
+    generations_by_processor: cat.generations_by_processor,
+    rams: cat.rams,
+    storages: cat.storages,
+    gpus: cat.gpus,
+    screen_sizes: cat.screen_sizes,
+    from_asset_config: cat.from_asset_config,
   };
-  try {
-    const [brands, models, processors, generations, rams, storages] = await Promise.all([
-      pool.query(
-        `SELECT DISTINCT brand FROM laptop_catalog
-         WHERE COALESCE(active, TRUE) AND brand IS NOT NULL AND TRIM(brand) != ''
-         ORDER BY brand LIMIT 500`
-      ),
-      pool.query(
-        `SELECT DISTINCT model FROM laptop_catalog
-         WHERE COALESCE(active, TRUE) AND model IS NOT NULL AND TRIM(model) != ''
-         ORDER BY model LIMIT 2000`
-      ),
-      pool.query(
-        `SELECT DISTINCT processor FROM laptop_catalog
-         WHERE COALESCE(active, TRUE) AND processor IS NOT NULL AND TRIM(processor) != ''
-         ORDER BY processor LIMIT 500`
-      ),
-      pool.query(
-        `SELECT DISTINCT generation FROM laptop_catalog
-         WHERE COALESCE(active, TRUE) AND generation IS NOT NULL AND TRIM(generation) != ''
-         ORDER BY generation LIMIT 500`
-      ),
-      pool.query(
-        `SELECT DISTINCT ram FROM laptop_catalog
-         WHERE COALESCE(active, TRUE) AND ram IS NOT NULL AND TRIM(ram) != ''
-         ORDER BY ram LIMIT 200`
-      ),
-      pool.query(
-        `SELECT DISTINCT storage FROM laptop_catalog
-         WHERE COALESCE(active, TRUE) AND storage IS NOT NULL AND TRIM(storage) != ''
-         ORDER BY storage LIMIT 400`
-      )
-    ]);
-    out.brands = brands.rows.map((r) => r.brand);
-    out.models = models.rows.map((r) => r.model);
-    out.processors = processors.rows.map((r) => r.processor);
-    out.generations = generations.rows.map((r) => r.generation);
-    out.rams = rams.rows.map((r) => r.ram);
-    out.storages = storages.rows.map((r) => r.storage);
-  } catch (e) {
-    console.warn('[formMeta] laptop_catalog unavailable:', e.message || e);
-  }
-
-  try {
-    const gpu = await pool.query(
-      `SELECT DISTINCT gpu FROM inventory
-       WHERE gpu IS NOT NULL AND TRIM(gpu) != ''
-       ORDER BY gpu LIMIT 300`
-    );
-    out.gpus = gpu.rows.map((r) => r.gpu);
-    const ss = await pool.query(
-      `SELECT DISTINCT screen_size FROM inventory
-       WHERE screen_size IS NOT NULL AND TRIM(screen_size) != ''
-       ORDER BY screen_size LIMIT 120`
-    );
-    out.screen_sizes = ss.rows.map((r) => r.screen_size);
-  } catch (e) {
-    console.warn('[formMeta] inventory spec columns unavailable:', e.message || e);
-  }
-
-  if (!out.screen_sizes.length) {
-    out.screen_sizes = ['11"', '11.6"', '12"', '13"', '14"', '14-inch', '15"', '15.6"', '16"', '17"'];
-  }
-  if (!out.gpus.length) {
-    out.gpus = [
-      'Intel UHD Graphics',
-      'Intel Iris Xe',
-      'Integrated',
-      'NVIDIA GeForce',
-      'NVIDIA RTX',
-      'AMD Radeon'
-    ];
-  }
-
-  return out;
 }
 
 /** Next PO number + approved vendors for create form (Laravel PO form parity) */
 async function formMeta(req, res) {
   try {
-    const purchase_order_number = await nextPurchaseOrderNumber();
+    const purchase_order_number = await peekNextPurchaseOrderNumber();
     const vendors = await pool.query(
       `SELECT vendor_id, first_name, business_name, email, phone, address, state
        FROM vendors
@@ -1075,7 +1533,7 @@ async function getOne(req, res) {
   if (!r.rows.length) return res.status(404).json({ success: false, message: 'Not found' });
 
   const qtyMaps = await buildReceivedQtyMapsForPoIds([r.rows[0].po_id]);
-  const enriched = attachProductDetails(r.rows[0], qtyMaps);
+  const enriched = await attachProductDetailsWithGrn(pool, r.rows[0], qtyMaps);
 
   res.json({ success: true, data: enriched });
 }
@@ -1123,18 +1581,10 @@ async function create(req, res) {
   const sub_total_amount = body.sub_total_amount ?? lineSubtotalFromRows(rawLines);
   const total_amount = getTotalAmountOfPurchaseOrder(sub_total_amount, !!is_same_state);
 
-  const purchase_order_number =
+  const preferredPoNumber =
     body.purchase_order_number && String(body.purchase_order_number).trim()
       ? String(body.purchase_order_number).trim()
-      : await nextPurchaseOrderNumber();
-
-  const dup = await pool.query(
-    `SELECT 1 FROM vendor_purchase_orders WHERE purchase_order_number = $1 AND deleted_at IS NULL`,
-    [purchase_order_number]
-  );
-  if (dup.rows.length) {
-    return res.status(409).json({ success: false, message: 'PO number already exists' });
-  }
+      : null;
 
   const assets_details =
     body.assets_details != null ? body.assets_details : buildAssetsDetailsFromLines(rawLines);
@@ -1142,6 +1592,8 @@ async function create(req, res) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+
+    const purchase_order_number = await allocatePurchaseOrderNumber(client, preferredPoNumber);
 
     const { insertedIds, enrichedLines } = await insertProductDetailsForPo(
       client,
@@ -1200,6 +1652,23 @@ async function create(req, res) {
       message: 'Purchase Order saved successfully',
       data: { ...ins.rows[0], po_id: poId, line_items: enrichedLines, product_details: enrichedLines }
     });
+
+    await safeLogPurchaseOrderActivity({
+      poId,
+      activityType: ACTIVITY_TYPES.PURCHASE_ORDER,
+      action: 'created',
+      description: `${req.user?.name || 'User'} created Purchase Order ${purchase_order_number}.`,
+      metadata: { purchase_order_number, vendor_id: body.vendor_id, line_count: enrichedLines.length },
+      user: req.user,
+    });
+    await safeLogPurchaseOrderActivity({
+      poId,
+      activityType: ACTIVITY_TYPES.VENDOR,
+      action: 'vendor_selected',
+      description: `Vendor selected for Purchase Order ${purchase_order_number}.`,
+      metadata: { vendor_id: body.vendor_id },
+      user: req.user,
+    });
   } catch (e) {
     try {
       await client.query('ROLLBACK');
@@ -1233,6 +1702,7 @@ async function update(req, res) {
   const id = Number(req.params.id);
   const cur = await pool.query(`SELECT * FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL`, [id]);
   if (!cur.rows.length) return res.status(404).json({ success: false, message: 'Not found' });
+  const oldPo = cur.rows[0];
 
   const body = req.body;
   const line_items = Array.isArray(body.line_items) ? body.line_items : JSON.parse(JSON.stringify(cur.rows[0].line_items || []));
@@ -1298,6 +1768,43 @@ async function update(req, res) {
     });
 
     res.json({ success: true, data: upd.rows[0] });
+
+    await safeLogPurchaseOrderActivity({
+      poId: id,
+      activityType: ACTIVITY_TYPES.PURCHASE_ORDER,
+      action: 'updated',
+      description: `${req.user?.name || 'User'} updated Purchase Order ${upd.rows[0].purchase_order_number}.`,
+      user: req.user,
+    });
+    if (body.vendor_id != null && Number(body.vendor_id) !== Number(oldPo.vendor_id)) {
+      await safeLogPurchaseOrderActivity({
+        poId: id,
+        activityType: ACTIVITY_TYPES.VENDOR,
+        action: 'vendor_changed',
+        description: `Vendor changed on Purchase Order ${upd.rows[0].purchase_order_number}.`,
+        metadata: { from_vendor_id: oldPo.vendor_id, to_vendor_id: body.vendor_id },
+        user: req.user,
+      });
+    }
+    if (Number(total_amount) !== Number(oldPo.total_amount)) {
+      await safeLogPurchaseOrderActivity({
+        poId: id,
+        activityType: ACTIVITY_TYPES.ITEM,
+        action: 'total_amount_updated',
+        description: `Total amount updated from ₹${oldPo.total_amount} to ₹${total_amount}.`,
+        metadata: { old_total: oldPo.total_amount, new_total: total_amount },
+        user: req.user,
+      });
+    }
+    if (body.line_items != null) {
+      await safeLogPurchaseOrderActivity({
+        poId: id,
+        activityType: ACTIVITY_TYPES.ITEM,
+        action: 'item_updated',
+        description: `Line items updated on Purchase Order ${upd.rows[0].purchase_order_number}.`,
+        user: req.user,
+      });
+    }
   } catch (e) {
     console.error(e);
     res.status(500).json({ success: false, message: e.message });
@@ -1335,6 +1842,14 @@ async function remove(req, res) {
     payload: {}
   });
   res.json({ success: true, message: 'Deleted' });
+
+  await safeLogPurchaseOrderActivity({
+    poId: Number(req.params.id),
+    activityType: ACTIVITY_TYPES.PURCHASE_ORDER,
+    action: 'cancelled',
+    description: `${req.user?.name || 'User'} cancelled Purchase Order ${r.rows[0].purchase_order_number}.`,
+    user: req.user,
+  });
 }
 
 const MANAGER_ROLES = new Set(['manager', 'admin', 'super_admin']);
@@ -1399,6 +1914,16 @@ async function updateStatus(req, res) {
        WHERE po_id = $2 AND deleted_at IS NULL`,
       [req.user?.user_id || null, id]
     );
+
+    try {
+      await sendPoPendingApprovalEmailToManagers({
+        po,
+        vendorName: po.vendor_business_name || po.vendor_first_name,
+        submitterName: req.user?.name || req.user?.email,
+      });
+    } catch (emailErr) {
+      console.error('PO pending-approval manager email failed:', emailErr);
+    }
   } else if (status === 'approved') {
     if (!isManagerUser(req.user)) {
       return res.status(403).json({ success: false, message: 'Only managers can approve purchase orders' });
@@ -1460,6 +1985,36 @@ async function updateStatus(req, res) {
     payload: { from: prev, to: status, rejection_reason: rejectionReason || null }
   });
 
+  const statusActionMap = {
+    pending_approval: 'status_changed',
+    approved: 'approved',
+    rejected: 'rejected',
+  };
+  const poAction = statusActionMap[status] || 'status_changed';
+  const statusDescriptions = {
+    pending_approval: `${req.user?.name || 'User'} submitted Purchase Order ${po.purchase_order_number} for approval.`,
+    approved: `${req.user?.name || 'User'} approved Purchase Order ${po.purchase_order_number}.`,
+    rejected: `${req.user?.name || 'User'} rejected Purchase Order ${po.purchase_order_number}.`,
+  };
+  await safeLogPurchaseOrderActivity({
+    poId: id,
+    activityType: ACTIVITY_TYPES.PURCHASE_ORDER,
+    action: poAction,
+    description: statusDescriptions[status] || `Purchase Order status changed from ${prev} to ${status}.`,
+    remarks: status === 'rejected' ? rejectionReason || null : null,
+    metadata: { from: prev, to: status },
+    user: req.user,
+  });
+  if (status === 'approved') {
+    await safeLogPurchaseOrderActivity({
+      poId: id,
+      activityType: ACTIVITY_TYPES.DOCUMENT,
+      action: 'pdf_generated',
+      description: `Purchase Order PDF generated for ${po.purchase_order_number}.`,
+      user: req.user,
+    });
+  }
+
   res.json({ success: true, message: 'Purchase order status updated!', data: { po_id: id, status } });
 }
 
@@ -1486,7 +2041,7 @@ function createGrnBillsUpload() {
         cb(null, `${Date.now()}_${safe}`);
       }
     }),
-    limits: { fileSize: 8 * 1024 * 1024 }
+    limits: multerLimits()
   });
 }
 
@@ -1529,6 +2084,8 @@ async function uploadGrnBill(req, res) {
       [bill_name, JSON.stringify(merged), grnId]
     );
 
+    await syncPoBillFromGrn(poId, bill_name, merged);
+
     res.json({
       success: true,
       message: 'GRN bill uploaded successfully',
@@ -1553,7 +2110,7 @@ function createBillsUpload() {
         cb(null, `${Date.now()}_${safe}`);
       }
     }),
-    limits: { fileSize: 25 * 1024 * 1024 }
+    limits: multerLimits()
   });
 }
 
@@ -1605,6 +2162,15 @@ async function uploadBills(req, res) {
       bill_name,
       bill_files: merged
     });
+
+    await safeLogPurchaseOrderActivity({
+      poId: id,
+      activityType: ACTIVITY_TYPES.ATTACHMENT,
+      action: 'invoice_uploaded',
+      description: `${req.user?.name || 'User'} uploaded invoice ${bill_name} (${files.length} file${files.length === 1 ? '' : 's'}).`,
+      metadata: { bill_name, files_count: files.length },
+      user: req.user,
+    });
   } catch (e) {
     console.error(e);
     res.status(500).json({ success: false, message: e.message || 'Upload failed' });
@@ -1622,6 +2188,8 @@ module.exports = {
   receiveProductSerial,
   receivePoLineBulkValidators,
   receivePoLineBulk,
+  receivePoLineUnitValidators,
+  receivePoLineUnit,
   generatedGrnValidators,
   getGeneratedGrnOverview,
   grnReceivedProductsValidators,
@@ -1640,5 +2208,54 @@ module.exports = {
   uploadBills,
   grnBillParamValidators,
   createGrnBillsUpload,
-  uploadGrnBill
+  uploadGrnBill,
+  listPurchaseOrderActivities: async (req, res) => {
+    try {
+      const poId = Number(req.params.poId || req.params.id);
+      const exists = await pool.query(
+        `SELECT po_id FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL`,
+        [poId]
+      );
+      if (!exists.rows.length) {
+        return res.status(404).json({ success: false, message: 'Purchase order not found' });
+      }
+      const page = parseInt(req.query.page, 10) || 1;
+      const limit = parseInt(req.query.limit, 10) || 50;
+      const data = await listPurchaseOrderActivities(poId, { page, limit });
+      res.json({ success: true, ...data });
+    } catch (error) {
+      console.error('listPurchaseOrderActivities:', error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  },
+  logPurchaseOrderDocumentActivity: async (req, res) => {
+    try {
+      const poId = Number(req.params.poId || req.params.id);
+      const exists = await pool.query(
+        `SELECT purchase_order_number FROM vendor_purchase_orders WHERE po_id = $1 AND deleted_at IS NULL`,
+        [poId]
+      );
+      if (!exists.rows.length) {
+        return res.status(404).json({ success: false, message: 'Purchase order not found' });
+      }
+      const action = String(req.body?.action || '').trim();
+      const allowed = new Set(['pdf_downloaded', 'printed', 'shared']);
+      if (!allowed.has(action)) {
+        return res.status(400).json({ success: false, message: 'Invalid document activity action' });
+      }
+      const poNumber = exists.rows[0].purchase_order_number;
+      const row = await safeLogPurchaseOrderActivity({
+        poId,
+        activityType: ACTIVITY_TYPES.DOCUMENT,
+        action,
+        description: `${req.user?.name || 'User'} ${action.replace(/_/g, ' ')} for Purchase Order ${poNumber}.`,
+        remarks: req.body?.remarks || null,
+        user: req.user,
+      });
+      res.status(201).json({ success: true, activity: row });
+    } catch (error) {
+      console.error('logPurchaseOrderDocumentActivity:', error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  },
 };

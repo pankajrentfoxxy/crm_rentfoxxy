@@ -1,16 +1,60 @@
 const pool = require('../config/db');
-const { pickNextAssigneeForTeamPool } = require('../services/qcRoundRobinService');
-const { syncWorkLogForTicketState } = require('../services/ticketWorkLogService');
-const { applyGrnVendorQcPassOnTicketComplete } = require('../services/grnTicketService');
+const { resolveQcAssignee, recordAssigneeForTeam, fetchOrderedMemberIds } = require('../services/qcRoundRobinService');
+const { syncWorkLogForTicketState, closeOpenWorkLogs, startWorkLog } = require('../services/ticketWorkLogService');
+const { markVendorSerialReadyForRent } = require('../services/grnTicketService');
+const { vacateWarehouseLocation } = require('../services/warehouseLocationService');
 const ttsplAuditService = require('../services/ttsplAuditService');
+const { logProductionHistory } = require('../services/ticketWorkflowHistoryService');
 const { sendHighlightedTicketAlert } = require('../services/highlightedTicketAlertService');
+const vendorBilling = require('./vendorBillingController');
 
 const PRIVILEGED_ROLES = ['admin', 'floor_manager', 'manager'];
-const QC_STAGES = ['QC1', 'QC2'];
+const STAGE_ROUTING_ROLES = ['admin', 'floor_manager', 'manager', 'warehouse'];
+const TECHNICIAN_ROLES = ['technician', 'team_member', 'team_lead'];
+const DIAGNOSIS_REPAIR_STAGES = ['Chip Level Repair', 'Body & Paint'];
+const QC_STAGES = ['QC1', 'QC2', 'Dispatch QC'];
+
+const MANAGER_ROUTING_FROM = {
+  Diagnosis: ['Assembly & Software', 'Chip Level Repair', 'Body & Paint'],
+};
+
+function isSuperAdmin(user) {
+  return user?.role === 'super_admin';
+}
+
+function canBypassTransitionRules(user, body) {
+  if (!user) return false;
+  if (isSuperAdmin(user)) return true;
+  return PRIVILEGED_ROLES.includes(user.role);
+}
+
+function isStageRouter(user) {
+  if (!user) return false;
+  if (isSuperAdmin(user)) return true;
+  return STAGE_ROUTING_ROLES.includes(user.role);
+}
+
+function isAssignedTechnician(user, ticket) {
+  const userId = Number(user?.user_id);
+  const assigneeId = Number(ticket?.assigned_user_id);
+  return userId > 0 && assigneeId > 0 && userId === assigneeId
+    && TECHNICIAN_ROLES.includes(user?.role);
+}
+
+async function canMarkDiagnosisRepair(req, ticket, targetStageName) {
+  if (isStageRouter(req.user)) return true;
+  if (!DIAGNOSIS_REPAIR_STAGES.includes(targetStageName)) return false;
+  if (!isAssignedTechnician(req.user, ticket)) return false;
+  const currentStage = await getStageById(pool, ticket.current_stage_id);
+  return currentStage?.stage_name === 'Diagnosis';
+}
 
 async function getStageByName(db, stageName) {
   const r = await db.query(
-    `SELECT * FROM stages WHERE stage_name = $1 LIMIT 1`,
+    `SELECT * FROM stages
+     WHERE stage_name = $1
+     ORDER BY (team_id IS NULL), stage_id ASC
+     LIMIT 1`,
     [stageName]
   );
   return r.rows[0] || null;
@@ -66,33 +110,13 @@ async function applyInventoryCompletion(db, ticket, userId) {
   );
 
   if (ticket.vendor_serial_id) {
-    await db.query(
-      `UPDATE vendor_serial_numbers
-       SET qc_status = 'passed', inventory_status = 'in_stock', updated_at = NOW()
-       WHERE serial_id = $1`,
-      [ticket.vendor_serial_id]
-    );
-    try {
-      await applyGrnVendorQcPassOnTicketComplete(db, ticket, userId);
-    } catch (e) {
-      console.error('GRN vendor QC pass on inventory move failed:', e);
-    }
-  }
-
-  if (ticket.ttspl_id) {
+    await markVendorSerialReadyForRent(db, ticket, userId);
+  } else if (ticket.ttspl_id) {
     await ttsplAuditService.logTtsplEvent({
       ttsplId: ticket.ttspl_id,
-      vendorSerialId: ticket.vendor_serial_id,
-      eventType: 'qc2_passed',
-      description: 'QC2 passed — ready for inventory',
-      actorUserId: userId,
-      db
-    });
-    await ttsplAuditService.logTtsplEvent({
-      ttsplId: ticket.ttspl_id,
-      vendorSerialId: ticket.vendor_serial_id,
+      vendorSerialId: null,
       eventType: 'inventory_ready',
-      description: 'Ticket completed — moved to Inventory',
+      description: 'Ticket completed — moved to Inventory (no vendor serial link)',
       actorUserId: userId,
       db
     });
@@ -127,9 +151,6 @@ exports.getTtsplHistory = async (req, res) => {
 };
 
 exports.getFloorDashboard = async (req, res) => {
-  if (!PRIVILEGED_ROLES.includes(req.user.role)) {
-    return res.status(403).json({ success: false, message: 'Floor dashboard requires manager or floor manager access' });
-  }
   try {
     const [byStage, priority, techLoad, avgDur, partsAlerts, recent, qcFail] = await Promise.all([
       pool.query(`
@@ -137,7 +158,7 @@ exports.getFloorDashboard = async (req, res) => {
                COUNT(t.ticket_id)::int AS count,
                COUNT(t.ticket_id) FILTER (WHERE t.highlighted = TRUE)::int AS highlighted_count
         FROM stages s
-        LEFT JOIN tickets t ON t.current_stage_id = s.stage_id AND t.status NOT IN ('completed', 'qc_failed_return_vendor')
+        LEFT JOIN tickets t ON t.current_stage_id = s.stage_id AND t.status NOT IN ('completed', 'qc_failed_return_vendor', 'cancelled')
         GROUP BY s.stage_name, s.stage_order
         ORDER BY s.stage_order
       `),
@@ -146,14 +167,14 @@ exports.getFloorDashboard = async (req, res) => {
           COUNT(*) FILTER (WHERE priority = 'normal')::int AS normal,
           COUNT(*) FILTER (WHERE priority = 'high')::int AS high,
           COUNT(*) FILTER (WHERE priority = 'sales_order')::int AS sales_order
-        FROM tickets WHERE status NOT IN ('completed', 'qc_failed_return_vendor')
+        FROM tickets WHERE status NOT IN ('completed', 'qc_failed_return_vendor', 'cancelled')
       `),
       pool.query(`
         SELECT u.user_id, u.name,
                COUNT(t.ticket_id)::int AS active_tickets
         FROM users u
         LEFT JOIN tickets t ON t.assigned_user_id = u.user_id
-          AND t.status NOT IN ('completed', 'qc_failed_return_vendor')
+          AND t.status NOT IN ('completed', 'qc_failed_return_vendor', 'cancelled')
         WHERE u.active = TRUE AND u.role IN ('technician', 'floor_manager', 'qc')
         GROUP BY u.user_id, u.name
         HAVING COUNT(t.ticket_id) > 0
@@ -212,7 +233,9 @@ exports.getFloorDashboard = async (req, res) => {
 
 exports.moveToStage = async (req, res) => {
   const { id } = req.params;
-  const { to_stage_name, reason, notes } = req.body;
+  const { to_stage_name, reason, notes, inventory_tag } = req.body;
+  // Optional manual assignee (e.g. Final Testing -> QC1 picker). Overrides round-robin.
+  const overrideAssignee = req.body.assigned_user_id ? Number(req.body.assigned_user_id) : null;
 
   if (!to_stage_name) {
     return res.status(400).json({ success: false, message: 'to_stage_name is required' });
@@ -230,7 +253,18 @@ exports.moveToStage = async (req, res) => {
     const ticket = ticketRes.rows[0];
     const currentStage = await getStageById(client, ticket.current_stage_id);
     const currentStageName = currentStage?.stage_name;
-    const nextStage = await getStageByName(client, to_stage_name);
+    // Production path: QC2 pass goes to Pending Inventory (not directly Inventory).
+    // Dispatch QC / sales_order_qc still go straight to Inventory.
+    let effectiveToStage = to_stage_name;
+    if (
+      currentStageName === 'QC2'
+      && to_stage_name === 'Inventory'
+      && ticket.ticket_type !== 'sales_order_qc'
+    ) {
+      effectiveToStage = 'Pending Inventory';
+    }
+
+    const nextStage = await getStageByName(client, effectiveToStage);
 
     if (!nextStage) {
       await client.query('ROLLBACK');
@@ -238,19 +272,51 @@ exports.moveToStage = async (req, res) => {
     }
 
     let conditionHint = null;
-    if (currentStageName === 'QC1' && to_stage_name === 'Assembly & Software') conditionHint = 'qc1_failed';
-    if (currentStageName === 'QC1' && to_stage_name === 'QC2') conditionHint = 'qc1_passed';
-    if (currentStageName === 'QC2' && to_stage_name === 'QC1') conditionHint = 'qc2_failed';
-    if (currentStageName === 'QC2' && to_stage_name === 'Inventory') conditionHint = 'qc2_passed';
+    if (currentStageName === 'QC1' && effectiveToStage === 'Assembly & Software') conditionHint = 'qc1_failed';
+    if (currentStageName === 'QC1' && effectiveToStage === 'QC2') conditionHint = 'qc1_passed';
+    if (currentStageName === 'QC1' && effectiveToStage === 'Dispatch QC') conditionHint = 'qc1_passed_so';
+    if (currentStageName === 'QC2' && effectiveToStage === 'QC1') conditionHint = 'qc2_failed';
+    if (currentStageName === 'QC2' && effectiveToStage === 'Pending Inventory') conditionHint = 'qc2_passed';
+    if (currentStageName === 'QC2' && effectiveToStage === 'Inventory') conditionHint = 'qc2_passed';
+    if (currentStageName === 'Pending Inventory' && effectiveToStage === 'Inventory') conditionHint = 'inventory_received';
+    if (currentStageName === 'Dispatch QC' && effectiveToStage === 'Inventory') conditionHint = 'dispatch_qc_passed';
+    if (currentStageName === 'Dispatch QC' && effectiveToStage === 'Assembly & Software') conditionHint = 'dispatch_qc_failed';
+    if (currentStageName === 'Dispatch QC' && effectiveToStage === 'Diagnosis') conditionHint = 'dispatch_qc_failed';
 
     const privileged = PRIVILEGED_ROLES.includes(req.user.role);
+    const bypassTransitionRules = canBypassTransitionRules(req.user, req.body);
     if (!privileged && req.user.role === 'qc' && !QC_STAGES.includes(currentStageName)) {
       await client.query('ROLLBACK');
       return res.status(403).json({ success: false, message: 'QC team can only act on QC stages' });
     }
 
-    const transition = await validateTransition(currentStageName, to_stage_name, conditionHint);
-    if (!transition.ok && !privileged) {
+    const managerRoutes = MANAGER_ROUTING_FROM[currentStageName];
+    if (managerRoutes?.includes(effectiveToStage) && !isStageRouter(req.user)) {
+      const techRepairOk = await canMarkDiagnosisRepair(req, ticket, effectiveToStage);
+      if (!techRepairOk) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({
+          success: false,
+          message: 'Only floor manager, warehouse, or admin can route tickets from this stage',
+        });
+      }
+    }
+
+    if (
+      currentStageName === 'Diagnosis'
+      && effectiveToStage === 'Assembly & Software'
+      && req.user.role !== 'super_admin'
+      && !PRIVILEGED_ROLES.includes(req.user.role)
+    ) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({
+        success: false,
+        message: 'Only admin or floor manager can move tickets from Diagnosis to Assembly & Software',
+      });
+    }
+
+    const transition = await validateTransition(currentStageName, effectiveToStage, conditionHint);
+    if (!transition.ok && !bypassTransitionRules) {
       await client.query('ROLLBACK');
       return res.status(400).json({ success: false, message: transition.message });
     }
@@ -262,10 +328,27 @@ exports.moveToStage = async (req, res) => {
     let highlightedReason = ticket.highlighted_reason;
     let qcFailCount = ticket.qc_fail_count || 0;
 
-    if (currentStageName === 'QC1' && to_stage_name === 'Assembly & Software') {
+    if (currentStageName === 'QC1' && effectiveToStage === 'Assembly & Software') {
       if (!reason?.trim()) {
         await client.query('ROLLBACK');
         return res.status(400).json({ success: false, message: 'QC1 fail reason is required' });
+      }
+      if (!overrideAssignee) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Hardware & Software technician is required when failing from QC1',
+        });
+      }
+      const hwMemberIds = nextStage.team_id
+        ? await fetchOrderedMemberIds(client, nextStage.team_id)
+        : [];
+      if (!hwMemberIds.includes(overrideAssignee)) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Selected user is not an active Hardware & Software team member',
+        });
       }
       qcFailCount += 1;
       updates.push(`qc_fail_count = $${pi++}`); params.push(qcFailCount);
@@ -285,7 +368,7 @@ exports.moveToStage = async (req, res) => {
       });
     }
 
-    if (currentStageName === 'QC1' && to_stage_name === 'QC2') {
+    if (currentStageName === 'QC1' && effectiveToStage === 'QC2') {
       updates.push(`qc1_passed_at = NOW()`);
       updates.push(`highlighted = FALSE`);
       updates.push(`highlighted_reason = NULL`);
@@ -293,10 +376,95 @@ exports.moveToStage = async (req, res) => {
       highlightedReason = null;
     }
 
-    if (currentStageName === 'QC2' && to_stage_name === 'QC1') {
+    if (currentStageName === 'QC1' && effectiveToStage === 'Dispatch QC') {
+      updates.push(`qc1_passed_at = NOW()`);
+      updates.push(`highlighted = FALSE`);
+      updates.push(`highlighted_reason = NULL`);
+      highlighted = false;
+      highlightedReason = null;
+    }
+
+    if (
+      currentStageName === 'Dispatch QC'
+      && (effectiveToStage === 'Assembly & Software' || effectiveToStage === 'Diagnosis')
+    ) {
+      if (!reason?.trim() || reason.trim().length < 5) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: 'Dispatch QC fail reason is required (min 5 characters)' });
+      }
+      qcFailCount += 1;
+      updates.push(`qc_fail_count = $${pi++}`); params.push(qcFailCount);
+      highlighted = true;
+      highlightedReason = `Dispatch QC failed: ${reason.trim()}`;
+      updates.push(`highlighted = TRUE`);
+      updates.push(`highlighted_reason = $${pi++}`); params.push(highlightedReason);
+      await ttsplAuditService.logTtsplEvent({
+        ttsplId: ticket.ttspl_id,
+        vendorSerialId: ticket.vendor_serial_id,
+        eventType: 'qc1_failed',
+        description: highlightedReason,
+        metadata: { reason: reason.trim(), ticket_id: ticket.ticket_id, dispatch_qc: true },
+        actorUserId: req.user.user_id,
+        actorName: req.user.name,
+        db: client
+      });
+
+      // Dispatch QC fail → detach from the Sales Order, recalc totals, mark the
+      // asset qc_failed (drops off Ready to Rent/Sell) and write SO/asset audits.
+      // Ticket stage move itself is handled below by this function.
+      const allocRes = await client.query(
+        `SELECT allocation_id FROM sales_order_serials
+          WHERE qc_ticket_id = $1 AND status <> 'removed'
+          ORDER BY allocation_id DESC LIMIT 1`,
+        [ticket.ticket_id]
+      );
+      if (allocRes.rows.length) {
+        const { applyDispatchQcFailure } = require('../services/dispatchQcCaptureService');
+        const paRes = await client.query(
+          `SELECT production_asset_id FROM production_assets
+            WHERE ticket_id = $1 OR (vendor_serial_id IS NOT NULL AND vendor_serial_id = $2)
+            ORDER BY production_asset_id DESC LIMIT 1`,
+          [ticket.ticket_id, ticket.vendor_serial_id || null]
+        );
+        await applyDispatchQcFailure(client, {
+          allocationId: allocRes.rows[0].allocation_id,
+          pa: paRes.rows[0] || null,
+          remarks: reason.trim(),
+          actorUserId: req.user.user_id,
+          actorName: req.user.name,
+          moveTicketToDiagnosis: false,
+        });
+      }
+    }
+
+    if (currentStageName === 'Dispatch QC' && effectiveToStage === 'Inventory') {
+      updates.push(`highlighted = FALSE`);
+      updates.push(`highlighted_reason = NULL`);
+      highlighted = false;
+      highlightedReason = null;
+    }
+
+    if (currentStageName === 'QC2' && effectiveToStage === 'QC1') {
       if (!reason?.trim()) {
         await client.query('ROLLBACK');
         return res.status(400).json({ success: false, message: 'QC2 fail reason is required' });
+      }
+      if (!overrideAssignee) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'QC1 technician is required when failing from QC2 to QC1',
+        });
+      }
+      const qc1MemberIds = nextStage.team_id
+        ? await fetchOrderedMemberIds(client, nextStage.team_id)
+        : [];
+      if (!qc1MemberIds.includes(overrideAssignee)) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Selected user is not an active QC1 team member',
+        });
       }
       updates.push(`qc2_failed_at = NOW()`);
       updates.push(`qc2_fail_reason = $${pi++}`); params.push(reason.trim());
@@ -315,21 +483,59 @@ exports.moveToStage = async (req, res) => {
       });
     }
 
-    if (to_stage_name === 'QC1' && ticket.qc1_failed_at && currentStageName !== 'QC2') {
+    if (effectiveToStage === 'QC1' && ticket.qc1_failed_at && currentStageName !== 'QC2') {
       highlighted = true;
       highlightedReason = `QC1 previously failed: ${ticket.qc1_fail_reason || 'see history'}`;
       updates.push(`highlighted = TRUE`);
       updates.push(`highlighted_reason = $${pi++}`); params.push(highlightedReason);
     }
 
-    if (to_stage_name === 'Assembly & Software' && req.user.role === 'technician') {
+    if (effectiveToStage === 'Assembly & Software' && ['technician', 'team_member', 'team_lead'].includes(req.user.role)) {
       updates.push(`highlighted = FALSE`);
       updates.push(`highlighted_reason = NULL`);
       highlighted = false;
     }
 
     let isCompleted = false;
-    if (to_stage_name === 'Inventory') {
+    if (effectiveToStage === 'Pending Inventory') {
+      // QC2 pass — hold for serial-verified receive; do NOT stock yet
+      updates.push(`qc2_passed_at = NOW()`);
+      updates.push(`highlighted = FALSE`);
+      updates.push(`highlighted_reason = NULL`);
+      highlighted = false;
+      try {
+        const paSvc = require('../services/productionAssetService');
+        let pa = await paSvc.getByTicket(client, ticket.ticket_id);
+        if (!pa && ticket.vendor_serial_id) pa = await paSvc.getByVendorSerial(client, ticket.vendor_serial_id);
+        if (pa) {
+          await paSvc.markPendingInventory(client, pa.production_asset_id, req.user.user_id, {
+            source: 'qc2',
+            inventory_tag,
+          });
+        } else {
+          await paSvc.createFromGrn(client, {
+            ticketId: ticket.ticket_id,
+            serialNumber: ticket.serial_number,
+            ttsplId: ticket.ttspl_id,
+            vendorSerialId: ticket.vendor_serial_id,
+            configSource: ticket,
+          }).then(async (created) => {
+            if (created?.production_asset_id) {
+              await paSvc.markPendingInventory(client, created.production_asset_id, req.user.user_id, {
+                source: 'qc2',
+                inventory_tag,
+              });
+            }
+          });
+        }
+      } catch (paErr) {
+        if (paErr.status === 400) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ success: false, message: paErr.message });
+        }
+        console.error('markPendingInventory failed:', paErr.message);
+      }
+    } else if (effectiveToStage === 'Inventory') {
       isCompleted = true;
       updates.push(`status = 'completed'`);
       updates.push(`completed_at = NOW()`);
@@ -348,6 +554,22 @@ exports.moveToStage = async (req, res) => {
            WHERE pre_dispatch_qc_ticket_id = $1`,
           [ticket.ticket_id]
         );
+        // SO-level allocation: mark this laptop QC-passed and keep it reserved
+        // (a passed pre-dispatch unit stays allocated to its order, not back to stock).
+        await client.query(
+          `UPDATE sales_order_serials SET qc_status = 'passed', updated_at = NOW()
+           WHERE qc_ticket_id = $1 AND status = 'attached'`,
+          [ticket.ticket_id]
+        );
+        if (ticket.vendor_serial_id) {
+          await client.query(
+            `UPDATE vendor_serial_numbers SET inventory_status = 'reserved', updated_at = NOW()
+             WHERE serial_id = $1
+               AND COALESCE(inventory_status,'in_stock') NOT IN ('rented','sold','on_demo','in_transit','returned')`,
+            [ticket.vendor_serial_id]
+          );
+          await vacateWarehouseLocation(client, ticket.vendor_serial_id);
+        }
       }
     } else {
       updates.push(`status = 'in_progress'`);
@@ -355,11 +577,64 @@ exports.moveToStage = async (req, res) => {
     }
 
     let assignedUserId = ticket.assigned_user_id;
-    if (to_stage_name === 'QC1' && currentStageName === 'Final Testing' && nextStage.team_id) {
-      try {
-        assignedUserId = await pickNextAssigneeForTeamPool(client, nextStage.team_id);
-      } catch {
-        assignedUserId = null;
+
+    const KEEP_SAME_TECH_TRANSITIONS = new Set([
+      'Diagnosis→Assembly & Software',
+      'Assembly & Software→Final Testing',
+      'Chip Level Repair→Assembly & Software',
+      'Body & Paint→Assembly & Software',
+      'QC1→Assembly & Software',
+      'Dispatch QC→Assembly & Software',
+    ]);
+
+    const ROUND_ROBIN_TRANSITIONS = new Set([
+      'Final Testing→QC1',
+      'QC1→QC2',
+      'QC1→Dispatch QC',
+    ]);
+
+    // All Hardware & Software stages — moving between any two of these keeps the
+    // same technician so their work timer stays ongoing across the whole HW/SW flow.
+    const HW_SW_STAGES = new Set([
+      'Diagnosis',
+      'Assembly & Software',
+      'Final Testing',
+      'Chip Level Repair',
+      'Body & Paint',
+    ]);
+
+    const transitionKey = `${currentStageName}→${effectiveToStage}`;
+    const bothHwSw = HW_SW_STAGES.has(currentStageName) && HW_SW_STAGES.has(effectiveToStage);
+
+    if (ROUND_ROBIN_TRANSITIONS.has(transitionKey) && nextStage.team_id) {
+      assignedUserId = await resolveQcAssignee(client, {
+        teamId: nextStage.team_id,
+        ticketId: ticket.ticket_id,
+        targetStageName: effectiveToStage,
+        transitionKey
+      });
+    } else if (KEEP_SAME_TECH_TRANSITIONS.has(transitionKey) || bothHwSw) {
+      assignedUserId = ticket.assigned_user_id;
+    }
+
+    // Side-routes to repair vendors: unassign so Body & Paint / Chip tech can be picked.
+    if (
+      (effectiveToStage === 'Body & Paint' || effectiveToStage === 'Chip Level Repair')
+      && !overrideAssignee
+    ) {
+      assignedUserId = null;
+    }
+
+    // Dispatch QC fail → Diagnosis: back to the Diagnosis team queue for triage.
+    if (currentStageName === 'Dispatch QC' && effectiveToStage === 'Diagnosis' && !overrideAssignee) {
+      assignedUserId = null;
+    }
+
+    // Manual picker (e.g. Final Testing -> QC1, QC2 fail -> QC1) wins over round-robin/keep-same.
+    if (overrideAssignee) {
+      assignedUserId = overrideAssignee;
+      if (currentStageName === 'QC2' && effectiveToStage === 'QC1' && nextStage.team_id) {
+        await recordAssigneeForTeam(client, nextStage.team_id, overrideAssignee);
       }
     }
 
@@ -375,40 +650,82 @@ exports.moveToStage = async (req, res) => {
     if (ticket.serial_number) {
       await client.query(
         `UPDATE inventory SET stage = $1 WHERE serial_number = $2`,
-        [to_stage_name, ticket.serial_number]
+        [effectiveToStage, ticket.serial_number]
       );
     }
 
-    await syncWorkLogForTicketState(client, newTicket);
+    // Stop the previous segment. Keep the timer running automatically only when
+    // the SAME technician carries the unit to the next stage (Diagnosis →
+    // Assembly & Software → Final Testing). A handoff to a new person (e.g. QC)
+    // leaves it stopped so they scan-to-start their own timer.
+    await closeOpenWorkLogs(client, newTicket.ticket_id);
+    const sameTech = assignedUserId && ticket.assigned_user_id
+      && Number(assignedUserId) === Number(ticket.assigned_user_id);
+    if (newTicket.status !== 'completed' && sameTech) {
+      await startWorkLog(client, {
+        ticketId: newTicket.ticket_id,
+        userId: assignedUserId,
+        stageId: nextStage.stage_id
+      });
+    }
 
-    const activityNotes = notes || reason || `Moved to ${to_stage_name}`;
+    const activityNotes = notes || reason || `Moved to ${effectiveToStage}`;
+    const bypassNote = isSuperAdmin(req.user) && req.body.bypass_transition
+      ? '[Super Admin bypass] '
+      : '';
     await client.query(
       `INSERT INTO activities (ticket_id, stage_id, user_id, action, notes)
        VALUES ($1, $2, $3, 'stage_changed', $4)`,
-      [id, nextStage.stage_id, req.user.user_id, activityNotes]
+      [id, nextStage.stage_id, req.user.user_id, `${bypassNote}${activityNotes}`]
     );
 
     await ttsplAuditService.logTtsplEvent({
       ttsplId: ticket.ttspl_id,
       vendorSerialId: ticket.vendor_serial_id,
       eventType: 'stage_changed',
-      description: `${currentStageName} → ${to_stage_name}`,
-      metadata: { from: currentStageName, to: to_stage_name, reason: reason || null },
+      description: `${currentStageName} → ${effectiveToStage}`,
+      metadata: { from: currentStageName, to: effectiveToStage, reason: reason || null },
       actorUserId: req.user.user_id,
       actorName: req.user.name,
       db: client
     });
 
+    await logProductionHistory(client, {
+      ticketBefore: ticket,
+      ticketAfter: newTicket,
+      beforeStageName: currentStageName,
+      afterStageName: effectiveToStage,
+      source: 'moveToStage',
+      hint: conditionHint,
+      remarks: activityNotes,
+      failureReason: ['qc1_failed', 'qc2_failed', 'dispatch_qc_failed'].includes(conditionHint) ? reason?.trim() : null,
+      actor: req.user,
+      assignmentType: conditionHint || 'stage_move',
+    });
+
     await client.query('COMMIT');
+
+    let assignedUserName = null;
+    if (newTicket.assigned_user_id) {
+      const uRes = await pool.query(
+        'SELECT name FROM users WHERE user_id = $1',
+        [newTicket.assigned_user_id]
+      );
+      assignedUserName = uRes.rows[0]?.name || null;
+    }
 
     if (highlighted && highlightedReason) {
       notifyHighlightedTechnician({ ...newTicket, highlighted_reason: highlightedReason }, highlightedReason);
     }
 
+    const assignNote = assignedUserName ? ` — assigned to ${assignedUserName}` : '';
     res.json({
       success: true,
-      message: isCompleted ? 'Ticket completed — moved to Inventory' : `Moved to ${to_stage_name}`,
+      message: isCompleted
+        ? 'Ticket completed — moved to Inventory'
+        : `Moved to ${effectiveToStage}${assignNote}`,
       ticket: newTicket,
+      assigned_user_name: assignedUserName,
       completed: isCompleted
     });
   } catch (e) {
@@ -426,6 +743,14 @@ async function moveToNamedStage(req, res, stageName, flags = {}) {
     return res.status(404).json({ success: false, message: 'Ticket not found' });
   }
   const ticket = ticketRes.rows[0];
+
+  const allowed = await canMarkDiagnosisRepair(req, ticket, stageName);
+  if (!allowed) {
+    return res.status(403).json({
+      success: false,
+      message: 'Only the assigned technician (Diagnosis) or floor manager can route to repair stages',
+    });
+  }
 
   if (flags.chip_repair_required) {
     await pool.query(`UPDATE tickets SET chip_repair_required = TRUE WHERE ticket_id = $1`, [req.params.id]);
@@ -495,6 +820,16 @@ exports.markQcFailed = async (req, res) => {
       );
     }
 
+    // SO-level allocation: this laptop failed pre-dispatch QC — mark it failed so
+    // the warehouse detaches/replaces it before the DC can be generated.
+    if (ticket.ticket_type === 'sales_order_qc') {
+      await pool.query(
+        `UPDATE sales_order_serials SET qc_status = 'failed', updated_at = NOW()
+         WHERE qc_ticket_id = $1 AND status = 'attached'`,
+        [ticket.ticket_id]
+      );
+    }
+
     await ttsplAuditService.logTtsplEvent({
       ttsplId: ticket.ttspl_id,
       vendorSerialId: ticket.vendor_serial_id,
@@ -505,10 +840,32 @@ exports.markQcFailed = async (req, res) => {
       actorName: req.user.name
     });
 
+    const afterRes = await pool.query('SELECT * FROM tickets WHERE ticket_id = $1', [id]);
+    await logProductionHistory(pool, {
+      ticketBefore: ticket,
+      ticketAfter: afterRes.rows[0] || ticket,
+      source: 'markQcFailed',
+      remarks: reason.trim(),
+      failureReason: reason.trim(),
+      actor: req.user,
+    });
+
+    // Auto-raise a DRAFT vendor debit note linked to this return ticket (accounts
+    // fills the amount & approves; it then adjusts the next vendor bill).
+    let debitNote = null;
+    try {
+      debitNote = await vendorBilling.createReturnDebitNote(pool, {
+        ticket, reason: reason.trim(), actorUserId: req.user.user_id,
+      });
+    } catch (dnErr) {
+      console.error('[vendor-return] debit note auto-create failed for ticket', id, dnErr.message);
+    }
+
     res.json({
       success: true,
       message: 'Ticket marked for vendor return. Initiate vendor return DC from vendor management.',
-      instructions: 'Create a vendor return DC and link the serial to complete the return process.'
+      instructions: 'Create a vendor return DC and link the serial to complete the return process.',
+      debit_note: debitNote ? { debit_note_number: debitNote.debit_note_number, debit_note_id: debitNote.debit_note_id } : null,
     });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message || 'Failed' });
@@ -517,8 +874,8 @@ exports.markQcFailed = async (req, res) => {
 
 exports.updateTtsplConfig = async (req, res) => {
   const { id } = req.params;
-  const { processor, ram, storage, gpu, screen_size, os, change_type, notes } = req.body;
-  const fields = { processor, ram, storage, gpu, screen_size, os };
+  const { processor, ram, storage, gpu, screen_size, os, change_type, notes, brand, model, generation } = req.body;
+  const fields = { processor, ram, storage, gpu, screen_size, os, brand, model, generation };
   if (!notes?.trim()) {
     return res.status(400).json({ success: false, message: 'Notes are required for config changes' });
   }
@@ -535,57 +892,98 @@ exports.updateTtsplConfig = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Ticket has no TTSPL ID' });
     }
 
-    let extra = {};
-    if (ticket.vendor_serial_id) {
-      const vs = await pool.query(
-        `SELECT extra FROM vendor_serial_numbers WHERE serial_id = $1`,
-        [ticket.vendor_serial_id]
-      );
-      extra = vs.rows[0]?.extra || {};
-      if (typeof extra === 'string') {
-        try { extra = JSON.parse(extra); } catch { extra = {}; }
-      }
+    const paSvc = require('../services/productionAssetService');
+    let pa = await paSvc.getByTicket(pool, ticket.ticket_id);
+    if (!pa && ticket.vendor_serial_id) {
+      pa = await paSvc.getByVendorSerial(pool, ticket.vendor_serial_id);
     }
-
-    const current = {
-      processor: ticket.processor || extra.processor || '',
-      ram: ticket.ram || extra.ram || '',
-      storage: ticket.storage || extra.storage || '',
-      gpu: extra.gpu || '',
-      screen_size: extra.screen_size || '',
-      os: extra.os || ''
-    };
-
-    const changes = [];
-    for (const [field, newVal] of Object.entries(fields)) {
-      if (newVal === undefined || newVal === null) continue;
-      const oldVal = current[field] || '';
-      if (String(newVal).trim() === String(oldVal).trim()) continue;
-      await ttsplAuditService.logConfigChange({
-        ttsplId,
-        vendorSerialId: ticket.vendor_serial_id,
+    if (!pa) {
+      pa = await paSvc.createFromGrn(pool, {
         ticketId: ticket.ticket_id,
-        changedBy: req.user.user_id,
-        changeType,
-        fieldName: field,
-        oldValue: oldVal,
-        newValue: newVal,
-        notes: notes.trim()
+        serialNumber: ticket.serial_number,
+        ttsplId: ticket.ttspl_id,
+        vendorSerialId: ticket.vendor_serial_id,
+        configSource: ticket,
       });
-      changes.push({ field, oldValue: oldVal, newValue: newVal });
-      extra[field] = newVal;
-      if (['processor', 'ram', 'storage'].includes(field)) {
-        await pool.query(
-          `UPDATE tickets SET ${field} = $1 WHERE ticket_id = $2`,
-          [newVal, id]
-        );
+    }
+
+    const stageRes = await pool.query(
+      `SELECT stage_name FROM stages WHERE stage_id = $1`,
+      [ticket.current_stage_id]
+    );
+    const stageName = stageRes.rows[0]?.stage_name || null;
+
+    const patch = {
+      processor,
+      ram,
+      ssd: storage,
+      storage,
+      gpu,
+      screen_size,
+      brand,
+      model,
+      generation,
+    };
+    const paResult = await paSvc.updateConfig(
+      pool,
+      pa.production_asset_id,
+      patch,
+      req.user.user_id,
+      stageName
+    );
+
+    // Keep config audit trail; do NOT write hardware config into VSN.extra
+    // (that leaked into PO/GRN receive view). Non-config meta in extra is untouched.
+    const changes = (paResult.changes || []).map((c) => ({
+      field: c.field === 'ssd' ? 'storage' : c.field,
+      oldValue: c.old_value,
+      newValue: c.new_value,
+    }));
+
+    for (const ch of changes) {
+      if (['processor', 'ram', 'storage', 'gpu', 'screen_size', 'os', 'brand', 'model', 'generation'].includes(ch.field)) {
+        await ttsplAuditService.logConfigChange({
+          ttsplId,
+          vendorSerialId: ticket.vendor_serial_id,
+          ticketId: ticket.ticket_id,
+          changedBy: req.user.user_id,
+          changeType,
+          fieldName: ch.field,
+          oldValue: ch.oldValue,
+          newValue: ch.newValue,
+          notes: notes.trim()
+        });
       }
     }
 
-    if (ticket.vendor_serial_id && changes.length) {
+    // Mirror display fields to inventory only (not GRN snapshot / VPD / locked extra)
+    if (changes.length && ticket.serial_number) {
+      const latest = paResult.production_asset || {};
       await pool.query(
-        `UPDATE vendor_serial_numbers SET extra = $1::jsonb, updated_at = NOW() WHERE serial_id = $2`,
-        [JSON.stringify(extra), ticket.vendor_serial_id]
+        `UPDATE inventory SET
+             brand = COALESCE(NULLIF($2, ''), brand),
+             model = COALESCE(NULLIF($3, ''), model),
+             processor = COALESCE(NULLIF($4, ''), processor),
+             generation = COALESCE(NULLIF($5, ''), generation),
+             ram = COALESCE(NULLIF($6, ''), ram),
+             storage = COALESCE(NULLIF($7, ''), storage),
+             gpu = COALESCE(NULLIF($8, ''), gpu),
+             screen_size = COALESCE(NULLIF($9, ''), screen_size),
+             updated_at = CURRENT_TIMESTAMP
+         WHERE LOWER(serial_number) = LOWER($1)
+            OR machine_number = $10`,
+        [
+          ticket.serial_number,
+          latest.brand,
+          latest.model,
+          latest.processor,
+          latest.generation,
+          latest.ram,
+          latest.ssd,
+          latest.gpu,
+          latest.screen_size,
+          ticket.ttspl_id || '',
+        ]
       );
     }
 
@@ -594,15 +992,80 @@ exports.updateTtsplConfig = async (req, res) => {
         ttsplId,
         vendorSerialId: ticket.vendor_serial_id,
         eventType: 'config_updated',
-        description: `Config updated: ${changes.map((c) => `${c.field} ${c.oldValue} → ${c.newValue}`).join(', ')}`,
-        metadata: { changes },
+        description: `Config updated on Production Asset: ${changes.map((c) => `${c.field} ${c.oldValue} → ${c.newValue}`).join(', ')}`,
+        metadata: { changes, production_asset_id: pa.production_asset_id },
         actorUserId: req.user.user_id,
         actorName: req.user.name
       });
     }
 
-    res.json({ success: true, message: 'Configuration updated', changes });
+    res.json({
+      success: true,
+      message: 'Configuration updated',
+      changes,
+      production_asset: paSvc.rowToDisplayConfig(paResult.production_asset),
+    });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message || 'Config update failed' });
+  }
+};
+
+const vendorRepairSvc = require('../services/vendorRepairDcService');
+const HW_SW_DIAGNOSIS_STAGES = new Set([
+  'Diagnosis', 'Assembly & Software', 'Final Testing', 'Chip Level Repair', 'Body & Paint',
+]);
+
+exports.markDiagnosisFailed = async (req, res) => {
+  const { id } = req.params;
+  const { reason } = req.body;
+  if (!reason?.trim()) {
+    return res.status(400).json({ success: false, message: 'Failure reason is required' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await vendorRepairSvc.ensureVendorRepairSchema();
+    const tRes = await client.query(
+      `SELECT t.*, s.stage_name
+         FROM tickets t
+         LEFT JOIN stages s ON s.stage_id = t.current_stage_id
+        WHERE t.ticket_id = $1`,
+      [id]
+    );
+    const ticket = tRes.rows[0];
+    if (!ticket) {
+      return res.status(404).json({ success: false, message: 'Ticket not found' });
+    }
+
+    const stageName = ticket.stage_name;
+    const onHwStage = !stageName || HW_SW_DIAGNOSIS_STAGES.has(stageName) || stageName === 'Floor Manager';
+    const canMark = onHwStage && (
+      isStageRouter(req.user)
+      || isAssignedTechnician(req.user, ticket)
+      || ['super_admin'].includes(req.user.role)
+    );
+    if (!canMark) {
+      return res.status(403).json({ success: false, message: 'Not allowed to mark diagnosis failed on this ticket' });
+    }
+
+    await client.query('BEGIN');
+    const result = await vendorRepairSvc.markDiagnosisFailed(client, {
+      ticketId: Number(id),
+      reason: reason.trim(),
+      actorUserId: req.user.user_id,
+      actorName: req.user.name,
+    });
+    await client.query('COMMIT');
+
+    res.json({
+      success: true,
+      message: result.already_failed ? 'Already marked as Diagnosis Failed' : 'Marked as Diagnosis Failed',
+      ...result,
+    });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ success: false, message: e.message || 'Failed to mark diagnosis failed' });
+  } finally {
+    client.release();
   }
 };

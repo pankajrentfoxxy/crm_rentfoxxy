@@ -1,33 +1,84 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus } from 'lucide-react';
+import { Plus, Building2, Download, Tags } from 'lucide-react';
 import { listSalesOrders } from '../../sales-pipeline/salesPipelineApi';
-import { getCustomers } from '../leadCrmApi';
+import { bulkUpdateCustomerType, exportCustomersExcel, getCustomerIds, getCustomers } from '../leadCrmApi';
 import CustomerFormDrawer from '../components/CustomerFormDrawer';
-import PermissionGate from '../../../components/PermissionGate';
+import BulkCustomerTypeModal from '../components/BulkCustomerTypeModal';
+import { PageHeader, StatCard, Button, ResponsiveTable } from '../../../components/ui/primitives';
+import { useAuth } from '../../../context/AuthContext';
 import toast from 'react-hot-toast';
+import {
+  CUSTOMER_TYPE_OPTIONS,
+  customerTypeBadgeClass,
+  customerTypeLabel,
+} from '../../../utils/customerType';
+
+const EXPORT_ROLES = new Set(['admin', 'super_admin']);
+const TYPE_EDIT_ROLES = new Set(['admin', 'super_admin']);
+const PAGE_SIZE = 25;
+
+function formatSelectedCount(n) {
+  return `${Number(n || 0).toLocaleString('en-IN')} Customer${n === 1 ? '' : 's'} Selected`;
+}
 
 export default function CustomerListPage() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const canExportCustomers = EXPORT_ROLES.has(user?.role);
+  const canBulkEditType = TYPE_EDIT_ROLES.has(user?.role);
   const [customers, setCustomers] = useState([]);
-  const [pagination, setPagination] = useState({ page: 1, totalPages: 1 });
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
   const [search, setSearch] = useState('');
+  const [sortDir, setSortDir] = useState('asc');
   const [kycFilter, setKycFilter] = useState('');
+  const [customerType, setCustomerType] = useState('all');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editCustomer, setEditCustomer] = useState(null);
   const [activeOrderCounts, setActiveOrderCounts] = useState({});
+  const [exporting, setExporting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [selectedMeta, setSelectedMeta] = useState(() => new Map());
+  const [selectAllMatching, setSelectAllMatching] = useState(false);
+  const [selectingAll, setSelectingAll] = useState(false);
+  const [bulkModalOpen, setBulkModalOpen] = useState(false);
+  const [bulkSaving, setBulkSaving] = useState(false);
 
-  const load = useCallback(async (page = 1) => {
+  const listFilterParams = useMemo(() => ({
+    search: search || undefined,
+    customer_type: customerType === 'all' ? undefined : customerType,
+    kyc: kycFilter || undefined,
+  }), [search, customerType, kycFilter]);
+
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+    setSelectedMeta(new Map());
+    setSelectAllMatching(false);
+  }, []);
+
+  const load = useCallback(async () => {
     try {
-      const res = await getCustomers({ page, limit: 25, search: search || undefined });
+      const res = await getCustomers({
+        page,
+        limit: PAGE_SIZE,
+        sort_by: 'customer_id',
+        sort_dir: sortDir,
+        ...listFilterParams,
+      });
       setCustomers(res.data?.customers || []);
-      setPagination(res.data?.pagination || { page: 1, totalPages: 1 });
+      setPagination(res.data?.pagination || { page: 1, totalPages: 1, total: 0 });
     } catch {
       toast.error('Failed to load customers');
     }
-  }, [search]);
+  }, [page, sortDir, listFilterParams]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Reset selection when filters/search change (not when paging)
+  useEffect(() => {
+    clearSelection();
+  }, [search, customerType, kycFilter, clearSelection]);
 
   useEffect(() => {
     listSalesOrders({ limit: 500 })
@@ -45,44 +96,308 @@ export default function CustomerListPage() {
       .catch(() => setActiveOrderCounts({}));
   }, []);
 
-  const filtered = useMemo(() => {
-    if (kycFilter === 'verified') return customers.filter((c) => c.kyc_verified);
-    if (kycFilter === 'pending') return customers.filter((c) => !c.kyc_verified);
-    return customers;
-  }, [customers, kycFilter]);
+  const pageIds = useMemo(
+    () => customers.map((c) => c.customer_id),
+    [customers]
+  );
+
+  const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
+  const somePageSelected = pageIds.some((id) => selectedIds.has(id));
+
+  const selectedCustomers = useMemo(() => {
+    const list = [];
+    selectedIds.forEach((id) => {
+      const fromPage = customers.find((c) => c.customer_id === id);
+      const fromMeta = selectedMeta.get(id);
+      list.push(fromPage || fromMeta || { customer_id: id });
+    });
+    return list.sort((a, b) => Number(a.customer_id) - Number(b.customer_id));
+  }, [selectedIds, selectedMeta, customers]);
+
+  const mergeMeta = (rows) => {
+    setSelectedMeta((prev) => {
+      const next = new Map(prev);
+      (rows || []).forEach((c) => {
+        if (c?.customer_id != null) next.set(c.customer_id, c);
+      });
+      return next;
+    });
+  };
+
+  const toggleOne = (customer, checked) => {
+    const id = customer.customer_id;
+    setSelectAllMatching(false);
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+    setSelectedMeta((prev) => {
+      const next = new Map(prev);
+      if (checked) next.set(id, customer);
+      else next.delete(id);
+      return next;
+    });
+  };
+
+  const selectCurrentPage = () => {
+    setSelectAllMatching(false);
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      customers.forEach((c) => next.add(c.customer_id));
+      return next;
+    });
+    mergeMeta(customers);
+  };
+
+  const deselectCurrentPage = () => {
+    setSelectAllMatching(false);
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      pageIds.forEach((id) => next.delete(id));
+      return next;
+    });
+    setSelectedMeta((prev) => {
+      const next = new Map(prev);
+      pageIds.forEach((id) => next.delete(id));
+      return next;
+    });
+  };
+
+  const toggleCurrentPage = (checked) => {
+    if (checked) selectCurrentPage();
+    else deselectCurrentPage();
+  };
+
+  const selectAllMatchingCustomers = async () => {
+    setSelectingAll(true);
+    try {
+      const res = await getCustomerIds(listFilterParams);
+      const rows = res.data?.customers || [];
+      const ids = res.data?.customer_ids || rows.map((c) => c.customer_id);
+      setSelectedIds(new Set(ids));
+      setSelectedMeta(new Map(rows.map((c) => [c.customer_id, c])));
+      setSelectAllMatching(true);
+      toast.success(formatSelectedCount(ids.length));
+    } catch {
+      toast.error('Failed to select matching customers');
+    } finally {
+      setSelectingAll(false);
+    }
+  };
 
   const stats = useMemo(() => ({
-    total: customers.length,
+    total: pagination.total || customers.length,
     kyc: customers.filter((c) => c.kyc_verified).length,
     portal: customers.filter((c) => c.portal_enabled).length,
-  }), [customers]);
+  }), [customers, pagination.total]);
+
+  const actionCell = (c) => (
+    <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
+      <button type="button" onClick={() => navigate(`/lead-crm/customers/${c.customer_id}`)} className="text-blue-600 text-sm font-semibold">View</button>
+      <button type="button" onClick={() => { setEditCustomer(c); setDrawerOpen(true); }} className="text-gray-600 text-sm font-semibold">Edit</button>
+    </div>
+  );
+
+  const kycBadge = (c) => (
+    <span className={`text-xs px-2 py-0.5 rounded-full ${c.kyc_verified ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+      {c.kyc_verified ? 'Verified' : 'Pending'}
+    </span>
+  );
+
+  const toggleSort = () => {
+    setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    setPage(1);
+  };
+
+  const handleExportExcel = async () => {
+    setExporting(true);
+    try {
+      const response = await exportCustomersExcel({ search: search || undefined });
+      const blob = new Blob([response.data], {
+        type: response.headers['content-type'] || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const disposition = response.headers['content-disposition'] || '';
+      const match = /filename="?([^"]+)"?/.exec(disposition);
+      a.href = url;
+      a.download = match?.[1] || 'customers_export.xlsx';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success('Customer export downloaded');
+    } catch {
+      toast.error('Failed to export customers');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const removeFromSelection = (customerId) => {
+    setSelectAllMatching(false);
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(customerId);
+      return next;
+    });
+    setSelectedMeta((prev) => {
+      const next = new Map(prev);
+      next.delete(customerId);
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    if (bulkModalOpen && selectedIds.size === 0) {
+      setBulkModalOpen(false);
+    }
+  }, [bulkModalOpen, selectedIds]);
+
+  const handleBulkTypeSave = async (nextType) => {
+    const ids = Array.from(selectedIds);
+    if (!ids.length) return;
+    setBulkSaving(true);
+    try {
+      const { data } = await bulkUpdateCustomerType({
+        customer_ids: ids,
+        customer_type: nextType,
+      });
+      toast.success(data.message || `Updated ${data.updated_count} customer(s)`);
+      setBulkModalOpen(false);
+      clearSelection();
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Bulk update failed');
+    } finally {
+      setBulkSaving(false);
+    }
+  };
+
+  const selectHeader = canBulkEditType ? (
+    <input
+      type="checkbox"
+      checked={allPageSelected}
+      ref={(el) => {
+        if (el) el.indeterminate = somePageSelected && !allPageSelected;
+      }}
+      onChange={(e) => toggleCurrentPage(e.target.checked)}
+      onClick={(e) => e.stopPropagation()}
+      aria-label="Select current page"
+      className="rounded border-slate-300"
+      title="Select current page"
+    />
+  ) : null;
+
+  const columns = [
+    ...(canBulkEditType ? [{
+      key: 'select',
+      header: selectHeader,
+      className: 'w-10',
+      render: (c) => (
+        <input
+          type="checkbox"
+          checked={selectedIds.has(c.customer_id)}
+          onChange={(e) => toggleOne(c, e.target.checked)}
+          onClick={(e) => e.stopPropagation()}
+          aria-label={`Select customer ${c.customer_id}`}
+          className="rounded border-slate-300"
+        />
+      ),
+    }] : []),
+    { key: 'id', header: 'ID', sortable: true, sortKey: 'customer_id', render: (c) => `#${c.customer_id}` },
+    { key: 'company', header: 'Company', render: (c) => (
+      <span className="font-medium inline-flex items-center gap-2 flex-wrap">
+        {c.company_name || c.customer_name}
+        <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${customerTypeBadgeClass(c.customer_type)}`}>
+          {customerTypeLabel(c.customer_type)}
+        </span>
+      </span>
+    ) },
+    { key: 'contact', header: 'Contact', render: (c) => c.contact_person_name || c.customer_name },
+    { key: 'phone', header: 'Phone', render: (c) => c.customer_number || c.phone },
+    { key: 'email', header: 'Email', render: (c) => c.email || '—' },
+    { key: 'gst', header: 'GST', render: (c) => <span className="text-xs">{c.gst_number || '—'}</span> },
+    { key: 'city', header: 'City', render: (c) => c.billing_city || '—' },
+    { key: 'items', header: 'Items', align: 'center', render: (c) => c.active_item_count ?? 0 },
+    { key: 'orders', header: 'Active Orders', align: 'center', render: (c) => activeOrderCounts[c.customer_id] ?? 0 },
+    { key: 'portal', header: 'Portal', render: (c) => <span className={`inline-block w-2 h-2 rounded-full ${c.portal_enabled ? 'bg-green-500' : 'bg-gray-300'}`} /> },
+    { key: 'kyc', header: 'KYC', render: kycBadge },
+    { key: 'actions', header: 'Actions', render: actionCell },
+  ];
+
+  const renderCard = (c) => (
+    <div className="space-y-2">
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-start gap-2 min-w-0">
+          {canBulkEditType ? (
+            <input
+              type="checkbox"
+              checked={selectedIds.has(c.customer_id)}
+              onChange={(e) => toggleOne(c, e.target.checked)}
+              onClick={(e) => e.stopPropagation()}
+              className="mt-1 rounded border-slate-300"
+              aria-label={`Select customer ${c.customer_id}`}
+            />
+          ) : null}
+          <span className="font-semibold text-slate-800 inline-flex items-center gap-2 flex-wrap">
+            {c.company_name || c.customer_name}
+            <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${customerTypeBadgeClass(c.customer_type)}`}>
+              {customerTypeLabel(c.customer_type)}
+            </span>
+          </span>
+        </div>
+        {kycBadge(c)}
+      </div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+        <span>#{c.customer_id}</span>
+        <span>{c.contact_person_name || c.customer_name}</span>
+        <span>{c.customer_number || c.phone}</span>
+        {c.billing_city && <span>{c.billing_city}</span>}
+        <span>Items: {c.active_item_count ?? 0}</span>
+        <span>Active orders: {activeOrderCounts[c.customer_id] ?? 0}</span>
+      </div>
+      <div className="pt-2 border-t border-slate-100">{actionCell(c)}</div>
+    </div>
+  );
 
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Customers</h1>
-          <p className="text-sm text-gray-500">Manage customer profiles and KYC</p>
-        </div>
-        <button type="button" onClick={() => { setEditCustomer(null); setDrawerOpen(true); }}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm rounded-lg">
-          <Plus className="w-4 h-4" /> Add Customer
-        </button>
-      </div>
+      <PageHeader
+        title="Customers"
+        subtitle="Manage customer profiles and KYC"
+        icon={Building2}
+        actions={(
+          <div className="flex flex-wrap gap-2">
+            {canExportCustomers ? (
+              <Button variant="secondary" icon={Download} disabled={exporting} onClick={handleExportExcel}>
+                {exporting ? 'Exporting...' : 'Export Excel'}
+              </Button>
+            ) : null}
+            <Button icon={Plus} onClick={() => { setEditCustomer(null); setDrawerOpen(true); }}>Add Customer</Button>
+          </div>
+        )}
+      />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-        {[['Total', stats.total], ['KYC Verified', stats.kyc], ['Portal Enabled', stats.portal]].map(([l, v]) => (
-          <div key={l} className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
-            <p className="text-xs text-gray-500">{l}</p>
-            <p className="text-2xl font-bold">{v}</p>
-          </div>
-        ))}
+        <StatCard label="Total" value={stats.total} tone="gray" />
+        <StatCard label="KYC Verified" value={stats.kyc} tone="green" />
+        <StatCard label="Portal Enabled" value={stats.portal} tone="blue" />
       </div>
 
       <div className="flex flex-wrap gap-3 mb-4">
-        <input placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)}
+        <input placeholder="Search..." value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }}
           className="border border-gray-200 rounded-lg px-3 py-2 text-sm flex-1 min-w-[200px]" />
-        <select value={kycFilter} onChange={(e) => setKycFilter(e.target.value)}
+        <select value={customerType} onChange={(e) => { setCustomerType(e.target.value); setPage(1); }}
+          className="border border-gray-200 rounded-lg px-3 py-2 text-sm">
+          <option value="all">All types</option>
+          {CUSTOMER_TYPE_OPTIONS.filter((o) => o.value !== 'both').map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+        <select value={kycFilter} onChange={(e) => { setKycFilter(e.target.value); setPage(1); }}
           className="border border-gray-200 rounded-lg px-3 py-2 text-sm">
           <option value="">All KYC</option>
           <option value="verified">Verified</option>
@@ -90,47 +405,87 @@ export default function CustomerListPage() {
         </select>
       </div>
 
-      <div className="rounded-xl border border-gray-100 bg-white shadow-sm overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-xs text-gray-500 text-left">
-            <tr>
-              {['ID', 'Company', 'Contact', 'Phone', 'Email', 'GST', 'City', 'Active Orders', 'Portal', 'KYC', 'Actions'].map((h) => (
-                <th key={h} className="p-3 whitespace-nowrap">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((c) => (
-              <tr key={c.customer_id} className="border-t border-gray-100 hover:bg-gray-50/50">
-                <td className="p-3">#{c.customer_id}</td>
-                <td className="p-3 font-medium">{c.company_name || c.customer_name}</td>
-                <td className="p-3">{c.contact_person_name || c.customer_name}</td>
-                <td className="p-3">{c.customer_number || c.phone}</td>
-                <td className="p-3">{c.email || '—'}</td>
-                <td className="p-3 text-xs">{c.gst_number || '—'}</td>
-                <td className="p-3">{c.billing_city || '—'}</td>
-                <td className="p-3 text-center">{activeOrderCounts[c.customer_id] ?? 0}</td>
-                <td className="p-3">
-                  <span className={`inline-block w-2 h-2 rounded-full ${c.portal_enabled ? 'bg-green-500' : 'bg-gray-300'}`} />
-                </td>
-                <td className="p-3">
-                  <span className={`text-xs px-2 py-0.5 rounded-full ${c.kyc_verified ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
-                    {c.kyc_verified ? 'Verified' : 'Pending'}
-                  </span>
-                </td>
-                <td className="p-3 space-x-2 whitespace-nowrap">
-                  <button type="button" onClick={() => navigate(`/lead-crm/customers/${c.customer_id}`)}
-                    className="text-blue-600 text-xs hover:underline">View</button>
-                  <button type="button" onClick={() => { setEditCustomer(c); setDrawerOpen(true); }}
-                    className="text-gray-600 text-xs hover:underline">Edit</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {canBulkEditType ? (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+          <button
+            type="button"
+            onClick={selectCurrentPage}
+            disabled={!customers.length}
+            className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-50"
+          >
+            Select Current Page
+          </button>
+          <button
+            type="button"
+            onClick={selectAllMatchingCustomers}
+            disabled={selectingAll || !pagination.total}
+            className="text-sm px-3 py-1.5 rounded-lg border border-teal-300 bg-white text-teal-800 hover:bg-teal-50 disabled:opacity-50 font-medium"
+          >
+            {selectingAll
+              ? 'Selecting…'
+              : `Select All Matching Customers${pagination.total ? ` (${pagination.total.toLocaleString('en-IN')})` : ''}`}
+          </button>
+          {selectAllMatching ? (
+            <span className="text-xs text-teal-700">All matching filters selected</span>
+          ) : null}
+        </div>
+      ) : null}
 
-      <CustomerFormDrawer open={drawerOpen} customer={editCustomer} onClose={() => setDrawerOpen(false)} onSaved={() => load(pagination.page)} />
+      {canBulkEditType && selectedIds.size > 0 ? (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-teal-200 bg-teal-50 px-4 py-3">
+          <span className="text-sm font-semibold text-teal-900">
+            {formatSelectedCount(selectedIds.size)}
+          </span>
+          <Button
+            variant="secondary"
+            icon={Tags}
+            onClick={() => setBulkModalOpen(true)}
+          >
+            Edit type
+          </Button>
+          <button
+            type="button"
+            onClick={clearSelection}
+            className="text-sm text-teal-800 hover:underline"
+          >
+            Clear selection
+          </button>
+        </div>
+      ) : null}
+
+      <ResponsiveTable
+        columns={columns}
+        rows={customers}
+        keyField="customer_id"
+        renderCard={renderCard}
+        onRowClick={(c) => navigate(`/lead-crm/customers/${c.customer_id}`)}
+        sortKey="customer_id"
+        sortDirection={sortDir}
+        onSort={toggleSort}
+      />
+
+      {pagination.totalPages > 1 && (
+        <div className="flex items-center justify-between mt-4">
+          <p className="text-sm text-gray-500">
+            Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, pagination.total)} of {pagination.total}
+          </p>
+          <div className="flex gap-2">
+            <Button variant="secondary" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Prev</Button>
+            <span className="text-sm text-gray-600 py-2">Page {page} of {pagination.totalPages}</span>
+            <Button variant="secondary" disabled={page >= pagination.totalPages} onClick={() => setPage((p) => p + 1)}>Next</Button>
+          </div>
+        </div>
+      )}
+
+      <CustomerFormDrawer open={drawerOpen} customer={editCustomer} onClose={() => setDrawerOpen(false)} onSaved={() => load()} />
+      <BulkCustomerTypeModal
+        open={bulkModalOpen}
+        customers={selectedCustomers}
+        saving={bulkSaving}
+        onClose={() => setBulkModalOpen(false)}
+        onConfirm={handleBulkTypeSave}
+        onRemove={removeFromSelection}
+      />
     </div>
   );
 }

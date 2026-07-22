@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { isRestrictedToAssigned } = require('../services/dataScopeService');
 
 // Get Dashboard Statistics
 exports.getDashboardStats = async (req, res) => {
@@ -189,7 +190,7 @@ exports.getManagerDashboard = async (req, res) => {
           COUNT(*) FILTER (
             WHERE serial_number IN (
               SELECT serial_number FROM tickets
-              WHERE status NOT IN ('completed', 'qc_failed_return_vendor')
+              WHERE status NOT IN ('completed', 'qc_failed_return_vendor', 'cancelled')
             )
           )::int AS in_repair,
           COUNT(*) FILTER (WHERE qc_status = 'qc_failed_return_vendor')::int AS qc_failed
@@ -218,7 +219,7 @@ exports.getManagerDashboard = async (req, res) => {
       ),
       pool.query(
         `SELECT
-          COUNT(*) FILTER (WHERE status NOT IN ('completed', 'qc_failed_return_vendor'))::int AS active_tickets,
+          COUNT(*) FILTER (WHERE status NOT IN ('completed', 'qc_failed_return_vendor', 'cancelled'))::int AS active_tickets,
           COUNT(*) FILTER (WHERE highlighted = TRUE)::int AS highlighted,
           COALESCE(
             AVG(EXTRACT(EPOCH FROM (completed_at - created_at)) / 3600)
@@ -231,7 +232,7 @@ exports.getManagerDashboard = async (req, res) => {
         `SELECT s.stage_name, COUNT(t.ticket_id)::int AS count
          FROM stages s
          LEFT JOIN tickets t ON t.current_stage_id = s.stage_id
-           AND t.status NOT IN ('completed', 'qc_failed_return_vendor')
+           AND t.status NOT IN ('completed', 'qc_failed_return_vendor', 'cancelled')
          GROUP BY s.stage_id, s.stage_name, s.stage_order
          ORDER BY s.stage_order ASC`
       ),
@@ -329,14 +330,15 @@ exports.getManagerDashboard = async (req, res) => {
 exports.getSalesDashboard = async (req, res) => {
   try {
     const userId = req.user.user_id;
-    const isSalesOnly = req.user.role === 'sales';
-    const leadFilter = isSalesOnly ? 'AND l.assigned_user_id = $1' : '';
-    const leadParams = isSalesOnly ? [userId] : [];
+    const assignedOnly = await isRestrictedToAssigned(req, 'leads')
+      || await isRestrictedToAssigned(req, 'follow_ups');
+    const leadFilter = assignedOnly ? 'AND l.assigned_user_id = $1' : '';
+    const leadParams = assignedOnly ? [userId] : [];
 
-    const quotFilter = isSalesOnly
+    const quotFilter = assignedOnly
       ? `AND (sq.created_by = $1 OR l.assigned_user_id = $1)`
       : '';
-    const quotParams = isSalesOnly ? [userId] : [];
+    const quotParams = assignedOnly ? [userId] : [];
 
     const [
       leadsStatusRes,

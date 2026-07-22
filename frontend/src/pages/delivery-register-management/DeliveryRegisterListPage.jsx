@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { Mail, Phone, RefreshCw, Upload, User } from 'lucide-react';
 import UploadPodModal from '../../features/delivery-register-management/components/UploadPodModal';
 import { exportRowsToCsv } from '../../features/operation-management/utils/quotationHelpers';
@@ -10,6 +10,12 @@ import {
 } from '../../utils/deliveryRegisterApi';
 
 const PAGE_SIZES = [10, 25, 50, 100];
+
+const STATUS_TABS = [
+  { key: 'in-transit', label: 'In Transit', path: '/sales-pipeline/delivery-register' },
+  { key: 'delivered', label: 'Delivered', path: '/sales-pipeline/delivery-register/delivered' },
+  { key: 'rejected', label: 'Rejected', path: '/sales-pipeline/delivery-register/rejected' },
+];
 
 const STATUS_META = {
   'in-transit': { apiStatus: 'in_transit', title: 'In Transit' },
@@ -210,6 +216,22 @@ export default function DeliveryRegisterListPage() {
       </div>
 
       {actionMsg ? <p className="text-green-700 text-sm mb-2">{actionMsg}</p> : null}
+
+      <div className="flex flex-wrap gap-2 mb-4">
+        {STATUS_TABS.map((t) => (
+          <Link
+            key={t.key}
+            to={t.path}
+            className={`px-4 py-2 text-sm font-medium rounded-lg border transition-colors ${
+              routeStatus === t.key
+                ? 'bg-teal-700 text-white border-teal-700'
+                : 'bg-white text-gray-600 border-gray-200 hover:border-teal-300'
+            }`}
+          >
+            {t.label}
+          </Link>
+        ))}
+      </div>
 
       <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
         <div className="p-4 border-b flex flex-wrap items-center justify-between gap-3">

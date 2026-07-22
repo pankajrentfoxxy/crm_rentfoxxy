@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { X } from 'lucide-react';
+import { X, Loader2, Eye } from 'lucide-react';
 import toast from 'react-hot-toast';
 import AssetDetailsForm, { emptyLineItem, lineItemsToPayload } from '../../operation-management/components/AssetDetailsForm';
 import { BillingAddressPanel, ShippingAddressPanel } from '../../operation-management/components/CustomerAddressPanels';
@@ -8,6 +8,15 @@ import { INDIAN_STATES, slugifyState } from '../../../constants/indianStates';
 import {
   createQuotation, getCustomerAddresses, getCustomerDetail, getQuotationMeta, updateQuotationStatus,
 } from '../salesPipelineApi';
+import {
+  formatCurrency, sumLines, formatDate, formatConfig, lineTotal, typeLabel, countLaptops,
+} from '../salesPipelineUtils';
+import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
+import {
+  customerTypeMismatchMessage,
+  filterCustomersForQuotation,
+  isCustomerEligibleForQuotation,
+} from '../../../utils/customerType';
 
 const DEFAULT_TERMS = 'Payment terms as agreed. Goods remain property of Rentfoxxy until full payment.';
 
@@ -18,18 +27,25 @@ function getField(obj, snake, camel) {
   return val || '';
 }
 
+function customerDisplayName(customer) {
+  if (!customer) return 'N/A';
+  return customer.company_name || customer.companyName || customer.name || customer.customer_name || 'N/A';
+}
+
 function buildBillingAddress(customer) {
   if (!customer) return null;
+  const displayName = customerDisplayName(customer);
   if (customer.billing_address && typeof customer.billing_address === 'object') {
     return {
       ...customer.billing_address,
+      name: displayName,
       gst_number: customer.billing_address.gst_number
         || getField(customer, 'gst_no', 'gstNo')
         || getField(customer, 'gst_number', 'gstNumber'),
     };
   }
   return {
-    name: customer.name || customer.company_name || customer.companyName || 'N/A',
+    name: displayName,
     phone: customer.phone || customer.customer_number || 'N/A',
     country: 'India',
     state: getField(customer, 'billing_state', 'billingState') || 'N/A',
@@ -54,11 +70,12 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
   const [manualShipping, setManualShipping] = useState(emptyManualShipping());
   const [lines, setLines] = useState([emptyLineItem()]);
   const [saving, setSaving] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [sendEmail, setSendEmail] = useState('');
   const [ccEmail, setCcEmail] = useState('');
   const [form, setForm] = useState({
     customer_id: '', supply_state: slugifyState('Haryana'), quotation_type: 'rental',
-    branch: 'rentfoxxy', security_amount: '', shiping_charges: '', GST_number: '',
+    branch: 'rentfoxxy', security_type: 'none', security_amount: '', shiping_charges: '', GST_number: '',
     customer_mobile: '', email: '', customer_name: '', remarks: '', terms: DEFAULT_TERMS,
     validity_date: '', source_lead_id: '',
   });
@@ -160,7 +177,7 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
     setForm((prev) => ({
       ...prev,
       customer_id: customerId,
-      customer_name: customer?.name || '',
+      customer_name: customer?.company_name || customer?.name || '',
       email: customer?.email || '',
       customer_mobile: customer?.phone || '',
       GST_number: customer?.gst_no || '',
@@ -217,14 +234,49 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
   }, [prefill?.customer_id, customers.length]);
 
   const onTypeChange = (quotationType) => {
-    setForm((prev) => ({
-      ...prev,
-      quotation_type: quotationType,
-      branch: branchForQuotationType(quotationType),
-    }));
+    setForm((prev) => {
+      const stillOk = !prev.customer_id || isCustomerEligibleForQuotation(
+        customers.find((c) => String(c.customer_id) === String(prev.customer_id))?.customer_type,
+        quotationType
+      );
+      if (!stillOk) {
+        toast.error(customerTypeMismatchMessage(
+          customers.find((c) => String(c.customer_id) === String(prev.customer_id))?.customer_type,
+          quotationType
+        ));
+        setCustomerDetail(null);
+        setBillingAddress(null);
+        setShippingOptions([]);
+        setSelectedShippingValue('');
+      }
+      return {
+        ...prev,
+        quotation_type: quotationType,
+        branch: branchForQuotationType(quotationType),
+        ...(stillOk ? {} : { customer_id: '', customer_name: '', GST_number: '', email: '', customer_mobile: '' }),
+      };
+    });
   };
 
+  const eligibleCustomers = useMemo(
+    () => filterCustomersForQuotation(customers, form.quotation_type),
+    [customers, form.quotation_type]
+  );
+
+  const totalValue = sumLines(lines);
+  const security = form.security_type === 'one_month_rental' ? totalValue : (Number(form.security_amount) || 0);
+  const isSaleType = form.quotation_type === 'sale' || form.quotation_type === 'sales';
+
   const submit = async (andSend) => {
+    if (!form.customer_id) {
+      toast.error('Select a customer');
+      return;
+    }
+    const selectedCustomer = customers.find((c) => String(c.customer_id) === String(form.customer_id));
+    if (selectedCustomer && !isCustomerEligibleForQuotation(selectedCustomer.customer_type, form.quotation_type)) {
+      toast.error(customerTypeMismatchMessage(selectedCustomer.customer_type, form.quotation_type));
+      return;
+    }
     if (!selectedShippingAddress) {
       toast.error('Select a shipping address');
       return;
@@ -238,6 +290,7 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
       const res = await createQuotation({
         quotation_number: meta?.quotation_number,
         ...form,
+        security_amount: security,
         source_lead_id: form.source_lead_id || prefill.lead_id || null,
         ...lineItemsToPayload(lines),
         customer_shipping_address: selectedShippingAddress,
@@ -275,7 +328,7 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
               <label className="text-xs font-medium text-gray-600">Customer *</label>
               <select className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" value={form.customer_id} onChange={(e) => onCustomerChange(e.target.value)}>
                 <option value="">Select customer</option>
-                {customers.map((c) => <option key={c.customer_id} value={c.customer_id}>{c.name}</option>)}
+                {eligibleCustomers.map((c) => <option key={c.customer_id} value={c.customer_id}>{c.company_name || c.name}</option>)}
               </select>
             </div>
             <div>
@@ -299,15 +352,28 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
 
           <AssetDetailsForm lines={lines} onChange={setLines} catalog={meta?.catalog} quotationType={form.quotation_type} />
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-medium text-gray-600">Security Amount (₹)</label>
-              <input type="number" className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" value={form.security_amount} onChange={(e) => setForm((f) => ({ ...f, security_amount: e.target.value }))} />
+          {!isSaleType && (
+            <div className="border rounded-lg p-3 space-y-2">
+              <p className="text-xs font-medium text-gray-600">Security Deposit</p>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="radio" name="qsec" checked={form.security_type === 'none'}
+                  onChange={() => setForm((f) => ({ ...f, security_type: 'none' }))} />
+                No Security
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="radio" name="qsec" checked={form.security_type === 'one_month_rental'}
+                  onChange={() => setForm((f) => ({ ...f, security_type: 'one_month_rental' }))} />
+                1 Month Rental as Security
+                {form.security_type === 'one_month_rental' && (
+                  <span className="ml-auto font-semibold text-blue-700">{formatCurrency(security)}</span>
+                )}
+              </label>
+              <p className="text-[11px] text-gray-400">Auto-calculated from each laptop&apos;s monthly rate × quantity.</p>
             </div>
-            <div>
-              <label className="text-xs font-medium text-gray-600">Shipping Charges (₹)</label>
-              <input type="number" className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" value={form.shiping_charges} onChange={(e) => setForm((f) => ({ ...f, shiping_charges: e.target.value }))} />
-            </div>
+          )}
+          <div>
+            <label className="text-xs font-medium text-gray-600">Shipping Charges (₹)</label>
+            <input type="number" className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" value={form.shiping_charges} onChange={(e) => setForm((f) => ({ ...f, shiping_charges: e.target.value }))} />
           </div>
           <textarea className="w-full border rounded-lg px-3 py-2 text-sm" rows={2} placeholder="Remarks" value={form.remarks} onChange={(e) => setForm((f) => ({ ...f, remarks: e.target.value }))} />
           <textarea className="w-full border rounded-lg px-3 py-2 text-sm" rows={3} placeholder="Terms & Conditions" value={form.terms} onChange={(e) => setForm((f) => ({ ...f, terms: e.target.value }))} />
@@ -337,11 +403,24 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
                     ].map(([k, label]) => (
                       <div key={k}>
                         <label className="text-xs text-gray-500">{label}</label>
-                        <input
-                          className="w-full mt-1 border rounded-lg px-3 py-2 text-sm"
-                          value={manualShipping[k]}
-                          onChange={(e) => setManualShipping((m) => ({ ...m, [k]: e.target.value }))}
-                        />
+                        {k === 'zip_code' ? (
+                          <input
+                            className="w-full mt-1 border rounded-lg px-3 py-2 text-sm"
+                            value={manualShipping[k]}
+                            onChange={(e) => applyPincodeAutofill(e.target.value, setManualShipping, {
+                              pinKey: 'zip_code', cityKey: 'city', stateKey: 'state',
+                            })}
+                            onBlur={(e) => applyPincodeAutofill(e.target.value, setManualShipping, {
+                              pinKey: 'zip_code', cityKey: 'city', stateKey: 'state',
+                            })}
+                          />
+                        ) : (
+                          <input
+                            className="w-full mt-1 border rounded-lg px-3 py-2 text-sm"
+                            value={manualShipping[k]}
+                            onChange={(e) => setManualShipping((m) => ({ ...m, [k]: e.target.value }))}
+                          />
+                        )}
                       </div>
                     ))}
                     <div className="sm:col-span-2">
@@ -375,11 +454,158 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
           </div>
         </div>
         <div className="border-t p-4 flex justify-end gap-2">
-          <button type="button" onClick={onClose} className="px-4 py-2 text-sm border rounded-lg">Cancel</button>
-          <button type="button" disabled={saving} onClick={() => submit(false)} className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50">Save Draft</button>
-          <button type="button" disabled={saving} onClick={() => submit(true)} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">Save & Send</button>
+          <button type="button" disabled={saving} onClick={onClose} className="px-4 py-2 text-sm border rounded-lg disabled:opacity-50">Cancel</button>
+          <button type="button" disabled={saving} onClick={() => setPreviewOpen(true)} className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50 disabled:opacity-50 inline-flex items-center gap-2">
+            <Eye className="w-4 h-4" /> Preview
+          </button>
+          <button type="button" disabled={saving} onClick={() => submit(false)} className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50 disabled:opacity-50 inline-flex items-center gap-2">
+            {saving && <Loader2 className="w-4 h-4 animate-spin" />}
+            Save Draft
+          </button>
+          <button type="button" disabled={saving} onClick={() => submit(true)} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 inline-flex items-center gap-2">
+            {saving && <Loader2 className="w-4 h-4 animate-spin" />}
+            {saving ? 'Saving…' : 'Save & Send'}
+          </button>
         </div>
       </aside>
+
+      {previewOpen && (
+        <QuotationPreview
+          onClose={() => setPreviewOpen(false)}
+          quotationNumber={meta?.quotation_number}
+          form={form}
+          lines={lines}
+          billingAddress={billingAddress}
+          shippingAddress={selectedShippingAddress}
+          security={security}
+          isSaleType={isSaleType}
+        />
+      )}
+    </div>
+  );
+}
+
+function PreviewAddress({ title, addr, gstNumber }) {
+  return (
+    <div className="border rounded-lg p-3">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1">{title}</p>
+      {addr ? (
+        <div className="text-sm text-gray-700 space-y-0.5">
+          {addr.name ? <p className="font-medium text-gray-900">{addr.name}</p> : null}
+          {addr.address ? <p>{addr.address}</p> : null}
+          <p>
+            {[addr.city, addr.state, addr.zip_code].filter(Boolean).join(', ')}
+            {addr.country ? `, ${addr.country}` : ''}
+          </p>
+          {addr.phone ? <p>Phone: {addr.phone}</p> : null}
+          {gstNumber || addr.gst_number ? <p>GSTIN: {gstNumber || addr.gst_number}</p> : null}
+        </div>
+      ) : (
+        <p className="text-sm text-gray-400">Not selected</p>
+      )}
+    </div>
+  );
+}
+
+function QuotationPreview({
+  onClose, quotationNumber, form, lines, billingAddress, shippingAddress, security, isSaleType,
+}) {
+  const subtotal = sumLines(lines);
+  const shipping = Number(form.shiping_charges) || 0;
+  const showSecurity = !isSaleType && security > 0;
+  const estTotal = subtotal + shipping + (showSecurity ? security : 0);
+  const validLines = (lines || []).filter((l) => l.brand || l.model_name || l.model || Number(l.quantity) > 0);
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <button type="button" className="absolute inset-0 bg-black/50" onClick={onClose} aria-label="Close preview" />
+      <div className="relative bg-white w-full max-w-3xl max-h-[90vh] rounded-xl shadow-2xl flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between border-b px-5 py-3 shrink-0">
+          <h3 className="font-semibold text-gray-900">Quotation Preview</h3>
+          <button type="button" onClick={onClose} className="p-1 rounded hover:bg-gray-100"><X className="w-5 h-5" /></button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 space-y-5">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-xl font-bold text-gray-900">Rentfoxxy</h2>
+              <p className="text-xs text-gray-500 mt-0.5">{typeLabel(form.quotation_type)} Quotation</p>
+            </div>
+            <div className="text-right text-sm">
+              <p className="font-semibold text-gray-900">{quotationNumber || 'Draft'}</p>
+              <p className="text-gray-500">Validity: {formatDate(form.validity_date)}</p>
+              <p className="text-gray-500">Supply: {String(form.supply_state || '').replace(/-/g, ' ') || '—'}</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <PreviewAddress
+              title="Bill To"
+              addr={billingAddress ? { ...billingAddress, name: form.customer_name || billingAddress.name } : null}
+              gstNumber={form.GST_number}
+            />
+            <PreviewAddress title="Ship To" addr={shippingAddress} />
+          </div>
+
+          <div className="border rounded-lg overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-gray-600 text-xs">
+                <tr>
+                  <th className="text-left px-3 py-2 font-semibold">#</th>
+                  <th className="text-left px-3 py-2 font-semibold">Configuration</th>
+                  <th className="text-right px-3 py-2 font-semibold">Qty</th>
+                  <th className="text-right px-3 py-2 font-semibold">{isSaleType ? 'Unit Price' : 'Monthly Rate'}</th>
+                  <th className="text-right px-3 py-2 font-semibold">Amount</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {validLines.length ? validLines.map((l, i) => (
+                  <tr key={i}>
+                    <td className="px-3 py-2 text-gray-500">{i + 1}</td>
+                    <td className="px-3 py-2 text-gray-800">{formatConfig(l) || '—'}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{Number(l.quantity) || 0}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(l.rate)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(lineTotal(l))}</td>
+                  </tr>
+                )) : (
+                  <tr><td colSpan={5} className="px-3 py-6 text-center text-gray-400">No items added</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex justify-end">
+            <div className="w-full sm:w-72 text-sm space-y-1">
+              <div className="flex justify-between"><span className="text-gray-600">Subtotal{isSaleType ? '' : ' (monthly)'}</span><span className="tabular-nums">{formatCurrency(subtotal)}</span></div>
+              {showSecurity ? (
+                <div className="flex justify-between"><span className="text-gray-600">Security Deposit</span><span className="tabular-nums">{formatCurrency(security)}</span></div>
+              ) : null}
+              <div className="flex justify-between"><span className="text-gray-600">Shipping Charges</span><span className="tabular-nums">{formatCurrency(shipping)}</span></div>
+              <div className="flex justify-between border-t pt-1 font-semibold text-gray-900">
+                <span>{isSaleType ? 'Total' : 'Estimated First Payment'}</span><span className="tabular-nums">{formatCurrency(estTotal)}</span>
+              </div>
+              <p className="text-[11px] text-gray-400 pt-1">{countLaptops(lines)} unit(s){isSaleType ? '' : ' · monthly rental + one-time security & shipping'}. GST as applicable.</p>
+            </div>
+          </div>
+
+          {form.remarks ? (
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1">Remarks</p>
+              <p className="text-sm text-gray-700 whitespace-pre-wrap">{form.remarks}</p>
+            </div>
+          ) : null}
+          {form.terms ? (
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1">Terms &amp; Conditions</p>
+              <p className="text-sm text-gray-700 whitespace-pre-wrap">{form.terms}</p>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="border-t p-4 flex justify-end shrink-0">
+          <button type="button" onClick={onClose} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">Close Preview</button>
+        </div>
+      </div>
     </div>
   );
 }

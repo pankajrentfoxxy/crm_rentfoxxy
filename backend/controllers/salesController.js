@@ -1,6 +1,8 @@
 const pool = require('../config/db');
 const { researchCompany } = require('../services/perplexityService');
 const PDFDocument = require('pdfkit');
+const { formatPdfDateIstOrDash, formatPdfNowIst } = require('../utils/pdfDateTimeUtils');
+const { appendCustomerTypeCondition, isCustomerTypeAllowed } = require('../services/customerAccessScope');
 
 const logOrderStatusHistory = async (db, { orderId, fromStatus = null, toStatus, changedBy = null, notes = null }) => {
     if (!toStatus) return;
@@ -33,7 +35,7 @@ const safeMoney = (v) => {
   return (Math.round(clamped * 100) / 100).toFixed(2);
 };
 const roundMoney = (v) => Number(safeMoney(v));
-const formatDate = (value) => (value ? new Date(value).toLocaleDateString('en-IN') : '-');
+const formatDate = (value) => formatPdfDateIstOrDash(value);
 const supplierStateCode = (COMPANY_DETAILS.gst || '').slice(0, 2);
 const extractStateCode = (gst) => {
     const value = String(gst || '').trim();
@@ -422,7 +424,7 @@ const renderEwayPdf = (res, bundle) => {
     doc.rect(left, 36, pageWidth, 56).stroke('#1f2937');
     doc.font('Helvetica-Bold').fontSize(15).text('FORM GST EWB-01 (ERP FORMAT)', left, 48, { width: pageWidth, align: 'center' });
     doc.font('Helvetica').fontSize(9).text(`E-Way Bill No: ${order.eway_bill_number || '-'}`, left, 72, { width: pageWidth / 2 });
-    doc.text(`Generated: ${formatDate(order.eway_bill_generated_at || new Date())}`, left + pageWidth / 2, 72, { width: pageWidth / 2, align: 'right' });
+    doc.text(`Generated: ${formatPdfNowIst()}`, left + pageWidth / 2, 72, { width: pageWidth / 2, align: 'right' });
 
     let y = 104;
     doc.font('Helvetica-Bold').fontSize(11).text('Part - A (Consignment Details)', left, y);
@@ -472,29 +474,30 @@ const renderEwayPdf = (res, bundle) => {
     doc.end();
 };
 
-exports.researchCompanyData = async (req, res) => {
-    const { company_name } = req.body;
-    if (!company_name) return res.status(400).json({ message: 'Company name is required' });
+// exports.researchCompanyData = async (req, res) => {
+//     const { company_name } = req.body;
+//     if (!company_name) return res.status(400).json({ message: 'Company name is required' });
 
-    try {
-        // 1. Check Database for existing company research
-        const dbRes = await pool.query(
-            `SELECT details FROM customers WHERE name ILIKE $1 AND details IS NOT NULL LIMIT 1`,
-            [company_name]
-        );
+//     try {
+//         // 1. Check Database for existing company research
+//         const dbRes = await pool.query(
+//             `SELECT details FROM customers WHERE name ILIKE $1 AND details IS NOT NULL LIMIT 1`,
+//             [company_name]
+//         );
 
-        if (dbRes.rows.length > 0) {
-            return res.json({ success: true, data: dbRes.rows[0].details, source: 'database' });
-        }
+//         if (dbRes.rows.length > 0) {
+//             return res.json({ success: true, data: dbRes.rows[0].details, source: 'database' });
+//         }
 
-        // 2. Fetch from Perplexity API
-        const data = await researchCompany(company_name);
-        res.json({ success: true, data, source: 'api' });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Research failed', error: error.message });
-    }
-};
+//         // 2. Fetch from Perplexity API
+//         // const data = await researchCompany(company_name);
+//         const data = null;
+//         res.json({ success: true, data, source: 'api' });
+//     } catch (error) {
+//         console.error(error);
+//         res.status(500).json({ message: 'Research failed', error: error.message });
+//     }
+// };
 
 const formatCustomerAddressLine = (row) => {
     if (!row) return null;
@@ -538,6 +541,9 @@ exports.getCustomerById = async (req, res) => {
     try {
         const result = await pool.query('SELECT * FROM customers WHERE customer_id = $1', [id]);
         if (!result.rows.length) return res.status(404).json({ message: 'Customer not found' });
+        if (!isCustomerTypeAllowed(req.allowedCustomerTypes, result.rows[0].customer_type)) {
+            return res.status(403).json({ message: 'Access denied: customer is outside your Customer Access scope' });
+        }
         const addrRes = await pool.query(
             `SELECT customer_address_id, customer_id, concern_person, mobile_no, address, pincode, is_head_office, address_type
              FROM customer_addresses WHERE customer_id = $1 ORDER BY is_head_office DESC, customer_address_id ASC`,
@@ -556,12 +562,24 @@ exports.getCustomers = async (req, res) => {
         let result;
         if (search && String(search).trim()) {
             const term = `%${String(search).trim()}%`;
+            const params = [term];
+            const conditions = ['(name ILIKE $1 OR company_name ILIKE $1 OR email ILIKE $1 OR phone ILIKE $1 OR gst_no ILIKE $1)'];
+            // Role-based Customer Access scope (all/sales/rental)
+            appendCustomerTypeCondition(req.allowedCustomerTypes, conditions, params, 'customer_type');
             result = await pool.query(
-                `SELECT * FROM customers WHERE name ILIKE $1 OR company_name ILIKE $1 OR email ILIKE $1 OR phone ILIKE $1 OR gst_no ILIKE $1 ORDER BY created_at DESC`,
-                [term]
+                `SELECT * FROM customers WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC`,
+                params
             );
         } else {
-            result = await pool.query('SELECT * FROM customers ORDER BY created_at DESC');
+            const params = [];
+            const conditions = [];
+            appendCustomerTypeCondition(req.allowedCustomerTypes, conditions, params, 'customer_type');
+            result = await pool.query(
+                `SELECT * FROM customers
+                 ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
+                 ORDER BY created_at DESC`,
+                params
+            );
         }
         const addrRes = await pool.query(
             `SELECT customer_address_id, customer_id, concern_person, mobile_no, address, pincode, is_head_office, address_type
@@ -589,6 +607,11 @@ exports.updateCustomer = async (req, res) => {
     const { name, company_name, email, phone, gst_no, type, address } = req.body;
 
     try {
+        const existing = await pool.query('SELECT customer_type FROM customers WHERE customer_id = $1', [id]);
+        if (!existing.rows.length) return res.status(404).json({ message: 'Customer not found' });
+        if (!isCustomerTypeAllowed(req.allowedCustomerTypes, existing.rows[0].customer_type)) {
+            return res.status(403).json({ message: 'Access denied: customer is outside your Customer Access scope' });
+        }
         await pool.query(
             `UPDATE customers SET
               name = COALESCE($1, name),
@@ -627,12 +650,14 @@ exports.updateCustomerAddress = async (req, res) => {
               concern_person = COALESCE($1, concern_person),
               mobile_no = COALESCE($2, mobile_no),
               address = COALESCE($3, address),
-              pincode = COALESCE($4, pincode),
-              is_head_office = COALESCE($5, is_head_office),
-              address_type = COALESCE($6, address_type),
+              city = COALESCE($4, city),
+              state = COALESCE($5, state),
+              pincode = COALESCE($6, pincode),
+              is_head_office = COALESCE($7, is_head_office),
+              address_type = COALESCE($8, address_type),
               updated_at = CURRENT_TIMESTAMP
-             WHERE customer_address_id = $7`,
-            [concern_person || null, mobile_no || null, address || null, pincode || null, is_head_office ?? false, address_type || null, addr_id]
+             WHERE customer_address_id = $9`,
+            [concern_person || null, mobile_no || null, address || null, req.body.city || null, req.body.state || null, pincode || null, is_head_office ?? false, address_type || null, addr_id]
         );
         const res2 = await pool.query('SELECT * FROM customer_addresses WHERE customer_address_id = $1', [addr_id]);
         res.json({ success: true, address: res2.rows[0] });

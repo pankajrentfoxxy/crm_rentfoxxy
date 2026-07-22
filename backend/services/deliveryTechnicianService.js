@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const pool = require('../config/db');
+const { parseIndianMobile } = require('../utils/phoneValidation');
 
 const UPLOAD_SUBDIR = 'delivery-man';
 const uploadRoot = path.join(__dirname, '..', '..', 'uploads', UPLOAD_SUBDIR);
@@ -148,12 +149,13 @@ async function createTechnician(body, files = {}) {
   const firstName = (body.first_name || body.f_name || '').trim();
   const lastName = (body.last_name || body.l_name || '').trim();
   const email = (body.email || '').trim();
-  const phone = (body.phone || '').trim();
+  const phoneParsed = parseIndianMobile(body.phone, { required: true, label: 'Phone' });
+  if (!phoneParsed.ok) return { ok: false, message: phoneParsed.error };
+  const phone = phoneParsed.value;
   const countryCode = (body.country_code || '91').trim();
 
   if (!firstName) return { ok: false, message: 'First name is required' };
   if (!lastName) return { ok: false, message: 'Last name is required' };
-  if (!phone) return { ok: false, message: 'Phone is required' };
   if (!email) return { ok: false, message: 'Email is required' };
 
   const unique = await assertUniquePhoneEmail({ email, phone, countryCode });
@@ -211,7 +213,12 @@ async function updateTechnician(id, body, files = {}) {
   const firstName = (body.first_name || body.f_name || existing.first_name || '').trim();
   const lastName = (body.last_name || body.l_name || existing.last_name || '').trim();
   const email = (body.email || existing.email || '').trim();
-  const phone = (body.phone || existing.phone || '').trim();
+  let phone = existing.phone;
+  if (body.phone !== undefined) {
+    const phoneParsed = parseIndianMobile(body.phone, { required: true, label: 'Phone' });
+    if (!phoneParsed.ok) return { ok: false, message: phoneParsed.error };
+    phone = phoneParsed.value;
+  }
   const countryCode = (body.country_code || existing.country_code || '91').trim();
 
   if (!firstName) return { ok: false, message: 'First name is required' };
@@ -279,6 +286,21 @@ async function updateTechnician(id, body, files = {}) {
   return { ok: true, data: formatTechnician(r.rows[0]) };
 }
 
+async function changeTechnicianPassword(id, newPassword) {
+  const password = String(newPassword || '');
+  if (password.length < 8) {
+    return { ok: false, message: 'Password must be at least 8 characters' };
+  }
+  const passwordHash = await bcrypt.hash(password, 10);
+  const r = await pool.query(
+    `UPDATE delivery_technicians SET password_hash = $1, updated_at = NOW()
+     WHERE technician_id = $2 RETURNING *`,
+    [passwordHash, id]
+  );
+  if (!r.rows.length) return { ok: false, message: 'Technician not found', status: 404 };
+  return { ok: true, data: formatTechnician(r.rows[0]) };
+}
+
 async function updateTechnicianStatus(id, status) {
   const isActive = status === 1 || status === '1' || status === true;
   const r = await pool.query(
@@ -303,6 +325,56 @@ async function deleteTechnician(id) {
   return { ok: true };
 }
 
+const DELIVERY_TECH_LINK_ROLES = new Set(['support_tech', 'support_lead', 'dispatch', 'dispatch_qc']);
+
+function splitUserName(full) {
+  const t = String(full || '').trim();
+  if (!t) return { first: 'Field', last: 'Technician' };
+  const i = t.indexOf(' ');
+  if (i < 0) return { first: t, last: 'Technician' };
+  return { first: t.slice(0, i), last: t.slice(i + 1).trim() || 'Technician' };
+}
+
+/** Ensure a CRM support/dispatch user has a linked delivery_technicians row (for DC dropdown + My Deliveries). */
+async function ensureLinkedDeliveryTechnician(userId) {
+  if (!userId) return null;
+  const uRes = await pool.query(
+    `SELECT user_id, name, email, mobile_no, role, active, status
+       FROM users WHERE user_id = $1`,
+    [userId]
+  );
+  const u = uRes.rows[0];
+  if (!u || !u.active || String(u.status || 'active') !== 'active') return null;
+  if (!DELIVERY_TECH_LINK_ROLES.has(u.role)) return null;
+
+  const linked = await pool.query(
+    `SELECT technician_id, user_id FROM delivery_technicians
+      WHERE user_id = $1 OR LOWER(email) = LOWER($2)
+      ORDER BY CASE WHEN user_id = $1 THEN 0 ELSE 1 END
+      LIMIT 1`,
+    [userId, u.email]
+  );
+  if (linked.rows[0]) {
+    if (!linked.rows[0].user_id) {
+      await pool.query(
+        `UPDATE delivery_technicians SET user_id = $1, updated_at = NOW() WHERE technician_id = $2`,
+        [userId, linked.rows[0].technician_id]
+      );
+    }
+    return linked.rows[0].technician_id;
+  }
+
+  const { first, last } = splitUserName(u.name);
+  const phone = String(u.mobile_no || '').trim() || `9${String(userId).padStart(9, '0').slice(-9)}`;
+  const ins = await pool.query(
+    `INSERT INTO delivery_technicians (user_id, first_name, last_name, phone, email, country_code, is_active)
+     VALUES ($1, $2, $3, $4, $5, '91', TRUE)
+     RETURNING technician_id`,
+    [userId, first, last, phone, u.email]
+  );
+  return ins.rows[0]?.technician_id || null;
+}
+
 module.exports = {
   UPLOAD_SUBDIR,
   generatePassword,
@@ -311,6 +383,8 @@ module.exports = {
   getTechnicianById,
   createTechnician,
   updateTechnician,
+  changeTechnicianPassword,
   updateTechnicianStatus,
   deleteTechnician,
+  ensureLinkedDeliveryTechnician,
 };

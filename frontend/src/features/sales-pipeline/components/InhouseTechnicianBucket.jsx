@@ -1,5 +1,5 @@
 import React from 'react';
-import { DISPATCH_MODE_STYLES, statusLabel } from '../salesPipelineUtils';
+import { DISPATCH_MODE_STYLES, formatDeliveryAddressLine, statusLabel } from '../salesPipelineUtils';
 
 export default function InhouseTechnicianBucket({ buckets = [], onSendOtp, onVerifyOtp, onReject }) {
   if (!buckets.length) {
@@ -22,7 +22,9 @@ export default function InhouseTechnicianBucket({ buckets = [], onSendOtp, onVer
                 <li key={d.dc_number} className="p-4 flex flex-wrap items-start justify-between gap-3">
                   <div className="text-sm">
                     <p className="font-medium text-gray-900">{d.customer_name}</p>
-                    <p className="text-gray-500 text-xs mt-0.5">{d.delivery_address || d.delivery_location || '—'}</p>
+                    <p className="text-gray-500 text-xs mt-0.5">
+                      {formatDeliveryAddressLine(d.delivery_address) || d.delivery_location || '—'}
+                    </p>
                     <p className="text-blue-700 font-mono text-xs mt-1">{d.dc_number}</p>
                     <span className={`inline-block mt-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${DISPATCH_MODE_STYLES.inhouse}`}>
                       OTP: {d.delivery_otp_sent_at ? 'Sent' : 'Not Sent'}

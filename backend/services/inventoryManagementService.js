@@ -5,11 +5,19 @@ const {
   EFFECTIVE_STATUS_SQL,
   parseExtra,
   parseLineItems,
-  enrichSerialRow
+  enrichSerialRow,
+  enrichSerialRowsBatch
 } = require('./qcManagementService');
 
 const LIST_SEGMENT_MAP = {
   passed: { mode: 'status', status: 'passed' },
+  // Staging bucket — not yet in QC Process (no floor ticket until moved).
+  qc_pending: { mode: 'status', status: 'qc_pending' },
+  // ERP "QC Processing List" (/admin/qc/orders/qc-orders/pending) — status = 'pending' only.
+  // Other non-passed statuses (failed, out_for_repare, dead, …) have their own inventory tabs.
+  qc_process: { mode: 'status', status: 'pending' },
+  dead_laptops: { mode: 'status', status: 'dead' },
+  missing_laptops: { mode: 'status', status: 'missing' },
   rent_to_own: { mode: 'po_passed', poType: 'rent_to_own' },
   rental_purchase: { mode: 'po_passed', poType: 'rental_purchase' },
   direct_purchase: { mode: 'po_passed', poType: 'direct_purchase' },
@@ -22,6 +30,10 @@ const LIST_SEGMENT_MAP = {
 
 const ROUTE_TO_SEGMENT = {
   'ready-to-rent-or-sell': 'passed',
+  'qc-pending': 'qc_pending',
+  'qc-process': 'qc_process',
+  'dead-laptops': 'dead_laptops',
+  'missing-laptops': 'missing_laptops',
   'rent-to-own': 'rent_to_own',
   'rental-purchase': 'rental_purchase',
   'direct-purchase': 'direct_purchase',
@@ -39,6 +51,10 @@ function normalizeListSegment(input) {
 function listTitleForSegment(segment) {
   const titles = {
     passed: 'Ready to Rent or Sell',
+    qc_pending: 'QC Pending',
+    qc_process: 'QC Process Laptops',
+    dead_laptops: 'Dead Laptops',
+    missing_laptops: 'Missing Laptops',
     rent_to_own: 'Rent To Own',
     rental_purchase: 'Rental Purchase',
     direct_purchase: 'Direct Purchase',
@@ -56,6 +72,29 @@ function effectiveStatusSql(alias) {
   )`;
 }
 
+// Lifecycle statuses that mean a unit has left the "Ready to Rent/Sell" shelf
+// (DC created/dispatched, with a customer, or scrapped/returned).
+// These units belong in Customer Assets / Dead Assets, not the rentable pool.
+const OFF_SHELF_STATUSES = [
+  'in_transit', 'rented', 'on_demo', 'sold', 'returned', 'scrapped'
+];
+
+/** Units awaiting serial-verified warehouse receive must not appear on rentable shelf lists. */
+function pendingInventoryReceiveFilterSql(alias = 's') {
+  return ` AND COALESCE(${alias}.extra->>'awaiting_inventory_receive', 'false') <> 'true'
+           AND NOT EXISTS (
+             SELECT 1 FROM production_assets pa
+              WHERE pa.vendor_serial_id = ${alias}.serial_id
+                AND pa.status = 'pending_inventory'
+           )`;
+}
+
+/** QC-passed units on DC or with a customer must not appear in Ready to Rent or Sell. */
+function offShelfInventoryFilterSql(alias = 's') {
+  const list = OFF_SHELF_STATUSES.map((s) => `'${s}'`).join(', ');
+  return ` AND COALESCE(${alias}.inventory_status, 'in_stock') NOT IN (${list})`;
+}
+
 function buildListWhere(segment, params, alias = 's') {
   const cfg = LIST_SEGMENT_MAP[segment];
   if (!cfg) return { sql: ' AND FALSE', params };
@@ -71,7 +110,7 @@ function buildListWhere(segment, params, alias = 's') {
     params.push('passed', cfg.poType);
     return {
       sql: ` AND ${alias}.po_id IS NOT NULL AND ${effectiveStatusSql(alias)} = $${params.length - 1}
-             AND p.purchase_order_type = $${params.length}`,
+             AND p.purchase_order_type = $${params.length}${offShelfInventoryFilterSql(alias)}${pendingInventoryReceiveFilterSql(alias)}`,
       params
     };
   }
@@ -88,10 +127,40 @@ function buildListWhere(segment, params, alias = 's') {
     };
   }
 
+  if (cfg.mode === 'status_not') {
+    params.push(cfg.status);
+    const i = params.length;
+    return {
+      sql: ` AND ${alias}.po_id IS NOT NULL AND ${effectiveStatusSql(alias)} <> $${i}`,
+      params
+    };
+  }
+
   params.push(cfg.status);
   const i = params.length;
+
+  // Migrated ERP rows often store out_for_repare as inventory_status = in_repair
+  // while qc_status / extra.action_status carry the ERP label.
+  if (cfg.status === 'out_for_repare') {
+    params.push('in_repair');
+    const j = params.length;
+    return {
+      sql: ` AND ${alias}.po_id IS NOT NULL AND (
+        ${effectiveStatusSql(alias)} = $${i}
+        OR ${alias}.inventory_status IN ($${i}, $${j})
+        OR COALESCE(NULLIF(TRIM(${alias}.extra->>'action_status'), ''), '') = $${i}
+      )`,
+      params,
+    };
+  }
+
+  const shelfSql = cfg.status === 'passed' ? offShelfInventoryFilterSql(alias) : '';
+  const pendingReceiveSql = cfg.status === 'passed' ? pendingInventoryReceiveFilterSql(alias) : '';
+  const qcPendingReceiveSql = cfg.status === 'pending'
+    ? ` AND COALESCE(${alias}.extra->>'awaiting_inventory_receive', 'false') <> 'true'`
+    : '';
   return {
-    sql: ` AND ${alias}.po_id IS NOT NULL AND ${effectiveStatusSql(alias)} = $${i}`,
+    sql: ` AND ${alias}.po_id IS NOT NULL AND ${effectiveStatusSql(alias)} = $${i}${shelfSql}${pendingReceiveSql}${qcPendingReceiveSql}`,
     params
   };
 }
@@ -216,9 +285,46 @@ async function fetchSparePartTabCounts(pool) {
   return counts;
 }
 
+/** Active SO allocations (attached, not yet on a DC) for Ready to Rent/Sell indicators. */
+async function attachSoAttachmentIndicators(pool, rows) {
+  if (!rows?.length) return rows;
+  const serialIds = rows.map((r) => r.serial_id).filter(Boolean);
+  if (!serialIds.length) return rows;
+
+  const r = await pool.query(
+    `SELECT sos.serial_id,
+            sos.sales_order_number,
+            COALESCE(MAX(sol.customer_name), MAX(c.company_name), MAX(c.name), '') AS customer_name,
+            COALESCE(MAX(sol.quotation_type), MAX(sq.quotation_type), 'rental') AS quotation_type
+       FROM sales_order_serials sos
+       LEFT JOIN sales_order_lines sol ON sol.sales_order_number = sos.sales_order_number
+       LEFT JOIN sales_quotations sq ON sq.quotation_number = sol.quotation_number
+       LEFT JOIN customers c ON c.customer_id = sol.customer_id
+      WHERE sos.serial_id = ANY($1::int[])
+        AND sos.status = 'attached'
+      GROUP BY sos.serial_id, sos.sales_order_number`,
+    [serialIds]
+  );
+
+  const bySerial = Object.fromEntries(r.rows.map((row) => [row.serial_id, row]));
+  for (const row of rows) {
+    const att = bySerial[row.serial_id];
+    row.so_attachment = att
+      ? {
+          sales_order_number: att.sales_order_number,
+          customer_name: att.customer_name || null,
+          quotation_type: att.quotation_type || 'rental',
+        }
+      : null;
+  }
+  return rows;
+}
+
 module.exports = {
   LIST_SEGMENT_MAP,
   ROUTE_TO_SEGMENT,
+  OFF_SHELF_STATUSES,
+  offShelfInventoryFilterSql,
   SPARE_PART_TABS,
   SPARE_STATUS_VALUES,
   normalizeListSegment,
@@ -228,8 +334,10 @@ module.exports = {
   listTitleForSegment,
   buildListWhere,
   enrichSerialRow,
+  enrichSerialRowsBatch,
   enrichSparePartRow,
   fetchSparePartTabCounts,
+  attachSoAttachmentIndicators,
   parseExtra,
   parseLineItems
 };

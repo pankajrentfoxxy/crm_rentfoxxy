@@ -47,10 +47,15 @@ exports.uploadDocument = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid doc_type' });
     }
 
-    const custCheck = await pool.query('SELECT customer_id FROM customers WHERE customer_id = $1', [customerId]);
+    const custCheck = await pool.query('SELECT customer_id, customer_type FROM customers WHERE customer_id = $1', [customerId]);
     if (!custCheck.rows.length) {
       if (req.file.path && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
       return res.status(404).json({ success: false, message: 'Customer not found' });
+    }
+    const { isCustomerTypeAllowed } = require('../services/customerAccessScope');
+    if (!isCustomerTypeAllowed(req.allowedCustomerTypes, custCheck.rows[0].customer_type)) {
+      if (req.file.path && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return res.status(403).json({ success: false, message: 'Access denied: customer is outside your Customer Access scope' });
     }
 
     const destDir = path.join('uploads', 'customer-documents', String(customerId));

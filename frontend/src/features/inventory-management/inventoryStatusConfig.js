@@ -4,7 +4,7 @@ export const OUT_FOR_REPAIR_INVENTORY_ACTIONS = [
   { value: 'replace', label: 'Replace' }
 ];
 
-/** Laravel inventory-list/passed — status2 sale routing (ReturnAndRepareCheckXYZ) */
+/** Laravel ReturnAndRepareCheckXYZ — sets serial status2 for ready-to-rent list */
 export const READY_TO_RENT_SALE_ACTIONS = [
   { value: 'normal_sale', label: 'Normal Sale' },
   { value: 'clearance_sale', label: 'Clearance Sale' },
@@ -12,9 +12,19 @@ export const READY_TO_RENT_SALE_ACTIONS = [
   { value: 'rent_or_normal_sale', label: 'Rent or Normal Sale' }
 ];
 
+/** Admin-only — move QC passed unit back into QC Process pipeline */
+export const MOVE_TO_QC_PROCESS_ACTION = {
+  value: '__move_to_qc_process__',
+  label: 'Move to QC Process'
+};
+
 /** CRM route segment → Laravel admin.inventory.inventoryList segment */
 export const INVENTORY_SEGMENT_BY_ROUTE = {
   'ready-to-rent-or-sell': 'passed',
+  'qc-pending': 'qc_pending',
+  'qc-process': 'qc_process',
+  'dead-laptops': 'dead_laptops',
+  'missing-laptops': 'missing_laptops',
   'rent-to-own': 'rent_to_own',
   'rental-purchase': 'rental_purchase',
   'direct-purchase': 'direct_purchase',
@@ -31,6 +41,30 @@ export const INVENTORY_PAGE_META = {
     erpSegment: 'passed',
     countKey: 'passed',
     description: 'QC passed assets ready for rent or sale (Laravel inventory-list/passed).'
+  },
+  'qc-pending': {
+    title: 'QC Pending',
+    erpSegment: 'qc_pending',
+    countKey: 'qc_pending',
+    description: 'Laptops received but not yet in QC Process — move to QC Process when ready.'
+  },
+  'qc-process': {
+    title: 'QC Process Laptops',
+    erpSegment: 'qc_process',
+    countKey: 'qc_process',
+    description: 'Laptops still in the QC pipeline — QC status is not yet passed.'
+  },
+  'dead-laptops': {
+    title: 'Dead Laptops',
+    erpSegment: 'dead_laptops',
+    countKey: 'dead_laptops',
+    description: 'Non-working units held for future floor re-evaluation or parts.'
+  },
+  'missing-laptops': {
+    title: 'Missing Laptops',
+    erpSegment: 'missing_laptops',
+    countKey: 'missing_laptops',
+    description: 'Units marked missing from warehouse — use Asset Movement to reclassify when found.'
   },
   'rent-to-own': {
     title: 'Rent To Own',
@@ -55,6 +89,12 @@ export const INVENTORY_PAGE_META = {
     erpSegment: 'out_for_repare',
     countKey: 'out_for_repare',
     description: 'Assets sent out for repair.'
+  },
+  'out-for-repair': {
+    title: 'Out for Repair',
+    erpSegment: 'out_for_repair',
+    countKey: 'out_for_repair',
+    description: 'Laptops dispatched to external vendor repair (Production Diagnosis Failed workflow).'
   },
   'spare-parts': {
     title: 'Spare Parts',

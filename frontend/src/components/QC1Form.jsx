@@ -1,6 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { CheckCircle, AlertTriangle, Save, ChevronDown, ChevronUp } from 'lucide-react';
 import api from '../utils/api';
+import HwReworkAssignModal from '../features/floor-pipeline/components/HwReworkAssignModal';
+import Qc1SpecChecklist from '../features/floor-pipeline/components/Qc1SpecChecklist';
+import Qc2SpecVerifyPanel from '../features/floor-pipeline/components/Qc2SpecVerifyPanel';
+import DispatchQcSpecVerifyPanel from '../features/floor-pipeline/components/DispatchQcSpecVerifyPanel';
+import Qc2InventoryTagModal from '../features/floor-pipeline/components/Qc2InventoryTagModal';
 
 const GRADE_OPTIONS = ['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C', 'D'];
 
@@ -97,10 +102,33 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
     const [processing, setProcessing] = useState(false);
     const [saving, setSaving] = useState(false);
     const [bitlockerModal, setBitlockerModal] = useState(false);
+    const [specChecklistReady, setSpecChecklistReady] = useState(qcStage !== 'QC1');
+    const [qc2Verified, setQc2Verified] = useState(qcStage !== 'QC2');
+    const [dispatchQcVerified, setDispatchQcVerified] = useState(qcStage !== 'Dispatch QC');
     const [assigneeModal, setAssigneeModal] = useState(false);
     const [qc2Assignees, setQc2Assignees] = useState([]);
     const [selectedAssigneeId, setSelectedAssigneeId] = useState('');
     const [loadingAssignees, setLoadingAssignees] = useState(false);
+    const [hwFailPickerOpen, setHwFailPickerOpen] = useState(false);
+    const [qc2TagModalOpen, setQc2TagModalOpen] = useState(false);
+    const [pendingQc2AssigneeId, setPendingQc2AssigneeId] = useState(null);
+
+    const syncHeaderFromSpec = useCallback((h) => {
+        setHeader({
+            processor: h.processor || '',
+            generation: h.generation || '',
+            storage_type: h.storage_type || h.ssd || '',
+            ram_size: h.ram_size || h.ram || '',
+        });
+    }, []);
+
+    const handleQc2Verified = useCallback((ok) => {
+        setQc2Verified(!!ok);
+    }, []);
+
+    const handleDispatchQcVerified = useCallback((ok) => {
+        setDispatchQcVerified(!!ok);
+    }, []);
 
     const loadQCData = useCallback(async () => {
         try {
@@ -108,27 +136,38 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
             if (res.data.success) {
                 const { ticket: ticketData, qcResult } = res.data;
 
-                // Auto-fill header from ticket/inventory
+                // Only prefill the inspection from an UNLOCKED draft of the current cycle.
+                // A locked result is a finalized submission from a previous QC pass/fail
+                // cycle — after a failure the form must open blank for a fresh inspection.
+                const draft = qcResult && !qcResult.is_locked ? qcResult : null;
+
+                // Header config can still come from the ticket/inventory (not a prior QC value).
                 setHeader({
-                    processor: qcResult?.processor || ticketData.processor || '',
-                    generation: qcResult?.generation || '',
-                    storage_type: qcResult?.storage_type || ticketData.storage_type || '',
-                    ram_size: qcResult?.ram_size || ticketData.ram_size || ''
+                    processor: draft?.processor || ticketData.processor || '',
+                    generation: draft?.generation || '',
+                    storage_type: draft?.storage_type || ticketData.storage_type || '',
+                    ram_size: draft?.ram_size || ticketData.ram_size || ''
                 });
 
-                if (qcResult) {
-                    setChecklist(qcResult.checklist_data || INITIAL_CHECKLIST);
+                if (draft) {
+                    setChecklist(draft.checklist_data || INITIAL_CHECKLIST);
                     setGrading({
-                        final_grade: qcResult.final_grade || '',
-                        grade_notes: qcResult.grade_notes || ''
+                        final_grade: draft.final_grade || '',
+                        grade_notes: draft.grade_notes || ''
                     });
-                    setRemarks(qcResult.remarks || '');
-                    if (qcResult.parts_replaced) {
+                    setRemarks(draft.remarks || '');
+                    if (draft.parts_replaced) {
                         setPartReplacement({
                             parts_replaced: true,
-                            replaced_parts: qcResult.replaced_parts || []
+                            replaced_parts: draft.replaced_parts || []
                         });
                     }
+                } else {
+                    // Finalized prior cycle (or nothing yet) → start from scratch.
+                    setChecklist(INITIAL_CHECKLIST);
+                    setGrading({ final_grade: '', grade_notes: '' });
+                    setRemarks('');
+                    setPartReplacement({ parts_replaced: false, replaced_parts: [] });
                 }
             }
         } catch (error) {
@@ -159,12 +198,19 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
         return !criticalFailures.some(Boolean);
     };
 
-    const submitQC = async (assignToUserId = null) => {
+    const submitQC = async (assignToUserId = null, inventoryTag = null) => {
         setProcessing(true);
         try {
+            // Spec panels own config; fill legacy header fields so API never depends on the old form.
+            const safeHeader = {
+                processor: header.processor || ticket.processor || '-',
+                generation: header.generation || ticket.generation || '-',
+                storage_type: header.storage_type || ticket.storage_type || ticket.storage || '-',
+                ram_size: header.ram_size || ticket.ram_size || ticket.ram || '-',
+            };
             const payload = {
                 qcStage,
-                header,
+                header: safeHeader,
                 checklist,
                 grading,
                 remarks,
@@ -174,11 +220,18 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
             if (assignToUserId != null) {
                 payload.assignToUserId = assignToUserId;
             }
+            if (inventoryTag) {
+                payload.inventory_tag = inventoryTag;
+            }
             const res = await api.post(`/tickets/${ticket.ticket_id}/qc/submit`, payload);
 
             if (res.data.success) {
                 alert(`${qcStage} submitted successfully!\nResult: ${res.data.result}\nNext Stage: ${res.data.nextStage}`);
-                onComplete();
+                onComplete?.({
+                    nextStage: res.data.nextStage,
+                    result: res.data.result,
+                    fromStageMove: true,
+                });
             }
         } catch (error) {
             console.error('Submit QC error:', error);
@@ -187,6 +240,9 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
             setProcessing(false);
             setAssigneeModal(false);
             setSelectedAssigneeId('');
+            setHwFailPickerOpen(false);
+            setQc2TagModalOpen(false);
+            setPendingQc2AssigneeId(null);
         }
     };
 
@@ -211,9 +267,14 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
     };
 
     const handleSubmit = async () => {
-        // Validate header
-        if (!header.processor || !header.generation || !header.storage_type || !header.ram_size) {
-            return alert('Please complete the header section (Processor, Generation, Storage Type, RAM Size)');
+        if (qcStage === 'QC1' && !specChecklistReady) {
+            return alert('Please complete the specification checklist (all 6 fields)');
+        }
+        if (qcStage === 'QC2' && !qc2Verified) {
+            return alert('Complete QC2 spec verification before testing');
+        }
+        if (qcStage === 'Dispatch QC' && !dispatchQcVerified) {
+            return alert('Complete Dispatch QC spec verification before testing');
         }
 
         // Validate all checklist items
@@ -245,6 +306,14 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
         setBitlockerModal(false);
 
         const needsQc2Assignee = qcStage === 'QC1' && willPassQC();
+        if (qcStage === 'QC1' && !willPassQC()) {
+            setHwFailPickerOpen(true);
+            return;
+        }
+        if (qcStage === 'QC2' && willPassQC()) {
+            setQc2TagModalOpen(true);
+            return;
+        }
         if (!needsQc2Assignee) {
             await submitQC();
             return;
@@ -284,6 +353,15 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
         await submitQC(parseInt(selectedAssigneeId, 10));
     };
 
+    const handleQc2TagConfirm = async (inventoryTag) => {
+        setQc2TagModalOpen(false);
+        await submitQC(pendingQc2AssigneeId, inventoryTag);
+    };
+
+    const confirmHwFailAssign = async (userId) => {
+        await submitQC(userId);
+    };
+
     const addReplacedPart = () => {
         setPartReplacement({
             ...partReplacement,
@@ -320,7 +398,26 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
                 </div>
             </div>
 
-            {/* Header Section */}
+            {/* Spec checklist (QC1) or classic header (Dispatch QC) */}
+            {qcStage === 'QC1' ? (
+                <Qc1SpecChecklist
+                    ticket={ticket}
+                    onReadyChange={setSpecChecklistReady}
+                    onHeaderSync={syncHeaderFromSpec}
+                />
+            ) : qcStage === 'QC2' ? (
+                <Qc2SpecVerifyPanel
+                    ticket={ticket}
+                    onVerified={handleQc2Verified}
+                    onHeaderSync={syncHeaderFromSpec}
+                />
+            ) : qcStage === 'Dispatch QC' ? (
+                <DispatchQcSpecVerifyPanel
+                    ticket={ticket}
+                    onVerified={handleDispatchQcVerified}
+                    onHeaderSync={syncHeaderFromSpec}
+                />
+            ) : (
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
                 <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
                     <span className="text-red-600">*</span> Header Information
@@ -387,7 +484,18 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
                     </div>
                 </div>
             </div>
+            )}
 
+            {qcStage === 'QC2' && !qc2Verified ? (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
+                    Specs must match first. When they do, review them above and click <strong>Continue to QC2 Testing</strong>.
+                </div>
+            ) : qcStage === 'Dispatch QC' && !dispatchQcVerified ? (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
+                    Specs must match first. When they do, review them above and click <strong>Proceed to Dispatch QC Testing</strong>.
+                </div>
+            ) : (
+            <>
             {/* Body & Physical Section */}
             <ChecklistSection
                 title="Body & Physical"
@@ -668,6 +776,8 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
                     {processing || loadingAssignees ? 'Submitting...' : `Submit ${qcStage}`}
                 </button>
             </div>
+            </>
+            )}
 
             {/* QC2 assignee selection (after QC1 pass + Bitlocker confirm) */}
             {assigneeModal && (
@@ -719,6 +829,22 @@ export default function QC1Form({ ticket, qcStage = 'QC1', onComplete }) {
                 </div>
             )}
 
+            <HwReworkAssignModal
+                ticket={ticket}
+                open={hwFailPickerOpen}
+                onClose={() => setHwFailPickerOpen(false)}
+                onConfirm={confirmHwFailAssign}
+                confirming={processing}
+            />
+
+            <Qc2InventoryTagModal
+                open={qc2TagModalOpen}
+                onClose={() => setQc2TagModalOpen(false)}
+                onConfirm={handleQc2TagConfirm}
+                saving={processing}
+                purchaseOrderType={ticket.purchase_order_type}
+            />
+
             {/* Bitlocker Reminder Modal */}
             {bitlockerModal && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-[60]">
@@ -760,8 +886,9 @@ function ChecklistSection({ title, icon, items, checklist, setChecklist }) {
 
     const failures = items.filter(item => {
         const val = checklist[item.key];
-        if (!val) return false;
-        return negativeTokens.some(token => val.includes(token));
+        console.log('Checklist value for', val);
+        if (!Array.isArray(val)) return false;
+        return negativeTokens.some(token => val?.includes(token));
     });
     const completed = items.filter(item => checklist[item.key] !== null).length;
 

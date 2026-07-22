@@ -2,12 +2,13 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { GripVertical } from 'lucide-react';
 import { STATUS_COLORS } from '../leadConstants';
-import { formatConfig, formatCurrency, formatFollowUpDateTime, formatInquiry, followUpTone, relativeTime } from '../leadCrmUtils';
+import { formatConfig, formatCurrency, formatFollowUpDateTime, formatInquiry, followUpTone, leadDisplayLabel, relativeTime } from '../leadCrmUtils';
+import QuickStatusUpdate from './QuickStatusUpdate';
 
-export default function LeadCard({ lead, onDragStart, onDragEnd }) {
+export default function LeadCard({ lead, onDragStart, onDragEnd, onRefresh }) {
   const navigate = useNavigate();
   const statusStyle = STATUS_COLORS[lead.status] || STATUS_COLORS.Pending;
-  const fuTone = followUpTone(lead.followUpDate);
+  const fuTone = followUpTone(lead.followUpDate, lead.followUpTime);
 
   return (
     <div
@@ -30,9 +31,9 @@ export default function LeadCard({ lead, onDragStart, onDragEnd }) {
               }`} title="Follow-up" />
             )}
           </div>
-          <p className="font-semibold text-gray-900 truncate">{lead.companyName || lead.name}</p>
+          <p className="font-semibold text-gray-900 truncate">{leadDisplayLabel(lead)}</p>
           <p className="text-gray-500 text-xs truncate">
-            {lead.name}{lead.designation ? ` · ${lead.designation}` : ''}
+            {(lead.name && lead.name !== 'Website Enquiry' ? lead.name : lead.email || '—')}{lead.designation ? ` · ${lead.designation}` : ''}
           </p>
           <p className="text-xs text-gray-500 mt-1 truncate">📞 {lead.phone || '—'}</p>
           {lead.email && <p className="text-xs text-gray-400 truncate">📧 {lead.email}</p>}
@@ -57,6 +58,10 @@ export default function LeadCard({ lead, onDragStart, onDragEnd }) {
           <p className="text-xs text-gray-400 mt-0.5">
             🕐 {relativeTime(lead.lastActivityAt || lead.updatedAt)}
           </p>
+          <div className="mt-2 pt-2 border-t border-gray-100 flex items-center justify-between" onClick={(e) => e.stopPropagation()}>
+            <QuickStatusUpdate lead={lead} onUpdated={onRefresh} />
+            <span className="text-xs text-gray-400">{lead.leadStage || ''}</span>
+          </div>
         </div>
       </div>
     </div>

@@ -50,9 +50,12 @@ function slugState(s) {
 
 const emptyLine = () => ({
   brand: '',
-  brand_custom: '',
+  category: '',
+  category_label: '',
   part_id: '',
   part_custom: '',
+  part_type: '',
+  specifications: '',
   warranty_months: '12',
   quantity: '',
   rate: ''
@@ -61,7 +64,7 @@ const emptyLine = () => ({
 /** Mirror Laravel assets_details array shape loosely (nested keys grouped by field). */
 function buildAssetsDetails(linePayloads) {
   return {
-    brand: linePayloads.map((l) => l.brand_name),
+    brand: linePayloads.map((l) => l.brand_name || ''),
     parts: linePayloads.map((l) => l.spare_part_name),
     warranty_in_month: linePayloads.map((l) => l.warranty_months),
     quantity: linePayloads.map((l) => l.quantity),
@@ -84,23 +87,33 @@ function buildLinePayloads(lines, partsCatalog) {
   const payloads = [];
   for (let idx = 0; idx < lines.length; idx += 1) {
     const ln = lines[idx];
-    let brand_name = ln.brand === '__custom__' ? ln.brand_custom.trim() : ln.brand.trim();
+    const category = (ln.category || '').trim();
+    const category_label = ln.category_label || '';
+    const brand_name = (ln.brand || '').trim();
 
     let part_id = ln.part_id && ln.part_id !== '__custom__' ? Number(ln.part_id) : null;
     let spare_part_name = '';
+    let floor_part_id = null;
+    let part_type = (ln.part_type || '').trim();
     if (part_id != null && Number.isFinite(part_id)) {
       const row = partsCatalog.find((p) => Number(p.id) === part_id);
       spare_part_name = row?.name ? String(row.name) : '';
+      floor_part_id = row?.floor_part_id != null ? Number(row.floor_part_id) : null;
+      if (!part_type && row?.part_type) part_type = String(row.part_type);
     }
     if (ln.part_id === '__custom__' || !spare_part_name) {
-      spare_part_name = ln.part_custom.trim();
+      spare_part_name = (ln.part_custom || '').trim();
       part_id = null;
+      floor_part_id = null;
     }
 
     const qty = Number(ln.quantity);
     const rate = Number(ln.rate);
     const w = Number(ln.warranty_months);
 
+    if (!category) {
+      throw new Error(`Line ${idx + 1}: category is required`);
+    }
     if (!brand_name) {
       throw new Error(`Line ${idx + 1}: brand is required`);
     }
@@ -118,10 +131,16 @@ function buildLinePayloads(lines, partsCatalog) {
     }
 
     payloads.push({
+      category,
+      category_label,
       brand_name,
       brand_id: null,
+      part_type: part_type || null,
       part_id,
+      floor_part_id,
+      parts_catalog_id: floor_part_id,
       spare_part_name,
+      specifications: (ln.specifications || '').trim(),
       warranty_months: Math.round(w),
       quantity: qty,
       rate
@@ -130,7 +149,7 @@ function buildLinePayloads(lines, partsCatalog) {
   return payloads;
 }
 
-export default function SparePartsPoFormModal({ open, onClose, onSaved }) {
+export default function SparePartsPoFormModal({ open, onClose, onSaved, prefill }) {
   const [metaLoading, setMetaLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -141,7 +160,8 @@ export default function SparePartsPoFormModal({ open, onClose, onSaved }) {
   const [remarks, setRemarks] = useState('');
 
   const [vendorOptions, setVendorOptions] = useState([]);
-  const [brands, setBrands] = useState([]);
+  const [categoriesFromMeta, setCategoriesFromMeta] = useState([]);
+  const [brandOptions, setBrandOptions] = useState([]);
   const [partsCatalog, setPartsCatalog] = useState([]);
   const [lines, setLines] = useState([emptyLine()]);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -161,7 +181,8 @@ export default function SparePartsPoFormModal({ open, onClose, onSaved }) {
       if (!data.success) throw new Error(data.message || 'Failed to load form');
       setPurchaseOrderNumber(data.purchase_order_number || '');
       setVendorOptions(Array.isArray(data.vendors) ? data.vendors : []);
-      setBrands(Array.isArray(data.brands) ? data.brands : []);
+      setCategoriesFromMeta(Array.isArray(data.categories) ? data.categories : []);
+      setBrandOptions(Array.isArray(data.brands) ? data.brands : []);
       setPartsCatalog(Array.isArray(data.parts) ? data.parts : []);
     } catch (e) {
       toast.error(e.response?.data?.message || e.message || 'Could not load spare PO form');
@@ -179,6 +200,27 @@ export default function SparePartsPoFormModal({ open, onClose, onSaved }) {
   useEffect(() => {
     if (!open) setPreviewOpen(false);
   }, [open]);
+
+  // Pre-fill the first line when navigated here from a part request.
+  useEffect(() => {
+    if (!open || !prefill) return;
+    const match = partsCatalog.find(
+      (p) => prefill.part_name && String(p.name).toLowerCase() === String(prefill.part_name).toLowerCase()
+    );
+    const category = prefill.category || match?.category || '';
+    const catOpt = categoriesFromMeta.find((c) => c.value === category);
+    setLines([
+      {
+        ...emptyLine(),
+        category,
+        category_label: catOpt?.label || '',
+        part_id: match ? String(match.id) : '__custom__',
+        part_custom: match ? '' : prefill.part_name || '',
+        quantity: String(prefill.quantity || 1),
+        specifications: prefill.specifications || ''
+      }
+    ]);
+  }, [open, prefill, partsCatalog, categoriesFromMeta]);
 
   const selectedVendor = useMemo(
     () => vendorOptions.find((v) => String(v.id) === String(vendor_id)),
@@ -308,8 +350,8 @@ export default function SparePartsPoFormModal({ open, onClose, onSaved }) {
           <div>
             <h2 className="text-lg font-bold text-slate-900">Add spare parts purchase order</h2>
             <p className="text-[11px] text-slate-500 mt-0.5">
-              Matches Laravel spare PO form — brand / part / warranty / quantity / rate rows; GST uses the vendor state
-              and supply state fields.
+              Category / part / warranty / quantity / rate rows; parts link to floor inventory. GST uses the vendor
+              state and supply state fields.
             </p>
           </div>
           <button
@@ -326,6 +368,17 @@ export default function SparePartsPoFormModal({ open, onClose, onSaved }) {
           <div className="p-12 text-center text-slate-500 text-sm animate-pulse">Loading form…</div>
         ) : (
           <form onSubmit={submit} className="flex-1 overflow-y-auto p-5 space-y-5">
+            {prefill?.request_number ? (
+              <div className="p-3 bg-blue-50 border border-blue-100 rounded-xl text-sm">
+                <p className="font-semibold text-blue-900">
+                  Creating spare PO to fulfil part request {prefill.request_number}
+                </p>
+                <p className="text-blue-700 text-xs mt-0.5">
+                  {prefill.ttspl_id ? `Laptop: ${prefill.ttspl_id} · ` : ''}
+                  Part: {prefill.part_name}
+                </p>
+              </div>
+            ) : null}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="text-xs font-semibold text-slate-600 flex items-center gap-1">
@@ -408,7 +461,7 @@ export default function SparePartsPoFormModal({ open, onClose, onSaved }) {
             <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
               <div className="flex items-center gap-2 border-b border-slate-100 pb-2">
                 <h3 className="text-sm font-bold text-slate-900">Parts order details</h3>
-                <span className="text-[11px] text-slate-500 ml-auto">Brand, part, warranty, quantity & rate — add rows</span>
+                <span className="text-[11px] text-slate-500 ml-auto">Brand, category, part, type — add rows</span>
               </div>
 
               <div className="space-y-4">
@@ -427,81 +480,131 @@ export default function SparePartsPoFormModal({ open, onClose, onSaved }) {
                       </button>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                       <div>
                         <label className="text-[11px] font-semibold text-slate-600">Brand*</label>
                         <select
                           className="mt-1 w-full border border-slate-200 rounded-lg px-2 py-2 text-sm bg-white"
                           value={ln.brand}
-                          onChange={(e) =>
-                            updateLine(idx, {
-                              brand: e.target.value,
-                              brand_custom: ''
-                            })
-                          }
+                          onChange={(e) => updateLine(idx, { brand: e.target.value })}
                         >
-                          <option value="">Please select</option>
-                          {brands.map((b) => (
-                            <option key={String(b)} value={String(b)}>
-                              {String(b)}
-                            </option>
+                          <option value="">Select brand…</option>
+                          {brandOptions.map((b) => (
+                            <option key={b.id} value={b.name}>{b.name}</option>
                           ))}
-                          <option value="__custom__">Other…</option>
                         </select>
                       </div>
-                      {ln.brand === '__custom__' ? (
-                        <div>
-                          <label className="text-[11px] font-semibold text-slate-600">Brand (custom)*</label>
-                          <input
-                            className="mt-1 w-full border border-slate-200 rounded-lg px-2 py-2 text-sm"
-                            value={ln.brand_custom}
-                            placeholder="Brand name"
-                            onChange={(e) => updateLine(idx, { brand_custom: e.target.value })}
-                          />
-                        </div>
-                      ) : (
-                        <div />
-                      )}
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-600">Category*</label>
+                        <select
+                          className="mt-1 w-full border border-slate-200 rounded-lg px-2 py-2 text-sm bg-white"
+                          value={ln.category}
+                          onChange={(e) => {
+                            const opt = categoriesFromMeta.find((c) => c.value === e.target.value);
+                            updateLine(idx, {
+                              category: e.target.value,
+                              category_label: opt?.label || '',
+                              part_id: '',
+                              part_custom: '',
+                              part_type: '',
+                            });
+                          }}
+                        >
+                          <option value="">Select category…</option>
+                          {categoriesFromMeta.map((c) => (
+                            <option key={c.value} value={c.value}>
+                              {c.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                       <div>
                         <label className="text-[11px] font-semibold text-slate-600">Part*</label>
                         <select
                           className="mt-1 w-full border border-slate-200 rounded-lg px-2 py-2 text-sm bg-white"
                           value={ln.part_id}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            const sel = partsCatalog.find((p) => String(p.id) === val);
+                            const catOpt = categoriesFromMeta.find((c) => c.value === sel?.category);
                             updateLine(idx, {
-                              part_id: e.target.value,
-                              part_custom: ''
-                            })
-                          }
+                              part_id: val,
+                              part_custom: '',
+                              part_type: sel?.part_type || '',
+                              specifications: sel?.specifications || '',
+                              category: sel?.category || ln.category,
+                              category_label: catOpt?.label || ln.category_label,
+                              brand: sel?.default_brand || ln.brand,
+                            });
+                          }}
                         >
                           <option value="">Choose from catalog…</option>
-                          {partsCatalog.map((p) => (
-                            <option key={p.id} value={String(p.id)}>
-                              {p.name}
-                            </option>
-                          ))}
-                          <option value="__custom__">Other…</option>
+                          {partsCatalog
+                            .filter((p) => !ln.category || p.category === ln.category)
+                            .map((p) => (
+                              <option key={p.id} value={String(p.id)}>
+                                {p.name}
+                                {p.part_type ? ` (${p.part_type})` : ''}
+                                {p.stock_qty !== undefined && p.stock_qty !== null
+                                  ? ` · Stock ${p.stock_qty}`
+                                  : ''}
+                              </option>
+                            ))}
+                          <option value="__custom__">+ Other (type manually)</option>
                         </select>
+                        {(() => {
+                          const sel = partsCatalog.find((p) => Number(p.id) === Number(ln.part_id));
+                          if (!sel?.floor_part_id) return null;
+                          return (
+                            <p className="text-[11px] text-slate-500 mt-1">
+                              Floor stock: {sel.stock_qty || 0} units · ₹{sel.unit_cost || 0}/unit
+                              {sel.location_code ? ` · ${sel.location_code}` : ''}
+                            </p>
+                          );
+                        })()}
                       </div>
-                      {ln.part_id === '__custom__' || ln.part_id === '' ? (
-                        <div>
-                          <label className="text-[11px] font-semibold text-slate-600">
-                            Part name {(ln.part_id === '__custom__' || ln.part_custom) && '*'}
-                          </label>
-                          <input
-                            className="mt-1 w-full border border-slate-200 rounded-lg px-2 py-2 text-sm"
-                            value={ln.part_custom}
-                            placeholder={
-                              ln.part_id === '__custom__' ? 'Describe the part / SKU' : 'Optional if catalog selected'
-                            }
-                            onChange={(e) => updateLine(idx, { part_custom: e.target.value })}
-                          />
-                        </div>
-                      ) : null}
                     </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-600">Type</label>
+                        <input
+                          className="mt-1 w-full border border-slate-200 rounded-lg px-2 py-2 text-sm"
+                          value={ln.part_type}
+                          placeholder="DDR4, NVMe, 65W…"
+                          onChange={(e) => updateLine(idx, { part_type: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-600">
+                          Specifications <span className="text-slate-400 font-normal">(optional)</span>
+                        </label>
+                        <input
+                          className="mt-1 w-full border border-slate-200 rounded-lg px-2 py-2 text-sm"
+                          value={ln.specifications}
+                          placeholder="Capacity, connector, compatible models…"
+                          onChange={(e) => updateLine(idx, { specifications: e.target.value })}
+                        />
+                      </div>
+                    </div>
+
+                    {(ln.part_id === '__custom__' || ln.part_id === '') && (
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-600">
+                          Part name {ln.part_id === '__custom__' && <span className="text-red-500">*</span>}
+                        </label>
+                        <input
+                          className="mt-1 w-full border border-slate-200 rounded-lg px-2 py-2 text-sm"
+                          value={ln.part_custom}
+                          placeholder={
+                            ln.part_id === '__custom__'
+                              ? 'e.g. RAM 8GB DDR4 2666MHz SODIMM'
+                              : 'Optional if catalog selected'
+                          }
+                          onChange={(e) => updateLine(idx, { part_custom: e.target.value })}
+                        />
+                      </div>
+                    )}
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div>
@@ -689,6 +792,7 @@ export default function SparePartsPoFormModal({ open, onClose, onSaved }) {
                       <th className="p-2">#</th>
                       <th className="p-2">Brand</th>
                       <th className="p-2">Part</th>
+                      <th className="p-2">Type</th>
                       <th className="p-2">Warranty (mo)</th>
                       <th className="p-2 tabular-nums">Qty</th>
                       <th className="p-2 tabular-nums">Rate (₹)</th>
@@ -703,6 +807,7 @@ export default function SparePartsPoFormModal({ open, onClose, onSaved }) {
                           <td className="p-2">{idx + 1}</td>
                           <td className="p-2 font-medium text-slate-900">{row.brand_name}</td>
                           <td className="p-2 text-slate-800">{row.spare_part_name}</td>
+                          <td className="p-2 text-slate-600">{row.part_type || '—'}</td>
                           <td className="p-2 tabular-nums">{row.warranty_months}</td>
                           <td className="p-2 tabular-nums">{row.quantity}</td>
                           <td className="p-2 tabular-nums font-mono">{Number(row.rate).toFixed(2)}</td>
@@ -716,25 +821,25 @@ export default function SparePartsPoFormModal({ open, onClose, onSaved }) {
                       {previewGstFooter.mode === 'intra' ? (
                         <>
                           <tr>
-                            <td colSpan={6} className="p-2 text-right">
+                            <td colSpan={7} className="p-2 text-right">
                               Sub total
                             </td>
                             <td className="p-2 font-mono">₹{previewGstFooter.sub.toFixed(2)}</td>
                           </tr>
                           <tr className="font-normal text-slate-600">
-                            <td colSpan={6} className="p-2 text-right">
+                            <td colSpan={7} className="p-2 text-right">
                               SGST (9%)
                             </td>
                             <td className="p-2 font-mono">₹{previewGstFooter.sgst.toFixed(2)}</td>
                           </tr>
                           <tr className="font-normal text-slate-600">
-                            <td colSpan={6} className="p-2 text-right">
+                            <td colSpan={7} className="p-2 text-right">
                               CGST (9%)
                             </td>
                             <td className="p-2 font-mono">₹{previewGstFooter.cgst.toFixed(2)}</td>
                           </tr>
                           <tr>
-                            <td colSpan={6} className="p-2 text-right">
+                            <td colSpan={7} className="p-2 text-right">
                               Total
                             </td>
                             <td className="p-2 font-mono">₹{previewGstFooter.tot.toFixed(2)}</td>
@@ -743,19 +848,19 @@ export default function SparePartsPoFormModal({ open, onClose, onSaved }) {
                       ) : (
                         <>
                           <tr>
-                            <td colSpan={6} className="p-2 text-right">
+                            <td colSpan={7} className="p-2 text-right">
                               Sub total
                             </td>
                             <td className="p-2 font-mono">₹{previewGstFooter.sub.toFixed(2)}</td>
                           </tr>
                           <tr className="font-normal text-slate-600">
-                            <td colSpan={6} className="p-2 text-right">
+                            <td colSpan={7} className="p-2 text-right">
                               IGST (18%)
                             </td>
                             <td className="p-2 font-mono">₹{previewGstFooter.igst.toFixed(2)}</td>
                           </tr>
                           <tr>
-                            <td colSpan={6} className="p-2 text-right">
+                            <td colSpan={7} className="p-2 text-right">
                               Total
                             </td>
                             <td className="p-2 font-mono">₹{previewGstFooter.tot.toFixed(2)}</td>

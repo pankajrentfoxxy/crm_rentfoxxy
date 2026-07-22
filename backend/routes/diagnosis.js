@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
+const { multerLimits } = require('../config/uploadLimits');
 const path = require('path');
 const fs = require('fs');
 const { authMiddleware } = require('../middleware/auth');
@@ -34,7 +35,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
     storage: storage,
-    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+    limits: multerLimits(),
     fileFilter: (req, file, cb) => {
         if (file.mimetype.startsWith('image/')) {
             cb(null, true);

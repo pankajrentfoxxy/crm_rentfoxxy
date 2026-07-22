@@ -3,6 +3,7 @@ const pool = require('../../config/db');
 const {
   EFFECTIVE_STATUS_SQL,
   enrichSerialRow,
+  enrichSerialRowsBatch,
   normalizeRouteStatus,
   parseExtra,
   resolveLineItem
@@ -14,6 +15,7 @@ const {
   insertAllocationLog,
   addToInventory
 } = require('../../services/qcCheckService');
+const { logTtsplEvent } = require('../../services/ttsplAuditService');
 
 const listValidators = [
   param('status').isString().trim(),
@@ -54,6 +56,7 @@ async function listOrdersByStatus(req, res) {
     FROM vendor_serial_numbers s
     INNER JOIN vendor_purchase_orders p ON p.po_id = s.po_id AND p.deleted_at IS NULL
     LEFT JOIN vendors v ON v.vendor_id = p.vendor_id AND v.deleted_at IS NULL
+    LEFT JOIN vendor_goods_received_notes g ON g.grn_id = s.grn_id AND g.deleted_at IS NULL
     WHERE s.deleted_at IS NULL
       AND s.po_id IS NOT NULL
       AND ${EFFECTIVE_STATUS_SQL} = $1
@@ -84,15 +87,17 @@ async function listOrdersByStatus(req, res) {
          p.purchase_order_date,
          p.vendor_id,
          p.line_items,
+         p.product_details_legacy_ids,
          v.business_name,
-         v.first_name AS vendor_name
+         v.first_name AS vendor_name,
+         g.meta->>'product_id' AS grn_product_id
        ${fromSql}
        ORDER BY s.updated_at DESC
        LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
       listParams
     );
 
-    const data = rowsR.rows.map(enrichSerialRow);
+    const data = await enrichSerialRowsBatch(pool, rowsR.rows);
     res.json({
       success: true,
       status,
@@ -324,6 +329,29 @@ async function qcCheck(req, res) {
         );
       }
     }
+
+    const ttsplLabel = updateResult.row?.inventory_asset_code
+      || details?.unique_product_serial
+      || serialNumber;
+    const qcEventMap = {
+      passed: 'qc2_passed',
+      failed: 'qc1_failed',
+      dead: 'qc1_failed',
+      pending: 'qc_started',
+      require_for_parts: 'parts_used',
+      send_to_qc_check: 'qc_started'
+    };
+    await logTtsplEvent({
+      ttsplId: ttsplLabel,
+      vendorSerialId: serialId,
+      eventType: qcEventMap[selected] || 'config_updated',
+      description: selected === 'passed'
+        ? 'Vendor QC passed — unit ready for inventory'
+        : `Vendor QC: ${selected}${remark ? ` — ${remark}` : ''}`,
+      metadata: { qc_status: selected, remark },
+      actorUserId: userId,
+      db: client
+    });
 
     await client.query('COMMIT');
     res.json({ success: true, message: 'QC check updated successfully' });

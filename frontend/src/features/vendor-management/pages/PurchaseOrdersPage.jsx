@@ -23,6 +23,7 @@ import {
   patchPurchaseOrderStatus,
   uploadPurchaseOrderBills
 } from '../vendorManagementApi';
+import PoActivityPanel from '../components/PoActivityPanel';
 import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
 import {
@@ -30,6 +31,8 @@ import {
   isProcurementUser,
   mergeAssetCatalog,
   modelsForBrand,
+  processorsForBrand,
+  generationsForBrandProcessor,
   poStatusBadge,
   poTypeBadge
 } from '../vendorMgmtUi';
@@ -145,23 +148,58 @@ function RemarkCell({ text }) {
   );
 }
 
-function hasUploadedBill(row) {
-  return parseBillFiles(row).length > 0;
+/** CRM bill upload + vendor portal invoice + legacy bill_files */
+function getPoBillInfo(row) {
+  const crmFiles = parseBillFiles(row);
+  if (row?.bill_name) {
+    return {
+      billName: row.bill_name,
+      files: crmFiles.length ? crmFiles : (row.vendor_invoice_file ? [row.vendor_invoice_file] : []),
+      source: row.vendor_invoice_number && !crmFiles.length ? 'vendor' : 'crm',
+    };
+  }
+  if (row?.vendor_invoice_number) {
+    return {
+      billName: row.vendor_invoice_number,
+      files: row.vendor_invoice_file ? [row.vendor_invoice_file] : [],
+      source: 'vendor',
+    };
+  }
+  if (crmFiles.length) {
+    return { billName: 'Bill', files: crmFiles, source: 'crm' };
+  }
+  return { billName: null, files: [], source: null };
+}
+
+function hasPoBill(row) {
+  const info = getPoBillInfo(row);
+  return !!(info.billName || info.files.length);
 }
 
 function canSubmitForApproval(status) {
   const s = String(status || '').toLowerCase();
-  return s === 'draft' || s === 'pending' || s === '';
+  if (s === 'draft' || s === 'pending') {
+    return true;
+  }
+  return false;
 }
 
 function isPendingManagerApproval(status) {
   return String(status || '').toLowerCase() === 'pending_approval';
 }
 
-/** Eye / receive screen only after manager approval */
+/** Eye / receive screen after manager approval (incl. vendor accepted) */
 function showReceiveEye(status) {
   const s = String(status || '').toLowerCase();
-  return s === 'approved' || s === 'processing' || s === 'completed' || s === 'sent';
+  return ['approved', 'vendor_accepted', 'processing', 'completed', 'sent'].includes(s);
+}
+
+function matchesPoStatusTab(rowStatus, tab) {
+  const s = String(rowStatus || '').toLowerCase();
+  if (tab === 'approved') {
+    return ['approved', 'vendor_accepted', 'sent'].includes(s);
+  }
+  return normalizePoStatus(rowStatus) === tab;
 }
 
 const PO_STATUS_TABS = [
@@ -278,6 +316,8 @@ export default function PurchaseOrdersPage() {
   const [assetCatalog, setAssetCatalog] = useState(null);
 
   const [preview, setPreview] = useState({ open: false, loading: false, detail: null });
+  const [previewTab, setPreviewTab] = useState('details');
+  const [activityRefreshKey, setActivityRefreshKey] = useState(0);
   const [billView, setBillView] = useState({ open: false, bill_name: '', files: [], poId: null });
   const [billUpload, setBillUpload] = useState({ open: false, po: null, bill_name: '' });
   /** Read-only summary of the create-PO modal before Save (no API call). */
@@ -315,8 +355,13 @@ export default function PurchaseOrdersPage() {
   const statusTabCounts = useMemo(() => {
     const c = { all: allRows.length, draft: 0, pending_approval: 0, approved: 0, processing: 0, completed: 0, rejected: 0 };
     allRows.forEach((r) => {
-      const k = normalizePoStatus(r.status);
-      if (c[k] != null) c[k] += 1;
+      const s = String(r.status || '').toLowerCase();
+      if (['approved', 'vendor_accepted', 'sent'].includes(s)) {
+        c.approved += 1;
+      } else {
+        const k = normalizePoStatus(r.status);
+        if (c[k] != null) c[k] += 1;
+      }
     });
     return c;
   }, [allRows]);
@@ -324,7 +369,7 @@ export default function PurchaseOrdersPage() {
   useEffect(() => {
     let list = [...allRows];
     if (statusTab !== 'all') {
-      list = list.filter((r) => normalizePoStatus(r.status) === statusTab);
+      list = list.filter((r) => matchesPoStatusTab(r.status, statusTab));
     }
     setTotal(list.length);
     const tp = Math.max(1, Math.ceil(list.length / LIST_PAGE_SIZE));
@@ -402,6 +447,16 @@ export default function PurchaseOrdersPage() {
     [assetDraft.brand, catalog]
   );
 
+  const processorOptions = useMemo(
+    () => processorsForBrand(assetDraft.brand, catalog),
+    [assetDraft.brand, catalog]
+  );
+
+  const generationOptions = useMemo(
+    () => generationsForBrandProcessor(assetDraft.brand, assetDraft.processor, catalog),
+    [assetDraft.brand, assetDraft.processor, catalog]
+  );
+
   function addAssetRow() {
     if (!form.vendor_id || !form.purchase_order_type) {
       toast.error('Select vendor and purchase order type before adding asset lines');
@@ -420,7 +475,8 @@ export default function PurchaseOrdersPage() {
       assetDraft.screen_size,
       assetDraft.quantity,
       assetDraft.rate,
-      assetDraft.period_months,
+      // Rent-to-own has no locking period field; Tenure stands in for it.
+      ...(!isRto ? [assetDraft.period_months] : []),
       ...(isRental ? [assetDraft.monthly_rental_amount] : []),
       ...(isRto ? [assetDraft.tenure_months] : [])
     ];
@@ -430,7 +486,8 @@ export default function PurchaseOrdersPage() {
     }
     const qty = Number(assetDraft.quantity);
     const rate = Number(assetDraft.rate);
-    const pm = Number(assetDraft.period_months);
+    // For rent-to-own, the locking/period value carried downstream is the Tenure.
+    const pm = isRto ? Number(assetDraft.tenure_months || 0) : Number(assetDraft.period_months);
     if (!(qty > 0) || !(Number.isFinite(rate) && rate >= 0) || !(Number.isFinite(pm) && pm >= 0)) {
       toast.error('Quantity must be > 0; rate and locking/warranty months must be valid');
       return;
@@ -617,11 +674,13 @@ export default function PurchaseOrdersPage() {
   }
 
   async function openPreview(poId) {
+    setPreviewTab('details');
     setPreview({ open: true, loading: true, detail: null });
     try {
       const { data } = await fetchPurchaseOrder(poId);
       if (!data.success || !data.data) throw new Error(data.message || 'Not found');
       setPreview({ open: true, loading: false, detail: data.data });
+      setActivityRefreshKey((k) => k + 1);
     } catch (e) {
       toast.error(e.response?.data?.message || e.message || 'Could not load preview');
       setPreview({ open: false, loading: false, detail: null });
@@ -639,6 +698,7 @@ export default function PurchaseOrdersPage() {
       if (!data.success) throw new Error(data.message);
       toast.success(data.message || 'Purchase order status updated!');
       if (next === 'rejected') setRejectModal({ open: false, po: null, reason: '' });
+      setActivityRefreshKey((k) => k + 1);
       await loadList();
     } catch (err) {
       toast.error(err.response?.data?.message || err.message || 'Update failed');
@@ -647,7 +707,11 @@ export default function PurchaseOrdersPage() {
   }
 
   function openBillUpload(po) {
-    setBillUpload({ open: true, po, bill_name: po.bill_name || '' });
+    setBillUpload({
+      open: true,
+      po,
+      bill_name: po.bill_name || po.vendor_invoice_number || '',
+    });
   }
 
   async function submitBillUpload(e) {
@@ -742,6 +806,27 @@ export default function PurchaseOrdersPage() {
         </button>
       </header>
 
+      <div className="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3 text-sm text-blue-900">
+        <p className="font-semibold mb-1">PO approval &amp; vendor flow</p>
+        <ol className="list-decimal list-inside space-y-1 text-blue-800/90 text-xs sm:text-sm">
+          <li>
+            <strong>Procurement</strong> creates a PO and clicks <em>Submit for Approval</em>.
+          </li>
+          <li>
+            <strong>Manager / Admin</strong> reviews POs in the <em>Pending Approval</em> tab and approves or rejects.
+            Managers with SMTP configured receive an email alert; otherwise use the <em>Pending Approval</em> tab.
+          </li>
+          <li>
+            On approval, the vendor receives an email with the PO PDF and can accept/reject in the{' '}
+            <strong>Vendor Portal</strong> (optional — you can still receive goods without portal use).
+          </li>
+          <li>
+            After approval, use the <strong>eye icon</strong> to receive goods. Upload the vendor bill here or during GRN;
+            vendor portal invoices also appear in the bill column.
+          </li>
+        </ol>
+      </div>
+
       <div className="flex flex-wrap gap-1 border-b border-gray-100 bg-white rounded-xl border border-gray-100 p-2 shadow-sm">
         {PO_STATUS_TABS.map((tab) => (
           <button
@@ -796,7 +881,114 @@ export default function PurchaseOrdersPage() {
       {loading ? (
         <div className="p-8 rounded-lg border text-center text-slate-500 animate-pulse">Loading…</div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border bg-white shadow-sm">
+        <>
+        {/* Mobile cards */}
+        <div className="grid gap-3 md:hidden">
+          {rows.length === 0 ? (
+            <div className="p-8 rounded-lg border bg-white text-center text-slate-500">
+              No purchase orders match your filters.
+            </div>
+          ) : rows.map((r, i) => {
+            const st = String(r.status || '').toLowerCase();
+            const vendorName =
+              r.vendor_display_name || r.vendor_business_name || r.vendor_first_name || `Vendor #${r.vendor_id}`;
+            const showEye = showReceiveEye(r.status);
+            const showSubmit = canSubmitForApproval(r.status) && procurement;
+            const showManagerActions = isPendingManagerApproval(r.status) && manager;
+            const typeBadge = poTypeBadge(r.purchase_order_type);
+            const stBadge = poStatusBadge(r.status);
+            const billInfo = getPoBillInfo(r);
+            return (
+              <div key={r.po_id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-3">
+                <div className="flex items-start justify-between gap-2">
+                  <button
+                    type="button"
+                    className="text-left text-orange-600 font-bold hover:underline"
+                    onClick={() => openPreview(r.po_id)}
+                  >
+                    {r.purchase_order_number}
+                  </button>
+                  <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold ${stBadge.className}`}>
+                    {stBadge.label}
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+                  <span className={`inline-flex px-2 py-0.5 rounded-full font-semibold ${typeBadge.className}`}>{typeBadge.label}</span>
+                  <span>{r.purchase_order_date}</span>
+                </div>
+                <p className="text-sm text-slate-800 font-medium">{vendorName}</p>
+                {r.remarks ? <div className="text-xs text-slate-600"><RemarkCell text={r.remarks} /></div> : null}
+                {st === 'rejected' && r.rejection_reason ? (
+                  <p className="text-xs text-red-600">Rejected: {r.rejection_reason}</p>
+                ) : null}
+
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  {billInfo.billName ? (
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-slate-200 bg-slate-50 font-semibold text-slate-800"
+                      onClick={() => setBillView({ open: true, bill_name: billInfo.billName, files: billInfo.files, poId: r.po_id })}
+                    >
+                      View bill
+                    </button>
+                  ) : showEye ? (
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-orange-500 text-orange-600 font-semibold"
+                      onClick={() => openBillUpload(r)}
+                    >
+                      Upload bill
+                    </button>
+                  ) : (
+                    <span className="text-slate-400">Bill after approval</span>
+                  )}
+                </div>
+
+                {(showSubmit || showManagerActions || showEye) && (
+                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
+                    {showSubmit ? (
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1.5 h-9 px-3 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold"
+                        onClick={() => onStatusChange(r, 'pending_approval')}
+                      >
+                        Submit for Approval
+                      </button>
+                    ) : null}
+                    {showManagerActions ? (
+                      <>
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 h-9 px-3 rounded-lg bg-green-600 hover:bg-green-700 text-white text-xs font-semibold"
+                          onClick={() => onStatusChange(r, 'approved')}
+                        >
+                          <Check className="w-3.5 h-3.5" /> Approve
+                        </button>
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 h-9 px-3 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-semibold"
+                          onClick={() => setRejectModal({ open: true, po: r, reason: '' })}
+                        >
+                          Reject
+                        </button>
+                      </>
+                    ) : null}
+                    {showEye && !showSubmit ? (
+                      <Link
+                        to={`/vendor-management/purchase-orders/${r.po_id}/receive`}
+                        className="inline-flex items-center gap-1.5 h-9 px-3 rounded-lg border border-blue-200 text-blue-600 text-xs font-semibold hover:bg-blue-50"
+                      >
+                        <Eye className="w-4 h-4" /> {st === 'completed' ? 'View received' : 'Receive goods'}
+                      </Link>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="hidden md:block overflow-x-auto rounded-lg border bg-white shadow-sm">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-left text-xs font-semibold text-slate-600 uppercase tracking-wide">
               <tr>
@@ -820,6 +1012,7 @@ export default function PurchaseOrdersPage() {
                 const showManagerActions = isPendingManagerApproval(r.status) && manager;
                 const typeBadge = poTypeBadge(r.purchase_order_type);
                 const stBadge = poStatusBadge(r.status);
+                const billInfo = getPoBillInfo(r);
 
                 return (
                   <tr key={r.po_id} className="border-b border-gray-100 hover:bg-gray-50">
@@ -844,42 +1037,45 @@ export default function PurchaseOrdersPage() {
                       <RemarkCell text={r.remarks} />
                     </td>
                     <td className="p-3">
-                      {r.bill_name ? (
+                      {billInfo.billName ? (
                         <button
                           type="button"
                           className="text-orange-600 font-medium hover:underline text-left"
                           onClick={() =>
                             setBillView({
                               open: true,
-                              bill_name: r.bill_name,
-                              files: parseBillFiles(r),
+                              bill_name: billInfo.billName,
+                              files: billInfo.files,
                               poId: r.po_id
                             })
                           }
                         >
-                          {r.bill_name}
+                          {billInfo.billName}
+                          {billInfo.source === 'vendor' ? (
+                            <span className="block text-[10px] text-slate-500 font-normal">via vendor portal</span>
+                          ) : null}
                         </button>
                       ) : (
                         <span className="text-slate-400">N/A</span>
                       )}
                     </td>
                     <td className="p-3">
-                      {r.bill_name ? (
+                      {hasPoBill(r) ? (
                         <button
                           type="button"
                           className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-800 hover:bg-slate-100"
                           onClick={() =>
                             setBillView({
                               open: true,
-                              bill_name: r.bill_name,
-                              files: parseBillFiles(r),
+                              bill_name: billInfo.billName,
+                              files: billInfo.files,
                               poId: r.po_id
                             })
                           }
                         >
                           View bill
                         </button>
-                      ) : (
+                      ) : showEye ? (
                         <button
                           type="button"
                           className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-orange-500 text-orange-600 text-xs font-semibold hover:bg-orange-50"
@@ -887,6 +1083,8 @@ export default function PurchaseOrdersPage() {
                         >
                           Upload bill
                         </button>
+                      ) : (
+                        <span className="text-slate-400 text-xs">After approval</span>
                       )}
                     </td>
                     <td className="p-3">
@@ -959,6 +1157,7 @@ export default function PurchaseOrdersPage() {
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       {!loading && rows.length > 0 && (
@@ -1155,7 +1354,11 @@ export default function PurchaseOrdersPage() {
                             const nextModels = modelsForBrand(v, catalog);
                             const model =
                               d.model && nextModels.includes(d.model) ? d.model : '';
-                            return { ...d, brand: v, model };
+                            const nextProcs = processorsForBrand(v, catalog);
+                            const processor = d.processor && nextProcs.includes(d.processor) ? d.processor : '';
+                            const nextGens = generationsForBrandProcessor(v, processor, catalog);
+                            const generation = d.generation && nextGens.includes(d.generation) ? d.generation : '';
+                            return { ...d, brand: v, model, processor, generation };
                           })
                         }
                         options={catalog.brands}
@@ -1171,15 +1374,22 @@ export default function PurchaseOrdersPage() {
                         label="Processor"
                         required
                         value={assetDraft.processor}
-                        onChange={(v) => setAssetDraft((d) => ({ ...d, processor: v }))}
-                        options={catalog.processors}
+                        onChange={(v) =>
+                          setAssetDraft((d) => {
+                            const nextGens = generationsForBrandProcessor(d.brand, v, catalog);
+                            const generation =
+                              d.generation && nextGens.includes(d.generation) ? d.generation : '';
+                            return { ...d, processor: v, generation };
+                          })
+                        }
+                        options={processorOptions}
                       />
                       <AssetSelect
                         label="Generation"
                         required
                         value={assetDraft.generation}
                         onChange={(v) => setAssetDraft((d) => ({ ...d, generation: v }))}
-                        options={catalog.generations}
+                        options={generationOptions}
                       />
                       <AssetSelect
                         label="Ram"
@@ -1228,21 +1438,24 @@ export default function PurchaseOrdersPage() {
                         value={assetDraft.rate}
                         onChange={(v) => setAssetDraft((d) => ({ ...d, rate: v }))}
                       />
-                      <div className="lg:col-span-2">
-                        <AssetTextInput
-                          label={
-                            form.purchase_order_type === 'direct_purchase'
-                              ? 'Warranty (In Month)'
-                              : 'Locking Period (In Month)'
-                          }
-                          required
-                          type="number"
-                          min={0}
-                          placeholder="Enter value in month"
-                          value={assetDraft.period_months}
-                          onChange={(v) => setAssetDraft((d) => ({ ...d, period_months: v }))}
-                        />
-                      </div>
+                      {/* Rent-to-own uses Tenure only — no separate locking period. */}
+                      {form.purchase_order_type !== 'rent_to_own' && (
+                        <div className="lg:col-span-2">
+                          <AssetTextInput
+                            label={
+                              form.purchase_order_type === 'direct_purchase'
+                                ? 'Warranty (In Month)'
+                                : 'Locking Period (In Month)'
+                            }
+                            required
+                            type="number"
+                            min={0}
+                            placeholder="Enter value in month"
+                            value={assetDraft.period_months}
+                            onChange={(v) => setAssetDraft((d) => ({ ...d, period_months: v }))}
+                          />
+                        </div>
+                      )}
                       {['rental_purchase', 'rent_to_own'].includes(form.purchase_order_type) ? (
                         <AssetTextInput
                           label="Monthly Rental Amount"
@@ -1640,6 +1853,24 @@ export default function PurchaseOrdersPage() {
                 </table>
               </div>
             </div>
+
+            <div className="flex items-center justify-end gap-2 px-5 py-3 border-t bg-slate-50 shrink-0">
+              <button
+                type="button"
+                onClick={() => setCreatePreviewOpen(false)}
+                className="px-4 py-2 rounded-lg border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-white bg-slate-100/80"
+              >
+                Back to form
+              </button>
+              <button
+                type="button"
+                disabled={metaLoading}
+                onClick={submitModal}
+                className="px-5 py-2 rounded-lg bg-orange-600 text-white text-sm font-semibold hover:bg-orange-700 disabled:opacity-50"
+              >
+                Save
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1658,8 +1889,13 @@ export default function PurchaseOrdersPage() {
             className="bg-white rounded-2xl shadow-xl w-full max-w-5xl max-h-[92vh] overflow-hidden flex flex-col"
             onMouseDown={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between px-5 py-3 border-b bg-slate-50">
-              <h2 className="text-lg font-bold text-slate-900">Purchase order preview</h2>
+            <div className="flex items-center justify-between px-5 py-3 border-b bg-slate-50 gap-3">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">Purchase order details</h2>
+                {preview.detail?.purchase_order_number ? (
+                  <p className="text-xs text-slate-500 font-mono mt-0.5">{preview.detail.purchase_order_number}</p>
+                ) : null}
+              </div>
               <button
                 type="button"
                 onClick={closePreview}
@@ -1669,10 +1905,31 @@ export default function PurchaseOrdersPage() {
                 <X className="w-5 h-5" />
               </button>
             </div>
+            {!preview.loading && preview.detail ? (
+              <div className="flex gap-2 border-b px-5 pt-2">
+                {['details', 'activity'].map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setPreviewTab(t)}
+                    className={`px-4 py-2 text-sm capitalize border-b-2 -mb-px ${
+                      previewTab === t
+                        ? 'border-indigo-600 text-indigo-700 font-medium'
+                        : 'border-transparent text-gray-500 hover:text-gray-800'
+                    }`}
+                  >
+                    {t === 'activity' ? 'Activity' : 'Details'}
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <div className="flex-1 overflow-y-auto p-5 space-y-4">
               {preview.loading ? (
                 <div className="py-16 text-center text-slate-500 animate-pulse">Loading…</div>
               ) : preview.detail ? (
+                previewTab === 'activity' ? (
+                  <PoActivityPanel poId={preview.detail.po_id} refreshKey={activityRefreshKey} />
+                ) : (
                 <>
                   <div className="rounded-xl border border-slate-200 p-4 bg-slate-50/50">
                     <div className="grid sm:grid-cols-3 gap-3 text-sm">
@@ -1816,6 +2073,7 @@ export default function PurchaseOrdersPage() {
                     </table>
                   </div>
                 </>
+                )
               ) : null}
             </div>
           </div>

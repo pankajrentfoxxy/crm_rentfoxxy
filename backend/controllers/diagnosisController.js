@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const { syncWorkLogForTicketState } = require('../services/ticketWorkLogService');
+const { logProductionHistory } = require('../services/ticketWorkflowHistoryService');
 
 // Diagnosis sections configuration
 const DIAGNOSIS_SECTIONS = {
@@ -238,6 +239,15 @@ exports.submitDiagnosis = async (req, res) => {
     try {
         await client.query('BEGIN');
 
+        const ticketBeforeRes = await client.query(
+            `SELECT t.*, s.stage_name
+               FROM tickets t
+               LEFT JOIN stages s ON s.stage_id = t.current_stage_id
+              WHERE t.ticket_id = $1`,
+            [id]
+        );
+        const ticketBefore = ticketBeforeRes.rows[0] || null;
+
         // 1. Calculate Failures & Flags
         let totalFailures = 0;
         const flags = {};
@@ -365,6 +375,18 @@ exports.submitDiagnosis = async (req, res) => {
             INSERT INTO activities (ticket_id, stage_id, user_id, action, notes)
             VALUES ($1, $2, $3, 'diagnosis_completed', $4)
         `, [id, nextStageId, userId, logNotes]);
+
+        const ticketAfterRes = await client.query('SELECT * FROM tickets WHERE ticket_id = $1', [id]);
+        await logProductionHistory(client, {
+            ticketBefore,
+            ticketAfter: ticketAfterRes.rows[0] || ticketBefore,
+            beforeStageName: ticketBefore?.stage_name || 'Diagnosis',
+            afterStageName: nextStageName,
+            source: 'submitDiagnosis',
+            remarks: logNotes,
+            actor: req.user,
+            metadata: { next_team: nextTeam, total_failures: totalFailures },
+        });
 
         await client.query('COMMIT');
         res.json({ success: true, next_team: nextTeam });

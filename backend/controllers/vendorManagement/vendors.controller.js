@@ -5,10 +5,26 @@ const fs = require('fs');
 const { body, param, query, validationResult } = require('express-validator');
 const pool = require('../../config/db');
 const { logVendorAudit } = require('../../services/vendorAuditLogService');
+const {
+  DEPLOYED_WITH_CUSTOMER_STATUSES,
+  displayDeployedStatus,
+} = require('../../services/customerDeployedAssets');
+const { normalizeIndianMobile } = require('../../utils/phoneValidation');
 
 /** PO bulk receive + TTSPL: `purchaseOrders.controller` (`receivePoLineBulk`). Spare PO bulk: `sparePartsOrders.controller` (`receiveSpareLineBulk`). */
 
 const UPLOAD_SUB = 'vendor-management';
+
+let vendorShippingSchemaEnsured = false;
+
+async function ensureVendorShippingSchema() {
+  if (vendorShippingSchemaEnsured) return;
+  const migrationPath = path.join(__dirname, '../../migrations/123_vendor_shipping_address.sql');
+  if (fs.existsSync(migrationPath)) {
+    await pool.query(fs.readFileSync(migrationPath, 'utf8'));
+  }
+  vendorShippingSchemaEnsured = true;
+}
 
 function ensureUploadDir() {
   const dir = path.join(__dirname, '..', '..', 'uploads', UPLOAD_SUB);
@@ -33,7 +49,8 @@ function saveUploadedFile(file) {
 
 function buildMulter() {
   const multer = require('multer');
-  return multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 } });
+  const { multerLimits } = require('../../config/uploadLimits');
+  return multer({ storage: multer.memoryStorage(), limits: multerLimits() });
 }
 
 const listValidators = [
@@ -96,26 +113,49 @@ function extendedVendorValidators() {
     body('pan_number').optional({ checkFalsy: true }).isString().isLength({ max: 20 }),
     body('msme_number').optional({ checkFalsy: true }).isString().isLength({ max: 50 }),
     body('contact_person_name').optional({ checkFalsy: true }).isString().isLength({ max: 255 }),
-    body('contact_person_phone').optional({ checkFalsy: true }).isString().isLength({ max: 32 }),
-    body('alternate_phone').optional({ checkFalsy: true }).isString().isLength({ max: 32 }),
+    body('contact_person_phone')
+      .optional({ checkFalsy: true })
+      .customSanitizer(normalizeIndianMobile)
+      .matches(/^\d{10}$/)
+      .withMessage('Contact phone must be exactly 10 digits'),
+    body('alternate_phone')
+      .optional({ checkFalsy: true })
+      .customSanitizer(normalizeIndianMobile)
+      .matches(/^\d{10}$/)
+      .withMessage('Alternate phone must be exactly 10 digits'),
     body('city').optional({ checkFalsy: true }).isString().isLength({ max: 100 }),
     body('pincode').optional({ checkFalsy: true }).isString().isLength({ max: 10 }),
-    body('notes').optional({ checkFalsy: true }).isString().isLength({ max: 5000 })
+    body('notes').optional({ checkFalsy: true }).isString().isLength({ max: 5000 }),
+    body('shipping_same').optional().isBoolean(),
+    body('shipping_address').optional({ checkFalsy: true }).isString().isLength({ max: 5000 }),
+    body('shipping_city').optional({ checkFalsy: true }).isString().isLength({ max: 100 }),
+    body('shipping_state').optional({ checkFalsy: true }).isString().isLength({ max: 128 }),
+    body('shipping_pincode').optional({ checkFalsy: true }).isString().isLength({ max: 10 })
   ];
 }
 
 function pickExtendedVendorFields(body) {
+  const shippingSame = body.shipping_same === false || body.shipping_same === 'false' ? false : true;
+  const contactPhone = body.contact_person_phone
+    ? normalizeIndianMobile(body.contact_person_phone)
+    : null;
+  const alternatePhone = body.alternate_phone ? normalizeIndianMobile(body.alternate_phone) : null;
   return {
     po_payment_terms: body.po_payment_terms || 'postpaid_monthly',
     credit_days: body.credit_days != null && body.credit_days !== '' ? Number(body.credit_days) : 1,
     pan_number: body.pan_number || null,
     msme_number: body.msme_number || null,
     contact_person_name: body.contact_person_name || null,
-    contact_person_phone: body.contact_person_phone || null,
-    alternate_phone: body.alternate_phone || null,
+    contact_person_phone: contactPhone,
+    alternate_phone: alternatePhone,
     city: body.city || null,
     pincode: body.pincode || null,
-    notes: body.notes || null
+    notes: body.notes || null,
+    shipping_same: shippingSame,
+    shipping_address: shippingSame ? null : (body.shipping_address || null),
+    shipping_city: shippingSame ? null : (body.shipping_city || null),
+    shipping_state: shippingSame ? null : (body.shipping_state || null),
+    shipping_pincode: shippingSame ? null : (body.shipping_pincode || null),
   };
 }
 
@@ -139,6 +179,7 @@ function normalizeVendorRow(row) {
 const getValidators = [param('id').isInt().toInt()];
 
 async function getVendor(req, res) {
+  await ensureVendorShippingSchema();
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
   const { id } = req.params;
@@ -173,6 +214,7 @@ function createValidators() {
     body('email').trim().notEmpty().isEmail(),
     body('password').notEmpty().isLength({ min: 8, max: 256 }),
     body('number')
+      .customSanitizer(normalizeIndianMobile)
       .trim()
       .notEmpty()
       .matches(/^\d{10}$/)
@@ -204,6 +246,7 @@ function createValidators() {
 }
 
 async function createVendor(req, res) {
+  await ensureVendorShippingSchema();
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
 
@@ -236,9 +279,10 @@ async function createVendor(req, res) {
         contact_person_name, contact_person_phone, alternate_phone,
         bank_name, account_number, bank_ifsc_code, account_holder_name,
         po_payment_terms, credit_days, notes,
+        shipping_same, shipping_address, shipping_city, shipping_state, shipping_pincode,
         image_url, logo_url, licenses_url, remember_pass_plain, vendor_portal_enabled
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,TRUE
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,TRUE
       ) RETURNING *`,
       [
         req.body.status,
@@ -271,6 +315,11 @@ async function createVendor(req, res) {
         ext.po_payment_terms,
         ext.credit_days,
         ext.notes,
+        ext.shipping_same,
+        ext.shipping_address,
+        ext.shipping_city,
+        ext.shipping_state,
+        ext.shipping_pincode,
         image_url,
         logo_url,
         licenses_url,
@@ -321,6 +370,7 @@ function updateValidatorsFixed() {
     body('business_name').trim().notEmpty().isLength({ min: 1, max: 255 }),
     body('email').trim().notEmpty().isEmail(),
     body('number')
+      .customSanitizer(normalizeIndianMobile)
       .trim()
       .notEmpty()
       .matches(/^\d{10}$/)
@@ -352,6 +402,7 @@ function updateValidatorsFixed() {
 }
 
 async function updateVendor(req, res) {
+  await ensureVendorShippingSchema();
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
   const vendor_id = Number(req.params.id);
@@ -416,12 +467,17 @@ async function updateVendor(req, res) {
       po_payment_terms = $28,
       credit_days = $29,
       notes = $30,
-      image_url = $31,
-      logo_url = $32,
-      licenses_url = $33,
-      remember_pass_plain = $34,
+      shipping_same = $31,
+      shipping_address = $32,
+      shipping_city = $33,
+      shipping_state = $34,
+      shipping_pincode = $35,
+      image_url = $36,
+      logo_url = $37,
+      licenses_url = $38,
+      remember_pass_plain = $39,
       updated_at = NOW()
-     WHERE vendor_id = $35 AND deleted_at IS NULL
+     WHERE vendor_id = $40 AND deleted_at IS NULL
      RETURNING *`,
     [
       req.body.status,
@@ -454,6 +510,11 @@ async function updateVendor(req, res) {
       ext.po_payment_terms,
       ext.credit_days,
       ext.notes,
+      ext.shipping_same,
+      ext.shipping_address,
+      ext.shipping_city,
+      ext.shipping_state,
+      ext.shipping_pincode,
       image_url,
       logo_url,
       licenses_url,
@@ -716,6 +777,133 @@ async function loginAsVendor(req, res) {
   });
 }
 
+// ---------- Vendor laptops (serials supplied by this vendor) -----------------
+const laptopsValidators = [
+  param('id').isInt({ min: 1 }).toInt(),
+  query('page').optional().isInt({ min: 1 }).toInt(),
+  query('limit').optional().isInt({ min: 1, max: 200 }).toInt(),
+  query('search').optional().isString().trim(),
+  query('lifecycle').optional().isIn(['all', 'active', 'returned', 'in_stock']),
+];
+
+/**
+ * GET /vendors/:id/laptops
+ * All laptops (serial units) supplied by a vendor, derived from the authoritative
+ * inventory (vendor_serial_numbers -> vendor_purchase_orders.vendor_id). Returns
+ * overall Active / Returned counts plus a paginated, searchable list.
+ */
+async function listVendorLaptops(req, res) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+
+  const vendorId = parseInt(req.params.id, 10);
+  const page = req.query.page || 1;
+  const limit = req.query.limit || 25;
+  const offset = (page - 1) * limit;
+  const search = (req.query.search || '').trim();
+  const lifecycle = req.query.lifecycle || 'all';
+
+  // Overall counts (independent of search/lifecycle filters).
+  const countR = await pool.query(
+    `SELECT COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE vsn.inventory_status = ANY($2::text[]))::int AS active,
+            COUNT(*) FILTER (WHERE vsn.inventory_status = 'returned')::int AS returned
+       FROM vendor_serial_numbers vsn
+       JOIN vendor_purchase_orders po ON po.po_id = vsn.po_id
+      WHERE po.vendor_id = $1 AND vsn.deleted_at IS NULL`,
+    [vendorId, DEPLOYED_WITH_CUSTOMER_STATUSES]
+  );
+
+  const fromJoins = `
+    FROM vendor_serial_numbers vsn
+    JOIN vendor_purchase_orders po ON po.po_id = vsn.po_id
+    LEFT JOIN customers c ON c.customer_id = vsn.current_customer_id
+    LEFT JOIN inventory inv ON (
+      inv.machine_number = vsn.inventory_asset_code OR inv.serial_number = vsn.serial_number
+    )`;
+
+  const params = [vendorId];
+  let where = ` WHERE po.vendor_id = $1 AND vsn.deleted_at IS NULL`;
+
+  if (lifecycle === 'active' || lifecycle === 'in_stock') {
+    params.push(DEPLOYED_WITH_CUSTOMER_STATUSES);
+    const di = params.length;
+    where += lifecycle === 'active'
+      ? ` AND vsn.inventory_status = ANY($${di}::text[])`
+      : ` AND NOT (vsn.inventory_status = ANY($${di}::text[])) AND vsn.inventory_status <> 'returned'`;
+  } else if (lifecycle === 'returned') {
+    where += ` AND vsn.inventory_status = 'returned'`;
+  }
+
+  if (search) {
+    params.push(`%${search}%`);
+    const i = params.length;
+    where += ` AND (
+      COALESCE(vsn.inventory_asset_code, '') ILIKE $${i}
+      OR COALESCE(vsn.extra->>'ttspl_id', '') ILIKE $${i}
+      OR COALESCE(vsn.serial_number, '') ILIKE $${i}
+      OR COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', inv.model, '') ILIKE $${i}
+      OR COALESCE(vsn.extra->>'brand', inv.brand, '') ILIKE $${i}
+      OR COALESCE(c.name, '') ILIKE $${i}
+      OR COALESCE(vsn.current_dc_number, '') ILIKE $${i}
+    )`;
+  }
+
+  const filteredR = await pool.query(`SELECT COUNT(*)::int AS total ${fromJoins}${where}`, params);
+  const filteredTotal = filteredR.rows[0]?.total || 0;
+
+  const listParams = [...params, limit, offset];
+  const listR = await pool.query(
+    `SELECT vsn.serial_id,
+            COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
+            vsn.serial_number,
+            COALESCE(vsn.extra->>'brand', inv.brand) AS brand,
+            COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', inv.model) AS model_name,
+            COALESCE(vsn.extra->>'processor', inv.processor) AS processor,
+            vsn.extra->>'generation' AS generation,
+            COALESCE(vsn.extra->>'ram', inv.ram) AS ram,
+            COALESCE(vsn.extra->>'storage', inv.storage) AS storage,
+            vsn.inventory_status,
+            vsn.current_customer_id,
+            c.name AS customer_name,
+            vsn.current_dc_number,
+            po.purchase_order_number
+     ${fromJoins}${where}
+     ORDER BY vsn.updated_at DESC NULLS LAST, vsn.serial_id DESC
+     LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+    listParams
+  );
+
+  const laptops = listR.rows.map((r) => {
+    const lc = r.inventory_status === 'returned'
+      ? 'returned'
+      : DEPLOYED_WITH_CUSTOMER_STATUSES.includes(r.inventory_status)
+        ? 'active'
+        : 'in_stock';
+    return {
+      ...r,
+      rental_status: displayDeployedStatus(r.inventory_status),
+      lifecycle: lc,
+    };
+  });
+
+  res.json({
+    success: true,
+    counts: {
+      total: countR.rows[0]?.total || 0,
+      active: countR.rows[0]?.active || 0,
+      returned: countR.rows[0]?.returned || 0,
+    },
+    laptops,
+    pagination: {
+      page,
+      limit,
+      total: filteredTotal,
+      totalPages: Math.max(1, Math.ceil(filteredTotal / limit)),
+    },
+  });
+}
+
 module.exports = {
   buildMulter,
   listValidators,
@@ -731,5 +919,7 @@ module.exports = {
   deleteVendor,
   loginAsVendor,
   portalAccessValidators,
-  updatePortalAccess
+  updatePortalAccess,
+  laptopsValidators,
+  listVendorLaptops
 };

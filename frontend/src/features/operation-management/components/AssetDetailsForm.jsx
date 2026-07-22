@@ -1,8 +1,12 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
-  FALLBACK_BRANDS, FALLBACK_MODELS, FALLBACK_PROCESSORS, FALLBACK_GENERATIONS,
-  FALLBACK_RAM, FALLBACK_STORAGE, FALLBACK_GPU, FALLBACK_SCREEN_SIZES,
-} from '../../sales-pipeline/salesPipelineUtils';
+  modelsForBrand,
+  processorsForBrand,
+  generationsForBrand,
+  generationsForBrandProcessor,
+  EMPTY_ASSET_CATALOG,
+} from '../../../utils/assetCatalogUtils';
+import useAssetCascadeCatalog from '../../../hooks/useAssetCascadeCatalog';
 import { emptyLineItem, lineItemsToPayload } from './DocumentLineItemsForm';
 import SearchableSelect from './SearchableSelect';
 
@@ -56,29 +60,59 @@ function pickOptions(catalogRows, line, field, fallback = []) {
   return filtered.length ? filtered : fallback;
 }
 
-function modelOptionsForBrand(catalog, brand) {
-  const models = catalog?.models;
-  if (Array.isArray(models) && models.length) return models;
-  if (models && typeof models === 'object' && brand && models[brand]?.length) {
-    return models[brand];
-  }
-  return brand ? (FALLBACK_MODELS[brand] || ['Other']) : [];
-}
+const DEFAULT_REQUIRED_FIELDS = [
+  'brand', 'model_name', 'processor', 'generation', 'ram', 'storage', 'gpu', 'screen_size', 'quantity', 'rate',
+];
 
-export default function AssetDetailsForm({ lines, onChange, catalog, quotationType }) {
+export default function AssetDetailsForm({
+  lines,
+  onChange,
+  catalog,
+  quotationType,
+  requiredFields = DEFAULT_REQUIRED_FIELDS,
+  useCascadeApi,
+}) {
+  const required = new Set(requiredFields);
+  const isRequired = (field) => required.has(field);
   const showRentalFields = quotationType === 'rental' || quotationType === 'demo';
-  const catalogRows = catalog?.catalog_rows || [];
-  const globalOptions = {
-    gpu: catalog?.gpus?.length ? catalog.gpus : FALLBACK_GPU,
-    screen_size: catalog?.screen_sizes?.length ? catalog.screen_sizes : FALLBACK_SCREEN_SIZES,
-  };
+  const cascadeMode = useCascadeApi ?? !catalog?.brands?.length;
+  const {
+    brands: cascadeBrands,
+    specMasters,
+    modelsByBrand,
+    processorsByBrand,
+    generationsByBrand,
+    loadBrandData,
+    prefetchLine,
+  } = useAssetCascadeCatalog(cascadeMode);
+  const cfg = cascadeMode
+    ? {
+      from_asset_config: true,
+      brands: cascadeBrands,
+      rams: specMasters.rams,
+      storages: specMasters.storages,
+      gpus: specMasters.gpus,
+      screen_sizes: specMasters.screen_sizes,
+    }
+    : (catalog?.brands?.length ? catalog : EMPTY_ASSET_CATALOG);
+  const catalogRows = cfg.catalog_rows || [];
+  const useConfig = cascadeMode || cfg.from_asset_config !== false;
+
+  useEffect(() => {
+    if (!cascadeMode) return;
+    lines.forEach((line) => prefetchLine(line));
+  }, [cascadeMode, lines, prefetchLine]);
 
   const updateLine = (index, field, value) => {
+    if (cascadeMode && field === 'brand' && value) {
+      loadBrandData(value);
+    }
+
     const next = lines.map((row, i) => {
       if (i !== index) return row;
       const updated = { ...row, [field]: value };
 
-      if (CATALOG_FIELDS.includes(field)) {
+      if (!useConfig && CATALOG_FIELDS.includes(field)) {
         dependentFieldsAfter(field).forEach((depField) => {
           const options = optionsForField(catalogRows, updated, depField);
           if (updated[depField] && !options.includes(updated[depField])) {
@@ -89,23 +123,34 @@ export default function AssetDetailsForm({ lines, onChange, catalog, quotationTy
 
       if (field === 'brand' && value) {
         updated.model_name = '';
-        updated.processor = '';
-        updated.generation = '';
-        updated.ram = '';
-        updated.storage = '';
+        if (!useConfig) {
+          updated.processor = '';
+          updated.generation = '';
+          updated.ram = '';
+          updated.storage = '';
+        } else {
+          updated.processor = '';
+          updated.generation = '';
+        }
       }
 
-      if (field === 'model_name' && value) {
+      if (field === 'processor' && value && !useConfig) {
+        updated.generation = '';
+      }
+
+      if (field === 'model_name' && value && !useConfig) {
         const modelRow = catalogRows.find(
           (row) => row.model === value && (!updated.brand || row.brand === updated.brand)
         ) || catalogRows.find((row) => row.model === value);
         if (modelRow) updated.brand = modelRow.brand || updated.brand;
       }
 
-      const match = matchCatalogRow(catalogRows, updated);
-      if (match) {
-        updated.model_name = match.model || updated.model_name;
-        updated.brand = match.brand || updated.brand;
+      if (!useConfig) {
+        const match = matchCatalogRow(catalogRows, updated);
+        if (match) {
+          updated.model_name = match.model || updated.model_name;
+          updated.brand = match.brand || updated.brand;
+        }
       }
 
       return updated;
@@ -119,24 +164,32 @@ export default function AssetDetailsForm({ lines, onChange, catalog, quotationTy
   return (
     <div className="space-y-4">
       {lines.map((line, index) => {
-        const brandOptions = pickOptions(
-          catalogRows, line, 'brand', catalog?.brands?.length ? catalog.brands : FALLBACK_BRANDS
-        );
-        const modelOptions = pickOptions(
-          catalogRows, line, 'model_name', modelOptionsForBrand(catalog, line.brand)
-        );
-        const processorOptions = pickOptions(
-          catalogRows, line, 'processor', catalog?.processors?.length ? catalog.processors : FALLBACK_PROCESSORS
-        );
-        const generationOptions = pickOptions(
-          catalogRows, line, 'generation', catalog?.generations?.length ? catalog.generations : FALLBACK_GENERATIONS
-        );
-        const ramOptions = pickOptions(
-          catalogRows, line, 'ram', catalog?.rams?.length ? catalog.rams : FALLBACK_RAM
-        );
-        const storageOptions = pickOptions(
-          catalogRows, line, 'storage', catalog?.storages?.length ? catalog.storages : FALLBACK_STORAGE
-        );
+        const brandOptions = cascadeMode
+          ? cascadeBrands
+          : (useConfig
+            ? (cfg.brands || [])
+            : pickOptions(catalogRows, line, 'brand', cfg.brands));
+        const modelOptions = cascadeMode
+          ? (modelsByBrand[line.brand] || [])
+          : (useConfig
+            ? modelsForBrand(line.brand, cfg)
+            : pickOptions(catalogRows, line, 'model_name', modelsForBrand(line.brand, cfg)));
+        const processorOptions = cascadeMode
+          ? (processorsByBrand[line.brand] || [])
+          : (useConfig
+            ? processorsForBrand(line.brand, cfg)
+            : pickOptions(catalogRows, line, 'processor', cfg.processors));
+        const generationOptions = cascadeMode
+          ? (generationsByBrand[line.brand] || [])
+          : (useConfig
+            ? generationsForBrand(line.brand, cfg)
+            : pickOptions(catalogRows, line, 'generation', generationsForBrandProcessor(line.brand, line.processor, cfg)));
+        const ramOptions = useConfig
+          ? (cfg.rams || [])
+          : pickOptions(catalogRows, line, 'ram', cfg.rams);
+        const storageOptions = useConfig
+          ? (cfg.storages || [])
+          : pickOptions(catalogRows, line, 'storage', cfg.storages);
 
         return (
         <div key={index} className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
@@ -156,7 +209,7 @@ export default function AssetDetailsForm({ lines, onChange, catalog, quotationTy
             <SearchableSelect
               id={`asset-brand-${index}`}
               label="Brand"
-              required
+              required={isRequired('brand')}
               value={line.brand}
               onChange={(v) => updateLine(index, 'brand', v)}
               options={brandOptions}
@@ -164,31 +217,34 @@ export default function AssetDetailsForm({ lines, onChange, catalog, quotationTy
             <SearchableSelect
               id={`asset-model-${index}`}
               label="Model"
-              required
+              required={isRequired('model_name')}
               value={line.model_name}
               onChange={(v) => updateLine(index, 'model_name', v)}
               options={modelOptions}
+              disabled={useConfig && !line.brand}
             />
             <SearchableSelect
               id={`asset-processor-${index}`}
               label="Processor"
-              required
+              required={isRequired('processor')}
               value={line.processor}
               onChange={(v) => updateLine(index, 'processor', v)}
               options={processorOptions}
+              disabled={useConfig && (!line.brand || (cascadeMode && !processorOptions.length && line.brand))}
             />
             <SearchableSelect
               id={`asset-generation-${index}`}
               label="Generation"
-              required
+              required={isRequired('generation')}
               value={line.generation}
               onChange={(v) => updateLine(index, 'generation', v)}
               options={generationOptions}
+              disabled={useConfig && (cascadeMode ? !line.brand : !line.processor)}
             />
             <SearchableSelect
               id={`asset-ram-${index}`}
               label="Ram"
-              required
+              required={isRequired('ram')}
               value={line.ram}
               onChange={(v) => updateLine(index, 'ram', v)}
               options={ramOptions}
@@ -196,7 +252,7 @@ export default function AssetDetailsForm({ lines, onChange, catalog, quotationTy
             <SearchableSelect
               id={`asset-storage-${index}`}
               label="Storage"
-              required
+              required={isRequired('storage')}
               value={line.storage}
               onChange={(v) => updateLine(index, 'storage', v)}
               options={storageOptions}
@@ -204,28 +260,28 @@ export default function AssetDetailsForm({ lines, onChange, catalog, quotationTy
             <SearchableSelect
               id={`asset-gpu-${index}`}
               label="Gpu"
-              required
+              required={isRequired('gpu')}
               value={line.gpu}
               onChange={(v) => updateLine(index, 'gpu', v)}
-              options={globalOptions.gpu}
+              options={cfg.gpus || []}
             />
             <SearchableSelect
               id={`asset-screen-${index}`}
               label="Screen Size"
-              required
+              required={isRequired('screen_size')}
               value={line.screen_size}
               onChange={(v) => updateLine(index, 'screen_size', v)}
-              options={globalOptions.screen_size}
+              options={cfg.screen_sizes || []}
             />
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">
                 Quantity
-                <span className="text-red-500 ml-0.5">*</span>
+                {isRequired('quantity') ? <span className="text-red-500 ml-0.5">*</span> : null}
               </label>
               <input
                 type="number"
                 min="1"
-                required
+                required={isRequired('quantity')}
                 placeholder="Enter quantity"
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
                 value={line.quantity}
@@ -235,12 +291,12 @@ export default function AssetDetailsForm({ lines, onChange, catalog, quotationTy
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">
                 Rate
-                <span className="text-red-500 ml-0.5">*</span>
+                {isRequired('rate') ? <span className="text-red-500 ml-0.5">*</span> : null}
               </label>
               <input
                 type="number"
                 min="0"
-                required
+                required={isRequired('rate')}
                 placeholder="Enter rate"
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
                 value={line.rate}

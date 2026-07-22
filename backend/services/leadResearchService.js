@@ -1,4 +1,5 @@
 const prisma = require('../prisma/client');
+const pool = require('../config/db');
 const { researchLeadCompany } = require('./perplexityService');
 
 const getDomainFromEmail = (email) => {
@@ -64,15 +65,17 @@ const ensureResearch = async (lead, options = {}) => {
         rawResponse: data
       }
     });
-    await prisma.lead.update({
-      where: { leadId: lead.leadId },
-      data: { researchStatus: 'completed', researchRequestedAt: new Date() }
-    });
+    await pool.query(
+      `UPDATE leads SET research_status = $1, research_requested_at = NOW(), updated_at = NOW()
+        WHERE lead_id = $2`,
+      ['completed', lead.leadId]
+    );
   } catch (error) {
-    await prisma.lead.update({
-      where: { leadId: lead.leadId },
-      data: { researchStatus: 'failed', researchRequestedAt: new Date() }
-    });
+    await pool.query(
+      `UPDATE leads SET research_status = $1, research_requested_at = NOW(), updated_at = NOW()
+        WHERE lead_id = $2`,
+      ['failed', lead.leadId]
+    ).catch((e) => console.error('Lead research status update failed:', e.message));
   }
 };
 

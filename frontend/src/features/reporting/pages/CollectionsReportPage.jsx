@@ -8,13 +8,16 @@ import ChartCard from '../components/ChartCard';
 import ReportFilters from '../components/ReportFilters';
 import DataTable from '../components/DataTable';
 import ExportButton from '../components/ExportButton';
+import { useReportFiltersFromUrl } from '../hooks/useReportFiltersFromUrl';
+
+const COLLECTIONS_DEFAULTS = {
+  month: new Date().getMonth() + 1,
+  year: new Date().getFullYear(),
+};
+const COLLECTIONS_FILTER_KEYS = ['month', 'year'];
 
 export default function CollectionsReportPage() {
-  const now = new Date();
-  const [filters, setFilters] = useState({
-    month: now.getMonth() + 1,
-    year: now.getFullYear(),
-  });
+  const [filters, setFilters] = useReportFiltersFromUrl(COLLECTIONS_DEFAULTS, COLLECTIONS_FILTER_KEYS);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -30,7 +33,7 @@ export default function CollectionsReportPage() {
     }
   }, [filters]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(filters); }, []);
 
   const summary = data?.summary || {};
   const trend = (data?.monthly_trend || []).map((r) => ({

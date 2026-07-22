@@ -1,0 +1,267 @@
+{
+  "generatedAt": "2026-06-23T18:30:11.755Z",
+  "recordCounts": [
+    {
+      "entity": "users",
+      "erpCount": 13,
+      "crmCount": 27,
+      "delta": 14,
+      "status": "OK"
+    },
+    {
+      "entity": "vendors",
+      "erpCount": 116,
+      "crmCount": 114,
+      "delta": -2,
+      "status": "UNDER_MIGRATED"
+    },
+    {
+      "entity": "customers",
+      "erpCount": 287,
+      "crmCount": 287,
+      "delta": 0,
+      "status": "OK"
+    },
+    {
+      "entity": "inventory",
+      "erpCount": 4053,
+      "crmCount": 4051,
+      "delta": -2,
+      "status": "UNDER_MIGRATED"
+    },
+    {
+      "entity": "purchase_orders",
+      "erpCount": 139,
+      "crmCount": 138,
+      "delta": -1,
+      "status": "UNDER_MIGRATED"
+    },
+    {
+      "entity": "serial_numbers",
+      "erpCount": 4090,
+      "crmCount": 4090,
+      "delta": 0,
+      "status": "OK"
+    },
+    {
+      "entity": "sales_orders",
+      "erpCount": 4647,
+      "crmCount": 4647,
+      "delta": 0,
+      "status": "OK"
+    },
+    {
+      "entity": "delivery_challans",
+      "erpCount": 4479,
+      "crmCount": 4479,
+      "delta": 0,
+      "status": "OK"
+    },
+    {
+      "entity": "support_tickets",
+      "erpCount": 2045,
+      "crmCount": 2045,
+      "delta": 0,
+      "status": "OK"
+    },
+    {
+      "entity": "allocation_logs",
+      "erpCount": 3952,
+      "crmCount": 3952,
+      "delta": 0,
+      "status": "OK"
+    }
+  ],
+  "foreignKeys": [
+    {
+      "name": "vendor_purchase_orders.vendor_id → vendors",
+      "violations": 0,
+      "status": "OK"
+    },
+    {
+      "name": "sales_order_lines.customer_id → customers",
+      "violations": 0,
+      "status": "OK"
+    },
+    {
+      "name": "vendor_serial_numbers missing serial",
+      "violations": 0,
+      "status": "OK"
+    },
+    {
+      "name": "customers missing name",
+      "violations": 0,
+      "status": "OK"
+    }
+  ],
+  "idMap": [
+    {
+      "name": "erp_id_map orphans (users)",
+      "violations": 0,
+      "status": "OK"
+    }
+  ],
+  "duplicates": [
+    {
+      "name": "vendor_serial_numbers.serial_number",
+      "duplicateGroups": 0,
+      "status": "OK"
+    }
+  ],
+  "errors": [],
+  "passed": false,
+  "rbacBaseline": [
+    {
+      "entity": "users",
+      "crmCount": 27,
+      "status": "RECORDED"
+    },
+    {
+      "entity": "roles",
+      "crmCount": 18,
+      "status": "RECORDED"
+    },
+    {
+      "entity": "role_permissions",
+      "crmCount": 576,
+      "status": "RECORDED"
+    },
+    {
+      "entity": "user_permissions",
+      "crmCount": 5,
+      "status": "RECORDED"
+    },
+    {
+      "entity": "teams",
+      "crmCount": 22,
+      "status": "RECORDED"
+    },
+    {
+      "entity": "user_teams",
+      "crmCount": 5,
+      "status": "RECORDED"
+    },
+    {
+      "entity": "permission_sections",
+      "crmCount": 70,
+      "status": "RECORDED"
+    }
+  ],
+  "baseline": {
+    "generatedAt": "2026-06-23T17:59:04.326Z",
+    "recordCounts": [
+      {
+        "entity": "users",
+        "erpCount": 13,
+        "crmCount": 17,
+        "delta": 4,
+        "status": "OK"
+      },
+      {
+        "entity": "vendors",
+        "erpCount": 116,
+        "crmCount": 0,
+        "delta": -116,
+        "status": "UNDER_MIGRATED"
+      },
+      {
+        "entity": "customers",
+        "erpCount": 287,
+        "crmCount": 0,
+        "delta": -287,
+        "status": "UNDER_MIGRATED"
+      },
+      {
+        "entity": "inventory",
+        "erpCount": 4053,
+        "crmCount": 0,
+        "delta": -4053,
+        "status": "UNDER_MIGRATED"
+      },
+      {
+        "entity": "purchase_orders",
+        "erpCount": 139,
+        "crmCount": 0,
+        "delta": -139,
+        "status": "UNDER_MIGRATED"
+      },
+      {
+        "entity": "serial_numbers",
+        "erpCount": 4090,
+        "crmCount": 0,
+        "delta": -4090,
+        "status": "UNDER_MIGRATED"
+      },
+      {
+        "entity": "sales_orders",
+        "erpCount": 4647,
+        "crmCount": 0,
+        "delta": -4647,
+        "status": "UNDER_MIGRATED"
+      },
+      {
+        "entity": "delivery_challans",
+        "erpCount": 4479,
+        "crmCount": 0,
+        "delta": -4479,
+        "status": "UNDER_MIGRATED"
+      },
+      {
+        "entity": "support_tickets",
+        "erpCount": 2045,
+        "crmCount": 0,
+        "delta": -2045,
+        "status": "UNDER_MIGRATED"
+      },
+      {
+        "entity": "allocation_logs",
+        "erpCount": 3952,
+        "crmCount": 0,
+        "delta": -3952,
+        "status": "UNDER_MIGRATED"
+      }
+    ],
+    "foreignKeys": [],
+    "idMap": [],
+    "duplicates": [],
+    "errors": [],
+    "passed": false,
+    "rbacBaseline": [
+      {
+        "entity": "users",
+        "crmCount": 17,
+        "status": "BASELINE"
+      },
+      {
+        "entity": "roles",
+        "crmCount": 18,
+        "status": "BASELINE"
+      },
+      {
+        "entity": "role_permissions",
+        "crmCount": 576,
+        "status": "BASELINE"
+      },
+      {
+        "entity": "user_permissions",
+        "crmCount": 5,
+        "status": "BASELINE"
+      },
+      {
+        "entity": "teams",
+        "crmCount": 22,
+        "status": "BASELINE"
+      },
+      {
+        "entity": "user_teams",
+        "crmCount": 5,
+        "status": "BASELINE"
+      },
+      {
+        "entity": "permission_sections",
+        "crmCount": 70,
+        "status": "BASELINE"
+      }
+    ]
+  }
+}

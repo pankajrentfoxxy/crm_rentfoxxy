@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, Check, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
+import { AlertTriangle, Check, ChevronDown, ChevronUp, Loader2, Search } from 'lucide-react';
 import api from '../../utils/api';
+import { formatIndianMobileInput, indianMobileError, normalizeIndianMobile } from '../../utils/phoneValidation';
 import { formatAddress } from './utils';
+import PickupSetupForm from './components/PickupSetupForm';
 import './support.css';
 
 const CATEGORIES = [
@@ -66,7 +68,7 @@ function CustomerCard({
             <div className="grid gap-2 mt-2 sm:grid-cols-2">
                 <label className="support-label-compact">
                     <span className="support-label-text">Phone</span>
-                    <input className="support-field support-field-compact" value={ticketPhone} onChange={(e) => setTicketPhone(e.target.value)} />
+                    <input className="support-field support-field-compact" value={ticketPhone} onChange={(e) => setTicketPhone(formatIndianMobileInput(e.target.value))} maxLength={10} inputMode="numeric" />
                 </label>
                 <label className="support-label-compact">
                     <span className="support-label-text">Priority</span>
@@ -85,7 +87,7 @@ function CustomerCard({
                 <div className="grid gap-2 mt-2">
                     <label className="support-label-compact">
                         <span className="support-label-text">Alt phone</span>
-                        <input className="support-field support-field-compact" value={ticketAltPhone} onChange={(e) => setTicketAltPhone(e.target.value)} />
+                        <input className="support-field support-field-compact" value={ticketAltPhone} onChange={(e) => setTicketAltPhone(formatIndianMobileInput(e.target.value))} maxLength={10} inputMode="numeric" />
                     </label>
                     <label className="support-label-compact">
                         <span className="support-label-text">Email</span>
@@ -120,21 +122,23 @@ function AssetCard({ asset, isOn, block, onToggle }) {
     );
 }
 
-function CreateNav({ step, setStep, customer, saving, selectedCount }) {
+function CreateNav({ step, setStep, customer, saving, selectedCount, ticketCategory }) {
+    const isPickup = ticketCategory === 'pickup';
+    const lastStep = isPickup ? 2 : 2;
     return (
         <div className="support-create-nav">
             {step > 0 && (
                 <button type="button" onClick={() => setStep(step - 1)} className="support-btn-outline flex-1">Back</button>
             )}
-            {step < 2 ? (
+            {step < lastStep ? (
                 <button type="button" disabled={step === 0 && !customer} onClick={() => setStep(step + 1)} className="support-btn-primary flex-1">
                     Next
                 </button>
-            ) : (
+            ) : !isPickup ? (
                 <button type="submit" disabled={saving || !selectedCount} className="support-btn-primary flex-1">
                     {saving ? 'Saving…' : 'Create'}
                 </button>
-            )}
+            ) : null}
         </div>
     );
 }
@@ -163,6 +167,7 @@ export default function SupportTicketCreate() {
     const [ticketEmail, setTicketEmail] = useState('');
     const [ticketAddress, setTicketAddress] = useState('');
     const [blocked, setBlocked] = useState({});
+    const [machineSearch, setMachineSearch] = useState('');
 
     useEffect(() => {
         api.get('/support/categories').then((r) => setCategories(r.data.categories || [])).catch(() => setCategories([]));
@@ -192,6 +197,7 @@ export default function SupportTicketCreate() {
         setCustomers([]);
         setSelected({});
         setBlocked({});
+        setMachineSearch('');
         setShowRemarks(false);
         setShowContactExtra(false);
         const [detailRes, assetsRes] = await Promise.all([
@@ -212,7 +218,7 @@ export default function SupportTicketCreate() {
         const serial = asset.unique_serial_number || asset.serial_number || '';
         try {
             const { data } = await api.get(
-                `/support/tickets/check-duplicate?customer_id=${customer.customer_id}&serial=${encodeURIComponent(serial)}&customer_inventory_id=${asset.id}`
+                `/support/tickets/check-duplicate?customer_id=${customer.customer_id}&serial=${encodeURIComponent(serial)}`
             );
             return data.duplicate;
         } catch {
@@ -240,6 +246,10 @@ export default function SupportTicketCreate() {
             setBlocked((prev) => ({ ...prev, [id]: dup }));
             return;
         }
+        if (ticketCategory === 'pickup') {
+            setSelected({ [id]: { asset, remarks: '', issue_category_id: '' } });
+            return;
+        }
         setSelected((prev) => ({
             ...prev,
             [id]: { asset, remarks: '', issue_category_id: '' }
@@ -254,11 +264,95 @@ export default function SupportTicketCreate() {
     const selectedCount = selectedList.length;
     const firstSelectedId = Object.keys(selected)[0];
 
+    const filteredAssets = useMemo(() => {
+        const q = machineSearch.trim().toLowerCase();
+        if (!q) return assets;
+        return assets.filter((asset) => {
+            const haystack = [
+                asset.unique_serial_number,
+                asset.serial_number,
+                asset.model_name,
+                asset.ram,
+                asset.storage,
+                asset.generation,
+            ]
+                .filter(Boolean)
+                .join(' ')
+                .toLowerCase();
+            return haystack.includes(q);
+        });
+    }, [assets, machineSearch]);
+
+    const pickupTicketStub = useMemo(() => {
+        if (!customer) return null;
+        return {
+            customer_id: customer.customer_id,
+            customer_name: customer.customer_name,
+            customer_phone: ticketPhone,
+            display_phone: ticketPhone,
+            ticket_phone_override: ticketPhone,
+        };
+    }, [customer, ticketPhone]);
+
+    const validateSupportPhones = () => {
+        const phoneErr = indianMobileError(ticketPhone, { label: 'Phone' });
+        if (phoneErr) return phoneErr;
+        const altErr = indianMobileError(ticketAltPhone, { label: 'Alternate phone' });
+        if (altErr) return altErr;
+        return null;
+    };
+
+    const normalizedTicketPhone = () => (ticketPhone?.trim() ? normalizeIndianMobile(ticketPhone) : '');
+    const normalizedAltPhone = () => (ticketAltPhone?.trim() ? normalizeIndianMobile(ticketAltPhone) : '');
+
+    const submitPickupTicket = async (pickupPayload) => {
+        if (!customer || !selectedCount) {
+            alert('Select at least one laptop');
+            return;
+        }
+        const phoneValidationError = validateSupportPhones();
+        if (phoneValidationError) {
+            alert(phoneValidationError);
+            return;
+        }
+        setSaving(true);
+        try {
+            const machines = selectedList.map(({ asset }) => ({
+                serial_number: asset.serial_number,
+                unique_serial_number: asset.unique_serial_number,
+                ttspl_id: asset.unique_serial_number,
+                brand: asset.model_name?.split(' ')[0] || '',
+                model: asset.model_name,
+                ram: asset.ram,
+                storage: asset.storage,
+                generation: asset.generation,
+            }));
+            const { data } = await api.post('/support/tickets/pickup-ticket', {
+                customer_id: customer.customer_id,
+                customer_name: customer.customer_name,
+                customer_phone: normalizedTicketPhone() || customer.contact_person_number || customer.customer_number,
+                priority,
+                ticket_phone_override: normalizedTicketPhone(),
+                ticket_alt_phone: normalizedAltPhone() || null,
+                ticket_email: ticketEmail,
+                ticket_address: ticketAddress,
+                machines,
+                ...pickupPayload,
+            });
+            navigate(`/support/tickets/${data.ticket.id}`);
+        } catch (err) {
+            alert(err.response?.data?.message || 'Failed to create pickup ticket');
+        } finally {
+            setSaving(false);
+        }
+    };
+
     const buildItems = () =>
         selectedList.map(({ asset, remarks, issue_category_id }) => {
             const cat = categories.find((c) => String(c.id) === String(issue_category_id));
             return {
-                customer_inventory_id: asset.id,
+                // Deployed assets come from vendor_serial_numbers, not customer_inventory.
+                customer_inventory_id: null,
                 serial_number: asset.serial_number,
                 unique_serial_number: asset.unique_serial_number,
                 model: asset.model_name,
@@ -276,12 +370,18 @@ export default function SupportTicketCreate() {
 
     const submit = async (e) => {
         e.preventDefault();
+        if (ticketCategory === 'pickup') return;
         if (!customer) {
             alert('Select a customer');
             return;
         }
         if (!selectedCount) {
             alert('Select at least one machine');
+            return;
+        }
+        const phoneValidationError = validateSupportPhones();
+        if (phoneValidationError) {
+            alert(phoneValidationError);
             return;
         }
         setSaving(true);
@@ -292,8 +392,8 @@ export default function SupportTicketCreate() {
                 customer_phone: customer.contact_person_number || customer.customer_number,
                 ticket_category: ticketCategory,
                 priority,
-                ticket_phone_override: ticketPhone,
-                ticket_alt_phone: ticketAltPhone,
+                ticket_phone_override: normalizedTicketPhone(),
+                ticket_alt_phone: normalizedAltPhone() || null,
                 ticket_email: ticketEmail,
                 ticket_address: ticketAddress,
                 items: buildItems()
@@ -352,6 +452,7 @@ export default function SupportTicketCreate() {
                         setCustomer(null);
                         setSelected({});
                         setBlocked({});
+                        setMachineSearch('');
                     }}
                 />
             )}
@@ -372,7 +473,7 @@ export default function SupportTicketCreate() {
                 <span className={`support-category-label ${ticketCategory}`}>{ticketCategory}</span>
             </div>
 
-            {selectedCount > 0 && (
+            {selectedCount > 0 && ticketCategory !== 'pickup' && (
                 <div className="support-bulk-bar support-bulk-bar-compact">
                     <label className="support-label-compact flex-1">
                         <span className="support-label-text">Technician</span>
@@ -386,10 +487,26 @@ export default function SupportTicketCreate() {
                 </div>
             )}
 
+            {assets.length > 0 && (
+                <div className="relative mb-3">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                    <input
+                        type="search"
+                        value={machineSearch}
+                        onChange={(e) => setMachineSearch(e.target.value)}
+                        className="support-field support-field-compact w-full pl-9"
+                        placeholder="Search TTSPL, serial, model…"
+                    />
+                </div>
+            )}
+
             {!assets.length && <p className="support-empty-msg">No machines for this customer.</p>}
+            {assets.length > 0 && !filteredAssets.length && (
+                <p className="support-empty-msg">No machines match your search.</p>
+            )}
 
             <div className="support-asset-grid support-asset-grid-compact">
-                {assets.map((asset) => {
+                {filteredAssets.map((asset) => {
                     const id = String(asset.id);
                     return (
                         <AssetCard
@@ -432,7 +549,27 @@ export default function SupportTicketCreate() {
                             )}
                         </div>
                     )}
-                    <p className="support-selected-count">{selectedCount} selected</p>
+                    <p className="support-selected-count">{selectedCount} selected{ticketCategory === 'pickup' ? ' — one Return DC for all selected laptops' : ''}</p>
+                </div>
+            )}
+
+            {ticketCategory === 'pickup' && selectedCount >= 1 && pickupTicketStub && (
+                <div className="mt-4 pt-4 border-t border-slate-100">
+                    <h3 className="support-create-section-title mb-3">Schedule pickup</h3>
+                    <PickupSetupForm
+                        ticket={pickupTicketStub}
+                        customerId={customer?.customer_id}
+                        selectedMachines={selectedList.map(({ asset }) => ({
+                            serial_number: asset.serial_number,
+                            unique_serial_number: asset.unique_serial_number,
+                            ttspl_id: asset.unique_serial_number,
+                            brand: asset.model_name?.split(' ')[0] || '',
+                            model: asset.model_name,
+                        }))}
+                        onSubmit={submitPickupTicket}
+                        saving={saving}
+                        submitLabel={`Create Pickup Ticket + Return DC${selectedCount > 1 ? ` (${selectedCount} units)` : ''}`}
+                    />
                 </div>
             )}
         </section>
@@ -456,16 +593,30 @@ export default function SupportTicketCreate() {
                     {step === 0 && customerStep}
                     {step === 1 && categoryStep}
                     {step === 2 && machinesStep}
-                    <CreateNav step={step} setStep={setStep} customer={customer} saving={saving} selectedCount={selectedCount} />
+                    {isMobile && ticketCategory === 'pickup' && step === 2 && selectedCount === 1 && pickupTicketStub && (
+                        <div className="px-1 pb-2">
+                            <PickupSetupForm
+                                ticket={pickupTicketStub}
+                                customerId={customer?.customer_id}
+                                selectedAsset={selectedList[0]?.asset}
+                                onSubmit={submitPickupTicket}
+                                saving={saving}
+                                submitLabel="Create Pickup Ticket + Return DC"
+                            />
+                        </div>
+                    )}
+                    <CreateNav step={step} setStep={setStep} customer={customer} saving={saving} selectedCount={selectedCount} ticketCategory={ticketCategory} />
                 </>
             ) : (
                 <>
                     {customerStep}
                     {categoryStep}
                     {machinesStep}
-                    <button type="submit" disabled={saving || !customer || !selectedCount} className="support-btn-primary w-full sm:w-auto">
-                        {saving ? 'Creating…' : `Create ticket (${selectedCount})`}
-                    </button>
+                    {ticketCategory !== 'pickup' && (
+                        <button type="submit" disabled={saving || !customer || !selectedCount} className="support-btn-primary w-full sm:w-auto">
+                            {saving ? 'Creating…' : `Create ticket (${selectedCount})`}
+                        </button>
+                    )}
                 </>
             )}
         </form>

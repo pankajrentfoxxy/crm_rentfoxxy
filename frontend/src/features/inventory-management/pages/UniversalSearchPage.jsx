@@ -2,9 +2,13 @@ import React, { useState } from 'react';
 import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
 import { Loader2, Search } from 'lucide-react';
+import { useAuth } from '../../../context/AuthContext';
 import { fetchUniversalSearch } from '../inventoryManagementApi';
+import SuperAdminSerialStatusPanel from '../components/SuperAdminSerialStatusPanel';
 
 export default function UniversalSearchPage() {
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === 'super_admin';
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
@@ -84,6 +88,21 @@ export default function UniversalSearchPage() {
               ))}
             </tbody>
           </table>
+          {isSuperAdmin && result.data.length === 1 ? (
+            <div className="p-4 border-t">
+              <SuperAdminSerialStatusPanel
+                row={result.data[0]}
+                onUpdated={async () => {
+                  try {
+                    const { data } = await fetchUniversalSearch(input.trim().toUpperCase());
+                    setResult(data);
+                  } catch {
+                    /* ignore refresh errors */
+                  }
+                }}
+              />
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

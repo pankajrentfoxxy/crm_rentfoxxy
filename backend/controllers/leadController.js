@@ -1,12 +1,118 @@
 const fs = require('fs');
+const path = require('path');
 const csv = require('csv-parser');
 const crypto = require('crypto');
 const prisma = require('../prisma/client');
 const pool = require('../config/db');
 const { ensureResearch } = require('../services/leadResearchService');
 const { getNextAutoAssignee, updateAutoAssignConfig } = require('../services/leadAutoAssignService');
+const {
+  runLeadEmailSync,
+  getLeadEmailSyncStatus,
+} = require('../services/leadEmailIngestionService');
+const { isRestrictedToAssigned } = require('../services/dataScopeService');
+const {
+  validateFinanceSpockContactFields,
+  applyFinanceSpockDetails,
+} = require('./customerManagementController');
+const {
+  normalizeIndianMobile,
+  validateIndianMobile,
+} = require('../utils/phoneValidation');
 
 const { STATUSES_WITHOUT_STAGE_CHOICE, STAGES_BY_STATUS, stagesForStatus } = require('../constants/leadStages');
+
+function currentUserId(user) {
+  const id = user?.user_id ?? user?.userId;
+  return id != null && !Number.isNaN(parseInt(id, 10)) ? parseInt(id, 10) : null;
+}
+
+function hasSalesAccess(user) {
+  if (!user) return false;
+  if (user.role === 'sales') return true;
+  return Array.isArray(user.permissions) && user.permissions.includes('sales_access');
+}
+
+/** Sales / sales_access users operate on their own lead queue only. */
+function isSalesLeadOperator(user) {
+  if (!user) return false;
+  if (user.role === 'sales') return true;
+  if (['admin', 'manager', 'super_admin'].includes(user.role)) return false;
+  return hasSalesAccess(user);
+}
+
+function sameUserId(a, b) {
+  if (a == null || b == null) return false;
+  return parseInt(a, 10) === parseInt(b, 10);
+}
+
+/** DB `follow_up_time` is TIME — format as HH:mm for API consumers. */
+function formatFollowUpTime(value) {
+  if (value == null || value === '') return null;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    const h = String(value.getUTCHours()).padStart(2, '0');
+    const m = String(value.getUTCMinutes()).padStart(2, '0');
+    return `${h}:${m}`;
+  }
+  const s = String(value).trim();
+  const m = s.match(/(\d{1,2}):(\d{2})/);
+  if (m) return `${m[1].padStart(2, '0')}:${m[2]}`;
+  return s.length >= 5 ? s.slice(0, 5) : s;
+}
+
+/** Parse HTML time input / API string into PostgreSQL TIME literal. */
+function normalizeFollowUpTimeForDb(value) {
+  if (value == null || value === '') return null;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    const h = String(value.getUTCHours()).padStart(2, '0');
+    const m = String(value.getUTCMinutes()).padStart(2, '0');
+    return `${h}:${m}:00`;
+  }
+  const s = String(value).trim();
+  const m = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (!m) return null;
+  return `${m[1].padStart(2, '0')}:${m[2]}:${m[3] || '00'}`;
+}
+
+/** Calendar YYYY-MM-DD in Asia/Kolkata. */
+function calendarYmdIst(date = new Date()) {
+  return date.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+/**
+ * Store follow-up calendar day as noon IST so the date never shifts across timezones.
+ * Accepts YYYY-MM-DD or any Date/ISO string.
+ */
+function normalizeFollowUpDateForDb(value) {
+  if (value == null || value === '') return null;
+  let ymd = null;
+  if (typeof value === 'string') {
+    const m = value.trim().match(/^(\d{4}-\d{2}-\d{2})/);
+    if (m) ymd = m[1];
+  }
+  if (!ymd) {
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return null;
+    ymd = calendarYmdIst(d);
+  }
+  return new Date(`${ymd}T12:00:00+05:30`);
+}
+
+/** Start / end of "today" in IST as absolute timestamps (for Prisma filters). */
+function istTodayBounds() {
+  const ymd = calendarYmdIst();
+  return {
+    start: new Date(`${ymd}T00:00:00+05:30`),
+    end: new Date(`${ymd}T23:59:59.999+05:30`),
+    ymd,
+  };
+}
+
+function serializeLeadFollowUpTime(lead) {
+  if (!lead || lead.followUpTime === undefined) return lead;
+  lead.followUpTime = formatFollowUpTime(lead.followUpTime);
+  return lead;
+}
 
 async function ensureLeadQuotationColumns() {
   await pool.query(`
@@ -18,6 +124,17 @@ async function ensureLeadQuotationColumns() {
       ADD COLUMN IF NOT EXISTS quotation_last_to_email VARCHAR(255)
   `);
 }
+
+exports.ensureLeadCrmSchema = async () => {
+  const files = ['057_phase3_lead_crm.sql'];
+  for (const file of files) {
+    const sqlPath = path.join(__dirname, '../migrations', file);
+    if (fs.existsSync(sqlPath)) {
+      await pool.query(fs.readFileSync(sqlPath, 'utf8'));
+    }
+  }
+  await ensureLeadQuotationColumns();
+};
 
 async function attachQuotationMeta(lead) {
   await ensureLeadQuotationColumns();
@@ -34,7 +151,7 @@ async function attachQuotationMeta(lead) {
   return lead;
 }
 
-const LEAD_STATUSES = ['Pending', 'Cold', 'Warm', 'Hot', 'Gone', 'Hold', 'Rejected', 'Call Back', 'Deal', 'Demo'];
+const LEAD_STATUSES = ['Pending', 'Cold', 'Warm', 'Hot', 'Gone', 'Hold', 'Rejected', 'Call Back', 'Deal', 'Demo', 'Repeat'];
 const LEAD_SOURCE_OPTIONS = ['Google', 'LinkedIn', 'Team', 'References', 'Apollo'];
 
 const csvEscape = (value) => {
@@ -44,7 +161,7 @@ const csvEscape = (value) => {
 };
 
 /** Shared Prisma where for list + CSV export */
-function buildPrismaWhereForLeads(req) {
+function buildPrismaWhereForLeads(req, { assignedOnly = false } = {}) {
   const { status, assigned_to, source, date_from, date_to, search, include_duplicates } = req.query;
   const andConditions = [];
 
@@ -70,12 +187,21 @@ function buildPrismaWhereForLeads(req) {
     }
   }
 
-  if (req.user.role === 'sales') {
-    andConditions.push({ assignedUserId: req.user.user_id });
+  if (assignedOnly) {
+    const uid = currentUserId(req.user);
+    if (uid != null) {
+      andConditions.push({
+        OR: [
+          { assignedUserId: uid },
+          { AND: [{ assignedById: uid }, { assignedUserId: null }] },
+        ],
+      });
+    }
   } else if (assigned_to) {
     const parts = normalizeArrayField(assigned_to);
     if (parts.some((p) => String(p).toLowerCase() === 'me')) {
-      andConditions.push({ assignedUserId: req.user.user_id });
+      const uid = currentUserId(req.user);
+      if (uid != null) andConditions.push({ assignedUserId: uid });
     } else {
     const hasUnassigned = parts.some((p) => String(p).toLowerCase() === 'unassigned');
     const userIds = parts
@@ -118,18 +244,39 @@ function buildPrismaWhereForLeads(req) {
 }
 
 const normalizeEmail = (value) => (value || '').trim().toLowerCase();
-const normalizePhone = (value) => (value || '').replace(/\s+/g, '');
+const normalizePhone = (value) => {
+  const trimmed = String(value ?? '').trim();
+  if (!trimmed) return null;
+  return normalizeIndianMobile(trimmed);
+};
 const isLikelyCompanyDomain = (value) => !!value && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(value);
 const getDomainFromEmail = (email) => {
   const normalized = normalizeEmail(email);
   if (!normalized || !normalized.includes('@')) return null;
   return normalized.split('@')[1] || null;
 };
-const canEditLead = (user, lead) => {
-  if (!user || !lead) return false;
-  if (['admin', 'manager'].includes(user.role)) return true;
-  if (user.role === 'sales') return lead.assignedUserId === user.user_id;
+async function leadsAssignedOnly(req) {
+  return isRestrictedToAssigned(req, 'leads');
+}
+
+async function denyUnlessCanEditLead(req, res, lead) {
+  const assignedOnly = await leadsAssignedOnly(req);
+  if (assignedOnly && !canEditLead(req.user, lead, { assignedOnly: true })) {
+    res.status(403).json({ success: false, message: 'Access denied' });
+    return true;
+  }
   return false;
+}
+
+const canEditLead = (user, lead, { assignedOnly = false } = {}) => {
+  if (!user || !lead) return false;
+  if (['admin', 'manager', 'super_admin'].includes(user.role)) return true;
+  if (!assignedOnly) return true;
+  const uid = currentUserId(user);
+  const assignedUserId = lead.assignedUserId ?? lead.assigned_user_id;
+  const assignedById = lead.assignedById ?? lead.assigned_by;
+  return sameUserId(assignedUserId, uid)
+    || (assignedUserId == null && sameUserId(assignedById, uid));
 };
 
 const pickField = (row, keys) => {
@@ -315,46 +462,51 @@ const normalizeArrayField = (value) => {
 async function enrichLeadsPhase3(leads) {
   if (!leads?.length) return leads;
   const ids = leads.map((l) => l.leadId);
-  const { rows } = await pool.query(
-    `SELECT lead_id, whatsapp_number, designation, quantity_required, monthly_budget,
-            rental_duration, use_case, company_type, company_size, industry, annual_revenue,
-            pan_number, gst_number, state, pincode, billing_address, shipping_same_as_billing,
-            shipping_address, follow_up_time, converted_at, converted_by, customer_id,
-            inquiry_type, last_activity_at
-     FROM leads WHERE lead_id = ANY($1::int[])`,
-    [ids]
-  );
-  const map = new Map(rows.map((r) => [r.lead_id, r]));
-  return leads.map((lead) => {
-    const ex = map.get(lead.leadId);
-    if (!ex) return lead;
-    return {
-      ...lead,
-      whatsappNumber: ex.whatsapp_number,
-      designation: ex.designation,
-      quantityRequired: ex.quantity_required,
-      monthlyBudget: ex.monthly_budget,
-      rentalDuration: ex.rental_duration,
-      useCase: ex.use_case,
-      companyType: ex.company_type,
-      companySize: ex.company_size,
-      industry: ex.industry,
-      annualRevenue: ex.annual_revenue,
-      panNumber: ex.pan_number,
-      gstNumber: ex.gst_number,
-      state: ex.state,
-      pincode: ex.pincode,
-      billingAddress: ex.billing_address,
-      shippingSameAsBilling: ex.shipping_same_as_billing,
-      shippingAddress: ex.shipping_address,
-      followUpTime: ex.follow_up_time,
-      convertedAt: ex.converted_at,
-      convertedBy: ex.converted_by,
-      customerId: ex.customer_id,
-      inquiryType: ex.inquiry_type,
-      lastActivityAt: ex.last_activity_at
-    };
-  });
+  try {
+    const { rows } = await pool.query(
+      `SELECT lead_id, whatsapp_number, designation, quantity_required, monthly_budget,
+              rental_duration, use_case, company_type, company_size, industry, annual_revenue,
+              pan_number, gst_number, state, pincode, billing_address, shipping_same_as_billing,
+              shipping_address, follow_up_time, converted_at, converted_by, customer_id,
+              inquiry_type, last_activity_at
+       FROM leads WHERE lead_id = ANY($1::int[])`,
+      [ids]
+    );
+    const map = new Map(rows.map((r) => [r.lead_id, r]));
+    return leads.map((lead) => {
+      const ex = map.get(lead.leadId);
+      if (!ex) return lead;
+      return {
+        ...lead,
+        whatsappNumber: ex.whatsapp_number,
+        designation: ex.designation,
+        quantityRequired: ex.quantity_required,
+        monthlyBudget: ex.monthly_budget,
+        rentalDuration: ex.rental_duration,
+        useCase: ex.use_case,
+        companyType: ex.company_type,
+        companySize: ex.company_size,
+        industry: ex.industry,
+        annualRevenue: ex.annual_revenue,
+        panNumber: ex.pan_number,
+        gstNumber: ex.gst_number,
+        state: ex.state,
+        pincode: ex.pincode,
+        billingAddress: ex.billing_address,
+        shippingSameAsBilling: ex.shipping_same_as_billing,
+        shippingAddress: ex.shipping_address,
+        followUpTime: formatFollowUpTime(ex.follow_up_time),
+        convertedAt: ex.converted_at,
+        convertedBy: ex.converted_by,
+        customerId: ex.customer_id,
+        inquiryType: ex.inquiry_type,
+        lastActivityAt: ex.last_activity_at
+      };
+    });
+  } catch (e) {
+    console.warn('enrichLeadsPhase3 skipped:', e.message);
+    return leads;
+  }
 }
 
 function applyLeadListFilters(leads, req) {
@@ -365,11 +517,7 @@ function applyLeadListFilters(leads, req) {
     out = out.filter((l) => types.includes(l.inquiryType || 'rental'));
   }
   if (follow_up) {
-    const now = new Date();
-    const startOfDay = new Date(now);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(now);
-    endOfDay.setHours(23, 59, 59, 999);
+    const { start: startOfDay, end: endOfDay, ymd: todayYmd } = istTodayBounds();
     const filter = String(follow_up).toLowerCase();
     out = out.filter((l) => {
       if (!l.followUpDate) return false;
@@ -377,12 +525,19 @@ function applyLeadListFilters(leads, req) {
       if (filter === 'today') return fd >= startOfDay && fd <= endOfDay;
       if (filter === 'overdue') return fd < startOfDay;
       if (filter === 'this_week') {
-        const startOfWeek = new Date(startOfDay);
-        startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
-        const endOfWeek = new Date(startOfWeek);
-        endOfWeek.setDate(endOfWeek.getDate() + 6);
-        endOfWeek.setHours(23, 59, 59, 999);
-        return fd >= startOfWeek && fd <= endOfWeek;
+        // IST calendar week containing today (Mon–Sun)
+        const [y, m, d] = todayYmd.split('-').map(Number);
+        const todayNoon = new Date(Date.UTC(y, m - 1, d, 6, 30)); // ~noon IST
+        const day = todayNoon.getUTCDay(); // 0=Sun
+        const mondayOffset = day === 0 ? -6 : 1 - day;
+        const weekStart = new Date(todayNoon);
+        weekStart.setUTCDate(weekStart.getUTCDate() + mondayOffset);
+        const weekStartYmd = weekStart.toISOString().slice(0, 10);
+        const weekEnd = new Date(weekStart);
+        weekEnd.setUTCDate(weekEnd.getUTCDate() + 6);
+        const weekEndYmd = weekEnd.toISOString().slice(0, 10);
+        const fdYmd = calendarYmdIst(fd);
+        return fdYmd >= weekStartYmd && fdYmd <= weekEndYmd;
       }
       return true;
     });
@@ -392,7 +547,8 @@ function applyLeadListFilters(leads, req) {
 
 exports.getLeads = async (req, res) => {
   try {
-    const where = buildPrismaWhereForLeads(req);
+    const assignedOnly = await leadsAssignedOnly(req);
+    const where = buildPrismaWhereForLeads(req, { assignedOnly });
 
     let leads = await prisma.lead.findMany({
       where,
@@ -415,7 +571,8 @@ exports.getLeads = async (req, res) => {
 
 exports.exportLeadsCsv = async (req, res) => {
   try {
-    const where = buildPrismaWhereForLeads(req);
+    const assignedOnly = await leadsAssignedOnly(req);
+    const where = buildPrismaWhereForLeads(req, { assignedOnly });
     const leads = await prisma.lead.findMany({
       where,
       orderBy: { createdAt: 'desc' },
@@ -535,9 +692,7 @@ exports.getLeadById = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Lead not found' });
     }
 
-    if (req.user.role === 'sales' && lead.assignedUserId !== req.user.user_id) {
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
+    if (await denyUnlessCanEditLead(req, res, lead)) return;
 
     const addressRes = await pool.query(
       `SELECT address_id, concern_person, mobile_no, address, pincode, address_type, created_at
@@ -722,8 +877,24 @@ exports.acceptLeadQuotation = async (req, res) => {
 exports.createLead = async (req, res) => {
   const payload = buildLeadPayload(req.body || {});
 
-  if (!payload.phone || !String(payload.phone).trim()) {
-    return res.status(400).json({ success: false, message: 'Phone is required' });
+  // Email is optional; validate format only when provided.
+  if (payload.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email)) {
+    return res.status(400).json({ success: false, message: 'Enter a valid email' });
+  }
+
+  const phoneError = validateIndianMobile(payload.phone, { required: false, label: 'Phone' });
+  if (phoneError) {
+    return res.status(400).json({ success: false, message: phoneError });
+  }
+  payload.phone = payload.phone?.trim() ? normalizeIndianMobile(payload.phone) : null;
+
+  const body = req.body || {};
+  const whatsappRaw = body.whatsapp_number ?? body.whatsappNumber;
+  if (whatsappRaw != null && String(whatsappRaw).trim()) {
+    const whatsappError = validateIndianMobile(whatsappRaw, { label: 'WhatsApp number' });
+    if (whatsappError) {
+      return res.status(400).json({ success: false, message: whatsappError });
+    }
   }
 
   try {
@@ -735,12 +906,10 @@ exports.createLead = async (req, res) => {
       if (existing) duplicateOf = existing.leadId;
     }
 
-    const hasSalesAccess = Array.isArray(req.user.permissions) && req.user.permissions.includes('sales_access');
-    const isSalesOperator = req.user.role === 'sales' || (!['admin', 'manager'].includes(req.user.role) && hasSalesAccess);
-
+    const uid = currentUserId(req.user);
     let assignData = {};
-    if (isSalesOperator) {
-      assignData = { assignedUserId: req.user.user_id, assignedById: req.user.user_id, assignedAt: new Date() };
+    if (isSalesLeadOperator(req.user) && uid) {
+      assignData = { assignedUserId: uid, assignedById: uid, assignedAt: new Date() };
     } else {
       let autoAssignee = null;
       try {
@@ -749,13 +918,13 @@ exports.createLead = async (req, res) => {
         console.error('Auto-assign lookup failed:', assignErr.message);
       }
       if (autoAssignee) {
-        assignData = { assignedUserId: autoAssignee, assignedById: req.user.user_id, assignedAt: new Date() };
+        assignData = { assignedUserId: autoAssignee, assignedById: uid, assignedAt: new Date() };
       }
     }
 
-    const body = req.body || {};
     const personalRemarks = body.personal_remarks ?? body.personalRemarks;
     const inquiryType = body.inquiry_type ?? body.inquiryType ?? 'rental';
+    const normalizedInquiry = ['rental', 'sales', 'both'].includes(inquiryType) ? inquiryType : 'rental';
 
     const lead = await prisma.lead.create({
       data: {
@@ -767,7 +936,6 @@ exports.createLead = async (req, res) => {
         ram: body.ram || null,
         storage: body.storage || null,
         personalRemarks: personalRemarks ? String(personalRemarks).trim() : null,
-        inquiryType: ['rental', 'sales', 'both'].includes(inquiryType) ? inquiryType : 'rental',
         status: 'Pending',
         createdAt: new Date(),
         ...assignData,
@@ -776,14 +944,43 @@ exports.createLead = async (req, res) => {
       }
     });
 
+    // Persist assignee via SQL — some deployed Prisma clients fail to write
+    // assigned_user_id on create even when assigned_by is set.
+    if (assignData.assignedUserId) {
+      await pool.query(
+        `UPDATE leads
+            SET assigned_user_id = $1,
+                assigned_by = COALESCE($2, assigned_by),
+                assigned_at = COALESCE(assigned_at, NOW())
+          WHERE lead_id = $3`,
+        [assignData.assignedUserId, assignData.assignedById || uid, lead.leadId]
+      );
+      lead.assignedUserId = assignData.assignedUserId;
+      lead.assignedById = assignData.assignedById || uid;
+    }
+
+    await pool.query('UPDATE leads SET inquiry_type = $1 WHERE lead_id = $2', [normalizedInquiry, lead.leadId]);
+    lead.inquiryType = normalizedInquiry;
+
     await prisma.leadActivity.create({
       data: {
         leadId: lead.leadId,
-        userId: req.user.user_id,
+        userId: uid,
         action: 'lead_created',
         notes: 'Lead created'
       }
     });
+
+    if (assignData.assignedUserId) {
+      await prisma.leadAssignment.create({
+        data: {
+          leadId: lead.leadId,
+          assignedTo: assignData.assignedUserId,
+          assignedBy: assignData.assignedById || uid,
+          assignedAt: assignData.assignedAt || new Date()
+        }
+      }).catch((err) => console.warn('lead_assignment insert skipped:', err.message));
+    }
 
     // Trigger research in background (don't block response)
     ensureResearch(lead).catch((err) => console.error('Lead research error:', err));
@@ -791,7 +988,7 @@ exports.createLead = async (req, res) => {
     res.status(201).json({ success: true, lead });
   } catch (error) {
     console.error('Create lead error:', error);
-    res.status(500).json({ success: false, message: 'Server error creating lead' });
+    res.status(500).json({ success: false, message: error.message || 'Server error creating lead' });
   }
 };
 
@@ -888,6 +1085,23 @@ exports.getSampleCsv = async (req, res) => {
   res.setHeader('Content-Type', 'text/csv');
   res.setHeader('Content-Disposition', 'attachment; filename="lead_sample.csv"');
   res.send(csvContent);
+};
+
+exports.getAssignableSalesUsers = async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT user_id, name, email, role
+         FROM users
+        WHERE role = 'sales'
+          AND active = true
+          AND COALESCE(status, 'active') = 'active'
+        ORDER BY name ASC`
+    );
+    res.json({ success: true, users: rows });
+  } catch (error) {
+    console.error('getAssignableSalesUsers error:', error);
+    res.status(500).json({ success: false, message: 'Failed to load assignable users' });
+  }
 };
 
 exports.assignLeads = async (req, res) => {
@@ -1037,9 +1251,7 @@ exports.updateLeadStatus = async (req, res) => {
     });
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
 
-    if (req.user.role === 'sales' && lead.assignedUserId !== req.user.user_id) {
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
+    if (await denyUnlessCanEditLead(req, res, lead)) return;
 
     let resolvedStage = null;
     if (STATUSES_WITHOUT_STAGE_CHOICE.includes(status)) {
@@ -1145,31 +1357,48 @@ exports.updateFollowUp = async (req, res) => {
   try {
     const lead = await prisma.lead.findUnique({ where: { leadId: parseInt(id, 10) } });
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
-    if (req.user.role === 'sales' && lead.assignedUserId !== req.user.user_id) {
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
+    if (await denyUnlessCanEditLead(req, res, lead)) return;
 
     const leadId = parseInt(id, 10);
-    const followUpTime = req.body.follow_up_time || null;
+    const followUpTime = normalizeFollowUpTimeForDb(req.body.follow_up_time);
+    const followUpDate = normalizeFollowUpDateForDb(follow_up_date);
+    const uid = currentUserId(req.user);
+    // Sales operators must be assignee for in-app reminders; claim unassigned leads on set.
+    const claimAssignee =
+      isSalesLeadOperator(req.user) && uid != null && lead.assignedUserId == null;
 
     await pool.query(
       `UPDATE leads SET
         follow_up_date = $1,
-        follow_up_time = $2,
+        follow_up_time = $2::time,
+        assigned_user_id = CASE WHEN $4::boolean THEN $5::integer ELSE assigned_user_id END,
         updated_at = NOW()
        WHERE lead_id = $3`,
-      [follow_up_date ? new Date(follow_up_date) : null, followUpTime, leadId]
+      [
+        followUpDate,
+        followUpTime,
+        leadId,
+        claimAssignee,
+        uid,
+      ]
     );
 
     const updated = await prisma.lead.findUnique({ where: { leadId } });
+    serializeLeadFollowUpTime(updated);
 
+    const cleared = !followUpDate;
     const timeNote = followUpTime ? ` at ${followUpTime}` : '';
+    const dateLabel = follow_up_date
+      ? (String(follow_up_date).match(/^(\d{4}-\d{2}-\d{2})/) || [])[1] || String(follow_up_date).slice(0, 10)
+      : null;
     await prisma.leadActivity.create({
       data: {
         leadId: updated.leadId,
         userId: req.user.user_id,
-        action: 'follow_up_set',
-        notes: notes || `Follow-up scheduled for ${follow_up_date || '—'}${timeNote}`
+        action: cleared ? 'follow_up_cleared' : 'follow_up_set',
+        notes: notes || (cleared
+          ? 'Follow-up cleared'
+          : `Follow-up scheduled for ${dateLabel}${timeNote}`)
       }
     });
 
@@ -1182,17 +1411,16 @@ exports.updateFollowUp = async (req, res) => {
 
 exports.getFollowUps = async (req, res) => {
   try {
-    const now = new Date();
-    const endOfDay = new Date(now);
-    endOfDay.setHours(23, 59, 59, 999);
-    const baseWhere = req.user.role === 'sales'
-      ? { assignedUserId: req.user.user_id }
-      : {};
+    const { start: startOfDay, end: endOfDay } = istTodayBounds();
+    const assignedOnly = await leadsAssignedOnly(req);
+    const uid = currentUserId(req.user);
+    const baseWhere = assignedOnly && uid != null ? { assignedUserId: uid } : {};
 
+    // Calendar-day buckets in IST — do NOT use "date < now" (midnight today would be overdue).
     const overdue = await prisma.lead.findMany({
       where: {
         ...baseWhere,
-        followUpDate: { lt: now },
+        followUpDate: { lt: startOfDay },
         status: { notIn: ['Rejected', 'Gone'] }
       },
       orderBy: { followUpDate: 'asc' },
@@ -1202,17 +1430,260 @@ exports.getFollowUps = async (req, res) => {
     const todayLeads = await prisma.lead.findMany({
       where: {
         ...baseWhere,
-        followUpDate: { gte: now, lte: endOfDay },
+        followUpDate: { gte: startOfDay, lte: endOfDay },
         status: { notIn: ['Rejected', 'Gone'] }
       },
       orderBy: { followUpDate: 'asc' },
       include: { assignedUser: { select: { userId: true, name: true } } }
     });
 
+    // Sort each bucket by date + time (IST due clock)
+    const sortByDue = (a, b) => {
+      const da = resolveFollowUpDueAt(a.followUpDate, a.followUpTime)
+        || (a.followUpDate ? new Date(a.followUpDate) : new Date(0));
+      const db = resolveFollowUpDueAt(b.followUpDate, b.followUpTime)
+        || (b.followUpDate ? new Date(b.followUpDate) : new Date(0));
+      return da.getTime() - db.getTime();
+    };
+    overdue.sort(sortByDue);
+    todayLeads.sort(sortByDue);
+
+    overdue.forEach(serializeLeadFollowUpTime);
+    todayLeads.forEach(serializeLeadFollowUpTime);
+
     res.json({ success: true, today: todayLeads, overdue });
   } catch (error) {
     console.error('Follow-up error:', error);
     res.status(500).json({ success: false, message: 'Server error fetching follow-ups' });
+  }
+};
+
+/** Ensure in-app reminder ack table exists (idempotent). */
+async function ensureFollowUpInAppRemindersTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS lead_followup_in_app_reminders (
+      id              SERIAL PRIMARY KEY,
+      lead_id         INTEGER NOT NULL REFERENCES leads(lead_id) ON DELETE CASCADE,
+      user_id         INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+      follow_up_at    TIMESTAMPTZ NOT NULL,
+      status          VARCHAR(20) NOT NULL DEFAULT 'shown',
+      snooze_until    TIMESTAMPTZ,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT lead_followup_in_app_reminders_unique
+        UNIQUE (lead_id, user_id, follow_up_at)
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_lead_followup_in_app_user
+      ON lead_followup_in_app_reminders (user_id, status)
+  `);
+}
+
+/** Calendar YYYY-MM-DD in IST for a stored follow_up_date (date string or timestamptz). */
+function followUpCalendarYmdIst(followUpDate) {
+  if (followUpDate == null || followUpDate === '') return null;
+  if (typeof followUpDate === 'string') {
+    const m = followUpDate.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (m) return m[1];
+  }
+  const base = new Date(followUpDate);
+  if (Number.isNaN(base.getTime())) return null;
+  return base.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+/**
+ * Combine follow_up_date + follow_up_time into an absolute Date (IST clock).
+ * Requires a real follow_up_time — date-only rows do not fire timed reminders.
+ */
+function resolveFollowUpDueAt(followUpDate, followUpTime) {
+  const ymd = followUpCalendarYmdIst(followUpDate);
+  if (!ymd) return null;
+
+  const timeStr = formatFollowUpTime(followUpTime);
+  if (!timeStr) return null;
+
+  const [hh, mm] = timeStr.split(':').map((n) => parseInt(n, 10));
+  // "00:00:00" from empty/default DB can mean "no real time" — still treat as midnight IST.
+  const iso = `${ymd}T${String(hh || 0).padStart(2, '0')}:${String(mm || 0).padStart(2, '0')}:00+05:30`;
+  const due = new Date(iso);
+  return Number.isNaN(due.getTime()) ? null : due;
+}
+
+function reminderMatchesDue(ackFollowUpAt, dueAt) {
+  if (!ackFollowUpAt || !dueAt) return false;
+  return Math.abs(new Date(ackFollowUpAt).getTime() - dueAt.getTime()) < 60 * 1000;
+}
+
+/**
+ * Sales-team-only upcoming follow-up reminders.
+ * Returns leads assigned to the current sales user that are due within the
+ * 2-minute pre-notify window (and not dismissed / still snoozed).
+ */
+exports.getFollowUpReminders = async (req, res) => {
+  try {
+    // Sales role / sales_access operators only — never Admin / other modules.
+    if (!isSalesLeadOperator(req.user)) {
+      return res.json({ success: true, reminders: [], sales_only: true });
+    }
+
+    const uid = currentUserId(req.user);
+    if (!uid) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    await ensureFollowUpInAppRemindersTable();
+
+    // follow_up_date is calendar midnight (not due clock); match by IST calendar day.
+    const leadsRes = await pool.query(
+      `SELECT l.lead_id, l.name, l.company_name, l.follow_up_date, l.follow_up_time, l.status,
+              l.assigned_user_id
+         FROM leads l
+        WHERE l.assigned_user_id = $1
+          AND l.follow_up_date IS NOT NULL
+          AND l.follow_up_time IS NOT NULL
+          AND l.status NOT IN ('Rejected', 'Gone')
+          AND ((l.follow_up_date AT TIME ZONE 'Asia/Kolkata')::date)
+              BETWEEN ((NOW() AT TIME ZONE 'Asia/Kolkata')::date - 1)
+                  AND ((NOW() AT TIME ZONE 'Asia/Kolkata')::date + 1)`,
+      [uid]
+    );
+
+    const ackRes = await pool.query(
+      `SELECT lead_id, follow_up_at, status, snooze_until
+         FROM lead_followup_in_app_reminders
+        WHERE user_id = $1
+          AND follow_up_at >= (CURRENT_TIMESTAMP - INTERVAL '1 day')
+          AND follow_up_at <= (CURRENT_TIMESTAMP + INTERVAL '1 day')`,
+      [uid]
+    );
+    const acks = ackRes.rows;
+
+    const now = Date.now();
+    const WINDOW_MS = 2 * 60 * 1000;
+    const GRACE_AFTER_MS = 15 * 60 * 1000;
+    const reminders = [];
+
+    for (const row of leadsRes.rows) {
+      const dueAt = resolveFollowUpDueAt(row.follow_up_date, row.follow_up_time);
+      if (!dueAt) continue;
+      const dueMs = dueAt.getTime();
+      const triggerMs = dueMs - WINDOW_MS;
+
+      if (now < triggerMs || now > dueMs + GRACE_AFTER_MS) continue;
+
+      const ack = acks.find(
+        (a) => Number(a.lead_id) === Number(row.lead_id) && reminderMatchesDue(a.follow_up_at, dueAt)
+      );
+      if (ack?.status === 'dismissed') continue;
+      if (ack?.status === 'shown') continue;
+      if (ack?.status === 'snoozed' && ack.snooze_until && new Date(ack.snooze_until).getTime() > now) {
+        continue;
+      }
+
+      // Log as pending when first eligible so the table is audited even if client ack fails.
+      if (!ack) {
+        try {
+          await pool.query(
+            `INSERT INTO lead_followup_in_app_reminders
+               (lead_id, user_id, follow_up_at, status, snooze_until, created_at, updated_at)
+             VALUES ($1, $2, $3, 'pending', NULL, NOW(), NOW())
+             ON CONFLICT (lead_id, user_id, follow_up_at) DO NOTHING`,
+            [row.lead_id, uid, dueAt.toISOString()]
+          );
+        } catch (insErr) {
+          console.warn('follow-up reminder pending insert:', insErr.message);
+        }
+      }
+
+      reminders.push({
+        leadId: row.lead_id,
+        leadName: row.name || '—',
+        customerName: row.company_name || '—',
+        followUpAt: dueAt.toISOString(),
+        followUpDate: row.follow_up_date,
+        followUpTime: formatFollowUpTime(row.follow_up_time),
+        status: row.status,
+        minutesUntil: Math.max(0, Math.round((dueMs - now) / 60000)),
+      });
+    }
+
+    reminders.sort((a, b) => new Date(a.followUpAt) - new Date(b.followUpAt));
+    res.json({ success: true, reminders });
+  } catch (error) {
+    console.error('getFollowUpReminders error:', error);
+    res.status(500).json({ success: false, message: 'Server error fetching reminders' });
+  }
+};
+
+/**
+ * Ack a sales follow-up reminder: shown | dismiss | snooze.
+ * Body: { follow_up_at, action, snooze_minutes? }
+ */
+exports.ackFollowUpReminder = async (req, res) => {
+  try {
+    if (!isSalesLeadOperator(req.user)) {
+      return res.status(403).json({ success: false, message: 'Sales team only' });
+    }
+    const uid = currentUserId(req.user);
+    const leadId = parseInt(req.params.id, 10);
+    const { follow_up_at, action, snooze_minutes } = req.body || {};
+    if (!uid || !leadId || !follow_up_at) {
+      return res.status(400).json({ success: false, message: 'lead, follow_up_at required' });
+    }
+    const act = String(action || 'shown').toLowerCase();
+    if (!['shown', 'dismiss', 'dismissed', 'snooze', 'snoozed'].includes(act)) {
+      return res.status(400).json({ success: false, message: 'Invalid action' });
+    }
+
+    await ensureFollowUpInAppRemindersTable();
+
+    const leadRes = await pool.query(
+      `SELECT lead_id, assigned_user_id, follow_up_date, follow_up_time, status
+         FROM leads WHERE lead_id = $1`,
+      [leadId]
+    );
+    if (!leadRes.rows.length) {
+      return res.status(404).json({ success: false, message: 'Lead not found' });
+    }
+    const lead = leadRes.rows[0];
+    if (parseInt(lead.assigned_user_id, 10) !== uid) {
+      return res.status(403).json({ success: false, message: 'Only assigned sales user can acknowledge' });
+    }
+
+    const dueAt = new Date(follow_up_at);
+    if (Number.isNaN(dueAt.getTime())) {
+      return res.status(400).json({ success: false, message: 'Invalid follow_up_at' });
+    }
+
+    let status = 'shown';
+    let snoozeUntil = null;
+    if (act === 'dismiss' || act === 'dismissed') status = 'dismissed';
+    if (act === 'snooze' || act === 'snoozed') {
+      status = 'snoozed';
+      const mins = Math.min(60, Math.max(1, parseInt(snooze_minutes, 10) || 5));
+      snoozeUntil = new Date(Date.now() + mins * 60 * 1000);
+    }
+
+    await pool.query(
+      `INSERT INTO lead_followup_in_app_reminders
+         (lead_id, user_id, follow_up_at, status, snooze_until, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+       ON CONFLICT (lead_id, user_id, follow_up_at)
+       DO UPDATE SET status = EXCLUDED.status,
+                     snooze_until = EXCLUDED.snooze_until,
+                     updated_at = NOW()`,
+      [leadId, uid, dueAt.toISOString(), status, snoozeUntil]
+    );
+
+    res.json({
+      success: true,
+      status,
+      snooze_until: snoozeUntil ? snoozeUntil.toISOString() : null,
+    });
+  } catch (error) {
+    console.error('ackFollowUpReminder error:', error);
+    res.status(500).json({ success: false, message: 'Server error acknowledging reminder' });
   }
 };
 
@@ -1222,9 +1693,7 @@ exports.runResearch = async (req, res) => {
   try {
     const lead = await prisma.lead.findUnique({ where: { leadId: parseInt(id, 10) } });
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
-    if (req.user.role === 'sales' && lead.assignedUserId !== req.user.user_id) {
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
+    if (await denyUnlessCanEditLead(req, res, lead)) return;
 
     // Force refresh so API re-searches and updates all research fields
     await ensureResearch(lead, { force: true });
@@ -1243,9 +1712,7 @@ exports.updateResearchDetails = async (req, res) => {
   try {
     const lead = await prisma.lead.findUnique({ where: { leadId: parseInt(id, 10) } });
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
-    if (req.user.role === 'sales' && lead.assignedUserId !== req.user.user_id) {
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
+    if (await denyUnlessCanEditLead(req, res, lead)) return;
 
     const existing = await prisma.leadCompanyResearch.findUnique({
       where: { leadId: lead.leadId }
@@ -1313,9 +1780,7 @@ exports.createLeadOrder = async (req, res) => {
     if (lead.status !== 'Deal') {
       return res.status(400).json({ success: false, message: 'Order can be created only for Deal status' });
     }
-    if (req.user.role === 'sales' && lead.assignedUserId !== req.user.user_id) {
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
+    if (await denyUnlessCanEditLead(req, res, lead)) return;
 
     const order = await prisma.leadOrder.create({
       data: {
@@ -1378,8 +1843,17 @@ exports.updateLeadBasicDetails = async (req, res) => {
     // Use raw SQL for full update to avoid Prisma client sync issues with company_brand
     // Only update email/phone if explicitly provided - otherwise keep existing (fixes bug when only personal_remarks is sent)
     const nextName = (name ?? existing.name)?.trim() || existing.name;
+    // Email is optional; validate format only when a non-empty value is provided.
     const nextEmail = email !== undefined ? (normalizeEmail(email) || null) : existing.email;
-    const nextPhone = phone !== undefined ? (normalizePhone(phone) || null) : existing.phone;
+    if (nextEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail)) {
+      return res.status(400).json({ success: false, message: 'Enter a valid email' });
+    }
+    let nextPhone = existing.phone;
+    if (phone !== undefined) {
+      const phoneError = validateIndianMobile(phone, { required: false, label: 'Phone' });
+      if (phoneError) return res.status(400).json({ success: false, message: phoneError });
+      nextPhone = String(phone ?? '').trim() ? normalizeIndianMobile(phone) : null;
+    }
     const nextCity = normalizedCity !== undefined ? (normalizedCity || null) : existing.city;
     const nextPersonalRemarksVal = nextPersonalRemarks !== undefined ? nextPersonalRemarks : (existing.personalRemarks ?? existing.personal_remarks);
     const cbRes = await pool.query('SELECT company_brand FROM leads WHERE lead_id = $1', [leadId]);
@@ -1464,6 +1938,13 @@ exports.addLeadAddress = async (req, res) => {
   if (!address || !String(address).trim()) {
     return res.status(400).json({ success: false, message: 'Address is required' });
   }
+  if (mobile_no != null && String(mobile_no).trim()) {
+    const mobileError = validateIndianMobile(mobile_no, { label: 'Mobile number' });
+    if (mobileError) return res.status(400).json({ success: false, message: mobileError });
+  }
+  const normalizedMobile = mobile_no != null && String(mobile_no).trim()
+    ? normalizeIndianMobile(mobile_no)
+    : null;
   try {
     const lead = await prisma.lead.findUnique({ where: { leadId: parseInt(id, 10) } });
     if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
@@ -1472,7 +1953,7 @@ exports.addLeadAddress = async (req, res) => {
       `INSERT INTO lead_addresses (lead_id, concern_person, mobile_no, address, pincode, address_type, created_by, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
        RETURNING address_id, concern_person, mobile_no, address, pincode, address_type, created_at`,
-      [id, concern_person || null, mobile_no || null, String(address).trim(), pincode || null, address_type || 'Shipping', req.user.user_id]
+      [id, concern_person || null, normalizedMobile, String(address).trim(), pincode || null, address_type || 'Shipping', req.user.user_id]
     );
     res.status(201).json({ success: true, address: inserted.rows[0] });
   } catch (error) {
@@ -1559,13 +2040,18 @@ exports.getLeadCustomerProfile = async (req, res) => {
     if (!canEditLead(req.user, lead)) return res.status(403).json({ success: false, message: 'Access denied' });
 
     const customerRes = await pool.query(
-      `SELECT customer_id, name, company_name, email, phone, gst_no
+      `SELECT customer_id, name, company_name, email, phone, gst_no, customer_type
        FROM customers
        WHERE source_lead_id = $1
        LIMIT 1`,
       [id]
     );
     if (!customerRes.rows.length) return res.json({ success: true, customer: null, addresses: [] });
+    // Customer Access scope — hide converted customers outside the caller's scope
+    const { isCustomerTypeAllowed } = require('../services/customerAccessScope');
+    if (!isCustomerTypeAllowed(req.allowedCustomerTypes, customerRes.rows[0].customer_type)) {
+      return res.json({ success: true, customer: null, addresses: [] });
+    }
     const customer = customerRes.rows[0];
     const addressesRes = await pool.query(
       `SELECT customer_address_id, concern_person, mobile_no, address, pincode, is_head_office, address_type
@@ -1586,8 +2072,10 @@ exports.getLeadOrders = async (req, res) => {
 
   try {
     const where = status ? { orderStatus: status } : {};
-    if (req.user.role === 'sales') {
-      where.lead = { assignedUserId: req.user.user_id };
+    const uid = currentUserId(req.user);
+    const assignedOnly = await isRestrictedToAssigned(req, 'lead_orders');
+    if (assignedOnly && uid != null) {
+      where.lead = { assignedUserId: uid };
     }
     const orders = await prisma.leadOrder.findMany({
       where,
@@ -1662,6 +2150,31 @@ exports.getReports = async (req, res) => {
   } catch (error) {
     console.error('Lead reports error:', error);
     res.status(500).json({ success: false, message: 'Server error fetching reports' });
+  }
+};
+
+/** Default To/CC layout for the lead quotation email UI. */
+exports.getQuotationEmailConfig = async (req, res) => {
+  try {
+    const { getDefaultQuotationCc, buildDefaultCcRecipients } = require('../services/leadQuotationService');
+    let senderEmail = String(req.user?.email || '').trim();
+    if (!senderEmail && req.user?.user_id) {
+      const ures = await pool.query('SELECT email FROM users WHERE user_id = $1', [req.user.user_id]);
+      senderEmail = String(ures.rows[0]?.email || '').trim();
+    }
+    const defaultCc = getDefaultQuotationCc();
+    const ccRecipients = buildDefaultCcRecipients(senderEmail);
+    res.json({
+      success: true,
+      to_hint: 'Customer email (editable in send form)',
+      default_cc: defaultCc,
+      cc_recipients: ccRecipients,
+      sender_email: senderEmail || null,
+      from_address: process.env.QUOTATION_FROM || process.env.EMAIL_FROM || process.env.SMTP_USER || null,
+    });
+  } catch (error) {
+    console.error('getQuotationEmailConfig:', error);
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -1776,6 +2289,11 @@ exports.sendLeadQuotation = async (req, res) => {
 
     const acceptToken = crypto.randomBytes(24).toString('hex');
     const ccExtra = parseCcList(body.cc_emails);
+    const ccRecipients = Array.isArray(body.cc_recipients)
+      ? body.cc_recipients.map((e) => String(e).trim()).filter(Boolean)
+      : (body.cc_recipients
+        ? parseCcList(body.cc_recipients)
+        : null);
 
     const leadForQuote = applyQuotationConfigOne(lead, body.config_one || {});
 
@@ -1839,6 +2357,7 @@ exports.sendLeadQuotation = async (req, res) => {
       estimateDate: body.estimate_date || formatEstimateDate(new Date()),
       companyName: billTo.company_name,
       ccExtra,
+      ccRecipients: ccRecipients != null ? ccRecipients : null,
       acceptToken,
       emailConfig: {
         config1,
@@ -1927,6 +2446,19 @@ exports.updateLeadFullProfile = async (req, res) => {
     const params = [];
     let idx = 1;
 
+    const phoneFields = [
+      ['phone', 'phone', 'phone', 'Phone'],
+      ['whatsapp_number', 'whatsappNumber', 'whatsapp', 'WhatsApp number'],
+    ];
+    for (const [snake, camel, label, errLabel] of phoneFields) {
+      const raw = body[snake] !== undefined ? body[snake] : body[camel];
+      if (raw === undefined) continue;
+      if (raw != null && String(raw).trim()) {
+        const err = validateIndianMobile(raw, { label: errLabel });
+        if (err) return res.status(400).json({ success: false, message: err });
+      }
+    }
+
     const addField = (dbCol, value, label, prevVal) => {
       if (value === undefined) return;
       setClauses.push(`${dbCol} = $${idx}`);
@@ -1944,7 +2476,15 @@ exports.updateLeadFullProfile = async (req, res) => {
     addField('company_brand', pick('company_brand', 'companyBrand'), 'company brand', existing.companyBrand);
     addField('email', pick('email', 'email') != null ? normalizeEmail(pick('email', 'email')) : undefined, 'email', existing.email);
     addField('phone', pick('phone', 'phone') != null ? normalizePhone(pick('phone', 'phone')) : undefined, 'phone', existing.phone);
-    addField('whatsapp_number', pick('whatsapp_number', 'whatsappNumber'), 'whatsapp', existing.whatsappNumber);
+    const whatsappPick = pick('whatsapp_number', 'whatsappNumber');
+    addField(
+      'whatsapp_number',
+      whatsappPick != null
+        ? (String(whatsappPick).trim() ? normalizeIndianMobile(whatsappPick) : null)
+        : undefined,
+      'whatsapp',
+      existing.whatsappNumber
+    );
     addField('designation', pick('designation', 'designation'), 'designation', existing.designation);
     addField('quantity_required', pick('quantity_required', 'quantityRequired'), 'quantity', existing.quantityRequired);
     addField('monthly_budget', pick('monthly_budget', 'monthlyBudget'), 'budget', existing.monthlyBudget);
@@ -1982,7 +2522,13 @@ exports.updateLeadFullProfile = async (req, res) => {
     }
 
     if (pick('follow_up_time', 'followUpTime') !== undefined) {
-      addField('follow_up_time', pick('follow_up_time', 'followUpTime') || null, 'follow-up time', existing.followUpTime);
+      const t = normalizeFollowUpTimeForDb(pick('follow_up_time', 'followUpTime'));
+      setClauses.push(`follow_up_time = $${idx}::time`);
+      params.push(t);
+      idx += 1;
+      const prev = formatFollowUpTime(existing.followUpTime) ?? '';
+      const next = formatFollowUpTime(t) ?? '';
+      if (prev !== next) changes.push('follow-up time');
     }
 
     if (!setClauses.length) {
@@ -2000,6 +2546,7 @@ exports.updateLeadFullProfile = async (req, res) => {
       where: { leadId },
       include: { assignedUser: { select: { userId: true, name: true, role: true } } }
     });
+    serializeLeadFollowUpTime(updated);
 
     await prisma.leadActivity.create({
       data: {
@@ -2016,6 +2563,16 @@ exports.updateLeadFullProfile = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error updating profile' });
   }
 };
+
+function parseCustomerDetails(value) {
+  if (value == null) return {};
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value) || {};
+  } catch {
+    return {};
+  }
+}
 
 exports.convertToCustomer = async (req, res) => {
   const { id } = req.params;
@@ -2038,9 +2595,7 @@ exports.convertToCustomer = async (req, res) => {
       });
     }
 
-    if (req.user.role === 'sales' && lead.assigned_user_id !== req.user.user_id) {
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
+    if (await denyUnlessCanEditLead(req, res, lead)) return;
 
     const body = req.body || {};
     const billingAddress = body.billing_address || lead.billing_address || null;
@@ -2053,6 +2608,11 @@ exports.convertToCustomer = async (req, res) => {
         success: false,
         message: 'Billing address, city, state, and pincode are required'
       });
+    }
+
+    const contactValidationErrors = validateFinanceSpockContactFields(body);
+    if (contactValidationErrors.length) {
+      return res.status(400).json({ success: false, message: contactValidationErrors[0] });
     }
 
     const shippingSame = body.shipping_same_as_billing !== false && body.shipping_same !== false
@@ -2071,6 +2631,12 @@ exports.convertToCustomer = async (req, res) => {
     const gstNo = body.gst_number || body.gst_no || lead.gst_number || null;
     const panNumber = body.pan_number || lead.pan_number || null;
 
+    const customerDetails = {
+      contact_person_name: customerName,
+      contact_person_number: phone,
+    };
+    applyFinanceSpockDetails(customerDetails, body);
+
     let customerId = lead.customer_id;
     let isNew = false;
 
@@ -2081,6 +2647,14 @@ exports.convertToCustomer = async (req, res) => {
 
     if (existingByLead.rows.length) {
       customerId = existingByLead.rows[0].customer_id;
+      const existingDetailsRes = await pool.query(
+        'SELECT details FROM customers WHERE customer_id = $1',
+        [customerId]
+      );
+      const mergedDetails = parseCustomerDetails(existingDetailsRes.rows[0]?.details);
+      mergedDetails.contact_person_name = customerName;
+      mergedDetails.contact_person_number = phone;
+      applyFinanceSpockDetails(mergedDetails, body);
       await pool.query(
         `UPDATE customers SET
           name = $1, company_name = $2, email = $3, phone = $4, gst_no = $5,
@@ -2088,15 +2662,15 @@ exports.convertToCustomer = async (req, res) => {
           billing_address = $10, billing_city = $11, billing_state = $12, billing_pincode = $13,
           shipping_same = $14, shipping_address = $15, shipping_city = $16, shipping_state = $17, shipping_pincode = $18,
           whatsapp_number = $19, designation = $20, source_lead_stage = $21,
-          onboarded_by = $22, onboarded_at = COALESCE(onboarded_at, NOW()), updated_at = NOW()
-         WHERE customer_id = $23`,
+          onboarded_by = $22, onboarded_at = COALESCE(onboarded_at, NOW()), details = $23, updated_at = NOW()
+         WHERE customer_id = $24`,
         [
           customerName, companyName, email, phone, gstNo, panNumber,
           lead.company_type, lead.company_size, lead.industry,
           billingAddress, billingCity, billingState, billingPincode,
           shippingSame, shippingAddress, shippingCity, shippingState, shippingPincode,
           lead.whatsapp_number, lead.designation, lead.lead_stage,
-          req.user.user_id, customerId
+          req.user.user_id, JSON.stringify(mergedDetails), customerId
         ]
       );
     } else {
@@ -2107,11 +2681,11 @@ exports.convertToCustomer = async (req, res) => {
           billing_address, billing_city, billing_state, billing_pincode,
           shipping_same, shipping_address, shipping_city, shipping_state, shipping_pincode,
           whatsapp_number, designation, source_lead_stage, onboarded_by, onboarded_at,
-          type, created_at, updated_at
+          type, details, created_at, updated_at
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
           $11, $12, $13, $14, $15, $16, $17, $18, $19,
-          $20, $21, $22, $23, NOW(), 'Lead', NOW(), NOW()
+          $20, $21, $22, $23, NOW(), 'Lead', $24, NOW(), NOW()
         ) RETURNING customer_id`,
         [
           customerName, companyName, leadId, email, phone, gstNo, panNumber,
@@ -2119,7 +2693,7 @@ exports.convertToCustomer = async (req, res) => {
           billingAddress, billingCity, billingState, billingPincode,
           shippingSame, shippingAddress, shippingCity, shippingState, shippingPincode,
           lead.whatsapp_number, lead.designation, lead.lead_stage,
-          req.user.user_id
+          req.user.user_id, JSON.stringify(customerDetails)
         ]
       );
       customerId = insertRes.rows[0].customer_id;
@@ -2177,5 +2751,132 @@ exports.getLeadConversionStatus = async (req, res) => {
   } catch (error) {
     console.error('getLeadConversionStatus error:', error);
     res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+function formatLeadActivityType(action, statusFrom, statusTo) {
+  const a = String(action || '').toLowerCase();
+  if (a.includes('status')) return 'Status Changed';
+  if (a.includes('follow')) return 'Follow-up';
+  if (a.includes('quotation')) return 'Quotation Sent';
+  if (a.includes('email')) return 'Email';
+  if (a.includes('convert')) return 'Converted';
+  if (a.includes('assign')) return 'Assignment';
+  if (a.includes('created')) return 'Lead Created';
+  if (a.includes('remark')) return 'Remark';
+  if (statusFrom || statusTo) return 'Status Changed';
+  return 'Activity';
+}
+
+function buildLeadActivityDescription(row) {
+  if (row._kind === 'remark') {
+    return String(row.note || '').trim() || 'Remark added';
+  }
+  const parts = [];
+  if (row.statusFrom && row.statusTo) {
+    parts.push(`Status: ${row.statusFrom} → ${row.statusTo}`);
+  } else if (row.statusTo) {
+    parts.push(`Status: ${row.statusTo}`);
+  }
+  if (row.stageTo) {
+    parts.push(`Stage: ${row.stageTo}`);
+  } else if (row.stageFrom && !row.stageTo) {
+    parts.push(`Stage: ${row.stageFrom}`);
+  }
+  const note = String(row.notes || '').trim();
+  if (note && !parts.some((p) => note.includes(p.replace('Status: ', '').replace('Stage: ', '')))) {
+    if (parts.length) parts.push(note);
+    else return note;
+  }
+  if (parts.length) return parts.join(' · ');
+  return note || row.action || 'Activity';
+}
+
+/** GET /api/leads/:id/recent-activity?limit=5 */
+exports.getLeadRecentActivity = async (req, res) => {
+  const leadId = parseInt(req.params.id, 10);
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 5, 1), 20);
+
+  try {
+    const lead = await prisma.lead.findUnique({ where: { leadId } });
+    if (!lead) {
+      return res.status(404).json({ success: false, message: 'Lead not found' });
+    }
+    if (await denyUnlessCanEditLead(req, res, lead)) return;
+
+    const [activities, remarksRes] = await Promise.all([
+      prisma.leadActivity.findMany({
+        where: {
+          leadId,
+          NOT: { action: 'email_reingested' },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: limit * 3,
+        include: { user: { select: { name: true } } },
+      }),
+      pool.query(
+        `SELECT r.remark_id, r.note, r.created_at, u.name AS user_name
+         FROM lead_remarks r
+         LEFT JOIN users u ON r.user_id = u.user_id
+         WHERE r.lead_id = $1
+         ORDER BY r.created_at DESC
+         LIMIT $2`,
+        [leadId, limit * 3]
+      ),
+    ]);
+
+    const merged = [
+      ...activities.map((a) => ({
+        id: `a-${a.activityId}`,
+        type: formatLeadActivityType(a.action, a.statusFrom, a.statusTo),
+        description: buildLeadActivityDescription({ ...a, _kind: 'activity' }),
+        performedBy: a.user?.name || 'System',
+        createdAt: a.createdAt,
+        _ts: new Date(a.createdAt).getTime(),
+      })),
+      ...(remarksRes.rows || []).map((r) => ({
+        id: `r-${r.remark_id}`,
+        type: 'Remark',
+        description: buildLeadActivityDescription({ ...r, _kind: 'remark' }),
+        performedBy: r.user_name || 'System',
+        createdAt: r.created_at,
+        _ts: new Date(r.created_at).getTime(),
+      })),
+    ]
+      .sort((a, b) => b._ts - a._ts)
+      .slice(0, limit)
+      .map(({ _ts, ...rest }) => rest);
+
+    res.json({ success: true, activities: merged });
+  } catch (error) {
+    console.error('getLeadRecentActivity error:', error);
+    res.status(500).json({ success: false, message: 'Server error fetching activity' });
+  }
+};
+
+exports.getEmailSyncStatus = async (_req, res) => {
+  try {
+    const status = await getLeadEmailSyncStatus();
+    res.json({ success: true, ...status });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.triggerEmailSync = async (_req, res) => {
+  try {
+    const status = await getLeadEmailSyncStatus();
+    if (!status.configured) {
+      return res.status(400).json({
+        success: false,
+        message: 'Lead email IMAP is not configured (LEAD_EMAIL_IMAP_HOST/USER/PASS)',
+      });
+    }
+    const summary = await runLeadEmailSync();
+    const after = await getLeadEmailSyncStatus();
+    res.json({ success: true, summary, ...after });
+  } catch (error) {
+    console.error('triggerEmailSync error:', error);
+    res.status(500).json({ success: false, message: error.message });
   }
 };

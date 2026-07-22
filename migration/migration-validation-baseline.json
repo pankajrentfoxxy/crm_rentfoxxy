@@ -1,0 +1,117 @@
+{
+  "generatedAt": "2026-06-23T17:59:04.326Z",
+  "recordCounts": [
+    {
+      "entity": "users",
+      "erpCount": 13,
+      "crmCount": 17,
+      "delta": 4,
+      "status": "OK"
+    },
+    {
+      "entity": "vendors",
+      "erpCount": 116,
+      "crmCount": 0,
+      "delta": -116,
+      "status": "UNDER_MIGRATED"
+    },
+    {
+      "entity": "customers",
+      "erpCount": 287,
+      "crmCount": 0,
+      "delta": -287,
+      "status": "UNDER_MIGRATED"
+    },
+    {
+      "entity": "inventory",
+      "erpCount": 4053,
+      "crmCount": 0,
+      "delta": -4053,
+      "status": "UNDER_MIGRATED"
+    },
+    {
+      "entity": "purchase_orders",
+      "erpCount": 139,
+      "crmCount": 0,
+      "delta": -139,
+      "status": "UNDER_MIGRATED"
+    },
+    {
+      "entity": "serial_numbers",
+      "erpCount": 4090,
+      "crmCount": 0,
+      "delta": -4090,
+      "status": "UNDER_MIGRATED"
+    },
+    {
+      "entity": "sales_orders",
+      "erpCount": 4647,
+      "crmCount": 0,
+      "delta": -4647,
+      "status": "UNDER_MIGRATED"
+    },
+    {
+      "entity": "delivery_challans",
+      "erpCount": 4479,
+      "crmCount": 0,
+      "delta": -4479,
+      "status": "UNDER_MIGRATED"
+    },
+    {
+      "entity": "support_tickets",
+      "erpCount": 2045,
+      "crmCount": 0,
+      "delta": -2045,
+      "status": "UNDER_MIGRATED"
+    },
+    {
+      "entity": "allocation_logs",
+      "erpCount": 3952,
+      "crmCount": 0,
+      "delta": -3952,
+      "status": "UNDER_MIGRATED"
+    }
+  ],
+  "foreignKeys": [],
+  "idMap": [],
+  "duplicates": [],
+  "errors": [],
+  "passed": false,
+  "rbacBaseline": [
+    {
+      "entity": "users",
+      "crmCount": 17,
+      "status": "BASELINE"
+    },
+    {
+      "entity": "roles",
+      "crmCount": 18,
+      "status": "BASELINE"
+    },
+    {
+      "entity": "role_permissions",
+      "crmCount": 576,
+      "status": "BASELINE"
+    },
+    {
+      "entity": "user_permissions",
+      "crmCount": 5,
+      "status": "BASELINE"
+    },
+    {
+      "entity": "teams",
+      "crmCount": 22,
+      "status": "BASELINE"
+    },
+    {
+      "entity": "user_teams",
+      "crmCount": 5,
+      "status": "BASELINE"
+    },
+    {
+      "entity": "permission_sections",
+      "crmCount": 70,
+      "status": "BASELINE"
+    }
+  ]
+}

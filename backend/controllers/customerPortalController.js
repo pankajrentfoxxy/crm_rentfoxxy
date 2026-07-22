@@ -3,6 +3,8 @@ const bcrypt = require('bcryptjs');
 const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
+const { DEPLOYED_WITH_CUSTOMER_STATUSES } = require('../services/customerDeployedAssets');
+const { validateIndianMobile, normalizeIndianMobile } = require('../utils/phoneValidation');
 
 const PORTAL_ITEM_TYPE_MAP = {
   'Replacement Request': 'replacement',
@@ -126,20 +128,32 @@ exports.listLaptops = async (req, res) => {
   try {
     const customerId = req.customer.customer_id;
     let rows = [];
+
+    // Authoritative source: assets currently held by this customer per the
+    // inventory state machine (customer_inventory is deprecated).
     try {
-      const inv = await pool.query(
-        `SELECT COALESCE(unique_serial_number, serial_number) AS ttspl_id,
-                model_name AS model, processor, generation, ram, storage,
-                asset_kind AS status, COALESCE(delivery_date, created_at) AS dispatch_date,
-                dc_number
-         FROM customer_inventory
-         WHERE customer_id = $1
-         ORDER BY id DESC`,
-        [customerId]
+      const held = await pool.query(
+        `SELECT COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
+                vsn.extra->>'brand' AS brand,
+                COALESCE(vsn.extra->>'model', vsn.extra->>'model_name') AS model,
+                vsn.extra->>'processor' AS processor,
+                vsn.extra->>'generation' AS generation,
+                vsn.extra->>'ram' AS ram,
+                vsn.extra->>'storage' AS storage,
+                vsn.current_dc_number AS dc_number,
+                vsn.delivered_at AS dispatch_date,
+                vsn.inventory_status AS status,
+                vsn.rent_monthly_rate AS monthly_rate
+           FROM vendor_serial_numbers vsn
+          WHERE vsn.current_customer_id = $1
+            AND vsn.deleted_at IS NULL
+            AND vsn.inventory_status = ANY($2::text[])
+          ORDER BY vsn.delivered_at DESC NULLS LAST`,
+        [customerId, DEPLOYED_WITH_CUSTOMER_STATUSES]
       );
-      rows = inv.rows;
-    } catch (invErr) {
-      console.warn('customerPortal listLaptops inventory:', invErr.message);
+      rows = held.rows;
+    } catch (heldErr) {
+      console.warn('customerPortal listLaptops (derived):', heldErr.message);
     }
 
     if (!rows.length) {
@@ -289,7 +303,9 @@ exports.downloadInvoicePdf = async (req, res) => {
 exports.listCreditNotes = async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT credit_note_id, credit_note_number, reason, amount, status, created_at, from_date, to_date
+      `SELECT credit_note_id, credit_note_number, reason, description, amount, status,
+              created_at, from_date, to_date, quantity, unit_rate, ttspl_ids,
+              return_ticket_id, applied_in_invoice_id
        FROM customer_credit_notes
        WHERE customer_id = $1
        ORDER BY created_at DESC`,
@@ -321,9 +337,14 @@ exports.listDeliveries = async (req, res) => {
 exports.raiseTicket = async (req, res) => {
   const client = await pool.connect();
   try {
-    const { subject, description, ticket_type, ttspl_id, photos } = req.body || {};
+    const { subject, description, ticket_type, ttspl_id, photos, pickup_address } = req.body || {};
     if (!subject || !description || description.length < 20) {
       return res.status(400).json({ success: false, message: 'Subject and description (min 20 chars) required' });
+    }
+    if (pickup_address?.phone != null && String(pickup_address.phone).trim()) {
+      const phoneError = validateIndianMobile(pickup_address.phone, { label: 'Pickup phone' });
+      if (phoneError) return res.status(400).json({ success: false, message: phoneError });
+      pickup_address.phone = normalizeIndianMobile(pickup_address.phone);
     }
 
     const customerId = req.customer.customer_id;
@@ -335,6 +356,7 @@ exports.raiseTicket = async (req, res) => {
     const cust = custRes.rows[0];
 
     let dcNumber = null;
+    let specs = {};
     if (ttspl_id) {
       const dcRes = await client.query(
         `SELECT dc_number FROM delivery_challan_lines dcl
@@ -345,6 +367,18 @@ exports.raiseTicket = async (req, res) => {
         [customerId, ttspl_id]
       );
       dcNumber = dcRes.rows[0]?.dc_number || null;
+
+      // Pull specs so support (and the eventual return QC ticket) has device details.
+      const sRes = await client.query(
+        `SELECT extra FROM vendor_serial_numbers
+         WHERE deleted_at IS NULL
+           AND (inventory_asset_code = $1 OR serial_number = $1 OR extra->>'ttspl_id' = $1)
+         LIMIT 1`,
+        [ttspl_id]
+      );
+      const ex = sRes.rows[0]?.extra || {};
+      specs = { brand: ex.brand || null, model: ex.model || ex.model_name || null,
+                ram: ex.ram || null, storage: ex.storage || null, generation: ex.generation || null };
     }
 
     await client.query('BEGIN');
@@ -352,8 +386,8 @@ exports.raiseTicket = async (req, res) => {
       `INSERT INTO support_tickets (
          customer_id, customer_name, customer_phone, status, last_activity_at,
          priority, top_level_remarks, ticket_email, ticket_category,
-         ttspl_id, dc_number, customer_portal_ticket, portal_customer_id
-       ) VALUES ($1,$2,$3,'open',NOW(),'normal',$4,$5,$6,$7,$8,TRUE,$9)
+         ttspl_id, dc_number, customer_portal_ticket, portal_customer_id, pickup_address
+       ) VALUES ($1,$2,$3,'open',NOW(),'normal',$4,$5,$6,$7,$8,TRUE,$9,$10::jsonb)
        RETURNING id`,
       [
         customerId,
@@ -365,6 +399,7 @@ exports.raiseTicket = async (req, res) => {
         ttspl_id || null,
         dcNumber,
         customerId,
+        pickup_address ? JSON.stringify(pickup_address) : null,
       ]
     );
     const ticketId = ticketRes.rows[0].id;
@@ -372,8 +407,9 @@ exports.raiseTicket = async (req, res) => {
     await client.query(
       `INSERT INTO support_ticket_items (
          ticket_id, serial_number, unique_serial_number, item_type,
-         issue_category_label, remarks, status, otp_code
-       ) VALUES ($1,$2,$3,$4,$5,$6,'open',$7)`,
+         issue_category_label, remarks, status, otp_code,
+         brand, model, ram, storage, generation
+       ) VALUES ($1,$2,$3,$4,$5,$6,'open',$7,$8,$9,$10,$11,$12)`,
       [
         ticketId,
         ttspl_id || null,
@@ -382,6 +418,7 @@ exports.raiseTicket = async (req, res) => {
         ticket_type || subject,
         description,
         Math.floor(100000 + Math.random() * 900000).toString(),
+        specs.brand, specs.model, specs.ram, specs.storage, specs.generation,
       ]
     );
 

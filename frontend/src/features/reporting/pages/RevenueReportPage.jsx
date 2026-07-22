@@ -10,9 +10,12 @@ import ChartCard from '../components/ChartCard';
 import ReportFilters from '../components/ReportFilters';
 import DataTable from '../components/DataTable';
 import ExportButton from '../components/ExportButton';
+import { useReportFiltersFromUrl } from '../hooks/useReportFiltersFromUrl';
+
+const REVENUE_FILTER_KEYS = ['from', 'to', 'type'];
 
 export default function RevenueReportPage() {
-  const [filters, setFilters] = useState(() => defaultRange());
+  const [filters, setFilters] = useReportFiltersFromUrl(defaultRange(), REVENUE_FILTER_KEYS);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -28,7 +31,7 @@ export default function RevenueReportPage() {
     }
   }, [filters]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(filters); }, []);
 
   const totals = data?.totals || {};
   const invoices = data?.invoices || [];

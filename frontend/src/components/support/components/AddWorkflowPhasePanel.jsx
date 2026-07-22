@@ -68,6 +68,7 @@ export default function AddWorkflowPhasePanel({ ticketId, customerId, sourceItem
                 <label className="support-label">Remarks
                     <textarea className="support-field min-h-[80px]" value={remarks} onChange={(e) => setRemarks(e.target.value)} placeholder="Instructions for technician" />
                 </label>
+                {phaseType !== 'pickup' && (
                 <label className="support-label">Assign technician
                     <select className="support-field" value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)}>
                         <option value="">Unassigned</option>
@@ -76,6 +77,7 @@ export default function AddWorkflowPhasePanel({ ticketId, customerId, sourceItem
                         ))}
                     </select>
                 </label>
+                )}
                 <div className="flex gap-2 pt-2">
                     <button type="button" className="support-btn-outline flex-1" onClick={onCancel}>Cancel</button>
                     <button type="submit" disabled={saving} className="support-btn-primary flex-1 inline-flex items-center justify-center gap-2">

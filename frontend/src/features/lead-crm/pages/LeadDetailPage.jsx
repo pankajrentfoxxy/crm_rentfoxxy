@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Send } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
@@ -20,6 +20,7 @@ const TABS = ['Activity & Remarks', 'Lead Profile', 'Follow-ups', 'Quotations', 
 export default function LeadDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const [lead, setLead] = useState(null);
   const [conversion, setConversion] = useState(null);
   const [tab, setTab] = useState(0);
@@ -45,6 +46,12 @@ export default function LeadDetailPage() {
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (typeof location.state?.focusTab === 'number') {
+      setTab(location.state.focusTab);
+    }
+  }, [location.state?.focusTab]);
 
   useEffect(() => {
     if (tab !== 3 || !lead?.leadId) return;
@@ -111,9 +118,13 @@ export default function LeadDetailPage() {
 
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto">
-      <button type="button" onClick={() => navigate('/lead-crm/leads')}
-        className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 mb-4">
-        <ArrowLeft className="w-4 h-4" /> Back to Leads
+      <button
+        type="button"
+        onClick={() => navigate(location.state?.fromFollowUps ? '/lead-crm/follow-ups' : '/lead-crm/leads')}
+        className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 mb-4"
+      >
+        <ArrowLeft className="w-4 h-4" />
+        {location.state?.fromFollowUps ? 'Back to Follow-ups' : 'Back to Leads'}
       </button>
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
@@ -148,18 +159,28 @@ export default function LeadDetailPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div><span className="text-gray-500">Company</span><p>{lead.companyName || '—'}</p></div>
                 <div><span className="text-gray-500">Contact</span><p>{lead.name}</p></div>
-                <div><span className="text-gray-500">Phone</span><p>{lead.phone}</p></div>
+                <div><span className="text-gray-500">Email</span><p>{lead.email || '—'}</p></div>
+                <div><span className="text-gray-500">Phone</span><p>{lead.phone || '—'}</p></div>
                 <div><span className="text-gray-500">Inquiry</span><p>{formatInquiry(lead.inquiryType)}</p></div>
                 <div><span className="text-gray-500">Config</span><p>{formatConfig(lead)}</p></div>
                 <div><span className="text-gray-500">Qty / Budget</span>
                   <p>{lead.quantityRequired || '—'} · {formatCurrency(lead.monthlyBudget)}/mo</p></div>
                 <div className="col-span-2"><span className="text-gray-500">Billing</span><p>{lead.billingAddress || '—'}</p></div>
+                <div className="col-span-2"><span className="text-gray-500">Personal Remarks</span>
+                  <p className="whitespace-pre-wrap">{lead.personalRemarks || lead.personal_remarks || '—'}</p></div>
               </div>
             </div>
           )}
 
           {tab === 2 && (
-            <FollowUpWidget leadId={lead.leadId} initialDate={lead.followUpDate} initialTime={lead.followUpTime} onSaved={load} />
+            <FollowUpWidget
+              leadId={lead.leadId}
+              initialDate={lead.followUpDate}
+              initialTime={lead.followUpTime}
+              initialPersonalRemarks={lead.personalRemarks ?? lead.personal_remarks ?? ''}
+              assignedUserId={lead.assignedUserId ?? lead.assigned_user_id}
+              onSaved={load}
+            />
           )}
 
           {tab === 3 && (
@@ -258,7 +279,9 @@ export default function LeadDetailPage() {
               <button type="button" onClick={() => setStatusOpen(true)}
                 className="w-full py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50">Change Status</button>
               <button type="button" onClick={() => setTab(2)}
-                className="w-full py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50">Set Follow-up</button>
+                className="w-full py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50">
+                {lead.followUpDate ? 'Update Follow-up' : 'Set Follow-up'}
+              </button>
               <button type="button" onClick={navigateToQuotation}
                 className="w-full py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50">Send Quotation</button>
               {canConvert && (
@@ -270,6 +293,7 @@ export default function LeadDetailPage() {
             </div>
             <div className="text-sm space-y-2 border-t pt-3">
               <p><span className="text-gray-500">Lead ID:</span> #{lead.leadId}</p>
+              <p><span className="text-gray-500">Email:</span> {lead.email || '—'}</p>
               <p><span className="text-gray-500">Created:</span> {new Date(lead.createdAt).toLocaleDateString('en-IN')}</p>
               <p><span className="text-gray-500">Last Activity:</span> {relativeTime(lead.lastActivityAt || lead.updatedAt)}</p>
               <p><span className="text-gray-500">Assigned:</span> {lead.assignedUser?.name || 'Unassigned'}</p>

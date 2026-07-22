@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const PDFDocument = require('pdfkit');
+const { formatPdfDateIstOrDash } = require('../utils/pdfDateTimeUtils');
 
 const UPLOAD_DIR = path.join(__dirname, '../uploads/vendor-po-documents');
 
@@ -63,9 +64,9 @@ async function generatePurchaseOrderPdf({ po, vendor }) {
 
     doc.fontSize(10).fillColor('#374151');
     doc.text(`PO Number: ${poNumber}`);
-    doc.text(`PO Date: ${po.purchase_order_date || '—'}`);
+    doc.text(`PO Date: ${formatPdfDateIstOrDash(po.purchase_order_date)}`);
     doc.text(`PO Type: ${formatPoType(po.purchase_order_type)}`);
-    if (po.expected_delivery_date) doc.text(`Expected Delivery: ${po.expected_delivery_date}`);
+    if (po.expected_delivery_date) doc.text(`Expected Delivery: ${formatPdfDateIstOrDash(po.expected_delivery_date)}`);
     doc.text(`Supply State: ${String(po.po_state || '').replace(/_/g, ' ')}`);
     doc.moveDown();
 

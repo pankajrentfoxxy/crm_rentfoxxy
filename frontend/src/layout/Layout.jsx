@@ -50,9 +50,10 @@ import {
   ClipboardCheck,
   Wrench,
   DollarSign,
+  Search,
 } from 'lucide-react';
 
-import { isSupportUser } from '../utils/supportAccess';
+import { canAccessSupportModule } from '../utils/supportAccess';
 import { useQcStatusCounts } from '../features/qc-management/hooks/useQcStatusCounts';
 import { useInventoryListCounts } from '../features/inventory-management/hooks/useInventoryListCounts';
 import usePermission from '../hooks/usePermission';
@@ -61,6 +62,8 @@ import { useDeliveryRegisterCounts } from '../features/delivery-register-managem
 import { useLeadCrmCounts } from '../features/lead-crm/hooks/useLeadCrmCounts';
 import { useFinanceCounts } from '../features/finance-overview/hooks/useFinanceCounts';
 import { useSupportCounts } from '../features/support-module/hooks/useSupportCounts';
+import { useFloorCounts } from '../features/floor-pipeline/hooks/useFloorCounts';
+import { isFloorPipelineNavActive } from '../features/floor-pipeline/floorPipelineAccess';
 import {
   FLAT_MENU_ITEMS,
   vendorAccordionChildren,
@@ -82,32 +85,47 @@ import {
   isReportsChildVisible,
   isDeliveryRegisterChildVisible,
   isLeadCrmChildVisible,
+  isFloorPipelineChildVisible,
+  isInventoryChildVisible,
+  masterDataMenuItems,
 } from '../config/menuConfig';
 
+/** Lead CRM accordion routes only (Customers live under Master Data). */
+function isLeadCrmAccordionRoute(pathname) {
+  return pathname.startsWith('/lead-crm/leads') || pathname.startsWith('/lead-crm/follow-ups');
+}
 
+/** Match list + detail routes without false positives (e.g. /support vs /support-parts). */
+function isNavPathActive(menuPath, pathname) {
+  if (pathname === menuPath) return true;
+  return pathname.startsWith(`${menuPath}/`);
+}
 
 export default function Layout({ children }) {
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
+  const [menuQuery, setMenuQuery] = useState('');
+
   const location = useLocation();
 
-  const { user, logout } = useAuth();
+  const { user, logout, effectivePermissions } = useAuth();
   const { canView } = usePermission();
 
   const navigate = useNavigate();
 
   const showQcAccordion = canView('qc_management');
 
-  const showInventoryAccordion = canView('inventory_management');
+  const showInventoryCounts = canView('inventory_management');
 
   const showSalesPipelineAccordion =
-    canView('sales_pipeline') ||
     canView('sales_quotations') ||
     canView('sales_orders_doc') ||
     canView('delivery_challans') ||
     canView('return_dc') ||
-    canView('delivery_register_management');
+    canView('delivery_register_management') ||
+    canView('technician_bucket') ||
+    canView('technicians_bucket_list');
 
   const showDeliveryRegisterAccordion =
     canView('delivery_register_management') || canView('technicians_bucket_list');
@@ -134,13 +152,20 @@ export default function Layout({ children }) {
 
   const { counts: qcCounts } = useQcStatusCounts(showQcAccordion);
 
-  const { counts: inventoryCounts } = useInventoryListCounts(showInventoryAccordion);
+  const { counts: inventoryCounts } = useInventoryListCounts(showInventoryCounts);
+
+  const showFloorCounts =
+    canView('floor_pipeline') ||
+    canView('floor_tickets') ||
+    canView('chip_level_repair') ||
+    canView('qc_management');
+  const { counts: floorCounts } = useFloorCounts(showFloorCounts);
 
   const showLeadCrmAccordion = canView('leads') || canView('follow_ups') || canView('customers');
   const { counts: leadCrmCounts } = useLeadCrmCounts(showLeadCrmAccordion);
 
   const [leadCrmAccordionOpen, setLeadCrmAccordionOpen] = useState(() =>
-    location.pathname.startsWith('/lead-crm')
+    isLeadCrmAccordionRoute(location.pathname)
   );
 
   const [vendorAccordionOpen, setVendorAccordionOpen] = useState(() =>
@@ -199,7 +224,7 @@ export default function Layout({ children }) {
 
   useEffect(() => {
 
-    if (location.pathname.startsWith('/lead-crm')) {
+    if (isLeadCrmAccordionRoute(location.pathname)) {
       setLeadCrmAccordionOpen(true);
     }
 
@@ -267,12 +292,98 @@ export default function Layout({ children }) {
 
   const menuItems = FLAT_MENU_ITEMS;
 
+  // Permission-filtered children for each accordion. The sidebar must only show
+  // what the user can actually open (sections mirror the real route guards), so
+  // every accordion is filtered and a group/header is hidden when it has none.
+  const reportsVisibleChildren = reportsMenuItems.filter((c) => isReportsChildVisible(c, canView, user?.role));
+  const leadCrmVisibleChildren = leadCrmAccordionChildren.filter((c) => isLeadCrmChildVisible(c, canView));
+  const salesVisibleChildren = salesPipelineAccordionChildren.filter((c) => isSalesPipelineChildVisible(c, canView));
+  const floorVisibleChildren = floorPipelineAccordionChildren.filter((c) => isFloorPipelineChildVisible(c, canView));
+  const inventoryVisibleChildren = inventoryAccordionChildren.filter((c) => isInventoryChildVisible(c, canView));
+  const financeVisibleChildren = financeMenuItems.filter((c) => isFinanceChildVisible(c, canView));
+  const settingsVisibleChildren = settingsAccordionChildren.filter((c) => isSettingsChildVisible(c, canView));
+  const showVendorAccordion = canView('vendor_management');
+  const showSupportNav2 = canAccessSupportModule(user, effectivePermissions) || canView('customer_inventory');
+
+  // Whether each sidebar group has any content the user can reach.
+  const groupHasContent = {
+    reports: showReportsAccordion && reportsVisibleChildren.length > 0,
+    master_data: canView('customers') || canView('vendor_management'),
+    lead_crm: showLeadCrmAccordion && leadCrmVisibleChildren.length > 0,
+    sales_pipeline: showSalesPipelineAccordion && salesVisibleChildren.length > 0,
+    floor_quality: floorVisibleChildren.length > 0,
+    inventory: inventoryVisibleChildren.length > 0,
+    vendor: showVendorAccordion,
+    finance: showFinanceAccordion && financeVisibleChildren.length > 0,
+    support: showSupportNav2,
+    settings: settingsVisibleChildren.length > 0,
+  };
+
+  const ACCORDION_GROUP = {
+    reportsAccordion: 'reports',
+    leadCrmAccordion: 'lead_crm',
+    salesPipelineAccordion: 'sales_pipeline',
+    floorPipelineAccordion: 'floor_quality',
+    inventoryAccordion: 'inventory',
+    vendorAccordion: 'vendor',
+    financeAccordion: 'finance',
+    settingsAccordion: 'settings',
+  };
+
   function itemAllowed(item) {
-    if (item.type === 'section' && item.label === 'Support') {
-      return isSupportUser(user) || canView('support_tickets') || canView('customer_inventory');
+    if (item.type === 'section') {
+      return groupHasContent[item.groupKey] ?? isMenuItemVisible(item, canView);
+    }
+    if (ACCORDION_GROUP[item.type]) {
+      return !!groupHasContent[ACCORDION_GROUP[item.type]];
+    }
+    if (item.label === 'Support') {
+      return showSupportNav2;
     }
     return isMenuItemVisible(item, canView);
   }
+
+  // Flat list of every permission-visible page, used by the sidebar search box so
+  // users can jump straight to any route without opening the right accordion.
+  const allSearchRoutes = [];
+  const seenSearchRoutes = new Set();
+  const addSearchRoute = (label, routePath, groupLabel) => {
+    if (!label || !routePath) return;
+    const key = `${label}|${routePath}`;
+    if (seenSearchRoutes.has(key)) return;
+    seenSearchRoutes.add(key);
+    allSearchRoutes.push({ label, path: routePath, group: groupLabel });
+  };
+  [
+    ['Reports & Analytics', reportsVisibleChildren],
+    ['Lead & Sales CRM', leadCrmVisibleChildren],
+    ['Sales Pipeline', salesVisibleChildren],
+    ['Production', floorVisibleChildren],
+    ['Inventory', inventoryVisibleChildren],
+    ['Finance', financeVisibleChildren],
+    ['Settings', settingsVisibleChildren],
+  ].forEach(([groupLabel, children]) =>
+    (children || []).forEach((child) => addSearchRoute(child.label, child.path, groupLabel))
+  );
+  if (showVendorAccordion) {
+    vendorAccordionChildren
+      .filter((child) => child.type !== 'subheader')
+      .forEach((child) => addSearchRoute(child.label, child.path, 'Vendor Management'));
+  }
+  masterDataMenuItems.forEach((child) => {
+    if (isMenuItemVisible(child, canView)) addSearchRoute(child.label, child.path, 'Master Data');
+  });
+  if (showSupportNav2) addSearchRoute('Support', '/support', 'Support');
+
+  const trimmedMenuQuery = menuQuery.trim().toLowerCase();
+  const searchResults = trimmedMenuQuery
+    ? allSearchRoutes.filter(
+        (r) =>
+          r.label.toLowerCase().includes(trimmedMenuQuery)
+          || r.path.toLowerCase().includes(trimmedMenuQuery)
+          || r.group.toLowerCase().includes(trimmedMenuQuery)
+      )
+    : [];
 
 
 
@@ -332,7 +443,58 @@ export default function Layout({ children }) {
 
         <nav className="p-3 space-y-0.5 overflow-y-auto max-h-[calc(100vh-8rem)]">
 
-          {menuItems.filter(itemAllowed).map((item) => {
+          <div className="sticky top-0 z-10 bg-white pb-2 mb-1">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+              <input
+                type="text"
+                value={menuQuery}
+                onChange={(e) => setMenuQuery(e.target.value)}
+                placeholder="Search menu…"
+                aria-label="Search menu"
+                className="w-full rounded-md border border-gray-200 bg-gray-50 pl-8 pr-7 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-300"
+              />
+              {menuQuery ? (
+                <button
+                  type="button"
+                  onClick={() => setMenuQuery('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  aria-label="Clear search"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          {trimmedMenuQuery ? (
+            <div className="space-y-0.5">
+              {searchResults.length === 0 ? (
+                <p className="px-3 py-4 text-xs text-gray-400">No matching pages.</p>
+              ) : (
+                searchResults.map((r) => (
+                  <NavLink
+                    key={`${r.label}-${r.path}`}
+                    to={r.path}
+                    onClick={() => { setSidebarOpen(false); setMenuQuery(''); }}
+                    className={({ isActive }) =>
+                      [
+                        'flex items-center justify-between gap-2 px-3 py-2 rounded-md text-sm transition-colors',
+                        isActive
+                          ? 'bg-blue-100 text-blue-900 font-semibold'
+                          : 'text-gray-700 hover:bg-gray-100',
+                      ].join(' ')
+                    }
+                  >
+                    <span className="truncate">{r.label}</span>
+                    <span className="text-[10px] text-gray-400 shrink-0 uppercase tracking-wide">{r.group}</span>
+                  </NavLink>
+                ))
+              )}
+            </div>
+          ) : null}
+
+          {!trimmedMenuQuery && menuItems.filter(itemAllowed).map((item) => {
 
             if (item.type === 'section') {
 
@@ -362,7 +524,7 @@ export default function Layout({ children }) {
 
                     onClick={() => setLeadCrmAccordionOpen((o) => !o)}
 
-                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors text-left hover:bg-gray-100 ${location.pathname.startsWith('/lead-crm') ? 'text-blue-700 bg-blue-50/60' : 'text-gray-800'
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors text-left hover:bg-gray-100 ${isLeadCrmAccordionRoute(location.pathname) ? 'text-blue-700 bg-blue-50/60' : 'text-gray-800'
 
                       }`}
 
@@ -389,8 +551,8 @@ export default function Layout({ children }) {
                       {leadCrmAccordionChildren.filter((child) => isLeadCrmChildVisible(child, canView)).map((child) => {
 
                         const badge =
-                          child.countKey && leadCrmCounts && leadCrmCounts[child.countKey] != null
-                            ? leadCrmCounts[child.countKey]
+                          child.countKey && child.section && canView(child.section)
+                            ? (leadCrmCounts?.[child.countKey] ?? 0)
                             : null;
 
                         return (
@@ -573,7 +735,7 @@ export default function Layout({ children }) {
 
                     <Wrench className="w-5 h-5 text-gray-600 shrink-0" />
 
-                    <span className="flex-1">Floor Pipeline</span>
+                    <span className="flex-1">Production</span>
 
                     <ChevronDown
 
@@ -589,7 +751,13 @@ export default function Layout({ children }) {
 
                     <div className="mt-1 ml-2 pl-3 border-l border-blue-100 space-y-0.5">
 
-                      {floorPipelineAccordionChildren.map((child) => (
+                      {floorVisibleChildren.map((child) => {
+
+                        const badge = child.countKey && child.section && canView(child.section)
+                          ? (floorCounts?.[child.countKey] ?? 0)
+                          : null;
+
+                        return (
 
                         <NavLink
 
@@ -599,11 +767,13 @@ export default function Layout({ children }) {
 
                           onClick={() => setSidebarOpen(false)}
 
+                          isActive={(_, location) => isFloorPipelineNavActive(child.path, location)}
+
                           className={({ isActive }) =>
 
                             [
 
-                              'block px-2 py-1.5 rounded-md text-xs transition-colors',
+                              'flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-xs transition-colors',
 
                               isActive
 
@@ -617,11 +787,19 @@ export default function Layout({ children }) {
 
                         >
 
-                          {child.label}
+                          <span>{child.label}</span>
+
+                          {badge != null ? (
+                            <span className="shrink-0 rounded-full bg-sky-100 text-sky-800 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums">
+                              {badge}
+                            </span>
+                          ) : null}
 
                         </NavLink>
 
-                      ))}
+                        );
+
+                      })}
 
                     </div>
 
@@ -766,11 +944,11 @@ export default function Layout({ children }) {
 
                     <div className="mt-1 ml-2 pl-3 border-l border-sky-100 space-y-0.5">
 
-                      {inventoryAccordionChildren.map((child) => {
+                      {inventoryVisibleChildren.map((child) => {
 
                         const badge =
-                          child.countKey && inventoryCounts && inventoryCounts[child.countKey] != null
-                            ? inventoryCounts[child.countKey]
+                          child.countKey && child.section && canView(child.section)
+                            ? (inventoryCounts?.[child.countKey] ?? 0)
                             : null;
 
                         return (
@@ -900,8 +1078,8 @@ export default function Layout({ children }) {
                   {salesPipelineAccordionOpen && (
                     <div className="mt-1 ml-2 pl-3 border-l border-blue-100 space-y-0.5">
                       {salesPipelineAccordionChildren.filter((child) => isSalesPipelineChildVisible(child, canView)).map((child) => {
-                        const badge = child.countKey && operationCounts[child.countKey] != null
-                          ? operationCounts[child.countKey]
+                        const badge = child.countKey && child.section && canView(child.section)
+                          ? (operationCounts?.[child.countKey] ?? 0)
                           : null;
                         return (
                           <NavLink
@@ -1006,8 +1184,8 @@ export default function Layout({ children }) {
                   {financeAccordionOpen && (
                     <div className="mt-1 ml-2 pl-3 border-l border-emerald-100 space-y-0.5">
                       {financeMenuItems.filter((child) => isFinanceChildVisible(child, canView)).map((child) => {
-                        const badge = child.countKey && financeCounts[child.countKey] != null
-                          ? financeCounts[child.countKey]
+                        const badge = child.countKey && child.section && canView(child.section)
+                          ? (financeCounts?.[child.countKey] ?? 0)
                           : null;
                         const Icon = child.icon;
                         return (
@@ -1090,7 +1268,7 @@ export default function Layout({ children }) {
 
             return (
 
-              <Link
+              <NavLink
 
                 key={path}
 
@@ -1098,7 +1276,16 @@ export default function Layout({ children }) {
 
                 onClick={() => setSidebarOpen(false)}
 
-                className="flex items-center gap-3 px-3 py-1.5 rounded-md hover:bg-gray-100 transition-colors text-sm"
+                isActive={({ location: loc }) => isNavPathActive(path, loc.pathname)}
+
+                className={({ isActive }) =>
+                  [
+                    'flex items-center gap-3 px-3 py-1.5 rounded-md transition-colors text-sm',
+                    isActive
+                      ? 'bg-blue-100 text-blue-900 font-semibold'
+                      : 'text-gray-700 hover:bg-gray-100',
+                  ].join(' ')
+                }
 
               >
 
@@ -1112,7 +1299,7 @@ export default function Layout({ children }) {
                   </span>
                 ) : null}
 
-              </Link>
+              </NavLink>
 
             );
 

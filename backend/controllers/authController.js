@@ -3,21 +3,46 @@ const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
-const { buildEffectivePermissionsForUser } = require('../services/permissionService');
+const { buildEffectivePermissionsForUser, upsertUserPermissions: upsertUserPermissionsService } = require('../services/permissionService');
+const { getDisplayTeams, normalizeTeamIds } = require('../utils/teamUtils');
+const { parseIndianMobile } = require('../utils/phoneValidation');
 
-const MANAGEABLE_ROLES = ['team_member', 'team_lead', 'sales', 'floor_manager', 'procurement', 'qc', 'dispatch', 'manager', 'admin', 'support_lead', 'support_tech'];
-const hasUserMgmtAccess = (user) => ['admin', 'manager'].includes(user?.role);
-const canViewUsers = (user) => ['admin', 'manager', 'floor_manager'].includes(user?.role);
+function resolveMobileNo(mobile_no, { required = false } = {}) {
+  const parsed = parseIndianMobile(mobile_no, { required, label: 'Mobile number' });
+  if (!parsed.ok) return parsed;
+  return { ok: true, value: parsed.value };
+}
+
+const MANAGEABLE_ROLES = [
+  'team_member', 'team_lead', 'sales', 'floor_manager', 'procurement', 'qc', 'dispatch',
+  'manager', 'admin', 'support_lead', 'support_tech', 'accounts', 'warehouse', 'dispatch_qc',
+];
+const FLOOR_ROLES = ['team_member', 'team_lead', 'floor_manager', 'qc'];
+const CRM_EXCLUDED_ROLES = ['vendor', 'customer', 'technician'];
+const hasUserMgmtAccess = (user) => ['admin', 'manager', 'super_admin'].includes(user?.role);
+const canViewUsers = (user) => ['admin', 'manager', 'super_admin', 'floor_manager'].includes(user?.role);
 const canManageTargetUser = (actor, target) => {
   if (!actor || !target) return false;
-  if (actor.role === 'admin') return true;
-  if (actor.role === 'manager') return !['admin', 'manager'].includes(target.role);
+  if (['super_admin', 'admin'].includes(actor.role)) return true;
+  if (actor.role === 'manager') return !['admin', 'manager', 'super_admin'].includes(target.role);
   return false;
+};
+
+const generatePassword = (length = 10) => {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#';
+  let out = '';
+  for (let i = 0; i < length; i += 1) {
+    out += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return out;
 };
 
 // Register User
 exports.register = async (req, res) => {
-  const { name, email, password, role, team_id, team_ids, mobile_no } = req.body;
+  const {
+    name, email, password, role, team_id, team_ids, mobile_no,
+    designation, department, employee_id, joining_date, notes,
+  } = req.body;
 
   try {
     if (!hasUserMgmtAccess(req.user)) {
@@ -29,8 +54,8 @@ exports.register = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid role selected' });
     }
 
-    if (req.user.role === 'manager' && ['manager', 'admin'].includes(normalizedRole)) {
-      return res.status(403).json({ success: false, message: 'Manager can only create team users/sales/floor manager' });
+    if (req.user.role === 'manager' && ['manager', 'admin', 'super_admin'].includes(normalizedRole)) {
+      return res.status(403).json({ success: false, message: 'Manager can only create non-admin users' });
     }
 
     // For procurement/qc/dispatch roles: auto-set permissions (standalone like Sales, no team)
@@ -38,7 +63,7 @@ exports.register = async (req, res) => {
     let resolvedTeamIds = [];
     if (normalizedRole === 'procurement') {
       permissions = ['procurement_access'];
-    } else if (normalizedRole === 'qc') {
+    } else if (normalizedRole === 'qc' || normalizedRole === 'dispatch_qc') {
       permissions = ['qc_access'];
     } else if (normalizedRole === 'dispatch') {
       permissions = ['dispatch_access'];
@@ -49,9 +74,9 @@ exports.register = async (req, res) => {
     } else {
       // team_member, team_lead, floor_manager: support multiple teams
       if (Array.isArray(team_ids) && team_ids.length > 0) {
-        resolvedTeamIds = team_ids.map((id) => parseInt(id)).filter((id) => !isNaN(id) && id > 0);
+        resolvedTeamIds = await normalizeTeamIds(team_ids);
       } else if (team_id && team_id !== 'null' && team_id !== '') {
-        resolvedTeamIds = [parseInt(team_id)];
+        resolvedTeamIds = await normalizeTeamIds([team_id]);
       }
     }
     const primaryTeamId = resolvedTeamIds[0] || null; // First team as primary for backward compat
@@ -73,15 +98,34 @@ exports.register = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const password_hash = await bcrypt.hash(password, salt);
 
-    const mobileNo = mobile_no ? String(mobile_no).trim() : null;
+    const mobileParsed = resolveMobileNo(mobile_no);
+    if (!mobileParsed.ok) {
+      return res.status(400).json({ success: false, message: mobileParsed.error });
+    }
+    const mobileNo = mobileParsed.value;
     const result = await pool.query(
-      `INSERT INTO users (name, email, password_hash, role, team_id, active, permissions, mobile_no) 
-       VALUES ($1, $2, $3, $4, $5, true, $6, $7) 
-       RETURNING user_id, name, email, role, team_id, mobile_no, created_at`,
-      [name, email, password_hash, normalizedRole, primaryTeamId, permissions, mobileNo || null]
+      `INSERT INTO users (
+         name, email, password_hash, role, team_id, active, permissions, mobile_no,
+         designation, department, employee_id, joining_date, notes, status
+       )
+       VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, $9, $10, $11::date, $12, 'active')
+       RETURNING user_id, name, email, role, team_id, mobile_no, designation, department,
+         employee_id, joining_date, notes, status, created_at`,
+      [
+        name, email, password_hash, normalizedRole, primaryTeamId, permissions, mobileNo || null,
+        designation || null, department || null, employee_id || null, joining_date || null, notes || null,
+      ]
     );
 
     const user = result.rows[0];
+
+    // Link support/dispatch CRM users to delivery_technicians for DC assignment + My Deliveries
+    if (['support_tech', 'support_lead', 'dispatch', 'dispatch_qc'].includes(normalizedRole)) {
+      const { ensureLinkedDeliveryTechnician } = require('../services/deliveryTechnicianService');
+      ensureLinkedDeliveryTechnician(user.user_id).catch((err) => {
+        console.warn('ensureLinkedDeliveryTechnician:', err.message);
+      });
+    }
 
     // Insert user_teams for multi-team support
     if (resolvedTeamIds.length > 0) {
@@ -125,29 +169,8 @@ exports.ensureUserSchema = async () => {
 
 const hasRbacUserMgmtAccess = (user) => ['admin', 'super_admin'].includes(user?.role);
 
-const upsertUserPermissionRows = async (userId, permissions, grantedBy) => {
-  const results = [];
-  for (const perm of permissions) {
-    const { section, can_view, can_create, can_edit, can_delete } = perm;
-    if (!section) continue;
-    const result = await pool.query(
-      `INSERT INTO user_permissions (user_id, section, can_view, can_create, can_edit, can_delete, granted_by, granted_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-       ON CONFLICT (user_id, section)
-       DO UPDATE SET
-         can_view = EXCLUDED.can_view,
-         can_create = EXCLUDED.can_create,
-         can_edit = EXCLUDED.can_edit,
-         can_delete = EXCLUDED.can_delete,
-         granted_by = EXCLUDED.granted_by,
-         granted_at = NOW()
-       RETURNING id, user_id, section, can_view, can_create, can_edit, can_delete, granted_by, granted_at`,
-      [userId, section, can_view ?? null, can_create ?? null, can_edit ?? null, can_delete ?? null, grantedBy]
-    );
-    results.push(result.rows[0]);
-  }
-  return results;
-};
+const upsertUserPermissionRows = async (userId, permissions, grantedBy) =>
+  upsertUserPermissionsService(userId, permissions, grantedBy);
 
 // Helper: get user's team_ids (from user_teams, fallback to team_id)
 const getUserTeamIds = async (userId, fallbackTeamId) => {
@@ -157,12 +180,22 @@ const getUserTeamIds = async (userId, fallbackTeamId) => {
       [userId]
     );
     if (utRes.rows.length > 0) {
-      return utRes.rows.map((r) => r.team_id);
+      return normalizeTeamIds(utRes.rows.map((r) => r.team_id));
     }
   } catch (e) {
     // user_teams table may not exist before migration
   }
-  return fallbackTeamId != null ? [fallbackTeamId] : [];
+  return fallbackTeamId != null ? normalizeTeamIds([fallbackTeamId]) : [];
+};
+
+const getUserTeamNames = async (userId, fallbackTeamId) => {
+  const teamIds = await getUserTeamIds(userId, fallbackTeamId);
+  if (!teamIds.length) return [];
+  const res = await pool.query(
+    'SELECT team_name FROM teams WHERE team_id = ANY($1::int[]) ORDER BY team_name',
+    [teamIds]
+  );
+  return res.rows.map((r) => r.team_name);
 };
 
 // Login User
@@ -211,6 +244,16 @@ exports.login = async (req, res) => {
     }
 
     const teamIds = await getUserTeamIds(user.user_id, user.team_id);
+    const teamNames = await getUserTeamNames(user.user_id, user.team_id);
+
+    try {
+      await pool.query(
+        'UPDATE users SET last_login = NOW(), last_login_ip = $1 WHERE user_id = $2',
+        [req.ip || req.headers['x-forwarded-for'] || null, user.user_id]
+      );
+    } catch (e) {
+      // non-fatal if columns missing before migration
+    }
 
     const token = jwt.sign(
       {
@@ -221,6 +264,7 @@ exports.login = async (req, res) => {
         user_type: user.user_type || 'internal',
         team_id: user.team_id,
         team_ids: teamIds,
+        team_names: teamNames,
         permissions: user.permissions || []
       },
       process.env.JWT_SECRET,
@@ -230,6 +274,7 @@ exports.login = async (req, res) => {
     delete user.password_hash;
     user.permissions = Array.isArray(user.permissions) ? user.permissions : [];
     user.team_ids = teamIds;
+    user.team_names = teamNames;
     user.effective_permissions = await buildEffectivePermissionsForUser(user.user_id, user.role);
 
     res.json({
@@ -268,6 +313,7 @@ exports.getCurrentUser = async (req, res) => {
     const user = result.rows[0];
     user.permissions = Array.isArray(user.permissions) ? user.permissions : [];
     user.team_ids = req.user.team_ids || await getUserTeamIds(user.user_id, user.team_id);
+    user.team_names = req.user.team_names || await getUserTeamNames(user.user_id, user.team_id);
     user.effective_permissions = await buildEffectivePermissionsForUser(user.user_id, user.role);
     res.json({
       success: true,
@@ -303,6 +349,7 @@ exports.loginBarcode = async (req, res) => {
 
     const user = result.rows[0];
     const teamIds = await getUserTeamIds(user.user_id, user.team_id);
+    const teamNames = await getUserTeamNames(user.user_id, user.team_id);
 
     const token = jwt.sign(
       {
@@ -311,6 +358,7 @@ exports.loginBarcode = async (req, res) => {
         role: user.role,
         team_id: user.team_id,
         team_ids: teamIds,
+        team_names: teamNames,
         permissions: user.permissions || []
       },
       process.env.JWT_SECRET,
@@ -319,6 +367,7 @@ exports.loginBarcode = async (req, res) => {
 
     delete user.password_hash;
     user.team_ids = teamIds;
+    user.team_names = teamNames;
 
     res.json({
       success: true,
@@ -353,7 +402,11 @@ exports.updateMobile = async (req, res) => {
       return res.status(403).json({ success: false, message: 'You cannot modify this user' });
     }
 
-    const mobileNo = mobile_no ? String(mobile_no).trim() : null;
+    const mobileParsed = resolveMobileNo(mobile_no);
+    if (!mobileParsed.ok) {
+      return res.status(400).json({ success: false, message: mobileParsed.error });
+    }
+    const mobileNo = mobileParsed.value;
     const result = await pool.query(
       `UPDATE users SET mobile_no = $1 WHERE user_id = $2 RETURNING user_id, name, mobile_no`,
       [mobileNo, id]
@@ -406,6 +459,16 @@ exports.updateBarcode = async (req, res) => {
   }
 };
 
+exports.getTeams = async (req, res) => {
+  try {
+    const teams = await getDisplayTeams();
+    res.json({ success: true, teams });
+  } catch (error) {
+    console.error('getTeams error:', error);
+    res.status(500).json({ success: false, message: 'Server error fetching teams' });
+  }
+};
+
 // Get All Users (for Managers/Admins to assign tasks)
 exports.getAllUsers = async (req, res) => {
   try {
@@ -413,18 +476,76 @@ exports.getAllUsers = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
-    const includeInactive = false;
-    const activeClause = includeInactive ? '' : 'WHERE u.active = true';
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 25, 1), 200);
+    const offset = (page - 1) * limit;
+    const roleFilter = String(req.query.role || '').trim().toLowerCase();
+    const statusFilter = String(req.query.status || '').trim().toLowerCase();
+    const departmentFilter = String(req.query.department || '').trim();
+    const search = String(req.query.search || '').trim();
+    const includeInactive = req.query.include_inactive === 'true'
+      && ['admin', 'super_admin'].includes(req.user.role);
 
-    const result = await pool.query(
-      `SELECT u.user_id, u.name, u.email, u.mobile_no, u.role, u.team_id, u.barcode, u.permissions, u.active, t.team_name 
-             FROM users u
-             LEFT JOIN teams t ON u.team_id = t.team_id
-             ${activeClause}
-             ORDER BY u.name ASC`
+    const conditions = [`u.role NOT IN ('vendor', 'customer')`];
+    const params = [];
+
+    if (!includeInactive) {
+      conditions.push(`(u.active = true OR COALESCE(u.status, 'active') = 'active')`);
+    }
+
+    if (roleFilter) {
+      params.push(roleFilter);
+      conditions.push(`u.role = $${params.length}`);
+    }
+
+    if (statusFilter) {
+      params.push(statusFilter);
+      conditions.push(`COALESCE(u.status, CASE WHEN u.active THEN 'active' ELSE 'inactive' END) = $${params.length}`);
+    }
+
+    if (departmentFilter) {
+      params.push(departmentFilter);
+      conditions.push(`u.department = $${params.length}`);
+    }
+
+    if (search) {
+      params.push(`%${search}%`);
+      conditions.push(`(u.name ILIKE $${params.length} OR u.email ILIKE $${params.length})`);
+    }
+
+    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const statsResult = await pool.query(
+      `SELECT
+         COUNT(*)::int AS total,
+         COUNT(*) FILTER (WHERE COALESCE(u.status, 'active') = 'active' AND u.active = true)::int AS active,
+         COUNT(*) FILTER (WHERE COALESCE(u.status, 'active') = 'inactive' OR u.active = false)::int AS inactive,
+         COUNT(*) FILTER (WHERE COALESCE(u.status, 'active') = 'pending_approval')::int AS pending_approval,
+         COUNT(*) FILTER (WHERE COALESCE(u.status, 'active') = 'blocked')::int AS blocked
+       FROM users u
+       WHERE u.role NOT IN ('vendor', 'customer')`
     );
 
-    // Attach team_ids for each user
+    const countResult = await pool.query(
+      `SELECT COUNT(*)::int AS total FROM users u ${whereClause}`,
+      params
+    );
+
+    const listParams = [...params, limit, offset];
+    const result = await pool.query(
+      `SELECT u.user_id, u.name, u.email, u.mobile_no, u.role, u.team_id, u.barcode, u.permissions,
+              u.active, COALESCE(u.status, CASE WHEN u.active THEN 'active' ELSE 'inactive' END) AS status,
+              u.designation, u.department, u.employee_id, u.joining_date, u.notes,
+              u.last_login, u.created_at, u.deactivated_at, u.deactivation_reason,
+              t.team_name
+       FROM users u
+       LEFT JOIN teams t ON u.team_id = t.team_id
+       ${whereClause}
+       ORDER BY u.name ASC
+       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      listParams
+    );
+
     for (const u of result.rows) {
       try {
         const utRes = await pool.query(
@@ -432,17 +553,218 @@ exports.getAllUsers = async (req, res) => {
           [u.user_id]
         );
         u.team_ids = utRes.rows.length > 0
-          ? utRes.rows.map((r) => r.team_id)
-          : (u.team_id != null ? [u.team_id] : []);
+          ? await normalizeTeamIds(utRes.rows.map((r) => r.team_id))
+          : (u.team_id != null ? await normalizeTeamIds([u.team_id]) : []);
       } catch (e) {
         u.team_ids = u.team_id != null ? [u.team_id] : [];
       }
     }
 
-    res.json({ success: true, users: result.rows });
+    const total = countResult.rows[0]?.total || 0;
+    res.json({
+      success: true,
+      users: result.rows,
+      stats: statsResult.rows[0] || {},
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 1,
+      },
+    });
   } catch (error) {
     console.error('Get all users error:', error);
     res.status(500).json({ success: false, message: 'Server error fetching users' });
+  }
+};
+
+exports.updateUser = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    if (!hasUserMgmtAccess(req.user)) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+
+    const target = await pool.query('SELECT * FROM users WHERE user_id = $1', [id]);
+    if (!target.rows.length) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    if (!canManageTargetUser(req.user, target.rows[0])) {
+      return res.status(403).json({ success: false, message: 'Cannot edit this user' });
+    }
+
+    const {
+      name, email, mobile_no, role, team_id, team_ids,
+      designation, department, employee_id, joining_date, notes,
+    } = req.body;
+
+    if (role) {
+      const normalizedRole = String(role).trim().toLowerCase();
+      if (!MANAGEABLE_ROLES.includes(normalizedRole)) {
+        return res.status(400).json({ success: false, message: 'Invalid role' });
+      }
+      if (req.user.role === 'manager' && ['manager', 'admin', 'super_admin'].includes(normalizedRole)) {
+        return res.status(403).json({ success: false, message: 'Cannot assign admin/manager role' });
+      }
+    }
+
+    let normalizedMobile = undefined;
+    if (mobile_no != null) {
+      const mobileParsed = resolveMobileNo(mobile_no);
+      if (!mobileParsed.ok) {
+        return res.status(400).json({ success: false, message: mobileParsed.error });
+      }
+      normalizedMobile = mobileParsed.value;
+    }
+
+    await pool.query(
+      `UPDATE users SET
+         name = COALESCE($1, name),
+         email = COALESCE($2, email),
+         mobile_no = COALESCE($3, mobile_no),
+         role = COALESCE($4, role),
+         team_id = COALESCE($5::int, team_id),
+         designation = COALESCE($6, designation),
+         department = COALESCE($7, department),
+         employee_id = COALESCE($8, employee_id),
+         joining_date = COALESCE($9::date, joining_date),
+         notes = COALESCE($10, notes),
+         updated_at = NOW()
+       WHERE user_id = $11`,
+      [
+        name || null, email || null, normalizedMobile,
+        role ? String(role).trim().toLowerCase() : null,
+        team_id != null ? team_id : null,
+        designation || null, department || null, employee_id || null,
+        joining_date || null, notes || null, id,
+      ]
+    );
+
+    const effectiveRole = role
+      ? String(role).trim().toLowerCase()
+      : target.rows[0].role;
+
+    if (Array.isArray(team_ids) && FLOOR_ROLES.includes(effectiveRole)) {
+      const validTeamIds = await normalizeTeamIds(team_ids);
+      await pool.query('DELETE FROM user_teams WHERE user_id = $1', [id]);
+      for (const tid of validTeamIds) {
+        await pool.query(
+          'INSERT INTO user_teams (user_id, team_id) VALUES ($1, $2) ON CONFLICT (user_id, team_id) DO NOTHING',
+          [id, tid]
+        );
+      }
+      const primaryTeamId = validTeamIds[0] || null;
+      await pool.query('UPDATE users SET team_id = $1 WHERE user_id = $2', [primaryTeamId, id]);
+    } else if (role && !FLOOR_ROLES.includes(effectiveRole)) {
+      await pool.query('DELETE FROM user_teams WHERE user_id = $1', [id]);
+      await pool.query('UPDATE users SET team_id = NULL WHERE user_id = $1', [id]);
+    }
+
+    const updated = await pool.query(
+      `SELECT u.user_id, u.name, u.email, u.mobile_no, u.role, u.team_id, u.designation, u.department,
+              u.employee_id, u.joining_date, u.notes, u.status, u.active, t.team_name
+       FROM users u LEFT JOIN teams t ON u.team_id = t.team_id WHERE u.user_id = $1`,
+      [id]
+    );
+
+    res.json({ success: true, message: 'User updated', user: updated.rows[0] });
+  } catch (error) {
+    console.error('Update user error:', error);
+    if (error.code === '23505') {
+      return res.status(400).json({ success: false, message: 'Email already in use' });
+    }
+    res.status(500).json({ success: false, message: 'Server error updating user' });
+  }
+};
+
+exports.updateUserStatus = async (req, res) => {
+  const { status, reason } = req.body;
+  const VALID = ['active', 'inactive', 'blocked'];
+
+  try {
+    if (!hasUserMgmtAccess(req.user)) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+    if (!VALID.includes(status)) {
+      return res.status(400).json({ success: false, message: 'Invalid status' });
+    }
+
+    const target = await pool.query('SELECT * FROM users WHERE user_id = $1', [req.params.id]);
+    if (!target.rows.length) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    if (!canManageTargetUser(req.user, target.rows[0])) {
+      return res.status(403).json({ success: false, message: 'Cannot modify this user' });
+    }
+    if (req.user.role === 'manager' && status === 'blocked') {
+      return res.status(403).json({ success: false, message: 'Only admin can block users' });
+    }
+    if (parseInt(target.rows[0].user_id, 10) === parseInt(req.user.user_id, 10)) {
+      return res.status(400).json({ success: false, message: 'You cannot change your own status' });
+    }
+
+    const userId = parseInt(req.params.id, 10);
+    const actorId = parseInt(req.user.user_id, 10);
+    const isActive = status === 'active';
+
+    await pool.query(
+      `UPDATE users SET
+         status = $1,
+         active = $2,
+         deactivated_at = $3,
+         deactivated_by = $4,
+         deactivation_reason = $5,
+         updated_at = NOW()
+       WHERE user_id = $6`,
+      [
+        status,
+        isActive,
+        isActive ? null : new Date(),
+        isActive ? null : actorId,
+        isActive ? null : (reason || null),
+        userId,
+      ]
+    );
+
+    res.json({ success: true, status });
+  } catch (error) {
+    console.error('Update user status error:', error);
+    res.status(500).json({ success: false, message: 'Server error updating status' });
+  }
+};
+
+exports.resetUserPassword = async (req, res) => {
+  try {
+    if (!['admin', 'super_admin'].includes(req.user.role)) {
+      return res.status(403).json({ success: false, message: 'Admin only' });
+    }
+
+    const target = await pool.query('SELECT user_id, role FROM users WHERE user_id = $1', [req.params.id]);
+    if (!target.rows.length) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    if (CRM_EXCLUDED_ROLES.includes(target.rows[0].role)) {
+      return res.status(400).json({ success: false, message: 'Cannot reset password for portal users' });
+    }
+
+    const { new_password } = req.body;
+    const plain = new_password || generatePassword();
+    const hash = await bcrypt.hash(plain, 10);
+
+    await pool.query(
+      'UPDATE users SET password_hash = $1, updated_at = NOW() WHERE user_id = $2',
+      [hash, req.params.id]
+    );
+
+    res.json({
+      success: true,
+      new_password: plain,
+      message: 'Password reset. Share the new password with the user.',
+    });
+  } catch (error) {
+    console.error('Reset user password error:', error);
+    res.status(500).json({ success: false, message: 'Server error resetting password' });
   }
 };
 
@@ -472,7 +794,7 @@ exports.updateUserTeams = async (req, res) => {
       return res.status(403).json({ success: false, message: 'You cannot modify this user' });
     }
 
-    const validTeamIds = team_ids.map((tid) => parseInt(tid)).filter((tid) => !isNaN(tid) && tid > 0);
+    const validTeamIds = await normalizeTeamIds(team_ids);
 
     await pool.query('DELETE FROM user_teams WHERE user_id = $1', [id]);
     for (const tid of validTeamIds) {
@@ -550,13 +872,16 @@ exports.registerCustomer = async (req, res) => {
 
     const salt = await bcrypt.genSalt(10);
     const password_hash = await bcrypt.hash(password, salt);
-    const mobileNo = mobile_no ? String(mobile_no).trim() : null;
+    const mobileParsed = resolveMobileNo(mobile_no);
+    if (!mobileParsed.ok) {
+      return res.status(400).json({ success: false, message: mobileParsed.error });
+    }
 
     const result = await pool.query(
       `INSERT INTO users (name, email, password_hash, role, user_type, status, active, mobile_no)
        VALUES ($1, $2, $3, 'customer', 'customer', 'active', true, $4)
        RETURNING user_id, name, email, role, user_type, status, mobile_no, created_at`,
-      [name, email, password_hash, mobileNo]
+      [name, email, password_hash, mobileParsed.value]
     );
 
     res.status(201).json({ success: true, user: result.rows[0] });
@@ -582,7 +907,10 @@ exports.registerVendor = async (req, res) => {
 
     const salt = await bcrypt.genSalt(10);
     const password_hash = await bcrypt.hash(password, salt);
-    const mobileNo = mobile_no ? String(mobile_no).trim() : null;
+    const mobileParsed = resolveMobileNo(mobile_no, { required: true });
+    if (!mobileParsed.ok) {
+      return res.status(400).json({ success: false, message: mobileParsed.error });
+    }
 
     const result = await pool.query(
       `INSERT INTO users (name, email, password_hash, role, user_type, status, active, mobile_no, company_name, gst_number)
@@ -592,7 +920,7 @@ exports.registerVendor = async (req, res) => {
         name,
         email,
         password_hash,
-        mobileNo,
+        mobileParsed.value,
         company_name ? String(company_name).trim() : null,
         gst_number ? String(gst_number).trim() : null,
       ]
@@ -629,13 +957,16 @@ exports.registerTechnician = async (req, res) => {
 
     const salt = await bcrypt.genSalt(10);
     const password_hash = await bcrypt.hash(password, salt);
-    const mobileNo = mobile_no ? String(mobile_no).trim() : null;
+    const mobileParsed = resolveMobileNo(mobile_no);
+    if (!mobileParsed.ok) {
+      return res.status(400).json({ success: false, message: mobileParsed.error });
+    }
 
     const result = await pool.query(
       `INSERT INTO users (name, email, password_hash, role, user_type, status, active, mobile_no)
        VALUES ($1, $2, $3, 'technician', 'technician', 'active', true, $4)
        RETURNING user_id, name, email, role, user_type, status, mobile_no, created_at`,
-      [name, email, password_hash, mobileNo]
+      [name, email, password_hash, mobileParsed.value]
     );
 
     const user = result.rows[0];

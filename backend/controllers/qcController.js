@@ -5,7 +5,10 @@ const {
     recordAssigneeForTeam
 } = require('../services/qcRoundRobinService');
 const { syncWorkLogForTicketState } = require('../services/ticketWorkLogService');
-const { applyGrnVendorQcPassOnTicketComplete } = require('../services/grnTicketService');
+const { markVendorSerialReadyForRent } = require('../services/grnTicketService');
+const { vacateWarehouseLocation } = require('../services/warehouseLocationService');
+const ttsplAuditService = require('../services/ttsplAuditService');
+const { logProductionHistory } = require('../services/ticketWorkflowHistoryService');
 
 // QC Checklist Configuration
 const QC_CHECKLIST_STRUCTURE = {
@@ -204,12 +207,12 @@ exports.saveQC = async (req, res) => {
         );
 
         if (existing.rows.length > 0) {
-            // Update existing
+            // Update existing — a draft is always unlocked so it reloads on re-entry.
             await pool.query(
                 `UPDATE qc_results 
                  SET processor = $1, generation = $2, storage_type = $3, ram_size = $4,
                      checklist_data = $5, final_grade = $6, grade_notes = $7, remarks = $8,
-                     parts_replaced = $9, replaced_parts = $10, tested_by = $11
+                     parts_replaced = $9, replaced_parts = $10, tested_by = $11, is_locked = false
                  WHERE qc_id = $12`,
                 [
                     header.processor, header.generation, header.storage_type, header.ram_size,
@@ -249,7 +252,7 @@ exports.saveQC = async (req, res) => {
 // Submit QC and route ticket
 exports.submitQC = async (req, res) => {
     const { id } = req.params;
-    const { qcStage, header, checklist, grading, remarks, replacedParts, signOff, assignToUserId } = req.body;
+    const { qcStage, header, checklist, grading, remarks, replacedParts, signOff, assignToUserId, inventory_tag } = req.body;
     const userId = req.user.user_id;
 
     const client = await pool.connect();
@@ -257,8 +260,16 @@ exports.submitQC = async (req, res) => {
     try {
         await client.query('BEGIN');
 
+        const ticketBeforeRes = await client.query('SELECT * FROM tickets WHERE ticket_id = $1', [id]);
+        const ticketBefore = ticketBeforeRes.rows[0] || null;
+        const beforeStageRes = ticketBefore?.current_stage_id
+          ? await client.query('SELECT stage_name FROM stages WHERE stage_id = $1', [ticketBefore.current_stage_id])
+          : { rows: [] };
+        const beforeStageName = beforeStageRes.rows[0]?.stage_name || qcStage;
+
         const ticketMetaRes = await client.query(
-            `SELECT serial_number, machine_number, vendor_serial_id FROM tickets WHERE ticket_id = $1`,
+            `SELECT serial_number, machine_number, vendor_serial_id, ticket_type, ttspl_id, qc_fail_count
+               FROM tickets WHERE ticket_id = $1`,
             [id]
         );
         const ticketMeta = ticketMetaRes.rows[0] || {};
@@ -328,12 +339,15 @@ exports.submitQC = async (req, res) => {
         if (result === 'PASS') {
             if (qcStage === 'QC1') {
                 nextStage = 'QC2';
-            } else if (qcStage === 'QC2') {
-                nextStage = 'Inventory';
+            } else if (qcStage === 'QC2' || qcStage === 'Dispatch QC') {
+                // Dispatch QC still goes to Inventory. Floor QC2 goes to Pending Inventory.
+                nextStage = qcStage === 'Dispatch QC' ? 'Inventory' : 'Pending Inventory';
             }
         } else {
-            // FAIL - return to Assembly & Software
-            nextStage = 'Assembly & Software';
+            // FAIL routing depends on the stage:
+            //  - QC2 fail        -> back to QC1 for full re-inspection (never Assembly/Software)
+            //  - QC1 / Dispatch  -> back to Assembly & Software for technician rework
+            nextStage = qcStage === 'QC2' ? 'QC1' : 'Assembly & Software';
         }
 
         // Get next stage ID
@@ -345,6 +359,7 @@ exports.submitQC = async (req, res) => {
         if (stageRes.rows.length > 0) {
             const { stage_id, team_id } = stageRes.rows[0];
             const isCompleted = nextStage === 'Inventory';
+            const isPendingInventory = nextStage === 'Pending Inventory';
             let assignedUserId = null;
             if (result === 'PASS' && qcStage === 'QC1') {
                 const manualId = assignToUserId != null && assignToUserId !== ''
@@ -373,15 +388,61 @@ exports.submitQC = async (req, res) => {
                         assignedUserId = null;
                     }
                 }
+            } else if (result === 'FAIL' && qcStage === 'QC1') {
+                const manualId = assignToUserId != null && assignToUserId !== ''
+                    ? parseInt(assignToUserId, 10)
+                    : null;
+                if (!manualId || Number.isNaN(manualId)) {
+                    await client.query('ROLLBACK');
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Hardware & Software technician is required when failing from QC1',
+                    });
+                }
+                const eligible = await fetchOrderedMemberIds(client, team_id);
+                if (!eligible.includes(manualId)) {
+                    await client.query('ROLLBACK');
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Selected assignee is not an active Hardware & Software team member',
+                    });
+                }
+                assignedUserId = manualId;
             }
+
+            const qc1FailReason = (remarks?.trim() || reasons?.join('; ') || 'QC1 checklist failed').slice(0, 2000);
+            const qc1FailUpdates = result === 'FAIL' && qcStage === 'QC1'
+                ? `, qc_fail_count = COALESCE(qc_fail_count, 0) + 1,
+                     qc1_failed_at = NOW(),
+                     qc1_fail_reason = $6,
+                     highlighted = TRUE,
+                     highlighted_reason = $7`
+                : '';
+            const qc1FailParams = result === 'FAIL' && qcStage === 'QC1'
+                ? [qc1FailReason, `QC1 failed: ${qc1FailReason}`]
+                : [];
 
             await client.query(
                 `UPDATE tickets 
                  SET current_stage_id = $1, assigned_team_id = $2, assigned_user_id = $5,
                      status = $4::varchar, completed_at = CASE WHEN $4::varchar = 'completed' THEN CURRENT_TIMESTAMP ELSE NULL END
+                     ${qc1FailUpdates}
                  WHERE ticket_id = $3`,
-                [stage_id, team_id, id, isCompleted ? 'completed' : 'in_progress', assignedUserId]
+                [stage_id, team_id, id, isCompleted ? 'completed' : 'in_progress', assignedUserId, ...qc1FailParams]
             );
+
+            if (result === 'FAIL' && qcStage === 'QC1') {
+                await ttsplAuditService.logTtsplEvent({
+                    ttsplId: ticketMeta.ttspl_id,
+                    vendorSerialId: ticketMeta.vendor_serial_id,
+                    eventType: 'qc1_failed',
+                    description: `QC1 failed: ${qc1FailReason}`,
+                    metadata: { reason: qc1FailReason, ticket_id: Number(id) },
+                    actorUserId: userId,
+                    actorName: req.user.name,
+                    db: client
+                });
+            }
 
             const ticketAfterQc = await client.query(
                 `SELECT ticket_id, status, assigned_user_id, current_stage_id FROM tickets WHERE ticket_id = $1`,
@@ -397,19 +458,94 @@ exports.submitQC = async (req, res) => {
                 );
             }
 
-            if (isCompleted && (serialNumber || machineNumber)) {
+            if (isPendingInventory && result === 'PASS') {
                 await client.query(
-                    `UPDATE inventory 
-                     SET status = 'In Stock', stock_type = 'Ready', stage = 'Inventory'
-                     WHERE serial_number = $1 OR machine_number = $2`,
-                    [serialNumber, machineNumber]
+                    `UPDATE tickets SET qc2_passed_at = NOW() WHERE ticket_id = $1`,
+                    [id]
+                );
+                try {
+                    const paSvc = require('../services/productionAssetService');
+                    let pa = await paSvc.getByTicket(client, Number(id));
+                    if (!pa && ticketMeta.vendor_serial_id) {
+                        pa = await paSvc.getByVendorSerial(client, ticketMeta.vendor_serial_id);
+                    }
+                    if (!pa) {
+                        pa = await paSvc.createFromGrn(client, {
+                            ticketId: Number(id),
+                            serialNumber: ticketMeta.serial_number,
+                            ttsplId: ticketMeta.ttspl_id,
+                            vendorSerialId: ticketMeta.vendor_serial_id,
+                            configSource: ticketMeta,
+                        });
+                    }
+                    if (pa?.production_asset_id) {
+                        await paSvc.markPendingInventory(client, pa.production_asset_id, userId, {
+                            source: 'qc2',
+                            inventory_tag,
+                        });
+                    }
+                } catch (paErr) {
+                    if (paErr.status === 400) {
+                        await client.query('ROLLBACK');
+                        return res.status(400).json({ success: false, message: paErr.message });
+                    }
+                    console.error('QC submit pending inventory mark failed:', paErr.message);
+                }
+                if (serialNumber || machineNumber) {
+                    await client.query(
+                        `UPDATE inventory SET stage = $1 WHERE serial_number = $2 OR machine_number = $3`,
+                        [nextStage, serialNumber, machineNumber]
+                    );
+                }
+            } else if (isCompleted && result === 'PASS' && ticketMeta.ticket_type === 'sales_order_qc') {
+                // Pre-dispatch "Dispatch QC" pass on a Sales Order laptop must mirror the
+                // stage-move path: mark the SO allocation / DC QC / vendor serial as passed
+                // and keep the unit RESERVED for its order (not generic ready stock),
+                // otherwise the laptop stays "pending" and keeps showing in the queue / blocks DC.
+                await client.query(
+                    `UPDATE dc_qc_tickets SET status = 'qc_passed', updated_at = NOW()
+                      WHERE ticket_id = $1`,
+                    [id]
+                );
+                await client.query(
+                    `UPDATE delivery_challan_lines
+                        SET pre_dispatch_qc_passed = TRUE, updated_at = NOW()
+                      WHERE pre_dispatch_qc_ticket_id = $1`,
+                    [id]
+                );
+                await client.query(
+                    `UPDATE sales_order_serials SET qc_status = 'passed', updated_at = NOW()
+                      WHERE qc_ticket_id = $1 AND status = 'attached'`,
+                    [id]
                 );
                 if (ticketMeta.vendor_serial_id) {
-                    try {
-                        await applyGrnVendorQcPassOnTicketComplete(client, ticketMeta, userId);
-                    } catch (grnQcErr) {
-                        console.error('GRN vendor QC pass on QC completion failed:', grnQcErr);
-                    }
+                    await client.query(
+                        `UPDATE vendor_serial_numbers SET inventory_status = 'reserved', updated_at = NOW()
+                          WHERE serial_id = $1
+                            AND COALESCE(inventory_status,'in_stock') NOT IN ('rented','sold','on_demo','in_transit','returned')`,
+                        [ticketMeta.vendor_serial_id]
+                    );
+                    await vacateWarehouseLocation(client, ticketMeta.vendor_serial_id);
+                }
+            } else if (isCompleted && result === 'PASS') {
+                if (serialNumber || machineNumber) {
+                    await client.query(
+                        `UPDATE inventory 
+                         SET status = 'In Stock', stock_type = 'Ready', stage = 'Inventory'
+                         WHERE serial_number = $1 OR machine_number = $2`,
+                        [serialNumber, machineNumber]
+                    );
+                }
+                if (ticketMeta.vendor_serial_id) {
+                    const fullTicket = await client.query(
+                        `SELECT * FROM tickets WHERE ticket_id = $1`,
+                        [id]
+                    );
+                    await markVendorSerialReadyForRent(
+                        client,
+                        fullTicket.rows[0] || ticketMeta,
+                        userId
+                    );
                 }
             } else if (serialNumber || machineNumber) {
                 await client.query(
@@ -440,6 +576,20 @@ exports.submitQC = async (req, res) => {
                     `${qcStage} completed. Result: ${result}. Grade: ${grading.final_grade}. Next: ${nextStage}${assigneeNote}${checklistNote}`
                 ]
             );
+
+            const ticketAfterRes = await client.query('SELECT * FROM tickets WHERE ticket_id = $1', [id]);
+            await logProductionHistory(client, {
+                ticketBefore,
+                ticketAfter: ticketAfterRes.rows[0] || ticketBefore,
+                beforeStageName,
+                afterStageName: nextStage,
+                source: 'submitQC',
+                remarks: remarks || null,
+                failureReason: result === 'FAIL' ? (remarks?.trim() || reasons?.join('; ') || null) : null,
+                actor: req.user,
+                metadata: { qc_result: result, qc_stage: qcStage, grade: grading.final_grade },
+                assignmentType: result === 'FAIL' ? 'qc_fail_return' : 'qc_pass_handoff',
+            });
         }
 
         await client.query('COMMIT');
@@ -455,7 +605,11 @@ exports.submitQC = async (req, res) => {
     } catch (error) {
         await client.query('ROLLBACK');
         console.error('Submit QC error:', error);
-        res.status(500).json({ success: false, message: 'Server error' });
+        const detail = String(error?.message || '');
+        const message = detail.includes('value too long')
+            ? 'QC header value too long for database column. Please retry — columns were widened for full processor names.'
+            : 'Server error';
+        res.status(500).json({ success: false, message });
     } finally {
         client.release();
     }

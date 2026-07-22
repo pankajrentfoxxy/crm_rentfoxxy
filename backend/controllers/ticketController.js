@@ -1,4 +1,6 @@
 const pool = require('../config/db');
+const { queryDispatchQcEligibleMembers } = require('../utils/dispatchQcAccess');
+const { findBlockingTicket, blockingTicketMessage } = require('../utils/floorTicketSerialGuard');
 const { pickNextAssigneeForTeamPool } = require('../services/qcRoundRobinService');
 const {
   startWorkLog,
@@ -7,6 +9,64 @@ const {
 } = require('../services/ticketWorkLogService');
 const { applyGrnVendorQcPassOnTicketComplete } = require('../services/grnTicketService');
 const ttsplAuditService = require('../services/ttsplAuditService');
+const {
+  logProductionHistory,
+  logWorkStarted,
+  getTicketProductionHistory,
+} = require('../services/ticketWorkflowHistoryService');
+const { hasPermission } = require('../services/permissionService');
+const {
+  resolveTicketListScope,
+  buildTicketListAssignmentClause,
+  canAccessTicketRecord,
+  isRestrictedToAssignedAny,
+} = require('../services/dataScopeService');
+const { appendDateRangeClauses } = require('../utils/dateRangeFilter');
+const { pickSpecFilters, buildTicketSpecFilter } = require('../utils/inventorySpecFilter');
+
+// Replace legacy "user/team/stage ID: N" tokens in activity notes with names.
+// New activity logs already store names; this keeps historical entries readable.
+async function resolveActivityNoteIds(rows = []) {
+  const patterns = [
+    { re: /user ID: (\d+)/gi, table: 'users', col: 'name', key: 'user_id' },
+    { re: /team ID: (\d+)/gi, table: 'teams', col: 'team_name', key: 'team_id' },
+    { re: /stage ID: (\d+)/gi, table: 'stages', col: 'stage_name', key: 'stage_id' }
+  ];
+
+  const idsByType = { users: new Set(), teams: new Set(), stages: new Set() };
+  for (const row of rows) {
+    if (!row?.notes) continue;
+    for (const p of patterns) {
+      for (const m of row.notes.matchAll(p.re)) idsByType[p.table].add(Number(m[1]));
+    }
+  }
+
+  const nameMaps = { users: {}, teams: {}, stages: {} };
+  await Promise.all(
+    patterns.map(async (p) => {
+      const ids = [...idsByType[p.table]];
+      if (!ids.length) return;
+      const result = await pool.query(
+        `SELECT ${p.key} AS id, ${p.col} AS name FROM ${p.table} WHERE ${p.key} = ANY($1::int[])`,
+        [ids]
+      );
+      result.rows.forEach((r) => { nameMaps[p.table][r.id] = r.name; });
+    })
+  );
+
+  for (const row of rows) {
+    if (!row?.notes) continue;
+    let notes = row.notes;
+    for (const p of patterns) {
+      notes = notes.replace(p.re, (full, idStr) => {
+        const name = nameMaps[p.table][Number(idStr)];
+        if (!name) return full;
+        return p.table === 'users' ? name : `${name}${p.table === 'teams' ? ' team' : ''}`;
+      });
+    }
+    row.notes = notes;
+  }
+}
 
 // Create Ticket
 exports.createTicket = async (req, res) => {
@@ -79,6 +139,15 @@ exports.createTicket = async (req, res) => {
       });
     }
 
+    const blocked = await findBlockingTicket(pool, { serialNumber: serial_number, ttsplId: ttspl_id });
+    if (blocked) {
+      return res.status(400).json({
+        success: false,
+        message: blockingTicketMessage(blocked),
+        blocking_ticket_id: blocked.ticket_id,
+      });
+    }
+
     // Create ticket
     const result = await pool.query(
       `INSERT INTO tickets 
@@ -103,6 +172,16 @@ exports.createTicket = async (req, res) => {
        VALUES ($1, $2, $3, $4, $5)`,
       [ticket.ticket_id, finalStageId, req.user.user_id, 'created', logMessage]
     );
+
+    await logProductionHistory(pool, {
+      ticketBefore: null,
+      ticketAfter: ticket,
+      afterStageName: firstStage.stage_name,
+      source: 'createTicket',
+      remarks: logMessage,
+      actor: req.user,
+      assignmentType: 'initial',
+    });
 
     if (finalUserId) {
       await startWorkLog(pool, {
@@ -142,22 +221,37 @@ exports.createTicket = async (req, res) => {
 // Get Tickets (with filters)
 exports.getTickets = async (req, res) => {
   const { status, stage_id, team_id, search, view, priority, ticket_type, stage_names } = req.query;
+  const specFilters = pickSpecFilters(req.query);
 
   try {
+    const params = [];
+    const specFilter = buildTicketSpecFilter(specFilters, params, 't');
     let query = `
       SELECT t.*, 
              s.stage_name, s.stage_order,
              tm.team_name,
-             u.name as assigned_user_name
+             tm.team_name AS assigned_team_name,
+             u.name as assigned_user_name,
+             COALESCE(
+               NULLIF(TRIM(t.ttspl_id), ''),
+               (regexp_match(t.machine_number, 'TTSPL[0-9]+', 'i'))[1],
+               NULLIF(TRIM(t.machine_number), '')
+             ) AS ttspl_display,
+             COALESCE(
+               NULLIF(TRIM(t.serial_number), ''),
+               (SELECT vsn.serial_number FROM vendor_serial_numbers vsn
+                WHERE vsn.serial_id = t.vendor_serial_id AND vsn.deleted_at IS NULL LIMIT 1)
+             ) AS resolved_serial_number
       FROM tickets t
       LEFT JOIN stages s ON t.current_stage_id = s.stage_id
       LEFT JOIN teams tm ON t.assigned_team_id = tm.team_id
       LEFT JOIN users u ON t.assigned_user_id = u.user_id
+      ${specFilter.joinSql}
       WHERE 1=1
+      ${specFilter.whereSql}
     `;
 
-    const params = [];
-    let paramCount = 1;
+    let paramCount = params.length + 1;
 
     if (status) {
       query += ` AND t.status = $${paramCount}`;
@@ -171,35 +265,23 @@ exports.getTickets = async (req, res) => {
       paramCount++;
     }
 
-    // Role-based visibility: Admin & Floor Manager see all; Team members see only tickets assigned to them
-    const privilegedRoles = ['admin', 'floor_manager', 'manager'];
-
-    if (req.user.role === 'qc' && !privilegedRoles.includes(req.user.role)) {
-      query += ` AND s.stage_name IN ('QC1', 'QC2')`;
+    if (req.user.role === 'qc') {
+      query += ` AND s.stage_name IN ('QC1', 'QC2', 'Dispatch QC')`;
     }
 
-    if (!privilegedRoles.includes(req.user.role)) {
-      // Team members: See ONLY tickets assigned to them (never unassigned tickets)
-      if (view === 'completed') {
-        query += ` AND (t.assigned_user_id = $${paramCount} OR EXISTS (
-          SELECT 1 FROM activities a WHERE a.ticket_id = t.ticket_id AND a.user_id = $${paramCount}
-          AND a.action IN ('stage_changed','stage_jumped')
-        ))`;
-        params.push(req.user.user_id);
-        paramCount++;
-      } else {
-        // In-progress: must be assigned to this user (exclude NULL explicitly)
-        query += ` AND t.assigned_user_id IS NOT NULL AND t.assigned_user_id = $${paramCount}`;
-        params.push(req.user.user_id);
-        paramCount++;
-      }
-    } else {
-      // Admins/Floor Managers: can filter by team_id if provided
-      if (team_id) {
-        query += ` AND t.assigned_team_id = $${paramCount}`;
-        params.push(team_id);
-        paramCount++;
-      }
+    if (req.user.role === 'dispatch_qc') {
+      query += ` AND s.stage_name = 'Dispatch QC'`;
+    }
+
+    const ticketScope = await resolveTicketListScope(req);
+    const assignmentFilter = buildTicketListAssignmentClause(ticketScope, paramCount, params);
+    query += assignmentFilter.clause;
+    paramCount = assignmentFilter.paramCount;
+
+    if (ticketScope.mode === 'all' && team_id) {
+      query += ` AND t.assigned_team_id = $${paramCount}`;
+      params.push(team_id);
+      paramCount++;
     }
 
     if (priority) {
@@ -237,6 +319,18 @@ exports.getTickets = async (req, res) => {
       paramCount++;
     }
 
+    const dateClauses = appendDateRangeClauses({
+      column: 'created_at',
+      dateFrom: req.query.date_from,
+      dateTo: req.query.date_to,
+      params,
+      tableAlias: 't',
+    });
+    if (dateClauses.length) {
+      query += ` AND ${dateClauses.join(' AND ')}`;
+      paramCount = params.length + 1;
+    }
+
     // View filter: completed tab shows status=completed OR tickets user moved; in_progress shows status!=completed
     if (view === 'completed') {
       if (!privilegedRoles.includes(req.user.role)) {
@@ -250,23 +344,124 @@ exports.getTickets = async (req, res) => {
         query += ` AND t.status = 'completed'`;
       }
     } else if (view === 'in_progress') {
-      query += ` AND t.status != 'completed'`;
+      query += ` AND t.status NOT IN ('completed', 'cancelled', 'diagnosis_failed', 'out_for_repair')`;
+    } else if (!status) {
+      // Default list never shows cancelled tickets (e.g. serial removed from SO),
+      // unless the caller explicitly filters by status.
+      query += ` AND t.status <> 'cancelled'`;
     }
 
     query += ' ORDER BY t.created_at DESC';
 
+    const page = Math.max(1, parseInt(req.query.page, 10) || 0);
+    const limitRaw = parseInt(req.query.limit, 10) || 0;
+    const limit = limitRaw > 0 ? Math.min(100, Math.max(1, limitRaw)) : 0;
+    const paginate = page > 0 && limit > 0;
+
+    let total;
+    let totalPages = 1;
+
+    if (paginate) {
+      const whereStart = query.indexOf('FROM tickets t');
+      const orderStart = query.indexOf(' ORDER BY');
+      const fromWhere = query.slice(whereStart, orderStart);
+      const countResult = await pool.query(`SELECT COUNT(*)::int AS total ${fromWhere}`, params);
+      total = countResult.rows[0]?.total || 0;
+      totalPages = Math.max(1, Math.ceil(total / limit));
+      query += ` LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
+      params.push(limit, (page - 1) * limit);
+    }
+
     const result = await pool.query(query, params);
 
-    res.json({
+    const payload = {
       success: true,
+      tickets: result.rows,
       count: result.rows.length,
-      tickets: result.rows
-    });
+    };
+
+    if (paginate) {
+      payload.pagination = { page, limit, total, totalPages };
+    }
+
+    res.json(payload);
   } catch (error) {
     res.status(500).json({
       success: false,
       message: 'Server error fetching tickets'
     });
+  }
+};
+
+// Floor pipeline sidebar counts — scoped to the same tickets the user can list.
+exports.getFloorNavCounts = async (req, res) => {
+  try {
+    const params = [];
+    let paramCount = 1;
+    let where = `WHERE t.status NOT IN ('completed', 'cancelled', 'diagnosis_failed', 'out_for_repair')`;
+
+    if (req.user.role === 'qc') {
+      where += ` AND s.stage_name IN ('QC1', 'QC2', 'Dispatch QC')`;
+    }
+
+    if (req.user.role === 'dispatch_qc') {
+      where += ` AND s.stage_name = 'Dispatch QC'`;
+    }
+
+    const ticketScope = await resolveTicketListScope(req);
+    const assignmentFilter = buildTicketListAssignmentClause(ticketScope, paramCount, params);
+    where += assignmentFilter.clause;
+    paramCount = assignmentFilter.paramCount;
+
+    const { rows } = await pool.query(
+      `SELECT
+        COUNT(*)::int AS all_tickets,
+        COUNT(*) FILTER (WHERE s.stage_name IN ('QC1','QC2'))::int AS qc_queue,
+        COUNT(*) FILTER (WHERE s.stage_name = 'Chip Level Repair')::int AS chip_level,
+        COUNT(*) FILTER (WHERE s.stage_name = 'Body & Paint')::int AS body_paint,
+        COUNT(*) FILTER (WHERE t.status = 'diagnosis_failed')::int AS diagnosis_failed
+      FROM tickets t
+      LEFT JOIN stages s ON s.stage_id = t.current_stage_id
+      ${where}`,
+      params
+    );
+    const r = rows[0] || {};
+    const cache = {};
+    const userId = req.user.user_id;
+    const role = req.user.role;
+
+    const canViewSection = async (section) => {
+      if (role === 'super_admin') return true;
+      return hasPermission(userId, role, section, 'can_view', cache);
+    };
+
+    let pendingInventory = 0;
+    if (await canViewSection('pending_inventory')) {
+      try {
+        const pi = await pool.query(
+          `SELECT COUNT(*)::int AS n
+             FROM production_assets
+            WHERE status = 'pending_inventory'`
+        );
+        pendingInventory = pi.rows[0]?.n || 0;
+      } catch {
+        pendingInventory = 0;
+      }
+    }
+
+    res.json({
+      success: true,
+      counts: {
+        all_tickets: (await canViewSection('floor_tickets')) ? (r.all_tickets || 0) : 0,
+        qc_queue: (await canViewSection('qc_management')) ? (r.qc_queue || 0) : 0,
+        chip_level: (await canViewSection('chip_level_repair')) ? (r.chip_level || 0) : 0,
+        body_paint: (await canViewSection('floor_pipeline')) ? (r.body_paint || 0) : 0,
+        diagnosis_failed: (await canViewSection('floor_pipeline')) ? (r.diagnosis_failed || 0) : 0,
+        pending_inventory: pendingInventory,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error fetching floor counts' });
   }
 };
 
@@ -324,14 +519,32 @@ exports.getTicketById = async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT t.*, 
+      `SELECT t.*,
               s.stage_name, s.stage_order,
               tm.team_name,
-              u.name as assigned_user_name
+              u.name as assigned_user_name,
+              COALESCE(vsn.extra->>'gpu', '') AS gpu,
+              COALESCE(vsn.extra->>'screen_size', '') AS screen_size,
+              COALESCE(vsn.extra->>'generation', '') AS generation,
+              COALESCE(vsn.extra->>'os', '') AS os,
+              COALESCE(vsn.extra->>'model', t.model) AS model_name,
+              COALESCE(vsn.extra->>'condition', '') AS condition,
+              COALESCE(
+                NULLIF(TRIM(t.ttspl_id), ''),
+                vsn.inventory_asset_code,
+                (regexp_match(t.machine_number, 'TTSPL[0-9]+', 'i'))[1],
+                NULLIF(TRIM(t.machine_number), '')
+              ) AS ttspl_display,
+              vsn.serial_number AS vsn_serial_number,
+              vpo.purchase_order_type,
+              COALESCE(NULLIF(TRIM(t.serial_number), ''), vsn.serial_number) AS resolved_serial_number,
+              vsn.extra AS vsn_extra
        FROM tickets t
        LEFT JOIN stages s ON t.current_stage_id = s.stage_id
        LEFT JOIN teams tm ON t.assigned_team_id = tm.team_id
        LEFT JOIN users u ON t.assigned_user_id = u.user_id
+       LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = t.vendor_serial_id
+       LEFT JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id AND vpo.deleted_at IS NULL
        WHERE t.ticket_id = $1`,
       [id]
     );
@@ -345,16 +558,12 @@ exports.getTicketById = async (req, res) => {
 
     const ticket = result.rows[0];
 
-    // Team members can only view tickets assigned to them
-    const privilegedRoles = ['admin', 'floor_manager', 'manager'];
-    if (!privilegedRoles.includes(req.user.role)) {
-      const assignedToMe = Number(ticket.assigned_user_id) === Number(req.user.user_id);
-      if (!assignedToMe) {
-        return res.status(403).json({
-          success: false,
-          message: 'Access denied: you can only view tickets assigned to you'
-        });
-      }
+    const allowed = await canAccessTicketRecord(req, ticket);
+    if (!allowed) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied: you can only view tickets assigned to you'
+      });
     }
 
     // Get activities
@@ -367,6 +576,10 @@ exports.getTicketById = async (req, res) => {
        ORDER BY a.created_at DESC`,
       [id]
     );
+
+    // Older activity notes stored raw IDs ("Assigned to user ID: 15. Moved to
+    // stage ID: 3."). Resolve them to names so the work log reads naturally.
+    await resolveActivityNoteIds(activities.rows);
 
     // Get photos
     const photos = await pool.query(
@@ -381,10 +594,13 @@ exports.getTicketById = async (req, res) => {
 
     // Get parts
     const parts = await pool.query(
-      `SELECT tp.*, p.part_name, p.part_type, p.cost as unit_cost, (tp.quantity_used * p.cost) as total_part_cost
+      `SELECT tp.*, p.part_name, p.part_type, p.category,
+              COALESCE(tp.unit_cost, p.cost, 0) AS unit_cost,
+              (tp.quantity_used * COALESCE(tp.unit_cost, p.cost, 0)) AS total_part_cost
        FROM ticket_parts tp
        LEFT JOIN parts p ON tp.part_id = p.part_id
-       WHERE tp.ticket_id = $1`,
+       WHERE tp.ticket_id = $1
+       ORDER BY tp.added_at DESC`,
       [id]
     );
 
@@ -397,11 +613,15 @@ exports.getTicketById = async (req, res) => {
       [id]
     );
 
-    // Get part requests
+    // Get part requests (Phase 16: include catalog + reserved instance details)
     const partRequests = await pool.query(
-      `SELECT pr.*, u.name as requested_by_name
+      `SELECT pr.*, u.name as requested_by_name,
+              pi.prt_id, pi.location_code, pi.status AS instance_status,
+              p.category, p.quantity AS stock_qty, p.cost AS catalog_cost
        FROM part_requests pr
        LEFT JOIN users u ON pr.requested_by = u.user_id
+       LEFT JOIN part_instances pi ON pi.instance_id = pr.instance_id
+       LEFT JOIN parts p ON p.part_id = pr.part_id
        WHERE pr.ticket_id = $1
        ORDER BY pr.created_at DESC`,
       [id]
@@ -433,6 +653,20 @@ exports.getTicketById = async (req, res) => {
       success: false,
       message: 'Server error fetching ticket'
     });
+  }
+};
+
+exports.getProductionHistory = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const ticketRes = await pool.query('SELECT ticket_id FROM tickets WHERE ticket_id = $1', [id]);
+    if (!ticketRes.rows.length) {
+      return res.status(404).json({ success: false, message: 'Ticket not found' });
+    }
+    const data = await getTicketProductionHistory(id);
+    res.json({ success: true, ...data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || 'Failed to load production history' });
   }
 };
 
@@ -671,6 +905,16 @@ exports.moveToNextStage = async (req, res) => {
       [id, nextStage.stage_id, req.user.user_id, action, activityNotes]
     );
 
+    await logProductionHistory(pool, {
+      ticketBefore: ticket,
+      ticketAfter: updateResult.rows[0],
+      beforeStageName: currentStageName,
+      afterStageName: nextStage.stage_name,
+      source: target_stage_id ? 'moveToNextStageJump' : 'moveToNextStage',
+      remarks: activityNotes,
+      actor: req.user,
+    });
+
     res.json({
       success: true,
       message: successMessage,
@@ -691,6 +935,20 @@ exports.assignTicket = async (req, res) => {
   const { user_id, team_id, target_stage_id } = req.body;
 
   try {
+    const ticketRes = await pool.query(
+      `SELECT t.*, s.stage_name
+       FROM tickets t
+       JOIN stages s ON s.stage_id = t.current_stage_id
+       WHERE t.ticket_id = $1`,
+      [id]
+    );
+    if (ticketRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Ticket not found' });
+    }
+    const currentTicket = ticketRes.rows[0];
+    const preserveDispatchQcStage =
+      currentTicket.stage_name === 'Dispatch QC' && user_id && !target_stage_id && !team_id;
+
     let updateQuery = 'UPDATE tickets SET ';
     const params = [];
     let paramCount = 1;
@@ -700,7 +958,9 @@ exports.assignTicket = async (req, res) => {
       updateQuery += `assigned_user_id = $${paramCount}, `;
       params.push(user_id);
       paramCount++;
-      logMessage += `Assigned to user ID: ${user_id}. `;
+      const userRes = await pool.query('SELECT name FROM users WHERE user_id = $1', [user_id]);
+      const userName = userRes.rows[0]?.name || `user #${user_id}`;
+      logMessage += `Assigned to ${userName}. `;
     } else if (user_id === null) {
       updateQuery += `assigned_user_id = NULL, `;
       logMessage += `Unassigned user. `;
@@ -710,7 +970,9 @@ exports.assignTicket = async (req, res) => {
       updateQuery += `assigned_team_id = $${paramCount}, `;
       params.push(team_id);
       paramCount++;
-      logMessage += `Assigned to team ID: ${team_id}. `;
+      const teamRes = await pool.query('SELECT team_name FROM teams WHERE team_id = $1', [team_id]);
+      const teamName = teamRes.rows[0]?.team_name || `team #${team_id}`;
+      logMessage += `Assigned to ${teamName} team. `;
     }
 
     // Remove trailing comma and space
@@ -722,12 +984,15 @@ exports.assignTicket = async (req, res) => {
 
     if (target_stage_id) {
       // Floor manager priority assign: user + stage specified
-      const stageRes = await pool.query('SELECT stage_id, team_id FROM stages WHERE stage_id = $1', [target_stage_id]);
+      const stageRes = await pool.query('SELECT stage_id, team_id, stage_name FROM stages WHERE stage_id = $1', [target_stage_id]);
       if (stageRes.rows.length > 0) {
         targetStageId = stageRes.rows[0].stage_id;
         targetTeamId = stageRes.rows[0].team_id;
-        logMessage += `Moved to stage ID: ${targetStageId}. `;
+        logMessage += `Moved to ${stageRes.rows[0].stage_name || `stage #${targetStageId}`}. `;
       }
+    } else if (preserveDispatchQcStage) {
+      // Reassign within Dispatch QC — keep stage, only change assignee
+      logMessage += 'Reassigned at Dispatch QC. ';
     } else if (user_id) {
       // Get all teams for this user (primary team_id + user_teams)
       const userTeamsRes = await pool.query(
@@ -740,7 +1005,7 @@ exports.assignTicket = async (req, res) => {
 
       if (userTeamIds.length > 0) {
         const stageRes = await pool.query(
-          `SELECT s.stage_id, s.team_id FROM stages s
+          `SELECT s.stage_id, s.team_id, s.stage_name FROM stages s
            WHERE s.team_id = ANY($1::int[])
            ORDER BY s.stage_order ASC LIMIT 1`,
           [userTeamIds]
@@ -748,19 +1013,19 @@ exports.assignTicket = async (req, res) => {
         if (stageRes.rows.length > 0) {
           targetStageId = stageRes.rows[0].stage_id;
           targetTeamId = stageRes.rows[0].team_id;
-          logMessage += `Moved to stage ID: ${targetStageId}. `;
+          logMessage += `Moved to ${stageRes.rows[0].stage_name || `stage #${targetStageId}`}. `;
         }
       }
     } else if (team_id) {
       // When assigning to team only, move to that team's first stage
       const stageRes = await pool.query(
-        'SELECT stage_id, team_id FROM stages WHERE team_id = $1 ORDER BY stage_order ASC LIMIT 1',
+        'SELECT stage_id, team_id, stage_name FROM stages WHERE team_id = $1 ORDER BY stage_order ASC LIMIT 1',
         [team_id]
       );
       if (stageRes.rows.length > 0) {
         targetStageId = stageRes.rows[0].stage_id;
         targetTeamId = stageRes.rows[0].team_id;
-        logMessage += `Moved to stage ID: ${targetStageId}. `;
+        logMessage += `Moved to ${stageRes.rows[0].stage_name || `stage #${targetStageId}`}. `;
       }
     }
 
@@ -788,6 +1053,16 @@ exports.assignTicket = async (req, res) => {
     );
 
     const updatedTicket = result.rows[0];
+
+    await logProductionHistory(pool, {
+      ticketBefore: currentTicket,
+      ticketAfter: updatedTicket,
+      beforeStageName: currentTicket.stage_name,
+      source: 'assignTicket',
+      remarks: logMessage.trim(),
+      actor: req.user,
+      assignmentType: 'manual_assign',
+    });
 
     await syncWorkLogForTicketState(pool, updatedTicket);
 
@@ -875,6 +1150,15 @@ exports.claimTicket = async (req, res) => {
          WHERE t.ticket_id = $1`,
       [id]
     );
+
+    await logProductionHistory(pool, {
+      ticketBefore: ticket,
+      ticketAfter: updatedTicket.rows[0] || result.rows[0],
+      source: 'claimTicket',
+      remarks: 'Technician claimed ticket',
+      actor: req.user,
+      assignmentType: 'self_claim',
+    });
 
     // Log activity
     await pool.query(
@@ -1228,40 +1512,106 @@ exports.updateGrade = async (req, res) => {
 // Start Work Timer
 exports.startWork = async (req, res) => {
   const { id } = req.params;
+  const { verify } = req.body; // TTSPL id or serial number the tech scans/types to confirm the machine
   const userId = req.user.user_id;
 
   try {
-    // Check if valid ticket
-    const ticketRes = await pool.query('SELECT current_stage_id FROM tickets WHERE ticket_id = $1', [id]);
-    if (ticketRes.rows.length === 0) return res.status(404).json({ success: false, message: 'Ticket not found' });
-    const stageId = ticketRes.rows[0].current_stage_id;
-
-    // Check if already active
-    const activeRes = await pool.query(
-      'SELECT log_id FROM work_logs WHERE ticket_id = $1 AND user_id = $2 AND end_time IS NULL',
-      [id, userId]
+    const ticketRes = await pool.query(
+      'SELECT current_stage_id, ttspl_id, serial_number FROM tickets WHERE ticket_id = $1',
+      [id]
     );
+    if (ticketRes.rows.length === 0) return res.status(404).json({ success: false, message: 'Ticket not found' });
+    const ticket = ticketRes.rows[0];
+    const stageId = ticket.current_stage_id;
 
-    if (activeRes.rows.length > 0) {
-      return res.status(400).json({ success: false, message: 'Work already started for this ticket' });
+    // Machine-identity gate: the tech must confirm the right laptop before the timer starts.
+    const entered = String(verify || '').trim().toLowerCase();
+    if (!entered) {
+      return res.status(400).json({ success: false, message: 'Enter the TTSPL ID or Serial number to start work' });
+    }
+    const valid = [ticket.ttspl_id, ticket.serial_number]
+      .filter(Boolean)
+      .map((x) => String(x).trim().toLowerCase());
+    if (!valid.includes(entered)) {
+      return res.status(400).json({ success: false, message: 'TTSPL ID / Serial number does not match this ticket' });
     }
 
-    // Insert Log
+    // Restart the stage timer from this moment: close any open segment, open a fresh one.
+    await pool.query(
+      `UPDATE work_logs SET end_time = CURRENT_TIMESTAMP WHERE ticket_id = $1 AND end_time IS NULL`,
+      [id]
+    );
     await pool.query(
       `INSERT INTO work_logs (ticket_id, user_id, stage_id) VALUES ($1, $2, $3)`,
       [id, userId, stageId]
     );
-
-    // Log Activity
     await pool.query(
-      `INSERT INTO activities (ticket_id, user_id, action, notes) VALUES ($1, $2, 'work_started', 'Started work timer')`,
+      `INSERT INTO activities (ticket_id, user_id, action, notes) VALUES ($1, $2, 'work_started', 'Verified machine & started work timer')`,
       [id, userId]
     );
 
-    res.json({ success: true, message: 'Work timer started' });
+    await logWorkStarted(pool, { ticketId: Number(id), stageId, actor: req.user });
+
+    res.json({ success: true, message: 'Work started — timer running' });
   } catch (error) {
     console.error('Start work error:', error);
     res.status(500).json({ success: false, message: 'Server error starting work' });
+  }
+};
+
+// ── Stage task checklist (Assembly & Software, Final Testing, etc.) ──────────
+exports.saveStageTask = async (req, res) => {
+  const { id } = req.params;
+  const { stage_id, checklist_data, notes, completed } = req.body;
+  const userId = req.user.user_id;
+  if (!stage_id) return res.status(400).json({ success: false, message: 'stage_id is required' });
+  try {
+    const existing = await pool.query(
+      'SELECT id FROM ticket_checklist_progress WHERE ticket_id = $1 AND stage_id = $2 ORDER BY id DESC LIMIT 1',
+      [id, stage_id]
+    );
+    const payload = JSON.stringify(checklist_data || {});
+    if (existing.rows.length) {
+      await pool.query(
+        `UPDATE ticket_checklist_progress
+         SET checklist_data = $1::jsonb, completed_by = $2,
+             completed_at = CASE WHEN $3 THEN NOW() ELSE completed_at END
+         WHERE id = $4`,
+        [payload, userId, !!completed, existing.rows[0].id]
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO ticket_checklist_progress (ticket_id, stage_id, checklist_data, completed_by, completed_at)
+         VALUES ($1, $2, $3::jsonb, $4, CASE WHEN $5 THEN NOW() ELSE NULL END)`,
+        [id, stage_id, payload, userId, !!completed]
+      );
+    }
+    if (notes && String(notes).trim()) {
+      await pool.query(
+        `INSERT INTO activities (ticket_id, stage_id, user_id, action, notes) VALUES ($1, $2, $3, 'stage_work', $4)`,
+        [id, stage_id, userId, String(notes).trim()]
+      );
+    }
+    res.json({ success: true, message: completed ? 'Task completed' : 'Task progress saved' });
+  } catch (error) {
+    console.error('saveStageTask error:', error);
+    res.status(500).json({ success: false, message: 'Server error saving task' });
+  }
+};
+
+exports.getStageTask = async (req, res) => {
+  const { id } = req.params;
+  const { stage_id } = req.query;
+  if (!stage_id) return res.status(400).json({ success: false, message: 'stage_id is required' });
+  try {
+    const r = await pool.query(
+      'SELECT * FROM ticket_checklist_progress WHERE ticket_id = $1 AND stage_id = $2 ORDER BY id DESC LIMIT 1',
+      [id, stage_id]
+    );
+    res.json({ success: true, progress: r.rows[0] || null });
+  } catch (error) {
+    console.error('getStageTask error:', error);
+    res.status(500).json({ success: false, message: 'Server error fetching task' });
   }
 };
 
@@ -1314,19 +1664,59 @@ exports.endWork = async (req, res) => {
 };
 
 // Get Active Work Log
+// Hardware & Software stages. The work timer should run as ONE continuous,
+// ongoing timer across all of these for the same technician — it must not reset
+// when the unit moves between Diagnosis → Assembly & Software → Final Testing →
+// Chip Level Repair → Body & Paint.
+const HW_SW_STAGE_NAMES = [
+  'Diagnosis',
+  'Assembly & Software',
+  'Final Testing',
+  'Chip Level Repair',
+  'Body & Paint'
+];
+
 exports.getActiveWorkLog = async (req, res) => {
   const { id } = req.params;
   const userId = req.user.user_id;
 
   try {
     const result = await pool.query(
-      `SELECT *, (EXTRACT(EPOCH FROM start_time) * 1000) as start_time_epoch FROM work_logs WHERE ticket_id = $1 AND user_id = $2 AND end_time IS NULL`,
+      `SELECT w.*, (EXTRACT(EPOCH FROM w.start_time) * 1000) AS start_time_epoch, s.stage_name
+       FROM work_logs w
+       LEFT JOIN stages s ON s.stage_id = w.stage_id
+       WHERE w.ticket_id = $1 AND w.user_id = $2 AND w.end_time IS NULL`,
       [id, userId]
     );
 
     if (result.rows.length > 0) {
-      // Calculate duration logic if needed, but client can do it based on start_time
-      res.json({ success: true, active: true, log: result.rows[0] });
+      const log = result.rows[0];
+      log.session_start_epoch = Number(log.start_time_epoch);
+      log.session_elapsed_ms = null;
+
+      // When the open segment is a Hardware & Software stage, accumulate the
+      // technician's total time across every HW/SW segment on this ticket (closed
+      // + the currently-open one) so the on-screen timer keeps counting across
+      // stage moves instead of restarting each stage. QC / other stages keep
+      // their own per-stage timer.
+      if (HW_SW_STAGE_NAMES.includes(log.stage_name)) {
+        const totalRes = await pool.query(
+          `SELECT COALESCE(
+             SUM(EXTRACT(EPOCH FROM (COALESCE(w.end_time, CURRENT_TIMESTAMP) - w.start_time)) * 1000),
+             0
+           ) AS session_elapsed_ms
+           FROM work_logs w
+           JOIN stages s ON s.stage_id = w.stage_id
+           WHERE w.ticket_id = $1 AND w.user_id = $2 AND s.stage_name = ANY($3::text[])`,
+          [id, userId, HW_SW_STAGE_NAMES]
+        );
+        const sessionElapsedMs = Number(totalRes.rows[0]?.session_elapsed_ms) || 0;
+        log.session_elapsed_ms = sessionElapsedMs;
+        // Reference start the client subtracts from its own clock to keep ticking.
+        log.session_start_epoch = Date.now() - sessionElapsedMs;
+      }
+
+      res.json({ success: true, active: true, log });
     } else {
       res.json({ success: true, active: false });
     }
@@ -1358,7 +1748,16 @@ exports.bulkMoveTickets = async (req, res) => {
     // We should probably respect RBAC (only admin/manager/floor manager).
     // Assuming route protection handles RBAC.
 
-    const ticketsRes = await pool.query('SELECT ticket_id, serial_number FROM tickets WHERE current_stage_id = $1', [current_stage_id]);
+    const currentStageRes = await pool.query('SELECT stage_name FROM stages WHERE stage_id = $1', [current_stage_id]);
+    const fromStageName = currentStageRes.rows[0]?.stage_name || null;
+
+    const ticketsRes = await pool.query(
+      `SELECT t.*, s.stage_name
+         FROM tickets t
+         LEFT JOIN stages s ON s.stage_id = t.current_stage_id
+        WHERE t.current_stage_id = $1`,
+      [current_stage_id]
+    );
     const tickets = ticketsRes.rows;
 
     if (tickets.length === 0) {
@@ -1411,6 +1810,22 @@ exports.bulkMoveTickets = async (req, res) => {
 
     await Promise.all(promises);
 
+    await Promise.all(
+      tickets.map(async (beforeTicket) => {
+        const afterRes = await pool.query('SELECT * FROM tickets WHERE ticket_id = $1', [beforeTicket.ticket_id]);
+        return logProductionHistory(pool, {
+          ticketBefore: beforeTicket,
+          ticketAfter: afterRes.rows[0] || beforeTicket,
+          beforeStageName: fromStageName,
+          afterStageName: targetStage.stage_name,
+          source: 'bulkMoveTickets',
+          remarks: `Bulk moved to ${targetStage.stage_name}`,
+          actor: req.user,
+          assignmentType: 'bulk_move',
+        });
+      })
+    );
+
     res.json({
       success: true,
       message: `Successfully moved ${movedCount} tickets to ${targetStage.stage_name}`,
@@ -1420,5 +1835,443 @@ exports.bulkMoveTickets = async (req, res) => {
   } catch (error) {
     console.error('Bulk move error:', error);
     res.status(500).json({ success: false, message: 'Server error performing bulk move' });
+  }
+};
+
+/** GET /api/tickets/floor-manager-queue */
+exports.getFloorManagerQueue = async (req, res) => {
+  try {
+    const { search } = req.query;
+    const params = [];
+    let paramCount = 1;
+
+    let query = `
+      SELECT t.*, s.stage_name,
+              COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id', t.ttspl_id) AS ttspl_id,
+              vsn.extra->>'brand' AS brand,
+              vsn.extra->>'processor' AS processor,
+              vsn.extra->>'ram' AS ram,
+              vsn.extra->>'storage' AS storage,
+              u.name AS assigned_user_name
+       FROM tickets t
+       JOIN stages s ON s.stage_id = t.current_stage_id
+       LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = t.vendor_serial_id
+       LEFT JOIN users u ON u.user_id = t.assigned_user_id
+       WHERE s.stage_name = 'Floor Manager'
+         AND t.status NOT IN ('completed', 'qc_failed_return_vendor', 'cancelled')`;
+
+    const ticketScope = await resolveTicketListScope(req);
+    const assignmentFilter = buildTicketListAssignmentClause(ticketScope, paramCount, params);
+    query += assignmentFilter.clause;
+    paramCount = assignmentFilter.paramCount;
+
+    if (search) {
+      query += ` AND (
+        t.serial_number ILIKE $${paramCount}
+        OR t.model ILIKE $${paramCount}
+        OR COALESCE(t.ttspl_id, '') ILIKE $${paramCount}
+        OR COALESCE(t.machine_number, '') ILIKE $${paramCount}
+        OR COALESCE(vsn.inventory_asset_code, '') ILIKE $${paramCount}
+        OR COALESCE(vsn.extra->>'ttspl_id', '') ILIKE $${paramCount}
+      )`;
+      params.push(`%${search}%`);
+      paramCount++;
+    }
+
+    query += `
+       ORDER BY
+         CASE t.priority WHEN 'sales_order' THEN 0 WHEN 'high' THEN 1 ELSE 2 END,
+         t.created_at ASC`;
+
+    const page = Math.max(1, parseInt(req.query.page, 10) || 0);
+    const limitRaw = parseInt(req.query.limit, 10) || 0;
+    const limit = limitRaw > 0 ? Math.min(100, Math.max(1, limitRaw)) : 0;
+    const paginate = page > 0 && limit > 0;
+
+    let total;
+    let totalPages = 1;
+
+    if (paginate) {
+      const whereStart = query.indexOf('FROM tickets t');
+      const orderStart = query.indexOf(' ORDER BY');
+      const fromWhere = query.slice(whereStart, orderStart);
+      const countResult = await pool.query(`SELECT COUNT(*)::int AS total ${fromWhere}`, params);
+      total = countResult.rows[0]?.total || 0;
+      totalPages = Math.max(1, Math.ceil(total / limit));
+      query += ` LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
+      params.push(limit, (page - 1) * limit);
+    }
+
+    const { rows } = await pool.query(query, params);
+
+    const payload = { success: true, tickets: rows };
+    if (paginate) {
+      payload.pagination = { page, limit, total, totalPages };
+    }
+    res.json(payload);
+  } catch (error) {
+    console.error('getFloorManagerQueue:', error);
+    res.status(500).json({ success: false, message: 'Failed to load floor manager queue' });
+  }
+};
+
+/** GET /api/tickets/team-members?team_name=Hardware+%26+Software */
+function rolesForTeamName(teamName) {
+  const n = String(teamName || '').trim().toLowerCase();
+  if (n === 'dispatch qc team' || n === 'dispatch qc') {
+    // Handled separately in getTeamMembers via queryDispatchQcEligibleMembers.
+    return { roles: ['dispatch_qc', 'team_member', 'team_lead'], roleOnly: false };
+  }
+  if (n === 'floor manager') {
+    return { roles: ['floor_manager'], roleOnly: true };
+  }
+  if (n === 'qc1 team' || n === 'qc2 team') {
+    return { roles: ['qc'], roleOnly: false };
+  }
+  if (/qc/i.test(n)) {
+    return { roles: ['qc'], roleOnly: false };
+  }
+  return { roles: ['technician', 'floor_manager', 'team_member', 'team_lead'], roleOnly: false };
+}
+
+async function queryTeamMembers(pool, { roles, teamId }) {
+  if (teamId) {
+    const r = await pool.query(
+      `SELECT u.user_id, u.name, u.role,
+              COUNT(t.ticket_id) FILTER (WHERE t.status = 'in_progress')::int AS active_tickets
+       FROM users u
+       LEFT JOIN tickets t ON t.assigned_user_id = u.user_id AND t.status = 'in_progress'
+       WHERE COALESCE(u.active, true) = true
+         AND u.role = ANY($1::text[])
+         AND (
+           u.team_id = $2
+           OR EXISTS (SELECT 1 FROM user_teams ut WHERE ut.user_id = u.user_id AND ut.team_id = $2)
+         )
+       GROUP BY u.user_id, u.name, u.role
+       ORDER BY active_tickets ASC, u.name ASC`,
+      [roles, teamId]
+    );
+    if (r.rows.length) return r.rows;
+  }
+
+  const r = await pool.query(
+    `SELECT u.user_id, u.name, u.role,
+            COUNT(t.ticket_id) FILTER (WHERE t.status = 'in_progress')::int AS active_tickets
+     FROM users u
+     LEFT JOIN tickets t ON t.assigned_user_id = u.user_id AND t.status = 'in_progress'
+     WHERE COALESCE(u.active, true) = true AND u.role = ANY($1::text[])
+     GROUP BY u.user_id, u.name, u.role
+     ORDER BY active_tickets ASC, u.name ASC`,
+    [roles]
+  );
+  return r.rows;
+}
+
+exports.getTeamMembers = async (req, res) => {
+  const teamName = String(req.query.team_name || 'Hardware & Software').trim();
+  const n = teamName.trim().toLowerCase();
+
+  try {
+    const teamRes = await pool.query(
+      `SELECT team_id FROM teams WHERE team_name = $1 LIMIT 1`,
+      [teamName]
+    );
+    const teamId = teamRes.rows[0]?.team_id ?? null;
+
+    if (n === 'dispatch qc team' || n === 'dispatch qc') {
+      const rows = await queryDispatchQcEligibleMembers(pool, teamId);
+      return res.json({ success: true, team_name: teamName, members: rows });
+    }
+
+    const { roles, roleOnly } = rolesForTeamName(teamName);
+
+    let rows = [];
+    if (teamId && !roleOnly) {
+      rows = await queryTeamMembers(pool, { roles, teamId });
+    } else if (teamId && roleOnly) {
+      rows = await queryTeamMembers(pool, { roles, teamId });
+      if (!rows.length) {
+        rows = await queryTeamMembers(pool, { roles, teamId: null });
+      }
+    } else {
+      rows = await queryTeamMembers(pool, { roles, teamId: null });
+    }
+
+    res.json({ success: true, team_name: teamName, members: rows });
+  } catch (error) {
+    console.error('getTeamMembers:', error);
+    res.status(500).json({ success: false, message: 'Failed to load team members' });
+  }
+};
+
+/** GET /api/tickets/:id/next-assignee?to_stage_name=QC2 */
+exports.getNextAssignee = async (req, res) => {
+  const { to_stage_name } = req.query;
+  if (!to_stage_name) {
+    return res.status(400).json({ success: false, message: 'to_stage_name required' });
+  }
+
+  const ROUND_ROBIN_TARGETS = new Set([
+    'Final Testing→QC1',
+    'QC1→QC2',
+    'QC2→QC1',
+  ]);
+
+  try {
+    const ticket = await pool.query(
+      `SELECT t.*, s.stage_name AS current_stage_name
+       FROM tickets t
+       JOIN stages s ON s.stage_id = t.current_stage_id
+       WHERE t.ticket_id = $1`,
+      [req.params.id]
+    );
+    if (!ticket.rows.length) {
+      return res.status(404).json({ success: false, message: 'Not found' });
+    }
+
+    const t = ticket.rows[0];
+    const key = `${t.current_stage_name}→${to_stage_name}`;
+
+    if (!ROUND_ROBIN_TARGETS.has(key)) {
+      if (!t.assigned_user_id) {
+        return res.json({ success: true, assignee: null, keep_same: true });
+      }
+      const u = await pool.query(
+        'SELECT user_id, name, role FROM users WHERE user_id = $1',
+        [t.assigned_user_id]
+      );
+      return res.json({ success: true, assignee: u.rows[0] || null, keep_same: true });
+    }
+
+    const stageRes = await pool.query('SELECT * FROM stages WHERE stage_name = $1', [to_stage_name]);
+    if (!stageRes.rows.length) {
+      return res.json({ success: true, assignee: null });
+    }
+    const teamId = stageRes.rows[0].team_id;
+    if (!teamId) {
+      return res.json({ success: true, assignee: null });
+    }
+
+    const members = await pool.query(
+      `SELECT DISTINCT u.user_id, u.name, u.role,
+         COUNT(tkt.ticket_id) FILTER (WHERE tkt.status = 'in_progress')::int AS active_tickets
+       FROM users u
+       LEFT JOIN user_teams ut ON ut.user_id = u.user_id AND ut.team_id = $1
+       LEFT JOIN tickets tkt ON tkt.assigned_user_id = u.user_id AND tkt.status = 'in_progress'
+       WHERE (u.team_id = $1 OR ut.team_id = $1) AND COALESCE(u.active, true) = true
+       GROUP BY u.user_id, u.name, u.role
+       ORDER BY active_tickets ASC, u.user_id ASC`,
+      [teamId]
+    );
+
+    const rrState = await pool.query(
+      'SELECT last_assigned_user_id FROM qc_round_robin_state WHERE team_id = $1',
+      [teamId]
+    );
+    const ids = members.rows.map((r) => r.user_id);
+    if (!ids.length) {
+      return res.json({ success: true, assignee: null, team_has_no_members: true });
+    }
+
+    let nextIdx = 0;
+    if (rrState.rows.length && rrState.rows[0].last_assigned_user_id) {
+      const lastIdx = ids.indexOf(rrState.rows[0].last_assigned_user_id);
+      nextIdx = (lastIdx + 1) % ids.length;
+    }
+    const next = members.rows.find((r) => r.user_id === ids[nextIdx]);
+    return res.json({
+      success: true,
+      assignee: next || null,
+      team_members: members.rows,
+    });
+  } catch (error) {
+    console.error('getNextAssignee:', error);
+    res.status(500).json({ success: false, message: 'Failed to preview assignee' });
+  }
+};
+
+const CONFIG_FIELD_MAP = {
+  RAM: 'ram',
+  Storage: 'storage',
+  Processor: 'processor',
+  GPU: 'gpu',
+  Screen: 'screen_size',
+  OS: 'os',
+  Other: 'other'
+};
+
+/** POST /api/tickets/:id/parts-with-config */
+exports.addPartToTicketWithConfig = async (req, res) => {
+  const { id } = req.params;
+  const {
+    part_id,
+    quantity,
+    notes,
+    is_upgrade: isUpgradeRaw,
+    config_field: configFieldRaw,
+    old_value: oldValueRaw,
+    new_value: newValueRaw
+  } = req.body;
+
+  const qty = Math.max(1, Number(quantity) || 1);
+  const isUpgrade = Boolean(isUpgradeRaw);
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const ticketRes = await client.query('SELECT * FROM tickets WHERE ticket_id = $1 FOR UPDATE', [id]);
+    if (!ticketRes.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Ticket not found' });
+    }
+    const ticket = ticketRes.rows[0];
+
+    const partRes = await client.query(
+      `SELECT part_id, part_name, part_type, category, quantity, cost FROM parts WHERE part_id = $1 FOR UPDATE`,
+      [part_id]
+    );
+    if (!partRes.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Part not found' });
+    }
+    const part = partRes.rows[0];
+    if (part.quantity < qty) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: `Insufficient stock (${part.quantity} available)` });
+    }
+
+    const unitCost = parseFloat(part.cost) || 0;
+    const totalCost = unitCost * qty;
+
+    const tpRes = await client.query(
+      `INSERT INTO ticket_parts (ticket_id, part_id, quantity_used, notes, unit_cost, is_upgrade)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id`,
+      [id, part_id, qty, notes || null, unitCost, isUpgrade]
+    );
+
+    const newQtyRes = await client.query(
+      `UPDATE parts SET quantity = quantity - $1 WHERE part_id = $2 RETURNING quantity`,
+      [qty, part_id]
+    );
+    const newPartsQuantity = newQtyRes.rows[0]?.quantity ?? 0;
+
+    await client.query(
+      `INSERT INTO activities (ticket_id, user_id, action, notes) VALUES ($1, $2, 'part_added', $3)`,
+      [id, req.user.user_id, `Added ${qty} × ${part.part_name}${isUpgrade ? ' (upgrade)' : ''}`]
+    );
+
+    let configUpdated = false;
+    if (ticket.ttspl_id) {
+      await ttsplAuditService.logTtsplEvent({
+        ttsplId: ticket.ttspl_id,
+        vendorSerialId: ticket.vendor_serial_id,
+        eventType: 'parts_used',
+        description: `Part used: ${part.part_name} × ${qty} (₹${totalCost.toFixed(2)})`,
+        metadata: { part_id, part_name: part.part_name, quantity: qty, unit_cost: unitCost, is_upgrade: isUpgrade },
+        actorUserId: req.user.user_id,
+        actorName: req.user.name,
+        db: client
+      });
+
+      if (isUpgrade && configFieldRaw && newValueRaw) {
+        const fieldName = CONFIG_FIELD_MAP[configFieldRaw] || String(configFieldRaw).toLowerCase();
+        const oldValue = oldValueRaw || ticket[fieldName] || '';
+        const newValue = String(newValueRaw).trim();
+
+        await ttsplAuditService.logConfigChange({
+          ttsplId: ticket.ttspl_id,
+          vendorSerialId: ticket.vendor_serial_id,
+          ticketId: ticket.ticket_id,
+          changedBy: req.user.user_id,
+          changeType: 'upgrade',
+          fieldName,
+          oldValue,
+          newValue,
+          notes: notes || `Upgrade via part: ${part.part_name}`,
+          partUsedId: part_id,
+          partCost: totalCost,
+          db: client
+        });
+
+        if (ticket.vendor_serial_id) {
+          const vs = await client.query(
+            `SELECT extra FROM vendor_serial_numbers WHERE serial_id = $1`,
+            [ticket.vendor_serial_id]
+          );
+          let extra = vs.rows[0]?.extra || {};
+          if (typeof extra === 'string') {
+            try { extra = JSON.parse(extra); } catch { extra = {}; }
+          }
+          if (fieldName !== 'other') extra[fieldName] = newValue;
+          await client.query(
+            `UPDATE vendor_serial_numbers SET extra = $1::jsonb, updated_at = NOW() WHERE serial_id = $2`,
+            [JSON.stringify(extra), ticket.vendor_serial_id]
+          );
+          if (['processor', 'ram', 'storage'].includes(fieldName)) {
+            await client.query(
+              `UPDATE tickets SET ${fieldName} = $1 WHERE ticket_id = $2`,
+              [newValue, id]
+            );
+          }
+        }
+        configUpdated = true;
+      }
+    }
+
+    await client.query('COMMIT');
+    res.json({
+      success: true,
+      ticket_part_id: tpRes.rows[0].id,
+      new_parts_quantity: newPartsQuantity,
+      config_updated: configUpdated,
+      message: `Part attached. ${part.part_name} — ${newPartsQuantity} remaining in stock`
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('addPartToTicketWithConfig:', error);
+    res.status(500).json({ success: false, message: error.message || 'Failed to attach part' });
+  } finally {
+    client.release();
+  }
+};
+
+/** POST /api/tickets/:id/log-note */
+exports.logNote = async (req, res) => {
+  const { id } = req.params;
+  const { note_text, time_spent_minutes } = req.body;
+  if (!note_text?.trim() || note_text.trim().length < 3) {
+    return res.status(400).json({ success: false, message: 'Note text required (min 3 characters)' });
+  }
+  try {
+    const ticketRes = await pool.query('SELECT * FROM tickets WHERE ticket_id = $1', [id]);
+    if (!ticketRes.rows.length) {
+      return res.status(404).json({ success: false, message: 'Not found' });
+    }
+    const t = ticketRes.rows[0];
+    const text = note_text.trim();
+
+    await pool.query(
+      `INSERT INTO activities (ticket_id, user_id, action, notes) VALUES ($1, $2, 'note_added', $3)`,
+      [id, req.user.user_id, text]
+    );
+
+    if (t.ttspl_id) {
+      await ttsplAuditService.logTtsplEvent({
+        ttsplId: t.ttspl_id,
+        vendorSerialId: t.vendor_serial_id,
+        eventType: 'note_added',
+        description: text,
+        metadata: { time_spent_minutes: time_spent_minutes || null },
+        actorUserId: req.user.user_id,
+        actorName: req.user.name
+      });
+    }
+
+    res.json({ success: true, message: 'Work note logged' });
+  } catch (error) {
+    console.error('logNote:', error);
+    res.status(500).json({ success: false, message: 'Failed to log note' });
   }
 };

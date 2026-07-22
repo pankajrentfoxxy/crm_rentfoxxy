@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Eye, Plus } from 'lucide-react';
 import {
   fetchSpareOrders,
@@ -10,6 +10,7 @@ import {
 } from '../vendorManagementApi';
 import { getBackendOrigin } from '../../../utils/api';
 import SparePartsPoFormModal from '../components/SparePartsPoFormModal';
+import SparePartsCatalogPanel from '../components/SparePartsCatalogPanel';
 
 const LIST_PAGE_SIZE = 25;
 
@@ -102,6 +103,7 @@ function formatBrandLabel(line) {
 }
 
 export default function SparePartsPoPage() {
+  const location = useLocation();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -111,6 +113,7 @@ export default function SparePartsPoPage() {
   const [search, setSearch] = useState('');
 
   const [modalOpen, setModalOpen] = useState(false);
+  const [formPrefill, setFormPrefill] = useState(null);
   const [preview, setPreview] = useState({ open: false, loading: false, detail: null });
   const [billView, setBillView] = useState({ open: false, bill_name: '', files: [], spoId: null });
   const [billUpload, setBillUpload] = useState({ open: false, spo: null, bill_name: '' });
@@ -134,6 +137,16 @@ export default function SparePartsPoPage() {
   useEffect(() => {
     loadList();
   }, [loadList]);
+
+  // Open the form pre-filled when navigated here from the Parts Approval page.
+  useEffect(() => {
+    if (location.state?.openForm) {
+      setFormPrefill(location.state.prefill || null);
+      setModalOpen(true);
+      window.history.replaceState({}, document.title);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function applySearch(e) {
     e.preventDefault();
@@ -233,13 +246,18 @@ export default function SparePartsPoPage() {
         </div>
         <button
           type="button"
-          onClick={() => setModalOpen(true)}
+          onClick={() => {
+            setFormPrefill(null);
+            setModalOpen(true);
+          }}
           className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-orange-600 text-white text-sm font-semibold shadow-sm hover:bg-orange-700 transition-colors"
         >
           <Plus className="w-5 h-5" />
           Add spare parts PO
         </button>
       </header>
+
+      <SparePartsCatalogPanel />
 
       <form onSubmit={applySearch} className="flex flex-wrap items-center gap-2">
         <input
@@ -273,7 +291,89 @@ export default function SparePartsPoPage() {
       {loading ? (
         <div className="p-8 rounded-lg border text-center text-slate-500 animate-pulse">Loading…</div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border bg-white shadow-sm">
+        <>
+        {/* Mobile cards */}
+        <div className="grid gap-3 md:hidden">
+          {rows.length === 0 ? (
+            <div className="p-8 rounded-lg border bg-white text-center text-slate-500">
+              No spare parts purchase orders match your filters.
+            </div>
+          ) : rows.map((r) => {
+            const editable = statusRowEditable(r.status);
+            const st = String(r.status || '').toLowerCase();
+            const vendorName =
+              r.vendor_display_name || r.vendor_business_name || r.vendor_first_name || `Vendor #${r.vendor_id}`;
+            const showReceiveCue = st !== 'void' && st !== 'pending';
+            return (
+              <div key={r.spo_id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-3">
+                <div className="flex items-start justify-between gap-2">
+                  <button
+                    type="button"
+                    className="text-left text-orange-600 font-bold hover:underline"
+                    onClick={() => openPreview(r.spo_id)}
+                  >
+                    {r.purchase_order_number}
+                  </button>
+                  {!editable && <span className="text-xs font-semibold capitalize text-slate-700">{r.status || '—'}</span>}
+                </div>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+                  <span>{r.purchase_order_date}</span>
+                  <span className="text-slate-800 font-medium">{vendorName}</span>
+                </div>
+                {r.remarks ? <div className="text-xs text-slate-600"><RemarkCell text={r.remarks} /></div> : null}
+
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  {r.bill_name ? (
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-slate-200 bg-slate-50 font-semibold text-slate-800"
+                      onClick={() => setBillView({ open: true, bill_name: r.bill_name, files: parseBillFiles(r), spoId: r.spo_id })}
+                    >
+                      View bill
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-orange-500 text-orange-600 font-semibold"
+                      onClick={() => openBillUpload(r)}
+                    >
+                      Upload bill
+                    </button>
+                  )}
+                  {showReceiveCue ? (
+                    <Link
+                      to={`/vendor-management/spare-parts-po/${r.spo_id}/receive`}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-teal-600 text-teal-700 font-semibold hover:bg-teal-50"
+                    >
+                      <Eye className="w-4 h-4" /> Receive
+                    </Link>
+                  ) : null}
+                </div>
+
+                {editable ? (
+                  <div className="pt-2 border-t border-slate-100">
+                    <select
+                      className="w-full border border-slate-200 rounded-md px-2 py-2 text-sm bg-white"
+                      value={st === 'draft' ? 'draft' : st === 'pending' ? 'pending' : ''}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        if (!next || next === st || next === 'draft') return;
+                        onStatusChange(r, next);
+                      }}
+                    >
+                      <option value="">Please take action</option>
+                      {st === 'draft' ? <option value="draft">Draft</option> : null}
+                      <option value="pending">Pending</option>
+                      <option value="approved">Approve</option>
+                    </select>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="hidden md:block overflow-x-auto rounded-lg border bg-white shadow-sm">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-left text-xs font-semibold text-slate-600 uppercase tracking-wide">
               <tr>
@@ -429,6 +529,7 @@ export default function SparePartsPoPage() {
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       {!loading && rows.length > 0 && (
@@ -459,7 +560,18 @@ export default function SparePartsPoPage() {
         </div>
       )}
 
-      <SparePartsPoFormModal open={modalOpen} onClose={() => setModalOpen(false)} onSaved={loadList} />
+      <SparePartsPoFormModal
+        open={modalOpen}
+        prefill={formPrefill}
+        onClose={() => {
+          setModalOpen(false);
+          setFormPrefill(null);
+        }}
+        onSaved={() => {
+          setFormPrefill(null);
+          loadList();
+        }}
+      />
 
       {preview.open && (
         <div
@@ -500,6 +612,7 @@ export default function SparePartsPoPage() {
                           <th className="p-2">#</th>
                           <th className="p-2">Brand</th>
                           <th className="p-2">Part</th>
+                          <th className="p-2">Type</th>
                           <th className="p-2">Warranty (mo)</th>
                           <th className="p-2 text-right">Qty</th>
                           <th className="p-2 text-right">Rate</th>
@@ -512,6 +625,7 @@ export default function SparePartsPoPage() {
                             <td className="p-2">{idx + 1}</td>
                             <td className="p-2">{formatBrandLabel(ln)}</td>
                             <td className="p-2">{formatPartLabel(ln)}</td>
+                            <td className="p-2">{ln.part_type || '—'}</td>
                             <td className="p-2">
                               {ln.warranty_months ?? ln.warranty ?? ln.warranty_in_month ?? '—'}
                             </td>

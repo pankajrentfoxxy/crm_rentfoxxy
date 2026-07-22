@@ -63,7 +63,7 @@ export async function fetchDeliveryChallanMeta(salesOrderNumber) {
 }
 
 export async function fetchDeliveryChallan(dcNumber) {
-  const { data } = await api.get(`/sales-management/delivery-challans/${dcNumber}`);
+  const { data } = await api.get(`/sales-management/delivery-challans/${encodeURIComponent(dcNumber)}`);
   return data;
 }
 
@@ -78,17 +78,17 @@ export async function fetchAvailableSerials(params = {}) {
 }
 
 export async function sendDeliveryOtp(dcNumber, body) {
-  const { data } = await api.post(`/sales-management/delivery-challans/${dcNumber}/send-otp`, body);
+  const { data } = await api.post(`/sales-management/delivery-challans/${encodeURIComponent(dcNumber)}/send-otp`, body);
   return data;
 }
 
 export async function verifyDeliveryOtp(dcNumber, body) {
-  const { data } = await api.post(`/sales-management/delivery-challans/${dcNumber}/verify-otp`, body);
+  const { data } = await api.post(`/sales-management/delivery-challans/${encodeURIComponent(dcNumber)}/verify-otp`, body);
   return data;
 }
 
 export async function submitDeliveryRegister(dcNumber, body) {
-  const { data } = await api.post(`/sales-management/delivery-challans/${dcNumber}/delivery-register`, body);
+  const { data } = await api.post(`/sales-management/delivery-challans/${encodeURIComponent(dcNumber)}/delivery-register`, body);
   return data;
 }
 

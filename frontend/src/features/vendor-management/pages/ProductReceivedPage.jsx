@@ -16,12 +16,21 @@ import {
   Package,
   Phone,
   Plus,
+  ExternalLink,
+  Copy,
   UserCircle,
+  KeyRound,
   X
 } from 'lucide-react';
 import { invalidateInventoryManagement } from '../../inventory-management/inventoryCountsEvents';
 import { invalidateQcCounts } from '../../qc-management/qcCountsEvents';
-import { fetchProductReceivedContext, receivePoLineBulk } from '../vendorManagementApi';
+import {
+  createGrnCaptureToken,
+  fetchGrnCaptureTokenStatus,
+  fetchProductReceivedContext,
+  receivePoLineUnit,
+} from '../vendorManagementApi';
+import AccessNumbersAdmin from '../components/AccessNumbersAdmin';
 
 function formatWorkflowStatus(status) {
   const s = String(status || '').toLowerCase();
@@ -82,11 +91,28 @@ function ItemDescriptionCard({ line }) {
     .filter((x) => x != null && String(x).trim() !== '')
     .map((x) => String(x).trim());
 
+  const locked = !!line.config_locked || Number(line.receivedQty) > 0;
+
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50/90 shadow-sm px-3 py-2.5 text-left max-w-md">
-      <h3 className="text-sm font-semibold text-slate-900 leading-snug">{title}</h3>
+      <div className="flex items-start justify-between gap-2">
+        <h3 className="text-sm font-semibold text-slate-900 leading-snug">{title}</h3>
+        {locked ? (
+          <span
+            className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-emerald-800 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5"
+            title="PO/GRN ordered & received config is locked. Floor/inventory edits go to the Production Asset only."
+          >
+            Locked
+          </span>
+        ) : null}
+      </div>
       {specs.length > 0 ? (
         <p className="text-xs text-slate-600 mt-1 mb-0 leading-relaxed">{specs.join(' | ')}</p>
+      ) : null}
+      {locked ? (
+        <p className="text-[10px] text-slate-500 mt-1.5 mb-0">
+          Original vendor config (read-only). Inventory edits do not change this.
+        </p>
       ) : null}
     </div>
   );
@@ -160,9 +186,19 @@ export default function ProductReceivedPage() {
   const [receiveStep, setReceiveStep] = useState('meta');
   const [rentalStartDate, setRentalStartDate] = useState('');
   const [bulkQtyStr, setBulkQtyStr] = useState('');
-  const [bulkSerials, setBulkSerials] = useState([]);
+  const [bulkQuantity, setBulkQuantity] = useState(0);
+  const [currentUnitIndex, setCurrentUnitIndex] = useState(0);
+  const [currentSerial, setCurrentSerial] = useState('');
+  const [completedUnits, setCompletedUnits] = useState([]);
+  const [activeGrnId, setActiveGrnId] = useState(null);
+  const [captureToken, setCaptureToken] = useState(null);
+  const [captureUrl, setCaptureUrl] = useState('');
+  const [accessNumber, setAccessNumber] = useState(null);
+  const [captureLoading, setCaptureLoading] = useState(false);
+  const [accessAdminOpen, setAccessAdminOpen] = useState(false);
   const [billStatus, setBillStatus] = useState('pending');
   const [billName, setBillName] = useState('');
+  const [physicalDamageRemark, setPhysicalDamageRemark] = useState('');
   const [modalBusy, setModalBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -195,9 +231,16 @@ export default function ProductReceivedPage() {
     setReceiveStep('meta');
     setRentalStartDate('');
     setBulkQtyStr('');
-    setBulkSerials([]);
+    setBulkQuantity(0);
+    setCurrentUnitIndex(0);
+    setCurrentSerial('');
+    setCompletedUnits([]);
+    setActiveGrnId(null);
+    setCaptureToken(null);
+    setCaptureUrl('');
     setBillStatus('pending');
     setBillName('');
+    setPhysicalDamageRemark('');
   }
 
   useEffect(() => {
@@ -210,6 +253,9 @@ export default function ProductReceivedPage() {
   }, [receiveLineIndex, modalBusy]);
 
   const po = ctx?.purchase_order;
+  // Direct purchase has no rental: the "start date" is just the goods receive date.
+  const isDirectPo = String(po?.purchase_order_type || '').toLowerCase() === 'direct_purchase';
+  const receiveDateLabel = isDirectPo ? 'Goods receive date' : 'Rental start date';
   const lines = ctx?.lines || [];
   const stats = ctx?.stats || statsFromLines(lines);
   const poStatusLower = String(po?.status || '').toLowerCase();
@@ -228,14 +274,21 @@ export default function ProductReceivedPage() {
     setReceiveStep('meta');
     setRentalStartDate(new Date().toISOString().slice(0, 10));
     setBulkQtyStr('');
-    setBulkSerials([]);
+    setBulkQuantity(0);
+    setCurrentUnitIndex(0);
+    setCurrentSerial('');
+    setCompletedUnits([]);
+    setActiveGrnId(null);
+    setCaptureToken(null);
+    setCaptureUrl('');
+    setPhysicalDamageRemark('');
   }
 
   function gotoSerialInputs() {
     if (receiveLineIndex === null) return;
     const rem = remainingOnLine(receiveLineIndex);
     if (!rentalStartDate || !rentalStartDate.trim()) {
-      toast.error('Rental start date is required');
+      toast.error(`${receiveDateLabel} is required`);
       return;
     }
     const q = parseInt(String(bulkQtyStr).trim(), 10);
@@ -255,30 +308,78 @@ export default function ProductReceivedPage() {
       toast.error('Bill number is required when bill is marked as received');
       return;
     }
-    setBulkSerials(Array.from({ length: q }, () => ''));
+    setBulkQuantity(q);
+    setCurrentUnitIndex(0);
+    setCurrentSerial('');
+    setCompletedUnits([]);
+    setActiveGrnId(null);
+    setCaptureToken(null);
+    setCaptureUrl('');
+    setAccessNumber(null);
+    setPhysicalDamageRemark('');
     setReceiveStep('serials');
   }
 
-  function updateBulkSerialAt(i, value) {
-    setBulkSerials((prev) => {
-      const next = [...prev];
-      next[i] = value;
-      return next;
-    });
-  }
+  const refreshCaptureLink = useCallback(async () => {
+    if (receiveLineIndex === null || receiveStep !== 'serials' || bulkQuantity < 1) return;
+    setCaptureLoading(true);
+    try {
+      const { data } = await createGrnCaptureToken(poId, {
+        line_index: receiveLineIndex,
+        unit_index: currentUnitIndex,
+        total_units: bulkQuantity,
+      });
+      if (data.success) {
+        setCaptureToken(data.data.token);
+        setCaptureUrl(data.data.capture_url);
+        setAccessNumber(data.data.access_number ?? null);
+      }
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Could not create capture link');
+    } finally {
+      setCaptureLoading(false);
+    }
+  }, [poId, receiveLineIndex, receiveStep, bulkQuantity, currentUnitIndex]);
 
-  async function submitBulkReceive() {
-    if (receiveLineIndex === null) return;
-    const q = bulkSerials.length;
-    const trimmed = bulkSerials.map((s) => String(s ?? '').trim().toUpperCase());
-    const emptyIdx = trimmed.findIndex((s) => !s);
-    if (emptyIdx >= 0) {
-      toast.error(`Enter serial number for row ${emptyIdx + 1}`);
+  useEffect(() => {
+    if (receiveStep !== 'serials' || bulkQuantity < 1) return undefined;
+    refreshCaptureLink();
+    return undefined;
+  }, [receiveStep, bulkQuantity, currentUnitIndex, refreshCaptureLink]);
+
+  useEffect(() => {
+    if (!captureToken || receiveStep !== 'serials' || modalBusy) return undefined;
+    const poll = setInterval(async () => {
+      try {
+        const { data } = await fetchGrnCaptureTokenStatus(captureToken);
+        if (data.success && data.data?.serial_number) {
+          setCurrentSerial(data.data.serial_number);
+        }
+      } catch {
+        /* ignore poll errors */
+      }
+    }, 2000);
+    return () => clearInterval(poll);
+  }, [captureToken, receiveStep, modalBusy]);
+
+  function openCaptureLink() {
+    if (!captureUrl) {
+      toast.error('Capture link not ready yet');
       return;
     }
-    const uniq = new Set(trimmed);
-    if (uniq.size !== trimmed.length) {
-      toast.error('Serial numbers must be unique within this batch');
+    window.open(captureUrl, '_blank', 'noopener,noreferrer');
+  }
+
+  function copyCaptureLink() {
+    if (!captureUrl) return;
+    navigator.clipboard.writeText(captureUrl).then(() => toast.success('Capture link copied'));
+  }
+
+  async function receiveCurrentUnit() {
+    if (receiveLineIndex === null) return;
+    const serial = String(currentSerial || '').trim().toUpperCase();
+    if (!serial) {
+      toast.error('Enter or capture the serial number first');
       return;
     }
 
@@ -287,34 +388,50 @@ export default function ProductReceivedPage() {
       const body = {
         line_index: receiveLineIndex,
         rental_start_date: rentalStartDate.trim(),
-        quantity: q,
-        serial_numbers: trimmed,
+        serial_number: serial,
+        apply_bill_settings: currentUnitIndex === 0,
         bill_status: billStatus,
-        bill_name: billStatus === 'received' ? billName.trim() : undefined
+        bill_name: billStatus === 'received' ? billName.trim() : undefined,
+        capture_token: captureToken || undefined,
+        physical_damage_remark: physicalDamageRemark.trim() || undefined,
       };
-      const { data } = await receivePoLineBulk(poId, body);
+      if (activeGrnId) body.grn_id = activeGrnId;
+
+      const { data } = await receivePoLineUnit(poId, body);
       if (data.success) {
-        const created = data.data?.created || [];
-        const tickets = (data.data?.tickets || []).filter((t) => t?.ok);
-        const example = created[0]?.inventory_asset_code;
-        const ticketNote =
-          tickets.length > 0
-            ? ` ${tickets.length} repair ticket(s) created for Floor Manager.`
-            : '';
-        toast.success(
-          (data.message ||
-            (example ? `Received ${created.length} unit(s). Codes include ${example}…` : 'Units received')) + ticketNote
-        );
-        resetReceiveWizardUi();
-        invalidateQcCounts();
-        invalidateInventoryManagement();
-        await load();
+        const created = data.data?.created;
+        const ttspl = created?.inventory_asset_code;
+        setCompletedUnits((prev) => [
+          ...prev,
+          { serial_number: serial, inventory_asset_code: ttspl, serial_id: created?.serial_id },
+        ]);
+        if (data.data?.grn_id) setActiveGrnId(data.data.grn_id);
+        toast.success(ttspl ? `Received — ${ttspl}` : 'Unit received');
+
+        const nextIndex = currentUnitIndex + 1;
+        if (nextIndex >= bulkQuantity) {
+          const ticketOk = data.data?.ticket?.ok;
+          toast.success(
+            `All ${bulkQuantity} unit(s) received.${ticketOk ? ' Floor tickets created.' : ''}`,
+            { duration: 5000 }
+          );
+          resetReceiveWizardUi();
+          invalidateQcCounts();
+          invalidateInventoryManagement();
+          await load();
+        } else {
+          setCurrentUnitIndex(nextIndex);
+          setCurrentSerial('');
+          setCaptureToken(null);
+          setCaptureUrl('');
+          setPhysicalDamageRemark('');
+        }
       }
     } catch (e) {
       const msg =
         e.response?.data?.message ||
         (e.response?.data?.errors?.[0]?.msg ? String(e.response.data.errors[0].msg) : null);
-      toast.error(msg || 'Failed to save serials');
+      toast.error(msg || 'Failed to receive unit');
     } finally {
       setModalBusy(false);
     }
@@ -367,13 +484,23 @@ export default function ProductReceivedPage() {
               Purchase Order list Items
             </h1>
           </div>
-          <Link
-            to={viewGrnHref}
-            className="inline-flex items-center gap-2 rounded-md bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold px-4 py-2 shadow-sm transition-colors"
-          >
-            <Eye className="w-4 h-4" />
-            View GRN
-          </Link>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setAccessAdminOpen(true)}
+              className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold px-4 py-2 shadow-sm transition-colors"
+            >
+              <KeyRound className="w-4 h-4 text-teal-600" />
+              Access Numbers
+            </button>
+            <Link
+              to={viewGrnHref}
+              className="inline-flex items-center gap-2 rounded-md bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold px-4 py-2 shadow-sm transition-colors"
+            >
+              <Eye className="w-4 h-4" />
+              View GRN
+            </Link>
+          </div>
         </div>
 
         {po ? (
@@ -479,7 +606,55 @@ export default function ProductReceivedPage() {
             </div>
             {/* Items table */}
             <div className="rounded-lg border border-slate-200 overflow-hidden bg-white">
-              <div className="overflow-x-auto">
+              {/* Mobile cards */}
+              <div className="md:hidden divide-y divide-slate-100">
+                {n === 0 ? (
+                  <p className="px-4 py-10 text-center text-slate-500">No line items on this purchase order.</p>
+                ) : lines.map((line, idx) => {
+                  const ordered = Number(line.quantity) || 0;
+                  const got = Number(line.receivedQty) || 0;
+                  const left = Math.max(0, ordered - got);
+                  const complete = left <= 0;
+                  return (
+                    <div key={idx} className="p-4 space-y-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="text-xs font-semibold text-slate-400 tabular-nums mt-1">#{idx + 1}</span>
+                        <div className="flex-1 min-w-0">
+                          <ItemDescriptionCard line={line} />
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <PeriodBadge line={line} purchaseOrder={po} />
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 text-center">
+                        <div className="rounded-lg bg-slate-50 border border-slate-100 py-2">
+                          <p className="text-[10px] uppercase tracking-wide text-slate-500">Ordered</p>
+                          <p className="text-base font-bold tabular-nums text-slate-800">{ordered}</p>
+                        </div>
+                        <div className="rounded-lg bg-emerald-50 border border-emerald-100 py-2">
+                          <p className="text-[10px] uppercase tracking-wide text-emerald-600">Received</p>
+                          <p className="text-base font-bold tabular-nums text-emerald-700">{got}</p>
+                        </div>
+                        <div className="rounded-lg bg-rose-50 border border-rose-100 py-2">
+                          <p className="text-[10px] uppercase tracking-wide text-rose-600">Remaining</p>
+                          <p className="text-base font-bold tabular-nums text-rose-700">{left}</p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={complete || receiveMutationsBlocked}
+                        onClick={() => openReceiveWizard(idx)}
+                        className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed bg-teal-700 hover:bg-teal-800 text-white"
+                      >
+                        {receiveMutationsBlocked ? null : complete ? null : <Plus className="w-4 h-4" />}
+                        {receiveMutationsBlocked ? 'Completed' : complete ? 'Received' : 'Receive'}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full text-sm min-w-[860px]">
                   <thead>
                     <tr className="bg-slate-600 text-white text-left text-xs capitalize tracking-wide">
@@ -595,7 +770,7 @@ export default function ProductReceivedPage() {
         ) : null}
       </div>
 
-      {/* Receive wizard — rental date + quantity, then serials per unit (bulk API) */}
+      {/* Receive wizard — rental date + quantity, then one serial at a time with capture link */}
       {receiveLineIndex !== null ? (
         <div
           className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/50 overflow-y-auto"
@@ -608,16 +783,16 @@ export default function ProductReceivedPage() {
           }}
         >
           <div
-            className="relative w-full max-w-lg rounded-xl bg-white shadow-xl border border-slate-200 overflow-hidden my-8"
+            className="relative w-full max-w-lg rounded-xl bg-white shadow-xl border border-slate-200 overflow-hidden my-8 max-h-[90vh] flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100 bg-slate-50">
+            <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100 bg-slate-50 shrink-0">
               <div>
                 <p className="text-[11px] font-semibold text-teal-700 uppercase tracking-wide">
                   Step {receiveStep === 'meta' ? '1' : '2'} of 2
                 </p>
                 <h2 id="receive-modal-title" className="text-base font-semibold text-slate-900">
-                  {receiveStep === 'meta' ? 'Receive — details' : 'Enter serial numbers'}
+                  {receiveStep === 'meta' ? 'Receive — details' : `Serial capture — laptop ${currentUnitIndex + 1} of ${bulkQuantity}`}
                 </h2>
               </div>
               <button
@@ -630,16 +805,19 @@ export default function ProductReceivedPage() {
               </button>
             </div>
 
-            <div className="p-5 space-y-4 text-sm">
+            <div className="p-5 space-y-4 text-sm overflow-y-auto">
               <div className="rounded-lg border border-slate-100 bg-slate-50/80 p-3">
                 <p className="text-xs text-slate-500 mb-2">Product {receiveLineIndex + 1}</p>
                 {lines[receiveLineIndex] ? <ItemDescriptionCard line={lines[receiveLineIndex]} /> : null}
                 <p className="text-xs text-slate-600 mt-2 tabular-nums">
                   Remaining to receive: <strong>{remainingOnLine(receiveLineIndex)}</strong>
-                  {receiveStep === 'serials' && bulkSerials.length ? (
+                  {receiveStep === 'serials' && bulkQuantity > 0 ? (
                     <span className="text-slate-500">
                       {' '}
-                      · Receiving <strong>{bulkSerials.length}</strong> unit(s)
+                      · Receiving <strong>{bulkQuantity}</strong> unit(s) one by one
+                      {completedUnits.length > 0 ? (
+                        <span> · <strong>{completedUnits.length}</strong> done</span>
+                      ) : null}
                     </span>
                   ) : null}
                 </p>
@@ -649,7 +827,7 @@ export default function ProductReceivedPage() {
                 <>
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1.5" htmlFor="receive-rental-start">
-                      Rental start date <span className="text-rose-600">*</span>
+                      {receiveDateLabel} <span className="text-rose-600">*</span>
                     </label>
                     <input
                       id="receive-rental-start"
@@ -739,8 +917,8 @@ export default function ProductReceivedPage() {
                       onChange={(e) => setBulkQtyStr(e.target.value)}
                     />
                     <p className="text-[11px] text-slate-500 mt-1.5">
-                      Each unit gets a permanent <strong className="font-mono text-slate-700">TTSPL####</strong> code on
-                      save. Unique serial numbers are required for every row on the next step.
+                      Each laptop is received one at a time. A <strong className="font-mono text-slate-700">TTSPL####</strong>{' '}
+                      code and floor ticket are created per unit after its serial is captured.
                     </p>
                   </div>
                 </>
@@ -748,36 +926,105 @@ export default function ProductReceivedPage() {
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-xs text-slate-600 m-0">
-                      Rental starts <strong>{rentalStartDate || '—'}</strong>
+                      {isDirectPo ? 'Received on' : 'Rental starts'} <strong>{rentalStartDate || '—'}</strong>
+                    </p>
+                    <p className="text-xs font-semibold text-teal-800 m-0">
+                      Laptop {currentUnitIndex + 1} of {bulkQuantity}
                     </p>
                   </div>
-                  <div
-                    className="max-h-[min(26rem,calc(100vh-20rem))] overflow-y-auto pr-1 space-y-3 rounded-lg border border-slate-100 p-3 bg-slate-50/40"
-                  >
-                    {bulkSerials.map((val, si) => (
-                      <div key={si}>
-                        <label
-                          className="block text-xs font-semibold text-slate-600 mb-1"
-                          htmlFor={`receive-serial-${si}`}
-                        >
-                          Unit {si + 1} — serial number <span className="text-rose-600">*</span>
-                        </label>
-                        <input
-                          id={`receive-serial-${si}`}
-                          type="text"
-                          autoComplete="off"
-                          className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-teal-500 focus:border-teal-500 outline-none disabled:opacity-50"
-                          placeholder="Manual serial"
-                          value={val}
-                          disabled={modalBusy}
-                          onChange={(e) => updateBulkSerialAt(si, e.target.value)}
-                        />
+
+                  {completedUnits.length > 0 ? (
+                    <ul className="text-xs space-y-1 rounded-lg border border-emerald-100 bg-emerald-50/60 p-2">
+                      {completedUnits.map((u) => (
+                        <li key={u.serial_id || u.inventory_asset_code} className="flex justify-between gap-2 font-mono text-emerald-900">
+                          <span>{u.serial_number}</span>
+                          <span className="font-semibold">{u.inventory_asset_code}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+
+                  {accessNumber != null ? (
+                    <div className="rounded-lg border border-teal-200 bg-teal-50 p-3 flex items-center gap-3">
+                      <KeyRound className="w-5 h-5 text-teal-700 shrink-0" />
+                      <div className="min-w-0">
+                        <p className="text-[11px] uppercase tracking-wide text-teal-700 font-semibold m-0">Access Number</p>
+                        <p className="text-2xl font-bold text-teal-900 tabular-nums leading-tight m-0">{accessNumber}</p>
+                        <p className="text-[11px] text-teal-700 m-0 leading-snug">
+                          On the received laptop, open <strong>{(captureUrl || '').replace(/^https?:\/\//, '').split('/')[0] || 'rentfoxxy.com'}/access</strong> and enter this number.
+                        </p>
                       </div>
-                    ))}
+                    </div>
+                  ) : null}
+
+                  <div className="rounded-lg border border-slate-200 bg-white p-3 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label className="text-xs font-semibold text-slate-600" htmlFor="receive-serial-current">
+                        Serial number <span className="text-rose-600">*</span>
+                      </label>
+                      {/* <div className="flex flex-wrap gap-1.5">
+                        <button
+                          type="button"
+                          disabled={modalBusy || captureLoading || !captureUrl}
+                          onClick={openCaptureLink}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-teal-200 bg-teal-50 text-teal-800 text-xs font-semibold hover:bg-teal-100 disabled:opacity-50"
+                          title="Open on the laptop being received"
+                        >
+                          {captureLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <ExternalLink className="w-3 h-3" />}
+                          Open on laptop
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!captureUrl}
+                          onClick={copyCaptureLink}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 text-slate-600 text-xs font-medium hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          <Copy className="w-3 h-3" />
+                          Copy link
+                        </button>
+                      </div> */}
+                    </div>
+                    <input
+                      id="receive-serial-current"
+                      type="text"
+                      autoComplete="off"
+                      autoFocus
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-teal-500 focus:border-teal-500 outline-none disabled:opacity-50"
+                      placeholder="Auto-fills when capture link is used, or type manually"
+                      value={currentSerial}
+                      disabled={true}
+                      onChange={(e) => setCurrentSerial(e.target.value)}
+                    />
+                    <p className="text-[11px] text-slate-500 m-0 leading-relaxed">
+                      On the <strong>received laptop</strong>, open the capture link (or paste the copied link).
+                      Copy the PowerShell / Terminal command shown there and run it — serial auto-fills here within a few seconds.
+                      No CRM install needed on the laptop.
+                    </p>
+                    {captureUrl && /localhost|127\.0\.0\.1/.test(captureUrl) ? (
+                      <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded-lg p-2 m-0">
+                        Dev mode: this link only works on the same PC. Use{' '}
+                        <strong>staging.rentfoxxy.com</strong> for real GRN on other laptops.
+                      </p>
+                    ) : null}
+                    {captureUrl && !/localhost|127\.0\.0\.1/.test(captureUrl) ? (
+                      <p className="text-[10px] text-slate-400 m-0 font-mono break-all">{captureUrl}</p>
+                    ) : null}
                   </div>
-                  <p className="text-[11px] text-slate-500 m-0">
-                    Duplicate serials in this batch are not allowed; the server also rejects serials already in the database.
-                  </p>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1.5" htmlFor="physical-damage-remark">
+                      Physical Damage — remark
+                    </label>
+                    <textarea
+                      id="physical-damage-remark"
+                      rows={3}
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-teal-500 focus:border-teal-500 outline-none disabled:opacity-50 resize-y min-h-[4.5rem]"
+                      placeholder="Note any scratches, dents, cracks, or other physical damage observed during receive"
+                      value={physicalDamageRemark}
+                      disabled={modalBusy}
+                      onChange={(e) => setPhysicalDamageRemark(e.target.value)}
+                    />
+                  </div>
                 </div>
               )}
 
@@ -786,9 +1033,10 @@ export default function ProductReceivedPage() {
                   {receiveStep === 'serials' ? (
                     <button
                       type="button"
-                      disabled={modalBusy}
-                      className="px-4 py-2 rounded-lg border border-slate-200 text-slate-700 text-sm font-semibold hover:bg-slate-50"
+                      disabled={modalBusy || completedUnits.length > 0}
+                      className="px-4 py-2 rounded-lg border border-slate-200 text-slate-700 text-sm font-semibold hover:bg-slate-50 disabled:opacity-40"
                       onClick={() => setReceiveStep('meta')}
+                      title={completedUnits.length > 0 ? 'Cannot go back after units are received' : undefined}
                     >
                       Back
                     </button>
@@ -818,14 +1066,12 @@ export default function ProductReceivedPage() {
                   ) : (
                     <button
                       type="button"
-                      disabled={
-                        modalBusy || bulkSerials.length === 0 || bulkSerials.some((s) => !String(s ?? '').trim())
-                      }
-                      onClick={() => submitBulkReceive()}
+                      disabled={modalBusy || !String(currentSerial || '').trim()}
+                      onClick={() => receiveCurrentUnit()}
                       className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold disabled:opacity-40"
                     >
                       {modalBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                      Receive {bulkSerials.length || ''} unit(s)
+                      {currentUnitIndex + 1 >= bulkQuantity ? 'Receive & finish' : 'Receive & next laptop'}
                     </button>
                   )}
                 </div>
@@ -834,6 +1080,8 @@ export default function ProductReceivedPage() {
           </div>
         </div>
       ) : null}
+
+      {accessAdminOpen ? <AccessNumbersAdmin onClose={() => setAccessAdminOpen(false)} /> : null}
     </div>
   );
 }

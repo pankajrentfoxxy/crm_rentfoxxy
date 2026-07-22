@@ -8,9 +8,12 @@ import ChartCard from '../components/ChartCard';
 import ReportFilters from '../components/ReportFilters';
 import DataTable from '../components/DataTable';
 import ExportButton from '../components/ExportButton';
+import { useReportFiltersFromUrl } from '../hooks/useReportFiltersFromUrl';
+
+const DATE_RANGE_KEYS = ['from', 'to'];
 
 export default function InventoryReportPage() {
-  const [filters, setFilters] = useState(() => defaultRange());
+  const [filters, setFilters] = useReportFiltersFromUrl(defaultRange(), DATE_RANGE_KEYS);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -26,7 +29,7 @@ export default function InventoryReportPage() {
     }
   }, [filters]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(filters); }, []);
 
   const summary = data?.summary || {};
   const byBrand = data?.by_brand || [];

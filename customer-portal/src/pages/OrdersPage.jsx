@@ -25,7 +25,30 @@ export default function OrdersPage() {
   return (
     <div className="space-y-6">
       <h1 className="text-xl font-bold">My Orders</h1>
-      <div className="bg-white rounded-xl border overflow-hidden">
+
+      {/* Mobile cards */}
+      <div className="grid gap-3 md:hidden">
+        {loading ? (
+          <p className="p-8 text-center text-slate-500">Loading…</p>
+        ) : orders.length === 0 ? (
+          <p className="p-8 text-center text-slate-500">No orders found</p>
+        ) : orders.map((o) => (
+          <div key={o.sales_order_number} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-mono text-xs font-semibold text-slate-900">{o.sales_order_number}</span>
+              <span className={`px-2 py-0.5 rounded-full text-xs capitalize ${statusClass(o.status)}`}>{o.status || 'pending'}</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+              <span>{o.date ? format(new Date(o.date), 'dd MMM yyyy') : '—'}</span>
+              <span className="capitalize">{o.type || '—'}</span>
+              <span>{o.laptops} laptop(s)</span>
+            </div>
+            <p className="text-base font-bold text-slate-900 pt-2 border-t border-slate-100">{inr(o.total_value)}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="hidden md:block bg-white rounded-xl border overflow-hidden">
         {loading ? (
           <p className="p-8 text-center text-slate-500">Loading…</p>
         ) : orders.length === 0 ? (

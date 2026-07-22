@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { logProductionHistory } = require('../services/ticketWorkflowHistoryService');
 
 const normalizeArray = (value) => {
   if (!Array.isArray(value)) return [];
@@ -102,6 +103,15 @@ exports.submitChipRepair = async (req, res) => {
 
     const diagnosisStage = stageRes.rows[0];
 
+    const beforeRes = await pool.query(
+      `SELECT t.*, s.stage_name
+         FROM tickets t
+         LEFT JOIN stages s ON s.stage_id = t.current_stage_id
+        WHERE t.ticket_id = $1`,
+      [id]
+    );
+    const ticketBefore = beforeRes.rows[0] || null;
+
     await pool.query(
       `INSERT INTO chip_level_repairs
        (ticket_id, created_by, updated_by, status, issues, issue_notes, parts_required, parts_notes, resolved_checks)
@@ -130,6 +140,17 @@ exports.submitChipRepair = async (req, res) => {
        VALUES ($1, $2, $3, 'chip_level_completed', $4)`,
       [id, diagnosisStage.stage_id, req.user.user_id, 'Chip level repair completed. Returned to Diagnosis.']
     );
+
+    const afterRes = await pool.query('SELECT * FROM tickets WHERE ticket_id = $1', [id]);
+    await logProductionHistory(pool, {
+      ticketBefore,
+      ticketAfter: afterRes.rows[0] || ticketBefore,
+      beforeStageName: ticketBefore?.stage_name || 'Chip Level Repair',
+      afterStageName: 'Diagnosis',
+      source: 'submitChipRepair',
+      remarks: 'Chip level repair completed. Returned to Diagnosis.',
+      actor: req.user,
+    });
 
     res.json({ success: true, message: 'Chip level repair completed' });
   } catch (error) {

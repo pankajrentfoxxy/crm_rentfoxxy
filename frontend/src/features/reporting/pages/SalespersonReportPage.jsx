@@ -4,9 +4,12 @@ import { getSalespersonReport } from '../reportingApi';
 import { defaultRange } from '../reportingUtils';
 import ReportFilters from '../components/ReportFilters';
 import ExportButton from '../components/ExportButton';
+import { useReportFiltersFromUrl } from '../hooks/useReportFiltersFromUrl';
+
+const DATE_RANGE_KEYS = ['from', 'to'];
 
 export default function SalespersonReportPage() {
-  const [filters, setFilters] = useState(() => defaultRange());
+  const [filters, setFilters] = useReportFiltersFromUrl(defaultRange(), DATE_RANGE_KEYS);
   const [salespeople, setSalespeople] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -22,7 +25,7 @@ export default function SalespersonReportPage() {
     }
   }, [filters]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(filters); }, []);
 
   return (
     <div className="p-4 max-w-7xl mx-auto space-y-6">

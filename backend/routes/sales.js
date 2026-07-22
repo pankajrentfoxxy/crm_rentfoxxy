@@ -1,10 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
+const { multerLimits } = require('../config/uploadLimits');
 const fs = require('fs');
 const { authMiddleware } = require('../middleware/auth');
+const customerScope = require('../middleware/customerScope');
 const {
-    researchCompanyData,
+    // researchCompanyData,
     createCustomer,
     getCustomers,
     getCustomerById,
@@ -126,13 +128,13 @@ const requireDispatchAccess = (req, res, next) => {
     }
 };
 
-router.post('/research', authMiddleware, requireSalesAccess, researchCompanyData);
+// router.post('/research', authMiddleware, requireSalesAccess, researchCompanyData);
 
 const customerUploadDir = 'uploads/customers';
 if (!fs.existsSync(customerUploadDir)) fs.mkdirSync(customerUploadDir, { recursive: true });
 const upload = multer({
     dest: customerUploadDir,
-    limits: { fileSize: 5 * 1024 * 1024 }
+    limits: multerLimits()
 });
 
 router.post('/customers', authMiddleware, (req, res, next) => {
@@ -163,11 +165,11 @@ const requireCustomersOrSalesAccess = (req, res, next) => {
         res.status(403).json({ message: 'Access denied' });
     }
 };
-router.get('/customers', authMiddleware, requireCustomersOrSalesAccess, getCustomers);
-router.get('/customers/:id', authMiddleware, requireCustomersOrSalesAccess, getCustomerById);
-router.put('/customers/:id', authMiddleware, requireCustomersEdit, updateCustomer);
-router.put('/customers/:id/addresses/:addr_id', authMiddleware, requireAddressAccess, updateCustomerAddress);
-router.post('/customers/:id/addresses', authMiddleware, requireAddressAccess, addCustomerAddress);
+router.get('/customers', authMiddleware, requireCustomersOrSalesAccess, customerScope, getCustomers);
+router.get('/customers/:id', authMiddleware, requireCustomersOrSalesAccess, customerScope, getCustomerById);
+router.put('/customers/:id', authMiddleware, requireCustomersEdit, customerScope, updateCustomer);
+router.put('/customers/:id/addresses/:addr_id', authMiddleware, requireAddressAccess, customerScope, updateCustomerAddress);
+router.post('/customers/:id/addresses', authMiddleware, requireAddressAccess, customerScope, addCustomerAddress);
 router.post('/orders', authMiddleware, requireSalesAccess, createOrder);
 router.get('/orders', authMiddleware, getOrders); // All logged-in users can fetch orders (filtered by role)
 router.get('/orders/export-csv', authMiddleware, exportOrdersCsv);

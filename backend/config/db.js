@@ -1,15 +1,24 @@
 const { Pool } = require('pg');
 require('dotenv').config();
 
+function resolveDbHost(raw) {
+  const host = String(raw || '').trim();
+  // Windows + Docker: "localhost" often resolves to ::1 while Postgres is bound on IPv4 only.
+  if (host.toLowerCase() === 'localhost') return '127.0.0.1';
+  return host;
+}
+
+const dbHost = resolveDbHost(process.env.DB_HOST);
+
 // SSL: disabled for localhost / Docker postgres. For remote hostnames, SSL defaults ON
 // unless DB_SSL=false (typical VPS Postgres without TLS). Managed DBs often need ssl on.
-const hostLower = String(process.env.DB_HOST || '').toLowerCase();
-const sslDisabledHosts = new Set(['postgres', 'localhost', '127.0.0.1']);
+const hostLower = dbHost.toLowerCase();
+const sslDisabledHosts = new Set(['postgres', '127.0.0.1']);
 const useSsl = !sslDisabledHosts.has(hostLower) &&
   process.env.DB_SSL !== 'false' &&
   process.env.DB_SSL !== '0';
 const pool = new Pool({
-  host: process.env.DB_HOST,
+  host: dbHost,
   port: process.env.DB_PORT,
   database: process.env.DB_NAME,
   user: process.env.DB_USER,

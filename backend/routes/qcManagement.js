@@ -6,6 +6,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
+const { multerLimits, multerErrorMessage } = require('../config/uploadLimits');
 const { authMiddleware, checkRoleOrPermission } = require('../middleware/auth');
 const orders = require('../controllers/qcManagement/orders.controller');
 
@@ -22,7 +23,7 @@ const returnRepareUpload = multer({
       cb(null, `${Date.now()}-${safe}`);
     }
   }),
-  limits: { fileSize: 2 * 1024 * 1024, files: 10 },
+  limits: multerLimits(),
   fileFilter: (_req, file, cb) => {
     const ok = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'].includes(file.mimetype);
     cb(ok ? null : new Error('Only PDF, JPG, JPEG, PNG allowed'), ok);
@@ -68,7 +69,7 @@ router.post(
   (req, res, next) => {
     returnRepareUpload.array('files', 10)(req, res, (err) => {
       if (err) {
-        return res.status(400).json({ success: false, message: err.message || 'File upload failed' });
+        return res.status(400).json({ success: false, message: multerErrorMessage(err) });
       }
       next();
     });

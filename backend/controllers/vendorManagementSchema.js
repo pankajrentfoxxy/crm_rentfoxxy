@@ -12,7 +12,8 @@ async function ensureVendorManagementSchema() {
     '037_vendor_serial_inventory_meta.sql',
     '038_inventory_management_laravel_views.sql',
     '052_phase1_vendor_procurement.sql',
-    '055_vendor_portal_sessions.sql'
+    '055_vendor_portal_sessions.sql',
+    '084_grn_serial_capture.sql'
   ]) {
     const sqlPath = path.join(__dirname, '../migrations', file);
     if (!fs.existsSync(sqlPath)) continue;

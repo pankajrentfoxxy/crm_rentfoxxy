@@ -1,147 +1,208 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Plus } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { Plus, Truck } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
+import { PageHeader, StatCard, Button, ResponsiveTable, SearchField, ListPagination, DateRangeFilter } from '../../../components/ui/primitives';
 import DCForm from '../components/DCForm';
 import DispatchModal from '../components/DispatchModal';
 import QcStatusBadge from '../components/QcStatusBadge';
-import { getDcQcStatus, listDCs } from '../salesPipelineApi';
-import { DC_STATUS_STYLES, DISPATCH_MODE_STYLES, formatDate, statusLabel } from '../salesPipelineUtils';
+import { listDCs } from '../salesPipelineApi';
+import { DC_STATUS_STYLES, DISPATCH_MODE_STYLES, formatDate, statusLabel, deliveryChallanDetailPath } from '../salesPipelineUtils';
+import { useUrlFilters, useDebouncedUrlSearch, listReturnState } from '../../../hooks/useUrlFilters';
 
 const TABS = ['all', 'pending', 'in_transit', 'delivered', 'rejected'];
+const PAGE_SIZE = 25;
+const DC_FILTER_DEFAULTS = {
+  page: 1,
+  search: '',
+  dateFrom: '',
+  dateTo: '',
+  tab: 'all',
+};
 
 export default function DeliveryChallanListPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const { filters, setFilters } = useUrlFilters(DC_FILTER_DEFAULTS);
+  const { page, dateFrom, dateTo, tab } = filters;
+  const { searchInput, setSearchInput, debouncedSearch: search } = useDebouncedUrlSearch(filters, setFilters);
   const [rows, setRows] = useState([]);
-  const [qcMap, setQcMap] = useState({});
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState('all');
+  const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [dcDrawer, setDcDrawer] = useState(false);
   const [dispatchDc, setDispatchDc] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await listDCs({ limit: 100 });
-      let list = res.data?.delivery_challans || [];
-      if (tab !== 'all') list = list.filter((r) => (r.status || 'pending') === tab);
+      const res = await listDCs({
+        page,
+        limit: PAGE_SIZE,
+        search: search || undefined,
+        status: tab !== 'all' ? tab : undefined,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
+      });
+      const list = res.data?.delivery_challans || [];
       setRows(list);
-      const qcEntries = await Promise.all(
-        list.slice(0, 30).map(async (r) => {
-          try {
-            const q = await getDcQcStatus(r.dc_number);
-            return [r.dc_number, q.data];
-          } catch {
-            return [r.dc_number, null];
-          }
-        })
-      );
-      setQcMap(Object.fromEntries(qcEntries));
+      setPagination(res.data?.pagination || { page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
     } catch {
       toast.error('Failed to load delivery challans');
     } finally {
       setLoading(false);
     }
-  }, [tab]);
+  }, [tab, page, search, dateFrom, dateTo]);
 
   useEffect(() => { load(); }, [load]);
 
   const stats = useMemo(() => ({
-    total: rows.length,
+    total: pagination.total || rows.length,
     pending: rows.filter((r) => !r.status || r.status === 'pending').length,
-    in_transit: rows.filter((r) => r.status === 'in_transit').length,
+    in_transit: rows.filter((r) => ['in_transit', 'shipped', 'reached'].includes(r.status)).length,
     delivered: rows.filter((r) => r.status === 'delivered').length,
     rejected: rows.filter((r) => r.status === 'rejected').length,
-  }), [rows]);
+  }), [rows, pagination.total]);
+
+  const dispatchCell = (row) => {
+    const qc = row.qc_status;
+    const canDispatch = (row.status === 'pending' || !row.status) && qc?.all_passed;
+    return (
+      <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
+        <button type="button" className="text-blue-600 text-sm font-semibold" onClick={() => navigate(deliveryChallanDetailPath(row.dc_number), { state: listReturnState(location) })}>View</button>
+        {canDispatch && (
+          <PermissionGate section="dispatch_ops" action="edit">
+            <button type="button" className="text-sm text-teal-700 font-semibold" onClick={() => setDispatchDc(row.dc_number)}>Dispatch</button>
+          </PermissionGate>
+        )}
+      </div>
+    );
+  };
+
+  const columns = [
+    { key: 'dc_number', header: 'DC #', render: (r) => <span className="font-mono text-blue-700 font-semibold">{r.dc_number}</span> },
+    { key: 'date', header: 'Created', render: (r) => formatDate(r.created_at) },
+    { key: 'dispatch_date', header: 'Dispatch Date', render: (r) => (
+      <span className="text-sm font-medium text-slate-800">{formatDate(r.dispatched_at)}</span>
+    ) },
+    { key: 'customer_name', header: 'Customer' },
+    { key: 'so', header: 'SO #', render: (r) => <span className="font-mono text-xs">{r.sales_order_number || '—'}</span> },
+    { key: 'dispatch', header: 'Dispatch', render: (r) => (r.dispatch_mode ? <span className={`px-2 py-0.5 rounded-full text-xs ${DISPATCH_MODE_STYLES[r.dispatch_mode]}`}>{r.dispatch_mode}</span> : '—') },
+    {
+      key: 'qc',
+      header: 'QC',
+      render: (r) => {
+        const qc = r.qc_status;
+        return (
+          <QcStatusBadge
+            allPassed={qc?.all_passed}
+            pendingCount={qc?.pending_count}
+            failedCount={qc?.failed_count}
+            totalCount={qc?.total_count}
+          />
+        );
+      },
+    },
+    { key: 'status', header: 'Status', render: (r) => <span className={`px-2 py-0.5 rounded-full text-xs ${DC_STATUS_STYLES[r.status || 'pending']}`}>{statusLabel(r.status || 'pending')}</span> },
+    { key: 'actions', header: 'Actions', render: dispatchCell },
+  ];
+
+  const renderCard = (r) => {
+    const qc = r.qc_status;
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="font-mono text-blue-700 font-semibold">{r.dc_number}</span>
+          <span className={`px-2 py-0.5 rounded-full text-xs ${DC_STATUS_STYLES[r.status || 'pending']}`}>{statusLabel(r.status || 'pending')}</span>
+        </div>
+        <p className="font-medium text-slate-800">{r.customer_name}</p>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+          <span>{formatDate(r.created_at)}</span>
+          {r.dispatched_at ? <span>Dispatch: {formatDate(r.dispatched_at)}</span> : null}
+          {r.sales_order_number && <span className="font-mono">SO {r.sales_order_number}</span>}
+          {r.dispatch_mode && <span className={`px-2 py-0.5 rounded-full ${DISPATCH_MODE_STYLES[r.dispatch_mode]}`}>{r.dispatch_mode}</span>}
+        </div>
+        <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
+          <QcStatusBadge
+            allPassed={qc?.all_passed}
+            pendingCount={qc?.pending_count}
+            failedCount={qc?.failed_count}
+            totalCount={qc?.total_count}
+          />
+          {dispatchCell(r)}
+        </div>
+      </div>
+    );
+  };
+
+  const dispatchQc = dispatchDc ? rows.find((r) => r.dc_number === dispatchDc)?.qc_status : null;
 
   return (
     <div className="p-4 max-w-7xl mx-auto">
-      <div className="flex flex-wrap items-start justify-between gap-4 mb-6">
-        <div>
-          <h1 className="text-2xl font-semibold text-gray-900">Delivery Challans</h1>
-          <p className="text-sm text-gray-500">DC-* series</p>
-        </div>
-        <PermissionGate section="delivery_challans" action="create">
-          <button type="button" onClick={() => setDcDrawer(true)} className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">
-            <Plus className="w-4 h-4" /> Create DC
-          </button>
-        </PermissionGate>
-      </div>
+      <PageHeader
+        title="Delivery Challans"
+        subtitle="DC-* series"
+        icon={Truck}
+        actions={(
+          <PermissionGate section="delivery_challans" action="create">
+            <Button icon={Plus} onClick={() => setDcDrawer(true)}>Create DC</Button>
+          </PermissionGate>
+        )}
+      />
 
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
-        {[['Total', stats.total], ['Pending', stats.pending], ['In Transit', stats.in_transit], ['Delivered', stats.delivered], ['Rejected', stats.rejected]].map(([l, v]) => (
-          <div key={l} className="bg-white border rounded-lg p-3 text-center"><p className="text-xs text-gray-500">{l}</p><p className="text-lg font-semibold">{v}</p></div>
-        ))}
+        <StatCard label="Total" value={stats.total} tone="gray" />
+        <StatCard label="Pending (page)" value={stats.pending} tone="amber" />
+        <StatCard label="In Transit (page)" value={stats.in_transit} tone="blue" />
+        <StatCard label="Delivered (page)" value={stats.delivered} tone="green" />
+        <StatCard label="Rejected (page)" value={stats.rejected} tone="red" />
       </div>
 
       <div className="flex flex-wrap gap-2 mb-4">
         {TABS.map((t) => (
-          <button key={t} type="button" onClick={() => setTab(t)} className={`px-3 py-1.5 rounded-full text-xs font-medium capitalize ${tab === t ? 'bg-blue-600 text-white' : 'bg-gray-100'}`}>{t.replace('_', ' ')}</button>
+          <button key={t} type="button" onClick={() => setFilters({ tab: t })} className={`px-3 min-h-[36px] rounded-full text-xs font-medium capitalize ${tab === t ? 'bg-blue-600 text-white' : 'bg-gray-100'}`}>{t.replace('_', ' ')}</button>
         ))}
       </div>
 
-      <div className="bg-white border rounded-xl overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-xs text-gray-500 uppercase text-left">
-            <tr>
-              <th className="px-4 py-3">DC #</th>
-              <th className="px-4 py-3">Date</th>
-              <th className="px-4 py-3">Customer</th>
-              <th className="px-4 py-3">SO #</th>
-              <th className="px-4 py-3">Dispatch</th>
-              <th className="px-4 py-3">QC</th>
-              <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y">
-            {loading ? (
-              <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-500">Loading…</td></tr>
-            ) : rows.map((row) => {
-              const qc = qcMap[row.dc_number];
-              return (
-                <tr key={row.dc_number} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 font-mono text-blue-700">{row.dc_number}</td>
-                  <td className="px-4 py-3">{formatDate(row.created_at)}</td>
-                  <td className="px-4 py-3">{row.customer_name}</td>
-                  <td className="px-4 py-3 font-mono text-xs">{row.sales_order_number}</td>
-                  <td className="px-4 py-3">
-                    {row.dispatch_mode ? (
-                      <span className={`px-2 py-0.5 rounded-full text-xs ${DISPATCH_MODE_STYLES[row.dispatch_mode]}`}>{row.dispatch_mode}</span>
-                    ) : '—'}
-                  </td>
-                  <td className="px-4 py-3">
-                    <QcStatusBadge
-                      allPassed={qc?.all_passed}
-                      pendingCount={qc?.pending_count}
-                      failedCount={qc?.tickets?.filter((t) => t.status === 'qc_failed').length}
-                      totalCount={qc?.total_count}
-                    />
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={`px-2 py-0.5 rounded-full text-xs ${DC_STATUS_STYLES[row.status || 'pending']}`}>{statusLabel(row.status || 'pending')}</span>
-                  </td>
-                  <td className="px-4 py-3 space-x-2">
-                    <button type="button" className="text-blue-600 text-xs" onClick={() => navigate(`/sales-pipeline/delivery-challans/${row.dc_number}`)}>View</button>
-                    {(row.status === 'pending' || !row.status) && qc?.all_passed && (
-                      <PermissionGate section="dispatch_ops" action="edit">
-                        <button type="button" className="text-xs text-teal-700" onClick={() => setDispatchDc(row.dc_number)}>Dispatch</button>
-                      </PermissionGate>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+      <div className="flex flex-wrap gap-3 mb-4">
+        <SearchField
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          placeholder="Search DC #, SO #, customer, GST…"
+        />
+        <DateRangeFilter
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onRangeChange={(range) => setFilters(range)}
+          onDateFromChange={(v) => setFilters({ dateFrom: v })}
+          onDateToChange={(v) => setFilters({ dateTo: v })}
+          fromLabel="Created from"
+          toLabel="Created to"
+        />
       </div>
+
+      <ResponsiveTable
+        columns={columns}
+        rows={rows}
+        keyField="dc_number"
+        loading={loading}
+        renderCard={renderCard}
+        onRowClick={(r) => navigate(deliveryChallanDetailPath(r.dc_number), { state: listReturnState(location) })}
+      />
+
+      <ListPagination
+        page={page}
+        totalPages={pagination.totalPages || 1}
+        total={pagination.total || 0}
+        pageSize={PAGE_SIZE}
+        onPageChange={(p) => setFilters({ page: p })}
+      />
 
       <DCForm open={dcDrawer} onClose={() => setDcDrawer(false)} />
       <DispatchModal
         open={Boolean(dispatchDc)}
         dcNumber={dispatchDc}
-        qcBlocked={dispatchDc && !qcMap[dispatchDc]?.all_passed}
+        qcBlocked={dispatchDc && !dispatchQc?.all_passed}
         onClose={() => setDispatchDc(null)}
         onDispatched={load}
       />

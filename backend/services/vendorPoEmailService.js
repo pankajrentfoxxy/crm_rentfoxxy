@@ -74,4 +74,51 @@ async function sendPurchaseOrderApprovedEmail({ po, vendor, pdfAbsolutePath }) {
   return true;
 }
 
-module.exports = { sendPurchaseOrderApprovedEmail };
+/**
+ * Notify manager/admin users when a PO is submitted for approval.
+ * @returns {Promise<number>} emails sent
+ */
+async function sendPoPendingApprovalEmailToManagers({ po, vendorName, submitterName }) {
+  const pool = require('../config/db');
+  const transport = getMailTransport();
+  if (!transport) {
+    console.warn('[vendorPoEmail] SMTP not configured — skipping manager PO alert');
+    return 0;
+  }
+
+  const managers = await pool.query(
+    `SELECT email, name FROM users
+     WHERE role IN ('manager', 'admin', 'super_admin')
+       AND COALESCE(active, true) = true
+       AND email IS NOT NULL AND TRIM(email) <> ''`
+  );
+
+  const poNumber = po.purchase_order_number || `PO-${po.po_id}`;
+  const crmUrl = process.env.FRONTEND_URL?.split(',')[0]?.trim() || 'http://localhost:3000';
+  const listUrl = `${crmUrl}/vendor-management/purchase-orders`;
+  const subject = `PO ${poNumber} awaiting your approval`;
+  const text = [
+    `Purchase order ${poNumber} from ${vendorName || 'vendor'} was submitted for approval`,
+    submitterName ? `by ${submitterName}.` : '.',
+    `Review: ${listUrl} (Pending Approval tab)`,
+  ].join(' ');
+
+  let sent = 0;
+  for (const m of managers.rows) {
+    try {
+      await transport.sendMail({
+        from: process.env.FROM_EMAIL || process.env.SMTP_USER,
+        to: m.email,
+        subject,
+        text,
+        html: `<p>${text}</p><p><a href="${listUrl}">Open Purchase Orders</a></p>`,
+      });
+      sent += 1;
+    } catch (err) {
+      console.error('[vendorPoEmail] manager alert failed for', m.email, err.message);
+    }
+  }
+  return sent;
+}
+
+module.exports = { sendPurchaseOrderApprovedEmail, sendPoPendingApprovalEmailToManagers };

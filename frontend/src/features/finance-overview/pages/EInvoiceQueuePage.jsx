@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { generateEInvoice, generateEWayBill, sendEInvoiceEmail } from '../../customer-billing/customerBillingApi';
 import { getEinvoiceQueue } from '../financeOverviewApi';
+import { deliveryChallanDetailPath } from '../../sales-pipeline/salesPipelineUtils';
 
 export default function EInvoiceQueuePage() {
   const [rows, setRows] = useState([]);
@@ -111,7 +112,7 @@ export default function EInvoiceQueuePage() {
                   <input type="checkbox" checked={selected.includes(r.dc_number)} onChange={() => toggleSelect(r.dc_number)} />
                 </td>
                 <td className="px-4 py-3 font-medium">
-                  <Link to={`/sales-pipeline/delivery-challans/${r.dc_number}`} className="text-blue-600 hover:underline">{r.dc_number}</Link>
+                  <Link to={deliveryChallanDetailPath(r.dc_number)} className="text-blue-600 hover:underline">{r.dc_number}</Link>
                 </td>
                 <td className="px-4 py-3">{r.created_at?.slice?.(0, 10)}</td>
                 <td className="px-4 py-3">{r.customer_name}</td>

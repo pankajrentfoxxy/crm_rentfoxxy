@@ -1,184 +1,309 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import InhouseTechnicianBucket from '../components/InhouseTechnicianBucket';
-import DispatchModal from '../components/DispatchModal';
-import {
-  listByStatus, markDelivered, markRejected, sendDeliveryOtp, verifyDeliveryOtp,
-} from '../salesPipelineApi';
-import { DISPATCH_MODE_STYLES, formatDate, statusLabel } from '../salesPipelineUtils';
+import { KeyRound, Map as MapIcon, CheckCircle2, ExternalLink, Image as ImageIcon, Users, XCircle } from 'lucide-react';
+import { ListPagination, SearchField } from '../../../components/ui/primitives';
+import { listDeliveryFlow, markRejected } from '../salesPipelineApi';
+import { deliveryChallanDetailPath } from '../salesPipelineUtils';
+import { DISPATCH_MODE_STYLES, formatDateTime, statusLabel } from '../salesPipelineUtils';
+import { useUrlFilters, useDebouncedUrlSearch, listReturnState } from '../../../hooks/useUrlFilters';
+import { getBackendOrigin } from '../../../utils/api';
+import AdminDeliverModal from '../components/AdminDeliverModal';
+import ReturnWarehouseReceiveModal from '../components/ReturnWarehouseReceiveModal';
+import PermissionGate from '../../../components/PermissionGate';
 
-const TABS = ['in-transit', 'delivered', 'rejected'];
+const TABS = [
+  { id: 'all', label: 'All' },
+  { id: 'inhouse', label: 'Inhouse' },
+  { id: 'courier', label: 'Courier' },
+  { id: 'porter', label: 'Porter' },
+  { id: 'delivered', label: 'Delivered' },
+  { id: 'rejected', label: 'Rejected' },
+];
+
+const PAGE_SIZE = 25;
+const REGISTER_FILTER_DEFAULTS = { page: 1, search: '', tab: 'all' };
+
+function uploadUrl(p) {
+  if (!p) return null;
+  if (p.startsWith('http')) return p;
+  return `${getBackendOrigin().replace(/\/$/, '')}/uploads/${p.replace(/^\/?uploads\//, '')}`;
+}
 
 export default function DeliveryRegisterPage() {
-  const [tab, setTab] = useState('in-transit');
+  const location = useLocation();
+  const { filters, setFilters } = useUrlFilters(REGISTER_FILTER_DEFAULTS);
+  const { page, tab } = filters;
+  const { searchInput, setSearchInput, debouncedSearch: search } = useDebouncedUrlSearch(filters, setFilters);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [bucketView, setBucketView] = useState(false);
-  const [otpDc, setOtpDc] = useState(null);
-  const [otpValue, setOtpValue] = useState('');
-  const [rejectDc, setRejectDc] = useState(null);
+  const [pagination, setPagination] = useState({
+    page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE,
+  });
+  const [otpModal, setOtpModal] = useState(null);
+  const [deliverModal, setDeliverModal] = useState(null);
+  const [receiveModal, setReceiveModal] = useState(null);
+  const [rejectModal, setRejectModal] = useState(null);
   const [rejectReason, setRejectReason] = useState('');
-  const [dispatchDc, setDispatchDc] = useState(null);
+  const [rejectRemarks, setRejectRemarks] = useState('');
+
+  const isDelivered = tab === 'delivered';
+  const isRejectedTab = tab === 'rejected';
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await listByStatus(tab, { limit: 100 });
-      setRows(res.data?.rows || res.data?.deliveries || []);
+      const r = await listDeliveryFlow({
+        status: tab,
+        movement: 'outbound', // delivery register = outbound DCs only (no RDC)
+        search: search || undefined,
+        page,
+        limit: PAGE_SIZE,
+      });
+      setRows(r.data?.items || []);
+      setPagination(r.data?.pagination || {
+        page: 1, totalPages: 1, total: r.data?.items?.length || 0, limit: PAGE_SIZE,
+      });
     } catch {
       toast.error('Failed to load delivery register');
     } finally {
       setLoading(false);
     }
-  }, [tab]);
+  }, [tab, page, search]);
 
   useEffect(() => { load(); }, [load]);
 
-  const buckets = useMemo(() => {
-    const inhouse = rows.filter((r) => r.dispatch_mode === 'inhouse' || r.ship_by === 'by_hand');
-    const map = {};
-    inhouse.forEach((d) => {
-      const key = d.delivery_person_name || d.technician_name || 'Unassigned';
-      if (!map[key]) map[key] = { name: key, deliveries: [] };
-      map[key].deliveries.push(d);
-    });
-    return Object.values(map);
-  }, [rows]);
-
-  const handleSendOtp = async (d) => {
+  const handleCourierReject = async () => {
+    if (!rejectModal || !rejectReason.trim()) {
+      toast.error('Rejection reason is required');
+      return;
+    }
     try {
-      await sendDeliveryOtp(d.dc_number, {});
-      toast.success('OTP sent to customer');
+      await markRejected(rejectModal.dc_number, {
+        rejection_reason: rejectReason.trim(),
+        rejection_remarks: rejectRemarks.trim() || undefined,
+      });
+      toast.success('Marked rejected — confirm warehouse return with OTP');
+      setRejectModal(null);
+      setRejectReason('');
+      setRejectRemarks('');
       load();
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed');
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Reject failed');
     }
   };
 
-  const handleVerify = async () => {
-    try {
-      await verifyDeliveryOtp(otpDc.dc_number, { otp: otpValue });
-      await markDelivered(otpDc.dc_number, {});
-      toast.success('Delivered ✓');
-      setOtpDc(null);
-      load();
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Verify failed');
-    }
-  };
-
-  const handleReject = async () => {
-    try {
-      await markRejected(rejectDc.dc_number, { rejection_reason: rejectReason });
-      toast.success('Marked rejected');
-      setRejectDc(null);
-      load();
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed');
-    }
-  };
+  const selectTab = (id) => setFilters({ tab: id });
 
   return (
     <div className="p-4 max-w-7xl mx-auto">
-      <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">Delivery Register</h1>
-          <p className="text-sm text-gray-500">Track in-transit and completed deliveries</p>
+          <p className="text-sm text-gray-500">Track dispatched, in-transit and delivered challans</p>
         </div>
-        {tab === 'in-transit' && (
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={bucketView} onChange={(e) => setBucketView(e.target.checked)} />
-            Technician Bucket View
-          </label>
-        )}
+        <PermissionGate section="technician_bucket" action="view">
+          <Link
+            to="/delivery-register-management/technicians"
+            className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-teal-800 bg-teal-50 border border-teal-200 rounded-lg hover:bg-teal-100"
+          >
+            <Users className="w-4 h-4" />
+            Delivery Technicians
+          </Link>
+        </PermissionGate>
       </div>
 
-      <div className="flex gap-2 mb-4">
+      <div className="flex gap-2 mb-4 flex-wrap">
         {TABS.map((t) => (
-          <button key={t} type="button" onClick={() => setTab(t)} className={`px-3 py-1.5 rounded-full text-xs font-medium capitalize ${tab === t ? 'bg-blue-600 text-white' : 'bg-gray-100'}`}>
-            {t.replace('-', ' ')}
+          <button key={t.id} type="button" onClick={() => selectTab(t.id)}
+            className={`px-3 py-1.5 rounded-full text-xs font-medium ${tab === t.id ? 'bg-blue-600 text-white' : 'bg-gray-100'}`}>
+            {t.label}
           </button>
         ))}
       </div>
 
-      {bucketView && tab === 'in-transit' ? (
-        <InhouseTechnicianBucket
-          buckets={buckets}
-          onSendOtp={handleSendOtp}
-          onVerifyOtp={setOtpDc}
-          onReject={setRejectDc}
+      <div className="mb-4">
+        <SearchField
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          placeholder="Search DC #, customer, SO #, GST…"
         />
-      ) : (
-        <div className="bg-white border rounded-xl overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-xs text-gray-500 uppercase text-left">
-              <tr>
-                <th className="px-4 py-3">DC #</th>
-                <th className="px-4 py-3">Customer</th>
-                <th className="px-4 py-3">SO #</th>
-                <th className="px-4 py-3">Mode</th>
-                <th className="px-4 py-3">Date</th>
-                <th className="px-4 py-3">Status</th>
-                {tab === 'in-transit' && <th className="px-4 py-3">Actions</th>}
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {loading ? (
-                <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-500">Loading…</td></tr>
-              ) : rows.map((row) => (
-                <tr key={row.dc_number}>
-                  <td className="px-4 py-3 font-mono text-blue-700">{row.dc_number}</td>
-                  <td className="px-4 py-3">{row.customer_name}</td>
-                  <td className="px-4 py-3 font-mono text-xs">{row.sales_order_number}</td>
-                  <td className="px-4 py-3">
-                    <span className={`px-2 py-0.5 rounded-full text-xs ${DISPATCH_MODE_STYLES[row.dispatch_mode] || 'bg-gray-100'}`}>
-                      {row.dispatch_mode || row.ship_by || '—'}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">{formatDate(row.created_at || row.dispatched_at)}</td>
-                  <td className="px-4 py-3">{statusLabel(row.status)}</td>
-                  {tab === 'in-transit' && (
-                    <td className="px-4 py-3 space-x-2">
-                      {(row.dispatch_mode === 'inhouse' || row.ship_by === 'by_hand') && (
+      </div>
+
+      {!loading && pagination.total > 0 ? (
+        <p className="text-sm text-gray-500 mb-3">
+          {pagination.total} {isDelivered ? 'delivered ' : isRejectedTab ? 'rejected ' : ''}challan{pagination.total === 1 ? '' : 's'}
+        </p>
+      ) : null}
+
+      <div className="bg-white border rounded-xl overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 text-xs text-gray-500 uppercase text-left">
+            <tr>
+              <th className="px-4 py-3">DC #</th>
+              <th className="px-4 py-3">Customer</th>
+              <th className="px-4 py-3">Tech / Courier</th>
+              <th className="px-4 py-3">Mode</th>
+              <th className="px-4 py-3">Dispatched</th>
+              <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">OTP</th>
+              <th className="px-4 py-3">{isDelivered ? 'POD' : 'Actions'}</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {loading ? (
+              <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-500">Loading…</td></tr>
+            ) : rows.length === 0 ? (
+              <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-500">No deliveries in this view.</td></tr>
+            ) : rows.map((row) => (
+              <tr key={row.dc_number} className={row.status === 'rejected' ? 'bg-red-50/60' : ''}>
+                <td className={`px-4 py-3 font-mono ${row.status === 'rejected' ? 'text-red-700 line-through decoration-red-400' : 'text-blue-700'}`}>
+                  {row.dc_number}
+                  {row.movement_type === 'return' && (
+                    <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-700">RDC</span>
+                  )}
+                </td>
+                <td className="px-4 py-3">
+                  <p>{row.customer_name}</p>
+                  <p className="text-xs text-gray-400">{row.customer_phone}</p>
+                </td>
+                <td className="px-4 py-3 text-gray-600">
+                  {row.dispatch_mode === 'courier'
+                    ? `${row.courier_name || '—'}${row.awb_number ? ` · ${row.awb_number}` : ''}`
+                    : row.dispatch_mode === 'porter'
+                      ? (row.porter_booking_url
+                        ? <a href={row.porter_booking_url} target="_blank" rel="noreferrer" className="text-blue-600 inline-flex items-center gap-1">{row.porter_tracking_id || 'Track'} <ExternalLink className="w-3 h-3" /></a>
+                        : (row.porter_tracking_id || '—'))
+                      : (row.technician_name || '—')}
+                </td>
+                <td className="px-4 py-3">
+                  <span className={`px-2 py-0.5 rounded-full text-xs ${DISPATCH_MODE_STYLES[row.dispatch_mode] || 'bg-gray-100'}`}>
+                    {row.dispatch_mode || row.ship_by || '—'}
+                  </span>
+                </td>
+                <td className="px-4 py-3 text-gray-600">{formatDateTime(row.dispatched_at)}</td>
+                <td className="px-4 py-3">
+                  <span className={row.status === 'rejected' ? 'text-red-700 font-medium line-through decoration-red-400' : ''}>
+                    {statusLabel(row.status)}
+                  </span>
+                  {row.rejected_at && <p className="text-[10px] text-red-600">{formatDateTime(row.rejected_at)}</p>}
+                  {row.return_to_warehouse_at && <p className="text-[10px] text-emerald-700">WH: {formatDateTime(row.return_to_warehouse_at)}</p>}
+                </td>
+                <td className="px-4 py-3">
+                  {row.otp_verified_at ? (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">✓ Verified</span>
+                  ) : row.otp_code ? (
+                    <button type="button" onClick={() => setOtpModal(row)} className="font-mono text-blue-700 inline-flex items-center gap-1">
+                      <KeyRound className="w-3.5 h-3.5" />{row.otp_code}
+                    </button>
+                  ) : row.otp_pending ? (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">OTP sent</span>
+                  ) : row.otp_sent_at ? (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">Sent</span>
+                  ) : (
+                    <span className="text-xs text-gray-400">—</span>
+                  )}
+                </td>
+                <td className="px-4 py-3">
+                  {isDelivered ? (
+                    <div className="flex gap-2">
+                      {uploadUrl(row.pod_photo_url) && (
+                        <a href={uploadUrl(row.pod_photo_url)} target="_blank" rel="noreferrer" className="text-xs text-blue-600 inline-flex items-center gap-1"><ImageIcon className="w-3.5 h-3.5" /> Photo</a>
+                      )}
+                      {uploadUrl(row.esign_url) && (
+                        <a href={uploadUrl(row.esign_url)} target="_blank" rel="noreferrer" className="text-xs text-blue-600 inline-flex items-center gap-1"><ImageIcon className="w-3.5 h-3.5" /> E-Sign</a>
+                      )}
+                      {!row.pod_photo_url && !row.esign_url && <span className="text-xs text-gray-400">{row.pod_type || '—'}</span>}
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {(row.tech_latitude && row.tech_longitude) && (
+                        <a href={`https://www.google.com/maps?q=${row.tech_latitude},${row.tech_longitude}`} target="_blank" rel="noreferrer" className="text-xs text-gray-600 inline-flex items-center gap-1"><MapIcon className="w-3.5 h-3.5" /> Map</a>
+                      )}
+                      {row.movement_type === 'return' ? (
+                        <button type="button" onClick={() => setReceiveModal(row)} className="text-xs text-blue-700 inline-flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" /> Warehouse receive</button>
+                      ) : row.status === 'rejected' ? (
+                        row.return_to_warehouse_at ? (
+                          <span className="text-xs text-emerald-700">Returned to QC</span>
+                        ) : (
+                          <Link
+                            to={deliveryChallanDetailPath(row.dc_number)}
+                            state={listReturnState(location)}
+                            className="text-xs text-red-700 inline-flex items-center gap-1"
+                          >
+                            <XCircle className="w-3.5 h-3.5" /> Warehouse return
+                          </Link>
+                        )
+                      ) : (
                         <>
-                          <button type="button" className="text-xs text-blue-600" onClick={() => handleSendOtp(row)}>Send OTP</button>
-                          <button type="button" className="text-xs text-emerald-700" onClick={() => setOtpDc(row)}>Verify & Deliver</button>
+                          <button type="button" onClick={() => setDeliverModal(row)} className="text-xs text-emerald-700 inline-flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" /> Deliver</button>
+                          {(row.dispatch_mode === 'courier' || row.ship_by === 'by_courier') && ['in_transit', 'reached', 'shipped'].includes(row.status) && (
+                            <PermissionGate section="dispatch_ops" action="edit">
+                              <button type="button" onClick={() => { setRejectModal(row); setRejectReason(''); setRejectRemarks(''); }}
+                                className="text-xs text-red-700 inline-flex items-center gap-1">
+                                <XCircle className="w-3.5 h-3.5" /> Reject
+                              </button>
+                            </PermissionGate>
+                          )}
                         </>
                       )}
-                      <button type="button" className="text-xs text-gray-700" onClick={() => markDelivered(row.dc_number, {}).then(load).then(() => toast.success('Delivered'))}>Mark Delivered</button>
-                      <button type="button" className="text-xs text-red-700" onClick={() => setRejectDc(row)}>Reject</button>
-                    </td>
+                    </div>
                   )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
-      {otpDc && (
+      <ListPagination
+        page={page}
+        totalPages={pagination.totalPages || 1}
+        total={pagination.total || 0}
+        pageSize={PAGE_SIZE}
+        onPageChange={(p) => setFilters({ page: p })}
+      />
+
+      {otpModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <button type="button" className="absolute inset-0 bg-black/40" onClick={() => setOtpDc(null)} aria-label="Close" />
-          <div className="relative bg-white rounded-xl p-6 w-full max-w-sm">
-            <h3 className="font-semibold mb-3">Verify OTP — {otpDc.dc_number}</h3>
-            <input className="w-full border rounded-lg px-3 py-2 mb-3" value={otpValue} onChange={(e) => setOtpValue(e.target.value)} placeholder="OTP" />
-            <button type="button" onClick={handleVerify} className="w-full py-2 bg-blue-600 text-white rounded-lg text-sm">Verify & Deliver</button>
+          <button type="button" className="absolute inset-0 bg-black/40" onClick={() => setOtpModal(null)} aria-label="Close" />
+          <div className="relative bg-white rounded-xl p-6 w-full max-w-xs text-center">
+            <h3 className="font-semibold mb-2">OTP — {otpModal.dc_number}</h3>
+            <p className="text-3xl font-mono font-bold tracking-widest text-blue-700">{otpModal.otp_code}</p>
+            <p className="text-xs text-gray-500 mt-2">Sent {formatDateTime(otpModal.otp_sent_at)}</p>
+            <button type="button" onClick={() => setOtpModal(null)} className="mt-4 w-full py-2 border rounded-lg text-sm">Close</button>
           </div>
         </div>
       )}
 
-      {rejectDc && (
+      {deliverModal && (
+        <AdminDeliverModal
+          dc={deliverModal}
+          onClose={() => setDeliverModal(null)}
+          onDelivered={load}
+        />
+      )}
+
+      {receiveModal && (
+        <ReturnWarehouseReceiveModal
+          dc={receiveModal}
+          onClose={() => setReceiveModal(null)}
+          onReceived={load}
+        />
+      )}
+
+      {rejectModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <button type="button" className="absolute inset-0 bg-black/40" onClick={() => setRejectDc(null)} aria-label="Close" />
-          <div className="relative bg-white rounded-xl p-6 w-full max-w-sm">
-            <h3 className="font-semibold mb-3">Reject — {rejectDc.dc_number}</h3>
-            <textarea className="w-full border rounded-lg px-3 py-2 mb-3" rows={3} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} />
-            <button type="button" onClick={handleReject} className="w-full py-2 bg-red-600 text-white rounded-lg text-sm">Confirm</button>
+          <button type="button" className="absolute inset-0 bg-black/40" onClick={() => setRejectModal(null)} aria-label="Close" />
+          <div className="relative bg-white rounded-xl p-6 w-full max-w-sm space-y-3">
+            <h3 className="font-semibold">Reject Courier Delivery — {rejectModal.dc_number}</h3>
+            <p className="text-xs text-gray-500">Mark rejected — laptops return to QC only after warehouse OTP is confirmed.</p>
+            <textarea className="w-full border rounded-lg px-3 py-2 text-sm" rows={2} placeholder="Rejection reason" value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} />
+            <textarea className="w-full border rounded-lg px-3 py-2 text-sm" rows={2} placeholder="Warehouse remarks (optional)" value={rejectRemarks} onChange={(e) => setRejectRemarks(e.target.value)} />
+            <button type="button" onClick={handleCourierReject} className="w-full py-2 bg-red-600 text-white rounded-lg text-sm">Confirm Reject</button>
           </div>
         </div>
       )}
-
-      <DispatchModal open={Boolean(dispatchDc)} dcNumber={dispatchDc} onClose={() => setDispatchDc(null)} onDispatched={load} />
     </div>
   );
 }

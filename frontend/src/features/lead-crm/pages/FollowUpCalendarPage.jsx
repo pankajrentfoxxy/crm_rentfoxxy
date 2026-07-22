@@ -1,163 +1,177 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Phone } from 'lucide-react';
-import { getFollowUps, getLeads, updateFollowUp } from '../leadCrmApi';
-import { STATUS_COLORS } from '../leadConstants';
-import { daysInMonth, formatFollowUpDateTime, isSameDay, startOfMonth } from '../leadCrmUtils';
+import { AlertTriangle, Calendar } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { getFollowUps } from '../leadCrmApi';
+import { STATUS_COLORS } from '../leadConstants';
+import SetFollowUpModal from '../components/SetFollowUpModal';
+import { formatFollowUpDateTime, followUpDueAt, followUpTone } from '../leadCrmUtils';
 
-export default function FollowUpCalendarPage() {
-  const [cursor, setCursor] = useState(() => new Date());
-  const [selected, setSelected] = useState(() => new Date());
-  const [allLeads, setAllLeads] = useState([]);
-  const [overdue, setOverdue] = useState([]);
-  const [todayList, setTodayList] = useState([]);
-  const [rescheduleId, setRescheduleId] = useState(null);
-  const [rescheduleDate, setRescheduleDate] = useState('');
-  const [rescheduleTime, setRescheduleTime] = useState('');
+function getFollowUpState(lead) {
+  const tone = followUpTone(lead.followUpDate, lead.followUpTime);
+  if (tone === 'overdue') return 'overdue';
+  const due = followUpDueAt(lead.followUpDate, lead.followUpTime);
+  if (!due) return 'normal';
+  const diff = due.getTime() - Date.now();
+  if (diff >= 0 && diff <= 10 * 60 * 1000) return 'upcoming_10m';
+  return 'normal';
+}
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const [leadsRes, fuRes] = await Promise.all([getLeads(), getFollowUps()]);
-        setAllLeads((leadsRes.data?.leads || []).filter((l) => l.followUpDate));
-        setOverdue(fuRes.data?.overdue || []);
-        setTodayList(fuRes.data?.today || []);
-      } catch { /* ignore */ }
-    })();
-  }, []);
-
-  const year = cursor.getFullYear();
-  const month = cursor.getMonth();
-  const first = startOfMonth(year, month);
-  const totalDays = daysInMonth(year, month);
-  const startPad = first.getDay();
-
-  const leadsOnDay = useMemo(() => {
-    return allLeads.filter((l) => isSameDay(new Date(l.followUpDate), selected));
-  }, [allLeads, selected]);
-
-  const dotsForDay = (day) => {
-    const d = new Date(year, month, day);
-    const items = allLeads.filter((l) => isSameDay(new Date(l.followUpDate), d));
-    if (!items.length) return null;
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    const dd = new Date(d); dd.setHours(0, 0, 0, 0);
-    if (dd < today) return 'red';
-    if (dd.getTime() === today.getTime()) return 'amber';
-    return 'blue';
-  };
-
-  const handleReschedule = async () => {
-    if (!rescheduleId || !rescheduleDate) return;
-    try {
-      await updateFollowUp(rescheduleId, { follow_up_date: rescheduleDate, follow_up_time: rescheduleTime || null, notes: 'Rescheduled from calendar' });
-      toast.success('Follow-up updated');
-      setRescheduleId(null);
-      window.location.reload();
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed');
-    }
-  };
-
-  const LeadRow = ({ lead }) => {
-    const st = STATUS_COLORS[lead.status] || STATUS_COLORS.Pending;
-    return (
-      <div className="p-3 rounded-xl border border-gray-100 bg-white shadow-sm text-sm">
-        <div className="flex justify-between gap-2">
-          <div>
-            <Link to={`/lead-crm/leads/${lead.leadId}`} className="font-medium text-blue-600 hover:underline">
-              {lead.companyName || lead.name}
-            </Link>
-            <p className="text-gray-500 text-xs">{lead.name} · {lead.phone}</p>
-          </div>
-          <span className={`px-2 py-0.5 rounded-full text-xs h-fit ${st.bg} ${st.text}`}>{lead.status}</span>
-        </div>
-        <p className="text-xs text-gray-500 mt-2">{formatFollowUpDateTime(lead.followUpDate, lead.followUpTime)}</p>
-        <div className="flex gap-2 mt-2">
-          <button type="button" onClick={() => { setRescheduleId(lead.leadId); setRescheduleDate(''); }}
-            className="text-xs px-2 py-1 border rounded-lg">Reschedule</button>
-          {lead.phone && (
-            <a href={`tel:${lead.phone}`} className="text-xs px-2 py-1 border rounded-lg flex items-center gap-1">
-              <Phone className="w-3 h-3" /> Call
-            </a>
-          )}
-          {lead.phone && (
-            <a href={`https://wa.me/91${lead.phone.replace(/\D/g, '').slice(-10)}`} target="_blank" rel="noreferrer"
-              className="text-xs px-2 py-1 border rounded-lg text-green-700">WhatsApp</a>
-          )}
-        </div>
-      </div>
-    );
-  };
+function FollowUpTable({ items, variant, onUpdateFollowUp }) {
+  const isOverdue = variant === 'overdue';
 
   return (
-    <div className="p-4 md:p-6 max-w-7xl mx-auto">
-      <h1 className="text-2xl font-bold text-gray-900 mb-6">Follow-ups</h1>
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-        <div className="lg:col-span-3 rounded-xl border border-gray-100 bg-white shadow-sm p-4">
-          <div className="flex items-center justify-between mb-4">
-            <button type="button" onClick={() => setCursor(new Date(year, month - 1, 1))}><ChevronLeft /></button>
-            <h2 className="font-semibold">{cursor.toLocaleString('en-IN', { month: 'long', year: 'numeric' })}</h2>
-            <button type="button" onClick={() => setCursor(new Date(year, month + 1, 1))}><ChevronRight /></button>
+    <div className="overflow-x-auto min-w-0">
+      <table className="w-full text-sm table-fixed">
+        <colgroup>
+          <col className="w-[16%]" />
+          <col className="w-[16%]" />
+          <col className="w-[11%]" />
+          <col className="w-[13%]" />
+          <col className="w-[22%]" />
+          <col className="w-[15%]" />
+        </colgroup>
+        <thead className="bg-slate-50">
+          <tr>
+            {['Lead', 'Company', 'Status', 'Assignee', 'Follow-up', 'Action'].map((label) => (
+              <th
+                key={label}
+                className="px-2 py-2 text-left text-xs font-medium text-slate-500 uppercase tracking-wide"
+              >
+                {label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((lead) => {
+            const state = getFollowUpState(lead);
+            const st = STATUS_COLORS[lead.status] || STATUS_COLORS.Pending;
+
+            return (
+              <tr
+                key={lead.leadId}
+                className={`border-t border-slate-100 hover:bg-slate-50/50 transition-colors ${
+                  state === 'overdue' ? 'bg-red-50/50' : state === 'upcoming_10m' ? 'bg-emerald-50/50' : ''
+                }`}
+              >
+                <td className="px-2 py-2 truncate" title={lead.name}>
+                  <Link
+                    to={`/lead-crm/leads/${lead.leadId}`}
+                    state={{ focusTab: 2, fromFollowUps: true }}
+                    className="text-slate-800 hover:text-blue-600 hover:underline font-medium"
+                  >
+                    {lead.name || '—'}
+                  </Link>
+                </td>
+                <td className="px-2 py-2 text-slate-600 truncate" title={lead.companyName || ''}>
+                  {lead.companyName || '—'}
+                </td>
+                <td className="px-2 py-2">
+                  <span className={`px-2 py-0.5 rounded text-xs font-medium ${st.bg} ${st.text}`}>
+                    {lead.status}
+                  </span>
+                </td>
+                <td className="px-2 py-2 text-slate-600 truncate" title={lead.assignedUser?.name || ''}>
+                  {lead.assignedUser?.name || '—'}
+                </td>
+                <td className={`px-2 py-2 align-top ${isOverdue || state === 'overdue' ? 'text-red-600' : 'text-slate-600'}`}>
+                  <div className="leading-tight">
+                    {formatFollowUpDateTime(lead.followUpDate, lead.followUpTime)}
+                  </div>
+                  {state === 'upcoming_10m' && (
+                    <div className="text-xs text-emerald-600 font-medium mt-0.5">Due in 10 min</div>
+                  )}
+                  {(isOverdue || state === 'overdue') && (
+                    <div className="text-xs text-red-600 font-medium mt-0.5">Overdue</div>
+                  )}
+                </td>
+                <td className="px-2 py-2 align-top">
+                  <button
+                    type="button"
+                    onClick={() => onUpdateFollowUp(lead)}
+                    className="text-indigo-600 hover:text-indigo-700 font-medium text-xs"
+                  >
+                    Update
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
+          {items.length === 0 && (
+            <tr>
+              <td colSpan={6} className="px-2 py-6 text-center text-slate-500 text-sm">
+                No follow-ups found.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+export default function FollowUpCalendarPage() {
+  const [today, setToday] = useState([]);
+  const [overdue, setOverdue] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editLead, setEditLead] = useState(null);
+
+  const loadFollowUps = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data } = await getFollowUps();
+      if (!data?.success) throw new Error(data?.message || 'Failed to load follow-ups');
+      setToday(data.today || []);
+      setOverdue(data.overdue || []);
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to load follow-ups');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadFollowUps();
+  }, [loadFollowUps]);
+
+  if (loading) {
+    return <div className="text-center py-12 text-slate-500 text-sm">Loading follow-ups…</div>;
+  }
+
+  return (
+    <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-4">
+      <div>
+        <h1 className="text-lg font-medium text-slate-800 flex items-center gap-2">
+          <Calendar className="w-4 h-4 text-indigo-600" />
+          Follow-ups
+        </h1>
+        <p className="text-xs text-slate-500 mt-0.5">Today and overdue follow-ups</p>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="border border-slate-200 rounded-lg bg-white overflow-hidden shadow-sm">
+          <div className="px-3 py-2 bg-slate-50 border-b border-slate-100">
+            <h3 className="text-xs font-medium text-slate-600">Today ({today.length})</h3>
           </div>
-          <div className="grid grid-cols-7 gap-1 text-center text-xs text-gray-500 mb-2">
-            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => <div key={d}>{d}</div>)}
-          </div>
-          <div className="grid grid-cols-7 gap-1">
-            {Array.from({ length: startPad }).map((_, i) => <div key={`pad-${i}`} />)}
-            {Array.from({ length: totalDays }).map((_, i) => {
-              const day = i + 1;
-              const dot = dotsForDay(day);
-              const d = new Date(year, month, day);
-              const active = isSameDay(d, selected);
-              return (
-                <button key={day} type="button" onClick={() => setSelected(d)}
-                  className={`aspect-square rounded-lg text-sm flex flex-col items-center justify-center gap-0.5 ${
-                    active ? 'bg-blue-600 text-white' : 'hover:bg-gray-100'
-                  }`}>
-                  {day}
-                  {dot && <span className={`w-1.5 h-1.5 rounded-full ${dot === 'red' ? 'bg-red-500' : dot === 'amber' ? 'bg-amber-500' : 'bg-blue-500'} ${active ? 'bg-white' : ''}`} />}
-                </button>
-              );
-            })}
-          </div>
+          <FollowUpTable items={today} variant="today" onUpdateFollowUp={setEditLead} />
         </div>
 
-        <div className="lg:col-span-2 space-y-4">
-          <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4">
-            <h3 className="font-semibold text-sm mb-1">
-              Follow-ups — {selected.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
-            </h3>
-            <p className="text-xs text-gray-500 mb-3">Today ({todayList.length}) · Overdue ({overdue.length})</p>
-            <div className="space-y-2 max-h-[40vh] overflow-y-auto">
-              {leadsOnDay.length === 0 ? <p className="text-sm text-gray-400">No follow-ups this day</p> : leadsOnDay.map((l) => <LeadRow key={l.leadId} lead={l} />)}
-            </div>
+        <div className="border border-slate-200 rounded-lg bg-white overflow-hidden shadow-sm">
+          <div className="px-3 py-2 bg-amber-50 border-b border-amber-100 flex items-center gap-2">
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+            <h3 className="text-xs font-medium text-amber-800">Overdue ({overdue.length})</h3>
           </div>
-          {overdue.length > 0 && (
-            <div className="rounded-xl border-2 border-red-200 bg-red-50/30 p-4">
-              <h3 className="font-semibold text-sm text-red-800 mb-2">Overdue ({overdue.length})</h3>
-              <div className="space-y-2 max-h-[30vh] overflow-y-auto">
-                {overdue.map((l) => <LeadRow key={l.leadId} lead={l} />)}
-              </div>
-            </div>
-          )}
+          <FollowUpTable items={overdue} variant="overdue" onUpdateFollowUp={setEditLead} />
         </div>
       </div>
 
-      {rescheduleId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="bg-white rounded-xl p-4 w-full max-w-sm space-y-3">
-            <h3 className="font-semibold">Reschedule Follow-up</h3>
-            <input type="date" value={rescheduleDate} onChange={(e) => setRescheduleDate(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm" />
-            <input type="time" value={rescheduleTime} onChange={(e) => setRescheduleTime(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm" />
-            <div className="flex gap-2 justify-end">
-              <button type="button" onClick={() => setRescheduleId(null)} className="px-3 py-1.5 text-sm border rounded-lg">Cancel</button>
-              <button type="button" onClick={handleReschedule} className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg">Save</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <SetFollowUpModal
+        open={Boolean(editLead)}
+        lead={editLead}
+        onClose={() => setEditLead(null)}
+        onSaved={loadFollowUps}
+      />
     </div>
   );
 }

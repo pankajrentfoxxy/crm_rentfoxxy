@@ -3,10 +3,12 @@
  */
 
 const VALID_STATUSES = new Set([
+  'qc_pending',
   'pending',
   'passed',
   'failed',
   'dead',
+  'missing',
   'require_for_parts'
 ]);
 
@@ -85,7 +87,7 @@ function effectiveQcStatus(row) {
   return 'pending';
 }
 
-function resolveLineItem(lineItems, extraRaw) {
+function resolveLineItem(lineItems, extraRaw, options = {}) {
   const lines = parseLineItems(lineItems);
   const ex = parseExtra(extraRaw);
   const idx =
@@ -99,6 +101,12 @@ function resolveLineItem(lineItems, extraRaw) {
         String(l.product_detail_id ?? l.product_id ?? l.pro_id ?? l.id ?? '') === k
     );
     if (found) return found;
+
+    const legacyIds = options.legacyProductIds ?? options.product_details_legacy_ids;
+    if (Array.isArray(legacyIds) && legacyIds.length) {
+      const legacyIdx = legacyIds.findIndex((id) => String(id) === k);
+      if (legacyIdx >= 0 && lines[legacyIdx]) return lines[legacyIdx];
+    }
   }
   if (lines.length === 1) return lines[0];
   return null;
@@ -149,6 +157,226 @@ function computeAddedDate(updatedAt) {
   return { label: `${daysAgo} Days Ago`, daysAgo };
 }
 
+const BRAND_HINTS = ['Dell', 'HP', 'Lenovo', 'Apple', 'Acer', 'Asus', 'MSI', 'Razer'];
+
+function pickFirstNonEmpty(...values) {
+  for (const value of values) {
+    if (value == null) continue;
+    const text = String(value).trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+function isNumericBrand(value) {
+  const text = String(value ?? '').trim();
+  return text !== '' && /^\d+$/.test(text);
+}
+
+function inferBrandFromModel(model) {
+  const name = String(model || '').toLowerCase();
+  for (const hint of BRAND_HINTS) {
+    if (name.startsWith(hint.toLowerCase())) return hint;
+  }
+  return '';
+}
+
+function formatBrandDisplay(brand, model, brandMap) {
+  const raw = String(brand ?? '').trim();
+  if (!raw) return inferBrandFromModel(model) || '';
+  if (!isNumericBrand(raw)) return raw;
+  if (brandMap?.get(raw)) return brandMap.get(raw);
+  return inferBrandFromModel(model) || '';
+}
+
+function lookupInventorySpec(row, ctx) {
+  if (!ctx?.inventoryBySerial && !ctx?.inventoryByAsset && !ctx?.inventoryById) return null;
+  const ex = parseExtra(row.extra);
+  const bySerial = ctx.inventoryBySerial?.get(String(row.serial_number || '').toLowerCase());
+  if (bySerial) return bySerial;
+  const asset = row.inventory_asset_code ? String(row.inventory_asset_code) : '';
+  if (asset && ctx.inventoryByAsset?.get(asset)) return ctx.inventoryByAsset.get(asset);
+  for (const key of [ex.inventory_id, ex.product_id]) {
+    if (key == null || String(key).trim() === '') continue;
+    const hit = ctx.inventoryById?.get(String(key));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function lookupVendorProductDetail(row, ctx) {
+  if (!ctx?.vpdByOldId && !ctx?.vpdById) return null;
+  const ex = parseExtra(row.extra);
+  for (const key of [ex.product_detail_id, ex.pro_id]) {
+    if (key == null || String(key).trim() === '') continue;
+    const hit = ctx.vpdById?.get(String(key));
+    if (hit) return hit;
+  }
+  for (const key of [ex.product_id, row.grn_product_id]) {
+    if (key == null || String(key).trim() === '') continue;
+    const hit = ctx.vpdByOldId?.get(String(key));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function resolveItemDescription(row, ctx = {}) {
+  const ex = parseExtra(row.extra);
+  const line = resolveLineItem(row.line_items, row.extra, {
+    legacyProductIds: row.product_details_legacy_ids
+  });
+  const inv = lookupInventorySpec(row, ctx);
+  const vpd = lookupVendorProductDetail(row, ctx);
+  // GRN-received config (VPD / inventory / serial extra) wins over PO line_items — legacy ERP PO rows are often wrong.
+  const model = pickFirstNonEmpty(
+    ex.model,
+    ex.model_name,
+    ex.product_model_name,
+    line?.product_name,
+    line?.model,
+    vpd?.model,
+    inv?.model
+  );
+  const brand = formatBrandDisplay(
+    pickFirstNonEmpty(ex.brand, ex.brand_name, line?.brand_name, line?.brand, vpd?.brand, inv?.brand),
+    model,
+    ctx.brandMap
+  );
+
+  return {
+    brand,
+    model,
+    screen_size: pickFirstNonEmpty(ex.screen_size, line?.screen_size, vpd?.screen_size, inv?.screen_size),
+    processor: pickFirstNonEmpty(ex.processor, line?.processor, vpd?.processor, inv?.processor),
+    generation: pickFirstNonEmpty(ex.generation, line?.generation, vpd?.generation, inv?.generation),
+    ram: pickFirstNonEmpty(ex.ram, line?.ram, vpd?.ram, inv?.ram),
+    storage: pickFirstNonEmpty(ex.storage, line?.storage, vpd?.storage, inv?.storage),
+    gpu: pickFirstNonEmpty(ex.gpu, line?.gpu, vpd?.gpu, inv?.gpu),
+    os: pickFirstNonEmpty(ex.os, line?.os, inv?.os)
+  };
+}
+
+async function buildSerialSpecContext(pool, rows) {
+  if (!rows?.length) {
+    return {
+      inventoryBySerial: new Map(),
+      inventoryByAsset: new Map(),
+      inventoryById: new Map(),
+      vpdByOldId: new Map(),
+      vpdById: new Map(),
+      brandMap: new Map()
+    };
+  }
+
+  const serialNumbers = [];
+  const assetCodes = [];
+  const inventoryIds = new Set();
+  const oldProductIds = new Set();
+  const productDetailIds = new Set();
+
+  for (const row of rows) {
+    const ex = parseExtra(row.extra);
+    if (row.serial_number) serialNumbers.push(String(row.serial_number));
+    if (row.inventory_asset_code) assetCodes.push(String(row.inventory_asset_code));
+    for (const key of [ex.inventory_id, ex.product_id]) {
+      if (key == null || String(key).trim() === '') continue;
+      const n = Number(key);
+      if (Number.isFinite(n) && n > 0) inventoryIds.add(n);
+    }
+    for (const key of [ex.product_id, row.grn_product_id]) {
+      if (key == null || String(key).trim() === '') continue;
+      const n = Number(key);
+      if (Number.isFinite(n) && n > 0) oldProductIds.add(n);
+    }
+    for (const key of [ex.product_detail_id, ex.pro_id]) {
+      if (key == null || String(key).trim() === '') continue;
+      const n = Number(key);
+      if (Number.isFinite(n) && n > 0) productDetailIds.add(n);
+    }
+  }
+
+  const inventoryBySerial = new Map();
+  const inventoryByAsset = new Map();
+  const inventoryById = new Map();
+  const vpdByOldId = new Map();
+  const vpdById = new Map();
+
+  const needsInventory = serialNumbers.length || assetCodes.length || inventoryIds.size;
+  const needsVpd = oldProductIds.size || productDetailIds.size;
+
+  const [invR, vpdR, brandMap] = await Promise.all([
+    needsInventory
+      ? pool.query(
+          `SELECT inventory_id, serial_number, machine_number, brand, model, processor,
+                  generation, ram, storage, gpu, screen_size
+             FROM inventory
+            WHERE serial_number = ANY($1::text[])
+               OR machine_number = ANY($2::text[])
+               OR inventory_id = ANY($3::int[])`,
+          [serialNumbers, assetCodes, [...inventoryIds]]
+        )
+      : Promise.resolve({ rows: [] }),
+    needsVpd
+      ? pool.query(
+          `SELECT product_detail_id, old_product_id, brand, model, processor, generation,
+                  ram, storage, gpu, screen_size
+             FROM vendor_product_details
+            WHERE old_product_id = ANY($1::int[])
+               OR product_detail_id = ANY($2::int[])`,
+          [[...oldProductIds], [...productDetailIds]]
+        )
+      : Promise.resolve({ rows: [] }),
+    loadBrandNameMap(pool),
+  ]);
+
+  for (const inv of invR.rows) {
+    if (inv.serial_number) inventoryBySerial.set(String(inv.serial_number).toLowerCase(), inv);
+    if (inv.machine_number) inventoryByAsset.set(String(inv.machine_number), inv);
+    inventoryById.set(String(inv.inventory_id), inv);
+  }
+
+  for (const vpd of vpdR.rows) {
+    if (vpd.old_product_id != null) vpdByOldId.set(String(vpd.old_product_id), vpd);
+    vpdById.set(String(vpd.product_detail_id), vpd);
+  }
+
+  return {
+    inventoryBySerial,
+    inventoryByAsset,
+    inventoryById,
+    vpdByOldId,
+    vpdById,
+    brandMap,
+  };
+}
+
+async function loadBrandNameMap(pool) {
+  try {
+    const { cacheWrap, CACHE_TTL } = require('../utils/cacheService');
+    const cached = await cacheWrap('master:asset_config_brands:v1', CACHE_TTL.MASTER_LOOKUP, async () => {
+      const brandR = await pool.query(
+        `SELECT id, name FROM asset_config_brands WHERE deleted_at IS NULL`
+      );
+      const obj = {};
+      for (const brand of brandR.rows) obj[String(brand.id)] = brand.name;
+      return obj;
+    });
+    return new Map(Object.entries(cached || {}));
+  } catch {
+    const brandR = await pool.query(
+      `SELECT id, name FROM asset_config_brands WHERE deleted_at IS NULL`
+    );
+    const map = new Map();
+    for (const brand of brandR.rows) map.set(String(brand.id), brand.name);
+    return map;
+  }
+}
+
+async function enrichSerialRowsBatch(pool, rows) {
+  const ctx = await buildSerialSpecContext(pool, rows);
+  return rows.map((row) => enrichSerialRow(row, ctx));
+}
+
 function computePoTypePeriod(row, line, poType) {
   const today = new Date();
   const type = String(poType || '').toLowerCase();
@@ -176,11 +404,12 @@ function computePoTypePeriod(row, line, poType) {
   return { daysLeft, label: `Rent Started ${ago} Days Ago` };
 }
 
-function enrichSerialRow(row) {
-  const line = resolveLineItem(row.line_items, row.extra);
+function enrichSerialRow(row, specContext = null) {
+  const line = resolveLineItem(row.line_items, row.extra, {
+    legacyProductIds: row.product_details_legacy_ids
+  });
   const ex = parseExtra(row.extra);
-  const brand = line?.brand_name ?? line?.brand ?? '';
-  const model = line?.product_name ?? line?.model ?? '';
+  const itemDescription = resolveItemDescription(row, specContext || {});
   const poType = row.purchase_order_type;
   const actionStatus = ex.action_status ?? null;
   const cameFrom = ex.came_from ?? null;
@@ -225,17 +454,13 @@ function enrichSerialRow(row) {
     vendor_id: row.vendor_id,
     vendor_name:
       (actionStatus && ex.vendor_name) || row.vendor_name || row.business_name || '',
-    product_id: line?.product_detail_id ?? line?.product_id ?? ex.product_detail_id ?? null,
-    item_description: {
-      brand,
-      model,
-      screen_size: line?.screen_size ?? '',
-      processor: line?.processor ?? '',
-      generation: line?.generation ?? '',
-      ram: line?.ram ?? '',
-      storage: line?.storage ?? '',
-      gpu: line?.gpu ?? ''
-    },
+    product_id:
+      line?.product_detail_id ??
+      line?.product_id ??
+      ex.product_detail_id ??
+      ex.product_id ??
+      null,
+    item_description: itemDescription,
     locking_period: computeLockingPeriod(line, poType),
     po_type_period: computePoTypePeriod(row, line, poType),
     received_from: receivedFrom,
@@ -246,6 +471,14 @@ function enrichSerialRow(row) {
     rental_period: row.rental_start_date || line?.rental_period || null,
     product_warranty: line?.warranty_months ?? line?.product_warranty ?? null,
     inventory_tag: ex.inventory_tag || null,
+    warehouse_carret: row.warehouse_carret ?? null,
+    warehouse_carret_slot: row.warehouse_carret_slot ?? null,
+    warehouse_location: row.warehouse_carret && row.warehouse_carret_slot
+      ? `Carret ${row.warehouse_carret} / Slot ${row.warehouse_carret_slot}`
+      : null,
+    ticket_id: row.ticket_id ?? null,
+    active_floor_ticket_id: row.active_floor_ticket_id ?? null,
+    ticket_stage_name: row.ticket_stage_name ?? null,
     extra: ex
   };
 }
@@ -271,6 +504,9 @@ module.exports = {
   parseLineItems,
   effectiveQcStatus,
   resolveLineItem,
+  resolveItemDescription,
+  buildSerialSpecContext,
+  enrichSerialRowsBatch,
   enrichSerialRow,
   normalizeRouteStatus,
   formatPoType

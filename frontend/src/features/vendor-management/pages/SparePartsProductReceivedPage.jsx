@@ -59,10 +59,12 @@ function formatDateTime(po) {
 function SpareItemCard({ line }) {
   const brand = line.brand_name ?? line.brand ?? '';
   const part = line.spare_part_name ?? line.part_name ?? line.name ?? '';
+  const partType = line.part_type ? String(line.part_type) : '';
   const title = [brand, part].filter(Boolean).join(' — ') || 'Spare item';
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50/90 shadow-sm px-3 py-2.5 text-left max-w-md">
       <h3 className="text-sm font-semibold text-slate-900 leading-snug">{title}</h3>
+      {partType ? <p className="text-xs text-slate-600 mt-1">Type: {partType}</p> : null}
     </div>
   );
 }
@@ -457,7 +459,55 @@ export default function SparePartsProductReceivedPage() {
             )}
 
             <div className="rounded-lg border border-slate-200 overflow-hidden bg-white">
-              <div className="overflow-x-auto">
+              {/* Mobile cards */}
+              <div className="md:hidden divide-y divide-slate-100">
+                {n === 0 ? (
+                  <p className="px-4 py-10 text-center text-slate-500">No line items on this spare PO.</p>
+                ) : lines.map((line, idx) => {
+                  const ordered = Number(line.quantity) || 0;
+                  const got = Number(line.receivedQty) || 0;
+                  const left = Math.max(0, ordered - got);
+                  const complete = left <= 0;
+                  return (
+                    <div key={idx} className="p-4 space-y-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="text-xs font-semibold text-slate-400 tabular-nums mt-1">#{idx + 1}</span>
+                        <div className="flex-1 min-w-0">
+                          <SpareItemCard line={line} />
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <SpareWarrantyBadge line={line} spo={po} />
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 text-center">
+                        <div className="rounded-lg bg-slate-50 border border-slate-100 py-2">
+                          <p className="text-[10px] uppercase tracking-wide text-slate-500">Ordered</p>
+                          <p className="text-base font-bold tabular-nums text-slate-800">{ordered}</p>
+                        </div>
+                        <div className="rounded-lg bg-emerald-50 border border-emerald-100 py-2">
+                          <p className="text-[10px] uppercase tracking-wide text-emerald-600">Received</p>
+                          <p className="text-base font-bold tabular-nums text-emerald-700">{got}</p>
+                        </div>
+                        <div className="rounded-lg bg-rose-50 border border-rose-100 py-2">
+                          <p className="text-[10px] uppercase tracking-wide text-rose-600">Remaining</p>
+                          <p className="text-base font-bold tabular-nums text-rose-700">{left}</p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={complete}
+                        onClick={() => openReceiveWizard(idx)}
+                        className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed bg-teal-700 hover:bg-teal-800 text-white"
+                      >
+                        {complete ? null : <Plus className="w-4 h-4" />}
+                        {complete ? 'Received' : 'Receive'}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full text-sm min-w-[860px]">
                   <thead>
                     <tr className="bg-slate-600 text-white text-left text-xs capitalize tracking-wide">

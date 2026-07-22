@@ -2,9 +2,9 @@ import React from 'react';
 
 export default function InventoryPageShell({ title, description, erpSegment, children }) {
   return (
-    <div className="rounded-xl border bg-white shadow-sm p-8 space-y-4">
+    <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-4 sm:p-6 lg:p-8 space-y-4">
       <div>
-        <h1 className="text-2xl font-bold text-slate-900">{title}</h1>
+        <h1 className="text-xl sm:text-2xl font-bold text-slate-900">{title}</h1>
         {description && (
           <p className="text-sm text-slate-600 leading-relaxed max-w-3xl mt-2">{description}</p>
         )}

@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
 const { logPermissionAudit } = require('../services/permissionAuditService');
+const { applyRoleDefaults } = require('../services/roleDefaultsSeed');
 const {
   getPermissionSections,
   listRolePermissions,
@@ -13,6 +14,8 @@ const {
 } = require('../services/permissionService');
 
 const hasRbacAccess = (user) => ['admin', 'super_admin'].includes(user?.role);
+const hasRbacReadAccess = (user) => ['admin', 'super_admin', 'manager'].includes(user?.role);
+const hasRbacWriteAccess = (user) => ['admin', 'super_admin', 'manager'].includes(user?.role);
 
 const slugifyRoleName = (value) =>
   String(value || '')
@@ -47,7 +50,7 @@ exports.getPermissionSections = async (req, res) => {
 
 exports.listRoles = async (req, res) => {
   try {
-    if (!hasRbacAccess(req.user)) {
+    if (!hasRbacReadAccess(req.user)) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
@@ -60,19 +63,22 @@ exports.listRoles = async (req, res) => {
     let whereClause = '';
     if (search) {
       params.push(`%${search}%`);
-      whereClause = `WHERE name ILIKE $1 OR display_name ILIKE $1 OR description ILIKE $1`;
+      whereClause = `WHERE r.name ILIKE $1 OR r.display_name ILIKE $1 OR r.description ILIKE $1`;
     }
 
     const countResult = await pool.query(
-      `SELECT COUNT(*)::int AS total FROM roles ${whereClause}`,
+      `SELECT COUNT(*)::int AS total FROM roles r ${whereClause}`,
       params
     );
     const listParams = [...params, limit, offset];
     const listResult = await pool.query(
-      `SELECT id, name, display_name, description, is_system_role, created_at, updated_at
-       FROM roles
+      `SELECT r.id, r.name, r.display_name, r.description, r.is_system_role, r.created_at, r.updated_at,
+              (SELECT COUNT(*)::int FROM users u
+               WHERE u.role = r.name AND u.active = true
+                 AND u.role NOT IN ('vendor', 'customer')) AS active_users
+       FROM roles r
        ${whereClause}
-       ORDER BY is_system_role DESC, name ASC
+       ORDER BY r.is_system_role DESC, r.name ASC
        LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
       listParams
     );
@@ -214,7 +220,7 @@ exports.deleteRole = async (req, res) => {
 
 exports.getRolePermissions = async (req, res) => {
   try {
-    if (!hasRbacAccess(req.user)) {
+    if (!hasRbacReadAccess(req.user)) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
@@ -236,7 +242,7 @@ exports.getRolePermissions = async (req, res) => {
 
 exports.updateRolePermissions = async (req, res) => {
   try {
-    if (!hasRbacAccess(req.user)) {
+    if (!hasRbacWriteAccess(req.user)) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
@@ -429,6 +435,37 @@ exports.updateUserPermissionsById = async (req, res) => {
   } catch (error) {
     console.error('updateUserPermissionsById error:', error);
     res.status(500).json({ success: false, message: 'Server error updating permissions' });
+  }
+};
+
+exports.applyRoleDefaults = async (req, res) => {
+  try {
+    if (!hasRbacWriteAccess(req.user)) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+
+    const { role } = req.params;
+    const roleExists = await pool.query('SELECT name FROM roles WHERE name = $1', [role]);
+    if (roleExists.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Role not found' });
+    }
+
+    await applyRoleDefaults(role);
+
+    await logPermissionAudit({
+      actorUserId: req.user.user_id,
+      targetType: 'role_permissions',
+      targetId: role,
+      action: 'role_permissions_defaults_applied',
+      payload: { role },
+    });
+
+    const permissions = await listRolePermissions(role);
+    const sections = await getPermissionSections();
+    res.json({ success: true, message: 'Role defaults applied', role, sections, permissions });
+  } catch (error) {
+    console.error('applyRoleDefaults error:', error);
+    res.status(500).json({ success: false, message: 'Server error applying role defaults' });
   }
 };
 

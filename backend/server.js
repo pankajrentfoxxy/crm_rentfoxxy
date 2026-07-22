@@ -3,9 +3,10 @@ const cors = require('cors');
 require('dotenv').config();
 
 const errorHandler = require('./middleware/errorHandler');
+const { BODY_PARSER_LIMIT } = require('./config/uploadLimits');
 const { startEmailQueueWorker } = require('./services/emailQueueService');
 const { startInventorySyncWorker } = require('./services/inventoryErpSyncService');
-const { startLeadEmailIngestionWorker } = require('./services/leadEmailIngestionService');
+const { startLeadEmailIngestionWorker, stopLeadEmailIngestionWorker } = require('./services/leadEmailIngestionService');
 const { startCustomerInventorySyncWorker } = require('./services/customerInventoryErpSyncService');
 
 const app = express();
@@ -16,6 +17,8 @@ const allowedOrigins = [
   'http://localhost:3001',
   'http://localhost:3002',
   'http://localhost:5001',
+  'http://127.0.0.2:5001',
+  'http://127.0.0.2:3000',
   'https://rentfoxxy.vercel.app',
   'http://187.77.187.213',
   'https://187.77.187.213',
@@ -48,8 +51,14 @@ app.use(cors({
   },
   credentials: true
 }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+try {
+  const compression = require('compression');
+  app.use(compression());
+} catch {
+  console.warn('[server] compression middleware unavailable — run npm install in backend/');
+}
+app.use(express.json({ limit: BODY_PARSER_LIMIT }));
+app.use(express.urlencoded({ extended: true, limit: BODY_PARSER_LIMIT }));
 app.use('/uploads', express.static('uploads'));
 
 // Test database connection
@@ -74,16 +83,25 @@ app.use('/api/warehouse', require('./routes/warehouse'));
 app.use('/api/stages', require('./routes/stages'));
 app.use('/api/teams', require('./routes/teams'));
 app.use('/api/parts', require('./routes/parts'));
+app.use('/api/part-requests', require('./routes/partRequests'));
 app.use('/api/inventory', require('./routes/inventory'));
 app.use('/api/analytics', require('./routes/analytics'));
 app.use('/api/reports', require('./routes/reports'));
 app.use('/api/diagnosis', require('./routes/diagnosis'));
 app.use('/api/chip-repair', require('./routes/chipLevel'));
 app.use('/api/quotation', require('./routes/quotationPublic'));
+app.use('/api/grn-capture', require('./routes/grnCapturePublic'));
+app.use('/api/qc2-capture', require('./routes/qc2CapturePublic'));
+app.use('/api/qc2', require('./routes/qc2'));
+app.use('/api/dispatch-qc-capture', require('./routes/dispatchQcCapturePublic'));
+app.use('/api/dispatch-qc', require('./routes/dispatchQc'));
+app.use('/api/grn-access-public', require('./routes/grnAccessPublic'));
+app.use('/api/grn-access', require('./routes/grnAccess'));
 app.use('/api/leads', require('./routes/leads'));
 app.use('/api/customer-documents', require('./routes/customerDocuments'));
 app.use('/api/customer-inventory', require('./routes/customerInventory'));
 app.use('/api/support', require('./routes/support'));
+app.use('/api/support-parts', require('./routes/supportParts'));
 app.use('/api/vendor-management', require('./routes/vendorManagement'));
 app.use('/api/vendor-portal', require('./routes/vendorPortal'));
 app.use('/api/customer-portal', require('./routes/customerPortal'));
@@ -93,6 +111,12 @@ app.use('/api/customer-billing', require('./routes/customerBilling'));
 app.use('/api/vendor-billing', require('./routes/vendorBilling'));
 app.use('/api/einvoice', require('./routes/einvoice'));
 app.use('/api/finance-overview', require('./routes/financeOverview'));
+app.use('/api/demo', require('./routes/demo'));
+app.use('/api/companies', require('./routes/companies'));
+app.use('/api/asset-configuration', require('./routes/assetConfiguration'));
+app.use('/api/production-assets', require('./routes/productionAssets'));
+app.use('/api/vendor-repair', require('./routes/vendorRepair'));
+app.use('/api/utils', require('./routes/utils'));
 
 // Health check
 app.get('/health', (req, res) => {
@@ -154,16 +178,21 @@ app.listen(PORT, () => {
     console.log(`Server running on port ${PORT} (${process.env.NODE_ENV || 'development'})`);
   }
 
-  // startEmailQueueWorker().catch((err) => console.error('Email queue worker failed:', err.message));
-  // startInventorySyncWorker().catch((err) => console.error('ERP inventory sync worker failed:', err.message));
-  // startLeadEmailIngestionWorker().catch((err) => console.error('Lead email ingestion worker failed:', err.message));
-  // startCustomerInventorySyncWorker().catch((err) => console.error('Customer inventory ERP worker failed:', err.message));
+  // Background workers — enable via env (default: on when configured).
+  const workersOn = String(process.env.ENABLE_BACKGROUND_WORKERS || 'true').toLowerCase() !== 'false';
+  if (workersOn) {
+    startEmailQueueWorker().catch((err) => console.error('Email queue worker failed:', err.message));
+    startLeadEmailIngestionWorker().catch((err) => console.error('Lead email ingestion worker failed:', err.message));
+    // startInventorySyncWorker().catch((err) => console.error('ERP inventory sync worker failed:', err.message));
+    // startCustomerInventorySyncWorker().catch((err) => console.error('Customer inventory ERP worker failed:', err.message));
+  }
   const { ensureSupportSchema } = require('./controllers/supportController');
   const { ensureUserSchema } = require('./controllers/authController');
   const { ensureVendorManagementSchema, ensureVendorBillingSchema } = require('./controllers/vendorManagementSchema');
   const { ensureSalesManagementSchema } = require('./controllers/salesManagementController');
   const { ensureCustomerManagementSchema } = require('./controllers/customerManagementController');
   const { ensureBillingEngineSchema } = require('./controllers/customerBillingController');
+  const { ensureLeadCrmSchema } = require('./controllers/leadController');
   const { startBillingScheduler } = require('./services/billingSchedulerService');
   ensureSupportSchema().catch((err) => console.error('Support schema ensure failed:', err.message));
   ensureUserSchema().catch((err) => console.error('User schema ensure failed:', err.message));
@@ -172,7 +201,31 @@ app.listen(PORT, () => {
   ensureSalesManagementSchema().catch((err) => console.error('Sales management schema failed:', err.message));
   ensureCustomerManagementSchema().catch((err) => console.error('Customer management schema failed:', err.message));
   ensureBillingEngineSchema().catch((err) => console.error('Billing engine schema failed:', err.message));
+  ensureLeadCrmSchema().catch((err) => console.error('Lead CRM schema ensure failed:', err.message));
+  const { ensureAssetConfigurationSchema } = require('./controllers/assetConfigurationController');
+  ensureAssetConfigurationSchema().catch((err) => console.error('Asset configuration schema ensure failed:', err.message));
+  const { ensureVendorRepairSchema } = require('./services/vendorRepairDcService');
+  ensureVendorRepairSchema().catch((err) => console.error('Vendor repair schema ensure failed:', err.message));
+  const { initCache } = require('./utils/cacheService');
+  initCache().catch((err) => console.error('Cache init failed:', err.message));
   startBillingScheduler();
+});
+
+const shutdownWorkers = async (signal) => {
+  console.log(`${signal} received — shutting down background workers`);
+  try {
+    await stopLeadEmailIngestionWorker();
+  } catch (err) {
+    console.error('Lead email idle shutdown failed:', err.message);
+  }
+};
+
+process.on('SIGTERM', () => {
+  shutdownWorkers('SIGTERM').finally(() => process.exit(0));
+});
+
+process.on('SIGINT', () => {
+  shutdownWorkers('SIGINT').finally(() => process.exit(0));
 });
 
 module.exports = app;

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Plus, Trash2, X } from 'lucide-react';
-import { sendLeadQuotation } from '../leadCrmApi';
+import { sendLeadQuotation, fetchQuotationEmailConfig } from '../leadCrmApi';
 import { LAPTOP_BRANDS, PROCESSORS, GENERATIONS, RAM_OPTIONS, STORAGE_OPTIONS } from '../leadConstants';
 import toast from 'react-hot-toast';
 
@@ -13,6 +13,7 @@ const DEFAULT_TERMS = 'Prices are exclusive of GST. Quotation valid for 7 days f
 export default function QuotationSendModal({ open, lead, onClose, onSent }) {
   const [toEmail, setToEmail] = useState('');
   const [cc, setCc] = useState('');
+  const [mailPreview, setMailPreview] = useState({ from: '', defaultCc: [] });
   const [subject, setSubject] = useState('');
   const [lines, setLines] = useState([emptyLine()]);
   const [notes, setNotes] = useState('');
@@ -37,6 +38,16 @@ export default function QuotationSendModal({ open, lead, onClose, onSent }) {
         rate: lead.monthlyBudget || '',
         total: (lead.quantityRequired || 1) * (Number(lead.monthlyBudget) || 0),
       }]);
+      fetchQuotationEmailConfig()
+        .then((res) => {
+          const data = res.data || {};
+          setCc((data.cc_recipients || []).join(', '));
+          setMailPreview({
+            from: data.from_address || '',
+            defaultCc: data.default_cc || [],
+          });
+        })
+        .catch(() => setCc(''));
     }
   }, [lead, open]);
 
@@ -62,7 +73,7 @@ export default function QuotationSendModal({ open, lead, onClose, onSent }) {
     try {
       const res = await sendLeadQuotation(lead.leadId, {
         to_email: toEmail,
-        cc_emails: cc ? cc.split(',').map((e) => e.trim()).filter(Boolean) : [],
+        cc_recipients: cc ? cc.split(/[,;]/).map((e) => e.trim()).filter(Boolean) : [],
         subject,
         line_items: lines,
         notes,
@@ -102,9 +113,13 @@ export default function QuotationSendModal({ open, lead, onClose, onSent }) {
                 className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" />
             </div>
             <div>
-              <label className="text-xs text-gray-500">CC (comma-separated)</label>
+              <label className="text-xs text-gray-500">CC recipients</label>
               <input value={cc} onChange={(e) => setCc(e.target.value)}
-                className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" />
+                className="w-full mt-1 border rounded-lg px-3 py-2 text-sm"
+                placeholder="Default team CC — edit to remove anyone" />
+              <p className="text-[10px] text-gray-500 mt-1">
+                Default team CC: {(mailPreview.defaultCc || []).join(', ') || '—'}. Your email is included automatically unless you remove it.
+              </p>
             </div>
           </div>
           <div>

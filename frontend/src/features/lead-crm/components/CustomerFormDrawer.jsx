@@ -3,16 +3,34 @@ import { X } from 'lucide-react';
 import { COMPANY_TYPES } from '../leadConstants';
 import {
   addCustomerAddress, createCustomer, deleteCustomerAddress,
-  getCustomerAddresses, setDefaultCustomerAddress, updateCustomer,
+  getCustomerAddresses, setDefaultCustomerAddress, updateCustomer, updateCustomerAddress,
 } from '../leadCrmApi';
 import toast from 'react-hot-toast';
+import { INDIAN_STATES, resolveStateSelectValue } from '../../../constants/indianStates';
+import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
+import {
+  formatIndianMobileInput,
+  indianMobileError,
+  normalizeIndianMobile,
+} from '../../../utils/phoneValidation';
+import {
+  CUSTOMER_TYPE_OPTIONS,
+  customerTypeLabel,
+  normalizeCustomerType,
+} from '../../../utils/customerType';
+import { useAuth } from '../../../context/AuthContext';
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const empty = () => ({
   customer_name: '', email: '', customer_number: '', company_name: '',
   gst_number: '', pan_number: '', company_type: '', industry: '',
+  customer_type: 'both',
   billing_address: '', billing_city: '', billing_state: '', billing_pincode: '',
   shipping_same: true, shipping_address: '', shipping_city: '', shipping_state: '', shipping_pincode: '',
   whatsapp_number: '', designation: '', notes: '',
+  finance_contact_name: '', finance_contact_email: '', finance_contact_mobile: '',
+  spock_person_name: '', spock_person_email: '', spock_person_mobile: '',
 });
 
 const emptyAddrForm = () => ({
@@ -20,13 +38,17 @@ const emptyAddrForm = () => ({
 });
 
 export default function CustomerFormDrawer({ open, customer, onClose, onSaved }) {
+  const { user } = useAuth();
+  const canEditType = user?.role === 'admin' || user?.role === 'super_admin';
   const [form, setForm] = useState(empty());
   const [shippingSame, setShippingSame] = useState(true);
   const [savedAddresses, setSavedAddresses] = useState([]);
   const [showAddrForm, setShowAddrForm] = useState(false);
+  const [editingAddressId, setEditingAddressId] = useState(null);
   const [addrForm, setAddrForm] = useState(emptyAddrForm());
   const [addrSaving, setAddrSaving] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState({});
   const isEdit = !!customer;
 
   useEffect(() => {
@@ -40,24 +62,33 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
         pan_number: customer.pan_number || customer.pan_card_number || '',
         company_type: customer.company_type || '',
         industry: customer.industry || '',
+        customer_type: normalizeCustomerType(customer.customer_type),
         billing_address: typeof customer.billing_address === 'string' ? customer.billing_address : customer.billing_address?.address || '',
         billing_city: customer.billing_city || '',
-        billing_state: customer.billing_state || '',
+        billing_state: resolveStateSelectValue(customer.billing_state || ''),
         billing_pincode: customer.billing_pincode || '',
         shipping_same: customer.shipping_same !== false,
         shipping_address: customer.shipping_address || '',
         shipping_city: customer.shipping_city || '',
-        shipping_state: customer.shipping_state || '',
+        shipping_state: resolveStateSelectValue(customer.shipping_state || ''),
         shipping_pincode: customer.shipping_pincode || '',
         whatsapp_number: customer.whatsapp_number || '',
         designation: customer.designation || '',
         notes: customer.notes || '',
+        finance_contact_name: customer.finance_contact_name || customer.details?.finance_contact_name || '',
+        finance_contact_email: customer.finance_contact_email || customer.details?.finance_contact_email || '',
+        finance_contact_mobile: customer.finance_contact_mobile || customer.details?.finance_contact_mobile || '',
+        spock_person_name: customer.spock_person_name || customer.details?.spock_person_name || customer.expox_person_name || customer.details?.expox_person_name || '',
+        spock_person_email: customer.spock_person_email || customer.details?.spock_person_email || customer.expox_person_email || customer.details?.expox_person_email || '',
+        spock_person_mobile: customer.spock_person_mobile || customer.details?.spock_person_mobile || customer.expox_person_mobile || customer.details?.expox_person_mobile || '',
       });
       setShippingSame(customer.shipping_same !== false);
+      setFieldErrors({});
     } else if (open) {
       setForm(empty());
       setShippingSame(true);
       setSavedAddresses([]);
+      setFieldErrors({});
     }
   }, [customer, open]);
 
@@ -75,10 +106,115 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
+  const handlePincodeAutofill = (value, cityKey, stateKey, pinKey) =>
+    applyPincodeAutofill(value, setForm, { pinKey, cityKey, stateKey });
+
+  const setMobile = (k, v) => {
+    set(k, formatIndianMobileInput(v));
+    setFieldErrors((prev) => {
+      if (!prev[k]) return prev;
+      const next = { ...prev };
+      delete next[k];
+      return next;
+    });
+  };
+
+  const validateForm = () => {
+    const errors = {};
+    const phoneErr = indianMobileError(form.customer_number, { required: true, label: 'Phone' });
+    if (phoneErr) errors.customer_number = phoneErr;
+    const whatsappErr = indianMobileError(form.whatsapp_number, { label: 'WhatsApp number' });
+    if (whatsappErr) errors.whatsapp_number = whatsappErr;
+    const requiredSpokeFields = [
+      ['spock_person_name', 'Name'],
+      ['spock_person_email', 'Email'],
+      ['spock_person_mobile', 'Mobile Number'],
+    ];
+    const optionalEmailFields = [
+      ['email', 'Email'],
+      ['finance_contact_email', 'Finance Contact Email'],
+    ];
+    const optionalMobileFields = [
+      ['finance_contact_mobile', 'Finance Contact Mobile Number'],
+    ];
+    requiredSpokeFields.forEach(([key, label]) => {
+      const value = String(form[key] || '').trim();
+      const errorLabel = `Spoke person ${label.toLowerCase()}`;
+      if (!value) {
+        errors[key] = `${errorLabel} is required`;
+        return;
+      }
+      if (key.endsWith('_email') && !EMAIL_RE.test(value)) errors[key] = `${errorLabel} is invalid`;
+      if (key.endsWith('_mobile')) {
+        const err = indianMobileError(value, { required: true, label: errorLabel });
+        if (err) errors[key] = err;
+      }
+    });
+    optionalEmailFields.forEach(([key, label]) => {
+      const value = String(form[key] || '').trim();
+      if (value && !EMAIL_RE.test(value)) errors[key] = `${label} is invalid`;
+    });
+    optionalMobileFields.forEach(([key, label]) => {
+      const err = indianMobileError(form[key], { label });
+      if (err) errors[key] = err;
+    });
+    setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const renderField = (key, label, { type = 'text', mobile = false, required = false } = {}) => (
+    <div key={key}>
+      <label className="text-xs text-gray-500">
+        {label}
+        {required && <span className="text-red-500"> *</span>}
+      </label>
+      <input
+        type={type}
+        value={form[key]}
+        onChange={(e) => {
+          if (mobile) setMobile(key, e.target.value);
+          else {
+            set(key, e.target.value);
+            setFieldErrors((prev) => {
+              if (!prev[key]) return prev;
+              const next = { ...prev };
+              delete next[key];
+              return next;
+            });
+          }
+        }}
+        maxLength={mobile ? 10 : undefined}
+        className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm ${
+          fieldErrors[key] ? 'border-red-300' : 'border-gray-200'
+        }`}
+      />
+      {fieldErrors[key] && <p className="mt-1 text-xs text-red-600">{fieldErrors[key]}</p>}
+    </div>
+  );
+
   const loadAddresses = async () => {
     if (!customer?.customer_id) return;
     const res = await getCustomerAddresses(customer.customer_id);
     setSavedAddresses(res.data?.addresses || []);
+  };
+
+  const resetAddrForm = () => {
+    setShowAddrForm(false);
+    setEditingAddressId(null);
+    setAddrForm(emptyAddrForm());
+  };
+
+  const handleEditAddress = (addr) => {
+    setEditingAddressId(addr.customer_address_id);
+    setAddrForm({
+      address: addr.address || '',
+      city: addr.city || '',
+      state: resolveStateSelectValue(addr.state || ''),
+      pincode: addr.pincode || '',
+      concern_person: addr.concern_person || '',
+      mobile_no: addr.mobile_no || '',
+    });
+    setShowAddrForm(true);
   };
 
   const handleSaveAddress = async () => {
@@ -86,15 +222,26 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
       toast.error('Address is required');
       return;
     }
+    const mobileErr = indianMobileError(addrForm.mobile_no, { label: 'Mobile number' });
+    if (mobileErr) {
+      toast.error(mobileErr);
+      return;
+    }
     setAddrSaving(true);
     try {
-      await addCustomerAddress(customer.customer_id, {
+      const payload = {
         ...addrForm,
+        mobile_no: addrForm.mobile_no?.trim() ? normalizeIndianMobile(addrForm.mobile_no) : '',
         address_type: 'Shipping',
-      });
-      toast.success('Shipping address saved');
-      setAddrForm(emptyAddrForm());
-      setShowAddrForm(false);
+      };
+      if (editingAddressId) {
+        await updateCustomerAddress(customer.customer_id, editingAddressId, payload);
+        toast.success('Shipping address updated');
+      } else {
+        await addCustomerAddress(customer.customer_id, payload);
+        toast.success('Shipping address saved');
+      }
+      resetAddrForm();
       await loadAddresses();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to save address');
@@ -124,10 +271,16 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
   };
 
   const handleSave = async () => {
+    if (!validateForm()) {
+      toast.error('Please fix the highlighted fields');
+      return;
+    }
     setSaving(true);
     try {
       const payload = {
         ...form,
+        customer_number: normalizeIndianMobile(form.customer_number),
+        whatsapp_number: form.whatsapp_number?.trim() ? normalizeIndianMobile(form.whatsapp_number) : '',
         shipping_same: shippingSame,
         shipping_address: shippingSame ? '' : form.shipping_address,
         shipping_city: shippingSame ? '' : form.shipping_city,
@@ -175,13 +328,21 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
         <div className="flex-1 overflow-y-auto p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
           {[
             ['customer_name', 'Customer Name'], ['company_name', 'Company'], ['email', 'Email'],
-            ['customer_number', 'Phone'], ['whatsapp_number', 'WhatsApp'], ['designation', 'Designation'],
+            ['customer_number', 'Phone', true], ['whatsapp_number', 'WhatsApp', true], ['designation', 'Designation'],
             ['gst_number', 'GST'], ['pan_number', 'PAN'],
-          ].map(([k, label]) => (
+          ].map(([k, label, mobile]) => (
             <div key={k}>
               <label className="text-xs text-gray-500">{label}</label>
-              <input value={form[k]} onChange={(e) => set(k, e.target.value)}
-                className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              <input
+                value={form[k]}
+                onChange={(e) => (mobile ? setMobile(k, e.target.value) : set(k, e.target.value))}
+                maxLength={mobile ? 10 : undefined}
+                inputMode={mobile ? 'numeric' : undefined}
+                className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm ${
+                  fieldErrors[k] ? 'border-red-300' : 'border-gray-200'
+                }`}
+              />
+              {fieldErrors[k] && <p className="mt-1 text-xs text-red-600">{fieldErrors[k]}</p>}
             </div>
           ))}
           <div>
@@ -197,6 +358,23 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
             <input value={form.industry} onChange={(e) => set('industry', e.target.value)}
               className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
           </div>
+          <div>
+            <label className="text-xs text-gray-500">Customer Type</label>
+            <select
+              value={form.customer_type}
+              onChange={(e) => set('customer_type', e.target.value)}
+              disabled={!canEditType}
+              className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm disabled:bg-gray-50 disabled:text-gray-500"
+              title={canEditType ? undefined : 'Only Admin / Super Admin can change Customer Type'}
+            >
+              {CUSTOMER_TYPE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+            {!canEditType ? (
+              <p className="mt-1 text-[11px] text-gray-400">{customerTypeLabel(form.customer_type)} (read-only)</p>
+            ) : null}
+          </div>
           <div className="sm:col-span-2">
             <label className="text-xs text-gray-500">Billing Address</label>
             <textarea value={form.billing_address} onChange={(e) => set('billing_address', e.target.value)} rows={2}
@@ -205,10 +383,41 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
           {['billing_city', 'billing_state', 'billing_pincode'].map((k) => (
             <div key={k}>
               <label className="text-xs text-gray-500 capitalize">{k.replace('billing_', '')}</label>
-              <input value={form[k]} onChange={(e) => set(k, e.target.value)}
-                className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              {k === 'billing_state' ? (
+                <select value={form.billing_state} onChange={(e) => set('billing_state', e.target.value)}
+                  className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white">
+                  <option value="">Select state</option>
+                  {INDIAN_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              ) : k === 'billing_pincode' ? (
+                <input value={form.billing_pincode}
+                  onChange={(e) => handlePincodeAutofill(e.target.value, 'billing_city', 'billing_state', 'billing_pincode')}
+                  onBlur={(e) => handlePincodeAutofill(e.target.value, 'billing_city', 'billing_state', 'billing_pincode')}
+                  className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              ) : (
+                <input value={form[k]} onChange={(e) => set(k, e.target.value)}
+                  className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              )}
             </div>
           ))}
+
+          <div className="sm:col-span-2 pt-2 border-t space-y-3">
+            <h3 className="text-sm font-semibold text-gray-800">Finance Contact</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {renderField('finance_contact_name', 'Finance Contact Name')}
+              {renderField('finance_contact_email', 'Finance Contact Email', { type: 'email' })}
+              {renderField('finance_contact_mobile', 'Finance Contact Mobile Number', { mobile: true })}
+            </div>
+          </div>
+
+          <div className="sm:col-span-2 pt-2 border-t space-y-3">
+            <h3 className="text-sm font-semibold text-gray-800">Spoke Person</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {renderField('spock_person_name', 'Name', { required: true })}
+              {renderField('spock_person_email', 'Email', { type: 'email', required: true })}
+              {renderField('spock_person_mobile', 'Mobile Number', { mobile: true, required: true })}
+            </div>
+          </div>
 
           <div className="sm:col-span-2 pt-2 border-t">
             <h3 className="text-sm font-semibold text-gray-800 mb-2">Shipping Address</h3>
@@ -238,8 +447,21 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
               ].map(([k, label]) => (
                 <div key={k}>
                   <label className="text-xs text-gray-500">{label}</label>
-                  <input value={form[k]} onChange={(e) => set(k, e.target.value)}
-                    className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                  {k === 'shipping_state' ? (
+                    <select value={form.shipping_state} onChange={(e) => set('shipping_state', e.target.value)}
+                      className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white">
+                      <option value="">Select state</option>
+                      {INDIAN_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  ) : k === 'shipping_pincode' ? (
+                    <input value={form.shipping_pincode}
+                      onChange={(e) => handlePincodeAutofill(e.target.value, 'shipping_city', 'shipping_state', 'shipping_pincode')}
+                      onBlur={(e) => handlePincodeAutofill(e.target.value, 'shipping_city', 'shipping_state', 'shipping_pincode')}
+                      className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                  ) : (
+                    <input value={form[k]} onChange={(e) => set(k, e.target.value)}
+                      className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                  )}
                 </div>
               ))}
             </>
@@ -260,6 +482,8 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
                   </p>
                   {addr.is_head_office && <span className="text-xs text-green-700">Default</span>}
                   <div className="flex gap-2 pt-1">
+                    <button type="button" onClick={() => handleEditAddress(addr)}
+                      className="text-xs text-blue-600 hover:underline">Edit</button>
                     {!addr.is_head_office && (
                       <button type="button" onClick={() => handleSetDefaultAddress(addr.customer_address_id)}
                         className="text-xs text-blue-600 hover:underline">Set as default</button>
@@ -271,6 +495,9 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
               ))}
               {showAddrForm ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-3 border rounded-lg">
+                  <p className="sm:col-span-2 text-sm font-medium text-gray-800">
+                    {editingAddressId ? 'Edit shipping address' : 'Add shipping address'}
+                  </p>
                   <div className="sm:col-span-2">
                     <label className="text-xs text-gray-500">Address *</label>
                     <textarea value={addrForm.address} onChange={(e) => setAddrForm((f) => ({ ...f, address: e.target.value }))}
@@ -282,21 +509,46 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
                   ].map(([k, label]) => (
                     <div key={k}>
                       <label className="text-xs text-gray-500">{label}</label>
-                      <input value={addrForm[k]} onChange={(e) => setAddrForm((f) => ({ ...f, [k]: e.target.value }))}
-                        className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" />
+                      {k === 'state' ? (
+                        <select value={addrForm.state} onChange={(e) => setAddrForm((f) => ({ ...f, state: e.target.value }))}
+                          className="w-full mt-1 border rounded-lg px-3 py-2 text-sm bg-white">
+                          <option value="">Select state</option>
+                          {INDIAN_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      ) : k === 'pincode' ? (
+                        <input value={addrForm.pincode}
+                          onChange={(e) => applyPincodeAutofill(e.target.value, setAddrForm, {
+                            pinKey: 'pincode', cityKey: 'city', stateKey: 'state',
+                          })}
+                          onBlur={(e) => applyPincodeAutofill(e.target.value, setAddrForm, {
+                            pinKey: 'pincode', cityKey: 'city', stateKey: 'state',
+                          })}
+                          className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" />
+                      ) : (
+                        <input
+                          value={addrForm[k]}
+                          onChange={(e) => setAddrForm((f) => ({
+                            ...f,
+                            [k]: k === 'mobile_no' ? formatIndianMobileInput(e.target.value) : e.target.value,
+                          }))}
+                          maxLength={k === 'mobile_no' ? 10 : undefined}
+                          inputMode={k === 'mobile_no' ? 'numeric' : undefined}
+                          className="w-full mt-1 border rounded-lg px-3 py-2 text-sm"
+                        />
+                      )}
                     </div>
                   ))}
                   <div className="sm:col-span-2 flex gap-2">
                     <button type="button" onClick={handleSaveAddress} disabled={addrSaving}
                       className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg disabled:opacity-50">
-                      {addrSaving ? 'Saving...' : 'Save Address'}
+                      {addrSaving ? 'Saving...' : editingAddressId ? 'Update Address' : 'Save Address'}
                     </button>
-                    <button type="button" onClick={() => { setShowAddrForm(false); setAddrForm(emptyAddrForm()); }}
+                    <button type="button" onClick={resetAddrForm}
                       className="px-3 py-1.5 text-sm border rounded-lg">Cancel</button>
                   </div>
                 </div>
               ) : (
-                <button type="button" onClick={() => setShowAddrForm(true)}
+                <button type="button" onClick={() => { setEditingAddressId(null); setAddrForm(emptyAddrForm()); setShowAddrForm(true); }}
                   className="text-sm text-blue-600 hover:underline">+ Add Shipping Address</button>
               )}
             </div>

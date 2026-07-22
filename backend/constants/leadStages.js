@@ -1,7 +1,7 @@
 /**
- * Lead status ↔ lead stage (reason / substage). Kept in sync with frontend/src/constants/leadStages.js
+ * Lead status ↔ lead stage (reason / substage). Kept in sync with frontend lead constants.
  */
-const STATUSES_WITHOUT_STAGE_CHOICE = ['Deal', 'Call Back', 'Demo'];
+const STATUSES_WITHOUT_STAGE_CHOICE = ['Call Back', 'Demo', 'Pending'];
 
 const STAGES_BY_STATUS = {
   Cold: ['Proposal Shared', 'In Follow Up', 'Nurturing'],
@@ -28,8 +28,9 @@ const STAGES_BY_STATUS = {
     'Enquiry Raised By Mistake',
     'Service Not Feasible',
     'Need Local Vendor'
-  ]
-  // Pending: no substages (optional null)
+  ],
+  Deal: ['Deal'],
+  Repeat: ['Repeat Customer']
 };
 
 function stagesForStatus(status) {

@@ -1,7 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { INDIAN_STATES, slugifyState } from '../../constants/indianStates';
+import { applyPincodeAutofill } from '../../utils/pincodeLookup';
 import { createCustomerManagement, fetchCustomerManagementMeta } from '../../utils/customerManagementApi';
+import { formatIndianMobileInput, indianMobileError, normalizeIndianMobile } from '../../utils/phoneValidation';
+import { CUSTOMER_TYPE_OPTIONS } from '../../utils/customerType';
+import { useAuth } from '../../context/AuthContext';
 
 const emptyForm = {
   customer_name: '',
@@ -21,12 +25,15 @@ const emptyForm = {
   shipping_address_1: '',
   shipping_address_2: '',
   business_type: '',
+  customer_type: 'both',
   gst_number: '',
   pan_card_number: '',
 };
 
 export default function CustomerAddPage() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const canEditType = user?.role === 'admin' || user?.role === 'super_admin';
   const [form, setForm] = useState(emptyForm);
   const [uploadDocs, setUploadDocs] = useState([]);
   const [profile, setProfile] = useState(null);
@@ -42,6 +49,9 @@ export default function CustomerAddPage() {
 
   const update = (field, value) => setForm((prev) => ({ ...prev, [field]: value }));
 
+  const handlePincodeChange = (field, cityField, stateField, value) =>
+    applyPincodeAutofill(value, setForm, { pinKey: field, cityKey: cityField, stateKey: stateField });
+
   const onProfileChange = (e) => {
     const file = e.target.files?.[0];
     setProfile(file || null);
@@ -56,6 +66,12 @@ export default function CustomerAddPage() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    const phoneErr = indianMobileError(form.customer_number, { required: true, label: 'Customer number' });
+    const contactErr = indianMobileError(form.contact_person_number, { required: true, label: 'Contact number' });
+    if (phoneErr || contactErr) {
+      setError(phoneErr || contactErr);
+      return;
+    }
     setSaving(true);
     setError('');
     try {
@@ -63,6 +79,8 @@ export default function CustomerAddPage() {
       Object.entries(form).forEach(([key, value]) => {
         if (key.includes('_state')) {
           payload.append(key, slugifyState(value));
+        } else if (key === 'customer_number' || key === 'contact_person_number') {
+          payload.append(key, normalizeIndianMobile(value));
         } else {
           payload.append(key, value ?? '');
         }
@@ -95,7 +113,7 @@ export default function CustomerAddPage() {
             </Field>
             <Field label="Customer Number" required>
               <input required type="tel" maxLength={10} className="field-input" value={form.customer_number}
-                onChange={(e) => update('customer_number', e.target.value.replace(/\D/g, '').slice(0, 10))} placeholder="Customer number" />
+                onChange={(e) => update('customer_number', formatIndianMobileInput(e.target.value))} placeholder="Customer number" />
             </Field>
             <Field label="Customer Email" required>
               <input required type="email" className="field-input" value={form.email} onChange={(e) => update('email', e.target.value)} placeholder="Email" />
@@ -105,7 +123,7 @@ export default function CustomerAddPage() {
             </Field>
             <Field label="Contact Person Number" required>
               <input required type="tel" maxLength={10} className="field-input" value={form.contact_person_number}
-                onChange={(e) => update('contact_person_number', e.target.value.replace(/\D/g, '').slice(0, 10))} />
+                onChange={(e) => update('contact_person_number', formatIndianMobileInput(e.target.value))} />
             </Field>
             <Field label="Password" required>
               <input required readOnly className="field-input bg-gray-50" value={form.password} />
@@ -129,7 +147,9 @@ export default function CustomerAddPage() {
               <input required className="field-input" value={form.billing_city} onChange={(e) => update('billing_city', e.target.value)} />
             </Field>
             <Field label="Billing Pin Code" required>
-              <input required className="field-input" value={form.billing_pin_code} onChange={(e) => update('billing_pin_code', e.target.value)} />
+              <input required className="field-input" value={form.billing_pin_code}
+                onChange={(e) => handlePincodeChange('billing_pin_code', 'billing_city', 'billing_state', e.target.value)}
+                onBlur={(e) => handlePincodeChange('billing_pin_code', 'billing_city', 'billing_state', e.target.value)} />
             </Field>
             <Field label="Billing Address 1" required>
               <textarea required rows={2} className="field-input" value={form.billing_address_1} onChange={(e) => update('billing_address_1', e.target.value)} />
@@ -151,7 +171,9 @@ export default function CustomerAddPage() {
               <input required className="field-input" value={form.shipping_city} onChange={(e) => update('shipping_city', e.target.value)} />
             </Field>
             <Field label="Shipping Pin Code" required>
-              <input required className="field-input" value={form.shipping_pin_code} onChange={(e) => update('shipping_pin_code', e.target.value)} />
+              <input required className="field-input" value={form.shipping_pin_code}
+                onChange={(e) => handlePincodeChange('shipping_pin_code', 'shipping_city', 'shipping_state', e.target.value)}
+                onBlur={(e) => handlePincodeChange('shipping_pin_code', 'shipping_city', 'shipping_state', e.target.value)} />
             </Field>
             <Field label="Shipping Address 1" required>
               <textarea required rows={2} className="field-input" value={form.shipping_address_1} onChange={(e) => update('shipping_address_1', e.target.value)} />
@@ -166,6 +188,23 @@ export default function CustomerAddPage() {
                 <option value="regular">Regular</option>
                 <option value="supplier">Supplier</option>
               </select>
+            </Field>
+            <Field label="Customer Type" required>
+              <select
+                required
+                className="field-input"
+                value={form.customer_type}
+                onChange={(e) => update('customer_type', e.target.value)}
+                disabled={!canEditType}
+                title={canEditType ? undefined : 'Only Admin / Super Admin can set Customer Type'}
+              >
+                {CUSTOMER_TYPE_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+              {!canEditType ? (
+                <p className="text-[11px] text-gray-400 mt-1">Defaults to Both — Admin can change later</p>
+              ) : null}
             </Field>
             <Field label="GST Number">
               <input className="field-input uppercase" value={form.gst_number} onChange={(e) => update('gst_number', e.target.value.toUpperCase())} />

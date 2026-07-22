@@ -80,4 +80,26 @@ const checkPermission = (permission) => {
   };
 };
 
-module.exports = { authMiddleware, checkRole, checkPermission, checkRoleOrPermission };
+// DB-backed permission check — the role_permissions matrix is the source of
+// truth, with per-user overrides from user_permissions. Delegates to the
+// canonical section-permission middleware (caching + status-aware) so there is
+// a single implementation across the codebase.
+// action: 'view' | 'create' | 'edit' | 'delete'
+const checkSectionPermission = (section, action = 'view') => {
+  const { checkPermission: sectionCheck } = require('./checkPermission');
+  return sectionCheck(section, action);
+};
+
+const checkAnySectionPermission = (sections, action = 'view') => {
+  const { checkAnySectionPermission: anyCheck } = require('./checkPermission');
+  return anyCheck(sections, action);
+};
+
+module.exports = {
+  authMiddleware,
+  checkRole,
+  checkPermission,
+  checkRoleOrPermission,
+  checkSectionPermission,
+  checkAnySectionPermission,
+};

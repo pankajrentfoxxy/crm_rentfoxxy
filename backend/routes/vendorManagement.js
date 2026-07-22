@@ -3,19 +3,24 @@
  * Base path: /api/vendor-management (mounted from server.js)
  */
 const express = require('express');
-const { authMiddleware, checkRoleOrPermission } = require('../middleware/auth');
+const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
+const { wrapMulter } = require('../config/uploadLimits');
 const vendors = require('../controllers/vendorManagement/vendors.controller');
 const purchaseOrders = require('../controllers/vendorManagement/purchaseOrders.controller');
 const sparePo = require('../controllers/vendorManagement/sparePartsOrders.controller');
+const spareCatalog = require('../controllers/vendorManagement/sparePartsCatalog.controller');
 const serials = require('../controllers/vendorManagement/serialNumbers.controller');
 const billing = require('../controllers/vendorManagement/billing.controller');
 const replaced = require('../controllers/vendorManagement/replacedProducts.controller');
 
 const router = express.Router();
 
+// RBAC driven by the role_permissions matrix (single source of truth) — view
+// access to the Vendor Management module. Write actions are gated by the UI's
+// can_create/can_edit flags; tighten per-action here later if needed.
 const authorize = [
   authMiddleware,
-  checkRoleOrPermission(['admin', 'manager', 'procurement'], ['vendor_management_access'])
+  checkSectionPermission('vendor_management', 'view')
 ];
 
 const upload = vendors.buildMulter();
@@ -29,18 +34,19 @@ const vendorFiles = upload.fields([
 // ---------- Vendors (Laravel VendorController equivalents) ----------------------------
 router.get('/vendors/info', authorize, vendors.lookupValidators, vendors.lookupVendor);
 router.get('/vendors', authorize, vendors.listValidators, vendors.listVendors);
+router.get('/vendors/:id/laptops', authorize, vendors.laptopsValidators, vendors.listVendorLaptops);
 router.get('/vendors/:id', authorize, vendors.getValidators, vendors.getVendor);
 router.post(
   '/vendors',
   authorize,
-  vendorFiles,
+  wrapMulter(vendorFiles),
   ...vendors.createValidators(),
   vendors.createVendor
 );
 router.put(
   '/vendors/:id',
   authorize,
-  vendorFiles,
+  wrapMulter(vendorFiles),
   ...vendors.updateValidatorsFixed(),
   vendors.updateVendor
 );
@@ -78,6 +84,24 @@ router.post(
   ...purchaseOrders.receivePoLineBulkValidators,
   purchaseOrders.receivePoLineBulk
 );
+router.post(
+  '/purchase-orders/:poId/product-received/receive-unit',
+  authorize,
+  ...purchaseOrders.receivePoLineUnitValidators,
+  purchaseOrders.receivePoLineUnit
+);
+const grnCapture = require('../controllers/grnSerialCapture.controller');
+router.post(
+  '/purchase-orders/:poId/grn-capture-tokens',
+  authorize,
+  ...grnCapture.createTokenValidators,
+  grnCapture.createGrnCaptureToken
+);
+router.get(
+  '/grn-capture-tokens/:token',
+  authorize,
+  grnCapture.getGrnCaptureTokenStatus
+);
 router.get(
   '/purchase-orders/:poId/generated-grn',
   authorize,
@@ -98,18 +122,20 @@ router.patch('/purchase-orders/:id/status', authorize, purchaseOrders.statusVali
 router.post(
   '/purchase-orders/:id/bills',
   authorize,
-  poBillsUpload.array('files', 25),
+  wrapMulter(poBillsUpload.array('files', 25)),
   purchaseOrders.uploadBills
 );
 const grnBillsUpload = purchaseOrders.createGrnBillsUpload();
 router.post(
   '/purchase-orders/:poId/grns/:grnId/bills',
   authorize,
-  grnBillsUpload.array('files', 10),
+  wrapMulter(grnBillsUpload.array('files', 10)),
   purchaseOrders.grnBillParamValidators,
   purchaseOrders.uploadGrnBill
 );
 
+router.get('/purchase-orders/:poId/activities', authorize, purchaseOrders.listPurchaseOrderActivities);
+router.post('/purchase-orders/:poId/activities', authorize, purchaseOrders.logPurchaseOrderDocumentActivity);
 router.get('/purchase-orders/:id', authorize, purchaseOrders.getValidators, purchaseOrders.getOne);
 router.post('/purchase-orders', authorize, ...purchaseOrders.createValidators(), purchaseOrders.create);
 router.put('/purchase-orders/:id', authorize, purchaseOrders.updateValidators, purchaseOrders.update);
@@ -130,12 +156,15 @@ router.put('/serial-numbers/update', authorize, serials.serialUpdateValidators, 
 // ---------- Spare parts PO ---------------------------------------------------------
 router.get('/spare-parts-orders/next-number', authorize, sparePo.nextNumber);
 router.get('/spare-parts-orders/form-meta', authorize, sparePo.formMeta);
+router.get('/spare-parts-catalog', authorize, spareCatalog.listCatalog);
+router.post('/spare-parts-catalog', authorize, spareCatalog.createValidators, spareCatalog.createCatalogItem);
+router.patch('/spare-parts-catalog/:id', authorize, spareCatalog.updateValidators, spareCatalog.updateCatalogItem);
 router.patch('/spare-parts-orders/:id/status', authorize, sparePo.statusValidators, sparePo.updateStatus);
 const spoBillsUpload = sparePo.createSpoBillsUpload();
 router.post(
   '/spare-parts-orders/:id/bills',
   authorize,
-  spoBillsUpload.array('files', 25),
+  wrapMulter(spoBillsUpload.array('files', 25)),
   sparePo.uploadBills
 );
 router.get(
