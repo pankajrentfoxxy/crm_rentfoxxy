@@ -21,6 +21,26 @@ const {
   appendCustomerTypeCondition,
   isCustomerTypeAllowed,
 } = require('../services/customerAccessScope');
+const { parseExtra } = require('../services/qcManagementService');
+const productionAssetService = require('../services/productionAssetService');
+const {
+  buildAssetBeforeState,
+  buildAssetChangeSet,
+  logCustomerAssetEdit,
+  listCustomerAssetActivity,
+  normalizeAssetDateField,
+} = require('../services/customerAssetActivityService');
+
+const CUSTOMER_ASSET_SPEC_FIELDS = [
+  'brand',
+  'model',
+  'processor',
+  'generation',
+  'ram',
+  'storage',
+  'gpu',
+  'screen_size',
+];
 
 /**
  * Customer Access guard for single-record endpoints (GET/PUT/DELETE /customers/:id
@@ -1399,6 +1419,291 @@ async function queryCustomerReturnedAssets(customerId, { search = '', limit, off
 
 // "Assets with Customer" — derived from the authoritative inventory
 // (vendor_serial_numbers), replacing the deprecated customer_inventory table.
+/** Edit deployed asset specs / monthly rate for a customer-held serial. */
+exports.updateCustomerAsset = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const customerId = parseInt(req.params.customerId, 10);
+    const serialId = parseInt(req.params.serialId, 10);
+    if (!customerId || !serialId) {
+      return res.status(400).json({ success: false, message: 'Invalid customer or serial id' });
+    }
+
+    const access = await checkCustomerAccessById(req, customerId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, message: access.message });
+    }
+
+    const specPayload = {};
+    for (const field of CUSTOMER_ASSET_SPEC_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, field)) {
+        const val = req.body[field];
+        specPayload[field] = val == null ? '' : String(val).trim();
+      }
+    }
+
+    let rentMonthlyRate;
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'rent_monthly_rate')) {
+      const raw = req.body.rent_monthly_rate;
+      if (raw == null || raw === '') {
+        rentMonthlyRate = null;
+      } else {
+        const n = Number(raw);
+        if (!Number.isFinite(n) || n < 0) {
+          return res.status(400).json({ success: false, message: 'Invalid monthly rate' });
+        }
+        rentMonthlyRate = n;
+      }
+    }
+
+    let dcNumber;
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'dc_number')) {
+      const raw = req.body.dc_number;
+      dcNumber = raw == null || raw === '' ? null : String(raw).trim();
+    }
+
+    let deliveredAt;
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'delivered_at')) {
+      const raw = req.body.delivered_at;
+      if (raw == null || raw === '') {
+        deliveredAt = null;
+      } else {
+        deliveredAt = normalizeAssetDateField(raw);
+        if (!deliveredAt) {
+          return res.status(400).json({ success: false, message: 'Invalid delivery date' });
+        }
+      }
+    }
+
+    if (
+      !Object.keys(specPayload).length
+      && rentMonthlyRate === undefined
+      && dcNumber === undefined
+      && deliveredAt === undefined
+    ) {
+      return res.status(400).json({ success: false, message: 'Provide at least one field to update' });
+    }
+
+    await client.query('BEGIN');
+
+    const cur = await client.query(
+      `SELECT vsn.serial_id, vsn.serial_number, vsn.inventory_asset_code, vsn.extra,
+              vsn.inventory_status, vsn.current_customer_id, vsn.rent_monthly_rate,
+              vsn.current_dc_number, vsn.delivered_at,
+              inv.inventory_id, inv.brand AS inv_brand, inv.model AS inv_model,
+              inv.processor AS inv_processor, inv.generation AS inv_generation,
+              inv.ram AS inv_ram, inv.storage AS inv_storage, inv.gpu AS inv_gpu,
+              inv.screen_size AS inv_screen_size
+         FROM vendor_serial_numbers vsn
+         LEFT JOIN inventory inv ON (
+           inv.machine_number = vsn.inventory_asset_code
+           OR inv.serial_number = vsn.serial_number
+         )
+        WHERE vsn.serial_id = $1
+          AND vsn.deleted_at IS NULL
+        FOR UPDATE OF vsn`,
+      [serialId]
+    );
+
+    if (!cur.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Serial not found' });
+    }
+
+    const row = cur.rows[0];
+    if (parseInt(row.current_customer_id, 10) !== customerId) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Asset not found for this customer' });
+    }
+    if (!DEPLOYED_WITH_CUSTOMER_STATUSES.includes(String(row.inventory_status || ''))) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Only active customer-held assets can be edited here',
+      });
+    }
+
+    const extra = parseExtra(row.extra);
+    const before = buildAssetBeforeState(row, extra);
+    const changes = buildAssetChangeSet(before, {
+      specPayload,
+      rentMonthlyRate,
+      dcNumber,
+      deliveredAt,
+    });
+
+    if (!changes.length) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: 'No changes detected' });
+    }
+
+    for (const [key, val] of Object.entries(specPayload)) {
+      if (val) extra[key] = val;
+      else delete extra[key];
+      if (key === 'model') {
+        if (val) extra.model_name = val;
+        else delete extra.model_name;
+      }
+    }
+    if (Object.keys(specPayload).length) {
+      extra.spec_source = 'customer_asset_edit';
+      extra.spec_corrected_at = new Date().toISOString();
+      extra.spec_corrected_by = req.user?.user_id || null;
+    }
+
+    const vsnPatch = [];
+    const vsnParams = [];
+    let p = 1;
+    if (Object.keys(specPayload).length) {
+      vsnPatch.push(`extra = $${p++}::jsonb`);
+      vsnParams.push(JSON.stringify(extra));
+    }
+    if (rentMonthlyRate !== undefined) {
+      vsnPatch.push(`rent_monthly_rate = $${p++}`);
+      vsnParams.push(rentMonthlyRate);
+    }
+    if (dcNumber !== undefined) {
+      vsnPatch.push(`current_dc_number = $${p++}`);
+      vsnParams.push(dcNumber);
+    }
+    if (deliveredAt !== undefined) {
+      vsnPatch.push(`delivered_at = $${p++}::timestamptz`);
+      vsnParams.push(`${deliveredAt}T00:00:00.000Z`);
+    }
+    vsnPatch.push('updated_at = NOW()');
+    vsnParams.push(serialId);
+
+    await client.query(
+      `UPDATE vendor_serial_numbers SET ${vsnPatch.join(', ')} WHERE serial_id = $${p}`,
+      vsnParams
+    );
+
+    const effectiveDcNumber = dcNumber !== undefined ? dcNumber : row.current_dc_number;
+    if (deliveredAt !== undefined && effectiveDcNumber) {
+      await client.query(
+        `UPDATE delivery_challan_lines
+            SET delivered_at = $1::timestamptz,
+                delivery_completed_at = $1::timestamptz,
+                updated_at = NOW()
+          WHERE dc_number = $2
+            AND customer_id = $3
+            AND COALESCE(movement_type, 'outbound') = 'outbound'`,
+        [`${deliveredAt}T00:00:00.000Z`, effectiveDcNumber, customerId]
+      );
+    }
+
+    let invRow = null;
+    if (row.inventory_id && Object.keys(specPayload).length) {
+      const invUpdates = [];
+      const invParams = [];
+      let i = 1;
+      const setInv = (col, key) => {
+        if (!Object.prototype.hasOwnProperty.call(specPayload, key)) return;
+        invUpdates.push(`${col} = $${i++}`);
+        invParams.push(specPayload[key] || null);
+      };
+      setInv('brand', 'brand');
+      setInv('model', 'model');
+      setInv('processor', 'processor');
+      setInv('generation', 'generation');
+      setInv('ram', 'ram');
+      setInv('storage', 'storage');
+      setInv('gpu', 'gpu');
+      setInv('screen_size', 'screen_size');
+      if (invUpdates.length) {
+        invUpdates.push('updated_at = CURRENT_TIMESTAMP');
+        invParams.push(row.inventory_id);
+        const invRes = await client.query(
+          `UPDATE inventory SET ${invUpdates.join(', ')} WHERE inventory_id = $${i} RETURNING *`,
+          invParams
+        );
+        invRow = invRes.rows[0] || null;
+      }
+    }
+
+    let productionAssetSync = null;
+    if (Object.keys(specPayload).length) {
+      const syncRow = invRow || {
+        serial_number: row.serial_number,
+        machine_number: row.inventory_asset_code,
+        brand: specPayload.brand ?? extra.brand ?? row.inv_brand,
+        model: specPayload.model ?? extra.model ?? extra.model_name ?? row.inv_model,
+        processor: specPayload.processor ?? extra.processor ?? row.inv_processor,
+        generation: specPayload.generation ?? extra.generation ?? row.inv_generation,
+        ram: specPayload.ram ?? extra.ram ?? row.inv_ram,
+        storage: specPayload.storage ?? extra.storage ?? row.inv_storage,
+        gpu: specPayload.gpu ?? extra.gpu ?? row.inv_gpu,
+        screen_size: specPayload.screen_size ?? extra.screen_size ?? row.inv_screen_size,
+      };
+      try {
+        productionAssetSync = await productionAssetService.syncWorkingConfigFromInventory(
+          client,
+          syncRow,
+          req.user?.user_id
+        );
+      } catch (paErr) {
+        console.error('updateCustomerAsset production asset sync:', paErr.message);
+      }
+    }
+
+    await client.query('COMMIT');
+
+    const ttsplId = row.inventory_asset_code || row.serial_number;
+    await logCustomerAssetEdit({
+      customerId,
+      serialId,
+      ttsplId,
+      serialNumber: row.serial_number,
+      changes,
+      actorUserId: req.user?.user_id,
+      actorName: req.user?.name || null,
+    });
+
+    const responsePayload = {
+      ...specPayload,
+      model_name: specPayload.model ?? extra.model_name,
+    };
+    if (rentMonthlyRate !== undefined) responsePayload.rent_monthly_rate = rentMonthlyRate;
+    if (dcNumber !== undefined) responsePayload.dc_number = dcNumber;
+    if (deliveredAt !== undefined) responsePayload.delivered_at = deliveredAt;
+
+    res.json({
+      success: true,
+      message: 'Customer asset updated',
+      asset: responsePayload,
+      activity: changes,
+      production_asset_changes: productionAssetSync?.changes || null,
+    });
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      /* ignore */
+    }
+    console.error('updateCustomerAsset:', error);
+    res.status(500).json({ success: false, message: error.message || 'Failed to update asset' });
+  } finally {
+    client.release();
+  }
+};
+
+exports.getCustomerAssetActivity = async (req, res) => {
+  try {
+    const customerId = parseInt(req.params.customerId, 10);
+    const access = await checkCustomerAccessById(req, customerId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, message: access.message });
+    }
+    const limit = parseInt(req.query.limit, 10) || 20;
+    const serialId = req.query.serial_id ? parseInt(req.query.serial_id, 10) : null;
+    const activity = await listCustomerAssetActivity(customerId, { limit, serialId });
+    res.json({ success: true, activity });
+  } catch (error) {
+    console.error('getCustomerAssetActivity:', error);
+    res.status(500).json({ success: false, message: error.message || 'Failed to load activity' });
+  }
+};
+
 exports.getCustomerLaptops = async (req, res) => {
   try {
     const customerId = parseInt(req.params.customerId, 10);

@@ -1,13 +1,13 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Copy, FileText, Loader2 } from 'lucide-react';
+import { ArrowLeft, Copy, FileText, Loader2, Pencil } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import { Button, SearchField, ListPagination } from '../../../components/ui/primitives';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
 import {
-  getCustomer, getCustomerLaptops, getCustomerAddresses, verifyCustomerKyc, enableCustomerPortal,
+  getCustomer, getCustomerLaptops, getCustomerAssetActivity, getCustomerAddresses, verifyCustomerKyc, enableCustomerPortal,
 } from '../leadCrmApi';
 import { formatCurrency } from '../leadCrmUtils';
 import { getBackendOrigin } from '../../../utils/api';
@@ -15,6 +15,9 @@ import CustomerDocuments from '../components/CustomerDocuments';
 import CustomerFormDrawer from '../components/CustomerFormDrawer';
 import CustomerAddressesTab from '../components/CustomerAddressesTab';
 import CustomerAddressModal from '../components/CustomerAddressModal';
+import CustomerAssetEditModal from '../components/CustomerAssetEditModal';
+import CustomerAssetActivityFeed from '../components/CustomerAssetActivityFeed';
+import usePermission from '../../../hooks/usePermission';
 
 const TABS = ['Profile', 'Addresses', 'Documents', 'Assets', 'Orders', 'Lead Origin', 'Portal Access'];
 const TAB_PROFILE = 0;
@@ -154,6 +157,10 @@ export default function CustomerDetailPage() {
   const [savedAddresses, setSavedAddresses] = useState([]);
   const [addressesLoading, setAddressesLoading] = useState(false);
   const [addressModal, setAddressModal] = useState(null);
+  const [assetEdit, setAssetEdit] = useState(null);
+  const [assetActivity, setAssetActivity] = useState([]);
+  const [assetActivityLoading, setAssetActivityLoading] = useState(false);
+  const { canEdit: canEditCustomerAssets } = usePermission();
 
   const loadCustomer = useCallback(async () => {
     try {
@@ -202,12 +209,29 @@ export default function CustomerDetailPage() {
     }
   }, [id, assetView, assetPage, assetSearch]);
 
+  const loadAssetActivity = useCallback(async () => {
+    setAssetActivityLoading(true);
+    try {
+      const res = await getCustomerAssetActivity(id, { limit: 15 });
+      setAssetActivity(res.data?.activity || []);
+    } catch {
+      setAssetActivity([]);
+    } finally {
+      setAssetActivityLoading(false);
+    }
+  }, [id]);
+
+  const refreshAssetsTab = useCallback(async () => {
+    await Promise.all([loadAssets(), loadAssetActivity()]);
+  }, [loadAssets, loadAssetActivity]);
+
   useEffect(() => { loadCustomer(); }, [loadCustomer]);
 
   useEffect(() => {
     if (tab !== TAB_ASSETS) return;
     loadAssets();
-  }, [tab, loadAssets]);
+    loadAssetActivity();
+  }, [tab, loadAssets, loadAssetActivity]);
 
   useEffect(() => {
     if (tab !== TAB_ADDRESSES) return;
@@ -218,9 +242,9 @@ export default function CustomerDetailPage() {
 
   const load = useCallback(async () => {
     await loadCustomer();
-    if (tab === TAB_ASSETS) await loadAssets();
+    if (tab === TAB_ASSETS) await refreshAssetsTab();
     if (tab === TAB_ADDRESSES) await loadAddresses();
-  }, [loadCustomer, loadAssets, loadAddresses, tab]);
+  }, [loadCustomer, refreshAssetsTab, loadAddresses, tab]);
 
   if (!customer) return <div className="p-6 text-center text-gray-400">Loading...</div>;
 
@@ -399,7 +423,19 @@ export default function CustomerDetailPage() {
                 <div key={lap.serial_id || lap.ttspl_id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
                   <div className="flex items-center justify-between gap-2">
                     <button type="button" onClick={() => setTtsplOpen(lap.ttspl_id || lap.serial_number)} className="text-blue-600 font-mono text-sm font-semibold">{lap.ttspl_id || lap.serial_number}</button>
-                    <span className="px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-xs">{lap.status || 'rented'}</span>
+                    <div className="flex items-center gap-1">
+                      {canEditCustomerAssets('customer_assets') && lap.serial_id ? (
+                        <button
+                          type="button"
+                          title="Edit asset"
+                          onClick={() => setAssetEdit(lap)}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                      ) : null}
+                      <span className="px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-xs">{lap.status || 'rented'}</span>
+                    </div>
                   </div>
                   <p className="text-sm text-slate-800">{lap.model_name || '—'}</p>
                   <p className="text-xs text-slate-500">SN: {lap.serial_number || '—'}</p>
@@ -443,7 +479,7 @@ export default function CustomerDetailPage() {
               <thead className="bg-gray-50 text-xs text-gray-500 text-left">
                 <tr>
                   {(assetView === 'active'
-                    ? ['#', 'TTSPL ID', 'Serial No', 'Model', 'Config', 'Entity', 'DC Number', 'Delivered Date', 'Monthly Rate', 'POD', 'Status']
+                    ? ['#', 'TTSPL ID', 'Serial No', 'Model', 'Config', 'Entity', 'DC Number', 'Delivered Date', 'Monthly Rate', 'POD', 'Status', 'Actions']
                     : ['#', 'TTSPL ID', 'Serial No', 'Model', 'Config', 'Return DC', 'Returned Date', 'Type', 'POD', 'Status']
                   ).map((h) => <th key={h} className="p-3">{h}</th>)}
                 </tr>
@@ -451,7 +487,7 @@ export default function CustomerDetailPage() {
               <tbody>
                 {assetView === 'active' ? (
                   assetRows.length === 0 ? (
-                    <tr><td colSpan={11} className="p-6 text-center text-gray-400">No assets currently with this customer</td></tr>
+                    <tr><td colSpan={12} className="p-6 text-center text-gray-400">No assets currently with this customer</td></tr>
                   ) : assetRows.map((lap, i) => (
                     <tr key={lap.serial_id || lap.ttspl_id} className="border-t border-gray-100">
                       <td className="p-3 text-xs text-gray-400">{(assetPage - 1) * ASSET_PAGE_SIZE + i + 1}</td>
@@ -474,6 +510,20 @@ export default function CustomerDetailPage() {
                       <td className="p-3 text-xs">{lap.rent_monthly_rate ? formatCurrency(lap.rent_monthly_rate) : '—'}</td>
                       <td className="p-3 text-xs"><PodLinks pdfPath={lap.dc_pdf_path} files={lap.pod_files} keyPrefix={lap.serial_id || lap.ttspl_id} /></td>
                       <td className="p-3"><span className="px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-xs">{lap.status || 'rented'}</span></td>
+                      <td className="p-3">
+                        {canEditCustomerAssets('customer_assets') && lap.serial_id ? (
+                          <button
+                            type="button"
+                            title="Edit asset"
+                            onClick={() => setAssetEdit(lap)}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 hover:text-teal-700"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                        ) : (
+                          <span className="text-xs text-gray-300">—</span>
+                        )}
+                      </td>
                     </tr>
                   ))
                 ) : (
@@ -510,6 +560,8 @@ export default function CustomerDetailPage() {
             pageSize={ASSET_PAGE_SIZE}
             onPageChange={setAssetPage}
           />
+
+          <CustomerAssetActivityFeed activity={assetActivity} loading={assetActivityLoading} />
           </>
           )}
         </div>
@@ -617,6 +669,13 @@ export default function CustomerDetailPage() {
         initial={addressModal?.initial}
         onClose={() => setAddressModal(null)}
         onSaved={load}
+      />
+      <CustomerAssetEditModal
+        open={Boolean(assetEdit)}
+        customerId={customer.customer_id}
+        asset={assetEdit}
+        onClose={() => setAssetEdit(null)}
+        onSaved={refreshAssetsTab}
       />
       <TtsplHistoryDrawer ttsplId={ttsplOpen} open={!!ttsplOpen} onClose={() => setTtsplOpen(null)} />
       {newPassword && <PasswordModal password={newPassword} onClose={() => setNewPassword(null)} />}

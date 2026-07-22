@@ -40,6 +40,10 @@ export const bulkUpdateCustomerType = (data) =>
   api.patch('/customer-management/customers/bulk-customer-type', data);
 export const verifyCustomerKyc = (id) => api.put(`/customer-management/customers/${id}/verify-kyc`);
 export const getCustomerLaptops = (id, params) => api.get(`/customer-management/customers/${id}/laptops`, { params });
+export const getCustomerAssetActivity = (customerId, params) =>
+  api.get(`/customer-management/customers/${customerId}/assets/activity`, { params });
+export const updateCustomerAsset = (customerId, serialId, body) =>
+  api.patch(`/customer-management/customers/${customerId}/laptops/${serialId}`, body);
 export const getCustomerAddresses = (id) => api.get(`/customer-management/customers/${id}/addresses`);
 export const addCustomerAddress = (id, data) => api.post(`/customer-management/customers/${id}/addresses`, data);
 export const updateCustomerAddress = (id, addressId, data) =>

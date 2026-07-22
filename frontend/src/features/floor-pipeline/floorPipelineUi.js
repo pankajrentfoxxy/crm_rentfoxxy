@@ -321,6 +321,7 @@ export const EVENT_ICONS = {
   chip_repair_started: '🔬',
   body_paint_started: '🎨',
   inventory_tagged: '🏷️',
+  customer_asset_updated: '✏️',
   status_in_stock: '📦',
   status_reserved: '🔒',
   status_in_transit: '🚚',

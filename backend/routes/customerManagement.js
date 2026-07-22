@@ -43,6 +43,12 @@ router.post(
 router.put('/customers/:customerId/verify-kyc', cp('kyc_management', 'edit'), ctrl.verifyCustomerKyc);
 router.patch('/customers/:customerId/portal-access', cp('customers', 'edit'), ctrl.enableCustomerPortal);
 router.get('/customers/:customerId/laptops', cp('customer_assets', 'view'), ctrl.getCustomerLaptops);
+router.get('/customers/:customerId/assets/activity', cp('customer_assets', 'view'), ctrl.getCustomerAssetActivity);
+router.patch(
+  '/customers/:customerId/laptops/:serialId',
+  cp('customer_assets', 'edit'),
+  ctrl.updateCustomerAsset
+);
 router.get('/customers/:customerId/addresses', cp('customers', 'view'), ctrl.getCustomerAddresses);
 router.post('/customers/:customerId/addresses', cp('customers', 'edit'), ctrl.addCustomerAddress);
 router.put('/customers/:customerId/addresses/:addressId', cp('customers', 'edit'), ctrl.updateCustomerAddress);
