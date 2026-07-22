@@ -26,6 +26,7 @@ const {
   getSalesOrderDispatchDate,
   getOperationCounts,
   searchAvailableInventory,
+  assertSalesOrderVisibleToUser,
   getDcSerialRateLookup,
   lookupSerialRate,
   lookupSerialRemark,
@@ -68,6 +69,7 @@ const {
   appendCustomerTypeCondition,
   isCustomerTypeAllowed,
 } = require('../services/customerAccessScope');
+const { hasPermission } = require('../services/permissionService');
 
 /**
  * Resolve a vendor_serial_numbers.serial_id from a parsed DC serial entry,
@@ -692,6 +694,8 @@ exports.listSalesOrders = async (req, res) => {
       customerId: req.query.customer_id || null,
       status: req.query.status || '',
       entityScope: req.query.entity_scope || '',
+      viewerRole: req.user?.role || null,
+      viewerUserId: req.user?.user_id || null,
     });
     res.json({ success: true, ...data });
   } catch (error) {
@@ -701,6 +705,9 @@ exports.listSalesOrders = async (req, res) => {
 
 exports.getSalesOrder = async (req, res) => {
   try {
+    if (!req.dispatchSoAccess) {
+      await assertSalesOrderVisibleToUser(req.params.salesOrderNumber, req.user);
+    }
     const lines = await getSalesOrderLines(req.params.salesOrderNumber);
     if (!lines.length) {
       return res.status(404).json({ success: false, message: 'Sales order not found' });
@@ -712,6 +719,9 @@ exports.getSalesOrder = async (req, res) => {
       remaining_qty: await getSalesOrderRemainingQty(req.params.salesOrderNumber),
     });
   } catch (error) {
+    if (error.status === 403) {
+      return res.status(403).json({ success: false, message: error.message });
+    }
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -834,7 +844,23 @@ exports.storeSalesOrder = async (req, res) => {
         [salesOrderNumber]
       );
     }
+
+    const dispatchWf = require('../services/dispatchWorkflowService');
+    const wfStart = await dispatchWf.startWorkflow(client, {
+      salesOrderNumber,
+      quotationType: body.quotation_type || 'rental',
+      user: req.user,
+    });
+
     await client.query('COMMIT');
+
+    if (wfStart?.notifyUserId) {
+      await dispatchWf.postStartWorkflowNotifications({
+        salesOrderNumber,
+        notifyUserId: wfStart.notifyUserId,
+        assigneeName: wfStart.assigneeName,
+      });
+    }
 
     const savedLines = await getSalesOrderLines(salesOrderNumber);
     const header = savedLines[0] || {};
@@ -1413,6 +1439,20 @@ exports.storeDeliveryChallan = async (req, res) => {
       [dcNumber, dispatchMode]
     );
 
+    const dispatchWf = require('../services/dispatchWorkflowService');
+    if (body.sales_order_number) {
+      await dispatchWf.onDcGenerated(client, {
+        salesOrderNumber: body.sales_order_number,
+        dcNumber,
+        user: req.user,
+      });
+      await dispatchWf.onDispatched(client, {
+        salesOrderNumber: body.sales_order_number,
+        dcNumber,
+        user: req.user,
+      });
+    }
+
     await client.query('COMMIT');
 
     // Generate the entity-branded DC PDF and store its path.
@@ -1841,7 +1881,10 @@ exports.updateDeliveryChallan = async (req, res) => {
 
 exports.getOperationCounts = async (req, res) => {
   try {
-    const counts = await getOperationCounts();
+    const counts = await getOperationCounts({
+      role: req.user?.role || null,
+      userId: req.user?.user_id || null,
+    });
     res.json({ success: true, counts });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -2370,14 +2413,23 @@ exports.listPayments = async (req, res) => {
 exports.getSoWithPayments = async (req, res) => {
   try {
     const soNumber = req.params.soNumber;
+    if (!req.dispatchSoAccess) {
+      await assertSalesOrderVisibleToUser(soNumber, req.user);
+    }
     const lines = await getSalesOrderLines(soNumber);
     if (!lines.length) {
       return res.status(404).json({ success: false, message: 'Sales order not found' });
     }
-    const payRes = await pool.query(
-      `SELECT * FROM sales_order_payments WHERE sales_order_number = $1 ORDER BY payment_date DESC`,
-      [soNumber]
-    );
+    const canViewPayments = req.user?.role === 'super_admin'
+      || await hasPermission(req.user.user_id, req.user.role, 'payment_records', 'can_view', req.permissionCache);
+    let paymentRows = [];
+    if (canViewPayments) {
+      const payRes = await pool.query(
+        `SELECT * FROM sales_order_payments WHERE sales_order_number = $1 ORDER BY payment_date DESC`,
+        [soNumber]
+      );
+      paymentRows = payRes.rows;
+    }
     const dcRes = await pool.query(
       `SELECT DISTINCT ON (dc_number) dc_number, status, created_at, ship_by, dispatch_mode, dispatched_at
        FROM delivery_challan_lines WHERE sales_order_number = $1 ORDER BY dc_number, id DESC`,
@@ -2399,7 +2451,9 @@ exports.getSoWithPayments = async (req, res) => {
       totalValue += l.amount;
       l.hsn_code = resolveHsnForDisplay(l.hsn_code, { quotationType: l.quotation_type });
     });
-    const totalPaid = payRes.rows.reduce((s, p) => s + Number(p.amount || 0), 0);
+    const totalPaid = canViewPayments
+      ? paymentRows.reduce((s, p) => s + Number(p.amount || 0), 0)
+      : null;
     const totals = computeGstBreakdown({
       subtotal: totalValue,
       shipping: lines[0].shiping_charges,
@@ -2421,7 +2475,7 @@ exports.getSoWithPayments = async (req, res) => {
       dispatch_date: dispatchMeta.dispatch_date,
       last_dispatch_date: dispatchMeta.last_dispatch_date,
       lines,
-      payments: payRes.rows,
+      ...(canViewPayments ? { payments: paymentRows } : {}),
       delivery_challans: dcRes.rows,
       totals,
       summary: {
@@ -2433,14 +2487,19 @@ exports.getSoWithPayments = async (req, res) => {
         pending_qty: fulfillment.pending_qty,
         dispatch_date: dispatchMeta.dispatch_date,
         last_dispatch_date: dispatchMeta.last_dispatch_date,
-        total_paid: totalPaid,
-        balance_due: Math.max(0, totalValue - totalPaid),
+        ...(canViewPayments ? {
+          total_paid: totalPaid,
+          balance_due: Math.max(0, totalValue - totalPaid),
+        } : {}),
         security_amount: Number(lines[0].security_amount || 0),
         status: soStatus,
         ...totals,
       },
     });
   } catch (error) {
+    if (error.status === 403) {
+      return res.status(403).json({ success: false, message: error.message });
+    }
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -2515,7 +2574,26 @@ exports.cancelSalesOrder = async (req, res) => {
       `UPDATE sales_order_lines SET status = 'cancelled' WHERE sales_order_number = $1`,
       [soNumber]
     );
+
+    const wfCancel = await client.query(
+      `UPDATE dispatch_workflow
+          SET status = 'cancelled', updated_at = NOW()
+        WHERE sales_order_number = $1
+          AND status = 'waiting_acceptance'
+        RETURNING id, assigned_user_id`,
+      [soNumber]
+    );
+
     await client.query('COMMIT');
+
+    if (wfCancel.rows[0]) {
+      try {
+        const { emitCancelled } = require('../services/dispatchSocketService');
+        await emitCancelled(soNumber, wfCancel.rows[0].assigned_user_id);
+      } catch (err) {
+        console.error('dispatch socket cancelled emit failed:', err.message);
+      }
+    }
 
     const released = attachedRes.rows.length;
     res.json({
@@ -3062,6 +3140,15 @@ exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}) => {
       WHERE dc_number = $1`,
     [dcNumber]
   ).catch(() => {});
+
+  if (ctx.sales_order_number) {
+    const dispatchWf = require('../services/dispatchWorkflowService');
+    await dispatchWf.onCustomerAsset(client, {
+      salesOrderNumber: ctx.sales_order_number,
+      dcNumber,
+      user: actor,
+    });
+  }
 
   return { ctx, deliveredAt };
 };

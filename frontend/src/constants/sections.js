@@ -39,6 +39,8 @@ export const APPLICATION_SECTIONS = [
   'warehouse',
   'dispatch',
   'dispatch_ops',
+  'dispatch_workflow',
+  'dispatch_pending_orders',
   'customer_billing',
   'vendor_billing_mgmt',
   'credit_notes',
@@ -97,6 +99,8 @@ export const SECTION_LABELS = {
   parts: 'Parts (Legacy)',
   parts_inventory: 'Parts Inventory',
   customer_inventory: 'Customer Inventory',
+  dispatch_workflow: 'Dispatch Workflow',
+  dispatch_pending_orders: 'Dispatch Pending Orders',
   ttspl_history: 'TTSPL History',
   warehouse: 'Warehouse',
   dispatch: 'Dispatch',
@@ -135,7 +139,7 @@ export const SECTION_GROUPS = {
   'Inventory & Parts': [
     'inventory', 'inventory_management', 'inventory_asset_movement', 'parts', 'parts_inventory', 'customer_inventory', 'ttspl_history',
   ],
-  'Warehouse & Dispatch': ['warehouse', 'dispatch', 'dispatch_ops'],
+  'Warehouse & Dispatch': ['warehouse', 'dispatch', 'dispatch_ops', 'dispatch_workflow', 'dispatch_pending_orders'],
   'Finance & Billing': [
     'customer_billing', 'vendor_billing_mgmt', 'credit_notes', 'debit_notes',
     'security_deposits', 'billing_dashboard', 'einvoice_ewb',

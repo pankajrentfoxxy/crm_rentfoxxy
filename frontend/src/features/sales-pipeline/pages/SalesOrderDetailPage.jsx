@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
@@ -10,9 +10,11 @@ import SoDeliveryAddressPanel from '../components/SoDeliveryAddressPanel';
 import SoLineRateEditModal from '../components/SoLineRateEditModal';
 import SoLineHsnEditModal from '../components/SoLineHsnEditModal';
 import SoActivityPanel from '../components/SoActivityPanel';
-import { cancelSalesOrder, getQuotation, getSalesOrderFull, listPayments, logSoDocumentActivity, regenerateSalesOrderPdf } from '../salesPipelineApi';
+import { DispatchWorkflowCard } from '../../dispatch/components/DispatchWorkflowPanel';
+import { cancelSalesOrder, getQuotation, getSalesOrderFull, logSoDocumentActivity, regenerateSalesOrderPdf } from '../salesPipelineApi';
 import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
+import usePermission from '../../../hooks/usePermission';
 import { formatConfig, formatCurrency, formatDate, TYPE_STYLES, typeLabel, deliveryChallanDetailPath, parseDeliveryAddress, formatSupplyStateLabel, resolveSupplyStateFromShipping } from '../salesPipelineUtils';
 import { getSoScopeConfig, orderMatchesScope, salesOrderListPath } from '../salesOrderScope';
 
@@ -53,7 +55,13 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
   const navigate = useNavigate();
   const soNumber = resolveSoNumber(params);
   const { user } = useAuth();
+  const { canView, canEdit } = usePermission();
+  const canViewPayments = canView('payment_records');
+  const canViewQuotations = canView('sales_quotations');
   const isSuperAdmin = user?.role === 'super_admin';
+  const isDispatchUser = user?.role === 'dispatch';
+  const canViewDispatchOps = isDispatchUser || isSuperAdmin
+    || canEdit('dispatch_workflow') || canEdit('dispatch_pending_orders');
   const canOverrideHsn = user?.role === 'admin' || user?.role === 'super_admin';
   const [tab, setTab] = useState('overview');
   const [data, setData] = useState(null);
@@ -65,23 +73,35 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
   const [editHsnLine, setEditHsnLine] = useState(null);
   const [activityRefreshKey, setActivityRefreshKey] = useState(0);
 
+  const visibleTabs = useMemo(() => TABS.filter((t) => {
+    if (t === 'payments') return canViewPayments;
+    if (t === 'quote') return canViewQuotations;
+    if (t === 'laptops') return canViewDispatchOps || canView('delivery_challans');
+    return true;
+  }), [canViewPayments, canViewQuotations, canViewDispatchOps, canView]);
+
   const load = useCallback(async () => {
     try {
       const res = await getSalesOrderFull(soNumber);
       setData(res.data);
-      const payRes = await listPayments(soNumber);
-      setPayments(payRes.data?.payments || []);
+      setPayments(canViewPayments ? (res.data?.payments || []) : []);
       const qn = res.data?.lines?.[0]?.quotation_number;
-      if (qn) {
+      if (qn && canViewQuotations) {
         getQuotation(qn).then((qr) => setQuote(qr.data)).catch(() => {});
+      } else {
+        setQuote(null);
       }
       setActivityRefreshKey((k) => k + 1);
     } catch {
       toast.error('Failed to load sales order');
     }
-  }, [soNumber]);
+  }, [soNumber, canViewPayments, canViewQuotations]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!visibleTabs.includes(tab)) setTab('overview');
+  }, [visibleTabs, tab]);
 
   const lines = data?.lines || [];
   const head = lines[0] || {};
@@ -205,7 +225,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
       </div>
 
       <div className="flex gap-2 border-b mb-4 overflow-x-auto">
-        {TABS.map((t) => (
+        {visibleTabs.map((t) => (
           <button key={t} type="button" onClick={() => setTab(t)} className={`px-4 py-2 text-sm capitalize border-b-2 -mb-px ${tab === t ? 'border-blue-600 text-blue-700 font-medium' : 'border-transparent text-gray-500'}`}>
             {t === 'dcs' ? 'Delivery Challans' : t === 'quote' ? 'Linked Quotation' : t === 'laptops' ? 'Laptops & QC' : t === 'addresses' ? 'Delivery Addresses' : t === 'activity' ? 'Activity' : t}
           </button>
@@ -241,11 +261,18 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
             )}
             <div className="flex justify-between"><span className="text-gray-500">Security Deposit</span><strong>{formatCurrency(totals.security ?? summary.security_amount)}</strong></div>
             <div className="flex justify-between border-t pt-1.5 mt-1"><span className="font-semibold text-gray-900">Grand Total</span><strong>{formatCurrency(totals.grand_total)}</strong></div>
-            <div className="flex justify-between"><span className="text-gray-500">Total Collected</span><strong>{formatCurrency(summary.total_paid)}</strong></div>
-            <div className={`flex justify-between ${summary.balance_due > 0 ? 'text-red-600 font-semibold' : 'text-emerald-700 font-semibold'}`}>
-              <span>Balance Due</span><span>{formatCurrency(summary.balance_due)}</span>
-            </div>
+            {canViewPayments && (
+              <>
+                <div className="flex justify-between"><span className="text-gray-500">Total Collected</span><strong>{formatCurrency(summary.total_paid)}</strong></div>
+                <div className={`flex justify-between ${summary.balance_due > 0 ? 'text-red-600 font-semibold' : 'text-emerald-700 font-semibold'}`}>
+                  <span>Balance Due</span><span>{formatCurrency(summary.balance_due)}</span>
+                </div>
+              </>
+            )}
           </div>
+          {canViewDispatchOps ? (
+            <DispatchWorkflowCard soNumber={soNumber} onRefresh={load} />
+          ) : null}
           <div className="lg:col-span-2 bg-white border rounded-xl overflow-hidden">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-xs uppercase text-gray-500">

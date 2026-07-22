@@ -223,6 +223,19 @@ async function routeMismatchToPendingInventory(client, {
       );
     }
   }
+
+  if (alloc.sales_order_number) {
+    try {
+      const dispatchWf = require('./dispatchWorkflowService');
+      await dispatchWf.onQcFailed(client, {
+        salesOrderNumber: alloc.sales_order_number,
+        reason: remarks,
+        user: actorUserId ? { user_id: actorUserId } : null,
+      });
+    } catch (wfErr) {
+      console.error('dispatch QC fail notification:', wfErr.message);
+    }
+  }
 }
 
 async function createDispatchQcToken({ ticketId, createdBy, req }) {

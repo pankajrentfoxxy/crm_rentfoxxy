@@ -63,14 +63,18 @@ const flowCtrl = require('../controllers/deliveryFlowController');
 const supportCtrl = require('../controllers/supportController');
 const { soRoute, bindSoNumber, bindSoSerialDetach } = require('../middleware/soNumberRoutes');
 const { dcRoute, bindDcNumber, rejectDcActionSuffix } = require('../middleware/dcNumberRoutes');
+const {
+  checkSoViewOrAssignedDispatch,
+  checkSoSerialOrAssignedDispatch,
+} = require('../middleware/dispatchSoAccess');
 
 router.use(authMiddleware);
 router.use(require('../middleware/customerScope')); // Customer Access scope -> req.allowedCustomerTypes
 
 // SO-level serial allocation (warehouse attaches laptops -> 1 QC ticket each)
-router.get(...soRoute('/serials', soSerialsView, sosCtrl.listSerials));
-router.post(...soRoute('/serials', soSerialsEdit, sosCtrl.attachSerial));
-router.delete(/^\/sales-orders\/(.+)\/serials\/([^/]+)$/, bindSoSerialDetach, soSerialsEdit, sosCtrl.detachSerial);
+router.get(...soRoute('/serials', checkSoViewOrAssignedDispatch, sosCtrl.listSerials));
+router.post(...soRoute('/serials', checkSoSerialOrAssignedDispatch, sosCtrl.attachSerial));
+router.delete(/^\/sales-orders\/(.+)\/serials\/([^/]+)$/, bindSoSerialDetach, checkSoSerialOrAssignedDispatch, sosCtrl.detachSerial);
 
 // Phase 13 — per-serial delivery addresses on the SO
 router.patch('/so-serials/:allocationId/address', soSerialsEdit, ctrl.updateSoSerialAddress);
@@ -104,14 +108,14 @@ router.patch('/quotations/:quotationNumber/status', quoteEdit, ctrl.updateQuotat
 
 router.get('/sales-orders/meta/add', soView, ctrl.getAddSalesOrderMeta);
 router.get('/sales-orders', soView, ctrl.listSalesOrders);
-router.get(...soRoute('/activities', soView, ctrl.listSalesOrderActivities));
-router.post(...soRoute('/activities', soView, ctrl.logSalesOrderDocumentActivity));
-router.get(...soRoute('/full', soView, ctrl.getSoWithPayments));
+router.get(...soRoute('/activities', checkSoViewOrAssignedDispatch, ctrl.listSalesOrderActivities));
+router.post(...soRoute('/activities', checkSoViewOrAssignedDispatch, ctrl.logSalesOrderDocumentActivity));
+router.get(...soRoute('/full', checkSoViewOrAssignedDispatch, ctrl.getSoWithPayments));
 router.get(...soRoute('/payments', payView, ctrl.listPayments));
 router.post(...soRoute('/payments', payCreate, ctrl.recordPayment));
 router.post(...soRoute('/pdf', soView, ctrl.regenerateSalesOrderPdf));
 router.patch(...soRoute('/cancel', soEdit, ctrl.cancelSalesOrder));
-router.get(/^\/sales-orders\/(.+)$/, bindSoNumber, soView, ctrl.getSalesOrder);
+router.get(/^\/sales-orders\/(.+)$/, bindSoNumber, checkSoViewOrAssignedDispatch, ctrl.getSalesOrder);
 router.post('/sales-orders', soCreate, ctrl.storeSalesOrder);
 
 router.get('/delivery-challans/meta/add', soDcView, ctrl.getAddDeliveryChallanMeta);

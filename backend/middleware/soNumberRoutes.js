@@ -10,6 +10,7 @@ function bindSoNumber(req, _res, next) {
     req.params.soNumber = raw;
   }
   req.params.salesOrderNumber = req.params.soNumber;
+  req.soNumber = req.params.soNumber;
   next();
 }
 

@@ -11,6 +11,7 @@ import { getBackendOrigin } from '../../../utils/api';
 import AdminDeliverModal from '../components/AdminDeliverModal';
 import ReturnWarehouseReceiveModal from '../components/ReturnWarehouseReceiveModal';
 import PermissionGate from '../../../components/PermissionGate';
+import DispatchDashboardWidget from '../../dispatch/components/DispatchWorkflowPanel';
 
 const TABS = [
   { id: 'all', label: 'All' },
@@ -111,6 +112,10 @@ export default function DeliveryRegisterPage() {
             Delivery Technicians
           </Link>
         </PermissionGate>
+      </div>
+
+      <div className="mb-4">
+        <DispatchDashboardWidget />
       </div>
 
       <div className="flex gap-2 mb-4 flex-wrap">

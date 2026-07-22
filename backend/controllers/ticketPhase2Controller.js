@@ -284,9 +284,27 @@ exports.moveToStage = async (req, res) => {
 
     const privileged = PRIVILEGED_ROLES.includes(req.user.role);
     const bypassTransitionRules = canBypassTransitionRules(req.user, req.body);
+    const dispatchQcActor = req.user.role === 'dispatch' || req.user.role === 'dispatch_qc';
     if (!privileged && req.user.role === 'qc' && !QC_STAGES.includes(currentStageName)) {
       await client.query('ROLLBACK');
       return res.status(403).json({ success: false, message: 'QC team can only act on QC stages' });
+    }
+    if (!privileged && dispatchQcActor && currentStageName !== 'Dispatch QC') {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ success: false, message: 'Dispatch team can only act on Dispatch QC stage' });
+    }
+    if (
+      currentStageName === 'Dispatch QC'
+      && effectiveToStage === 'Inventory'
+      && !bypassTransitionRules
+      && req.user.role !== 'super_admin'
+      && req.user.role !== 'admin'
+    ) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({
+        success: false,
+        message: 'Only admin can mark Dispatch QC passed and ready for DC',
+      });
     }
 
     const managerRoutes = MANAGER_ROUTING_FROM[currentStageName];
