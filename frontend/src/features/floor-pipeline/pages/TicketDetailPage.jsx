@@ -30,6 +30,8 @@ import {
   resolveTicketSerial,
   ticketStatusLabel,
   ticketStatusBadgeClass,
+  formatStageDisplayName,
+  PENDING_INVENTORY_STAGE,
 } from '../floorPipelineUi';
 import {
   canManageFloorTickets,
@@ -63,7 +65,7 @@ import { useDispatchRealtime } from '../../dispatch/DispatchRealtimeProvider';
 const HW_WORK_STAGES = ['Assembly & Software', 'Final Testing', 'Chip Level Repair', 'Body & Paint'];
 const HW_SW_DIAGNOSIS_STAGES = ['Diagnosis', ...HW_WORK_STAGES];
 // Stages where the assignee must scan/confirm the machine and run a work timer.
-const TIMED_WORK_STAGES = ['Diagnosis', 'Assembly & Software', 'Final Testing', 'Chip Level Repair', 'Body & Paint', 'QC1', 'QC2', 'Dispatch QC', 'Pending Inventory'];
+const TIMED_WORK_STAGES = ['Diagnosis', 'Assembly & Software', 'Final Testing', 'Chip Level Repair', 'Body & Paint', 'QC1', 'QC2', 'Dispatch QC', PENDING_INVENTORY_STAGE];
 const STAGE_TASK_STAGES = ['Assembly & Software', 'Final Testing'];
 
 function fmtElapsed(ms) {
@@ -204,14 +206,14 @@ export default function TicketDetailPage() {
       // Keep the user on this page when the next stage is still assigned to them.
       // Redirect only when ownership changed (or access is denied).
       if (!privileged && !stillMine) {
-        toast.success(`Ticket moved to ${res.ticket?.stage_name || nextStage || 'next stage'}`);
+        toast.success(`Ticket moved to ${formatStageDisplayName(res.ticket?.stage_name) || nextStage || 'next stage'}`);
         navigate('/floor-pipeline/tickets');
         return;
       }
 
       if (moved) {
         const assignMsg = meta.assignedUserName ? ` — assigned to ${meta.assignedUserName}` : '';
-        toast.success(`Moved to ${res.ticket?.stage_name}${assignMsg}`);
+        toast.success(`Moved to ${formatStageDisplayName(res.ticket?.stage_name)}${assignMsg}`);
       }
 
       setData(res);
@@ -668,7 +670,7 @@ export default function TicketDetailPage() {
   }
   if ((qc || canManageTickets) && stage === 'QC2') {
     stageButtons.push(
-      { label: 'QC2 PASS — Move to Pending Inventory', action: () => setQc2PassTagOpen(true), success: true },
+      { label: 'QC2 PASS — Move to QC Ready', action: () => setQc2PassTagOpen(true), success: true },
       { label: 'QC2 FAIL — Send back to QC1', action: openQc2FailPicker, danger: true, needsReason: true }
     );
   }
@@ -846,7 +848,7 @@ export default function TicketDetailPage() {
                     <li key={a.activity_id} className="text-slate-600">
                       <span className="text-slate-400">{new Date(a.created_at).toLocaleString()}</span>
                       {' · '}{a.user_name || 'System'} — {a.action.replace(/_/g, ' ')}
-                      {a.stage_name ? ` (${a.stage_name})` : ''}
+                      {a.stage_name ? ` (${formatStageDisplayName(a.stage_name)})` : ''}
                     </li>
                   ))}
                 </ul>
@@ -951,7 +953,7 @@ export default function TicketDetailPage() {
             <p className="text-xs text-slate-500 mt-2">{ticket.initial_condition || ticket.condition || '—'}</p>
 
             <h3 className="text-xs font-semibold uppercase text-slate-500 mt-4 mb-2">Current Assignment</h3>
-            <p><span className="text-slate-500">Stage:</span> {stage}</p>
+            <p><span className="text-slate-500">Stage:</span> {formatStageDisplayName(stage)}</p>
             <p><span className="text-slate-500">Team:</span> {ticket.team_name || '—'}</p>
             <p><span className="text-slate-500">Assigned:</span> {ticket.assigned_user_name || 'Unassigned'}</p>
 
@@ -1116,7 +1118,7 @@ export default function TicketDetailPage() {
         onClose={() => setQc2PassTagOpen(false)}
         onConfirm={(tag) => {
           setQc2PassTagOpen(false);
-          move('Pending Inventory', undefined, undefined, { inventoryTag: tag });
+          move(PENDING_INVENTORY_STAGE, undefined, undefined, { inventoryTag: tag });
         }}
         purchaseOrderType={ticket?.purchase_order_type}
         title="QC2 Pass — Inventory Tag"

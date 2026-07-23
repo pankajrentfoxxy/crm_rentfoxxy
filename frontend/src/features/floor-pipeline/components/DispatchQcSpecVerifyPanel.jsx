@@ -268,7 +268,7 @@ export default function DispatchQcSpecVerifyPanel({ ticket, onVerified, onHeader
       {failedDetail && !specsMatched ? (
         <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 space-y-2">
           <p className="text-sm font-semibold text-rose-800 flex items-center gap-2">
-            <XCircle className="w-4 h-4" /> Configuration mismatch — unit routed to Pending Inventory
+            <XCircle className="w-4 h-4" /> Configuration mismatch — unit routed to QC Ready
           </p>
           {failedDetail.remarks ? (
             <p className="text-xs text-rose-700">{failedDetail.remarks}</p>
@@ -284,7 +284,7 @@ export default function DispatchQcSpecVerifyPanel({ ticket, onVerified, onHeader
             </ul>
           ) : null}
           <p className="text-xs text-rose-700">
-            Serial detached from SO. Receive via <strong>Pending Inventory</strong> after rework.
+            Serial detached from SO. Receive via <strong>QC Ready</strong> after rework.
           </p>
         </div>
       ) : null}

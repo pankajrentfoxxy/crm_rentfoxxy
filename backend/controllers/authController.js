@@ -6,6 +6,10 @@ const pool = require('../config/db');
 const { buildEffectivePermissionsForUser, upsertUserPermissions: upsertUserPermissionsService } = require('../services/permissionService');
 const { getDisplayTeams, normalizeTeamIds } = require('../utils/teamUtils');
 const { parseIndianMobile } = require('../utils/phoneValidation');
+const {
+  requestPasswordResetOtp,
+  resetPasswordWithOtp: applyPasswordResetWithOtp,
+} = require('../services/passwordResetService');
 
 function resolveMobileNo(mobile_no, { required = false } = {}) {
   const parsed = parseIndianMobile(mobile_no, { required, label: 'Mobile number' });
@@ -1087,5 +1091,35 @@ exports.deleteUser = async (req, res) => {
   } catch (error) {
     console.error('Delete user error:', error);
     res.status(500).json({ success: false, message: 'Server error deleting user' });
+  }
+};
+
+exports.requestForgotPasswordOtp = async (req, res) => {
+  try {
+    const { email } = req.body;
+    const result = await requestPasswordResetOtp(email);
+    return res.status(result.status).json({
+      success: result.ok,
+      message: result.message,
+      expiresInMinutes: result.expiresInMinutes,
+      retryAfterSeconds: result.retryAfterSeconds,
+    });
+  } catch (error) {
+    console.error('Request forgot password OTP error:', error);
+    res.status(500).json({ success: false, message: 'Server error sending verification code' });
+  }
+};
+
+exports.resetPasswordWithOtp = async (req, res) => {
+  try {
+    const { email, otp, new_password } = req.body;
+    const result = await applyPasswordResetWithOtp(email, otp, new_password);
+    return res.status(result.status).json({
+      success: result.ok,
+      message: result.message,
+    });
+  } catch (error) {
+    console.error('Reset password with OTP error:', error);
+    res.status(500).json({ success: false, message: 'Server error resetting password' });
   }
 };

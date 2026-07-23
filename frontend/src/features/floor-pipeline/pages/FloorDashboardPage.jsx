@@ -7,7 +7,7 @@ import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import usePermission from '../../../hooks/usePermission';
 import { useAuth } from '../../../context/AuthContext';
 import { fetchFloorDashboard, getFloorManagerQueue, getTeamMembers } from '../floorPipelineApi';
-import { configSummary, priorityBadge, resolveTicketTtspl } from '../floorPipelineUi';
+import { configSummary, priorityBadge, resolveTicketTtspl, formatStageDisplayName } from '../floorPipelineUi';
 import { canManageFloorTickets } from '../floorPipelineAccess';
 import useAutoRefresh from '../hooks/useAutoRefresh';
 import AssignmentModal from '../components/AssignmentModal';
@@ -20,7 +20,7 @@ function BarChart({ data, valueKey = 'count' }) {
     <div className="space-y-2">
       {data.map((row) => (
         <div key={row.stage_name} className="flex items-center gap-2 text-xs">
-          <span className="w-32 truncate text-slate-600" title={row.stage_name}>{row.stage_name}</span>
+          <span className="w-32 truncate text-slate-600" title={formatStageDisplayName(row.stage_name)}>{formatStageDisplayName(row.stage_name)}</span>
           <div className="flex-1 h-5 bg-slate-100 rounded-full overflow-hidden">
             <div
               className="h-full bg-blue-600 rounded-full"

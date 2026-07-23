@@ -20,6 +20,8 @@ const {
   approveVendor,
   getPendingVendors,
   getTeams,
+  requestForgotPasswordOtp,
+  resetPasswordWithOtp,
 } = require('../controllers/authController');
 const { authMiddleware } = require('../middleware/auth');
 
@@ -51,6 +53,16 @@ router.get('/debug', async (req, res) => {
 // @desc    Login user
 // @access  Public
 router.post('/login', login);
+
+// @route   POST /api/auth/forgot-password/request
+// @desc    Send password reset OTP to email
+// @access  Public
+router.post('/forgot-password/request', requestForgotPasswordOtp);
+
+// @route   POST /api/auth/forgot-password/reset
+// @desc    Verify OTP and set new password
+// @access  Public
+router.post('/forgot-password/reset', resetPasswordWithOtp);
 
 // @route   POST /api/auth/register/customer
 // @desc    Public customer self-registration

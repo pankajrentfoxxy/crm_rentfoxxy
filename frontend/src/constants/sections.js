@@ -91,7 +91,7 @@ export const SECTION_LABELS = {
   chip_level_repair: 'Chip Level Repair',
   qc_management: 'QC Management',
   dispatch_qc: 'Dispatch QC',
-  pending_inventory: 'Pending Inventory',
+  pending_inventory: 'QC Ready',
   tickets: 'Tickets (Legacy)',
   inventory: 'Inventory',
   inventory_management: 'Inventory Management',

@@ -43,7 +43,7 @@ export const floorPipelineAccordionChildren = [
   { label: 'Chip Level Repair', path: '/floor-pipeline/tickets?stage=Chip+Level+Repair', section: 'chip_level_repair', countKey: 'chip_level' },
   { label: 'Body & Paint', path: '/floor-pipeline/tickets?stage=Body+%26+Paint', section: 'floor_pipeline', countKey: 'body_paint' },
   { label: 'Diagnosis Failed', path: '/floor-pipeline/diagnosis-failed', section: 'floor_pipeline', countKey: 'diagnosis_failed' },
-  { label: 'Pending Inventory', path: '/floor-pipeline/pending-inventory', section: 'pending_inventory', countKey: 'pending_inventory' },
+  { label: 'QC Ready', path: '/floor-pipeline/pending-inventory', section: 'pending_inventory', countKey: 'pending_inventory' },
   { label: 'Vendor Repair DC', path: '/floor-pipeline/vendor-repair-dc', section: 'floor_pipeline' },
 ];
 

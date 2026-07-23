@@ -1,7 +1,7 @@
 import React from 'react';
 import { AlertTriangle, Clock, User, Wrench } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { configSummary, priorityBadge, ticketAgeDays, resolveTicketTtspl } from '../floorPipelineUi';
+import { configSummary, priorityBadge, ticketAgeDays, resolveTicketTtspl, formatStageDisplayName } from '../floorPipelineUi';
 
 export default function TicketCard({ ticket, pendingParts, onCardClick }) {
   const pri = priorityBadge(ticket.priority);
@@ -13,7 +13,7 @@ export default function TicketCard({ ticket, pendingParts, onCardClick }) {
           {pri.label}
         </span>
         <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-800">
-          {ticket.stage_name}
+          {formatStageDisplayName(ticket.stage_name)}
         </span>
       </div>
       <p className="font-mono font-bold text-slate-900 text-sm">{resolveTicketTtspl(ticket) || '—'}</p>

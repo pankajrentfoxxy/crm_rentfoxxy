@@ -57,7 +57,7 @@ export default function PendingInventoryPage() {
       const { data } = await fetchPendingInventory();
       setRows(data.data || []);
     } catch (e) {
-      toast.error(e.response?.data?.message || 'Failed to load pending inventory');
+      toast.error(e.response?.data?.message || 'Failed to load QC Ready queue');
     } finally {
       setLoading(false);
     }
@@ -149,7 +149,7 @@ export default function PendingInventoryPage() {
         <div>
           <h1 className="text-xl font-semibold text-slate-900 flex items-center gap-2">
             <PackageCheck className="w-6 h-6 text-teal-600" />
-            Pending Inventory
+            QC Ready
           </h1>
           <p className="text-sm text-slate-500 mt-1">
             Units awaiting serial-verified receive with warehouse location (from QC2 or Dispatch QC).
@@ -170,7 +170,7 @@ export default function PendingInventoryPage() {
         </div>
       ) : rows.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-200 p-10 text-center text-slate-500 text-sm">
-          No units pending receive.
+          No units in QC Ready.
         </div>
       ) : (
         <div className="overflow-x-auto rounded-xl border border-slate-100 bg-white shadow-sm">
@@ -206,7 +206,7 @@ export default function PendingInventoryPage() {
                   <td className="px-3 py-2 whitespace-nowrap">{fmtWhen(row.qc2_completed_at)}</td>
                   <td className="px-3 py-2">
                     <span className="inline-flex rounded-full bg-amber-50 text-amber-800 px-2 py-0.5 text-xs font-medium">
-                      Pending receive
+                      QC Ready
                     </span>
                   </td>
                   {canReceive ? (

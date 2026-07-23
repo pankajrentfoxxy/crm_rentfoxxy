@@ -4,6 +4,15 @@ export const FP_SUCCESS = '#16A34A';
 export const FP_WARNING = '#D97706';
 export const FP_DANGER = '#DC2626';
 
+/** Backend stage name (DB) — do not change without migration. */
+export const PENDING_INVENTORY_STAGE = 'Pending Inventory';
+export const QC_READY_LABEL = 'QC Ready';
+
+export function formatStageDisplayName(stageName) {
+  if (stageName === PENDING_INVENTORY_STAGE) return QC_READY_LABEL;
+  return stageName;
+}
+
 export const KANBAN_STAGES = [
   'Floor Manager',
   'Diagnosis',
@@ -13,7 +22,7 @@ export const KANBAN_STAGES = [
   'Body & Paint',
   'QC1',
   'QC2',
-  'Pending Inventory',
+  PENDING_INVENTORY_STAGE,
   'Dispatch QC',
   'Inventory'
 ];
@@ -26,7 +35,7 @@ export const MAIN_STAGE_ORDER = [
   'Final Testing',
   'QC1',
   'QC2',
-  'Pending Inventory',
+  PENDING_INVENTORY_STAGE,
   'Dispatch QC',
   'Inventory',
 ];

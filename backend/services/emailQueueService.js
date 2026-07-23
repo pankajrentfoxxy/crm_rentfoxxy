@@ -244,8 +244,33 @@ async function sendCustomerPortalWelcome({ customerEmail, customerName, portalUr
   });
 }
 
+const sendEmailImmediate = async ({ toEmail, subject, bodyText = null, bodyHtml = null }) => {
+  const transporter = getTransporter();
+  const from = process.env.SMTP_FROM || process.env.SMTP_USER;
+
+  if (!transporter) {
+    return enqueueEmail({
+      toEmail,
+      subject,
+      bodyText,
+      bodyHtml,
+      dedupeKey: `immediate:${toEmail}:${Date.now()}`,
+    });
+  }
+
+  await transporter.sendMail({
+    from,
+    to: toEmail,
+    subject,
+    text: bodyText || undefined,
+    html: bodyHtml || undefined,
+  });
+  return true;
+};
+
 module.exports = {
   startEmailQueueWorker,
   sendCustomerPortalWelcome,
   enqueueEmail,
+  sendEmailImmediate,
 };

@@ -33,6 +33,7 @@ import {
   resolveTicketSerial,
   ticketStatusLabel,
   ticketStatusBadgeClass,
+  formatStageDisplayName,
 } from '../floorPipelineUi';
 
 const VIEW_KEY = 'floor_pipeline_view';
@@ -384,7 +385,7 @@ export default function FloorTicketListPage() {
                       {resolveTicketSerial(t) || '—'}
                     </td>
                     <td className="px-3 py-3 text-xs">{configSummary(t)}</td>
-                    <td className="px-3 py-3">{t.stage_name}</td>
+                    <td className="px-3 py-3">{formatStageDisplayName(t.stage_name)}</td>
                     <td className="px-3 py-3">
                       <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${stageCategoryBadge(t.stage_name)}`}>{cat}</span>
                     </td>
