@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Search } from 'lucide-react';
 import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
+import { normalizeTtsplSearchInput } from '../../../utils/ttspl';
 
 export default function TtsplHistorySearchPage() {
   const [input, setInput] = useState('');
@@ -9,7 +10,7 @@ export default function TtsplHistorySearchPage() {
 
   const onSubmit = (e) => {
     e.preventDefault();
-    const q = input.trim();
+    const q = normalizeTtsplSearchInput(input);
     if (!q) return;
     setTtsplId(q);
     setDrawerOpen(true);
@@ -20,6 +21,7 @@ export default function TtsplHistorySearchPage() {
       <h2 className="text-2xl font-bold text-slate-900">TTSPL History</h2>
       <p className="text-sm text-slate-600 max-w-2xl">
         Search by TTSPL ID to view lifecycle timeline, config changes, parts installed, and cost summary.
+        You can enter the number only (e.g. <span className="font-mono">3424</span>) or the full code (e.g. <span className="font-mono">TTSPL3424</span>).
       </p>
 
       <div className="rounded-xl border bg-white p-6 shadow-sm">
@@ -30,7 +32,7 @@ export default function TtsplHistorySearchPage() {
               className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono uppercase"
               value={input}
               onChange={(e) => setInput(e.target.value.toUpperCase())}
-              placeholder="TTSPL-…"
+              placeholder="3424 or TTSPL3424"
             />
           </div>
           <button

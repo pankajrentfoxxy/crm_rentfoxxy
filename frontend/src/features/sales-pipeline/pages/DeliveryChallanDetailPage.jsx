@@ -593,14 +593,14 @@ export default function DeliveryChallanDetailPage() {
                     onClick={openChangeAssignee}
                     className="px-4 py-2 border border-blue-200 text-blue-700 rounded-lg text-sm hover:bg-blue-50"
                   >
-                    Change Assignee
+                    Change delivery details
                   </button>
                   <p className="text-xs text-gray-500">
                     You can reassign technician, courier, or porter until pickup/delivery starts (status: reached or later).
                   </p>
                 </PermissionGate>
               ) : (
-                <p className="text-xs text-gray-500">Assignee is locked — pickup/delivery has already started or completed.</p>
+                <p className="text-xs text-gray-500">Delivery details are locked — pickup/delivery has already started or completed.</p>
               )}
               {assignmentHistory.length > 0 && (
                 <div className="border rounded-lg p-3 space-y-2">

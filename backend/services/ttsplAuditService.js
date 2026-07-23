@@ -1,7 +1,32 @@
 const pool = require('../config/db');
+const { formatTtspl, parseTtsplNum } = require('./vendorInventoryAssetCodeService');
 
 function normalizeCode(code) {
   return String(code || '').trim().toUpperCase();
+}
+
+/** Accept TTSPL3424, tttspl3424, 3424, etc. for history lookup. */
+function normalizeTtsplSearchCode(rawCode) {
+  const code = normalizeCode(rawCode);
+  if (!code) return '';
+
+  const stripped = code.replace(/[\s\-_]/g, '');
+
+  const parsed = parseTtsplNum(stripped);
+  if (parsed != null) return formatTtspl(parsed);
+
+  if (/^\d+$/.test(stripped)) {
+    const num = Number(stripped);
+    if (Number.isFinite(num) && num > 0) return formatTtspl(num);
+  }
+
+  const flexMatch = stripped.match(/^T+SPL(\d+)$/i);
+  if (flexMatch) {
+    const num = Number(flexMatch[1]);
+    if (Number.isFinite(num) && num > 0) return formatTtspl(num);
+  }
+
+  return stripped;
 }
 
 function syntheticId(prefix, seed) {
@@ -67,6 +92,9 @@ async function resolveTtsplAsset(rawCode) {
   const code = normalizeCode(rawCode);
   if (!code) return null;
 
+  const ttsplCode = normalizeTtsplSearchCode(rawCode);
+  const searchCodes = [...new Set([ttsplCode, code].filter(Boolean))];
+
   let vsnRes = await pool.query(
     `SELECT vsn.*,
             vpo.purchase_order_number,
@@ -76,24 +104,24 @@ async function resolveTtsplAsset(rawCode) {
      LEFT JOIN vendors v ON v.vendor_id = vpo.vendor_id
      WHERE vsn.deleted_at IS NULL
        AND (
-         UPPER(COALESCE(vsn.inventory_asset_code, '')) = $1
-         OR UPPER(vsn.serial_number) = $1
-         OR UPPER(COALESCE(vsn.extra->>'ttspl_id', '')) = $1
-         OR UPPER(COALESCE(vsn.extra->>'unique_product_serial', '')) = $1
+         UPPER(COALESCE(vsn.inventory_asset_code, '')) = ANY($1::text[])
+         OR UPPER(vsn.serial_number) = ANY($1::text[])
+         OR UPPER(COALESCE(vsn.extra->>'ttspl_id', '')) = ANY($1::text[])
+         OR UPPER(COALESCE(vsn.extra->>'unique_product_serial', '')) = ANY($1::text[])
        )
      ORDER BY vsn.serial_id DESC
      LIMIT 1`,
-    [code]
+    [searchCodes]
   );
 
   if (!vsnRes.rows.length) {
     const invRes = await pool.query(
       `SELECT serial_number, machine_number FROM inventory
-       WHERE UPPER(COALESCE(machine_number, '')) = $1
-          OR UPPER(COALESCE(serial_number, '')) = $1
+       WHERE UPPER(COALESCE(machine_number, '')) = ANY($1::text[])
+          OR UPPER(COALESCE(serial_number, '')) = ANY($1::text[])
        ORDER BY inventory_id DESC
        LIMIT 1`,
-      [code]
+      [searchCodes]
     );
     const inv = invRes.rows[0];
     if (inv?.serial_number) {
@@ -120,7 +148,7 @@ async function resolveTtsplAsset(rawCode) {
     || code
   );
   const aliases = new Set(
-    [code, canonicalTtspl, vsn?.serial_number, vsn?.extra?.ttspl_id, vsn?.extra?.unique_product_serial]
+    [code, ttsplCode, canonicalTtspl, vsn?.serial_number, vsn?.extra?.ttspl_id, vsn?.extra?.unique_product_serial]
       .filter(Boolean)
       .map(normalizeCode)
   );
@@ -716,5 +744,6 @@ module.exports = {
   logGrnReceive,
   logConfigChange,
   getTtsplHistory,
-  resolveTtsplAsset
+  resolveTtsplAsset,
+  normalizeTtsplSearchCode
 };

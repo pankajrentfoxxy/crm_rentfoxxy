@@ -75,11 +75,11 @@ export default function ChangeAssigneeModal({
         ...form,
         reason: form.reason?.trim() || undefined,
       });
-      toast.success(data?.message || 'Assignee updated — DC PDF regenerated');
+      toast.success(data?.message || 'Delivery details updated — DC PDF regenerated');
       onSaved?.(data);
       onClose();
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to update assignee');
+      toast.error(err.response?.data?.message || 'Failed to update delivery details');
     } finally {
       setSaving(false);
     }
@@ -89,9 +89,9 @@ export default function ChangeAssigneeModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <button type="button" className="absolute inset-0 bg-black/40" onClick={onClose} aria-label="Close" />
       <div className="relative bg-white rounded-xl shadow-xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
-        <h2 className="text-lg font-semibold text-gray-900 mb-1">Change Assignee</h2>
+        <h2 className="text-lg font-semibold text-gray-900 mb-1">Change delivery details</h2>
         <p className="text-xs text-gray-500 mb-4">
-          Update assignee, dispatch date, and estimated delivery before pickup starts. Changes are logged and the DC PDF is regenerated.
+          Update delivery mode, assignee, dispatch date, and estimated delivery before pickup starts. Changes are logged and the DC PDF is regenerated.
         </p>
         <form onSubmit={submit} className="space-y-4">
           <div className="flex flex-wrap gap-4 text-sm">
