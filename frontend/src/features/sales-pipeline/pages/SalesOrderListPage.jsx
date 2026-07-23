@@ -8,7 +8,7 @@ import PaymentModal from '../components/PaymentModal';
 import SalesOrderForm from '../components/SalesOrderForm';
 import DCForm from '../components/DCForm';
 import { cancelSalesOrder, getSalesOrderMeta, listSalesOrders } from '../salesPipelineApi';
-import { formatCurrency, formatDate, TYPE_STYLES, typeLabel } from '../salesPipelineUtils';
+import { formatCurrency, formatDate, salesOrderTypeLabel, salesOrderTypeStyle } from '../salesPipelineUtils';
 import {
   getSoScopeConfig,
   salesOrderDetailPath,
@@ -24,11 +24,17 @@ const SO_FILTER_DEFAULTS = {
   dateTo: '',
   status: '',
   customerId: '',
+  orderType: '',
 };
 const SO_STATUS_OPTIONS = [
   { value: '', label: 'All statuses' },
   { value: 'pending', label: 'Pending' },
   { value: 'cancelled', label: 'Cancelled' },
+];
+const SO_ORDER_TYPE_OPTIONS = [
+  { value: '', label: 'All types' },
+  { value: 'standard', label: 'Standard rental' },
+  { value: 'replacement', label: 'Replacement' },
 ];
 
 function soStatusLabel(status) {
@@ -102,7 +108,7 @@ export default function SalesOrderListPage({ scope }) {
   const location = useLocation();
   const returnTo = `${location.pathname}${location.search}`;
   const { filters, setFilters } = useUrlFilters(SO_FILTER_DEFAULTS);
-  const { page, dateFrom, dateTo, status: statusFilter, customerId } = filters;
+  const { page, dateFrom, dateTo, status: statusFilter, customerId, orderType: orderTypeFilter } = filters;
   const { searchInput, setSearchInput, debouncedSearch: search } = useDebouncedUrlSearch(filters, setFilters);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -135,6 +141,7 @@ export default function SalesOrderListPage({ scope }) {
         customer_id: customerId || undefined,
         status: statusFilter || undefined,
         entity_scope: scope || undefined,
+        order_type: scope === 'rental' && orderTypeFilter ? orderTypeFilter : undefined,
       });
       setRows(res.data?.sales_orders || []);
       setPagination(res.data?.pagination || { page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
@@ -147,7 +154,7 @@ export default function SalesOrderListPage({ scope }) {
     } finally {
       setLoading(false);
     }
-  }, [page, search, dateFrom, dateTo, customerId, statusFilter, scope]);
+  }, [page, search, dateFrom, dateTo, customerId, statusFilter, orderTypeFilter, scope]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -231,7 +238,11 @@ export default function SalesOrderListPage({ scope }) {
       <span className="text-sm font-medium text-slate-800">{formatDate(r.dispatch_date)}</span>
     ) },
     { key: 'customer_name', header: 'Customer' },
-    { key: 'type', header: 'Type', render: (r) => <span className={`px-2 py-0.5 rounded-full text-xs ${TYPE_STYLES[r.quotation_type]}`}>{typeLabel(r.quotation_type)}</span> },
+    { key: 'type', header: 'Type', render: (r) => (
+      <span className={`px-2 py-0.5 rounded-full text-xs ${salesOrderTypeStyle(r)}`}>
+        {salesOrderTypeLabel(r)}
+      </span>
+    ) },
     { key: 'laptop_qty', header: 'Laptop Qty', render: (r) => {
       const { total } = fulfillmentFromRow(r);
       return <span className="text-lg font-bold text-blue-700">{total}</span>;
@@ -268,7 +279,7 @@ export default function SalesOrderListPage({ scope }) {
             <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-100 text-red-700">Cancelled</span>
           )}
         </span>
-        <span className={`px-2 py-0.5 rounded-full text-xs ${TYPE_STYLES[r.quotation_type]}`}>{typeLabel(r.quotation_type)}</span>
+        <span className={`px-2 py-0.5 rounded-full text-xs ${salesOrderTypeStyle(r)}`}>{salesOrderTypeLabel(r)}</span>
       </div>
       <p className="font-medium text-slate-800">{r.customer_name}</p>
       <div className="flex flex-wrap gap-1">
@@ -354,6 +365,20 @@ export default function SalesOrderListPage({ scope }) {
             ))}
           </select>
         </label>
+        {scope === 'rental' && (
+          <label className="flex flex-col gap-1 text-xs text-slate-600">
+            Order type
+            <select
+              className="min-w-[160px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+              value={orderTypeFilter}
+              onChange={(e) => setFilters({ orderType: e.target.value })}
+            >
+              {SO_ORDER_TYPE_OPTIONS.map((opt) => (
+                <option key={opt.value || 'all'} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </label>
+        )}
         <DateRangeFilter
           dateFrom={dateFrom}
           dateTo={dateTo}

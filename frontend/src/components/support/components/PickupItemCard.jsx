@@ -405,9 +405,14 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
             {item.pickup_type === 'repair' && item.floor_ticket_id && (
               <p className="text-xs text-green-600">🔧 Floor repair ticket #{item.floor_ticket_id} created automatically</p>
             )}
-            {item.pickup_type === 'repair' && (
+            {item.pickup_type === 'repair' && item.status === 'swap_initiated' && (
+              <p className="text-xs text-pink-700 mt-1">
+                Swap started — a replacement sales order will deliver a different laptop. This unit stays in warehouse inventory.
+              </p>
+            )}
+            {item.pickup_type === 'repair' && item.status !== 'swap_initiated' && (
               <p className="text-xs text-green-700 mt-1">
-                Unit removed from customer inventory. Send back via Service Delivery Challan when repair is complete.
+                Unit removed from customer inventory. Send the same unit back via Service DC, or use &quot;Send a different laptop&quot; on the ticket if not repairable.
               </p>
             )}
             {item.pickup_type === 'return' && (

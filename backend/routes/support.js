@@ -61,6 +61,8 @@ const {
     ensureSupportSchema,
     getServiceDcEligibility,
     createServiceDc,
+    getRepairSwapContext,
+    initiateRepairSwap,
     regenerateServiceDcPdf,
 } = require('../controllers/supportController');
 
@@ -152,6 +154,8 @@ router.post('/tickets/:ticketId/phases', requireSupportLead, addWorkflowPhaseIte
 router.post('/tickets/:ticketId/assign-all', requireSupportLead, assignTicketBulk);
 router.post('/tickets/:ticketId/close', requireSupportTicketClose, closeTicket);
 router.post('/tickets/:ticketId/cancel', requireSupportTicketCancel, cancelTicket);
+router.get('/tickets/:ticketId/repair-swap-context', requireSupportLead, getRepairSwapContext);
+router.post('/tickets/:ticketId/replacements/swap-from-repair', requireSupportLead, initiateRepairSwap);
 router.post('/tickets/:ticketId/replacements', requireSupportLead, initiateReplacement);
 router.post('/tickets/:ticketId/cancel-return-pickup', requireSupportLead, cancelReturnPickup);
 router.post('/tickets/:ticketId/assign-return-pickup', requireSupportLead, assignReturnPickupDispatch);

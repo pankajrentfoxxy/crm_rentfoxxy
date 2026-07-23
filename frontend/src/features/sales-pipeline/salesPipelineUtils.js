@@ -20,6 +20,7 @@ export const TYPE_STYLES = {
   demo: 'bg-violet-100 text-violet-800',
   sale: 'bg-emerald-100 text-emerald-800',
   sales: 'bg-emerald-100 text-emerald-800',
+  replacement: 'bg-pink-100 text-pink-800',
 };
 
 export const DC_STATUS_STYLES = {
@@ -104,7 +105,19 @@ export function typeLabel(t) {
   if (key === 'sale' || key === 'sales') return 'Sales';
   if (key === 'demo') return 'Demo';
   if (key === 'rental') return 'Rental';
+  if (key === 'replacement') return 'Replacement';
   return t || '—';
+}
+
+/** SO list/detail: support replacement orders show as Replacement; others use quotation_type. */
+export function salesOrderTypeLabel(row) {
+  if (row?.is_replacement_order) return 'Replacement';
+  return typeLabel(row?.quotation_type);
+}
+
+export function salesOrderTypeStyle(row) {
+  if (row?.is_replacement_order) return TYPE_STYLES.replacement;
+  return TYPE_STYLES[row?.quotation_type] || 'bg-gray-100 text-gray-700';
 }
 
 export function statusLabel(s) {

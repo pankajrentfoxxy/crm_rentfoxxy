@@ -494,7 +494,7 @@ async function getQuotationLines(quotationNumber) {
 
 async function listSalesOrdersGrouped({
   page = 1, limit = 20, search = '', assignedUserId = null, dateFrom, dateTo,
-  customerId = null, status = '', entityScope = '',
+  customerId = null, status = '', entityScope = '', orderType = '',
   viewerRole = null, viewerUserId = null,
 } = {}) {
   const hasEntityCode = await tableColumnExists('sales_order_lines', 'entity_code');
@@ -536,6 +536,13 @@ async function listSalesOrdersGrouped({
       GROUP BY sales_order_number
       HAVING COUNT(*) FILTER (WHERE LOWER(COALESCE(status, 'pending')) != 'cancelled') > 0
     )`;
+  }
+  const replacementSoSubquery = `SELECT DISTINCT sales_order_number FROM support_replacement_orders WHERE sales_order_number IS NOT NULL`;
+  const normalizedOrderType = String(orderType || '').trim().toLowerCase();
+  if (normalizedOrderType === 'replacement') {
+    where += where ? ` AND sales_order_number IN (${replacementSoSubquery})` : `WHERE sales_order_number IN (${replacementSoSubquery})`;
+  } else if (normalizedOrderType === 'standard') {
+    where += where ? ` AND sales_order_number NOT IN (${replacementSoSubquery})` : `WHERE sales_order_number NOT IN (${replacementSoSubquery})`;
   }
   where = appendDateRangeToWhere(
     where,
@@ -598,7 +605,16 @@ async function listSalesOrdersGrouped({
            AND COALESCE(dcl.movement_type, 'outbound') = 'outbound') AS dispatch_date,
        (SELECT CASE WHEN COUNT(*) > 0 AND COUNT(*) FILTER (WHERE sol.status = 'cancelled') = COUNT(*)
                     THEN 'cancelled' ELSE 'pending' END
-          FROM sales_order_lines sol WHERE sol.sales_order_number = g.sales_order_number) AS status
+          FROM sales_order_lines sol WHERE sol.sales_order_number = g.sales_order_number) AS status,
+       EXISTS (
+         SELECT 1 FROM support_replacement_orders ro
+          WHERE ro.sales_order_number = g.sales_order_number
+            AND ro.sales_order_number IS NOT NULL
+       ) AS is_replacement_order,
+       (SELECT MIN(ro.ticket_id)::int
+          FROM support_replacement_orders ro
+         WHERE ro.sales_order_number = g.sales_order_number
+           AND ro.sales_order_number IS NOT NULL) AS support_ticket_id
      FROM (
        SELECT DISTINCT ON (sales_order_number)
          id, sales_order_number, quotation_number, customer_id, customer_name, gst_number,
@@ -646,6 +662,22 @@ async function getSalesOrderLines(salesOrderNumber) {
     [salesOrderNumber]
   );
   return result.rows;
+}
+
+async function getSalesOrderSupportMeta(salesOrderNumber) {
+  const result = await pool.query(
+    `SELECT EXISTS (
+       SELECT 1 FROM support_replacement_orders ro
+        WHERE ro.sales_order_number = $1
+          AND ro.sales_order_number IS NOT NULL
+     ) AS is_replacement_order,
+     (SELECT MIN(ro.ticket_id)::int
+        FROM support_replacement_orders ro
+       WHERE ro.sales_order_number = $1
+         AND ro.sales_order_number IS NOT NULL) AS support_ticket_id`,
+    [salesOrderNumber]
+  );
+  return result.rows[0] || { is_replacement_order: false, support_ticket_id: null };
 }
 
 /** Aggregate pre-dispatch QC status for many DCs in one query (list page). */
@@ -1871,6 +1903,7 @@ module.exports = {
   getQuotationLines,
   listSalesOrdersGrouped,
   getSalesOrderLines,
+  getSalesOrderSupportMeta,
   listDeliveryChallansGrouped,
   getDeliveryChallanLines,
   listReturnDeliveryChallans,

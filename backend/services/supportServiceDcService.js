@@ -14,6 +14,14 @@ const { loadDeliveryDefaults } = require('./supportReplacementFlowService');
 const DC_PURPOSE = 'service_return';
 const OPEN_SDC_STATUSES = new Set(['pending', 'in_transit', 'shipped', 'reached']);
 
+async function logServiceDcAudit(db, { itemId, ticketId, userId, action, detail }) {
+  await db.query(
+    `INSERT INTO support_ticket_item_audit (item_id, ticket_id, user_id, action, detail)
+     VALUES ($1, $2, $3, $4, $5::jsonb)`,
+    [itemId ?? null, ticketId, userId ?? null, action, detail ? JSON.stringify(detail) : null]
+  );
+}
+
 const parseJson = (raw) => {
   if (!raw) return null;
   if (typeof raw === 'object') return raw;
@@ -277,7 +285,8 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
   const txnType = await resolveTxnTypeForDc(db, { salesOrderNumber, originalDcNumber });
   const hsnCode = resolveHsnForPersist({ transactionType: 'repair', role: null });
   const entityCode = entityForQuotationType(txnType === 'sale' ? 'sales' : 'rental');
-  const dcStatus = dispatchInfo.hasDispatch ? 'in_transit' : 'pending';
+  // Pending until Dispatch QC passes; dispatch transitions happen via normal DC dispatch flow.
+  const dcStatus = 'pending';
 
   await db.query(
     `INSERT INTO delivery_challan_lines
@@ -286,11 +295,11 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
          dispatch_mode, delivery_person_id, courier_name, awb_number,
          porter_tracking_id, porter_order_id,
          sales_order_number, original_dc_number, dc_purpose, remarks,
-         status, dispatched_at, created_by, created_at, updated_at,
+         status, created_by, created_at, updated_at,
          entity_code, hsn_code, pre_dispatch_qc_passed)
      VALUES ($1,'outbound',$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16,
              $17,$18,$19,$20,
-             $21,CASE WHEN $22 THEN NOW() ELSE NULL END,$23,NOW(),NOW(),$24,$25,TRUE)`,
+             $21,$22,NOW(),NOW(),$23,$24,FALSE)`,
     [
       sdcNumber,
       ticketId,
@@ -313,7 +322,6 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
       DC_PURPOSE,
       dispatchInfo.remarks || `Service return for support ticket #${ticketId}`,
       dcStatus,
-      dispatchInfo.hasDispatch,
       actor?.user_id || null,
       entityCode,
       hsnCode,
@@ -337,17 +345,6 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
       actorUserId: actor?.user_id,
       actorName: actor?.name,
     });
-
-    if (dispatchInfo.hasDispatch) {
-      await inventorySM.markDispatched(db, row.serial.serial_id, {
-        dcNumber: sdcNumber,
-        customerId: ticket.customer_id,
-        entityCode,
-        dispatchMode: dispatchInfo.dcDispatchMode,
-        actorUserId: actor?.user_id,
-        actorName: actor?.name,
-      });
-    }
   }
 
   await db.query(
@@ -565,11 +562,30 @@ async function onServiceDcDelivered(db, dcNumber, actor = {}) {
       actor,
     });
     if (result.billingBranch) billingLog.push({ serialId, branch: result.billingBranch });
+    await logServiceDcAudit(db, {
+      itemId: pickupItem.id,
+      ticketId: row.support_ticket_id,
+      userId: actor?.user_id,
+      action: 'service_dc_delivered',
+      detail: {
+        service_dc_number: dcNumber,
+        serial_id: serialId,
+        billing_branch: result.billingBranch || null,
+      },
+    });
   }
 
   let closed = false;
   if (row.support_ticket_id) {
     closed = await tryCloseServiceDcTicket(db, row.support_ticket_id, actor);
+    if (closed) {
+      await logServiceDcAudit(db, {
+        ticketId: row.support_ticket_id,
+        userId: actor?.user_id,
+        action: 'ticket_closed',
+        detail: { reason: 'service_dc_delivered', service_dc_number: dcNumber, billing_log: billingLog },
+      });
+    }
   }
 
   return { handled: true, closed, billingLog };

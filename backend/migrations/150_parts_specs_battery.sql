@@ -1,4 +1,4 @@
--- Parts catalog specs (display) + battery capture on floor part requests.
+node backend/scripts/run-migration-168.js-- Parts catalog specs (display) + battery capture on floor part requests.
 -- Idempotent.
 
 ALTER TABLE parts

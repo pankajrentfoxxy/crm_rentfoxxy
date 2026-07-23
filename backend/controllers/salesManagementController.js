@@ -16,6 +16,7 @@ const {
   listSalesOrdersGrouped,
   listCustomersForOrderScope,
   getSalesOrderLines,
+  getSalesOrderSupportMeta,
   listDeliveryChallansGrouped,
   getDeliveryChallanLines,
   listReturnDeliveryChallans,
@@ -695,6 +696,7 @@ exports.listSalesOrders = async (req, res) => {
       customerId: req.query.customer_id || null,
       status: req.query.status || '',
       entityScope: req.query.entity_scope || '',
+      orderType: req.query.order_type || '',
       viewerRole: req.user?.role || null,
       viewerUserId: req.user?.user_id || null,
     });
@@ -2506,10 +2508,13 @@ exports.getSoWithPayments = async (req, res) => {
     const soStatus = lines.every((l) => String(l.status).toLowerCase() === 'cancelled')
       ? 'cancelled'
       : (lines[0].status || 'pending');
+    const supportMeta = await getSalesOrderSupportMeta(soNumber);
     res.json({
       success: true,
       sales_order_number: soNumber,
       status: soStatus,
+      is_replacement_order: supportMeta.is_replacement_order,
+      support_ticket_id: supportMeta.support_ticket_id,
       laptop_qty: laptopQty,
       attached_count: Number(attachedRes.rows[0]?.c || fulfillment.attached_count || 0),
       delivered_count: fulfillment.delivered_count,

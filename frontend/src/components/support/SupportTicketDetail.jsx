@@ -19,6 +19,7 @@ import PickupItemCard from './components/PickupItemCard';
 import CreatePickupModal from './components/CreatePickupModal';
 import PickupSetupForm from './components/PickupSetupForm';
 import ServiceDcPanel from './components/ServiceDcPanel';
+import RepairSwapPanel from './components/RepairSwapPanel';
 import AssignmentHistoryList, { actionLabel } from './components/AssignmentHistoryList';
 import {
   formatItemId,
@@ -928,7 +929,22 @@ export default function SupportTicketDetail() {
     && complaintForReplacement.outcome !== 'replacement_required'
     && !complaintForReplacement.replacement_flag_reason;
 
-  const tabItems = tab === 'complaint' ? complaints : tab === 'pickup' ? pickups : replacements;
+  const repairPickupsInWarehouse = pickups.filter(
+    (p) => (p.pickup_type === 'repair' || p.source_item_id) && p.warehouse_received_at
+  );
+  const hasActiveReplacementSo = !!ticket.sales_order_number
+    && replacementOrders.some((o) => o.status !== 'completed' && o.status !== 'cancelled');
+  const showSwapTab = repairPickupsInWarehouse.length > 0
+    || pickups.some((p) => p.status === 'swap_initiated');
+  const canOpenRepairSwap = isSupportLead(user) && showSwapTab && !hasActiveReplacementSo;
+
+  const tabItems = tab === 'complaint'
+    ? complaints
+    : tab === 'pickup'
+      ? pickups
+      : tab === 'replacement'
+        ? replacements
+        : [];
 
   const hasActivePickup = (sourceId) => pickups.some(
     (p) => p.source_item_id === sourceId && !['resolved', 'closed', 'inventory_updated'].includes(p.status)
@@ -993,6 +1009,11 @@ export default function SupportTicketDetail() {
               )}
               {canInitiateReplacement && (
                 <button type="button" className="support-btn-primary min-h-[44px]" onClick={() => setShowReplacement(true)}>Initiate replacement</button>
+              )}
+              {canOpenRepairSwap && (
+                <button type="button" className="support-btn-outline min-h-[44px]" onClick={() => setTab('swap')}>
+                  Repair swap (create SO)
+                </button>
               )}
               {!activePickupExists && !canInitiateReplacement && !ticket.return_dc_number && (
                 <button type="button" className="support-btn-outline min-h-[44px]" onClick={() => setPickupModal({})}>Schedule pickup</button>
@@ -1138,12 +1159,17 @@ export default function SupportTicketDetail() {
               {[
                 { id: 'complaint', label: 'Complaint', n: complaints.length },
                 { id: 'pickup', label: 'Pickup', n: pickups.length },
-                { id: 'replacement', label: 'Replacement', n: replacements.length }
+                { id: 'replacement', label: 'Replacement', n: replacements.length },
+                ...(showSwapTab ? [{
+                  id: 'swap',
+                  label: 'Repair swap',
+                  n: repairPickupsInWarehouse.length || 1,
+                }] : []),
               ].map((t) => (
                 <button
                   key={t.id}
                   type="button"
-                  className={`support-v3-tab ${tab === t.id ? 'active' : ''}`}
+                  className={`support-v3-tab ${t.id} ${tab === t.id ? 'active' : ''}`}
                   onClick={() => setTab(t.id)}
                 >
                   {t.label} ({t.n})
@@ -1151,6 +1177,19 @@ export default function SupportTicketDetail() {
               ))}
             </div>
             <div className="space-y-3">
+              {tab === 'swap' ? (
+                <RepairSwapPanel
+                  variant="tab"
+                  ticket={ticket}
+                  pickups={pickups}
+                  replacementOrders={replacementOrders}
+                  ticketId={ticket.id}
+                  isLead={isSupportLead(user)}
+                  onRefresh={load}
+                  onSwapCreated={() => setTab('replacement')}
+                />
+              ) : (
+                <>
               {tabItems.length === 0 && <p className="text-sm" style={{ color: 'var(--color-text-tertiary)' }}>No items in this category.</p>}
               {tabItems.map((item) => (
                 <ItemCard
@@ -1166,6 +1205,8 @@ export default function SupportTicketDetail() {
                   assignmentHistory={assignmentHistory}
                 />
               ))}
+                </>
+              )}
             </div>
           </section>
 

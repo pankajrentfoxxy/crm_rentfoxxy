@@ -15,7 +15,7 @@ import { cancelSalesOrder, getQuotation, getSalesOrderFull, logSoDocumentActivit
 import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
 import usePermission from '../../../hooks/usePermission';
-import { formatConfig, formatCurrency, formatDate, TYPE_STYLES, typeLabel, deliveryChallanDetailPath, parseDeliveryAddress, formatSupplyStateLabel, resolveSupplyStateFromShipping } from '../salesPipelineUtils';
+import { formatConfig, formatCurrency, formatDate, salesOrderTypeLabel, salesOrderTypeStyle, deliveryChallanDetailPath, parseDeliveryAddress, formatSupplyStateLabel, resolveSupplyStateFromShipping } from '../salesPipelineUtils';
 import { getSoScopeConfig, orderMatchesScope, salesOrderListPath } from '../salesOrderScope';
 
 function resolveSoNumber(params) {
@@ -191,7 +191,9 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
             ) : null}
           </div>
           <div className="flex flex-wrap items-center gap-2 mt-2">
-            <span className={`inline-block px-2 py-0.5 rounded-full text-xs ${TYPE_STYLES[head.quotation_type]}`}>{typeLabel(head.quotation_type)}</span>
+            <span className={`inline-block px-2 py-0.5 rounded-full text-xs ${salesOrderTypeStyle({ ...head, is_replacement_order: data?.is_replacement_order })}`}>
+              {salesOrderTypeLabel({ ...head, is_replacement_order: data?.is_replacement_order })}
+            </span>
             {isCancelled && (
               <span className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">Cancelled</span>
             )}

@@ -16,6 +16,7 @@ export default function PickupSetupForm({
   hideMachinePreview = false,
   dispatchOptional = false,
   dispatchOnly = false,
+  hideDispatch = false,
   changeMode = false,
   initialValues = null,
   onSubmit,
@@ -99,10 +100,10 @@ export default function PickupSetupForm({
 
   const canSubmit = (dispatchOnly || fixedPickupType || pickupType)
     && (dispatchOnly || pickupAddress.address.trim())
-    && (dispatchOptional || dispatchOnly || dispatchMode)
-    && (dispatchOptional || dispatchOnly || dispatchMode !== 'technician' || technicianId)
+    && (hideDispatch || dispatchOptional || dispatchOnly || dispatchMode)
+    && (hideDispatch || dispatchOptional || dispatchOnly || dispatchMode !== 'technician' || technicianId)
     && (!dispatchOnly || dispatchMode)
-    && (dispatchMode !== 'technician' || technicianId);
+    && (hideDispatch || dispatchMode !== 'technician' || technicianId);
 
   const handleSubmit = () => {
     if (!canSubmit || saving) return;
@@ -209,6 +210,7 @@ export default function PickupSetupForm({
       </div>
       )}
 
+      {!hideDispatch && (
       <div>
         <label className="text-sm font-semibold text-gray-700 block mb-1">
           {changeMode
@@ -296,6 +298,7 @@ export default function PickupSetupForm({
           </div>
         )}
       </div>
+      )}
 
       {changeMode && (
         <textarea

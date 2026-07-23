@@ -4436,6 +4436,75 @@ exports.createServiceDc = async (req, res) => {
     });
 };
 
+exports.getRepairSwapContext = async (req, res) => {
+    try {
+        const ticketId = parseInt(req.params.ticketId, 10);
+        const ctx = await replacementFlow.buildRepairSwapContext(pool, ticketId);
+        res.json({ success: true, ...ctx });
+    } catch (e) {
+        res.status(e.status || 500).json({ success: false, message: e.message || 'Failed to load repair swap context' });
+    }
+};
+
+exports.initiateRepairSwap = async (req, res) => {
+    if (!isSupportLead(req.user)) {
+        return res.status(403).json({ success: false, message: 'Only support lead can initiate a repair swap' });
+    }
+    const ticketId = parseInt(req.params.ticketId, 10);
+    const body = req.body || {};
+    const client = await pool.connect();
+    let resultPayload = {};
+    try {
+        await ensureSupportTicketItemV3Columns(client);
+        await ensureDeliveryChallanReplacementColumns(client);
+        await client.query('BEGIN');
+
+        const addr = body.pickup_address && typeof body.pickup_address === 'object' ? body.pickup_address : {};
+        const shippingAddress = {
+            name: body.contact_name || addr.name || '',
+            phone: body.contact_phone || addr.phone || '',
+            address: addr.address || '',
+            city: addr.city || '',
+            state: addr.state || '',
+            pincode: addr.pincode || '',
+        };
+
+        resultPayload = await replacementFlow.initiateSwapFromRepairPickup(client, {
+            ticketId,
+            pickupItemIds: body.pickup_item_ids,
+            reason: body.reason,
+            shippingAddress,
+            userId: req.user.user_id,
+        });
+
+        await logAudit(client, {
+            ticketId,
+            userId: req.user.user_id,
+            action: 'repair_swap_initiated',
+            detail: {
+                sales_order_number: resultPayload.sales_order_number,
+                return_dc_number: resultPayload.return_dc_number,
+                pickup_item_ids: resultPayload.pickup_item_ids,
+                unit_count: resultPayload.unit_count,
+            },
+        });
+        await bumpTicketActivity(client, ticketId);
+        await client.query('COMMIT');
+    } catch (e) {
+        await client.query('ROLLBACK');
+        return res.status(e.status || 400).json({ success: false, message: e.message || 'Failed to initiate repair swap' });
+    } finally {
+        client.release();
+    }
+    const data = await getTicketWithItems(ticketId, req.user);
+    res.json({
+        success: true,
+        message: 'Replacement swap started — attach a different laptop to the sales order',
+        ...resultPayload,
+        ...data,
+    });
+};
+
 exports.regenerateServiceDcPdf = async (req, res) => {
     const sdcNumber = decodeURIComponent(req.params.sdcNumber || '');
     try {

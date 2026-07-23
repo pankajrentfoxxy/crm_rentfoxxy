@@ -1223,6 +1223,7 @@
 .support-v3-tab.complaint.active { border-bottom-color: #2563eb; color: #1e40af; }
 .support-v3-tab.pickup.active { border-bottom-color: #ea580c; color: #9a3412; }
 .support-v3-tab.replacement.active { border-bottom-color: #db2777; color: #9d174d; }
+.support-v3-tab.swap.active { border-bottom-color: #be185d; color: #831843; }
 
 .support-filter-chip.complaint.active { background: #eff6ff; color: #1d4ed8; border-color: #93c5fd; }
 .support-filter-chip.pickup.active { background: #fff7ed; color: #c2410c; border-color: #fdba74; }
