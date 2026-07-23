@@ -12,6 +12,7 @@ const assetMovement = require('../controllers/inventoryManagement/assetMovement.
 const router = express.Router();
 
 const invView = [authMiddleware, checkSectionPermission('inventory_management', 'view')];
+const invEdit = [authMiddleware, checkSectionPermission('inventory_management', 'edit')];
 const invAdmin = [
   authMiddleware,
   checkRole('admin', 'super_admin'),
@@ -65,7 +66,7 @@ router.post(
 );
 router.post(
   '/qc-process/move-from-passed',
-  invAdmin,
+  invEdit,
   qcProcess.moveToQcValidators,
   qcProcess.moveToQcProcess
 );

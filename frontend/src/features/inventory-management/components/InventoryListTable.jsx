@@ -1208,7 +1208,7 @@ export default function InventoryListTable({ routeKey }) {
                     <td className="px-3 py-3">
                       <div className="flex flex-col gap-2 min-w-[11rem]">
                         <ReadyToRentActionSelect row={row} onUpdated={load} />
-                        {isInventoryAdmin ? (
+                        {canEditInventory ? (
                           <MoveToQcProcessButton row={row} onUpdated={load} />
                         ) : null}
                       </div>
