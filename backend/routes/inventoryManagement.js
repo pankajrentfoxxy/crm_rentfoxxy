@@ -17,6 +17,10 @@ const invAdmin = [
   checkRole('admin', 'super_admin'),
   checkSectionPermission('inventory_management', 'edit')
 ];
+const invSpecEdit = [
+  authMiddleware,
+  checkAnySectionPermission(['inventory_management', 'qc_management'], 'edit')
+];
 const assetMovementAccess = [
   authMiddleware,
   checkAnySectionPermission(['inventory_asset_movement'], 'edit')
@@ -130,7 +134,7 @@ router.patch(
 );
 router.patch(
   '/:id/item-description',
-  superAdminOnly,
+  invSpecEdit,
   inventoryList.itemDescriptionValidators,
   inventoryList.updateItemDescription
 );

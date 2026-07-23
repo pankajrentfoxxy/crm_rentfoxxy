@@ -1349,6 +1349,68 @@ async function listCascadeGenerationsForBrandProcessor(brandName, processorName)
   return listCascadeGenerationsForBrand(brandName);
 }
 
+function nameInAssetConfigList(list, value, entityKey) {
+  if (!value) return true;
+  const key = compareKey(entityKey, value);
+  return (list || []).some((name) => compareKey(entityKey, name) === key);
+}
+
+/** Validate laptop spec fields against Asset Configuration (brand mappings + spec masters). */
+async function validateLaptopSpecForEdit(spec) {
+  const errors = [];
+  const brand = String(spec.brand || '').trim();
+  const model = String(spec.model || '').trim();
+  const processor = String(spec.processor || '').trim();
+  const generation = String(spec.generation || '').trim();
+  const ram = String(spec.ram || '').trim();
+  const storage = String(spec.storage || '').trim();
+  const gpu = String(spec.gpu || '').trim();
+  const screenSize = String(spec.screen_size || '').trim();
+
+  const specMasters = await listCascadeSpecMasters();
+  if (ram && !nameInAssetConfigList(specMasters.rams, ram, 'ram')) {
+    errors.push(`RAM "${ram}" is not in asset configuration`);
+  }
+  if (storage && !nameInAssetConfigList(specMasters.storages, storage, 'storage')) {
+    errors.push(`Storage "${storage}" is not in asset configuration`);
+  }
+  if (gpu && !nameInAssetConfigList(specMasters.gpus, gpu, 'gpu')) {
+    errors.push(`GPU "${gpu}" is not in asset configuration`);
+  }
+  if (screenSize && !nameInAssetConfigList(specMasters.screen_sizes, screenSize, 'screen-sizes')) {
+    errors.push(`Screen size "${screenSize}" is not in asset configuration`);
+  }
+
+  if (!brand) return errors;
+
+  const brands = await listCascadeBrands();
+  if (!nameInAssetConfigList(brands.map((b) => b.name), brand, 'brands')) {
+    errors.push(`Brand "${brand}" is not in asset configuration`);
+    return errors;
+  }
+
+  if (model) {
+    const { models } = await listCascadeModelsForBrand(brand);
+    if (models.length && !nameInAssetConfigList(models, model, 'models')) {
+      errors.push(`Model "${model}" is not mapped to brand "${brand}" in asset configuration`);
+    }
+  }
+  if (processor) {
+    const { processors } = await listCascadeProcessorsForBrand(brand);
+    if (processors.length && !nameInAssetConfigList(processors, processor, 'processors')) {
+      errors.push(`Processor "${processor}" is not mapped to brand "${brand}" in asset configuration`);
+    }
+  }
+  if (generation) {
+    const { generations } = await listCascadeGenerationsForBrand(brand);
+    if (generations.length && !nameInAssetConfigList(generations, generation, 'generations')) {
+      errors.push(`Generation "${generation}" is not mapped to brand "${brand}" in asset configuration`);
+    }
+  }
+
+  return errors;
+}
+
 async function listActiveSpareBrandsForDropdown() {
   try {
     const { rows } = await pool.query(
@@ -1417,4 +1479,5 @@ module.exports = {
   listCascadeGenerationsForBrand,
   listCascadeGenerationsForBrandProcessor,
   listActiveSpareBrandsForDropdown,
+  validateLaptopSpecForEdit,
 };

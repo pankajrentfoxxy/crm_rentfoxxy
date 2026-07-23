@@ -5,6 +5,10 @@ import { Clock, ExternalLink, FileImage, FileSpreadsheet, FileText, History, Loa
 import { SearchField, ListPagination, DateRangeFilter } from '../../../components/ui/primitives';
 import { useUrlFilters, useDebouncedUrlSearch, listReturnState } from '../../../hooks/useUrlFilters';
 import { useAuth } from '../../../context/AuthContext';
+import usePermission from '../../../hooks/usePermission';
+import ItemDescriptionEditModal from './ItemDescriptionEditModal';
+import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
+import AddLaptopToQcModal from './AddLaptopToQcModal';
 import {
   createProductionTicket,
   fetchInventoryList,
@@ -14,12 +18,9 @@ import {
   moveQcPendingToQcProcess,
   moveDeadToQcProcess,
   tagInventorySerial,
-  updateInventoryItemDescription,
   updateInventorySerialRemark,
   updateReadyToRentSaleAction
 } from '../inventoryManagementApi';
-import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
-import AddLaptopToQcModal from './AddLaptopToQcModal';
 import {
   INVENTORY_API_SEGMENT_BY_ROUTE,
   INVENTORY_PAGE_META,
@@ -214,48 +215,7 @@ function ItemDescriptionCard({ item }) {
 
 function ItemDescriptionCell({ row, canEdit, onUpdated }) {
   const [open, setOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
   const item = row.item_description || {};
-  const [form, setForm] = useState({
-    brand: item.brand || '',
-    model: item.model || '',
-    processor: item.processor || '',
-    generation: item.generation || '',
-    ram: item.ram || '',
-    storage: item.storage || '',
-    gpu: item.gpu || '',
-    screen_size: item.screen_size || '',
-  });
-
-  useEffect(() => {
-    if (!open) return;
-    setForm({
-      brand: item.brand || '',
-      model: item.model || '',
-      processor: item.processor || '',
-      generation: item.generation || '',
-      ram: item.ram || '',
-      storage: item.storage || '',
-      gpu: item.gpu || '',
-      screen_size: item.screen_size || '',
-    });
-  }, [open, item.brand, item.model, item.processor, item.generation, item.ram, item.storage, item.gpu, item.screen_size]);
-
-  const save = async () => {
-    setSaving(true);
-    try {
-      const { data } = await updateInventoryItemDescription(row.serial_id, form);
-      if (data.success) {
-        toast.success(data.message || 'Item description updated');
-        setOpen(false);
-        onUpdated?.();
-      }
-    } catch (e) {
-      toast.error(e.response?.data?.message || 'Update failed');
-    } finally {
-      setSaving(false);
-    }
-  };
 
   return (
     <>
@@ -273,51 +233,12 @@ function ItemDescriptionCell({ row, canEdit, onUpdated }) {
         ) : null}
       </div>
 
-      {open ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
-          <div className="w-full max-w-lg rounded-xl bg-white shadow-xl border border-slate-200">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
-              <div>
-                <h3 className="font-semibold text-slate-900">Edit item description</h3>
-                <p className="text-xs text-slate-500 font-mono mt-0.5">{row.unique_product_serial || row.serial_number}</p>
-              </div>
-              <button type="button" className="p-2 rounded-lg hover:bg-slate-100" onClick={() => setOpen(false)}>
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[70vh] overflow-y-auto">
-              {[
-                ['Brand', 'brand'],
-                ['Model', 'model'],
-                ['Processor', 'processor'],
-                ['Generation', 'generation'],
-                ['RAM', 'ram'],
-                ['Storage', 'storage'],
-                ['GPU', 'gpu'],
-                ['Screen size', 'screen_size'],
-              ].map(([label, key]) => (
-                <label key={key} className="block text-sm">
-                  <span className="text-xs font-medium text-slate-600">{label}</span>
-                  <input
-                    type="text"
-                    value={form[key]}
-                    onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
-                    className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
-                  />
-                </label>
-              ))}
-            </div>
-            <div className="flex gap-2 px-4 py-3 border-t border-slate-100">
-              <button type="button" className="flex-1 rounded-lg border border-slate-200 py-2 text-sm" onClick={() => setOpen(false)} disabled={saving}>
-                Cancel
-              </button>
-              <button type="button" className="flex-1 rounded-lg bg-teal-700 text-white py-2 text-sm font-semibold disabled:opacity-50" onClick={save} disabled={saving}>
-                {saving ? 'Saving…' : 'Save'}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <ItemDescriptionEditModal
+        open={open}
+        row={row}
+        onClose={() => setOpen(false)}
+        onSaved={onUpdated}
+      />
     </>
   );
 }
@@ -787,9 +708,12 @@ function SparePartRow({ row }) {
 
 export default function InventoryListTable({ routeKey }) {
   const { user } = useAuth();
+  const { canEdit: canEditSection } = usePermission();
   const location = useLocation();
   const isInventoryAdmin = ['admin', 'super_admin'].includes(user?.role);
   const isSuperAdmin = user?.role === 'super_admin';
+  const canEditInventory = canEditSection('inventory_management');
+  const canEditQc = canEditSection('qc_management');
   const meta = INVENTORY_PAGE_META[routeKey];
   const apiSegment = INVENTORY_API_SEGMENT_BY_ROUTE[routeKey];
   const isSpare = routeKey === 'spare-parts';
@@ -822,6 +746,10 @@ export default function InventoryListTable({ routeKey }) {
   const [exporting, setExporting] = useState(false);
   const [scopeNote, setScopeNote] = useState(null);
   const isQcProcess = routeKey === 'qc-process';
+  const showReadyToRentAction = routeKey === 'ready-to-rent-or-sell';
+  const canEditItemDescription =
+    (showReadyToRentAction && canEditInventory)
+    || (isQcProcess && (canEditInventory || canEditQc));
   const listReturn = listReturnState(location);
 
   const total = pagination.total || 0;
@@ -886,7 +814,6 @@ export default function InventoryListTable({ routeKey }) {
     return () => window.removeEventListener(INVENTORY_LIST_INVALIDATE, onInvalidate);
   }, [load]);
 
-  const showReadyToRentAction = routeKey === 'ready-to-rent-or-sell';
   const statCards = useMemo(
     () => (listCounts && showReadyToRentAction
       ? READY_TO_RENT_STAT_CARDS.map((card) => ({
@@ -1242,7 +1169,7 @@ export default function InventoryListTable({ routeKey }) {
                   <td className="px-3 py-3">
                     <ItemDescriptionCell
                       row={row}
-                      canEdit={showReadyToRentAction && isSuperAdmin}
+                      canEdit={canEditItemDescription}
                       onUpdated={load}
                     />
                   </td>

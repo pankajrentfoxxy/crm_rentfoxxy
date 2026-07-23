@@ -28,6 +28,7 @@ const {
   attachSerialTicketIds,
 } = require('../../utils/inventoryListQuery');
 const { getInventoryTagAccess } = require('../../services/inventoryTagAccessScope');
+const { hasPermission } = require('../../services/permissionService');
 
 const READY_TO_RENT_SALE_VALUES = [
   'normal_sale',
@@ -662,7 +663,7 @@ const itemDescriptionValidators = [
   ...SPEC_FIELDS.map((field) => body(field).optional({ nullable: true }).isString().trim()),
 ];
 
-/** Super admin — correct item description on Ready to Rent/Sell (stored on serial extra). */
+/** Inventory / QC edit — correct item description (stored on serial extra). */
 async function updateItemDescription(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
@@ -694,11 +695,23 @@ async function updateItemDescription(req, res) {
       return res.status(400).json({ success: false, message: 'Only PO laptop serials can be updated here' });
     }
 
+    const userId = req.user?.user_id;
+    const role = req.user?.role;
+    const isSuperAdmin = role === 'super_admin';
+    const canInvEdit = isSuperAdmin
+      || await hasPermission(userId, role, 'inventory_management', 'can_edit');
+    const canQcEdit = isSuperAdmin
+      || await hasPermission(userId, role, 'qc_management', 'can_edit');
+
     const effectiveQc = String(row.qc_status || parseExtra(row.extra).status || 'pending').trim();
-    if (effectiveQc !== 'passed') {
-      return res.status(400).json({
+    const canEditPassed = effectiveQc === 'passed' && canInvEdit;
+    const canEditQcProcess = effectiveQc === 'pending' && (canInvEdit || canQcEdit);
+    if (!canEditPassed && !canEditQcProcess) {
+      return res.status(403).json({
         success: false,
-        message: 'Item description can only be edited on QC passed (Ready to Rent/Sell) units'
+        message: effectiveQc === 'passed'
+          ? 'You do not have permission to edit specs on Ready to Rent/Sell units'
+          : 'Item description can only be edited on QC Process (pending) or Ready to Rent/Sell (passed) units'
       });
     }
     if (['rented', 'sold', 'in_transit', 'on_demo', 'reserved'].includes(String(row.inventory_status || ''))) {
@@ -709,6 +722,22 @@ async function updateItemDescription(req, res) {
     }
 
     const extra = parseExtra(row.extra);
+    const mergedSpec = {};
+    for (const field of SPEC_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(payload, field)) {
+        mergedSpec[field] = payload[field];
+      } else if (field === 'model') {
+        mergedSpec[field] = extra.model || extra.model_name || '';
+      } else {
+        mergedSpec[field] = extra[field] || '';
+      }
+    }
+    const { validateLaptopSpecForEdit } = require('../../services/assetConfigurationService');
+    const specErrors = await validateLaptopSpecForEdit(mergedSpec);
+    if (specErrors.length) {
+      return res.status(400).json({ success: false, message: specErrors.join('; ') });
+    }
+
     for (const [key, val] of Object.entries(payload)) {
       if (val) extra[key] = val;
       else delete extra[key];
@@ -717,7 +746,9 @@ async function updateItemDescription(req, res) {
         if (!val) delete extra.model_name;
       }
     }
-    extra.spec_source = 'super_admin_override';
+    extra.spec_source = isSuperAdmin
+      ? 'super_admin_override'
+      : (canEditQcProcess && !canEditPassed ? 'qc_override' : 'inventory_override');
     extra.spec_corrected_at = new Date().toISOString();
     extra.spec_corrected_by = req.user?.user_id || null;
 
@@ -732,7 +763,7 @@ async function updateItemDescription(req, res) {
         ttsplId,
         vendorSerialId: serialId,
         eventType: 'item_description_updated',
-        description: 'Item description corrected (super admin)',
+        description: `Item description corrected (${extra.spec_source})`,
         metadata: payload,
         actorUserId: req.user?.user_id,
       });
