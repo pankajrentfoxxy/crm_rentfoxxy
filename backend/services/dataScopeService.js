@@ -34,6 +34,17 @@ function scopeUserId(user) {
   return Number.isInteger(n) && n > 0 ? n : null;
 }
 
+const QC_INSPECTOR_QUEUE_STAGES = new Set(['QC1', 'QC2', 'Dispatch QC']);
+
+function isQcInspectorQueueStage(stageName) {
+  return QC_INSPECTOR_QUEUE_STAGES.has(String(stageName || '').trim());
+}
+
+/** QC Inspector role lists the full QC queue — assignment filter is skipped in ticketController. */
+function isQcInspectorRole(role) {
+  return role === 'qc';
+}
+
 async function getEffectiveDataScope(userId, role, section, cache) {
   if (role === 'super_admin') return DATA_SCOPE_ALL;
 
@@ -144,6 +155,10 @@ function buildTicketListAssignmentClause(scope, paramCount, params) {
 async function canAccessTicketRecord(req, ticket) {
   if (req.user?.role === 'super_admin') return true;
 
+  if (isQcInspectorRole(req.user?.role) && isQcInspectorQueueStage(ticket.stage_name)) {
+    return true;
+  }
+
   const assignedOnly = await isRestrictedToAssignedAny(req, [
     'tickets',
     'floor_pipeline',
@@ -190,6 +205,8 @@ module.exports = {
   resolveTicketListScope,
   buildTicketListAssignmentClause,
   canAccessTicketRecord,
+  isQcInspectorRole,
+  isQcInspectorQueueStage,
   appendCreatedByFilter,
   appendDeliveryPersonFilter,
   appendSupportAssignedFilter,

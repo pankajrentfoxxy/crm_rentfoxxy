@@ -20,6 +20,7 @@ const {
   buildTicketListAssignmentClause,
   canAccessTicketRecord,
   isRestrictedToAssignedAny,
+  isQcInspectorRole,
 } = require('../services/dataScopeService');
 const { appendDateRangeClauses } = require('../utils/dateRangeFilter');
 const { pickSpecFilters, buildTicketSpecFilter } = require('../utils/inventorySpecFilter');
@@ -273,7 +274,9 @@ exports.getTickets = async (req, res) => {
       query += ` AND s.stage_name = 'Dispatch QC'`;
     }
 
-    const ticketScope = await resolveTicketListScope(req);
+    const ticketScope = isQcInspectorRole(req.user?.role)
+      ? { mode: 'all' }
+      : await resolveTicketListScope(req);
     const assignmentFilter = buildTicketListAssignmentClause(ticketScope, paramCount, params);
     query += assignmentFilter.clause;
     paramCount = assignmentFilter.paramCount;
@@ -408,7 +411,9 @@ exports.getFloorNavCounts = async (req, res) => {
       where += ` AND s.stage_name = 'Dispatch QC'`;
     }
 
-    const ticketScope = await resolveTicketListScope(req);
+    const ticketScope = isQcInspectorRole(req.user?.role)
+      ? { mode: 'all' }
+      : await resolveTicketListScope(req);
     const assignmentFilter = buildTicketListAssignmentClause(ticketScope, paramCount, params);
     where += assignmentFilter.clause;
     paramCount = assignmentFilter.paramCount;
