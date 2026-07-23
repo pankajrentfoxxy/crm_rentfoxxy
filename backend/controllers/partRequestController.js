@@ -34,6 +34,18 @@ const FULL_SELECT = `
 
 const PRIVILEGED = ['admin', 'manager', 'super_admin'];
 
+let partsSpecEnsured = false;
+async function ensurePartsSpecColumns(db) {
+  if (partsSpecEnsured) return;
+  await db.query(`
+    ALTER TABLE parts ADD COLUMN IF NOT EXISTS model_number VARCHAR(120);
+    ALTER TABLE parts ADD COLUMN IF NOT EXISTS pin_size VARCHAR(60);
+    ALTER TABLE part_requests ADD COLUMN IF NOT EXISTS battery_model_number VARCHAR(120);
+    ALTER TABLE part_requests ADD COLUMN IF NOT EXISTS battery_photos JSONB;
+  `);
+  partsSpecEnsured = true;
+}
+
 function isBatteryPart(part) {
   const cat = String(part?.category || part?.part_type || '').toLowerCase().trim();
   const name = String(part?.part_name || '').toLowerCase();
@@ -211,6 +223,7 @@ exports.uploadPartRequestPhotos = async (req, res) => {
 // GET /api/part-requests
 exports.listPartRequests = async (req, res) => {
   try {
+    await ensurePartsSpecColumns(pool);
     const { ticket_id, status } = req.query;
     const where = [];
     const params = [];
@@ -236,6 +249,7 @@ exports.listPartRequests = async (req, res) => {
 // GET /api/part-requests/:requestId
 exports.getPartRequest = async (req, res) => {
   try {
+    await ensurePartsSpecColumns(pool);
     const result = await pool.query(`${FULL_SELECT} WHERE pr.request_id = $1`, [req.params.requestId]);
     if (!result.rows.length) return res.status(404).json({ success: false, message: 'Request not found' });
     res.json({ success: true, request: result.rows[0] });
@@ -247,6 +261,7 @@ exports.getPartRequest = async (req, res) => {
 // GET /api/tickets/:ticketId/part-requests  (also reachable via list with ?ticket_id=)
 exports.getTicketPartRequests = async (req, res) => {
   try {
+    await ensurePartsSpecColumns(pool);
     const result = await pool.query(
       `${FULL_SELECT} WHERE pr.ticket_id = $1 ORDER BY pr.created_at DESC`,
       [req.params.ticketId]
@@ -629,6 +644,7 @@ exports.cancelPartRequest = async (req, res) => {
 // GET /api/part-requests/warehouse-queue
 exports.getWarehouseQueue = async (req, res) => {
   try {
+    await ensurePartsSpecColumns(pool);
     const result = await pool.query(
       `${FULL_SELECT} WHERE pr.status IN ('pending','escalated','ordered','received')
         ORDER BY CASE pr.status WHEN 'pending' THEN 0 WHEN 'received' THEN 1 WHEN 'ordered' THEN 2 ELSE 3 END,
@@ -643,6 +659,7 @@ exports.getWarehouseQueue = async (req, res) => {
 // GET /api/part-requests/procurement-queue
 exports.getProcurementQueue = async (req, res) => {
   try {
+    await ensurePartsSpecColumns(pool);
     const result = await pool.query(
       `${FULL_SELECT} WHERE pr.status IN ('escalated','ordered') ORDER BY pr.created_at ASC`
     );

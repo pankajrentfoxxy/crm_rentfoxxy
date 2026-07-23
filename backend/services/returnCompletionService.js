@@ -14,6 +14,106 @@ const inventorySM = require('./inventoryStateMachine');
 const replacementFlow = require('./supportReplacementFlowService');
 const billing = require('./billingSchedulerService');
 const { createTicketFromReturn } = require('./grnTicketService');
+const {
+  isRepairPickupItem,
+  removeRepairPickupFromCustomer,
+} = require('./repairPickupInventoryService');
+
+async function findPickupItemForSerial(db, { serialRow, supportTicketId, dcNumber }) {
+  if (!supportTicketId && !dcNumber) return null;
+  const code = serialRow.inventory_asset_code || serialRow.extra?.ttspl_id || serialRow.serial_number;
+  const params = [code];
+  let sql = `
+    SELECT sti.*
+      FROM support_ticket_items sti
+     WHERE sti.item_type = 'pickup'
+       AND (
+         sti.ttspl_id = $1
+         OR sti.unique_serial_number = $1
+         OR sti.serial_number = $1
+       )
+  `;
+  if (supportTicketId) {
+    params.push(supportTicketId);
+    sql += ` AND sti.ticket_id = $${params.length}`;
+  }
+  if (dcNumber) {
+    params.push(dcNumber);
+    sql += ` AND sti.return_dc_number = $${params.length}`;
+  }
+  sql += ' ORDER BY sti.id ASC LIMIT 1';
+  const r = await db.query(sql, params);
+  return r.rows[0] || null;
+}
+
+async function markRepairPickupPickedUp(db, item, actorUserId, actorName) {
+  const out = await removeRepairPickupFromCustomer(db, item, {
+    user_id: actorUserId,
+    name: actorName,
+  });
+  await db.query(
+    `UPDATE support_ticket_items
+        SET picked_up_at = COALESCE(picked_up_at, NOW()),
+            customer_otp_verified_at = COALESCE(customer_otp_verified_at, NOW()),
+            status = CASE
+              WHEN status IN ('resolved', 'closed', 'inventory_updated', 'awaiting_service_return') THEN status
+              ELSE 'picked_up'
+            END,
+            updated_at = NOW()
+      WHERE id = $1`,
+    [item.id]
+  );
+  return { itemId: item.id, repair_pickup: true, ...out };
+}
+
+async function finalizeSupportPickupTicket(db, supportTicketId, dcNumber) {
+  if (!supportTicketId) return;
+
+  const replRes = await replacementFlow.onReplacementReturnPickedUp(db, {
+    supportTicketId,
+    returnDcNumber: dcNumber,
+  });
+  if (replRes.handled) {
+    await db.query(
+      `UPDATE support_ticket_items
+          SET picked_up_at = COALESCE(picked_up_at, NOW()),
+              status = CASE WHEN status = 'inventory_updated' THEN status ELSE 'picked_up' END,
+              updated_at = NOW()
+        WHERE ticket_id = $1 AND item_type = 'pickup'
+          AND return_dc_number = $2`,
+      [supportTicketId, dcNumber]
+    );
+    await db.query(
+      `UPDATE support_tickets SET last_activity_at = NOW(), updated_at = NOW() WHERE id = $1`,
+      [supportTicketId]
+    );
+    return;
+  }
+
+  await db.query(
+    `UPDATE support_ticket_items
+        SET status = 'resolved',
+            picked_up_at = COALESCE(picked_up_at, NOW()),
+            resolved_at  = COALESCE(resolved_at, NOW()),
+            updated_at = NOW()
+      WHERE ticket_id = $1 AND item_type = 'pickup'
+        AND status NOT IN ('resolved', 'closed', 'inventory_updated', 'awaiting_service_return')
+        AND COALESCE(pickup_type, CASE WHEN source_item_id IS NOT NULL THEN 'repair' END) <> 'repair'`,
+    [supportTicketId]
+  );
+  await db.query(
+    `UPDATE support_tickets
+        SET status = CASE WHEN NOT EXISTS (
+              SELECT 1 FROM support_ticket_items
+               WHERE ticket_id = $1
+                 AND status NOT IN ('resolved', 'closed', 'inventory_updated', 'awaiting_service_return')
+            ) THEN 'closed' ELSE 'in_progress' END,
+            last_activity_at = NOW(),
+            updated_at = NOW()
+      WHERE id = $1`,
+    [supportTicketId]
+  );
+}
 
 async function processReturnedSerials(db, {
   serialIds = [],
@@ -34,6 +134,17 @@ async function processReturnedSerials(db, {
     );
     const s = r.rows[0];
     if (!s) { results.push({ serialId, skipped: true, reason: 'not_found' }); continue; }
+
+    const pickupItem = await findPickupItemForSerial(db, {
+      serialRow: s,
+      supportTicketId,
+      dcNumber,
+    });
+    if (pickupItem && isRepairPickupItem(pickupItem)) {
+      results.push(await markRepairPickupPickedUp(db, pickupItem, actorUserId, actorName));
+      continue;
+    }
+
     if (!['rented', 'on_demo', 'sold'].includes(s.inventory_status)) {
       results.push({ serialId, skipped: true, reason: s.inventory_status });
       continue;
@@ -86,48 +197,8 @@ async function processReturnedSerials(db, {
     });
   }
 
-  // Resolve the originating support pickup ticket (if any) once all units processed.
   if (supportTicketId) {
-    const replRes = await replacementFlow.onReplacementReturnPickedUp(db, {
-      supportTicketId,
-      returnDcNumber: dcNumber,
-    });
-    if (!replRes.handled) {
-      await db.query(
-        `UPDATE support_ticket_items
-            SET status = 'resolved',
-                picked_up_at = COALESCE(picked_up_at, NOW()),
-                resolved_at  = COALESCE(resolved_at, NOW()),
-                updated_at = NOW()
-          WHERE ticket_id = $1 AND item_type = 'pickup'
-            AND status NOT IN ('resolved', 'closed', 'inventory_updated')`,
-        [supportTicketId]
-      );
-      await db.query(
-        `UPDATE support_tickets
-            SET status = CASE WHEN NOT EXISTS (
-                  SELECT 1 FROM support_ticket_items
-                   WHERE ticket_id = $1 AND status NOT IN ('resolved', 'closed', 'inventory_updated')
-                ) THEN 'closed' ELSE status END,
-                last_activity_at = NOW(), updated_at = NOW()
-          WHERE id = $1`,
-        [supportTicketId]
-      );
-    } else {
-      await db.query(
-        `UPDATE support_ticket_items
-            SET picked_up_at = COALESCE(picked_up_at, NOW()),
-                status = CASE WHEN status = 'inventory_updated' THEN status ELSE 'picked_up' END,
-                updated_at = NOW()
-          WHERE ticket_id = $1 AND item_type = 'pickup'
-            AND return_dc_number = $2`,
-        [supportTicketId, dcNumber]
-      );
-      await db.query(
-        `UPDATE support_tickets SET last_activity_at = NOW(), updated_at = NOW() WHERE id = $1`,
-        [supportTicketId]
-      );
-    }
+    await finalizeSupportPickupTicket(db, supportTicketId, dcNumber);
   }
 
   return results;

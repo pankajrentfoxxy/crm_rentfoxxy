@@ -18,6 +18,7 @@ import RaisePartRequestForm from '../../features/support/components/RaisePartReq
 import PickupItemCard from './components/PickupItemCard';
 import CreatePickupModal from './components/CreatePickupModal';
 import PickupSetupForm from './components/PickupSetupForm';
+import ServiceDcPanel from './components/ServiceDcPanel';
 import AssignmentHistoryList, { actionLabel } from './components/AssignmentHistoryList';
 import {
   formatItemId,
@@ -1122,6 +1123,15 @@ export default function SupportTicketDetail() {
               assignmentHistory={assignmentHistory}
             />
           )}
+
+          <ServiceDcPanel
+            ticket={ticket}
+            pickups={pickups}
+            replacementOrders={replacementOrders}
+            ticketId={ticket.id}
+            isLead={isSupportLead(user)}
+            onRefresh={load}
+          />
 
           <section className="support-v3-card">
             <div className="support-v3-tabs mb-3">

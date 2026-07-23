@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 require('dotenv').config();
 
 const errorHandler = require('./middleware/errorHandler');
@@ -59,7 +60,9 @@ try {
 }
 app.use(express.json({ limit: BODY_PARSER_LIMIT }));
 app.use(express.urlencoded({ extended: true, limit: BODY_PARSER_LIMIT }));
-app.use('/uploads', express.static('uploads'));
+// Always serve from backend/uploads regardless of process cwd; fall back to repo-root/uploads for legacy files.
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
 // Test database connection
 const pool = require('./config/db');

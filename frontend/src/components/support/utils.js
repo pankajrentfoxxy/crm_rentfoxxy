@@ -1,3 +1,5 @@
+import { getBackendOrigin } from '../../utils/api';
+
 export const formatTicketId = (id) => `#TKT-${String(id).padStart(3, '0')}`;
 export const formatItemId = (id) => `ITEM-${String(id).padStart(2, '0')}`;
 
@@ -34,21 +36,17 @@ export const formatHours = (hours) => {
   return `${h}h`;
 };
 
-export const uploadBase = () => {
-  const host = window.location.hostname;
-  if (host === 'localhost' || host.startsWith('192.168.')) {
-    return `http://${host}:5001`;
-  }
-  return window.location.origin;
-};
+export const uploadBase = () => getBackendOrigin();
 
 export const uploadAssetUrl = (path) => {
   if (!path) return null;
   if (String(path).startsWith('http')) return path;
-  return `${uploadBase().replace(/\/$/, '')}/${String(path).replace(/^\//, '')}`;
+  return `${getBackendOrigin().replace(/\/$/, '')}/${String(path).replace(/^\//, '')}`;
 };
 
-export const podUrl = (path) => (path ? `${uploadBase()}/uploads/${String(path).replace(/^\/?uploads\//, '')}` : null);
+export const podUrl = (path) => (
+  path ? `${getBackendOrigin().replace(/\/$/, '')}/uploads/${String(path).replace(/^\/?uploads\//, '')}` : null
+);
 
 // Client-side image compression so large phone-camera photos (often 5-15 MB)
 // are shrunk before upload and never trip the server's size limit. Resizes to a
@@ -107,6 +105,12 @@ export const compressImageFile = async (file, opts = {}) => {
 
 export const displayStatus = (ticket) => {
   if (ticket.status === 'closed') return { label: 'Closed', className: 'closed' };
+  const awaitingServiceReturn = (ticket.items || []).some(
+    (item) => item.item_type === 'pickup' && item.status === 'awaiting_service_return'
+  );
+  if (awaitingServiceReturn) {
+    return { label: 'Awaiting service return', className: 'progress' };
+  }
   if (ticket.has_replacement_pending) return { label: 'Replacement pending', className: 'replacement' };
   if (ticket.is_overdue) return { label: `Overdue · ${formatHours(ticket.hours_since_last_update)}`, className: 'overdue' };
   if (ticket.unassigned_item_count > 0) return { label: 'Unassigned', className: 'open' };
@@ -171,6 +175,75 @@ export const workloadTone = (openItems) => {
 
 const isClosed = (item) => ['resolved', 'closed', 'inventory_updated'].includes(item.status);
 
+const resolvePickupKind = (item) => item.pickup_type || (item.source_item_id ? 'repair' : 'return');
+
+export const getItemStepperV3Pickup = (item) => {
+  const es = item.effective_current_step || (item.assigned_to || item.pickup_assigned_to ? 'assigned' : 'unassigned');
+  const isRepair = resolvePickupKind(item) === 'repair';
+
+  const sharedIdx = {
+    unassigned: 0,
+    assigned: 0,
+    pending_dispatch: 0,
+    in_transit: 0,
+    wait_72h: 0,
+    pickup_action: 0,
+    reached: 1,
+    visited: 1,
+    pod_uploaded: 2,
+    fixed_pending_pod: 2,
+    customer_otp: 3,
+    picked_up: 3,
+  };
+
+  if (isRepair) {
+    const steps = [
+      { key: 'assigned', label: 'Assigned' },
+      { key: 'reached', label: 'Reached' },
+      { key: 'pod', label: 'POD Photo' },
+      { key: 'customer_otp', label: 'Customer OTP' },
+      { key: 'warehouse_confirmed', label: 'Warehouse' },
+      { key: 'service_return', label: 'Send Back' },
+      { key: 'closed', label: 'Done' },
+    ];
+    const idxMap = {
+      ...sharedIdx,
+      awaiting_service_return: 5,
+      service_dc_pending: 5,
+      warehouse_confirmed: 6,
+      reached_warehouse: 4,
+      inventory_updated: 6,
+      resolved: 6,
+      otp_verified: 6,
+      closed: 6,
+    };
+    let currentIndex = idxMap[es] ?? 0;
+    if (isClosed(item)) currentIndex = steps.length - 1;
+    return { steps, currentIndex, completedThrough: Math.max(0, currentIndex - 1) };
+  }
+
+  const steps = [
+    { key: 'assigned', label: 'Assigned' },
+    { key: 'reached', label: 'Reached' },
+    { key: 'pod', label: 'POD Photo' },
+    { key: 'customer_otp', label: 'Customer OTP' },
+    { key: 'warehouse_confirmed', label: 'Warehouse' },
+    { key: 'closed', label: 'Done' },
+  ];
+  const idxMap = {
+    ...sharedIdx,
+    warehouse_confirmed: 4,
+    reached_warehouse: 4,
+    inventory_updated: 5,
+    resolved: 5,
+    otp_verified: 5,
+    closed: 5,
+  };
+  let currentIndex = idxMap[es] ?? 0;
+  if (isClosed(item)) currentIndex = steps.length - 1;
+  return { steps, currentIndex, completedThrough: Math.max(0, currentIndex - 1) };
+};
+
 /** v3 complaint stepper driven by `effective_current_step` from API */
 export const getItemStepperV3Complaint = (item) => {
   const es = item.effective_current_step || (item.assigned_to ? 'assigned' : 'unassigned');
@@ -193,40 +266,6 @@ export const getItemStepperV3Complaint = (item) => {
     fixed_pending_pod: 3,
     pod_uploaded: 4,
     otp_verified: 5
-  };
-  let currentIndex = idxMap[es] ?? 0;
-  if (isClosed(item)) currentIndex = steps.length - 1;
-  return { steps, currentIndex, completedThrough: Math.max(0, currentIndex - 1) };
-};
-
-export const getItemStepperV3Pickup = (item) => {
-  const es = item.effective_current_step || (item.assigned_to || item.pickup_assigned_to ? 'assigned' : 'unassigned');
-  const steps = [
-    { key: 'assigned', label: 'Assigned' },
-    { key: 'reached', label: 'Reached' },
-    { key: 'pod', label: 'POD Photo' },
-    { key: 'customer_otp', label: 'Customer OTP' },
-    { key: 'warehouse_confirmed', label: 'Warehouse' },
-    { key: 'closed', label: 'Done' }
-  ];
-  const idxMap = {
-    unassigned: 0,
-    assigned: 0,
-    in_transit: 0, // legacy
-    wait_72h: 0, // legacy
-    pickup_action: 0, // legacy
-    reached: 1,
-    visited: 1, // legacy alias
-    pod_uploaded: 2,
-    fixed_pending_pod: 2, // legacy alias
-    customer_otp: 3,
-    picked_up: 3, // legacy alias
-    warehouse_confirmed: 4,
-    reached_warehouse: 4, // legacy alias
-    inventory_updated: 5,
-    resolved: 5,
-    otp_verified: 5,
-    closed: 5
   };
   let currentIndex = idxMap[es] ?? 0;
   if (isClosed(item)) currentIndex = steps.length - 1;
@@ -329,3 +368,34 @@ export const ticketHasUnassignedTechnicianSlots = (ticket) => (
       && !['resolved', 'closed'].includes(item.status)
   )
 );
+
+export const resolveItemPickupKind = (item) => {
+  if (!item || item.item_type !== 'pickup') return null;
+  return item.pickup_type || (item.source_item_id ? 'repair' : 'return');
+};
+
+export const ticketPickupKind = (ticket) => {
+  if (ticket?.pickup_kind) return ticket.pickup_kind;
+  const kinds = [...new Set((ticket?.items || [])
+    .filter((item) => item.item_type === 'pickup')
+    .map(resolveItemPickupKind)
+    .filter(Boolean))];
+  if (!kinds.length) return null;
+  if (kinds.length === 1) return kinds[0];
+  return 'mixed';
+};
+
+export const pickupKindLabel = (kind) => {
+  if (kind === 'repair') return 'Repair Pickup';
+  if (kind === 'return') return 'Return Pickup';
+  if (kind === 'mixed') return 'Mixed Pickup';
+  return null;
+};
+
+export const ticketSubTypeLabel = (ticket) => {
+  const kind = ticket?.pickup_kind || ticketPickupKind(ticket);
+  if (kind === 'repair') return 'Repair';
+  if (kind === 'return') return 'Return';
+  if (kind === 'mixed') return 'Mixed';
+  return null;
+};

@@ -43,6 +43,8 @@ const deriveComplaintStep = (item) => {
 };
 
 const derivePickupStep = (item) => {
+  const pickupType = item.pickup_type || (item.source_item_id ? 'repair' : 'return');
+  const isRepair = pickupType === 'repair';
   // Phase 20: redesigned pickup flow is the default for every pickup item.
   // Assigned -> Reached -> POD -> Customer OTP -> Warehouse confirmed.
   // Only the deprecated Phase 18 self-carry / loan-machine flow is treated as
@@ -53,7 +55,13 @@ const derivePickupStep = (item) => {
     if (item.status === 'pending_dispatch' || (item.return_dc_number && !item.pickup_method && !item.assigned_to && !item.pickup_assigned_to)) {
       return 'pending_dispatch';
     }
-    if (item.warehouse_received_at || CLOSED.has(item.status)) return 'warehouse_confirmed';
+    if (isRepair) {
+      if (item.service_dc_status === 'delivered' || item.service_dc_delivered_at) return 'warehouse_confirmed';
+      if (item.service_dc_number) return 'service_dc_pending';
+      if (item.status === 'awaiting_service_return' || item.warehouse_received_at) return 'awaiting_service_return';
+    } else if (item.warehouse_received_at || CLOSED.has(item.status)) {
+      return 'warehouse_confirmed';
+    }
     if (item.customer_otp_verified_at) return 'customer_otp';
     if (item.pod_image_path || item.proof_of_completion_path) return 'pod_uploaded';
     if (item.visited_at) return 'reached';

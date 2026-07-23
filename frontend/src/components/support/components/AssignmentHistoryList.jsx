@@ -3,6 +3,7 @@ import React from 'react';
 function actionLabel(action) {
   if (action === 'return_pickup_assignee_changed') return 'Pickup assignee changed';
   if (action === 'return_pickup_assigned') return 'Pickup assigned';
+  if (action === 'service_dc_created') return 'Service DC created';
   if (action === 'technician_reassigned') return 'Technician reassigned';
   if (action === 'technician_assigned') return 'Technician assigned';
   return String(action || '').replace(/_/g, ' ');

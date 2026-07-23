@@ -47,6 +47,7 @@ export const markCourierRejected = (n, d) => api.patch(`${base}/delivery-challan
 export const listReturnDCs = (p) => api.get(`${base}/return-dc`, { params: p });
 export const getReturnDcDetail = (rdcNumber) => api.get(`${base}/return-dc/${encodeURIComponent(rdcNumber)}/detail`);
 export const regenerateReturnDcPdf = (rdcNumber) => api.post(`${base}/return-dc/${encodeURIComponent(rdcNumber)}/pdf`);
+export const downloadReturnDcPdf = (rdcNumber) => api.get(`${base}/return-dc/${encodeURIComponent(rdcNumber)}/download-pdf`, { responseType: 'blob' });
 export const confirmReturnDcWarehouse = (rdcNumber, data) =>
   api.post(`${base}/return-dc/${encodeURIComponent(rdcNumber)}/warehouse-confirm`, data);
 

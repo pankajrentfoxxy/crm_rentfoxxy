@@ -1,5 +1,6 @@
 .support-crm {
   --support-primary: #534ab7;
+  --crm-header-height: 73px;
   --color-text-primary: #0f172a;
   --color-text-secondary: #475569;
   --color-text-tertiary: #64748b;
@@ -15,10 +16,23 @@
   --support-closed-text: #27500a;
   --support-muted: #64748b;
   --support-surface: #f8fafc;
-  min-height: 100vh;
+  min-height: calc(100vh - var(--crm-header-height));
+  margin: -1rem;
   background: var(--support-surface);
   color: #0f172a;
   font-size: 14px;
+}
+
+@media (min-width: 1024px) {
+  .support-crm {
+    margin: -1.5rem;
+  }
+}
+
+.support-crm-body {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
 }
 
 .support-crm * {
@@ -27,9 +41,19 @@
 
 .support-sidebar {
   width: 260px;
+  flex-shrink: 0;
   border-right: 0.5px solid #e2e8f0;
   background: #fff;
-  min-height: calc(100vh - 57px);
+  position: sticky;
+  top: var(--crm-header-height);
+  max-height: calc(100vh - var(--crm-header-height));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.support-sidebar nav {
+  padding-bottom: 16px;
 }
 
 .support-nav-label {
@@ -73,23 +97,23 @@
   color: var(--support-overdue-text);
 }
 
-.support-topbar {
-  position: sticky;
-  top: 0;
-  z-index: 30;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 20px;
-  background: #fff;
-  border-bottom: 0.5px solid #e2e8f0;
+.support-main {
+  flex: 1;
+  min-width: 0;
+  padding: 20px;
+  width: 100%;
 }
 
-.support-main {
-  padding: 20px;
-  max-width: 1200px;
+.support-table-scroll {
   width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.support-tickets-table {
+  width: 100%;
+  min-width: 960px;
 }
 
 .support-stat-grid {
@@ -1203,6 +1227,8 @@
 .support-filter-chip.complaint.active { background: #eff6ff; color: #1d4ed8; border-color: #93c5fd; }
 .support-filter-chip.pickup.active { background: #fff7ed; color: #c2410c; border-color: #fdba74; }
 .support-filter-chip.replacement.active { background: #fdf2f8; color: #be185d; border-color: #f9a8d4; }
+.support-filter-chip.subtype.repair.active { background: #fff7ed; color: #c2410c; border-color: #fdba74; }
+.support-filter-chip.subtype.return.active { background: #ecfdf5; color: #047857; border-color: #6ee7b7; }
 
 /* ============================================================
    PHASE 18 — MOBILE-FIRST OVERRIDES (technician field view)

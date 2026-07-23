@@ -7,8 +7,9 @@ const inventorySM = require('./inventoryStateMachine');
 const { DEPLOYED_WITH_CUSTOMER_STATUSES } = require('./customerDeployedAssets');
 const { logTtsplEvent } = require('./ttsplAuditService');
 const supportInventoryService = require('./supportInventoryService');
+const { isRepairPickupItem } = require('./repairPickupInventoryService');
 
-const WAREHOUSE_COMPLETE_STATUSES = new Set(['inventory_updated']);
+const WAREHOUSE_COMPLETE_STATUSES = new Set(['inventory_updated', 'awaiting_service_return']);
 
 function wasWarehouseReceived(item) {
     return !!item.warehouse_received_at || WAREHOUSE_COMPLETE_STATUSES.has(item.status);
@@ -45,6 +46,12 @@ async function loadSerialRow(client, code) {
 
 function shouldPreserveCustomerAssignment(item, serial, customerId) {
     if (!serial || wasWarehouseReceived(item)) return false;
+
+    if (isRepairPickupItem(item) && item.customer_otp_verified_at && !item.warehouse_received_at) {
+        return ['returned', 'in_stock', 'in_repair'].includes(serial.inventory_status)
+            || !serial.current_customer_id;
+    }
+
     if (!serial.current_customer_id || Number(serial.current_customer_id) !== Number(customerId)) {
         return false;
     }
@@ -153,6 +160,15 @@ async function preserveCustomerAssetsOnCancel(client, {
             actorUserId,
             actorName,
         });
+
+        if (!serial.current_customer_id && customerId) {
+            await client.query(
+                `UPDATE vendor_serial_numbers
+                    SET current_customer_id = $2, updated_at = NOW()
+                  WHERE serial_id = $1`,
+                [serial.serial_id, customerId]
+            );
+        }
 
         await cancelPrematureReturnQcTickets(client, serial.serial_id);
 

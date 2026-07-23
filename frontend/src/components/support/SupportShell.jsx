@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   Headphones, LayoutDashboard, Ticket, UserCog, Clock, Truck, MessageSquare,
   Users, Package, Settings, ClipboardList, CheckCircle2, Plus, BarChart2
@@ -8,29 +8,7 @@ import api from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
 import { canAccessCustomerInventory, canCancelSupportTicket, isSupportLead, isSupportTechnician } from '../../utils/supportAccess';
 import usePermission from '../../hooks/usePermission';
-import { initials } from './utils';
 import './support.css';
-
-const titles = {
-  overview: 'Overview',
-  stats: 'Stats & Reports',
-  dashboard: 'Dashboard',
-  tickets: 'All tickets',
-  'pending-assign': 'Pending assign',
-  overdue: 'Overdue',
-  pickups: 'Pickups',
-  'pickup-bucket': 'Pickup Bucket',
-  'my-pickups': 'My Pickups',
-  complaints: 'Complaints',
-  'cancelled-tickets': 'Cancelled tickets',
-  'my-tickets': 'My tickets',
-  'my-resolved': 'Resolved by me',
-  technicians: 'Technicians',
-  'tech-bucket': 'Parts bucket',
-  'parts-queue': 'Part queue',
-  settings: 'Settings',
-  new: 'New ticket'
-};
 
 function NavItem({ to, icon: Icon, label, badge, badgeDanger }) {
   return (
@@ -46,7 +24,6 @@ export default function SupportShell() {
   const { user } = useAuth();
   const { canView } = usePermission();
   const location = useLocation();
-  const navigate = useNavigate();
   const [badges, setBadges] = useState({});
   const techOnly = isSupportTechnician(user) && !isSupportLead(user);
   const canCreate = isSupportLead(user);
@@ -56,37 +33,9 @@ export default function SupportShell() {
     api.get('/support/badges').then((r) => setBadges(r.data.badges || {})).catch(() => setBadges({}));
   }, [location.pathname]);
 
-  const pageTitle = useMemo(() => {
-    const path = location.pathname.replace(/^\/support\/?/, '');
-    if (path.startsWith('tickets/new')) return titles.new;
-    if (path.startsWith('tickets/')) return 'Ticket detail';
-    if (path.startsWith('challans/')) return 'Challan';
-    const key = path.split('/')[0] || 'dashboard';
-    return titles[key] || 'Support';
-  }, [location.pathname]);
-
-  const roleLabel = user?.role?.replace(/_/g, ' ') || 'User';
-
   return (
     <div className="support-crm">
-      <header className="support-topbar">
-        <h1 className="text-lg font-semibold m-0">{pageTitle}</h1>
-        <div className="flex items-center gap-3">
-          {canCreate && (
-            <button type="button" className="support-btn-primary hidden sm:inline-flex items-center gap-2" onClick={() => navigate('/support/tickets/new')}>
-              <Plus className="w-4 h-4" /> New ticket
-            </button>
-          )}
-          <div className="flex items-center gap-2 text-sm text-slate-600">
-            <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-[#534AB7] text-white text-xs font-semibold">
-              {initials(user?.name)}
-            </span>
-            <span className="hidden sm:inline capitalize">{roleLabel}</span>
-          </div>
-        </div>
-      </header>
-
-      <div className="flex">
+      <div className="support-crm-body">
         <aside className="support-sidebar hidden md:block">
           <div className="flex items-center gap-2 px-4 py-4 border-b border-slate-200">
             <Headphones className="w-6 h-6 text-[#534AB7]" />
@@ -142,7 +91,7 @@ export default function SupportShell() {
           )}
         </aside>
 
-        <main className="support-main flex-1">
+        <main className="support-main">
           <Outlet />
         </main>
       </div>

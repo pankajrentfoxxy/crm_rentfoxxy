@@ -37,6 +37,7 @@ const { emailDocument } = require('../services/salesManagementPdfService');
 const { createSalesOrderQcTicket } = require('../services/grnTicketService');
 const { logTtsplEvent } = require('../services/ttsplAuditService');
 const replacementFlow = require('../services/supportReplacementFlowService');
+const supportServiceDcService = require('../services/supportServiceDcService');
 const { regenerateReturnDcPdf, regenerateReturnDcPdfByRdc } = require('../services/returnDcPdfService');
 const { isRestrictedToAssigned, scopeUserId } = require('../services/dataScopeService');
 const {
@@ -2104,6 +2105,48 @@ exports.regenerateReturnDcPdf = async (req, res) => {
   }
 };
 
+const resolveUploadAbsolutePath = (relativePath) => {
+  if (!relativePath) return null;
+  const clean = String(relativePath).replace(/^\//, '');
+  const candidates = [
+    path.join(__dirname, '..', clean),
+    path.join(__dirname, '..', '..', clean),
+  ];
+  for (const abs of candidates) {
+    if (fs.existsSync(abs)) return abs;
+  }
+  return null;
+};
+
+exports.downloadReturnDcPdf = async (req, res) => {
+  try {
+    const rdcNumber = String(req.params.rdcNumber || '').trim();
+    const row = await pool.query(
+      `SELECT pdf_path FROM delivery_challan_lines
+        WHERE dc_number = $1 AND movement_type = 'return'
+        LIMIT 1`,
+      [rdcNumber]
+    );
+    let pdfPath = row.rows[0]?.pdf_path;
+    if (!pdfPath) {
+      pdfPath = await regenerateReturnDcPdfByRdc(pool, rdcNumber);
+    }
+    if (!pdfPath) {
+      return res.status(404).json({ success: false, message: 'Return DC PDF not found' });
+    }
+    const abs = resolveUploadAbsolutePath(pdfPath);
+    if (!abs) {
+      return res.status(404).json({ success: false, message: 'PDF file missing on disk' });
+    }
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${path.basename(abs)}"`);
+    return res.sendFile(abs);
+  } catch (error) {
+    console.error('downloadReturnDcPdf:', error);
+    res.status(500).json({ success: false, message: error.message || 'Failed to download PDF' });
+  }
+};
+
 /**
  * Generate a Return DC for a support pickup ticket as a delivery_challan_lines row
  * (movement_type='return') so it rides the SAME delivery flow. Pickup mode:
@@ -3056,6 +3099,11 @@ exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}) => {
   const replEarly = await replacementFlow.onReplacementOutboundDelivered(client, dcNumber, actor);
   if (replEarly.handled) {
     return { replacement: true, ...replEarly };
+  }
+
+  const serviceDcEarly = await supportServiceDcService.onServiceDcDelivered(client, dcNumber, actor);
+  if (serviceDcEarly.handled) {
+    return { service_dc: true, ...serviceDcEarly };
   }
 
   const ctx = await getDcContext(client, dcNumber);

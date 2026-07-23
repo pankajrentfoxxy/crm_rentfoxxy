@@ -1,13 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Loader2, Search, Download } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Loader2, Search, Download, Plus } from 'lucide-react';
 import api from '../../utils/api';
 import { canCloseSupportTicket, isSupportLead } from '../../utils/supportAccess';
 import { useAuth } from '../../context/AuthContext';
-import { displayStatus, formatRelative, formatTicketId, podUrl, ticketHasUnassignedTechnicianSlots } from './utils';
+import { displayStatus, formatRelative, formatTicketId, podUrl, ticketHasUnassignedTechnicianSlots, ticketPickupKind, ticketSubTypeLabel } from './utils';
 import TtsplHistoryDrawer from '../../features/floor-pipeline/components/TtsplHistoryDrawer';
+import { ListPagination } from '../../components/ui/primitives';
 
-const TYPE_CHIPS = [
+const PAGE_SIZE = 25;
+
+const PRIMARY_TYPE_CHIPS = [
   { key: '', label: 'All', countKey: 'all' },
   { key: 'complaint', label: 'Complaint', countKey: 'complaint' },
   { key: 'pickup', label: 'Pickup', countKey: 'pickup' },
@@ -30,6 +33,12 @@ const TYPE_BADGE = {
   loan: 'bg-teal-100 text-teal-800',
 };
 
+const PICKUP_KIND_BADGE = {
+  repair: 'bg-orange-100 text-orange-800',
+  return: 'bg-emerald-100 text-emerald-800',
+  mixed: 'bg-slate-100 text-slate-700',
+};
+
 function primaryType(ticket) {
   const types = (ticket.items || []).map((i) => i.item_type);
   return types[0] || ticket.ticket_category || 'complaint';
@@ -50,8 +59,30 @@ function isUnassigned(ticket) {
   return ticketHasUnassignedTechnicianSlots(ticket);
 }
 
+function SubTypeBadge({ ticket }) {
+  const label = ticket.pickup_kind_label || ticketSubTypeLabel(ticket);
+  if (!label) return <span className="text-slate-400">—</span>;
+  const kind = ticket.pickup_kind || ticketPickupKind(ticket);
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded-full ${PICKUP_KIND_BADGE[kind] || 'bg-slate-100 text-slate-700'}`}>
+      {label.replace(' Pickup', '')}
+    </span>
+  );
+}
+
+function TypeBadges({ ticket }) {
+  const pType = primaryType(ticket);
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded-full capitalize ${TYPE_BADGE[pType] || 'bg-slate-100'}`}>
+      {pType}
+    </span>
+  );
+}
+
 export default function SupportTicketList() {
   const { user } = useAuth();
+  const navigate = useNavigate();
+  const canCreate = isSupportLead(user);
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [badges, setBadges] = useState({});
@@ -64,16 +95,26 @@ export default function SupportTicketList() {
   const [search, setSearch] = useState('');
   const [debounced, setDebounced] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
+  const [pickupKindFilter, setPickupKindFilter] = useState('');
   const [priorityFilter, setPriorityFilter] = useState('');
   const [assignFilter, setAssignFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
-  const [typeCounts, setTypeCounts] = useState({ all: 0, complaint: 0, pickup: 0, replacement: 0 });
+  const [typeCounts, setTypeCounts] = useState({
+    all: 0, complaint: 0, pickup: 0, repair_pickup: 0, return_pickup: 0, replacement: 0
+  });
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(search.trim()), 300);
     return () => clearTimeout(t);
   }, [search]);
+
+  useEffect(() => {
+    setPage(1);
+    setSelected(new Set());
+  }, [debounced]);
 
   const activeTab = STATUS_TABS.find((t) => t.key === statusTab) || STATUS_TABS[0];
 
@@ -97,21 +138,29 @@ export default function SupportTicketList() {
       if (typeFilter && ['complaint', 'pickup', 'replacement'].includes(typeFilter)) {
         params.set('type', typeFilter);
       }
-      params.set('limit', '100');
+      if (pickupKindFilter && ['repair', 'return'].includes(pickupKindFilter)) {
+        params.set('pickup_type', pickupKindFilter);
+      }
+      params.set('limit', String(PAGE_SIZE));
+      params.set('offset', String((page - 1) * PAGE_SIZE));
       const countParams = buildFilterParams();
       const [{ data }, countsRes] = await Promise.all([
         api.get(`/support/tickets?${params}`),
         api.get(`/support/tickets/counts?${countParams}`)
       ]);
       setTickets(data.tickets || []);
-      setTypeCounts(countsRes.data.counts || { all: 0, complaint: 0, pickup: 0, replacement: 0 });
+      setTotal(data.total ?? 0);
+      setTypeCounts(countsRes.data.counts || {
+        all: 0, complaint: 0, pickup: 0, repair_pickup: 0, return_pickup: 0, replacement: 0
+      });
     } catch {
       setTickets([]);
-      setTypeCounts({ all: 0, complaint: 0, pickup: 0, replacement: 0 });
+      setTotal(0);
+      setTypeCounts({ all: 0, complaint: 0, pickup: 0, repair_pickup: 0, return_pickup: 0, replacement: 0 });
     } finally {
       setLoading(false);
     }
-  }, [buildFilterParams, typeFilter]);
+  }, [buildFilterParams, typeFilter, pickupKindFilter, page]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -153,6 +202,7 @@ export default function SupportTicketList() {
     const params = new URLSearchParams();
     if (debounced) params.set('search', debounced);
     if (typeFilter) params.set('type', typeFilter);
+    if (pickupKindFilter) params.set('pickup_type', pickupKindFilter);
     params.set('view', activeTab.view);
     const res = await api.get(`/support/tickets/export?${params}`, { responseType: 'blob' });
     const url = window.URL.createObjectURL(res.data);
@@ -180,15 +230,66 @@ export default function SupportTicketList() {
   const clearFilters = () => {
     setSearch('');
     setTypeFilter('');
+    setPickupKindFilter('');
     setPriorityFilter('');
     setAssignFilter('');
     setDateFrom('');
     setDateTo('');
+    setPage(1);
+    setSelected(new Set());
+  };
+
+  const handleTypeChipClick = (chip) => {
+    setTypeFilter(chip.key);
+    if (chip.key !== 'pickup') setPickupKindFilter('');
+    setPage(1);
+    setSelected(new Set());
+  };
+
+  const isTypeChipActive = (chip) => {
+    if (chip.key === 'pickup') return typeFilter === 'pickup';
+    return typeFilter === chip.key && !pickupKindFilter;
+  };
+
+  const handleTypeSelect = (value) => {
+    if (value === 'repair_pickup') {
+      setTypeFilter('pickup');
+      setPickupKindFilter('repair');
+      setPage(1);
+      setSelected(new Set());
+      return;
+    }
+    if (value === 'return_pickup') {
+      setTypeFilter('pickup');
+      setPickupKindFilter('return');
+      setPage(1);
+      setSelected(new Set());
+      return;
+    }
+    setTypeFilter(value);
+    setPickupKindFilter('');
+    setPage(1);
+    setSelected(new Set());
+  };
+
+  const typeSelectValue = pickupKindFilter === 'repair'
+    ? 'repair_pickup'
+    : pickupKindFilter === 'return'
+      ? 'return_pickup'
+      : typeFilter;
+
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  const handlePageChange = (nextPage) => {
+    setPage(nextPage);
+    setSelected(new Set());
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap gap-1 border-b border-slate-200 pb-1">
+    <div className="space-y-4 min-w-0">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-1">
+        <div className="flex flex-wrap gap-1">
         {STATUS_TABS.map((tab) => {
           const count = tab.key === 'overdue' ? badges.overdue_tickets
             : tab.key === 'open' ? badges.open_tickets
@@ -197,7 +298,11 @@ export default function SupportTicketList() {
             <button
               key={tab.key}
               type="button"
-              onClick={() => setStatusTab(tab.key)}
+              onClick={() => {
+                setStatusTab(tab.key);
+                setPage(1);
+                setSelected(new Set());
+              }}
               className={`px-3 py-2 text-sm font-medium rounded-t-lg border-b-2 -mb-px transition-colors ${
                 statusTab === tab.key
                   ? 'border-[#534AB7] text-[#534AB7]'
@@ -213,15 +318,25 @@ export default function SupportTicketList() {
             </button>
           );
         })}
+        </div>
+        {canCreate && (
+          <button
+            type="button"
+            className="support-btn-primary inline-flex items-center gap-2 shrink-0"
+            onClick={() => navigate('/support/tickets/new')}
+          >
+            <Plus className="w-4 h-4" /> New ticket
+          </button>
+        )}
       </div>
 
       <div className="flex flex-wrap gap-2">
-        {TYPE_CHIPS.map((chip) => (
+        {PRIMARY_TYPE_CHIPS.map((chip) => (
           <button
             key={chip.key || 'all'}
             type="button"
-            className={`support-filter-chip ${chip.key || 'all'}${typeFilter === chip.key ? ' active' : ''}`}
-            onClick={() => setTypeFilter(chip.key)}
+            className={`support-filter-chip ${chip.key || 'all'}${isTypeChipActive(chip) ? ' active' : ''}`}
+            onClick={() => handleTypeChipClick(chip)}
           >
             {chip.label} ({typeCounts[chip.countKey] ?? 0})
           </button>
@@ -240,19 +355,21 @@ export default function SupportTicketList() {
               className="w-full pl-10 pr-3 py-2 rounded-lg border border-slate-300 text-sm"
             />
           </div>
-          <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm">
+          <select value={typeSelectValue} onChange={(e) => handleTypeSelect(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm">
             <option value="">All types</option>
             <option value="complaint">Complaint ({typeCounts.complaint ?? 0})</option>
             <option value="replacement">Replacement ({typeCounts.replacement ?? 0})</option>
             <option value="pickup">Pickup ({typeCounts.pickup ?? 0})</option>
+            <option value="repair_pickup">Repair Pickup ({typeCounts.repair_pickup ?? 0})</option>
+            <option value="return_pickup">Return Pickup ({typeCounts.return_pickup ?? 0})</option>
             <option value="loan">Loan</option>
           </select>
-          <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm">
+          <select value={priorityFilter} onChange={(e) => { setPriorityFilter(e.target.value); setPage(1); setSelected(new Set()); }} className="border border-slate-300 rounded-lg px-3 py-2 text-sm">
             <option value="">All priorities</option>
             <option value="high">High</option>
             <option value="normal">Normal</option>
           </select>
-          <select value={assignFilter} onChange={(e) => setAssignFilter(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm">
+          <select value={assignFilter} onChange={(e) => { setAssignFilter(e.target.value); setPage(1); setSelected(new Set()); }} className="border border-slate-300 rounded-lg px-3 py-2 text-sm">
             <option value="">All assignees</option>
             <option value="unassigned">Unassigned</option>
             <option value="me">Me</option>
@@ -260,8 +377,8 @@ export default function SupportTicketList() {
               <option key={tech.user_id} value={String(tech.user_id)}>{tech.name}</option>
             ))}
           </select>
-          <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm" />
-          <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+          <input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); setSelected(new Set()); }} className="border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+          <input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); setSelected(new Set()); }} className="border border-slate-300 rounded-lg px-3 py-2 text-sm" />
         </div>
         <div className="flex flex-wrap items-center gap-3 text-sm">
           <button type="button" onClick={clearFilters} className="text-blue-600 hover:underline">Clear filters</button>
@@ -302,7 +419,6 @@ export default function SupportTicketList() {
         <div className="grid gap-3 sm:hidden">
           {filtered.map((ticket) => {
             const st = displayStatus(ticket);
-            const pType = primaryType(ticket);
             const overdue = ticket.is_overdue || (ticket.hours_since_last_update >= 48);
             const podItem = (ticket.items || []).find((it) => it.proof_of_completion_path || it.pod_image_path);
             const url = podItem && podUrl(podItem.proof_of_completion_path || podItem.pod_image_path);
@@ -316,7 +432,8 @@ export default function SupportTicketList() {
                   <span className={`support-status-badge shrink-0 ${st.className}`}>{st.label}</span>
                 </div>
                 <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                  <span className={`text-xs px-2 py-0.5 rounded-full capitalize ${TYPE_BADGE[pType] || 'bg-slate-100'}`}>{pType}</span>
+                  <TypeBadges ticket={ticket} />
+                  <SubTypeBadge ticket={ticket} />
                   <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 capitalize">{ticket.priority || 'normal'}</span>
                   {ticket.ttspl_id && (
                     <button type="button" onClick={() => setHistoryTtspl(ticket.ttspl_id)} className="text-xs font-mono text-blue-600">
@@ -350,8 +467,8 @@ export default function SupportTicketList() {
             );
           })}
         </div>
-        <div className="hidden sm:block overflow-x-auto bg-white rounded-xl border border-slate-200">
-          <table className="w-full text-sm">
+        <div className="hidden sm:block support-table-scroll bg-white rounded-xl border border-slate-200">
+          <table className="support-tickets-table text-sm">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs text-slate-600 uppercase">
                 {isSupportLead(user) && (
@@ -362,6 +479,7 @@ export default function SupportTicketList() {
                 <th className="p-3">#</th>
                 <th className="p-3">Customer</th>
                 <th className="p-3">Type</th>
+                <th className="p-3">Sub-type</th>
                 <th className="p-3">Status</th>
                 <th className="p-3">Priority</th>
                 <th className="p-3">TTSPL ID</th>
@@ -375,7 +493,6 @@ export default function SupportTicketList() {
             <tbody>
               {filtered.map((ticket) => {
                 const st = displayStatus(ticket);
-                const pType = primaryType(ticket);
                 const overdue = ticket.is_overdue || (ticket.hours_since_last_update >= 48);
                 return (
                   <tr key={ticket.id} className="border-b border-slate-100 hover:bg-slate-50/80">
@@ -387,9 +504,10 @@ export default function SupportTicketList() {
                     <td className="p-3 font-mono text-xs">{formatTicketId(ticket.id)}</td>
                     <td className="p-3 font-medium">{ticket.customer_name || '—'}</td>
                     <td className="p-3">
-                      <span className={`text-xs px-2 py-0.5 rounded-full capitalize ${TYPE_BADGE[pType] || 'bg-slate-100'}`}>
-                        {pType}
-                      </span>
+                      <TypeBadges ticket={ticket} />
+                    </td>
+                    <td className="p-3">
+                      <SubTypeBadge ticket={ticket} />
                     </td>
                     <td className="p-3">
                       <span className={`support-status-badge ${st.className}`}>{st.label}</span>
@@ -449,6 +567,13 @@ export default function SupportTicketList() {
             </tbody>
           </table>
         </div>
+        <ListPagination
+          page={page}
+          totalPages={totalPages}
+          total={total}
+          pageSize={PAGE_SIZE}
+          onPageChange={handlePageChange}
+        />
         </>
       )}
 

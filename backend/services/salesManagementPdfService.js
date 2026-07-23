@@ -793,6 +793,126 @@ async function generateReturnDcPdf({ returnDcNumber, header = {}, units = [], es
   return relativePath;
 }
 
+// ── Service Delivery Challan PDF ─────────────────────────────────────────────
+async function generateServiceDcPdf({ serviceDcNumber, header = {}, units = [] }) {
+  ensureUploadDir();
+  const fileName = `${String(serviceDcNumber).replace(/[^\w-]/g, '_')}_${Date.now()}.pdf`;
+  const filePath = path.join(UPLOAD_DIR, fileName);
+  const relativePath = `uploads/sales-documents/${fileName}`;
+
+  const entityCode = header.entity_code
+    || (String(header.transaction_type || '').toLowerCase() === 'sale' ? 'gorefurbo' : 'rentfoxxy');
+  const company = await loadCompany(entityCode);
+  const accent = company.code === 'gorefurbo' ? C.gorefurbo : C.rentfoxxy;
+  const addr = normalizeDeliveryAddress(header.shipping_address) || {};
+
+  await new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ margin: 36, size: 'A4' });
+    const stream = fs.createWriteStream(filePath);
+    doc.pipe(stream);
+    const L = 36; const R = 559; const W = R - L;
+    let y = 40;
+
+    const logo = drawCompanyLogo(doc, company, L, y, { maxHeight: 36, maxWidth: 170 });
+    if (!logo.drawn) {
+      doc.fillColor(accent).font('Helvetica-Bold').fontSize(22).text(company.code || 'rentfoxxy', L, y + 4);
+    }
+    doc.font('Helvetica-Bold').fontSize(16).fillColor(accent)
+      .text('SERVICE DELIVERY CHALLAN', 230, y, { width: 293, align: 'right' });
+    doc.font('Helvetica').fontSize(8).fillColor(C.sub)
+      .text('Repaired unit return to customer', 230, y + 20, { width: 293, align: 'right' });
+    y += 46;
+    doc.moveTo(L, y).lineTo(R, y).strokeColor(C.line).lineWidth(1).stroke();
+    y += 12;
+
+    const num = (label, value, x, color) => {
+      doc.font('Helvetica-Bold').fontSize(12).fillColor(color || C.ink)
+        .text(value || 'N/A', x, y, { width: 165, align: 'center' });
+      doc.font('Helvetica').fontSize(7).fillColor(C.sub)
+        .text(label, x, y + 17, { width: 165, align: 'center' });
+    };
+    num('Service DC Number', serviceDcNumber, L, C.docNum);
+    num('Original DC Number', header.original_dc_number || 'N/A', L + 180, C.teal);
+    num('Sales Order Number', header.sales_order_number || 'N/A', L + 360, C.ink);
+    y += 38;
+    doc.moveTo(L, y).lineTo(R, y).strokeColor(C.line).lineWidth(1).stroke();
+    y += 12;
+
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink)
+      .text(`Support Ticket: #${header.support_ticket_id || '—'}`, L, y);
+    y += 16;
+
+    const shipTitle = `Deliver to: ${header.customer_name || addr.name || 'Customer'}`;
+    doc.font('Helvetica-Bold').fontSize(10).fillColor(C.ink).text(shipTitle, L, y, { width: W });
+    y = doc.y + 6;
+    doc.font('Helvetica').fontSize(8.5).fillColor(C.ink);
+    const row = (lab, val) => {
+      if (val == null || val === '') return;
+      doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.ink)
+        .text(`${lab}: `, L, y, { continued: true, width: W })
+        .font('Helvetica').text(String(val), { width: W });
+      y = doc.y + 2;
+    };
+    row('Phone', header.customer_phone || addr.phone);
+    row('Email', header.customer_email);
+    row('Address', formatDeliveryAddressLine(header.shipping_address));
+    y += 10;
+
+    const sdcHsn = resolveHsnForDisplay(header.hsn_code, { transactionType: 'repair' }) || '847330';
+    const cols = [
+      { key: 'idx', label: '#', w: 28, align: 'center' },
+      { key: 'product', label: 'Laptop / Product', w: 230, align: 'left' },
+      { key: 'hsn', label: 'HSN/SAC', w: 60, align: 'center' },
+      { key: 'ttspl', label: 'Machine No.', w: 100, align: 'left' },
+      { key: 'serial', label: 'Serial No.', w: 105, align: 'left' },
+    ];
+    const drawHeader = (yh) => {
+      doc.rect(L, yh, W, 22).fill(accent);
+      let cx = L;
+      doc.fillColor(C.white).font('Helvetica-Bold').fontSize(9);
+      for (const c of cols) { doc.text(c.label, cx + 6, yh + 6, { width: c.w - 12, align: c.align }); cx += c.w; }
+      return yh + 22;
+    };
+    y = drawHeader(y);
+    doc.font('Helvetica').fontSize(8.5).fillColor(C.ink);
+    units.forEach((u, i) => {
+      const l1 = `${dash(u.brand)} ${dash(u.model || u.model_name)}`.trim();
+      const l2 = [u.processor, u.generation, u.ram, u.storage].filter(Boolean).join(' | ');
+      const rowH = Math.max(34, 14 + (l2 ? 11 : 0));
+      let cx = L;
+      for (const c of cols) { doc.rect(cx, y, c.w, rowH).strokeColor(C.line).lineWidth(0.6).stroke(); cx += c.w; }
+      doc.text(String(i + 1), L + 4, y + rowH / 2 - 5, { width: cols[0].w - 8, align: 'center' });
+      let px = L + cols[0].w + 6; let py = y + 6;
+      doc.font('Helvetica-Bold').fontSize(8.5).text(l1, px, py, { width: cols[1].w - 12 });
+      if (l2) doc.font('Helvetica').fontSize(8).fillColor(C.sub).text(l2, px, py + 11, { width: cols[1].w - 12 });
+      doc.font('Helvetica').fontSize(8).fillColor(C.ink)
+        .text(sdcHsn, L + cols[0].w + cols[1].w + 4, y + rowH / 2 - 5, { width: cols[2].w - 8, align: 'center' });
+      doc.font('Helvetica-Bold').fontSize(8.5).fillColor(C.ink)
+        .text(dash(u.ttspl), L + cols[0].w + cols[1].w + cols[2].w + 6, y + rowH / 2 - 5, { width: cols[3].w - 12 });
+      doc.font('Helvetica').fontSize(8.5).fillColor(C.ink)
+        .text(dash(u.serial), L + cols[0].w + cols[1].w + cols[2].w + cols[3].w + 6, y + rowH / 2 - 5, { width: cols[4].w - 12 });
+      y += rowH;
+    });
+    y += 14;
+
+    if (header.remarks) {
+      doc.font('Helvetica-Bold').fontSize(10).fillColor(accent).text('Remarks', L, y);
+      y += 12;
+      doc.font('Helvetica').fontSize(9).fillColor(C.ink).text(String(header.remarks), L, y, { width: W });
+      y = doc.y + 12;
+    }
+
+    doc.font('Helvetica').fontSize(7).fillColor(C.sub)
+      .text('This Service Delivery Challan records return of the repaired unit to the customer under the original rental/sale agreement. No new Sales Order is created.', L, y, { width: W, align: 'center' });
+
+    doc.end();
+    stream.on('finish', resolve);
+    stream.on('error', reject);
+  });
+
+  return relativePath;
+}
+
 async function emailDocument({ to, subject, text, html, pdfRelativePath, cc }) {
   const transport = getMailTransport();
   if (!transport || !to) return false;
@@ -810,4 +930,4 @@ async function emailDocument({ to, subject, text, html, pdfRelativePath, cc }) {
   return true;
 }
 
-module.exports = { generateDocumentPdf, generateReturnDcPdf, emailDocument };
+module.exports = { generateDocumentPdf, generateReturnDcPdf, generateServiceDcPdf, emailDocument };

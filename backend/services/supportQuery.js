@@ -6,6 +6,20 @@ const DEFAULT_OVERDUE_HOURS = 48;
 
 const ACTIVE_TICKET_STATUSES = `t.status NOT IN ('closed', 'cancelled')`;
 
+const pickupKindSql = `COALESCE(i.pickup_type, CASE WHEN i.source_item_id IS NOT NULL THEN 'repair' ELSE 'return' END)`;
+
+const resolvePickupKind = (item) => {
+    if (item.item_type !== 'pickup') return null;
+    return item.pickup_type || (item.source_item_id ? 'repair' : 'return');
+};
+
+const deriveTicketPickupKind = (items = []) => {
+    const kinds = [...new Set(items.filter((i) => i.item_type === 'pickup').map(resolvePickupKind).filter(Boolean))];
+    if (!kinds.length) return null;
+    if (kinds.length === 1) return kinds[0];
+    return 'mixed';
+};
+
 const activityAtSql = `
     GREATEST(
         COALESCE(t.last_activity_at, t.updated_at, t.created_at),
@@ -53,7 +67,8 @@ const attachItems = async (tickets) => {
     const ids = tickets.map((t) => t.id);
     const { rows } = await pool.query(
         `SELECT i.id, i.ticket_id, i.item_type, i.status, i.brand, i.model, i.serial_number, i.unique_serial_number,
-                i.assigned_to, i.pickup_method, i.loan_delivered_at, i.pickup_scheduled_at, i.updated_at, i.replacement_flag_reason,
+                i.assigned_to, i.pickup_method, i.pickup_type, i.source_item_id,
+                i.loan_delivered_at, i.pickup_scheduled_at, i.updated_at, i.replacement_flag_reason,
                 i.visited_at, i.visited_lat, i.visited_lng, i.ttspl_verified, i.outcome,
                 i.pod_image_path, i.proof_of_completion_path,
                 ut.name AS assigned_to_name
@@ -68,11 +83,23 @@ const attachItems = async (tickets) => {
         if (!byTicket[row.ticket_id]) byTicket[row.ticket_id] = [];
         byTicket[row.ticket_id].push(row);
     }
-    return tickets.map((t) => ({
-        ...t,
-        items: byTicket[t.id] || [],
-        display_phone: t.ticket_phone_override || t.customer_phone
-    }));
+    return tickets.map((t) => {
+        const items = byTicket[t.id] || [];
+        const pickup_kind = deriveTicketPickupKind(items);
+        return {
+            ...t,
+            items,
+            pickup_kind,
+            pickup_kind_label: pickup_kind === 'repair'
+                ? 'Repair Pickup'
+                : pickup_kind === 'return'
+                    ? 'Return Pickup'
+                    : pickup_kind === 'mixed'
+                        ? 'Mixed Pickup'
+                        : null,
+            display_phone: t.ticket_phone_override || t.customer_phone
+        };
+    });
 };
 
 const applyViewFilter = (view, params, user, overdueHours, { assignedOnly = false } = {}) => {
@@ -134,6 +161,7 @@ const buildTicketListWhere = ({
     view = 'active',
     search = '',
     type = '',
+    pickupType = '',
     closedDays = 30,
     assignedOnly = false,
     overdueHours,
@@ -176,6 +204,15 @@ const buildTicketListWhere = ({
     if (['complaint', 'pickup', 'replacement'].includes(type)) {
         params.push(type);
         where += ` AND EXISTS (SELECT 1 FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.item_type = $${params.length})`;
+    }
+
+    if (['repair', 'return'].includes(pickupType)) {
+        params.push(pickupType);
+        where += ` AND EXISTS (
+            SELECT 1 FROM support_ticket_items i
+            WHERE i.ticket_id = t.id AND i.item_type = 'pickup'
+              AND ${pickupKindSql} = $${params.length}
+        )`;
     }
 
     if (priority === 'high') {
@@ -226,6 +263,7 @@ const listTicketsEnriched = async ({
     view = 'active',
     search = '',
     type = '',
+    pickupType = '',
     limit = 50,
     offset = 0,
     closedDays = 30,
@@ -242,6 +280,7 @@ const listTicketsEnriched = async ({
         view,
         search,
         type,
+        pickupType,
         closedDays,
         assignedOnly,
         overdueHours: settings.overdue_threshold_hours,
@@ -294,13 +333,23 @@ const countTicketsByType = async (filters) => {
             ))::int AS pickup,
             COUNT(*) FILTER (WHERE EXISTS (
                 SELECT 1 FROM support_ticket_items i
+                WHERE i.ticket_id = t.id AND i.item_type = 'pickup'
+                  AND ${pickupKindSql} = 'repair'
+            ))::int AS repair_pickup,
+            COUNT(*) FILTER (WHERE EXISTS (
+                SELECT 1 FROM support_ticket_items i
+                WHERE i.ticket_id = t.id AND i.item_type = 'pickup'
+                  AND ${pickupKindSql} = 'return'
+            ))::int AS return_pickup,
+            COUNT(*) FILTER (WHERE EXISTS (
+                SELECT 1 FROM support_ticket_items i
                 WHERE i.ticket_id = t.id AND i.item_type = 'replacement'
             ))::int AS replacement
         FROM support_tickets t
         ${where}
     `;
     const { rows } = await pool.query(sql, params);
-    return rows[0] || { all: 0, complaint: 0, pickup: 0, replacement: 0 };
+    return rows[0] || { all: 0, complaint: 0, pickup: 0, repair_pickup: 0, return_pickup: 0, replacement: 0 };
 };
 
 const dashboardSummary = async (user) => {

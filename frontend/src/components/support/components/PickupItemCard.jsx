@@ -394,7 +394,7 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
         </div>
       )}
 
-      {/* Warehouse confirmed */}
+      {/* Warehouse confirmed — repair pickups stay open until Service DC delivery */}
       {whDone && (
         <div className="p-4">
           <div className="bg-green-50 border border-green-200 rounded-xl p-4">
@@ -404,6 +404,11 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
             </div>
             {item.pickup_type === 'repair' && item.floor_ticket_id && (
               <p className="text-xs text-green-600">🔧 Floor repair ticket #{item.floor_ticket_id} created automatically</p>
+            )}
+            {item.pickup_type === 'repair' && (
+              <p className="text-xs text-green-700 mt-1">
+                Unit removed from customer inventory. Send back via Service Delivery Challan when repair is complete.
+              </p>
             )}
             {item.pickup_type === 'return' && (
               <p className="text-xs text-green-600">✓ Inventory updated — laptop marked as returned</p>

@@ -147,6 +147,7 @@ router.patch(/^\/delivery-challans\/(.+)$/, rejectDcActionSuffix, bindDcNumber, 
 
 router.get('/return-dc', rdcView, ctrl.listReturnDeliveryChallans);
 router.get('/return-dc/:rdcNumber/detail', rdcView, ctrl.getReturnDcDetail);
+router.get('/return-dc/:rdcNumber/download-pdf', rdcView, ctrl.downloadReturnDcPdf);
 router.post('/return-dc/:rdcNumber/pdf', rdcView, ctrl.regenerateReturnDcPdf);
 router.post('/return-dc/:rdcNumber/warehouse-confirm', rdcEdit, supportCtrl.confirmReturnDcWarehouseReceipt);
 router.post('/return-dc/tickets/:ticketId/assign-number', rdcEdit, ctrl.assignReturnDcNumber);

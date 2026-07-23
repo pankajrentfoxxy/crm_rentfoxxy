@@ -58,7 +58,10 @@ const {
     exportTickets,
     getAvailableAssets,
     removeTicketItem,
-    ensureSupportSchema
+    ensureSupportSchema,
+    getServiceDcEligibility,
+    createServiceDc,
+    regenerateServiceDcPdf,
 } = require('../controllers/supportController');
 
 const router = express.Router();
@@ -175,6 +178,9 @@ router.patch('/items/:itemId/assign', requireSupportLead, assignItem);
 
 // Phase 20 — pickup flow redesign
 router.post('/tickets/:ticketId/pickup', requireSupportLead, createPickupWithReturnDc);
+router.get('/tickets/:ticketId/service-dc/eligibility', getServiceDcEligibility);
+router.post('/tickets/:ticketId/service-dc', requireSupportLead, createServiceDc);
+router.post('/service-dc/:sdcNumber/pdf', requireSupportLead, regenerateServiceDcPdf);
 router.post('/items/:itemId/pickup-reached', logVisit);
 router.post('/items/:itemId/technician-esign', technicianSignPickup);
 router.post('/items/:itemId/verify-pickup-otp', verifyPickupCustomerOtp);

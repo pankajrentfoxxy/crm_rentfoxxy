@@ -86,6 +86,7 @@ const DOC_TYPES = {
   sales_order: { prefix: 'SO-', pad: 6 },
   delivery_challan: { prefix: 'DC-', pad: 6 },
   return_dc: { prefix: 'RDC', pad: 6 },
+  service_dc: { prefix: 'SDC', pad: 6 },
   // Per-entity sequences (migration 074). Rental/Demo -> rentfoxxy, Sales -> gorefurbo.
   quote_rentfoxxy: { prefix: 'EST-', pad: 6 },
   quote_gorefurbo: { prefix: 'GEST-', pad: 6 },
@@ -210,6 +211,7 @@ async function nextDocumentNumber(docType) {
 const FY_DOC_TYPES = {
   sales_order: { docType: 'so_rentfoxxy', prefix: 'SO', table: 'sales_order_lines', column: 'sales_order_number' },
   delivery_challan: { docType: 'dc_rentfoxxy', prefix: 'DC', table: 'delivery_challan_lines', column: 'dc_number' },
+  service_dc: { docType: 'service_dc', prefix: 'SDC', table: 'delivery_challan_lines', column: 'dc_number' },
 };
 const FY_SEQ_PAD = 4;
 
@@ -718,7 +720,7 @@ async function listDeliveryChallansGrouped({
             d.id, d.dc_number, d.sales_order_number, d.quotation_number, d.customer_id, d.customer_name,
             d.gst_number, d.status, d.pdf_path, d.file_path, d.ship_by, d.delivery_person_id,
             d.courier_name, d.awb_number, d.model_name, d.dispatch_mode, d.dispatched_at,
-            d.created_at, d.updated_at,
+            d.created_at, d.updated_at, d.dc_purpose, d.support_ticket_id,
             COALESCE(u.name, u.email, '') AS delivery_person_name
        FROM delivery_challan_lines d
        LEFT JOIN users u ON u.user_id = d.delivery_person_id
@@ -1880,4 +1882,5 @@ module.exports = {
   searchAvailableInventory,
   healStaleReturnedPassedSerials,
   assertSalesOrderVisibleToUser,
+  nextFinancialYearNumber,
 };

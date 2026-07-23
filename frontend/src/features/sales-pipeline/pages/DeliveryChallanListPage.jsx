@@ -80,7 +80,17 @@ export default function DeliveryChallanListPage() {
   };
 
   const columns = [
-    { key: 'dc_number', header: 'DC #', render: (r) => <span className="font-mono text-blue-700 font-semibold">{r.dc_number}</span> },
+    { key: 'dc_number', header: 'DC #', render: (r) => (
+      <span className="flex flex-wrap items-center gap-1.5">
+        <span className="font-mono text-blue-700 font-semibold">{r.dc_number}</span>
+        {r.dc_purpose === 'service_return' && (
+          <span className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-teal-100 text-teal-800">Service Return</span>
+        )}
+        {r.dc_purpose === 'replacement' && (
+          <span className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-orange-100 text-orange-800">Replacement</span>
+        )}
+      </span>
+    ) },
     { key: 'date', header: 'Created', render: (r) => formatDate(r.created_at) },
     { key: 'dispatch_date', header: 'Dispatch Date', render: (r) => (
       <span className="text-sm font-medium text-slate-800">{formatDate(r.dispatched_at)}</span>
