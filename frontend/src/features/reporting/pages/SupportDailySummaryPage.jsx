@@ -3,6 +3,27 @@ import { Loader2, Truck, MessageSquare, RefreshCw, PackageCheck } from 'lucide-r
 import api from '../../../utils/api';
 
 const today = () => new Date().toISOString().slice(0, 10);
+const yesterday = () => new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+
+const DATE_PRESETS = [
+  { value: 'all', label: 'All dates' },
+  { value: 'today', label: 'Today' },
+  { value: 'yesterday', label: 'Yesterday' },
+  { value: 'custom', label: 'Custom' },
+];
+
+const rangeForPreset = (preset) => {
+  if (preset === 'yesterday') return { from: yesterday(), to: yesterday() };
+  if (preset === 'custom' || preset === 'all') return { from: '', to: '' };
+  return { from: today(), to: today() };
+};
+
+const paramsForFilters = (f) => {
+  const base = { assignee: f.assignee, team: f.team };
+  if (f.preset === 'all') return { ...base, all_time: 1 };
+  if (f.from && f.to) return { ...base, from: f.from, to: f.to };
+  return { ...base, all_time: 1 };
+};
 
 const GROUPS = [
   {
@@ -75,15 +96,18 @@ function GroupCard({ group, data }) {
   );
 }
 
+const DEFAULT_FILTERS = { preset: 'today', from: today(), to: today(), assignee: '', team: '' };
+
 export default function SupportDailySummaryPage() {
-  const [from, setFrom] = useState(today);
-  const [to, setTo] = useState(today);
-  const [assignee, setAssignee] = useState('');
-  const [team, setTeam] = useState('');
+  const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const [technicians, setTechnicians] = useState([]);
   const [teams, setTeams] = useState([]);
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  const set = (key, value) => setFilters((f) => ({ ...f, [key]: value }));
+  const setPreset = (preset) => setFilters((f) => ({ ...f, preset, ...(preset === 'custom' ? {} : rangeForPreset(preset)) }));
+  const setDate = (key, value) => setFilters((f) => ({ ...f, preset: 'custom', [key]: value }));
 
   useEffect(() => {
     api.get('/reports/support-daily-summary/filters')
@@ -94,26 +118,21 @@ export default function SupportDailySummaryPage() {
       .catch(() => { setTechnicians([]); setTeams([]); });
   }, []);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (f) => {
     setLoading(true);
     try {
-      const res = await api.get('/reports/support-daily-summary', { params: { from, to, assignee, team } });
+      const res = await api.get('/reports/support-daily-summary', { params: paramsForFilters(f) });
       setSummary(res.data.summary || null);
     } catch {
       setSummary(null);
     } finally {
       setLoading(false);
     }
-  }, [from, to, assignee, team]);
+  }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(filters); }, [filters, load]);
 
-  const resetFilters = () => {
-    setFrom(today());
-    setTo(today());
-    setAssignee('');
-    setTeam('');
-  };
+  const resetFilters = () => setFilters(DEFAULT_FILTERS);
 
   const returned = summary?.returned;
 
@@ -124,37 +143,53 @@ export default function SupportDailySummaryPage() {
         <p className="text-sm text-gray-500 mt-1">Support team KPIs for the selected date range and filters</p>
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 flex flex-wrap gap-3 items-end">
-        <label className="text-sm">
-          <span className="block text-gray-500 text-xs mb-1">From</span>
-          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
-            className="border border-gray-200 rounded-lg px-3 py-2 text-sm" />
-        </label>
-        <label className="text-sm">
-          <span className="block text-gray-500 text-xs mb-1">To</span>
-          <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
-            className="border border-gray-200 rounded-lg px-3 py-2 text-sm" />
-        </label>
-        <label className="text-sm">
-          <span className="block text-gray-500 text-xs mb-1">Team</span>
-          <select value={team} onChange={(e) => setTeam(e.target.value)}
-            className="border border-gray-200 rounded-lg px-3 py-2 text-sm min-w-[150px]">
-            <option value="">All teams</option>
-            {teams.map((t) => <option key={t.team_id} value={t.team_id}>{t.team_name}</option>)}
-          </select>
-        </label>
-        <label className="text-sm">
-          <span className="block text-gray-500 text-xs mb-1">User</span>
-          <select value={assignee} onChange={(e) => setAssignee(e.target.value)}
-            className="border border-gray-200 rounded-lg px-3 py-2 text-sm min-w-[160px]">
-            <option value="">All users</option>
-            {technicians.map((u) => <option key={u.user_id} value={u.user_id}>{u.name}</option>)}
-          </select>
-        </label>
-        <button type="button" onClick={load}
-          className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700">Apply</button>
-        <button type="button" onClick={resetFilters}
-          className="border border-gray-200 text-gray-600 px-4 py-2 rounded-lg text-sm hover:bg-gray-50">Reset</button>
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 space-y-3">
+        <div className="flex flex-wrap gap-2">
+          {DATE_PRESETS.map((p) => (
+            <button
+              key={p.value}
+              type="button"
+              onClick={() => setPreset(p.value)}
+              className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+                filters.preset === p.value
+                  ? 'bg-blue-600 text-white border-blue-600'
+                  : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-3 items-end">
+          <label className="text-sm">
+            <span className="block text-gray-500 text-xs mb-1">From</span>
+            <input type="date" value={filters.from} onChange={(e) => setDate('from', e.target.value)}
+              className="border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+          </label>
+          <label className="text-sm">
+            <span className="block text-gray-500 text-xs mb-1">To</span>
+            <input type="date" value={filters.to} onChange={(e) => setDate('to', e.target.value)}
+              className="border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+          </label>
+          <label className="text-sm">
+            <span className="block text-gray-500 text-xs mb-1">Team</span>
+            <select value={filters.team} onChange={(e) => set('team', e.target.value)}
+              className="border border-gray-200 rounded-lg px-3 py-2 text-sm min-w-[150px]">
+              <option value="">All teams</option>
+              {teams.map((t) => <option key={t.team_id} value={t.team_id}>{t.team_name}</option>)}
+            </select>
+          </label>
+          <label className="text-sm">
+            <span className="block text-gray-500 text-xs mb-1">User</span>
+            <select value={filters.assignee} onChange={(e) => set('assignee', e.target.value)}
+              className="border border-gray-200 rounded-lg px-3 py-2 text-sm min-w-[160px]">
+              <option value="">All users</option>
+              {technicians.map((u) => <option key={u.user_id} value={u.user_id}>{u.name}</option>)}
+            </select>
+          </label>
+          <button type="button" onClick={resetFilters}
+            className="border border-gray-200 text-gray-600 px-4 py-2 rounded-lg text-sm hover:bg-gray-50">Clear</button>
+        </div>
       </div>
 
       {loading ? (

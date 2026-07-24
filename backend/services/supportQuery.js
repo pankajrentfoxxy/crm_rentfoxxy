@@ -392,7 +392,7 @@ const dashboardSummary = async (user) => {
 // Daily Support Summary KPI cards.
 // Filters: dateFrom / dateTo (defaults to today), assignee (user_id), team (team_id).
 // The assignee/team filters are applied on the item's assigned technician.
-const dailySupportSummary = async ({ dateFrom = '', dateTo = '', assignee = '', teamIds = null } = {}) => {
+const dailySupportSummary = async ({ dateFrom = '', dateTo = '', assignee = '', teamIds = null, allTime = false } = {}) => {
     const today = new Date().toISOString().slice(0, 10);
     const from = dateFrom || today;
     const to = dateTo || dateFrom || today;
@@ -407,7 +407,8 @@ const dailySupportSummary = async ({ dateFrom = '', dateTo = '', assignee = '', 
         ($3::int IS NULL OR i.assigned_to = $3)
         AND ($4::int[] IS NULL OR i.assigned_to IN (SELECT u2.user_id FROM users u2 WHERE u2.team_id = ANY($4::int[])))
     `;
-    const inRange = (col) => `${col} >= $1::date AND ${col} < ($2::date + INTERVAL '1 day')`;
+    // allTime => no date restriction (TRUE keeps the FILTER clause valid).
+    const inRange = (col) => (allTime ? 'TRUE' : `${col} >= $1::date AND ${col} < ($2::date + INTERVAL '1 day')`);
     const openStatus = `i.status NOT IN ('resolved','closed','cancelled')`;
     const doneStatus = `i.status IN ('resolved','closed')`;
 

@@ -2085,11 +2085,13 @@ exports.getSupportDailySummary = async (req, res) => {
     try {
         const teamId = req.query.team;
         const teamIds = teamId ? await getTeamIdsForFilter(teamId) : null;
+        const allTime = req.query.all_time === '1' || req.query.all_time === 'true';
         const summary = await supportQuery.dailySupportSummary({
             dateFrom: req.query.from || req.query.date_from || '',
             dateTo: req.query.to || req.query.date_to || '',
             assignee: req.query.assignee || req.query.user || '',
             teamIds,
+            allTime,
         });
         res.json({ success: true, summary });
     } catch (error) {
