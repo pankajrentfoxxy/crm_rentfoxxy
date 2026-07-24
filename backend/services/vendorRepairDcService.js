@@ -1560,6 +1560,23 @@ async function receiveItemsFromVendor(client, {
           replacement_dc_number: replacementDcNumber,
         },
       });
+      await safeLogTtsplEvent({
+        ttsplId: item.ttspl_id,
+        vendorSerialId: item.vendor_serial_id || item.serial_id,
+        eventType: 'vendor_replaced',
+        description: `Vendor could not repair — replaced by ${replacementRow.inventory_asset_code} (serial ${replacementRow.serial_number}) via ${replacementDcNumber}`,
+        metadata: {
+          replacement_ttspl: replacementRow.inventory_asset_code,
+          replacement_serial: replacementRow.serial_number,
+          replacement_serial_id: replacementRow.serial_id,
+          replacement_dc_number: replacementDcNumber,
+          vendor_repair_dc: dcNumber,
+          original_serial: item.serial_number,
+        },
+        actorUserId,
+        actorName: itemWhSigner,
+        db: client,
+      });
       // New replacement serial is inserted as in_stock; refresh qc/extra only.
       await client.query(
         `UPDATE vendor_serial_numbers SET

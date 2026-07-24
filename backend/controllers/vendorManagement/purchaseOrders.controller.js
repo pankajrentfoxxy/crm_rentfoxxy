@@ -37,6 +37,7 @@ const {
   safeLogPurchaseOrderActivity,
   listPurchaseOrderActivities,
 } = require('../../services/purchaseOrderActivityService');
+const { resolveSerialForGrnIntake } = require('../../services/serialReintakeService');
 
 async function logReceiveActivities({
   poId, user, grnId, grnWasNew, unitCount, ttsplCodes = [], ticketCount = 0, poNumber,
@@ -517,6 +518,18 @@ async function receiveProductSerial(req, res) {
       }
     }
 
+    const reintake = await resolveSerialForGrnIntake(client, serial_number, {
+      reason: 'grn_receive_on_po_line',
+      actorUserId: req.user?.user_id,
+      actorName: req.user?.name,
+      newPoId: poId,
+      newGrnId: finalGrnId,
+    });
+    if (!reintake.ok) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: reintake.message });
+    }
+
     const insS = await client.query(
       `INSERT INTO vendor_serial_numbers (po_id, grn_id, serial_number, qc_status, extra)
        VALUES ($1,$2,$3,'pending',$4::jsonb) RETURNING serial_id`,
@@ -707,19 +720,6 @@ async function receivePoLineBulk(req, res) {
   try {
     await client.query('BEGIN');
 
-    const dup = await client.query(
-      `SELECT serial_number FROM vendor_serial_numbers
-       WHERE deleted_at IS NULL AND LOWER(serial_number) = ANY($1::text[])`,
-      [serialsNorm.map((s) => s.toLowerCase())]
-    );
-    if (dup.rows.length > 0) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({
-        success: false,
-        message: `Serial already exists in inventory: ${dup.rows.map((row) => row.serial_number).join(', ')}`
-      });
-    }
-
     if (grnId != null && Number.isFinite(grnId)) {
       const g = await client.query(
         `SELECT grn_id FROM vendor_goods_received_notes WHERE grn_id = $1 AND po_id = $2 AND deleted_at IS NULL`,
@@ -743,6 +743,20 @@ async function receivePoLineBulk(req, res) {
         );
         finalGrnId = insG.rows[0].grn_id;
         grnWasNew = true;
+      }
+    }
+
+    for (const serial of serialsNorm) {
+      const reintake = await resolveSerialForGrnIntake(client, serial, {
+        reason: 'grn_bulk_receive_on_po_line',
+        actorUserId: req.user?.user_id,
+        actorName: req.user?.name,
+        newPoId: poId,
+        newGrnId: finalGrnId,
+      });
+      if (!reintake.ok) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ success: false, message: reintake.message });
       }
     }
 
@@ -976,19 +990,6 @@ async function receivePoLineUnit(req, res) {
   try {
     await client.query('BEGIN');
 
-    const dup = await client.query(
-      `SELECT serial_number FROM vendor_serial_numbers
-       WHERE deleted_at IS NULL AND LOWER(serial_number) = LOWER($1)`,
-      [serial_number]
-    );
-    if (dup.rows.length > 0) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({
-        success: false,
-        message: `Serial already exists in inventory: ${dup.rows[0].serial_number}`
-      });
-    }
-
     if (grnId != null && Number.isFinite(grnId)) {
       const g = await client.query(
         `SELECT grn_id FROM vendor_goods_received_notes WHERE grn_id = $1 AND po_id = $2 AND deleted_at IS NULL`,
@@ -1013,6 +1014,18 @@ async function receivePoLineUnit(req, res) {
         finalGrnId = insG.rows[0].grn_id;
         grnWasNew = true;
       }
+    }
+
+    const reintake = await resolveSerialForGrnIntake(client, serial_number, {
+      reason: 'grn_receive_po_line_unit',
+      actorUserId: req.user?.user_id,
+      actorName: req.user?.name,
+      newPoId: poId,
+      newGrnId: finalGrnId,
+    });
+    if (!reintake.ok) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: reintake.message });
     }
 
     if (applyBill) {
