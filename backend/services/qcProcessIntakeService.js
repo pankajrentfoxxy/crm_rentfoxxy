@@ -990,6 +990,72 @@ async function createProductionTicketForQcSerial(db, { serialId, serialNumber },
   };
 }
 
+/** After inventory/QC item-description edit — mirror specs onto open floor tickets + PA. */
+async function syncLinkedTicketsFromItemDescription(db, {
+  serialId,
+  serialNumber,
+  inventoryAssetCode,
+  itemDesc,
+  userId,
+}) {
+  if (!itemDesc || (!serialId && !serialNumber && !inventoryAssetCode)) {
+    return { updated: 0, ticket_ids: [] };
+  }
+
+  const params = [serialId || null, inventoryAssetCode || null, serialNumber || null];
+  const { rows: tickets } = await db.query(
+    `SELECT ticket_id
+       FROM tickets
+      WHERE status NOT IN ('completed', 'cancelled', 'qc_failed_return_vendor')
+        AND (
+          ($1::int IS NOT NULL AND vendor_serial_id = $1)
+          OR ($2::text IS NOT NULL AND (ttspl_id = $2 OR machine_number = $2))
+          OR ($3::text IS NOT NULL AND serial_number = $3)
+        )
+      ORDER BY ticket_id`,
+    params
+  );
+
+  for (const t of tickets) {
+    await syncTicketHardwareConfig(db, {
+      ticketId: t.ticket_id,
+      serialId: null,
+      itemDesc,
+    });
+  }
+
+  let productionAssetSync = null;
+  if (serialNumber || inventoryAssetCode) {
+    const productionAssetService = require('./productionAssetService');
+    try {
+      productionAssetSync = await productionAssetService.syncWorkingConfigFromInventory(
+        db,
+        {
+          serial_number: serialNumber,
+          machine_number: inventoryAssetCode,
+          brand: itemDesc.brand,
+          model: itemDesc.model,
+          processor: itemDesc.processor,
+          generation: itemDesc.generation,
+          ram: itemDesc.ram,
+          storage: itemDesc.storage,
+          gpu: itemDesc.gpu,
+          screen_size: itemDesc.screen_size,
+        },
+        userId
+      );
+    } catch (e) {
+      console.error('syncLinkedTicketsFromItemDescription production asset:', e.message);
+    }
+  }
+
+  return {
+    updated: tickets.length,
+    ticket_ids: tickets.map((t) => t.ticket_id),
+    production_asset_sync: productionAssetSync,
+  };
+}
+
 module.exports = {
   PO_TYPES,
   addLaptopToQcProcess,
@@ -1002,6 +1068,7 @@ module.exports = {
   reopenQcSerialForActivePipeline,
   FLOOR_PIPELINE_STAGES,
   syncTicketHardwareConfig,
+  syncLinkedTicketsFromItemDescription,
   resolveItemDescription,
   buildSerialSpecContext,
   itemDescToGrnLine

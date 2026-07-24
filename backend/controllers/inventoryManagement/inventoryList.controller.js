@@ -718,12 +718,6 @@ async function updateItemDescription(req, res) {
           : 'Item description can only be edited on QC Process (pending) or Ready to Rent/Sell (passed) units'
       });
     }
-    if (['rented', 'sold', 'in_transit', 'on_demo', 'reserved'].includes(String(row.inventory_status || ''))) {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot edit description while unit is deployed or reserved'
-      });
-    }
 
     const extra = parseExtra(row.extra);
     const mergedSpec = {};
@@ -768,6 +762,28 @@ async function updateItemDescription(req, res) {
       [JSON.stringify(extra), serialId]
     );
 
+    const fullItemDesc = {};
+    for (const field of SPEC_FIELDS) {
+      const val = extra[field] || (field === 'model' ? extra.model_name : '');
+      if (val != null && String(val).trim() !== '') fullItemDesc[field] = String(val).trim();
+    }
+
+    let ticketSync = { updated: 0, ticket_ids: [] };
+    if (Object.keys(fullItemDesc).length) {
+      const { syncLinkedTicketsFromItemDescription } = require('../../services/qcProcessIntakeService');
+      try {
+        ticketSync = await syncLinkedTicketsFromItemDescription(pool, {
+          serialId: Number(serialId),
+          serialNumber: row.serial_number,
+          inventoryAssetCode: row.inventory_asset_code,
+          itemDesc: fullItemDesc,
+          userId: req.user?.user_id,
+        });
+      } catch (syncErr) {
+        console.error('updateItemDescription ticket sync:', syncErr.message);
+      }
+    }
+
     const ttsplId = row.inventory_asset_code || row.serial_number;
     if (ttsplId) {
       await logTtsplEvent({
@@ -775,13 +791,20 @@ async function updateItemDescription(req, res) {
         vendorSerialId: serialId,
         eventType: 'item_description_updated',
         description: `Item description corrected (${extra.spec_source})`,
-        metadata: payload,
+        metadata: { ...payload, tickets_synced: ticketSync.ticket_ids },
         actorUserId: req.user?.user_id,
       });
     }
 
     invalidateInventoryListCachesFireAndForget();
-    res.json({ success: true, message: 'Item description updated', item_description: payload });
+    res.json({
+      success: true,
+      message: ticketSync.updated
+        ? `Item description updated. Synced to ${ticketSync.updated} floor ticket(s).`
+        : 'Item description updated',
+      item_description: payload,
+      tickets_synced: ticketSync.ticket_ids,
+    });
   } catch (e) {
     console.error('updateItemDescription', e);
     res.status(500).json({ success: false, message: e.message || 'Failed to update item description' });
