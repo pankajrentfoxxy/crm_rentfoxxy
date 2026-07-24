@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const pool = require('../config/db');
 const grnAccessService = require('./grnAccessService');
+const { findActiveSerialByNumber, isEligibleForReintake } = require('./serialReintakeService');
 
 const TOKEN_TTL_MINUTES = 30;
 
@@ -135,12 +136,8 @@ async function submitCapturedSerial(tokenId, serialNumber) {
     return { ok: false, code: 400, message: 'Invalid serial number' };
   }
 
-  const dup = await pool.query(
-    `SELECT serial_number FROM vendor_serial_numbers
-     WHERE deleted_at IS NULL AND LOWER(serial_number) = LOWER($1)`,
-    [serial]
-  );
-  if (dup.rows.length) {
+  const existing = await findActiveSerialByNumber(pool, serial);
+  if (existing && !isEligibleForReintake(existing)) {
     return {
       ok: false,
       code: 409,
