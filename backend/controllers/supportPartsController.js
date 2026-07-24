@@ -37,6 +37,56 @@ function saveEsignFile(base64Data, prefix) {
   return `uploads/support-parts/${filename}`;
 }
 
+const OPEN_PART_REQUEST_STATUSES = [
+  'pending', 'approved', 'challan_generated', 'issued', 'return_requested',
+];
+
+async function resolveAssignedTechForItem(client, supportItemId, ticketId, fallbackUserId) {
+  if (!supportItemId) return fallbackUserId;
+  const itemRes = await client.query(
+    'SELECT assigned_to FROM support_ticket_items WHERE id = $1 AND ticket_id = $2',
+    [supportItemId, ticketId]
+  );
+  return itemRes.rows[0]?.assigned_to || fallbackUserId;
+}
+
+async function userCanActOnPartRequest(client, spr, user) {
+  if (['admin', 'support_lead', 'manager', 'super_admin'].includes(user.role)) return true;
+  if (spr.assigned_to_tech === user.user_id) return true;
+  if (spr.support_item_id) {
+    const itemRes = await client.query(
+      'SELECT assigned_to FROM support_ticket_items WHERE id = $1',
+      [spr.support_item_id]
+    );
+    if (itemRes.rows[0]?.assigned_to === user.user_id) return true;
+  }
+  return false;
+}
+
+/** Keep part requests / draft challans aligned when a complaint assignee changes. */
+async function syncPartRequestsTechForItem(client, itemId, techUserId) {
+  if (!itemId || !techUserId) return;
+  await client.query(
+    `UPDATE support_part_requests
+     SET assigned_to_tech = $2, updated_at = NOW()
+     WHERE support_item_id = $1
+       AND status = ANY($3::text[])`,
+    [itemId, techUserId, OPEN_PART_REQUEST_STATUSES]
+  );
+  await client.query(
+    `UPDATE support_part_challans spc
+     SET issued_to = $2, updated_at = NOW()
+     WHERE spc.status = 'draft'
+       AND spc.id IN (
+         SELECT DISTINCT challan_id FROM support_part_requests
+         WHERE support_item_id = $1 AND challan_id IS NOT NULL
+       )`,
+    [itemId, techUserId]
+  );
+}
+
+exports.syncPartRequestsTechForItem = syncPartRequestsTechForItem;
+
 // ── RAISE PART REQUEST ────────────────────────────────────────────────────────
 
 exports.raiseSupportPartRequest = async (req, res) => {
@@ -73,16 +123,21 @@ exports.raiseSupportPartRequest = async (req, res) => {
       throw Object.assign(new Error('Part not found'), { status: 404 });
     const part = partRes.rows[0];
 
+    const assignedTechId = await resolveAssignedTechForItem(
+      client, support_item_id || null, support_ticket_id, req.user.user_id
+    );
+
     const reqNumber = await nextSprNumber(client);
     const { rows } = await client.query(
       `INSERT INTO support_part_requests
          (request_number, support_ticket_id, support_item_id, ttspl_id,
           serial_number, requested_by, assigned_to_tech, part_id, quantity,
           reason, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$6,$7,$8,$9,'pending')
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending')
        RETURNING *`,
       [reqNumber, support_ticket_id, support_item_id || null, ttspl_id || null,
-       serial_number || null, req.user.user_id, part_id, Number(quantity), reason || null]
+       serial_number || null, req.user.user_id, assignedTechId, part_id,
+       Number(quantity), reason || null]
     );
     const spr = rows[0];
 
@@ -184,6 +239,18 @@ exports.approveAndGenerateChallan = async (req, res) => {
       throw new Error('No pending requests found for given IDs');
 
     const requests = reqRes.rows;
+    for (const reqRow of requests) {
+      const correctTech = await resolveAssignedTechForItem(
+        client, reqRow.support_item_id, reqRow.support_ticket_id, reqRow.assigned_to_tech
+      );
+      if (correctTech !== reqRow.assigned_to_tech) {
+        await client.query(
+          `UPDATE support_part_requests SET assigned_to_tech = $2, updated_at = NOW() WHERE id = $1`,
+          [reqRow.id, correctTech]
+        );
+        reqRow.assigned_to_tech = correctTech;
+      }
+    }
     const techIds = [...new Set(requests.map((r) => r.assigned_to_tech))];
     const ticketIds = [...new Set(requests.map((r) => r.support_ticket_id))];
     if (techIds.length > 1)
@@ -382,7 +449,7 @@ exports.markPartUsed = async (req, res) => {
     if (!r.rows.length) throw Object.assign(new Error('Request not found'), { status: 404 });
     const spr = r.rows[0];
 
-    if (spr.assigned_to_tech !== req.user.user_id && !['admin', 'support_lead', 'manager'].includes(req.user.role))
+    if (!(await userCanActOnPartRequest(client, spr, req.user)))
       throw Object.assign(new Error('Not authorised'), { status: 403 });
     if (spr.status !== 'issued')
       throw new Error(`Cannot mark used: status is '${spr.status}'`);

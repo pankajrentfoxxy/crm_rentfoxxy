@@ -28,6 +28,7 @@ const supportServiceDcService = require('../services/supportServiceDcService');
 const { regenerateServiceDcPdfByNumber } = require('../services/serviceDcPdfService');
 const { validateIndianMobile, normalizeIndianMobile } = require('../utils/phoneValidation');
 const { appendCustomerTypeCondition, isCustomerTypeAllowed } = require('../services/customerAccessScope');
+const { syncPartRequestsTechForItem } = require('./supportPartsController');
 
 function normalizeSupportPhoneFields(body) {
     const out = { ...body };
@@ -1803,6 +1804,9 @@ exports.assignItem = async (req, res) => {
             `UPDATE support_ticket_items SET assigned_to = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
             [itemId, assignedTo]
         );
+        if (assignedTo) {
+            await syncPartRequestsTechForItem(client, itemId, assignedTo);
+        }
         const isReassign = item.assigned_to && assignedTo && item.assigned_to !== assignedTo;
         await logAudit(client, {
             itemId,
@@ -2087,6 +2091,9 @@ exports.assignTicketBulk = async (req, res) => {
              WHERE id = ANY($1::int[])`,
             [ids, assignedTo]
         );
+        for (const row of toAssign) {
+            await syncPartRequestsTechForItem(client, row.id, assignedTo);
+        }
         for (const row of toAssign) {
             await logAudit(client, {
                 itemId: row.id,

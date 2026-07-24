@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { Loader2, Phone, MapPin, CheckCircle2, Clock, RefreshCw, Camera, Laptop } from 'lucide-react';
 import toast from 'react-hot-toast';
 import TtsplHistoryDrawer from '../../features/floor-pipeline/components/TtsplHistoryDrawer';
@@ -791,7 +791,11 @@ function PickupStatusBanner({ ticket, pickups, ticketId, isLead, onRefresh, assi
 
 export default function SupportTicketDetail() {
   const { ticketId } = useParams();
+  const location = useLocation();
   const { user } = useAuth();
+  const ticketsBackTo = location.state?.ticketsListSearch
+    ? `/support/tickets?${location.state.ticketsListSearch}`
+    : '/support/tickets';
   const [data, setData] = useState(null);
   const [technicians, setTechnicians] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -985,7 +989,7 @@ export default function SupportTicketDetail() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <Link to="/support/tickets" className="text-sm min-h-[44px] inline-flex items-center" style={{ color: 'var(--support-primary)' }}>← All tickets</Link>
+        <Link to={ticketsBackTo} className="text-sm min-h-[44px] inline-flex items-center" style={{ color: 'var(--support-primary)' }}>← All tickets</Link>
         <div className="flex flex-wrap gap-2">
           <button type="button" className="support-btn-outline lg:hidden min-h-[44px]" onClick={() => setMobileDetails(true)}>Details</button>
           {isSupportLead(user) && !isCancelled && (
