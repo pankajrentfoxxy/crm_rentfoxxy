@@ -21,6 +21,7 @@ import PickupSetupForm from './components/PickupSetupForm';
 import ServiceDcPanel from './components/ServiceDcPanel';
 import RepairSwapPanel from './components/RepairSwapPanel';
 import AssignmentHistoryList, { actionLabel } from './components/AssignmentHistoryList';
+import { replacementSalesOrderDetailPath } from '../../features/sales-pipeline/salesOrderScope';
 import {
   formatItemId,
   formatTicketId,
@@ -455,7 +456,7 @@ function ReplacementOrderBanner({ ticket, replacementOrders, pickups, ticketId, 
   const units = replacementOrders.filter((o) => o.sales_order_number === ticket.sales_order_number);
   const delivered = units.filter((o) => o.status === 'delivered' || o.new_machine_serial).length;
   const hasDeliveryDc = units.some((o) => o.dc_number);
-  const soPath = `/sales-pipeline/sales-orders/${encodeURIComponent(ticket.sales_order_number)}`;
+  const soPath = replacementSalesOrderDetailPath(ticket.sales_order_number);
   const linkedPickups = pickups.filter((p) => p.return_dc_number === ticket.return_dc_number);
   const pendingPickup = linkedPickups.some(
     (p) => p.status === 'pending_dispatch' || (!p.pickup_method && !p.assigned_to && !p.pickup_assigned_to)

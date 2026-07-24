@@ -76,7 +76,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
   const visibleTabs = useMemo(() => TABS.filter((t) => {
     if (t === 'payments') return canViewPayments;
     if (t === 'quote') return canViewQuotations;
-    if (t === 'laptops') return canViewDispatchOps || canView('delivery_challans');
+    if (t === 'laptops') return canViewDispatchOps || canView('delivery_challans') || canView('sales_orders_replacement');
     return true;
   }), [canViewPayments, canViewQuotations, canViewDispatchOps, canView]);
 
@@ -129,6 +129,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
   );
   const isCancelled = String(data?.status || head.status || '').toLowerCase() === 'cancelled';
   const resolvedScope = scopeProp
+    || (data?.is_replacement_order ? 'replacement' : null)
     || (orderMatchesScope(head, 'sale') ? 'sale' : orderMatchesScope(head, 'rental') ? 'rental' : null);
   const scopeConfig = getSoScopeConfig(resolvedScope);
   const listPath = salesOrderListPath(resolvedScope);

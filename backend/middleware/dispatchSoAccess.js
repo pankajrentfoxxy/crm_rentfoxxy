@@ -4,6 +4,10 @@
  */
 const pool = require('../config/db');
 const { hasPermission } = require('../services/permissionService');
+const {
+  SO_VIEW_SECTIONS,
+  assertReplacementSalesOrderAccessIfScoped,
+} = require('../services/dataScopeService');
 
 async function userHasDispatchSoAccess(userId, soNumber) {
   if (!userId || !soNumber) return false;
@@ -51,12 +55,22 @@ function checkSoViewOrAssignedDispatch(req, res, next) {
     }
     if (req.user.role === 'super_admin') return next();
 
-    const salesAllowed = await hasAnySectionPermission(
-      req,
-      ['sales_orders_doc', 'sales_orders_sale', 'sales_orders_rental'],
-      'can_view'
-    );
-    if (salesAllowed) return next();
+    const salesAllowed = await hasAnySectionPermission(req, SO_VIEW_SECTIONS, 'can_view');
+    if (salesAllowed) {
+      const soNumber = resolveSoNumber(req);
+      if (soNumber) {
+        try {
+          await assertReplacementSalesOrderAccessIfScoped(
+            soNumber,
+            req.user,
+            req.permissionCache
+          );
+        } catch (err) {
+          return res.status(err.status || 403).json({ success: false, message: err.message });
+        }
+      }
+      return next();
+    }
 
     const dispatchAllowed = await hasAnySectionPermission(
       req,
@@ -96,10 +110,24 @@ function checkSoSerialOrAssignedDispatch(req, res, next) {
 
     const salesAllowed = await hasAnySectionPermission(
       req,
-      ['sales_orders_doc', 'sales_orders_sale', 'sales_orders_rental', 'delivery_challans'],
+      [...SO_VIEW_SECTIONS, 'delivery_challans'],
       'can_edit'
     );
-    if (salesAllowed) return next();
+    if (salesAllowed) {
+      const soNumber = resolveSoNumber(req);
+      if (soNumber) {
+        try {
+          await assertReplacementSalesOrderAccessIfScoped(
+            soNumber,
+            req.user,
+            req.permissionCache
+          );
+        } catch (err) {
+          return res.status(err.status || 403).json({ success: false, message: err.message });
+        }
+      }
+      return next();
+    }
 
     const dispatchAllowed = await hasAnySectionPermission(
       req,

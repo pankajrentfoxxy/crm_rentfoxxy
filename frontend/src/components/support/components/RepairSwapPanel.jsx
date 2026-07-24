@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { Loader2, RefreshCw } from 'lucide-react';
 import api from '../../../utils/api';
 import PickupSetupForm from './PickupSetupForm';
+import { replacementSalesOrderDetailPath } from '../../../features/sales-pipeline/salesOrderScope';
 
 function specLine(item) {
   return [item.brand, item.model, item.processor, item.generation, item.ram, item.storage]
@@ -79,7 +80,7 @@ export default function RepairSwapPanel({
   }
 
   if (hasActiveReplacement && ticket.sales_order_number) {
-    const soPath = `/sales-pipeline/sales-orders/${encodeURIComponent(ticket.sales_order_number)}`;
+    const soPath = replacementSalesOrderDetailPath(ticket.sales_order_number);
     return (
       <div className="rounded-xl border border-pink-200 bg-pink-50/40 p-4 space-y-2">
         <p className="text-sm font-semibold text-pink-900">Replacement sales order created</p>
@@ -227,7 +228,7 @@ export default function RepairSwapPanel({
         <p className="text-xs text-pink-800">
           Next: attach stock on{' '}
           <Link
-            to={`/sales-pipeline/sales-orders/${encodeURIComponent(ticket.sales_order_number)}`}
+            to={replacementSalesOrderDetailPath(ticket.sales_order_number)}
             className="font-semibold underline"
           >
             SO {ticket.sales_order_number}

@@ -5,6 +5,7 @@ const multer = require('multer');
 const { multerLimits, wrapMulter } = require('../config/uploadLimits');
 const router = express.Router();
 const { authMiddleware, checkSectionPermission, checkAnySectionPermission, checkRole } = require('../middleware/auth');
+const { SO_VIEW_SECTIONS } = require('../services/dataScopeService');
 const cp = checkSectionPermission;
 const cpAny = checkAnySectionPermission;
 
@@ -35,19 +36,19 @@ const uploadPod = multer({
 const quoteView = cp('sales_quotations', 'view');
 const quoteCreate = cp('sales_quotations', 'create');
 const quoteEdit = cp('sales_quotations', 'edit');
-const soView = cpAny(['sales_orders_doc', 'sales_orders_sale', 'sales_orders_rental'], 'view');
-const soCreate = cpAny(['sales_orders_doc', 'sales_orders_sale', 'sales_orders_rental'], 'create');
-const soEdit = cpAny(['sales_orders_doc', 'sales_orders_sale', 'sales_orders_rental'], 'edit');
+const soView = cpAny(SO_VIEW_SECTIONS, 'view');
+const soCreate = cpAny(SO_VIEW_SECTIONS, 'create');
+const soEdit = cpAny(SO_VIEW_SECTIONS, 'edit');
 const dcView = cp('delivery_challans', 'view');
 const dcCreate = cp('delivery_challans', 'create');
 const dcEdit = cp('delivery_challans', 'edit');
 /** SO laptop attach/QC flow — sales users need sales_orders_doc; warehouse uses delivery_challans. */
-const soSerialsView = cpAny(['sales_orders_doc', 'sales_orders_sale', 'sales_orders_rental', 'delivery_challans'], 'view');
-const soSerialsEdit = cpAny(['sales_orders_doc', 'sales_orders_sale', 'sales_orders_rental', 'delivery_challans'], 'edit');
+const soSerialsView = cpAny([...SO_VIEW_SECTIONS, 'delivery_challans'], 'view');
+const soSerialsEdit = cpAny([...SO_VIEW_SECTIONS, 'delivery_challans'], 'edit');
 /** DC from sales order — sales creates DCs for their SOs without full delivery_challans module access. */
-const soDcView = cpAny(['sales_orders_doc', 'sales_orders_sale', 'sales_orders_rental', 'delivery_challans'], 'view');
-const soDcCreate = cpAny(['sales_orders_doc', 'sales_orders_sale', 'sales_orders_rental', 'delivery_challans'], 'create');
-const soDcEdit = cpAny(['sales_orders_doc', 'sales_orders_sale', 'sales_orders_rental', 'delivery_challans'], 'edit');
+const soDcView = cpAny([...SO_VIEW_SECTIONS, 'delivery_challans'], 'view');
+const soDcCreate = cpAny([...SO_VIEW_SECTIONS, 'delivery_challans'], 'create');
+const soDcEdit = cpAny([...SO_VIEW_SECTIONS, 'delivery_challans'], 'edit');
 const payView = cp('payment_records', 'view');
 const payCreate = cp('payment_records', 'create');
 const rdcView = cp('return_dc', 'view');

@@ -29,6 +29,7 @@ function SalesOrdersLegacyRedirect() {
   const { canView } = usePermission();
   if (canView('sales_orders_sale')) return <Navigate to="sales-orders-sale" replace />;
   if (canView('sales_orders_rental')) return <Navigate to="sales-orders-rental" replace />;
+  if (canView('sales_orders_replacement')) return <Navigate to="sales-orders-replacement" replace />;
   if (canView('sales_orders_doc')) return <Navigate to="sales-orders-rental" replace />;
   return <Navigate to="/dashboard" replace />;
 }
@@ -38,6 +39,7 @@ function SalesIndexRedirect() {
   if (canView('sales_quotations')) return <Navigate to="quotations" replace />;
   if (canView('sales_orders_sale')) return <Navigate to="sales-orders-sale" replace />;
   if (canView('sales_orders_rental')) return <Navigate to="sales-orders-rental" replace />;
+  if (canView('sales_orders_replacement')) return <Navigate to="sales-orders-replacement" replace />;
   if (canView('sales_orders_doc')) return <Navigate to="sales-orders-rental" replace />;
   if (canView('delivery_challans')) return <Navigate to="delivery-challans" replace />;
   if (canView('delivery_register_management')) return <Navigate to="delivery-register" replace />;
@@ -57,6 +59,8 @@ export default function SalesPipelineApp() {
       <Route path="sales-orders-sale/*" element={gSo(<SalesOrderDetailPage scope="sale" />)} />
       <Route path="sales-orders-rental" element={g('sales_orders_rental', <SalesOrderListPage scope="rental" />)} />
       <Route path="sales-orders-rental/*" element={gSo(<SalesOrderDetailPage scope="rental" />)} />
+      <Route path="sales-orders-replacement" element={g('sales_orders_replacement', <SalesOrderListPage scope="replacement" />)} />
+      <Route path="sales-orders-replacement/*" element={gSo(<SalesOrderDetailPage scope="replacement" />)} />
       <Route path="sales-orders/*" element={gSo(<SalesOrderDetailPage />)} />
       <Route path="delivery-challans" element={g('delivery_challans', <DeliveryChallanListPage />)} />
       <Route

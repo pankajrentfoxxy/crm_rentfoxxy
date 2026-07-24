@@ -20,6 +20,7 @@ import {
   AlertCircle,
   Zap,
   DollarSign,
+  RefreshCw,
   Headphones,
 } from 'lucide-react';
 
@@ -76,6 +77,7 @@ export const salesPipelineAccordionChildren = [
   { label: 'Quotations', path: '/sales-pipeline/quotations', section: 'sales_quotations', countKey: 'quotations' },
   { label: 'Sales Orders – Sale', path: '/sales-pipeline/sales-orders-sale', section: 'sales_orders_sale', countKey: 'sales_orders_sale' },
   { label: 'Sales Orders – Rental', path: '/sales-pipeline/sales-orders-rental', section: 'sales_orders_rental', countKey: 'sales_orders_rental' },
+  { label: 'Replacement Sales Orders', path: '/sales-pipeline/sales-orders-replacement', section: 'sales_orders_replacement' },
   { label: 'Delivery Challans', path: '/sales-pipeline/delivery-challans', section: 'delivery_challans', countKey: 'delivery_challans' },
   { label: 'Delivery Register', path: '/sales-pipeline/delivery-register', section: 'delivery_register_management' },
   { label: 'Delivery Technicians', path: '/delivery-register-management/technicians', section: 'technician_bucket' },
@@ -248,6 +250,12 @@ export const MENU_GROUPS = [
         path: '/support',
         section: 'support_tickets',
         countKey: 'open_tickets',
+      },
+      {
+        icon: RefreshCw,
+        label: 'Replacement Sales Orders',
+        path: '/sales-pipeline/sales-orders-replacement',
+        section: 'sales_orders_replacement',
       },
       {
         icon: ClipboardCheck,

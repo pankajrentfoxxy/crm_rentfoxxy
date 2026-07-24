@@ -141,7 +141,9 @@ export default function SalesOrderListPage({ scope }) {
         customer_id: customerId || undefined,
         status: statusFilter || undefined,
         entity_scope: scope || undefined,
-        order_type: scope === 'rental' && orderTypeFilter ? orderTypeFilter : undefined,
+        order_type: scope === 'replacement'
+          ? 'replacement'
+          : (scope === 'rental' && orderTypeFilter ? orderTypeFilter : undefined),
       });
       setRows(res.data?.sales_orders || []);
       setPagination(res.data?.pagination || { page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
@@ -317,7 +319,9 @@ export default function SalesOrderListPage({ scope }) {
               </span>
             )}
             <PermissionGate section={scopeConfig?.permissionSection || permissionSections} action="create">
-              <Button icon={Plus} onClick={() => setSoDrawer(true)}>Create Sales Order</Button>
+              {scope !== 'replacement' && (
+                <Button icon={Plus} onClick={() => setSoDrawer(true)}>Create Sales Order</Button>
+              )}
             </PermissionGate>
           </div>
         )}
