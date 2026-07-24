@@ -389,6 +389,90 @@ const dashboardSummary = async (user) => {
     return { ...(q.rows[0] || {}), settings };
 };
 
+// Daily Support Summary KPI cards.
+// Filters: dateFrom / dateTo (defaults to today), assignee (user_id), team (team_id).
+// The assignee/team filters are applied on the item's assigned technician.
+const dailySupportSummary = async ({ dateFrom = '', dateTo = '', assignee = '', teamIds = null } = {}) => {
+    const today = new Date().toISOString().slice(0, 10);
+    const from = dateFrom || today;
+    const to = dateTo || dateFrom || today;
+    const assigneeId = assignee ? parseInt(assignee, 10) : null;
+    const teamList = Array.isArray(teamIds) && teamIds.length ? teamIds.map(Number).filter((n) => !Number.isNaN(n)) : null;
+
+    // $1 from, $2 to, $3 assignee, $4 team ids (reused across every sub-count).
+    const params = [from, to, Number.isNaN(assigneeId) ? null : assigneeId, teamList && teamList.length ? teamList : null];
+
+    // Restrict to the selected technician / team (NULL param => no restriction).
+    const scope = `
+        ($3::int IS NULL OR i.assigned_to = $3)
+        AND ($4::int[] IS NULL OR i.assigned_to IN (SELECT u2.user_id FROM users u2 WHERE u2.team_id = ANY($4::int[])))
+    `;
+    const inRange = (col) => `${col} >= $1::date AND ${col} < ($2::date + INTERVAL '1 day')`;
+    const openStatus = `i.status NOT IN ('resolved','closed','cancelled')`;
+    const doneStatus = `i.status IN ('resolved','closed')`;
+
+    const { rows } = await pool.query(
+        `
+        SELECT
+            -- Daily Pickup
+            COUNT(*) FILTER (WHERE i.item_type = 'pickup' AND ${openStatus}
+                AND i.pickup_completed_at IS NULL AND i.pickup_scheduled_at IS NULL
+                AND ${inRange('i.created_at')} AND ${scope})::int AS pending_pickup,
+            COUNT(*) FILTER (WHERE i.item_type = 'pickup' AND ${openStatus}
+                AND i.pickup_completed_at IS NULL AND i.pickup_scheduled_at IS NOT NULL
+                AND ${inRange('i.created_at')} AND ${scope})::int AS followup_pickup,
+
+            -- Daily Complaints
+            COUNT(*) FILTER (WHERE i.item_type = 'complaint' AND ${openStatus}
+                AND ${inRange('i.created_at')} AND ${scope})::int AS pending_complaints,
+            COUNT(*) FILTER (WHERE i.item_type = 'complaint' AND ${doneStatus}
+                AND i.resolved_at IS NOT NULL AND ${inRange('i.resolved_at')} AND ${scope})::int AS resolved_complaints,
+
+            -- Daily Replacements
+            COUNT(*) FILTER (WHERE i.item_type = 'replacement'
+                AND COALESCE(i.pickup_completed_at, i.picked_up_at) IS NOT NULL
+                AND ${inRange('COALESCE(i.pickup_completed_at, i.picked_up_at)')} AND ${scope})::int AS replacement_pickup_completed,
+            COUNT(*) FILTER (WHERE i.item_type = 'replacement' AND ${doneStatus}
+                AND i.resolved_at IS NOT NULL AND ${inRange('i.resolved_at')} AND ${scope})::int AS replacement_completed,
+
+            -- Daily Returned Laptops (units received back at the warehouse in range)
+            COUNT(*) FILTER (WHERE i.warehouse_received_at IS NOT NULL
+                AND ${inRange('i.warehouse_received_at')} AND ${scope})::int AS returned_total,
+            COUNT(*) FILTER (WHERE i.item_type = 'pickup' AND i.warehouse_received_at IS NOT NULL
+                AND ${inRange('i.warehouse_received_at')} AND ${scope})::int AS returned_pickup,
+            COUNT(*) FILTER (WHERE i.item_type = 'replacement' AND i.warehouse_received_at IS NOT NULL
+                AND ${inRange('i.warehouse_received_at')} AND ${scope})::int AS returned_replacement,
+            COUNT(*) FILTER (WHERE i.item_type = 'complaint' AND i.warehouse_received_at IS NOT NULL
+                AND ${inRange('i.warehouse_received_at')} AND ${scope})::int AS returned_complaint
+        FROM support_ticket_items i
+        `,
+        params
+    );
+
+    const r = rows[0] || {};
+    return {
+        range: { from, to },
+        pickup: {
+            pending: r.pending_pickup || 0,
+            followup: r.followup_pickup || 0,
+        },
+        complaints: {
+            pending: r.pending_complaints || 0,
+            resolved: r.resolved_complaints || 0,
+        },
+        replacements: {
+            pickup_completed: r.replacement_pickup_completed || 0,
+            completed: r.replacement_completed || 0,
+        },
+        returned: {
+            total: r.returned_total || 0,
+            pickup: r.returned_pickup || 0,
+            replacement: r.returned_replacement || 0,
+            complaint: r.returned_complaint || 0,
+        },
+    };
+};
+
 const navBadges = async (user) => {
     const settings = await getSettings();
     const oh = settings.overdue_threshold_hours;
@@ -448,5 +532,6 @@ module.exports = {
     listTicketsEnriched,
     countTicketsByType,
     dashboardSummary,
+    dailySupportSummary,
     navBadges
 };

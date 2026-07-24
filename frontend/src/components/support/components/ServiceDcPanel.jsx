@@ -9,7 +9,7 @@ import { replacementSalesOrderDetailPath } from '../../../features/sales-pipelin
 
 function dcPurposeLabel(purpose) {
   if (purpose === 'service_return') return 'Service Return';
-  if (purpose === 'replacement') return 'Replacement';
+  if (purpose === 'replacement') return 'Replace  ment';
   return 'Standard';
 }
 

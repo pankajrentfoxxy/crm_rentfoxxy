@@ -2,6 +2,7 @@ const pool = require('../config/db');
 const { getDisplayTeams, getTeamIdsForFilter } = require('../utils/teamUtils');
 const { getLaptopReport, getTicketRows, getStagePerformanceTickets } = require('../services/laptopReportService');
 const { getSalesOrderReport, getSalesOrderReportDrilldown } = require('../services/salesOrderReportService');
+const supportQuery = require('../services/supportQuery');
 
 function formatDuration(seconds) {
     if (seconds == null || !Number.isFinite(seconds)) return '—';
@@ -2029,6 +2030,40 @@ exports.getSupportStats = async (req, res) => {
     } catch (error) {
         console.error('getSupportStats error:', error);
         res.status(500).json({ success: false, message: 'Server error generating support stats' });
+    }
+};
+
+exports.getSupportSummaryFilters = async (req, res) => {
+    try {
+        const [techs, teams] = await Promise.all([
+            pool.query(
+                `SELECT user_id, name FROM users
+                 WHERE role IN ('support_tech', 'support_lead')
+                 ORDER BY active DESC, name`
+            ),
+            getDisplayTeams(),
+        ]);
+        res.json({ success: true, technicians: techs.rows, teams });
+    } catch (error) {
+        console.error('getSupportSummaryFilters error:', error);
+        res.status(500).json({ success: false, message: 'Server error loading support summary filters' });
+    }
+};
+
+exports.getSupportDailySummary = async (req, res) => {
+    try {
+        const teamId = req.query.team;
+        const teamIds = teamId ? await getTeamIdsForFilter(teamId) : null;
+        const summary = await supportQuery.dailySupportSummary({
+            dateFrom: req.query.from || req.query.date_from || '',
+            dateTo: req.query.to || req.query.date_to || '',
+            assignee: req.query.assignee || req.query.user || '',
+            teamIds,
+        });
+        res.json({ success: true, summary });
+    } catch (error) {
+        console.error('getSupportDailySummary error:', error);
+        res.status(500).json({ success: false, message: 'Server error generating support daily summary' });
     }
 };
 

@@ -13,6 +13,7 @@ import VendorSpendReportPage from './pages/VendorSpendReportPage';
 import TechnicianReportPage from './pages/TechnicianReportPage';
 import LaptopReportPage from './pages/LaptopReportPage';
 import SalesOrderReportPage from './pages/SalesOrderReportPage';
+import SupportDailySummaryPage from './pages/SupportDailySummaryPage';
 
 const g = (section, node) => <ProtectedRoute section={section} action="view">{node}</ProtectedRoute>;
 
@@ -45,6 +46,7 @@ export default function ReportingApp() {
       <Route path="technician" element={g('reports_access', <TechnicianReportPage />)} />
       <Route path="laptop-report" element={g('reports_access', <LaptopReportPage />)} />
       <Route path="sales-order-report" element={g('reports_access', <SalesOrderReportPage />)} />
+      <Route path="support-daily-summary" element={g('reports_access', <SupportDailySummaryPage />)} />
     </Routes>
   );
 }

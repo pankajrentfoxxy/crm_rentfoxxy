@@ -717,8 +717,12 @@ async function getDcQcStatusSummaries(dcNumbers) {
   return out;
 }
 
-async function listDeliveryChallansGrouped({
-  page = 1, limit = 20, search = '', status = '', assignedUserId = null, dateFrom, dateTo,
+function buildDeliveryChallanListWhere({
+  search = '',
+  status = '',
+  assignedUserId = null,
+  dateFrom,
+  dateTo,
 } = {}) {
   const params = [];
   const baseFilter = `COALESCE(d.movement_type, 'outbound') = 'outbound'`;
@@ -734,8 +738,6 @@ async function listDeliveryChallansGrouped({
   if (status === 'pending') {
     where += ` AND (d.status IS NULL OR d.status = 'pending')`;
   } else if (status === 'in_transit') {
-    // Strictly dispatched-but-not-delivered units (exclude 'pending', which has
-    // its own tab).
     where += ` AND d.status IN ('in_transit', 'shipped', 'reached')`;
   } else if (status && status !== 'all') {
     params.push(status);
@@ -745,12 +747,53 @@ async function listDeliveryChallansGrouped({
     where,
     appendDateRangeClauses({ column: 'created_at', dateFrom, dateTo, params, tableAlias: 'd' })
   );
+  return { where, params };
+}
+
+async function listDeliveryChallansGrouped({
+  page = 1, limit = 20, search = '', status = '', assignedUserId = null, dateFrom, dateTo,
+} = {}) {
+  const { where, params } = buildDeliveryChallanListWhere({
+    search, status, assignedUserId, dateFrom, dateTo,
+  });
   // A DC can have several line items; list/count one row per DC (not per line)
   // so multi-laptop challans don't appear duplicated.
-  const countResult = await pool.query(
-    `SELECT COUNT(DISTINCT d.dc_number)::int AS total FROM delivery_challan_lines d ${where}`,
-    params
-  );
+  const laptopUnitSql = `CASE
+    WHEN COALESCE(jsonb_array_length(d.serial_number), 0) > 0
+      THEN jsonb_array_length(d.serial_number)
+    ELSE COALESCE(d.quantity, 1)
+  END`;
+  const [countResult, laptopResult, statusResult] = await Promise.all([
+    pool.query(
+      `SELECT COUNT(DISTINCT d.dc_number)::int AS total FROM delivery_challan_lines d ${where}`,
+      params
+    ),
+    pool.query(
+      `SELECT COALESCE(SUM(${laptopUnitSql}), 0)::int AS total_laptops
+         FROM delivery_challan_lines d
+         ${where}`,
+      params
+    ),
+    pool.query(
+      `WITH dc_heads AS (
+         SELECT DISTINCT ON (d.dc_number)
+                d.dc_number,
+                COALESCE(NULLIF(TRIM(d.status), ''), 'pending') AS dc_status
+           FROM delivery_challan_lines d
+           ${where}
+          ORDER BY d.dc_number, d.id DESC
+       )
+       SELECT
+         COUNT(*)::int AS total,
+         COUNT(*) FILTER (WHERE dc_status = 'pending')::int AS pending,
+         COUNT(*) FILTER (WHERE dc_status IN ('in_transit', 'shipped', 'reached'))::int AS in_transit,
+         COUNT(*) FILTER (WHERE dc_status = 'delivered')::int AS delivered,
+         COUNT(*) FILTER (WHERE dc_status = 'rejected')::int AS rejected
+       FROM dc_heads`,
+      params
+    ),
+  ]);
+  const statusRow = statusResult.rows[0] || {};
   const offset = (page - 1) * limit;
   const listParams = [...params, limit, offset];
   const listResult = await pool.query(
@@ -783,6 +826,15 @@ async function listDeliveryChallansGrouped({
       ...row,
       qc_status: qcSummaries[row.dc_number] || emptyQc,
     })),
+    stats: {
+      total_delivery_challans: countResult.rows[0]?.total || 0,
+      total_laptops: laptopResult.rows[0]?.total_laptops || 0,
+      total: statusRow.total || countResult.rows[0]?.total || 0,
+      pending: statusRow.pending || 0,
+      in_transit: statusRow.in_transit || 0,
+      delivered: statusRow.delivered || 0,
+      rejected: statusRow.rejected || 0,
+    },
     pagination: {
       page,
       limit,

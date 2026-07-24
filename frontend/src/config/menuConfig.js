@@ -99,6 +99,7 @@ export const reportsMenuItems = [
   { icon: Wrench, label: 'Technician', path: '/reports/technician', section: 'reports_access' },
   { icon: ClipboardCheck, label: 'Laptop Report', path: '/reports/laptop-report', section: 'reports_access' },
   { icon: ShoppingCart, label: 'Sales Order Report', path: '/reports/sales-order-report', section: 'reports_access' },
+  { icon: Headphones, label: 'Daily Support Summary', path: '/reports/support-daily-summary', section: 'reports_access' },
 ];
 
 // Each section matches that page's REAL backend + route guard exactly, so a user

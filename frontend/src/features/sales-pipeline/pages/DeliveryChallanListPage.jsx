@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Plus, Truck } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -29,6 +29,15 @@ export default function DeliveryChallanListPage() {
   const { searchInput, setSearchInput, debouncedSearch: search } = useDebouncedUrlSearch(filters, setFilters);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState({
+    total_delivery_challans: 0,
+    total_laptops: 0,
+    total: 0,
+    pending: 0,
+    in_transit: 0,
+    delivered: 0,
+    rejected: 0,
+  });
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [dcDrawer, setDcDrawer] = useState(false);
   const [dispatchDc, setDispatchDc] = useState(null);
@@ -46,6 +55,15 @@ export default function DeliveryChallanListPage() {
       });
       const list = res.data?.delivery_challans || [];
       setRows(list);
+      setStats(res.data?.stats || {
+        total_delivery_challans: res.data?.pagination?.total || list.length,
+        total_laptops: 0,
+        total: res.data?.pagination?.total || list.length,
+        pending: 0,
+        in_transit: 0,
+        delivered: 0,
+        rejected: 0,
+      });
       setPagination(res.data?.pagination || { page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
     } catch {
       toast.error('Failed to load delivery challans');
@@ -56,13 +74,7 @@ export default function DeliveryChallanListPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  const stats = useMemo(() => ({
-    total: pagination.total || rows.length,
-    pending: rows.filter((r) => !r.status || r.status === 'pending').length,
-    in_transit: rows.filter((r) => ['in_transit', 'shipped', 'reached'].includes(r.status)).length,
-    delivered: rows.filter((r) => r.status === 'delivered').length,
-    rejected: rows.filter((r) => r.status === 'rejected').length,
-  }), [rows, pagination.total]);
+  const formatCount = (n) => Number(n || 0).toLocaleString('en-IN');
 
   const dispatchCell = (row) => {
     const qc = row.qc_status;
@@ -160,12 +172,17 @@ export default function DeliveryChallanListPage() {
         )}
       />
 
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+        <StatCard label="Total Delivery Challans" value={formatCount(stats.total_delivery_challans)} tone="gray" />
+        <StatCard label="Total Laptops" value={formatCount(stats.total_laptops)} tone="blue" />
+      </div>
+
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
-        <StatCard label="Total" value={stats.total} tone="gray" />
-        <StatCard label="Pending (page)" value={stats.pending} tone="amber" />
-        <StatCard label="In Transit (page)" value={stats.in_transit} tone="blue" />
-        <StatCard label="Delivered (page)" value={stats.delivered} tone="green" />
-        <StatCard label="Rejected (page)" value={stats.rejected} tone="red" />
+        <StatCard label="Total" value={formatCount(stats.total)} tone="gray" />
+        <StatCard label="Pending" value={formatCount(stats.pending)} tone="amber" />
+        <StatCard label="In Transit" value={formatCount(stats.in_transit)} tone="blue" />
+        <StatCard label="Delivered" value={formatCount(stats.delivered)} tone="green" />
+        <StatCard label="Rejected" value={formatCount(stats.rejected)} tone="red" />
       </div>
 
       <div className="flex flex-wrap gap-2 mb-4">

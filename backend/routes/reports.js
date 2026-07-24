@@ -19,5 +19,7 @@ router.get('/sales-order-report', authMiddleware, reportsView, reportsController
 router.get('/sales-order-report/drilldown', authMiddleware, reportsView, reportsController.getSalesOrderReportDrilldown);
 router.post('/export', authMiddleware, cp('reports_export', 'create'), reportsController.exportToExcel);
 router.get('/support-stats', authMiddleware, reportsView, reportsController.getSupportStats);
+router.get('/support-daily-summary', authMiddleware, reportsView, reportsController.getSupportDailySummary);
+router.get('/support-daily-summary/filters', authMiddleware, reportsView, reportsController.getSupportSummaryFilters);
 
 module.exports = router;
