@@ -14,6 +14,7 @@ const {
   updateUser,
   updateUserStatus,
   resetUserPassword,
+  loginAsUser,
   registerCustomer,
   registerVendor,
   registerTechnician,
@@ -133,6 +134,11 @@ router.put('/users/:id', authMiddleware, updateUser);
 // @desc    Activate, deactivate, or block user
 // @access  Private (Admin/Manager)
 router.patch('/users/:id/status', authMiddleware, updateUserStatus);
+
+// @route   POST /api/auth/users/:id/login-as
+// @desc    Super admin opens a session as another CRM user (new tab)
+// @access  Private (super_admin)
+router.post('/users/:id/login-as', authMiddleware, loginAsUser);
 
 // @route   POST /api/auth/users/:id/reset-password
 // @desc    Reset user password (admin only)

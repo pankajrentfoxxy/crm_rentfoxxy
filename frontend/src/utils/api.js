@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { getAuthToken } from './authToken';
 
 /** Local dev: Cursor often forwards 127.0.0.1:5001 to remote; nodemon binds 0.0.0.0:5001. Use 127.0.0.2 to hit local. */
 function localDevApiHost() {
@@ -42,7 +43,7 @@ const api = axios.create({
 });
 
 api.interceptors.request.use((config) => {
-    const token = localStorage.getItem('token');
+    const token = getAuthToken();
     if (token) config.headers.Authorization = `Bearer ${token}`;
     // For FormData, let the browser set Content-Type with boundary (don't use application/json)
     if (config.data instanceof FormData && config.headers) {

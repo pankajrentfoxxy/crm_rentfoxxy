@@ -11,6 +11,7 @@ import { io } from 'socket.io-client';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../context/AuthContext';
 import { getBackendOrigin } from '../../utils/api';
+import { getAuthToken } from '../../utils/authToken';
 import { fetchDispatchPendingOrders, fetchDispatchPendingQcAlerts } from '../../utils/dispatchWorkflowApi';
 import {
   filterActivePopupAlerts,
@@ -226,7 +227,7 @@ export function DispatchRealtimeProvider({ children }) {
       return undefined;
     }
 
-    const token = localStorage.getItem('token');
+    const token = getAuthToken();
     if (!token) return undefined;
 
     const socket = io(getBackendOrigin(), {

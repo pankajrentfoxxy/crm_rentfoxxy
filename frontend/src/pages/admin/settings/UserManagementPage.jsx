@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Copy, Key, Pencil, Plus, Power, Search, X,
+  Copy, Key, LogIn, Pencil, Plus, Power, Search, X,
 } from 'lucide-react';
 import RoleBadge from '../../../components/ui/RoleBadge';
 import { ToastContainer, useToast } from '../../../components/ui/Toast';
@@ -16,6 +16,7 @@ import {
   createUser,
   fetchAuthTeams,
   fetchUsers,
+  loginAsUser,
   resetUserPassword,
   updateUser,
   updateUserStatus,
@@ -98,6 +99,7 @@ export default function UserManagementPage() {
   const { toasts, setToasts, showToast } = useToast();
 
   const isAdmin = ['admin', 'super_admin'].includes(currentUser?.role);
+  const isSuperAdmin = currentUser?.role === 'super_admin';
 
   const [users, setUsers] = useState([]);
   const [stats, setStats] = useState({});
@@ -127,6 +129,7 @@ export default function UserManagementPage() {
   const [resetPassword, setResetPassword] = useState('');
   const [resetResult, setResetResult] = useState(null);
   const [resetSaving, setResetSaving] = useState(false);
+  const [impersonatingId, setImpersonatingId] = useState(null);
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
@@ -290,6 +293,31 @@ export default function UserManagementPage() {
       showToast(err.response?.data?.message || 'Reset failed', 'error');
     } finally {
       setResetSaving(false);
+    }
+  };
+
+  const handleLoginAsUser = async (u) => {
+    if (!isSuperAdmin) return;
+    if (u.user_id === currentUser?.user_id) {
+      showToast('You are already logged in as this user', 'error');
+      return;
+    }
+    if (u.role === 'super_admin') {
+      showToast('Cannot log in as another super administrator', 'error');
+      return;
+    }
+    setImpersonatingId(u.user_id);
+    try {
+      const data = await loginAsUser(u.user_id);
+      if (!data.token) throw new Error('No session token returned');
+      const by = encodeURIComponent(currentUser?.email || 'super admin');
+      const callbackUrl = `${window.location.origin}/auth/impersonate?token=${encodeURIComponent(data.token)}&by=${by}`;
+      window.open(callbackUrl, '_blank', 'noopener,noreferrer');
+      showToast(`Opened ${u.name} in a new tab`, 'success');
+    } catch (err) {
+      showToast(err.response?.data?.message || err.message || 'Login as user failed', 'error');
+    } finally {
+      setImpersonatingId(null);
     }
   };
 
@@ -496,6 +524,21 @@ export default function UserManagementPage() {
                             >
                               <Power className="w-4 h-4" />
                             </button>
+                            {isSuperAdmin
+                              && u.user_id !== currentUser?.user_id
+                              && u.role !== 'super_admin'
+                              && (u.status === 'active' || u.active)
+                              && u.status !== 'blocked' ? (
+                              <button
+                                type="button"
+                                onClick={() => handleLoginAsUser(u)}
+                                disabled={impersonatingId === u.user_id}
+                                className="p-2 text-gray-400 hover:text-emerald-700 rounded-lg hover:bg-emerald-50 disabled:opacity-50"
+                                title="Login as user (new tab)"
+                              >
+                                <LogIn className="w-4 h-4" />
+                              </button>
+                            ) : null}
                             {isAdmin ? (
                               <>
                                 {u.status !== 'blocked' ? (

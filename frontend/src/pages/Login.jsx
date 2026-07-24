@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { Link, useNavigate } from 'react-router-dom';
 import { postLoginPath } from '../utils/supportAccess';
 import api from '../utils/api';
+import { setNormalAuthToken } from '../utils/authToken';
 import { ArrowLeft, Laptop, Mail, Scan } from 'lucide-react';
 import BarcodeScanner from '../components/BarcodeScanner';
 
@@ -117,7 +118,7 @@ export default function Login() {
     setLoading(true);
     try {
       const { data } = await api.post('/auth/login-barcode', { barcode });
-      localStorage.setItem('token', data.token);
+      setNormalAuthToken(data.token);
       window.location.href = '/dashboard';
     } catch (err) {
       setError(err.response?.data?.message || 'Invalid barcode');

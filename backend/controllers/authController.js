@@ -319,6 +319,11 @@ exports.getCurrentUser = async (req, res) => {
     user.team_ids = req.user.team_ids || await getUserTeamIds(user.user_id, user.team_id);
     user.team_names = req.user.team_names || await getUserTeamNames(user.user_id, user.team_id);
     user.effective_permissions = await buildEffectivePermissionsForUser(user.user_id, user.role);
+    if (req.user.user_impersonation) {
+      user.user_impersonation = true;
+      user.impersonated_by_user_id = req.user.impersonated_by_user_id || null;
+      user.impersonated_by_email = req.user.impersonated_by_email || null;
+    }
     res.json({
       success: true,
       user
@@ -735,6 +740,95 @@ exports.updateUserStatus = async (req, res) => {
   } catch (error) {
     console.error('Update user status error:', error);
     res.status(500).json({ success: false, message: 'Server error updating status' });
+  }
+};
+
+exports.loginAsUser = async (req, res) => {
+  try {
+    if (req.user?.role !== 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only super administrators can log in as another user.',
+      });
+    }
+
+    const targetId = parseInt(req.params.id, 10);
+    if (!Number.isFinite(targetId) || targetId <= 0) {
+      return res.status(400).json({ success: false, message: 'Invalid user id' });
+    }
+
+    if (Number(req.user.user_id) === targetId) {
+      return res.status(400).json({ success: false, message: 'You are already logged in as this user.' });
+    }
+
+    const result = await pool.query(
+      `SELECT u.*, t.team_name
+         FROM users u
+         LEFT JOIN teams t ON u.team_id = t.team_id
+        WHERE u.user_id = $1`,
+      [targetId]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const user = result.rows[0];
+    if (!user.active) {
+      return res.status(400).json({ success: false, message: 'This user account is inactive.' });
+    }
+    if (user.status === 'blocked') {
+      return res.status(400).json({ success: false, message: 'This user account is blocked.' });
+    }
+    if (user.status === 'pending_approval') {
+      return res.status(400).json({ success: false, message: 'This user account is pending approval.' });
+    }
+    if (CRM_EXCLUDED_ROLES.includes(user.role)) {
+      return res.status(400).json({ success: false, message: 'Cannot log in as portal-only users from CRM.' });
+    }
+    if (user.role === 'super_admin') {
+      return res.status(403).json({ success: false, message: 'Cannot log in as another super administrator.' });
+    }
+
+    const teamIds = await getUserTeamIds(user.user_id, user.team_id);
+    const teamNames = await getUserTeamNames(user.user_id, user.team_id);
+
+    const token = jwt.sign(
+      {
+        user_id: user.user_id,
+        email: user.email,
+        role: user.role,
+        status: user.status || 'active',
+        user_type: user.user_type || 'internal',
+        team_id: user.team_id,
+        team_ids: teamIds,
+        team_names: teamNames,
+        permissions: user.permissions || [],
+        user_impersonation: true,
+        impersonated_by_user_id: req.user.user_id,
+        impersonated_by_email: req.user.email,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: '8h' }
+    );
+
+    delete user.password_hash;
+    user.permissions = Array.isArray(user.permissions) ? user.permissions : [];
+    user.team_ids = teamIds;
+    user.team_names = teamNames;
+    user.user_impersonation = true;
+    user.impersonated_by_user_id = req.user.user_id;
+    user.impersonated_by_email = req.user.email;
+    user.effective_permissions = await buildEffectivePermissionsForUser(user.user_id, user.role);
+
+    res.json({
+      success: true,
+      message: `Opened session as ${user.name}`,
+      token,
+      user,
+    });
+  } catch (error) {
+    console.error('Login as user error:', error);
+    res.status(500).json({ success: false, message: 'Server error during impersonation login' });
   }
 };
 

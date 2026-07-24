@@ -75,6 +75,11 @@ export async function resetUserPassword(userId, newPassword) {
   return data;
 }
 
+export async function loginAsUser(userId) {
+  const { data } = await api.post(`/auth/users/${userId}/login-as`);
+  return data;
+}
+
 export async function fetchUsersByRole(role, params = {}) {
   const { data } = await api.get(`/users/by-role/${role}`, { params });
   return data;

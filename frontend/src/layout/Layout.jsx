@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 
 import { useAuth } from '../context/AuthContext';
+import { getImpersonatedByLabel, isImpersonationSession } from '../utils/authToken';
 
 import { useNavigate, Link, NavLink, useLocation } from 'react-router-dom';
 
@@ -300,11 +301,13 @@ export default function Layout({ children }) {
 
 
   const handleLogout = () => {
-
+    const impersonating = isImpersonationSession();
     logout();
-
+    if (impersonating) {
+      window.close();
+      return;
+    }
     navigate('/login');
-
   };
 
 
@@ -1475,7 +1478,23 @@ export default function Layout({ children }) {
 
         </header>
 
-
+        {isImpersonationSession() ? (
+          <div className="bg-amber-100 border-b border-amber-300 px-4 py-2 text-sm text-amber-950 flex flex-wrap items-center justify-between gap-2">
+            <span>
+              Viewing as <strong>{user?.name}</strong>
+              {getImpersonatedByLabel() ? (
+                <> · opened by <span className="font-mono text-xs">{getImpersonatedByLabel()}</span></>
+              ) : null}
+            </span>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="text-xs font-semibold underline hover:text-amber-900"
+            >
+              End impersonation
+            </button>
+          </div>
+        ) : null}
 
         <main className="p-4 lg:p-6">{children}</main>
 

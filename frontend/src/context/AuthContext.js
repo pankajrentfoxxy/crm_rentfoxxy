@@ -1,6 +1,12 @@
 import React, { useState, useEffect, useContext, useCallback, useMemo } from 'react';
 import api from '../utils/api';
 import { hasPermission as checkPermission, isAssignedDataOnly as checkAssignedScope } from '../utils/permissionHelper';
+import {
+  clearAuthToken,
+  getAuthToken,
+  isImpersonationSession,
+  setNormalAuthToken,
+} from '../utils/authToken';
 
 export const AuthContext = React.createContext();
 
@@ -15,7 +21,7 @@ export function AuthProvider({ children }) {
       const { data } = await api.get('/auth/me');
       setUser(data.user);
     } catch (error) {
-      localStorage.removeItem('token');
+      clearAuthToken();
       setUser(null);
     } finally {
       setLoading(false);
@@ -23,20 +29,20 @@ export function AuthProvider({ children }) {
   }, []);
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
+    const token = getAuthToken();
     if (token) loadUser();
     else setLoading(false);
   }, [loadUser]);
 
   const login = async (email, password) => {
     const { data } = await api.post('/auth/login', { email, password });
-    localStorage.setItem('token', data.token);
+    setNormalAuthToken(data.token);
     setUser(data.user);
     return data;
   };
 
   const logout = () => {
-    localStorage.removeItem('token');
+    clearAuthToken();
     setUser(null);
   };
 
@@ -67,6 +73,7 @@ export function AuthProvider({ children }) {
       logout,
       loading,
       isAuthenticated: !!user,
+      isImpersonationSession: isImpersonationSession(),
       effectivePermissions,
       hasPermission,
       isAssignedDataOnly,

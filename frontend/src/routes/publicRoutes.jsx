@@ -8,9 +8,11 @@ import Qc2ConfigMatchPage from '../pages/Qc2ConfigMatchPage';
 import DispatchQcConfigMatchPage from '../pages/DispatchQcConfigMatchPage';
 import AccessPage from '../features/access/AccessPage';
 import HomeRedirect from '../router/HomeRedirect';
+import UserImpersonateCallbackPage from '../pages/auth/UserImpersonateCallbackPage';
 
 export const publicRoutes = [
   { path: '/login', element: <Login /> },
+  { path: '/auth/impersonate', element: <UserImpersonateCallbackPage /> },
   { path: '/register/customer', element: <CustomerRegister /> },
   { path: '/register/vendor', element: <VendorRegister /> },
   { path: '/quotation/accept/:token', element: <QuotationAccept /> },
