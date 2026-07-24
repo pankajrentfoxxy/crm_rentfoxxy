@@ -12,18 +12,24 @@ export default function Qc2InventoryTagModal({
   onConfirm,
   saving = false,
   purchaseOrderType,
+  inventoryTagOverride = '',
+  allowSaleOverride = false,
   title = 'Submit QC2 — Inventory Tag',
 }) {
+  const overrideTag = String(inventoryTagOverride || '').trim().toLowerCase();
+  const hasOverride = ['rental', 'sale', 'both'].includes(overrideTag);
+  const rentalPurchaseDefault = purchaseOrderType === 'rental_purchase' && !hasOverride && !allowSaleOverride;
+
   const [tag, setTag] = React.useState('rental');
-  const rentalPurchaseLocked = purchaseOrderType === 'rental_purchase';
 
   React.useEffect(() => {
-    if (open) {
-      setTag(rentalPurchaseLocked ? 'rental' : 'rental');
-    }
-  }, [open, rentalPurchaseLocked]);
+    if (!open) return;
+    if (hasOverride) setTag(overrideTag);
+    else if (rentalPurchaseDefault) setTag('rental');
+    else setTag('rental');
+  }, [open, hasOverride, overrideTag, rentalPurchaseDefault]);
 
-  const effectiveTag = rentalPurchaseLocked ? 'rental' : tag;
+  const effectiveTag = hasOverride ? overrideTag : tag;
 
   const tagLabel = useMemo(() => {
     const hit = TAG_OPTIONS.find((o) => o.value === effectiveTag);
@@ -41,11 +47,21 @@ export default function Qc2InventoryTagModal({
           How should this laptop be listed after inventory receive?
         </p>
 
-        {rentalPurchaseLocked ? (
-          <div className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-sm text-violet-900">
-            PO type is <strong>Rental Purchase</strong> — tagged as <strong>Rental</strong> automatically.
+        {hasOverride ? (
+          <div className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm text-teal-900">
+            This unit is set to <strong>{tagLabel}</strong> inventory (per-laptop override).
           </div>
-        ) : (
+        ) : rentalPurchaseDefault ? (
+          <div className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-sm text-violet-900">
+            PO type is <strong>Rental Purchase</strong> — tagged as <strong>Rental</strong> by default.
+          </div>
+        ) : purchaseOrderType === 'rental_purchase' && allowSaleOverride ? (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            PO type is <strong>Rental Purchase</strong>, but you can tag this laptop as Sale if needed.
+          </div>
+        ) : null}
+
+        {!hasOverride && !rentalPurchaseDefault ? (
           <div className="space-y-2">
             {TAG_OPTIONS.map((opt) => (
               <label
@@ -65,7 +81,7 @@ export default function Qc2InventoryTagModal({
               </label>
             ))}
           </div>
-        )}
+        ) : null}
 
         <div className="flex justify-end gap-2 pt-1">
           <button type="button" onClick={onClose} className="px-3 py-2 text-sm border rounded-lg">

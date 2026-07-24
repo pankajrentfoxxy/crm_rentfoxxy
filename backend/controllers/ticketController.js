@@ -542,6 +542,7 @@ exports.getTicketById = async (req, res) => {
               ) AS ttspl_display,
               vsn.serial_number AS vsn_serial_number,
               vpo.purchase_order_type,
+              NULLIF(TRIM(vsn.extra->>'inventory_tag_override'), '') AS inventory_tag_override,
               COALESCE(NULLIF(TRIM(t.serial_number), ''), vsn.serial_number) AS resolved_serial_number,
               vsn.extra AS vsn_extra
        FROM tickets t

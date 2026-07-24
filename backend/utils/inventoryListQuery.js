@@ -110,6 +110,14 @@ function buildInventorySerialListQuery({
         AND tk.status IN ('in_progress', 'on_hold')
         AND st.stage_name IN ('QC1', 'QC2')
     )`;
+  } else if (segment === 'qc_process' && ticketStageFilter === 'dispatch_qc') {
+    ticketStageSql = ` AND EXISTS (
+      SELECT 1 FROM tickets tk
+      INNER JOIN stages st ON st.stage_id = tk.current_stage_id
+      WHERE tk.vendor_serial_id = s.serial_id
+        AND tk.status IN ('in_progress', 'on_hold')
+        AND st.stage_name = 'Dispatch QC'
+    )`;
   }
 
   let searchSql = '';

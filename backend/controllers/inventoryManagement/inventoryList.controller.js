@@ -71,7 +71,9 @@ async function listInventory(req, res) {
   const dateFrom = req.query.date_from;
   const dateTo = req.query.date_to;
   const specFilters = pickSpecFilters(req.query);
-  const ticketStageFilter = req.query.ticket_stage_filter === 'qc1_qc2' ? 'qc1_qc2' : 'all';
+  const ticketStageFilter = ['qc1_qc2', 'dispatch_qc'].includes(req.query.ticket_stage_filter)
+    ? req.query.ticket_stage_filter
+    : 'all';
   const isSpare = segment === 'spare_parts';
 
   try {
@@ -183,7 +185,9 @@ async function exportInventoryExcel(req, res) {
   const dateFrom = req.query.date_from;
   const dateTo = req.query.date_to;
   const specFilters = pickSpecFilters(req.query);
-  const ticketStageFilter = req.query.ticket_stage_filter === 'qc1_qc2' ? 'qc1_qc2' : 'all';
+  const ticketStageFilter = ['qc1_qc2', 'dispatch_qc'].includes(req.query.ticket_stage_filter)
+    ? req.query.ticket_stage_filter
+    : 'all';
   const limit = Math.min(20000, Math.max(1, parseInt(req.query.limit, 10) || 20000));
 
   try {
@@ -732,10 +736,17 @@ async function updateItemDescription(req, res) {
         mergedSpec[field] = extra[field] || '';
       }
     }
-    const { validateLaptopSpecForEdit } = require('../../services/assetConfigurationService');
+    const { validateLaptopSpecForEdit, normalizeLaptopSpecForEdit } = require('../../services/assetConfigurationService');
     const specErrors = await validateLaptopSpecForEdit(mergedSpec);
     if (specErrors.length) {
       return res.status(400).json({ success: false, message: specErrors.join('; ') });
+    }
+
+    const normalizedSpec = await normalizeLaptopSpecForEdit(mergedSpec);
+    for (const field of SPEC_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(payload, field)) {
+        payload[field] = normalizedSpec[field] || '';
+      }
     }
 
     for (const [key, val] of Object.entries(payload)) {

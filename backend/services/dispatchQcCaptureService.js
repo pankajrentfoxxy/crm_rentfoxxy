@@ -303,27 +303,58 @@ async function applyDispatchQcFailure(client, {
       console.error('dispatch QC fail notification:', wfErr.message);
     }
   }
-  // 4. Asset status → qc_failed / Dispatch QC Failed (off Ready to Rent/Sell).
+  // 4. Asset status — rework stays in QC Process (pending/in_stock); hard fail only when
+  // the ticket is not returning to the floor pipeline.
   if (alloc.serial_id) {
-    await inventorySM.transitionAsset(client, {
-      serialId: alloc.serial_id,
-      toStatus: 'qc_failed',
-      reason: `Dispatch QC failed on ${soNumber}: ${failReason}`.slice(0, 500),
-      actorUserId: actorUserId || null,
-      actorName: actorName || null,
-      allowOverride: true, // reserved → qc_failed is a deliberate exception
-    });
-    await client.query(
-      `UPDATE vendor_serial_numbers
-          SET qc_status = 'failed',
-              current_customer_id = NULL,
-              current_dc_number = NULL,
-              extra = (COALESCE(extra, '{}'::jsonb) - 'awaiting_inventory_receive')
-                      || jsonb_build_object('status', 'failed', 'dispatch_qc_failed_at', NOW()::text),
-              updated_at = NOW()
-        WHERE serial_id = $1 AND deleted_at IS NULL`,
-      [alloc.serial_id]
-    );
+    if (moveTicketToDiagnosis) {
+      await client.query(
+        `UPDATE vendor_serial_numbers
+            SET qc_status = 'pending',
+                inventory_status = CASE
+                  WHEN inventory_status IN ('qc_failed', 'reserved', 'in_transit') THEN 'in_stock'
+                  ELSE inventory_status
+                END,
+                current_customer_id = NULL,
+                current_dc_number = NULL,
+                extra = (COALESCE(extra, '{}'::jsonb) - 'awaiting_inventory_receive' - 'dispatch_qc_failed_at')
+                        || jsonb_build_object('status', 'pending'),
+                updated_at = NOW()
+          WHERE serial_id = $1 AND deleted_at IS NULL`,
+        [alloc.serial_id]
+      );
+      try {
+        await inventorySM.transitionAsset(client, {
+          serialId: alloc.serial_id,
+          toStatus: 'in_stock',
+          reason: `Dispatch QC failed on ${soNumber} — rework`.slice(0, 255),
+          actorUserId: actorUserId || null,
+          actorName: actorName || null,
+          allowOverride: true,
+        });
+      } catch (invErr) {
+        console.warn(`applyDispatchQcFailure: inventory transition skipped: ${invErr.message}`);
+      }
+    } else {
+      await inventorySM.transitionAsset(client, {
+        serialId: alloc.serial_id,
+        toStatus: 'qc_failed',
+        reason: `Dispatch QC failed on ${soNumber}: ${failReason}`.slice(0, 255),
+        actorUserId: actorUserId || null,
+        actorName: actorName || null,
+        allowOverride: true,
+      });
+      await client.query(
+        `UPDATE vendor_serial_numbers
+            SET qc_status = 'failed',
+                current_customer_id = NULL,
+                current_dc_number = NULL,
+                extra = (COALESCE(extra, '{}'::jsonb) - 'awaiting_inventory_receive')
+                        || jsonb_build_object('status', 'failed', 'dispatch_qc_failed_at', NOW()::text),
+                updated_at = NOW()
+          WHERE serial_id = $1 AND deleted_at IS NULL`,
+        [alloc.serial_id]
+      );
+    }
   }
 
   // Production asset mirrors the failure (kept out of pending-inventory receive).
@@ -331,12 +362,13 @@ async function applyDispatchQcFailure(client, {
   if (paId) {
     await client.query(
       `UPDATE production_assets
-          SET status = 'dispatch_qc_failed',
-              qc2_verification = COALESCE(qc2_verification, '{}'::jsonb) || $2::jsonb,
+          SET status = $2,
+              qc2_verification = COALESCE(qc2_verification, '{}'::jsonb) || $3::jsonb,
               updated_at = NOW()
         WHERE production_asset_id = $1`,
       [
         paId,
+        moveTicketToDiagnosis ? 'in_production' : 'dispatch_qc_failed',
         JSON.stringify({
           source: 'dispatch_qc',
           reason: 'dispatch_qc_failed',

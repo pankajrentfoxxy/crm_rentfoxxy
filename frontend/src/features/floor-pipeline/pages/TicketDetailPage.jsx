@@ -53,6 +53,7 @@ import HwReworkAssignModal from '../components/HwReworkAssignModal';
 import Qc2InventoryTagModal from '../components/Qc2InventoryTagModal';
 import DispatchQcEtaBadge from '../components/DispatchQcEtaBadge';
 import DispatchQcSnoozeActivityModal from '../components/DispatchQcSnoozeActivityModal';
+import ConfigUpdateModal from '../components/ConfigUpdateModal';
 import DispatchQcReminderModal, {
   isDispatchQcDueCrossed,
   isDispatchQcTicketAssignee,
@@ -114,6 +115,7 @@ export default function TicketDetailPage() {
   const [qc1FailPickerOpen, setQc1FailPickerOpen] = useState(false);
   const [qc1FailConfirming, setQc1FailConfirming] = useState(false);
   const [qc2PassTagOpen, setQc2PassTagOpen] = useState(false);
+  const [configEditOpen, setConfigEditOpen] = useState(false);
   const [qcMembers, setQcMembers] = useState([]);
   const [chosenAssignee, setChosenAssignee] = useState('');
 
@@ -756,7 +758,8 @@ export default function TicketDetailPage() {
             </>
           ) : null}
         </div>
-        <div className="flex flex-wrap gap-1 mt-2">
+        <div className="flex flex-wrap items-center gap-2 mt-2">
+          <div className="flex flex-wrap gap-1">
           {configBadges(ticket).map((b) => (
             <span
               key={b.label}
@@ -766,6 +769,16 @@ export default function TicketDetailPage() {
               <span className="font-medium">{b.value}</span>
             </span>
           ))}
+          </div>
+          {canManageTickets ? (
+            <button
+              type="button"
+              onClick={() => setConfigEditOpen(true)}
+              className="text-xs font-semibold text-blue-700 hover:text-blue-900 underline"
+            >
+              Edit specs
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -1121,6 +1134,8 @@ export default function TicketDetailPage() {
           move(PENDING_INVENTORY_STAGE, undefined, undefined, { inventoryTag: tag });
         }}
         purchaseOrderType={ticket?.purchase_order_type}
+        inventoryTagOverride={ticket?.inventory_tag_override}
+        allowSaleOverride={canManageTickets}
         title="QC2 Pass — Inventory Tag"
       />
       <TtsplHistoryDrawer ttsplId={resolveTicketTtspl(ticket)} open={historyOpen} onClose={() => setHistoryOpen(false)} />
@@ -1188,6 +1203,17 @@ export default function TicketDetailPage() {
         activities={data?.activities || []}
         dispatchQcEta={ticket?.dispatch_qc_eta}
         snoozedUntil={qcSnoozeUntil || ticket?.dispatch_qc_eta?.qc_alert_snoozed_until}
+      />
+
+      <ConfigUpdateModal
+        open={configEditOpen}
+        onClose={() => setConfigEditOpen(false)}
+        ticket={ticket}
+        extra={data?.vendor_serial_extra || data?.extra || {}}
+        onSaved={() => {
+          refresh();
+          reloadTicketHistory(resolveTicketTtspl(ticket));
+        }}
       />
     </div>
   );

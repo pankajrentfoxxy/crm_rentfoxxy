@@ -40,7 +40,7 @@ const { logTtsplEvent } = require('../services/ttsplAuditService');
 const replacementFlow = require('../services/supportReplacementFlowService');
 const supportServiceDcService = require('../services/supportServiceDcService');
 const { regenerateReturnDcPdf, regenerateReturnDcPdfByRdc } = require('../services/returnDcPdfService');
-const { isRestrictedToAssigned, scopeUserId } = require('../services/dataScopeService');
+const { isRestrictedToAssigned, scopeUserId, salesOrderScopeSection } = require('../services/dataScopeService');
 const {
   ACTIVITY_TYPES,
   safeLogSalesOrderActivity,
@@ -684,8 +684,10 @@ exports.getAddSalesOrderMeta = async (req, res) => {
 
 exports.listSalesOrders = async (req, res) => {
   try {
-    const assignedOnly = await isRestrictedToAssigned(req, 'sales_orders');
+    const scopeSection = salesOrderScopeSection(req.query.entity_scope);
+    const assignedOnly = await isRestrictedToAssigned(req, scopeSection);
     const assignedUserId = assignedOnly ? scopeUserId(req.user) : null;
+    const restrictDispatchWorkflow = req.user?.role === 'dispatch' && assignedOnly;
     const data = await listSalesOrdersGrouped({
       page: parseInt(req.query.page, 10) || 1,
       limit: Math.min(parseInt(req.query.limit, 10) || 20, 100),
@@ -699,6 +701,7 @@ exports.listSalesOrders = async (req, res) => {
       orderType: req.query.order_type || '',
       viewerRole: req.user?.role || null,
       viewerUserId: req.user?.user_id || null,
+      restrictDispatchWorkflow,
     });
     res.json({ success: true, ...data });
   } catch (error) {
@@ -1884,9 +1887,21 @@ exports.updateDeliveryChallan = async (req, res) => {
 
 exports.getOperationCounts = async (req, res) => {
   try {
+    const role = req.user?.role || null;
+    const userId = req.user?.user_id || null;
+    const isDispatch = role === 'dispatch';
+    const [restrictDispatchSale, restrictDispatchRental] = isDispatch
+      ? await Promise.all([
+        isRestrictedToAssigned(req, 'sales_orders_sale'),
+        isRestrictedToAssigned(req, 'sales_orders_rental'),
+      ])
+      : [false, false];
     const counts = await getOperationCounts({
-      role: req.user?.role || null,
-      userId: req.user?.user_id || null,
+      role,
+      userId,
+      restrictDispatchSale,
+      restrictDispatchRental,
+      restrictDispatchAll: restrictDispatchSale && restrictDispatchRental,
     });
     res.json({ success: true, counts });
   } catch (error) {

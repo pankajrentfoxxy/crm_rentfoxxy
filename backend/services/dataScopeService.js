@@ -1,6 +1,7 @@
 const {
   getUserPermissionRow,
   getRolePermissionRow,
+  hasPermission,
 } = require('./permissionService');
 
 const DATA_SCOPE_ALL = 'all';
@@ -23,6 +24,14 @@ const SECTION_ALIASES = {
   dispatch: ['dispatch', 'delivery_challans'],
   delivery_challans: ['delivery_challans', 'dispatch'],
 };
+
+/** Map sales list entity_scope query to RBAC section for data_scope checks. */
+function salesOrderScopeSection(entityScope) {
+  const scope = String(entityScope || '').trim().toLowerCase();
+  if (scope === 'sale') return 'sales_orders_sale';
+  if (scope === 'rental') return 'sales_orders_rental';
+  return 'sales_orders_doc';
+}
 
 function sectionsToCheck(section) {
   return SECTION_ALIASES[section] || [section];
@@ -95,6 +104,21 @@ async function isRestrictedToAssigned(req, section) {
     req.dataScopeCache
   );
   return scope === DATA_SCOPE_ASSIGNED;
+}
+
+/** True when user may view all sales orders (any sale/rental/doc section with data_scope=all). */
+async function hasUnrestrictedSalesOrderAccess(userId, role, cache) {
+  if (role === 'super_admin' || role === 'admin') return true;
+  const sections = ['sales_orders_sale', 'sales_orders_rental', 'sales_orders_doc'];
+  for (const section of sections) {
+    // eslint-disable-next-line no-await-in-loop
+    const canView = await hasPermission(userId, role, section, 'can_view', cache);
+    if (!canView) continue;
+    // eslint-disable-next-line no-await-in-loop
+    const scope = await getEffectiveDataScope(userId, role, section, cache);
+    if (scope === DATA_SCOPE_ALL) return true;
+  }
+  return false;
 }
 
 async function isRestrictedToAssignedAny(req, sections) {
@@ -202,6 +226,8 @@ module.exports = {
   getEffectiveDataScope,
   isRestrictedToAssigned,
   isRestrictedToAssignedAny,
+  salesOrderScopeSection,
+  hasUnrestrictedSalesOrderAccess,
   resolveTicketListScope,
   buildTicketListAssignmentClause,
   canAccessTicketRecord,

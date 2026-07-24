@@ -557,11 +557,31 @@ function normalizeTagValue(raw) {
   return tag;
 }
 
-async function resolveInventoryTag(db, pa, requestedTag, { requireTag = true } = {}) {
-  const poType = await resolvePurchaseOrderType(db, pa);
-  if (poType === 'rental_purchase') return 'rental';
+async function getSerialInventoryTagOverride(db, vendorSerialId) {
+  if (!vendorSerialId) return null;
+  const r = await db.query(
+    `SELECT extra->>'inventory_tag_override' AS tag
+       FROM vendor_serial_numbers
+      WHERE serial_id = $1 AND deleted_at IS NULL`,
+    [vendorSerialId]
+  );
+  const tag = normalizeTagValue(r.rows[0]?.tag);
+  return INVENTORY_TAGS.includes(tag) ? tag : null;
+}
 
+async function resolveInventoryTag(db, pa, requestedTag, { requireTag = true } = {}) {
+  const override = await getSerialInventoryTagOverride(db, pa?.vendor_serial_id);
+  if (override) return override;
+
+  const poType = await resolvePurchaseOrderType(db, pa);
   const tag = normalizeTagValue(requestedTag);
+
+  if (poType === 'rental_purchase') {
+    // Rental PO defaults to rental; QC2 may explicitly choose sale/both for this unit.
+    if (tag && tag !== 'rental') return tag;
+    return 'rental';
+  }
+
   if (!tag) {
     if (requireTag) {
       const err = new Error('Inventory tag is required (rental, sale, or both)');
@@ -591,12 +611,58 @@ async function holdVendorSerialForPendingInventory(db, vendorSerialId) {
   );
 }
 
+/** Link PA to an open floor ticket when ticket_id was never set (e.g. GRN-only PA). */
+async function resolveTicketForProductionAsset(db, pa, { pendingInventoryOnly = false } = {}) {
+  if (!pa) return null;
+  if (pa.ticket_id) {
+    const r = await db.query(`SELECT * FROM tickets WHERE ticket_id = $1`, [pa.ticket_id]);
+    return r.rows[0] || null;
+  }
+  if (!pa.vendor_serial_id) return null;
+
+  const stageFilter = pendingInventoryOnly
+    ? `AND s.stage_name = 'Pending Inventory'`
+    : '';
+  const r = await db.query(
+    `SELECT t.* FROM tickets t
+      JOIN stages s ON s.stage_id = t.current_stage_id
+     WHERE t.vendor_serial_id = $1
+       AND t.status NOT IN ('completed', 'cancelled', 'qc_failed_return_vendor')
+       ${stageFilter}
+     ORDER BY t.updated_at DESC
+     LIMIT 1`,
+    [pa.vendor_serial_id]
+  );
+  const ticket = r.rows[0] || null;
+  if (ticket?.ticket_id) {
+    await db.query(
+      `UPDATE production_assets SET ticket_id = COALESCE(ticket_id, $2), updated_at = NOW()
+        WHERE production_asset_id = $1`,
+      [pa.production_asset_id, ticket.ticket_id]
+    );
+  }
+  return ticket;
+}
+
 async function markPendingInventory(db, productionAssetId, userId, meta = {}) {
-  const pa = await getById(db, productionAssetId);
+  let pa = await getById(db, productionAssetId);
   if (!pa) {
     const err = new Error('Production asset not found');
     err.status = 404;
     throw err;
+  }
+
+  const explicitTicketId = meta.ticketId || meta.ticket_id || null;
+  if (explicitTicketId && !pa.ticket_id) {
+    await db.query(
+      `UPDATE production_assets SET ticket_id = COALESCE(ticket_id, $2), updated_at = NOW()
+        WHERE production_asset_id = $1`,
+      [productionAssetId, explicitTicketId]
+    );
+    pa = await getById(db, productionAssetId);
+  } else if (!pa.ticket_id) {
+    await resolveTicketForProductionAsset(db, pa);
+    pa = await getById(db, productionAssetId);
   }
 
   const source = meta.source || 'qc2';
@@ -733,10 +799,8 @@ async function receiveIntoInventory(db, productionAssetId, {
     );
   }
 
-  if (pa.ticket_id) {
-    const ticketRes = await db.query(`SELECT * FROM tickets WHERE ticket_id = $1`, [pa.ticket_id]);
-    const ticket = ticketRes.rows[0];
-    if (ticket) {
+  const ticket = await resolveTicketForProductionAsset(db, pa, { pendingInventoryOnly: true });
+  if (ticket) {
       const ticketBefore = { ...ticket };
       const invStage = await db.query(
         `SELECT stage_id, team_id, stage_name FROM stages WHERE stage_name = 'Inventory' ORDER BY stage_order LIMIT 1`
@@ -750,13 +814,13 @@ async function receiveIntoInventory(db, productionAssetId, {
                   completed_at = NOW(),
                   updated_at = NOW()
             WHERE ticket_id = $1`,
-          [pa.ticket_id, invStage.rows[0].stage_id, invStage.rows[0].team_id]
+          [ticket.ticket_id, invStage.rows[0].stage_id, invStage.rows[0].team_id]
         );
       } else {
         await db.query(
           `UPDATE tickets SET status = 'completed', completed_at = NOW(), updated_at = NOW()
             WHERE ticket_id = $1`,
-          [pa.ticket_id]
+          [ticket.ticket_id]
         );
       }
 
@@ -791,7 +855,6 @@ async function receiveIntoInventory(db, productionAssetId, {
         actor: { user_id: actorUserId, name: actorName },
         assignmentType: 'receive',
       });
-    }
   }
 
   const upd = await db.query(
@@ -937,7 +1000,18 @@ async function listPendingInventory(db) {
             s.stage_name,
             p.purchase_order_type
        FROM production_assets pa
-       LEFT JOIN tickets t ON t.ticket_id = pa.ticket_id
+       LEFT JOIN LATERAL (
+         SELECT tk.* FROM tickets tk
+          WHERE tk.ticket_id = pa.ticket_id
+             OR (
+               pa.ticket_id IS NULL
+               AND tk.vendor_serial_id = pa.vendor_serial_id
+               AND tk.status NOT IN ('completed', 'cancelled', 'qc_failed_return_vendor')
+             )
+          ORDER BY CASE WHEN tk.ticket_id = pa.ticket_id THEN 0 ELSE 1 END,
+                   tk.updated_at DESC
+          LIMIT 1
+       ) t ON true
        LEFT JOIN users u ON u.user_id = pa.qc2_completed_by
        LEFT JOIN stages s ON s.stage_id = t.current_stage_id
        LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = pa.vendor_serial_id

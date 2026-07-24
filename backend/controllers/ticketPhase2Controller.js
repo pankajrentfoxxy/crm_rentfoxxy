@@ -529,6 +529,7 @@ exports.moveToStage = async (req, res) => {
           await paSvc.markPendingInventory(client, pa.production_asset_id, req.user.user_id, {
             source: 'qc2',
             inventory_tag,
+            ticketId: ticket.ticket_id,
           });
         } else {
           await paSvc.createFromGrn(client, {
@@ -542,6 +543,7 @@ exports.moveToStage = async (req, res) => {
               await paSvc.markPendingInventory(client, created.production_asset_id, req.user.user_id, {
                 source: 'qc2',
                 inventory_tag,
+                ticketId: ticket.ticket_id,
               });
             }
           });
@@ -671,6 +673,13 @@ exports.moveToStage = async (req, res) => {
         [effectiveToStage, ticket.serial_number]
       );
     }
+
+    const { reopenQcSerialForActivePipeline } = require('../services/qcProcessIntakeService');
+    await reopenQcSerialForActivePipeline(client, {
+      vendorSerialId: ticket.vendor_serial_id,
+      ticketId: ticket.ticket_id,
+      stageName: effectiveToStage,
+    });
 
     // Stop the previous segment. Keep the timer running automatically only when
     // the SAME technician carries the unit to the next stage (Diagnosis →

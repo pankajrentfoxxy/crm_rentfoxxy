@@ -66,7 +66,7 @@ function isAllowed(from, to) {
 
 async function loadSerial(db, serialId) {
   const r = await db.query(
-    `SELECT serial_id, serial_number, inventory_status,
+    `SELECT serial_id, serial_number, inventory_status, current_dc_number,
             COALESCE(inventory_asset_code, extra->>'ttspl_id') AS ttspl_id
        FROM vendor_serial_numbers
       WHERE serial_id = $1 AND deleted_at IS NULL`,
@@ -163,7 +163,7 @@ async function transitionAsset(db, {
        (serial_id, ttspl_id, from_status, to_status, reason, dc_number,
         customer_id, entity_code, actor_user_id)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-    [serialId, serial.ttspl_id, from, toStatus, reason, dcNumber,
+    [serialId, serial.ttspl_id, from, toStatus, reason ? String(reason).slice(0, 255) : null, dcNumber,
      customerId, entityCode, actorUserId]
   );
 
@@ -249,6 +249,25 @@ const markDelivered = async (db, serialId, {
     if ([STATUS.IN_STOCK, STATUS.RESERVED].includes(from)) {
       await markDispatched(client, serialId, {
         dcNumber, customerId, entityCode, dispatchMode, actorUserId, actorName,
+      });
+    } else if (
+      from === STATUS.RETURNED
+      && dcNumber
+      && String(serial.current_dc_number || '') === String(dcNumber)
+    ) {
+      // Outbound DC already holds this serial but status drifted to returned
+      // (e.g. support return on the old unit). Re-assert in_transit, then deliver.
+      await transitionAsset(client, {
+        serialId,
+        toStatus: STATUS.IN_TRANSIT,
+        dcNumber,
+        customerId,
+        entityCode,
+        dispatchMode,
+        reason: `In transit on ${dcNumber} (recovered from returned while on DC)`,
+        actorUserId,
+        actorName,
+        allowOverride: true,
       });
     } else {
       throw new Error(`Illegal inventory transition ${from} -> ${toStatus} (serial ${serialId})`);

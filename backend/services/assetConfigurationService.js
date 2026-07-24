@@ -3,6 +3,8 @@ const {
   normalizeEntityName,
   compareKey,
   collapseSpaces,
+  isPlaceholderGpu,
+  resolveBrandToCatalogName,
 } = require('../utils/assetConfigNormalize');
 const { normalizeSpecFilterOptions } = require('../utils/specFilterNormalize');
 const { cacheWrap, CACHE_TTL, cacheDelPattern } = require('../utils/cacheService');
@@ -1355,56 +1357,78 @@ function nameInAssetConfigList(list, value, entityKey) {
   return (list || []).some((name) => compareKey(entityKey, name) === key);
 }
 
+/** Normalize laptop spec fields to Asset Configuration labels before validate/save. */
+async function normalizeLaptopSpecForEdit(spec) {
+  const rawBrand = String(spec.brand || '').trim();
+  const brands = await listCascadeBrands();
+  const brand = resolveBrandToCatalogName(rawBrand, brands.map((b) => b.name));
+
+  return {
+    brand,
+    model: normalizeEntityName('models', spec.model, { brandName: brand }),
+    processor: normalizeEntityName('processors', spec.processor),
+    generation: normalizeEntityName('generations', spec.generation),
+    ram: normalizeEntityName('ram', spec.ram),
+    storage: normalizeEntityName('storage', spec.storage),
+    gpu: normalizeEntityName('gpus', spec.gpu),
+    screen_size: normalizeEntityName('screen-sizes', spec.screen_size),
+  };
+}
+
 /** Validate laptop spec fields against Asset Configuration (brand mappings + spec masters). */
 async function validateLaptopSpecForEdit(spec) {
   const errors = [];
-  const brand = String(spec.brand || '').trim();
-  const model = String(spec.model || '').trim();
-  const processor = String(spec.processor || '').trim();
-  const generation = String(spec.generation || '').trim();
-  const ram = String(spec.ram || '').trim();
-  const storage = String(spec.storage || '').trim();
-  const gpu = String(spec.gpu || '').trim();
-  const screenSize = String(spec.screen_size || '').trim();
+  const normalized = await normalizeLaptopSpecForEdit(spec);
+  const {
+    brand,
+    model,
+    processor,
+    generation,
+    ram,
+    storage,
+    gpu,
+    screen_size: screenSize,
+  } = normalized;
 
   const specMasters = await listCascadeSpecMasters();
   if (ram && !nameInAssetConfigList(specMasters.rams, ram, 'ram')) {
-    errors.push(`RAM "${ram}" is not in asset configuration`);
+    errors.push(`RAM "${spec.ram}" is not in asset configuration`);
   }
   if (storage && !nameInAssetConfigList(specMasters.storages, storage, 'storage')) {
-    errors.push(`Storage "${storage}" is not in asset configuration`);
+    errors.push(`Storage "${spec.storage}" is not in asset configuration`);
   }
-  if (gpu && !nameInAssetConfigList(specMasters.gpus, gpu, 'gpu')) {
-    errors.push(`GPU "${gpu}" is not in asset configuration`);
+  if (gpu && !isPlaceholderGpu(gpu) && !nameInAssetConfigList(specMasters.gpus, gpu, 'gpu')) {
+    errors.push(`GPU "${spec.gpu}" is not in asset configuration`);
   }
   if (screenSize && !nameInAssetConfigList(specMasters.screen_sizes, screenSize, 'screen-sizes')) {
-    errors.push(`Screen size "${screenSize}" is not in asset configuration`);
+    errors.push(`Screen size "${spec.screen_size}" is not in asset configuration`);
   }
 
   if (!brand) return errors;
 
   const brands = await listCascadeBrands();
   if (!nameInAssetConfigList(brands.map((b) => b.name), brand, 'brands')) {
-    errors.push(`Brand "${brand}" is not in asset configuration`);
+    errors.push(`Brand "${spec.brand}" is not in asset configuration`);
     return errors;
   }
 
   if (model) {
     const { models } = await listCascadeModelsForBrand(brand);
-    if (models.length && !nameInAssetConfigList(models, model, 'models')) {
-      errors.push(`Model "${model}" is not mapped to brand "${brand}" in asset configuration`);
+    const modelKey = compareKey('models', model, { brandName: brand });
+    if (models.length && !models.some((n) => compareKey('models', n, { brandName: brand }) === modelKey)) {
+      errors.push(`Model "${spec.model}" is not mapped to brand "${brand}" in asset configuration`);
     }
   }
   if (processor) {
     const { processors } = await listCascadeProcessorsForBrand(brand);
     if (processors.length && !nameInAssetConfigList(processors, processor, 'processors')) {
-      errors.push(`Processor "${processor}" is not mapped to brand "${brand}" in asset configuration`);
+      errors.push(`Processor "${spec.processor}" is not mapped to brand "${brand}" in asset configuration`);
     }
   }
   if (generation) {
     const { generations } = await listCascadeGenerationsForBrand(brand);
     if (generations.length && !nameInAssetConfigList(generations, generation, 'generations')) {
-      errors.push(`Generation "${generation}" is not mapped to brand "${brand}" in asset configuration`);
+      errors.push(`Generation "${spec.generation}" is not mapped to brand "${brand}" in asset configuration`);
     }
   }
 
@@ -1480,4 +1504,5 @@ module.exports = {
   listCascadeGenerationsForBrandProcessor,
   listActiveSpareBrandsForDropdown,
   validateLaptopSpecForEdit,
+  normalizeLaptopSpecForEdit,
 };

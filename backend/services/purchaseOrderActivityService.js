@@ -61,11 +61,12 @@ const ACTION_TITLES = {
   priority_updated: 'Priority Updated',
 };
 
-function actorFromUser(user = {}) {
+function actorFromUser(user) {
+  const u = user || {};
   return {
-    userId: user.user_id || user.userId || null,
-    userName: user.name || user.userName || 'System',
-    userRole: user.role || user.userRole || 'system',
+    userId: u.user_id || u.userId || null,
+    userName: u.name || u.userName || 'System',
+    userRole: u.role || u.userRole || 'system',
   };
 }
 

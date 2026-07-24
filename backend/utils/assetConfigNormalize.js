@@ -25,9 +25,45 @@ function ordinal(n) {
   return `${n}${ordinalSuffix(n)}`;
 }
 
-/** Trim + collapse whitespace. */
+/** Trim + collapse whitespace; strip common legal suffixes from WMI manufacturer strings. */
 function normalizeBrand(name) {
-  return collapseSpaces(name);
+  let s = collapseSpaces(name);
+  if (!s) return s;
+  s = s.replace(
+    /\s+(inc\.?|incorporated|corp\.?|corporation|ltd\.?|limited|co\.?|company|llc\.?|gmbh)$/i,
+    ''
+  );
+  return collapseSpaces(s);
+}
+
+/** Windows placeholder when GPU drivers are missing — never a real catalog GPU. */
+const PLACEHOLDER_GPU_PATTERNS = [
+  /^microsoft basic display adapter$/i,
+  /^standard vga graphics adapter$/i,
+  /^microsoft remote display adapter$/i,
+  /^microsoft hyper-v video$/i,
+];
+
+function isPlaceholderGpu(name) {
+  const s = collapseSpaces(name);
+  return Boolean(s && PLACEHOLDER_GPU_PATTERNS.some((re) => re.test(s)));
+}
+
+/** Map WMI / legacy brand labels to an Asset Configuration brand name when possible. */
+function resolveBrandToCatalogName(brandName, catalogNames = []) {
+  const normalized = normalizeBrand(brandName);
+  if (!normalized) return '';
+  const key = compareKey('brands', normalized);
+  const exact = catalogNames.find((n) => compareKey('brands', n) === key);
+  if (exact) return exact;
+
+  const firstToken = normalized.split(/\s+/)[0];
+  if (firstToken && firstToken !== normalized) {
+    const byToken = catalogNames.find((n) => compareKey('brands', n) === compareKey('brands', firstToken));
+    if (byToken) return byToken;
+  }
+
+  return normalized;
 }
 
 /** Remove brand prefix and common noise from model when brand is stored separately. */
@@ -202,7 +238,7 @@ function normalizeGpu(name) {
   return collapseSpaces(name);
 }
 
-/** 14-inch, 14 inch → 14" */
+/** 14-inch, 14 inch, bare 14 → 14" */
 function normalizeScreenSize(name) {
   const s = collapseSpaces(name);
   if (!s) return s;
@@ -212,6 +248,9 @@ function normalizeScreenSize(name) {
 
   const quoted = s.match(/^(\d+(?:\.\d+)?)\s*"$/);
   if (quoted) return `${quoted[1]}"`;
+
+  const bare = s.match(/^(\d+(?:\.\d+)?)$/);
+  if (bare) return `${bare[1]}"`;
 
   return s;
 }
@@ -253,4 +292,6 @@ module.exports = {
   normalizeEntityName,
   compareKey,
   collapseSpaces,
+  isPlaceholderGpu,
+  resolveBrandToCatalogName,
 };

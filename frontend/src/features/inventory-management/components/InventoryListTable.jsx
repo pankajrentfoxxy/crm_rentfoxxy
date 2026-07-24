@@ -770,6 +770,7 @@ export default function InventoryListTable({ routeKey }) {
         date_from: showDateFilter && dateFrom ? dateFrom : undefined,
         date_to: showDateFilter && dateTo ? dateTo : undefined,
         ...(isQcProcess && qcStageFilter === 'qc1_qc2' ? { ticket_stage_filter: 'qc1_qc2' } : {}),
+        ...(isQcProcess && qcStageFilter === 'dispatch_qc' ? { ticket_stage_filter: 'dispatch_qc' } : {}),
         ...(showSpecFilter ? debouncedSpecParams : {}),
       }, { signal: controller.signal });
       if (controller.signal.aborted) return;
@@ -862,6 +863,7 @@ export default function InventoryListTable({ routeKey }) {
         date_from: showDateFilter && dateFrom ? dateFrom : undefined,
         date_to: showDateFilter && dateTo ? dateTo : undefined,
         ...(isQcProcess && qcStageFilter === 'qc1_qc2' ? { ticket_stage_filter: 'qc1_qc2' } : {}),
+        ...(isQcProcess && qcStageFilter === 'dispatch_qc' ? { ticket_stage_filter: 'dispatch_qc' } : {}),
         ...(showSpecFilter ? debouncedSpecParams : {}),
       });
       toast.success('Excel export downloaded');
@@ -957,6 +959,7 @@ export default function InventoryListTable({ routeKey }) {
           {[
             { key: 'all', label: 'All' },
             { key: 'qc1_qc2', label: 'QC1 + QC2' },
+            { key: 'dispatch_qc', label: 'Dispatch QC' },
           ].map((opt) => (
             <button
               key={opt.key}

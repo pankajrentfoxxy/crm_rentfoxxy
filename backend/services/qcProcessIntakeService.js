@@ -19,6 +19,62 @@ const { vacateWarehouseLocation } = require('./warehouseLocationService');
 const PO_TYPES = ['rental_purchase', 'rent_to_own', 'direct_purchase'];
 const DEFAULT_PO_STATE = 'Maharashtra';
 
+const FLOOR_PIPELINE_STAGES = new Set([
+  'Diagnosis',
+  'Assembly & Software',
+  'Final Testing',
+  'Chip Level Repair',
+  'Body & Paint',
+  'QC1',
+  'QC2',
+  'Dispatch QC',
+  'Pending Inventory',
+]);
+
+/** After Dispatch QC fail or rework routing — show unit on QC Process again. */
+async function reopenQcSerialForActivePipeline(db, { vendorSerialId, ticketId, stageName }) {
+  if (!vendorSerialId || !FLOOR_PIPELINE_STAGES.has(stageName)) return { applied: false };
+
+  const r = await db.query(
+    `UPDATE vendor_serial_numbers
+        SET qc_status = 'pending',
+            inventory_status = CASE
+              WHEN inventory_status IN ('qc_failed', 'in_repair') THEN 'in_stock'
+              ELSE inventory_status
+            END,
+            extra = (COALESCE(extra, '{}'::jsonb) - 'dispatch_qc_failed_at')
+                    || jsonb_build_object('status', 'pending'),
+            updated_at = NOW()
+      WHERE serial_id = $1 AND deleted_at IS NULL
+        AND (
+          COALESCE(NULLIF(TRIM(qc_status), ''), extra->>'status', 'pending') = 'failed'
+          OR inventory_status = 'qc_failed'
+        )
+      RETURNING serial_id`,
+    [vendorSerialId]
+  );
+
+  if (ticketId || vendorSerialId) {
+    await db.query(
+      `UPDATE production_assets
+          SET status = 'in_production', updated_at = NOW()
+        WHERE status = 'dispatch_qc_failed'
+          AND (${ticketId ? 'ticket_id = $1' : 'FALSE'} OR vendor_serial_id = $${ticketId ? 2 : 1})`,
+      ticketId ? [ticketId, vendorSerialId] : [vendorSerialId]
+    );
+  }
+
+  if (r.rows.length) {
+    try {
+      const { invalidateInventoryListCachesFireAndForget } = require('./inventoryListCache');
+      invalidateInventoryListCachesFireAndForget();
+    } catch {
+      // optional
+    }
+  }
+  return { applied: r.rows.length > 0 };
+}
+
 function normalizeStateValue(s) {
   return String(s || '')
     .trim()
@@ -943,6 +999,8 @@ module.exports = {
   createProductionTicketForQcSerial,
   ensureFloorTicketForQcSerial,
   findActiveFloorTicket,
+  reopenQcSerialForActivePipeline,
+  FLOOR_PIPELINE_STAGES,
   syncTicketHardwareConfig,
   resolveItemDescription,
   buildSerialSpecContext,

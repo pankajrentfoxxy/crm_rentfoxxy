@@ -139,6 +139,28 @@ function buildListWhere(segment, params, alias = 's') {
   params.push(cfg.status);
   const i = params.length;
 
+  // QC Process: pending units + failed units still on an active floor ticket (e.g. after
+  // Dispatch QC fail then manual stage routing back to Dispatch QC).
+  if (segment === 'qc_process' && cfg.status === 'pending') {
+    params.push('failed');
+    const failedIdx = params.length;
+    const qcPendingReceiveSql = ` AND COALESCE(${alias}.extra->>'awaiting_inventory_receive', 'false') <> 'true'`;
+    return {
+      sql: ` AND ${alias}.po_id IS NOT NULL AND (
+        ${effectiveStatusSql(alias)} = $${i}
+        OR (
+          ${effectiveStatusSql(alias)} = $${failedIdx}
+          AND EXISTS (
+            SELECT 1 FROM tickets tk
+            WHERE tk.vendor_serial_id = ${alias}.serial_id
+              AND tk.status IN ('in_progress', 'on_hold')
+          )
+        )
+      )${qcPendingReceiveSql}`,
+      params,
+    };
+  }
+
   // Migrated ERP rows often store out_for_repare as inventory_status = in_repair
   // while qc_status / extra.action_status carry the ERP label.
   if (cfg.status === 'out_for_repare') {

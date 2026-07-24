@@ -11,9 +11,9 @@ const {
 const columnExistsCache = new Map();
 const { appendDateRangeClauses, appendDateRangeToWhere } = require('../utils/dateRangeFilter');
 
-/** Dispatch role only: pending SOs live in Pending Orders; Sales Orders list after accept. */
-function dispatchWorkflowListFilterClauses(params, { role, userId } = {}) {
-  if (role !== 'dispatch' || !userId) {
+/** Dispatch role with assigned scope: pending SOs live in Pending Orders; Sales Orders list after accept. */
+function dispatchWorkflowListFilterClauses(params, { role, userId, restrictDispatchWorkflow = false } = {}) {
+  if (role !== 'dispatch' || !userId || !restrictDispatchWorkflow) {
     return { sql: '' };
   }
 
@@ -50,10 +50,16 @@ function appendDispatchWorkflowListFilters(where, params, viewer = {}) {
   return `${where} AND ${sql}`;
 }
 
-async function assertSalesOrderVisibleToUser(salesOrderNumber, user) {
+async function assertSalesOrderVisibleToUser(salesOrderNumber, user, permissionCache) {
   const role = user?.role;
   const userId = user?.user_id;
   if (role === 'super_admin' || role === 'admin') return;
+
+  if (role === 'dispatch') {
+    const { hasUnrestrictedSalesOrderAccess } = require('./dataScopeService');
+    const fullAccess = await hasUnrestrictedSalesOrderAccess(userId, role, permissionCache);
+    if (fullAccess) return;
+  }
 
   const r = await pool.query(
     `SELECT status, assigned_user_id, accepted_by
@@ -495,7 +501,7 @@ async function getQuotationLines(quotationNumber) {
 async function listSalesOrdersGrouped({
   page = 1, limit = 20, search = '', assignedUserId = null, dateFrom, dateTo,
   customerId = null, status = '', entityScope = '', orderType = '',
-  viewerRole = null, viewerUserId = null,
+  viewerRole = null, viewerUserId = null, restrictDispatchWorkflow = false,
 } = {}) {
   const hasEntityCode = await tableColumnExists('sales_order_lines', 'entity_code');
   const entitySelect = hasEntityCode ? 'entity_code' : `'rentfoxxy' AS entity_code`;
@@ -555,6 +561,7 @@ async function listSalesOrdersGrouped({
   where = appendDispatchWorkflowListFilters(where, params, {
     role: viewerRole,
     userId: viewerUserId,
+    restrictDispatchWorkflow,
   });
   const statsQuery = `
     WITH filtered AS (
@@ -1247,15 +1254,27 @@ async function countReturnDcPickupPairs() {
   return pairs.size;
 }
 
-async function getOperationCounts({ role = null, userId = null } = {}) {
+async function getOperationCounts({
+  role = null,
+  userId = null,
+  restrictDispatchSale = false,
+  restrictDispatchRental = false,
+  restrictDispatchAll = false,
+} = {}) {
   const saleScope = salesOrderScopeWhere('sale');
   const rentalScope = salesOrderScopeWhere('rental');
   const saleParams = [];
   const rentalParams = [];
   const allParams = [];
-  const saleDispatchFilter = dispatchWorkflowListFilterClauses(saleParams, { role, userId }).sql;
-  const rentalDispatchFilter = dispatchWorkflowListFilterClauses(rentalParams, { role, userId }).sql;
-  const allDispatchFilter = dispatchWorkflowListFilterClauses(allParams, { role, userId }).sql;
+  const saleDispatchFilter = dispatchWorkflowListFilterClauses(saleParams, {
+    role, userId, restrictDispatchWorkflow: restrictDispatchSale,
+  }).sql;
+  const rentalDispatchFilter = dispatchWorkflowListFilterClauses(rentalParams, {
+    role, userId, restrictDispatchWorkflow: restrictDispatchRental,
+  }).sql;
+  const allDispatchFilter = dispatchWorkflowListFilterClauses(allParams, {
+    role, userId, restrictDispatchWorkflow: restrictDispatchAll,
+  }).sql;
   const saleWhere = saleDispatchFilter ? `WHERE ${saleScope} AND ${saleDispatchFilter}` : `WHERE ${saleScope}`;
   const rentalWhere = rentalDispatchFilter ? `WHERE ${rentalScope} AND ${rentalDispatchFilter}` : `WHERE ${rentalScope}`;
   const allWhere = allDispatchFilter ? `WHERE ${allDispatchFilter}` : '';
