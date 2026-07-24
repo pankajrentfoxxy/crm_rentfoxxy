@@ -40,7 +40,7 @@ const { logTtsplEvent } = require('../services/ttsplAuditService');
 const replacementFlow = require('../services/supportReplacementFlowService');
 const supportServiceDcService = require('../services/supportServiceDcService');
 const { regenerateReturnDcPdf, regenerateReturnDcPdfByRdc } = require('../services/returnDcPdfService');
-const { isRestrictedToAssigned, scopeUserId, salesOrderScopeSection } = require('../services/dataScopeService');
+const { isRestrictedToAssigned, scopeUserId, salesOrderScopeSection, resolveSalesOrderListOrderType, assertReplacementSalesOrderAccessIfScoped } = require('../services/dataScopeService');
 const {
   ACTIVITY_TYPES,
   safeLogSalesOrderActivity,
@@ -688,6 +688,12 @@ exports.listSalesOrders = async (req, res) => {
     const assignedOnly = await isRestrictedToAssigned(req, scopeSection);
     const assignedUserId = assignedOnly ? scopeUserId(req.user) : null;
     const restrictDispatchWorkflow = req.user?.role === 'dispatch' && assignedOnly;
+    if (!req.permissionCache) req.permissionCache = {};
+    const orderType = await resolveSalesOrderListOrderType(
+      req.user,
+      req.query.order_type || '',
+      req.permissionCache
+    );
     const data = await listSalesOrdersGrouped({
       page: parseInt(req.query.page, 10) || 1,
       limit: Math.min(parseInt(req.query.limit, 10) || 20, 100),
@@ -698,7 +704,7 @@ exports.listSalesOrders = async (req, res) => {
       customerId: req.query.customer_id || null,
       status: req.query.status || '',
       entityScope: req.query.entity_scope || '',
-      orderType: req.query.order_type || '',
+      orderType,
       viewerRole: req.user?.role || null,
       viewerUserId: req.user?.user_id || null,
       restrictDispatchWorkflow,
@@ -713,6 +719,12 @@ exports.getSalesOrder = async (req, res) => {
   try {
     if (!req.dispatchSoAccess) {
       await assertSalesOrderVisibleToUser(req.params.salesOrderNumber, req.user);
+      if (!req.permissionCache) req.permissionCache = {};
+      await assertReplacementSalesOrderAccessIfScoped(
+        req.params.salesOrderNumber,
+        req.user,
+        req.permissionCache
+      );
     }
     const lines = await getSalesOrderLines(req.params.salesOrderNumber);
     if (!lines.length) {
@@ -2475,6 +2487,8 @@ exports.getSoWithPayments = async (req, res) => {
     const soNumber = req.params.soNumber;
     if (!req.dispatchSoAccess) {
       await assertSalesOrderVisibleToUser(soNumber, req.user);
+      if (!req.permissionCache) req.permissionCache = {};
+      await assertReplacementSalesOrderAccessIfScoped(soNumber, req.user, req.permissionCache);
     }
     const lines = await getSalesOrderLines(soNumber);
     if (!lines.length) {

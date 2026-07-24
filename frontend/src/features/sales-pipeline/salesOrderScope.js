@@ -35,12 +35,27 @@ export const SO_SCOPES = {
       { value: 'demo', label: 'Demo (Rental)' },
     ],
   },
+  replacement: {
+    key: 'replacement',
+    permissionSection: 'sales_orders_replacement',
+    listPath: '/sales-pipeline/sales-orders-replacement',
+    detailSegment: 'sales-orders-replacement',
+    brandName: 'Support',
+    brandColor: '#db2777',
+    title: 'Replacement Sales Orders',
+    subtitle: 'Support replacement orders (all)',
+    defaultQuotationType: 'rental',
+    defaultBranch: 'rentfoxxy',
+    allowedTypes: ['rental'],
+    typeOptions: [],
+  },
 };
 
 export const SO_PERMISSION_SECTIONS = [
   'sales_orders_doc',
   'sales_orders_sale',
   'sales_orders_rental',
+  'sales_orders_replacement',
 ];
 
 export function getSoScopeConfig(scope) {
@@ -50,6 +65,7 @@ export function getSoScopeConfig(scope) {
 export function resolveSoScopeFromPath(pathname = '') {
   if (pathname.includes('/sales-orders-sale')) return 'sale';
   if (pathname.includes('/sales-orders-rental')) return 'rental';
+  if (pathname.includes('/sales-orders-replacement')) return 'replacement';
   return null;
 }
 
@@ -76,6 +92,10 @@ export function salesOrderDetailPath(soNumber, scope) {
   if (!soNumber) return salesOrderListPath(scope);
   const segment = getSoScopeConfig(scope)?.detailSegment || 'sales-orders';
   return `/sales-pipeline/${segment}/${encodeURIComponent(soNumber)}`;
+}
+
+export function replacementSalesOrderDetailPath(soNumber) {
+  return salesOrderDetailPath(soNumber, 'replacement');
 }
 
 export function soPermissionSectionsForGate() {

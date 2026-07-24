@@ -5,6 +5,7 @@ import { FileText, Loader2, PackageCheck, Truck } from 'lucide-react';
 import api from '../../../utils/api';
 import PickupSetupForm from './PickupSetupForm';
 import { uploadAssetUrl } from '../utils';
+import { replacementSalesOrderDetailPath } from '../../../features/sales-pipeline/salesOrderScope';
 
 function dcPurposeLabel(purpose) {
   if (purpose === 'service_return') return 'Service Return';
@@ -143,7 +144,7 @@ export default function ServiceDcPanel({ ticket, pickups, replacementOrders = []
                   )}
                   {sdc.sales_order_number && (
                     <Link
-                      to={`/sales-pipeline/sales-orders/${encodeURIComponent(sdc.sales_order_number)}`}
+                      to={replacementSalesOrderDetailPath(sdc.sales_order_number)}
                       className="text-slate-600 hover:underline"
                     >
                       SO {sdc.sales_order_number}

@@ -1,8 +1,22 @@
+const pool = require('../config/db');
 const {
   getUserPermissionRow,
   getRolePermissionRow,
   hasPermission,
 } = require('./permissionService');
+
+const SO_VIEW_SECTIONS = [
+  'sales_orders_doc',
+  'sales_orders_sale',
+  'sales_orders_rental',
+  'sales_orders_replacement',
+];
+
+const SO_STANDARD_VIEW_SECTIONS = [
+  'sales_orders_doc',
+  'sales_orders_sale',
+  'sales_orders_rental',
+];
 
 const DATA_SCOPE_ALL = 'all';
 const DATA_SCOPE_ASSIGNED = 'assigned';
@@ -30,7 +44,52 @@ function salesOrderScopeSection(entityScope) {
   const scope = String(entityScope || '').trim().toLowerCase();
   if (scope === 'sale') return 'sales_orders_sale';
   if (scope === 'rental') return 'sales_orders_rental';
+  if (scope === 'replacement') return 'sales_orders_replacement';
   return 'sales_orders_doc';
+}
+
+/** Users with replacement SO access but no standard sale/rental/doc list access. */
+async function userHasReplacementOnlySalesOrderAccess(userId, role, cache) {
+  if (role === 'super_admin' || role === 'admin') return false;
+  const hasReplacement = await hasPermission(userId, role, 'sales_orders_replacement', 'can_view', cache);
+  if (!hasReplacement) return false;
+  for (const section of SO_STANDARD_VIEW_SECTIONS) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await hasPermission(userId, role, section, 'can_view', cache)) return false;
+  }
+  return true;
+}
+
+async function assertReplacementSalesOrderAccessIfScoped(salesOrderNumber, user, cache) {
+  if (!user || !salesOrderNumber) return;
+  if (user.role === 'super_admin' || user.role === 'admin') return;
+  const replacementOnly = await userHasReplacementOnlySalesOrderAccess(
+    user.user_id,
+    user.role,
+    cache
+  );
+  if (!replacementOnly) return;
+  const r = await pool.query(
+    `SELECT 1 FROM support_replacement_orders
+      WHERE sales_order_number = $1
+      LIMIT 1`,
+    [salesOrderNumber]
+  );
+  if (!r.rows.length) {
+    const err = new Error('Access limited to replacement sales orders only');
+    err.status = 403;
+    throw err;
+  }
+}
+
+async function resolveSalesOrderListOrderType(user, requestedOrderType, cache) {
+  const replacementOnly = await userHasReplacementOnlySalesOrderAccess(
+    user?.user_id,
+    user?.role,
+    cache
+  );
+  if (replacementOnly) return 'replacement';
+  return String(requestedOrderType || '').trim().toLowerCase();
 }
 
 function sectionsToCheck(section) {
@@ -221,12 +280,16 @@ function appendSupportAssignedFilter(userId, params) {
 module.exports = {
   DATA_SCOPE_ALL,
   DATA_SCOPE_ASSIGNED,
+  SO_VIEW_SECTIONS,
   sectionsToCheck,
   scopeUserId,
   getEffectiveDataScope,
   isRestrictedToAssigned,
   isRestrictedToAssignedAny,
   salesOrderScopeSection,
+  userHasReplacementOnlySalesOrderAccess,
+  assertReplacementSalesOrderAccessIfScoped,
+  resolveSalesOrderListOrderType,
   hasUnrestrictedSalesOrderAccess,
   resolveTicketListScope,
   buildTicketListAssignmentClause,
