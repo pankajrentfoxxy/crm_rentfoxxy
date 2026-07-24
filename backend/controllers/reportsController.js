@@ -3,6 +3,7 @@ const { getDisplayTeams, getTeamIdsForFilter } = require('../utils/teamUtils');
 const { getLaptopReport, getTicketRows, getStagePerformanceTickets } = require('../services/laptopReportService');
 const { getSalesOrderReport, getSalesOrderReportDrilldown } = require('../services/salesOrderReportService');
 const supportQuery = require('../services/supportQuery');
+const { getInwardOutwardSummary, getInwardOutwardFilters } = require('../services/inwardOutwardReportService');
 
 function formatDuration(seconds) {
     if (seconds == null || !Number.isFinite(seconds)) return '—';
@@ -2030,6 +2031,36 @@ exports.getSupportStats = async (req, res) => {
     } catch (error) {
         console.error('getSupportStats error:', error);
         res.status(500).json({ success: false, message: 'Server error generating support stats' });
+    }
+};
+
+exports.getInwardOutwardSummary = async (req, res) => {
+    try {
+        const { from, to } = resolveDateRange(req.query);
+        const summary = await getInwardOutwardSummary({
+            from,
+            to,
+            entity: req.query.entity || '',
+            branch: req.query.branch || '',
+            vendor: req.query.vendor || '',
+            customer: req.query.customer || '',
+            courier: req.query.courier || '',
+            user: req.query.user || '',
+        });
+        res.json({ success: true, summary });
+    } catch (error) {
+        console.error('getInwardOutwardSummary error:', error);
+        res.status(500).json({ success: false, message: 'Server error generating inward/outward summary' });
+    }
+};
+
+exports.getInwardOutwardFilters = async (_req, res) => {
+    try {
+        const filters = await getInwardOutwardFilters();
+        res.json({ success: true, ...filters });
+    } catch (error) {
+        console.error('getInwardOutwardFilters error:', error);
+        res.status(500).json({ success: false, message: 'Server error loading inward/outward filters' });
     }
 };
 

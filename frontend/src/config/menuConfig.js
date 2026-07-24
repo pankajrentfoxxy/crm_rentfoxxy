@@ -22,6 +22,7 @@ import {
   DollarSign,
   RefreshCw,
   Headphones,
+  ArrowLeftRight,
 } from 'lucide-react';
 
 /** Vendor Management accordion (procurement only — billing lives under Finance).
@@ -100,6 +101,7 @@ export const reportsMenuItems = [
   { icon: ClipboardCheck, label: 'Laptop Report', path: '/reports/laptop-report', section: 'reports_access' },
   { icon: ShoppingCart, label: 'Sales Order Report', path: '/reports/sales-order-report', section: 'reports_access' },
   { icon: Headphones, label: 'Daily Support Summary', path: '/reports/support-daily-summary', section: 'reports_access' },
+  { icon: ArrowLeftRight, label: 'Inward & Outward Summary', path: '/reports/inward-outward-summary', section: 'reports_access' },
 ];
 
 // Each section matches that page's REAL backend + route guard exactly, so a user

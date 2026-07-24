@@ -21,5 +21,7 @@ router.post('/export', authMiddleware, cp('reports_export', 'create'), reportsCo
 router.get('/support-stats', authMiddleware, reportsView, reportsController.getSupportStats);
 router.get('/support-daily-summary', authMiddleware, reportsView, reportsController.getSupportDailySummary);
 router.get('/support-daily-summary/filters', authMiddleware, reportsView, reportsController.getSupportSummaryFilters);
+router.get('/inward-outward-summary', authMiddleware, reportsView, reportsController.getInwardOutwardSummary);
+router.get('/inward-outward-summary/filters', authMiddleware, reportsView, reportsController.getInwardOutwardFilters);
 
 module.exports = router;

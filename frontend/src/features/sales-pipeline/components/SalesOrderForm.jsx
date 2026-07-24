@@ -526,6 +526,49 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
               <input type="date" className="border rounded-lg px-3 py-2 text-sm" value={form.advance_due_date} onChange={(e) => setForm((f) => ({ ...f, advance_due_date: e.target.value }))} />
             </div>
           )}
+          <div className="border border-gray-200 rounded-lg overflow-hidden">
+            <div className="px-3 py-2 bg-gray-50 border-b flex items-center justify-between">
+              <p className="text-xs font-semibold text-gray-700">Configuration Review — verify before creating</p>
+              <span className="text-[11px] text-gray-500">{countLaptops(lines)} unit(s)</span>
+            </div>
+            <div className="divide-y">
+              {lines.some((l) => l.brand || l.model_name || l.processor || l.ram || l.storage) ? (
+                lines.map((l, i) => {
+                  const isEmpty = !(l.brand || l.model_name || l.processor || l.ram || l.storage);
+                  if (isEmpty) return null;
+                  const missing = SO_ASSET_REQUIRED_FIELDS.filter((f) => !String(l[f] || '').trim());
+                  const extras = [
+                    l.locking_period && `Lock-in: ${l.locking_period}`,
+                    l.technical_warranty && `Warranty: ${l.technical_warranty}`,
+                    l.battery_charger_warranty && `Battery/Charger: ${l.battery_charger_warranty}`,
+                  ].filter(Boolean).join(' · ');
+                  return (
+                    <div key={i} className="px-3 py-2 text-sm">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="font-medium text-gray-900 truncate">
+                            {[l.brand, l.model_name].filter(Boolean).join(' ') || '—'}
+                          </p>
+                          <p className="text-xs text-gray-600">{formatConfig(l) || '—'}</p>
+                          {extras ? <p className="text-[11px] text-gray-400 mt-0.5">{extras}</p> : null}
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className="text-xs text-gray-500">Qty {Number(l.quantity) || 0} × {formatCurrency(l.rate)}</p>
+                          <p className="font-semibold text-gray-800 tabular-nums">{formatCurrency(lineTotal(l))}</p>
+                        </div>
+                      </div>
+                      {missing.length > 0 && (
+                        <p className="text-[11px] text-red-600 mt-1">⚠ Missing required: {missing.join(', ')}</p>
+                      )}
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="px-3 py-4 text-center text-sm text-gray-400">No configuration added yet</div>
+              )}
+            </div>
+          </div>
+
           <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 text-sm space-y-1">
             <p>Subtotal: <strong>{formatCurrency(gstTotals.subtotal)}</strong></p>
             {gstTotals.gst_type === 'inter' ? (
