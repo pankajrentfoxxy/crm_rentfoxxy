@@ -1385,6 +1385,28 @@ async function healStaleReturnedPassedSerials(db = pool) {
   );
 }
 
+/**
+ * Dispatch QC fail can detach a serial from the SO, but completing the rework ticket
+ * used to force inventory_status=reserved anyway — heal those units for attach/search.
+ */
+async function healStaleReservedPassedSerials(db = pool) {
+  await db.query(
+    `UPDATE vendor_serial_numbers vsn SET
+        inventory_status = 'in_stock',
+        extra = (COALESCE(vsn.extra, '{}'::jsonb) - 'awaiting_inventory_receive')
+                || jsonb_build_object('status', 'passed'),
+        updated_at = NOW()
+      WHERE vsn.deleted_at IS NULL
+        AND COALESCE(NULLIF(TRIM(vsn.qc_status), ''), NULLIF(TRIM(vsn.extra->>'status'), ''), 'pending') = 'passed'
+        AND vsn.inventory_status = 'reserved'
+        AND NOT EXISTS (
+          SELECT 1 FROM sales_order_serials sos
+           WHERE sos.serial_id = vsn.serial_id
+             AND sos.status = 'attached'
+        )`
+  );
+}
+
 async function searchAvailableInventory({
   brand,
   model_name,
@@ -1407,6 +1429,7 @@ async function searchAvailableInventory({
   const candidateLimit = hasSpecFilter ? 25000 : responseLimit;
 
   await healStaleReturnedPassedSerials();
+  await healStaleReservedPassedSerials();
 
   const params = [];
   let searchSql = '';

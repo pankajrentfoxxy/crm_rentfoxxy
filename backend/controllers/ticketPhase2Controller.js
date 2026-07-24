@@ -574,22 +574,31 @@ exports.moveToStage = async (req, res) => {
            WHERE pre_dispatch_qc_ticket_id = $1`,
           [ticket.ticket_id]
         );
-        // SO-level allocation: mark this laptop QC-passed and keep it reserved
-        // (a passed pre-dispatch unit stays allocated to its order, not back to stock).
-        await client.query(
-          `UPDATE sales_order_serials SET qc_status = 'passed', updated_at = NOW()
-           WHERE qc_ticket_id = $1 AND status = 'attached'`,
+        const attachedAlloc = await client.query(
+          `SELECT allocation_id FROM sales_order_serials
+            WHERE qc_ticket_id = $1 AND status = 'attached'
+            LIMIT 1`,
           [ticket.ticket_id]
         );
-        if (ticket.vendor_serial_id) {
+        if (attachedAlloc.rows.length) {
+          // Still on the SO — mark QC passed and keep reserved (not back on the shelf).
           await client.query(
-            `UPDATE vendor_serial_numbers SET inventory_status = 'reserved', updated_at = NOW()
-             WHERE serial_id = $1
-               AND COALESCE(inventory_status,'in_stock') NOT IN ('rented','sold','on_demo','in_transit','returned')`,
-            [ticket.vendor_serial_id]
+            `UPDATE sales_order_serials SET qc_status = 'passed', updated_at = NOW()
+             WHERE qc_ticket_id = $1 AND status = 'attached'`,
+            [ticket.ticket_id]
           );
-          await vacateWarehouseLocation(client, ticket.vendor_serial_id);
+          if (ticket.vendor_serial_id) {
+            await client.query(
+              `UPDATE vendor_serial_numbers SET inventory_status = 'reserved', updated_at = NOW()
+               WHERE serial_id = $1
+                 AND COALESCE(inventory_status,'in_stock') NOT IN ('rented','sold','on_demo','in_transit','returned')`,
+              [ticket.vendor_serial_id]
+            );
+            await vacateWarehouseLocation(client, ticket.vendor_serial_id);
+          }
         }
+        // Detached after Dispatch QC fail + floor rework: applyInventoryCompletion already
+        // set in_stock — do not re-reserve or the unit disappears from SO attach lists.
       }
     } else {
       updates.push(`status = 'in_progress'`);
