@@ -2,16 +2,80 @@
 const router = require('express').Router();
 const ctrl   = require('../controllers/supportPartsController');
 const { authMiddleware } = require('../middleware/auth');
+const { hasPermission } = require('../services/permissionService');
+
+const WAREHOUSE_ROLES = new Set(['warehouse', 'admin', 'support_lead', 'manager', 'super_admin']);
+
+async function userHasSupportPartChallanAccess(req, action = 'can_view') {
+  if (!req.user) return false;
+  if (req.user.role === 'super_admin') return true;
+  if (WAREHOUSE_ROLES.has(req.user.role)) return true;
+  if (!req.permissionCache) req.permissionCache = {};
+  return hasPermission(
+    req.user.user_id,
+    req.user.role,
+    'support_part_challan',
+    action,
+    req.permissionCache
+  );
+}
 
 const requireWarehouse = (req, res, next) => {
-  if (!['warehouse', 'admin', 'support_lead', 'manager', 'super_admin'].includes(req.user?.role))
-    return res.status(403).json({ success: false, message: 'Warehouse access required' });
-  next();
+  (async () => {
+    const allowed = await userHasSupportPartChallanAccess(req, 'can_view');
+    if (!allowed) {
+      return res.status(403).json({ success: false, message: 'Support part queue access required' });
+    }
+    return next();
+  })().catch((err) => {
+    console.error('requireWarehouse:', err);
+    return res.status(500).json({ success: false, message: 'Server error checking permissions' });
+  });
 };
+
+const requireWarehouseEdit = (req, res, next) => {
+  (async () => {
+    const allowed = await userHasSupportPartChallanAccess(req, 'can_edit');
+    if (!allowed) {
+      return res.status(403).json({ success: false, message: 'Support part queue edit access required' });
+    }
+    return next();
+  })().catch((err) => {
+    console.error('requireWarehouseEdit:', err);
+    return res.status(500).json({ success: false, message: 'Server error checking permissions' });
+  });
+};
+
+const SUPPORT_PARTS_ROLES = new Set([
+  'support_tech', 'support_lead', 'warehouse', 'admin', 'manager', 'super_admin',
+]);
+
+async function userHasSupportPartRequestAccess(req, action = 'can_view') {
+  if (!req.user) return false;
+  if (req.user.role === 'super_admin') return true;
+  if (SUPPORT_PARTS_ROLES.has(req.user.role)) return true;
+  if (!req.permissionCache) req.permissionCache = {};
+  return hasPermission(
+    req.user.user_id,
+    req.user.role,
+    'support_part_requests',
+    action,
+    req.permissionCache
+  );
+}
+
 const requireSupportOrWarehouse = (req, res, next) => {
-  if (!['support_tech', 'support_lead', 'warehouse', 'admin', 'manager', 'super_admin'].includes(req.user?.role))
-    return res.status(403).json({ success: false, message: 'Not authorised' });
-  next();
+  (async () => {
+    const challan = await userHasSupportPartChallanAccess(req, 'can_view');
+    const requests = await userHasSupportPartRequestAccess(req, 'can_view');
+    if (!challan && !requests) {
+      return res.status(403).json({ success: false, message: 'Not authorised' });
+    }
+    return next();
+  })().catch((err) => {
+    console.error('requireSupportOrWarehouse:', err);
+    return res.status(500).json({ success: false, message: 'Server error checking permissions' });
+  });
 };
 
 router.use(authMiddleware);
@@ -19,12 +83,12 @@ router.use(authMiddleware);
 // Part requests
 router.post('/requests',                          requireSupportOrWarehouse, ctrl.raiseSupportPartRequest);
 router.get('/requests',                           requireSupportOrWarehouse, ctrl.listSupportPartRequests);
-router.post('/requests/approve-and-challan',      requireWarehouse,          ctrl.approveAndGenerateChallan);
+router.post('/requests/approve-and-challan',      requireWarehouseEdit,      ctrl.approveAndGenerateChallan);
 router.patch('/requests/:requestId/mark-used',    requireSupportOrWarehouse, ctrl.markPartUsed);
 router.post('/requests/:requestId/return',        requireSupportOrWarehouse, ctrl.returnPart);
-router.patch('/requests/:requestId/accept-return', requireWarehouse,         ctrl.acceptReturn);
+router.patch('/requests/:requestId/accept-return', requireWarehouseEdit,         ctrl.acceptReturn);
 router.post('/requests/:requestId/request-reassign', requireSupportOrWarehouse, ctrl.requestReassign);
-router.patch('/requests/:requestId/resolve-reassign', requireWarehouse,        ctrl.resolveReassign);
+router.patch('/requests/:requestId/resolve-reassign', requireWarehouseEdit,        ctrl.resolveReassign);
 
 // Parts movement history (inventory ledger)
 router.get('/history',                             requireWarehouse, ctrl.getPartsHistory);
