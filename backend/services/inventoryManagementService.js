@@ -156,7 +156,7 @@ function buildListWhere(segment, params, alias = 's') {
               AND tk.status IN ('in_progress', 'on_hold')
           )
         )
-      )${qcPendingReceiveSql}`,
+      )${qcPendingReceiveSql}${offShelfInventoryFilterSql(alias)}`,
       params,
     };
   }
@@ -176,9 +176,11 @@ function buildListWhere(segment, params, alias = 's') {
     };
   }
 
-  const shelfSql = cfg.status === 'passed' ? offShelfInventoryFilterSql(alias) : '';
+  const shelfSql = ['passed', 'qc_pending'].includes(cfg.status)
+    ? offShelfInventoryFilterSql(alias)
+    : '';
   const pendingReceiveSql = cfg.status === 'passed' ? pendingInventoryReceiveFilterSql(alias) : '';
-  const qcPendingReceiveSql = cfg.status === 'pending'
+  const qcPendingReceiveSql = ['pending', 'qc_pending'].includes(cfg.status)
     ? ` AND COALESCE(${alias}.extra->>'awaiting_inventory_receive', 'false') <> 'true'`
     : '';
   return {

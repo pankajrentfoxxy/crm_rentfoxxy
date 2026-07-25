@@ -38,6 +38,42 @@ function bucketLabel(value) {
   return BUCKET_OPTIONS.find((o) => o.value === value)?.label || value;
 }
 
+function UnmovableAssetsPanel({ title, tone, items, emptyHint }) {
+  if (!items?.length) return null;
+  const toneClasses = tone === 'amber'
+    ? 'border-amber-200 bg-amber-50 text-amber-950'
+    : 'border-slate-200 bg-slate-50 text-slate-800';
+
+  return (
+    <div className={`rounded-lg border px-3 py-2 text-xs ${toneClasses}`}>
+      <p className="font-semibold mb-2">{title} ({items.length})</p>
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-left">
+          <thead>
+            <tr className="text-[10px] uppercase tracking-wide opacity-70">
+              <th className="pr-4 pb-1 font-semibold">Searched</th>
+              <th className="pr-4 pb-1 font-semibold">TTSPL</th>
+              <th className="pr-4 pb-1 font-semibold">Serial</th>
+              <th className="pb-1 font-semibold">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={`${item.serial_id}-${item.matched_term || item.unique_product_serial}`} className="border-t border-black/5">
+                <td className="py-1.5 pr-4 font-mono">{item.matched_term || '—'}</td>
+                <td className="py-1.5 pr-4 font-mono font-semibold">{item.unique_product_serial || '—'}</td>
+                <td className="py-1.5 pr-4 font-mono">{item.serial_number || '—'}</td>
+                <td className="py-1.5 capitalize">{item.inventory_status?.replace(/_/g, ' ') || item.block_reason || '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {emptyHint ? <p className="mt-2 opacity-80">{emptyHint}</p> : null}
+    </div>
+  );
+}
+
 export default function AssetMovementPage() {
   const [searchInput, setSearchInput] = useState('');
   const search = useDebouncedValue(searchInput.trim(), 400);
@@ -80,9 +116,33 @@ export default function AssetMovementPage() {
   }, [search]);
 
   const activeRows = useMemo(
-    () => rows.filter((r) => !r.blocked),
+    () => rows.filter((r) => !r.blocked && !r.ineligible),
     [rows]
   );
+
+  const blockedRows = useMemo(() => {
+    if (searchMeta?.blocked?.length) return searchMeta.blocked;
+    return rows.filter((r) => r.blocked).map((r) => ({
+      serial_id: r.serial_id,
+      serial_number: r.serial_number,
+      unique_product_serial: r.unique_product_serial,
+      inventory_status: r.inventory_status,
+      block_reason: r.block_reason,
+      matched_term: r.matched_term,
+    }));
+  }, [rows, searchMeta]);
+
+  const ineligibleRows = useMemo(() => {
+    if (searchMeta?.ineligible?.length) return searchMeta.ineligible;
+    return rows.filter((r) => r.ineligible && !r.blocked).map((r) => ({
+      serial_id: r.serial_id,
+      serial_number: r.serial_number,
+      unique_product_serial: r.unique_product_serial,
+      inventory_status: r.inventory_status,
+      block_reason: r.block_reason,
+      matched_term: r.matched_term,
+    }));
+  }, [rows, searchMeta]);
 
   const bucketCounts = useMemo(() => {
     const counts = Object.fromEntries(BUCKET_OPTIONS.map((o) => [o.value, 0]));
@@ -206,6 +266,7 @@ export default function AssetMovementPage() {
         </h1>
         <p className="text-sm text-slate-600 mt-1">
           Paste TTSPLs or serials, pick <strong>Move From</strong> to filter by current category, then <strong>Move To</strong> and move up to {MAX_BATCH} at a time.
+          Returned customer units (support closed, on floor/QC) appear under <strong>QC Process</strong> and can be moved to Ready, Dead, QC Pending, or Missing.
         </p>
       </div>
 
@@ -224,18 +285,33 @@ export default function AssetMovementPage() {
         </label>
 
         {searchMeta?.not_found?.length ? (
-          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900">
             <span className="font-semibold">Not found ({searchMeta.not_found.length}):</span>{' '}
             {searchMeta.not_found.slice(0, 20).join(', ')}
             {searchMeta.not_found.length > 20 ? ` … +${searchMeta.not_found.length - 20} more` : ''}
+            <p className="mt-1 text-[11px] opacity-80">No matching serial or TTSPL in inventory for these values.</p>
           </div>
         ) : null}
+
+        <UnmovableAssetsPanel
+          title="Found but blocked — cannot move"
+          tone="amber"
+          items={blockedRows}
+          emptyHint="These laptops are rented, sold, in transit, or otherwise deployed."
+        />
+
+        <UnmovableAssetsPanel
+          title="Found but not eligible for asset movement"
+          tone="slate"
+          items={ineligibleRows}
+        />
 
         {activeRows.length > 0 ? (
           <div className="space-y-2">
             <p className="text-xs text-slate-600">
               Found {activeRows.length} movable laptop(s)
-              {rows.length > activeRows.length ? ` (${rows.length - activeRows.length} blocked — rented/sold/in transit)` : ''}
+              {blockedRows.length ? ` · ${blockedRows.length} blocked` : ''}
+              {ineligibleRows.length ? ` · ${ineligibleRows.length} ineligible` : ''}
             </p>
             <div className="flex flex-wrap gap-1.5">
               {BUCKET_OPTIONS.map((opt) => {
@@ -348,11 +424,22 @@ export default function AssetMovementPage() {
             <Loader2 className="w-5 h-5 animate-spin text-teal-600" />
             Searching…
           </div>
+        ) : !loading && canSearch(search) && !activeRows.length && (blockedRows.length || ineligibleRows.length) ? (
+          <div className="py-16 text-center text-slate-500 text-sm px-6">
+            No movable laptops for this search.
+            {blockedRows.length ? (
+              <p className="mt-2 text-amber-800 text-xs">
+                {blockedRows.length} blocked asset(s) listed above with TTSPL IDs.
+              </p>
+            ) : null}
+          </div>
         ) : !moveFrom ? (
           <div className="py-16 text-center text-slate-500 text-sm">
             {activeRows.length
               ? 'Choose Move From above to list laptops in that category.'
-              : 'No movable laptops found for this search.'}
+              : canSearch(search)
+                ? 'No movable laptops found for this search.'
+                : 'Enter a serial/TTSPL (min 2 chars) or paste comma-separated values'}
           </div>
         ) : (
           <table className="min-w-full text-sm">
@@ -390,7 +477,12 @@ export default function AssetMovementPage() {
                     <td className="px-3 py-3 font-mono text-xs">{row.unique_product_serial || '—'}</td>
                     <td className="px-3 py-3 text-xs">{row.purchase_order_number || '—'}</td>
                     <td className="px-3 py-3 capitalize text-xs">{row.qc_status?.replace(/_/g, ' ')}</td>
-                    <td className="px-3 py-3 text-xs">{row.inventory_status?.replace(/_/g, ' ')}</td>
+                    <td className="px-3 py-3 text-xs">
+                      {row.inventory_status?.replace(/_/g, ' ')}
+                      {row.is_returned_floor ? (
+                        <span className="ml-1 text-[10px] font-medium text-teal-700">(returned)</span>
+                      ) : null}
+                    </td>
                     <td className="px-3 py-3 text-xs text-slate-600 max-w-[200px] truncate">{row.remark || '—'}</td>
                   </tr>
                 ))
