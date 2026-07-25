@@ -2,6 +2,14 @@ const { hasPermission } = require('../services/permissionService');
 
 const SUPPORT_ROLES = ['admin', 'manager', 'super_admin', 'support_lead', 'support_tech'];
 
+/** Support users need read-only parts catalog when logging parts on tickets. */
+const SUPPORT_PARTS_CATALOG_SECTIONS = [
+  'support_tickets',
+  'support_part_requests',
+  'support_part_challan',
+  'support_technician',
+];
+
 const isSupportUser = (user) => user && SUPPORT_ROLES.includes(user.role);
 
 const isSupportLead = (user) =>
@@ -84,6 +92,7 @@ const requireSupportTicketCancel = (req, res, next) => {
 
 module.exports = {
     SUPPORT_ROLES,
+    SUPPORT_PARTS_CATALOG_SECTIONS,
     isSupportUser,
     isSupportLead,
     canCloseSupportTicket,

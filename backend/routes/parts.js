@@ -3,13 +3,22 @@ const router = express.Router();
 const { getAllParts, createPart, updatePartQuantity, updatePart, getPartUsage } = require('../controllers/partController');
 const { getPartsGrouped } = require('../controllers/partsDropdownController');
 const { authMiddleware, checkSectionPermission, checkAnySectionPermission } = require('../middleware/auth');
+const { SUPPORT_PARTS_CATALOG_SECTIONS } = require('../middleware/supportAccess');
 const cp = checkSectionPermission;
 
 router.use(authMiddleware);
 
-// Floor technicians need the parts catalog during diagnosis even without full inventory access.
+// Floor technicians and support staff need the parts catalog during diagnosis / ticket visits.
 const partsCatalogView = checkAnySectionPermission(
-  ['parts_inventory', 'parts', 'floor_tickets', 'floor_pipeline', 'tickets', 'parts_requests'],
+  [
+    'parts_inventory',
+    'parts',
+    'floor_tickets',
+    'floor_pipeline',
+    'tickets',
+    'parts_requests',
+    ...SUPPORT_PARTS_CATALOG_SECTIONS,
+  ],
   'view'
 );
 

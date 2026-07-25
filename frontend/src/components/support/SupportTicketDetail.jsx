@@ -929,7 +929,10 @@ export default function SupportTicketDetail() {
     if (c.outcome === 'replacement_required') return true;
     return replacementOrders.some((o) => o.source_item_id === c.id && o.status === 'cancelled');
   });
-  const canInitiateReplacement = isSupportLead(user) && eligibleForReplacement.length > 0 && !ticket.return_dc_number;
+  const canInitiateReplacement = isSupportLead(user) && eligibleForReplacement.length > 0;
+  const replacementActionLabel = ticket.return_dc_number && ticket.sales_order_number
+    ? `Add to replacement (${eligibleForReplacement.length})`
+    : 'Initiate replacement';
   const canMoveToReplacement = isSupportLead(user) && complaintForReplacement
     && complaintForReplacement.outcome !== 'replacement_required'
     && !complaintForReplacement.replacement_flag_reason;
@@ -966,8 +969,8 @@ export default function SupportTicketDetail() {
         : setPhasePanel({ sourceItem: item, phaseType: type }))
     };
     if (item.item_type === 'complaint' && item.outcome === 'replacement_required') {
-      if (!hasLinkedReplacement(item.id) && !ticket.return_dc_number) {
-        /* Lead uses header "Initiate replacement" — hide duplicate workflow buttons */
+      if (!hasLinkedReplacement(item.id) && !hasActivePickup(item.id)) {
+        /* Lead uses header Initiate / Add to replacement — hide duplicate workflow buttons */
       } else if (!hasActivePickup(item.id)) {
         actions.showPickup = true;
       }
@@ -1013,7 +1016,9 @@ export default function SupportTicketDetail() {
                 </button>
               )}
               {canInitiateReplacement && (
-                <button type="button" className="support-btn-primary min-h-[44px]" onClick={() => setShowReplacement(true)}>Initiate replacement</button>
+                <button type="button" className="support-btn-primary min-h-[44px]" onClick={() => setShowReplacement(true)}>
+                  {replacementActionLabel}
+                </button>
               )}
               {canOpenRepairSwap && (
                 <button type="button" className="support-btn-outline min-h-[44px]" onClick={() => setTab('swap')}>

@@ -412,6 +412,182 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
     return { pickupItemIds, pickupItemId: pickupItemIds[0], rdc, customerOtp, machines };
 };
 
+/** Add pickup items and serial entries to an existing Return DC (multi-complaint replacement). */
+const appendMachinesToReturnDc = async (client, ticket, ticketId, userId, opts) => {
+    const {
+        return_dc_number: returnDcNumber,
+        pickup_type,
+        pickup_address,
+        dispatch_mode,
+        technician_user_id,
+        courier_name, awb_number,
+        porter_tracking_id, porter_order_id,
+        machines: machinesRaw,
+        remarks: remarksOpt,
+    } = opts;
+
+    const rdc = String(returnDcNumber || ticket.return_dc_number || '').trim();
+    if (!rdc) {
+        throw Object.assign(new Error('Return DC number is required'), { status: 400 });
+    }
+
+    await ensureSupportTicketItemV3Columns(client);
+    await ensureDeliveryChallanReplacementColumns(client);
+
+    let machines = (Array.isArray(machinesRaw) ? machinesRaw : [])
+        .map((m) => normalizeMachine(m, ticket))
+        .filter((m) => m.serial_number || m.ttspl_id || m.unique_serial_number);
+    if (!machines.length) {
+        throw Object.assign(new Error('Select at least one laptop for this pickup'), { status: 400 });
+    }
+
+    for (const m of machines) {
+        if (!m.source_item_id) continue;
+        const linked = await client.query(
+            `SELECT id FROM support_ticket_items
+              WHERE source_item_id = $1 AND item_type = 'pickup'
+                AND status NOT IN ('resolved', 'closed', 'inventory_updated')
+              LIMIT 1`,
+            [m.source_item_id]
+        );
+        if (linked.rows.length) {
+            throw Object.assign(new Error('A pickup is already scheduled for one of the selected machines.'), { status: 400 });
+        }
+    }
+
+    const dclRes = await client.query(
+        `SELECT dc_number, serial_number, quantity, remarks, dispatch_mode, delivery_person_id,
+                courier_name, awb_number, porter_tracking_id, porter_order_id, status
+           FROM delivery_challan_lines
+          WHERE dc_number = $1 AND movement_type = 'return'
+          ORDER BY id ASC
+          LIMIT 1
+          FOR UPDATE`,
+        [rdc]
+    );
+    if (!dclRes.rows.length) {
+        throw Object.assign(new Error(`Return DC ${rdc} not found`), { status: 404 });
+    }
+    const dcl = dclRes.rows[0];
+
+    const existingPickupRes = await client.query(
+        `SELECT pickup_method, assigned_to, pickup_courier_name, pickup_awb,
+                porter_tracking_id, porter_order_id, status
+           FROM support_ticket_items
+          WHERE ticket_id = $1 AND return_dc_number = $2 AND item_type = 'pickup'
+          ORDER BY id ASC
+          LIMIT 1`,
+        [ticketId, rdc]
+    );
+    const existingPickup = existingPickupRes.rows[0] || null;
+
+    let pickupAddr = pickup_address || parseAddressJson(ticket.pickup_address);
+    if (pickupAddr) pickupAddr = parseAddressJson(pickupAddr);
+
+    const inheritedDispatch = existingPickup?.pickup_method || dcl.dispatch_mode;
+    const resolvedDispatch = dispatch_mode || (
+      inheritedDispatch === 'inhouse' ? 'technician' : inheritedDispatch
+    );
+    const hasDispatch = ['technician', 'courier', 'porter'].includes(String(resolvedDispatch || ''))
+      || (existingPickup && ['assigned', 'in_transit', 'picked_up'].includes(existingPickup.status));
+    const techId = hasDispatch
+      ? (parseInt(technician_user_id, 10) || existingPickup?.assigned_to || dcl.delivery_person_id || null)
+      : null;
+    const pickupStatus = hasDispatch ? (existingPickup?.status === 'assigned' ? 'assigned' : 'pending_dispatch') : 'pending_dispatch';
+    const customerOtp = generateOtp();
+    const pickupItemIds = [];
+
+    for (const m of machines) {
+        const insertRes = await client.query(
+            `INSERT INTO support_ticket_items
+                (ticket_id, customer_inventory_id, serial_number, unique_serial_number,
+                 ttspl_id, brand, model, ram, storage, generation,
+                 item_type, pickup_type, status, source_item_id,
+                 assigned_to, pickup_method, pickup_assigned_to, pickup_courier_name, pickup_awb,
+                 porter_tracking_id, porter_order_id,
+                 otp_code, customer_otp_code, customer_otp_sent_at, return_dc_number)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+                     'pickup',$11,$12,$13,
+                     $14,$15,$14,$16,$17,$18,$19,
+                     $20,$20,NOW(),$21)
+             RETURNING id`,
+            [
+                ticketId, m.customer_inventory_id, m.serial_number, m.ttspl_id || m.unique_serial_number,
+                m.ttspl_id || m.unique_serial_number, m.brand, m.model, m.ram, m.storage, m.generation,
+                pickup_type, pickupStatus, m.source_item_id,
+                techId, hasDispatch ? resolvedDispatch : null,
+                hasDispatch && resolvedDispatch === 'courier' ? (courier_name || existingPickup?.pickup_courier_name || null) : null,
+                hasDispatch && resolvedDispatch === 'courier' ? (awb_number || existingPickup?.pickup_awb || null) : null,
+                hasDispatch && resolvedDispatch === 'porter' ? (porter_tracking_id || existingPickup?.porter_tracking_id || null) : null,
+                hasDispatch && resolvedDispatch === 'porter' ? (porter_order_id || existingPickup?.porter_order_id || null) : null,
+                customerOtp,
+                rdc,
+            ]
+        );
+        pickupItemIds.push(insertRes.rows[0].id);
+    }
+
+    const entries = [];
+    let rawSerial = dcl.serial_number;
+    if (typeof rawSerial === 'string') {
+        try { rawSerial = JSON.parse(rawSerial); } catch { rawSerial = [rawSerial]; }
+    }
+    if (Array.isArray(rawSerial)) entries.push(...rawSerial.filter(Boolean));
+
+    for (const m of machines) {
+        const serialCode = m.ttspl_id || m.unique_serial_number || m.serial_number;
+        if (!serialCode) continue;
+        const vsnRes = await client.query(
+            `SELECT serial_id, serial_number, inventory_asset_code
+               FROM vendor_serial_numbers
+              WHERE deleted_at IS NULL
+                AND (inventory_asset_code = $1 OR serial_number = $1 OR extra->>'ttspl_id' = $1)
+              LIMIT 1`,
+            [serialCode]
+        );
+        const vsn = vsnRes.rows[0];
+        if (vsn) {
+            entries.push(`${vsn.serial_id}|${vsn.serial_number}|${vsn.inventory_asset_code || serialCode}`);
+        } else {
+            entries.push(`|${serialCode}|${serialCode}`);
+        }
+    }
+
+    const dcRemarks = remarksOpt != null && String(remarksOpt).trim()
+        ? String(remarksOpt).trim()
+        : replacementFlow.buildReplacementRdcRemarks(machines);
+
+    await client.query(
+        `UPDATE delivery_challan_lines
+            SET serial_number = $2::jsonb,
+                quantity = $3,
+                remarks = $4,
+                updated_at = NOW()
+          WHERE dc_number = $1 AND movement_type = 'return'`,
+        [rdc, JSON.stringify(entries), Math.max(1, entries.length), dcRemarks]
+    );
+
+    if (pickupAddr && Object.keys(pickupAddr).length) {
+        await client.query(
+            'UPDATE support_tickets SET pickup_address = $1::jsonb, updated_at = NOW() WHERE id = $2',
+            [JSON.stringify(pickupAddr), ticketId]
+        );
+    }
+
+    await logAudit(client, {
+        itemId: pickupItemIds[0], ticketId, userId,
+        action: 'pickup_appended',
+        detail: {
+            pickup_type, return_dc_number: rdc,
+            unit_count: machines.length,
+            ttspl_ids: machines.map((m) => m.ttspl_id || m.unique_serial_number).filter(Boolean),
+        },
+    });
+    await bumpTicketActivity(client, ticketId);
+
+    return { pickupItemIds, pickupItemId: pickupItemIds[0], rdc, customerOtp, machines, appended: true };
+};
+
 const VALID_ITEM_TYPES = new Set(['complaint', 'pickup', 'replacement']);
 const TERMINAL_ITEM_STATUSES = ['resolved', 'closed', 'inventory_updated'];
 
@@ -3531,8 +3707,24 @@ exports.initiateReplacement = async (req, res) => {
         if (!ticketRes.rows.length) throw Object.assign(new Error('Ticket not found'), { status: 404 });
         const ticket = ticketRes.rows[0];
 
-        if (ticket.return_dc_number) {
+        const isAppend = !!(ticket.return_dc_number && ticket.sales_order_number);
+        if (!isAppend && ticket.return_dc_number) {
             throw Object.assign(new Error('Replacement order already created on this ticket'), { status: 400 });
+        }
+        if (isAppend) {
+            const outboundDc = await client.query(
+                `SELECT dc_number FROM delivery_challan_lines
+                  WHERE sales_order_number = $1 AND movement_type = 'outbound'
+                    AND COALESCE(status, '') NOT IN ('cancelled')
+                  LIMIT 1`,
+                [ticket.sales_order_number]
+            );
+            if (outboundDc.rows.length) {
+                throw Object.assign(
+                    new Error(`Cannot add laptops: outbound delivery DC ${outboundDc.rows[0].dc_number} already exists on ${ticket.sales_order_number}`),
+                    { status: 400 }
+                );
+            }
         }
 
         let sourceIds = Array.isArray(sourceItemIdsRaw)
@@ -3607,18 +3799,32 @@ exports.initiateReplacement = async (req, res) => {
             lineConfigs.push(await replacementFlow.resolveConfigFromComplaint(client, src, ticket.customer_id));
         }
 
-        const { salesOrderNumber, lineIds } = await replacementFlow.createConfigSalesOrder(client, {
-            customerId: ticket.customer_id,
-            customerName,
-            customerEmail: ticket.ticket_email || cust.email,
-            customerMobile: shippingAddress.phone || cust.phone,
-            shippingAddress,
-            billingAddress,
-            gstNumber: cust.gst_no,
-            supplyState: cust.billing_state,
-            lineConfigs,
-            userId: req.user.user_id,
-        });
+        const { salesOrderNumber, lineIds } = isAppend
+            ? await replacementFlow.appendConfigSalesOrderLines(client, {
+                salesOrderNumber: ticket.sales_order_number,
+                customerId: ticket.customer_id,
+                customerName,
+                customerEmail: ticket.ticket_email || cust.email,
+                customerMobile: shippingAddress.phone || cust.phone,
+                shippingAddress,
+                billingAddress,
+                gstNumber: cust.gst_no,
+                supplyState: cust.billing_state,
+                lineConfigs,
+                userId: req.user.user_id,
+            })
+            : await replacementFlow.createConfigSalesOrder(client, {
+                customerId: ticket.customer_id,
+                customerName,
+                customerEmail: ticket.ticket_email || cust.email,
+                customerMobile: shippingAddress.phone || cust.phone,
+                shippingAddress,
+                billingAddress,
+                gstNumber: cust.gst_no,
+                supplyState: cust.billing_state,
+                lineConfigs,
+                userId: req.user.user_id,
+            });
 
         const replacementOrderIds = [];
         for (let i = 0; i < sourceItems.length; i += 1) {
@@ -3701,19 +3907,33 @@ exports.initiateReplacement = async (req, res) => {
             ? String(remarksBody).trim()
             : replacementFlow.buildReplacementRdcRemarks(machines);
 
-        const pickupResult = await executePickupWithReturnDc(client, ticket, ticketId, req.user.user_id, {
-            pickup_type: 'return',
-            pickup_address: shippingAddress,
-            dispatch_mode: dispatch_mode || null,
-            technician_user_id,
-            courier_name,
-            awb_number,
-            porter_tracking_id,
-            porter_order_id,
-            machines,
-            dc_purpose: 'replacement',
-            remarks: rdcRemarks,
-        });
+        const pickupResult = isAppend
+            ? await appendMachinesToReturnDc(client, ticket, ticketId, req.user.user_id, {
+                return_dc_number: ticket.return_dc_number,
+                pickup_type: 'return',
+                pickup_address: shippingAddress,
+                dispatch_mode: dispatch_mode || null,
+                technician_user_id,
+                courier_name,
+                awb_number,
+                porter_tracking_id,
+                porter_order_id,
+                machines,
+                remarks: rdcRemarks,
+            })
+            : await executePickupWithReturnDc(client, ticket, ticketId, req.user.user_id, {
+                pickup_type: 'return',
+                pickup_address: shippingAddress,
+                dispatch_mode: dispatch_mode || null,
+                technician_user_id,
+                courier_name,
+                awb_number,
+                porter_tracking_id,
+                porter_order_id,
+                machines,
+                dc_purpose: 'replacement',
+                remarks: rdcRemarks,
+            });
 
         for (let i = 0; i < replacementOrderIds.length; i += 1) {
             await client.query(
@@ -3725,17 +3945,28 @@ exports.initiateReplacement = async (req, res) => {
             );
         }
 
-        await client.query(
-            `UPDATE support_tickets SET
-                ticket_category = 'replacement',
-                sales_order_number = $2,
-                return_dc_number = $3,
-                pickup_address = $4::jsonb,
-                status = CASE WHEN status = 'open' THEN 'in_progress' ELSE status END,
-                updated_at = NOW()
-             WHERE id = $1`,
-            [ticketId, salesOrderNumber, pickupResult.rdc, JSON.stringify(shippingAddress)]
-        );
+        if (!isAppend) {
+            await client.query(
+                `UPDATE support_tickets SET
+                    ticket_category = 'replacement',
+                    sales_order_number = $2,
+                    return_dc_number = $3,
+                    pickup_address = $4::jsonb,
+                    status = CASE WHEN status = 'open' THEN 'in_progress' ELSE status END,
+                    updated_at = NOW()
+                 WHERE id = $1`,
+                [ticketId, salesOrderNumber, pickupResult.rdc, JSON.stringify(shippingAddress)]
+            );
+        } else {
+            await client.query(
+                `UPDATE support_tickets SET
+                    pickup_address = $2::jsonb,
+                    status = CASE WHEN status = 'open' THEN 'in_progress' ELSE status END,
+                    updated_at = NOW()
+                 WHERE id = $1`,
+                [ticketId, JSON.stringify(shippingAddress)]
+            );
+        }
 
         await logAudit(client, {
             ticketId,
@@ -3755,8 +3986,11 @@ exports.initiateReplacement = async (req, res) => {
             sales_order_number: salesOrderNumber,
             return_dc_number: pickupResult.rdc,
             unit_count: sourceItems.length,
+            appended: isAppend,
             customer_otp_visible: pickupResult.customerOtp,
-            next_steps: 'Attach laptops to the sales order, complete Dispatch QC, then create delivery DC.',
+            next_steps: isAppend
+                ? 'New SO lines added — attach laptops on the sales order and extend the same return pickup.'
+                : 'Attach laptops to the sales order, complete Dispatch QC, then create delivery DC.',
         };
     } catch (e) {
         await client.query('ROLLBACK');

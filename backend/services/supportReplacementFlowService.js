@@ -209,6 +209,86 @@ async function createConfigSalesOrder(client, {
   return { salesOrderNumber, lineIds, token };
 }
 
+/** Add config-only lines to an existing support replacement sales order. */
+async function appendConfigSalesOrderLines(client, {
+  salesOrderNumber,
+  customerId,
+  customerName,
+  customerEmail,
+  customerMobile,
+  shippingAddress,
+  billingAddress,
+  gstNumber,
+  supplyState,
+  lineConfigs,
+  userId,
+}) {
+  const so = String(salesOrderNumber || '').trim();
+  if (!so) throw Object.assign(new Error('Sales order number is required'), { status: 400 });
+
+  const headRes = await client.query(
+    `SELECT sales_order_number, token, customer_id, customer_name, customer_email, customer_mobile,
+            customer_shipping_address, customer_billing_address, gst_number, supply_state
+       FROM sales_order_lines
+      WHERE sales_order_number = $1
+      ORDER BY id ASC
+      LIMIT 1`,
+    [so]
+  );
+  if (!headRes.rows.length) {
+    throw Object.assign(new Error(`Sales order ${so} not found`), { status: 404 });
+  }
+  const head = headRes.rows[0];
+  const token = head.token;
+  const shippingJson = shippingAddress ? JSON.stringify(shippingAddress) : head.customer_shipping_address;
+  const billingJson = billingAddress ? JSON.stringify(billingAddress) : head.customer_billing_address;
+  const lineIds = [];
+
+  for (const cfg of lineConfigs) {
+    const { resolveHsnForPersist } = require('../constants/hsnDefaults');
+    const lineHsn = resolveHsnForPersist({ quotationType: 'rental' });
+    const ins = await client.query(
+      `INSERT INTO sales_order_lines (
+         sales_order_number, quotation_number, customer_id, customer_name, customer_email, customer_mobile,
+         customer_shipping_address, customer_billing_address, gst_number, supply_state, security_amount,
+         shiping_charges, quotation_type, branch, brand, model_name, processor, generation, ram, storage,
+         gpu, screen_size, quantity, main_qty, rate, locking_period, battery_charger_warranty,
+         technical_warranty, remark, status, token, created_by, hsn_code
+       ) VALUES (
+         $1,'N/A',$2,$3,$4,$5,$6,$7,$8,$9,0,0,'rental','rentfoxxy',
+         $10,$11,$12,$13,$14,$15,$16,$17,1,1,$18,0,0,0,
+         'Support replacement','pending',$19,$20,$21
+       ) RETURNING id`,
+      [
+        so,
+        customerId || head.customer_id,
+        customerName || head.customer_name,
+        customerEmail || head.customer_email || null,
+        customerMobile || head.customer_mobile || null,
+        shippingJson,
+        billingJson,
+        gstNumber || head.gst_number || null,
+        supplyState || head.supply_state || null,
+        cfg.brand,
+        cfg.model,
+        cfg.processor,
+        cfg.generation,
+        cfg.ram,
+        cfg.storage,
+        cfg.gpu,
+        cfg.screen_size,
+        cfg.monthly_rate || 0,
+        token,
+        userId,
+        lineHsn,
+      ]
+    );
+    lineIds.push(ins.rows[0].id);
+  }
+
+  return { salesOrderNumber: so, lineIds, token };
+}
+
 function formatConfigLabel(cfg) {
   return [cfg.brand, cfg.model, cfg.processor, cfg.generation, cfg.ram, cfg.storage]
     .filter(Boolean)
@@ -797,6 +877,7 @@ module.exports = {
   buildRepairSwapContext,
   initiateSwapFromRepairPickup,
   createConfigSalesOrder,
+  appendConfigSalesOrderLines,
   formatConfigLabel,
   onReplacementOutboundDelivered,
   onReplacementReturnPickedUp,

@@ -109,7 +109,7 @@ async function transitionAsset(db, {
   let p = 3;
   const add = (col, val) => { sets.push(`${col} = $${p}`); params.push(val); p += 1; };
 
-  if (dcNumber !== null) add('current_dc_number', dcNumber);
+  if (dcNumber !== null && toStatus !== STATUS.IN_STOCK) add('current_dc_number', dcNumber);
   if (entityCode !== null) add('current_entity', entityCode);
   if (dispatchMode !== null) add('dispatch_mode', dispatchMode);
 

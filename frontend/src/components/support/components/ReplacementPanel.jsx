@@ -35,6 +35,8 @@ export default function ReplacementPanel({ ticketId, ticket, customerId, onDone,
   const [eligibleItems, setEligibleItems] = useState([]);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [deliveryDefaults, setDeliveryDefaults] = useState(null);
+  const [appendMode, setAppendMode] = useState(false);
+  const [activeOrder, setActiveOrder] = useState(null);
 
   useEffect(() => {
     setLoading(true);
@@ -44,19 +46,18 @@ export default function ReplacementPanel({ ticketId, ticket, customerId, onDone,
         setEligibleItems(items);
         setSelectedIds(new Set(items.map((i) => String(i.id))));
         setDeliveryDefaults(r.data.delivery_defaults || null);
+        setActiveOrder(r.data.active_order || null);
+        setAppendMode(!!(ticket?.return_dc_number && r.data.active_order?.sales_order_number));
         setReason(items[0]?.replacement_flag_reason || '');
         setRdcRemarks(buildReplacementRdcRemarks(items));
         setRemarksTouched(false);
-        if (r.data.active_order?.sales_order_number) {
-          toast.error('A replacement order already exists on this ticket');
-        }
       })
       .catch(() => {
         setEligibleItems([]);
         toast.error('Could not load replacement details');
       })
       .finally(() => setLoading(false));
-  }, [ticketId]);
+  }, [ticketId, ticket?.return_dc_number, ticket?.sales_order_number]);
 
   const selectedItems = useMemo(
     () => eligibleItems.filter((i) => selectedIds.has(String(i.id))),
@@ -102,7 +103,11 @@ export default function ReplacementPanel({ ticketId, ticket, customerId, onDone,
         porter_order_id: pickupForm.porter_order_id,
       });
       const d = res.data || {};
-      toast.success(`Sales order ${d.sales_order_number} created · Return DC ${d.return_dc_number}`);
+      toast.success(
+        appendMode
+          ? `Added ${ids.length} laptop(s) to ${d.sales_order_number} · Return DC ${d.return_dc_number}`
+          : `Sales order ${d.sales_order_number} created · Return DC ${d.return_dc_number}`
+      );
       if (d.customer_otp_visible) {
         toast(`Pickup OTP: ${d.customer_otp_visible}`, { duration: 12000, icon: '🔑' });
       }
@@ -136,10 +141,23 @@ export default function ReplacementPanel({ ticketId, ticket, customerId, onDone,
   return (
     <section className="bg-white border border-pink-200 rounded-xl p-4 space-y-4">
       <div>
-        <h3 className="font-semibold text-pink-900">Create replacement order</h3>
+        <h3 className="font-semibold text-pink-900">
+          {appendMode ? 'Add laptops to replacement order' : 'Create replacement order'}
+        </h3>
         <p className="text-sm text-slate-600 mt-1">
-          Step 1 — Creates one sales order (laptop config + same rent) and one return DC to pick up faulty units.
-          Step 2 — Attach stock laptops on the sales order, pass Dispatch QC, then create delivery DC.
+          {appendMode ? (
+            <>
+              Adds SO lines and pickup items to existing order{' '}
+              <span className="font-mono">{activeOrder?.sales_order_number || ticket.sales_order_number}</span>
+              {' '}and return DC{' '}
+              <span className="font-mono">{activeOrder?.return_dc_number || ticket.return_dc_number}</span>.
+            </>
+          ) : (
+            <>
+              Step 1 — Creates one sales order (laptop config + same rent) and one return DC to pick up faulty units.
+              Step 2 — Attach stock laptops on the sales order, pass Dispatch QC, then create delivery DC.
+            </>
+          )}
         </p>
       </div>
 
@@ -217,7 +235,11 @@ export default function ReplacementPanel({ ticketId, ticket, customerId, onDone,
         hideMachinePreview
         dispatchOptional
         saving={busy}
-        submitLabel={`Create sales order + return DC (${selectedIds.size} laptop${selectedIds.size > 1 ? 's' : ''})`}
+        submitLabel={
+          appendMode
+            ? `Add to sales order + return DC (${selectedIds.size} laptop${selectedIds.size > 1 ? 's' : ''})`
+            : `Create sales order + return DC (${selectedIds.size} laptop${selectedIds.size > 1 ? 's' : ''})`
+        }
         onSubmit={submitReplacement}
       />
 
