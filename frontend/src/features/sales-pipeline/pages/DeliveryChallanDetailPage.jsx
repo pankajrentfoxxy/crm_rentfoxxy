@@ -254,7 +254,10 @@ export default function DeliveryChallanDetailPage() {
   const allUnits = lines.flatMap((l) => {
     const lineRemark = (l.remarks || '').trim();
     if (l.serials_detail && l.serials_detail.length) {
-      return l.serials_detail.map((d) => ({ ...d, remark: lineRemark }));
+      return l.serials_detail.map((d) => ({
+        ...d,
+        remark: (d.remark || '').trim() || lineRemark,
+      }));
     }
     return parseSerials(l.serial_number).map((s) => {
       const parts = String(s).split('|');

@@ -368,6 +368,16 @@ function buildReplacementSoLineRemark(cfg) {
   return code ? `Support replacement against TTSPL: ${code}` : 'Support replacement';
 }
 
+/** Use SO line remark, or derive TTSPL-specific text from a linked replacement order. */
+function effectiveReplacementLineRemark(soRemark, oldMachineSerial) {
+  const r = String(soRemark || '').trim();
+  if (r && r !== 'Support replacement') return r;
+  if (String(oldMachineSerial || '').trim()) {
+    return buildReplacementSoLineRemark({ old_machine_serial: oldMachineSerial });
+  }
+  return r || 'Support replacement';
+}
+
 async function findReplacementOrderForSerial(client, serialId) {
   const r = await client.query(
     `SELECT ro.*
@@ -974,6 +984,7 @@ module.exports = {
   appendConfigSalesOrderLines,
   formatConfigLabel,
   buildReplacementSoLineRemark,
+  effectiveReplacementLineRemark,
   onReplacementOutboundDelivered,
   onReplacementReturnPickedUp,
   onReplacementWarehouseReceived,
