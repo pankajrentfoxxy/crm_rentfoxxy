@@ -39,6 +39,11 @@ export const updateDcAssignment = (n, d) => api.patch(`${base}/delivery-challans
 export const markDelivered = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}/delivered`, d);
 export const markRejected = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}/rejected`, d);
 export const cancelDC = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}/cancel`, d || {});
+export const uploadSaleDcCompliance = (n, formData) => api.post(
+  `${base}/delivery-challans/${encDc(n)}/sale-compliance`,
+  formData,
+  { headers: { 'Content-Type': 'multipart/form-data' } }
+);
 export const markCustomerRejected = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}/customer-rejected`, d);
 export const sendWarehouseReturnOtp = (n) => api.post(`${base}/delivery-challans/${encDc(n)}/warehouse-return-otp`);
 export const verifyWarehouseReturnOtp = (n, d) => api.post(`${base}/delivery-challans/${encDc(n)}/warehouse-return-otp/verify`, d);

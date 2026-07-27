@@ -37,6 +37,16 @@ const {
 } = require('../services/salesManagementService');
 const { generateDocumentPdf } = require('../services/salesManagementPdfService');
 const { emailDocument } = require('../services/salesManagementPdfService');
+const {
+  isSaleDc,
+  buildSaleCompliance,
+  computeDcGrandTotal,
+  assertCanDownloadSaleDcPdf,
+  emailAccountsSaleDcCreated,
+  normalizeVehicleNumber,
+  canUploadSaleDcCompliance,
+} = require('../services/saleDcComplianceService');
+const { validateSaleVehicleOnCreate } = require('../controllers/saleDcComplianceController');
 const { createSalesOrderQcTicket } = require('../services/grnTicketService');
 const { logTtsplEvent } = require('../services/ttsplAuditService');
 const replacementFlow = require('../services/supportReplacementFlowService');
@@ -1192,6 +1202,21 @@ exports.getDeliveryChallan = async (req, res) => {
       });
     }
 
+    const isSale = isSaleDc(headLine.entity_code, soQuotationType);
+    let sale_compliance = null;
+    let can_download_pdf = true;
+    if (isSale) {
+      const canUpload = req.user?.role === 'super_admin'
+        || await canUploadSaleDcCompliance(req.user, req.permissionCache);
+      sale_compliance = buildSaleCompliance(headLine, totals, req.user?.role, { canUpload });
+      can_download_pdf = sale_compliance.can_download_pdf;
+      if (!can_download_pdf) {
+        for (const line of lines) {
+          line.pdf_path = null;
+        }
+      }
+    }
+
     res.json({
       success: true,
       dc_number: req.params.dcNumber,
@@ -1200,6 +1225,9 @@ exports.getDeliveryChallan = async (req, res) => {
       totals,
       assignment_editable: assignmentEditable,
       assignment_history: assignmentHistory,
+      is_sale: isSale,
+      sale_compliance,
+      can_download_pdf,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1651,6 +1679,16 @@ exports.createDcsByAddress = async (req, res) => {
 
       const groupAwb = group.awb_number || body.awb_number || null;
       const groupDeliveryPersonId = group.delivery_person_id || body.delivery_person_id || null;
+      const groupVehicleNumber = normalizeVehicleNumber(group.vehicle_number || body.vehicle_number) || null;
+
+      const vehicleErr = validateSaleVehicleOnCreate(entityCode, ship_by, {
+        ...group,
+        vehicle_number: groupVehicleNumber,
+      });
+      if (vehicleErr) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: vehicleErr });
+      }
 
       const serialTokens = groupSerials.map((s) =>
         `${s.serial_id || ''}|${s.serial_number || s.vsn_serial || ''}|${s.ttspl_id || s.ttspl_id_vsn || ''}`
@@ -1690,12 +1728,12 @@ exports.createDcsByAddress = async (req, res) => {
           brand, model_name, quantity, main_qty, serial_number,
           ship_by, courier_name, awb_number, courier_tracking_url,
           porter_tracking_id, porter_order_id, porter_booking_url,
-          delivery_person_id, dispatch_mode, dispatched_at,
+          delivery_person_id, vehicle_number, dispatch_mode, dispatched_at,
           remarks, status, created_by, hsn_code
         ) VALUES (
           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
-          $15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,NOW(),
-          $29,'in_transit',$30,$31
+          $15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,NOW(),
+          $30,'in_transit',$31,$32
         )`,
         [
           dcNumber, sales_order_number, soHead.quotation_number, soHead.customer_id || null,
@@ -1713,6 +1751,7 @@ exports.createDcsByAddress = async (req, res) => {
           ship_by === 'by_porter' ? (group.porter_order_id || body.porter_order_id || null) : null,
           ship_by === 'by_porter' ? (group.porter_booking_url || body.porter_booking_url || null) : null,
           ship_by === 'by_hand' && groupDeliveryPersonId ? Number(groupDeliveryPersonId) : null,
+          groupVehicleNumber,
           dispatchMode, dcRemarks, req.user?.user_id, dcHsn,
         ]
       );
@@ -1788,6 +1827,19 @@ exports.createDcsByAddress = async (req, res) => {
           docType: 'delivery_challan', docNumber: dcNumber, header: dcLines[0] || {}, lines: dcLines,
         });
         await pool.query(`UPDATE delivery_challan_lines SET pdf_path = $1 WHERE dc_number = $2`, [pdfPath, dcNumber]);
+
+        if (entityCode === 'gorefurbo') {
+          const grandTotal = await computeDcGrandTotal(dcNumber);
+          const laptopCount = dcLines.reduce((s, l) => s + (Number(l.quantity) || 0), 0);
+          await emailAccountsSaleDcCreated({
+            dcNumber,
+            salesOrderNumber: sales_order_number,
+            customerName: soHead.customer_name,
+            pdfPath,
+            grandTotal,
+            laptopCount,
+          });
+        }
       } catch (pdfErr) {
         console.error(`DC PDF generation failed (${dcNumber}):`, pdfErr.message);
       }
@@ -2740,10 +2792,14 @@ exports.regenerateSalesOrderPdf = async (req, res) => {
 exports.regenerateDcPdf = async (req, res) => {
   try {
     const n = req.params.dcNumber;
+    await assertCanDownloadSaleDcPdf(req.user, n);
     const pdf = await regenerateDcPdfForNumber(n);
     if (!pdf) return res.status(404).json({ success: false, message: 'DC not found' });
     res.json({ success: true, pdf_path: pdf });
-  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+  } catch (e) {
+    const status = e.message?.includes('E-Invoice must be uploaded') ? 403 : 500;
+    res.status(status).json({ success: false, message: e.message });
+  }
 };
 
 exports.createPreDispatchQcTicket = async (req, res) => {

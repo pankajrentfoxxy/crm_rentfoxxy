@@ -913,12 +913,16 @@ async function generateServiceDcPdf({ serviceDcNumber, header = {}, units = [] }
   return relativePath;
 }
 
-async function emailDocument({ to, subject, text, html, pdfRelativePath, cc }) {
+async function emailDocument({ to, subject, text, html, pdfRelativePath, cc, replyTo }) {
   const transport = getMailTransport();
   if (!transport || !to) return false;
   const abs = pdfRelativePath ? path.join(__dirname, '..', pdfRelativePath) : null;
+  const fromAddress = process.env.SMTP_FROM
+    || process.env.FROM_EMAIL
+    || process.env.EMAIL_FROM
+    || process.env.SMTP_USER;
   const mail = {
-    from: process.env.SMTP_FROM || process.env.SMTP_USER,
+    from: fromAddress,
     to,
     subject,
     text,
@@ -926,6 +930,7 @@ async function emailDocument({ to, subject, text, html, pdfRelativePath, cc }) {
   };
   if (html) mail.html = html;
   if (cc) mail.cc = cc;
+  if (replyTo) mail.replyTo = replyTo;
   await transport.sendMail(mail);
   return true;
 }

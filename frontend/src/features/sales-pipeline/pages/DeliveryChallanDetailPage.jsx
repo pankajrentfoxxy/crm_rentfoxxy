@@ -6,6 +6,7 @@ import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDraw
 import DispatchModal from '../components/DispatchModal';
 import ChangeAssigneeModal from '../components/ChangeAssigneeModal';
 import EInvoicePanel from '../components/EInvoicePanel';
+import SaleDcCompliancePanel from '../components/SaleDcCompliancePanel';
 import QcStatusBadge from '../components/QcStatusBadge';
 import {
   createDcQcTickets, getDC, getDcQcStatus, getDCMeta, getSalesOrderFull,
@@ -78,6 +79,8 @@ export default function DeliveryChallanDetailPage() {
   const [cancelModal, setCancelModal] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
   const [cancelSaving, setCancelSaving] = useState(false);
+  const [saleCompliance, setSaleCompliance] = useState(null);
+  const [canDownloadPdf, setCanDownloadPdf] = useState(true);
 
   const head = lines[0] || {};
   const summaryLines = billingLines.length ? billingLines : lines;
@@ -101,6 +104,8 @@ export default function DeliveryChallanDetailPage() {
       setAssignmentEditable(res.data?.assignment_editable ?? isDcAssignmentEditable(res.data?.lines?.[0]?.status));
       setAssignmentHistory(res.data?.assignment_history || []);
       setHsnDraft(res.data?.lines?.[0]?.hsn_code || '');
+      setSaleCompliance(res.data?.sale_compliance || null);
+      setCanDownloadPdf(res.data?.can_download_pdf !== false);
       if (res.data?.lines?.[0]?.sales_order_number) {
         const soRes = await getSalesOrderFull(res.data.lines[0].sales_order_number);
         setPaymentSummary(soRes.data?.summary);
@@ -316,22 +321,29 @@ export default function DeliveryChallanDetailPage() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={async () => {
-              try {
-                const r = await regenerateDcPdf(dcNumber);
-                const url = dcPdfUrl(r.data?.pdf_path) || dcPdfUrl(head.pdf_path);
-                if (url) window.open(url, '_blank');
-                else toast.error('PDF not available');
-              } catch {
-                toast.error('Could not open PDF');
-              }
-            }}
-            className="inline-flex items-center px-4 min-h-[40px] text-sm font-semibold border border-slate-300 rounded-xl text-gray-700 hover:bg-gray-50"
-          >
-            Download PDF
-          </button>
+          {(canDownloadPdf || isSuperAdmin) && (
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  const r = await regenerateDcPdf(dcNumber);
+                  const url = dcPdfUrl(r.data?.pdf_path) || dcPdfUrl(head.pdf_path);
+                  if (url) window.open(url, '_blank');
+                  else toast.error('PDF not available');
+                } catch (err) {
+                  toast.error(err.response?.data?.message || 'Could not open PDF');
+                }
+              }}
+              className="inline-flex items-center px-4 min-h-[40px] text-sm font-semibold border border-slate-300 rounded-xl text-gray-700 hover:bg-gray-50"
+            >
+              Download PDF
+            </button>
+          )}
+          {isSale && !canDownloadPdf && !isSuperAdmin && (
+            <span className="text-xs text-indigo-700 bg-indigo-50 border border-indigo-200 px-3 py-2 rounded-xl">
+              Upload E-Invoice on the E-Invoice tab to unlock PDF
+            </span>
+          )}
           {isSuperAdmin && (
             <button type="button" onClick={() => setEditOpen(true)}
               className="inline-flex items-center px-4 min-h-[40px] text-sm font-semibold bg-amber-600 text-white rounded-xl hover:bg-amber-700">Edit DC</button>
@@ -711,7 +723,23 @@ export default function DeliveryChallanDetailPage() {
           )}
 
           {tab === 'einvoice' && isSale && (
-            <EInvoicePanel dcNumber={dcNumber} dcLine={head} customerEmail={head.email} onReload={load} />
+            <div className="space-y-6">
+              <SaleDcCompliancePanel
+                dcNumber={dcNumber}
+                saleCompliance={saleCompliance}
+                totals={totals}
+                onReload={load}
+                isSuperAdmin={isSuperAdmin}
+              />
+              {isSuperAdmin && (
+                <details className="bg-white border rounded-xl p-4">
+                  <summary className="cursor-pointer text-sm font-semibold text-gray-700">Zoho API generate (optional)</summary>
+                  <div className="mt-4">
+                    <EInvoicePanel dcNumber={dcNumber} dcLine={head} customerEmail={head.email} onReload={load} />
+                  </div>
+                </details>
+              )}
+            </div>
           )}
         </div>
 
@@ -721,6 +749,9 @@ export default function DeliveryChallanDetailPage() {
             <p><span className="text-gray-500">Created:</span> {formatDate(head.created_at)}</p>
             <p><span className="text-gray-500">Dispatch date:</span> <strong>{formatDateTime(head.dispatched_at)}</strong></p>
             <p><span className="text-gray-500">Mode:</span> {head.dispatch_mode || head.ship_by || '—'}</p>
+            {head.vehicle_number ? (
+              <p><span className="text-gray-500">Vehicle:</span> {head.vehicle_number}</p>
+            ) : null}
             {head.delivered_at ? (
               <p><span className="text-gray-500">Delivered:</span> {formatDateTime(head.delivered_at)}</p>
             ) : null}

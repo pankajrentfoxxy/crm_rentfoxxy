@@ -32,6 +32,28 @@ const uploadPod = multer({
     cb(null, true);
   },
 });
+const saleComplianceStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const safeDc = String(req.params.dcNumber || 'dc').replace(/[^\w-]+/g, '_');
+    const dir = path.join(__dirname, '../uploads/sale-dc-compliance', safeDc);
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname) || '.pdf';
+    const prefix = file.fieldname === 'eway_bill_pdf' ? 'eway' : 'einvoice';
+    cb(null, `${prefix}_${Date.now()}${ext}`);
+  },
+});
+const uploadSaleCompliance = multer({
+  storage: saleComplianceStorage,
+  limits: multerLimits({ files: 2 }),
+  fileFilter: (req, file, cb) => {
+    const ok = /^(image\/(jpeg|jpg|png|webp|gif)|application\/pdf)$/i.test(file.mimetype);
+    if (!ok) return cb(new Error('Only PDF or image files allowed'));
+    cb(null, true);
+  },
+});
 // Section guards
 const quoteView = cp('sales_quotations', 'view');
 const quoteCreate = cp('sales_quotations', 'create');
@@ -59,6 +81,7 @@ const tbEdit = cp('technician_bucket', 'edit');
 const whReturnEdit = cpAny(['delivery_challans', 'technician_bucket'], 'edit');
 const drView = cpAny(['delivery_register_management', 'technician_bucket'], 'view');
 const ctrl = require('../controllers/salesManagementController');
+const saleComplianceCtrl = require('../controllers/saleDcComplianceController');
 const sosCtrl = require('../controllers/salesOrderSerialController');
 const flowCtrl = require('../controllers/deliveryFlowController');
 const supportCtrl = require('../controllers/supportController');
@@ -133,6 +156,17 @@ router.get(...dcRoute('/qc-status', soDcView, ctrl.getDcQcStatus));
 router.patch(...dcRoute('/assignment', soDcEdit, ctrl.updateDcAssignment));
 router.patch(...dcRoute('/dispatch', soDcEdit, ctrl.updateDcDispatch));
 router.patch(...dcRoute('/cancel', checkRole('super_admin'), ctrl.cancelDeliveryChallan));
+router.post(
+  ...dcRoute(
+    '/sale-compliance',
+    saleComplianceCtrl.checkSaleDcComplianceUpload,
+    wrapMulter(uploadSaleCompliance.fields([
+      { name: 'einvoice_pdf', maxCount: 1 },
+      { name: 'eway_bill_pdf', maxCount: 1 },
+    ])),
+    saleComplianceCtrl.uploadSaleDcCompliance
+  )
+);
 router.patch(...dcRoute('/delivered', soDcEdit, ctrl.markDcDelivered));
 router.patch(...dcRoute('/rejected', soDcEdit, ctrl.markDcRejected));
 router.patch(...dcRoute('/customer-rejected', tbEdit, flowCtrl.markCustomerRejected));

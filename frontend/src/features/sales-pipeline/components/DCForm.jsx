@@ -102,7 +102,7 @@ function AddressEditDrawer({ address, onSave, onClose }) {
 
 // ── DispatchFields ────────────────────────────────────────────────────────────
 
-function DispatchFields({ shipBy, fields, onChange, deliveryTechnicians = [] }) {
+function DispatchFields({ shipBy, fields, onChange, deliveryTechnicians = [], requireVehicle = false }) {
   const set = (k) => (e) => onChange({ ...fields, [k]: e.target.value });
   if (shipBy === 'by_courier') return (
     <div className="space-y-2 mt-2">
@@ -124,10 +124,14 @@ function DispatchFields({ shipBy, fields, onChange, deliveryTechnicians = [] }) 
         value={fields.porter_order_id || ''} onChange={set('porter_order_id')} />
       <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Booking URL (optional)"
         value={fields.porter_booking_url || ''} onChange={set('porter_booking_url')} />
+      {requireVehicle && (
+        <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Vehicle number* (E-Way Bill)"
+          value={fields.vehicle_number || ''} onChange={set('vehicle_number')} />
+      )}
     </div>
   );
   if (shipBy === 'by_hand') return (
-    <div className="mt-2">
+    <div className="mt-2 space-y-2">
       <select className="w-full border rounded-lg px-3 py-2 text-sm"
         value={fields.delivery_person_id || ''} onChange={set('delivery_person_id')}>
         <option value="">Select delivery technician*</option>
@@ -142,6 +146,10 @@ function DispatchFields({ shipBy, fields, onChange, deliveryTechnicians = [] }) 
           No delivery technicians found. Add via Sales Pipeline → Delivery Technicians.
         </p>
       )}
+      {requireVehicle && (
+        <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Vehicle number* (E-Way Bill)"
+          value={fields.vehicle_number || ''} onChange={set('vehicle_number')} />
+      )}
     </div>
   );
   return null;
@@ -151,7 +159,7 @@ function DispatchFields({ shipBy, fields, onChange, deliveryTechnicians = [] }) 
 
 function DcGroupCard({
   groupIndex, group, meta, shipBy, dispatchFields, onDispatchChange,
-  onAddressEdit, onToggleSerial,
+  onAddressEdit, onToggleSerial, requireVehicle = false,
 }) {
   const [expanded, setExpanded] = useState(true);
   const [editingAddress, setEditingAddress] = useState(false);
@@ -247,6 +255,7 @@ function DcGroupCard({
             fields={dispatchFields}
             onChange={onDispatchChange}
             deliveryTechnicians={meta?.delivery_technicians || []}
+            requireVehicle={requireVehicle}
           />
         </div>
       )}
@@ -279,6 +288,9 @@ export default function DCForm({ open, onClose, prefillSo }) {
   const [groupDispatch, setGroupDispatch] = useState({});
 
   const [saving, setSaving] = useState(false);
+
+  const isSale = meta?.quotation_type === 'sale' || meta?.quotation_type === 'sales';
+  const requireVehicle = isSale && (shipBy === 'by_porter' || shipBy === 'by_hand');
 
   // ── Load SOs ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -415,6 +427,9 @@ export default function DCForm({ open, onClose, prefillSo }) {
       if (shipBy === 'by_hand' && !gd.delivery_person_id) {
         errors.push(`DC #${idx + 1}: Select a delivery technician.`);
       }
+      if (requireVehicle && !gd.vehicle_number?.trim()) {
+        errors.push(`DC #${idx + 1}: Vehicle number is required for sale Porter / Inhouse dispatch.`);
+      }
     });
 
     activeDcGroups.forEach((g) => {
@@ -442,7 +457,7 @@ export default function DCForm({ open, onClose, prefillSo }) {
       dcCount: activeDcGroups.length,
       totalLaptops,
     };
-  }, [dcGroups, shipBy, groupDispatch]);
+  }, [dcGroups, shipBy, groupDispatch, requireVehicle]);
 
   // ── Submit ────────────────────────────────────────────────────────────────
   const submit = async () => {
@@ -581,6 +596,12 @@ export default function DCForm({ open, onClose, prefillSo }) {
                   <option value="by_porter">Porter / Last-mile service</option>
                   <option value="by_hand">Inhouse Delivery Technician</option>
                 </select>
+                {isSale && (
+                  <p className="text-xs text-indigo-700 mt-2">
+                    Sale order: DC will be created now. Accounts will be emailed to prepare E-Invoice.
+                    If DC value exceeds ₹50,000, E-Way Bill is required on upload. Vehicle number is required for Porter / Inhouse.
+                  </p>
+                )}
                         </div>
 
               {/* DC Group Cards */}
@@ -596,6 +617,7 @@ export default function DCForm({ open, onClose, prefillSo }) {
                     onDispatchChange={(fields) => handleGroupDispatchChange(i, fields)}
                     onAddressEdit={handleAddressEdit}
                     onToggleSerial={handleToggleSerial}
+                    requireVehicle={requireVehicle}
                   />
                       ))}
                     </div>

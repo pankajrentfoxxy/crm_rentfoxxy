@@ -64,7 +64,7 @@ const ROLE_ROW_DEFAULTS = {
     ['dashboard', false, false, false], ['dispatch', false, true, false], ['dispatch_ops', false, true, false],
     ['delivery_challans', false, true, false], ['delivery_register_management', false, true, false],
     ['technician_bucket', false, true, false],
-    ['einvoice_ewb', false, false, false], ['customers', false, false, false],
+    ['einvoice_ewb', true, true, false], ['customers', false, false, false],
   ],
   accounts: [
     ['dashboard', false, false, false], ['customer_billing', true, true, false], ['vendor_billing_mgmt', true, true, false],
