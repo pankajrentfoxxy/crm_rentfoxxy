@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { CheckCircle2, Circle, Loader2 } from 'lucide-react';
-import { getStageTask, moveTicketStage, saveStageTask } from '../floorPipelineApi';
+import { getStageChecklist, getStageTask, moveTicketStage, saveStageTask } from '../floorPipelineApi';
 
 const NEXT_STAGE_ON_COMPLETE = {
   'Assembly & Software': 'Final Testing',
@@ -13,8 +13,9 @@ const REQUIRES_ASSIGNEE_ON_COMPLETE = {
   'Final Testing': 'QC1',
 };
 
-// Recommended refurb checklists. These are intentionally simple constants now and
-// can be moved to the editable stage_checklists table later.
+// Fallback refurb checklists. The live items are loaded from the editable
+// stage_checklists DB table (GET /stages/:id/checklist); these constants are only
+// used when the DB has no checklist configured for the stage.
 export const STAGE_CHECKLISTS = {
   'Assembly & Software': [
     { key: 'os_installed', label: 'OS installed (genuine image)' },
@@ -39,7 +40,7 @@ export const STAGE_CHECKLISTS = {
 };
 
 export default function StageTaskPanel({ ticket, stageName, onSubmitted }) {
-  const items = STAGE_CHECKLISTS[stageName] || [];
+  const [items, setItems] = useState(STAGE_CHECKLISTS[stageName] || []);
   const [checks, setChecks] = useState({});
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
@@ -48,14 +49,29 @@ export default function StageTaskPanel({ ticket, stageName, onSubmitted }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await getStageTask(ticket.ticket_id, ticket.current_stage_id);
-      if (r.data?.progress?.checklist_data) setChecks(r.data.progress.checklist_data || {});
+      const [taskRes, checklistRes] = await Promise.allSettled([
+        getStageTask(ticket.ticket_id, ticket.current_stage_id),
+        getStageChecklist(ticket.current_stage_id),
+      ]);
+
+      if (taskRes.status === 'fulfilled' && taskRes.value.data?.progress?.checklist_data) {
+        setChecks(taskRes.value.data.progress.checklist_data || {});
+      }
+
+      const dbItems = checklistRes.status === 'fulfilled'
+        ? checklistRes.value.data?.checklist?.checklist_items
+        : null;
+      if (Array.isArray(dbItems) && dbItems.length) {
+        setItems(dbItems);
+      } else {
+        setItems(STAGE_CHECKLISTS[stageName] || []);
+      }
     } catch {
-      /* first time — no progress yet */
+      /* first time — no progress yet; keep fallback items */
     } finally {
       setLoading(false);
     }
-  }, [ticket.ticket_id, ticket.current_stage_id]);
+  }, [ticket.ticket_id, ticket.current_stage_id, stageName]);
 
   useEffect(() => { load(); }, [load]);
 

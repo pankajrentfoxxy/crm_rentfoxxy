@@ -117,6 +117,11 @@ export function getActiveWorkLog(id) {
   return api.get(`${base}/${id}/work/active`);
 }
 
+// Editable checklist definition for a stage (items shown in StageTaskPanel).
+export function getStageChecklist(stageId) {
+  return api.get(`/stages/${stageId}/checklist`);
+}
+
 // Stage task checklist (Assembly & Software, Final Testing, ...)
 export function getStageTask(id, stageId) {
   return api.get(`${base}/${id}/stage-task`, { params: { stage_id: stageId } });
