@@ -12,6 +12,12 @@ import { DC_STATUS_STYLES, DISPATCH_MODE_STYLES, formatDate, statusLabel, delive
 import { useUrlFilters, useDebouncedUrlSearch, listReturnState } from '../../../hooks/useUrlFilters';
 
 const TABS = ['all', 'pending', 'in_transit', 'delivered', 'rejected'];
+const PURPOSE_FILTERS = [
+  { value: '', label: 'All types' },
+  { value: 'standard', label: 'DC' },
+  { value: 'replacement', label: 'Replacement' },
+  { value: 'service_return', label: 'Service' },
+];
 const PAGE_SIZE = 25;
 const DC_FILTER_DEFAULTS = {
   page: 1,
@@ -19,13 +25,14 @@ const DC_FILTER_DEFAULTS = {
   dateFrom: '',
   dateTo: '',
   tab: 'all',
+  purpose: '',
 };
 
 export default function DeliveryChallanListPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { filters, setFilters } = useUrlFilters(DC_FILTER_DEFAULTS);
-  const { page, dateFrom, dateTo, tab } = filters;
+  const { page, dateFrom, dateTo, tab, purpose } = filters;
   const { searchInput, setSearchInput, debouncedSearch: search } = useDebouncedUrlSearch(filters, setFilters);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -50,6 +57,7 @@ export default function DeliveryChallanListPage() {
         limit: PAGE_SIZE,
         search: search || undefined,
         status: tab !== 'all' ? tab : undefined,
+        dc_purpose: purpose || undefined,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
       });
@@ -70,7 +78,7 @@ export default function DeliveryChallanListPage() {
     } finally {
       setLoading(false);
     }
-  }, [tab, page, search, dateFrom, dateTo]);
+  }, [tab, page, search, dateFrom, dateTo, purpose]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -135,7 +143,15 @@ export default function DeliveryChallanListPage() {
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-2">
           <span className="font-mono text-blue-700 font-semibold">{r.dc_number}</span>
-          <span className={`px-2 py-0.5 rounded-full text-xs ${DC_STATUS_STYLES[r.status || 'pending']}`}>{statusLabel(r.status || 'pending')}</span>
+          <div className="flex items-center gap-1.5">
+            {r.dc_purpose === 'service_return' && (
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-teal-100 text-teal-800">Service</span>
+            )}
+            {r.dc_purpose === 'replacement' && (
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-orange-100 text-orange-800">Replacement</span>
+            )}
+            <span className={`px-2 py-0.5 rounded-full text-xs ${DC_STATUS_STYLES[r.status || 'pending']}`}>{statusLabel(r.status || 'pending')}</span>
+          </div>
         </div>
         <p className="font-medium text-slate-800">{r.customer_name}</p>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
@@ -185,9 +201,25 @@ export default function DeliveryChallanListPage() {
         <StatCard label="Rejected" value={formatCount(stats.rejected)} tone="red" />
       </div>
 
-      <div className="flex flex-wrap gap-2 mb-4">
+      <div className="flex flex-wrap gap-2 mb-3">
         {TABS.map((t) => (
-          <button key={t} type="button" onClick={() => setFilters({ tab: t })} className={`px-3 min-h-[36px] rounded-full text-xs font-medium capitalize ${tab === t ? 'bg-blue-600 text-white' : 'bg-gray-100'}`}>{t.replace('_', ' ')}</button>
+          <button key={t} type="button" onClick={() => setFilters({ tab: t, page: 1 })} className={`px-3 min-h-[36px] rounded-full text-xs font-medium capitalize ${tab === t ? 'bg-blue-600 text-white' : 'bg-gray-100'}`}>{t.replace('_', ' ')}</button>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <span className="text-xs font-medium text-slate-500 uppercase tracking-wide">Type</span>
+        {PURPOSE_FILTERS.map((p) => (
+          <button
+            key={p.value || 'all'}
+            type="button"
+            onClick={() => setFilters({ purpose: p.value, page: 1 })}
+            className={`px-3 min-h-[36px] rounded-full text-xs font-medium ${
+              purpose === p.value ? 'bg-slate-800 text-white' : 'bg-gray-100 text-slate-700'
+            }`}
+          >
+            {p.label}
+          </button>
         ))}
       </div>
 

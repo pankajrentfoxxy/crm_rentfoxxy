@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const pool = require('../config/db');
+const { effectiveReplacementLineRemark } = require('./supportReplacementFlowService');
 const { resolveLineItem } = require('./qcManagementService');
 const { parseJsonArray } = require('./deliveryRegisterService');
 const {
@@ -753,6 +754,7 @@ async function getDcQcStatusSummaries(dcNumbers) {
 function buildDeliveryChallanListWhere({
   search = '',
   status = '',
+  dcPurpose = '',
   assignedUserId = null,
   dateFrom,
   dateTo,
@@ -767,6 +769,13 @@ function buildDeliveryChallanListWhere({
   if (assignedUserId) {
     params.push(assignedUserId);
     where += ` AND d.delivery_person_id = $${params.length}`;
+  }
+  if (dcPurpose === 'standard') {
+    where += ` AND COALESCE(d.dc_purpose, 'standard') = 'standard'`;
+  } else if (dcPurpose === 'replacement') {
+    where += ` AND d.dc_purpose = 'replacement'`;
+  } else if (dcPurpose === 'service_return') {
+    where += ` AND d.dc_purpose = 'service_return'`;
   }
   if (status === 'pending') {
     where += ` AND (d.status IS NULL OR d.status = 'pending')`;
@@ -784,10 +793,10 @@ function buildDeliveryChallanListWhere({
 }
 
 async function listDeliveryChallansGrouped({
-  page = 1, limit = 20, search = '', status = '', assignedUserId = null, dateFrom, dateTo,
+  page = 1, limit = 20, search = '', status = '', dcPurpose = '', assignedUserId = null, dateFrom, dateTo,
 } = {}) {
   const { where, params } = buildDeliveryChallanListWhere({
-    search, status, assignedUserId, dateFrom, dateTo,
+    search, status, dcPurpose, assignedUserId, dateFrom, dateTo,
   });
   // A DC can have several line items; list/count one row per DC (not per line)
   // so multi-laptop challans don't appear duplicated.
@@ -1803,12 +1812,22 @@ function rateForDcLine(line, rateMap) {
 async function getDcSerialRateLookup(dcNumber, salesOrderNumber) {
   const r = await pool.query(
     `SELECT sos.serial_id, sos.ttspl_id, sos.serial_number,
+            sol.id AS line_id,
             sol.brand, sol.model_name, sol.processor, sol.generation,
             sol.ram, sol.storage, sol.gpu, sol.screen_size,
-            sol.rate, sol.remark
+            sol.rate, sol.remark,
+            ro.old_machine_serial
        FROM sales_order_serials sos
        INNER JOIN sales_order_lines sol
          ON sol.id = sos.line_id AND sol.sales_order_number = sos.sales_order_number
+       LEFT JOIN LATERAL (
+         SELECT old_machine_serial
+           FROM support_replacement_orders ro
+          WHERE ro.sales_order_line_id = sol.id
+            AND COALESCE(TRIM(ro.old_machine_serial), '') <> ''
+          ORDER BY ro.id DESC
+          LIMIT 1
+       ) ro ON TRUE
       WHERE sos.sales_order_number = $2
         AND sos.status <> 'removed'
         AND (
@@ -1842,7 +1861,7 @@ async function getDcSerialRateLookup(dcNumber, salesOrderNumber) {
       storage: row.storage || '',
       gpu: row.gpu || '',
       screen_size: row.screen_size || '',
-      remark: (row.remark || '').trim(),
+      remark: effectiveReplacementLineRemark(row.remark, row.old_machine_serial),
     };
     if (row.serial_id) bySerialId.set(Number(row.serial_id), payload);
     if (row.ttspl_id) byTtspl.set(String(row.ttspl_id).toUpperCase(), payload);
@@ -1854,6 +1873,27 @@ async function getDcSerialRateLookup(dcNumber, salesOrderNumber) {
 function lookupSerialRemark(lookup, { serialId, serialNumber, ttspl } = {}) {
   const hit = lookupSerialRate(lookup, { serialId, serialNumber, ttspl });
   return hit?.remark || '';
+}
+
+/** Resolve display remarks for SO line ids (replacement TTSPL when remark is generic). */
+async function resolveSoLineRemarksForLines(lineIds = []) {
+  const ids = [...new Set((lineIds || []).map((id) => Number(id)).filter((n) => Number.isFinite(n) && n > 0))];
+  if (!ids.length) return [];
+  const r = await pool.query(
+    `SELECT sol.id, sol.remark, ro.old_machine_serial
+       FROM sales_order_lines sol
+       LEFT JOIN LATERAL (
+         SELECT old_machine_serial
+           FROM support_replacement_orders ro
+          WHERE ro.sales_order_line_id = sol.id
+            AND COALESCE(TRIM(ro.old_machine_serial), '') <> ''
+          ORDER BY ro.id DESC
+          LIMIT 1
+       ) ro ON TRUE
+      WHERE sol.id = ANY($1::int[])`,
+    [ids]
+  );
+  return r.rows.map((row) => effectiveReplacementLineRemark(row.remark, row.old_machine_serial));
 }
 
 function lookupSerialRate(lookup, { serialId, serialNumber, ttspl } = {}) {
@@ -2013,6 +2053,7 @@ module.exports = {
   getDcSerialRateLookup,
   lookupSerialRate,
   lookupSerialRemark,
+  resolveSoLineRemarksForLines,
   loadSerialInventorySpec,
   getDcBillingLines,
   resolveDcBilling,

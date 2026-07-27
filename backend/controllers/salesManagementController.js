@@ -32,6 +32,7 @@ const {
   getDcSerialRateLookup,
   lookupSerialRate,
   lookupSerialRemark,
+  resolveSoLineRemarksForLines,
   entityDocType,
 } = require('../services/salesManagementService');
 const { generateDocumentPdf } = require('../services/salesManagementPdfService');
@@ -1044,6 +1045,7 @@ exports.listDeliveryChallans = async (req, res) => {
       limit: Math.min(parseInt(req.query.limit, 10) || 20, 100),
       search: req.query.search || '',
       status: req.query.status || '',
+      dcPurpose: req.query.dc_purpose || req.query.purpose || '',
       assignedUserId,
       dateFrom: req.query.date_from,
       dateTo: req.query.date_to,
@@ -1664,12 +1666,7 @@ exports.createDcsByAddress = async (req, res) => {
         : (uniqueModels.length > 1 ? 'Multiple configurations' : '');
 
       const groupLineIds = [...new Set(groupSerials.map((s) => s.line_id).filter(Boolean))];
-      const groupRemarks = groupLineIds
-        .map((lid) => {
-          const soLine = soLines.find((l) => Number(l.id) === Number(lid));
-          return (soLine?.remark || '').trim();
-        })
-        .filter(Boolean);
+      const groupRemarks = (await resolveSoLineRemarksForLines(groupLineIds)).filter(Boolean);
       const dcRemarks = [...new Set(groupRemarks)].join('; ') || null;
 
       const soLineHsns = groupLineIds
