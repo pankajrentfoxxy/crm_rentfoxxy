@@ -11,11 +11,13 @@ import { fetchFloorTickets } from '../floorPipelineApi';
 import useAutoRefresh from '../hooks/useAutoRefresh';
 import TicketCard from '../components/TicketCard';
 import AssignmentModal from '../components/AssignmentModal';
+import ConfigUpdateModal from '../components/ConfigUpdateModal';
 import FloorPipelineFilterPanel, { FILTER_CTL } from '../components/FloorPipelineFilterPanel';
 import { EMPTY_SPEC_FILTERS, SPEC_FILTER_KEYS } from '../../inventory-management/inventorySpecFilters';
 import useDebouncedSpecParams from '../../inventory-management/hooks/useDebouncedSpecParams';
 import {
   canAssignFloorTickets,
+  canManageFloorTickets,
   isFloorAssignedDataOnly,
 } from '../floorPipelineAccess';
 import {
@@ -55,6 +57,7 @@ export default function FloorTicketListPage() {
   const { user, isAssignedDataOnly } = useAuth();
   const { canEdit } = usePermission();
   const canAssign = canAssignFloorTickets(canEdit, isAssignedDataOnly);
+  const canManage = canManageFloorTickets(canEdit, isAssignedDataOnly);
   const allDataScope = !isFloorAssignedDataOnly(isAssignedDataOnly);
   const { filters, setFilters } = useUrlFilters(FLOOR_FILTER_DEFAULTS);
   const {
@@ -77,6 +80,7 @@ export default function FloorTicketListPage() {
   const [loading, setLoading] = useState(true);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [assignTicket, setAssignTicket] = useState(null);
+  const [configTicket, setConfigTicket] = useState(null);
 
   const fm = isFloorManagerRole(user?.role);
 
@@ -290,15 +294,26 @@ export default function FloorTicketListPage() {
                             pendingParts={t.part_requests_pending}
                             onCardClick={canAssign && stage === 'Floor Manager' ? handleFloorManagerClick : undefined}
                           />
-                          {canAssign && stage !== 'Floor Manager' && stage !== 'Inventory' ? (
-                            <div className="mt-1 flex justify-end px-1">
-                              <button
-                                type="button"
-                                onClick={() => setAssignTicket(t)}
-                                className="text-[11px] text-slate-600 font-semibold hover:underline"
-                              >
-                                Reassign
-                              </button>
+                          {canManage || (canAssign && stage !== 'Floor Manager' && stage !== 'Inventory') ? (
+                            <div className="mt-1 flex justify-end gap-3 px-1">
+                              {canManage ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setConfigTicket(t)}
+                                  className="text-[11px] text-blue-600 font-semibold hover:underline"
+                                >
+                                  Edit specs
+                                </button>
+                              ) : null}
+                              {canAssign && stage !== 'Floor Manager' && stage !== 'Inventory' ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setAssignTicket(t)}
+                                  className="text-[11px] text-slate-600 font-semibold hover:underline"
+                                >
+                                  Reassign
+                                </button>
+                              ) : null}
                             </div>
                           ) : null}
                         </div>
@@ -331,9 +346,18 @@ export default function FloorTicketListPage() {
                 pendingParts={t.part_requests_pending}
                 onCardClick={canAssign && t.stage_name === 'Floor Manager' ? handleFloorManagerClick : undefined}
               />
-              {canAssign && t.stage_name !== 'Inventory' ? (
-                <div className="mt-1 flex justify-end px-1">
-                  {renderAssignAction(t)}
+              {canManage || (canAssign && t.stage_name !== 'Inventory') ? (
+                <div className="mt-1 flex justify-end gap-3 px-1">
+                  {canManage ? (
+                    <button
+                      type="button"
+                      onClick={() => setConfigTicket(t)}
+                      className="text-[11px] text-blue-600 font-semibold hover:underline"
+                    >
+                      Edit specs
+                    </button>
+                  ) : null}
+                  {canAssign && t.stage_name !== 'Inventory' ? renderAssignAction(t) : null}
                 </div>
               ) : null}
             </div>
@@ -384,7 +408,20 @@ export default function FloorTicketListPage() {
                     <td className="px-3 py-3 font-mono text-xs text-slate-700">
                       {resolveTicketSerial(t) || '—'}
                     </td>
-                    <td className="px-3 py-3 text-xs">{configSummary(t)}</td>
+                    <td className="px-3 py-3 text-xs">
+                      <div className="flex items-start gap-2">
+                        <span>{configSummary(t)}</span>
+                        {canManage ? (
+                          <button
+                            type="button"
+                            onClick={() => setConfigTicket(t)}
+                            className="shrink-0 text-[11px] font-semibold text-blue-600 hover:underline"
+                          >
+                            Edit
+                          </button>
+                        ) : null}
+                      </div>
+                    </td>
                     <td className="px-3 py-3">{formatStageDisplayName(t.stage_name)}</td>
                     <td className="px-3 py-3">
                       <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${stageCategoryBadge(t.stage_name)}`}>{cat}</span>
@@ -419,6 +456,13 @@ export default function FloorTicketListPage() {
         open={!!assignTicket}
         onClose={() => setAssignTicket(null)}
         onAssigned={load}
+      />
+
+      <ConfigUpdateModal
+        open={!!configTicket}
+        ticket={configTicket}
+        onClose={() => setConfigTicket(null)}
+        onSaved={() => { setConfigTicket(null); load(); }}
       />
     </div>
   );

@@ -1,6 +1,6 @@
 /**
- * Run migration 172 — Dispatch team can upload E-Invoice / E-Way Bill on sale DCs.
- * Usage (from backend/): node scripts/run-migration-172.js
+ * Run migration 171 — sale DC compliance (e-invoice upload, e-way PDF, vehicle).
+ * Usage (from backend/): node scripts/run-migration-171.js
  */
 require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 process.env.DB_SSL = process.env.DB_SSL || 'false';
@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
 
-const MIGRATION_NAME = '172_dispatch_sale_dc_compliance_upload.sql';
+const MIGRATION_NAME = '171_sale_dc_compliance.sql';
 
 async function main() {
   const sqlPath = path.join(__dirname, '../migrations', MIGRATION_NAME);
@@ -25,15 +25,7 @@ async function main() {
       [MIGRATION_NAME]
     );
     await client.query('COMMIT');
-
-    const check = await pool.query(`
-      SELECT role, section, can_view, can_create, can_edit, can_delete
-        FROM role_permissions
-       WHERE role = 'dispatch' AND section = 'einvoice_ewb'
-    `);
-
-    console.log(`Migration 172 applied: ${sqlPath}`);
-    console.log('dispatch + einvoice_ewb permissions:', check.rows[0] || '(no row — check role_permissions)');
+    console.log(`Migration 171 applied: ${sqlPath}`);
   } catch (e) {
     await client.query('ROLLBACK');
     throw e;

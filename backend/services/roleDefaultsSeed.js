@@ -51,6 +51,11 @@ const ROLE_ROW_DEFAULTS = {
     ['dashboard', false, false, false], ['floor_pipeline', false, true, false], ['floor_tickets', false, true, false],
     ['qc_management', false, true, false], ['ttspl_history', false, false, false], ['inventory_management', false, false, false],
   ],
+  dispatch_qc: [
+    ['dashboard', false, false, false], ['floor_pipeline', false, true, false], ['floor_tickets', false, true, false],
+    ['qc_management', false, true, false], ['dispatch_ops', false, true, false],
+    ['ttspl_history', false, false, false], ['inventory_management', false, false, false],
+  ],
   procurement: [
     ['dashboard', false, false, false], ['vendor_management', true, true, false], ['procurement', true, true, false],
     ['inventory_management', false, false, false], ['parts_inventory', true, true, false],

@@ -36,7 +36,11 @@ export default function ConfigUpdateModal({ open, onClose, ticket, extra = {}, o
     });
     setNotes('');
     setChangeType('correction');
-  }, [open, ticket, extra]);
+    // Re-initialise only when the modal opens or a different ticket is loaded.
+    // `extra` is intentionally excluded: callers often pass an inline `{}` whose
+    // reference changes every render, which would otherwise reset inputs on each keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, ticket?.ticket_id]);
 
   if (!open) return null;
 
@@ -74,9 +78,9 @@ export default function ConfigUpdateModal({ open, onClose, ticket, extra = {}, o
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <button type="button" className="absolute inset-0 bg-black/40" onClick={onClose} aria-label="Close" />
-      <div className="relative w-full max-w-lg rounded-xl border border-gray-100 bg-white shadow-xl p-5 space-y-4">
+    <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto p-4 sm:items-center">
+      <button type="button" className="fixed inset-0 bg-black/50" onClick={onClose} aria-label="Close" />
+      <div className="relative z-10 my-8 w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-xl border border-gray-100 bg-white shadow-2xl p-5 space-y-4">
         <div className="flex justify-between items-center">
           <h3 className="font-semibold text-slate-900">Update laptop config</h3>
           <button type="button" onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
