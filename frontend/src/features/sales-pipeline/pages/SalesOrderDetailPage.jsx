@@ -15,7 +15,7 @@ import { cancelSalesOrder, getQuotation, getSalesOrderFull, logSoDocumentActivit
 import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
 import usePermission from '../../../hooks/usePermission';
-import { formatConfig, formatCurrency, formatDate, salesOrderTypeLabel, salesOrderTypeStyle, deliveryChallanDetailPath, parseDeliveryAddress, formatSupplyStateLabel, resolveSupplyStateFromShipping } from '../salesPipelineUtils';
+import { formatConfig, formatCurrency, formatDate, salesOrderTypeLabel, salesOrderTypeStyle, salesOrderStatusLabel, deliveryChallanDetailPath, parseDeliveryAddress, formatSupplyStateLabel, resolveSupplyStateFromShipping } from '../salesPipelineUtils';
 import { getSoScopeConfig, orderMatchesScope, salesOrderListPath } from '../salesOrderScope';
 
 function resolveSoNumber(params) {
@@ -240,7 +240,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
           <div className="bg-white border rounded-xl p-4 text-sm space-y-2">
             <p><span className="text-gray-500">Date:</span> {formatDate(head.created_at)}</p>
             <p><span className="text-gray-500">Dispatch date:</span> {formatDate(dispatchDate)}</p>
-            <p><span className="text-gray-500">Status:</span> {isCancelled ? 'Cancelled' : 'Pending'}</p>
+            <p><span className="text-gray-500">Status:</span> {salesOrderStatusLabel(data?.status || head.status)}</p>
             <p><span className="text-gray-500">Laptop quantity:</span> <strong className="text-blue-700">{laptopQty}</strong></p>
             <p><span className="text-gray-500">Delivered:</span> <strong className="text-emerald-700">{deliveredCount}</strong></p>
             <p><span className="text-gray-500">Attached:</span> <strong className="text-teal-700">{attachedCount}</strong></p>

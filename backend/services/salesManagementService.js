@@ -384,6 +384,36 @@ function withPendingQty(row = {}) {
   return { ...row, ...reconciled };
 }
 
+/** List/detail status from fulfillment — SO lines often stay `pending` after DC delivery. */
+function deriveSalesOrderListStatus(row = {}) {
+  if (String(row.status || '').toLowerCase() === 'cancelled') return 'cancelled';
+  const qty = Math.max(0, Number(row.laptop_qty ?? 0));
+  const delivered = Math.max(0, Number(row.delivered_count ?? 0));
+  const dispatched = Math.max(0, Number(row.dispatched_count ?? 0));
+  if (qty > 0 && delivered >= qty) return 'delivered';
+  if (dispatched > 0 || delivered > 0) return 'dispatched';
+  return 'pending';
+}
+
+function soLaptopQtySql(soRef) {
+  return `(SELECT COALESCE(SUM(COALESCE(main_qty, quantity, 0)), 0)::int
+             FROM sales_order_lines sol_q
+            WHERE sol_q.sales_order_number = ${soRef})`;
+}
+
+function soFullyDeliveredSql(soRef) {
+  return `${soLaptopQtySql(soRef)} > 0
+    AND ${fulfillmentSql(SO_FULFILLMENT_DELIVERED_SQL, soRef)} >= ${soLaptopQtySql(soRef)}`;
+}
+
+function soNotCancelledSql(soRef) {
+  return `${soRef} IN (
+    SELECT sales_order_number FROM sales_order_lines
+    GROUP BY sales_order_number
+    HAVING COUNT(*) FILTER (WHERE LOWER(COALESCE(status, 'pending')) = 'cancelled') < COUNT(*)
+  )`;
+}
+
 async function getSalesOrderDispatchDate(salesOrderNumber) {
   const r = await pool.query(
     `SELECT MIN(dcl.dispatched_at) AS dispatch_date,
@@ -533,15 +563,15 @@ async function listSalesOrdersGrouped({
         AND COUNT(*) FILTER (WHERE LOWER(COALESCE(status, 'pending')) = 'cancelled') = COUNT(*)
     )`;
   } else if (normalizedStatus === 'pending') {
-    where += where ? ` AND sales_order_number IN (
-      SELECT sales_order_number FROM sales_order_lines
-      GROUP BY sales_order_number
-      HAVING COUNT(*) FILTER (WHERE LOWER(COALESCE(status, 'pending')) != 'cancelled') > 0
-    )` : `WHERE sales_order_number IN (
-      SELECT sales_order_number FROM sales_order_lines
-      GROUP BY sales_order_number
-      HAVING COUNT(*) FILTER (WHERE LOWER(COALESCE(status, 'pending')) != 'cancelled') > 0
-    )`;
+    where += where ? ` AND ${soNotCancelledSql('sales_order_lines.sales_order_number')}` : `WHERE ${soNotCancelledSql('sales_order_lines.sales_order_number')}`;
+    where += ` AND NOT (${soFullyDeliveredSql('sales_order_lines.sales_order_number')})`;
+  } else if (normalizedStatus === 'delivered') {
+    where += where ? ` AND ${soNotCancelledSql('sales_order_lines.sales_order_number')}` : `WHERE ${soNotCancelledSql('sales_order_lines.sales_order_number')}`;
+    where += ` AND (${soFullyDeliveredSql('sales_order_lines.sales_order_number')})`;
+  } else if (normalizedStatus === 'dispatched') {
+    where += where ? ` AND ${soNotCancelledSql('sales_order_lines.sales_order_number')}` : `WHERE ${soNotCancelledSql('sales_order_lines.sales_order_number')}`;
+    where += ` AND NOT (${soFullyDeliveredSql('sales_order_lines.sales_order_number')})`;
+    where += ` AND ${fulfillmentSql(SO_FULFILLMENT_DISPATCHED_SQL, 'sales_order_lines.sales_order_number')} > 0`;
   }
   const replacementSoSubquery = `SELECT DISTINCT sales_order_number FROM support_replacement_orders WHERE sales_order_number IS NOT NULL`;
   const normalizedOrderType = String(orderType || '').trim().toLowerCase();
@@ -645,7 +675,10 @@ async function listSalesOrdersGrouped({
     statsRow.dispatched
   );
   return {
-    sales_orders: listResult.rows.map(withPendingQty),
+    sales_orders: listResult.rows.map((row) => {
+      const reconciled = withPendingQty(row);
+      return { ...reconciled, status: deriveSalesOrderListStatus(reconciled) };
+    }),
     stats: {
       orders: Number(statsRow.orders || 0),
       total_laptops: statsCounts.laptop_qty,
@@ -1993,6 +2026,7 @@ module.exports = {
   getSalesOrderFulfillmentCounts,
   getSalesOrderDispatchDate,
   withPendingQty,
+  deriveSalesOrderListStatus,
   listQuotationsGrouped,
   getQuotationLines,
   listSalesOrdersGrouped,
