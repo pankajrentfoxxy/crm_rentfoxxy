@@ -2,7 +2,12 @@
  * Support replacement: Sales Order (config only) + Return DC at initiate.
  * Outbound delivery DC is created later via normal SO attach → Dispatch QC → Create DC.
  */
-const { nextFinancialYearNumber, generateToken } = require('./salesManagementService');
+const {
+  nextFinancialYearNumber,
+  generateToken,
+  getSalesOrderFulfillmentCounts,
+  deriveSalesOrderListStatus,
+} = require('./salesManagementService');
 const inventorySM = require('./inventoryStateMachine');
 
 function parseExtra(raw) {
@@ -514,6 +519,18 @@ async function onReplacementOutboundDelivered(client, dcNumber, actor = {}) {
   if (handledAny && row.support_ticket_id) {
     await tryCloseReplacementTicket(client, row.support_ticket_id);
   }
+
+  if (handledAny && row.sales_order_number) {
+    const fulfillment = await getSalesOrderFulfillmentCounts(row.sales_order_number);
+    if (deriveSalesOrderListStatus(fulfillment) === 'delivered') {
+      await client.query(
+        `UPDATE sales_order_lines SET status = 'delivered', updated_at = NOW()
+          WHERE sales_order_number = $1 AND LOWER(COALESCE(status, 'pending')) != 'cancelled'`,
+        [row.sales_order_number]
+      );
+    }
+  }
+
   return { handled: handledAny };
 }
 

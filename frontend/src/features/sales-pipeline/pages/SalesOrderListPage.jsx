@@ -8,7 +8,7 @@ import PaymentModal from '../components/PaymentModal';
 import SalesOrderForm from '../components/SalesOrderForm';
 import DCForm from '../components/DCForm';
 import { cancelSalesOrder, getSalesOrderMeta, listSalesOrders } from '../salesPipelineApi';
-import { formatCurrency, formatDate, salesOrderTypeLabel, salesOrderTypeStyle } from '../salesPipelineUtils';
+import { formatCurrency, formatDate, salesOrderTypeLabel, salesOrderTypeStyle, salesOrderStatusLabel, salesOrderStatusStyle } from '../salesPipelineUtils';
 import {
   getSoScopeConfig,
   salesOrderDetailPath,
@@ -29,6 +29,8 @@ const SO_FILTER_DEFAULTS = {
 const SO_STATUS_OPTIONS = [
   { value: '', label: 'All statuses' },
   { value: 'pending', label: 'Pending' },
+  { value: 'dispatched', label: 'Dispatched / In transit' },
+  { value: 'delivered', label: 'Delivered' },
   { value: 'cancelled', label: 'Cancelled' },
 ];
 const SO_ORDER_TYPE_OPTIONS = [
@@ -38,15 +40,11 @@ const SO_ORDER_TYPE_OPTIONS = [
 ];
 
 function soStatusLabel(status) {
-  const s = String(status || 'pending').toLowerCase();
-  if (s === 'cancelled') return 'Cancelled';
-  return 'Pending';
+  return salesOrderStatusLabel(status);
 }
 
 function soStatusClass(status) {
-  const s = String(status || 'pending').toLowerCase();
-  if (s === 'cancelled') return 'bg-red-100 text-red-700';
-  return 'bg-amber-100 text-amber-800';
+  return salesOrderStatusStyle(status);
 }
 
 function QtyPill({ label, value, tone = 'slate' }) {

@@ -24,6 +24,7 @@ const {
   getQuotationRemainingQty,
   getSalesOrderRemainingQty,
   getSalesOrderFulfillmentCounts,
+  deriveSalesOrderListStatus,
   getSalesOrderDispatchDate,
   getOperationCounts,
   searchAvailableInventory,
@@ -2534,9 +2535,13 @@ exports.getSoWithPayments = async (req, res) => {
       security: lines[0].security_amount,
       supplyState: resolveSupplyStateFromAddress(lines[0].customer_shipping_address, lines[0].supply_state),
     });
-    const soStatus = lines.every((l) => String(l.status).toLowerCase() === 'cancelled')
-      ? 'cancelled'
-      : (lines[0].status || 'pending');
+    const soStatus = deriveSalesOrderListStatus({
+      status: lines.every((l) => String(l.status).toLowerCase() === 'cancelled') ? 'cancelled' : (lines[0].status || 'pending'),
+      laptop_qty: laptopQty,
+      delivered_count: fulfillment.delivered_count,
+      dispatched_count: fulfillment.dispatched_count,
+      pending_qty: fulfillment.pending_qty,
+    });
     const supportMeta = await getSalesOrderSupportMeta(soNumber);
     res.json({
       success: true,
