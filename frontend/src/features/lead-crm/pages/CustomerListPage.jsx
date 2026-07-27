@@ -18,6 +18,18 @@ const EXPORT_ROLES = new Set(['admin', 'super_admin']);
 const TYPE_EDIT_ROLES = new Set(['admin', 'super_admin']);
 const PAGE_SIZE = 25;
 
+// Remembers page + filters so returning from a customer's detail restores the list
+// position instead of resetting to page 1.
+const LIST_STATE_KEY = 'lead-crm:customers:list-state';
+
+function readSavedListState() {
+  try {
+    return JSON.parse(sessionStorage.getItem(LIST_STATE_KEY) || '{}') || {};
+  } catch {
+    return {};
+  }
+}
+
 function formatSelectedCount(n) {
   return `${Number(n || 0).toLocaleString('en-IN')} Customer${n === 1 ? '' : 's'} Selected`;
 }
@@ -27,13 +39,14 @@ export default function CustomerListPage() {
   const { user } = useAuth();
   const canExportCustomers = EXPORT_ROLES.has(user?.role);
   const canBulkEditType = TYPE_EDIT_ROLES.has(user?.role);
+  const saved = useMemo(() => readSavedListState(), []);
   const [customers, setCustomers] = useState([]);
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(() => saved.page || 1);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
-  const [search, setSearch] = useState('');
-  const [sortDir, setSortDir] = useState('asc');
-  const [kycFilter, setKycFilter] = useState('');
-  const [customerType, setCustomerType] = useState('all');
+  const [search, setSearch] = useState(() => saved.search || '');
+  const [sortDir, setSortDir] = useState(() => saved.sortDir || 'asc');
+  const [kycFilter, setKycFilter] = useState(() => saved.kycFilter || '');
+  const [customerType, setCustomerType] = useState(() => saved.customerType || 'all');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editCustomer, setEditCustomer] = useState(null);
   const [activeOrderCounts, setActiveOrderCounts] = useState({});
@@ -74,6 +87,18 @@ export default function CustomerListPage() {
   }, [page, sortDir, listFilterParams]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Persist page + filters so returning from a detail view restores this list.
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(
+        LIST_STATE_KEY,
+        JSON.stringify({ page, search, sortDir, kycFilter, customerType })
+      );
+    } catch {
+      /* storage unavailable — non-fatal */
+    }
+  }, [page, search, sortDir, kycFilter, customerType]);
 
   // Reset selection when filters/search change (not when paging)
   useEffect(() => {

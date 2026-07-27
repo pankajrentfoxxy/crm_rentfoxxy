@@ -292,7 +292,7 @@ export default function DeliveryChallanDetailPage() {
           >
             ← Back
           </button>
-          <h1 className={`text-2xl font-semibold font-mono mt-1 ${isRejected || isCancelled ? 'text-red-700 line-through decoration-red-400' : ''}`}>{dcNumber}</h1>
+          <h1 className={`text-2xl font-semibold font-mono mt-1 ${isRejected || isCancelled ? 'text-red-700 line-through decoration-red-400' : 'text-black'}`}>{dcNumber}</h1>
           <p className="text-gray-600">{head.customer_name || '—'} · SO: <Link className="text-blue-600" to={salesOrderDetailPath(head.sales_order_number)}>{head.sales_order_number}</Link></p>
           <p className="text-sm text-gray-500 mt-1">
             Created: {formatDate(head.created_at)}
