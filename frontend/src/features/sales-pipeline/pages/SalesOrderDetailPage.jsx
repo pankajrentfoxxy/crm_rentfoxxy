@@ -14,6 +14,7 @@ import { DispatchWorkflowCard } from '../../dispatch/components/DispatchWorkflow
 import { cancelSalesOrder, getQuotation, getSalesOrderFull, logSoDocumentActivity, regenerateSalesOrderPdf } from '../salesPipelineApi';
 import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
+import { canEditSoLineRateConfig } from '../../../utils/permissionHelper';
 import usePermission from '../../../hooks/usePermission';
 import { formatConfig, formatCurrency, formatDate, salesOrderTypeLabel, salesOrderTypeStyle, salesOrderStatusLabel, deliveryChallanDetailPath, parseDeliveryAddress, formatSupplyStateLabel, resolveSupplyStateFromShipping } from '../salesPipelineUtils';
 import { getSoScopeConfig, orderMatchesScope, salesOrderListPath } from '../salesOrderScope';
@@ -59,6 +60,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
   const canViewPayments = canView('payment_records');
   const canViewQuotations = canView('sales_quotations');
   const isSuperAdmin = user?.role === 'super_admin';
+  const canEditLineRateConfig = canEditSoLineRateConfig(user);
   const isDispatchUser = user?.role === 'dispatch';
   const canViewDispatchOps = isDispatchUser || isSuperAdmin
     || canEdit('dispatch_workflow') || canEdit('dispatch_pending_orders');
@@ -286,7 +288,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
                   <th className="px-4 py-2 text-right">Qty</th>
                   <th className="px-4 py-2 text-right">Rate</th>
                   <th className="px-4 py-2 text-right">Total</th>
-                  {isSuperAdmin || canOverrideHsn ? <th className="px-4 py-2 text-right"> </th> : null}
+                  {isSuperAdmin || canOverrideHsn || canEditLineRateConfig ? <th className="px-4 py-2 text-right"> </th> : null}
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -298,7 +300,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
                     <td className="px-4 py-2 text-right">{l.main_qty || l.quantity}</td>
                     <td className="px-4 py-2 text-right">{formatCurrency(l.rate)}</td>
                     <td className="px-4 py-2 text-right">{formatCurrency((l.main_qty || l.quantity || 0) * (l.rate || 0))}</td>
-                    {isSuperAdmin || canOverrideHsn ? (
+                    {isSuperAdmin || canOverrideHsn || canEditLineRateConfig ? (
                       <td className="px-4 py-2 text-right space-x-2 whitespace-nowrap">
                         {canOverrideHsn ? (
                           <button
@@ -309,7 +311,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
                             Edit HSN
                           </button>
                         ) : null}
-                        {isSuperAdmin ? (
+                        {canEditLineRateConfig ? (
                           <button
                             type="button"
                             onClick={() => setEditRateLine(l)}

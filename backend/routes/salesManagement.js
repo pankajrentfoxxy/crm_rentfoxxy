@@ -4,7 +4,7 @@ const fs = require('fs');
 const multer = require('multer');
 const { multerLimits, wrapMulter } = require('../config/uploadLimits');
 const router = express.Router();
-const { authMiddleware, checkSectionPermission, checkAnySectionPermission, checkRole } = require('../middleware/auth');
+const { authMiddleware, checkSectionPermission, checkAnySectionPermission, checkRole, checkRoleOrPermission } = require('../middleware/auth');
 const { SO_VIEW_SECTIONS } = require('../services/dataScopeService');
 const cp = checkSectionPermission;
 const cpAny = checkAnySectionPermission;
@@ -77,6 +77,7 @@ const rdcView = cp('return_dc', 'view');
 const rdcEdit = cp('return_dc', 'edit');
 const tbView = cp('technician_bucket', 'view');
 const tbEdit = cp('technician_bucket', 'edit');
+const soLineRateConfigEdit = checkRoleOrPermission(['admin'], ['so_line_rate_config_edit']);
 /** Warehouse return OTP — warehouse/sales (send) and technicians (verify) both need access. */
 const whReturnEdit = cpAny(['delivery_challans', 'technician_bucket'], 'edit');
 const drView = cpAny(['delivery_register_management', 'technician_bucket'], 'view');
@@ -105,10 +106,10 @@ router.patch('/so-serials/:allocationId/address', soSerialsEdit, ctrl.updateSoSe
 router.patch(...soRoute('/serial-addresses', soSerialsEdit, ctrl.bulkUpdateSoSerialAddresses));
 // Phase 14 — line-level delivery address (before serials are attached)
 router.patch('/so-lines/:lineId/address', soSerialsEdit, ctrl.updateSoLineAddress);
-// Super Admin — correct sales-side line config (processor / gen / RAM / storage)
-router.patch('/so-lines/:lineId/config', checkRole('super_admin'), ctrl.updateSoLineConfig);
-// Super Admin — correct monthly rate (regenerates SO + linked DC PDFs)
-router.patch('/so-lines/:lineId/rate', checkRole('super_admin'), ctrl.updateSoLineRate);
+// Super Admin / granted users — correct sales-side line config (processor / gen / RAM / storage)
+router.patch('/so-lines/:lineId/config', soLineRateConfigEdit, ctrl.updateSoLineConfig);
+// Super Admin / granted users — correct monthly rate (regenerates SO + linked DC PDFs)
+router.patch('/so-lines/:lineId/rate', soLineRateConfigEdit, ctrl.updateSoLineRate);
 // Admin / Super Admin — override line HSN/SAC
 router.patch('/so-lines/:lineId/hsn', checkRole('admin', 'super_admin'), ctrl.updateSoLineHsn);
 

@@ -122,6 +122,14 @@ export function canViewAnySection(user, effectivePermissions, sections) {
   return (sections || []).some((section) => canViewSection(user, effectivePermissions, section));
 }
 
+/** Edit SO line monthly rate + catalog config (super admin or explicit grant). */
+export function canEditSoLineRateConfig(user) {
+  if (!user) return false;
+  if (user.role === 'super_admin' || user.role === 'admin') return true;
+  const perms = Array.isArray(user.permissions) ? user.permissions : [];
+  return perms.includes('so_line_rate_config_edit');
+}
+
 /** Accordion visibility: explicit parent grant OR any child with view access. */
 export function canViewParentModule(user, effectivePermissions, parentSection) {
   if (!user) return false;

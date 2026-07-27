@@ -1,6 +1,6 @@
 /**
- * Run migration 171 — sale DC compliance (e-invoice upload, e-way PDF, vehicle).
- * Usage (from backend/): node scripts/run-migration-171.js
+ * Run migration 172 — grant harshit SO line rate/config edit permission.
+ * Usage (from backend/): node scripts/run-migration-172.js
  */
 require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 process.env.DB_SSL = process.env.DB_SSL || 'false';
@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
 
-const MIGRATION_NAME = '171_sale_dc_compliance.sql';
+const MIGRATION_NAME = '172_harshit_so_line_edit.sql';
 
 async function main() {
   const sqlPath = path.join(__dirname, '../migrations', MIGRATION_NAME);
@@ -25,7 +25,7 @@ async function main() {
       [MIGRATION_NAME]
     );
     await client.query('COMMIT');
-    console.log(`Migration 171 applied: ${sqlPath}`);
+    console.log(`Migration 172 applied: ${sqlPath}`);
   } catch (e) {
     await client.query('ROLLBACK');
     throw e;

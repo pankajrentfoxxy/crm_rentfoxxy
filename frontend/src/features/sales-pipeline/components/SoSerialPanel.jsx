@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { Package, Pencil } from 'lucide-react';
 import PermissionGate from '../../../components/PermissionGate';
 import { useAuth } from '../../../context/AuthContext';
+import { canEditSoLineRateConfig } from '../../../utils/permissionHelper';
 import { attachSoSerial, detachSoSerial, getAvailableSerials, listSoSerials } from '../salesPipelineApi';
 import SoLineConfigEditModal from './SoLineConfigEditModal';
 import SoLineRateEditModal from './SoLineRateEditModal';
@@ -151,7 +152,7 @@ export default function SoSerialPanel({ soNumber }) {
   const [editRateLine, setEditRateLine] = useState(null);
   const [assignModal, setAssignModal] = useState(null);
   const { user } = useAuth();
-  const isSuperAdmin = user?.role === 'super_admin';
+  const canEditLineRateConfig = canEditSoLineRateConfig(user);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -198,7 +199,7 @@ export default function SoSerialPanel({ soNumber }) {
               <p className="text-xs text-gray-500">{[line.processor, line.generation, line.ram, line.storage].filter(Boolean).join(' · ')}</p>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              {isSuperAdmin && (
+              {canEditLineRateConfig && (
                 <button
                   type="button"
                   onClick={() => setEditRateLine(line)}
@@ -209,7 +210,7 @@ export default function SoSerialPanel({ soNumber }) {
                   Edit rate
                 </button>
               )}
-              {isSuperAdmin && (
+              {canEditLineRateConfig && (
                 <button
                   type="button"
                   onClick={() => setEditLine(line)}
