@@ -27,10 +27,66 @@ async function loadOldDeployedSerial(client, src, customerId) {
   return r.rows[0] || null;
 }
 
+/**
+ * Resolve the old laptop's price to carry into the replacement line.
+ * The serial's `rent_monthly_rate` is often 0/null for units whose rent was never
+ * synced (or that were sold), so we fall back through the other places the unit's
+ * price was recorded:
+ *   1. vendor_serial_numbers.rent_monthly_rate (the deployed serial)
+ *   2. customer_inventory.rate (ERP-synced customer holding)
+ *   3. the most recent sales_order line rate where this unit was actually deployed
+ * Returns 0 only when no price is recorded anywhere.
+ */
+async function resolveOldUnitPrice(client, { serialRate, code, serialNumber, customerId }) {
+  const direct = serialRate != null ? Number(serialRate) : 0;
+  if (direct > 0) return direct;
+
+  const codes = [...new Set([code, serialNumber].filter(Boolean))];
+  if (!codes.length) return 0;
+
+  // 2. customer_inventory (most recent non-zero rate for this unit). rate is stored
+  //    as text, so cast defensively.
+  const ci = await client.query(
+    `SELECT NULLIF(TRIM(rate::text), '')::numeric AS rate
+       FROM customer_inventory
+      WHERE (unique_serial_number = ANY($1) OR serial_number = ANY($1))
+        AND rate ~ '^[0-9.]+$' AND NULLIF(TRIM(rate::text), '')::numeric > 0
+        ${customerId ? 'AND (customer_id = $2 OR customer_id IS NULL)' : ''}
+      ORDER BY COALESCE(updated_at, created_at) DESC NULLS LAST
+      LIMIT 1`,
+    customerId ? [codes, customerId] : [codes]
+  );
+  if (ci.rows[0]?.rate != null) return Number(ci.rows[0].rate);
+
+  // 3. Last sales-order line where the unit was deployed. sales_order_serials.ttspl_id
+  //    can be composite (e.g. 'TRU1575/TTSPL1052'), so also match on suffix.
+  const primary = code || serialNumber;
+  const sol = await client.query(
+    `SELECT sol.rate
+       FROM sales_order_serials sos
+       JOIN sales_order_lines sol ON sol.id = sos.line_id
+      WHERE (sos.ttspl_id = ANY($1) OR sos.serial_number = ANY($1) OR sos.ttspl_id ILIKE '%' || $2)
+        AND sol.rate IS NOT NULL AND sol.rate::numeric > 0
+      ORDER BY sol.id DESC
+      LIMIT 1`,
+    [codes, primary]
+  );
+  if (sol.rows[0]?.rate != null) return Number(sol.rows[0].rate);
+
+  return 0;
+}
+
 /** Build replacement laptop config from complaint item + deployed serial. */
 async function resolveConfigFromComplaint(client, src, customerId) {
   const oldSerial = await loadOldDeployedSerial(client, src, customerId);
   const extra = parseExtra(oldSerial?.extra);
+  const code = src.ttspl_id || src.unique_serial_number || src.serial_number || '';
+  const monthlyRate = await resolveOldUnitPrice(client, {
+    serialRate: oldSerial?.rent_monthly_rate,
+    code,
+    serialNumber: oldSerial?.serial_number || src.serial_number,
+    customerId,
+  });
   return {
     brand: src.brand || extra.brand || '',
     model: src.model || extra.model || extra.model_name || src.inv_model_name || '',
@@ -40,9 +96,9 @@ async function resolveConfigFromComplaint(client, src, customerId) {
     storage: src.storage || extra.storage || src.inv_storage || '',
     gpu: src.gpu || extra.gpu || src.inv_gpu || '',
     screen_size: src.screen_size || extra.screen_size || src.inv_screen_size || '',
-    monthly_rate: oldSerial?.rent_monthly_rate != null ? Number(oldSerial.rent_monthly_rate) : 0,
+    monthly_rate: monthlyRate,
     old_serial_id: oldSerial?.serial_id || null,
-    old_machine_serial: src.ttspl_id || src.unique_serial_number || src.serial_number || '',
+    old_machine_serial: code,
     old_customer_inventory_id: src.customer_inventory_id || null,
   };
 }
@@ -177,7 +233,7 @@ async function createConfigSalesOrder(client, {
        ) VALUES (
          $1,'N/A',$2,$3,$4,$5,$6,$7,$8,$9,0,0,'rental','rentfoxxy',
          $10,$11,$12,$13,$14,$15,$16,$17,1,1,$18,0,0,0,
-         'Support replacement','pending',$19,$20,$21
+         $22,'pending',$19,$20,$21
        ) RETURNING id`,
       [
         salesOrderNumber,
@@ -201,6 +257,7 @@ async function createConfigSalesOrder(client, {
         token,
         userId,
         lineHsn,
+        buildReplacementSoLineRemark(cfg),
       ]
     );
     lineIds.push(ins.rows[0].id);
@@ -257,7 +314,7 @@ async function appendConfigSalesOrderLines(client, {
        ) VALUES (
          $1,'N/A',$2,$3,$4,$5,$6,$7,$8,$9,0,0,'rental','rentfoxxy',
          $10,$11,$12,$13,$14,$15,$16,$17,1,1,$18,0,0,0,
-         'Support replacement','pending',$19,$20,$21
+         $22,'pending',$19,$20,$21
        ) RETURNING id`,
       [
         so,
@@ -281,6 +338,7 @@ async function appendConfigSalesOrderLines(client, {
         token,
         userId,
         lineHsn,
+        buildReplacementSoLineRemark(cfg),
       ]
     );
     lineIds.push(ins.rows[0].id);
@@ -293,6 +351,16 @@ function formatConfigLabel(cfg) {
   return [cfg.brand, cfg.model, cfg.processor, cfg.generation, cfg.ram, cfg.storage]
     .filter(Boolean)
     .join(' · ');
+}
+
+/**
+ * SO line remark for a replacement — names the old (faulty) laptop by TTSPL so the
+ * remark carries into the outbound delivery DC (its remarks are derived from the SO
+ * line remark). Falls back to the generic label when no TTSPL/serial is known.
+ */
+function buildReplacementSoLineRemark(cfg) {
+  const code = String(cfg?.old_machine_serial || '').trim();
+  return code ? `Support replacement against TTSPL: ${code}` : 'Support replacement';
 }
 
 async function findReplacementOrderForSerial(client, serialId) {
@@ -552,10 +620,18 @@ async function resolveConfigFromRepairPickup(client, pickupItem, complaintItem, 
   let monthlyRate = serial?.rent_monthly_rate != null ? Number(serial.rent_monthly_rate) : 0;
   if (!monthlyRate && pickupItem.customer_inventory_id) {
     const ci = await client.query(
-      'SELECT monthly_rate FROM customer_inventory WHERE id = $1',
+      'SELECT rate FROM customer_inventory WHERE id = $1',
       [pickupItem.customer_inventory_id]
     );
-    if (ci.rows[0]?.monthly_rate != null) monthlyRate = Number(ci.rows[0].monthly_rate);
+    if (ci.rows[0]?.rate != null) monthlyRate = Number(ci.rows[0].rate);
+  }
+  if (!monthlyRate) {
+    monthlyRate = await resolveOldUnitPrice(client, {
+      serialRate: serial?.rent_monthly_rate,
+      code,
+      serialNumber: serial?.serial_number || pickupItem.serial_number,
+      customerId,
+    });
   }
   const src = complaintItem || pickupItem;
   return {
@@ -871,6 +947,7 @@ module.exports = {
   buildReplacementRdcRemarks,
   resolveConfigFromComplaint,
   resolveConfigFromRepairPickup,
+  resolveOldUnitPrice,
   listEligibleComplaintItems,
   listRepairPickupSwapCandidates,
   buildTicketReplacementContext,
@@ -879,6 +956,7 @@ module.exports = {
   createConfigSalesOrder,
   appendConfigSalesOrderLines,
   formatConfigLabel,
+  buildReplacementSoLineRemark,
   onReplacementOutboundDelivered,
   onReplacementReturnPickedUp,
   onReplacementWarehouseReceived,
