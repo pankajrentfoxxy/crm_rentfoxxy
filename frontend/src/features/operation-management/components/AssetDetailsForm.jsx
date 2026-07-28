@@ -71,6 +71,8 @@ export default function AssetDetailsForm({
   quotationType,
   requiredFields = DEFAULT_REQUIRED_FIELDS,
   useCascadeApi,
+  hideCommercialFields = false,
+  hideAddLine = false,
 }) {
   const required = new Set(requiredFields);
   const isRequired = (field) => required.has(field);
@@ -192,7 +194,8 @@ export default function AssetDetailsForm({
           : pickOptions(catalogRows, line, 'storage', cfg.storages);
 
         return (
-        <div key={index} className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+        <div key={index} className={`bg-white border border-gray-200 rounded-xl shadow-sm ${hideCommercialFields ? 'overflow-visible' : 'overflow-hidden'}`}>
+          {!hideCommercialFields ? (
           <div className="px-4 py-3 border-b bg-gray-50 flex items-center justify-between">
             <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
               <span aria-hidden>💻</span>
@@ -205,7 +208,8 @@ export default function AssetDetailsForm({
               </button>
             ) : null}
           </div>
-          <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          ) : null}
+          <div className={`p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 ${hideCommercialFields ? '' : ''}`}>
             <SearchableSelect
               id={`asset-brand-${index}`}
               label="Brand"
@@ -273,6 +277,8 @@ export default function AssetDetailsForm({
               onChange={(v) => updateLine(index, 'screen_size', v)}
               options={cfg.screen_sizes || []}
             />
+            {!hideCommercialFields ? (
+            <>
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">
                 Quantity
@@ -351,10 +357,13 @@ export default function AssetDetailsForm({
                 onChange={(e) => updateLine(index, 'remark', e.target.value)}
               />
             </div>
+            </>
+            ) : null}
           </div>
         </div>
         );
       })}
+      {!hideAddLine ? (
       <button
         type="button"
         onClick={addLine}
@@ -363,6 +372,7 @@ export default function AssetDetailsForm({
         Add
         <span aria-hidden className="text-base leading-none">⊕</span>
       </button>
+      ) : null}
     </div>
   );
 }

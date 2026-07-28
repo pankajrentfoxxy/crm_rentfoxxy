@@ -1068,9 +1068,15 @@ exports.updateCustomer = async (req, res) => {
     if (body.contact_person_name !== undefined) {
       details.contact_person_name = body.contact_person_name || null;
       detailsChanged = true;
+    } else if (body.customer_name !== undefined || body.name !== undefined) {
+      details.contact_person_name = name || null;
+      detailsChanged = true;
     }
     if (body.contact_person_number !== undefined) {
       details.contact_person_number = body.contact_person_number || null;
+      detailsChanged = true;
+    } else if (body.customer_number !== undefined || body.phone !== undefined) {
+      details.contact_person_number = phone || null;
       detailsChanged = true;
     }
     for (const key of FINANCE_SPOCK_DETAIL_KEYS) {

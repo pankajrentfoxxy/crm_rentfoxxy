@@ -53,11 +53,13 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
 
   useEffect(() => {
     if (customer) {
+      const contactName = customer.contact_person_name || customer.customer_name || customer.name || '';
+      const contactPhone = customer.contact_person_number || customer.customer_number || customer.phone || '';
       setForm({
-        customer_name: customer.customer_name || customer.name || '',
+        customer_name: contactName,
         company_name: customer.company_name || '',
         email: customer.email || '',
-        customer_number: customer.customer_number || customer.phone || '',
+        customer_number: contactPhone,
         gst_number: customer.gst_number || '',
         pan_number: customer.pan_number || customer.pan_card_number || '',
         company_type: customer.company_type || '',
@@ -288,7 +290,11 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
         shipping_pincode: shippingSame ? '' : form.shipping_pincode,
       };
       if (isEdit) {
-        await updateCustomer(customer.customer_id, payload);
+        await updateCustomer(customer.customer_id, {
+          ...payload,
+          contact_person_name: payload.customer_name,
+          contact_person_number: payload.customer_number,
+        });
         toast.success('Customer updated');
       } else {
         await createCustomer({
@@ -327,7 +333,7 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
         </div>
         <div className="flex-1 overflow-y-auto p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
           {[
-            ['customer_name', 'Customer Name'], ['company_name', 'Company'], ['email', 'Email'],
+            ['customer_name', 'Contact Person'], ['company_name', 'Company'], ['email', 'Email'],
             ['customer_number', 'Phone', true], ['whatsapp_number', 'WhatsApp', true], ['designation', 'Designation'],
             ['gst_number', 'GST'], ['pan_number', 'PAN'],
           ].map(([k, label, mobile]) => (

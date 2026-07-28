@@ -60,6 +60,11 @@ export function canManageFloorTickets(canEdit, isAssignedDataOnly) {
   return hasFloorTicketEdit(canEdit) && !isFloorAssignedDataOnly(isAssignedDataOnly);
 }
 
+/** Edit laptop config (brand/model/RAM/SSD) on floor tickets — separate from assign/stage manager access. */
+export function canEditFloorTicketConfig(canEdit) {
+  return canEdit('floor_ticket_config_edit');
+}
+
 /** Assign / reassign — matches backend POST /tickets/:id/assign (floor_tickets edit). */
 export function canAssignFloorTickets(canEdit, isAssignedDataOnly) {
   return canManageFloorTickets(canEdit, isAssignedDataOnly);

@@ -13,7 +13,7 @@ const ROLE_ROW_DEFAULTS = {
     ['delivery_challans', true, true, false], ['return_dc', false, true, false],
     ['delivery_register_management', false, true, false], ['payment_records', true, true, false],
     ['vendor_management', true, true, false], ['procurement', true, true, false], ['sales_pipeline', true, true, false],
-    ['floor_pipeline', true, true, false], ['floor_tickets', false, true, false], ['chip_level_repair', false, true, false],
+    ['floor_pipeline', true, true, false], ['floor_tickets', false, true, false], ['floor_ticket_config_edit', false, true, false], ['chip_level_repair', false, true, false],
     ['qc_management', false, true, false], ['inventory', false, true, false], ['inventory_management', false, true, false],
     ['parts_inventory', true, true, false], ['ttspl_history', false, false, false],
     ['warehouse', false, true, false], ['dispatch', false, true, false], ['dispatch_ops', false, true, false],
@@ -34,6 +34,7 @@ const ROLE_ROW_DEFAULTS = {
   ],
   floor_manager: [
     ['dashboard', false, false, false], ['floor_pipeline', true, true, false], ['floor_tickets', true, true, false],
+    ['floor_ticket_config_edit', false, true, false],
     ['chip_level_repair', true, true, false], ['qc_management', false, true, false],
     ['inventory', false, true, false], ['inventory_management', false, true, false], ['parts_inventory', true, true, false],
     ['ttspl_history', false, false, false], ['warehouse', false, true, false], ['vendor_management', false, false, false],
@@ -45,6 +46,7 @@ const ROLE_ROW_DEFAULTS = {
   ],
   team_lead: [
     ['dashboard', false, false, false], ['floor_pipeline', true, true, false], ['floor_tickets', true, true, false],
+    ['floor_ticket_config_edit', false, true, false],
     ['chip_level_repair', true, true, false], ['parts_inventory', false, false, false], ['ttspl_history', false, false, false],
   ],
   qc: [

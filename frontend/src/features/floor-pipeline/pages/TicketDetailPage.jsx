@@ -34,6 +34,7 @@ import {
   PENDING_INVENTORY_STAGE,
 } from '../floorPipelineUi';
 import {
+  canEditFloorTicketConfig,
   canManageFloorTickets,
   canMoveDiagnosisToAssemblyForUser,
   canRunFloorStageRouting,
@@ -87,6 +88,7 @@ export default function TicketDetailPage() {
   const { user, isAssignedDataOnly } = useAuth();
   const { canEdit } = usePermission();
   const canManageTickets = canManageFloorTickets(canEdit, isAssignedDataOnly);
+  const canEditConfig = canEditFloorTicketConfig(canEdit);
   const { upsertQcAlertFromTicket, applyLocalQcSnooze, notifyQcOverdueIfNeeded } = useDispatchRealtime();
   const [loading, setLoading] = useState(true);
   const [qcReminderOpen, setQcReminderOpen] = useState(false);
@@ -770,7 +772,7 @@ export default function TicketDetailPage() {
             </span>
           ))}
           </div>
-          {canManageTickets ? (
+          {canEditConfig ? (
             <button
               type="button"
               onClick={() => setConfigEditOpen(true)}

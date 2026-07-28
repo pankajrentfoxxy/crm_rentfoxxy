@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronDown, Search } from 'lucide-react';
 
 function normalizeOptions(options = []) {
@@ -24,9 +25,12 @@ export default function SearchableSelect({
   id,
 }) {
   const rootRef = useRef(null);
+  const triggerRef = useRef(null);
   const searchRef = useRef(null);
+  const menuId = `${id || 'searchable-select'}-menu`;
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
+  const [menuStyle, setMenuStyle] = useState(null);
 
   const normalizedOptions = useMemo(() => normalizeOptions(options), [options]);
 
@@ -45,23 +49,126 @@ export default function SearchableSelect({
     [normalizedOptions, value]
   );
 
+  const updateMenuPosition = () => {
+    const el = triggerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const viewportPadding = 8;
+    const maxMenuHeight = 280;
+    const spaceBelow = window.innerHeight - rect.bottom - viewportPadding;
+    const spaceAbove = rect.top - viewportPadding;
+    const openUpward = spaceBelow < 180 && spaceAbove > spaceBelow;
+    const availableHeight = openUpward ? spaceAbove : spaceBelow;
+    const menuHeight = Math.min(maxMenuHeight, Math.max(availableHeight, 160));
+
+    setMenuStyle({
+      position: 'fixed',
+      left: rect.left,
+      width: rect.width,
+      zIndex: 9999,
+      maxHeight: menuHeight,
+      ...(openUpward
+        ? { bottom: window.innerHeight - rect.top + 4 }
+        : { top: rect.bottom + 4 }),
+    });
+  };
+
   useEffect(() => {
-    if (!open) return undefined;
+    if (!open) {
+      setMenuStyle(null);
+      return undefined;
+    }
+    updateMenuPosition();
     const t = setTimeout(() => searchRef.current?.focus(), 50);
     function onDocClick(e) {
-      if (rootRef.current && !rootRef.current.contains(e.target)) {
-        setOpen(false);
-        setSearch('');
-      }
+      if (rootRef.current?.contains(e.target)) return;
+      const menu = document.getElementById(menuId);
+      if (menu?.contains(e.target)) return;
+      setOpen(false);
+      setSearch('');
+    }
+    function onReposition() {
+      updateMenuPosition();
     }
     document.addEventListener('mousedown', onDocClick);
+    window.addEventListener('scroll', onReposition, true);
+    window.addEventListener('resize', onReposition);
     return () => {
       clearTimeout(t);
       document.removeEventListener('mousedown', onDocClick);
+      window.removeEventListener('scroll', onReposition, true);
+      window.removeEventListener('resize', onReposition);
     };
-  }, [open]);
+  }, [open, menuId]);
 
   const displayValue = selected?.label || placeholder;
+
+  const menu = open && menuStyle ? (
+    <div
+      id={menuId}
+      style={menuStyle}
+      className="flex flex-col rounded-lg border border-gray-200 bg-white shadow-lg overflow-hidden"
+    >
+      <div className="shrink-0 p-2 border-b border-gray-100">
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+          <input
+            ref={searchRef}
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search..."
+            className="w-full rounded-md border border-gray-200 pl-8 pr-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-600/20 focus:border-teal-600"
+          />
+        </div>
+      </div>
+      <ul role="listbox" className="flex-1 min-h-0 overflow-y-auto py-1 text-sm">
+        {!required ? (
+          <li>
+            <button
+              type="button"
+              role="option"
+              aria-selected={!value}
+              onClick={() => {
+                onChange('');
+                setOpen(false);
+                setSearch('');
+              }}
+              className={`w-full text-left px-3 py-2 hover:bg-teal-50 ${!value ? 'bg-teal-50 text-teal-900 font-medium' : 'text-gray-500'}`}
+            >
+              {placeholder}
+            </button>
+          </li>
+        ) : null}
+        {filteredOptions.length === 0 ? (
+          <li className="px-3 py-4 text-center text-gray-500 text-xs">No options match your search.</li>
+        ) : (
+          filteredOptions.map((opt) => {
+            const isSelected = String(value ?? '') === String(opt.value);
+            return (
+              <li key={opt.value}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
+                  onClick={() => {
+                    onChange(opt.value);
+                    setOpen(false);
+                    setSearch('');
+                  }}
+                  className={`w-full text-left px-3 py-2 hover:bg-teal-50 ${
+                    isSelected ? 'bg-teal-50 text-teal-900 font-medium' : 'text-gray-800'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              </li>
+            );
+          })
+        )}
+      </ul>
+    </div>
+  ) : null;
 
   return (
     <div ref={rootRef}>
@@ -73,6 +180,7 @@ export default function SearchableSelect({
       ) : null}
       <div className="relative">
         <button
+          ref={triggerRef}
           type="button"
           id={id}
           disabled={disabled}
@@ -88,68 +196,7 @@ export default function SearchableSelect({
           <ChevronDown className={`w-4 h-4 shrink-0 text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`} />
         </button>
 
-        {open ? (
-          <div className="absolute z-30 mt-1 w-full rounded-lg border border-gray-200 bg-white shadow-lg overflow-hidden">
-            <div className="p-2 border-b border-gray-100">
-              <div className="relative">
-                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-                <input
-                  ref={searchRef}
-                  type="search"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search..."
-                  className="w-full rounded-md border border-gray-200 pl-8 pr-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-600/20 focus:border-teal-600"
-                />
-              </div>
-            </div>
-            <ul role="listbox" className="max-h-48 overflow-y-auto py-1 text-sm">
-              {!required ? (
-                <li>
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={!value}
-                    onClick={() => {
-                      onChange('');
-                      setOpen(false);
-                      setSearch('');
-                    }}
-                    className={`w-full text-left px-3 py-2 hover:bg-teal-50 ${!value ? 'bg-teal-50 text-teal-900 font-medium' : 'text-gray-500'}`}
-                  >
-                    {placeholder}
-                  </button>
-                </li>
-              ) : null}
-              {filteredOptions.length === 0 ? (
-                <li className="px-3 py-4 text-center text-gray-500 text-xs">No options match your search.</li>
-              ) : (
-                filteredOptions.map((opt) => {
-                  const isSelected = String(value ?? '') === String(opt.value);
-                  return (
-                    <li key={opt.value}>
-                      <button
-                        type="button"
-                        role="option"
-                        aria-selected={isSelected}
-                        onClick={() => {
-                          onChange(opt.value);
-                          setOpen(false);
-                          setSearch('');
-                        }}
-                        className={`w-full text-left px-3 py-2 hover:bg-teal-50 ${
-                          isSelected ? 'bg-teal-50 text-teal-900 font-medium' : 'text-gray-800'
-                        }`}
-                      >
-                        {opt.label}
-                      </button>
-                    </li>
-                  );
-                })
-              )}
-            </ul>
-          </div>
-        ) : null}
+        {menu && typeof document !== 'undefined' ? createPortal(menu, document.body) : null}
       </div>
       {required ? (
         <select

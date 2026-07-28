@@ -17,6 +17,7 @@ import { EMPTY_SPEC_FILTERS, SPEC_FILTER_KEYS } from '../../inventory-management
 import useDebouncedSpecParams from '../../inventory-management/hooks/useDebouncedSpecParams';
 import {
   canAssignFloorTickets,
+  canEditFloorTicketConfig,
   canManageFloorTickets,
   isFloorAssignedDataOnly,
 } from '../floorPipelineAccess';
@@ -58,6 +59,7 @@ export default function FloorTicketListPage() {
   const { canEdit } = usePermission();
   const canAssign = canAssignFloorTickets(canEdit, isAssignedDataOnly);
   const canManage = canManageFloorTickets(canEdit, isAssignedDataOnly);
+  const canEditConfig = canEditFloorTicketConfig(canEdit);
   const allDataScope = !isFloorAssignedDataOnly(isAssignedDataOnly);
   const { filters, setFilters } = useUrlFilters(FLOOR_FILTER_DEFAULTS);
   const {
@@ -294,9 +296,9 @@ export default function FloorTicketListPage() {
                             pendingParts={t.part_requests_pending}
                             onCardClick={canAssign && stage === 'Floor Manager' ? handleFloorManagerClick : undefined}
                           />
-                          {canManage || (canAssign && stage !== 'Floor Manager' && stage !== 'Inventory') ? (
+                          {canEditConfig || (canAssign && stage !== 'Floor Manager' && stage !== 'Inventory') ? (
                             <div className="mt-1 flex justify-end gap-3 px-1">
-                              {canManage ? (
+                              {canEditConfig ? (
                                 <button
                                   type="button"
                                   onClick={() => setConfigTicket(t)}
@@ -346,9 +348,9 @@ export default function FloorTicketListPage() {
                 pendingParts={t.part_requests_pending}
                 onCardClick={canAssign && t.stage_name === 'Floor Manager' ? handleFloorManagerClick : undefined}
               />
-              {canManage || (canAssign && t.stage_name !== 'Inventory') ? (
+              {canEditConfig || (canAssign && t.stage_name !== 'Inventory') ? (
                 <div className="mt-1 flex justify-end gap-3 px-1">
-                  {canManage ? (
+                  {canEditConfig ? (
                     <button
                       type="button"
                       onClick={() => setConfigTicket(t)}
@@ -411,7 +413,7 @@ export default function FloorTicketListPage() {
                     <td className="px-3 py-3 text-xs">
                       <div className="flex items-start gap-2">
                         <span>{configSummary(t)}</span>
-                        {canManage ? (
+                        {canEditConfig ? (
                           <button
                             type="button"
                             onClick={() => setConfigTicket(t)}

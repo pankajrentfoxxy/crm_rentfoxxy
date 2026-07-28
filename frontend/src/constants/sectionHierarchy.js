@@ -35,7 +35,7 @@ export const MODULE_CHILDREN = {
     'technicians_bucket_list',
     'payment_records',
   ],
-  floor_pipeline: ['floor_tickets', 'chip_level_repair', 'qc_management', 'dispatch_qc', 'pending_inventory'],
+  floor_pipeline: ['floor_tickets', 'floor_ticket_config_edit', 'chip_level_repair', 'qc_management', 'dispatch_qc', 'pending_inventory'],
   inventory_management: ['parts', 'parts_inventory', 'customer_inventory', 'ttspl_history'],
 };
 

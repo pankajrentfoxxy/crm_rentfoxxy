@@ -57,6 +57,7 @@ const phase2 = require('../controllers/ticketPhase2Controller');
 const { authMiddleware, checkSectionPermission, checkAnySectionPermission } = require('../middleware/auth');
 const ftView = checkSectionPermission('floor_tickets', 'view');
 const ftEdit = checkSectionPermission('floor_tickets', 'edit');
+const ftConfigEdit = checkSectionPermission('floor_ticket_config_edit', 'edit');
 const ftAssign = checkAnySectionPermission(
   ['floor_tickets', 'floor_pipeline', 'tickets', 'replacement_so_laptop_qc'],
   'edit'
@@ -123,7 +124,7 @@ router.patch(
   phase2.markQcFailed
 );
 router.patch('/:id/diagnosis-failed', phase2.markDiagnosisFailed);
-router.patch('/:id/config', phase2.updateTtsplConfig);
+router.patch('/:id/config', ftConfigEdit, phase2.updateTtsplConfig);
 
 // @route   GET /api/tickets/:id
 // @desc    Get ticket by ID with full details
