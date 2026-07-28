@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import toast from 'react-hot-toast';
 import { formatCurrency, formatDateTime } from '../salesPipelineUtils';
-import { uploadSaleDcCompliance } from '../salesPipelineApi';
+import { uploadSaleDcCompliance, sendAccountsDcMail } from '../salesPipelineApi';
 import { getBackendOrigin } from '../../../utils/api';
 
 function docUrl(path) {
@@ -21,12 +21,35 @@ export default function SaleDcCompliancePanel({
   const needsEway = compliance.requires_eway_bill;
   const grandTotal = compliance.grand_total ?? totals?.grand_total;
   const canUpload = compliance.can_upload_compliance ?? isSuperAdmin;
+  const canSendMail = compliance.can_send_accounts_mail ?? isSuperAdmin;
+  const dispatchMailConfigured = compliance.dispatch_mail_configured === true;
+  const accountsEmail = compliance.accounts_email || 'accounts@truetechservices.in';
+  const dispatchFrom = compliance.dispatch_mail_from;
 
   const [einvoiceNumber, setEinvoiceNumber] = useState(compliance.einvoice_number || '');
   const [ewayNumber, setEwayNumber] = useState(compliance.eway_bill_number || '');
   const [einvoiceFile, setEinvoiceFile] = useState(null);
   const [ewayFile, setEwayFile] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [sendingMail, setSendingMail] = useState(false);
+
+  const handleSendAccountsMail = async () => {
+    if (!dispatchMailConfigured) {
+      toast.error('Dispatch mail is not configured on the server (DISPATCH_SMTP_*)');
+      return;
+    }
+    if (!window.confirm(`Send E-Invoice request to ${accountsEmail}${dispatchFrom ? ` from ${dispatchFrom}` : ''}?`)) return;
+    setSendingMail(true);
+    try {
+      const res = await sendAccountsDcMail(dcNumber);
+      toast.success(res.data?.message || 'Mail sent to accounts');
+      onReload?.();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Could not send mail');
+    } finally {
+      setSendingMail(false);
+    }
+  };
 
   const submit = async () => {
     if (!einvoiceNumber.trim() && !compliance.einvoice_complete) {
@@ -95,6 +118,33 @@ export default function SaleDcCompliancePanel({
           <p className="mt-2 text-emerald-800 font-medium">All required documents are on file.</p>
         )}
       </div>
+
+      {canSendMail && (
+        <section className="bg-white border rounded-xl p-5 space-y-3">
+          <h3 className="font-semibold text-gray-900">Notify Accounts</h3>
+          <p className="text-sm text-gray-600">
+            Send E-Invoice request to <strong>{accountsEmail}</strong>
+            {dispatchFrom ? <> from <strong>{dispatchFrom}</strong> (dispatch mail)</> : ' using the dispatch mail account.'}
+            {' '}DC PDF will be attached. Mail is <strong>not</strong> sent automatically when the DC is created.
+          </p>
+          {compliance.accounts_notified_at && (
+            <p className="text-xs text-emerald-700">
+              Last sent: {formatDateTime(compliance.accounts_notified_at)}
+            </p>
+          )}
+          {!dispatchMailConfigured && (
+            <p className="text-xs text-amber-700">Dispatch SMTP is not configured — ask admin to set DISPATCH_SMTP_* in server .env.</p>
+          )}
+          <button
+            type="button"
+            disabled={sendingMail || !dispatchMailConfigured}
+            onClick={handleSendAccountsMail}
+            className="px-4 py-2 bg-teal-700 text-white rounded-lg text-sm font-semibold hover:bg-teal-800 disabled:opacity-50"
+          >
+            {sendingMail ? 'Sending…' : compliance.accounts_notified_at ? 'Resend mail to Accounts' : 'Send mail to Accounts'}
+          </button>
+        </section>
+      )}
 
       {compliance.einvoice_complete && (
         <section className="bg-white border rounded-xl p-5 text-sm space-y-2">

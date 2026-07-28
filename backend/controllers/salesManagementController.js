@@ -40,9 +40,7 @@ const { emailDocument } = require('../services/salesManagementPdfService');
 const {
   isSaleDc,
   buildSaleCompliance,
-  computeDcGrandTotal,
   assertCanDownloadSaleDcPdf,
-  emailAccountsSaleDcCreated,
   normalizeVehicleNumber,
   canUploadSaleDcCompliance,
 } = require('../services/saleDcComplianceService');
@@ -1206,9 +1204,12 @@ exports.getDeliveryChallan = async (req, res) => {
     let sale_compliance = null;
     let can_download_pdf = true;
     if (isSale) {
-      const canUpload = req.user?.role === 'super_admin'
+      const canDispatchAction = req.user?.role === 'super_admin'
         || await canUploadSaleDcCompliance(req.user, req.permissionCache);
-      sale_compliance = buildSaleCompliance(headLine, totals, req.user?.role, { canUpload });
+      sale_compliance = buildSaleCompliance(headLine, totals, req.user?.role, {
+        canUpload: canDispatchAction,
+        canSendMail: canDispatchAction,
+      });
       can_download_pdf = sale_compliance.can_download_pdf;
       if (!can_download_pdf) {
         for (const line of lines) {
@@ -1827,19 +1828,6 @@ exports.createDcsByAddress = async (req, res) => {
           docType: 'delivery_challan', docNumber: dcNumber, header: dcLines[0] || {}, lines: dcLines,
         });
         await pool.query(`UPDATE delivery_challan_lines SET pdf_path = $1 WHERE dc_number = $2`, [pdfPath, dcNumber]);
-
-        if (entityCode === 'gorefurbo') {
-          const grandTotal = await computeDcGrandTotal(dcNumber);
-          const laptopCount = dcLines.reduce((s, l) => s + (Number(l.quantity) || 0), 0);
-          await emailAccountsSaleDcCreated({
-            dcNumber,
-            salesOrderNumber: sales_order_number,
-            customerName: soHead.customer_name,
-            pdfPath,
-            grandTotal,
-            laptopCount,
-          });
-        }
       } catch (pdfErr) {
         console.error(`DC PDF generation failed (${dcNumber}):`, pdfErr.message);
       }

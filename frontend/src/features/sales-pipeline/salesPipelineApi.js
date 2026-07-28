@@ -44,6 +44,7 @@ export const uploadSaleDcCompliance = (n, formData) => api.post(
   formData,
   { headers: { 'Content-Type': 'multipart/form-data' } }
 );
+export const sendAccountsDcMail = (n) => api.post(`${base}/delivery-challans/${encDc(n)}/send-accounts-mail`);
 export const markCustomerRejected = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}/customer-rejected`, d);
 export const sendWarehouseReturnOtp = (n) => api.post(`${base}/delivery-challans/${encDc(n)}/warehouse-return-otp`);
 export const verifyWarehouseReturnOtp = (n, d) => api.post(`${base}/delivery-challans/${encDc(n)}/warehouse-return-otp/verify`, d);

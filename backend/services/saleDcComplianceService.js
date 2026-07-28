@@ -2,7 +2,7 @@
  * Sale delivery challan compliance — e-invoice upload, conditional e-way bill (> ₹50k).
  * Rental / demo DCs are unaffected.
  */
-const { emailDocument } = require('./salesManagementPdfService');
+const { sendDispatchMail, isDispatchMailConfigured, getDispatchFromAddress } = require('./dispatchEmailService');
 const {
   computeGstBreakdown,
   resolveDcBilling,
@@ -62,12 +62,13 @@ function isEwayComplete(head, needsEway) {
   return Boolean(num && pdf);
 }
 
-function buildSaleCompliance(head, totals, userRole, { canUpload = false } = {}) {
+function buildSaleCompliance(head, totals, userRole, { canUpload = false, canSendMail = false } = {}) {
   const needsEway = requiresEwayBill(totals?.grand_total);
   const einvoiceComplete = isEinvoiceComplete(head);
   const ewayComplete = isEwayComplete(head, needsEway);
   const isSuperAdmin = userRole === 'super_admin';
   const mayUpload = isSuperAdmin || canUpload;
+  const maySendMail = isSuperAdmin || canSendMail;
 
   return {
     is_sale_dc: true,
@@ -79,6 +80,11 @@ function buildSaleCompliance(head, totals, userRole, { canUpload = false } = {})
     compliance_complete: einvoiceComplete && ewayComplete,
     can_download_pdf: isSuperAdmin || einvoiceComplete,
     can_upload_compliance: mayUpload,
+    can_send_accounts_mail: maySendMail,
+    dispatch_mail_configured: isDispatchMailConfigured(),
+    dispatch_mail_from: getDispatchFromAddress(),
+    accounts_notified_at: head?.accounts_notified_at || null,
+    accounts_email: ACCOUNTS_EMAIL,
     einvoice_number: head?.einvoice_number || head?.irn || null,
     einvoice_pdf_path: head?.einvoice_pdf_path || null,
     einvoice_uploaded_at: head?.einvoice_uploaded_at || null,
@@ -187,7 +193,7 @@ function buildAccountsSaleDcEmailHtml({
 </html>`;
 }
 
-async function emailAccountsSaleDcCreated({
+async function sendAccountsSaleDcEmail({
   dcNumber,
   salesOrderNumber,
   customerName,
@@ -195,14 +201,16 @@ async function emailAccountsSaleDcCreated({
   grandTotal,
   laptopCount,
 }) {
+  if (!isDispatchMailConfigured()) {
+    throw new Error(
+      'Dispatch mail is not configured. Set DISPATCH_SMTP_HOST, DISPATCH_SMTP_USER, DISPATCH_SMTP_PASS, and DISPATCH_SMTP_FROM in backend/.env'
+    );
+  }
+
   const needsEway = requiresEwayBill(grandTotal);
   const portalUrl = `${FRONTEND_URL}/sales-pipeline/delivery-challans/${encodeURIComponent(dcNumber)}`;
   const valueStr = Number(grandTotal || 0).toLocaleString('en-IN');
-  const fromAddress = process.env.SMTP_FROM
-    || process.env.FROM_EMAIL
-    || process.env.EMAIL_FROM
-    || process.env.SMTP_USER
-    || '(SMTP not configured)';
+  const fromAddress = getDispatchFromAddress();
 
   const html = buildAccountsSaleDcEmailHtml({
     dcNumber,
@@ -236,25 +244,26 @@ async function emailAccountsSaleDcCreated({
     'Truetech Services Pvt Ltd',
   ].join('\n');
 
-  try {
-    const sent = await emailDocument({
-      to: ACCOUNTS_EMAIL,
-      subject: `Sale DC ${dcNumber} — E-Invoice required${needsEway ? ' + E-Way Bill' : ''}`,
-      html,
-      text,
-      pdfRelativePath: pdfPath,
-      replyTo: process.env.ACCOUNTS_REPLY_TO || process.env.SMTP_FROM || process.env.SMTP_USER,
-    });
-    if (sent) {
-      console.log(`Accounts sale DC email sent: ${dcNumber} → ${ACCOUNTS_EMAIL} (from: ${fromAddress})`);
-    } else {
-      console.warn(`Accounts sale DC email skipped (SMTP/to missing): ${dcNumber}`);
-    }
-    return sent;
-  } catch (err) {
-    console.error(`Accounts email failed for ${dcNumber}:`, err.message);
-    return false;
+  const sent = await sendDispatchMail({
+    to: ACCOUNTS_EMAIL,
+    subject: `Sale DC ${dcNumber} — E-Invoice required${needsEway ? ' + E-Way Bill' : ''}`,
+    html,
+    text,
+    pdfRelativePath: pdfPath,
+    replyTo: process.env.DISPATCH_SMTP_REPLY_TO || fromAddress,
+  });
+
+  if (!sent) {
+    throw new Error('Failed to send mail — check DISPATCH_SMTP settings and DC PDF path');
   }
+
+  console.log(`Accounts sale DC email sent: ${dcNumber} → ${ACCOUNTS_EMAIL} (from dispatch: ${fromAddress})`);
+  return { sent: true, from: fromAddress, to: ACCOUNTS_EMAIL };
+}
+
+/** @deprecated Auto-send on DC create removed — use sendAccountsSaleDcEmail via API. */
+async function emailAccountsSaleDcCreated(params) {
+  return sendAccountsSaleDcEmail(params);
 }
 
 module.exports = {
@@ -268,6 +277,7 @@ module.exports = {
   computeDcGrandTotal,
   assertCanDownloadSaleDcPdf,
   normalizeVehicleNumber,
+  sendAccountsSaleDcEmail,
   emailAccountsSaleDcCreated,
   canUploadSaleDcCompliance,
   UPLOAD_PERMISSION_CHECKS,

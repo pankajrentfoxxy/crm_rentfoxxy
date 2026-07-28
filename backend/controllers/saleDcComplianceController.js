@@ -13,10 +13,14 @@ const {
   buildSaleCompliance,
   normalizeVehicleNumber,
   canUploadSaleDcCompliance,
+  computeDcGrandTotal,
+  sendAccountsSaleDcEmail,
+  ACCOUNTS_EMAIL,
 } = require('../services/saleDcComplianceService');
+const { generateDocumentPdf } = require('../services/salesManagementPdfService');
 const { safeLogSalesOrderActivity, ACTIVITY_TYPES } = require('../services/salesOrderActivityService');
 
-/** Allow accounts, dispatch team, or DC editors to upload e-invoice / e-way bill. */
+/** Dispatch / accounts / DC editors — upload docs or send accounts mail. */
 exports.checkSaleDcComplianceUpload = async (req, res, next) => {
   try {
     if (!req.user) {
@@ -136,7 +140,10 @@ exports.uploadSaleDcCompliance = async (req, res) => {
 
     const updated = await getDeliveryChallanLines(dcNumber);
     const canUpload = await canUploadSaleDcCompliance(req.user, req.permissionCache);
-    const compliance = buildSaleCompliance(updated[0], totals, req.user?.role, { canUpload });
+    const compliance = buildSaleCompliance(updated[0], totals, req.user?.role, {
+      canUpload,
+      canSendMail: canUpload,
+    });
 
     if (head.sales_order_number) {
       await safeLogSalesOrderActivity({
@@ -170,4 +177,110 @@ exports.validateSaleVehicleOnCreate = function validateSaleVehicleOnCreate(entit
     return 'Vehicle number is required for Porter / Inhouse sale dispatches (E-Way Bill).';
   }
   return null;
+};
+
+/** POST — manually send accounts E-Invoice request (dispatch SMTP only). */
+exports.sendAccountsNotification = async (req, res) => {
+  const dcNumber = req.params.dcNumber;
+
+  try {
+    let lines = await getDeliveryChallanLines(dcNumber);
+    if (!lines.length) {
+      return res.status(404).json({ success: false, message: 'Delivery challan not found' });
+    }
+    let head = lines[0];
+
+    let quotationType = null;
+    if (head.sales_order_number) {
+      const qtRes = await pool.query(
+        `SELECT quotation_type, customer_name FROM sales_order_lines
+          WHERE sales_order_number = $1 LIMIT 1`,
+        [head.sales_order_number]
+      );
+      quotationType = qtRes.rows[0]?.quotation_type || null;
+      if (!head.customer_name && qtRes.rows[0]?.customer_name) {
+        head = { ...head, customer_name: qtRes.rows[0].customer_name };
+      }
+    }
+
+    if (!isSaleDc(head.entity_code, quotationType)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Accounts notification applies to Sale delivery challans only',
+      });
+    }
+
+    let pdfPath = head.pdf_path;
+    if (!pdfPath) {
+      pdfPath = await generateDocumentPdf({
+        docType: 'delivery_challan',
+        docNumber: dcNumber,
+        header: head,
+        lines,
+      });
+      await pool.query(
+        `UPDATE delivery_challan_lines SET pdf_path = $1 WHERE dc_number = $2`,
+        [pdfPath, dcNumber]
+      );
+    }
+
+    const grandTotal = await computeDcGrandTotal(dcNumber);
+    const laptopCount = lines.reduce((s, l) => s + (Number(l.quantity) || 0), 0);
+
+    const mailResult = await sendAccountsSaleDcEmail({
+      dcNumber,
+      salesOrderNumber: head.sales_order_number,
+      customerName: head.customer_name,
+      pdfPath,
+      grandTotal,
+      laptopCount,
+    });
+
+    await pool.query(
+      `UPDATE delivery_challan_lines SET
+          accounts_notified_at = NOW(),
+          accounts_notified_by = $1,
+          updated_at = NOW()
+        WHERE dc_number = $2`,
+      [req.user?.user_id || null, dcNumber]
+    );
+
+    lines = await getDeliveryChallanLines(dcNumber);
+    head = lines[0];
+    const { subtotal } = await resolveDcBilling(dcNumber, lines);
+    const totals = computeGstBreakdown({
+      subtotal,
+      shipping: head.shiping_charges,
+      security: head.security_amount,
+      supplyState: resolveSupplyStateFromAddress(head.customer_shipping_address, head.supply_state),
+    });
+    const canSend = await canUploadSaleDcCompliance(req.user, req.permissionCache);
+    const saleCompliance = buildSaleCompliance(head, totals, req.user?.role, {
+      canUpload: canSend,
+      canSendMail: canSend,
+    });
+
+    if (head.sales_order_number) {
+      await safeLogSalesOrderActivity({
+        salesOrderNumber: head.sales_order_number,
+        activityType: ACTIVITY_TYPES.DELIVERY_CHALLAN,
+        action: 'accounts_notified',
+        description: `E-Invoice request emailed to ${ACCOUNTS_EMAIL} for ${dcNumber} (from ${mailResult.from}).`,
+        metadata: { dc_number: dcNumber, to: mailResult.to, from: mailResult.from },
+        user: req.user,
+      }).catch(() => {});
+    }
+
+    res.json({
+      success: true,
+      message: `Mail sent to ${ACCOUNTS_EMAIL} from ${mailResult.from}`,
+      from: mailResult.from,
+      to: mailResult.to,
+      sale_compliance: saleCompliance,
+    });
+  } catch (error) {
+    console.error('sendAccountsNotification:', error);
+    const status = error.message?.includes('not configured') ? 503 : 500;
+    res.status(status).json({ success: false, message: error.message });
+  }
 };

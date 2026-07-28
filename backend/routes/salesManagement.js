@@ -168,6 +168,13 @@ router.post(
     saleComplianceCtrl.uploadSaleDcCompliance
   )
 );
+router.post(
+  ...dcRoute(
+    '/send-accounts-mail',
+    saleComplianceCtrl.checkSaleDcComplianceUpload,
+    saleComplianceCtrl.sendAccountsNotification
+  )
+);
 router.patch(...dcRoute('/delivered', soDcEdit, ctrl.markDcDelivered));
 router.patch(...dcRoute('/rejected', soDcEdit, ctrl.markDcRejected));
 router.patch(...dcRoute('/customer-rejected', tbEdit, flowCtrl.markCustomerRejected));
