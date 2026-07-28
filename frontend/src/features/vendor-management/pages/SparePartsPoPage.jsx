@@ -102,8 +102,14 @@ function formatBrandLabel(line) {
   return '—';
 }
 
+const TABS = [
+  { key: 'orders', label: 'Purchase Orders' },
+  { key: 'catalog', label: 'Spare Parts Catalog' },
+];
+
 export default function SparePartsPoPage() {
   const location = useLocation();
+  const [tab, setTab] = useState('orders');
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -138,6 +144,19 @@ export default function SparePartsPoPage() {
     loadList();
   }, [loadList]);
 
+  // Live search: debounce the input into the server-side `search` term.
+  useEffect(() => {
+    const term = searchInput.trim();
+    const id = setTimeout(() => {
+      setSearch((prev) => {
+        if (prev === term) return prev;
+        setPage(1);
+        return term;
+      });
+    }, 300);
+    return () => clearTimeout(id);
+  }, [searchInput]);
+
   // Open the form pre-filled when navigated here from the Parts Approval page.
   useEffect(() => {
     if (location.state?.openForm) {
@@ -147,12 +166,6 @@ export default function SparePartsPoPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  function applySearch(e) {
-    e.preventDefault();
-    setSearch(searchInput.trim());
-    setPage(1);
-  }
 
   async function openPreview(spoId) {
     setPreview({ open: true, loading: true, detail: null });
@@ -244,22 +257,43 @@ export default function SparePartsPoPage() {
         <div>
           <h1 className="text-xl font-bold text-slate-900">Spare parts purchase orders</h1>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            setFormPrefill(null);
-            setModalOpen(true);
-          }}
-          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-orange-600 text-white text-sm font-semibold shadow-sm hover:bg-orange-700 transition-colors"
-        >
-          <Plus className="w-5 h-5" />
-          Add spare parts PO
-        </button>
+        {tab === 'orders' ? (
+          <button
+            type="button"
+            onClick={() => {
+              setFormPrefill(null);
+              setModalOpen(true);
+            }}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-orange-600 text-white text-sm font-semibold shadow-sm hover:bg-orange-700 transition-colors"
+          >
+            <Plus className="w-5 h-5" />
+            Add spare parts PO
+          </button>
+        ) : null}
       </header>
 
-      <SparePartsCatalogPanel />
+      <div className="flex flex-wrap gap-2 border-b border-slate-200">
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => setTab(t.key)}
+            className={`-mb-px px-4 py-2 text-sm font-semibold border-b-2 transition-colors ${
+              tab === t.key
+                ? 'border-orange-600 text-orange-600'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
 
-      <form onSubmit={applySearch} className="flex flex-wrap items-center gap-2">
+      {tab === 'catalog' ? <SparePartsCatalogPanel /> : null}
+
+      {tab === 'orders' ? (
+      <>
+      <div className="flex flex-wrap items-center gap-2">
         <input
           type="search"
           placeholder="Search PO #, remark, vendor…"
@@ -267,26 +301,16 @@ export default function SparePartsPoPage() {
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
         />
-        <button
-          type="submit"
-          className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900"
-        >
-          Search
-        </button>
-        {search ? (
+        {searchInput ? (
           <button
             type="button"
             className="text-sm text-slate-600 hover:text-slate-900 underline"
-            onClick={() => {
-              setSearchInput('');
-              setSearch('');
-              setPage(1);
-            }}
+            onClick={() => setSearchInput('')}
           >
             Clear
           </button>
         ) : null}
-      </form>
+      </div>
 
       {loading ? (
         <div className="p-8 rounded-lg border text-center text-slate-500 animate-pulse">Loading…</div>
@@ -559,6 +583,8 @@ export default function SparePartsPoPage() {
           </div>
         </div>
       )}
+      </>
+      ) : null}
 
       <SparePartsPoFormModal
         open={modalOpen}

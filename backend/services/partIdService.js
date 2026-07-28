@@ -114,25 +114,32 @@ async function generatePrqNumber(db = pool) {
  * Bulk-create part instances when units are received from a vendor.
  * Returns an array of { instance_id, prt_id }.
  * Also increments parts.quantity by `quantity`.
+ *
+ * `serialNumbers` (optional) is a per-unit array of physical serial numbers
+ * captured at receive time; index i maps to unit i.
  */
 async function createPartInstances({
   partId, quantity, unitCost, locationCode,
-  spoId, grnId, batchNumber, receivedBy, notes,
+  spoId, grnId, batchNumber, receivedBy, notes, serialNumbers,
 }, db = pool) {
   const instances = [];
   const now = new Date();
   const qty = Number(quantity) || 0;
+  const serials = Array.isArray(serialNumbers) ? serialNumbers : [];
 
   for (let i = 0; i < qty; i += 1) {
     const prtId = await generatePrtId(now, db);
+    const serial = serials[i] != null && String(serials[i]).trim() !== ''
+      ? String(serials[i]).trim()
+      : null;
     const res = await db.query(
       `INSERT INTO part_instances
          (prt_id, part_id, spo_id, grn_id, batch_number, unit_cost,
-          location_code, status, notes, received_at, received_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'in_stock',$8,NOW(),$9)
+          location_code, status, notes, serial_number, received_at, received_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'in_stock',$8,$9,NOW(),$10)
        RETURNING instance_id, prt_id`,
       [prtId, partId, spoId || null, grnId || null, batchNumber || null,
-        Number(unitCost) || 0, locationCode || null, notes || null, receivedBy || null]
+        Number(unitCost) || 0, locationCode || null, notes || null, serial, receivedBy || null]
     );
     instances.push(res.rows[0]);
   }
