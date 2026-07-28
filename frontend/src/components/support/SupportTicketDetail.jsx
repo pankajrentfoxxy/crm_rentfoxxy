@@ -21,6 +21,7 @@ import PickupSetupForm from './components/PickupSetupForm';
 import ServiceDcPanel from './components/ServiceDcPanel';
 import RepairSwapPanel from './components/RepairSwapPanel';
 import ResendLaptopPanel from './components/ResendLaptopPanel';
+import NewReplacementOrderPanel from './components/NewReplacementOrderPanel';
 import AssignmentHistoryList, { actionLabel } from './components/AssignmentHistoryList';
 import { replacementSalesOrderDetailPath } from '../../features/sales-pipeline/salesOrderScope';
 import {
@@ -30,6 +31,8 @@ import {
   initials,
   itemAllowsTechnicianAssign,
   isPickupAssignmentEditable,
+  isMigratedPickupStuck,
+  hasWarehouseReturnPickup,
   podUrl as podUrlFor,
   compressImageFile
 } from './utils';
@@ -449,7 +452,6 @@ function WorkflowActionsBar({ workflowActions, item }) {
 function ReplacementOrderBanner({ ticket, replacementOrders, pickups, ticketId, isLead, onRefresh, assignmentHistory = [] }) {
   const [showAssign, setShowAssign] = useState(false);
   const [showChangeAssignee, setShowChangeAssignee] = useState(false);
-  const [showResend, setShowResend] = useState(false);
   const [assignBusy, setAssignBusy] = useState(false);
   const [changeBusy, setChangeBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
@@ -465,11 +467,7 @@ function ReplacementOrderBanner({ ticket, replacementOrders, pickups, ticketId, 
   );
   const editablePickup = linkedPickups.find((p) => isPickupAssignmentEditable(p));
   const canChangeAssignee = isLead && !pendingPickup && !!editablePickup;
-  const migratedPickupStuck = linkedPickups.some(
-    (p) => ['resolved', 'inventory_updated', 'closed'].includes(p.status)
-      || p.customer_otp_verified_at
-      || p.warehouse_received_at
-  );
+  const migratedPickupStuck = linkedPickups.some((p) => isMigratedPickupStuck(p));
   const canCancelReturnPickup = isLead && ticket.return_dc_number
     && (linkedPickups.length === 0 || linkedPickups.every((p) => !p.picked_up_at && !p.warehouse_received_at
       && !['resolved', 'closed', 'inventory_updated', 'cancelled'].includes(p.status)));
@@ -676,28 +674,9 @@ function ReplacementOrderBanner({ ticket, replacementOrders, pickups, ticketId, 
         )}
         {isLead && (
           <div className="pt-2 border-t border-pink-100">
-            {!showResend ? (
-              <button
-                type="button"
-                className="support-btn-outline min-h-[40px] text-sm text-pink-800 border-pink-300"
-                onClick={() => setShowResend(true)}
-              >
-                Resend replacement laptop
-              </button>
-            ) : (
-              <ResendLaptopPanel
-                ticketId={ticketId}
-                ticket={ticket}
-                isLead={isLead}
-                onRefresh={onRefresh}
-                onDone={() => setShowResend(false)}
-              />
-            )}
-            {!showResend && (
-              <p className="text-xs text-slate-500 mt-1">
-                Faulty unit returned but customer still needs a different laptop? Prepare the existing sales order for a new delivery.
-              </p>
-            )}
+            <p className="text-xs text-slate-500">
+              Need to deliver a different laptop? Use the <strong>Send replacement laptop</strong> section below.
+            </p>
           </div>
         )}
       </div>
@@ -714,11 +693,7 @@ function PickupStatusBanner({ ticket, pickups, ticketId, isLead, onRefresh, assi
   const linkedPickups = ticket.return_dc_number
     ? pickups.filter((p) => p.return_dc_number === ticket.return_dc_number)
     : pickups.filter((p) => !['cancelled'].includes(p.status));
-  const migratedPickupStuck = linkedPickups.some(
-    (p) => ['resolved', 'inventory_updated', 'closed'].includes(p.status)
-      || p.customer_otp_verified_at
-      || p.warehouse_received_at
-  );
+  const migratedPickupStuck = linkedPickups.some((p) => isMigratedPickupStuck(p));
   const canCancelReturnPickup = isLead && ticket.return_dc_number
     && (linkedPickups.length === 0 || linkedPickups.every((p) => !p.picked_up_at && !p.warehouse_received_at
       && !['resolved', 'closed', 'inventory_updated', 'cancelled'].includes(p.status)));
@@ -837,6 +812,8 @@ export default function SupportTicketDetail() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [customerLaptops, setCustomerLaptops] = useState([]);
   const [cancelOpen, setCancelOpen] = useState(false);
+  const [showNewReplacement, setShowNewReplacement] = useState(false);
+  const [showResendLaptop, setShowResendLaptop] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -973,6 +950,8 @@ export default function SupportTicketDetail() {
   const showSwapTab = repairPickupsInWarehouse.length > 0
     || pickups.some((p) => p.status === 'swap_initiated');
   const canOpenRepairSwap = isSupportLead(user) && showSwapTab && !hasActiveReplacementSo;
+  const warehouseReturnDone = hasWarehouseReturnPickup(pickups);
+  const canSendReplacementLaptop = isSupportLead(user) && !isCancelled && warehouseReturnDone;
 
   const tabItems = tab === 'complaint'
     ? complaints
@@ -1181,6 +1160,55 @@ export default function SupportTicketDetail() {
               onRefresh={load}
               assignmentHistory={assignmentHistory}
             />
+          )}
+
+          {canSendReplacementLaptop && (
+            <section className="support-v3-card border-pink-200 bg-pink-50/20">
+              <h3 className="font-semibold text-sm text-pink-900 mb-2">Send replacement laptop</h3>
+              {!showNewReplacement && !showResendLaptop && (
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="support-btn-primary min-h-[40px] text-sm"
+                    onClick={() => setShowNewReplacement(true)}
+                  >
+                    Send another laptop (new order)
+                  </button>
+                  {ticket.sales_order_number && (
+                    <button
+                      type="button"
+                      className="support-btn-outline min-h-[40px] text-sm text-pink-800 border-pink-300"
+                      onClick={() => setShowResendLaptop(true)}
+                    >
+                      Resend on existing SO
+                    </button>
+                  )}
+                </div>
+              )}
+              {showNewReplacement && (
+                <NewReplacementOrderPanel
+                  ticket={ticket}
+                  ticketId={ticket.id}
+                  isLead={isSupportLead(user)}
+                  onRefresh={load}
+                  onCreated={() => setShowNewReplacement(false)}
+                />
+              )}
+              {showResendLaptop && (
+                <ResendLaptopPanel
+                  ticketId={ticket.id}
+                  ticket={ticket}
+                  isLead={isSupportLead(user)}
+                  onRefresh={load}
+                  onDone={() => setShowResendLaptop(false)}
+                />
+              )}
+              {!showNewReplacement && !showResendLaptop && (
+                <p className="text-xs text-slate-500 mt-2">
+                  Faulty unit is in the warehouse. Create a <strong>new replacement sales order</strong> to deliver a different laptop to the customer.
+                </p>
+              )}
+            </section>
           )}
 
           <ServiceDcPanel

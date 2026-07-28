@@ -3,6 +3,18 @@ import { getBackendOrigin } from '../../utils/api';
 export const formatTicketId = (id) => `#TKT-${String(id).padStart(3, '0')}`;
 export const formatItemId = (id) => `ITEM-${String(id).padStart(2, '0')}`;
 
+/** ERP migration: pickup marked done in CRM but warehouse never received the unit. */
+export function isMigratedPickupStuck(pickup) {
+  if (!pickup) return false;
+  if (pickup.warehouse_received_at || pickup.reached_warehouse_at) return false;
+  return ['resolved', 'inventory_updated', 'closed'].includes(pickup.status)
+    || !!pickup.customer_otp_verified_at;
+}
+
+export function hasWarehouseReturnPickup(pickups = []) {
+  return pickups.some((p) => p.item_type === 'pickup' && p.warehouse_received_at);
+}
+
 export const formatRelative = (date) => {
   if (!date) return '';
   const diff = Date.now() - new Date(date).getTime();

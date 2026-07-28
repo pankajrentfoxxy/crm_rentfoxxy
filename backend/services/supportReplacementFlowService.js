@@ -693,6 +693,289 @@ async function listRepairPickupSwapCandidates(client, ticketId) {
   return r.rows;
 }
 
+/** Return pickup already in warehouse — eligible for a new replacement SO (no new Return DC). */
+async function listReturnPickupRedeliveryCandidates(client, ticketId) {
+  const r = await client.query(
+    `SELECT sti.*
+       FROM support_ticket_items sti
+      WHERE sti.ticket_id = $1
+        AND sti.item_type = 'pickup'
+        AND sti.warehouse_received_at IS NOT NULL
+        AND sti.source_item_id IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM support_replacement_orders ro
+           WHERE ro.ticket_id = $1
+             AND ro.status NOT IN ('completed', 'cancelled')
+             AND ro.delivery_completed_at IS NULL
+        )
+      ORDER BY sti.id ASC`,
+    [ticketId]
+  );
+  return r.rows;
+}
+
+async function buildReturnRedeliveryContext(db, ticketId) {
+  const ticketRes = await db.query('SELECT * FROM support_tickets WHERE id = $1', [ticketId]);
+  if (!ticketRes.rows.length) {
+    throw Object.assign(new Error('Ticket not found'), { status: 404 });
+  }
+  const ticket = ticketRes.rows[0];
+
+  const activeUndelivered = await db.query(
+    `SELECT sales_order_number FROM support_replacement_orders
+      WHERE ticket_id = $1 AND status NOT IN ('completed','cancelled')
+        AND delivery_completed_at IS NULL
+      LIMIT 1`,
+    [ticketId]
+  );
+  if (activeUndelivered.rows.length) {
+    return {
+      can_create: false,
+      block_reason: `Replacement order ${activeUndelivered.rows[0].sales_order_number} is still open — complete delivery or cancel before creating another.`,
+      eligible_items: [],
+    };
+  }
+
+  const pickups = await listReturnPickupRedeliveryCandidates(db, ticketId);
+  const eligible = [];
+  for (const pickup of pickups) {
+    let complaint = null;
+    if (pickup.source_item_id) {
+      const cRes = await db.query(
+        'SELECT * FROM support_ticket_items WHERE id = $1 AND ticket_id = $2',
+        [pickup.source_item_id, ticketId]
+      );
+      complaint = cRes.rows[0] || null;
+    }
+    if (!complaint) continue;
+    const cfg = await resolveConfigFromRepairPickup(db, pickup, complaint, ticket.customer_id);
+    eligible.push({
+      pickup_item_id: pickup.id,
+      complaint_item_id: complaint.id,
+      ttspl_id: pickup.ttspl_id || pickup.unique_serial_number || pickup.serial_number,
+      serial_number: pickup.serial_number,
+      brand: cfg.brand,
+      model: cfg.model,
+      processor: cfg.processor,
+      generation: cfg.generation,
+      ram: cfg.ram,
+      storage: cfg.storage,
+      rent_monthly_rate: cfg.monthly_rate,
+      return_dc_number: pickup.return_dc_number || ticket.return_dc_number,
+      warehouse_received_at: pickup.warehouse_received_at,
+    });
+  }
+
+  const ref = pickups[0] || null;
+  const delivery_defaults = ref
+    ? await loadDeliveryDefaults(db, ticket, ref)
+    : await loadDeliveryDefaults(db, ticket, null);
+
+  return {
+    can_create: eligible.length > 0,
+    eligible_items: eligible,
+    delivery_defaults,
+    previous_sales_order_number: ticket.sales_order_number || null,
+    block_reason: eligible.length
+      ? null
+      : 'No return pickup with warehouse receipt found, or a replacement delivery is still in progress.',
+    next_steps: eligible.length ? [
+      'Creates a new replacement sales order (does not reuse the old SO)',
+      'Attach a QC-passed laptop on the new SO',
+      'Complete Dispatch QC and create delivery DC',
+      'No new Return DC — faulty unit is already in the warehouse',
+    ] : [],
+  };
+}
+
+/**
+ * After return pickup is in warehouse: create a brand-new replacement SO and deliver a different laptop.
+ */
+async function initiateReturnRedelivery(client, {
+  ticketId,
+  pickupItemIds,
+  reason,
+  shippingAddress,
+  userId,
+}) {
+  const ticketRes = await client.query('SELECT * FROM support_tickets WHERE id = $1 FOR UPDATE', [ticketId]);
+  if (!ticketRes.rows.length) throw Object.assign(new Error('Ticket not found'), { status: 404 });
+  const ticket = ticketRes.rows[0];
+
+  const ctx = await buildReturnRedeliveryContext(client, ticketId);
+  if (!ctx.can_create) {
+    throw Object.assign(new Error(ctx.block_reason || 'Cannot create replacement order'), { status: 400 });
+  }
+
+  const ids = (pickupItemIds || []).map((id) => Number(id)).filter((n) => Number.isFinite(n) && n > 0);
+  const allCandidates = await listReturnPickupRedeliveryCandidates(client, ticketId);
+  const pickups = ids.length
+    ? allCandidates.filter((p) => ids.includes(p.id))
+    : allCandidates;
+  if (!pickups.length) {
+    throw Object.assign(new Error('No eligible return pickup units for redelivery'), { status: 400 });
+  }
+
+  if (!String(shippingAddress?.address || '').trim()) {
+    throw Object.assign(new Error('Customer delivery address is required'), { status: 400 });
+  }
+
+  const custRes = await client.query(
+    `SELECT customer_id, name, company_name, email, phone, gst_no, billing_state,
+            billing_address, billing_city, billing_pincode
+       FROM customers WHERE customer_id = $1`,
+    [ticket.customer_id]
+  );
+  const cust = custRes.rows[0] || {};
+  const customerName = ticket.customer_name || cust.company_name || cust.name || '';
+  const billingAddress = {
+    name: customerName,
+    phone: cust.phone || shippingAddress.phone,
+    address: cust.billing_address || shippingAddress.address,
+    city: cust.billing_city || shippingAddress.city,
+    state: cust.billing_state || shippingAddress.state,
+    pincode: cust.billing_pincode || shippingAddress.pincode,
+    gst_number: cust.gst_no || null,
+  };
+
+  const lineConfigs = [];
+  const sourceComplaints = [];
+  for (const pickup of pickups) {
+    const cRes = await client.query(
+      'SELECT * FROM support_ticket_items WHERE id = $1 AND ticket_id = $2',
+      [pickup.source_item_id, ticketId]
+    );
+    const complaint = cRes.rows[0];
+    if (!complaint) {
+      throw Object.assign(new Error(`Return pickup #${pickup.id} is not linked to a complaint`), { status: 400 });
+    }
+    sourceComplaints.push({ pickup, complaint });
+    lineConfigs.push(await resolveConfigFromRepairPickup(client, pickup, complaint, ticket.customer_id));
+  }
+
+  const { salesOrderNumber, lineIds } = await createConfigSalesOrder(client, {
+    customerId: ticket.customer_id,
+    customerName,
+    customerEmail: ticket.ticket_email || cust.email,
+    customerMobile: shippingAddress.phone || cust.phone,
+    shippingAddress,
+    billingAddress,
+    gstNumber: cust.gst_no,
+    supplyState: cust.billing_state,
+    lineConfigs,
+    userId,
+  });
+
+  const replacementOrderIds = [];
+  const sharedReason = String(reason || '').trim()
+    || 'Send different laptop to customer — return unit already in warehouse';
+
+  for (let i = 0; i < sourceComplaints.length; i += 1) {
+    const { pickup, complaint } = sourceComplaints[i];
+    const cfg = lineConfigs[i];
+    const lineId = lineIds[i];
+
+    await client.query(
+      `UPDATE support_ticket_items SET
+          outcome = COALESCE(outcome, 'replacement_required'),
+          outcome_set_by = $2,
+          outcome_set_at = COALESCE(outcome_set_at, CURRENT_TIMESTAMP),
+          replacement_flagged_by = $2,
+          replacement_flag_reason = $3,
+          updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1`,
+      [complaint.id, userId, sharedReason]
+    );
+
+    const itemIns = await client.query(
+      `INSERT INTO support_ticket_items (
+          ticket_id, brand, model, processor, generation, ram, storage,
+          item_type, remarks, status, source_item_id
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,'replacement',$8,'order_placed',$9) RETURNING id`,
+      [
+        ticketId,
+        cfg.brand,
+        cfg.model,
+        cfg.processor,
+        cfg.generation,
+        cfg.ram,
+        cfg.storage,
+        sharedReason,
+        complaint.id,
+      ]
+    );
+    const replacementItemId = itemIns.rows[0].id;
+
+    const orderIns = await client.query(
+      `INSERT INTO support_replacement_orders (
+          ticket_id, item_id, source_item_id, complaint_item_id,
+          sales_order_number, sales_order_line_id,
+          old_customer_inventory_id, old_machine_serial,
+          old_serial_id, old_rent_monthly_rate,
+          delivery_address, contact_name, contact_phone,
+          return_dc_number, pickup_item_id,
+          pickup_completed_at,
+          status, created_by, notes, approved_at
+       ) VALUES ($1,$2,$3,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,CURRENT_TIMESTAMP,
+                 'order_placed',$15,$16,CURRENT_TIMESTAMP)
+       RETURNING id`,
+      [
+        ticketId,
+        replacementItemId,
+        complaint.id,
+        salesOrderNumber,
+        lineId,
+        cfg.old_customer_inventory_id,
+        cfg.old_machine_serial,
+        cfg.old_serial_id,
+        cfg.monthly_rate || null,
+        JSON.stringify(shippingAddress),
+        shippingAddress.name || customerName,
+        shippingAddress.phone || cust.phone,
+        pickup.return_dc_number || ticket.return_dc_number,
+        pickup.id,
+        userId,
+        sharedReason,
+      ]
+    );
+    replacementOrderIds.push(orderIns.rows[0].id);
+
+    await client.query(
+      `UPDATE support_ticket_items SET
+          replacement_approved_by = $2,
+          replacement_approved_at = CURRENT_TIMESTAMP
+       WHERE id = $1`,
+      [complaint.id, userId]
+    );
+  }
+
+  if (ticket.sales_order_number) {
+    await detachReturnedSerialsForResend(client, ticketId, ticket.sales_order_number);
+  }
+
+  await client.query(
+    `UPDATE support_tickets SET
+        ticket_category = 'replacement',
+        sales_order_number = $2,
+        pickup_address = $3::jsonb,
+        status = 'in_progress',
+        closed_at = NULL,
+        updated_at = CURRENT_TIMESTAMP
+     WHERE id = $1`,
+    [ticketId, salesOrderNumber, JSON.stringify(shippingAddress)]
+  );
+
+  return {
+    sales_order_number: salesOrderNumber,
+    previous_sales_order_number: ticket.sales_order_number || null,
+    return_dc_number: pickups[0]?.return_dc_number || ticket.return_dc_number,
+    unit_count: pickups.length,
+    replacement_order_ids: replacementOrderIds,
+    pickup_item_ids: pickups.map((p) => p.id),
+    next_steps: 'Attach a QC-passed laptop on the new sales order, complete Dispatch QC, then create the delivery DC.',
+  };
+}
+
 async function buildRepairSwapContext(db, ticketId) {
   const ticketRes = await db.query('SELECT * FROM support_tickets WHERE id = $1', [ticketId]);
   if (!ticketRes.rows.length) {
@@ -1307,10 +1590,13 @@ module.exports = {
   resolveOldUnitPrice,
   listEligibleComplaintItems,
   listRepairPickupSwapCandidates,
+  listReturnPickupRedeliveryCandidates,
   buildTicketReplacementContext,
   buildRepairSwapContext,
+  buildReturnRedeliveryContext,
   buildResendLaptopContext,
   initiateResendLaptop,
+  initiateReturnRedelivery,
   initiateSwapFromRepairPickup,
   createConfigSalesOrder,
   appendConfigSalesOrderLines,
