@@ -3,8 +3,9 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Send } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
-  addLeadRemark, addLeadAddress, getLead, getLeadAddresses, getLeadConversion,
+  addLeadRemark, updateLeadRemark, deleteLeadRemark, addLeadAddress, getLead, getLeadAddresses, getLeadConversion,
 } from '../leadCrmApi';
+import { useAuth } from '../../../context/AuthContext';
 import { STATUS_COLORS } from '../leadConstants';
 import { formatConfig, formatCurrency, formatFollowUpDateTime, formatInquiry, relativeTime } from '../leadCrmUtils';
 import ActivityFeed from '../components/ActivityFeed';
@@ -22,6 +23,7 @@ export default function LeadDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
+  const { user, hasPermission, isAssignedDataOnly } = useAuth();
   const [lead, setLead] = useState(null);
   const [conversion, setConversion] = useState(null);
   const [tab, setTab] = useState(0);
@@ -102,12 +104,42 @@ export default function LeadDetailPage() {
   const statusStyle = STATUS_COLORS[lead.status] || STATUS_COLORS.Pending;
   const canConvert = ['Deal', 'Demo'].includes(lead.status);
 
+  const role = String(user?.role || '').toLowerCase();
+  const canEditByRole = ['super_admin', 'admin', 'manager', 'sales'].includes(role);
+  const canEditByPermission = typeof hasPermission === 'function' && hasPermission('leads', 'edit');
+  const isPrivileged = ['super_admin', 'admin', 'manager'].includes(role);
+  const assignedOnly = typeof isAssignedDataOnly === 'function' && isAssignedDataOnly('leads');
+  const currentUserId = user?.user_id ?? user?.userId;
+  const assignedUserId = lead.assignedUserId ?? lead.assigned_user_id;
+  const isAssignee = assignedUserId == null || String(assignedUserId) === String(currentUserId);
+  const canManageRemarks = (canEditByRole || canEditByPermission) && (isPrivileged || !assignedOnly || isAssignee);
+
   const postRemark = async () => {
     if (!remark.trim()) return;
     await addLeadRemark(id, { note: remark });
     setRemark('');
     toast.success('Remark added');
     load();
+  };
+
+  const handleEditRemark = async (remarkId, note) => {
+    try {
+      await updateLeadRemark(id, remarkId, { note });
+      toast.success('Remark updated');
+      await load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to update remark');
+    }
+  };
+
+  const handleDeleteRemark = async (remarkId) => {
+    try {
+      await deleteLeadRemark(id, remarkId);
+      toast.success('Remark deleted');
+      await load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to delete remark');
+    }
   };
 
   const addAddress = async () => {
@@ -147,7 +179,14 @@ export default function LeadDetailPage() {
                 <button type="button" onClick={postRemark}
                   className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg">Post</button>
               </div>
-              <ActivityFeed activities={lead.activities || []} remarks={lead.remarks || []} assignments={lead.assignments || []} />
+              <ActivityFeed
+                activities={lead.activities || []}
+                remarks={lead.remarks || []}
+                assignments={lead.assignments || []}
+                canManageRemarks={canManageRemarks}
+                onEditRemark={handleEditRemark}
+                onDeleteRemark={handleDeleteRemark}
+              />
             </div>
           )}
 

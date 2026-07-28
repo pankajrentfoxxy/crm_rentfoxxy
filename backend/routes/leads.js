@@ -62,6 +62,7 @@ router.get('/:id/addresses', leadsView, leadController.getLeadAddresses);
 router.post('/:id/addresses', leadsEdit, leadController.addLeadAddress);
 router.delete('/:id/addresses/:address_id', leadsEdit, leadController.deleteLeadAddress);
 router.post('/:id/remarks', leadsEdit, leadController.addLeadRemark);
+router.put('/:id/remarks/:remark_id', leadsEdit, leadController.updateLeadRemark);
 router.delete('/:id/remarks/:remark_id', leadsEdit, leadController.deleteLeadRemark);
 router.get('/:id/customer-profile', leadsView, leadController.getLeadCustomerProfile);
 

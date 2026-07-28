@@ -12,6 +12,8 @@ export const convertToCustomer = (id, data) => api.post(`/leads/${id}/convert`, 
 export const getLeadConversion = (id) => api.get(`/leads/${id}/conversion`);
 export const getLeadStages = () => api.get('/leads/stages');
 export const addLeadRemark = (id, data) => api.post(`/leads/${id}/remarks`, data);
+export const updateLeadRemark = (id, remarkId, data) => api.put(`/leads/${id}/remarks/${remarkId}`, data);
+export const deleteLeadRemark = (id, remarkId) => api.delete(`/leads/${id}/remarks/${remarkId}`);
 export const updateFollowUp = (id, data) => api.put(`/leads/${id}/follow-up`, data);
 export const sendLeadQuotation = (id, data) => api.post(`/leads/${id}/send-quotation`, data);
 export const fetchQuotationEmailConfig = () => api.get('/leads/quotation-email-config');

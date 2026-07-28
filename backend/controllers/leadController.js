@@ -2032,6 +2032,41 @@ exports.deleteLeadRemark = async (req, res) => {
   }
 };
 
+exports.updateLeadRemark = async (req, res) => {
+  const { id, remark_id } = req.params;
+  const { note } = req.body || {};
+  if (!note || !String(note).trim()) {
+    return res.status(400).json({ success: false, message: 'Remark note is required' });
+  }
+  try {
+    const lead = await prisma.lead.findUnique({ where: { leadId: parseInt(id, 10) } });
+    if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
+    if (!canEditLead(req.user, lead)) return res.status(403).json({ success: false, message: 'Access denied' });
+    const result = await pool.query(
+      `UPDATE lead_remarks
+          SET note = $1
+        WHERE lead_id = $2 AND remark_id = $3
+        RETURNING remark_id, lead_id, user_id, note, created_at`,
+      [String(note).trim(), id, remark_id]
+    );
+    if (!result.rowCount) return res.status(404).json({ success: false, message: 'Remark not found' });
+    const row = result.rows[0];
+    res.json({
+      success: true,
+      remark: {
+        remarkId: row.remark_id,
+        leadId: row.lead_id,
+        userId: row.user_id,
+        note: row.note,
+        createdAt: row.created_at,
+      },
+    });
+  } catch (error) {
+    console.error('Update lead remark error:', error);
+    res.status(500).json({ success: false, message: 'Server error updating remark' });
+  }
+};
+
 exports.getLeadCustomerProfile = async (req, res) => {
   const { id } = req.params;
   try {
