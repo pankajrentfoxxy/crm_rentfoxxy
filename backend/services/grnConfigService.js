@@ -415,6 +415,7 @@ module.exports = {
   verifyConfigurationAgainst,
   // exported for tests / reuse
   norm,
+  normBrand,
   cpuType,
   genNum,
   genFromActual,
