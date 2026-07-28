@@ -8,8 +8,11 @@ export const raiseSupportPartRequest = (data) =>
 export const listSupportPartRequests = (params) =>
   api.get(`${BASE}/requests`, { params });
 
-export const approveAndGenerateChallan = (requestIds) =>
-  api.post(`${BASE}/requests/approve-and-challan`, { request_ids: requestIds });
+export const approveAndGenerateChallan = (requestIds, instanceMap) =>
+  api.post(`${BASE}/requests/approve-and-challan`, {
+    request_ids: requestIds,
+    ...(instanceMap ? { instance_map: instanceMap } : {}),
+  });
 
 export const markPartUsed = (requestId) =>
   api.patch(`${BASE}/requests/${requestId}/mark-used`);

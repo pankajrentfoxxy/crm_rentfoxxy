@@ -218,10 +218,12 @@ exports.listSupportPartRequests = async (req, res) => {
 // ── WAREHOUSE: APPROVE + GENERATE CHALLAN ────────────────────────────────────
 
 exports.approveAndGenerateChallan = async (req, res) => {
-  const { request_ids } = req.body;
+  const { request_ids, instance_map } = req.body;
   if (!Array.isArray(request_ids) || !request_ids.length) {
     return res.status(400).json({ success: false, message: 'request_ids required' });
   }
+  // Optional { [request_id]: instance_id } — warehouse picks the exact unit/serial.
+  const pickedInstances = instance_map && typeof instance_map === 'object' ? instance_map : {};
 
   const client = await pool.connect();
   try {
@@ -264,13 +266,35 @@ exports.approveAndGenerateChallan = async (req, res) => {
 
     const challanItems = [];
     for (const reqRow of requests) {
-      let instRes = await client.query(
-        `SELECT * FROM part_instances
-         WHERE part_id = $1 AND status = 'in_stock'
-         ORDER BY received_at ASC LIMIT 1 FOR UPDATE`,
-        [reqRow.part_id]
-      );
-      let instance = instRes.rows[0];
+      let instance = null;
+
+      // Warehouse explicitly chose a unit/serial for this request.
+      const chosenId = pickedInstances[reqRow.id] ?? pickedInstances[String(reqRow.id)];
+      if (chosenId) {
+        const chosenRes = await client.query(
+          `SELECT * FROM part_instances WHERE instance_id = $1 FOR UPDATE`,
+          [Number(chosenId)]
+        );
+        const chosen = chosenRes.rows[0];
+        if (!chosen) throw new Error(`Selected unit not found for "${reqRow.part_name}"`);
+        if (Number(chosen.part_id) !== Number(reqRow.part_id)) {
+          throw new Error(`Selected unit does not match part "${reqRow.part_name}"`);
+        }
+        if (chosen.status !== 'in_stock') {
+          throw new Error(`Selected unit for "${reqRow.part_name}" is '${chosen.status}', not available`);
+        }
+        instance = chosen;
+      }
+
+      if (!instance) {
+        const instRes = await client.query(
+          `SELECT * FROM part_instances
+           WHERE part_id = $1 AND status = 'in_stock'
+           ORDER BY received_at ASC LIMIT 1 FOR UPDATE`,
+          [reqRow.part_id]
+        );
+        instance = instRes.rows[0];
+      }
 
       if (!instance && Number(reqRow.quantity) > 0) {
         const partQtyRes = await client.query(

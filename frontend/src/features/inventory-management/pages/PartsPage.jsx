@@ -6,6 +6,7 @@ import MetricCard from '../../reporting/components/MetricCard';
 import DataTable from '../../reporting/components/DataTable';
 import { inr } from '../../reporting/reportingUtils';
 import { listPartInstances } from '../../floor-pipeline/partRequestsApi';
+import PartSerialsDrawer from '../components/PartSerialsDrawer';
 
 const CATEGORIES = [
   { value: '', label: 'All' },
@@ -289,6 +290,7 @@ function InstancesTab() {
       if (!q) return true;
       return (
         String(r.prt_id || '').toLowerCase().includes(q) ||
+        String(r.serial_number || '').toLowerCase().includes(q) ||
         String(r.part_name || '').toLowerCase().includes(q) ||
         String(r.installed_ttspl_id || '').toLowerCase().includes(q)
       );
@@ -300,7 +302,7 @@ function InstancesTab() {
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 flex flex-wrap gap-3 items-end">
         <label className="text-sm flex-1 min-w-[180px]">
           <span className="block text-gray-500 text-xs mb-1">Search</span>
-          <input className="w-full border rounded-lg px-3 py-2 text-sm" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="PRT-ID, part, TTSPL" />
+          <input className="w-full border rounded-lg px-3 py-2 text-sm" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Serial, PRT-ID, part, TTSPL" />
         </label>
         <label className="text-sm">
           <span className="block text-gray-500 text-xs mb-1">Status</span>
@@ -327,6 +329,7 @@ function InstancesTab() {
             <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
               <tr>
                 <th className="p-3">PRT-ID</th>
+                <th className="p-3">Serial No.</th>
                 <th className="p-3">Part Name</th>
                 <th className="p-3">Category</th>
                 <th className="p-3">Status</th>
@@ -340,6 +343,7 @@ function InstancesTab() {
               {filtered.map((r) => (
                 <tr key={r.instance_id} className="border-t border-gray-50">
                   <td className="p-3 font-mono text-blue-600">{r.prt_id}</td>
+                  <td className="p-3 font-mono">{r.serial_number || '—'}</td>
                   <td className="p-3">{r.part_name}</td>
                   <td className="p-3">{CAT_LABEL[partCategory(r)] || r.category || '—'}</td>
                   <td className="p-3">
@@ -372,6 +376,7 @@ export default function PartsPage() {
   const [editPart, setEditPart] = useState(null);
   const [adjustPart, setAdjustPart] = useState(null);
   const [usagePart, setUsagePart] = useState(null);
+  const [serialsPart, setSerialsPart] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -481,6 +486,7 @@ export default function PartsPage() {
       render: (r) => (
         <div className="flex flex-wrap gap-2 text-xs">
           <button type="button" className="text-blue-600 hover:underline" onClick={() => { setEditPart(r); setDrawerOpen(true); }}>Edit</button>
+          <button type="button" className="text-blue-600 hover:underline font-semibold" onClick={() => setSerialsPart(r)}>Serials</button>
           <button type="button" className="text-blue-600 hover:underline" onClick={() => setAdjustPart(r)}>Adjust</button>
           <button type="button" className="text-blue-600 hover:underline" onClick={() => setUsagePart(r)}>Usage</button>
         </div>
@@ -569,6 +575,7 @@ export default function PartsPage() {
       <AddPartDrawer open={drawerOpen} onClose={() => { setDrawerOpen(false); setEditPart(null); }} onSave={savePart} initial={editPart} />
       <AdjustStockModal part={adjustPart} onClose={() => setAdjustPart(null)} onSave={adjustStock} />
       <UsageModal part={usagePart} onClose={() => setUsagePart(null)} />
+      <PartSerialsDrawer open={!!serialsPart} part={serialsPart} onClose={() => setSerialsPart(null)} onChanged={load} />
     </div>
   );
 }

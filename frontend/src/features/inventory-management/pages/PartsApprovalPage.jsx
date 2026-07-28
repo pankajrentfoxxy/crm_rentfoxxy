@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Check, X, ArrowUpRight, ShoppingCart, RefreshCw, Package } from 'lucide-react';
+import { Check, X, ArrowUpRight, ShoppingCart, RefreshCw, Package, Search } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
   getWarehouseQueue,
@@ -8,6 +8,7 @@ import {
   rejectPartRequest,
   escalatePartRequest,
 } from '../../floor-pipeline/partRequestsApi';
+import SelectPartSerialModal from '../../floor-pipeline/components/SelectPartSerialModal';
 
 const TABS = [
   { id: 'pending', label: 'Pending Approval', statuses: ['pending'] },
@@ -38,6 +39,8 @@ export default function PartsApprovalPage() {
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [rejectModal, setRejectModal] = useState(null);
+  const [serialModal, setSerialModal] = useState(null);
+  const [search, setSearch] = useState('');
 
   const load = async () => {
     setLoading(true);
@@ -55,18 +58,33 @@ export default function PartsApprovalPage() {
     load();
   }, []);
 
-  const visibleRequests = requests.filter((r) =>
-    TABS.find((t) => t.id === tab)?.statuses.includes(r.status)
-  );
+  const visibleRequests = useMemo(() => {
+    const statuses = TABS.find((t) => t.id === tab)?.statuses || [];
+    const q = search.trim().toLowerCase();
+    return requests.filter((r) => {
+      if (!statuses.includes(r.status)) return false;
+      if (!q) return true;
+      return (
+        String(r.request_number || '').toLowerCase().includes(q) ||
+        String(r.part_name || '').toLowerCase().includes(q) ||
+        String(r.ttspl_id || '').toLowerCase().includes(q) ||
+        String(r.requester_name || '').toLowerCase().includes(q) ||
+        String(r.stage_name || '').toLowerCase().includes(q)
+      );
+    });
+  }, [requests, tab, search]);
 
   const tabCount = (id) =>
     requests.filter((r) => TABS.find((t) => t.id === id)?.statuses.includes(r.status)).length;
 
-  const approve = async (req) => {
+  const confirmApprove = async (instanceId) => {
+    if (!serialModal) return;
     setBusy(true);
     try {
-      const { data } = await approvePartRequest(req.request_id, { auto_select: true });
-      toast.success(`Approved — ${data.prt_id || 'PRT assigned'}`);
+      const body = instanceId ? { instance_id: instanceId } : { auto_select: true };
+      const { data } = await approvePartRequest(serialModal.request_id, body);
+      toast.success(`Approved — ${data.serial_number || data.prt_id || 'unit assigned'}`);
+      setSerialModal(null);
       load();
     } catch (e) {
       toast.error(e.response?.data?.message || 'Approve failed');
@@ -137,6 +155,17 @@ export default function PartsApprovalPage() {
         >
           <RefreshCw className="w-4 h-4" /> Refresh
         </button>
+      </div>
+
+      <div className="relative mb-4 max-w-md">
+        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+        <input
+          type="search"
+          className="w-full rounded-lg border border-gray-200 pl-8 pr-3 py-2 text-sm"
+          placeholder="Search request #, part, TTSPL, requester…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
       </div>
 
       <div className="flex gap-1 border-b mb-5">
@@ -267,7 +296,7 @@ export default function PartsApprovalPage() {
                       <button
                         type="button"
                         disabled={busy || outOfStock}
-                        onClick={() => approve(req)}
+                        onClick={() => setSerialModal(req)}
                         className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-green-600 text-white text-sm font-semibold disabled:opacity-50 hover:bg-green-700"
                       >
                         <Check className="w-4 h-4" />
@@ -338,6 +367,16 @@ export default function PartsApprovalPage() {
           busy={busy}
         />
       )}
+
+      <SelectPartSerialModal
+        open={!!serialModal}
+        partId={serialModal?.part_id}
+        partName={serialModal?.part_name}
+        requestLabel={serialModal?.request_number}
+        busy={busy}
+        onClose={() => setSerialModal(null)}
+        onConfirm={confirmApprove}
+      />
     </div>
   );
 }

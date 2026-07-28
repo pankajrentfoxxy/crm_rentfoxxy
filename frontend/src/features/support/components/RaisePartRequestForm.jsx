@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Wrench, ChevronDown, PenLine, Check, RotateCcw, Truck } from 'lucide-react';
+import { Wrench, ChevronDown, PenLine, Check, RotateCcw, Truck, Search, X } from 'lucide-react';
 import api from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
 import {
@@ -150,11 +150,28 @@ export default function RaisePartRequestForm({ ticket, item }) {
   const canManageReturn = ['warehouse', 'admin', 'manager', 'support_lead', 'super_admin'].includes(user?.role);
   const [open, setOpen] = useState(false);
   const [partId, setPartId] = useState('');
+  const [partSearch, setPartSearch] = useState('');
+  const [showParts, setShowParts] = useState(false);
   const [quantity, setQuantity] = useState(1);
   const [reason, setReason] = useState('');
   const [parts, setParts] = useState([]);
   const [saving, setSaving] = useState(false);
   const [existing, setExisting] = useState([]);
+
+  const selectedPart = useMemo(
+    () => parts.find((p) => String(p.part_id) === String(partId)),
+    [parts, partId]
+  );
+
+  const filteredParts = useMemo(() => {
+    const q = partSearch.trim().toLowerCase();
+    if (!q) return parts;
+    return parts.filter((p) =>
+      String(p.part_name || '').toLowerCase().includes(q) ||
+      String(p.part_sku || '').toLowerCase().includes(q) ||
+      String(p.category || p.part_type || '').toLowerCase().includes(q)
+    );
+  }, [parts, partSearch]);
 
   const ttsplId = item?.ttspl_id || item?.unique_serial_number || item?.serial_number || '';
 
@@ -193,6 +210,8 @@ export default function RaisePartRequestForm({ ticket, item }) {
       });
       toast.success(data.message || 'Part request raised');
       setPartId('');
+      setPartSearch('');
+      setShowParts(false);
       setQuantity(1);
       setReason('');
       loadExisting();
@@ -241,18 +260,52 @@ export default function RaisePartRequestForm({ ticket, item }) {
             {ttsplId ? ` · ${ttsplId}` : ''}
           </p>
 
-          <select
-            value={partId}
-            onChange={(e) => setPartId(e.target.value)}
-            className="w-full border rounded-xl px-3 py-3 min-h-[44px] text-base bg-white"
-          >
-            <option value="">Select part needed…</option>
-            {parts.map((p) => (
-              <option key={p.part_id} value={p.part_id}>
-                {p.part_name} (Stock: {p.quantity ?? 0})
-              </option>
-            ))}
-          </select>
+          {selectedPart ? (
+            <div className="flex items-center justify-between gap-2 w-full border rounded-xl px-3 py-3 min-h-[44px] bg-white">
+              <span className="min-w-0 truncate text-base">
+                {selectedPart.part_name}
+                <span className="text-gray-400"> (Stock: {selectedPart.quantity ?? 0})</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => { setPartId(''); setPartSearch(''); setShowParts(true); }}
+                className="shrink-0 inline-flex items-center gap-1 text-xs font-semibold text-amber-700 hover:underline"
+              >
+                <X className="w-3.5 h-3.5" /> Change
+              </button>
+            </div>
+          ) : (
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                value={partSearch}
+                onChange={(e) => { setPartSearch(e.target.value); setShowParts(true); }}
+                onFocus={() => setShowParts(true)}
+                onBlur={() => setTimeout(() => setShowParts(false), 150)}
+                placeholder="Search part needed…"
+                className="w-full border rounded-xl pl-9 pr-3 py-3 min-h-[44px] text-base bg-white"
+              />
+              {showParts && (
+                <div className="absolute z-20 mt-1 w-full max-h-60 overflow-y-auto rounded-xl border border-amber-200 bg-white shadow-lg">
+                  {filteredParts.length === 0 ? (
+                    <p className="px-3 py-2.5 text-sm text-gray-500">No parts found</p>
+                  ) : filteredParts.map((p) => (
+                    <button
+                      key={p.part_id}
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => { setPartId(String(p.part_id)); setPartSearch(''); setShowParts(false); }}
+                      className="w-full text-left px-3 py-2.5 text-sm hover:bg-amber-50 border-b border-amber-50 last:border-0"
+                    >
+                      {p.part_name}
+                      <span className="text-gray-400"> (Stock: {p.quantity ?? 0})</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="grid grid-cols-3 gap-2">
             <div>

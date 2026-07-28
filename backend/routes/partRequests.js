@@ -42,6 +42,8 @@ router.get('/warehouse-queue', checkRole('warehouse', 'admin', 'manager', 'super
 router.get('/procurement-queue', checkRole('procurement', 'admin', 'manager', 'super_admin'), ctrl.getProcurementQueue);
 router.get('/cost-summary/:ttsplId', checkSectionPermission('ttspl_history', 'view'), ctrl.getPartCostSummary);
 router.get('/instances', ctrl.listPartInstances);
+router.post('/instances', checkRole('warehouse', 'admin', 'manager', 'super_admin'), ctrl.addPartInstances);
+router.patch('/instances/:instanceId', checkRole('warehouse', 'admin', 'manager', 'super_admin'), ctrl.updatePartInstance);
 router.get('/ticket/:ticketId', ctrl.getTicketPartRequests);
 
 router.get('/:requestId', ctrl.getPartRequest);

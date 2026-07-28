@@ -16,6 +16,8 @@ export const getWarehouseQueue = () => api.get(`${base}/warehouse-queue`);
 export const getProcurementQueue = () => api.get(`${base}/procurement-queue`);
 export const getPartCostSummary = (ttsplId) => api.get(`${base}/cost-summary/${ttsplId}`);
 export const listPartInstances = (params) => api.get(`${base}/instances`, { params });
+export const addPartInstances = (body) => api.post(`${base}/instances`, body);
+export const updatePartInstance = (instanceId, body) => api.patch(`${base}/instances/${instanceId}`, body);
 
 export const approvePartRequest = (id, body) => api.patch(`${base}/${id}/approve`, body);
 export const rejectPartRequest = (id, body) => api.patch(`${base}/${id}/reject`, body);

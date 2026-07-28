@@ -24,7 +24,7 @@ export default function ServiceDcPanel({ ticket, pickups, replacementOrders = []
   );
   const hasReplacementSo = !!ticket.sales_order_number
     && replacementOrders.some((o) => o.status !== 'completed' && o.status !== 'cancelled');
-
+  
   const load = useCallback(async () => {
     if (!ticketId || hasReplacementSo) {
       setCtx(null);

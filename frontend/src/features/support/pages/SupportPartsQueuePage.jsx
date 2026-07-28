@@ -1,15 +1,18 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Loader2, ClipboardList, MapPin, PackageCheck, ArrowRightLeft, Check, X } from 'lucide-react';
+import { Loader2, ClipboardList, MapPin, PackageCheck, ArrowRightLeft, Check, X, Search } from 'lucide-react';
 import { getSupportPartsWarehouseQueue, approveAndGenerateChallan, resolvePartReassign } from '../supportPartsApi';
 import ESignChallanModal from '../components/ESignChallanModal';
+import PickSupportSerialsModal from '../components/PickSupportSerialsModal';
 import { usePartsBase } from '../partsBase';
 
 function PendingTab({ requests, onAction, base }) {
   const navigate = useNavigate();
   const [selected, setSelected] = useState(new Set());
   const [busy, setBusy] = useState(false);
+  const [search, setSearch] = useState('');
+  const [pickOpen, setPickOpen] = useState(false);
 
   const toggle = (id) => {
     const next = new Set(selected);
@@ -17,20 +20,42 @@ function PendingTab({ requests, onAction, base }) {
     setSelected(next);
   };
 
-  const approve = async () => {
-    const ids = Array.from(selected);
-    if (!ids.length) return;
-    const sel = requests.filter((r) => ids.includes(r.id));
-    const tickets = [...new Set(sel.map((r) => r.support_ticket_id))];
-    const techs = [...new Set(sel.map((r) => r.assigned_to_tech))];
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return requests;
+    return requests.filter((r) =>
+      String(r.request_number || '').toLowerCase().includes(q) ||
+      String(r.ticket_number || '').toLowerCase().includes(q) ||
+      String(r.part_name || '').toLowerCase().includes(q) ||
+      String(r.tech_name || '').toLowerCase().includes(q) ||
+      String(r.ttspl_id || '').toLowerCase().includes(q) ||
+      String(r.customer_name || '').toLowerCase().includes(q)
+    );
+  }, [requests, search]);
+
+  const selectedRequests = useMemo(
+    () => requests.filter((r) => selected.has(r.id)),
+    [requests, selected]
+  );
+
+  const openPicker = () => {
+    if (!selectedRequests.length) return;
+    const tickets = [...new Set(selectedRequests.map((r) => r.support_ticket_id))];
+    const techs = [...new Set(selectedRequests.map((r) => r.assigned_to_tech))];
     if (tickets.length > 1) { toast.error('Select requests from the same ticket only'); return; }
     if (techs.length > 1) { toast.error('Select requests for the same technician only'); return; }
+    setPickOpen(true);
+  };
 
+  const approve = async (instanceMap) => {
+    const ids = selectedRequests.map((r) => r.id);
+    if (!ids.length) return;
     setBusy(true);
     try {
-      const { data } = await approveAndGenerateChallan(ids);
+      const { data } = await approveAndGenerateChallan(ids, instanceMap);
       toast.success(`Challan ${data.challan_number} created - capture the technician's signature`);
       setSelected(new Set());
+      setPickOpen(false);
       onAction();
       if (data.challan_id) navigate(`${base}/challans/${data.challan_id}`);
     } catch (e) {
@@ -46,16 +71,29 @@ function PendingTab({ requests, onAction, base }) {
 
   return (
     <div className="space-y-3">
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+        <input
+          type="search"
+          className="w-full rounded-lg border border-gray-200 pl-8 pr-3 py-2 text-sm"
+          placeholder="Search request #, ticket, part, technician, TTSPL…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+      </div>
+
       {selected.size > 0 && (
         <div className="flex items-center justify-between bg-[#534AB7]/10 rounded-xl px-4 py-3 sticky top-2 z-10">
           <span className="text-sm text-[#534AB7] font-medium">{selected.size} request(s) selected</span>
-          <button type="button" onClick={approve} disabled={busy} className="px-4 py-2 min-h-[40px] bg-[#534AB7] text-white rounded-lg text-sm font-semibold disabled:opacity-50">
+          <button type="button" onClick={openPicker} disabled={busy} className="px-4 py-2 min-h-[40px] bg-[#534AB7] text-white rounded-lg text-sm font-semibold disabled:opacity-50">
             {busy ? 'Working…' : 'Approve + generate challan'}
           </button>
         </div>
       )}
 
-      {requests.map((req) => {
+      {filtered.length === 0 ? (
+        <div className="bg-white rounded-2xl border p-8 text-center text-sm text-gray-500">No requests match your search.</div>
+      ) : filtered.map((req) => {
         const available = Number(req.available ?? req.instances_available ?? req.stock_qty ?? 0);
         return (
           <div
@@ -98,6 +136,14 @@ function PendingTab({ requests, onAction, base }) {
           </div>
         );
       })}
+
+      <PickSupportSerialsModal
+        open={pickOpen}
+        requests={selectedRequests}
+        busy={busy}
+        onClose={() => setPickOpen(false)}
+        onConfirm={approve}
+      />
     </div>
   );
 }

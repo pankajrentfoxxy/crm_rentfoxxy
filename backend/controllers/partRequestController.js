@@ -15,7 +15,7 @@ const FULL_SELECT = `
          COALESCE(pr.part_name, p.part_name) AS part_name,
          p.category, p.part_type, p.cost AS catalog_cost, p.quantity AS stock_qty,
          p.model_number AS catalog_model_number, p.pin_size AS catalog_pin_size,
-         pi.prt_id, pi.location_code, pi.status AS instance_status, pi.unit_cost AS instance_cost,
+         pi.prt_id, pi.serial_number AS instance_serial, pi.location_code, pi.status AS instance_status, pi.unit_cost AS instance_cost,
          t.ttspl_id, t.brand, t.model, t.processor, t.ram, t.storage,
          t.vendor_serial_id, t.current_stage_id,
          st.stage_name,
@@ -45,6 +45,21 @@ async function ensurePartsSpecColumns(db) {
   `);
   partsSpecEnsured = true;
 }
+
+let serialColEnsured = false;
+async function ensurePartInstanceSerialColumn(db) {
+  if (serialColEnsured) return;
+  await db.query(`
+    ALTER TABLE part_instances ADD COLUMN IF NOT EXISTS serial_number VARCHAR(255);
+    CREATE INDEX IF NOT EXISTS idx_part_instances_serial ON part_instances (serial_number);
+    CREATE INDEX IF NOT EXISTS idx_part_instances_part_status ON part_instances (part_id, status);
+  `);
+  serialColEnsured = true;
+}
+
+// Statuses that count as physically available stock (feed parts.quantity).
+const IN_STOCK_STATUS = 'in_stock';
+const EDITABLE_INSTANCE_STATUSES = ['in_stock', 'defective', 'discarded'];
 
 function isBatteryPart(part) {
   const cat = String(part?.category || part?.part_type || '').toLowerCase().trim();
@@ -366,7 +381,7 @@ exports.approvePartRequest = async (req, res) => {
     });
 
     await client.query('COMMIT');
-    res.json({ success: true, instance_id: instanceId, prt_id: inst.prt_id, location_code: inst.location_code, message: 'Part approved and reserved' });
+    res.json({ success: true, instance_id: instanceId, prt_id: inst.prt_id, serial_number: inst.serial_number, location_code: inst.location_code, message: 'Part approved and reserved' });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('approvePartRequest:', err);
@@ -750,21 +765,29 @@ exports.getPartCostSummary = async (req, res) => {
   }
 };
 
-// GET /api/part-requests/instances?status=&part_id=&category=&limit=
+// GET /api/part-requests/instances?status=&part_id=&category=&search=&limit=
 exports.listPartInstances = async (req, res) => {
   try {
-    const { status, part_id, category, limit = 200 } = req.query;
+    await ensurePartInstanceSerialColumn(pool);
+    const { status, part_id, category, search, limit = 200 } = req.query;
     const conditions = [];
     const params = [];
     if (status) { params.push(status); conditions.push(`pi.status = $${params.length}`); }
     if (part_id) { params.push(Number(part_id)); conditions.push(`pi.part_id = $${params.length}`); }
     if (category) { params.push(category); conditions.push(`p.category = $${params.length}`); }
+    if (search && String(search).trim()) {
+      params.push(`%${String(search).trim()}%`);
+      const i = params.length;
+      conditions.push(`(pi.prt_id ILIKE $${i} OR pi.serial_number ILIKE $${i}
+        OR p.part_name ILIKE $${i} OR pi.installed_ttspl_id ILIKE $${i}
+        OR pi.location_code ILIKE $${i})`);
+    }
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
     params.push(Math.min(1000, Number(limit) || 200));
 
     const result = await pool.query(
-      `SELECT pi.instance_id, pi.prt_id, pi.part_id, pi.status, pi.location_code,
-              pi.unit_cost, pi.installed_ttspl_id, pi.installed_ticket_id, pi.installed_at,
+      `SELECT pi.instance_id, pi.prt_id, pi.serial_number, pi.part_id, pi.status, pi.location_code,
+              pi.unit_cost, pi.notes, pi.installed_ttspl_id, pi.installed_ticket_id, pi.installed_at,
               pi.received_at, pi.created_at,
               p.part_name, p.category, p.part_type
          FROM part_instances pi
@@ -778,6 +801,160 @@ exports.listPartInstances = async (req, res) => {
   } catch (err) {
     console.error('listPartInstances:', err);
     res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// POST /api/part-requests/instances
+// Add one or more physical units (with serial numbers) for a catalog part.
+// Body: { part_id, serial_number?, serial_numbers?[], quantity?, unit_cost?, location_code?, notes? }
+exports.addPartInstances = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await ensurePartInstanceSerialColumn(pool);
+    const {
+      part_id, serial_number, serial_numbers, quantity,
+      unit_cost, location_code, notes,
+    } = req.body || {};
+
+    if (!part_id) {
+      return res.status(400).json({ success: false, message: 'part_id required' });
+    }
+
+    // Build the list of serials to create. An explicit array wins; otherwise
+    // create `quantity` units, all sharing the single serial (or null).
+    let serials;
+    if (Array.isArray(serial_numbers) && serial_numbers.length) {
+      serials = serial_numbers.map((s) => String(s || '').trim()).filter(Boolean);
+    } else {
+      const qty = Math.max(1, Math.min(500, Number(quantity) || 1));
+      const single = serial_number ? String(serial_number).trim() : null;
+      serials = Array.from({ length: qty }, () => single);
+    }
+    if (!serials.length) {
+      return res.status(400).json({ success: false, message: 'Provide at least one serial number or a quantity' });
+    }
+
+    await client.query('BEGIN');
+
+    const partRes = await client.query(
+      `SELECT part_id, part_name, cost FROM parts WHERE part_id = $1 FOR UPDATE`,
+      [Number(part_id)]
+    );
+    if (!partRes.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Part not found' });
+    }
+    const part = partRes.rows[0];
+    const cost = unit_cost != null && unit_cost !== '' ? Number(unit_cost) : Number(part.cost || 0);
+
+    const created = [];
+    for (const s of serials) {
+      const prtId = await generatePrtId(new Date(), client);
+      const ins = await client.query(
+        `INSERT INTO part_instances
+           (prt_id, serial_number, part_id, unit_cost, location_code, status, notes,
+            received_by, received_at, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,'in_stock',$6,$7,NOW(),NOW(),NOW())
+         RETURNING instance_id, prt_id, serial_number, status, location_code, unit_cost`,
+        [prtId, s || null, Number(part_id), cost, location_code || null, notes || null, req.user.user_id]
+      );
+      created.push(ins.rows[0]);
+    }
+
+    await client.query(
+      `UPDATE parts SET quantity = COALESCE(quantity,0) + $1, updated_at = NOW() WHERE part_id = $2`,
+      [created.length, Number(part_id)]
+    );
+
+    await client.query('COMMIT');
+    res.status(201).json({
+      success: true,
+      created,
+      count: created.length,
+      message: `${created.length} unit(s) added to ${part.part_name}`,
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('addPartInstances:', err);
+    res.status(500).json({ success: false, message: err.message });
+  } finally {
+    client.release();
+  }
+};
+
+// PATCH /api/part-requests/instances/:instanceId
+// Edit a unit's serial/location/cost/notes and manage its stock status
+// (in_stock / defective / discarded). Keeps parts.quantity in sync.
+exports.updatePartInstance = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await ensurePartInstanceSerialColumn(pool);
+    const { instanceId } = req.params;
+    const { serial_number, location_code, unit_cost, notes, status } = req.body || {};
+
+    await client.query('BEGIN');
+    const instRes = await client.query(
+      `SELECT * FROM part_instances WHERE instance_id = $1 FOR UPDATE`, [Number(instanceId)]
+    );
+    if (!instRes.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Part unit not found' });
+    }
+    const inst = instRes.rows[0];
+
+    let nextStatus = inst.status;
+    if (status !== undefined && status !== null && status !== inst.status) {
+      if (!EDITABLE_INSTANCE_STATUSES.includes(status)) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: `Status '${status}' cannot be set here` });
+      }
+      // Only free stock (in_stock) may be reclassified — reserved/installed units
+      // are locked to their workflow.
+      if (!EDITABLE_INSTANCE_STATUSES.includes(inst.status)) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: `Unit is '${inst.status}' and cannot be changed here` });
+      }
+      nextStatus = status;
+    }
+
+    await client.query(
+      `UPDATE part_instances
+          SET serial_number = COALESCE($1, serial_number),
+              location_code = COALESCE($2, location_code),
+              unit_cost = COALESCE($3, unit_cost),
+              notes = COALESCE($4, notes),
+              status = $5,
+              updated_at = NOW()
+        WHERE instance_id = $6`,
+      [
+        serial_number !== undefined ? (serial_number === '' ? null : String(serial_number).trim()) : null,
+        location_code !== undefined ? (location_code === '' ? null : location_code) : null,
+        unit_cost != null && unit_cost !== '' ? Number(unit_cost) : null,
+        notes !== undefined ? notes : null,
+        nextStatus,
+        Number(instanceId),
+      ]
+    );
+
+    // Keep aggregate stock in sync when a unit enters/leaves in_stock.
+    const wasInStock = inst.status === IN_STOCK_STATUS;
+    const nowInStock = nextStatus === IN_STOCK_STATUS;
+    if (wasInStock !== nowInStock) {
+      const delta = nowInStock ? 1 : -1;
+      await client.query(
+        `UPDATE parts SET quantity = GREATEST(0, COALESCE(quantity,0) + $1), updated_at = NOW() WHERE part_id = $2`,
+        [delta, inst.part_id]
+      );
+    }
+
+    await client.query('COMMIT');
+    res.json({ success: true, message: 'Part unit updated' });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('updatePartInstance:', err);
+    res.status(500).json({ success: false, message: err.message });
+  } finally {
+    client.release();
   }
 };
 
