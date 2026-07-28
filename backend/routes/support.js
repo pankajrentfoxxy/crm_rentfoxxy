@@ -63,6 +63,8 @@ const {
     createServiceDc,
     getRepairSwapContext,
     initiateRepairSwap,
+    getResendLaptopContext,
+    initiateResendLaptop,
     regenerateServiceDcPdf,
 } = require('../controllers/supportController');
 
@@ -156,6 +158,8 @@ router.post('/tickets/:ticketId/close', requireSupportTicketClose, closeTicket);
 router.post('/tickets/:ticketId/cancel', requireSupportTicketCancel, cancelTicket);
 router.get('/tickets/:ticketId/repair-swap-context', requireSupportLead, getRepairSwapContext);
 router.post('/tickets/:ticketId/replacements/swap-from-repair', requireSupportLead, initiateRepairSwap);
+router.get('/tickets/:ticketId/resend-laptop-context', requireSupportLead, getResendLaptopContext);
+router.post('/tickets/:ticketId/resend-laptop', requireSupportLead, initiateResendLaptop);
 router.post('/tickets/:ticketId/replacements', requireSupportLead, initiateReplacement);
 router.post('/tickets/:ticketId/cancel-return-pickup', requireSupportLead, cancelReturnPickup);
 router.post('/tickets/:ticketId/assign-return-pickup', requireSupportLead, assignReturnPickupDispatch);

@@ -3,12 +3,15 @@
  * Outbound delivery DC is created later via normal SO attach → Dispatch QC → Create DC.
  */
 const {
-  nextFinancialYearNumber,
-  generateToken,
-  getSalesOrderFulfillmentCounts,
-  deriveSalesOrderListStatus,
-} = require('./salesManagementService');
+  buildReplacementSoLineRemark,
+  effectiveReplacementLineRemark,
+} = require('../utils/replacementRemarkUtils');
 const inventorySM = require('./inventoryStateMachine');
+
+/** Lazy load — avoids circular dep with salesManagementService at module init. */
+function salesManagementService() {
+  return require('./salesManagementService');
+}
 
 function parseExtra(raw) {
   if (!raw) return {};
@@ -219,8 +222,9 @@ async function createConfigSalesOrder(client, {
   lineConfigs,
   userId,
 }) {
-  const salesOrderNumber = await nextFinancialYearNumber('sales_order', client);
-  const token = generateToken();
+  const sm = salesManagementService();
+  const salesOrderNumber = await sm.nextFinancialYearNumber('sales_order', client);
+  const token = sm.generateToken();
   const shippingJson = shippingAddress ? JSON.stringify(shippingAddress) : null;
   const billingJson = billingAddress ? JSON.stringify(billingAddress) : null;
   const lineIds = [];
@@ -356,26 +360,6 @@ function formatConfigLabel(cfg) {
   return [cfg.brand, cfg.model, cfg.processor, cfg.generation, cfg.ram, cfg.storage]
     .filter(Boolean)
     .join(' · ');
-}
-
-/**
- * SO line remark for a replacement — names the old (faulty) laptop by TTSPL so the
- * remark carries into the outbound delivery DC (its remarks are derived from the SO
- * line remark). Falls back to the generic label when no TTSPL/serial is known.
- */
-function buildReplacementSoLineRemark(cfg) {
-  const code = String(cfg?.old_machine_serial || '').trim();
-  return code ? `Support replacement against TTSPL: ${code}` : 'Support replacement';
-}
-
-/** Use SO line remark, or derive TTSPL-specific text from a linked replacement order. */
-function effectiveReplacementLineRemark(soRemark, oldMachineSerial) {
-  const r = String(soRemark || '').trim();
-  if (r && r !== 'Support replacement') return r;
-  if (String(oldMachineSerial || '').trim()) {
-    return buildReplacementSoLineRemark({ old_machine_serial: oldMachineSerial });
-  }
-  return r || 'Support replacement';
 }
 
 async function findReplacementOrderForSerial(client, serialId) {
@@ -531,8 +515,9 @@ async function onReplacementOutboundDelivered(client, dcNumber, actor = {}) {
   }
 
   if (handledAny && row.sales_order_number) {
-    const fulfillment = await getSalesOrderFulfillmentCounts(row.sales_order_number);
-    if (deriveSalesOrderListStatus(fulfillment) === 'delivered') {
+    const sm = salesManagementService();
+    const fulfillment = await sm.getSalesOrderFulfillmentCounts(row.sales_order_number);
+    if (sm.deriveSalesOrderListStatus(fulfillment) === 'delivered') {
       await client.query(
         `UPDATE sales_order_lines SET status = 'delivered', updated_at = NOW()
           WHERE sales_order_number = $1 AND LOWER(COALESCE(status, 'pending')) != 'cancelled'`,
@@ -970,6 +955,351 @@ async function initiateSwapFromRepairPickup(client, {
   };
 }
 
+/** Detach SO serials whose units were already received back at warehouse (stale dispatch link). */
+async function detachReturnedSerialsForResend(client, ticketId, salesOrderNumber) {
+  const pickups = await client.query(
+    `SELECT ttspl_id, serial_number, unique_serial_number
+       FROM support_ticket_items
+      WHERE ticket_id = $1
+        AND item_type = 'pickup'
+        AND warehouse_received_at IS NOT NULL`,
+    [ticketId]
+  );
+  let detached = 0;
+  for (const p of pickups.rows) {
+    const codes = [p.ttspl_id, p.serial_number, p.unique_serial_number].filter(Boolean);
+    if (!codes.length) continue;
+    const r = await client.query(
+      `UPDATE sales_order_serials
+          SET status = 'removed', updated_at = NOW()
+        WHERE sales_order_number = $1
+          AND status IN ('attached', 'dispatched')
+          AND (
+            ttspl_id = ANY($2::text[])
+            OR serial_number = ANY($2::text[])
+          )
+        RETURNING allocation_id`,
+      [salesOrderNumber, codes]
+    );
+    detached += r.rows.length;
+  }
+  return detached;
+}
+
+async function backfillReplacementOrdersFromSo(client, ticket, userId, reason) {
+  const ticketId = ticket.id;
+  const so = ticket.sales_order_number;
+  const existing = await client.query(
+    `SELECT id FROM support_replacement_orders
+      WHERE ticket_id = $1 AND sales_order_number = $2 LIMIT 1`,
+    [ticketId, so]
+  );
+  if (existing.rows.length) return 0;
+
+  const complaints = await client.query(
+    `SELECT * FROM support_ticket_items
+      WHERE ticket_id = $1 AND item_type = 'complaint'
+      ORDER BY id ASC`,
+    [ticketId]
+  );
+  const lines = await client.query(
+    `SELECT id FROM sales_order_lines
+      WHERE sales_order_number = $1
+        AND LOWER(COALESCE(status, 'pending')) != 'cancelled'
+      ORDER BY id ASC`,
+    [so]
+  );
+  if (!lines.rows.length) return 0;
+
+  let sources = complaints.rows;
+  if (!sources.length) {
+    const pickupRes = await client.query(
+      `SELECT * FROM support_ticket_items
+        WHERE ticket_id = $1 AND item_type = 'pickup'
+        ORDER BY id ASC`,
+      [ticketId]
+    );
+    sources = pickupRes.rows.map((p) => ({
+      ...p,
+      id: p.source_item_id || p.id,
+    }));
+  }
+
+  let created = 0;
+  for (let i = 0; i < lines.rows.length; i += 1) {
+    const src = sources[i] || sources[0];
+    const line = lines.rows[i];
+    if (!src) continue;
+
+    const cfg = await resolveConfigFromComplaint(client, src, ticket.customer_id);
+    const sharedReason = reason || src.replacement_flag_reason || 'Resend replacement laptop';
+
+    let replItemRes = await client.query(
+      `SELECT id FROM support_ticket_items
+        WHERE ticket_id = $1 AND item_type = 'replacement' AND source_item_id = $2
+        LIMIT 1`,
+      [ticketId, src.id]
+    );
+    let replacementItemId = replItemRes.rows[0]?.id;
+    if (replacementItemId) {
+      await client.query(
+        `UPDATE support_ticket_items
+            SET status = 'order_placed', updated_at = CURRENT_TIMESTAMP
+          WHERE id = $1`,
+        [replacementItemId]
+      );
+    } else {
+      const itemIns = await client.query(
+        `INSERT INTO support_ticket_items (
+            ticket_id, brand, model, processor, generation, ram, storage,
+            item_type, remarks, status, source_item_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,'replacement',$8,'order_placed',$9)
+         RETURNING id`,
+        [
+          ticketId,
+          cfg.brand,
+          cfg.model,
+          cfg.processor,
+          cfg.generation,
+          cfg.ram,
+          cfg.storage,
+          sharedReason,
+          src.id,
+        ]
+      );
+      replacementItemId = itemIns.rows[0].id;
+    }
+
+    const pickupRes = await client.query(
+      `SELECT id FROM support_ticket_items
+        WHERE ticket_id = $1 AND item_type = 'pickup' AND source_item_id = $2
+        ORDER BY id DESC LIMIT 1`,
+      [ticketId, src.id]
+    );
+
+    await client.query(
+      `INSERT INTO support_replacement_orders (
+          ticket_id, item_id, source_item_id, complaint_item_id,
+          sales_order_number, sales_order_line_id,
+          old_customer_inventory_id, old_machine_serial, old_serial_id, old_rent_monthly_rate,
+          return_dc_number, pickup_item_id,
+          status, created_by, notes, approved_at
+       ) VALUES ($1,$2,$3,$3,$4,$5,$6,$7,$8,$9,$10,$11,'order_placed',$12,$13,CURRENT_TIMESTAMP)`,
+      [
+        ticketId,
+        replacementItemId,
+        src.id,
+        so,
+        line.id,
+        cfg.old_customer_inventory_id,
+        cfg.old_machine_serial,
+        cfg.old_serial_id,
+        cfg.monthly_rate || null,
+        ticket.return_dc_number || null,
+        pickupRes.rows[0]?.id || null,
+        userId,
+        sharedReason,
+      ]
+    );
+    created += 1;
+  }
+  return created;
+}
+
+/** Context for resending a replacement laptop on an existing replacement SO. */
+async function buildResendLaptopContext(client, ticketId) {
+  const ticketRes = await client.query('SELECT * FROM support_tickets WHERE id = $1', [ticketId]);
+  if (!ticketRes.rows.length) {
+    throw Object.assign(new Error('Ticket not found'), { status: 404 });
+  }
+  const ticket = ticketRes.rows[0];
+  const so = ticket.sales_order_number;
+  const base = {
+    ticket_id: ticketId,
+    sales_order_number: so,
+    ticket_status: ticket.status,
+    return_dc_number: ticket.return_dc_number || null,
+  };
+
+  if (!so) {
+    return {
+      ...base,
+      can_resend: false,
+      block_reason: 'No replacement sales order on this ticket. Use Initiate replacement first.',
+    };
+  }
+
+  const linesRes = await client.query(
+    `SELECT id, brand, model_name, quantity, status
+       FROM sales_order_lines
+      WHERE sales_order_number = $1
+        AND LOWER(COALESCE(status, 'pending')) != 'cancelled'
+      ORDER BY id ASC`,
+    [so]
+  );
+  if (!linesRes.rows.length) {
+    return {
+      ...base,
+      can_resend: false,
+      block_reason: `Sales order ${so} has no active lines.`,
+    };
+  }
+
+  let replOrders = [];
+  try {
+    const replRes = await client.query(
+      `SELECT id, status, delivery_completed_at, dc_number, old_machine_serial
+         FROM support_replacement_orders
+        WHERE ticket_id = $1 AND sales_order_number = $2
+        ORDER BY id ASC`,
+      [ticketId, so]
+    );
+    replOrders = replRes.rows;
+  } catch (e) {
+    if (e.code !== '42P01') throw e;
+  }
+
+  const allDelivered = replOrders.length > 0
+    && replOrders.every(
+      (o) => o.delivery_completed_at || ['delivered', 'completed'].includes(String(o.status || ''))
+    );
+
+  const serialsRes = await client.query(
+    `SELECT allocation_id, serial_number, ttspl_id, qc_status, status, dc_number
+       FROM sales_order_serials
+      WHERE sales_order_number = $1 AND status <> 'removed'
+      ORDER BY allocation_id DESC`,
+    [so]
+  );
+  const attachedSerials = serialsRes.rows;
+
+  const inFlightDcRes = await client.query(
+    `SELECT DISTINCT sos.dc_number, dcl.status
+       FROM sales_order_serials sos
+       JOIN delivery_challan_lines dcl
+         ON dcl.dc_number = sos.dc_number AND dcl.movement_type = 'outbound'
+      WHERE sos.sales_order_number = $1
+        AND sos.status = 'dispatched'
+        AND sos.dc_number IS NOT NULL
+        AND COALESCE(dcl.status, '') NOT IN ('delivered', 'cancelled', 'rejected')
+      LIMIT 1`,
+    [so]
+  );
+
+  const returnReceived = await client.query(
+    `SELECT 1 FROM support_ticket_items
+      WHERE ticket_id = $1 AND item_type = 'pickup' AND warehouse_received_at IS NOT NULL
+      LIMIT 1`,
+    [ticketId]
+  );
+  const hasReturnInWarehouse = returnReceived.rows.length > 0;
+
+  const qcReadyCount = attachedSerials.filter(
+    (s) => s.qc_status === 'passed' && !s.dc_number && s.status !== 'dispatched'
+  ).length;
+  const needsAttach = linesRes.rows.length > qcReadyCount;
+
+  if (allDelivered) {
+    return {
+      ...base,
+      can_resend: false,
+      block_reason: 'Replacement laptop already delivered on this order. Open a new support ticket if another unit is needed.',
+      replacement_orders: replOrders,
+      attached_serials: attachedSerials,
+    };
+  }
+
+  if (inFlightDcRes.rows.length && !hasReturnInWarehouse) {
+    return {
+      ...base,
+      can_resend: false,
+      block_reason: `Delivery DC ${inFlightDcRes.rows[0].dc_number} is still in progress. Wait for delivery or mark rejected before resending.`,
+      active_delivery_dc: inFlightDcRes.rows[0].dc_number,
+      replacement_orders: replOrders,
+      attached_serials: attachedSerials,
+    };
+  }
+
+  return {
+    ...base,
+    can_resend: true,
+    line_count: linesRes.rows.length,
+    needs_attach: needsAttach,
+    qc_ready_count: qcReadyCount,
+    has_return_in_warehouse: hasReturnInWarehouse,
+    stale_dispatch_dc: inFlightDcRes.rows[0]?.dc_number || null,
+    will_detach_stale_serial: hasReturnInWarehouse && inFlightDcRes.rows.length > 0,
+    replacement_orders: replOrders,
+    attached_serials: attachedSerials,
+    next_steps: [
+      'Open the replacement sales order (Laptops & QC tab)',
+      'Attach a different QC-passed laptop (one per line)',
+      'Complete Dispatch QC',
+      'Create delivery DC and assign delivery',
+    ],
+  };
+}
+
+/** Prepare ticket + SO so support can deliver a replacement laptop again. */
+async function initiateResendLaptop(client, ticketId, userId, { reason } = {}) {
+  const ctx = await buildResendLaptopContext(client, ticketId);
+  if (!ctx.can_resend) {
+    throw Object.assign(new Error(ctx.block_reason || 'Cannot resend laptop on this ticket'), { status: 400 });
+  }
+
+  const ticketRes = await client.query('SELECT * FROM support_tickets WHERE id = $1 FOR UPDATE', [ticketId]);
+  const ticket = ticketRes.rows[0];
+  const note = String(reason || '').trim() || 'Resend replacement laptop';
+
+  if (ticket.status === 'closed') {
+    await client.query(
+      `UPDATE support_tickets
+          SET status = 'in_progress', closed_at = NULL, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1`,
+      [ticketId]
+    );
+  } else if (ticket.status === 'open') {
+    await client.query(
+      `UPDATE support_tickets SET status = 'in_progress', updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+      [ticketId]
+    );
+  }
+
+  const detached = await detachReturnedSerialsForResend(client, ticketId, ticket.sales_order_number);
+  const backfilled = await backfillReplacementOrdersFromSo(client, ticket, userId, note);
+
+  await client.query(
+    `UPDATE support_replacement_orders
+        SET status = 'order_placed',
+            delivery_completed_at = NULL,
+            delivered_at = NULL,
+            dc_number = NULL,
+            new_serial_id = NULL
+      WHERE ticket_id = $1
+        AND sales_order_number = $2
+        AND delivery_completed_at IS NULL
+        AND status NOT IN ('completed', 'cancelled')`,
+    [ticketId, ticket.sales_order_number]
+  );
+
+  await client.query(
+    `UPDATE support_ticket_items
+        SET status = 'order_placed', updated_at = CURRENT_TIMESTAMP
+      WHERE ticket_id = $1
+        AND item_type = 'replacement'
+        AND status NOT IN ('delivered', 'closed')`,
+    [ticketId]
+  );
+
+  return {
+    ...ctx,
+    ticket_reopened: ticket.status === 'closed',
+    detached_serial_count: detached,
+    backfilled_order_count: backfilled,
+    reason: note,
+  };
+}
+
 module.exports = {
   buildReplacementRdcRemarks,
   resolveConfigFromComplaint,
@@ -979,6 +1309,8 @@ module.exports = {
   listRepairPickupSwapCandidates,
   buildTicketReplacementContext,
   buildRepairSwapContext,
+  buildResendLaptopContext,
+  initiateResendLaptop,
   initiateSwapFromRepairPickup,
   createConfigSalesOrder,
   appendConfigSalesOrderLines,

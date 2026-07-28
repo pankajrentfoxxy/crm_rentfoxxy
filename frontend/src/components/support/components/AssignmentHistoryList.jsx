@@ -6,6 +6,7 @@ function actionLabel(action) {
   if (action === 'service_dc_created') return 'Service DC created';
   if (action === 'service_dc_delivered') return 'Service DC delivered';
   if (action === 'repair_swap_initiated') return 'Repair swap started — different laptop order created';
+  if (action === 'replacement_resend_initiated') return 'Replacement resend prepared — attach new laptop on SO';
   if (action === 'ticket_closed') return 'Ticket closed';
   if (action === 'technician_reassigned') return 'Technician reassigned';
   if (action === 'technician_assigned') return 'Technician assigned';

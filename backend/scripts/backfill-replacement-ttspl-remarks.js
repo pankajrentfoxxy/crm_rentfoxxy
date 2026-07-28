@@ -14,7 +14,7 @@ require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 const pool = require('../config/db');
 const { getSalesOrderLines, getDeliveryChallanLines } = require('../services/salesManagementService');
 const { generateDocumentPdf } = require('../services/salesManagementPdfService');
-const { buildReplacementSoLineRemark } = require('../services/supportReplacementFlowService');
+const { buildReplacementSoLineRemark } = require('../utils/replacementRemarkUtils');
 
 const DRY = process.argv.includes('--dry');
 const GENERIC_REMARK = 'Support replacement';

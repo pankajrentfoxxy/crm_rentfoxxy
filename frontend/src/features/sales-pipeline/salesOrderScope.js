@@ -58,6 +58,26 @@ export const SO_PERMISSION_SECTIONS = [
   'sales_orders_replacement',
 ];
 
+/** Attach/detach laptops + Dispatch QC on sales order detail. */
+export const SO_LAPTOP_QC_SECTION = 'so_laptop_qc';
+
+export const SO_SERIAL_EDIT_SECTIONS = [
+  ...SO_PERMISSION_SECTIONS,
+  'delivery_challans',
+  'replacement_so_laptop_qc',
+  SO_LAPTOP_QC_SECTION,
+];
+
+/** Sections that unlock the Laptops & QC tab on SO detail. */
+export const SO_LAPTOPS_TAB_VIEW_SECTIONS = [
+  ...SO_PERMISSION_SECTIONS,
+  'delivery_challans',
+  'replacement_so_laptop_qc',
+  SO_LAPTOP_QC_SECTION,
+  'dispatch_workflow',
+  'dispatch_pending_orders',
+];
+
 export function getSoScopeConfig(scope) {
   return SO_SCOPES[scope] || null;
 }

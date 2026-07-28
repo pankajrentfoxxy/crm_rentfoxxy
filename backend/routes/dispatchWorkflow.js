@@ -23,7 +23,11 @@ router.post(
   cpAny(['dispatch_pending_orders', 'floor_tickets', 'dispatch_qc', 'floor_pipeline'], 'edit'),
   ctrl.snoozeQcAlert
 );
-router.get('/:salesOrderNumber', cp('dispatch_workflow', 'view'), ctrl.getWorkflow);
+router.get(
+  '/:salesOrderNumber',
+  cpAny(['dispatch_workflow', 'sales_orders_replacement', 'replacement_so_laptop_qc'], 'view'),
+  ctrl.getWorkflow
+);
 router.post(
   '/:salesOrderNumber/accept',
   cpAny(['dispatch_pending_orders', 'dispatch_workflow'], 'edit'),

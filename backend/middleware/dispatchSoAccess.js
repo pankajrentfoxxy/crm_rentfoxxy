@@ -6,6 +6,8 @@ const pool = require('../config/db');
 const { hasPermission } = require('../services/permissionService');
 const {
   SO_VIEW_SECTIONS,
+  SO_SERIAL_EDIT_SECTIONS,
+  SO_SERIAL_VIEW_SECTIONS,
   assertReplacementSalesOrderAccessIfScoped,
 } = require('../services/dataScopeService');
 
@@ -55,7 +57,7 @@ function checkSoViewOrAssignedDispatch(req, res, next) {
     }
     if (req.user.role === 'super_admin') return next();
 
-    const salesAllowed = await hasAnySectionPermission(req, SO_VIEW_SECTIONS, 'can_view');
+    const salesAllowed = await hasAnySectionPermission(req, SO_SERIAL_VIEW_SECTIONS, 'can_view');
     if (salesAllowed) {
       const soNumber = resolveSoNumber(req);
       if (soNumber) {
@@ -110,7 +112,7 @@ function checkSoSerialOrAssignedDispatch(req, res, next) {
 
     const salesAllowed = await hasAnySectionPermission(
       req,
-      [...SO_VIEW_SECTIONS, 'delivery_challans'],
+      SO_SERIAL_EDIT_SECTIONS,
       'can_edit'
     );
     if (salesAllowed) {

@@ -3742,6 +3742,11 @@ exports.updateSoLineConfig = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Sales order line not found' });
     }
     const line = lineRes.rows[0];
+    await assertReplacementSalesOrderAccessIfScoped(
+      line.sales_order_number,
+      req.user,
+      req.permissionCache
+    );
     if (String(line.status || '').toLowerCase() === 'cancelled') {
       await client.query('ROLLBACK');
       return res.status(409).json({
@@ -3868,6 +3873,11 @@ exports.updateSoLineRate = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Sales order line not found' });
     }
     const line = lineRes.rows[0];
+    await assertReplacementSalesOrderAccessIfScoped(
+      line.sales_order_number,
+      req.user,
+      req.permissionCache
+    );
     if (String(line.status || '').toLowerCase() === 'cancelled') {
       await client.query('ROLLBACK');
       return res.status(409).json({ success: false, message: 'Sales order line is cancelled' });
@@ -3962,6 +3972,11 @@ exports.updateSoLineHsn = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Sales order line not found' });
     }
     const line = lineRes.rows[0];
+    await assertReplacementSalesOrderAccessIfScoped(
+      line.sales_order_number,
+      req.user,
+      req.permissionCache
+    );
     if (String(line.status || '').toLowerCase() === 'cancelled') {
       await client.query('ROLLBACK');
       return res.status(409).json({ success: false, message: 'Sales order line is cancelled' });

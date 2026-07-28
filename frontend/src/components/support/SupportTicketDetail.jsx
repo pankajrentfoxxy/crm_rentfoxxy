@@ -20,6 +20,7 @@ import CreatePickupModal from './components/CreatePickupModal';
 import PickupSetupForm from './components/PickupSetupForm';
 import ServiceDcPanel from './components/ServiceDcPanel';
 import RepairSwapPanel from './components/RepairSwapPanel';
+import ResendLaptopPanel from './components/ResendLaptopPanel';
 import AssignmentHistoryList, { actionLabel } from './components/AssignmentHistoryList';
 import { replacementSalesOrderDetailPath } from '../../features/sales-pipeline/salesOrderScope';
 import {
@@ -448,6 +449,7 @@ function WorkflowActionsBar({ workflowActions, item }) {
 function ReplacementOrderBanner({ ticket, replacementOrders, pickups, ticketId, isLead, onRefresh, assignmentHistory = [] }) {
   const [showAssign, setShowAssign] = useState(false);
   const [showChangeAssignee, setShowChangeAssignee] = useState(false);
+  const [showResend, setShowResend] = useState(false);
   const [assignBusy, setAssignBusy] = useState(false);
   const [changeBusy, setChangeBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
@@ -670,6 +672,32 @@ function ReplacementOrderBanner({ ticket, replacementOrders, pickups, ticketId, 
             <p className="text-xs text-slate-500 mt-1">
               Use when pickup was created in error (e.g. migrated data). Clears the Return DC so you can initiate replacement again.
             </p>
+          </div>
+        )}
+        {isLead && (
+          <div className="pt-2 border-t border-pink-100">
+            {!showResend ? (
+              <button
+                type="button"
+                className="support-btn-outline min-h-[40px] text-sm text-pink-800 border-pink-300"
+                onClick={() => setShowResend(true)}
+              >
+                Resend replacement laptop
+              </button>
+            ) : (
+              <ResendLaptopPanel
+                ticketId={ticketId}
+                ticket={ticket}
+                isLead={isLead}
+                onRefresh={onRefresh}
+                onDone={() => setShowResend(false)}
+              />
+            )}
+            {!showResend && (
+              <p className="text-xs text-slate-500 mt-1">
+                Faulty unit returned but customer still needs a different laptop? Prepare the existing sales order for a new delivery.
+              </p>
+            )}
           </div>
         )}
       </div>

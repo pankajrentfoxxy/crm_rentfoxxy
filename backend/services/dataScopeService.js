@@ -12,6 +12,31 @@ const SO_VIEW_SECTIONS = [
   'sales_orders_replacement',
 ];
 
+/** Attach/detach laptops + Dispatch QC on any sales order scope. */
+const REPLACEMENT_SO_LAPTOP_QC_SECTION = 'replacement_so_laptop_qc';
+
+/** Rental/Sale SO — Laptops & QC tab + serial attach + line edit. */
+const SO_LAPTOP_QC_SECTION = 'so_laptop_qc';
+
+const SO_SERIAL_EDIT_SECTIONS = [
+  ...SO_VIEW_SECTIONS,
+  'delivery_challans',
+  REPLACEMENT_SO_LAPTOP_QC_SECTION,
+  SO_LAPTOP_QC_SECTION,
+];
+
+const SO_SERIAL_VIEW_SECTIONS = SO_SERIAL_EDIT_SECTIONS;
+
+/** Sections that unlock the Laptops & QC tab on SO detail. */
+const SO_LAPTOPS_TAB_VIEW_SECTIONS = [
+  ...SO_VIEW_SECTIONS,
+  'delivery_challans',
+  REPLACEMENT_SO_LAPTOP_QC_SECTION,
+  SO_LAPTOP_QC_SECTION,
+  'dispatch_workflow',
+  'dispatch_pending_orders',
+];
+
 const SO_STANDARD_VIEW_SECTIONS = [
   'sales_orders_doc',
   'sales_orders_sale',
@@ -51,8 +76,10 @@ function salesOrderScopeSection(entityScope) {
 /** Users with replacement SO access but no standard sale/rental/doc list access. */
 async function userHasReplacementOnlySalesOrderAccess(userId, role, cache) {
   if (role === 'super_admin' || role === 'admin') return false;
-  const hasReplacement = await hasPermission(userId, role, 'sales_orders_replacement', 'can_view', cache);
-  if (!hasReplacement) return false;
+  const hasReplacementList = await hasPermission(userId, role, 'sales_orders_replacement', 'can_view', cache);
+  const hasLaptopQc = await hasPermission(userId, role, REPLACEMENT_SO_LAPTOP_QC_SECTION, 'can_view', cache)
+    || await hasPermission(userId, role, REPLACEMENT_SO_LAPTOP_QC_SECTION, 'can_edit', cache);
+  if (!hasReplacementList && !hasLaptopQc) return false;
   for (const section of SO_STANDARD_VIEW_SECTIONS) {
     // eslint-disable-next-line no-await-in-loop
     if (await hasPermission(userId, role, section, 'can_view', cache)) return false;
@@ -281,6 +308,11 @@ module.exports = {
   DATA_SCOPE_ALL,
   DATA_SCOPE_ASSIGNED,
   SO_VIEW_SECTIONS,
+  REPLACEMENT_SO_LAPTOP_QC_SECTION,
+  SO_LAPTOP_QC_SECTION,
+  SO_SERIAL_EDIT_SECTIONS,
+  SO_SERIAL_VIEW_SECTIONS,
+  SO_LAPTOPS_TAB_VIEW_SECTIONS,
   sectionsToCheck,
   scopeUserId,
   getEffectiveDataScope,
