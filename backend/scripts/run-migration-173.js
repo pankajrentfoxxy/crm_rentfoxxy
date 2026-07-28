@@ -15,7 +15,7 @@ async function main() {
   await pool.query(sql);
   console.log('Migration 173 applied:', sqlPath);
 }
-
+  
 main()
   .catch((e) => {
     console.error(e);

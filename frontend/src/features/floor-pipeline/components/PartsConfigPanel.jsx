@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Loader2, Search, PackagePlus, Wrench, X, Camera } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Loader2, Search, PackagePlus, Wrench, X, Camera, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { addPartWithConfig, searchParts } from '../floorPipelineApi';
 import { createPartRequest, attachPartToRequest, cancelPartRequest, uploadPartRequestPhotos } from '../partRequestsApi';
@@ -123,6 +123,135 @@ function AttachPartModal({ request, onAttached, onClose }) {
   );
 }
 
+const REQUEST_TYPE_OPTIONS = [
+  { value: 'replacement', label: 'Replace Defective' },
+  { value: 'upgrade', label: 'Upgrade' },
+  { value: 'consumable', label: 'Consumable' },
+];
+
+const UPGRADE_FIELD_OPTIONS = [
+  { value: '', label: 'What are you upgrading?' },
+  { value: 'ram', label: 'RAM' },
+  { value: 'storage', label: 'Storage / SSD' },
+  { value: 'display', label: 'Display' },
+  { value: 'battery', label: 'Battery' },
+  { value: 'keyboard', label: 'Keyboard' },
+  { value: 'gpu', label: 'GPU' },
+  { value: 'other', label: 'Other' },
+];
+
+/** One editable row in the multi-part request cart. */
+function RequestItemRow({ item, ticket, onChange, onRemove, onUploadBattery, onRemovePhoto, uploading }) {
+  const battery = isBatteryPart(item.part);
+  const qty = item.part.quantity || 0;
+
+  const setConfigField = (value) => {
+    const auto = {
+      ram: ticket?.ram, storage: ticket?.storage, display: ticket?.screen_size,
+      processor: ticket?.processor, gpu: ticket?.gpu,
+    }[value] || '';
+    onChange(item.key, { config_field: value, old_value: auto });
+  };
+
+  return (
+    <div className="rounded-lg border border-blue-100 bg-white p-3 space-y-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="font-medium text-sm text-slate-900 truncate">{item.part.part_name}</p>
+          <span className={`inline-block mt-0.5 px-2 py-0.5 rounded-full text-[11px] font-medium ${
+            qty > 5 ? 'bg-green-100 text-green-700' : qty > 0 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'
+          }`}>
+            {qty > 0 ? `In Stock: ${qty}` : 'Out of Stock — Procurement'}
+          </span>
+        </div>
+        <button type="button" onClick={() => onRemove(item.key)} className="shrink-0 p-1 rounded hover:bg-red-50 text-red-500" title="Remove">
+          <Trash2 className="w-4 h-4" />
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <label className="block text-xs text-slate-600">
+          Type
+          <select
+            value={item.request_type}
+            onChange={(e) => onChange(item.key, { request_type: e.target.value })}
+            className="mt-1 w-full rounded border px-2 py-1.5 text-sm"
+          >
+            {REQUEST_TYPE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </label>
+        <label className="block text-xs text-slate-600">
+          Quantity
+          <input type="number" min={1} value={item.quantity}
+            onChange={(e) => onChange(item.key, { quantity: Math.max(1, Number(e.target.value) || 1) })}
+            className="mt-1 w-full rounded border px-2 py-1.5 text-sm" />
+        </label>
+      </div>
+
+      {item.request_type === 'upgrade' && (
+        <div className="space-y-2 bg-blue-50 rounded-lg p-2 border border-blue-100">
+          <select value={item.config_field} onChange={(e) => setConfigField(e.target.value)}
+            className="w-full border rounded-lg px-3 py-2 text-sm">
+            {UPGRADE_FIELD_OPTIONS.map((o) => <option key={o.value || 'none'} value={o.value}>{o.label}</option>)}
+          </select>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-gray-500">Current (old)</label>
+              <input value={item.old_value} onChange={(e) => onChange(item.key, { old_value: e.target.value })}
+                className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="e.g. 8 GB" />
+            </div>
+            <div>
+              <label className="text-xs text-gray-500">After upgrade (new)*</label>
+              <input value={item.new_value} onChange={(e) => onChange(item.key, { new_value: e.target.value })}
+                className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="e.g. 16 GB" />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {battery && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 space-y-2">
+          <p className="text-xs font-semibold text-amber-900">Battery details (required)</p>
+          <input
+            className="w-full border rounded-lg px-3 py-2 text-sm font-mono"
+            value={item.battery_model_number}
+            onChange={(e) => onChange(item.key, { battery_model_number: e.target.value })}
+            placeholder="Battery Model Number * e.g. L19C3PD4"
+          />
+          <label className="flex items-center justify-center gap-2 border border-dashed rounded-lg px-3 py-3 text-sm text-slate-600 cursor-pointer hover:bg-white">
+            <Camera className="w-4 h-4" />
+            {uploading ? 'Uploading…' : 'Upload battery photos *'}
+            <input type="file" accept="image/*" multiple className="hidden" disabled={uploading}
+              onChange={(e) => { const f = e.target.files; onUploadBattery(item.key, f); e.target.value = ''; }} />
+          </label>
+          {item.battery_photos.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {item.battery_photos.map((url, idx) => (
+                <div key={`${url}-${idx}`} className="relative w-14 h-14 rounded border overflow-hidden bg-white">
+                  <img src={photoUrl(item.battery_previews[idx] || url)} alt="" className="w-full h-full object-cover" />
+                  <button type="button" onClick={() => onRemovePhoto(item.key, idx)}
+                    className="absolute top-0.5 right-0.5 bg-black/60 text-white rounded p-0.5">
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <textarea value={item.description} onChange={(e) => onChange(item.key, { description: e.target.value })} rows={2}
+        placeholder="Why is this part needed? (optional)" className="w-full border rounded-lg px-3 py-2 text-sm" />
+
+      <label className="flex items-center gap-2 text-xs text-slate-700">
+        <input type="checkbox" checked={item.blocks_stage}
+          onChange={(e) => onChange(item.key, { blocks_stage: e.target.checked })} />
+        Block ticket until this part is attached
+      </label>
+    </div>
+  );
+}
+
 export default function PartsConfigPanel({ ticket, parts = [], configHistory = [], partRequests = [], onUpdated }) {
   const [mode, setMode] = useState('request');
 
@@ -132,13 +261,9 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
   const [selected, setSelected] = useState(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
 
-  const [requestType, setRequestType] = useState('replacement');
-  const [quantity, setQuantity] = useState(1);
-  const [description, setDescription] = useState('');
-  const [blocksStage, setBlocksStage] = useState(true);
-  const [configField, setConfigField] = useState('');
-  const [oldValue, setOldValue] = useState('');
-  const [newValue, setNewValue] = useState('');
+  const [requestType, setRequestType] = useState('replacement'); // default type applied to newly added items
+  const [items, setItems] = useState([]); // multi-part request cart
+  const itemKey = useRef(0);
   const [submitting, setSubmitting] = useState(false);
   const [attachModal, setAttachModal] = useState(null);
 
@@ -178,12 +303,6 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
     const t = setTimeout(() => search(query), 300);
     return () => clearTimeout(t);
   }, [query, search, selected]);
-
-  useEffect(() => {
-    if (requestType !== 'upgrade' || !configField) return;
-    const auto = { ram: ticket?.ram, storage: ticket?.storage, display: ticket?.screen_size, processor: ticket?.processor, gpu: ticket?.gpu }[configField] || '';
-    setOldValue(auto);
-  }, [requestType, configField, ticket]);
 
   useEffect(() => {
     if (!dIsUpgrade || !dConfigField) return;
@@ -227,6 +346,125 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
     setDropdownOpen(false);
     resetBattery();
     setFieldErrors({});
+  };
+
+  // ── Multi-part request cart ────────────────────────────────────────────────
+  const addItem = (p) => {
+    setItems((prev) => {
+      if (prev.some((it) => it.part.part_id === p.part_id)) {
+        toast.error(`${p.part_name} is already added`);
+        return prev;
+      }
+      itemKey.current += 1;
+      return [...prev, {
+        key: itemKey.current,
+        part: p,
+        request_type: requestType,
+        quantity: 1,
+        description: '',
+        blocks_stage: true,
+        config_field: '',
+        old_value: '',
+        new_value: '',
+        battery_model_number: '',
+        battery_photos: [],
+        battery_previews: [],
+      }];
+    });
+    setQuery('');
+    setResults([]);
+    setDropdownOpen(false);
+  };
+
+  const updateItem = (key, patch) =>
+    setItems((prev) => prev.map((it) => (it.key === key ? { ...it, ...patch } : it)));
+
+  const removeItem = (key) => setItems((prev) => prev.filter((it) => it.key !== key));
+
+  const handleItemBatteryFiles = async (key, fileList) => {
+    const files = Array.from(fileList || []).filter((f) => f.type?.startsWith('image/'));
+    if (!files.length) { toast.error('Select image files only'); return; }
+    setUploadingPhotos(true);
+    try {
+      const { data } = await uploadPartRequestPhotos(files);
+      const urls = data.urls || [];
+      const previews = files.map((f) => URL.createObjectURL(f));
+      setItems((prev) => prev.map((it) => (it.key === key
+        ? {
+          ...it,
+          battery_photos: [...it.battery_photos, ...urls],
+          battery_previews: [...it.battery_previews, ...previews],
+        }
+        : it)));
+      toast.success(`${urls.length} photo(s) uploaded`);
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Photo upload failed');
+    } finally {
+      setUploadingPhotos(false);
+    }
+  };
+
+  const removeItemBatteryPhoto = (key, idx) => {
+    setItems((prev) => prev.map((it) => {
+      if (it.key !== key) return it;
+      const previews = [...it.battery_previews];
+      const [removed] = previews.splice(idx, 1);
+      if (removed) { try { URL.revokeObjectURL(removed); } catch (_) { /* ignore */ } }
+      return {
+        ...it,
+        battery_photos: it.battery_photos.filter((_, i) => i !== idx),
+        battery_previews: previews,
+      };
+    }));
+  };
+
+  const handleSubmitAll = async () => {
+    if (!items.length) { toast.error('Add at least one part'); return; }
+    for (const it of items) {
+      if (isBatteryPart(it.part)) {
+        if (!String(it.battery_model_number || '').trim()) {
+          toast.error(`Battery Model Number required for ${it.part.part_name}`); return;
+        }
+        if (!it.battery_photos.length) {
+          toast.error(`At least one battery photo required for ${it.part.part_name}`); return;
+        }
+      }
+      if (it.request_type === 'upgrade' && (!it.config_field || !String(it.new_value || '').trim())) {
+        toast.error(`Upgrade needs a config field and new value for ${it.part.part_name}`); return;
+      }
+    }
+    setSubmitting(true);
+    let ok = 0;
+    const failed = [];
+    for (const it of items) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await createPartRequest({
+          ticket_id: ticket.ticket_id,
+          request_type: it.request_type,
+          part_id: it.part.part_id,
+          quantity: it.quantity,
+          description: it.description.trim() || undefined,
+          blocks_stage: it.blocks_stage,
+          config_field: it.request_type === 'upgrade' ? it.config_field : undefined,
+          old_value: it.request_type === 'upgrade' ? it.old_value : undefined,
+          new_value: it.request_type === 'upgrade' ? it.new_value : undefined,
+          battery_model_number: isBatteryPart(it.part) ? it.battery_model_number.trim() : undefined,
+          battery_photos: isBatteryPart(it.part) ? it.battery_photos : undefined,
+        });
+        ok += 1;
+      } catch (e) {
+        failed.push(it.part.part_name);
+      }
+    }
+    setSubmitting(false);
+    if (ok) toast.success(`${ok} part request(s) submitted`);
+    if (failed.length) toast.error(`Failed: ${failed.join(', ')}`);
+    if (ok) {
+      setItems([]);
+      resetSelection();
+      onUpdated?.();
+    }
   };
 
   const handleBatteryFiles = async (fileList) => {
@@ -280,37 +518,6 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
       return false;
     }
     return true;
-  };
-
-  const handleSubmitRequest = async () => {
-    if (!selected?.part_id) { toast.error('Select a part from the catalog dropdown'); return; }
-    if (requestType === 'upgrade' && (!configField || !newValue.trim())) {
-      toast.error('Upgrade needs a config field and new value');
-      return;
-    }
-    if (!validateBattery()) return;
-    setSubmitting(true);
-    try {
-      const { data } = await createPartRequest({
-        ticket_id: ticket.ticket_id,
-        request_type: requestType,
-        part_id: selected.part_id,
-        quantity,
-        description: description.trim() || undefined,
-        blocks_stage: blocksStage,
-        config_field: requestType === 'upgrade' ? configField : undefined,
-        old_value: requestType === 'upgrade' ? oldValue : undefined,
-        new_value: requestType === 'upgrade' ? newValue : undefined,
-        battery_model_number: selectedIsBattery ? batteryModelNumber.trim() : undefined,
-        battery_photos: selectedIsBattery ? batteryPhotos : undefined,
-      });
-      toast.success(data.message || 'Request submitted');
-      resetSelection();
-      setDescription(''); setNewValue(''); setOldValue(''); setConfigField(''); setQuantity(1);
-      onUpdated?.();
-    } catch (e) {
-      toast.error(e.response?.data?.message || 'Failed to submit request');
-    } finally { setSubmitting(false); }
   };
 
   const handleDirectAttach = async () => {
@@ -523,6 +730,8 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
         </p>
 
         {mode === 'request' && (
+          <div className="space-y-1">
+          <p className="text-[11px] text-slate-400">Default type for parts you add (change per part below)</p>
           <div className="grid grid-cols-3 gap-2">
             {[
               { value: 'replacement', label: 'Replace Defective', desc: 'Swap broken part' },
@@ -537,10 +746,13 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
               </button>
             ))}
           </div>
+          </div>
         )}
 
         <div className="relative">
-          <label className="block text-xs font-medium text-slate-600 mb-1">Select part from catalog *</label>
+          <label className="block text-xs font-medium text-slate-600 mb-1">
+            {mode === 'request' ? 'Add parts from catalog (select multiple) *' : 'Select part from catalog *'}
+          </label>
           <Search className="absolute left-3 top-[34px] w-4 h-4 text-slate-400" />
           <input
             className="w-full rounded-lg border pl-9 pr-20 py-2 text-sm"
@@ -573,11 +785,15 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
               {searching ? (
                 <li className="flex justify-center py-3"><Loader2 className="w-5 h-5 animate-spin text-blue-600" /></li>
               ) : results.length ? (
-                results.map((p) => (
+                results.map((p) => {
+                  const added = mode === 'request' && items.some((it) => it.part.part_id === p.part_id);
+                  return (
                   <li key={p.part_id}>
-                    <button type="button" className="w-full text-left px-3 py-2 hover:bg-slate-50"
-                      onClick={() => selectPart(p)}>
+                    <button type="button" disabled={added}
+                      className={`w-full text-left px-3 py-2 hover:bg-slate-50 ${added ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      onClick={() => (mode === 'request' ? addItem(p) : selectPart(p))}>
                       <span className="font-medium">{p.part_name}</span>
+                      {added ? <span className="text-[11px] text-green-600 ml-2">Added</span> : null}
                       <span className="text-xs text-slate-500 ml-2">
                         {p.category || p.part_type}
                         {p.model_number ? ` · ${p.model_number}` : ''}
@@ -585,7 +801,8 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
                       </span>
                     </button>
                   </li>
-                ))
+                  );
+                })
               ) : (
                 <li className="p-3 text-sm text-slate-500">No matching parts — choose from catalog only</li>
               )}
@@ -593,7 +810,42 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
           )}
         </div>
 
-        {selected && (
+        {mode === 'request' && (
+          items.length === 0 ? (
+            <p className="text-xs text-slate-500">
+              Search and add one or more parts above. Each part becomes its own request.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-xs font-semibold uppercase text-slate-500">
+                {items.length} part{items.length > 1 ? 's' : ''} to request
+              </p>
+              {items.map((it) => (
+                <RequestItemRow
+                  key={it.key}
+                  item={it}
+                  ticket={ticket}
+                  onChange={updateItem}
+                  onRemove={removeItem}
+                  onUploadBattery={handleItemBatteryFiles}
+                  onRemovePhoto={removeItemBatteryPhoto}
+                  uploading={uploadingPhotos}
+                />
+              ))}
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setItems([])} className="px-3 py-1.5 rounded border text-xs">
+                  Clear all
+                </button>
+                <button type="button" disabled={submitting || uploadingPhotos} onClick={handleSubmitAll}
+                  className="flex-1 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold disabled:opacity-50">
+                  {submitting ? 'Submitting…' : `Submit ${items.length} request${items.length > 1 ? 's' : ''}`}
+                </button>
+              </div>
+            </div>
+          )
+        )}
+
+        {mode === 'direct' && selected && (
           <div className="rounded-lg bg-blue-50 border border-blue-100 p-3 text-sm space-y-3">
             <div className="flex items-center justify-between">
               <p className="font-medium">{selected.part_name}</p>
@@ -602,89 +854,40 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
             {partDetailsCard}
             {batteryFields}
 
-            {mode === 'request' ? (
-              <>
-                {requestType === 'upgrade' && (
-                  <div className="space-y-2 bg-white rounded-lg p-3 border">
-                    <label className="text-xs font-semibold text-blue-900">Config Change</label>
-                    <select value={configField} onChange={(e) => setConfigField(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm">
-                      <option value="">What are you upgrading?</option>
-                      <option value="ram">RAM</option>
-                      <option value="storage">Storage / SSD</option>
-                      <option value="display">Display</option>
-                      <option value="battery">Battery</option>
-                      <option value="keyboard">Keyboard</option>
-                      <option value="gpu">GPU</option>
-                      <option value="other">Other</option>
-                    </select>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="text-xs text-gray-500">Current (old)</label>
-                        <input value={oldValue} onChange={(e) => setOldValue(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="e.g. 8 GB" />
-                      </div>
-                      <div>
-                        <label className="text-xs text-gray-500">After upgrade (new)*</label>
-                        <input value={newValue} onChange={(e) => setNewValue(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="e.g. 16 GB" />
-                      </div>
-                    </div>
-                  </div>
-                )}
-                <label className="block text-xs">
-                  Quantity
-                  <input type="number" min={1} value={quantity} onChange={(e) => setQuantity(Number(e.target.value))} className="mt-1 w-full rounded border px-2 py-1.5" />
+            <div className="grid sm:grid-cols-2 gap-3">
+              <label className="block text-xs">
+                Quantity*
+                <input type="number" min={1} max={selected.quantity} value={dQuantity} onChange={(e) => setDQuantity(Number(e.target.value))} className="mt-1 w-full rounded border px-2 py-1.5" />
+              </label>
+              <label className="flex items-center gap-2 text-xs pt-5">
+                <input type="checkbox" checked={dIsUpgrade} onChange={(e) => setDIsUpgrade(e.target.checked)} /> Is this an upgrade?
+              </label>
+            </div>
+            {dIsUpgrade && (
+              <div className="grid sm:grid-cols-2 gap-3">
+                <label className="block text-xs">Config field*
+                  <select value={dConfigField} onChange={(e) => setDConfigField(e.target.value)} className="mt-1 w-full rounded border px-2 py-1.5">
+                    {CONFIG_FIELDS.map((f) => <option key={f} value={f}>{f}</option>)}
+                  </select>
                 </label>
-                <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2}
-                  placeholder="Why is this part needed? Describe the issue…" className="w-full border rounded-lg px-3 py-2 text-sm" />
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={blocksStage} onChange={(e) => setBlocksStage(e.target.checked)} />
-                  <span>Block ticket from moving to next stage until part is attached</span>
+                <label className="block text-xs">Old value
+                  <input value={dOldValue} onChange={(e) => setDOldValue(e.target.value)} className="mt-1 w-full rounded border px-2 py-1.5" />
                 </label>
-                <div className="flex gap-2">
-                  <button type="button" onClick={resetSelection} className="px-3 py-1.5 rounded border text-xs">Clear</button>
-                  <button type="button" disabled={submitting || uploadingPhotos} onClick={handleSubmitRequest}
-                    className="flex-1 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold disabled:opacity-50">
-                    {submitting ? 'Submitting…' : (selected.quantity > 0 ? 'Submit for Warehouse Approval' : 'Submit for Procurement')}
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="grid sm:grid-cols-2 gap-3">
-                  <label className="block text-xs">
-                    Quantity*
-                    <input type="number" min={1} max={selected.quantity} value={dQuantity} onChange={(e) => setDQuantity(Number(e.target.value))} className="mt-1 w-full rounded border px-2 py-1.5" />
-                  </label>
-                  <label className="flex items-center gap-2 text-xs pt-5">
-                    <input type="checkbox" checked={dIsUpgrade} onChange={(e) => setDIsUpgrade(e.target.checked)} /> Is this an upgrade?
-                  </label>
-                </div>
-                {dIsUpgrade && (
-                  <div className="grid sm:grid-cols-2 gap-3">
-                    <label className="block text-xs">Config field*
-                      <select value={dConfigField} onChange={(e) => setDConfigField(e.target.value)} className="mt-1 w-full rounded border px-2 py-1.5">
-                        {CONFIG_FIELDS.map((f) => <option key={f} value={f}>{f}</option>)}
-                      </select>
-                    </label>
-                    <label className="block text-xs">Old value
-                      <input value={dOldValue} onChange={(e) => setDOldValue(e.target.value)} className="mt-1 w-full rounded border px-2 py-1.5" />
-                    </label>
-                    <label className="block text-xs sm:col-span-2">New value*
-                      <input value={dNewValue} onChange={(e) => setDNewValue(e.target.value)} className="mt-1 w-full rounded border px-2 py-1.5" />
-                    </label>
-                  </div>
-                )}
-                <label className="block text-xs">Notes
-                  <textarea value={dNotes} onChange={(e) => setDNotes(e.target.value)} className="mt-1 w-full rounded border px-2 py-1.5 min-h-[60px]" />
+                <label className="block text-xs sm:col-span-2">New value*
+                  <input value={dNewValue} onChange={(e) => setDNewValue(e.target.value)} className="mt-1 w-full rounded border px-2 py-1.5" />
                 </label>
-                <div className="flex gap-2">
-                  <button type="button" onClick={resetSelection} className="px-3 py-1.5 rounded border text-xs">Clear</button>
-                  <button type="button" disabled={submitting || uploadingPhotos} onClick={handleDirectAttach}
-                    className="flex-1 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold disabled:opacity-50">
-                    {submitting ? 'Attaching…' : 'Attach Part'}
-                  </button>
-                </div>
-              </>
+              </div>
             )}
+            <label className="block text-xs">Notes
+              <textarea value={dNotes} onChange={(e) => setDNotes(e.target.value)} className="mt-1 w-full rounded border px-2 py-1.5 min-h-[60px]" />
+            </label>
+            <div className="flex gap-2">
+              <button type="button" onClick={resetSelection} className="px-3 py-1.5 rounded border text-xs">Clear</button>
+              <button type="button" disabled={submitting || uploadingPhotos} onClick={handleDirectAttach}
+                className="flex-1 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold disabled:opacity-50">
+                {submitting ? 'Attaching…' : 'Attach Part'}
+              </button>
+            </div>
           </div>
         )}
       </section>
