@@ -6,6 +6,7 @@ import PermissionGate from '../../../components/PermissionGate';
 import { useAuth } from '../../../context/AuthContext';
 import { canEditSoLineRateConfig } from '../../../utils/permissionHelper';
 import { attachSoSerial, detachSoSerial, getAvailableSerials, listSoSerials } from '../salesPipelineApi';
+import { SO_SERIAL_EDIT_SECTIONS } from '../salesOrderScope';
 import SoLineConfigEditModal from './SoLineConfigEditModal';
 import SoLineRateEditModal from './SoLineRateEditModal';
 import DispatchQcAssignModal from './DispatchQcAssignModal';
@@ -151,8 +152,8 @@ export default function SoSerialPanel({ soNumber }) {
   const [editLine, setEditLine] = useState(null);
   const [editRateLine, setEditRateLine] = useState(null);
   const [assignModal, setAssignModal] = useState(null);
-  const { user } = useAuth();
-  const canEditLineRateConfig = canEditSoLineRateConfig(user);
+  const { user, effectivePermissions } = useAuth();
+  const canEditLineRateConfig = canEditSoLineRateConfig(user, effectivePermissions);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -246,7 +247,7 @@ export default function SoSerialPanel({ soNumber }) {
                       <Link to={`/floor-pipeline/tickets/${a.qc_ticket_id}`} className="text-xs text-blue-600">QC #{a.qc_ticket_id}</Link>
                     )}
                     <span className={`px-2 py-0.5 rounded-full text-xs ${QC_BADGE[a.qc_status] || QC_BADGE.pending}`}>{a.qc_status}</span>
-                    <PermissionGate section={['sales_orders_doc', 'delivery_challans']} action="edit">
+                    <PermissionGate section={SO_SERIAL_EDIT_SECTIONS} action="edit">
                       {a.qc_status !== 'passed' && (
                         <button type="button" onClick={() => detach(a.allocation_id)} className="text-xs text-red-600 hover:underline">Remove</button>
                       )}
@@ -258,7 +259,7 @@ export default function SoSerialPanel({ soNumber }) {
           )}
 
           {line.remaining_qty > 0 && (
-            <PermissionGate section={['sales_orders_doc', 'delivery_challans']} action="edit">
+            <PermissionGate section={SO_SERIAL_EDIT_SECTIONS} action="edit">
               <AttachPicker
                 soNumber={soNumber}
                 line={line}

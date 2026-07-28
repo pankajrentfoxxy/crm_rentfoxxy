@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const pool = require('../config/db');
-const { effectiveReplacementLineRemark } = require('./supportReplacementFlowService');
+const { effectiveReplacementLineRemark } = require('../utils/replacementRemarkUtils');
 const { resolveLineItem } = require('./qcManagementService');
 const { parseJsonArray } = require('./deliveryRegisterService');
 const {
@@ -2084,5 +2084,4 @@ module.exports = {
   searchAvailableInventory,
   healStaleReturnedPassedSerials,
   assertSalesOrderVisibleToUser,
-  nextFinancialYearNumber,
 };

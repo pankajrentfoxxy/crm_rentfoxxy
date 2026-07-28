@@ -122,12 +122,18 @@ export function canViewAnySection(user, effectivePermissions, sections) {
   return (sections || []).some((section) => canViewSection(user, effectivePermissions, section));
 }
 
-/** Edit SO line monthly rate + catalog config (super admin or explicit grant). */
-export function canEditSoLineRateConfig(user) {
+/** Edit SO line monthly rate + catalog config (admin, legacy grant, or replacement SO edit). */
+export function canEditSoLineRateConfig(user, effectivePermissions) {
   if (!user) return false;
   if (user.role === 'super_admin' || user.role === 'admin') return true;
   const perms = Array.isArray(user.permissions) ? user.permissions : [];
-  return perms.includes('so_line_rate_config_edit');
+  if (perms.includes('so_line_rate_config_edit')) return true;
+  if (effectivePermissions && Object.keys(effectivePermissions).length > 0) {
+    return resolveEffectivePermission(effectivePermissions, 'sales_orders_replacement', 'can_edit')
+      || resolveEffectivePermission(effectivePermissions, 'replacement_so_laptop_qc', 'can_edit')
+      || resolveEffectivePermission(effectivePermissions, 'so_laptop_qc', 'can_edit');
+  }
+  return false;
 }
 
 /** Accordion visibility: explicit parent grant OR any child with view access. */

@@ -5,7 +5,7 @@ const multer = require('multer');
 const { multerLimits, wrapMulter } = require('../config/uploadLimits');
 const router = express.Router();
 const { authMiddleware, checkSectionPermission, checkAnySectionPermission, checkRole, checkRoleOrPermission } = require('../middleware/auth');
-const { SO_VIEW_SECTIONS } = require('../services/dataScopeService');
+const { SO_VIEW_SECTIONS, SO_SERIAL_EDIT_SECTIONS, SO_SERIAL_VIEW_SECTIONS } = require('../services/dataScopeService');
 const cp = checkSectionPermission;
 const cpAny = checkAnySectionPermission;
 
@@ -65,8 +65,8 @@ const dcView = cp('delivery_challans', 'view');
 const dcCreate = cp('delivery_challans', 'create');
 const dcEdit = cp('delivery_challans', 'edit');
 /** SO laptop attach/QC flow — sales users need sales_orders_doc; warehouse uses delivery_challans. */
-const soSerialsView = cpAny([...SO_VIEW_SECTIONS, 'delivery_challans'], 'view');
-const soSerialsEdit = cpAny([...SO_VIEW_SECTIONS, 'delivery_challans'], 'edit');
+const soSerialsView = cpAny(SO_SERIAL_VIEW_SECTIONS, 'view');
+const soSerialsEdit = cpAny(SO_SERIAL_EDIT_SECTIONS, 'edit');
 /** DC from sales order — sales creates DCs for their SOs without full delivery_challans module access. */
 const soDcView = cpAny([...SO_VIEW_SECTIONS, 'delivery_challans'], 'view');
 const soDcCreate = cpAny([...SO_VIEW_SECTIONS, 'delivery_challans'], 'create');
@@ -77,7 +77,7 @@ const rdcView = cp('return_dc', 'view');
 const rdcEdit = cp('return_dc', 'edit');
 const tbView = cp('technician_bucket', 'view');
 const tbEdit = cp('technician_bucket', 'edit');
-const soLineRateConfigEdit = checkRoleOrPermission(['admin'], ['so_line_rate_config_edit']);
+const soLineRateConfigEdit = require('../middleware/soLineEditAccess').checkSoLineRateConfigEdit;
 /** Warehouse return OTP — warehouse/sales (send) and technicians (verify) both need access. */
 const whReturnEdit = cpAny(['delivery_challans', 'technician_bucket'], 'edit');
 const drView = cpAny(['delivery_register_management', 'technician_bucket'], 'view');

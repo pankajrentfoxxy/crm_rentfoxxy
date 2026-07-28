@@ -614,15 +614,30 @@ async function holdVendorSerialForPendingInventory(db, vendorSerialId) {
 /** Link PA to an open floor ticket when ticket_id was never set (e.g. GRN-only PA). */
 async function resolveTicketForProductionAsset(db, pa, { pendingInventoryOnly = false } = {}) {
   if (!pa) return null;
-  if (pa.ticket_id) {
-    const r = await db.query(`SELECT * FROM tickets WHERE ticket_id = $1`, [pa.ticket_id]);
-    return r.rows[0] || null;
-  }
-  if (!pa.vendor_serial_id) return null;
 
   const stageFilter = pendingInventoryOnly
     ? `AND s.stage_name = 'Pending Inventory'`
     : '';
+
+  if (pa.ticket_id && !pendingInventoryOnly) {
+    const r = await db.query(`SELECT * FROM tickets WHERE ticket_id = $1`, [pa.ticket_id]);
+    return r.rows[0] || null;
+  }
+
+  if (pa.ticket_id && pendingInventoryOnly) {
+    const linked = await db.query(
+      `SELECT t.* FROM tickets t
+        JOIN stages s ON s.stage_id = t.current_stage_id
+       WHERE t.ticket_id = $1
+         AND t.status NOT IN ('completed', 'cancelled', 'qc_failed_return_vendor')
+         ${stageFilter}`,
+      [pa.ticket_id]
+    );
+    if (linked.rows[0]) return linked.rows[0];
+  }
+
+  if (!pa.vendor_serial_id) return null;
+
   const r = await db.query(
     `SELECT t.* FROM tickets t
       JOIN stages s ON s.stage_id = t.current_stage_id
@@ -636,7 +651,7 @@ async function resolveTicketForProductionAsset(db, pa, { pendingInventoryOnly = 
   const ticket = r.rows[0] || null;
   if (ticket?.ticket_id) {
     await db.query(
-      `UPDATE production_assets SET ticket_id = COALESCE(ticket_id, $2), updated_at = NOW()
+      `UPDATE production_assets SET ticket_id = $2, updated_at = NOW()
         WHERE production_asset_id = $1`,
       [pa.production_asset_id, ticket.ticket_id]
     );
@@ -653,9 +668,9 @@ async function markPendingInventory(db, productionAssetId, userId, meta = {}) {
   }
 
   const explicitTicketId = meta.ticketId || meta.ticket_id || null;
-  if (explicitTicketId && !pa.ticket_id) {
+  if (explicitTicketId) {
     await db.query(
-      `UPDATE production_assets SET ticket_id = COALESCE(ticket_id, $2), updated_at = NOW()
+      `UPDATE production_assets SET ticket_id = $2, updated_at = NOW()
         WHERE production_asset_id = $1`,
       [productionAssetId, explicitTicketId]
     );
@@ -716,16 +731,34 @@ async function receiveIntoInventory(db, productionAssetId, {
   actorName,
 }) {
   await ensureTables(db);
-  const pa = await getById(db, productionAssetId);
+  let pa = await getById(db, productionAssetId);
   if (!pa) {
     const err = new Error('Production asset not found');
     err.status = 404;
     throw err;
   }
-  if (pa.status !== 'pending_inventory' && pa.status !== 'qc2_passed') {
-    const err = new Error(`Cannot receive: status is ${pa.status}`);
-    err.status = 400;
-    throw err;
+
+  const receivableStatuses = new Set(['pending_inventory', 'qc2_passed']);
+  if (!receivableStatuses.has(pa.status)) {
+    // Same serial can re-enter QC Ready on a new ticket while PA still shows "received".
+    const openPendingTicket = pa.vendor_serial_id
+      ? await resolveTicketForProductionAsset(db, pa, { pendingInventoryOnly: true })
+      : null;
+    if (pa.status === 'received' && openPendingTicket) {
+      await db.query(
+        `UPDATE production_assets
+            SET ticket_id = $2,
+                status = 'pending_inventory',
+                updated_at = NOW()
+          WHERE production_asset_id = $1`,
+        [productionAssetId, openPendingTicket.ticket_id]
+      );
+      pa = await getById(db, productionAssetId);
+    } else {
+      const err = new Error(`Cannot receive: status is ${pa.status}`);
+      err.status = 400;
+      throw err;
+    }
   }
 
   const expected = String(pa.serial_number || '').trim().toUpperCase();
@@ -1002,14 +1035,22 @@ async function listPendingInventory(db) {
        FROM production_assets pa
        LEFT JOIN LATERAL (
          SELECT tk.* FROM tickets tk
+          JOIN stages st ON st.stage_id = tk.current_stage_id
           WHERE tk.ticket_id = pa.ticket_id
              OR (
                pa.ticket_id IS NULL
                AND tk.vendor_serial_id = pa.vendor_serial_id
                AND tk.status NOT IN ('completed', 'cancelled', 'qc_failed_return_vendor')
              )
-          ORDER BY CASE WHEN tk.ticket_id = pa.ticket_id THEN 0 ELSE 1 END,
-                   tk.updated_at DESC
+             OR (
+               tk.vendor_serial_id = pa.vendor_serial_id
+               AND st.stage_name = 'Pending Inventory'
+               AND tk.status NOT IN ('completed', 'cancelled', 'qc_failed_return_vendor')
+             )
+          ORDER BY
+            CASE WHEN st.stage_name = 'Pending Inventory' THEN 0 ELSE 1 END,
+            CASE WHEN tk.ticket_id = pa.ticket_id THEN 0 ELSE 1 END,
+            tk.updated_at DESC
           LIMIT 1
        ) t ON true
        LEFT JOIN users u ON u.user_id = pa.qc2_completed_by

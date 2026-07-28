@@ -57,7 +57,10 @@ const phase2 = require('../controllers/ticketPhase2Controller');
 const { authMiddleware, checkSectionPermission, checkAnySectionPermission } = require('../middleware/auth');
 const ftView = checkSectionPermission('floor_tickets', 'view');
 const ftEdit = checkSectionPermission('floor_tickets', 'edit');
-const ftAssign = checkAnySectionPermission(['floor_tickets', 'floor_pipeline', 'tickets'], 'edit');
+const ftAssign = checkAnySectionPermission(
+  ['floor_tickets', 'floor_pipeline', 'tickets', 'replacement_so_laptop_qc'],
+  'edit'
+);
 const floorPipelineView = checkSectionPermission('floor_pipeline', 'view');
 const floorQueueView = checkAnySectionPermission(['floor_pipeline', 'floor_tickets'], 'view');
 // Floor / Dispatch QC users need laptop history on ticket screens even without

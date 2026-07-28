@@ -4746,6 +4746,56 @@ exports.initiateRepairSwap = async (req, res) => {
     });
 };
 
+exports.getResendLaptopContext = async (req, res) => {
+    try {
+        const ticketId = parseInt(req.params.ticketId, 10);
+        const ctx = await replacementFlow.buildResendLaptopContext(pool, ticketId);
+        res.json({ success: true, ...ctx });
+    } catch (e) {
+        res.status(e.status || 500).json({ success: false, message: e.message || 'Failed to load resend context' });
+    }
+};
+
+exports.initiateResendLaptop = async (req, res) => {
+    if (!isSupportLead(req.user)) {
+        return res.status(403).json({ success: false, message: 'Only support lead can resend a replacement laptop' });
+    }
+    const ticketId = parseInt(req.params.ticketId, 10);
+    const { reason } = req.body || {};
+    const client = await pool.connect();
+    let resultPayload = {};
+    try {
+        await client.query('BEGIN');
+        resultPayload = await replacementFlow.initiateResendLaptop(client, ticketId, req.user.user_id, { reason });
+        await logAudit(client, {
+            ticketId,
+            userId: req.user.user_id,
+            action: 'replacement_resend_initiated',
+            detail: {
+                sales_order_number: resultPayload.sales_order_number,
+                reason: resultPayload.reason,
+                detached_serial_count: resultPayload.detached_serial_count,
+                backfilled_order_count: resultPayload.backfilled_order_count,
+                ticket_reopened: resultPayload.ticket_reopened,
+            },
+        });
+        await bumpTicketActivity(client, ticketId);
+        await client.query('COMMIT');
+    } catch (e) {
+        await client.query('ROLLBACK');
+        return res.status(e.status || 400).json({ success: false, message: e.message || 'Failed to prepare resend' });
+    } finally {
+        client.release();
+    }
+    const data = await getTicketWithItems(ticketId, req.user);
+    res.json({
+        success: true,
+        message: 'Ready to resend replacement laptop — attach a new unit on the sales order',
+        ...resultPayload,
+        ...data,
+    });
+};
+
 exports.regenerateServiceDcPdf = async (req, res) => {
     const sdcNumber = decodeURIComponent(req.params.sdcNumber || '');
     try {

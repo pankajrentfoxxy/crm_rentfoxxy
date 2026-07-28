@@ -14,10 +14,10 @@ import { DispatchWorkflowCard } from '../../dispatch/components/DispatchWorkflow
 import { cancelSalesOrder, getQuotation, getSalesOrderFull, logSoDocumentActivity, regenerateSalesOrderPdf } from '../salesPipelineApi';
 import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
-import { canEditSoLineRateConfig } from '../../../utils/permissionHelper';
+import { canEditSoLineRateConfig, canViewAnySection } from '../../../utils/permissionHelper';
 import usePermission from '../../../hooks/usePermission';
 import { formatConfig, formatCurrency, formatDate, salesOrderTypeLabel, salesOrderTypeStyle, salesOrderStatusLabel, deliveryChallanDetailPath, parseDeliveryAddress, formatSupplyStateLabel, resolveSupplyStateFromShipping } from '../salesPipelineUtils';
-import { getSoScopeConfig, orderMatchesScope, salesOrderListPath } from '../salesOrderScope';
+import { getSoScopeConfig, orderMatchesScope, salesOrderListPath, SO_SERIAL_EDIT_SECTIONS, SO_LAPTOPS_TAB_VIEW_SECTIONS } from '../salesOrderScope';
 
 function resolveSoNumber(params) {
   const raw = params['*'] ?? params.soNumber ?? '';
@@ -55,15 +55,19 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
   const location = useLocation();
   const navigate = useNavigate();
   const soNumber = resolveSoNumber(params);
-  const { user } = useAuth();
+  const { user, effectivePermissions } = useAuth();
   const { canView, canEdit } = usePermission();
   const canViewPayments = canView('payment_records');
   const canViewQuotations = canView('sales_quotations');
   const isSuperAdmin = user?.role === 'super_admin';
-  const canEditLineRateConfig = canEditSoLineRateConfig(user);
+  const canEditLineRateConfig = canEditSoLineRateConfig(user, effectivePermissions);
   const isDispatchUser = user?.role === 'dispatch';
   const canViewDispatchOps = isDispatchUser || isSuperAdmin
-    || canEdit('dispatch_workflow') || canEdit('dispatch_pending_orders');
+    || canEdit('dispatch_workflow') || canEdit('dispatch_pending_orders')
+    || canEdit('sales_orders_replacement') || canEdit('replacement_so_laptop_qc')
+    || canEdit('so_laptop_qc');
+  const canViewLaptopsTab = canViewDispatchOps
+    || canViewAnySection(user, effectivePermissions, SO_LAPTOPS_TAB_VIEW_SECTIONS);
   const canOverrideHsn = user?.role === 'admin' || user?.role === 'super_admin';
   const [tab, setTab] = useState('overview');
   const [data, setData] = useState(null);
@@ -78,9 +82,9 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
   const visibleTabs = useMemo(() => TABS.filter((t) => {
     if (t === 'payments') return canViewPayments;
     if (t === 'quote') return canViewQuotations;
-    if (t === 'laptops') return canViewDispatchOps || canView('delivery_challans') || canView('sales_orders_replacement');
+    if (t === 'laptops') return canViewLaptopsTab;
     return true;
-  }), [canViewPayments, canViewQuotations, canViewDispatchOps, canView]);
+  }), [canViewPayments, canViewQuotations, canViewLaptopsTab]);
 
   const load = useCallback(async () => {
     try {

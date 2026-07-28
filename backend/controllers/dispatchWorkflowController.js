@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { assertReplacementSalesOrderAccessIfScoped } = require('../services/dataScopeService');
 const {
   getWorkflow,
   acceptOrder,
@@ -137,6 +138,7 @@ exports.listPendingOrders = async (req, res) => {
 exports.getWorkflow = async (req, res) => {
   try {
     const so = req.params.salesOrderNumber;
+    await assertReplacementSalesOrderAccessIfScoped(so, req.user, req.permissionCache);
     const wf = await getWorkflow(null, so);
     if (!wf) return res.status(404).json({ success: false, message: 'Workflow not found' });
     res.json({ success: true, workflow: wf });
