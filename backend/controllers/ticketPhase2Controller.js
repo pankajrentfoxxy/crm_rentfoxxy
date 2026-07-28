@@ -1023,6 +1023,33 @@ exports.updateTtsplConfig = async (req, res) => {
       );
     }
 
+    // Mirror the working config onto the ticket row so the floor tickets list
+    // (which reads tickets.brand/model/processor/generation/ram/storage) reflects the edit.
+    // GRN accepted snapshot (grn_config / vendor serial extra) is intentionally left untouched.
+    if (changes.length) {
+      const latest = paResult.production_asset || {};
+      await pool.query(
+        `UPDATE tickets SET
+             brand = COALESCE(NULLIF($2, ''), brand),
+             model = COALESCE(NULLIF($3, ''), model),
+             processor = COALESCE(NULLIF($4, ''), processor),
+             generation = COALESCE(NULLIF($5, ''), generation),
+             ram = COALESCE(NULLIF($6, ''), ram),
+             storage = COALESCE(NULLIF($7, ''), storage),
+             updated_at = CURRENT_TIMESTAMP
+         WHERE ticket_id = $1`,
+        [
+          ticket.ticket_id,
+          latest.brand,
+          latest.model,
+          latest.processor,
+          latest.generation,
+          latest.ram,
+          latest.ssd,
+        ]
+      );
+    }
+
     if (changes.length) {
       await ttsplAuditService.logTtsplEvent({
         ttsplId,

@@ -118,6 +118,7 @@ export default function ConfigUpdateModal({ open, onClose, ticket, extra = {}, o
           lines={lines}
           onChange={setLines}
           useCascadeApi
+          reconcileValues
           quotationType="sale"
           requiredFields={['brand', 'model_name', 'processor', 'generation', 'ram', 'storage']}
           hideCommercialFields

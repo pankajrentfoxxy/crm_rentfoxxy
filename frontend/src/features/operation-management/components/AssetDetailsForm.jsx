@@ -9,6 +9,7 @@ import {
 import useAssetCascadeCatalog from '../../../hooks/useAssetCascadeCatalog';
 import { emptyLineItem, lineItemsToPayload } from './DocumentLineItemsForm';
 import SearchableSelect from './SearchableSelect';
+import { matchConfigOption } from '../../../utils/configOptionMatch';
 
 export { emptyLineItem, lineItemsToPayload };
 
@@ -73,6 +74,7 @@ export default function AssetDetailsForm({
   useCascadeApi,
   hideCommercialFields = false,
   hideAddLine = false,
+  reconcileValues = false,
 }) {
   const required = new Set(requiredFields);
   const isRequired = (field) => required.has(field);
@@ -104,6 +106,43 @@ export default function AssetDetailsForm({
     if (!cascadeMode) return;
     lines.forEach((line) => prefetchLine(line));
   }, [cascadeMode, lines, prefetchLine]);
+
+  // When editing an existing config, the stored values (e.g. "I5", "16",
+  // "512 SSD") often don't exactly match catalog option strings, so the
+  // dropdowns render blank. Snap each value to the matching option once the
+  // relevant option list has loaded. Only snaps to options that exist, so it is
+  // a no-op once values are canonical (prevents render loops).
+  useEffect(() => {
+    if (!reconcileValues || !cascadeMode) return;
+    let changed = false;
+    const next = lines.map((line) => {
+      const updated = { ...line };
+      const snap = (field, options) => {
+        const cur = updated[field];
+        if (!cur || !options?.length) return;
+        if (options.includes(cur)) return;
+        const match = matchConfigOption(cur, options, field);
+        if (match && match !== cur) {
+          updated[field] = match;
+          changed = true;
+        }
+      };
+      snap('brand', cascadeBrands);
+      snap('model_name', modelsByBrand[updated.brand] || []);
+      snap('processor', processorsByBrand[updated.brand] || []);
+      snap('generation', generationsByBrand[updated.brand] || []);
+      snap('ram', specMasters.rams);
+      snap('storage', specMasters.storages);
+      snap('gpu', specMasters.gpus);
+      snap('screen_size', specMasters.screen_sizes);
+      return updated;
+    });
+    if (changed) onChange(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    reconcileValues, cascadeMode, lines, cascadeBrands,
+    modelsByBrand, processorsByBrand, generationsByBrand, specMasters,
+  ]);
 
   const updateLine = (index, field, value) => {
     if (cascadeMode && field === 'brand' && value) {

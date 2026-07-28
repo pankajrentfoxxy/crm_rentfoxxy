@@ -1,6 +1,6 @@
 /**
- * Run migration 175 — Dispatch QC reminder dismiss/reject columns.
- * Usage: node scripts/run-migration-175.js
+ * Run migration 176 — Add generation column to tickets (+ backfill).
+ * Usage: node scripts/run-migration-176.js
  */
 require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 process.env.DB_SSL = process.env.DB_SSL || 'false';
@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
 
-const MIGRATION_NAME = '175_dispatch_qc_alert_dismiss.sql';
+const MIGRATION_NAME = '176_ticket_generation_column.sql';
 
 async function main() {
   const sqlPath = path.join(__dirname, '../migrations', MIGRATION_NAME);
@@ -24,7 +24,7 @@ async function main() {
       [MIGRATION_NAME]
     );
     await client.query('COMMIT');
-    console.log('Migration 175 applied:', sqlPath);
+    console.log('Migration 176 applied:', sqlPath);
   } catch (e) {
     await client.query('ROLLBACK');
     throw e;
