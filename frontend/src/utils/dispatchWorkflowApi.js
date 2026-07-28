@@ -41,3 +41,9 @@ export function snoozeDispatchQcAlert(soNumber, { remark, snoozeMinutes } = {}) 
     snoozeMinutes,
   });
 }
+
+export function dismissDispatchQcAlert(soNumber, { remark } = {}) {
+  return api.post(`/dispatch-workflow/${encodeURIComponent(soNumber)}/dismiss-qc-alert`, {
+    remark,
+  });
+}

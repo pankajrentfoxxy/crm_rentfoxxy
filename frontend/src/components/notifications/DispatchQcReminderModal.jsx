@@ -58,9 +58,11 @@ export default function DispatchQcReminderModal({
   remark,
   snoozeMinutes,
   snoozing,
+  rejecting,
   onRemarkChange,
   onSnoozeMinutesChange,
   onSnooze,
+  onReject,
   hideTicketButton = false,
 }) {
   const navigate = useNavigate();
@@ -185,7 +187,7 @@ export default function DispatchQcReminderModal({
 
             <div>
               <label htmlFor="dispatch-qc-snooze-remark" className="block text-sm font-semibold text-slate-800 mb-1.5">
-                Why is QC still pending? <span className="text-slate-400 font-normal">(required every time you snooze)</span>
+                Why is QC still pending? <span className="text-slate-400 font-normal">(required to snooze or reject)</span>
               </label>
               <textarea
                 id="dispatch-qc-snooze-remark"
@@ -199,12 +201,28 @@ export default function DispatchQcReminderModal({
 
             <button
               type="button"
-              disabled={snoozing || !remark.trim()}
+              disabled={snoozing || rejecting || !remark.trim()}
               onClick={onSnooze}
               className="w-full rounded-xl border-2 border-orange-300 bg-white text-orange-700 py-2.5 text-sm font-bold hover:bg-orange-50 disabled:opacity-50"
             >
               {snoozing ? 'Snoozing…' : 'Snooze Reminder'}
             </button>
+
+            {onReject ? (
+              <>
+                <button
+                  type="button"
+                  disabled={snoozing || rejecting || !remark.trim()}
+                  onClick={onReject}
+                  className="w-full rounded-xl border-2 border-red-300 bg-white text-red-700 py-2.5 text-sm font-bold hover:bg-red-50 disabled:opacity-50"
+                >
+                  {rejecting ? 'Rejecting…' : 'Reject & Skip (stop reminding)'}
+                </button>
+                <p className="text-xs text-slate-500 text-center">
+                  Rejecting stops this reminder permanently for this order — use it when QC will be skipped for a reason.
+                </p>
+              </>
+            ) : null}
           </div>
         </div>
       </div>

@@ -12,6 +12,7 @@ import FollowUpWidget from '../components/FollowUpWidget';
 import LeadStatusModal from '../components/LeadStatusModal';
 import LeadConvertModal from '../components/LeadConvertModal';
 import LeadFormDrawer from '../components/LeadFormDrawer';
+import PersonalRemarksPanel from '../components/PersonalRemarksPanel';
 import { listQuotations } from '../../sales-pipeline/salesPipelineApi';
 import { formatDate, QUOTE_STATUS_STYLES, typeLabel, TYPE_STYLES } from '../../sales-pipeline/salesPipelineUtils';
 
@@ -166,8 +167,14 @@ export default function LeadDetailPage() {
                 <div><span className="text-gray-500">Qty / Budget</span>
                   <p>{lead.quantityRequired || '—'} · {formatCurrency(lead.monthlyBudget)}/mo</p></div>
                 <div className="col-span-2"><span className="text-gray-500">Billing</span><p>{lead.billingAddress || '—'}</p></div>
-                <div className="col-span-2"><span className="text-gray-500">Personal Remarks</span>
-                  <p className="whitespace-pre-wrap">{lead.personalRemarks || lead.personal_remarks || '—'}</p></div>
+                <div className="col-span-2">
+                  <PersonalRemarksPanel
+                    leadId={lead.leadId}
+                    value={lead.personalRemarks ?? lead.personal_remarks ?? ''}
+                    assignedUserId={lead.assignedUserId ?? lead.assigned_user_id}
+                    onSaved={load}
+                  />
+                </div>
               </div>
             </div>
           )}

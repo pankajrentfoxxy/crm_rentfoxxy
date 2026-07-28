@@ -59,7 +59,7 @@ import DispatchQcReminderModal, {
   isDispatchQcDueCrossed,
   isDispatchQcTicketAssignee,
 } from '../../../components/notifications/DispatchQcReminderModal';
-import { snoozeDispatchQcAlert } from '../../../utils/dispatchWorkflowApi';
+import { snoozeDispatchQcAlert, dismissDispatchQcAlert } from '../../../utils/dispatchWorkflowApi';
 import TtsplHistoryDrawer from '../components/TtsplHistoryDrawer';
 import useAutoRefresh from '../hooks/useAutoRefresh';
 import { useDispatchRealtime } from '../../dispatch/DispatchRealtimeProvider';
@@ -90,12 +90,14 @@ export default function TicketDetailPage() {
   const canManageTickets = canManageFloorTickets(canEdit, isAssignedDataOnly);
   const canEditConfig = canEditFloorTicketConfig(canEdit);
   const { upsertQcAlertFromTicket, applyLocalQcSnooze, notifyQcOverdueIfNeeded } = useDispatchRealtime();
+  const { applyLocalQcDismiss } = useDispatchRealtime();
   const [loading, setLoading] = useState(true);
   const [qcReminderOpen, setQcReminderOpen] = useState(false);
   const [qcSnoozeUntil, setQcSnoozeUntil] = useState(null);
   const [qcSnoozeRemark, setQcSnoozeRemark] = useState('');
   const [qcSnoozeMinutes, setQcSnoozeMinutes] = useState(5);
   const [qcSnoozing, setQcSnoozing] = useState(false);
+  const [qcRejecting, setQcRejecting] = useState(false);
   const [qcSnoozeActivityOpen, setQcSnoozeActivityOpen] = useState(false);
   const [data, setData] = useState(null);
   const [tab, setTab] = useState('overview');
@@ -258,6 +260,10 @@ export default function TicketDetailPage() {
   useEffect(() => {
     const eta = ticket?.dispatch_qc_eta;
     if (!eta?.qc_due_at || !ticket?.sales_order_number) return;
+    if (eta.qc_alert_dismissed) {
+      applyLocalQcDismiss(ticket.sales_order_number);
+      return;
+    }
     upsertQcAlertFromTicket({
       ...eta,
       workflow_id: eta.id,
@@ -274,7 +280,9 @@ export default function TicketDetailPage() {
     ticket?.dispatch_qc_eta?.id,
     ticket?.dispatch_qc_eta?.qc_due_at,
     ticket?.dispatch_qc_eta?.qc_alert_snoozed_until,
+    ticket?.dispatch_qc_eta?.qc_alert_dismissed,
     upsertQcAlertFromTicket,
+    applyLocalQcDismiss,
   ]);
 
   useEffect(() => {
@@ -283,6 +291,10 @@ export default function TicketDetailPage() {
       ? { ...eta, ticket_assignee_user_id: ticket.assigned_user_id }
       : null;
     if (!isDispatchQcTicketAssignee(user, alertRow)) {
+      setQcReminderOpen(false);
+      return undefined;
+    }
+    if (eta?.qc_alert_dismissed) {
       setQcReminderOpen(false);
       return undefined;
     }
@@ -343,6 +355,43 @@ export default function TicketDetailPage() {
       toast.error(err.response?.data?.message || 'Could not snooze alert');
     } finally {
       setQcSnoozing(false);
+    }
+  };
+
+  const handleTicketQcReject = async () => {
+    const eta = ticket?.dispatch_qc_eta;
+    if (!eta || qcRejecting || !ticket?.sales_order_number) return;
+    const trimmed = qcSnoozeRemark.trim();
+    if (!trimmed) {
+      toast.error('Remark is required to reject');
+      return;
+    }
+    setQcRejecting(true);
+    try {
+      await dismissDispatchQcAlert(ticket.sales_order_number, { remark: trimmed });
+      setQcSnoozeRemark('');
+      setQcReminderOpen(false);
+      setData((prev) => {
+        if (!prev?.ticket?.dispatch_qc_eta) return prev;
+        return {
+          ...prev,
+          ticket: {
+            ...prev.ticket,
+            dispatch_qc_eta: {
+              ...prev.ticket.dispatch_qc_eta,
+              qc_alert_dismissed: true,
+              qc_alert_dismiss_remark: trimmed,
+            },
+          },
+        };
+      });
+      applyLocalQcDismiss(ticket.sales_order_number);
+      toast.success('QC reminder rejected — it will not remind again');
+      await load({ soft: true });
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Could not reject alert');
+    } finally {
+      setQcRejecting(false);
     }
   };
 
@@ -1193,9 +1242,11 @@ export default function TicketDetailPage() {
         remark={qcSnoozeRemark}
         snoozeMinutes={qcSnoozeMinutes}
         snoozing={qcSnoozing}
+        rejecting={qcRejecting}
         onRemarkChange={setQcSnoozeRemark}
         onSnoozeMinutesChange={setQcSnoozeMinutes}
         onSnooze={handleTicketQcSnooze}
+        onReject={handleTicketQcReject}
         hideTicketButton
       />
 

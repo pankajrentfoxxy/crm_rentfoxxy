@@ -24,10 +24,12 @@ export default function PersonalRemarksPanel({
   const role = String(user?.role || '').toLowerCase();
   const canEditByPermission = typeof hasPermission === 'function' && hasPermission('leads', 'edit');
   const canEditByRole = ['super_admin', 'admin', 'manager', 'sales'].includes(role);
+  // Admins/managers can always edit any lead's remarks regardless of assignment scope.
+  const isPrivileged = ['super_admin', 'admin', 'manager'].includes(role);
   const assignedOnly = typeof isAssignedDataOnly === 'function' && isAssignedDataOnly('leads');
   const isAssignee =
     resolvedAssignedId == null || String(resolvedAssignedId) === String(currentUserId);
-  const canEdit = (canEditByPermission || canEditByRole) && (!assignedOnly || isAssignee);
+  const canEdit = (canEditByPermission || canEditByRole) && (isPrivileged || !assignedOnly || isAssignee);
 
   const load = useCallback(async () => {
     if (!leadId) return;

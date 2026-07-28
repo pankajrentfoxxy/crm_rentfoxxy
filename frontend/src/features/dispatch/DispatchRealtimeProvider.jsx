@@ -350,6 +350,12 @@ export function DispatchRealtimeProvider({ children }) {
     )));
   }, []);
 
+  const applyLocalQcDismiss = useCallback((soNumber) => {
+    if (!soNumber) return;
+    qcOverdueNotifiedRef.current.delete(soNumber);
+    setQcAlerts((prev) => prev.filter((o) => o.sales_order_number !== soNumber));
+  }, []);
+
   const alertOrders = useMemo(() => {
     const mine = orders.filter((o) => isAssignedToMe(o.assigned_user_id));
     return filterActivePopupAlerts(mine, snoozeSuppressRef.current);
@@ -398,6 +404,7 @@ export function DispatchRealtimeProvider({ children }) {
     snoozeSuppressRef,
     removeQcAlert,
     applyLocalQcSnooze,
+    applyLocalQcDismiss,
     qcSnoozeSuppressRef,
     upsertQcAlertFromTicket,
     notifyQcOverdueIfNeeded,
@@ -415,6 +422,7 @@ export function DispatchRealtimeProvider({ children }) {
     applyLocalSnooze,
     removeQcAlert,
     applyLocalQcSnooze,
+    applyLocalQcDismiss,
     upsertQcAlertFromTicket,
     notifyQcOverdueIfNeeded,
   ]);
@@ -444,6 +452,7 @@ export function useDispatchRealtime() {
     snoozeSuppressRef: { current: new Map() },
     removeQcAlert: () => {},
     applyLocalQcSnooze: () => {},
+    applyLocalQcDismiss: () => {},
     qcSnoozeSuppressRef: { current: new Map() },
     upsertQcAlertFromTicket: () => {},
     notifyQcOverdueIfNeeded: () => {},

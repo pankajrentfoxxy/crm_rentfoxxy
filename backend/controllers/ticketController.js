@@ -568,7 +568,8 @@ exports.getTicketById = async (req, res) => {
     if (ticket.sales_order_number && ticket.stage_name === 'Dispatch QC') {
       const wfRes = await pool.query(
         `SELECT dw.id, dw.assigned_user_id, dw.accepted_by, dw.qc_started_at, dw.qc_due_at, dw.qc_overdue,
-                dw.qc_alert_snoozed_until, dw.qc_alert_snooze_remark, dw.status,
+                dw.qc_alert_snoozed_until, dw.qc_alert_snooze_remark,
+                dw.qc_alert_dismissed, dw.qc_alert_dismiss_remark, dw.status,
                 sol.customer_name,
                 sol.quotation_type AS order_type
            FROM dispatch_workflow dw

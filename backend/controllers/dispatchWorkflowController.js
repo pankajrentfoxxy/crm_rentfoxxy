@@ -9,6 +9,7 @@ const {
   listPendingQcAlerts,
   snoozeAssignmentAlert,
   snoozeQcAlert,
+  dismissQcAlert,
   postStartWorkflowNotifications,
 } = require('../services/dispatchWorkflowService');
 const { searchAvailableInventory } = require('../services/salesManagementService');
@@ -81,6 +82,34 @@ exports.snoozeQcAlert = async (req, res) => {
       snooze_minutes: result.snooze_minutes,
       remark: result.remark,
     });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ success: false, message: e.message });
+  } finally {
+    client.release();
+  }
+};
+
+exports.dismissQcAlert = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const so = req.params.salesOrderNumber;
+    const { remark } = req.body || {};
+    await client.query('BEGIN');
+    const result = await dismissQcAlert(client, {
+      salesOrderNumber: so,
+      userId: req.user.user_id,
+      remark,
+      user: req.user,
+    });
+    if (!result.ok) {
+      await client.query('ROLLBACK');
+      return res.status(result.status || 400).json({ success: false, message: result.message });
+    }
+    await client.query('COMMIT');
+    const { emitQcComplete } = require('../services/dispatchSocketService');
+    await emitQcComplete(so);
+    res.json({ success: true, remark: result.remark });
   } catch (e) {
     await client.query('ROLLBACK');
     res.status(500).json({ success: false, message: e.message });

@@ -835,6 +835,7 @@ async function listPendingQcAlerts({ userId }) {
        ) tk ON TRUE
       WHERE dw.status = $1
         AND dw.qc_due_at IS NOT NULL
+        AND dw.qc_alert_dismissed IS NOT TRUE
         AND NOT (dw.qc_alert_snoozed_until IS NOT NULL AND dw.qc_alert_snoozed_until > NOW())
       ORDER BY dw.qc_due_at ASC NULLS LAST, dw.qc_started_at ASC`,
     [STATUS.DISPATCH_QC, userId]
@@ -974,6 +975,60 @@ async function snoozeQcAlert(client, { salesOrderNumber, userId, remark, snoozeM
   return { ok: true, snoozed_until: snoozeUntil, snooze_minutes: minutes, remark: trimmedRemark };
 }
 
+async function dismissQcAlert(client, { salesOrderNumber, userId, remark, user }) {
+  const wf = await getWorkflow(client, salesOrderNumber, { forUpdate: true });
+  if (!wf) return { ok: false, status: 404, message: 'Workflow not found' };
+  if (wf.status !== STATUS.DISPATCH_QC) {
+    return { ok: false, status: 400, message: 'Order is no longer in Dispatch QC' };
+  }
+  const assigneeCheck = await assertDispatchQcTicketAssignee(client, {
+    salesOrderNumber,
+    userId,
+  });
+  if (!assigneeCheck.ok) return assigneeCheck;
+
+  const trimmedRemark = String(remark || '').trim();
+  if (!trimmedRemark) {
+    return { ok: false, status: 400, message: 'Remark is required to reject this reminder' };
+  }
+
+  await client.query(
+    `UPDATE dispatch_workflow
+        SET qc_alert_dismissed = TRUE,
+            qc_alert_dismiss_remark = $1,
+            qc_alert_dismissed_at = NOW(),
+            qc_alert_dismissed_by = $2,
+            qc_alert_snoozed_until = NULL,
+            updated_at = NOW()
+      WHERE sales_order_number = $3`,
+    [trimmedRemark, userId, salesOrderNumber]
+  );
+
+  const dismissNote = `QC reminder rejected/skipped. Remark: ${trimmedRemark}`;
+
+  await logDispatchQcTicketActivity(client, {
+    salesOrderNumber,
+    userId,
+    action: 'dispatch_qc_reminder_rejected',
+    notes: dismissNote,
+  });
+
+  await logWorkflowActivity(
+    client,
+    salesOrderNumber,
+    'dispatch_qc_alert_dismissed',
+    'Dispatch QC reminder rejected/skipped (will not remind again).',
+    {
+      remark: trimmedRemark,
+      ticket_assignee_user_id: userId,
+    },
+    user,
+    trimmedRemark
+  );
+
+  return { ok: true, remark: trimmedRemark };
+}
+
 async function listDispatchDashboard({ userId, role }) {
   const isDispatch = role === 'dispatch' || role === 'super_admin' || role === 'admin';
   const params = [];
@@ -1023,6 +1078,7 @@ module.exports = {
   assertDispatchQcTicketAssignee,
   snoozeAssignmentAlert,
   snoozeQcAlert,
+  dismissQcAlert,
   listDispatchDashboard,
   safeLogWorkflowActivity: (params) => safeLogSalesOrderActivity({ ...params, activityType: WF_ACTIVITY }),
 };

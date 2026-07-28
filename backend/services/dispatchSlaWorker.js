@@ -80,6 +80,7 @@ async function processQcReminders() {
       WHERE dw.status = $1
         AND dw.qc_due_at IS NOT NULL
         AND dw.qc_due_at < NOW()
+        AND dw.qc_alert_dismissed IS NOT TRUE
         AND NOT (dw.qc_alert_snoozed_until IS NOT NULL AND dw.qc_alert_snoozed_until > NOW())
         AND (
           dw.qc_last_reminder_at IS NULL
