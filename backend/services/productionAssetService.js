@@ -3,6 +3,7 @@
  * GRN / capture token config stays immutable; all production edits land here.
  */
 const { configFromPlainObject } = require('./grnReceivedConfigService');
+const { normalizeCondition, normalizeMissingParts } = require('../constants/laptopConditions');
 const { compareConfig } = require('./grnConfigService');
 const { transitionAsset } = require('./inventoryStateMachine');
 const { logProductionHistory } = require('./ticketWorkflowHistoryService');
@@ -139,6 +140,8 @@ function rowToDisplayConfig(row) {
     serial_number: row.serial_number || '',
     ttspl_id: row.ttspl_id || '',
     grn_config: row.grn_config || null,
+    received_condition: row.received_condition || 'on',
+    missing_parts: row.missing_parts || [],
     qc1_checklist: row.qc1_checklist || null,
     qc2_verification: row.qc2_verification || null,
     qc2_completed_by: row.qc2_completed_by,
@@ -168,6 +171,8 @@ async function ensureTables(db) {
       gpu                  VARCHAR(120),
       screen_size          VARCHAR(60),
       grn_config           JSONB,
+      received_condition   VARCHAR(20),
+      missing_parts        JSONB,
       status               VARCHAR(40) NOT NULL DEFAULT 'in_production',
       qc1_checklist        JSONB,
       qc2_verification     JSONB,
@@ -206,6 +211,8 @@ async function createFromGrn(db, {
   ttsplId,
   vendorSerialId,
   configSource,
+  receivedCondition,
+  missingParts,
 }) {
   await ensureTables(db);
   const working = normalizeWorkingConfig(configSource || {});
@@ -238,11 +245,11 @@ async function createFromGrn(db, {
     `INSERT INTO production_assets (
        ticket_id, grn_id, grn_line_id, po_id, serial_number, ttspl_id, vendor_serial_id,
        brand, model, processor, generation, ram, ssd, gpu, screen_size,
-       grn_config, status, created_at, updated_at
+       grn_config, received_condition, missing_parts, status, created_at, updated_at
      ) VALUES (
        $1,$2,$3,$4,$5,$6,$7,
        $8,$9,$10,$11,$12,$13,$14,$15,
-       $16::jsonb, 'in_production', NOW(), NOW()
+       $16::jsonb, $17, $18::jsonb, 'in_production', NOW(), NOW()
      ) RETURNING *`,
     [
       ticketId || null,
@@ -261,6 +268,8 @@ async function createFromGrn(db, {
       working.gpu || null,
       working.screen_size || null,
       JSON.stringify(grnSnapshot),
+      normalizeCondition(receivedCondition),
+      JSON.stringify(normalizeMissingParts(missingParts)),
     ]
   );
   return ins.rows[0];

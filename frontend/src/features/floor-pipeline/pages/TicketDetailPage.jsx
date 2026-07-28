@@ -47,6 +47,7 @@ import ChipRepairPanel from '../components/ChipRepairPanel';
 import BodyPaintPanel from '../components/BodyPaintPanel';
 import PartsConfigPanel from '../components/PartsConfigPanel';
 import WorkNotesPanel from '../components/WorkNotesPanel';
+import GrnConditionNotice from '../components/GrnConditionNotice';
 import StageTaskPanel from '../components/StageTaskPanel';
 import AssignmentModal from '../components/AssignmentModal';
 import Qc1ReworkAssignModal from '../components/Qc1ReworkAssignModal';
@@ -874,6 +875,9 @@ export default function TicketDetailPage() {
 
           {tab === 'overview' && (
             <div className="grid md:grid-cols-2 gap-4">
+              <div className="md:col-span-2 empty:hidden">
+                <GrnConditionNotice ticket={ticket} />
+              </div>
               <div className="rounded-xl border bg-white p-4 shadow-sm space-y-3 text-sm">
                 <h3 className="font-semibold">Ticket Details</h3>
                 <div className="grid grid-cols-2 gap-2">
@@ -936,13 +940,16 @@ export default function TicketDetailPage() {
 
           {tab === 'worklog' && <WorkLogFeed activities={data.activities} parts={data.parts} auditLog={auditLog} />}
           {tab === 'parts' && (
-            <PartsConfigPanel
-              ticket={ticket}
-              parts={data.parts}
-              configHistory={configHistory}
-              partRequests={data.part_requests}
-              onUpdated={() => load({ soft: true })}
-            />
+            <div className="space-y-4">
+              <GrnConditionNotice ticket={ticket} />
+              <PartsConfigPanel
+                ticket={ticket}
+                parts={data.parts}
+                configHistory={configHistory}
+                partRequests={data.part_requests}
+                onUpdated={() => load({ soft: true })}
+              />
+            </div>
           )}
           {tab === 'diagnosis' && (
             <DiagnosisForm

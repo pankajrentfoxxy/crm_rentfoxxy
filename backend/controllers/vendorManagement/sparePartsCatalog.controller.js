@@ -1,19 +1,7 @@
 const { param, query, body, validationResult } = require('express-validator');
 const pool = require('../../config/db');
 const { listActiveSpareBrandsForDropdown } = require('../../services/assetConfigurationService');
-
-const CATEGORIES = [
-  { value: 'ram', label: 'RAM' },
-  { value: 'storage', label: 'Storage / SSD' },
-  { value: 'display', label: 'Display' },
-  { value: 'battery', label: 'Battery' },
-  { value: 'keyboard', label: 'Keyboard' },
-  { value: 'motherboard', label: 'Motherboard / Chip Level' },
-  { value: 'cooling', label: 'Cooling / Thermal' },
-  { value: 'power', label: 'Power / Charger' },
-  { value: 'body', label: 'Body / Casing' },
-  { value: 'general', label: 'General / Other' },
-];
+const { PART_CATEGORIES: CATEGORIES } = require('../../constants/laptopConditions');
 
 function toBrandArray(val) {
   if (val == null || val === '') return null;

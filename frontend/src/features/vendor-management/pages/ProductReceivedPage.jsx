@@ -20,6 +20,8 @@ import {
   Copy,
   UserCircle,
   KeyRound,
+  AlertTriangle,
+  Check,
   X
 } from 'lucide-react';
 import { invalidateInventoryManagement } from '../../inventory-management/inventoryCountsEvents';
@@ -31,6 +33,16 @@ import {
   receivePoLineUnit,
 } from '../vendorManagementApi';
 import AccessNumbersAdmin from '../components/AccessNumbersAdmin';
+import {
+  LAPTOP_CONDITIONS,
+  PART_CATEGORIES,
+  DEFAULT_CONDITION,
+  conditionLabel,
+  conditionBadgeClass,
+  normalizeAllowedConditions,
+  partCategoryLabels,
+  requiresConfigCapture,
+} from '../../../constants/laptopConditions';
 
 function formatWorkflowStatus(status) {
   const s = String(status || '').toLowerCase();
@@ -92,6 +104,7 @@ function ItemDescriptionCard({ line }) {
     .map((x) => String(x).trim());
 
   const locked = !!line.config_locked || Number(line.receivedQty) > 0;
+  const conditions = normalizeAllowedConditions(line.allowed_conditions);
 
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50/90 shadow-sm px-3 py-2.5 text-left max-w-md">
@@ -109,6 +122,17 @@ function ItemDescriptionCard({ line }) {
       {specs.length > 0 ? (
         <p className="text-xs text-slate-600 mt-1 mb-0 leading-relaxed">{specs.join(' | ')}</p>
       ) : null}
+      <div className="flex flex-wrap items-center gap-1 mt-1.5">
+        <span className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">Accepts</span>
+        {conditions.map((c) => (
+          <span
+            key={c}
+            className={`px-1.5 py-0.5 rounded-full border text-[10px] font-semibold ${conditionBadgeClass(c)}`}
+          >
+            {conditionLabel(c)}
+          </span>
+        ))}
+      </div>
       {locked ? (
         <p className="text-[10px] text-slate-500 mt-1.5 mb-0">
           Original vendor config (read-only). Inventory edits do not change this.
@@ -199,6 +223,8 @@ export default function ProductReceivedPage() {
   const [billStatus, setBillStatus] = useState('pending');
   const [billName, setBillName] = useState('');
   const [physicalDamageRemark, setPhysicalDamageRemark] = useState('');
+  const [receivedCondition, setReceivedCondition] = useState(DEFAULT_CONDITION);
+  const [missingParts, setMissingParts] = useState([]);
   const [modalBusy, setModalBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -241,6 +267,8 @@ export default function ProductReceivedPage() {
     setBillStatus('pending');
     setBillName('');
     setPhysicalDamageRemark('');
+    setReceivedCondition(DEFAULT_CONDITION);
+    setMissingParts([]);
   }
 
   useEffect(() => {
@@ -261,6 +289,21 @@ export default function ProductReceivedPage() {
   const poStatusLower = String(po?.status || '').toLowerCase();
   const receiveMutationsBlocked = poStatusLower === 'completed';
   const n = lines.length;
+  const conditionCatalog = ctx?.laptop_conditions?.length ? ctx.laptop_conditions : LAPTOP_CONDITIONS;
+  const partCatalog = ctx?.part_categories?.length ? ctx.part_categories : PART_CATEGORIES;
+  const activeLine = receiveLineIndex === null ? null : lines[receiveLineIndex];
+  const allowedConditions = normalizeAllowedConditions(activeLine?.allowed_conditions);
+  const conditionOptions = conditionCatalog.filter((c) => allowedConditions.includes(c.value));
+  // Only a powered-on laptop can run the hardware script, so the capture link,
+  // config verification and read-only serial apply to that condition alone.
+  const needsCapture = requiresConfigCapture(receivedCondition);
+
+  function toggleMissingPart(value) {
+    setMissingParts((prev) =>
+      prev.includes(value) ? prev.filter((p) => p !== value) : [...prev, value]
+    );
+  }
+
   function remainingOnLine(idx) {
     const line = lines[idx];
     if (!line) return 0;
@@ -282,6 +325,8 @@ export default function ProductReceivedPage() {
     setCaptureToken(null);
     setCaptureUrl('');
     setPhysicalDamageRemark('');
+    setReceivedCondition(normalizeAllowedConditions(lines[lineIndex]?.allowed_conditions)[0]);
+    setMissingParts([]);
   }
 
   function gotoSerialInputs() {
@@ -317,11 +362,14 @@ export default function ProductReceivedPage() {
     setCaptureUrl('');
     setAccessNumber(null);
     setPhysicalDamageRemark('');
+    setReceivedCondition(normalizeAllowedConditions(lines[receiveLineIndex]?.allowed_conditions)[0]);
+    setMissingParts([]);
     setReceiveStep('serials');
   }
 
   const refreshCaptureLink = useCallback(async () => {
     if (receiveLineIndex === null || receiveStep !== 'serials' || bulkQuantity < 1) return;
+    if (!requiresConfigCapture(receivedCondition)) return;
     setCaptureLoading(true);
     try {
       const { data } = await createGrnCaptureToken(poId, {
@@ -339,13 +387,22 @@ export default function ProductReceivedPage() {
     } finally {
       setCaptureLoading(false);
     }
-  }, [poId, receiveLineIndex, receiveStep, bulkQuantity, currentUnitIndex]);
+  }, [poId, receiveLineIndex, receiveStep, bulkQuantity, currentUnitIndex, receivedCondition]);
 
   useEffect(() => {
     if (receiveStep !== 'serials' || bulkQuantity < 1) return undefined;
     refreshCaptureLink();
     return undefined;
   }, [receiveStep, bulkQuantity, currentUnitIndex, refreshCaptureLink]);
+
+  // Switching to a dead / part-missing unit drops the capture session; the serial
+  // is typed by hand instead and no config verification is possible.
+  useEffect(() => {
+    if (requiresConfigCapture(receivedCondition)) return;
+    setCaptureToken(null);
+    setCaptureUrl('');
+    setAccessNumber(null);
+  }, [receivedCondition]);
 
   useEffect(() => {
     if (!captureToken || receiveStep !== 'serials' || modalBusy) return undefined;
@@ -382,6 +439,10 @@ export default function ProductReceivedPage() {
       toast.error('Enter or capture the serial number first');
       return;
     }
+    if (receivedCondition === 'part_missing' && !missingParts.length) {
+      toast.error('Select at least one missing part');
+      return;
+    }
 
     setModalBusy(true);
     try {
@@ -392,8 +453,10 @@ export default function ProductReceivedPage() {
         apply_bill_settings: currentUnitIndex === 0,
         bill_status: billStatus,
         bill_name: billStatus === 'received' ? billName.trim() : undefined,
-        capture_token: captureToken || undefined,
+        capture_token: needsCapture ? captureToken || undefined : undefined,
         physical_damage_remark: physicalDamageRemark.trim() || undefined,
+        received_condition: receivedCondition,
+        missing_parts: receivedCondition === 'part_missing' ? missingParts : undefined,
       };
       if (activeGrnId) body.grn_id = activeGrnId;
 
@@ -403,7 +466,13 @@ export default function ProductReceivedPage() {
         const ttspl = created?.inventory_asset_code;
         setCompletedUnits((prev) => [
           ...prev,
-          { serial_number: serial, inventory_asset_code: ttspl, serial_id: created?.serial_id },
+          {
+            serial_number: serial,
+            inventory_asset_code: ttspl,
+            serial_id: created?.serial_id,
+            received_condition: receivedCondition,
+            missing_parts: receivedCondition === 'part_missing' ? missingParts : [],
+          },
         ]);
         if (data.data?.grn_id) setActiveGrnId(data.data.grn_id);
         toast.success(ttspl ? `Received — ${ttspl}` : 'Unit received');
@@ -425,6 +494,8 @@ export default function ProductReceivedPage() {
           setCaptureToken(null);
           setCaptureUrl('');
           setPhysicalDamageRemark('');
+          setReceivedCondition(allowedConditions[0]);
+          setMissingParts([]);
         }
       }
     } catch (e) {
@@ -936,15 +1007,101 @@ export default function ProductReceivedPage() {
                   {completedUnits.length > 0 ? (
                     <ul className="text-xs space-y-1 rounded-lg border border-emerald-100 bg-emerald-50/60 p-2">
                       {completedUnits.map((u) => (
-                        <li key={u.serial_id || u.inventory_asset_code} className="flex justify-between gap-2 font-mono text-emerald-900">
-                          <span>{u.serial_number}</span>
-                          <span className="font-semibold">{u.inventory_asset_code}</span>
+                        <li key={u.serial_id || u.inventory_asset_code} className="text-emerald-900">
+                          <div className="flex justify-between gap-2 font-mono">
+                            <span>{u.serial_number}</span>
+                            <span className="font-semibold">{u.inventory_asset_code}</span>
+                          </div>
+                          {u.received_condition && u.received_condition !== 'on' ? (
+                            <p className="m-0 mt-0.5 text-[10px] font-semibold text-amber-800">
+                              {conditionLabel(u.received_condition)}
+                              {u.missing_parts?.length
+                                ? ` — ${partCategoryLabels(u.missing_parts).join(', ')}`
+                                : ''}
+                            </p>
+                          ) : null}
                         </li>
                       ))}
                     </ul>
                   ) : null}
 
-                  {accessNumber != null ? (
+                  <div className="rounded-lg border border-slate-200 bg-white p-3 space-y-2">
+                    <label className="block text-xs font-semibold text-slate-600">
+                      Laptop condition <span className="text-rose-600">*</span>
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      {conditionOptions.map((c) => {
+                        const active = receivedCondition === c.value;
+                        return (
+                          <button
+                            key={c.value}
+                            type="button"
+                            disabled={modalBusy}
+                            onClick={() => setReceivedCondition(c.value)}
+                            className={`px-3 py-1.5 rounded-lg border text-xs font-semibold transition disabled:opacity-50 ${
+                              active
+                                ? conditionBadgeClass(c.value)
+                                : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                            }`}
+                          >
+                            {c.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {conditionOptions.length === 1 ? (
+                      <p className="text-[11px] text-slate-500 m-0">
+                        This purchase order line only accepts {conditionOptions[0].label} laptops.
+                      </p>
+                    ) : null}
+                    {!needsCapture ? (
+                      <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-100 rounded-lg p-2 m-0 flex gap-1.5">
+                        <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
+                        <span>
+                          The laptop cannot be scanned in this condition — type the serial number from the
+                          sticker. Config is taken from the purchase order and the floor ticket is flagged
+                          for the technician.
+                        </span>
+                      </p>
+                    ) : null}
+                  </div>
+
+                  {receivedCondition === 'part_missing' ? (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3 space-y-2">
+                      <label className="block text-xs font-semibold text-amber-900">
+                        Missing parts <span className="text-rose-600">*</span>
+                        <span className="font-normal text-amber-700"> (select one or more)</span>
+                      </label>
+                      <div className="flex flex-wrap gap-1.5">
+                        {partCatalog.map((p) => {
+                          const active = missingParts.includes(p.value);
+                          return (
+                            <button
+                              key={p.value}
+                              type="button"
+                              disabled={modalBusy}
+                              onClick={() => toggleMissingPart(p.value)}
+                              aria-pressed={active}
+                              className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition disabled:opacity-50 ${
+                                active
+                                  ? 'bg-amber-600 border-amber-600 text-white'
+                                  : 'bg-white border-amber-200 text-amber-900 hover:bg-amber-100'
+                              }`}
+                            >
+                              {active ? <Check className="w-3 h-3" /> : null}
+                              {p.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <p className="text-[11px] text-amber-800 m-0">
+                        These appear on the floor ticket so the technician knows exactly which part
+                        requests to raise.
+                      </p>
+                    </div>
+                  ) : null}
+
+                  {accessNumber != null && needsCapture ? (
                     <div className="rounded-lg border border-teal-200 bg-teal-50 p-3 flex items-center gap-3">
                       <KeyRound className="w-5 h-5 text-teal-700 shrink-0" />
                       <div className="min-w-0">
@@ -990,23 +1147,34 @@ export default function ProductReceivedPage() {
                       autoComplete="off"
                       autoFocus
                       className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-teal-500 focus:border-teal-500 outline-none disabled:opacity-50"
-                      placeholder="Auto-fills when capture link is used, or type manually"
+                      placeholder={
+                        needsCapture
+                          ? 'Auto-fills when capture link is used'
+                          : 'Type the serial number printed on the laptop'
+                      }
                       value={currentSerial}
-                      disabled={true}
-                      onChange={(e) => setCurrentSerial(e.target.value)}
+                      disabled={modalBusy || needsCapture}
+                      onChange={(e) => setCurrentSerial(e.target.value.toUpperCase())}
                     />
-                    <p className="text-[11px] text-slate-500 m-0 leading-relaxed">
-                      On the <strong>received laptop</strong>, open the capture link (or paste the copied link).
-                      Copy the PowerShell / Terminal command shown there and run it — serial auto-fills here within a few seconds.
-                      No CRM install needed on the laptop.
-                    </p>
-                    {captureUrl && /localhost|127\.0\.0\.1/.test(captureUrl) ? (
+                    {needsCapture ? (
+                      <p className="text-[11px] text-slate-500 m-0 leading-relaxed">
+                        On the <strong>received laptop</strong>, open the capture link (or paste the copied link).
+                        Copy the PowerShell / Terminal command shown there and run it — serial auto-fills here within a few seconds.
+                        No CRM install needed on the laptop.
+                      </p>
+                    ) : (
+                      <p className="text-[11px] text-slate-500 m-0 leading-relaxed">
+                        Serial capture and config verification are skipped for this condition. The unit still
+                        gets a <strong className="font-mono text-slate-700">TTSPL####</strong> code and a floor ticket.
+                      </p>
+                    )}
+                    {needsCapture && captureUrl && /localhost|127\.0\.0\.1/.test(captureUrl) ? (
                       <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded-lg p-2 m-0">
                         Dev mode: this link only works on the same PC. Use{' '}
                         <strong>staging.rentfoxxy.com</strong> for real GRN on other laptops.
                       </p>
                     ) : null}
-                    {captureUrl && !/localhost|127\.0\.0\.1/.test(captureUrl) ? (
+                    {needsCapture && captureUrl && !/localhost|127\.0\.0\.1/.test(captureUrl) ? (
                       <p className="text-[10px] text-slate-400 m-0 font-mono break-all">{captureUrl}</p>
                     ) : null}
                   </div>
@@ -1066,7 +1234,11 @@ export default function ProductReceivedPage() {
                   ) : (
                     <button
                       type="button"
-                      disabled={modalBusy || !String(currentSerial || '').trim()}
+                      disabled={
+                        modalBusy
+                        || !String(currentSerial || '').trim()
+                        || (receivedCondition === 'part_missing' && !missingParts.length)
+                      }
                       onClick={() => receiveCurrentUnit()}
                       className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold disabled:opacity-40"
                     >

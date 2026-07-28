@@ -36,6 +36,13 @@ import {
   poStatusBadge,
   poTypeBadge
 } from '../vendorMgmtUi';
+import {
+  LAPTOP_CONDITIONS,
+  DEFAULT_CONDITION,
+  conditionLabel,
+  conditionBadgeClass,
+  normalizeAllowedConditions
+} from '../../../constants/laptopConditions';
 
 /** Matches Laravel purchase-order-form.blade.php state list (Str::slug(_, '_)) */
 const RAW_INDIAN_STATES = [
@@ -240,7 +247,8 @@ const emptyAssetDraft = () => ({
   rate: '',
   period_months: '',
   monthly_rental_amount: '',
-  tenure_months: ''
+  tenure_months: '',
+  allowed_conditions: [DEFAULT_CONDITION]
 });
 
 /** PO form-meta `asset_catalog` fallback when API omits catalog */
@@ -264,6 +272,62 @@ function AssetSelect({ label, value, onChange, options, required }) {
           </option>
         ))}
       </select>
+    </div>
+  );
+}
+
+/**
+ * Conditions this PO line may be received in. Refurbished stock often arrives
+ * mixed, so more than one may be selected; GRN then offers exactly these.
+ */
+function ConditionMultiSelect({ value, onChange }) {
+  const selected = Array.isArray(value) && value.length ? value : [DEFAULT_CONDITION];
+
+  function toggle(condition) {
+    const next = selected.includes(condition)
+      ? selected.filter((c) => c !== condition)
+      : [...selected, condition];
+    onChange(next.length ? next : [DEFAULT_CONDITION]);
+  }
+
+  return (
+    <div className="lg:col-span-4">
+      <label className="text-xs font-semibold text-slate-600 flex items-center gap-1">
+        Laptop Condition <span className="text-red-500">*</span>
+        <span className="font-normal text-slate-400">(select one or more)</span>
+      </label>
+      <div className="mt-1 flex flex-wrap gap-2">
+        {LAPTOP_CONDITIONS.map((c) => {
+          const active = selected.includes(c.value);
+          return (
+            <button
+              key={c.value}
+              type="button"
+              onClick={() => toggle(c.value)}
+              aria-pressed={active}
+              className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm font-medium transition ${
+                active
+                  ? `${conditionBadgeClass(c.value)} ring-1 ring-inset ring-current/20`
+                  : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              <span
+                className={`w-3.5 h-3.5 rounded border flex items-center justify-center ${
+                  active ? 'bg-current/10 border-current' : 'border-slate-300'
+                }`}
+              >
+                {active ? <Check className="w-2.5 h-2.5" /> : null}
+              </span>
+              {c.label}
+            </button>
+          );
+        })}
+      </div>
+      <p className="text-[11px] text-slate-500 mt-1.5">
+        At GRN the receiver picks one of these per laptop. <strong>On</strong> runs serial capture and
+        config verification; <strong>Not On</strong> and <strong>Part Missing</strong> take the serial manually
+        and flag the floor ticket.
+      </p>
     </div>
   );
 }
@@ -504,6 +568,7 @@ export default function PurchaseOrdersPage() {
       quantity: qty,
       rate,
       period_months: pm,
+      allowed_conditions: normalizeAllowedConditions(assetDraft.allowed_conditions),
       monthly_rental_amount: isRental ? Number(assetDraft.monthly_rental_amount) : undefined,
       tenure_months: isRto ? Number(assetDraft.tenure_months) : undefined
     };
@@ -539,7 +604,8 @@ export default function PurchaseOrdersPage() {
       period_months: row.period_months !== '' && row.period_months != null ? String(row.period_months) : '',
       monthly_rental_amount:
         row.monthly_rental_amount != null ? String(row.monthly_rental_amount) : '',
-      tenure_months: row.tenure_months != null ? String(row.tenure_months) : ''
+      tenure_months: row.tenure_months != null ? String(row.tenure_months) : '',
+      allowed_conditions: normalizeAllowedConditions(row.allowed_conditions)
     });
     setEditingAssetIndex(index);
   }
@@ -581,7 +647,8 @@ export default function PurchaseOrdersPage() {
           gpu: row.gpu,
           screen_size: row.screen_size,
           quantity: Number(row.quantity),
-          rate: Number(row.rate)
+          rate: Number(row.rate),
+          allowed_conditions: normalizeAllowedConditions(row.allowed_conditions)
         };
         if (form.purchase_order_type === 'direct_purchase') {
           line.warranty = Number(row.period_months);
@@ -1479,6 +1546,10 @@ export default function PurchaseOrdersPage() {
                           onChange={(v) => setAssetDraft((d) => ({ ...d, tenure_months: v }))}
                         />
                       ) : null}
+                      <ConditionMultiSelect
+                        value={assetDraft.allowed_conditions}
+                        onChange={(v) => setAssetDraft((d) => ({ ...d, allowed_conditions: v }))}
+                      />
                     </div>
 
                     <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -1569,6 +1640,17 @@ export default function PurchaseOrdersPage() {
                                       <span className="font-medium text-slate-500">{periodMonthsLabel}</span>
                                       <span className="block text-slate-800 tabular-nums">{row.period_months}</span>
                                     </span>
+                                  </div>
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    <span className="text-[11px] font-medium text-slate-500">Condition</span>
+                                    {normalizeAllowedConditions(row.allowed_conditions).map((c) => (
+                                      <span
+                                        key={c}
+                                        className={`px-2 py-0.5 rounded-full border text-[10px] font-semibold ${conditionBadgeClass(c)}`}
+                                      >
+                                        {conditionLabel(c)}
+                                      </span>
+                                    ))}
                                   </div>
                                 </div>
                                 <div className="flex items-center gap-1 shrink-0 self-start">

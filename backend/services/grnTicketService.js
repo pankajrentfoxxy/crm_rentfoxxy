@@ -13,6 +13,11 @@ const {
   addToInventory
 } = require('./qcCheckService');
 const { findBlockingTicket, blockingTicketMessage } = require('../utils/floorTicketSerialGuard');
+const {
+  normalizeCondition,
+  normalizeMissingParts,
+  conditionHighlight,
+} = require('../constants/laptopConditions');
 
 function lineItemSpecs(line) {
   if (!line) {
@@ -130,6 +135,8 @@ async function createTicketFromGrnReceive(db, {
   actorUserId,
   initialConditionOverride,
   grnId,
+  receivedCondition,
+  missingParts,
 }) {
   const blocking = await db.query(
     `SELECT ticket_id FROM tickets WHERE serial_number = $1 AND status IN ('in_progress', 'on_hold')`,
@@ -164,12 +171,19 @@ async function createTicketFromGrnReceive(db, {
     initialConditionOverride ||
     (poLabel ? `GRN receive — PO ${poLabel}` : 'GRN receive — vendor purchase order');
 
+  // "Not On" / "Part Missing" units are flagged so the floor sees them first and
+  // knows which parts to raise a request for. Powered-on units stay unhighlighted.
+  const condition = normalizeCondition(receivedCondition);
+  const missing = normalizeMissingParts(missingParts);
+  const { highlighted, reason } = conditionHighlight(condition, missing);
+  const priority = highlighted ? 'high' : 'normal';
+
   const ins = await db.query(
     `INSERT INTO tickets (
        serial_number, ttspl_id, machine_number, brand, model, processor, ram, storage,
        initial_condition, priority, ticket_type, current_stage_id, assigned_team_id, assigned_user_id,
-       initial_cost, vendor_serial_id
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'normal','grn_qc',$10,$11,$12,0,$13)
+       initial_cost, vendor_serial_id, received_condition, missing_parts, highlighted, highlighted_reason
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$14,'grn_qc',$10,$11,$12,0,$13,$15,$16::jsonb,$17,$18)
      RETURNING ticket_id`,
     [
       serialNumber,
@@ -184,7 +198,12 @@ async function createTicketFromGrnReceive(db, {
       stage.stage_id,
       stage.team_id,
       floorManagerUserId,
-      serialId
+      serialId,
+      priority,
+      condition,
+      JSON.stringify(missing),
+      highlighted,
+      reason
     ]
   );
 
@@ -224,7 +243,13 @@ async function createTicketFromGrnReceive(db, {
       vendorSerialId: serialId,
       eventType: 'ticket_created',
       description: 'QC ticket created from GRN receive',
-      metadata: { ticket_id: ticketId, po: poLabel, serial_number: serialNumber },
+      metadata: {
+        ticket_id: ticketId,
+        po: poLabel,
+        serial_number: serialNumber,
+        received_condition: condition,
+        missing_parts: missing,
+      },
       actorUserId: actorUserId,
       db
     });
@@ -250,12 +275,21 @@ async function createTicketFromGrnReceive(db, {
       ttsplId: ttspl,
       vendorSerialId: serialId,
       configSource: frozenCfg || { ...specs, ...line, storage: specs.storage || line?.storage || line?.ssd },
+      receivedCondition: condition,
+      missingParts: missing,
     });
   } catch (paErr) {
     console.error('Production asset create failed (non-fatal):', paErr.message);
   }
 
-  return { ok: true, ticket_id: ticketId, serial_number: serialNumber };
+  return {
+    ok: true,
+    ticket_id: ticketId,
+    serial_number: serialNumber,
+    received_condition: condition,
+    missing_parts: missing,
+    highlighted,
+  };
 }
 
 /**
@@ -593,6 +627,7 @@ async function recoverOrphanGrnTickets(db) {
   const client = db || require('../config/db');
   const orphans = await client.query(
     `SELECT vsn.serial_id, vsn.serial_number, vsn.inventory_asset_code, vsn.po_id,
+            vsn.received_condition, vsn.missing_parts,
             vpo.purchase_order_number, vpo.line_items
        FROM vendor_serial_numbers vsn
        JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id
@@ -619,6 +654,8 @@ async function recoverOrphanGrnTickets(db) {
         po: { po_id: row.po_id, purchase_order_number: row.purchase_order_number },
         line,
         actorUserId: null,
+        receivedCondition: row.received_condition,
+        missingParts: row.missing_parts,
       });
       if (result.ok) created += 1;
     } catch (err) {

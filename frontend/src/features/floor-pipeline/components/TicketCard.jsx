@@ -2,6 +2,7 @@ import React from 'react';
 import { AlertTriangle, Clock, User, Wrench } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { configSummary, priorityBadge, ticketAgeDays, resolveTicketTtspl, formatStageDisplayName } from '../floorPipelineUi';
+import { GrnConditionBadge } from './GrnConditionNotice';
 
 export default function TicketCard({ ticket, pendingParts, onCardClick }) {
   const pri = priorityBadge(ticket.priority);
@@ -9,8 +10,11 @@ export default function TicketCard({ ticket, pendingParts, onCardClick }) {
   const inner = (
     <>
       <div className="flex items-start justify-between gap-2 mb-2">
-        <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${pri.className}`}>
-          {pri.label}
+        <span className="inline-flex flex-wrap items-center gap-1.5">
+          <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${pri.className}`}>
+            {pri.label}
+          </span>
+          <GrnConditionBadge ticket={ticket} />
         </span>
         <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-800">
           {formatStageDisplayName(ticket.stage_name)}

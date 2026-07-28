@@ -1,6 +1,7 @@
 /**
  * Laravel PurchaseOrderController@store_purchase_order — product_details + line_items parity.
  */
+const { normalizeAllowedConditions } = require('../constants/laptopConditions');
 
 function parseJsonValue(raw) {
   if (raw == null) return null;
@@ -132,7 +133,8 @@ function mapLineForProductDetail(line, purchaseOrderType) {
     vendor_locking_period: null,
     warranty: null,
     parts: line.parts ?? null,
-    status: line.status ?? null
+    status: line.status ?? null,
+    allowed_conditions: normalizeAllowedConditions(line.allowed_conditions ?? line.conditions)
   };
 
   const locking = lockingRaw === '' || lockingRaw == null ? null : Number(lockingRaw);
@@ -178,8 +180,9 @@ async function insertProductDetailsForPo(client, poId, rawLines, purchaseOrderTy
     const ins = await client.query(
       `INSERT INTO vendor_product_details (
          po_id, category, brand, model, processor, generation, ram, storage, gpu, screen_size,
-         quantity, rate, remarks, total_amount, vendor_locking_period, warranty, parts, status
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+         quantity, rate, remarks, total_amount, vendor_locking_period, warranty, parts, status,
+         allowed_conditions
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb)
        RETURNING product_detail_id`,
       [
         poId ?? null,
@@ -199,7 +202,8 @@ async function insertProductDetailsForPo(client, poId, rawLines, purchaseOrderTy
         pd.vendor_locking_period,
         pd.warranty,
         pd.parts,
-        pd.status
+        pd.status,
+        JSON.stringify(pd.allowed_conditions)
       ]
     );
 

@@ -38,6 +38,40 @@ const {
   listPurchaseOrderActivities,
 } = require('../../services/purchaseOrderActivityService');
 const { resolveSerialForGrnIntake } = require('../../services/serialReintakeService');
+const {
+  LAPTOP_CONDITIONS,
+  PART_CATEGORIES,
+  CONDITION_VALUES,
+  normalizeAllowedConditions,
+  normalizeCondition,
+  normalizeMissingParts,
+  conditionLabel,
+  partCategoryLabels,
+} = require('../../constants/laptopConditions');
+
+/**
+ * Conditions the receiver may pick for a PO line. Prefers the PO line_items
+ * snapshot and falls back to vendor_product_details for orders whose JSONB
+ * predates the field. Legacy orders resolve to `['on']` — the original flow.
+ */
+async function resolveAllowedConditionsForLine(db, line) {
+  if (line?.allowed_conditions != null) {
+    return normalizeAllowedConditions(line.allowed_conditions);
+  }
+  const pd = line?.product_detail_id ?? line?.product_id ?? line?.pro_id ?? line?.id;
+  if (pd == null || String(pd).trim() === '' || !Number.isFinite(Number(pd))) {
+    return normalizeAllowedConditions(null);
+  }
+  try {
+    const r = await db.query(
+      `SELECT allowed_conditions FROM vendor_product_details WHERE product_detail_id = $1`,
+      [Number(pd)]
+    );
+    return normalizeAllowedConditions(r.rows[0]?.allowed_conditions);
+  } catch {
+    return normalizeAllowedConditions(null);
+  }
+}
 
 async function logReceiveActivities({
   poId, user, grnId, grnWasNew, unitCount, ttsplCodes = [], ticketCount = 0, poNumber,
@@ -379,7 +413,13 @@ async function getProductReceivedContext(req, res) {
 
   const qtyMaps = await buildReceivedQtyMapsForPoIds([poId]);
   const enriched = await attachProductDetailsWithGrn(pool, row, qtyMaps);
-  const lines = enriched.product_details || [];
+  const rawLines = enriched.product_details || [];
+  const lines = await Promise.all(
+    rawLines.map(async (line) => ({
+      ...line,
+      allowed_conditions: await resolveAllowedConditionsForLine(pool, line),
+    }))
+  );
 
   const grnsR = await pool.query(
     `SELECT * FROM vendor_goods_received_notes WHERE po_id = $1 AND deleted_at IS NULL ORDER BY grn_id`,
@@ -420,7 +460,9 @@ async function getProductReceivedContext(req, res) {
         received_qty: receivedQty,
         remaining_qty: Math.max(0, orderQty - receivedQty)
       },
-      grns: grnsR.rows
+      grns: grnsR.rows,
+      laptop_conditions: LAPTOP_CONDITIONS,
+      part_categories: PART_CATEGORIES
     }
   });
 }
@@ -925,6 +967,8 @@ const receivePoLineUnitValidators = [
   body('apply_bill_settings').optional().isBoolean().toBoolean(),
   body('capture_token').optional({ nullable: true }).isUUID(),
   body('physical_damage_remark').optional({ nullable: true }).isString().trim().isLength({ max: 2000 }),
+  body('received_condition').optional({ nullable: true }).isIn(CONDITION_VALUES),
+  body('missing_parts').optional({ nullable: true }).isArray({ max: 20 }),
 ];
 
 async function receivePoLineUnit(req, res) {
@@ -938,6 +982,10 @@ async function receivePoLineUnit(req, res) {
   const applyBill = req.body.apply_bill_settings === true || req.body.apply_bill_settings === 'true';
   const captureToken = req.body.capture_token || null;
   const physicalDamageRemark = String(req.body.physical_damage_remark || '').trim();
+  const receivedCondition = normalizeCondition(req.body.received_condition);
+  const missingParts = receivedCondition === 'part_missing'
+    ? normalizeMissingParts(req.body.missing_parts)
+    : [];
 
   let grnId =
     req.body.grn_id === '' || req.body.grn_id === undefined || req.body.grn_id === null
@@ -977,6 +1025,20 @@ async function receivePoLineUnit(req, res) {
     return res.status(400).json({
       success: false,
       message: 'Cannot receive more units than ordered for this line.'
+    });
+  }
+
+  const allowedConditions = await resolveAllowedConditionsForLine(pool, line);
+  if (!allowedConditions.includes(receivedCondition)) {
+    return res.status(400).json({
+      success: false,
+      message: `This purchase order line does not accept "${conditionLabel(receivedCondition)}" laptops. Allowed: ${allowedConditions.map(conditionLabel).join(', ')}.`
+    });
+  }
+  if (receivedCondition === 'part_missing' && !missingParts.length) {
+    return res.status(400).json({
+      success: false,
+      message: 'Select at least one missing part category for a Part Missing laptop.'
     });
   }
 
@@ -1068,11 +1130,24 @@ async function receivePoLineUnit(req, res) {
     );
     if (pd != null && String(pd).trim() !== '') extra.product_detail_id = String(pd);
     if (physicalDamageRemark) extra.physical_damage_remark = physicalDamageRemark;
+    extra.received_condition = receivedCondition;
+    if (missingParts.length) extra.missing_parts = missingParts;
 
     const insS = await client.query(
-      `INSERT INTO vendor_serial_numbers (po_id, grn_id, serial_number, inventory_asset_code, rental_start_date, qc_status, extra)
-       VALUES ($1,$2,$3,$4,$5::date,'pending',$6::jsonb) RETURNING serial_id`,
-      [poId, finalGrnId, serial_number, inventory_asset_code, rental_start_date, JSON.stringify(extra)]
+      `INSERT INTO vendor_serial_numbers (
+         po_id, grn_id, serial_number, inventory_asset_code, rental_start_date, qc_status, extra,
+         received_condition, missing_parts
+       ) VALUES ($1,$2,$3,$4,$5::date,'pending',$6::jsonb,$7,$8::jsonb) RETURNING serial_id`,
+      [
+        poId,
+        finalGrnId,
+        serial_number,
+        inventory_asset_code,
+        rental_start_date,
+        JSON.stringify(extra),
+        receivedCondition,
+        JSON.stringify(missingParts)
+      ]
     );
     createdRow = {
       serial_id: insS.rows[0].serial_id,
@@ -1121,7 +1196,9 @@ async function receivePoLineUnit(req, res) {
       grn_id: finalGrnId,
       line_index: lineIndex,
       rental_start_date,
-      inventory_asset_code: createdRow.inventory_asset_code
+      inventory_asset_code: createdRow.inventory_asset_code,
+      received_condition: receivedCondition,
+      missing_parts: missingParts
     }
   });
 
@@ -1143,9 +1220,18 @@ async function receivePoLineUnit(req, res) {
   try {
     const receiveLine = { ...line, ...receiveConfig };
     const poLabel = po.purchase_order_number || String(po.po_id);
-    const initialCondition = physicalDamageRemark
-      ? `GRN receive — PO ${poLabel}. Physical damage: ${physicalDamageRemark}`
-      : undefined;
+    const conditionNote = receivedCondition === 'part_missing'
+      ? `Condition: Part Missing (${partCategoryLabels(missingParts).join(', ')})`
+      : receivedCondition === 'not_on'
+        ? 'Condition: Not On — laptop does not power on'
+        : '';
+    const conditionParts = [
+      `GRN receive — PO ${poLabel}`,
+      conditionNote,
+      physicalDamageRemark ? `Physical damage: ${physicalDamageRemark}` : '',
+    ].filter(Boolean);
+    const initialCondition =
+      conditionNote || physicalDamageRemark ? conditionParts.join('. ') : undefined;
     ticketResult = await createTicketFromGrnReceive(pool, {
       serialId: createdRow.serial_id,
       serialNumber: createdRow.serial_number,
@@ -1155,6 +1241,8 @@ async function receivePoLineUnit(req, res) {
       actorUserId: req.user?.user_id,
       initialConditionOverride: initialCondition,
       grnId: finalGrnId,
+      receivedCondition,
+      missingParts,
     });
   } catch (ticketErr) {
     console.error('GRN ticket creation failed (unit receive):', ticketErr);
@@ -1183,7 +1271,7 @@ async function receivePoLineUnit(req, res) {
     data: {
       grn_id: finalGrnId,
       rental_start_date,
-      created: createdRow,
+      created: { ...createdRow, received_condition: receivedCondition, missing_parts: missingParts },
       lines: linesAfter,
       ticket: ticketResult
     }
