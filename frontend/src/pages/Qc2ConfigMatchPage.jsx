@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getApiUrl } from '../utils/api';
+import { buildMacCaptureCommand } from '../utils/macHwCaptureScript';
 
 function getPublicApiBase() {
   return getApiUrl();
@@ -38,8 +39,7 @@ function buildPsCommand(apiBase, token, apiPrefix = 'qc2-capture') {
 }
 
 function buildMacCommand(apiBase, token, apiPrefix = 'qc2-capture') {
-  const base = `${apiBase}/${apiPrefix}/${token}`;
-  return `M=$(sysctl -n hw.model);C=$(sysctl -n machdep.cpu.brand_string 2>/dev/null||echo "Apple Silicon");R=$(( $(sysctl -n hw.memsize)/1073741824 ));S=$(system_profiler SPNVMeDataType SPSerialATADataType 2>/dev/null|awk '/Capacity/{print;exit}'|grep -oE '[0-9]+(\\.[0-9]+)?'|head -1);V=$(curl -s -X POST "${base}/verify-configuration" -H "Content-Type: application/json" -d "{\\"manufacturer\\":\\"Apple\\",\\"model\\":\\"$M\\",\\"processor\\":\\"$C\\",\\"ram\\":\\"$R\\",\\"ssd\\":\\"$S\\",\\"gpu\\":\\"\\"}");if echo "$V"|grep -q '"configurationMatched":true';then SERIAL=$(ioreg -rd1 -c IOPlatformExpertDevice|awk '/IOPlatformSerialNumber/{print $3;exit}'|tr -d '"');curl -s -X POST "${base}" -H "Content-Type: application/json" -d "{\\"serial_number\\":\\"$SERIAL\\"}";echo "Verified + serial sent: $SERIAL";else echo "Verification failed / config mismatch:";echo "$V";fi`;
+  return buildMacCaptureCommand(apiBase, token, apiPrefix);
 }
 
 function buildPs1FileContent(apiBase, token, apiPrefix = 'qc2-capture') {

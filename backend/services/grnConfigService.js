@@ -40,12 +40,70 @@ function cpuType(s) {
   if (m) return `i${m[1]}`;
   m = t.match(/ryzen\s?([3579])/);
   if (m) return `ryzen${m[1]}`;
-  m = t.match(/\bm([1234])\b/) || t.match(/apple\s?m([1234])/);
+  m = t.match(/\bm\s*([1-5])(?:\s+(pro|max|ultra))?\b/) || t.match(/apple\s*m\s*([1-5])(?:\s+(pro|max|ultra))?/);
   if (m) return `m${m[1]}`;
   if (/celeron/.test(t)) return 'celeron';
   if (/pentium/.test(t)) return 'pentium';
   if (/xeon/.test(t)) return 'xeon';
   return t; // fall back to full normalized string
+}
+
+function isAppleBrand(s) {
+  return normBrand(s).includes('apple');
+}
+
+function isAppleConfig(expected, actual) {
+  return isAppleBrand(expected?.brand) || isAppleBrand(actual?.manufacturer ?? actual?.brand);
+}
+
+/** Apple hw.model e.g. MacBookAir10,1 → macbook air; Mac15,12 → generic Mac identifier. */
+function appleHwModelFamily(model) {
+  const s = String(model || '').trim();
+  if (!s) return null;
+  let m = s.match(/^MacBook(Pro|Air)(\d+),(\d+)$/i);
+  if (m) return m[1].toLowerCase() === 'pro' ? 'macbook pro' : 'macbook air';
+  if (/^Mac\d+,\d+$/i.test(s)) return 'mac';
+  return null;
+}
+
+function expectedMacbookFamily(expectedModel) {
+  const n = norm(expectedModel).replace(/\s+/g, ' ');
+  if (/macbook air|macbookair/.test(n.replace(/\s/g, ''))) return 'macbook air';
+  if (/macbook pro|macbookpro/.test(n.replace(/\s/g, ''))) return 'macbook pro';
+  if (/mac mini|macmini/.test(n.replace(/\s/g, ''))) return 'mac mini';
+  if (/mac studio|macstudio/.test(n.replace(/\s/g, ''))) return 'mac studio';
+  if (/imac/.test(n.replace(/\s/g, ''))) return 'imac';
+  return null;
+}
+
+function appleModelsMatch(expectedModel, actual) {
+  const expectedFamily = expectedMacbookFamily(expectedModel);
+  const rawCandidates = [actual.model, actual.model_version, actual.system_family].filter(Boolean);
+  for (const raw of rawCandidates) {
+    const n = norm(raw);
+    if (expectedFamily && n.includes(expectedFamily.replace(/\s/g, ''))) {
+      return { matched: true, matchedRaw: raw };
+    }
+    if (expectedFamily && n.includes(expectedFamily)) {
+      return { matched: true, matchedRaw: raw };
+    }
+  }
+  const hwFamily = appleHwModelFamily(actual.model);
+  if (expectedFamily && hwFamily) {
+    if (hwFamily === expectedFamily) return { matched: true, matchedRaw: actual.model };
+    if (hwFamily === 'mac' && expectedFamily === 'macbook air') {
+      return { matched: true, matchedRaw: actual.model };
+    }
+  }
+  return null;
+}
+
+function appleProcessorKey(s) {
+  const t = norm(s);
+  let m = t.match(/(?:apple\s*)?m\s*([1-5])(?:\s+(pro|max|ultra))?/);
+  if (m) return `m${m[1]}`;
+  if (/^m([1-5])$/.test(t)) return t;
+  return null;
 }
 
 /** Leading generation number, e.g. "12th Gen" → 12, "13" → 13. */
@@ -157,12 +215,21 @@ function processorsMatch(expectedProcessor, actualProcessor) {
   if (e === a) return true;
   const en = norm(expectedProcessor);
   const an = norm(actualProcessor);
-  return bothContain(an, en);
+  if (bothContain(an, en)) return true;
+  const appleE = appleProcessorKey(expectedProcessor);
+  const appleA = appleProcessorKey(actualProcessor);
+  if (appleE && appleA && appleE === appleA) return true;
+  // Mac script often reports generic "Apple Silicon" while PO/SO stores M1–M5.
+  if (appleE && /apple silicon/.test(an)) return true;
+  return false;
 }
 
 function modelsMatch(expectedModel, actual) {
   // Always return { matched, matchedRaw }. Returning a bare boolean breaks
   // compareConfig (modelResult.matched === undefined → false fail).
+  const appleHit = appleModelsMatch(expectedModel, actual);
+  if (appleHit) return appleHit;
+
   const e = normModel(expectedModel);
   if (!e) return { matched: true, matchedRaw: actual?.model || '' };
   const rawCandidates = [actual.model, actual.model_version, actual.system_family].filter(Boolean);
@@ -235,12 +302,15 @@ function compareConfig(expected, actual) {
     });
   }
 
-  // Generation — derived authoritatively from the actual CPU name (handles the
-  // 11th-gen "1165G7" case). Required only when both sides resolve to a number.
+  // Generation — derived from the actual CPU name on Intel; Apple M-series
+  // labels (M1, Apple M4) or blank expected values must not block.
   {
     const e = genNum(expected.generation);
     const a = genFromActual(actual);
-    const matched = e == null || a == null || e === a;
+    const appleGenLabel = /\bm\s*[1-5]\b/i.test(String(expected.generation || ''));
+    const matched = isAppleConfig(expected, actual) && (appleGenLabel || e == null || a == null)
+      ? true
+      : (e == null || a == null || e === a);
     checks.push({
       field: 'generation', label: FIELD_LABELS.generation, required: true, matched,
       expected: expected.generation,
@@ -352,4 +422,7 @@ module.exports = {
   processorsMatch,
   modelsMatch,
   modelTokens,
+  isAppleConfig,
+  appleModelsMatch,
+  appleProcessorKey,
 };

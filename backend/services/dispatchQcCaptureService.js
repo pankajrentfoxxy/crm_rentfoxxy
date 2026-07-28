@@ -9,8 +9,8 @@ const {
   frontendBaseUrl,
   resolvePublicFrontendUrl,
 } = require('./grnSerialCaptureService');
-const { verifyConfigurationAgainst, sizeNum } = require('./grnConfigService');
-const { serialMatchesSoLine, configMismatchMessage } = require('../utils/soInventorySpecMatch');
+const { verifyConfigurationAgainst, sizeNum, normBrand } = require('./grnConfigService');
+const { serialMatchesSoLine, configMismatchMessage, enrichSerialSpecs } = require('../utils/soInventorySpecMatch');
 const { getSalesOrderLines } = require('./salesManagementService');
 const {
   ensureTables,
@@ -112,13 +112,30 @@ async function resolveProductionAssetForDispatch(db, ticket, alloc) {
   return pa;
 }
 
+function normalizeAppleActual(actual = {}, expected = {}) {
+  const out = { ...actual };
+  const appleSide = normBrand(actual.manufacturer ?? actual.brand).includes('apple')
+    || normBrand(expected.brand).includes('apple');
+  if (!appleSide) return out;
+  const proc = String(out.processor || '').trim();
+  const expProc = String(expected.processor || '').trim();
+  if (/apple silicon/i.test(proc) && expProc) {
+    out.processor = /^apple/i.test(expProc) ? expProc : `Apple ${expProc}`;
+  } else if (/^m[1-5]$/i.test(expProc) && !proc) {
+    out.processor = `Apple ${expProc.toUpperCase()}`;
+  }
+  return out;
+}
+
 function actualToSoLineShape(actual = {}, expected = {}) {
-  return {
-    processor: actual.processor || expected.processor || '',
-    generation: actual.generation || expected.generation || '',
-    ram: actual.ram || expected.ram || '',
-    storage: actual.ssd || actual.storage || expected.ssd || '',
+  const normalized = normalizeAppleActual(actual, expected);
+  const shape = {
+    processor: normalized.processor || expected.processor || '',
+    generation: normalized.generation || expected.generation || '',
+    ram: normalized.ram ?? expected.ram ?? '',
+    storage: normalized.ssd ?? normalized.storage ?? expected.ssd ?? '',
   };
+  return enrichSerialSpecs(shape);
 }
 
 async function getSoLineForAllocation(alloc) {

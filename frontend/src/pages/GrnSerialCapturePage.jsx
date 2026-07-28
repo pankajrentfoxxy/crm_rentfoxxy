@@ -4,6 +4,7 @@ import axios from 'axios';
 import { CheckCircle2, XCircle, Laptop, Loader2, AlertTriangle, Copy, Download, Cpu } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getApiUrl } from '../utils/api';
+import { buildMacCaptureCommand } from '../utils/macHwCaptureScript';
 
 /**
  * Public capture page API base.
@@ -49,12 +50,6 @@ function buildPsCommand(apiBase, token) {
   const base = `${apiBase}/grn-capture/${token}`;
   return `$cs=Get-CimInstance Win32_ComputerSystem;$csp=Get-CimInstance Win32_ComputerSystemProduct;$cpu=(Get-CimInstance Win32_Processor).Name;$gpu=(Get-CimInstance Win32_VideoController|Select-Object -First 1).Name;$ram=[math]::Round((Get-CimInstance Win32_PhysicalMemory|Measure-Object -Property Capacity -Sum).Sum/1GB);if(-not $ram){$ram=[math]::Round($cs.TotalPhysicalMemory/1GB)};$ssd=[math]::Round((Get-PhysicalDisk|Select-Object -First 1).Size/1000000000);$gen='';if($cpu -match '(\\d{1,2})(?:st|nd|rd|th)\\s*Gen'){$gen=$matches[1]}elseif($cpu -match 'i[3579][- ]?(\\d{3,5})'){$n=$matches[1];if($n.Length -ge 5){$gen=$n.Substring(0,2)}elseif($n.Length -eq 4){if($n.Substring(0,1) -eq '1'){$gen=$n.Substring(0,2)}else{$gen=$n.Substring(0,1)}}else{$gen=$n.Substring(0,1)}};$cfg=@{manufacturer=$cs.Manufacturer;model=$cs.Model;model_version=$csp.Version;system_family=$cs.SystemFamily;processor=$cpu;generation=$gen;ram=$ram;ssd=$ssd;gpu=$gpu}|ConvertTo-Json;try{$v=Invoke-RestMethod -Uri "${base}/verify-configuration" -Method Post -Body $cfg -ContentType "application/json"}catch{${PS_ERR};Write-Host "Verify failed: $e" -ForegroundColor Red;Read-Host "Press Enter to close";return};if(-not $v.configurationMatched){Write-Host "Config mismatch:" -ForegroundColor Red;$v.errors|%{Write-Host (" - "+$_.field+": expected '"+$_.expected+"', found '"+$_.actual+"'") -ForegroundColor Red};Read-Host "Press Enter to close";return};$s=(Get-CimInstance Win32_BIOS).SerialNumber.Trim().ToUpper();try{Invoke-RestMethod -Uri "${base}" -Method Post -Body (@{serial_number=$s}|ConvertTo-Json) -ContentType "application/json"|Out-Null;Write-Host "Verified + serial sent: $s" -ForegroundColor Green}catch{${PS_ERR};Write-Host "Serial submit failed: $e" -ForegroundColor Red};Read-Host "Press Enter to close"`;
 }
-
-function buildMacCommand(apiBase, token) {
-  const base = `${apiBase}/grn-capture/${token}`;
-  return `M=$(sysctl -n hw.model);C=$(sysctl -n machdep.cpu.brand_string 2>/dev/null||echo "Apple Silicon");R=$(( $(sysctl -n hw.memsize)/1073741824 ));S=$(system_profiler SPNVMeDataType SPSerialATADataType 2>/dev/null|awk '/Capacity/{print;exit}'|grep -oE '[0-9]+(\\.[0-9]+)?'|head -1);V=$(curl -s -X POST "${base}/verify-configuration" -H "Content-Type: application/json" -d "{\\"manufacturer\\":\\"Apple\\",\\"model\\":\\"$M\\",\\"processor\\":\\"$C\\",\\"ram\\":\\"$R\\",\\"ssd\\":\\"$S\\",\\"gpu\\":\\"\\"}");if echo "$V"|grep -q '"configurationMatched":true';then SERIAL=$(ioreg -rd1 -c IOPlatformExpertDevice|awk '/IOPlatformSerialNumber/{print $3;exit}'|tr -d '"');curl -s -X POST "${base}" -H "Content-Type: application/json" -d "{\\"serial_number\\":\\"$SERIAL\\"}";echo "Verified + serial sent: $SERIAL";else echo "Verification failed / config mismatch:";echo "$V";fi`;
-}
-
 function buildPs1FileContent(apiBase, token) {
   const base = `${apiBase}/grn-capture/${token}`;
   return `# Rentfoxxy GRN — run on the received laptop (Windows PowerShell)
@@ -117,7 +112,7 @@ export default function GrnSerialCapturePage() {
   const apiBase = getPublicApiBase();
   const psScript = useMemo(() => buildPsCommand(apiBase, token), [apiBase, token]);
   const psEncoded = useMemo(() => encodePsCommand(psScript), [psScript]);
-  const macScript = useMemo(() => buildMacCommand(apiBase, token), [apiBase, token]);
+  const macScript = useMemo(() => buildMacCaptureCommand(apiBase, token, 'grn-capture'), [apiBase, token]);
 
   const loadSession = useCallback(async () => {
     setSessionWarning(null);
