@@ -325,10 +325,20 @@ function drillTitle({ scope, bucket, processor, generation }) {
   return `${col?.label || bucket} — ${processor} / ${genLabel} (${scope === 'sale' ? 'Sale' : 'Rental'})`;
 }
 
-function DrilldownModal({ open, onClose, title, loading, items, scope, bucket, returnTo }) {
+function DrilldownModal({ open, onClose, title, loading, items, scope, bucket, returnTo, canSeeClient }) {
   if (!open) return null;
   const scopeCfg = SO_SCOPES[scope] || SO_SCOPES.rental;
-  const cols = DRILL_COLUMNS[bucket] || DRILL_COLUMNS.ordered;
+  let cols = DRILL_COLUMNS[bucket] || DRILL_COLUMNS.ordered;
+  if (canSeeClient) {
+    const soIdx = cols.findIndex((c) => c.key === 'sales_order_number');
+    if (soIdx >= 0) {
+      cols = [
+        ...cols.slice(0, soIdx + 1),
+        { key: 'customer_name', label: 'Client' },
+        ...cols.slice(soIdx + 1),
+      ];
+    }
+  }
 
   const linkFor = (item) => {
     if (item.link_type === 'sales_order' && item.sales_order_number) {
@@ -444,6 +454,7 @@ export default function SalesOrderReportPage() {
   const [data, setData] = useState(null);
   const [drillLoading, setDrillLoading] = useState(false);
   const [drillItems, setDrillItems] = useState([]);
+  const [drillCanSeeClient, setDrillCanSeeClient] = useState(false);
 
   const filters = useMemo(() => {
     const f = { preset };
@@ -486,7 +497,10 @@ export default function SalesOrderReportPage() {
           processor: drillProcessor,
           generation: drillGeneration || 'all',
         });
-        if (!cancelled) setDrillItems(res?.items || []);
+        if (!cancelled) {
+          setDrillItems(res?.items || []);
+          setDrillCanSeeClient(Boolean(res?.can_see_client));
+        }
       } catch (err) {
         if (!cancelled) toast.error(err.message || 'Could not load details');
       } finally {
@@ -669,6 +683,7 @@ export default function SalesOrderReportPage() {
         scope={drill?.scope || 'rental'}
         bucket={drill?.bucket || 'ordered'}
         returnTo={returnTo}
+        canSeeClient={drillCanSeeClient}
       />
     </div>
   );

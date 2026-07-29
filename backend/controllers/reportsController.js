@@ -2223,10 +2223,17 @@ exports.getSalesOrderReport = async (req, res) => {
     }
 };
 
+const CLIENT_NAME_ROLES = ['super_admin', 'admin', 'sales', 'accounts'];
+
 exports.getSalesOrderReportDrilldown = async (req, res) => {
     try {
         const data = await getSalesOrderReportDrilldown(req.query);
-        res.json({ success: true, ...data });
+        const canSeeClient = CLIENT_NAME_ROLES.includes(req.user?.role);
+        // Only privileged roles may see the client name; strip it for everyone else.
+        const items = canSeeClient
+            ? data.items
+            : (data.items || []).map(({ customer_name, ...rest }) => rest);
+        res.json({ success: true, ...data, items, can_see_client: canSeeClient });
     } catch (error) {
         console.error('getSalesOrderReportDrilldown error:', error);
         res.status(500).json({ success: false, message: error.message || 'Server error loading drilldown' });

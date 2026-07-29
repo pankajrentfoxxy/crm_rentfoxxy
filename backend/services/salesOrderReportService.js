@@ -170,7 +170,7 @@ const CRM_DATE_FILTER = `AND sol.created_at >= ($1::date AT TIME ZONE 'Asia/Kolk
 
 async function fetchSoLines(scope) {
   const res = await pool.query(
-    `SELECT sol.id AS line_id, sol.sales_order_number, sol.processor, sol.generation,
+    `SELECT sol.id AS line_id, sol.sales_order_number, sol.customer_name, sol.processor, sol.generation,
             sol.brand, sol.model_name, sol.ram, sol.storage, sol.gpu, sol.screen_size,
             COALESCE(sol.main_qty, sol.quantity, 1)::int AS line_qty, sol.created_at
        FROM sales_order_lines sol
@@ -187,6 +187,7 @@ async function fetchSoSerials(scope) {
     `SELECT sos.allocation_id, sos.sales_order_number, sos.line_id, sos.serial_id,
             sos.ttspl_id, sos.serial_number, sos.status AS alloc_status, sos.qc_status,
             sos.dc_number, sos.created_at AS attached_at, sos.updated_at AS alloc_updated_at,
+            sol.customer_name,
             sol.processor, sol.generation, sol.brand, sol.model_name, sol.ram, sol.storage,
             sol.gpu, sol.screen_size, sol.created_at AS so_line_created_at,
             dcl.status AS dc_status, dcl.dispatch_mode, dcl.ship_by, dcl.dispatched_at,
@@ -483,6 +484,7 @@ async function getSalesOrderReportDrilldown(query = {}) {
       items.push({
         sales_order_number: line.sales_order_number,
         sales_order_date: line.created_at,
+        customer_name: line.customer_name,
         brand: line.brand,
         model_name: line.model_name,
         processor: line.processor,
@@ -503,6 +505,7 @@ async function getSalesOrderReportDrilldown(query = {}) {
       items.push({
         sales_order_number: s.sales_order_number,
         sales_order_date: s.so_line_created_at,
+        customer_name: s.customer_name,
         allocation_id: s.allocation_id,
         ttspl_id: s.ttspl_id,
         serial_number: s.serial_number,
@@ -527,6 +530,7 @@ async function getSalesOrderReportDrilldown(query = {}) {
       items.push({
         sales_order_number: s.sales_order_number,
         sales_order_date: s.so_line_created_at,
+        customer_name: s.customer_name,
         allocation_id: s.allocation_id,
         ttspl_id: s.ttspl_id,
         serial_number: s.serial_number,
@@ -552,6 +556,7 @@ async function getSalesOrderReportDrilldown(query = {}) {
         dc_number: s.dc_number,
         sales_order_number: s.sales_order_number,
         sales_order_date: s.so_line_created_at,
+        customer_name: s.customer_name,
         ttspl_id: s.ttspl_id,
         serial_number: s.serial_number,
         brand: s.brand,
@@ -579,6 +584,7 @@ async function getSalesOrderReportDrilldown(query = {}) {
         dc_number: s.dc_number,
         sales_order_number: s.sales_order_number,
         sales_order_date: s.so_line_created_at,
+        customer_name: s.customer_name,
         ttspl_id: s.ttspl_id,
         serial_number: s.serial_number,
         brand: s.brand,
