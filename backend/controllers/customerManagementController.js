@@ -655,7 +655,9 @@ exports.exportCustomerAssetsExcel = async (req, res) => {
          COALESCE(NULLIF(vsn.inventory_asset_code, ''), vsn.extra->>'ttspl_id') AS ttspl,
          vsn.serial_number AS serial_number,
          vsn.rent_monthly_rate AS price,
-         dd.delivered_at AS delivered_at
+         dd.delivered_at AS delivered_at,
+         COALESCE(NULLIF(vsn.current_dc_number, ''), dd.dc_number) AS dc_number,
+         COALESCE(dd.sales_order_number, sos.sales_order_number) AS sales_order_number
        FROM vendor_serial_numbers vsn
        JOIN customers c ON c.customer_id = vsn.current_customer_id
        LEFT JOIN inventory inv ON (
@@ -663,7 +665,9 @@ exports.exportCustomerAssetsExcel = async (req, res) => {
          OR inv.serial_number = vsn.serial_number
        )
        LEFT JOIN LATERAL (
-         SELECT COALESCE(dcl.delivered_at, dcl.delivery_completed_at) AS delivered_at
+         SELECT COALESCE(dcl.delivered_at, dcl.delivery_completed_at) AS delivered_at,
+                dcl.dc_number,
+                dcl.sales_order_number
            FROM delivery_challan_lines dcl
            CROSS JOIN LATERAL jsonb_array_elements_text(
              CASE WHEN jsonb_typeof(dcl.serial_number) = 'array' THEN dcl.serial_number ELSE '[]'::jsonb END
@@ -674,6 +678,14 @@ exports.exportCustomerAssetsExcel = async (req, res) => {
           ORDER BY COALESCE(dcl.delivered_at, dcl.delivery_completed_at) DESC NULLS LAST
           LIMIT 1
        ) dd ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT sos.sales_order_number
+           FROM sales_order_serials sos
+          WHERE sos.serial_id = vsn.serial_id
+            AND sos.status <> 'removed'
+          ORDER BY sos.allocation_id DESC
+          LIMIT 1
+       ) sos ON TRUE
       WHERE vsn.deleted_at IS NULL
         AND vsn.current_customer_id IS NOT NULL
         AND vsn.inventory_status = ANY($1::text[])
@@ -690,6 +702,8 @@ exports.exportCustomerAssetsExcel = async (req, res) => {
       'TTSPL',
       'Serial Number',
       'Price',
+      'DC Number',
+      'SO Number',
       'Delivered Date',
     ];
 
@@ -711,6 +725,8 @@ exports.exportCustomerAssetsExcel = async (req, res) => {
       TTSPL: r.ttspl || '',
       'Serial Number': r.serial_number || '',
       Price: r.price != null ? Number(r.price) : '',
+      'DC Number': r.dc_number || '',
+      'SO Number': r.sales_order_number || '',
       'Delivered Date': fmtDate(r.delivered_at),
     }));
 
