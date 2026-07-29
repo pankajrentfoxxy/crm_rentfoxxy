@@ -654,13 +654,26 @@ exports.exportCustomerAssetsExcel = async (req, res) => {
          COALESCE(inv.processor, vsn.extra->>'processor') AS processor,
          COALESCE(NULLIF(vsn.inventory_asset_code, ''), vsn.extra->>'ttspl_id') AS ttspl,
          vsn.serial_number AS serial_number,
-         vsn.rent_monthly_rate AS price
+         vsn.rent_monthly_rate AS price,
+         dd.delivered_at AS delivered_at
        FROM vendor_serial_numbers vsn
        JOIN customers c ON c.customer_id = vsn.current_customer_id
        LEFT JOIN inventory inv ON (
          inv.machine_number = vsn.inventory_asset_code
          OR inv.serial_number = vsn.serial_number
        )
+       LEFT JOIN LATERAL (
+         SELECT COALESCE(dcl.delivered_at, dcl.delivery_completed_at) AS delivered_at
+           FROM delivery_challan_lines dcl
+           CROSS JOIN LATERAL jsonb_array_elements_text(
+             CASE WHEN jsonb_typeof(dcl.serial_number) = 'array' THEN dcl.serial_number ELSE '[]'::jsonb END
+           ) AS elem
+          WHERE COALESCE(dcl.movement_type, 'outbound') = 'outbound'
+            AND dcl.status = 'delivered'
+            AND NULLIF(REGEXP_REPLACE(split_part(elem, '|', 1), '[^0-9]', '', 'g'), '')::int = vsn.serial_id
+          ORDER BY COALESCE(dcl.delivered_at, dcl.delivery_completed_at) DESC NULLS LAST
+          LIMIT 1
+       ) dd ON TRUE
       WHERE vsn.deleted_at IS NULL
         AND vsn.current_customer_id IS NOT NULL
         AND vsn.inventory_status = ANY($1::text[])
@@ -677,7 +690,17 @@ exports.exportCustomerAssetsExcel = async (req, res) => {
       'TTSPL',
       'Serial Number',
       'Price',
+      'Delivered Date',
     ];
+
+    const fmtDate = (d) => {
+      if (!d) return '';
+      const dt = new Date(d);
+      if (Number.isNaN(dt.getTime())) return '';
+      const dd = String(dt.getDate()).padStart(2, '0');
+      const mm = String(dt.getMonth() + 1).padStart(2, '0');
+      return `${dd}-${mm}-${dt.getFullYear()}`;
+    };
 
     const orderedRows = rows.map((r) => ({
       'Customer Name': r.customer_name || '',
@@ -688,6 +711,7 @@ exports.exportCustomerAssetsExcel = async (req, res) => {
       TTSPL: r.ttspl || '',
       'Serial Number': r.serial_number || '',
       Price: r.price != null ? Number(r.price) : '',
+      'Delivered Date': fmtDate(r.delivered_at),
     }));
 
     const XLSX = require('xlsx');
