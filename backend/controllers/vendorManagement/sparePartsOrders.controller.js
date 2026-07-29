@@ -7,8 +7,14 @@ const pool = require('../../config/db');
 const { getTotalAmountOfPurchaseOrder } = require('../../utils/purchaseOrderGst');
 const { nextSparePartsPurchaseOrderNumber } = require('../../services/vendorNumberService');
 const { logVendorAudit } = require('../../services/vendorAuditLogService');
-const { allocatePartAssetCodes, createPartInstances } = require('../../services/partIdService');
+const { allocatePartAssetCodes } = require('../../services/partIdService');
 const { listActiveSpareBrandsForDropdown } = require('../../services/assetConfigurationService');
+const {
+  resolveFloorPartId,
+  resolveOrCreateFloorPartId,
+  receiveUnitsIntoInventory,
+  autoLinkOpenRequests,
+} = require('../../services/partInventoryService');
 
 /** Resolve display name for spare PO line (used for PRT_{SHORTCUT}_{NNNN} codes). */
 async function resolveSpareLinePartName(line) {
@@ -28,104 +34,52 @@ async function resolveSpareLinePartName(line) {
   return String(name || 'PART').trim();
 }
 
+// Kept for the one-time backfill script, which resolves lines outside a transaction.
+const resolveFloorPartsId = resolveFloorPartId;
+
 /**
- * Phase 16 (best-effort): when spare units are received, mirror them into the
- * `parts` catalog as physical PRT-ID instances and auto-link any open part
- * requests for that part. Never throws — failures are logged and ignored so the
- * core SPO receive flow is unaffected.
+ * Register received units as tracked physical inventory: each gets a canonical
+ * Part ID (part_instances.prt_id) for its QR label, is linked back to its
+ * procurement serial row, and is written to the movement ledger.
  *
- * The spare PO line references `vendor_spare_parts_catalog`; we resolve it to a
- * `parts` catalog row by id first, then by name.
+ * Runs inside the receive transaction so a unit can never exist in procurement
+ * without existing in parts inventory. If the PO line names a part the floor
+ * catalog has never seen, the catalog row is created rather than skipped.
+ *
+ * @param {import('pg').PoolClient} client
+ * @param {{serialId: number, serialNumber: string|null, assetCode: string}[]} units
  */
-/**
- * Resolve the floor `parts.part_id` for a spare-PO line item, mirroring the
- * lookup precedence used at receive time. Returns a numeric part_id or null.
- * Reused by the receive sync and the one-time backfill script.
- */
-async function resolveFloorPartsId(line, db = pool) {
-  const rawId = line.product_detail_id ?? line.part_id ?? line.product_id ?? line.pro_id ?? line.id;
-  let partsId = null;
+async function trackReceivedUnits(client, { line, units, spoId, grnId, lineIndex, vendorId, user }) {
+  if (!Array.isArray(units) || !units.length) return [];
 
-  // (a) SPO line directly carries the floor part id (new SPO form).
-  const explicitFloor = line.floor_part_id ?? line.parts_catalog_id ?? null;
-  if (explicitFloor != null && /^\d+$/.test(String(explicitFloor))) {
-    const fp = await db.query(`SELECT part_id FROM parts WHERE part_id = $1`, [Number(explicitFloor)]);
-    if (fp.rows.length) partsId = fp.rows[0].part_id;
-  }
+  const partId = await resolveOrCreateFloorPartId(client, line);
 
-  // (b) rawId may itself be a parts.part_id (legacy direct).
-  if (!partsId && rawId != null && /^\d+$/.test(String(rawId))) {
-    const direct = await db.query(`SELECT part_id FROM parts WHERE part_id = $1`, [Number(rawId)]);
-    if (direct.rows.length) partsId = direct.rows[0].part_id;
-  }
+  const instances = await receiveUnitsIntoInventory(client, {
+    partId,
+    units: units.map((u) => ({
+      serialNumber: u.serialNumber,
+      vendorSerialId: u.serialId,
+      assetCode: u.assetCode,
+    })),
+    unitCost: Number(line.unit_price ?? line.rate ?? line.cost ?? 0),
+    locationCode: line.location_code || null,
+    spoId,
+    grnId,
+    spoLineIndex: lineIndex,
+    vendorId,
+    batchNumber: line.batch_number || null,
+    receivedBy: user?.user_id || null,
+    actorName: user?.name || null,
+  });
 
-  // (c) rawId is a vendor_spare_parts_catalog id that links to a floor part.
-  if (!partsId && rawId != null && /^\d+$/.test(String(rawId))) {
-    const cat = await db.query(
-      `SELECT floor_part_id FROM vendor_spare_parts_catalog WHERE part_id = $1 AND floor_part_id IS NOT NULL`,
-      [Number(rawId)]
-    );
-    if (cat.rows[0]?.floor_part_id) partsId = cat.rows[0].floor_part_id;
-  }
+  await autoLinkOpenRequests(client, {
+    partId,
+    instances,
+    actorUserId: user?.user_id || null,
+    actorName: user?.name || null,
+  });
 
-  // (d) Fall back to matching a parts row by name.
-  if (!partsId) {
-    let name = line.name || line.part_name || line.spare_part_name || line.product_name || null;
-    if (!name && rawId != null && /^\d+$/.test(String(rawId))) {
-      const cat = await db.query(`SELECT name FROM vendor_spare_parts_catalog WHERE part_id = $1`, [Number(rawId)]);
-      name = cat.rows[0]?.name || null;
-    }
-    if (name) {
-      const match = await db.query(`SELECT part_id FROM parts WHERE LOWER(part_name) = LOWER($1) LIMIT 1`, [String(name).trim()]);
-      if (match.rows.length) partsId = match.rows[0].part_id;
-    }
-  }
-
-  return partsId;
-}
-
-async function syncReceivedPartsToInventory({ line, quantity, spoId, grnId, receivedBy, serialNumbers }) {
-  try {
-    const qty = Number(quantity) || 0;
-    if (qty <= 0) return;
-
-    const partsId = await resolveFloorPartsId(line);
-    if (!partsId) return; // no matching parts catalog entry — skip silently
-
-    const instances = await createPartInstances({
-      partId: partsId,
-      quantity: qty,
-      unitCost: Number(line.unit_price ?? line.rate ?? line.cost ?? 0),
-      locationCode: line.location_code || null,
-      spoId,
-      grnId,
-      batchNumber: line.batch_number || null,
-      receivedBy: receivedBy || null,
-      serialNumbers: Array.isArray(serialNumbers) ? serialNumbers : [],
-    });
-
-    // Auto-link open requests (escalated/ordered) for this part to fresh instances.
-    for (const inst of instances) {
-      const linked = await pool.query(
-        `UPDATE part_requests SET status = 'approved', instance_id = $1, updated_at = NOW()
-          WHERE request_id = (
-            SELECT request_id FROM part_requests
-             WHERE part_id = $2 AND status IN ('escalated','ordered') AND instance_id IS NULL
-             ORDER BY created_at ASC LIMIT 1
-          )
-          RETURNING request_id`,
-        [inst.instance_id, partsId]
-      );
-      if (linked.rows.length) {
-        await pool.query(
-          `UPDATE part_instances SET status = 'reserved', updated_at = NOW() WHERE instance_id = $1`,
-          [inst.instance_id]
-        );
-      }
-    }
-  } catch (e) {
-    console.error('syncReceivedPartsToInventory (non-fatal):', e.message);
-  }
+  return instances;
 }
 
 function lineSubtotal(lineItems) {
@@ -790,7 +744,8 @@ async function getSpareProductReceivedContext(req, res) {
 const receiveSpareSerialValidators = [
   param('spoId').isInt().toInt(),
   body('line_index').isInt({ min: 0 }).toInt(),
-  body('serial_number').trim().notEmpty(),
+  // Optional: parts without a manufacturer serial are tracked by their Part ID.
+  body('serial_number').optional({ nullable: true }).trim(),
   body('grn_id').optional({ nullable: true }).isInt().toInt()
 ];
 
@@ -845,6 +800,7 @@ async function receiveSpareLineSerial(req, res) {
   let finalGrnId;
   let serialId;
   let inventoryAssetCode = null;
+  let prtId = null;
   try {
     await client.query('BEGIN');
 
@@ -877,13 +833,25 @@ async function receiveSpareLineSerial(req, res) {
     inventoryAssetCode = assetCode;
     extra.unique_product_serial = assetCode;
     extra.part_asset_code = assetCode;
+    extra.has_physical_serial = Boolean(serial_number);
 
     const insS = await client.query(
       `INSERT INTO vendor_serial_numbers (spo_id, grn_id, serial_number, inventory_asset_code, extra)
        VALUES ($1,$2,$3,$4,$5::jsonb) RETURNING serial_id`,
-      [spoId, finalGrnId, serial_number, inventoryAssetCode, JSON.stringify(extra)]
+      [spoId, finalGrnId, serial_number || inventoryAssetCode, JSON.stringify(extra)]
     );
     serialId = insS.rows[0].serial_id;
+
+    const [instance] = await trackReceivedUnits(client, {
+      line,
+      units: [{ serialId, serialNumber: serial_number || null, assetCode: inventoryAssetCode }],
+      spoId,
+      grnId: finalGrnId,
+      lineIndex,
+      vendorId: spo.vendor_id || null,
+      user: req.user,
+    });
+    prtId = instance?.prt_id || null;
 
     await client.query('COMMIT');
   } catch (e) {
@@ -907,18 +875,7 @@ async function receiveSpareLineSerial(req, res) {
     entityType: 'serial_number',
     entityId: String(serialId),
     action: 'receive_on_spare_po_line',
-    payload: { spo_id: spoId, grn_id: finalGrnId, line_index: lineIndex }
-  });
-
-  // Phase 16: mirror this unit into parts inventory as a PRT instance (best-effort),
-  // carrying the physical serial number so it appears in Parts inventory automatically.
-  await syncReceivedPartsToInventory({
-    line,
-    quantity: 1,
-    spoId,
-    grnId: finalGrnId,
-    receivedBy: req.user?.user_id,
-    serialNumbers: [serial_number],
+    payload: { spo_id: spoId, grn_id: finalGrnId, line_index: lineIndex, prt_id: prtId }
   });
 
   const qtyMaps2 = await buildReceivedQtyMapsForSpoIds([spoId]);
@@ -926,10 +883,16 @@ async function receiveSpareLineSerial(req, res) {
 
   res.status(201).json({
     success: true,
-    message: inventoryAssetCode
-      ? `Spare unit received — ${inventoryAssetCode}`
+    message: prtId
+      ? `Spare unit received — Part ID ${prtId}`
       : 'Serial recorded against this spare PO line.',
-    data: { grn_id: finalGrnId, serial_id: serialId, inventory_asset_code: inventoryAssetCode, lines: lines2 }
+    data: {
+      grn_id: finalGrnId,
+      serial_id: serialId,
+      inventory_asset_code: inventoryAssetCode,
+      prt_id: prtId,
+      lines: lines2
+    }
   });
 }
 
@@ -941,7 +904,6 @@ const receiveSpareLineBulkValidators = [
   body('line_index').isInt({ min: 0 }).toInt(),
   body('quantity').isInt({ min: 1, max: RECEIVE_SPARE_BULK_CAP }).toInt(),
   body('serial_numbers').isArray({ min: 1 }).withMessage('serial_numbers required'),
-  body('serial_numbers.*').trim().notEmpty(),
   body('grn_id').optional({ nullable: true }).isInt().toInt(),
   body().custom((_v, { req }) => {
     const q = Number(req.body.quantity);
@@ -949,9 +911,12 @@ const receiveSpareLineBulkValidators = [
     if (!Array.isArray(arr) || arr.length !== q) {
       throw new Error('serial_numbers must contain exactly quantity entries');
     }
-    const norm = arr.map((s) => String(s || '').trim().toUpperCase());
-    const set = new Set(norm);
-    if (set.size !== norm.length) {
+    // Blanks are allowed: not every spare part carries a manufacturer serial.
+    // Those units are still tracked by their generated Part ID.
+    const present = arr
+      .map((s) => String(s || '').trim().toUpperCase())
+      .filter(Boolean);
+    if (new Set(present).size !== present.length) {
       throw new Error('Duplicate serial numbers in this submission');
     }
     return true;
@@ -971,7 +936,11 @@ async function receiveSpareLineBulk(req, res) {
       ? null
       : Number(req.body.grn_id);
 
-  const serialsNorm = req.body.serial_numbers.map((s) => String(s || '').trim().toUpperCase());
+  // A blank entry means "this part has no serial number" — it still gets a Part ID.
+  const serialsNorm = req.body.serial_numbers.map((s) => {
+    const v = String(s || '').trim().toUpperCase();
+    return v || null;
+  });
 
   const r = await pool.query(
     `SELECT * FROM vendor_spare_parts_purchase_orders WHERE spo_id = $1 AND deleted_at IS NULL`,
@@ -1013,17 +982,20 @@ async function receiveSpareLineBulk(req, res) {
   try {
     await client.query('BEGIN');
 
-    const dup = await client.query(
-      `SELECT serial_number FROM vendor_serial_numbers
-       WHERE deleted_at IS NULL AND LOWER(serial_number) = ANY($1::text[])`,
-      [serialsNorm.map((s) => s.toLowerCase())]
-    );
-    if (dup.rows.length > 0) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({
-        success: false,
-        message: `Serial already exists in inventory: ${dup.rows.map((row) => row.serial_number).join(', ')}`
-      });
+    const providedSerials = serialsNorm.filter(Boolean);
+    if (providedSerials.length) {
+      const dup = await client.query(
+        `SELECT serial_number FROM vendor_serial_numbers
+         WHERE deleted_at IS NULL AND LOWER(serial_number) = ANY($1::text[])`,
+        [providedSerials.map((s) => s.toLowerCase())]
+      );
+      if (dup.rows.length > 0) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          message: `Serial already exists in inventory: ${dup.rows.map((row) => row.serial_number).join(', ')}`
+        });
+      }
     }
 
     if (grnId != null && Number.isFinite(grnId)) {
@@ -1054,12 +1026,17 @@ async function receiveSpareLineBulk(req, res) {
     const assetCodes = await allocatePartAssetCodes(client, partName, quantity);
 
     for (let i = 0; i < quantity; i += 1) {
-      const serial_number = serialsNorm[i];
+      const physicalSerial = serialsNorm[i];
       const inventory_asset_code = assetCodes[i];
+      // vendor_serial_numbers.serial_number is NOT NULL and unique, so a part
+      // with no manufacturer serial is keyed by its asset code there. The
+      // tracked unit records the honest answer: no physical serial.
+      const serial_number = physicalSerial || inventory_asset_code;
       const extra = {
         line_index: lineIndex,
         unique_product_serial: inventory_asset_code,
         part_asset_code: inventory_asset_code,
+        has_physical_serial: Boolean(physicalSerial),
       };
       if (pd != null && String(pd).trim() !== '') extra.part_id = String(pd);
 
@@ -1071,9 +1048,29 @@ async function receiveSpareLineBulk(req, res) {
       createdRows.push({
         serial_id: insS.rows[0].serial_id,
         serial_number,
+        physical_serial: physicalSerial,
         inventory_asset_code
       });
     }
+
+    // Same transaction: every received unit becomes a tracked, labelable Part ID.
+    const instances = await trackReceivedUnits(client, {
+      line,
+      units: createdRows.map((row) => ({
+        serialId: row.serial_id,
+        serialNumber: row.physical_serial,
+        assetCode: row.inventory_asset_code,
+      })),
+      spoId,
+      grnId: finalGrnId,
+      lineIndex,
+      vendorId: spo.vendor_id || null,
+      user: req.user,
+    });
+    instances.forEach((inst, i) => {
+      if (createdRows[i]) createdRows[i].prt_id = inst.prt_id;
+      if (createdRows[i]) createdRows[i].instance_id = inst.instance_id;
+    });
 
     await client.query('COMMIT');
   } catch (e) {
@@ -1102,19 +1099,9 @@ async function receiveSpareLineBulk(req, res) {
       grn_id: finalGrnId,
       line_index: lineIndex,
       qty: quantity,
-      inventory_codes: createdRows.map((x) => x.inventory_asset_code)
+      inventory_codes: createdRows.map((x) => x.inventory_asset_code),
+      part_ids: createdRows.map((x) => x.prt_id).filter(Boolean)
     }
-  });
-
-  // Phase 16: mirror received units into parts inventory as PRT instances (best-effort),
-  // carrying the physical serial numbers so they appear in Parts inventory automatically.
-  await syncReceivedPartsToInventory({
-    line,
-    quantity,
-    spoId,
-    grnId: finalGrnId,
-    receivedBy: req.user?.user_id,
-    serialNumbers: createdRows.map((x) => x.serial_number),
   });
 
   const qtyMapsAfter = await buildReceivedQtyMapsForSpoIds([spoId]);
@@ -1122,7 +1109,7 @@ async function receiveSpareLineBulk(req, res) {
 
   res.status(201).json({
     success: true,
-    message: `${quantity} spare unit(s) received with PRT asset codes.`,
+    message: `${quantity} spare unit(s) received. Part IDs generated — labels ready to print.`,
     data: {
       grn_id: finalGrnId,
       created: createdRows,

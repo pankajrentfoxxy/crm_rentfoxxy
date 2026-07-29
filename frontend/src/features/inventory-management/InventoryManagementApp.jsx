@@ -19,6 +19,7 @@ import UniversalSearchPage from './pages/UniversalSearchPage';
 import NpaAssetsPage from './pages/NpaAssetsPage';
 import PartsPage from './pages/PartsPage';
 import PartsApprovalPage from './pages/PartsApprovalPage';
+import PartsDashboardPage from './pages/PartsDashboardPage';
 import CustomerAssetsPage from './pages/CustomerAssetsPage';
 import PartsMovementHistoryPage from './pages/PartsMovementHistoryPage';
 import TtsplHistorySearchPage from './pages/TtsplHistorySearchPage';
@@ -59,6 +60,7 @@ export default function InventoryManagementApp() {
         <Route path="direct-purchase" element={g('inventory_management', <DirectPurchasePage />)} />
         <Route path="out-for-repare" element={g('inventory_management', <OutForReparePage />)} />
         <Route path="spare-parts" element={g('inventory_management', <SparePartsInventoryPage />)} />
+        <Route path="parts-dashboard" element={g('parts_inventory', <PartsDashboardPage />)} />
         <Route path="parts" element={g('parts_inventory', <PartsPage />)} />
         <Route path="parts-approval" element={g('parts_inventory', <PartsApprovalPage />)} />
         <Route path="parts-history" element={g('parts_inventory', <PartsMovementHistoryPage />)} />

@@ -9,13 +9,19 @@
 const pool = require('../config/db');
 const { generatePrqNumber, generatePrtId } = require('../services/partIdService');
 const { logTtsplEvent, logConfigChange, resolveTtsplAsset } = require('../services/ttsplAuditService');
+const { recordMovement, MOVEMENT } = require('../services/partMovementService');
+const { createReturnedPartInstance, normalizeCategory } = require('../services/partInventoryService');
+const productionAssetService = require('../services/productionAssetService');
 
 const FULL_SELECT = `
   SELECT pr.*,
          COALESCE(pr.part_name, p.part_name) AS part_name,
          p.category, p.part_type, p.cost AS catalog_cost, p.quantity AS stock_qty,
          p.model_number AS catalog_model_number, p.pin_size AS catalog_pin_size,
-         pi.prt_id, pi.serial_number AS instance_serial, pi.location_code, pi.status AS instance_status, pi.unit_cost AS instance_cost,
+         pi.prt_id, pi.serial_number AS instance_serial, pi.asset_code AS instance_asset_code,
+         pi.location_code, pi.status AS instance_status, pi.unit_cost AS instance_cost,
+         op.part_name AS old_part_catalog_name, op.category AS old_part_catalog_category,
+         opi.prt_id AS old_part_prt_id,
          t.ttspl_id, t.brand, t.model, t.processor, t.ram, t.storage,
          t.vendor_serial_id, t.current_stage_id,
          st.stage_name,
@@ -25,6 +31,8 @@ const FULL_SELECT = `
     FROM part_requests pr
     LEFT JOIN parts p              ON p.part_id = pr.part_id
     LEFT JOIN part_instances pi    ON pi.instance_id = pr.instance_id
+    LEFT JOIN parts op             ON op.part_id = pr.old_part_part_id
+    LEFT JOIN part_instances opi   ON opi.instance_id = pr.old_part_instance_id
     LEFT JOIN tickets t            ON t.ticket_id = pr.ticket_id
     LEFT JOIN stages st            ON st.stage_id = COALESCE(pr.ticket_stage_id, t.current_stage_id)
     LEFT JOIN users u              ON u.user_id = pr.requested_by
@@ -57,6 +65,17 @@ async function ensurePartInstanceSerialColumn(db) {
   serialColEnsured = true;
 }
 
+// Request config fields -> the patch key productionAssetService.updateConfig
+// understands. Storage is passed as `storage`; the service maps it to the
+// production_assets `ssd` column and normalizes the value.
+const PA_CONFIG_PATCH = {
+  ram: 'ram',
+  storage: 'storage',
+  processor: 'processor',
+  gpu: 'gpu',
+  display: 'screen_size',
+};
+
 // Statuses that count as physically available stock (feed parts.quantity).
 const IN_STOCK_STATUS = 'in_stock';
 const EDITABLE_INSTANCE_STATUSES = ['in_stock', 'defective', 'discarded'];
@@ -65,6 +84,34 @@ function isBatteryPart(part) {
   const cat = String(part?.category || part?.part_type || '').toLowerCase().trim();
   const name = String(part?.part_name || '').toLowerCase();
   return cat === 'battery' || cat.includes('battery') || name.includes('battery');
+}
+
+/**
+ * The old part coming off a laptop may be a type the catalog does not carry yet
+ * (inventory picks a category and types a name). Resolve it, creating the
+ * catalog row when needed so the defective unit has somewhere to live.
+ */
+async function resolveOldPartCatalogId(client, { partId, category, name }) {
+  if (partId) {
+    const r = await client.query(`SELECT part_id FROM parts WHERE part_id = $1`, [Number(partId)]);
+    if (r.rows.length) return r.rows[0].part_id;
+  }
+  const cleanName = String(name || '').trim();
+  if (!cleanName) return null;
+
+  const existing = await client.query(
+    `SELECT part_id FROM parts WHERE LOWER(part_name) = LOWER($1) LIMIT 1`,
+    [cleanName]
+  );
+  if (existing.rows.length) return existing.rows[0].part_id;
+
+  const cat = normalizeCategory(category);
+  const ins = await client.query(
+    `INSERT INTO parts (part_name, part_type, category, quantity, min_threshold, description)
+     VALUES ($1, $2, $3, 0, 5, $4) RETURNING part_id`,
+    [cleanName, cat, cat, `Created from a defective part returned by the floor`]
+  );
+  return ins.rows[0].part_id;
 }
 
 function normalizeBatteryPhotos(raw) {
@@ -287,12 +334,28 @@ exports.getTicketPartRequests = async (req, res) => {
   }
 };
 
-// PATCH /api/part-requests/:requestId/approve   body: { instance_id } | { auto_select: true }
+// PATCH /api/part-requests/:requestId/approve
+// body: { instance_id } | { prt_id } (scanned QR) | { auto_select: true }
+//       plus the old-part declaration: { old_part_expected, old_part_category,
+//       old_part_part_id, old_part_name }
 exports.approvePartRequest = async (req, res) => {
   const client = await pool.connect();
   try {
     const { requestId } = req.params;
-    const { instance_id, auto_select } = req.body || {};
+    const {
+      instance_id, auto_select, prt_id,
+      old_part_expected, old_part_category, old_part_part_id, old_part_name,
+    } = req.body || {};
+
+    if (old_part_expected && !['yes', 'not_available', 'unknown'].includes(old_part_expected)) {
+      return res.status(400).json({ success: false, message: 'Invalid old_part_expected value' });
+    }
+    if (old_part_expected === 'yes' && !old_part_part_id && !String(old_part_name || '').trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Select the category and part name of the old part being returned',
+      });
+    }
 
     await client.query('BEGIN');
 
@@ -307,6 +370,26 @@ exports.approvePartRequest = async (req, res) => {
     }
 
     let instanceId = instance_id ? Number(instance_id) : null;
+
+    // Scanned QR label (or a typed Part ID / serial) picks the exact unit.
+    if (!instanceId && String(prt_id || '').trim()) {
+      const code = String(prt_id).trim();
+      const scanned = await client.query(
+        `SELECT instance_id, prt_id, part_id, status FROM part_instances
+          WHERE UPPER(prt_id) = UPPER($1)
+             OR UPPER(COALESCE(serial_number, '')) = UPPER($1)
+             OR UPPER(COALESCE(asset_code, '')) = UPPER($1)
+          ORDER BY (UPPER(prt_id) = UPPER($1)) DESC, instance_id DESC
+          LIMIT 1`,
+        [code]
+      );
+      if (!scanned.rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, message: `No part unit found for "${code}"` });
+      }
+      instanceId = scanned.rows[0].instance_id;
+    }
+
     if (!instanceId) {
       if (!auto_select && pr.instance_id) instanceId = pr.instance_id;
     }
@@ -353,24 +436,80 @@ exports.approvePartRequest = async (req, res) => {
     if (!instRes.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ success: false, message: 'Part instance not found' }); }
     const inst = instRes.rows[0];
     if (Number(inst.part_id) !== Number(pr.part_id)) {
+      const names = await client.query(
+        `SELECT part_id, part_name FROM parts WHERE part_id = ANY($1::int[])`,
+        [[Number(inst.part_id), Number(pr.part_id)]]
+      );
+      const nameOf = (id) => names.rows.find((n) => Number(n.part_id) === Number(id))?.part_name || `part ${id}`;
       await client.query('ROLLBACK');
-      return res.status(400).json({ success: false, message: 'Selected part unit does not match the requested part' });
+      return res.status(400).json({
+        success: false,
+        message: `${inst.prt_id} is a "${nameOf(inst.part_id)}" but this request is for "${nameOf(pr.part_id)}"`,
+      });
     }
     if (inst.status !== 'in_stock' && inst.status !== 'reserved') {
       await client.query('ROLLBACK');
-      return res.status(400).json({ success: false, message: `Part unit is '${inst.status}', not available` });
+      return res.status(400).json({ success: false, message: `${inst.prt_id} is '${inst.status}', not available` });
+    }
+
+    // Inventory declares here whether a defective part is coming back off the
+    // laptop; the physical unit is created when the technician hands it over.
+    let oldPartId = null;
+    if (old_part_expected === 'yes') {
+      oldPartId = await resolveOldPartCatalogId(client, {
+        partId: old_part_part_id,
+        category: old_part_category,
+        name: old_part_name,
+      });
+      if (!oldPartId) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: 'Could not resolve the old part — pick a category and part name' });
+      }
     }
 
     await client.query(
       `UPDATE part_instances SET status = 'reserved', updated_at = NOW() WHERE instance_id = $1`, [instanceId]
     );
     await client.query(
-      `UPDATE part_requests SET status = 'approved', instance_id = $1, approved_by = $2, approved_at = NOW(), updated_at = NOW()
+      `UPDATE part_requests
+          SET status = 'approved', instance_id = $1, approved_by = $2, approved_at = NOW(),
+              old_part_expected = COALESCE($4, old_part_expected),
+              old_part_category = $5,
+              old_part_part_id = $6,
+              old_part_name = $7,
+              updated_at = NOW()
         WHERE request_id = $3`,
-      [instanceId, req.user.user_id, requestId]
+      [
+        instanceId, req.user.user_id, requestId,
+        old_part_expected || null,
+        old_part_expected === 'yes' ? normalizeCategory(old_part_category) : null,
+        oldPartId,
+        old_part_expected === 'yes' ? (String(old_part_name || '').trim() || null) : null,
+      ]
     );
 
     const tRes = await client.query(`SELECT ttspl_id, vendor_serial_id FROM tickets WHERE ticket_id = $1`, [pr.ticket_id]);
+
+    const partMeta = await client.query(
+      `SELECT part_name, category FROM parts WHERE part_id = $1`, [pr.part_id]
+    );
+    await recordMovement(client, {
+      type: MOVEMENT.RESERVED,
+      partId: pr.part_id,
+      instanceId,
+      prtId: inst.prt_id,
+      serialNumber: inst.serial_number,
+      category: partMeta.rows[0]?.category,
+      partName: partMeta.rows[0]?.part_name,
+      unitCost: inst.unit_cost,
+      requestId: Number(requestId),
+      ticketId: pr.ticket_id,
+      ttsplId: tRes.rows[0]?.ttspl_id,
+      isUpgrade: pr.request_type === 'upgrade',
+      actorUserId: req.user.user_id,
+      actorName: req.user.name,
+    });
+
     await logTtsplEvent({
       ttsplId: tRes.rows[0]?.ttspl_id,
       vendorSerialId: tRes.rows[0]?.vendor_serial_id,
@@ -381,7 +520,16 @@ exports.approvePartRequest = async (req, res) => {
     });
 
     await client.query('COMMIT');
-    res.json({ success: true, instance_id: instanceId, prt_id: inst.prt_id, serial_number: inst.serial_number, location_code: inst.location_code, message: 'Part approved and reserved' });
+    res.json({
+      success: true,
+      instance_id: instanceId,
+      prt_id: inst.prt_id,
+      serial_number: inst.serial_number,
+      location_code: inst.location_code,
+      old_part_expected: old_part_expected || null,
+      old_part_part_id: oldPartId,
+      message: `${inst.prt_id} reserved for this request`,
+    });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('approvePartRequest:', err);
@@ -407,6 +555,7 @@ exports.rejectPartRequest = async (req, res) => {
     // Free a reserved instance, if any.
     if (pr.instance_id) {
       await client.query(`UPDATE part_instances SET status = 'in_stock', updated_at = NOW() WHERE instance_id = $1 AND status = 'reserved'`, [pr.instance_id]);
+      await recordUnreserved(client, pr, req.user, `Request rejected: ${reason}`);
     }
     await client.query(
       `UPDATE part_requests SET status = 'rejected', rejection_reason = $1, updated_at = NOW() WHERE request_id = $2`,
@@ -504,9 +653,14 @@ exports.markPartReceived = async (req, res) => {
 };
 
 // POST /api/part-requests/:requestId/attach
+// body: { old_part_returned, old_part_condition, old_part_notes,
+//         old_part_part_id?, old_part_category?, old_part_name?, old_part_serial? }
 exports.attachPartAndReturnOld = async (req, res) => {
   const { requestId } = req.params;
-  const { old_part_returned, old_part_condition, old_part_notes } = req.body || {};
+  const {
+    old_part_returned, old_part_condition, old_part_notes,
+    old_part_part_id, old_part_category, old_part_name, old_part_serial,
+  } = req.body || {};
   const client = await pool.connect();
 
   try {
@@ -514,7 +668,7 @@ exports.attachPartAndReturnOld = async (req, res) => {
 
     const reqRes = await client.query(
       `SELECT pr.*, p.part_name, p.cost AS part_cost, p.category,
-              pi.prt_id, pi.unit_cost AS instance_cost,
+              pi.prt_id, pi.serial_number AS instance_serial, pi.unit_cost AS instance_cost,
               t.ttspl_id, t.vendor_serial_id, t.current_stage_id
          FROM part_requests pr
          JOIN parts p ON p.part_id = pr.part_id
@@ -564,39 +718,105 @@ exports.attachPartAndReturnOld = async (req, res) => {
         partUsedId: r.part_id, partCost: unitCost, db: client,
       });
 
-      const fieldMap = { ram: 'ram', storage: 'storage', display: 'screen_size', processor: 'processor', gpu: 'gpu', os: 'os' };
-      const jsonbKey = fieldMap[r.config_field] || r.config_field;
-      if (r.vendor_serial_id) {
-        await client.query(
-          `UPDATE vendor_serial_numbers
-              SET extra = jsonb_set(COALESCE(extra, '{}'::jsonb), $1, $2::jsonb), updated_at = NOW()
-            WHERE serial_id = $3`,
-          [`{${jsonbKey}}`, JSON.stringify(r.new_value), r.vendor_serial_id]
-        );
+      // Prefer the production asset writer: it normalizes RAM and storage to the
+      // same format the rest of the pipeline uses and mirrors the change to the
+      // inventory record, the ticket header and the change log in one place.
+      const paPatch = PA_CONFIG_PATCH[r.config_field];
+      let wroteViaProductionAsset = false;
+      if (paPatch) {
+        const pa = await productionAssetService.getByTicket(client, r.ticket_id);
+        if (pa) {
+          await productionAssetService.updateConfig(
+            client,
+            pa.production_asset_id,
+            { [paPatch]: r.new_value },
+            req.user.user_id,
+            r.stage_name || null
+          );
+          wroteViaProductionAsset = true;
+        }
       }
-      // Mirror core spec fields onto the ticket row so the header updates instantly.
-      if (['ram', 'storage', 'processor'].includes(r.config_field)) {
-        await client.query(
-          `UPDATE tickets SET ${r.config_field} = $1, updated_at = NOW() WHERE ticket_id = $2`,
-          [r.new_value, r.ticket_id]
-        );
+
+      // Laptops that never entered the production pipeline have no asset row;
+      // fall back to writing the inventory record and ticket header directly.
+      if (!wroteViaProductionAsset) {
+        const fieldMap = { ram: 'ram', storage: 'storage', display: 'screen_size', processor: 'processor', gpu: 'gpu', os: 'os' };
+        const jsonbKey = fieldMap[r.config_field] || r.config_field;
+        if (r.vendor_serial_id) {
+          await client.query(
+            `UPDATE vendor_serial_numbers
+                SET extra = jsonb_set(COALESCE(extra, '{}'::jsonb), $1, $2::jsonb), updated_at = NOW()
+              WHERE serial_id = $3`,
+            [`{${jsonbKey}}`, JSON.stringify(r.new_value), r.vendor_serial_id]
+          );
+        }
+        if (['ram', 'storage', 'processor'].includes(r.config_field)) {
+          await client.query(
+            `UPDATE tickets SET ${r.config_field} = $1, updated_at = NOW() WHERE ticket_id = $2`,
+            [r.new_value, r.ticket_id]
+          );
+        }
       }
       configUpdated = true;
+    }
+
+    // The removed part becomes its own tracked unit with its own Part ID, so it
+    // can be labelled, scanned, repaired or written off later. Inventory usually
+    // declared what to expect at approval; the technician can still correct it.
+    let returnedInstance = null;
+    if (old_part_returned) {
+      const returnedPartId = await resolveOldPartCatalogId(client, {
+        partId: old_part_part_id || r.old_part_part_id || r.part_id,
+        category: old_part_category || r.old_part_category || r.category,
+        name: old_part_name || r.old_part_name || r.part_name,
+      });
+      if (returnedPartId) {
+        returnedInstance = await createReturnedPartInstance(client, {
+          partId: returnedPartId,
+          condition: old_part_condition || 'defective',
+          ttsplId: r.ttspl_id,
+          ticketId: r.ticket_id,
+          requestId: Number(requestId),
+          serialNumber: old_part_serial || null,
+          notes: old_part_notes || null,
+          actorUserId: req.user.user_id,
+          actorName: req.user.name,
+        });
+      }
     }
 
     await client.query(
       `UPDATE part_requests SET status = 'attached', attached_by = $1, attached_at = NOW(),
               old_part_returned = $2,
               old_part_returned_at = CASE WHEN $2 THEN NOW() ELSE NULL END,
-              old_part_condition = $3, old_part_notes = $4, updated_at = NOW()
+              old_part_condition = $3, old_part_notes = $4,
+              old_part_instance_id = $6,
+              updated_at = NOW()
         WHERE request_id = $5`,
-      [req.user.user_id, Boolean(old_part_returned), old_part_condition || null, old_part_notes || null, requestId]
+      [
+        req.user.user_id, Boolean(old_part_returned), old_part_condition || null,
+        old_part_notes || null, requestId, returnedInstance?.instance_id || null,
+      ]
     );
 
-    // Reusable old part goes back into stock.
-    if (old_part_returned && old_part_condition === 'good') {
-      await client.query(`UPDATE parts SET quantity = quantity + 1, updated_at = NOW() WHERE part_id = $1`, [r.part_id]);
-    }
+    await recordMovement(client, {
+      type: MOVEMENT.INSTALLED,
+      partId: r.part_id,
+      instanceId: r.instance_id,
+      prtId: r.prt_id,
+      serialNumber: r.instance_serial,
+      category: r.category,
+      partName: r.part_name,
+      quantity: qty,
+      unitCost,
+      requestId: Number(requestId),
+      ticketId: r.ticket_id,
+      ttsplId: r.ttspl_id,
+      isUpgrade,
+      notes: isUpgrade ? `${r.config_field}: ${r.old_value || '—'} → ${r.new_value}` : null,
+      actorUserId: req.user.user_id,
+      actorName: req.user.name,
+    });
 
     await unblockTicket(client, r);
 
@@ -607,12 +827,21 @@ exports.attachPartAndReturnOld = async (req, res) => {
         request_id: Number(requestId), part_id: r.part_id, prt_id: r.prt_id, part_name: r.part_name,
         unit_cost: unitCost, is_upgrade: isUpgrade, config_field: r.config_field,
         old_value: r.old_value, new_value: r.new_value, old_part_returned: Boolean(old_part_returned), old_part_condition,
+        old_part_prt_id: returnedInstance?.prt_id || null,
       },
       actorUserId: req.user.user_id, actorName: req.user.name, db: client,
     });
 
     await client.query('COMMIT');
-    res.json({ success: true, message: 'Part attached successfully', config_updated: configUpdated, ticket_unblocked: Boolean(r.blocks_stage) });
+    res.json({
+      success: true,
+      message: returnedInstance
+        ? `Part attached. Old part logged as ${returnedInstance.prt_id} — print its label.`
+        : 'Part attached successfully',
+      config_updated: configUpdated,
+      ticket_unblocked: Boolean(r.blocks_stage),
+      returned_part: returnedInstance || null,
+    });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('attachPartAndReturnOld:', err);
@@ -642,6 +871,7 @@ exports.cancelPartRequest = async (req, res) => {
     }
     if (pr.instance_id) {
       await client.query(`UPDATE part_instances SET status = 'in_stock', updated_at = NOW() WHERE instance_id = $1 AND status = 'reserved'`, [pr.instance_id]);
+      await recordUnreserved(client, pr, req.user, 'Request cancelled');
     }
     await client.query(`UPDATE part_requests SET status = 'cancelled', updated_at = NOW() WHERE request_id = $1`, [requestId]);
     await unblockTicket(client, pr);
@@ -957,6 +1187,33 @@ exports.updatePartInstance = async (req, res) => {
     client.release();
   }
 };
+
+// Shared: a reserved unit going back to free stock.
+async function recordUnreserved(client, pr, user, notes) {
+  const info = await client.query(
+    `SELECT pi.prt_id, pi.serial_number, pi.unit_cost, p.part_name, p.category
+       FROM part_instances pi JOIN parts p ON p.part_id = pi.part_id
+      WHERE pi.instance_id = $1`,
+    [pr.instance_id]
+  );
+  const row = info.rows[0];
+  if (!row) return;
+  await recordMovement(client, {
+    type: MOVEMENT.UNRESERVED,
+    partId: pr.part_id,
+    instanceId: pr.instance_id,
+    prtId: row.prt_id,
+    serialNumber: row.serial_number,
+    category: row.category,
+    partName: row.part_name,
+    unitCost: row.unit_cost,
+    requestId: pr.request_id,
+    ticketId: pr.ticket_id,
+    notes,
+    actorUserId: user?.user_id,
+    actorName: user?.name,
+  });
+}
 
 // Shared: deactivate the block row and decrement the ticket's open counter.
 async function unblockTicket(client, pr) {

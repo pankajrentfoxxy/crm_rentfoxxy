@@ -58,6 +58,7 @@ export const inventoryAccordionChildren = [
   { label: 'Dead Laptops', path: '/inventory-management/dead-laptops', countKey: 'dead_laptops', section: 'inventory_management' },
   { label: 'Missing Laptops', path: '/inventory-management/missing-laptops', countKey: 'missing_laptops', section: 'inventory_management' },
   { label: 'Asset Movement', path: '/inventory-management/asset-movement', section: 'inventory_asset_movement' },
+  { label: 'Parts Dashboard', path: '/inventory-management/parts-dashboard', section: 'parts_inventory' },
   { label: 'Parts Inventory', path: '/inventory-management/parts', section: 'parts_inventory' },
   { label: 'Parts Movement History', path: '/inventory-management/parts-history', section: 'parts_inventory' },
   { label: 'Parts Approval', path: '/inventory-management/parts-approval', countKey: 'parts_pending', section: 'parts_inventory' },

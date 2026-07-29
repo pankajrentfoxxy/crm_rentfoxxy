@@ -2,6 +2,12 @@ const express = require('express');
 const router = express.Router();
 const { getAllParts, createPart, updatePartQuantity, updatePart, getPartUsage } = require('../controllers/partController');
 const { getPartsGrouped } = require('../controllers/partsDropdownController');
+const {
+  lookupPartUnit, searchPartUnits, getUnitQrPng, printPartLabels,
+} = require('../controllers/partUnitController');
+const {
+  getPartsDashboard, getPartsDashboardDrilldown,
+} = require('../controllers/partsDashboardController');
 const { authMiddleware, checkSectionPermission, checkAnySectionPermission } = require('../middleware/auth');
 const { SUPPORT_PARTS_CATALOG_SECTIONS } = require('../middleware/supportAccess');
 const cp = checkSectionPermission;
@@ -21,6 +27,17 @@ const partsCatalogView = checkAnySectionPermission(
   ],
   'view'
 );
+
+// Physical units: scanning a QR label and reprinting labels. Registered before
+// the `/:id` routes so "units" is never read as a part id.
+router.get('/units/lookup', partsCatalogView, lookupPartUnit);
+router.get('/units', partsCatalogView, searchPartUnits);
+router.get('/units/:code/qr.png', partsCatalogView, getUnitQrPng);
+router.post('/labels/print', partsCatalogView, printPartLabels);
+
+// Parts tracking dashboard.
+router.get('/dashboard', cp('parts_inventory', 'view'), getPartsDashboard);
+router.get('/dashboard/drilldown', cp('parts_inventory', 'view'), getPartsDashboardDrilldown);
 
 // @route   GET /api/parts
 // @desc    Get / search parts by part_name (?search=)

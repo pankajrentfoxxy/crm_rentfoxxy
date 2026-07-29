@@ -16,10 +16,13 @@ import {
   Package,
   Phone,
   Plus,
+  Printer,
   UserCircle,
   X
 } from 'lucide-react';
 import { invalidateInventoryManagement } from '../../inventory-management/inventoryCountsEvents';
+import PartLabelPrintModal from '../../inventory-management/components/PartLabelPrintModal';
+import ScanField from '../../../components/ScanField';
 import { createSpareGrn, fetchSpareProductReceivedContext, receiveSpareLineBulk } from '../vendorManagementApi';
 
 function statsFromLines(lines) {
@@ -117,6 +120,9 @@ export default function SparePartsProductReceivedPage() {
   const [receiveStep, setReceiveStep] = useState('qty');
   const [bulkQtyStr, setBulkQtyStr] = useState('');
   const [bulkSerials, setBulkSerials] = useState([]);
+  const [noSerialFlags, setNoSerialFlags] = useState([]);
+  const [createdUnits, setCreatedUnits] = useState([]);
+  const [labelModalOpen, setLabelModalOpen] = useState(false);
   const [modalBusy, setModalBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -160,6 +166,8 @@ export default function SparePartsProductReceivedPage() {
     setReceiveStep('qty');
     setBulkQtyStr('');
     setBulkSerials([]);
+    setNoSerialFlags([]);
+    setCreatedUnits([]);
   }
 
   useEffect(() => {
@@ -197,6 +205,8 @@ export default function SparePartsProductReceivedPage() {
     setReceiveStep('qty');
     setBulkQtyStr('');
     setBulkSerials([]);
+    setNoSerialFlags([]);
+    setCreatedUnits([]);
   }
 
   function gotoSerialInputs() {
@@ -216,6 +226,7 @@ export default function SparePartsProductReceivedPage() {
       return;
     }
     setBulkSerials(Array.from({ length: q }, () => ''));
+    setNoSerialFlags(Array.from({ length: q }, () => false));
     setReceiveStep('serials');
   }
 
@@ -227,17 +238,41 @@ export default function SparePartsProductReceivedPage() {
     });
   }
 
+  function toggleNoSerialAt(i) {
+    setNoSerialFlags((prev) => {
+      const next = [...prev];
+      next[i] = !next[i];
+      return next;
+    });
+    setBulkSerials((prev) => {
+      const next = [...prev];
+      if (!noSerialFlags[i]) next[i] = '';
+      return next;
+    });
+  }
+
+  /** Move focus to the next unit so a whole batch can be scanned without the mouse. */
+  function focusNextSerial(i) {
+    const el = document.getElementById(`spare-receive-serial-${i + 1}`);
+    if (el) el.focus();
+  }
+
+  const serialsReady =
+    bulkSerials.length > 0 &&
+    bulkSerials.every((s, i) => noSerialFlags[i] || String(s ?? '').trim());
+
   async function submitBulkReceive() {
     if (receiveLineIndex === null) return;
     const q = bulkSerials.length;
-    const trimmed = bulkSerials.map((s) => String(s ?? '').trim().toUpperCase());
-    const emptyIdx = trimmed.findIndex((s) => !s);
-    if (emptyIdx >= 0) {
-      toast.error(`Enter serial number for row ${emptyIdx + 1}`);
+    // A blank entry is allowed only when the unit is marked as having no serial.
+    const values = bulkSerials.map((s, i) => (noSerialFlags[i] ? '' : String(s ?? '').trim().toUpperCase()));
+    const missingIdx = values.findIndex((s, i) => !s && !noSerialFlags[i]);
+    if (missingIdx >= 0) {
+      toast.error(`Scan a serial for unit ${missingIdx + 1}, or tick "no serial on this part"`);
       return;
     }
-    const uniq = new Set(trimmed);
-    if (uniq.size !== trimmed.length) {
+    const present = values.filter(Boolean);
+    if (new Set(present).size !== present.length) {
       toast.error('Serial numbers must be unique within this batch');
       return;
     }
@@ -247,18 +282,15 @@ export default function SparePartsProductReceivedPage() {
       const body = {
         line_index: receiveLineIndex,
         quantity: q,
-        serial_numbers: trimmed
+        serial_numbers: values
       };
       if (grnChoice) body.grn_id = Number(grnChoice);
       const { data } = await receiveSpareLineBulk(spoId, body);
       if (data.success) {
         const created = data.data?.created || [];
-        const example = created[0]?.inventory_asset_code;
-        toast.success(
-          data.message ||
-            (example ? `Received ${created.length} unit(s). Codes include ${example}…` : 'Units received')
-        );
-        resetReceiveWizardUi();
+        setCreatedUnits(created);
+        setReceiveStep('labels');
+        toast.success(data.message || `Received ${created.length} unit(s)`);
         invalidateInventoryManagement();
         await load();
       }
@@ -271,6 +303,16 @@ export default function SparePartsProductReceivedPage() {
       setModalBusy(false);
     }
   }
+
+  const activeLine = receiveLineIndex !== null ? lines[receiveLineIndex] : null;
+  const labelUnits = createdUnits
+    .filter((u) => u.prt_id)
+    .map((u) => ({
+      code: u.prt_id,
+      title: [activeLine?.brand_name, activeLine?.spare_part_name || activeLine?.part_name || activeLine?.name]
+        .filter(Boolean).join(' — '),
+      subtitle: u.physical_serial ? `Serial ${u.physical_serial}` : 'No serial on this part',
+    }));
 
   const viewGrnHref = `/vendor-management/spare-parts-po/${encodeURIComponent(spoId || '')}/grn-detail`;
 
@@ -618,10 +660,14 @@ export default function SparePartsProductReceivedPage() {
             <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100 bg-slate-50">
               <div>
                 <p className="text-[11px] font-semibold text-teal-700 uppercase tracking-wide">
-                  Step {receiveStep === 'qty' ? '1' : '2'} of 2
+                  Step {receiveStep === 'qty' ? '1' : receiveStep === 'serials' ? '2' : '3'} of 3
                 </p>
                 <h2 id="spare-receive-modal-title" className="text-base font-semibold text-slate-900">
-                  {receiveStep === 'qty' ? 'Receive — quantity' : 'Enter serial numbers'}
+                  {receiveStep === 'qty'
+                    ? 'Receive — quantity'
+                    : receiveStep === 'serials'
+                      ? 'Scan each unit'
+                      : 'Print QR labels'}
                 </h2>
               </div>
               <button
@@ -667,40 +713,80 @@ export default function SparePartsProductReceivedPage() {
                     onChange={(e) => setBulkQtyStr(e.target.value)}
                   />
                   <p className="text-[11px] text-slate-500 mt-1.5">
-                    Each spare unit receives a permanent <strong className="font-mono text-slate-700">TTSPL####</strong>{' '}
-                    inventory code from the server. Enter one physical serial per row on the next step (
-                    <code className="text-[10px]">extra.line_index</code> + part id when present).
+                    Every unit gets its own permanent Part ID and a QR label you can print on the next
+                    steps. Scan the serial off each part where it has one — parts without a serial are
+                    still tracked by their Part ID.
                   </p>
                 </div>
-              ) : (
+              ) : receiveStep === 'serials' ? (
                 <div className="space-y-3">
                   <div
                     className="max-h-[min(26rem,calc(100vh-20rem))] overflow-y-auto pr-1 space-y-3 rounded-lg border border-slate-100 p-3 bg-slate-50/40"
                   >
                     {bulkSerials.map((val, si) => (
-                      <div key={si}>
+                      <div key={si} className="rounded-lg bg-white border border-slate-100 p-2.5">
                         <label
-                          className="block text-xs font-semibold text-slate-600 mb-1"
+                          className="block text-xs font-semibold text-slate-600 mb-1.5"
                           htmlFor={`spare-receive-serial-${si}`}
                         >
-                          Unit {si + 1} — serial number <span className="text-rose-600">*</span>
+                          Unit {si + 1} — serial number
                         </label>
-                        <input
+                        <ScanField
                           id={`spare-receive-serial-${si}`}
-                          type="text"
-                          autoComplete="off"
-                          className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-teal-500 focus:border-teal-500 outline-none disabled:opacity-50"
-                          placeholder="Manual serial"
                           value={val}
-                          disabled={modalBusy}
-                          onChange={(e) => updateBulkSerialAt(si, e.target.value)}
+                          disabled={modalBusy || noSerialFlags[si]}
+                          autoFocus={si === 0}
+                          placeholder={noSerialFlags[si] ? 'No serial — Part ID only' : 'Scan or type the serial'}
+                          aria-label={`Serial number for unit ${si + 1}`}
+                          onChange={(v) => updateBulkSerialAt(si, v)}
+                          onScan={() => focusNextSerial(si)}
                         />
+                        <label className="mt-1.5 inline-flex items-center gap-2 text-[11px] text-slate-600 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="rounded border-slate-300"
+                            checked={Boolean(noSerialFlags[si])}
+                            disabled={modalBusy}
+                            onChange={() => toggleNoSerialAt(si)}
+                          />
+                          This part has no serial number
+                        </label>
                       </div>
                     ))}
                   </div>
                   <p className="text-[11px] text-slate-500 m-0">
-                    Duplicates in this batch are not allowed; serials already in inventory are rejected.
+                    Scanning jumps to the next unit. Duplicates in this batch are not allowed, and serials
+                    already in inventory are rejected.
                   </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 flex items-start gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
+                    <p className="text-xs text-emerald-900 m-0">
+                      {createdUnits.length} unit{createdUnits.length === 1 ? '' : 's'} received and added to
+                      parts inventory. Print two labels per part so a damaged sticker does not lose the unit.
+                    </p>
+                  </div>
+                  <div className="max-h-56 overflow-y-auto rounded-lg border border-slate-100 divide-y divide-slate-100">
+                    {createdUnits.map((u) => (
+                      <div key={u.serial_id} className="flex items-center justify-between gap-3 px-3 py-2">
+                        <span className="font-mono text-xs font-semibold text-slate-900">{u.prt_id || '—'}</span>
+                        <span className="text-[11px] text-slate-500 truncate">
+                          {u.physical_serial ? `Serial ${u.physical_serial}` : 'No serial'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    disabled={!labelUnits.length}
+                    onClick={() => setLabelModalOpen(true)}
+                    className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold disabled:opacity-40"
+                  >
+                    <Printer className="w-4 h-4" />
+                    Print QR labels
+                  </button>
                 </div>
               )}
 
@@ -726,7 +812,7 @@ export default function SparePartsProductReceivedPage() {
                     className="px-4 py-2 rounded-lg border border-slate-200 text-slate-700 text-sm font-semibold hover:bg-slate-50"
                     onClick={() => resetReceiveWizardUi()}
                   >
-                    Cancel
+                    {receiveStep === 'labels' ? 'Done' : 'Cancel'}
                   </button>
                   {receiveStep === 'qty' ? (
                     <button
@@ -738,25 +824,30 @@ export default function SparePartsProductReceivedPage() {
                       Next
                       <ArrowRight className="w-4 h-4" />
                     </button>
-                  ) : (
+                  ) : receiveStep === 'serials' ? (
                     <button
                       type="button"
-                      disabled={
-                        modalBusy || bulkSerials.length === 0 || bulkSerials.some((s) => !String(s ?? '').trim())
-                      }
+                      disabled={modalBusy || !serialsReady}
                       onClick={() => submitBulkReceive()}
                       className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold disabled:opacity-40"
                     >
                       {modalBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
                       Receive {bulkSerials.length || ''} unit(s)
                     </button>
-                  )}
+                  ) : null}
                 </div>
               </div>
             </div>
           </div>
         </div>
       ) : null}
+
+      <PartLabelPrintModal
+        open={labelModalOpen}
+        units={labelUnits}
+        onClose={() => setLabelModalOpen(false)}
+        title="Print QR labels for received parts"
+      />
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Check, X, ArrowUpRight, ShoppingCart, RefreshCw, Package, Search } from 'lucide-react';
+import { X, ArrowUpRight, ShoppingCart, RefreshCw, Package, Search, QrCode } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
   getWarehouseQueue,
@@ -8,7 +8,7 @@ import {
   rejectPartRequest,
   escalatePartRequest,
 } from '../../floor-pipeline/partRequestsApi';
-import SelectPartSerialModal from '../../floor-pipeline/components/SelectPartSerialModal';
+import ApprovePartRequestModal from '../components/ApprovePartRequestModal';
 
 const TABS = [
   { id: 'pending', label: 'Pending Approval', statuses: ['pending'] },
@@ -77,13 +77,15 @@ export default function PartsApprovalPage() {
   const tabCount = (id) =>
     requests.filter((r) => TABS.find((t) => t.id === id)?.statuses.includes(r.status)).length;
 
-  const confirmApprove = async (instanceId) => {
+  const confirmApprove = async (payload) => {
     if (!serialModal) return;
     setBusy(true);
     try {
-      const body = instanceId ? { instance_id: instanceId } : { auto_select: true };
+      const body = payload.instance_id
+        ? { ...payload }
+        : { ...payload, auto_select: true };
       const { data } = await approvePartRequest(serialModal.request_id, body);
-      toast.success(`Approved — ${data.serial_number || data.prt_id || 'unit assigned'}`);
+      toast.success(data.message || `Approved — ${data.prt_id || 'unit assigned'}`);
       setSerialModal(null);
       load();
     } catch (e) {
@@ -288,7 +290,21 @@ export default function PartsApprovalPage() {
                   {req.location_code && (
                     <span className="text-xs text-gray-400">📍 {req.location_code}</span>
                   )}
+                  {req.prt_id && (
+                    <span className="font-mono text-xs text-teal-700 bg-teal-50 border border-teal-100 px-2 py-0.5 rounded">
+                      {req.prt_id}
+                    </span>
+                  )}
                 </div>
+
+                {req.old_part_expected && (
+                  <p className="mt-2 text-xs text-gray-500">
+                    {req.old_part_expected === 'yes'
+                      ? `Old part expected back: ${req.old_part_catalog_name || req.old_part_name || 'part'}`
+                      : 'No old part on this laptop'}
+                    {req.old_part_prt_id ? ` · returned as ${req.old_part_prt_id}` : ''}
+                  </p>
+                )}
 
                 <div className="mt-3 pt-3 border-t flex flex-wrap gap-2">
                   {req.status === 'pending' && (
@@ -299,8 +315,8 @@ export default function PartsApprovalPage() {
                         onClick={() => setSerialModal(req)}
                         className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-green-600 text-white text-sm font-semibold disabled:opacity-50 hover:bg-green-700"
                       >
-                        <Check className="w-4 h-4" />
-                        {outOfStock ? 'Cannot approve (out of stock)' : 'Approve'}
+                        <QrCode className="w-4 h-4" />
+                        {outOfStock ? 'Cannot approve (out of stock)' : 'Scan & Approve'}
                       </button>
 
                       <button
@@ -368,11 +384,9 @@ export default function PartsApprovalPage() {
         />
       )}
 
-      <SelectPartSerialModal
+      <ApprovePartRequestModal
         open={!!serialModal}
-        partId={serialModal?.part_id}
-        partName={serialModal?.part_name}
-        requestLabel={serialModal?.request_number}
+        request={serialModal}
         busy={busy}
         onClose={() => setSerialModal(null)}
         onConfirm={confirmApprove}

@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { addPartWithConfig, searchParts } from '../floorPipelineApi';
 import { createPartRequest, attachPartToRequest, cancelPartRequest, uploadPartRequestPhotos } from '../partRequestsApi';
 import { getBackendOrigin } from '../../../utils/api';
+import { PART_CATEGORIES } from '../../../constants/laptopConditions';
 
 const CONFIG_FIELDS = ['RAM', 'Storage', 'Processor', 'GPU', 'Screen', 'OS', 'Other'];
 const STATUS_ORDER = ['pending', 'escalated', 'ordered', 'received', 'approved', 'attached'];
@@ -44,17 +45,28 @@ function StatusBadge({ status }) {
 }
 
 function AttachPartModal({ request, onAttached, onClose }) {
-  const [oldPartReturned, setOldPartReturned] = useState(true);
+  // Inventory declared at approval whether this laptop even has an old part.
+  const noOldPartExpected = request.old_part_expected === 'not_available';
+  const [oldPartReturned, setOldPartReturned] = useState(!noOldPartExpected);
   const [oldPartCondition, setOldPartCondition] = useState('defective');
+  const [oldPartCategory, setOldPartCategory] = useState(
+    request.old_part_category || request.old_part_catalog_category || request.category || ''
+  );
+  const [oldPartName, setOldPartName] = useState(
+    request.old_part_catalog_name || request.old_part_name || request.part_name || ''
+  );
+  const [oldPartSerial, setOldPartSerial] = useState('');
   const [oldPartNotes, setOldPartNotes] = useState('');
   const [saving, setSaving] = useState(false);
 
+  const canConfirm = noOldPartExpected || oldPartReturned;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
-      <div className="bg-white rounded-xl w-full max-w-sm p-5 shadow-xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 overflow-y-auto">
+      <div className="bg-white rounded-xl w-full max-w-sm p-5 shadow-xl my-8">
         <h3 className="font-semibold mb-1">Attach Part: {request.part_name}</h3>
         {request.prt_id && (
-          <p className="font-mono text-xs text-blue-700 mb-3">PRT-ID: {request.prt_id}</p>
+          <p className="font-mono text-xs text-blue-700 mb-3">Part ID: {request.prt_id}</p>
         )}
 
         {request.request_type === 'upgrade' && (
@@ -66,31 +78,84 @@ function AttachPartModal({ request, onAttached, onClose }) {
           </div>
         )}
 
+        {noOldPartExpected ? (
+          <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-3 text-xs text-slate-700">
+            Inventory recorded that this laptop has no old part to return. Tick the box below if one
+            does come out after all.
+          </div>
+        ) : null}
+
         <div className="space-y-3 mb-4">
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={oldPartReturned} onChange={(e) => setOldPartReturned(e.target.checked)} />
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={oldPartReturned}
+              onChange={(e) => setOldPartReturned(e.target.checked)}
+            />
             <span>I am returning the {request.request_type === 'replacement' ? 'defective part' : 'old part'} to warehouse</span>
           </label>
 
           {oldPartReturned && (
             <>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs font-medium text-gray-600 block mb-1">Category</label>
+                  <select
+                    value={oldPartCategory}
+                    onChange={(e) => setOldPartCategory(e.target.value)}
+                    className="w-full border rounded-lg px-2 py-2 text-sm"
+                  >
+                    <option value="">Select…</option>
+                    {PART_CATEGORIES.map((c) => (
+                      <option key={c.value} value={c.value}>{c.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-gray-600 block mb-1">Condition</label>
+                  <select
+                    value={oldPartCondition}
+                    onChange={(e) => setOldPartCondition(e.target.value)}
+                    className="w-full border rounded-lg px-2 py-2 text-sm"
+                  >
+                    <option value="defective">Defective</option>
+                    <option value="worn">Worn</option>
+                    <option value="good">Good (reusable)</option>
+                  </select>
+                </div>
+              </div>
               <div>
-                <label className="text-xs font-medium text-gray-600 block mb-1">Old part condition</label>
-                <select value={oldPartCondition} onChange={(e) => setOldPartCondition(e.target.value)}
-                  className="w-full border rounded-lg px-3 py-2 text-sm">
-                  <option value="defective">Defective (cannot reuse)</option>
-                  <option value="worn">Worn (may still work)</option>
-                  <option value="good">Good (reusable)</option>
-                </select>
+                <label className="text-xs font-medium text-gray-600 block mb-1">Part name</label>
+                <input
+                  value={oldPartName}
+                  onChange={(e) => setOldPartName(e.target.value)}
+                  placeholder="e.g. Samsung 8GB DDR4"
+                  className="w-full border rounded-lg px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-600 block mb-1">
+                  Old part serial <span className="text-gray-400">(optional)</span>
+                </label>
+                <input
+                  value={oldPartSerial}
+                  onChange={(e) => setOldPartSerial(e.target.value)}
+                  placeholder="If the old part has one"
+                  className="w-full border rounded-lg px-3 py-2 text-sm font-mono"
+                />
               </div>
               <textarea value={oldPartNotes} onChange={(e) => setOldPartNotes(e.target.value)} rows={2}
                 placeholder="Notes about the old part (optional)"
                 className="w-full border rounded-lg px-3 py-2 text-sm" />
+              <p className="text-[11px] text-gray-500 m-0">
+                The old part gets its own Part ID and QR label so it can be tracked, repaired or written off.
+              </p>
             </>
           )}
         </div>
 
-        {!oldPartReturned && (
+        {!canConfirm && (
           <div className="bg-amber-50 border border-amber-100 rounded-lg p-2 mb-3 text-xs text-amber-800">
             You must return the old/defective part to warehouse. Ticket will not be unblocked until this is done.
           </div>
@@ -98,16 +163,19 @@ function AttachPartModal({ request, onAttached, onClose }) {
 
         <div className="flex gap-2">
           <button type="button" onClick={onClose} className="flex-1 py-2 border rounded-lg text-sm">Cancel</button>
-          <button type="button" disabled={saving || !oldPartReturned}
+          <button type="button" disabled={saving || !canConfirm}
             onClick={async () => {
               setSaving(true);
               try {
-                await attachPartToRequest(request.request_id, {
+                const { data } = await attachPartToRequest(request.request_id, {
                   old_part_returned: oldPartReturned,
                   old_part_condition: oldPartCondition,
                   old_part_notes: oldPartNotes,
+                  old_part_category: oldPartCategory || undefined,
+                  old_part_name: oldPartName || undefined,
+                  old_part_serial: oldPartSerial || undefined,
                 });
-                toast.success('Part attached! Ticket unblocked.');
+                toast.success(data?.message || 'Part attached! Ticket unblocked.');
                 onAttached();
                 onClose();
               } catch (e) {
