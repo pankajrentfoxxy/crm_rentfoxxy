@@ -22,6 +22,7 @@ router.get('/support-stats', authMiddleware, reportsView, reportsController.getS
 router.get('/support-daily-summary', authMiddleware, reportsView, reportsController.getSupportDailySummary);
 router.get('/support-daily-summary/filters', authMiddleware, reportsView, reportsController.getSupportSummaryFilters);
 router.get('/inward-outward-summary', authMiddleware, reportsView, reportsController.getInwardOutwardSummary);
+router.get('/inward-outward-summary/details', authMiddleware, reportsView, reportsController.getInwardOutwardDetails);
 router.get('/inward-outward-summary/filters', authMiddleware, reportsView, reportsController.getInwardOutwardFilters);
 
 module.exports = router;

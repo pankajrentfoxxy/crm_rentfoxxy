@@ -171,6 +171,219 @@ async function getInwardOutwardSummary({
   };
 }
 
+const DETAIL_LIMIT = 5000;
+
+/**
+ * Detailed rows behind a summary count. `type` selects the movement bucket:
+ *   inward_vendor | inward_customer | inward_direct | inward_total
+ *   outward_customer | outward_vendor | outward_total
+ * Each row: { ttspl, serial_number, brand, model, processor, generation, ram,
+ *             storage, config_text, party_type, party_name, movement_date }.
+ * TTSPL + configuration are resolved from the inventory master by serial, with
+ * source-specific fallbacks. Filter/zeroing rules mirror getInwardOutwardSummary
+ * so the detail list length matches the card count.
+ */
+async function getInwardOutwardDetails({
+  type = 'inward_total',
+  from = null, to = null, entity = '', branch = '', vendor = '', customer = '', courier = '', user = '',
+} = {}) {
+  const hasVendor = Boolean(vendor);
+  const hasCustomer = Boolean(customer);
+  const hasCourier = Boolean(courier);
+  const hasUser = Boolean(user);
+  const hasEntity = Boolean(entity);
+
+  const rows = async (sql, params) => (await pool.query(sql, params)).rows;
+
+  const vendorInwardRows = async () => {
+    if (hasCustomer || hasCourier || hasUser) return [];
+    const params = [];
+    let sql = `SELECT
+        COALESCE(NULLIF(vsn.inventory_asset_code, ''), inv.machine_number) AS ttspl,
+        vsn.serial_number AS serial_number,
+        COALESCE(inv.brand, vsn.extra->>'brand') AS brand,
+        COALESCE(inv.model, vsn.extra->>'model') AS model,
+        COALESCE(inv.processor, vsn.extra->>'processor') AS processor,
+        COALESCE(inv.generation, vsn.extra->>'generation') AS generation,
+        COALESCE(inv.ram, vsn.extra->>'ram') AS ram,
+        COALESCE(inv.storage, vsn.extra->>'storage', vsn.extra->>'ssd') AS storage,
+        NULL::text AS config_text,
+        'vendor' AS party_type,
+        ven.business_name AS party_name,
+        vsn.created_at AS movement_date
+      FROM vendor_serial_numbers vsn
+      JOIN vendor_purchase_orders po ON po.po_id = vsn.po_id
+      LEFT JOIN vendors ven ON ven.vendor_id = po.vendor_id
+      LEFT JOIN inventory inv ON LOWER(inv.serial_number) = LOWER(vsn.serial_number)
+      WHERE vsn.deleted_at IS NULL AND vsn.spo_id IS NULL`;
+    sql += dateClause('vsn.created_at', from, to, params);
+    sql += eqNum('po.vendor_id', vendor, params);
+    sql += eqText('vsn.current_entity', entity, params);
+    sql += ` ORDER BY vsn.created_at DESC LIMIT ${DETAIL_LIMIT}`;
+    return rows(sql, params);
+  };
+
+  const customerInwardRows = async () => {
+    if (hasVendor || hasEntity) return [];
+    const params = [];
+    let sql = `SELECT
+        inv.machine_number AS ttspl,
+        i.serial_number AS serial_number,
+        COALESCE(i.brand, inv.brand) AS brand,
+        COALESCE(i.model, inv.model) AS model,
+        inv.processor AS processor,
+        COALESCE(i.generation, inv.generation) AS generation,
+        COALESCE(i.ram, inv.ram) AS ram,
+        COALESCE(i.storage, inv.storage) AS storage,
+        NULL::text AS config_text,
+        'customer' AS party_type,
+        t.customer_name AS party_name,
+        i.warehouse_received_at AS movement_date
+      FROM support_ticket_items i
+      JOIN support_tickets t ON t.id = i.ticket_id
+      LEFT JOIN inventory inv ON LOWER(inv.serial_number) = LOWER(i.serial_number)
+      WHERE i.item_type = 'pickup' AND i.warehouse_received_at IS NOT NULL`;
+    sql += dateClause('i.warehouse_received_at', from, to, params);
+    sql += eqNum('t.customer_id', customer, params);
+    sql += ilike('i.pickup_courier_name', courier, params);
+    sql += eqNum('i.warehouse_received_by', user, params);
+    sql += ` ORDER BY i.warehouse_received_at DESC LIMIT ${DETAIL_LIMIT}`;
+    return rows(sql, params);
+  };
+
+  const directInwardRows = async () => {
+    if (hasEntity) return [];
+    const params = [];
+    let sql = `SELECT
+        COALESCE(inv.machine_number, io.unique_number) AS ttspl,
+        io.serial_number AS serial_number,
+        inv.brand AS brand,
+        inv.model AS model,
+        inv.processor AS processor,
+        inv.generation AS generation,
+        inv.ram AS ram,
+        inv.storage AS storage,
+        NULLIF(io.purpose, '') AS config_text,
+        CASE WHEN io.customer_id IS NOT NULL THEN 'customer'
+             WHEN io.vendor_id IS NOT NULL THEN 'vendor'
+             ELSE 'direct' END AS party_type,
+        COALESCE(cust.name, ven.business_name, NULLIF(io.found_in, '')) AS party_name,
+        io.created_at AS movement_date
+      FROM inward_outward io
+      LEFT JOIN inventory inv ON LOWER(inv.serial_number) = LOWER(io.serial_number)
+      LEFT JOIN customers cust ON cust.customer_id = io.customer_id
+      LEFT JOIN vendors ven ON ven.vendor_id = io.vendor_id
+      WHERE io.io_type ILIKE 'inward%'`;
+    sql += dateClause('io.created_at', from, to, params);
+    sql += eqNum('io.vendor_id', vendor, params);
+    sql += eqNum('io.customer_id', customer, params);
+    sql += ilike('io.courier_name', courier, params);
+    sql += eqNum('io.technician_id', user, params);
+    sql += ` ORDER BY io.created_at DESC LIMIT ${DETAIL_LIMIT}`;
+    return rows(sql, params);
+  };
+
+  const customerOutwardRows = async () => {
+    if (hasVendor) return [];
+    const params = [];
+    // DC line serials are sometimes stored pipe-joined as "<id>|<serial>|<TTSPL>".
+    // Extract a clean serial + TTSPL token so we can resolve config from inventory.
+    let sql = `SELECT
+        COALESCE(inv.machine_number, ser.ttspl_raw, ser.serial_clean) AS ttspl,
+        COALESCE(inv.serial_number, ser.serial_clean) AS serial_number,
+        COALESCE(inv.brand, d.brand) AS brand,
+        COALESCE(inv.model, d.model_name) AS model,
+        inv.processor AS processor,
+        inv.generation AS generation,
+        inv.ram AS ram,
+        inv.storage AS storage,
+        NULL::text AS config_text,
+        'customer' AS party_type,
+        d.customer_name AS party_name,
+        d.dispatched_at AS movement_date
+      FROM delivery_challan_lines d
+      LEFT JOIN LATERAL (
+        SELECT
+          CASE WHEN elem LIKE '%|%' THEN split_part(elem, '|', 2) ELSE elem END AS serial_clean,
+          (regexp_match(elem, 'TTSPL[0-9]+', 'i'))[1] AS ttspl_raw
+        FROM jsonb_array_elements_text(
+          CASE WHEN jsonb_typeof(d.serial_number) = 'array' THEN d.serial_number ELSE '[]'::jsonb END
+        ) elem
+      ) ser ON true
+      LEFT JOIN inventory inv
+        ON LOWER(inv.serial_number) = LOWER(ser.serial_clean)
+        OR (ser.ttspl_raw IS NOT NULL AND UPPER(inv.machine_number) = UPPER(ser.ttspl_raw))
+      WHERE COALESCE(d.movement_type, 'outbound') = 'outbound'
+        AND d.dispatched_at IS NOT NULL`;
+    sql += dateClause('d.dispatched_at', from, to, params);
+    sql += eqText('d.entity_code', entity, params);
+    sql += eqText('d.branch', branch, params);
+    sql += eqNum('d.customer_id', customer, params);
+    sql += ilike('d.courier_name', courier, params);
+    sql += eqNum('d.created_by', user, params);
+    sql += ` ORDER BY d.dispatched_at DESC LIMIT ${DETAIL_LIMIT}`;
+    return rows(sql, params);
+  };
+
+  const vendorOutwardRows = async () => {
+    if (hasCustomer || hasEntity) return [];
+    const params = [];
+    let sql = `SELECT
+        COALESCE(NULLIF(it.ttspl_id, ''), inv.machine_number) AS ttspl,
+        it.serial_number AS serial_number,
+        inv.brand AS brand,
+        inv.model AS model,
+        inv.processor AS processor,
+        inv.generation AS generation,
+        inv.ram AS ram,
+        inv.storage AS storage,
+        NULLIF(it.configuration, '') AS config_text,
+        'vendor' AS party_type,
+        COALESCE(h.vendor_name, ven.business_name) AS party_name,
+        h.dispatched_at AS movement_date
+      FROM vendor_repair_dc_items it
+      JOIN vendor_repair_delivery_challans h ON h.dc_number = it.dc_number
+      LEFT JOIN vendors ven ON ven.vendor_id = h.vendor_id
+      LEFT JOIN inventory inv ON LOWER(inv.serial_number) = LOWER(it.serial_number)
+      WHERE h.dispatched_at IS NOT NULL`;
+    sql += dateClause('h.dispatched_at', from, to, params);
+    sql += eqNum('h.vendor_id', vendor, params);
+    sql += ilike('h.courier_name', courier, params);
+    sql += eqNum('h.created_by', user, params);
+    sql += ` ORDER BY h.dispatched_at DESC LIMIT ${DETAIL_LIMIT}`;
+    return rows(sql, params);
+  };
+
+  const byDateDesc = (list) => list.sort((a, b) => {
+    const da = a.movement_date ? new Date(a.movement_date).getTime() : 0;
+    const db = b.movement_date ? new Date(b.movement_date).getTime() : 0;
+    return db - da;
+  });
+
+  switch (type) {
+    case 'inward_vendor':
+      return vendorInwardRows();
+    case 'inward_customer':
+      return customerInwardRows();
+    case 'inward_direct':
+      return directInwardRows();
+    case 'inward_total': {
+      const [a, b, c] = await Promise.all([vendorInwardRows(), customerInwardRows(), directInwardRows()]);
+      return byDateDesc([...a, ...b, ...c]);
+    }
+    case 'outward_customer':
+      return customerOutwardRows();
+    case 'outward_vendor':
+      return vendorOutwardRows();
+    case 'outward_total': {
+      const [a, b] = await Promise.all([customerOutwardRows(), vendorOutwardRows()]);
+      return byDateDesc([...a, ...b]);
+    }
+    default:
+      return [];
+  }
+}
+
 async function getInwardOutwardFilters() {
   const [entities, vendors, customers, couriers, users] = await Promise.all([
     pool.query(`SELECT code, legal_name FROM companies WHERE active IS DISTINCT FROM false ORDER BY code`),
@@ -204,4 +417,4 @@ async function getInwardOutwardFilters() {
   };
 }
 
-module.exports = { getInwardOutwardSummary, getInwardOutwardFilters };
+module.exports = { getInwardOutwardSummary, getInwardOutwardDetails, getInwardOutwardFilters };

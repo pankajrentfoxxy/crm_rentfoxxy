@@ -3,7 +3,7 @@ const { getDisplayTeams, getTeamIdsForFilter } = require('../utils/teamUtils');
 const { getLaptopReport, getTicketRows, getStagePerformanceTickets } = require('../services/laptopReportService');
 const { getSalesOrderReport, getSalesOrderReportDrilldown } = require('../services/salesOrderReportService');
 const supportQuery = require('../services/supportQuery');
-const { getInwardOutwardSummary, getInwardOutwardFilters } = require('../services/inwardOutwardReportService');
+const { getInwardOutwardSummary, getInwardOutwardDetails, getInwardOutwardFilters } = require('../services/inwardOutwardReportService');
 
 function formatDuration(seconds) {
     if (seconds == null || !Number.isFinite(seconds)) return '—';
@@ -1913,6 +1913,68 @@ exports.exportToExcel = async (req, res) => {
                 { key: 'ticket_id', label: 'Ticket ID' },
             ];
             sheetName = 'Technician';
+        } else if (reportType === 'sales_order_report') {
+            const data = await getSalesOrderReport(filters);
+            const scopeMeta = [
+                { key: 'rental', label: 'Rental (Rentfoxxy)' },
+                { key: 'sale', label: 'Sale (Gorefurbo)' },
+            ];
+            rows = [];
+            for (const scope of scopeMeta) {
+                const processors = data?.[scope.key]?.processors || [];
+                for (const group of processors) {
+                    for (const child of (group.generations || [])) {
+                        rows.push({
+                            scope: scope.label,
+                            processor: child.processor,
+                            generation: child.generation,
+                            ordered: child.ordered || 0,
+                            attached: child.attached || 0,
+                            dispatch_qc_done: child.dispatch_qc_done || 0,
+                            challan_generated: child.challan_generated || 0,
+                            dispatched: child.dispatched || 0,
+                            available: child.available || 0,
+                            qc_process: child.qc_process || 0,
+                        });
+                    }
+                }
+            }
+            headers = [
+                { key: 'scope', label: 'Scope' },
+                { key: 'processor', label: 'Processor' },
+                { key: 'generation', label: 'Generation' },
+                { key: 'ordered', label: 'Total Ordered' },
+                { key: 'attached', label: 'Attached (QC Pending)' },
+                { key: 'dispatch_qc_done', label: 'Dispatch QC Done' },
+                { key: 'challan_generated', label: 'DC Generated' },
+                { key: 'dispatched', label: 'Dispatched' },
+                { key: 'available', label: 'Ready Stock' },
+                { key: 'qc_process', label: 'QC1 / QC2' },
+            ];
+            sheetName = 'Sales Order Report';
+        } else if (reportType === 'sales_order_config') {
+            // Simple 3-column export: Processor, Generation, Total Count (ordered),
+            // scoped to a single side (rental or sale).
+            const data = await getSalesOrderReport(filters);
+            const scopeKey = filters.scope === 'sale' ? 'sale' : 'rental';
+            const processors = data?.[scopeKey]?.processors || [];
+            rows = [];
+            for (const group of processors) {
+                for (const child of (group.generations || [])) {
+                    if (!child.ordered) continue;
+                    rows.push({
+                        processor: child.processor,
+                        generation: child.generation,
+                        total_count: child.ordered || 0,
+                    });
+                }
+            }
+            headers = [
+                { key: 'processor', label: 'Processor' },
+                { key: 'generation', label: 'Generation' },
+                { key: 'total_count', label: 'Total Count' },
+            ];
+            sheetName = scopeKey === 'sale' ? 'Sale Orders' : 'Rental Orders';
         } else {
             return res.status(400).json({ success: false, message: 'Invalid report_type' });
         }
@@ -2051,6 +2113,27 @@ exports.getInwardOutwardSummary = async (req, res) => {
     } catch (error) {
         console.error('getInwardOutwardSummary error:', error);
         res.status(500).json({ success: false, message: 'Server error generating inward/outward summary' });
+    }
+};
+
+exports.getInwardOutwardDetails = async (req, res) => {
+    try {
+        const { from, to } = resolveDateRange(req.query);
+        const rows = await getInwardOutwardDetails({
+            type: req.query.type || 'inward_total',
+            from,
+            to,
+            entity: req.query.entity || '',
+            branch: req.query.branch || '',
+            vendor: req.query.vendor || '',
+            customer: req.query.customer || '',
+            courier: req.query.courier || '',
+            user: req.query.user || '',
+        });
+        res.json({ success: true, rows });
+    } catch (error) {
+        console.error('getInwardOutwardDetails error:', error);
+        res.status(500).json({ success: false, message: 'Server error loading inward/outward details' });
     }
 };
 

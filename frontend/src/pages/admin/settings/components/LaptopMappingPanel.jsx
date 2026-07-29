@@ -91,6 +91,25 @@ function MappingCheckboxColumn({
   );
 }
 
+// The list endpoints cap `limit` at 100 server-side, so a single call can miss
+// entities beyond the first page (e.g. brand has 150+ models). Fetch every page
+// so all master items are available to map for any brand.
+async function fetchAllEntity(listFn) {
+  const limit = 100;
+  const first = await listFn({ page: 1, limit, active_only: true });
+  let items = first.data?.items || [];
+  const totalPages = first.data?.pagination?.totalPages || 1;
+  if (totalPages > 1) {
+    const reqs = [];
+    for (let page = 2; page <= totalPages; page += 1) {
+      reqs.push(listFn({ page, limit, active_only: true }));
+    }
+    const rest = await Promise.all(reqs);
+    rest.forEach((r) => { items = items.concat(r.data?.items || []); });
+  }
+  return items;
+}
+
 export default function LaptopMappingPanel() {
   const [brands, setBrands] = useState([]);
   const [allModels, setAllModels] = useState([]);
@@ -104,17 +123,17 @@ export default function LaptopMappingPanel() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [mapRes, modelRes, procRes, genRes] = await Promise.all([
+      const [mapRes, modelItems, procItems, genItems] = await Promise.all([
         fetchLaptopSpecMapping(),
-        listModels({ limit: 500, active_only: true }),
-        listProcessors({ limit: 500, active_only: true }),
-        listGenerations({ limit: 500, active_only: true }),
+        fetchAllEntity(listModels),
+        fetchAllEntity(listProcessors),
+        fetchAllEntity(listGenerations),
       ]);
       const rows = mapRes.data?.brands || [];
       setBrands(rows);
-      setAllModels(modelRes.data?.items || []);
-      setAllProcessors(procRes.data?.items || []);
-      setAllGenerations(genRes.data?.items || []);
+      setAllModels(modelItems);
+      setAllProcessors(procItems);
+      setAllGenerations(genItems);
       setBrandId((prev) => (prev && rows.some((b) => b.id === prev) ? prev : rows[0]?.id || null));
     } catch {
       toast.error('Failed to load laptop mapping');

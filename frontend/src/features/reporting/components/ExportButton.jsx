@@ -3,7 +3,7 @@ import { Download, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { exportReport } from '../reportingApi';
 
-export default function ExportButton({ reportType, filters = {}, label = 'Export Excel' }) {
+export default function ExportButton({ reportType, filters = {}, label = 'Export Excel', fileNameBase }) {
   const [loading, setLoading] = useState(false);
 
   const handleExport = async () => {
@@ -17,7 +17,7 @@ export default function ExportButton({ reportType, filters = {}, label = 'Export
       const a = document.createElement('a');
       const date = new Date().toISOString().slice(0, 10);
       a.href = url;
-      a.download = `${reportType}_${date}.xlsx`;
+      a.download = `${fileNameBase || reportType}_${date}.xlsx`;
       document.body.appendChild(a);
       a.click();
       a.remove();

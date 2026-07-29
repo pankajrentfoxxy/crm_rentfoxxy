@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getSalesOrderReport, getSalesOrderReportDrilldown } from '../reportingApi';
+import ExportButton from '../components/ExportButton';
 import { useUrlFilterPatch } from '../hooks/useReportFiltersFromUrl';
 import { SO_SCOPES } from '../../sales-pipeline/salesOrderScope';
 
@@ -222,7 +223,7 @@ function DataRow({
   );
 }
 
-function ConfigTable({ title, accent, processors, scope, onCellClick }) {
+function ConfigTable({ title, accent, processors, scope, onCellClick, headerAction }) {
   const [expanded, setExpanded] = useState({});
 
   const toggle = (key) => setExpanded((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -250,6 +251,7 @@ function ConfigTable({ title, accent, processors, scope, onCellClick }) {
         >
           {processors.length} processor{processors.length !== 1 ? 's' : ''}
         </span>
+        {headerAction}
       </div>
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -428,7 +430,7 @@ function DrilldownModal({ open, onClose, title, loading, items, scope, bucket, r
 export default function SalesOrderReportPage() {
   const location = useLocation();
   const { setFilter, get } = useUrlFilterPatch();
-  const preset = get('preset', 'all');
+  const preset = get('preset', 'today');
   const from = get('from');
   const to = get('to');
   const drillScope = get('scope');
@@ -631,6 +633,14 @@ export default function SalesOrderReportPage() {
             processors={data?.rental?.processors || []}
             scope="rental"
             onCellClick={openDrill}
+            headerAction={(
+              <ExportButton
+                reportType="sales_order_config"
+                filters={{ ...filters, scope: 'rental' }}
+                label="Export"
+                fileNameBase="sales_order_rental"
+              />
+            )}
           />
           <ConfigTable
             title="Sale Orders (Gorefurbo)"
@@ -638,6 +648,14 @@ export default function SalesOrderReportPage() {
             processors={data?.sale?.processors || []}
             scope="sale"
             onCellClick={openDrill}
+            headerAction={(
+              <ExportButton
+                reportType="sales_order_config"
+                filters={{ ...filters, scope: 'sale' }}
+                label="Export"
+                fileNameBase="sales_order_sale"
+              />
+            )}
           />
         </div>
       </div>
