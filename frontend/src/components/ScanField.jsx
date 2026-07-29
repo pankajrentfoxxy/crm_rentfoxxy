@@ -1,6 +1,6 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { Camera, X } from 'lucide-react';
-import BarcodeScanner from './BarcodeScanner';
+import CameraScanner from './CameraScanner';
 
 /**
  * Text input that accepts a USB "gun" scanner as well as typing, with an
@@ -93,7 +93,16 @@ export default function ScanField({
               </button>
             </div>
             <div className="p-4">
-              <BarcodeScanner onScanSuccess={handleCameraRead} onScanFailure={() => {}} />
+              <CameraScanner onScan={handleCameraRead} />
+            </div>
+            <div className="px-4 pb-4">
+              <button
+                type="button"
+                onClick={() => { setCameraOpen(false); inputRef.current?.focus(); }}
+                className="w-full rounded-xl border border-slate-200 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Type the code instead
+              </button>
             </div>
           </div>
         </div>

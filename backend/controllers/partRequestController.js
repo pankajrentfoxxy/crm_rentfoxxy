@@ -55,10 +55,19 @@ async function ensurePartsSpecColumns(db) {
 }
 
 let serialColEnsured = false;
+/**
+ * Columns the part-tracking reads depend on. Migration 178 adds these properly
+ * (with the ledger and backfill); this only keeps the read paths working on an
+ * environment where it has not run yet.
+ */
 async function ensurePartInstanceSerialColumn(db) {
   if (serialColEnsured) return;
   await db.query(`
     ALTER TABLE part_instances ADD COLUMN IF NOT EXISTS serial_number VARCHAR(255);
+    ALTER TABLE part_instances ADD COLUMN IF NOT EXISTS asset_code VARCHAR(64);
+    ALTER TABLE part_instances ADD COLUMN IF NOT EXISTS vendor_id INT;
+    ALTER TABLE part_instances ADD COLUMN IF NOT EXISTS source VARCHAR(24) NOT NULL DEFAULT 'purchase';
+    ALTER TABLE part_instances ADD COLUMN IF NOT EXISTS removed_from_ttspl_id VARCHAR(50);
     CREATE INDEX IF NOT EXISTS idx_part_instances_serial ON part_instances (serial_number);
     CREATE INDEX IF NOT EXISTS idx_part_instances_part_status ON part_instances (part_id, status);
   `);
@@ -1010,18 +1019,28 @@ exports.listPartInstances = async (req, res) => {
       const i = params.length;
       conditions.push(`(pi.prt_id ILIKE $${i} OR pi.serial_number ILIKE $${i}
         OR p.part_name ILIKE $${i} OR pi.installed_ttspl_id ILIKE $${i}
-        OR pi.location_code ILIKE $${i})`);
+        OR pi.location_code ILIKE $${i} OR pi.asset_code ILIKE $${i}
+        OR spo.purchase_order_number ILIKE $${i}
+        OR COALESCE(vend.business_name, vend.first_name) ILIKE $${i})`);
     }
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
     params.push(Math.min(1000, Number(limit) || 200));
 
+    // The PO and vendor travel with the unit so a warranty claim can be traced
+    // back to who supplied it without hunting through GRN history.
     const result = await pool.query(
       `SELECT pi.instance_id, pi.prt_id, pi.serial_number, pi.part_id, pi.status, pi.location_code,
               pi.unit_cost, pi.notes, pi.installed_ttspl_id, pi.installed_ticket_id, pi.installed_at,
-              pi.received_at, pi.created_at,
-              p.part_name, p.category, p.part_type
+              pi.received_at, pi.created_at, pi.asset_code, pi.source, pi.spo_id, pi.grn_id,
+              pi.removed_from_ttspl_id, pi.condition_on_removal,
+              p.part_name, p.category, p.part_type,
+              spo.purchase_order_number, spo.purchase_order_date,
+              COALESCE(pi.vendor_id, spo.vendor_id) AS vendor_id,
+              COALESCE(NULLIF(TRIM(vend.business_name), ''), NULLIF(TRIM(vend.first_name), '')) AS vendor_name
          FROM part_instances pi
          JOIN parts p ON p.part_id = pi.part_id
+         LEFT JOIN vendor_spare_parts_purchase_orders spo ON spo.spo_id = pi.spo_id
+         LEFT JOIN vendors vend ON vend.vendor_id = COALESCE(pi.vendor_id, spo.vendor_id)
          ${where}
          ORDER BY pi.created_at DESC, pi.instance_id DESC
          LIMIT $${params.length}`,

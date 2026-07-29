@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Plus, X, AlertTriangle, Package, Boxes } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Plus, X, AlertTriangle, Package, Boxes, Printer } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../../utils/api';
+import PartLabelPrintModal from '../components/PartLabelPrintModal';
 import MetricCard from '../../reporting/components/MetricCard';
 import DataTable from '../../reporting/components/DataTable';
 import { inr } from '../../reporting/reportingUtils';
@@ -266,11 +268,12 @@ function InstancesTab() {
   const [status, setStatus] = useState('');
   const [category, setCategory] = useState('');
   const [search, setSearch] = useState('');
+  const [labelFor, setLabelFor] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const params = {};
+      const params = { limit: 500 };
       if (status) params.status = status;
       if (category) params.category = category;
       const { data } = await listPartInstances(params);
@@ -292,17 +295,30 @@ function InstancesTab() {
         String(r.prt_id || '').toLowerCase().includes(q) ||
         String(r.serial_number || '').toLowerCase().includes(q) ||
         String(r.part_name || '').toLowerCase().includes(q) ||
-        String(r.installed_ttspl_id || '').toLowerCase().includes(q)
+        String(r.installed_ttspl_id || '').toLowerCase().includes(q) ||
+        String(r.asset_code || '').toLowerCase().includes(q) ||
+        String(r.purchase_order_number || '').toLowerCase().includes(q) ||
+        String(r.vendor_name || '').toLowerCase().includes(q)
       );
     });
   }, [instances, search]);
+
+  const labelUnits = useMemo(
+    () => (labelFor ? [{
+      code: labelFor.prt_id,
+      title: labelFor.part_name,
+      subtitle: labelFor.serial_number ? `Serial ${labelFor.serial_number}` : 'No serial',
+      poNumber: labelFor.purchase_order_number || '',
+    }] : []),
+    [labelFor]
+  );
 
   return (
     <div className="space-y-4">
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 flex flex-wrap gap-3 items-end">
         <label className="text-sm flex-1 min-w-[180px]">
           <span className="block text-gray-500 text-xs mb-1">Search</span>
-          <input className="w-full border rounded-lg px-3 py-2 text-sm" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Serial, PRT-ID, part, TTSPL" />
+          <input className="w-full border rounded-lg px-3 py-2 text-sm" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Serial, PRT-ID, part, TTSPL, PO no., vendor" />
         </label>
         <label className="text-sm">
           <span className="block text-gray-500 text-xs mb-1">Status</span>
@@ -333,16 +349,20 @@ function InstancesTab() {
                 <th className="p-3">Part Name</th>
                 <th className="p-3">Category</th>
                 <th className="p-3">Status</th>
+                <th className="p-3">PO No.</th>
+                <th className="p-3">Vendor</th>
+                <th className="p-3">Received</th>
                 <th className="p-3">Location</th>
                 <th className="p-3">Unit Cost</th>
                 <th className="p-3">Installed On</th>
                 <th className="p-3">Installed At</th>
+                <th className="p-3 text-right">Label</th>
               </tr>
             </thead>
             <tbody>
               {filtered.map((r) => (
                 <tr key={r.instance_id} className="border-t border-gray-50">
-                  <td className="p-3 font-mono text-blue-600">{r.prt_id}</td>
+                  <td className="p-3 font-mono text-blue-600 whitespace-nowrap">{r.prt_id}</td>
                   <td className="p-3 font-mono">{r.serial_number || '—'}</td>
                   <td className="p-3">{r.part_name}</td>
                   <td className="p-3">{CAT_LABEL[partCategory(r)] || r.category || '—'}</td>
@@ -351,16 +371,52 @@ function InstancesTab() {
                       {r.status}
                     </span>
                   </td>
+                  <td className="p-3 whitespace-nowrap">
+                    {r.spo_id ? (
+                      <Link
+                        to={`/vendor-management/spare-parts-po/${r.spo_id}/grn-detail`}
+                        className="font-mono text-blue-600 hover:text-blue-800 hover:underline"
+                        title="Open the purchase order this unit came from"
+                      >
+                        {r.purchase_order_number || `SPO-${r.spo_id}`}
+                      </Link>
+                    ) : (
+                      <span className="text-gray-400">
+                        {r.source === 'defective_return' ? 'From laptop' : '—'}
+                      </span>
+                    )}
+                  </td>
+                  <td className="p-3">{r.vendor_name || '—'}</td>
+                  <td className="p-3 whitespace-nowrap">{r.received_at ? new Date(r.received_at).toLocaleDateString() : '—'}</td>
                   <td className="p-3 font-mono">{r.location_code || '—'}</td>
                   <td className="p-3">{inr(r.unit_cost)}</td>
                   <td className="p-3 font-mono text-teal-700">{r.installed_ttspl_id || '—'}</td>
-                  <td className="p-3">{r.installed_at ? new Date(r.installed_at).toLocaleDateString() : '—'}</td>
+                  <td className="p-3 whitespace-nowrap">{r.installed_at ? new Date(r.installed_at).toLocaleDateString() : '—'}</td>
+                  <td className="p-3 text-right">
+                    <button
+                      type="button"
+                      onClick={() => setLabelFor(r)}
+                      disabled={!r.prt_id}
+                      className="inline-grid place-items-center w-9 h-9 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40"
+                      aria-label={`Print QR label for ${r.prt_id}`}
+                      title="Print QR label"
+                    >
+                      <Printer className="w-4 h-4" />
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
       </div>
+
+      <PartLabelPrintModal
+        open={Boolean(labelFor)}
+        units={labelUnits}
+        onClose={() => setLabelFor(null)}
+        title="Reprint QR label"
+      />
     </div>
   );
 }

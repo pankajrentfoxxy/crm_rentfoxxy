@@ -53,10 +53,30 @@ async function attachPoLine(unit) {
   };
 }
 
+/**
+ * A label may encode just the Part ID, or the Part ID with the PO appended
+ * ("PRT-20260729-0042/SP-PO-0042"). Scanners also sometimes pick up a URL if
+ * someone re-encodes a code. Reduce whatever came in to the identifier we can
+ * actually look up.
+ */
+function normalizeScannedCode(raw) {
+  let text = String(raw || '').trim();
+  if (!text) return '';
+  // Tolerate a URL wrapper, e.g. https://crm.rentfoxxy.com/p/PRT-...
+  if (/^https?:\/\//i.test(text)) {
+    const tail = text.split(/[?#]/)[0].split('/').filter(Boolean).pop();
+    if (tail) text = tail;
+  }
+  // Take the identifier ahead of any PO / metadata suffix.
+  const [head] = text.split(/[/|]/);
+  return (head || text).trim();
+}
+
 // GET /api/parts/units/lookup?code=PRT-20260729-0042
 exports.lookupPartUnit = async (req, res) => {
   try {
-    const code = String(req.query.code || '').trim();
+    const raw = String(req.query.code || '').trim();
+    const code = normalizeScannedCode(raw);
     if (!code) return res.status(400).json({ success: false, message: 'code required' });
 
     const r = await pool.query(
@@ -172,28 +192,34 @@ exports.getUnitQrPng = async (req, res) => {
 };
 
 // POST /api/parts/labels/print
-// Body: { labels: [{ code, copies }], width_mm?, height_mm? }
+// Body: { labels: [{ code, caption?, copies }], width_mm?, height_mm?, caption_mm? }
 exports.printPartLabels = async (req, res) => {
   try {
-    const { labels, width_mm, height_mm } = req.body || {};
+    const { labels, width_mm, height_mm, caption_mm } = req.body || {};
     if (!Array.isArray(labels) || !labels.length) {
       return res.status(400).json({ success: false, message: 'labels required' });
     }
 
     const widthMm = Math.max(6, Math.min(100, Number(width_mm) || DEFAULT_LABEL_MM));
-    const heightMm = Math.max(6, Math.min(100, Number(height_mm) || widthMm));
+    const captionMm = Math.max(0, Math.min(20, Number(caption_mm) || 0));
+    // The caption band is added on top of the QR area, so the symbol keeps its
+    // full size instead of being squeezed to make room for the text.
+    const heightMm = Math.max(6, Math.min(120, Number(height_mm) || widthMm + captionMm));
 
-    const pdf = await buildLabelPdf(labels, { widthMm, heightMm });
+    const pdf = await buildLabelPdf(labels, { widthMm, heightMm, captionMm });
 
     // Track reprints so a unit whose label went missing is visible in inventory.
-    const codes = labels.map((l) => String(l?.code || '').trim()).filter(Boolean);
+    // A code may carry a "/PO" suffix, so match on the Part ID part only.
+    const codes = labels
+      .map((l) => String(l?.code || '').trim().split('/')[0].toUpperCase())
+      .filter(Boolean);
     if (codes.length) {
       await pool.query(
         `UPDATE part_instances
             SET label_print_count = COALESCE(label_print_count, 0) + 1,
                 label_last_printed_at = NOW(), updated_at = NOW()
           WHERE UPPER(prt_id) = ANY($1::text[])`,
-        [codes.map((c) => c.toUpperCase())]
+        [codes]
       ).catch(() => {});
     }
 

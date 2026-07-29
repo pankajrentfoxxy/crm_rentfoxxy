@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { AlertTriangle, Check, Loader2, QrCode, Search, X } from 'lucide-react';
 import api from '../../../utils/api';
@@ -178,8 +179,20 @@ export default function ApprovePartRequestModal({ open, request, busy = false, o
                 </p>
                 {scanned.purchase_order_number ? (
                   <p className="m-0 mt-0.5 text-emerald-700">
-                    {scanned.purchase_order_number}
-                    {scanned.vendor_name ? ` · ${scanned.vendor_name}` : ''}
+                    Supplied on{' '}
+                    {scanned.spo_id ? (
+                      <Link
+                        to={`/vendor-management/spare-parts-po/${scanned.spo_id}/grn-detail`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-semibold underline underline-offset-2 hover:text-emerald-900"
+                      >
+                        {scanned.purchase_order_number}
+                      </Link>
+                    ) : (
+                      <span className="font-semibold">{scanned.purchase_order_number}</span>
+                    )}
+                    {scanned.vendor_name ? ` by ${scanned.vendor_name}` : ''}
                   </p>
                 ) : null}
               </div>

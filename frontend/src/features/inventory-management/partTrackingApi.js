@@ -9,12 +9,18 @@ export const searchPartUnits = (params) => api.get(`${base}/units`, { params });
 
 /**
  * Label sheet as a PDF blob, one page per physical sticker at the exact
- * millimetre size so the label printer does not rescale it.
+ * millimetre size so the label printer does not rescale it. `captionMm`
+ * reserves a band under the QR for readable text (the PO number).
  */
-export const buildPartLabelsPdf = (labels, sizeMm) =>
+export const buildPartLabelsPdf = (labels, { widthMm, heightMm, captionMm = 0 } = {}) =>
   api.post(
     `${base}/labels/print`,
-    { labels, width_mm: sizeMm, height_mm: sizeMm },
+    {
+      labels,
+      width_mm: widthMm,
+      height_mm: heightMm ?? widthMm + captionMm,
+      caption_mm: captionMm,
+    },
     { responseType: 'blob' }
   );
 

@@ -67,6 +67,7 @@ export default function PartsDrilldownPanel({ query, onClose }) {
       code: r.prt_id,
       title: r.part_name,
       subtitle: r.serial_number ? `Serial ${r.serial_number}` : 'No serial',
+      poNumber: r.purchase_order_number || '',
     })),
     [rows]
   );

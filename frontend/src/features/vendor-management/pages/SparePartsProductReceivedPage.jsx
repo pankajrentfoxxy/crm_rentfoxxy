@@ -312,6 +312,7 @@ export default function SparePartsProductReceivedPage() {
       title: [activeLine?.brand_name, activeLine?.spare_part_name || activeLine?.part_name || activeLine?.name]
         .filter(Boolean).join(' — '),
       subtitle: u.physical_serial ? `Serial ${u.physical_serial}` : 'No serial on this part',
+      poNumber: po?.purchase_order_number || '',
     }));
 
   const viewGrnHref = `/vendor-management/spare-parts-po/${encodeURIComponent(spoId || '')}/grn-detail`;
