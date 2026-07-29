@@ -641,6 +641,69 @@ exports.exportCustomersExcel = async (req, res) => {
   }
 };
 
+// Export one row per LIVE customer-held laptop (active/deployed assets).
+// Independent of the customer list export; does not touch existing flows.
+exports.exportCustomerAssetsExcel = async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT
+         COALESCE(c.company_name, c.name) AS customer_name,
+         COALESCE(inv.brand, vsn.extra->>'brand') AS brand,
+         COALESCE(inv.model, vsn.extra->>'model', vsn.extra->>'model_name') AS model,
+         COALESCE(inv.generation, vsn.extra->>'generation') AS generation,
+         COALESCE(inv.processor, vsn.extra->>'processor') AS processor,
+         COALESCE(NULLIF(vsn.inventory_asset_code, ''), vsn.extra->>'ttspl_id') AS ttspl,
+         vsn.serial_number AS serial_number,
+         vsn.rent_monthly_rate AS price
+       FROM vendor_serial_numbers vsn
+       JOIN customers c ON c.customer_id = vsn.current_customer_id
+       LEFT JOIN inventory inv ON (
+         inv.machine_number = vsn.inventory_asset_code
+         OR inv.serial_number = vsn.serial_number
+       )
+      WHERE vsn.deleted_at IS NULL
+        AND vsn.current_customer_id IS NOT NULL
+        AND vsn.inventory_status = ANY($1::text[])
+      ORDER BY customer_name ASC, ttspl ASC NULLS LAST, vsn.serial_number ASC`,
+      [DEPLOYED_WITH_CUSTOMER_STATUSES]
+    );
+
+    const columnOrder = [
+      'Customer Name',
+      'Brand',
+      'Model',
+      'Generation',
+      'Processor',
+      'TTSPL',
+      'Serial Number',
+      'Price',
+    ];
+
+    const orderedRows = rows.map((r) => ({
+      'Customer Name': r.customer_name || '',
+      Brand: r.brand || '',
+      Model: r.model || '',
+      Generation: r.generation || '',
+      Processor: r.processor || '',
+      TTSPL: r.ttspl || '',
+      'Serial Number': r.serial_number || '',
+      Price: r.price != null ? Number(r.price) : '',
+    }));
+
+    const XLSX = require('xlsx');
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(orderedRows, { header: columnOrder });
+    XLSX.utils.book_append_sheet(wb, ws, 'Customer Assets');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="customer_assets_export.xlsx"');
+    res.send(buf);
+  } catch (error) {
+    console.error('exportCustomerAssetsExcel:', error);
+    res.status(500).json({ success: false, message: error.message || 'Export failed' });
+  }
+};
+
 exports.getCustomer = async (req, res) => {
   try {
     const customerId = parseInt(req.params.customerId, 10);

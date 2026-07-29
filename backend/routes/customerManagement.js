@@ -23,6 +23,7 @@ router.use(customerScope); // resolves req.allowedCustomerTypes (Customer Access
 
 router.get('/customers/meta/add', cp('customers', 'view'), ctrl.getAddCustomerMeta);
 router.get('/customers/export.xlsx', checkRole('admin', 'super_admin'), ctrl.exportCustomersExcel);
+router.get('/customers/assets/export.xlsx', checkRole('admin', 'super_admin'), ctrl.exportCustomerAssetsExcel);
 router.get('/customers/ids', cp('customers', 'view'), ctrl.listCustomerIds);
 router.get('/customers', cp('customers', 'view'), ctrl.listCustomers);
 router.patch(

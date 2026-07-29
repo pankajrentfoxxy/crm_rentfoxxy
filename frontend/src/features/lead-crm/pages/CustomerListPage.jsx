@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Building2, Download, Tags } from 'lucide-react';
 import { listSalesOrders } from '../../sales-pipeline/salesPipelineApi';
-import { bulkUpdateCustomerType, exportCustomersExcel, getCustomerIds, getCustomers } from '../leadCrmApi';
+import { bulkUpdateCustomerType, exportCustomersExcel, exportCustomerAssetsExcel, getCustomerIds, getCustomers } from '../leadCrmApi';
 import CustomerFormDrawer from '../components/CustomerFormDrawer';
 import BulkCustomerTypeModal from '../components/BulkCustomerTypeModal';
 import { PageHeader, StatCard, Button, ResponsiveTable } from '../../../components/ui/primitives';
@@ -51,6 +51,7 @@ export default function CustomerListPage() {
   const [editCustomer, setEditCustomer] = useState(null);
   const [activeOrderCounts, setActiveOrderCounts] = useState({});
   const [exporting, setExporting] = useState(false);
+  const [exportingAssets, setExportingAssets] = useState(false);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [selectedMeta, setSelectedMeta] = useState(() => new Map());
   const [selectAllMatching, setSelectAllMatching] = useState(false);
@@ -261,6 +262,31 @@ export default function CustomerListPage() {
     }
   };
 
+  const handleExportCustomerAssets = async () => {
+    setExportingAssets(true);
+    try {
+      const response = await exportCustomerAssetsExcel();
+      const blob = new Blob([response.data], {
+        type: response.headers['content-type'] || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const disposition = response.headers['content-disposition'] || '';
+      const match = /filename="?([^"]+)"?/.exec(disposition);
+      a.href = url;
+      a.download = match?.[1] || 'customer_assets_export.xlsx';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success('Customer assets export downloaded');
+    } catch {
+      toast.error('Failed to export customer assets');
+    } finally {
+      setExportingAssets(false);
+    }
+  };
+
   const removeFromSelection = (customerId) => {
     setSelectAllMatching(false);
     setSelectedIds((prev) => {
@@ -399,6 +425,11 @@ export default function CustomerListPage() {
             {canExportCustomers ? (
               <Button variant="secondary" icon={Download} disabled={exporting} onClick={handleExportExcel}>
                 {exporting ? 'Exporting...' : 'Export Excel'}
+              </Button>
+            ) : null}
+            {canExportCustomers ? (
+              <Button variant="secondary" icon={Download} disabled={exportingAssets} onClick={handleExportCustomerAssets}>
+                {exportingAssets ? 'Exporting...' : 'Export Customer Assets'}
               </Button>
             ) : null}
             <Button icon={Plus} onClick={() => { setEditCustomer(null); setDrawerOpen(true); }}>Add Customer</Button>
