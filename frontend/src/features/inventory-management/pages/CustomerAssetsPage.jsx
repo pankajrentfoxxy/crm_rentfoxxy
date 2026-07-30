@@ -36,10 +36,12 @@ export default function CustomerAssetsPage() {
   const [page, setPage] = useState(1);
   const [searchInput, setSearchInput] = useState('');
   const search = useDebouncedValue(searchInput.trim(), 320);
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => { setPage(1); }, [search, status]);
+  useEffect(() => { setPage(1); }, [search, status, fromDate, toDate]);
 
   const selectStatus = (key) => {
     if (key) setSearchParams({ status: key });
@@ -52,6 +54,8 @@ export default function CustomerAssetsPage() {
       const res = await fetchCustomerAssets({
         status: status || undefined,
         search: search || undefined,
+        from: fromDate || undefined,
+        to: toDate || undefined,
         page,
         limit: PAGE_SIZE,
       });
@@ -63,7 +67,7 @@ export default function CustomerAssetsPage() {
     } finally {
       setLoading(false);
     }
-  }, [status, search, page]);
+  }, [status, search, fromDate, toDate, page]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -99,6 +103,38 @@ export default function CustomerAssetsPage() {
           onChange={(e) => setSearchInput(e.target.value)}
           placeholder="Search TTSPL, serial, customer, model, DC…"
         />
+      </div>
+
+      <div className="mb-4 flex flex-wrap items-end gap-3">
+        <label className="flex flex-col text-xs text-gray-500">
+          Delivered from
+          <input
+            type="date"
+            value={fromDate}
+            max={toDate || undefined}
+            onChange={(e) => setFromDate(e.target.value)}
+            className="mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700"
+          />
+        </label>
+        <label className="flex flex-col text-xs text-gray-500">
+          To
+          <input
+            type="date"
+            value={toDate}
+            min={fromDate || undefined}
+            onChange={(e) => setToDate(e.target.value)}
+            className="mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700"
+          />
+        </label>
+        {(fromDate || toDate) && (
+          <button
+            type="button"
+            onClick={() => { setFromDate(''); setToDate(''); }}
+            className="px-3 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50"
+          >
+            Clear dates
+          </button>
+        )}
       </div>
 
       {/* Mobile cards */}

@@ -147,6 +147,8 @@ export default function CustomerDetailPage() {
   const [assetPage, setAssetPage] = useState(1);
   const [assetSearchInput, setAssetSearchInput] = useState('');
   const assetSearch = useDebouncedValue(assetSearchInput.trim(), 320);
+  const [assetFrom, setAssetFrom] = useState('');
+  const [assetTo, setAssetTo] = useState('');
   const [assetPagination, setAssetPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: ASSET_PAGE_SIZE });
   const [assetsLoading, setAssetsLoading] = useState(false);
   const [tab, setTab] = useState(0);
@@ -193,6 +195,8 @@ export default function CustomerDetailPage() {
         page: assetPage,
         limit: ASSET_PAGE_SIZE,
         search: assetSearch || undefined,
+        from: assetFrom || undefined,
+        to: assetTo || undefined,
       });
       setAssetRows(lapRes.data?.data || []);
       if (lapRes.data?.counts) setAssetCounts(lapRes.data.counts);
@@ -207,7 +211,7 @@ export default function CustomerDetailPage() {
     } finally {
       setAssetsLoading(false);
     }
-  }, [id, assetView, assetPage, assetSearch]);
+  }, [id, assetView, assetPage, assetSearch, assetFrom, assetTo]);
 
   const loadAssetActivity = useCallback(async () => {
     setAssetActivityLoading(true);
@@ -238,7 +242,7 @@ export default function CustomerDetailPage() {
     loadAddresses();
   }, [tab, loadAddresses]);
 
-  useEffect(() => { setAssetPage(1); }, [assetSearch, assetView]);
+  useEffect(() => { setAssetPage(1); }, [assetSearch, assetView, assetFrom, assetTo]);
 
   const load = useCallback(async () => {
     await loadCustomer();
@@ -410,6 +414,38 @@ export default function CustomerDetailPage() {
             placeholder="Search TTSPL, serial, model, DC number…"
             className="max-w-md"
           />
+
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="flex flex-col text-xs text-gray-500">
+              Delivery date from
+              <input
+                type="date"
+                value={assetFrom}
+                max={assetTo || undefined}
+                onChange={(e) => setAssetFrom(e.target.value)}
+                className="mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700"
+              />
+            </label>
+            <label className="flex flex-col text-xs text-gray-500">
+              To
+              <input
+                type="date"
+                value={assetTo}
+                min={assetFrom || undefined}
+                onChange={(e) => setAssetTo(e.target.value)}
+                className="mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700"
+              />
+            </label>
+            {(assetFrom || assetTo) && (
+              <button
+                type="button"
+                onClick={() => { setAssetFrom(''); setAssetTo(''); }}
+                className="px-3 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50"
+              >
+                Clear dates
+              </button>
+            )}
+          </div>
 
           {assetsLoading ? (
             <div className="flex justify-center py-12"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>

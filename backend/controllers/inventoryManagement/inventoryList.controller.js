@@ -465,7 +465,9 @@ const customerAssetsValidators = [
   query('page').optional().isInt({ min: 1 }).toInt(),
   query('limit').optional().isInt({ min: 1, max: 500 }).toInt(),
   query('search').optional().isString().trim(),
-  query('status').optional().isString().trim()
+  query('status').optional().isString().trim(),
+  query('from').optional().isString().trim(),
+  query('to').optional().isString().trim()
 ];
 
 async function customerAssets(req, res) {
@@ -477,6 +479,11 @@ async function customerAssets(req, res) {
   const offset = (page - 1) * limit;
   const search = (req.query.search || '').trim();
   const status = (req.query.status || '').trim();
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  const from = dateRe.test((req.query.from || '').trim()) ? req.query.from.trim() : '';
+  const to = dateRe.test((req.query.to || '').trim()) ? req.query.to.trim() : '';
+  // Delivery date compared in IST so it matches the "Delivered" column shown in the UI.
+  const deliveredExpr = "(s.delivered_at AT TIME ZONE 'Asia/Kolkata')::date";
 
   try {
     const params = [];
@@ -503,6 +510,10 @@ async function customerAssets(req, res) {
       )`;
     }
 
+    let dateSql = '';
+    if (from) { params.push(from); dateSql += ` AND ${deliveredExpr} >= $${params.length}`; }
+    if (to) { params.push(to); dateSql += ` AND ${deliveredExpr} <= $${params.length}`; }
+
     const fromSql = `
       FROM vendor_serial_numbers s
       LEFT JOIN customers c ON c.customer_id = s.current_customer_id
@@ -510,6 +521,7 @@ async function customerAssets(req, res) {
       WHERE s.deleted_at IS NULL
       ${statusSql}
       ${searchSql}
+      ${dateSql}
     `;
 
     const countR = await pool.query(`SELECT COUNT(*)::int AS total ${fromSql}`, params);
@@ -530,11 +542,14 @@ async function customerAssets(req, res) {
         OR COALESCE(s.current_dc_number, '') ILIKE $${i}
       )`;
     }
+    let breakdownDate = '';
+    if (from) { breakdownParams.push(from); breakdownDate += ` AND ${deliveredExpr} >= $${breakdownParams.length}`; }
+    if (to) { breakdownParams.push(to); breakdownDate += ` AND ${deliveredExpr} <= $${breakdownParams.length}`; }
     const breakdownR = await pool.query(
       `SELECT s.inventory_status, COUNT(*)::int AS c
        FROM vendor_serial_numbers s
        LEFT JOIN customers c ON c.customer_id = s.current_customer_id
-       WHERE s.deleted_at IS NULL AND s.inventory_status = ANY($1) ${breakdownSearch}
+       WHERE s.deleted_at IS NULL AND s.inventory_status = ANY($1) ${breakdownSearch} ${breakdownDate}
        GROUP BY s.inventory_status`,
       breakdownParams
     );

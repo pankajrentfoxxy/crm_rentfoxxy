@@ -1346,6 +1346,24 @@ function buildReturnedSearchSql(search, params) {
   )`;
 }
 
+// Delivery-date range filters. Delivery date is compared in IST so it matches
+// what the UI shows (timestamps are stored in UTC).
+function buildActiveDateSql(from, to, params) {
+  const expr = "(COALESCE(vsn.delivered_at, pod.delivery_completed_at) AT TIME ZONE 'Asia/Kolkata')::date";
+  let sql = '';
+  if (from) { params.push(from); sql += ` AND ${expr} >= $${params.length}`; }
+  if (to) { params.push(to); sql += ` AND ${expr} <= $${params.length}`; }
+  return sql;
+}
+
+function buildReturnedDateSql(from, to, params) {
+  const expr = "(COALESCE(rl.delivered_at, sti.warehouse_received_at, rl.created_at) AT TIME ZONE 'Asia/Kolkata')::date";
+  let sql = '';
+  if (from) { params.push(from); sql += ` AND ${expr} >= $${params.length}`; }
+  if (to) { params.push(to); sql += ` AND ${expr} <= $${params.length}`; }
+  return sql;
+}
+
 const ACTIVE_FROM_SQL = `
   FROM vendor_serial_numbers vsn
   LEFT JOIN inventory inv ON (
@@ -1488,10 +1506,11 @@ async function countCustomerReturnedAssets(customerId) {
   return rows[0]?.total || 0;
 }
 
-async function queryCustomerActiveAssets(customerId, { search = '', limit, offset } = {}) {
+async function queryCustomerActiveAssets(customerId, { search = '', from = '', to = '', limit, offset } = {}) {
   const params = [customerId, DEPLOYED_WITH_CUSTOMER_STATUSES];
   const searchSql = buildActiveSearchSql(search, params);
-  const fromWhere = `${ACTIVE_FROM_SQL}${searchSql}`;
+  const dateSql = buildActiveDateSql(from, to, params);
+  const fromWhere = `${ACTIVE_FROM_SQL}${searchSql}${dateSql}`;
 
   const countR = await pool.query(`SELECT COUNT(*)::int AS total ${fromWhere}`, params);
   const total = countR.rows[0]?.total || 0;
@@ -1507,10 +1526,11 @@ async function queryCustomerActiveAssets(customerId, { search = '', limit, offse
   return { rows: rows.map(mapActiveAssetRow), total };
 }
 
-async function queryCustomerReturnedAssets(customerId, { search = '', limit, offset } = {}) {
+async function queryCustomerReturnedAssets(customerId, { search = '', from = '', to = '', limit, offset } = {}) {
   const params = [customerId];
   const searchSql = buildReturnedSearchSql(search, params);
-  const fromWhere = `${RETURNED_FROM_SQL}${searchSql}`;
+  const dateSql = buildReturnedDateSql(from, to, params);
+  const fromWhere = `${RETURNED_FROM_SQL}${searchSql}${dateSql}`;
 
   const countR = await pool.query(`SELECT COUNT(*)::int AS total ${fromWhere}`, params);
   const total = countR.rows[0]?.total || 0;
@@ -1826,6 +1846,9 @@ exports.getCustomerLaptops = async (req, res) => {
     const paginate = page > 0 && limit > 0;
     const lifecycle = req.query.lifecycle === 'returned' ? 'returned' : 'active';
     const search = (req.query.search || '').trim();
+    const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+    const from = dateRe.test((req.query.from || '').trim()) ? req.query.from.trim() : '';
+    const to = dateRe.test((req.query.to || '').trim()) ? req.query.to.trim() : '';
 
     const counts = {
       active: await countCustomerActiveAssets(customerId),
@@ -1846,8 +1869,8 @@ exports.getCustomerLaptops = async (req, res) => {
 
     const offset = (page - 1) * limit;
     const result = lifecycle === 'returned'
-      ? await queryCustomerReturnedAssets(customerId, { search, limit, offset })
-      : await queryCustomerActiveAssets(customerId, { search, limit, offset });
+      ? await queryCustomerReturnedAssets(customerId, { search, from, to, limit, offset })
+      : await queryCustomerActiveAssets(customerId, { search, from, to, limit, offset });
 
     return res.json({
       success: true,
