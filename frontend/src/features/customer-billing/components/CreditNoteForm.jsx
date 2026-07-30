@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
+import SearchableSelect from '../../operation-management/components/SearchableSelect';
 import { createCreditNote, listInvoices } from '../customerBillingApi';
 import api from '../../../utils/api';
 
@@ -14,10 +15,18 @@ export default function CreditNoteForm({ open, onClose, onCreated }) {
 
   useEffect(() => {
     if (!open) return;
-    api.get('/customer-management/customers', { params: { limit: 200 } })
-      .then((r) => setCustomers(r.data?.customers || r.data?.rows || []))
+    api.get('/customer-management/customers/ids')
+      .then((r) => setCustomers(r.data?.customers || []))
       .catch(() => setCustomers([]));
   }, [open]);
+
+  const customerOptions = useMemo(
+    () => customers.map((c) => ({
+      value: String(c.customer_id),
+      label: c.company_name || c.name || c.customer_name || `Customer #${c.customer_id}`,
+    })),
+    [customers]
+  );
 
   useEffect(() => {
     if (!form.customer_id) { setInvoices([]); return; }
@@ -58,15 +67,15 @@ export default function CreditNoteForm({ open, onClose, onCreated }) {
       <form onSubmit={handleSubmit} className="relative bg-white w-full max-w-md h-full overflow-y-auto p-6 shadow-xl">
         <h3 className="font-semibold text-lg mb-4">Create Credit Note</h3>
         <div className="space-y-3 text-sm">
-          <div>
-            <label className="block text-gray-600 mb-1">Customer *</label>
-            <select required value={form.customer_id} onChange={(e) => set('customer_id', e.target.value)} className="w-full border rounded-lg px-3 py-2">
-              <option value="">Select…</option>
-              {customers.map((c) => (
-                <option key={c.customer_id} value={c.customer_id}>{c.company_name || c.name}</option>
-              ))}
-            </select>
-          </div>
+          <SearchableSelect
+            id="credit-note-customer"
+            label="Customer"
+            required
+            value={form.customer_id}
+            onChange={(v) => set('customer_id', v)}
+            options={customerOptions}
+            placeholder="Select customer"
+          />
           <div>
             <label className="block text-gray-600 mb-1">Related Invoice</label>
             <select value={form.invoice_id} onChange={(e) => set('invoice_id', e.target.value)} className="w-full border rounded-lg px-3 py-2">
