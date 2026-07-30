@@ -168,7 +168,7 @@ exports.ensureBillingEngineSchema = async () => {
 
 exports.listInvoices = async (req, res) => {
   try {
-    const { customer_id, month, year, status, page = 1, limit = 50 } = req.query;
+    const { customer_id, month, year, status, search, page = 1, limit = 50 } = req.query;
     const params = [];
     const where = ['1=1'];
     if (customer_id) {
@@ -187,6 +187,17 @@ exports.listInvoices = async (req, res) => {
       params.push(status);
       where.push(`ci.status = $${params.length}`);
     }
+    const qSearch = String(search || '').trim();
+    if (qSearch) {
+      params.push(`%${qSearch}%`);
+      const n = params.length;
+      where.push(`(
+        ci.invoice_number ILIKE $${n}
+        OR COALESCE(c.company_name, '') ILIKE $${n}
+        OR COALESCE(c.name, '') ILIKE $${n}
+        OR COALESCE(ci.irn, '') ILIKE $${n}
+      )`);
+    }
     const offset = (Math.max(1, parseInt(page, 10)) - 1) * parseInt(limit, 10);
     params.push(parseInt(limit, 10), offset);
 
@@ -203,17 +214,18 @@ exports.listInvoices = async (req, res) => {
       ),
       pool.query(
         `SELECT
-           COUNT(*) FILTER (WHERE status = 'draft')::int AS draft_count,
-           COALESCE(SUM(grand_total) FILTER (WHERE status = 'draft'), 0) AS draft_total,
-           COUNT(*) FILTER (WHERE status = 'sent')::int AS sent_count,
-           COALESCE(SUM(grand_total) FILTER (WHERE status = 'sent'), 0) AS sent_total,
-           COUNT(*) FILTER (WHERE status = 'paid')::int AS paid_count,
-           COALESCE(SUM(grand_total) FILTER (WHERE status = 'paid'), 0) AS paid_total,
-           COUNT(*) FILTER (WHERE status = 'overdue')::int AS overdue_count,
-           COALESCE(SUM(grand_total) FILTER (WHERE status = 'overdue'), 0) AS overdue_total,
-           COALESCE(SUM(grand_total) FILTER (WHERE status IN ('sent','overdue')), 0) AS outstanding_total
+           COUNT(*) FILTER (WHERE ci.status = 'draft')::int AS draft_count,
+           COALESCE(SUM(ci.grand_total) FILTER (WHERE ci.status = 'draft'), 0) AS draft_total,
+           COUNT(*) FILTER (WHERE ci.status = 'sent')::int AS sent_count,
+           COALESCE(SUM(ci.grand_total) FILTER (WHERE ci.status = 'sent'), 0) AS sent_total,
+           COUNT(*) FILTER (WHERE ci.status = 'paid')::int AS paid_count,
+           COALESCE(SUM(ci.grand_total) FILTER (WHERE ci.status = 'paid'), 0) AS paid_total,
+           COUNT(*) FILTER (WHERE ci.status = 'overdue')::int AS overdue_count,
+           COALESCE(SUM(ci.grand_total) FILTER (WHERE ci.status = 'overdue'), 0) AS overdue_total,
+           COALESCE(SUM(ci.grand_total) FILTER (WHERE ci.status IN ('sent','overdue')), 0) AS outstanding_total
          FROM customer_invoices ci
-         WHERE ${where.slice(0, where.length).join(' AND ').replace(/ci\./g, 'ci.')}`,
+         LEFT JOIN customers c ON c.customer_id = ci.customer_id
+         WHERE ${where.join(' AND ')}`,
         params.slice(0, params.length - 2)
       ),
     ]);

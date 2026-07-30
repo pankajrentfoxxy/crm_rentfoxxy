@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Receipt } from 'lucide-react';
+import { Plus, Receipt, Search } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import InvoiceStatusBadge from '../components/InvoiceStatusBadge';
+import SearchableSelect from '../../operation-management/components/SearchableSelect';
 import { PageHeader, StatCard, Button } from '../../../components/ui/primitives';
 import { downloadInvoicePdf, generateInvoice, listInvoices, markInvoicePaid } from '../customerBillingApi';
 import api from '../../../utils/api';
@@ -23,15 +24,30 @@ export default function InvoiceListPage() {
   const [customerId, setCustomerId] = useState('');
   const [month, setMonth] = useState('');
   const [year, setYear] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const [searchDebounced, setSearchDebounced] = useState('');
   const [customers, setCustomers] = useState([]);
   const [genOpen, setGenOpen] = useState(false);
   const [genForm, setGenForm] = useState({ customer_id: '', month: String(new Date().getMonth() || 12), year: String(new Date().getFullYear()) });
 
   useEffect(() => {
-    api.get('/customer-management/customers', { params: { limit: 200 } })
-      .then((r) => setCustomers(r.data?.customers || r.data?.rows || []))
+    const t = setTimeout(() => setSearchDebounced(searchInput.trim()), 320);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
+  useEffect(() => {
+    api.get('/customer-management/customers/ids')
+      .then((r) => setCustomers(r.data?.customers || []))
       .catch(() => setCustomers([]));
   }, []);
+
+  const customerOptions = useMemo(
+    () => customers.map((c) => ({
+      value: String(c.customer_id),
+      label: c.company_name || c.name || c.customer_name || `Customer #${c.customer_id}`,
+    })),
+    [customers]
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -41,6 +57,7 @@ export default function InvoiceListPage() {
       if (customerId) params.customer_id = customerId;
       if (month) params.month = month;
       if (year) params.year = year;
+      if (searchDebounced) params.search = searchDebounced;
       const res = await listInvoices(params);
       setRows(res.data?.invoices || []);
       setSummary(res.data?.summary || {});
@@ -49,7 +66,7 @@ export default function InvoiceListPage() {
     } finally {
       setLoading(false);
     }
-  }, [tab, customerId, month, year]);
+  }, [tab, customerId, month, year, searchDebounced]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -122,10 +139,25 @@ export default function InvoiceListPage() {
       </div>
 
       <div className="flex flex-wrap gap-2 mb-3">
-        <select value={customerId} onChange={(e) => setCustomerId(e.target.value)} className="border rounded-lg px-2 py-1.5 text-sm">
-          <option value="">All customers</option>
-          {customers.map((c) => <option key={c.customer_id} value={c.customer_id}>{c.company_name}</option>)}
-        </select>
+        <div className="relative flex-1 min-w-[220px]">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+          <input
+            type="search"
+            placeholder="Search invoice #, customer, IRN…"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            className="w-full border rounded-lg pl-9 pr-3 py-2 text-sm"
+          />
+        </div>
+        <div className="min-w-[220px] w-56">
+          <SearchableSelect
+            id="invoice-filter-customer"
+            value={customerId}
+            onChange={setCustomerId}
+            options={customerOptions}
+            placeholder="All customers"
+          />
+        </div>
         <select value={month} onChange={(e) => setMonth(e.target.value)} className="border rounded-lg px-2 py-1.5 text-sm">
           <option value="">All months</option>
           {MONTHS.slice(1).map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
@@ -242,10 +274,15 @@ export default function InvoiceListPage() {
           <button type="button" className="absolute inset-0 bg-black/40" onClick={() => setGenOpen(false)} aria-label="Close" />
           <div className="relative bg-white rounded-xl shadow-xl max-w-md w-full p-6 space-y-3">
             <h3 className="font-semibold">Generate Invoice</h3>
-            <select value={genForm.customer_id} onChange={(e) => setGenForm((f) => ({ ...f, customer_id: e.target.value }))} className="w-full border rounded-lg px-3 py-2 text-sm">
-              <option value="">Customer…</option>
-              {customers.map((c) => <option key={c.customer_id} value={c.customer_id}>{c.company_name}</option>)}
-            </select>
+            <SearchableSelect
+              id="invoice-gen-customer"
+              label="Customer"
+              required
+              value={genForm.customer_id}
+              onChange={(v) => setGenForm((f) => ({ ...f, customer_id: v }))}
+              options={customerOptions}
+              placeholder="Select customer"
+            />
             <div className="grid grid-cols-2 gap-2">
               <select value={genForm.month} onChange={(e) => setGenForm((f) => ({ ...f, month: e.target.value }))} className="border rounded-lg px-3 py-2 text-sm">
                 {MONTHS.slice(1).map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
