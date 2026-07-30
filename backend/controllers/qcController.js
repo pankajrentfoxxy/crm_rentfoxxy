@@ -9,6 +9,7 @@ const { markVendorSerialReadyForRent } = require('../services/grnTicketService')
 const { vacateWarehouseLocation } = require('../services/warehouseLocationService');
 const ttsplAuditService = require('../services/ttsplAuditService');
 const { logProductionHistory } = require('../services/ticketWorkflowHistoryService');
+const { assertTicketNotPartBlocked } = require('../services/ticketPartBlockService');
 
 // QC Checklist Configuration
 const QC_CHECKLIST_STRUCTURE = {
@@ -348,6 +349,15 @@ exports.submitQC = async (req, res) => {
             //  - QC2 fail        -> back to QC1 for full re-inspection (never Assembly/Software)
             //  - QC1 / Dispatch  -> back to Assembly & Software for technician rework
             nextStage = qcStage === 'QC2' ? 'QC1' : 'Assembly & Software';
+        }
+
+        if (ticketBefore?.ticket_id) {
+            try {
+                await assertTicketNotPartBlocked(client, ticketBefore.ticket_id);
+            } catch (blockErr) {
+                await client.query('ROLLBACK');
+                return res.status(blockErr.status || 409).json({ success: false, message: blockErr.message });
+            }
         }
 
         // Get next stage ID

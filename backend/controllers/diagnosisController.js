@@ -1,6 +1,7 @@
 const pool = require('../config/db');
 const { syncWorkLogForTicketState } = require('../services/ticketWorkLogService');
 const { logProductionHistory } = require('../services/ticketWorkflowHistoryService');
+const { assertTicketNotPartBlocked } = require('../services/ticketPartBlockService');
 
 // Diagnosis sections configuration
 const DIAGNOSIS_SECTIONS = {
@@ -247,6 +248,15 @@ exports.submitDiagnosis = async (req, res) => {
             [id]
         );
         const ticketBefore = ticketBeforeRes.rows[0] || null;
+
+        if (ticketBefore) {
+            try {
+                await assertTicketNotPartBlocked(client, ticketBefore.ticket_id);
+            } catch (blockErr) {
+                await client.query('ROLLBACK');
+                return res.status(blockErr.status || 409).json({ success: false, message: blockErr.message });
+            }
+        }
 
         // 1. Calculate Failures & Flags
         let totalFailures = 0;

@@ -10,7 +10,7 @@ export function buildMacCaptureCommand(apiBase, token, apiPrefix = 'grn-capture'
     'R=$(( $(sysctl -n hw.memsize)/1073741824 ))',
     'S=$(system_profiler SPNVMeDataType SPSerialATADataType 2>/dev/null|awk \'/Capacity/{print;exit}\'|grep -oE \'[0-9]+(\\.[0-9]+)?\'|head -1)',
     `V=$(curl -s -X POST "${base}/verify-configuration" -H "Content-Type: application/json" -d "{\\"manufacturer\\":\\"Apple\\",\\"model\\":\\"$M\\",\\"system_family\\":\\"$MF\\",\\"processor\\":\\"$C\\",\\"ram\\":\\"$R\\",\\"ssd\\":\\"$S\\",\\"gpu\\":\\"\\"}")`,
-    'if echo "$V"|grep -q \'"configurationMatched":true\'\';then',
+    'if [[ "$V" == *configurationMatched*true* ]];then',
     'SERIAL=$(ioreg -rd1 -c IOPlatformExpertDevice|awk \'/IOPlatformSerialNumber/{print $3;exit}\'|tr -d \'"\')',
     `curl -s -X POST "${base}" -H "Content-Type: application/json" -d "{\\"serial_number\\":\\"$SERIAL\\"}"`,
     'echo "Verified + serial sent: $SERIAL"',

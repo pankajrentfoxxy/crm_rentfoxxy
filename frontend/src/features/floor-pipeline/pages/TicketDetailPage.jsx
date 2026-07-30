@@ -32,6 +32,7 @@ import {
   ticketStatusBadgeClass,
   formatStageDisplayName,
   PENDING_INVENTORY_STAGE,
+  getPartBlockMessage,
 } from '../floorPipelineUi';
 import {
   canEditFloorTicketConfig,
@@ -738,6 +739,7 @@ export default function TicketDetailPage() {
   // Phase 16: when the ticket has open part requests, block stage progression.
   // Stage buttons are hidden entirely (not just disabled). Only reassign stays.
   const partsBlocked = (ticket.open_part_requests || 0) > 0;
+  const partBlockCopy = partsBlocked ? getPartBlockMessage(data?.part_requests, ticket.open_part_requests) : null;
   if (partsBlocked) {
     stageButtons.length = 0;
     if (canManageTickets) {
@@ -851,10 +853,10 @@ export default function TicketDetailPage() {
               <span className="text-lg">⛔</span>
               <div>
                 <p className="text-sm font-semibold text-amber-900">
-                  Ticket blocked — {ticket.open_part_requests} part request(s) pending
+                  Ticket blocked — {partBlockCopy?.title || `${ticket.open_part_requests} part request(s) open`}
                 </p>
                 <p className="text-xs text-amber-700">
-                  Parts must be attached before moving to next stage.
+                  {partBlockCopy?.detail || 'Parts must be attached before moving to next stage.'}
                   <button type="button" onClick={() => setTab('parts')} className="ml-1 underline">View requests</button>
                 </p>
               </div>
@@ -1086,11 +1088,11 @@ export default function TicketDetailPage() {
                         <div className="flex items-center gap-2 mb-1">
                           <span className="text-amber-600 text-lg">⛔</span>
                           <p className="font-semibold text-amber-900 text-sm">
-                            {ticket.open_part_requests} Part Request{ticket.open_part_requests !== 1 ? 's' : ''} Pending
+                            {partBlockCopy?.title || `${ticket.open_part_requests} Part Request${ticket.open_part_requests !== 1 ? 's' : ''} Open`}
                           </p>
                         </div>
                         <p className="text-xs text-amber-700">
-                          Attach all requested parts before moving to the next stage.
+                          {partBlockCopy?.detail || 'Attach all requested parts before moving to the next stage.'}
                         </p>
                         <button
                           type="button"

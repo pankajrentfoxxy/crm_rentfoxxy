@@ -352,3 +352,41 @@ export const EVENT_ICONS = {
   status_delivered: '✅',
   default: '•'
 };
+
+const PART_BLOCKING_STATUSES = ['pending', 'escalated', 'ordered', 'received', 'approved'];
+
+/** User-facing copy when open part requests block stage progression. */
+export function getPartBlockMessage(partRequests, openCount) {
+  if (!(openCount > 0)) return null;
+
+  const blocking = (partRequests || []).filter(
+    (pr) => pr.blocks_stage !== false && PART_BLOCKING_STATUSES.includes(pr.status)
+  );
+
+  const awaitingApproval = blocking.filter((pr) =>
+    ['pending', 'escalated', 'ordered', 'received'].includes(pr.status)
+  );
+  const awaitingAttach = blocking.filter((pr) => pr.status === 'approved');
+
+  if (awaitingApproval.length) {
+    return {
+      title: `${awaitingApproval.length} part request${awaitingApproval.length !== 1 ? 's' : ''} awaiting approval`,
+      detail: 'The team cannot progress this ticket until warehouse approves the part request(s).',
+    };
+  }
+
+  if (awaitingAttach.length) {
+    const needsReturn = awaitingAttach.some((pr) => pr.old_part_expected === 'yes');
+    return {
+      title: `${awaitingAttach.length} approved part${awaitingAttach.length !== 1 ? 's' : ''} ready to attach`,
+      detail: needsReturn
+        ? 'Attach the approved part(s) and return the old part(s) before moving to the next stage.'
+        : 'Attach the approved part(s) before moving to the next stage.',
+    };
+  }
+
+  return {
+    title: `${openCount} open part request${openCount !== 1 ? 's' : ''}`,
+    detail: 'Resolve all part requests before moving to the next stage.',
+  };
+}

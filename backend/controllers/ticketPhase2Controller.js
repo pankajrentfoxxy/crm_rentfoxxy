@@ -7,6 +7,7 @@ const ttsplAuditService = require('../services/ttsplAuditService');
 const { logProductionHistory } = require('../services/ticketWorkflowHistoryService');
 const { sendHighlightedTicketAlert } = require('../services/highlightedTicketAlertService');
 const vendorBilling = require('./vendorBillingController');
+const { assertTicketNotPartBlocked } = require('../services/ticketPartBlockService');
 
 const PRIVILEGED_ROLES = ['admin', 'floor_manager', 'manager'];
 const STAGE_ROUTING_ROLES = ['admin', 'floor_manager', 'manager', 'warehouse'];
@@ -251,6 +252,14 @@ exports.moveToStage = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Ticket not found' });
     }
     const ticket = ticketRes.rows[0];
+
+    try {
+      await assertTicketNotPartBlocked(client, ticket.ticket_id);
+    } catch (blockErr) {
+      await client.query('ROLLBACK');
+      return res.status(blockErr.status || 409).json({ success: false, message: blockErr.message });
+    }
+
     const currentStage = await getStageById(client, ticket.current_stage_id);
     const currentStageName = currentStage?.stage_name;
     // Production path: QC2 pass goes to Pending Inventory (not directly Inventory).

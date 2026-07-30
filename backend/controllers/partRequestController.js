@@ -693,6 +693,10 @@ exports.attachPartAndReturnOld = async (req, res) => {
       throw Object.assign(new Error(`Cannot attach part: request status is '${r.status}'. Must be approved.`), { status: 400 });
     }
 
+    if (r.old_part_expected === 'yes' && !old_part_returned) {
+      throw Object.assign(new Error('Return the old part to warehouse before completing attach.'), { status: 400 });
+    }
+
     const unitCost = parseFloat(r.instance_cost || r.part_cost || 0);
     const isUpgrade = r.request_type === 'upgrade';
     const qty = Number(r.quantity) || 1;

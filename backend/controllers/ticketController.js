@@ -23,6 +23,7 @@ const {
   isQcInspectorRole,
 } = require('../services/dataScopeService');
 const { appendDateRangeClauses } = require('../utils/dateRangeFilter');
+const { assertTicketNotPartBlocked } = require('../services/ticketPartBlockService');
 const { pickSpecFilters, buildTicketSpecFilter } = require('../utils/inventorySpecFilter');
 
 // Replace legacy "user/team/stage ID: N" tokens in activity notes with names.
@@ -771,6 +772,12 @@ exports.moveToNextStage = async (req, res) => {
     }
 
     const ticket = ticketResult.rows[0];
+
+    try {
+      await assertTicketNotPartBlocked(pool, ticket.ticket_id);
+    } catch (blockErr) {
+      return res.status(blockErr.status || 409).json({ success: false, message: blockErr.message });
+    }
     let nextStage;
 
     const currentStageMeta = await pool.query(
