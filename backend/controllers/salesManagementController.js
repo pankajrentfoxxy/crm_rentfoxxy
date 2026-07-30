@@ -3185,6 +3185,34 @@ exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}) => {
   const deliveredAt = new Date();
   const demoRows = [];
 
+  async function resolveDcSerialRentRate(serialId) {
+    if (!['rental', 'demo'].includes(String(quotationType || '').toLowerCase())) return null;
+    const bySerial = await client.query(
+      `SELECT sol.rate
+         FROM sales_order_serials sos
+         JOIN sales_order_lines sol ON sol.id = sos.line_id
+        WHERE sos.serial_id = $1
+          AND sos.dc_number = $2
+          AND sos.status <> 'removed'
+        ORDER BY sos.allocation_id DESC
+        LIMIT 1`,
+      [serialId, dcNumber]
+    );
+    const serialRate = parseFloat(bySerial.rows[0]?.rate || 0);
+    if (serialRate > 0) return serialRate;
+    const byDc = await client.query(
+      `SELECT sol.rate
+         FROM delivery_challan_lines dcl
+         JOIN sales_order_lines sol ON sol.sales_order_number = dcl.sales_order_number
+        WHERE dcl.dc_number = $1
+        ORDER BY (sol.brand = dcl.brand) DESC NULLS LAST
+        LIMIT 1`,
+      [dcNumber]
+    );
+    const dcRate = parseFloat(byDc.rows[0]?.rate || 0);
+    return dcRate > 0 ? dcRate : null;
+  }
+
   for (const s of serials) {
     const serialId = await resolveSerialId(client, s);
     if (!serialId) continue;
@@ -3205,18 +3233,7 @@ exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}) => {
       }
       continue;
     }
-    const rateRes = await client.query(
-      `SELECT sol.rate
-         FROM delivery_challan_lines dcl
-         JOIN sales_order_lines sol ON sol.sales_order_number = dcl.sales_order_number
-        WHERE dcl.dc_number = $1
-        ORDER BY (sol.brand = dcl.brand) DESC NULLS LAST
-        LIMIT 1`,
-      [dcNumber]
-    );
-    const rentMonthlyRate = ['rental', 'demo'].includes(String(quotationType || '').toLowerCase())
-      ? parseFloat(rateRes.rows[0]?.rate || 0) || null
-      : null;
+    const rentMonthlyRate = await resolveDcSerialRentRate(serialId);
     const result = await inventorySM.markDelivered(client, serialId, {
       quotationType,
       dcNumber,
