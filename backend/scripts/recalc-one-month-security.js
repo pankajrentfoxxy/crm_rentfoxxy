@@ -34,7 +34,7 @@ async function main() {
       await client.query('BEGIN');
       const newSecurity = await recalcSoSecurityIfOneMonthRental(client, soNumber);
       if (newSecurity != null) {
-        await syncDcSecurityForSo(client, soNumber, newSecurity);
+        await syncDcSecurityForSo(client, soNumber);
         await client.query('COMMIT');
         console.log(`${soNumber}: security = ₹${newSecurity.toFixed(2)}`);
       } else {

@@ -818,13 +818,25 @@ async function verifyDispatchQcConfiguration(tokenId, actual, ip) {
       ]
     );
 
-    await routeMismatchToPendingInventory(client, {
-      tokenRow: row,
-      pa,
-      remarks,
-      matchPayload: { ...matchPayload, remarks },
-      actorUserId: null,
-    });
+    // Record the mismatch only — do not detach from the SO or move the ticket.
+    // Dispatch QC chooses rework vs remove-from-SO via stage actions.
+    await client.query(
+      `UPDATE production_assets
+          SET qc2_verification = $2::jsonb,
+              updated_at = NOW()
+        WHERE production_asset_id = $1`,
+      [
+        pa.production_asset_id,
+        JSON.stringify({
+          ...matchPayload,
+          remarks,
+          source: 'dispatch_qc_script',
+          token_id: tokenId,
+          sales_order_number: row.sales_order_number,
+          configurationMatched: false,
+        }),
+      ]
+    );
 
     await client.query('COMMIT');
     return {
@@ -835,8 +847,8 @@ async function verifyDispatchQcConfiguration(tokenId, actual, ip) {
       expected,
       remarks,
       dispatch_qc_failed: true,
-      routed_to_pending_inventory: true, // legacy field name kept for capture clients
-      routed_to_diagnosis: true,
+      routed_to_pending_inventory: false,
+      routed_to_diagnosis: false,
     };
   } catch (e) {
     await client.query('ROLLBACK');

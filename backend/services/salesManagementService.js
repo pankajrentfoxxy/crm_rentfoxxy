@@ -1723,6 +1723,93 @@ function isIntraState(supplyState, sellerStateCode = SELLER_STATE_CODE) {
   return s === seller || s === '06' || s === 'hr' || s.includes('haryana');
 }
 
+/** One laptop's security share on an SO line (one month rent when applicable). */
+function perUnitSecurityForLine(line) {
+  const qty = Number(line.main_qty ?? line.quantity ?? 1) || 1;
+  const type = String(line.security_type || '').toLowerCase();
+  if (type === 'one_month_rental') {
+    const rate = Number(line.rate || 0);
+    if (rate > 0) return +rate.toFixed(2);
+  }
+  return +(Number(line.security_amount || 0) / qty).toFixed(2);
+}
+
+/** Total security deposit for a sales order. */
+function sumSoSecurityAmount(lines = []) {
+  if (!lines.length) return 0;
+  const type = String(lines[0].security_type || '').toLowerCase();
+  if (type === 'one_month_rental') {
+    return +lines.reduce((sum, line) => {
+      const qty = Number(line.main_qty ?? line.quantity ?? 1) || 1;
+      const rate = Number(line.rate || 0);
+      if (rate > 0) return sum + rate * qty;
+      return sum + Number(line.security_amount || 0);
+    }, 0).toFixed(2);
+  }
+  return +Number(lines[0].security_amount || 0).toFixed(2);
+}
+
+/** Security for a DC from the serials (and their SO lines) in that shipment. */
+function computeDcSecurityFromSerials(serials = [], soLines = []) {
+  const lineMap = new Map(soLines.map((l) => [Number(l.id), l]));
+  let total = 0;
+  for (const serial of serials) {
+    const line = lineMap.get(Number(serial.line_id));
+    if (line) total += perUnitSecurityForLine(line);
+  }
+  return +total.toFixed(2);
+}
+
+/** Recompute per-line one-month security; returns new SO total or null. */
+async function recalcSoSecurityIfOneMonthRental(db, salesOrderNumber) {
+  const typeRes = await db.query(
+    `SELECT security_type FROM sales_order_lines WHERE sales_order_number = $1 LIMIT 1`,
+    [salesOrderNumber]
+  );
+  if (String(typeRes.rows[0]?.security_type || '').toLowerCase() !== 'one_month_rental') {
+    return null;
+  }
+  await db.query(
+    `UPDATE sales_order_lines
+        SET security_amount = ROUND((COALESCE(rate, 0) * COALESCE(main_qty, quantity, 1))::numeric, 2)
+      WHERE sales_order_number = $1`,
+    [salesOrderNumber]
+  );
+  const sumRes = await db.query(
+    `SELECT COALESCE(SUM(security_amount), 0) AS total
+       FROM sales_order_lines WHERE sales_order_number = $1`,
+    [salesOrderNumber]
+  );
+  return +Number(sumRes.rows[0]?.total || 0).toFixed(2);
+}
+
+/** Refresh stored security on each DC from its dispatched serials. */
+async function syncDcSecurityForSo(db, salesOrderNumber) {
+  const soLinesRes = await db.query(
+    `SELECT * FROM sales_order_lines WHERE sales_order_number = $1`,
+    [salesOrderNumber]
+  );
+  const soLines = soLinesRes.rows;
+  if (!soLines.length) return;
+
+  const dcs = await db.query(
+    `SELECT DISTINCT dc_number FROM delivery_challan_lines WHERE sales_order_number = $1`,
+    [salesOrderNumber]
+  );
+  for (const { dc_number: dcNumber } of dcs.rows) {
+    const serialsRes = await db.query(
+      `SELECT line_id FROM sales_order_serials
+        WHERE sales_order_number = $1 AND dc_number = $2 AND status <> 'removed'`,
+      [salesOrderNumber, dcNumber]
+    );
+    const security = computeDcSecurityFromSerials(serialsRes.rows, soLines);
+    await db.query(
+      `UPDATE delivery_challan_lines SET security_amount = $1, updated_at = NOW() WHERE dc_number = $2`,
+      [security, dcNumber]
+    );
+  }
+}
+
 function computeGstBreakdown({
   subtotal = 0, shipping = 0, security = 0, supplyState = '',
   sellerStateCode = SELLER_STATE_CODE, gstRate = GST_RATE,
@@ -2042,6 +2129,11 @@ module.exports = {
   peekFinancialYearNumber,
   currentFinancialYear,
   computeGstBreakdown,
+  perUnitSecurityForLine,
+  sumSoSecurityAmount,
+  computeDcSecurityFromSerials,
+  recalcSoSecurityIfOneMonthRental,
+  syncDcSecurityForSo,
   resolveSupplyStateFromAddress,
   parseAddressField,
   normalizeStateForGst,

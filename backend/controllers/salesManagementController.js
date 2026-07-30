@@ -11,6 +11,10 @@ const {
   resolveDcBilling,
   entityForQuotationType,
   generateToken,
+  sumSoSecurityAmount,
+  computeDcSecurityFromSerials,
+  recalcSoSecurityIfOneMonthRental,
+  syncDcSecurityForSo,
   listQuotationsGrouped,
   getQuotationLines,
   listSalesOrdersGrouped,
@@ -125,28 +129,6 @@ function parseJsonSafe(value, fallback = null) {
   }
 }
 
-/** Recompute one-month-rental security on all SO lines after a rate change. */
-async function recalcSoSecurityIfNeeded(db, salesOrderNumber) {
-  const typeRes = await db.query(
-    `SELECT security_type FROM sales_order_lines WHERE sales_order_number = $1 LIMIT 1`,
-    [salesOrderNumber]
-  );
-  if (String(typeRes.rows[0]?.security_type || '').toLowerCase() !== 'one_month_rental') {
-    return null;
-  }
-  const sumRes = await db.query(
-    `SELECT COALESCE(SUM(COALESCE(rate, 0) * COALESCE(quantity, 1)), 0) AS one_month
-       FROM sales_order_lines WHERE sales_order_number = $1`,
-    [salesOrderNumber]
-  );
-  const oneMonth = +Number(sumRes.rows[0]?.one_month || 0).toFixed(2);
-  await db.query(
-    `UPDATE sales_order_lines SET security_amount = $1 WHERE sales_order_number = $2`,
-    [oneMonth, salesOrderNumber]
-  );
-  return oneMonth;
-}
-
 /** Keep linked outbound DC header rows aligned when an SO line config changes. */
 async function syncDcLinesFromSoLine(db, {
   lineId,
@@ -189,33 +171,6 @@ async function syncDcLinesFromSoLine(db, {
         )`,
     [brand, modelName, salesOrderNumber, lineId, oldBrand || '', oldModelName || '']
   );
-}
-
-/** Pro-rate updated SO security across existing DCs for that order. */
-async function syncDcSecurityForSo(db, salesOrderNumber, totalSecurity) {
-  const sec = Number(totalSecurity || 0);
-  if (!sec) return;
-  const unitsRes = await db.query(
-    `SELECT COUNT(*)::int AS n FROM sales_order_serials
-      WHERE sales_order_number = $1 AND status <> 'removed'`,
-    [salesOrderNumber]
-  );
-  const totalUnits = Number(unitsRes.rows[0]?.n || 0);
-  if (!totalUnits) return;
-  const dcs = await db.query(
-    `SELECT dc_number, SUM(COALESCE(quantity, main_qty, 1))::int AS qty
-       FROM delivery_challan_lines
-      WHERE sales_order_number = $1
-      GROUP BY dc_number`,
-    [salesOrderNumber]
-  );
-  for (const dc of dcs.rows) {
-    const groupSecurity = Math.round((sec / totalUnits) * Number(dc.qty || 1) * 100) / 100;
-    await db.query(
-      `UPDATE delivery_challan_lines SET security_amount = $1, updated_at = NOW() WHERE dc_number = $2`,
-      [groupSecurity, dc.dc_number]
-    );
-  }
 }
 
 /** Regenerate SO PDF and every linked DC PDF (rates/GST pull live from SO lines). */
@@ -861,10 +816,12 @@ exports.storeSalesOrder = async (req, res) => {
     // monthly rate x qty (server-authoritative). 'none' = 0.
     const securityType = String(body.security_type || 'none').toLowerCase();
     if (securityType === 'one_month_rental') {
-      const oneMonth = lineItems.reduce((s, it) => s + (Number(it.rate || 0) * Number(it.quantity || 1)), 0);
       await client.query(
-        `UPDATE sales_order_lines SET security_amount = $1, security_type = 'one_month_rental' WHERE sales_order_number = $2`,
-        [oneMonth, salesOrderNumber]
+        `UPDATE sales_order_lines
+            SET security_amount = ROUND((COALESCE(rate, 0) * COALESCE(main_qty, quantity, 1))::numeric, 2),
+                security_type = 'one_month_rental'
+          WHERE sales_order_number = $1`,
+        [salesOrderNumber]
       );
     } else {
       await client.query(
@@ -1317,18 +1274,56 @@ exports.storeDeliveryChallan = async (req, res) => {
     }
     let dcSecurity = Number(body.security_amount || 0);
     if (body.sales_order_number) {
-      const secRes = await pool.query(
-        `SELECT MAX(sol.security_amount) AS security_amount,
-                (SELECT COUNT(*) FROM sales_order_serials sos
-                  WHERE sos.sales_order_number = $1 AND sos.status <> 'removed') AS total_attached
-           FROM sales_order_lines sol WHERE sol.sales_order_number = $1`,
-        [body.sales_order_number]
-      );
-      const totalSecurity = Number(secRes.rows[0]?.security_amount || body.security_amount || 0);
-      const totalAttached = Number(secRes.rows[0]?.total_attached || 0);
-      dcSecurity = (totalAttached > 0 && thisDcSerialCount > 0)
-        ? Math.round((totalSecurity / totalAttached) * thisDcSerialCount * 100) / 100
-        : totalSecurity;
+      const soLinesForSec = await getSalesOrderLines(body.sales_order_number);
+      const securityType = String(soLinesForSec[0]?.security_type || '').toLowerCase();
+      if (securityType === 'one_month_rental' && thisDcSerialCount > 0) {
+        let matched = 0;
+        dcSecurity = 0;
+        for (let i = 0; i < count; i++) {
+          const model = (body.Model || body.model_name || [])[i];
+          const processor = (body.Processor || body.processor || [])[i];
+          const generation = (body.Generation || body.generation || [])[i];
+          const serials = (body.serial_number || [])[i];
+          const serialList = Array.isArray(serials) ? serials : (serials ? [serials] : []);
+          const soLine = soLinesForSec.find((l) =>
+            String(l.model_name || '') === String(model || '')
+            && String(l.processor || '') === String(processor || '')
+            && String(l.generation || '') === String(generation || '')
+          );
+          if (soLine) {
+            matched += serialList.length;
+            dcSecurity += computeDcSecurityFromSerials(
+              serialList.map(() => ({ line_id: soLine.id })),
+              soLinesForSec
+            );
+          }
+        }
+        dcSecurity = +Number(dcSecurity || 0).toFixed(2);
+        if (!matched) {
+          const totalSecurity = sumSoSecurityAmount(soLinesForSec);
+          const totalAttached = Number((await pool.query(
+            `SELECT COUNT(*)::int AS n FROM sales_order_serials
+              WHERE sales_order_number = $1 AND status <> 'removed'`,
+            [body.sales_order_number]
+          )).rows[0]?.n || 0);
+          dcSecurity = totalAttached > 0
+            ? Math.round((totalSecurity / totalAttached) * thisDcSerialCount * 100) / 100
+            : totalSecurity;
+        }
+      } else {
+        const secRes = await pool.query(
+          `SELECT MAX(sol.security_amount) AS security_amount,
+                  (SELECT COUNT(*) FROM sales_order_serials sos
+                    WHERE sos.sales_order_number = $1 AND sos.status <> 'removed') AS total_attached
+             FROM sales_order_lines sol WHERE sol.sales_order_number = $1`,
+          [body.sales_order_number]
+        );
+        const totalSecurity = Number(secRes.rows[0]?.security_amount || body.security_amount || 0);
+        const totalAttached = Number(secRes.rows[0]?.total_attached || 0);
+        dcSecurity = (totalAttached > 0 && thisDcSerialCount > 0)
+          ? Math.round((totalSecurity / totalAttached) * thisDcSerialCount * 100) / 100
+          : totalSecurity;
+      }
     }
 
     await client.query('BEGIN');
@@ -1652,10 +1647,6 @@ exports.createDcsByAddress = async (req, res) => {
       [sales_order_number]
     );
     const totalSoUnits = Number(totalRes.rows[0]?.n || allAllocationIds.length) || 1;
-    const totalSecurity = soLines.reduce((s, l) => s + Number(l.security_amount || 0), 0);
-    // Shipping is a header-level charge on the SO (same value replicated on each
-    // line) — carry it to the DC, pro-rated by unit share across split DCs so the
-    // total shipping across all DCs equals the SO's shipping (no double-charge).
     const totalShipping = Number(soHead.shiping_charges || 0);
 
     const allocMap = {};
@@ -1675,7 +1666,7 @@ exports.createDcsByAddress = async (req, res) => {
       const groupSupplyState = resolveSupplyStateFromAddress(deliveryAddress, soHead.supply_state);
 
       const groupSize = ids.length;
-      const groupSecurity = Math.round((totalSecurity / totalSoUnits) * groupSize * 100) / 100;
+      const groupSecurity = computeDcSecurityFromSerials(groupSerials, soLines);
       const groupShipping = Math.round((totalShipping / totalSoUnits) * groupSize * 100) / 100;
 
       const groupAwb = group.awb_number || body.awb_number || null;
@@ -2566,10 +2557,11 @@ exports.getSoWithPayments = async (req, res) => {
     const totalPaid = canViewPayments
       ? paymentRows.reduce((s, p) => s + Number(p.amount || 0), 0)
       : null;
+    const soSecurity = sumSoSecurityAmount(lines);
     const totals = computeGstBreakdown({
       subtotal: totalValue,
       shipping: lines[0].shiping_charges,
-      security: lines[0].security_amount,
+      security: soSecurity,
       supplyState: resolveSupplyStateFromAddress(lines[0].customer_shipping_address, lines[0].supply_state),
     });
     const soStatus = deriveSalesOrderListStatus({
@@ -2610,7 +2602,7 @@ exports.getSoWithPayments = async (req, res) => {
           total_paid: totalPaid,
           balance_due: Math.max(0, totalValue - totalPaid),
         } : {}),
-        security_amount: Number(lines[0].security_amount || 0),
+        security_amount: soSecurity,
         status: soStatus,
         ...totals,
       },
@@ -3879,9 +3871,9 @@ exports.updateSoLineRate = async (req, res) => {
     );
 
     const soNumber = line.sales_order_number;
-    const newSecurity = await recalcSoSecurityIfNeeded(client, soNumber);
+    const newSecurity = await recalcSoSecurityIfOneMonthRental(client, soNumber);
     if (newSecurity != null) {
-      await syncDcSecurityForSo(client, soNumber, newSecurity);
+      await syncDcSecurityForSo(client, soNumber);
     }
 
     await client.query('COMMIT');

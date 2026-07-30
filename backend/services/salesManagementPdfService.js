@@ -3,7 +3,7 @@ const path = require('path');
 const PDFDocument = require('pdfkit');
 const nodemailer = require('nodemailer');
 const pool = require('../config/db');
-const { computeGstBreakdown, resolveSupplyStateFromAddress } = require('./salesManagementService');
+const { computeGstBreakdown, resolveSupplyStateFromAddress, sumSoSecurityAmount } = require('./salesManagementService');
 const { resolveHsnForDisplay, txnTypeFromQuotation } = require('../constants/hsnDefaults');
 
 const UPLOAD_DIR = path.join(__dirname, '../uploads/sales-documents');
@@ -302,7 +302,9 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
   // Totals
   const goods = rows.reduce((s, r) => s + (Number(r.rate || 0) * Number(r.qty || 1)), 0);
   const shipping = Number(header.shiping_charges || lines[0]?.shiping_charges || 0);
-  const security = Number(header.security_amount || lines[0]?.security_amount || 0);
+  const security = docType === 'delivery_challan'
+    ? Number(header.security_amount || lines[0]?.security_amount || 0)
+    : sumSoSecurityAmount(lines);
   const subtotal = +goods.toFixed(2);
   const supplyState = resolveSupplyStateFromAddress(
     header.customer_shipping_address || lines[0]?.customer_shipping_address,

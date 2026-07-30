@@ -436,31 +436,41 @@ exports.moveToStage = async (req, res) => {
         db: client
       });
 
-      // Dispatch QC fail → detach from the Sales Order, recalc totals, mark the
-      // asset qc_failed (drops off Ready to Rent/Sell) and write SO/asset audits.
-      // Ticket stage move itself is handled below by this function.
-      const allocRes = await client.query(
-        `SELECT allocation_id FROM sales_order_serials
-          WHERE qc_ticket_id = $1 AND status <> 'removed'
-          ORDER BY allocation_id DESC LIMIT 1`,
-        [ticket.ticket_id]
-      );
-      if (allocRes.rows.length) {
-        const { applyDispatchQcFailure } = require('../services/dispatchQcCaptureService');
-        const paRes = await client.query(
-          `SELECT production_asset_id FROM production_assets
-            WHERE ticket_id = $1 OR (vendor_serial_id IS NOT NULL AND vendor_serial_id = $2)
-            ORDER BY production_asset_id DESC LIMIT 1`,
-          [ticket.ticket_id, ticket.vendor_serial_id || null]
+      if (effectiveToStage === 'Assembly & Software') {
+        // Rework path — keep the laptop on the Sales Order until an explicit
+        // "Remove from SO & send to Diagnosis" action is taken.
+        await client.query(
+          `UPDATE sales_order_serials
+              SET qc_status = 'failed', updated_at = NOW()
+            WHERE qc_ticket_id = $1 AND status = 'attached'`,
+          [ticket.ticket_id]
         );
-        await applyDispatchQcFailure(client, {
-          allocationId: allocRes.rows[0].allocation_id,
-          pa: paRes.rows[0] || null,
-          remarks: reason.trim(),
-          actorUserId: req.user.user_id,
-          actorName: req.user.name,
-          moveTicketToDiagnosis: false,
-        });
+      } else if (effectiveToStage === 'Diagnosis') {
+        // Hard fail — detach from SO, recalc totals, mark asset failed, audit.
+        // Ticket stage move itself is handled below by this function.
+        const allocRes = await client.query(
+          `SELECT allocation_id FROM sales_order_serials
+            WHERE qc_ticket_id = $1 AND status <> 'removed'
+            ORDER BY allocation_id DESC LIMIT 1`,
+          [ticket.ticket_id]
+        );
+        if (allocRes.rows.length) {
+          const { applyDispatchQcFailure } = require('../services/dispatchQcCaptureService');
+          const paRes = await client.query(
+            `SELECT production_asset_id FROM production_assets
+              WHERE ticket_id = $1 OR (vendor_serial_id IS NOT NULL AND vendor_serial_id = $2)
+              ORDER BY production_asset_id DESC LIMIT 1`,
+            [ticket.ticket_id, ticket.vendor_serial_id || null]
+          );
+          await applyDispatchQcFailure(client, {
+            allocationId: allocRes.rows[0].allocation_id,
+            pa: paRes.rows[0] || null,
+            remarks: reason.trim(),
+            actorUserId: req.user.user_id,
+            actorName: req.user.name,
+            moveTicketToDiagnosis: false,
+          });
+        }
       }
     }
 
