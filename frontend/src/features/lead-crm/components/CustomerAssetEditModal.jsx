@@ -37,6 +37,7 @@ export default function CustomerAssetEditModal({ open, customerId, asset, onClos
     screen_size: '',
     rent_monthly_rate: '',
     dc_number: '',
+    dispatched_at: '',
     delivered_at: '',
   });
 
@@ -56,7 +57,8 @@ export default function CustomerAssetEditModal({ open, customerId, asset, onClos
           ? String(asset.rent_monthly_rate)
           : '',
       dc_number: asset.dc_number || '',
-      delivered_at: toDateInputValue(asset.delivered_at || asset.dispatch_date),
+      dispatched_at: toDateInputValue(asset.dispatch_date),
+      delivered_at: toDateInputValue(asset.delivered_at),
     });
   }, [open, asset]);
 
@@ -76,6 +78,11 @@ export default function CustomerAssetEditModal({ open, customerId, asset, onClos
         screen_size: form.screen_size.trim(),
         dc_number: form.dc_number.trim(),
       };
+      if (form.dispatched_at.trim() !== '') {
+        body.dispatched_at = form.dispatched_at.trim();
+      } else {
+        body.dispatched_at = null;
+      }
       if (form.delivered_at.trim() !== '') {
         body.delivered_at = form.delivered_at.trim();
       } else {
@@ -125,7 +132,7 @@ export default function CustomerAssetEditModal({ open, customerId, asset, onClos
               />
             </label>
           ))}
-          <label className="block text-sm">
+          <label className="block text-sm sm:col-span-2">
             <span className="text-xs font-medium text-slate-600">DC number</span>
             <input
               type="text"
@@ -133,6 +140,15 @@ export default function CustomerAssetEditModal({ open, customerId, asset, onClos
               onChange={(e) => setForm((f) => ({ ...f, dc_number: e.target.value }))}
               className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono"
               placeholder="e.g. DC/26-27/0910"
+            />
+          </label>
+          <label className="block text-sm">
+            <span className="text-xs font-medium text-slate-600">Dispatch date</span>
+            <input
+              type="date"
+              value={form.dispatched_at}
+              onChange={(e) => setForm((f) => ({ ...f, dispatched_at: e.target.value }))}
+              className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
             />
           </label>
           <label className="block text-sm">
@@ -144,6 +160,10 @@ export default function CustomerAssetEditModal({ open, customerId, asset, onClos
               className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
             />
           </label>
+          <p className="text-[11px] text-slate-500 sm:col-span-2">
+            Delivery date can be a future date for laptops still in transit (e.g. expected delivery tomorrow).
+            For rented units, billing start follows the delivery date.
+          </p>
           <label className="block text-sm sm:col-span-2">
             <span className="text-xs font-medium text-slate-600">Monthly rate (₹)</span>
             <input

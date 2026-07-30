@@ -22,6 +22,7 @@ export default function MarkDeliveredModal({
   title = 'Mark as Delivered',
   initialDate,
   confirmLabel = 'Confirm Delivery',
+  allowFutureDates = true,
   onClose,
   onConfirm,
 }) {
@@ -50,13 +51,14 @@ export default function MarkDeliveredModal({
         ) : null}
         <p className="text-xs text-blue-800 bg-blue-50 border border-blue-100 rounded-lg p-2 mb-4">
           This date becomes the customer delivery date and rental billing start anchor for laptops on this DC.
+          {allowFutureDates ? ' You can pick a future date for units still in transit.' : ''}
         </p>
         <label className="block mb-4">
           <span className="text-sm font-medium text-gray-700 block mb-1">Delivery date *</span>
           <input
             type="date"
             value={deliveryDate}
-            max={todayInputValue()}
+            max={allowFutureDates ? undefined : todayInputValue()}
             onChange={(e) => setDeliveryDate(e.target.value)}
             className="w-full border rounded-lg px-3 py-2 text-sm"
           />

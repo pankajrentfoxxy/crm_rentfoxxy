@@ -3502,6 +3502,111 @@ exports.markDcDelivered = async (req, res) => {
   }
 };
 
+/**
+ * Correct delivery date on an already-delivered outbound DC.
+ * Updates DC lines, customer asset delivered_at, and rental rent_start_date (billing anchor).
+ */
+exports.updateDcDeliveryDate = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const dcNumber = req.params.dcNumber;
+    const { parseDeliveredAtInput, rentStartForSerial } = require('../services/deliveryDateService');
+    const deliveredAt = parseDeliveredAtInput(req.body?.delivered_at, { required: true });
+
+    await client.query('BEGIN');
+
+    const headRes = await client.query(
+      `SELECT status, dispatch_mode
+         FROM delivery_challan_lines
+        WHERE dc_number = $1
+        LIMIT 1`,
+      [dcNumber]
+    );
+    if (!headRes.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Delivery challan not found' });
+    }
+    const head = headRes.rows[0];
+    if (String(head.status || '').toLowerCase() !== 'delivered') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'Delivery date can only be updated after the DC is marked delivered',
+      });
+    }
+
+    await client.query(
+      `UPDATE delivery_challan_lines
+          SET delivered_at = $1, delivery_completed_at = $1, updated_at = NOW()
+        WHERE dc_number = $2`,
+      [deliveredAt, dcNumber]
+    );
+
+    const serials = await collectDcSerials(dcNumber);
+    let serialsUpdated = 0;
+    for (const s of serials) {
+      const serialId = await resolveSerialId(client, s);
+      if (!serialId) continue;
+      const sr = await client.query(
+        `SELECT dispatch_mode, dispatched_at, inventory_status
+           FROM vendor_serial_numbers WHERE serial_id = $1`,
+        [serialId]
+      );
+      const row = sr.rows[0] || {};
+      const rentStart = rentStartForSerial({
+        dispatchMode: row.dispatch_mode || head.dispatch_mode,
+        dispatchedAt: row.dispatched_at,
+        deliveredAt,
+        inventoryStatus: row.inventory_status,
+      });
+      await client.query(
+        `UPDATE vendor_serial_numbers
+            SET delivered_at = $1,
+                rent_start_date = COALESCE($2, rent_start_date),
+                updated_at = NOW()
+          WHERE serial_id = $3`,
+        [deliveredAt, rentStart ? rentStart.toISOString().slice(0, 10) : null, serialId]
+      );
+      serialsUpdated += 1;
+    }
+
+    await client.query(
+      `UPDATE demo_agreements SET delivered_at = $1, updated_at = NOW() WHERE dc_number = $2`,
+      [deliveredAt, dcNumber]
+    ).catch(() => {});
+
+    const soRes = await client.query(
+      `SELECT sales_order_number FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
+      [dcNumber]
+    );
+    const soNumber = soRes.rows[0]?.sales_order_number;
+    if (soNumber) {
+      await safeLogSalesOrderActivity({
+        salesOrderNumber: soNumber,
+        activityType: ACTIVITY_TYPES.DELIVERY_CHALLAN,
+        action: 'delivery_date_updated',
+        description: `${dcNumber} delivery date updated to ${deliveredAt.toISOString().slice(0, 10)}.`,
+        metadata: { dc_number: dcNumber, delivered_at: deliveredAt.toISOString() },
+        user: req.user,
+      });
+    }
+
+    await client.query('COMMIT');
+    res.json({
+      success: true,
+      message: 'Delivery date updated',
+      delivered_at: deliveredAt.toISOString(),
+      serials_updated: serialsUpdated,
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('updateDcDeliveryDate:', error);
+    res.status(error.status || 500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
+  }
+};
+
 exports.markDcRejected = async (req, res) => {
   try {
     const dcNumber = req.params.dcNumber;

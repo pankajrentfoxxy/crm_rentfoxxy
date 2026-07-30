@@ -176,6 +176,7 @@ router.post(
   )
 );
 router.patch(...dcRoute('/delivered', soDcEdit, ctrl.markDcDelivered));
+router.patch(...dcRoute('/delivery-date', soDcEdit, ctrl.updateDcDeliveryDate));
 router.patch(...dcRoute('/rejected', soDcEdit, ctrl.markDcRejected));
 router.patch(...dcRoute('/customer-rejected', tbEdit, flowCtrl.markCustomerRejected));
 router.post(...dcRoute('/warehouse-return-otp', whReturnEdit, flowCtrl.sendWarehouseReturnOtp));

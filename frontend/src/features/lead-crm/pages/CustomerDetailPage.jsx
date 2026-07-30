@@ -137,6 +137,11 @@ function PasswordModal({ password, onClose }) {
   );
 }
 
+function fmtAssetDate(value) {
+  if (!value) return '—';
+  return new Date(value).toLocaleDateString('en-IN');
+}
+
 export default function CustomerDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -481,7 +486,8 @@ export default function CustomerDetailPage() {
                       ? <span className="px-2 py-0.5 rounded bg-purple-100 text-purple-700">Gorefurbo</span>
                       : <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-700">Rentfoxxy</span>}
                     {lap.dc_number && <span className="font-mono">DC {lap.dc_number}</span>}
-                    {(lap.delivered_at || lap.dispatch_date) && <span>{new Date(lap.delivered_at || lap.dispatch_date).toLocaleDateString('en-IN')}</span>}
+                    {lap.dispatch_date && <span>Dispatch: {fmtAssetDate(lap.dispatch_date)}</span>}
+                    {lap.delivered_at && <span>Delivered: {fmtAssetDate(lap.delivered_at)}</span>}
                     {lap.rent_monthly_rate && <span className="font-semibold text-slate-700">{formatCurrency(lap.rent_monthly_rate)}</span>}
                   </div>
                   <div className="pt-2 border-t border-slate-100"><PodLinks pdfPath={lap.dc_pdf_path} files={lap.pod_files} keyPrefix={lap.serial_id || lap.ttspl_id} /></div>
@@ -515,7 +521,7 @@ export default function CustomerDetailPage() {
               <thead className="bg-gray-50 text-xs text-gray-500 text-left">
                 <tr>
                   {(assetView === 'active'
-                    ? ['#', 'TTSPL ID', 'Serial No', 'Model', 'Config', 'Entity', 'DC Number', 'Delivered Date', 'Monthly Rate', 'POD', 'Status', 'Actions']
+                    ? ['#', 'TTSPL ID', 'Serial No', 'Model', 'Config', 'Entity', 'DC Number', 'Dispatch Date', 'Delivered Date', 'Monthly Rate', 'POD', 'Status', 'Actions']
                     : ['#', 'TTSPL ID', 'Serial No', 'Model', 'Config', 'Return DC', 'Returned Date', 'Type', 'POD', 'Status']
                   ).map((h) => <th key={h} className="p-3">{h}</th>)}
                 </tr>
@@ -523,7 +529,7 @@ export default function CustomerDetailPage() {
               <tbody>
                 {assetView === 'active' ? (
                   assetRows.length === 0 ? (
-                    <tr><td colSpan={12} className="p-6 text-center text-gray-400">No assets currently with this customer</td></tr>
+                    <tr><td colSpan={13} className="p-6 text-center text-gray-400">No assets currently with this customer</td></tr>
                   ) : assetRows.map((lap, i) => (
                     <tr key={lap.serial_id || lap.ttspl_id} className="border-t border-gray-100">
                       <td className="p-3 text-xs text-gray-400">{(assetPage - 1) * ASSET_PAGE_SIZE + i + 1}</td>
@@ -542,7 +548,8 @@ export default function CustomerDetailPage() {
                           : <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-700">Rentfoxxy</span>}
                       </td>
                       <td className="p-3 text-xs font-mono">{lap.dc_number || '—'}</td>
-                      <td className="p-3 text-xs">{(lap.delivered_at || lap.dispatch_date) ? new Date(lap.delivered_at || lap.dispatch_date).toLocaleDateString('en-IN') : '—'}</td>
+                      <td className="p-3 text-xs">{fmtAssetDate(lap.dispatch_date)}</td>
+                      <td className="p-3 text-xs">{fmtAssetDate(lap.delivered_at)}</td>
                       <td className="p-3 text-xs">{lap.rent_monthly_rate ? formatCurrency(lap.rent_monthly_rate) : '—'}</td>
                       <td className="p-3 text-xs"><PodLinks pdfPath={lap.dc_pdf_path} files={lap.pod_files} keyPrefix={lap.serial_id || lap.ttspl_id} /></td>
                       <td className="p-3"><span className="px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-xs">{lap.status || 'rented'}</span></td>

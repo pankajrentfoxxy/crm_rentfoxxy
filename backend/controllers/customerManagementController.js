@@ -1372,7 +1372,7 @@ const ACTIVE_FROM_SQL = `
   )
   LEFT JOIN LATERAL (
     SELECT dcl.file_path, dcl.pod_image_url, dcl.pod_photo_url, dcl.esign_url,
-           dcl.pdf_path, dcl.delivery_completed_at
+           dcl.pdf_path, dcl.delivery_completed_at, dcl.dispatched_at
     FROM delivery_challan_lines dcl
     WHERE dcl.dc_number = vsn.current_dc_number
       AND COALESCE(dcl.movement_type, 'outbound') = 'outbound'
@@ -1428,7 +1428,7 @@ const ACTIVE_SELECT_SQL = `
          vsn.inventory_status AS status,
          vsn.current_entity AS entity_code,
          vsn.current_dc_number AS dc_number,
-         vsn.delivered_at AS dispatch_date,
+         COALESCE(vsn.dispatched_at, pod.dispatched_at) AS dispatch_date,
          COALESCE(vsn.delivered_at, pod.delivery_completed_at) AS delivered_at,
          vsn.rent_start_date,
          vsn.rent_monthly_rate,
@@ -1591,6 +1591,19 @@ exports.updateCustomerAsset = async (req, res) => {
       dcNumber = raw == null || raw === '' ? null : String(raw).trim();
     }
 
+    let dispatchedAt;
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'dispatched_at')) {
+      const raw = req.body.dispatched_at;
+      if (raw == null || raw === '') {
+        dispatchedAt = null;
+      } else {
+        dispatchedAt = normalizeAssetDateField(raw);
+        if (!dispatchedAt) {
+          return res.status(400).json({ success: false, message: 'Invalid dispatch date' });
+        }
+      }
+    }
+
     let deliveredAt;
     if (Object.prototype.hasOwnProperty.call(req.body || {}, 'delivered_at')) {
       const raw = req.body.delivered_at;
@@ -1608,6 +1621,7 @@ exports.updateCustomerAsset = async (req, res) => {
       !Object.keys(specPayload).length
       && rentMonthlyRate === undefined
       && dcNumber === undefined
+      && dispatchedAt === undefined
       && deliveredAt === undefined
     ) {
       return res.status(400).json({ success: false, message: 'Provide at least one field to update' });
@@ -1618,7 +1632,8 @@ exports.updateCustomerAsset = async (req, res) => {
     const cur = await client.query(
       `SELECT vsn.serial_id, vsn.serial_number, vsn.inventory_asset_code, vsn.extra,
               vsn.inventory_status, vsn.current_customer_id, vsn.rent_monthly_rate,
-              vsn.current_dc_number, vsn.delivered_at,
+              vsn.current_dc_number, vsn.delivered_at, vsn.rent_start_date,
+              vsn.dispatch_mode, vsn.dispatched_at,
               inv.inventory_id, inv.brand AS inv_brand, inv.model AS inv_model,
               inv.processor AS inv_processor, inv.generation AS inv_generation,
               inv.ram AS inv_ram, inv.storage AS inv_storage, inv.gpu AS inv_gpu,
@@ -1658,6 +1673,7 @@ exports.updateCustomerAsset = async (req, res) => {
       specPayload,
       rentMonthlyRate,
       dcNumber,
+      dispatchedAt,
       deliveredAt,
     });
 
@@ -1695,9 +1711,43 @@ exports.updateCustomerAsset = async (req, res) => {
       vsnPatch.push(`current_dc_number = $${p++}`);
       vsnParams.push(dcNumber);
     }
+    if (dispatchedAt !== undefined) {
+      vsnPatch.push(`dispatched_at = $${p++}::timestamptz`);
+      vsnParams.push(dispatchedAt ? `${dispatchedAt}T12:00:00.000Z` : null);
+    }
     if (deliveredAt !== undefined) {
       vsnPatch.push(`delivered_at = $${p++}::timestamptz`);
-      vsnParams.push(`${deliveredAt}T00:00:00.000Z`);
+      vsnParams.push(`${deliveredAt}T12:00:00.000Z`);
+    }
+
+    const effectiveDispatchedAt = dispatchedAt !== undefined
+      ? (dispatchedAt ? `${dispatchedAt}T12:00:00.000Z` : null)
+      : row.dispatched_at;
+    const effectiveDeliveredAt = deliveredAt !== undefined
+      ? `${deliveredAt}T12:00:00.000Z`
+      : row.delivered_at;
+
+    if (deliveredAt !== undefined || dispatchedAt !== undefined) {
+      const { rentStartForSerial } = require('../services/deliveryDateService');
+      const rentStart = rentStartForSerial({
+        dispatchMode: row.dispatch_mode,
+        dispatchedAt: effectiveDispatchedAt,
+        deliveredAt: effectiveDeliveredAt,
+        inventoryStatus: row.inventory_status,
+      });
+      if (rentStart) {
+        const rentStartStr = rentStart.toISOString().slice(0, 10);
+        vsnPatch.push(`rent_start_date = $${p++}`);
+        vsnParams.push(rentStartStr);
+        const beforeRent = row.rent_start_date ? String(row.rent_start_date).slice(0, 10) : '';
+        if (beforeRent !== rentStartStr) {
+          changes.push({
+            field: 'rent_start_date',
+            before: beforeRent,
+            after: rentStartStr,
+          });
+        }
+      }
     }
     vsnPatch.push('updated_at = NOW()');
     vsnParams.push(serialId);
@@ -1708,6 +1758,17 @@ exports.updateCustomerAsset = async (req, res) => {
     );
 
     const effectiveDcNumber = dcNumber !== undefined ? dcNumber : row.current_dc_number;
+    if (dispatchedAt !== undefined && effectiveDcNumber) {
+      await client.query(
+        `UPDATE delivery_challan_lines
+            SET dispatched_at = $1::timestamptz,
+                updated_at = NOW()
+          WHERE dc_number = $2
+            AND customer_id = $3
+            AND COALESCE(movement_type, 'outbound') = 'outbound'`,
+        [dispatchedAt ? `${dispatchedAt}T12:00:00.000Z` : null, effectiveDcNumber, customerId]
+      );
+    }
     if (deliveredAt !== undefined && effectiveDcNumber) {
       await client.query(
         `UPDATE delivery_challan_lines
@@ -1717,7 +1778,7 @@ exports.updateCustomerAsset = async (req, res) => {
           WHERE dc_number = $2
             AND customer_id = $3
             AND COALESCE(movement_type, 'outbound') = 'outbound'`,
-        [`${deliveredAt}T00:00:00.000Z`, effectiveDcNumber, customerId]
+        [`${deliveredAt}T12:00:00.000Z`, effectiveDcNumber, customerId]
       );
     }
 
@@ -1794,7 +1855,10 @@ exports.updateCustomerAsset = async (req, res) => {
     };
     if (rentMonthlyRate !== undefined) responsePayload.rent_monthly_rate = rentMonthlyRate;
     if (dcNumber !== undefined) responsePayload.dc_number = dcNumber;
+    if (dispatchedAt !== undefined) responsePayload.dispatched_at = dispatchedAt;
     if (deliveredAt !== undefined) responsePayload.delivered_at = deliveredAt;
+    const rentStartChange = changes.find((c) => c.field === 'rent_start_date');
+    if (rentStartChange?.after) responsePayload.rent_start_date = rentStartChange.after;
 
     res.json({
       success: true,

@@ -41,7 +41,15 @@ function toDateInputValue(d) {
  * Recompute rent_start_date for a rented serial after delivery date correction.
  */
 function rentStartForSerial({ dispatchMode, dispatchedAt, deliveredAt, inventoryStatus }) {
-  if (String(inventoryStatus || '') !== inventorySM.STATUS.RENTED) return null;
+  const status = String(inventoryStatus || '');
+  const rentalLike = [
+    inventorySM.STATUS.RENTED,
+    inventorySM.STATUS.IN_TRANSIT,
+    inventorySM.STATUS.ON_DEMO,
+    'out_stock',
+  ].includes(status);
+  if (!rentalLike) return null;
+  if (!deliveredAt && status === inventorySM.STATUS.IN_TRANSIT) return null;
   return inventorySM.computeRentStart({ dispatchMode, dispatchedAt, deliveredAt });
 }
 

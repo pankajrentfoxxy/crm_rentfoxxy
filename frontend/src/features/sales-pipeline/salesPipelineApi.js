@@ -37,6 +37,7 @@ export const createDcQcTickets = (n) => api.post(`${base}/delivery-challans/${en
 export const dispatchDC = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}/dispatch`, d);
 export const updateDcAssignment = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}/assignment`, d);
 export const markDelivered = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}/delivered`, d);
+export const updateDcDeliveryDate = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}/delivery-date`, d);
 export const markRejected = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}/rejected`, d);
 export const cancelDC = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}/cancel`, d || {});
 export const uploadSaleDcCompliance = (n, formData) => api.post(
