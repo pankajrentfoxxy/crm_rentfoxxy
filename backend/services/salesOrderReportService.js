@@ -3,7 +3,7 @@
  * CRM operations counted from 2026-07-01 only (excludes legacy ERP migration noise).
  */
 const pool = require('../config/db');
-const { compareKey } = require('../utils/assetConfigNormalize');
+const { compareKey, normalizeRam, normalizeStorage } = require('../utils/assetConfigNormalize');
 const { appleChipGeneration } = require('../utils/soInventorySpecMatch');
 const { salesOrderScopeWhere } = require('./salesManagementService');
 
@@ -78,12 +78,69 @@ function specKey(processor, generation) {
   return `${processorKey(processor)}::${compareKey('generations', gen)}`;
 }
 
-function emptyRow(processor, generation = null) {
-  const gen = generation != null ? resolveGeneration(processor, generation) : null;
+// Detail rows are broken down further by RAM + SSD so the list can show them.
+function detailKey(processor, generation, ram, ssd) {
+  return `${specKey(processor, generation)}::${compareKey('ram', ram || '')}::${compareKey('storage', ssd || '')}`;
+}
+
+// --- RAM / SSD (storage) filters -------------------------------------------
+function parseSpecFilters(query = {}) {
   return {
-    key: generation != null ? specKey(processor, generation) : processorKey(processor),
+    ram: String(query.ram || '').trim(),
+    ssd: String(query.ssd || query.storage || '').trim(),
+  };
+}
+
+function matchesSpecFilter(row, specFilters) {
+  if (!specFilters) return true;
+  const { ram, ssd } = specFilters;
+  if (ram && compareKey('ram', row.ram || '') !== compareKey('ram', ram)) return false;
+  if (ssd && compareKey('storage', row.storage || '') !== compareKey('storage', ssd)) return false;
+  return true;
+}
+
+function addSpecOption(map, entityKey, raw) {
+  const disp = (entityKey === 'ram' ? normalizeRam(raw || '') : normalizeStorage(raw || '')).trim();
+  if (!disp) return;
+  const key = compareKey(entityKey, disp);
+  if (!map.has(key)) map.set(key, disp);
+}
+
+function collectSpecOptions(...rowLists) {
+  const ram = new Map();
+  const ssd = new Map();
+  for (const rows of rowLists) {
+    for (const r of rows) {
+      addSpecOption(ram, 'ram', r.ram);
+      addSpecOption(ssd, 'storage', r.storage);
+    }
+  }
+  return { ram, ssd };
+}
+
+function mergeSpecOptions(a, b) {
+  const mergeMap = (m1, m2) => {
+    const m = new Map(m1);
+    m2.forEach((v, k) => { if (!m.has(k)) m.set(k, v); });
+    return m;
+  };
+  const sortVals = (m) => [...m.values()].sort((x, y) => x.localeCompare(y, undefined, { numeric: true }));
+  return {
+    ram: sortVals(mergeMap(a.ram, b.ram)),
+    ssd: sortVals(mergeMap(a.ssd, b.ssd)),
+  };
+}
+
+function emptyRow(processor, generation = null, ram = null, ssd = null) {
+  const gen = generation != null ? resolveGeneration(processor, generation) : null;
+  const isDetail = generation != null;
+  return {
+    key: isDetail ? detailKey(processor, generation, ram, ssd) : processorKey(processor),
+    spec_key: isDetail ? specKey(processor, generation) : null,
     processor: processor || '—',
     generation: gen,
+    ram: isDetail ? ((normalizeRam(ram || '').trim()) || '—') : null,
+    ssd: isDetail ? ((normalizeStorage(ssd || '').trim()) || '—') : null,
     is_group: generation == null,
     ordered: 0,
     attached: 0,
@@ -95,9 +152,9 @@ function emptyRow(processor, generation = null) {
   };
 }
 
-function bumpRow(map, processor, generation, field, n = 1) {
-  const key = specKey(processor, generation);
-  if (!map.has(key)) map.set(key, emptyRow(processor, generation));
+function bumpRow(map, processor, generation, ram, ssd, field, n = 1) {
+  const key = detailKey(processor, generation, ram, ssd);
+  if (!map.has(key)) map.set(key, emptyRow(processor, generation, ram, ssd));
   map.get(key)[field] += n;
 }
 
@@ -121,14 +178,17 @@ function groupByProcessor(detailRows) {
     .filter((g) => g.generations.length > 0)
     .map((g) => ({
       ...g,
-      generations: g.generations.sort((a, b) => b.ordered - a.ordered || String(a.generation).localeCompare(String(b.generation))),
+      generations: g.generations.sort((a, b) => b.ordered - a.ordered
+        || String(a.generation).localeCompare(String(b.generation))
+        || String(a.ram).localeCompare(String(b.ram), undefined, { numeric: true })
+        || String(a.ssd).localeCompare(String(b.ssd), undefined, { numeric: true })),
     }))
     .sort((a, b) => b.ordered - a.ordered || String(a.processor).localeCompare(String(b.processor)));
 }
 
 function detailRowsFromMap(map, orderConfigKeys) {
   return [...map.values()]
-    .filter((r) => orderConfigKeys.has(r.key))
+    .filter((r) => orderConfigKeys.has(r.spec_key))
     .sort((a, b) => b.ordered - a.ordered || String(a.processor).localeCompare(String(b.processor)));
 }
 
@@ -307,24 +367,26 @@ function buildScopeTable(lines, serials, stock, qcUnits, range) {
     const cfgKey = specKey(line.processor, line.generation);
     orderConfigKeys.add(cfgKey);
 
+    const r = line.ram;
+    const st = line.storage;
     if (showOrdered) {
-      bumpRow(map, line.processor, line.generation, 'ordered', pending);
+      bumpRow(map, line.processor, line.generation, r, st, 'ordered', pending);
     }
-    if (counts.attachedPending) bumpRow(map, line.processor, line.generation, 'attached', counts.attachedPending);
-    if (counts.dispatchQcDone) bumpRow(map, line.processor, line.generation, 'dispatch_qc_done', counts.dispatchQcDone);
-    if (counts.challan) bumpRow(map, line.processor, line.generation, 'challan_generated', counts.challan);
-    if (counts.dispatched) bumpRow(map, line.processor, line.generation, 'dispatched', counts.dispatched);
+    if (counts.attachedPending) bumpRow(map, line.processor, line.generation, r, st, 'attached', counts.attachedPending);
+    if (counts.dispatchQcDone) bumpRow(map, line.processor, line.generation, r, st, 'dispatch_qc_done', counts.dispatchQcDone);
+    if (counts.challan) bumpRow(map, line.processor, line.generation, r, st, 'challan_generated', counts.challan);
+    if (counts.dispatched) bumpRow(map, line.processor, line.generation, r, st, 'dispatched', counts.dispatched);
   }
 
   for (const row of stock) {
     const key = specKey(row.processor, row.generation);
     if (!orderConfigKeys.has(key)) continue;
-    bumpRow(map, row.processor, row.generation, 'available', 1);
+    bumpRow(map, row.processor, row.generation, row.ram, row.storage, 'available', 1);
   }
   for (const row of qcUnits) {
     const key = specKey(row.processor, row.generation);
     if (!orderConfigKeys.has(key)) continue;
-    bumpRow(map, row.processor, row.generation, 'qc_process', 1);
+    bumpRow(map, row.processor, row.generation, row.ram, row.storage, 'qc_process', 1);
   }
 
   const detailRows = detailRowsFromMap(map, orderConfigKeys);
@@ -392,13 +454,21 @@ function buildSummary(lines, serials, range) {
   };
 }
 
-async function buildScopeReport(scope, range) {
-  const [lines, serials, stock, qcUnits] = await Promise.all([
+async function buildScopeReport(scope, range, specFilters = null) {
+  const [linesAll, serialsAll, stockAll, qcAll] = await Promise.all([
     fetchSoLines(scope),
     fetchSoSerials(scope),
     fetchAvailableStock(),
     fetchQcProcessUnits(),
   ]);
+
+  // Option lists come from the unfiltered data so the dropdowns keep every choice.
+  const options = collectSpecOptions(linesAll, serialsAll, stockAll);
+
+  const lines = linesAll.filter((r) => matchesSpecFilter(r, specFilters));
+  const serials = serialsAll.filter((r) => matchesSpecFilter(r, specFilters));
+  const stock = stockAll.filter((r) => matchesSpecFilter(r, specFilters));
+  const qcUnits = qcAll.filter((r) => matchesSpecFilter(r, specFilters));
 
   const table = buildScopeTable(lines, serials, stock, qcUnits, range);
 
@@ -406,14 +476,16 @@ async function buildScopeReport(scope, range) {
     summary: buildSummary(lines, serials, range),
     processors: table.processors,
     rows: table.detail_rows,
+    options,
   };
 }
 
 async function getSalesOrderReport(query = {}) {
   const range = parseDateRange(query);
+  const specFilters = parseSpecFilters(query);
   const [rental, sale] = await Promise.all([
-    buildScopeReport('rental', range),
-    buildScopeReport('sale', range),
+    buildScopeReport('rental', range, specFilters),
+    buildScopeReport('sale', range, specFilters),
   ]);
 
   return {
@@ -422,6 +494,8 @@ async function getSalesOrderReport(query = {}) {
     to: range.to,
     crm_start_date: CRM_START_DATE,
     generated_at: new Date().toISOString(),
+    filter_options: mergeSpecOptions(rental.options, sale.options),
+    applied_filters: { ram: specFilters.ram, ssd: specFilters.ssd },
     summary: {
       rental: rental.summary,
       sale: sale.summary,
@@ -455,13 +529,19 @@ async function getSalesOrderReportDrilldown(query = {}) {
   const processor = query.processor || '';
   const generation = query.generation || '';
   const range = parseDateRange(query);
+  const specFilters = parseSpecFilters(query);
 
-  const [lines, serials, stock, qcUnits] = await Promise.all([
+  const [linesAll, serialsAll, stockAll, qcAll] = await Promise.all([
     fetchSoLines(scope),
     fetchSoSerials(scope),
     fetchAvailableStock(),
     fetchQcProcessUnits(),
   ]);
+
+  const lines = linesAll.filter((r) => matchesSpecFilter(r, specFilters));
+  const serials = serialsAll.filter((r) => matchesSpecFilter(r, specFilters));
+  const stock = stockAll.filter((r) => matchesSpecFilter(r, specFilters));
+  const qcUnits = qcAll.filter((r) => matchesSpecFilter(r, specFilters));
 
   const items = [];
 
@@ -653,10 +733,61 @@ async function getSalesOrderReportDrilldown(query = {}) {
   };
 }
 
+/**
+ * Ordered-count breakdown by Processor + Generation + RAM + SSD for a single scope.
+ * Mirrors the "Ordered" (pending) logic used on-screen, but keeps RAM/SSD as
+ * separate dimensions so the Excel export can list them per row.
+ */
+async function getSalesOrderConfigBreakdown(query = {}) {
+  const scope = query.scope === 'sale' ? 'sale' : 'rental';
+  const range = parseDateRange(query);
+  const specFilters = parseSpecFilters(query);
+
+  const [linesAll, serialsAll] = await Promise.all([
+    fetchSoLines(scope),
+    fetchSoSerials(scope),
+  ]);
+
+  const lines = linesAll.filter((r) => matchesSpecFilter(r, specFilters));
+  const serials = serialsAll.filter((r) => matchesSpecFilter(r, specFilters));
+
+  const serialsByLine = serials.reduce((acc, s) => {
+    const lid = Number(s.line_id);
+    if (!acc[lid]) acc[lid] = [];
+    acc[lid].push(s);
+    return acc;
+  }, {});
+
+  const map = new Map();
+  for (const line of lines) {
+    const lineSerials = serialsByLine[line.line_id] || [];
+    const delivered = lineSerials.filter((s) => isSerialDelivered(s)).length;
+    const active = lineSerials.filter((s) => !isSerialDelivered(s)).length;
+    const pending = Math.max(0, Number(line.line_qty || 0) - delivered - active);
+    if (pending <= 0) continue;
+    if (!range.live && !inDateRange(line.created_at, range)) continue;
+
+    const processor = line.processor || '—';
+    const generation = resolveGeneration(line.processor, line.generation);
+    const ram = (normalizeRam(line.ram || '').trim()) || '—';
+    const ssd = (normalizeStorage(line.storage || '').trim()) || '—';
+    const key = `${processorKey(processor)}::${compareKey('generations', generation)}::${compareKey('ram', ram)}::${compareKey('storage', ssd)}`;
+    if (!map.has(key)) map.set(key, { processor, generation, ram, ssd, total_count: 0 });
+    map.get(key).total_count += pending;
+  }
+
+  return [...map.values()].sort(
+    (a, b) => b.total_count - a.total_count
+      || String(a.processor).localeCompare(String(b.processor))
+      || String(a.generation).localeCompare(String(b.generation))
+  );
+}
+
 module.exports = {
   CRM_START_DATE,
   getSalesOrderReport,
   getSalesOrderReportDrilldown,
+  getSalesOrderConfigBreakdown,
   parseDateRange,
   specKey,
   processorKey,

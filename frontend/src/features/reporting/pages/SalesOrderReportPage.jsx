@@ -176,11 +176,12 @@ function DataRow({
   const bg = isChild ? '#FAFBFD' : C.surface;
   const metricCols = TABLE_COLS.filter((c) => c.bucket);
   const generation = isChild ? row.generation : 'all';
+  const ram = isChild && row.ram && row.ram !== '—' ? row.ram : undefined;
+  const ssd = isChild && row.ssd && row.ssd !== '—' ? row.ssd : undefined;
 
   return (
     <tr style={{ borderTop: `1px solid ${C.border}`, background: bg }}>
       <td
-        colSpan={2}
         style={{
           padding: '11px 14px', fontWeight: isChild ? 500 : 700,
           position: 'sticky', left: 0, background: bg, zIndex: 1, minWidth: 200,
@@ -203,10 +204,16 @@ function DataRow({
             {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
             {row.processor}
             <span style={{ fontSize: 11, color: C.dim, fontWeight: 600 }}>
-              ({row.generations?.length || 0} gen)
+              ({row.generations?.length || 0} config)
             </span>
           </button>
         )}
+      </td>
+      <td style={{ padding: '11px 12px', background: bg, color: C.dim, fontSize: 12.5 }}>
+        {isChild ? (row.ram || '—') : ''}
+      </td>
+      <td style={{ padding: '11px 12px', background: bg, color: C.dim, fontSize: 12.5 }}>
+        {isChild ? (row.ssd || '—') : ''}
       </td>
       {metricCols.map((col) => (
         <td key={col.key} style={{ padding: '11px 10px', textAlign: 'center', background: bg }}>
@@ -214,7 +221,7 @@ function DataRow({
             value={row[col.key]}
             color={col.color}
             onClick={() => row[col.key] > 0 && onCellClick({
-              scope, bucket: col.bucket, processor: row.processor, generation,
+              scope, bucket: col.bucket, processor: row.processor, generation, ram, ssd,
             })}
           />
         </td>
@@ -258,7 +265,6 @@ function ConfigTable({ title, accent, processors, scope, onCellClick, headerActi
           <thead>
             <tr style={{ background: '#F8FAFC' }}>
               <th
-                colSpan={2}
                 style={{
                   textAlign: 'left', padding: '12px 14px', fontWeight: 700, color: C.dim,
                   fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em',
@@ -266,6 +272,20 @@ function ConfigTable({ title, accent, processors, scope, onCellClick, headerActi
                 }}
               >
                 Processor / Generation
+              </th>
+              <th style={{
+                textAlign: 'left', padding: '12px 12px', fontWeight: 700, color: C.dim,
+                fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', minWidth: 90,
+              }}
+              >
+                RAM
+              </th>
+              <th style={{
+                textAlign: 'left', padding: '12px 12px', fontWeight: 700, color: C.dim,
+                fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', minWidth: 100,
+              }}
+              >
+                SSD
               </th>
               {metricCols.map((col) => (
                 <th
@@ -284,7 +304,7 @@ function ConfigTable({ title, accent, processors, scope, onCellClick, headerActi
           <tbody>
             {processors.length === 0 ? (
               <tr>
-                <td colSpan={metricCols.length + 1} style={{ padding: 32, textAlign: 'center', color: C.dim }}>
+                <td colSpan={metricCols.length + 3} style={{ padding: 32, textAlign: 'center', color: C.dim }}>
                   No pending pipeline for this scope
                 </td>
               </tr>
@@ -443,10 +463,14 @@ export default function SalesOrderReportPage() {
   const preset = get('preset', 'today');
   const from = get('from');
   const to = get('to');
+  const ram = get('ram');
+  const ssd = get('ssd');
   const drillScope = get('scope');
   const drillBucket = get('bucket');
   const drillProcessor = get('processor');
   const drillGeneration = get('generation', 'all');
+  const drillRam = get('dram');
+  const drillSsd = get('dssd');
   const drillOpen = Boolean(drillScope && drillBucket && drillProcessor);
   const returnTo = `${location.pathname}${location.search}`;
 
@@ -462,8 +486,13 @@ export default function SalesOrderReportPage() {
       f.from = from || '2026-07-01';
       f.to = to;
     }
+    if (ram) f.ram = ram;
+    if (ssd) f.ssd = ssd;
     return f;
-  }, [preset, from, to]);
+  }, [preset, from, to, ram, ssd]);
+
+  const ramOptions = data?.filter_options?.ram || [];
+  const ssdOptions = data?.filter_options?.ssd || [];
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -496,6 +525,8 @@ export default function SalesOrderReportPage() {
           bucket: drillBucket,
           processor: drillProcessor,
           generation: drillGeneration || 'all',
+          ram: drillRam || ram || undefined,
+          ssd: drillSsd || ssd || undefined,
         });
         if (!cancelled) {
           setDrillItems(res?.items || []);
@@ -508,14 +539,16 @@ export default function SalesOrderReportPage() {
       }
     })();
     return () => { cancelled = true; };
-  }, [drillOpen, drillScope, drillBucket, drillProcessor, drillGeneration, filters]);
+  }, [drillOpen, drillScope, drillBucket, drillProcessor, drillGeneration, drillRam, drillSsd, ram, ssd, filters]);
 
-  const openDrill = ({ scope, bucket, processor, generation }) => {
+  const openDrill = ({ scope, bucket, processor, generation, ram: rowRam, ssd: rowSsd }) => {
     setFilter({
       scope,
       bucket,
       processor,
       generation: generation || 'all',
+      dram: rowRam || null,
+      dssd: rowSsd || null,
     }, { replace: false });
   };
 
@@ -525,6 +558,8 @@ export default function SalesOrderReportPage() {
       bucket: null,
       processor: null,
       generation: null,
+      dram: null,
+      dssd: null,
     }, { replace: true });
   };
 
@@ -608,6 +643,42 @@ export default function SalesOrderReportPage() {
                 style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '7px 10px' }}
               />
             </>
+          )}
+          <select
+            value={ram}
+            onChange={(e) => setFilter({ ram: e.target.value || null })}
+            style={{
+              border: `1px solid ${ram ? C.blue : C.border}`, borderRadius: 8,
+              padding: '7px 10px', fontSize: 12.5, fontWeight: 600,
+              color: ram ? C.blue : C.dim, background: C.surface, cursor: 'pointer',
+            }}
+          >
+            <option value="">All RAM</option>
+            {ramOptions.map((v) => <option key={v} value={v}>{v}</option>)}
+          </select>
+          <select
+            value={ssd}
+            onChange={(e) => setFilter({ ssd: e.target.value || null })}
+            style={{
+              border: `1px solid ${ssd ? C.blue : C.border}`, borderRadius: 8,
+              padding: '7px 10px', fontSize: 12.5, fontWeight: 600,
+              color: ssd ? C.blue : C.dim, background: C.surface, cursor: 'pointer',
+            }}
+          >
+            <option value="">All SSD</option>
+            {ssdOptions.map((v) => <option key={v} value={v}>{v}</option>)}
+          </select>
+          {(ram || ssd) && (
+            <button
+              type="button"
+              onClick={() => setFilter({ ram: null, ssd: null })}
+              style={{
+                padding: '7px 12px', borderRadius: 8, fontSize: 12, fontWeight: 700,
+                border: `1px solid ${C.border}`, background: C.surface, color: C.dim, cursor: 'pointer',
+              }}
+            >
+              Clear specs
+            </button>
           )}
           {data?.generated_at && (
             <span style={{ marginLeft: 'auto', fontSize: 11, color: C.dim }}>

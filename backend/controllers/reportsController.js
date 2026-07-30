@@ -1,7 +1,7 @@
 const pool = require('../config/db');
 const { getDisplayTeams, getTeamIdsForFilter } = require('../utils/teamUtils');
 const { getLaptopReport, getTicketRows, getStagePerformanceTickets } = require('../services/laptopReportService');
-const { getSalesOrderReport, getSalesOrderReportDrilldown } = require('../services/salesOrderReportService');
+const { getSalesOrderReport, getSalesOrderReportDrilldown, getSalesOrderConfigBreakdown } = require('../services/salesOrderReportService');
 const supportQuery = require('../services/supportQuery');
 const { getInwardOutwardSummary, getInwardOutwardDetails, getInwardOutwardFilters } = require('../services/inwardOutwardReportService');
 
@@ -1953,25 +1953,22 @@ exports.exportToExcel = async (req, res) => {
             ];
             sheetName = 'Sales Order Report';
         } else if (reportType === 'sales_order_config') {
-            // Simple 3-column export: Processor, Generation, Total Count (ordered),
-            // scoped to a single side (rental or sale).
-            const data = await getSalesOrderReport(filters);
+            // Export: Processor, Generation, RAM, SSD, Total Count (ordered),
+            // scoped to a single side (rental or sale). Honors RAM/SSD filters.
             const scopeKey = filters.scope === 'sale' ? 'sale' : 'rental';
-            const processors = data?.[scopeKey]?.processors || [];
-            rows = [];
-            for (const group of processors) {
-                for (const child of (group.generations || [])) {
-                    if (!child.ordered) continue;
-                    rows.push({
-                        processor: child.processor,
-                        generation: child.generation,
-                        total_count: child.ordered || 0,
-                    });
-                }
-            }
+            const breakdown = await getSalesOrderConfigBreakdown(filters);
+            rows = breakdown.map((r) => ({
+                processor: r.processor,
+                generation: r.generation,
+                ram: r.ram,
+                ssd: r.ssd,
+                total_count: r.total_count || 0,
+            }));
             headers = [
                 { key: 'processor', label: 'Processor' },
                 { key: 'generation', label: 'Generation' },
+                { key: 'ram', label: 'RAM' },
+                { key: 'ssd', label: 'SSD' },
                 { key: 'total_count', label: 'Total Count' },
             ];
             sheetName = scopeKey === 'sale' ? 'Sale Orders' : 'Rental Orders';
