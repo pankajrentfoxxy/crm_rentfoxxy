@@ -1015,22 +1015,26 @@ async function ensureReturnDcPickupItems(db, dcl) {
   return inserted;
 }
 
-/** Pickup marked received but inventory never left customer / no floor ticket. */
-function isIncompleteWarehouseReceive(item) {
+/** Pickup marked received but unit still held by the return customer / no floor ticket. */
+function isIncompleteWarehouseReceive(item, returnCustomerId = null) {
   if (!item) return false;
   if (!item.warehouse_received_at) return false;
   if (!item.floor_ticket_id) return true;
   const inv = String(item.inventory_status || '').toLowerCase();
-  if (['rented', 'on_demo', 'in_transit', 'out_stock'].includes(inv)) return true;
-  return false;
+  if (!['rented', 'on_demo', 'in_transit', 'out_stock'].includes(inv)) return false;
+  if (returnCustomerId != null && item.current_customer_id != null) {
+    return parseInt(item.current_customer_id, 10) === parseInt(returnCustomerId, 10);
+  }
+  return true;
 }
 
 function evaluateReturnDcWarehouseConfirm(pickupItems, units, dcl) {
+  const returnCustomerId = dcl?.customer_id ?? null;
   const pendingItems = (pickupItems || []).filter(
-    (i) => !i.warehouse_received_at || isIncompleteWarehouseReceive(i)
+    (i) => !i.warehouse_received_at || isIncompleteWarehouseReceive(i, returnCustomerId)
   );
   const fullyDone = pickupItems.length > 0
-    && pickupItems.every((i) => i.warehouse_received_at && !isIncompleteWarehouseReceive(i));
+    && pickupItems.every((i) => i.warehouse_received_at && !isIncompleteWarehouseReceive(i, returnCustomerId));
   if (fullyDone) {
     return { can_warehouse_confirm: false, warehouse_block_reason: null, warehouse_receive_pending: false };
   }
@@ -1162,6 +1166,7 @@ async function listReturnDeliveryChallans({ page = 1, limit = 25, search = '', d
                 v_pending.inventory_asset_code = COALESCE(sti_rdc.ttspl_id, sti_tkt.ttspl_id, NULLIF(split_part(rl.serial_number->>0, '|', 3), ''))
                 OR v_pending.serial_number = COALESCE(sti_rdc.serial_number, sti_tkt.serial_number, NULLIF(split_part(rl.serial_number->>0, '|', 2), ''))
               )
+              AND v_pending.current_customer_id = rl.customer_id
               AND COALESCE(v_pending.inventory_status, '') IN ('rented','on_demo','in_transit','out_stock')
           )
        ) AS warehouse_receive_pending,
@@ -1215,12 +1220,13 @@ async function getReturnDcDetail(rdcNumber) {
     `SELECT sti.*,
             u1.name AS tech_name,
             u2.name AS warehouse_receiver_name,
-            vsn.inventory_status
+            vsn.inventory_status,
+            vsn.current_customer_id
        FROM support_ticket_items sti
        LEFT JOIN users u1 ON u1.user_id = COALESCE(sti.pickup_assigned_to, sti.assigned_to)
        LEFT JOIN users u2 ON u2.user_id = sti.warehouse_received_by
        LEFT JOIN LATERAL (
-         SELECT v.inventory_status
+         SELECT v.inventory_status, v.current_customer_id
            FROM vendor_serial_numbers v
           WHERE v.deleted_at IS NULL
             AND (

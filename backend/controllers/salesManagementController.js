@@ -1771,18 +1771,23 @@ exports.createDcsByAddress = async (req, res) => {
       // Dispatch each unit through the inventory state machine (fallback: direct).
       for (const s of groupSerials) {
         if (!s.serial_id) continue;
+        const { resolveSerialRentRate } = require('../services/serialRentRateService');
+        const rentMonthlyRate = await resolveSerialRentRate(client, s.serial_id, dcNumber);
         try {
           await inventorySM.markDispatched(client, s.serial_id, {
             dcNumber, customerId: soHead.customer_id || null, entityCode, dispatchMode,
+            rentMonthlyRate,
             actorUserId: req.user?.user_id, actorName: req.user?.name,
           });
         } catch (rErr) {
           await client.query(
             `UPDATE vendor_serial_numbers
                 SET inventory_status = 'in_transit', current_dc_number = $1,
-                    dispatch_mode = $2, dispatched_at = NOW(), updated_at = NOW()
+                    dispatch_mode = $2, dispatched_at = NOW(),
+                    rent_monthly_rate = COALESCE($4, rent_monthly_rate),
+                    updated_at = NOW()
               WHERE serial_id = $3`,
-            [dcNumber, dispatchMode, s.serial_id]
+            [dcNumber, dispatchMode, s.serial_id, rentMonthlyRate]
           );
         }
       }
@@ -3185,32 +3190,11 @@ exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}) => {
   const deliveredAt = new Date();
   const demoRows = [];
 
+  const { resolveSerialRentRate } = require('../services/serialRentRateService');
+
   async function resolveDcSerialRentRate(serialId) {
     if (!['rental', 'demo'].includes(String(quotationType || '').toLowerCase())) return null;
-    const bySerial = await client.query(
-      `SELECT sol.rate
-         FROM sales_order_serials sos
-         JOIN sales_order_lines sol ON sol.id = sos.line_id
-        WHERE sos.serial_id = $1
-          AND sos.dc_number = $2
-          AND sos.status <> 'removed'
-        ORDER BY sos.allocation_id DESC
-        LIMIT 1`,
-      [serialId, dcNumber]
-    );
-    const serialRate = parseFloat(bySerial.rows[0]?.rate || 0);
-    if (serialRate > 0) return serialRate;
-    const byDc = await client.query(
-      `SELECT sol.rate
-         FROM delivery_challan_lines dcl
-         JOIN sales_order_lines sol ON sol.sales_order_number = dcl.sales_order_number
-        WHERE dcl.dc_number = $1
-        ORDER BY (sol.brand = dcl.brand) DESC NULLS LAST
-        LIMIT 1`,
-      [dcNumber]
-    );
-    const dcRate = parseFloat(byDc.rows[0]?.rate || 0);
-    return dcRate > 0 ? dcRate : null;
+    return resolveSerialRentRate(client, serialId, dcNumber);
   }
 
   for (const s of serials) {

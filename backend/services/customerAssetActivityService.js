@@ -29,7 +29,7 @@ function displayValue(field, value) {
     const n = Number(value);
     return Number.isFinite(n) ? `₹${n}` : String(value);
   }
-  if (field === 'delivered_at' || field === 'dispatched_at') return normalizeAssetDateField(value) || '—';
+  if (field === 'delivered_at' || field === 'dispatched_at' || field === 'returned_at') return normalizeAssetDateField(value) || '—';
   return String(value);
 }
 
@@ -47,10 +47,11 @@ function buildAssetBeforeState(row, extra) {
     dc_number: row.current_dc_number || '',
     dispatched_at: normalizeAssetDateField(row.dispatched_at) || '',
     delivered_at: normalizeAssetDateField(row.delivered_at) || '',
+    returned_at: '',
   };
 }
 
-function buildAssetChangeSet(before, { specPayload, rentMonthlyRate, dcNumber, dispatchedAt, deliveredAt }) {
+function buildAssetChangeSet(before, { specPayload, rentMonthlyRate, dcNumber, dispatchedAt, deliveredAt, returnedAt }) {
   const changes = [];
 
   for (const { key, label } of SPEC_FIELDS) {
@@ -110,6 +111,19 @@ function buildAssetChangeSet(before, { specPayload, rentMonthlyRate, dcNumber, d
       changes.push({
         field: 'delivered_at',
         label: 'Delivery date',
+        oldValue: oldDate || null,
+        newValue: newDate || null,
+      });
+    }
+  }
+
+  if (returnedAt !== undefined) {
+    const oldDate = before.returned_at || '';
+    const newDate = returnedAt || '';
+    if (String(oldDate) !== String(newDate)) {
+      changes.push({
+        field: 'returned_at',
+        label: 'Return date',
         oldValue: oldDate || null,
         newValue: newDate || null,
       });

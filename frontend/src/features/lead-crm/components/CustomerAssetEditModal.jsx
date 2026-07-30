@@ -2,15 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { updateCustomerAsset } from '../leadCrmApi';
+import { assetCalendarYmd } from '../leadCrmUtils';
 
 function toDateInputValue(value) {
-  if (!value) return '';
-  const s = String(value);
-  const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
-  if (m) return m[1];
-  const d = new Date(s);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toISOString().slice(0, 10);
+  return assetCalendarYmd(value) || '';
 }
 
 const SPEC_FIELDS = [
@@ -39,10 +34,12 @@ export default function CustomerAssetEditModal({ open, customerId, asset, onClos
     dc_number: '',
     dispatched_at: '',
     delivered_at: '',
+    returned_at: '',
   });
 
   useEffect(() => {
     if (!open || !asset) return;
+    const isReturned = asset.lifecycle === 'returned' || asset.status === 'returned';
     setForm({
       brand: asset.brand || '',
       model: asset.model_name || asset.model || '',
@@ -59,10 +56,13 @@ export default function CustomerAssetEditModal({ open, customerId, asset, onClos
       dc_number: asset.dc_number || '',
       dispatched_at: toDateInputValue(asset.dispatch_date),
       delivered_at: toDateInputValue(asset.delivered_at),
+      returned_at: isReturned ? toDateInputValue(asset.returned_at) : '',
     });
   }, [open, asset]);
 
   if (!open || !asset) return null;
+
+  const isReturned = asset.lifecycle === 'returned' || asset.status === 'returned';
 
   const save = async () => {
     setSaving(true);
@@ -78,15 +78,30 @@ export default function CustomerAssetEditModal({ open, customerId, asset, onClos
         screen_size: form.screen_size.trim(),
         dc_number: form.dc_number.trim(),
       };
-      if (form.dispatched_at.trim() !== '') {
-        body.dispatched_at = form.dispatched_at.trim();
+      if (isReturned) {
+        body.lifecycle = 'returned';
+        if (form.dc_number.trim()) body.return_dc_number = form.dc_number.trim();
+        if (form.delivered_at.trim() !== '') {
+          body.delivered_at = form.delivered_at.trim();
+        } else {
+          body.delivered_at = null;
+        }
+        if (form.returned_at.trim() !== '') {
+          body.returned_at = form.returned_at.trim();
+        } else {
+          body.returned_at = null;
+        }
       } else {
-        body.dispatched_at = null;
-      }
-      if (form.delivered_at.trim() !== '') {
-        body.delivered_at = form.delivered_at.trim();
-      } else {
-        body.delivered_at = null;
+        if (form.dispatched_at.trim() !== '') {
+          body.dispatched_at = form.dispatched_at.trim();
+        } else {
+          body.dispatched_at = null;
+        }
+        if (form.delivered_at.trim() !== '') {
+          body.delivered_at = form.delivered_at.trim();
+        } else {
+          body.delivered_at = null;
+        }
       }
       if (form.rent_monthly_rate.trim() !== '') {
         body.rent_monthly_rate = form.rent_monthly_rate.trim();
@@ -133,37 +148,65 @@ export default function CustomerAssetEditModal({ open, customerId, asset, onClos
             </label>
           ))}
           <label className="block text-sm sm:col-span-2">
-            <span className="text-xs font-medium text-slate-600">DC number</span>
+            <span className="text-xs font-medium text-slate-600">{isReturned ? 'Return DC number' : 'DC number'}</span>
             <input
               type="text"
               value={form.dc_number}
               onChange={(e) => setForm((f) => ({ ...f, dc_number: e.target.value }))}
               className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono"
-              placeholder="e.g. DC/26-27/0910"
+              placeholder={isReturned ? 'e.g. RDC001744' : 'e.g. DC/26-27/0910'}
             />
           </label>
-          <label className="block text-sm">
-            <span className="text-xs font-medium text-slate-600">Dispatch date</span>
-            <input
-              type="date"
-              value={form.dispatched_at}
-              onChange={(e) => setForm((f) => ({ ...f, dispatched_at: e.target.value }))}
-              className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
-            />
-          </label>
-          <label className="block text-sm">
-            <span className="text-xs font-medium text-slate-600">Delivery date</span>
-            <input
-              type="date"
-              value={form.delivered_at}
-              onChange={(e) => setForm((f) => ({ ...f, delivered_at: e.target.value }))}
-              className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
-            />
-          </label>
-          <p className="text-[11px] text-slate-500 sm:col-span-2">
-            Delivery date can be a future date for laptops still in transit (e.g. expected delivery tomorrow).
-            For rented units, billing start follows the delivery date.
-          </p>
+          {isReturned ? (
+            <>
+              <label className="block text-sm">
+                <span className="text-xs font-medium text-slate-600">Delivered to customer</span>
+                <input
+                  type="date"
+                  value={form.delivered_at}
+                  onChange={(e) => setForm((f) => ({ ...f, delivered_at: e.target.value }))}
+                  className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                />
+              </label>
+              <label className="block text-sm">
+                <span className="text-xs font-medium text-slate-600">Returned from customer</span>
+                <input
+                  type="date"
+                  value={form.returned_at}
+                  onChange={(e) => setForm((f) => ({ ...f, returned_at: e.target.value }))}
+                  className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                />
+              </label>
+              <p className="text-[11px] text-slate-500 sm:col-span-2">
+                Delivered = when the laptop was given to this customer. Returned = when it was picked up back.
+              </p>
+            </>
+          ) : (
+            <>
+              <label className="block text-sm">
+                <span className="text-xs font-medium text-slate-600">Dispatch date</span>
+                <input
+                  type="date"
+                  value={form.dispatched_at}
+                  onChange={(e) => setForm((f) => ({ ...f, dispatched_at: e.target.value }))}
+                  className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                />
+              </label>
+              <label className="block text-sm">
+                <span className="text-xs font-medium text-slate-600">Delivery date</span>
+                <input
+                  type="date"
+                  value={form.delivered_at}
+                  onChange={(e) => setForm((f) => ({ ...f, delivered_at: e.target.value }))}
+                  className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                />
+              </label>
+              <p className="text-[11px] text-slate-500 sm:col-span-2">
+                Delivery date can be a future date for laptops still in transit.
+                For rented units, billing start follows the delivery date.
+              </p>
+            </>
+          )}
           <label className="block text-sm sm:col-span-2">
             <span className="text-xs font-medium text-slate-600">Monthly rate (₹)</span>
             <input
