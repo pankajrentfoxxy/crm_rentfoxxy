@@ -1,0 +1,6 @@
+file,count,description
+01_rent_start_null.csv,51,Rented/returned units with customer where rent_start_date IS NULL (invoice generate skips them)
+02_rent_start_vs_dc_delivery_mismatch.csv,66,rent_start_date != current DC delivered_at (TTSPL4371-type issue)
+03_rent_start_vs_serial_delivered_mismatch.csv,116,rent_start_date != serial.delivered_at (and not already in file 02)
+04_all_issues_combined.csv,233,All of the above in one file
+README_why_these_issues.txt,,Explanation of root causes

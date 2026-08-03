@@ -98,6 +98,10 @@ async function generateCustomerInvoice(customerId, month, year) {
       return { skipped: true, invoice_id: existing.rows[0].invoice_id };
     }
 
+    // Billing lag: mid-month deliveries wait for the NEXT month's invoice
+    // (prior-month days as catch-up + full current month).
+    // Starts on the 1st of the billing month are included in that month
+    // (rent_start_date <= monthStart).
     const serialsRes = await client.query(
       `SELECT vsn.serial_id,
               COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
@@ -116,9 +120,9 @@ async function generateCustomerInvoice(customerId, month, year) {
           AND vsn.inventory_status IN ('rented', 'returned')
           AND vsn.rent_start_date IS NOT NULL
           AND vsn.rent_start_date <= $2::date
-          AND (vsn.rent_billed_until IS NULL OR vsn.rent_billed_until < $2::date)
+          AND (vsn.rent_billed_until IS NULL OR vsn.rent_billed_until < $3::date)
         FOR UPDATE`,
-      [customerId, toLocalYmd(monthEnd)]
+      [customerId, toLocalYmd(monthStart), toLocalYmd(monthEnd)]
     );
 
     const lineItems = [];

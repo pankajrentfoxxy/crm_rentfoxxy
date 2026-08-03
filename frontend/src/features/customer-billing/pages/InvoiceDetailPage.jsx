@@ -1,13 +1,14 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import { CalendarRange, CheckCircle2, Layers } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import InvoiceStatusBadge from '../components/InvoiceStatusBadge';
 import SendInvoiceModal from '../components/SendInvoiceModal';
-import { Button } from '../../../components/ui/primitives';
+import { Button, SearchField, StatCard } from '../../../components/ui/primitives';
 import {
-  downloadInvoicePdf, generateEInvoice, generateEWayBill,
-  getInvoice, markInvoicePaid, sendEInvoiceEmail,
+  downloadInvoicePdf, generateEWayBill,
+  getInvoice, markInvoicePaid,
 } from '../customerBillingApi';
 
 function fmt(n) {
@@ -29,6 +30,31 @@ function formatInvoiceDate(d) {
   return parsed.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
+function isCatchupLine(line) {
+  return line?.is_catchup === true || line?.is_catchup === 'true';
+}
+
+function isFullBilledLine(line) {
+  if (isCatchupLine(line)) return false;
+  const days = Number(line?.days_in_month);
+  const monthDays = Number(line?.month_days);
+  if (!Number.isFinite(days) || !Number.isFinite(monthDays) || monthDays <= 0) return true;
+  return days >= monthDays;
+}
+
+function lineMatchesSearch(line, q) {
+  if (!q) return true;
+  const hay = [
+    line.ttspl_id,
+    line.serial_number,
+    line.brand,
+    line.model,
+    line.dc_number,
+    line.period,
+  ].map((v) => String(v || '').toLowerCase()).join(' ');
+  return hay.includes(q);
+}
+
 export default function InvoiceDetailPage() {
   const { id } = useParams();
   const [invoice, setInvoice] = useState(null);
@@ -36,7 +62,9 @@ export default function InvoiceDetailPage() {
   const [sendOpen, setSendOpen] = useState(false);
   const [ewbOpen, setEwbOpen] = useState(false);
   const [ewbForm, setEwbForm] = useState({ transporter_name: '', vehicle_number: '', distance_km: '', mode_of_transport: 'road' });
-  const [generating, setGenerating] = useState(false);
+  const [lineFilter, setLineFilter] = useState('all'); // all | full | previous
+  const [searchInput, setSearchInput] = useState('');
+  const [searchDebounced, setSearchDebounced] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -50,13 +78,54 @@ export default function InvoiceDetailPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    const t = setTimeout(() => setSearchDebounced(searchInput.trim().toLowerCase()), 250);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
+  const lineItems = useMemo(() => {
+    if (!invoice) return [];
+    const raw = typeof invoice.line_items === 'string'
+      ? JSON.parse(invoice.line_items)
+      : (invoice.line_items || []);
+    return Array.isArray(raw) ? raw : [];
+  }, [invoice]);
+
+  const counts = useMemo(() => {
+    const fullUnits = new Set();
+    const previousUnits = new Set();
+    let fullLines = 0;
+    let previousLines = 0;
+    for (const line of lineItems) {
+      const key = line.ttspl_id || line.serial_number || line.serial_id;
+      if (isCatchupLine(line)) {
+        previousLines += 1;
+        if (key) previousUnits.add(String(key));
+      } else if (isFullBilledLine(line)) {
+        fullLines += 1;
+        if (key) fullUnits.add(String(key));
+      }
+    }
+    return {
+      allLines: lineItems.length,
+      fullUnits: fullUnits.size,
+      fullLines,
+      previousUnits: previousUnits.size,
+      previousLines,
+    };
+  }, [lineItems]);
+
+  const filteredLines = useMemo(() => {
+    return lineItems.filter((line) => {
+      if (lineFilter === 'full' && !isFullBilledLine(line)) return false;
+      if (lineFilter === 'previous' && !isCatchupLine(line)) return false;
+      return lineMatchesSearch(line, searchDebounced);
+    });
+  }, [lineItems, lineFilter, searchDebounced]);
+
   if (!invoice) {
     return <div className="p-6 text-gray-500">Loading…</div>;
   }
-
-  const lineItems = typeof invoice.line_items === 'string'
-    ? JSON.parse(invoice.line_items)
-    : (invoice.line_items || []);
 
   const handleDownload = async () => {
     try {
@@ -98,6 +167,12 @@ export default function InvoiceDetailPage() {
     }
   };
 
+  const filterHint = lineFilter === 'full'
+    ? 'Full-month billed lines'
+    : lineFilter === 'previous'
+      ? 'Previous-month / catch-up lines'
+      : 'All line items';
+
   return (
     <div className="p-4 max-w-7xl mx-auto">
       <div className="mb-4">
@@ -120,12 +195,61 @@ export default function InvoiceDetailPage() {
         </div>
       </div>
 
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
+        <StatCard
+          label="All lines"
+          value={counts.allLines}
+          hint={lineFilter === 'all' ? 'Showing all' : 'Click to show all'}
+          icon={Layers}
+          tone={lineFilter === 'all' ? 'blue' : 'gray'}
+          onClick={() => setLineFilter('all')}
+        />
+        <StatCard
+          label="Full billed"
+          value={counts.fullUnits}
+          hint={`${counts.fullLines} line(s) · full month`}
+          icon={CheckCircle2}
+          tone={lineFilter === 'full' ? 'green' : 'gray'}
+          onClick={() => setLineFilter((f) => (f === 'full' ? 'all' : 'full'))}
+        />
+        <StatCard
+          label="Previous month start"
+          value={counts.previousUnits}
+          hint={`${counts.previousLines} catch-up line(s)`}
+          icon={CalendarRange}
+          tone={lineFilter === 'previous' ? 'amber' : 'gray'}
+          onClick={() => setLineFilter((f) => (f === 'previous' ? 'all' : 'previous'))}
+        />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <SearchField
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          placeholder="Search TTSPL, serial, brand, model…"
+          className="max-w-lg"
+        />
+        {lineFilter !== 'all' && (
+          <button
+            type="button"
+            onClick={() => setLineFilter('all')}
+            className="text-xs px-3 py-2 border rounded-lg text-slate-600 hover:bg-slate-50"
+          >
+            Clear filter
+          </button>
+        )}
+        <span className="text-xs text-slate-500 ml-auto">
+          Showing {filteredLines.length} of {lineItems.length} · {filterHint}
+        </span>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-4">
-          {/* Mobile line-item cards */}
           <div className="grid gap-3 sm:hidden">
-            {lineItems.map((line, idx) => (
-              <div key={idx} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-1.5">
+            {filteredLines.length === 0 ? (
+              <p className="text-center text-sm text-gray-500 py-8">No lines match this filter/search.</p>
+            ) : filteredLines.map((line, idx) => (
+              <div key={`${line.ttspl_id || 'line'}-${line.period || ''}-${idx}`} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-1.5">
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-medium text-slate-900">{line.ttspl_id || '—'}</span>
                   <span className="font-semibold text-slate-900">{fmt(line.amount)}</span>
@@ -136,7 +260,7 @@ export default function InvoiceDetailPage() {
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
                   <span>{line.days_in_month}{line.month_days ? `/${line.month_days}` : ''} days</span>
                   <span>{fmt(line.daily_rate)}/day</span>
-                  {line.is_catchup && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">catch-up</span>}
+                  {isCatchupLine(line) && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">catch-up</span>}
                   {line.returned && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-rose-100 text-rose-700">returned</span>}
                 </div>
               </div>
@@ -156,8 +280,14 @@ export default function InvoiceDetailPage() {
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {lineItems.map((line, idx) => (
-                  <tr key={idx}>
+                {filteredLines.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-4 py-8 text-center text-gray-500">
+                      No lines match this filter/search.
+                    </td>
+                  </tr>
+                ) : filteredLines.map((line, idx) => (
+                  <tr key={`${line.ttspl_id || 'line'}-${line.period || ''}-${idx}`}>
                     <td className="px-4 py-3">
                       <div className="font-medium">{line.ttspl_id || '—'}</div>
                       {line.serial_number && (
@@ -168,7 +298,7 @@ export default function InvoiceDetailPage() {
                     <td className="px-4 py-3">{line.model}</td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <div>{formatInvoiceDate(line.rent_start)} → {formatInvoiceDate(line.rent_end)}</div>
-                      {line.is_catchup && (
+                      {isCatchupLine(line) && (
                         <span className="inline-block mt-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">catch-up</span>
                       )}
                       {line.returned && (
