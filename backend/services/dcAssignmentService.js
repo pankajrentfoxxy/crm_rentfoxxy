@@ -396,4 +396,5 @@ module.exports = {
   shipByForMode,
   listAssignmentHistory,
   updateDcAssignment,
+  resolveTechnicianId,
 };

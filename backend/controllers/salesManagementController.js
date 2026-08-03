@@ -64,6 +64,7 @@ const {
   isAssignmentEditable,
   listAssignmentHistory,
   updateDcAssignment: applyDcAssignmentChange,
+  resolveTechnicianId,
 } = require('../services/dcAssignmentService');
 const {
   resolveHsnForPersist,
@@ -2301,9 +2302,12 @@ exports.generateReturnDc = async (req, res) => {
     const firstItem = itemsRes.rows[0];
     const rdc = await nextDocumentNumber('return_dc');
     const pickupAddr = (typeof t.pickup_address === 'string' ? JSON.parse(t.pickup_address) : t.pickup_address) || {};
-    const deliveryPersonId = dispatchMode === 'inhouse' && technician_user_id
+    const rawDeliveryPersonId = dispatchMode === 'inhouse' && technician_user_id
       ? parseInt(technician_user_id, 10)
       : (firstItem.assigned_to || firstItem.pickup_assigned_to || null);
+    const deliveryPersonId = rawDeliveryPersonId
+      ? await resolveTechnicianId(client, rawDeliveryPersonId)
+      : null;
 
     const rdcTxn = await resolveTxnTypeForDc(client, {
       salesOrderNumber: t.sales_order_number || null,

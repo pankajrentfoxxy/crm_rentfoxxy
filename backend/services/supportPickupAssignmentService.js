@@ -1,5 +1,5 @@
 const pool = require('../config/db');
-const { isAssignmentEditable } = require('./dcAssignmentService');
+const { isAssignmentEditable, resolveTechnicianId } = require('./dcAssignmentService');
 
 const DISPATCH_MODES = new Set(['technician', 'courier', 'porter']);
 
@@ -188,6 +188,7 @@ async function applyReturnPickupAssignment({ ticketId, body, allowChange = true 
 
     const newDcStatus = nextMeta.dc_dispatch_mode === 'inhouse' ? 'in_transit' : 'shipped';
     const techId = nextMeta.technician_user_id;
+    const deliveryPersonId = techId ? await resolveTechnicianId(client, techId) : null;
 
     await client.query(
       `UPDATE support_ticket_items SET
@@ -230,7 +231,7 @@ async function applyReturnPickupAssignment({ ticketId, body, allowChange = true 
         ticket.return_dc_number,
         nextMeta.dc_dispatch_mode,
         nextMeta.ship_by,
-        techId,
+        deliveryPersonId,
         nextMeta.courier_name,
         nextMeta.awb_number,
         nextMeta.porter_tracking_id,
