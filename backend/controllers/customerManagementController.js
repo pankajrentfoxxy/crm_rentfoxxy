@@ -660,10 +660,18 @@ exports.exportCustomerAssetsExcel = async (req, res) => {
          COALESCE(dd.sales_order_number, sos.sales_order_number) AS sales_order_number
        FROM vendor_serial_numbers vsn
        JOIN customers c ON c.customer_id = vsn.current_customer_id
-       LEFT JOIN inventory inv ON (
-         inv.machine_number = vsn.inventory_asset_code
-         OR inv.serial_number = vsn.serial_number
-       )
+       LEFT JOIN LATERAL (
+         SELECT inv.brand, inv.model, inv.processor, inv.generation
+           FROM inventory inv
+          WHERE inv.serial_number = vsn.serial_number
+             OR (
+               vsn.inventory_asset_code IS NOT NULL
+               AND inv.machine_number = vsn.inventory_asset_code
+             )
+          ORDER BY CASE WHEN inv.serial_number = vsn.serial_number THEN 0 ELSE 1 END,
+                   inv.inventory_id ASC
+          LIMIT 1
+       ) inv ON TRUE
        LEFT JOIN LATERAL (
          SELECT COALESCE(dcl.delivered_at, dcl.delivery_completed_at) AS delivered_at,
                 dcl.dc_number,
@@ -1364,12 +1372,26 @@ function buildReturnedDateSql(from, to, params) {
   return sql;
 }
 
+// Prefer OEM serial match over machine_number (TTSPL) to avoid duplicate rows when stale
+// inventory rows share a TTSPL code with a different physical unit.
+const INVENTORY_JOIN_SQL = `
+  LEFT JOIN LATERAL (
+    SELECT inv.brand, inv.model, inv.processor, inv.generation, inv.ram, inv.storage,
+           inv.gpu, inv.screen_size, inv.inventory_id
+      FROM inventory inv
+     WHERE inv.serial_number = vsn.serial_number
+        OR (
+          vsn.inventory_asset_code IS NOT NULL
+          AND inv.machine_number = vsn.inventory_asset_code
+        )
+     ORDER BY CASE WHEN inv.serial_number = vsn.serial_number THEN 0 ELSE 1 END,
+              inv.inventory_id ASC
+     LIMIT 1
+  ) inv ON TRUE`;
+
 const ACTIVE_FROM_SQL = `
   FROM vendor_serial_numbers vsn
-  LEFT JOIN inventory inv ON (
-    inv.machine_number = vsn.inventory_asset_code
-    OR inv.serial_number = vsn.serial_number
-  )
+  ${INVENTORY_JOIN_SQL}
   LEFT JOIN LATERAL (
     SELECT dcl.file_path, dcl.pod_image_url, dcl.pod_photo_url, dcl.esign_url,
            dcl.pdf_path, dcl.delivery_completed_at, dcl.dispatched_at
@@ -1500,6 +1522,8 @@ const RETURNED_FROM_SQL = `
        AND dcl.customer_id = rl.customer_id
        AND dcl.status = 'delivered'
        AND NULLIF(REGEXP_REPLACE(split_part(elem, '|', 1), '[^0-9]', '', 'g'), '')::int = vsn.serial_id
+       AND COALESCE(dcl.delivered_at, dcl.delivery_completed_at, dcl.created_at)
+           <= COALESCE(rl.delivered_at, sti.warehouse_received_at, rl.created_at)
      ORDER BY COALESCE(dcl.delivered_at, dcl.delivery_completed_at) DESC NULLS LAST
      LIMIT 1
   ) outbound ON TRUE
@@ -1512,7 +1536,7 @@ const RETURNED_SELECT_SQL = `
          rl.dc_number AS dc_number,
          rl.created_at,
          COALESCE(rl.delivered_at, sti.warehouse_received_at, rl.created_at) AS returned_at,
-         COALESCE(vsn.delivered_at, outbound.delivered_at) AS delivered_at,
+         outbound.delivered_at AS delivered_at,
          COALESCE(sti.ttspl_id, sti.unique_serial_number, vsn.inventory_asset_code,
                   vsn.extra->>'ttspl_id', NULLIF(split_part(rl.serial_number->>0, '|', 3), '')) AS ttspl_id,
          COALESCE(sti.serial_number, vsn.serial_number,
@@ -1781,10 +1805,21 @@ exports.updateCustomerAsset = async (req, res) => {
               inv.ram AS inv_ram, inv.storage AS inv_storage, inv.gpu AS inv_gpu,
               inv.screen_size AS inv_screen_size
          FROM vendor_serial_numbers vsn
-         LEFT JOIN inventory inv ON (
-           inv.machine_number = vsn.inventory_asset_code
-           OR inv.serial_number = vsn.serial_number
-         )
+         LEFT JOIN LATERAL (
+           SELECT inv.inventory_id, inv.brand AS inv_brand, inv.model AS inv_model,
+                  inv.processor AS inv_processor, inv.generation AS inv_generation,
+                  inv.ram AS inv_ram, inv.storage AS inv_storage, inv.gpu AS inv_gpu,
+                  inv.screen_size AS inv_screen_size
+             FROM inventory inv
+            WHERE inv.serial_number = vsn.serial_number
+               OR (
+                 vsn.inventory_asset_code IS NOT NULL
+                 AND inv.machine_number = vsn.inventory_asset_code
+               )
+            ORDER BY CASE WHEN inv.serial_number = vsn.serial_number THEN 0 ELSE 1 END,
+                     inv.inventory_id ASC
+            LIMIT 1
+         ) inv ON TRUE
         WHERE vsn.serial_id = $1
           AND vsn.deleted_at IS NULL
         FOR UPDATE OF vsn`,

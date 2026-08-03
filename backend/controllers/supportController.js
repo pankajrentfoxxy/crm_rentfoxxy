@@ -3236,6 +3236,11 @@ const warehouseReceiveReturnDcBatch = async (client, triggerItem, userId, esignU
                   OR sti.id = $2
                   OR sti.floor_ticket_id IS NULL
                   OR COALESCE(vsn.inventory_status, '') IN ('rented','on_demo','in_transit','out_stock')
+                  OR (
+                    sti.warehouse_received_at IS NOT NULL
+                    AND sti.warehouse_esign_at IS NULL
+                    AND sti.warehouse_esign_url IS NULL
+                  )
                 )
               ORDER BY sti.id ASC`,
             [triggerItem.return_dc_number, triggerItem.id]
@@ -3243,10 +3248,17 @@ const warehouseReceiveReturnDcBatch = async (client, triggerItem, userId, esignU
         if (sibRes.rows.length) siblings = sibRes.rows;
         // Clear stale incomplete timestamps so warehouseReceiveSinglePickupItem can re-run.
         for (const s of siblings) {
-            if (s.warehouse_received_at) {
+            const needsClear = s.warehouse_received_at
+                && (!s.warehouse_esign_at && !s.warehouse_esign_url);
+            if (s.warehouse_received_at && (needsClear || s.id === triggerItem.id)) {
                 await client.query(
                     `UPDATE support_ticket_items
-                        SET warehouse_received_at = NULL, updated_at = NOW()
+                        SET warehouse_received_at = NULL,
+                            warehouse_esign_url = NULL,
+                            warehouse_esign_at = NULL,
+                            warehouse_esign_by = NULL,
+                            reached_warehouse_at = NULL,
+                            updated_at = NOW()
                       WHERE id = $1`,
                     [s.id]
                 );
@@ -3318,6 +3330,9 @@ exports.confirmWarehouseReceipt = async (req, res) => {
         if (it.item_type !== 'pickup') throw Object.assign(new Error('Only for pickup items'), { status: 400 });
         // Allow retry when a prior confirm left inventory still with the customer
         // (warehouse_received_at set but no floor ticket / still rented).
+        const missingWarehouseEsign = it.warehouse_received_at
+            && !it.warehouse_esign_at
+            && !it.warehouse_esign_url;
         if (it.warehouse_received_at && it.floor_ticket_id) {
             const code = it.ttspl_id || it.unique_serial_number || it.serial_number;
             const inv = code ? await client.query(
@@ -3330,13 +3345,14 @@ exports.confirmWarehouseReceipt = async (req, res) => {
             ) : { rows: [] };
             const st = String(inv.rows[0]?.inventory_status || '').toLowerCase();
             const stillOut = ['rented', 'on_demo', 'in_transit', 'out_stock'].includes(st);
-            if (!stillOut) {
+            if (!stillOut && !missingWarehouseEsign) {
                 throw Object.assign(new Error('Already confirmed at warehouse'), { status: 400 });
             }
             await client.query(
                 `UPDATE support_ticket_items
                     SET warehouse_received_at = NULL, warehouse_esign_url = NULL,
                         warehouse_esign_at = NULL, warehouse_esign_by = NULL,
+                        reached_warehouse_at = NULL,
                         updated_at = NOW()
                   WHERE id = $1`,
                 [it.id]
@@ -3440,6 +3456,11 @@ exports.confirmReturnDcWarehouseReceipt = async (req, res) => {
                   sti.warehouse_received_at IS NULL
                   OR sti.floor_ticket_id IS NULL
                   OR COALESCE(vsn.inventory_status, '') IN ('rented','on_demo','in_transit','out_stock')
+                  OR (
+                    sti.warehouse_received_at IS NOT NULL
+                    AND sti.warehouse_esign_at IS NULL
+                    AND sti.warehouse_esign_url IS NULL
+                  )
                 )
               ORDER BY sti.id ASC LIMIT 1`,
             [rdcNumber]
@@ -3453,6 +3474,7 @@ exports.confirmReturnDcWarehouseReceipt = async (req, res) => {
                 `UPDATE support_ticket_items
                     SET warehouse_received_at = NULL, warehouse_esign_url = NULL,
                         warehouse_esign_at = NULL, warehouse_esign_by = NULL,
+                        reached_warehouse_at = NULL,
                         updated_at = NOW()
                   WHERE id = $1`,
                 [trigger.id]

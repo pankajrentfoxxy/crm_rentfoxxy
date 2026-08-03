@@ -629,11 +629,17 @@ exports.getTicketById = async (req, res) => {
       [id]
     );
 
-    // Get parts
+    // Get parts — removable when not installed via warehouse-approved attach flow
     const parts = await pool.query(
       `SELECT tp.*, p.part_name, p.part_type, p.category,
               COALESCE(tp.unit_cost, p.cost, 0) AS unit_cost,
-              (tp.quantity_used * COALESCE(tp.unit_cost, p.cost, 0)) AS total_part_cost
+              (tp.quantity_used * COALESCE(tp.unit_cost, p.cost, 0)) AS total_part_cost,
+              NOT EXISTS (
+                SELECT 1 FROM part_requests pr
+                 WHERE pr.ticket_id = tp.ticket_id
+                   AND pr.part_id = tp.part_id
+                   AND pr.status = 'attached'
+              ) AS removable
        FROM ticket_parts tp
        LEFT JOIN parts p ON tp.part_id = p.part_id
        WHERE tp.ticket_id = $1
@@ -2276,6 +2282,130 @@ exports.addPartToTicketWithConfig = async (req, res) => {
     await client.query('ROLLBACK');
     console.error('addPartToTicketWithConfig:', error);
     res.status(500).json({ success: false, message: error.message || 'Failed to attach part' });
+  } finally {
+    client.release();
+  }
+};
+
+/** DELETE /api/tickets/:ticketId/parts/:ticketPartId — direct-attached parts only (not warehouse-approved). */
+exports.removePartFromTicket = async (req, res) => {
+  const ticketId = req.params.id;
+  const ticketPartId = req.params.ticketPartId;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const tpRes = await client.query(
+      `SELECT tp.*, p.part_name
+         FROM ticket_parts tp
+         JOIN parts p ON p.part_id = tp.part_id
+        WHERE tp.id = $1 AND tp.ticket_id = $2
+        FOR UPDATE OF tp`,
+      [ticketPartId, ticketId]
+    );
+    if (!tpRes.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Part usage not found on this ticket' });
+    }
+    const tp = tpRes.rows[0];
+
+    const approvedAttach = await client.query(
+      `SELECT 1 FROM part_requests
+        WHERE ticket_id = $1 AND part_id = $2 AND status = 'attached'
+        LIMIT 1`,
+      [ticketId, tp.part_id]
+    );
+    if (approvedAttach.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot remove a warehouse-approved attached part. Cancel the part request before attach, or contact admin.',
+      });
+    }
+
+    const ticketRes = await client.query('SELECT * FROM tickets WHERE ticket_id = $1', [ticketId]);
+    const ticket = ticketRes.rows[0];
+
+    if (tp.is_upgrade && ticket?.ttspl_id) {
+      const histRes = await client.query(
+        `SELECT history_id, field_name, old_value, new_value
+           FROM ttspl_config_history
+          WHERE ticket_id = $1 AND part_used_id = $2
+          ORDER BY created_at DESC
+          LIMIT 1`,
+        [ticketId, tp.part_id]
+      );
+      const hist = histRes.rows[0];
+      if (hist?.field_name && hist.old_value != null) {
+        const fieldName = hist.field_name;
+        if (ticket.vendor_serial_id) {
+          const vs = await client.query(
+            `SELECT extra FROM vendor_serial_numbers WHERE serial_id = $1`,
+            [ticket.vendor_serial_id]
+          );
+          let extra = vs.rows[0]?.extra || {};
+          if (typeof extra === 'string') {
+            try { extra = JSON.parse(extra); } catch { extra = {}; }
+          }
+          if (fieldName !== 'other') extra[fieldName] = hist.old_value;
+          await client.query(
+            `UPDATE vendor_serial_numbers SET extra = $1::jsonb, updated_at = NOW() WHERE serial_id = $2`,
+            [JSON.stringify(extra), ticket.vendor_serial_id]
+          );
+        }
+        if (['processor', 'ram', 'storage'].includes(fieldName)) {
+          await client.query(
+            `UPDATE tickets SET ${fieldName} = $1, updated_at = NOW() WHERE ticket_id = $2`,
+            [hist.old_value, ticketId]
+          );
+        }
+        await ttsplAuditService.logConfigChange({
+          ttsplId: ticket.ttspl_id,
+          vendorSerialId: ticket.vendor_serial_id,
+          ticketId,
+          changedBy: req.user.user_id,
+          changeType: 'correction',
+          fieldName,
+          oldValue: hist.new_value,
+          newValue: hist.old_value,
+          notes: `Reverted upgrade after removing direct-attached part: ${tp.part_name}`,
+          partUsedId: tp.part_id,
+          partCost: 0,
+          db: client,
+        });
+      }
+    }
+
+    await client.query(
+      `UPDATE parts SET quantity = quantity + $1, updated_at = NOW() WHERE part_id = $2`,
+      [tp.quantity_used, tp.part_id]
+    );
+    await client.query(`DELETE FROM ticket_parts WHERE id = $1`, [ticketPartId]);
+
+    await client.query(
+      `INSERT INTO activities (ticket_id, user_id, action, notes) VALUES ($1, $2, 'part_removed', $3)`,
+      [ticketId, req.user.user_id, `Removed ${tp.quantity_used} × ${tp.part_name} (direct attach, not warehouse-approved)`]
+    );
+
+    if (ticket?.ttspl_id) {
+      await ttsplAuditService.logTtsplEvent({
+        ttsplId: ticket.ttspl_id,
+        vendorSerialId: ticket.vendor_serial_id,
+        eventType: 'part_removed',
+        description: `Removed direct-attached part: ${tp.part_name} × ${tp.quantity_used}`,
+        metadata: { ticket_part_id: ticketPartId, part_id: tp.part_id },
+        actorUserId: req.user.user_id,
+        actorName: req.user.name,
+        db: client,
+      });
+    }
+
+    await client.query('COMMIT');
+    res.json({ success: true, message: `${tp.part_name} removed from ticket` });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('removePartFromTicket:', error);
+    res.status(500).json({ success: false, message: error.message || 'Failed to remove part' });
   } finally {
     client.release();
   }

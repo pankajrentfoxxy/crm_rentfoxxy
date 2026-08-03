@@ -49,6 +49,7 @@ const {
   getTeamMembers,
   getNextAssignee,
   addPartToTicketWithConfig,
+  removePartFromTicket,
   logNote,
   getFloorNavCounts
 } = require('../controllers/ticketController');
@@ -170,6 +171,7 @@ router.post(
   ftEdit,
   addPartToTicketWithConfig
 );
+router.delete('/:id/parts/:ticketPartId', ftEdit, removePartFromTicket);
 router.post('/:id/log-note', logNote);
 
 // Cost & Parts System

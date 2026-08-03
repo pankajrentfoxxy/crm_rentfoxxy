@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Search, PackagePlus, Wrench, X, Camera, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { addPartWithConfig, searchParts } from '../floorPipelineApi';
-import { createPartRequest, attachPartToRequest, cancelPartRequest, uploadPartRequestPhotos } from '../partRequestsApi';
+import { addPartWithConfig, removeTicketPart, searchParts } from '../floorPipelineApi';
+import { createPartRequest, attachPartToRequest, detachAttachedPart, cancelPartRequest, uploadPartRequestPhotos } from '../partRequestsApi';
 import { getBackendOrigin } from '../../../utils/api';
 import { PART_CATEGORIES } from '../../../constants/laptopConditions';
 
@@ -616,13 +616,51 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
   };
 
   const handleCancel = async (req) => {
-    if (!window.confirm(`Cancel request ${req.request_number}?`)) return;
+    const isApproved = req.status === 'approved';
+    const confirmMsg = isApproved
+      ? `Remove approved part ${req.request_number} (${req.part_name}) from this ticket?\n\nThe reserved PRT will return to warehouse stock.`
+      : `Cancel request ${req.request_number}?`;
+    if (!window.confirm(confirmMsg)) return;
     try {
-      await cancelPartRequest(req.request_id);
-      toast.success('Request cancelled');
+      const { data } = await cancelPartRequest(req.request_id);
+      toast.success(data?.message || (isApproved ? 'Approved part removed' : 'Request cancelled'));
       onUpdated?.();
     } catch (e) {
       toast.error(e.response?.data?.message || 'Failed to cancel');
+    }
+  };
+
+  const handleDetachAttached = async (req) => {
+    const msg = [
+      `Remove ${req.part_name} from this laptop?`,
+      '',
+      'This will:',
+      '• Remove the part from Parts Used',
+      '• Revert config (if upgrade)',
+      '• Set request back to Approved (re-attach when ready)',
+      '• Return PRT to reserved stock',
+      '',
+      'The old part already returned to warehouse stays there.',
+    ].join('\n');
+    if (!window.confirm(msg)) return;
+    const reason = window.prompt('Reason for removal (optional):') || '';
+    try {
+      const { data } = await detachAttachedPart(req.request_id, { reason: reason.trim() || undefined });
+      toast.success(data?.message || 'Attached part removed');
+      onUpdated?.();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Failed to remove attached part');
+    }
+  };
+  const handleRemoveDirectPart = async (partRow) => {
+    const label = partRow.part_name || 'this part';
+    if (!window.confirm(`Remove ${label} from this ticket? Stock will be restored.`)) return;
+    try {
+      await removeTicketPart(ticket.ticket_id, partRow.id);
+      toast.success('Part removed');
+      onUpdated?.();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Failed to remove part');
     }
   };
 
@@ -761,16 +799,38 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
                     ✓ Approved by warehouse. PRT-ID: {req.prt_id || 'assigned'}
                   </p>
                   <button type="button" onClick={() => setAttachModal(req)}
-                    className="w-full py-2 bg-green-600 text-white rounded-lg text-sm font-semibold">
+                    className="w-full py-2 bg-green-600 text-white rounded-lg text-sm font-semibold mb-2">
                     Attach Part + Return Old Part
+                  </button>
+                  <button type="button" onClick={() => handleCancel(req)}
+                    className="w-full py-2 border border-red-200 text-red-700 rounded-lg text-sm font-semibold hover:bg-red-50">
+                    Remove approved part from ticket
+                  </button>
+                </div>
+              )}
+
+              {req.status === 'attached' && (
+                <div className="mt-2 pt-2 border-t space-y-2">
+                  <p className="text-xs text-slate-600">
+                    Installed — {req.prt_id || 'PRT assigned'}
+                    {req.attached_at ? ` · ${new Date(req.attached_at).toLocaleString()}` : ''}
+                  </p>
+                  <button type="button" onClick={() => handleDetachAttached(req)}
+                    className="w-full py-2 border border-red-200 text-red-700 rounded-lg text-sm font-semibold hover:bg-red-50">
+                    Remove attached part
                   </button>
                 </div>
               )}
 
               {req.blocks_stage && !['attached', 'cancelled', 'rejected'].includes(req.status) && (
-                <div className="mt-2 flex items-center justify-between text-xs">
-                  <span className="flex items-center gap-1.5 text-amber-700">⛔ Ticket blocked until part is attached</span>
-                  <button type="button" onClick={() => handleCancel(req)} className="text-slate-500 underline">Cancel</button>
+                <p className="mt-2 text-xs text-amber-700">⛔ Ticket blocked until part is attached</p>
+              )}
+
+              {!['approved', 'attached', 'cancelled', 'rejected'].includes(req.status) && (
+                <div className="mt-2 flex justify-end">
+                  <button type="button" onClick={() => handleCancel(req)} className="text-xs text-red-600 underline">
+                    Cancel request
+                  </button>
                 </div>
               )}
             </div>
@@ -1010,6 +1070,7 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
               <th className="px-3 py-2 text-right">Unit</th>
               <th className="px-3 py-2 text-right">Total</th>
               <th className="px-3 py-2">Upgrade</th>
+              <th className="px-3 py-2 text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -1020,16 +1081,30 @@ export default function PartsConfigPanel({ ticket, parts = [], configHistory = [
                 <td className="px-3 py-2 text-right">₹{parseFloat(p.unit_cost || 0).toFixed(0)}</td>
                 <td className="px-3 py-2 text-right font-medium">₹{parseFloat(p.total_part_cost || 0).toFixed(0)}</td>
                 <td className="px-3 py-2 text-center">{p.is_upgrade ? <span className="text-green-700 text-xs font-semibold">✓ Upgrade</span> : '—'}</td>
+                <td className="px-3 py-2 text-right">
+                  {p.removable ? (
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveDirectPart(p)}
+                      className="inline-flex items-center gap-1 text-xs text-red-600 hover:text-red-800"
+                      title="Remove direct-attached part (not warehouse-approved)"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" /> Remove
+                    </button>
+                  ) : (
+                    <span className="text-[11px] text-slate-400">Approved attach</span>
+                  )}
+                </td>
               </tr>
             ))}
-            {!parts.length && <tr><td colSpan={5} className="px-3 py-6 text-center text-slate-500">No parts attached yet</td></tr>}
+            {!parts.length && <tr><td colSpan={6} className="px-3 py-6 text-center text-slate-500">No parts attached yet</td></tr>}
           </tbody>
           {parts.length > 0 && (
             <tfoot className="bg-slate-50 font-semibold text-sm">
               <tr>
                 <td colSpan={3} className="px-3 py-2 text-right">Total parts cost</td>
                 <td className="px-3 py-2 text-right">₹{partsTotal.toFixed(0)}</td>
-                <td />
+                <td colSpan={2} />
               </tr>
             </tfoot>
           )}

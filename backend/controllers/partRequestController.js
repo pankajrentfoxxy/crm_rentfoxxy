@@ -864,6 +864,195 @@ exports.attachPartAndReturnOld = async (req, res) => {
   }
 };
 
+// POST /api/part-requests/:requestId/detach — undo attach; PRT back to reserved, request → approved.
+exports.detachAttachedPart = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { requestId } = req.params;
+    const reason = String(req.body?.reason || '').trim();
+    await client.query('BEGIN');
+
+    const reqRes = await client.query(
+      `${FULL_SELECT} WHERE pr.request_id = $1 FOR UPDATE OF pr`,
+      [requestId]
+    );
+    if (!reqRes.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Request not found' });
+    }
+    const r = reqRes.rows[0];
+    if (r.status !== 'attached') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: `Only attached parts can be removed this way (current status: ${r.status})`,
+      });
+    }
+
+    const canDetach = PRIVILEGED.includes(req.user.role)
+      || req.user.role === 'floor_manager'
+      || req.user.role === 'warehouse'
+      || Number(r.requested_by) === Number(req.user.user_id);
+    if (!canDetach) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ success: false, message: 'Not allowed to remove this attached part' });
+    }
+
+    const tpRes = await client.query(
+      `SELECT id FROM ticket_parts WHERE ticket_id = $1 AND part_id = $2 ORDER BY added_at DESC LIMIT 1`,
+      [r.ticket_id, r.part_id]
+    );
+
+    if (r.request_type === 'upgrade' && r.config_field && r.old_value != null && r.ttspl_id) {
+      await logConfigChange({
+        ttsplId: r.ttspl_id,
+        vendorSerialId: r.vendor_serial_id,
+        ticketId: r.ticket_id,
+        changedBy: req.user.user_id,
+        changeType: 'correction',
+        fieldName: r.config_field,
+        oldValue: r.new_value,
+        newValue: r.old_value,
+        notes: reason || `Revert upgrade — attached part removed (${r.part_name})`,
+        partUsedId: r.part_id,
+        partCost: 0,
+        db: client,
+      });
+
+      const paPatch = PA_CONFIG_PATCH[r.config_field];
+      let wroteViaProductionAsset = false;
+      if (paPatch) {
+        const pa = await productionAssetService.getByTicket(client, r.ticket_id);
+        if (pa) {
+          await productionAssetService.updateConfig(
+            client,
+            pa.production_asset_id,
+            { [paPatch]: r.old_value },
+            req.user.user_id,
+            r.stage_name || null
+          );
+          wroteViaProductionAsset = true;
+        }
+      }
+      if (!wroteViaProductionAsset) {
+        const fieldMap = { ram: 'ram', storage: 'storage', display: 'screen_size', processor: 'processor', gpu: 'gpu', os: 'os' };
+        const jsonbKey = fieldMap[r.config_field] || r.config_field;
+        if (r.vendor_serial_id) {
+          await client.query(
+            `UPDATE vendor_serial_numbers
+                SET extra = jsonb_set(COALESCE(extra, '{}'::jsonb), $1, $2::jsonb), updated_at = NOW()
+              WHERE serial_id = $3`,
+            [`{${jsonbKey}}`, JSON.stringify(r.old_value), r.vendor_serial_id]
+          );
+        }
+        if (['ram', 'storage', 'processor'].includes(r.config_field)) {
+          await client.query(
+            `UPDATE tickets SET ${r.config_field} = $1, updated_at = NOW() WHERE ticket_id = $2`,
+            [r.old_value, r.ticket_id]
+          );
+        }
+      }
+    }
+
+    if (r.instance_id) {
+      await client.query(
+        `UPDATE part_instances
+            SET status = 'reserved', installed_ticket_id = NULL, installed_ttspl_id = NULL,
+                installed_at = NULL, updated_at = NOW()
+          WHERE instance_id = $1`,
+        [r.instance_id]
+      );
+      await recordMovement(client, {
+        type: MOVEMENT.UNRESERVED,
+        partId: r.part_id,
+        instanceId: r.instance_id,
+        prtId: r.prt_id,
+        serialNumber: r.instance_serial,
+        category: r.category,
+        partName: r.part_name,
+        unitCost: parseFloat(r.instance_cost || r.catalog_cost || 0),
+        requestId: Number(requestId),
+        ticketId: r.ticket_id,
+        ttsplId: r.ttspl_id,
+        notes: reason || 'Attached part removed — returned to reserved for re-attach',
+        actorUserId: req.user.user_id,
+        actorName: req.user.name,
+      });
+    }
+
+    const qty = Number(r.quantity) || 1;
+    await client.query(
+      `UPDATE parts SET quantity = COALESCE(quantity, 0) + $1, updated_at = NOW() WHERE part_id = $2`,
+      [qty, r.part_id]
+    );
+
+    if (tpRes.rows[0]?.id) {
+      await client.query(`DELETE FROM ticket_parts WHERE id = $1`, [tpRes.rows[0].id]);
+    }
+
+    await client.query(
+      `UPDATE part_requests
+          SET status = 'approved',
+              attached_by = NULL,
+              attached_at = NULL,
+              updated_at = NOW()
+        WHERE request_id = $1`,
+      [requestId]
+    );
+
+    if (r.blocks_stage) {
+      await client.query(
+        `INSERT INTO ticket_part_blocks (ticket_id, request_id, is_active, blocked_at)
+         VALUES ($1, $2, true, NOW())
+         ON CONFLICT (ticket_id, request_id)
+         DO UPDATE SET is_active = true, unblocked_at = NULL, blocked_at = NOW()`,
+        [r.ticket_id, r.request_id]
+      );
+      await client.query(
+        `UPDATE tickets
+            SET open_part_requests = COALESCE(open_part_requests, 0) + 1, updated_at = NOW()
+          WHERE ticket_id = $1`,
+        [r.ticket_id]
+      );
+    }
+
+    await client.query(
+      `INSERT INTO activities (ticket_id, user_id, action, notes)
+       VALUES ($1, $2, 'part_detached', $3)`,
+      [
+        r.ticket_id,
+        req.user.user_id,
+        `Removed attached part ${r.part_name} (${r.prt_id || 'no PRT'}). Request back to approved.${reason ? ` Reason: ${reason}` : ''}`,
+      ]
+    );
+
+    if (r.ttspl_id) {
+      await logTtsplEvent({
+        ttsplId: r.ttspl_id,
+        vendorSerialId: r.vendor_serial_id,
+        eventType: 'part_detached',
+        description: `Attached part removed: ${r.part_name} (${r.prt_id || ''}) — request reset to approved`,
+        metadata: { request_id: Number(requestId), part_id: r.part_id, prt_id: r.prt_id, reason: reason || null },
+        actorUserId: req.user.user_id,
+        actorName: req.user.name,
+        db: client,
+      });
+    }
+
+    await client.query('COMMIT');
+    res.json({
+      success: true,
+      message: `${r.part_name} removed from ticket. Part request is approved again — re-attach when ready.${r.blocks_stage ? ' Ticket blocked until re-attached.' : ''}`,
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('detachAttachedPart:', err);
+    res.status(err.status || 500).json({ success: false, message: err.message });
+  } finally {
+    client.release();
+  }
+};
+
 // PATCH /api/part-requests/:requestId/cancel
 exports.cancelPartRequest = async (req, res) => {
   const client = await pool.connect();
@@ -875,21 +1064,39 @@ exports.cancelPartRequest = async (req, res) => {
     const pr = prRes.rows[0];
     if (['attached', 'cancelled'].includes(pr.status)) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ success: false, message: `Cannot cancel a request that is '${pr.status}'` });
+      return res.status(400).json({
+        success: false,
+        message: pr.status === 'attached'
+          ? 'Use Remove attached part — this request is already installed on the laptop.'
+          : `Cannot cancel a request that is '${pr.status}'`,
+      });
     }
-    // Only the requester, floor managers or admins may cancel.
-    if (!PRIVILEGED.includes(req.user.role) && req.user.role !== 'floor_manager' && Number(pr.requested_by) !== Number(req.user.user_id)) {
+    // Requester, floor manager, warehouse (released reserved PRT), or admin.
+    const canCancel = PRIVILEGED.includes(req.user.role)
+      || req.user.role === 'floor_manager'
+      || req.user.role === 'warehouse'
+      || Number(pr.requested_by) === Number(req.user.user_id);
+    if (!canCancel) {
       await client.query('ROLLBACK');
       return res.status(403).json({ success: false, message: 'You can only cancel your own requests' });
     }
     if (pr.instance_id) {
-      await client.query(`UPDATE part_instances SET status = 'in_stock', updated_at = NOW() WHERE instance_id = $1 AND status = 'reserved'`, [pr.instance_id]);
-      await recordUnreserved(client, pr, req.user, 'Request cancelled');
+      await client.query(
+        `UPDATE part_instances SET status = 'in_stock', updated_at = NOW()
+          WHERE instance_id = $1 AND status IN ('reserved', 'in_stock')`,
+        [pr.instance_id]
+      );
+      await recordUnreserved(client, pr, req.user, pr.status === 'approved' ? 'Approved request removed from ticket' : 'Request cancelled');
     }
     await client.query(`UPDATE part_requests SET status = 'cancelled', updated_at = NOW() WHERE request_id = $1`, [requestId]);
     await unblockTicket(client, pr);
     await client.query('COMMIT');
-    res.json({ success: true, message: 'Part request cancelled' });
+    res.json({
+      success: true,
+      message: pr.status === 'approved'
+        ? 'Approved part removed from ticket. Reserved PRT returned to stock.'
+        : 'Part request cancelled',
+    });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('cancelPartRequest:', err);

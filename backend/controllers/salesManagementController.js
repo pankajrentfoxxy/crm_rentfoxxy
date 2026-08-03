@@ -3678,6 +3678,27 @@ function sanitizeDeliveryAddress(raw) {
   };
 }
 
+function sanitizeCustomerShippingAddress(raw) {
+  const { normalizeDeliveryAddress } = require('../utils/deliveryAddressUtils');
+  const a = normalizeDeliveryAddress(parseJsonField(raw)) || {};
+  const name = String(a.name || '').trim();
+  const phone = String(a.phone || '').trim();
+  const address = String(a.address || a.address_line_1 || '').trim();
+  const city = String(a.city || '').trim();
+  const state = String(a.state || '').trim();
+  const zip_code = String(a.zip_code || a.pincode || '').trim();
+  if (!name || !phone || !address || !city || !state || !zip_code) return null;
+  return {
+    name,
+    phone,
+    address,
+    city,
+    state,
+    zip_code,
+    country: a.country || 'India',
+  };
+}
+
 // PATCH /so-serials/:allocationId/address
 exports.updateSoSerialAddress = async (req, res) => {
   try {
@@ -4182,6 +4203,101 @@ exports.updateDcHsn = async (req, res) => {
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('updateDcHsn:', error);
+    res.status(500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
+  }
+};
+
+/** PATCH /sales-orders/:soNumber/shipping-address — Super Admin only. */
+exports.updateSalesOrderShippingAddress = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const soNumber = req.params.salesOrderNumber || req.params.soNumber;
+    const shipping = sanitizeCustomerShippingAddress(
+      req.body?.customer_shipping_address ?? req.body
+    );
+    if (!shipping) {
+      return res.status(400).json({
+        success: false,
+        message: 'name, phone, address, city, state, and zip_code are required',
+      });
+    }
+
+    const supplyState = resolveSupplyStateFromAddress(shipping, req.body?.supply_state);
+    const shippingJson = JSON.stringify(shipping);
+
+    await client.query('BEGIN');
+
+    const exists = await client.query(
+      `SELECT id, status FROM sales_order_lines WHERE sales_order_number = $1 LIMIT 1 FOR UPDATE`,
+      [soNumber]
+    );
+    if (!exists.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Sales order not found' });
+    }
+    if (String(exists.rows[0].status || '').toLowerCase() === 'cancelled') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: 'Sales order is cancelled' });
+    }
+
+    await assertReplacementSalesOrderAccessIfScoped(soNumber, req.user, req.permissionCache);
+
+    await client.query(
+      `UPDATE sales_order_lines
+          SET customer_shipping_address = $1::jsonb,
+              supply_state = $2,
+              updated_at = NOW()
+        WHERE sales_order_number = $3`,
+      [shippingJson, supplyState, soNumber]
+    );
+
+    await client.query(
+      `UPDATE delivery_challan_lines
+          SET customer_shipping_address = $1::jsonb,
+              supply_state = $2,
+              updated_at = NOW()
+        WHERE sales_order_number = $3
+          AND COALESCE(status, '') NOT IN ('delivered', 'cancelled', 'rejected')`,
+      [shippingJson, supplyState, soNumber]
+    );
+
+    await client.query('COMMIT');
+
+    let regen = { so_pdf_path: null, dc_pdfs: [] };
+    try {
+      regen = await regenerateSoAndLinkedDcPdfs(soNumber);
+    } catch (pdfErr) {
+      console.warn('PDF regeneration after shipping address update:', pdfErr.message);
+    }
+
+    const dcCount = regen.dc_pdfs.length;
+    res.json({
+      success: true,
+      message: dcCount
+        ? `Shipping address updated — SO and ${dcCount} DC PDF(s) regenerated`
+        : 'Shipping address updated — SO PDF regenerated',
+      customer_shipping_address: shipping,
+      supply_state: supplyState,
+      pdf_path: regen.so_pdf_path,
+      dc_pdfs: regen.dc_pdfs,
+    });
+
+    await safeLogSalesOrderActivity({
+      salesOrderNumber: soNumber,
+      activityType: ACTIVITY_TYPES.CUSTOMER,
+      action: 'shipping_address_updated',
+      description: `${req.user?.name || 'User'} updated the sales order shipping address.`,
+      metadata: { supply_state: supplyState },
+      user: req.user,
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (error.status === 403) {
+      return res.status(403).json({ success: false, message: error.message });
+    }
+    console.error('updateSalesOrderShippingAddress:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
     client.release();

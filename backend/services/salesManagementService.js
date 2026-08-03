@@ -1019,6 +1019,8 @@ async function ensureReturnDcPickupItems(db, dcl) {
 function isIncompleteWarehouseReceive(item, returnCustomerId = null) {
   if (!item) return false;
   if (!item.warehouse_received_at) return false;
+  // ERP/backfill may set warehouse_received_at without warehouse e-sign — allow receive + sign.
+  if (!item.warehouse_esign_at && !item.warehouse_esign_url) return true;
   if (!item.floor_ticket_id) return true;
   const inv = String(item.inventory_status || '').toLowerCase();
   if (!['rented', 'on_demo', 'in_transit', 'out_stock'].includes(inv)) return false;
@@ -1118,7 +1120,8 @@ async function listReturnDeliveryChallans({ page = 1, limit = 25, search = '', d
        SELECT DISTINCT ON (return_dc_number)
               return_dc_number, pickup_type, ttspl_id, serial_number, floor_ticket_id,
               COALESCE(customer_otp_code, otp_code) AS customer_otp_code,
-              customer_otp_verified_at, warehouse_received_at
+              customer_otp_verified_at, warehouse_received_at,
+              warehouse_esign_at, warehouse_esign_url
          FROM support_ticket_items
         WHERE item_type = 'pickup' AND return_dc_number IS NOT NULL
         ORDER BY return_dc_number, id DESC
@@ -1127,7 +1130,8 @@ async function listReturnDeliveryChallans({ page = 1, limit = 25, search = '', d
        SELECT DISTINCT ON (ticket_id)
               ticket_id, pickup_type, ttspl_id, serial_number, floor_ticket_id,
               COALESCE(customer_otp_code, otp_code) AS customer_otp_code,
-              customer_otp_verified_at, warehouse_received_at
+              customer_otp_verified_at, warehouse_received_at,
+              warehouse_esign_at, warehouse_esign_url
          FROM support_ticket_items
         WHERE item_type = 'pickup' AND return_dc_number IS NULL
         ORDER BY ticket_id, id DESC
@@ -1158,6 +1162,11 @@ async function listReturnDeliveryChallans({ page = 1, limit = 25, search = '', d
        COALESCE(sti_rdc.warehouse_received_at, sti_tkt.warehouse_received_at) AS warehouse_received_at,
        (
          COALESCE(sti_rdc.warehouse_received_at, sti_tkt.warehouse_received_at) IS NULL
+         OR (
+           COALESCE(sti_rdc.warehouse_received_at, sti_tkt.warehouse_received_at) IS NOT NULL
+           AND COALESCE(sti_rdc.warehouse_esign_at, sti_tkt.warehouse_esign_at) IS NULL
+           AND COALESCE(sti_rdc.warehouse_esign_url, sti_tkt.warehouse_esign_url) IS NULL
+         )
          OR COALESCE(sti_rdc.floor_ticket_id, sti_tkt.floor_ticket_id) IS NULL
          OR EXISTS (
            SELECT 1 FROM vendor_serial_numbers v_pending
@@ -1331,7 +1340,7 @@ async function getReturnDcDetail(rdcNumber) {
       technician_at: techItem?.technician_esign_at || null,
       warehouse_url: whItem?.warehouse_esign_url || null,
       warehouse_name: whItem?.warehouse_receiver_name || null,
-      warehouse_at: whItem?.warehouse_esign_at || whItem?.warehouse_received_at || null,
+      warehouse_at: whItem?.warehouse_esign_at || null,
     },
     ...evaluateReturnDcWarehouseConfirm(pickupItems, units, dcl),
   };

@@ -18,6 +18,8 @@ export const listSoActivities = (n, p) => api.get(`${base}/sales-orders/${encSo(
 export const logSoDocumentActivity = (n, d) => api.post(`${base}/sales-orders/${encSo(n)}/activities`, d);
 export const createSalesOrder = (d) => api.post(`${base}/sales-orders`, d);
 export const cancelSalesOrder = (n) => api.patch(`${base}/sales-orders/${encSo(n)}/cancel`);
+export const updateSoShippingAddress = (n, d) =>
+  api.patch(`${base}/sales-orders/${encSo(n)}/shipping-address`, d);
 export const getSalesOrderMeta = (p) => api.get(`${base}/sales-orders/meta/add`, { params: p });
 export const listPayments = (n) => api.get(`${base}/sales-orders/${encSo(n)}/payments`);
 export const recordPayment = (n, d) => api.post(`${base}/sales-orders/${encSo(n)}/payments`, d);

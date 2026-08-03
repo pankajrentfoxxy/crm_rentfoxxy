@@ -25,4 +25,5 @@ export const escalatePartRequest = (id, body) => api.patch(`${base}/${id}/escala
 export const linkRequestToSpo = (id, body) => api.patch(`${base}/${id}/link-spo`, body);
 export const markPartReceived = (id, body) => api.patch(`${base}/${id}/received`, body);
 export const attachPartToRequest = (id, body) => api.post(`${base}/${id}/attach`, body);
+export const detachAttachedPart = (id, body) => api.post(`${base}/${id}/detach`, body || {});
 export const cancelPartRequest = (id) => api.patch(`${base}/${id}/cancel`);
