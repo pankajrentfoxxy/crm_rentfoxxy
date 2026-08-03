@@ -53,6 +53,7 @@ router.patch('/:requestId/escalate', checkRole('warehouse', 'admin', 'manager', 
 router.patch('/:requestId/link-spo', checkRole('procurement', 'admin', 'super_admin'), ctrl.linkRequestToSpo);
 router.patch('/:requestId/received', checkRole('warehouse', 'admin', 'manager', 'super_admin'), ctrl.markPartReceived);
 router.post('/:requestId/attach', checkSectionPermission('parts_requests', 'create'), ctrl.attachPartAndReturnOld);
+router.post('/:requestId/detach', checkSectionPermission('parts_requests', 'create'), ctrl.detachAttachedPart);
 router.patch('/:requestId/cancel', ctrl.cancelPartRequest);
 
 module.exports = router;

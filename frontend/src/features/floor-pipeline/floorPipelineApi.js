@@ -100,6 +100,10 @@ export function addPartWithConfig(id, body) {
   return api.post(`${base}/${id}/parts-with-config`, body);
 }
 
+export function removeTicketPart(ticketId, ticketPartId) {
+  return api.delete(`${base}/${ticketId}/parts/${ticketPartId}`);
+}
+
 export function logTicketNote(id, body) {
   return api.post(`${base}/${id}/log-note`, body);
 }

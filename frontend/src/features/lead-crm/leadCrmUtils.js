@@ -97,6 +97,24 @@ export function formatLeadDate(value) {
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
 
+/** Customer asset delivery/return dates — always IST calendar day (matches backend filters). */
+export function formatAssetCalendarDate(value) {
+  if (!value) return '—';
+  const ymd = followUpCalendarYmd(value);
+  if (!ymd) return '—';
+  const d = new Date(`${ymd}T12:00:00+05:30`);
+  return d.toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'numeric',
+    year: 'numeric',
+    timeZone: 'Asia/Kolkata',
+  });
+}
+
+export function assetCalendarYmd(value) {
+  return followUpCalendarYmd(value) || '';
+}
+
 export function formatActivityDateTime(value) {
   if (!value) return '—';
   const d = new Date(value);

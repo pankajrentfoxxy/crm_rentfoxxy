@@ -92,6 +92,7 @@ const {
   checkSoViewOrAssignedDispatch,
   checkSoSerialOrAssignedDispatch,
 } = require('../middleware/dispatchSoAccess');
+const { checkAdminDeliverAccess } = require('../middleware/deliveryAdminDeliverAccess');
 
 router.use(authMiddleware);
 router.use(require('../middleware/customerScope')); // Customer Access scope -> req.allowedCustomerTypes
@@ -119,7 +120,7 @@ router.get('/my-deliveries', tbView, flowCtrl.getMyDeliveries);
 router.patch(...dcRoute('/reached', tbEdit, flowCtrl.markTechReached));
 router.post(...dcRoute('/verify-serial', tbEdit, flowCtrl.verifySerialAndGenerateOtp));
 router.post(...dcRoute('/deliver', tbEdit, wrapMulter(uploadPod.single('pod_photo')), flowCtrl.submitDeliveryWithPod));
-router.patch(...dcRoute('/admin-deliver', checkRole('admin', 'manager', 'super_admin', 'warehouse', 'support_tech'), wrapMulter(uploadPod.single('pod_photo')), flowCtrl.adminDeliverOverride));
+router.patch(...dcRoute('/admin-deliver', checkAdminDeliverAccess, wrapMulter(uploadPod.single('pod_photo')), flowCtrl.adminDeliverOverride));
 
 router.get('/counts', quoteView, ctrl.getOperationCounts);
 router.get('/inventory/available-serials', soSerialsView, ctrl.getAvailableSerials);
@@ -140,6 +141,7 @@ router.get(...soRoute('/payments', payView, ctrl.listPayments));
 router.post(...soRoute('/payments', payCreate, ctrl.recordPayment));
 router.post(...soRoute('/pdf', soView, ctrl.regenerateSalesOrderPdf));
 router.patch(...soRoute('/cancel', soEdit, ctrl.cancelSalesOrder));
+router.patch(...soRoute('/shipping-address', checkRole('super_admin'), ctrl.updateSalesOrderShippingAddress));
 router.get(/^\/sales-orders\/(.+)$/, bindSoNumber, checkSoViewOrAssignedDispatch, ctrl.getSalesOrder);
 router.post('/sales-orders', soCreate, ctrl.storeSalesOrder);
 
@@ -176,6 +178,7 @@ router.post(
   )
 );
 router.patch(...dcRoute('/delivered', soDcEdit, ctrl.markDcDelivered));
+router.patch(...dcRoute('/delivery-date', soDcEdit, ctrl.updateDcDeliveryDate));
 router.patch(...dcRoute('/rejected', soDcEdit, ctrl.markDcRejected));
 router.patch(...dcRoute('/customer-rejected', tbEdit, flowCtrl.markCustomerRejected));
 router.post(...dcRoute('/warehouse-return-otp', whReturnEdit, flowCtrl.sendWarehouseReturnOtp));

@@ -9,7 +9,7 @@ import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDraw
 import {
   getCustomer, getCustomerLaptops, getCustomerAssetActivity, getCustomerAddresses, verifyCustomerKyc, enableCustomerPortal,
 } from '../leadCrmApi';
-import { formatCurrency } from '../leadCrmUtils';
+import { formatCurrency, formatAssetCalendarDate as fmtAssetDate } from '../leadCrmUtils';
 import { getBackendOrigin } from '../../../utils/api';
 import CustomerDocuments from '../components/CustomerDocuments';
 import CustomerFormDrawer from '../components/CustomerFormDrawer';
@@ -481,7 +481,8 @@ export default function CustomerDetailPage() {
                       ? <span className="px-2 py-0.5 rounded bg-purple-100 text-purple-700">Gorefurbo</span>
                       : <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-700">Rentfoxxy</span>}
                     {lap.dc_number && <span className="font-mono">DC {lap.dc_number}</span>}
-                    {(lap.delivered_at || lap.dispatch_date) && <span>{new Date(lap.delivered_at || lap.dispatch_date).toLocaleDateString('en-IN')}</span>}
+                    {lap.dispatch_date && <span>Dispatch: {fmtAssetDate(lap.dispatch_date)}</span>}
+                    {lap.delivered_at && <span>Delivered: {fmtAssetDate(lap.delivered_at)}</span>}
                     {lap.rent_monthly_rate && <span className="font-semibold text-slate-700">{formatCurrency(lap.rent_monthly_rate)}</span>}
                   </div>
                   <div className="pt-2 border-t border-slate-100"><PodLinks pdfPath={lap.dc_pdf_path} files={lap.pod_files} keyPrefix={lap.serial_id || lap.ttspl_id} /></div>
@@ -494,14 +495,27 @@ export default function CustomerDetailPage() {
                 <div key={lap.dc_number ? `${lap.dc_number}-${i}` : `ret-${i}`} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
                   <div className="flex items-center justify-between gap-2">
                     <button type="button" onClick={() => setTtsplOpen(lap.ttspl_id || lap.serial_number)} className="text-blue-600 font-mono text-sm font-semibold">{lap.ttspl_id || lap.serial_number || '—'}</button>
-                    <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-xs">returned</span>
+                    <div className="flex items-center gap-1">
+                      {canEditCustomerAssets('customer_assets') && lap.serial_id ? (
+                        <button
+                          type="button"
+                          title="Edit asset"
+                          onClick={() => setAssetEdit(lap)}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                      ) : null}
+                      <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-xs">returned</span>
+                    </div>
                   </div>
                   <p className="text-sm text-slate-800">{lap.model_name || '—'}</p>
                   <p className="text-xs text-slate-500">SN: {lap.serial_number || '—'}</p>
                   <p className="text-xs text-slate-500">{laptopConfig(lap) || '—'}</p>
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
                     {lap.dc_number && <span className="font-mono">Return DC {lap.dc_number}</span>}
-                    {lap.delivered_at && <span>{new Date(lap.delivered_at).toLocaleDateString('en-IN')}</span>}
+                    {lap.delivered_at && <span>Delivered to customer: {fmtAssetDate(lap.delivered_at)}</span>}
+                    {lap.returned_at && <span>Returned: {fmtAssetDate(lap.returned_at)}</span>}
                     <span className="capitalize">{lap.pickup_type || 'return'}</span>
                   </div>
                   <div className="pt-2 border-t border-slate-100"><PodLinks files={lap.pod_files} keyPrefix={lap.dc_number || `ret-${i}`} /></div>
@@ -515,15 +529,15 @@ export default function CustomerDetailPage() {
               <thead className="bg-gray-50 text-xs text-gray-500 text-left">
                 <tr>
                   {(assetView === 'active'
-                    ? ['#', 'TTSPL ID', 'Serial No', 'Model', 'Config', 'Entity', 'DC Number', 'Delivered Date', 'Monthly Rate', 'POD', 'Status', 'Actions']
-                    : ['#', 'TTSPL ID', 'Serial No', 'Model', 'Config', 'Return DC', 'Returned Date', 'Type', 'POD', 'Status']
+                    ? ['#', 'TTSPL ID', 'Serial No', 'Model', 'Config', 'Entity', 'DC Number', 'Dispatch Date', 'Delivered Date', 'Monthly Rate', 'POD', 'Status', 'Actions']
+                    : ['#', 'TTSPL ID', 'Serial No', 'Model', 'Config', 'Return DC', 'Delivered to Customer', 'Returned from Customer', 'Type', 'POD', 'Status', 'Actions']
                   ).map((h) => <th key={h} className="p-3">{h}</th>)}
                 </tr>
               </thead>
               <tbody>
                 {assetView === 'active' ? (
                   assetRows.length === 0 ? (
-                    <tr><td colSpan={12} className="p-6 text-center text-gray-400">No assets currently with this customer</td></tr>
+                    <tr><td colSpan={13} className="p-6 text-center text-gray-400">No assets currently with this customer</td></tr>
                   ) : assetRows.map((lap, i) => (
                     <tr key={lap.serial_id || lap.ttspl_id} className="border-t border-gray-100">
                       <td className="p-3 text-xs text-gray-400">{(assetPage - 1) * ASSET_PAGE_SIZE + i + 1}</td>
@@ -542,7 +556,8 @@ export default function CustomerDetailPage() {
                           : <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-700">Rentfoxxy</span>}
                       </td>
                       <td className="p-3 text-xs font-mono">{lap.dc_number || '—'}</td>
-                      <td className="p-3 text-xs">{(lap.delivered_at || lap.dispatch_date) ? new Date(lap.delivered_at || lap.dispatch_date).toLocaleDateString('en-IN') : '—'}</td>
+                      <td className="p-3 text-xs">{fmtAssetDate(lap.dispatch_date)}</td>
+                      <td className="p-3 text-xs">{fmtAssetDate(lap.delivered_at)}</td>
                       <td className="p-3 text-xs">{lap.rent_monthly_rate ? formatCurrency(lap.rent_monthly_rate) : '—'}</td>
                       <td className="p-3 text-xs"><PodLinks pdfPath={lap.dc_pdf_path} files={lap.pod_files} keyPrefix={lap.serial_id || lap.ttspl_id} /></td>
                       <td className="p-3"><span className="px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-xs">{lap.status || 'rented'}</span></td>
@@ -564,7 +579,7 @@ export default function CustomerDetailPage() {
                   ))
                 ) : (
                   assetRows.length === 0 ? (
-                    <tr><td colSpan={10} className="p-6 text-center text-gray-400">No returned laptops for this customer</td></tr>
+                    <tr><td colSpan={12} className="p-6 text-center text-gray-400">No returned laptops for this customer</td></tr>
                   ) : assetRows.map((lap, i) => (
                     <tr key={lap.dc_number ? `${lap.dc_number}-${i}` : `ret-${i}`} className="border-t border-gray-100">
                       <td className="p-3 text-xs text-gray-400">{(assetPage - 1) * ASSET_PAGE_SIZE + i + 1}</td>
@@ -578,10 +593,25 @@ export default function CustomerDetailPage() {
                       <td className="p-3">{lap.model_name || '—'}</td>
                       <td className="p-3 text-xs">{laptopConfig(lap) || '—'}</td>
                       <td className="p-3 text-xs font-mono">{lap.dc_number || '—'}</td>
-                      <td className="p-3 text-xs">{lap.delivered_at ? new Date(lap.delivered_at).toLocaleDateString('en-IN') : '—'}</td>
+                      <td className="p-3 text-xs">{fmtAssetDate(lap.delivered_at)}</td>
+                      <td className="p-3 text-xs">{fmtAssetDate(lap.returned_at)}</td>
                       <td className="p-3 text-xs capitalize">{lap.pickup_type || 'return'}</td>
                       <td className="p-3 text-xs"><PodLinks files={lap.pod_files} keyPrefix={lap.dc_number || `ret-${i}`} /></td>
                       <td className="p-3"><span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-xs">returned</span></td>
+                      <td className="p-3">
+                        {canEditCustomerAssets('customer_assets') && lap.serial_id ? (
+                          <button
+                            type="button"
+                            title="Edit asset"
+                            onClick={() => setAssetEdit(lap)}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 hover:text-teal-700"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                        ) : (
+                          <span className="text-xs text-gray-300">—</span>
+                        )}
+                      </td>
                     </tr>
                   ))
                 )}

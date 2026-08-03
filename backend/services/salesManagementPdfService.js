@@ -316,8 +316,12 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
   const gstAmount = gst.gst_total;
   const total = gst.grand_total;
 
-  const billing = parseJson(header.customer_billing_address, {}) || {};
-  const shippingAddr = parseJson(header.customer_shipping_address, {}) || {};
+  const billing = normalizeDeliveryAddress(
+    header.customer_billing_address || lines[0]?.customer_billing_address
+  ) || {};
+  const shippingAddr = normalizeDeliveryAddress(
+    header.customer_shipping_address || lines[0]?.customer_shipping_address
+  ) || {};
 
   await new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 36, size: 'A4' });

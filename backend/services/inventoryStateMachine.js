@@ -120,6 +120,7 @@ async function transitionAsset(db, {
     case STATUS.IN_TRANSIT:
       if (customerId !== null) add('current_customer_id', customerId);
       add('dispatched_at', new Date());
+      if (rentMonthlyRate !== null) add('rent_monthly_rate', rentMonthlyRate);
       break;
     case STATUS.RENTED:
     case STATUS.SOLD:
@@ -211,9 +212,9 @@ const reserveForDc = (db, serialId, { dcNumber, customerId, entityCode, actorUse
   transitionAsset(db, { serialId, toStatus: STATUS.RESERVED, dcNumber, customerId, entityCode,
     reason: `Reserved on ${dcNumber}`, actorUserId, actorName });
 
-const markDispatched = (db, serialId, { dcNumber, customerId, entityCode, dispatchMode, actorUserId, actorName }) =>
+const markDispatched = (db, serialId, { dcNumber, customerId, entityCode, dispatchMode, rentMonthlyRate, actorUserId, actorName }) =>
   transitionAsset(db, { serialId, toStatus: STATUS.IN_TRANSIT, dcNumber, customerId, entityCode,
-    dispatchMode, reason: `Dispatched on ${dcNumber} (${dispatchMode})`, actorUserId, actorName });
+    dispatchMode, rentMonthlyRate, reason: `Dispatched on ${dcNumber} (${dispatchMode})`, actorUserId, actorName });
 
 /**
  * Deliver: pick the terminal state from the order type, compute rent start.
@@ -228,7 +229,7 @@ function deliveredStatusForType(quotationType) {
 
 const markDelivered = async (db, serialId, {
   quotationType, dcNumber, customerId, entityCode, dispatchMode, dispatchedAt, deliveredAt,
-  rentMonthlyRate, actorUserId, actorName,
+  rentMonthlyRate, actorUserId, actorName, confirmedOnDc = false,
 }) => {
   const client = db || pool;
   const serial = await loadSerial(client, serialId);
@@ -253,10 +254,10 @@ const markDelivered = async (db, serialId, {
     } else if (
       from === STATUS.RETURNED
       && dcNumber
-      && String(serial.current_dc_number || '') === String(dcNumber)
+      && (String(serial.current_dc_number || '') === String(dcNumber) || confirmedOnDc)
     ) {
-      // Outbound DC already holds this serial but status drifted to returned
-      // (e.g. support return on the old unit). Re-assert in_transit, then deliver.
+      // Outbound DC holds this serial but status drifted to returned (e.g. a return
+      // pickup was warehouse-received while the outbound delivery was still open).
       await transitionAsset(client, {
         serialId,
         toStatus: STATUS.IN_TRANSIT,

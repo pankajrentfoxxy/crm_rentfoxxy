@@ -64,6 +64,7 @@ const {
   isAssignmentEditable,
   listAssignmentHistory,
   updateDcAssignment: applyDcAssignmentChange,
+  resolveTechnicianId,
 } = require('../services/dcAssignmentService');
 const {
   resolveHsnForPersist,
@@ -1771,18 +1772,23 @@ exports.createDcsByAddress = async (req, res) => {
       // Dispatch each unit through the inventory state machine (fallback: direct).
       for (const s of groupSerials) {
         if (!s.serial_id) continue;
+        const { resolveSerialRentRate } = require('../services/serialRentRateService');
+        const rentMonthlyRate = await resolveSerialRentRate(client, s.serial_id, dcNumber);
         try {
           await inventorySM.markDispatched(client, s.serial_id, {
             dcNumber, customerId: soHead.customer_id || null, entityCode, dispatchMode,
+            rentMonthlyRate,
             actorUserId: req.user?.user_id, actorName: req.user?.name,
           });
         } catch (rErr) {
           await client.query(
             `UPDATE vendor_serial_numbers
                 SET inventory_status = 'in_transit', current_dc_number = $1,
-                    dispatch_mode = $2, dispatched_at = NOW(), updated_at = NOW()
+                    dispatch_mode = $2, dispatched_at = NOW(),
+                    rent_monthly_rate = COALESCE($4, rent_monthly_rate),
+                    updated_at = NOW()
               WHERE serial_id = $3`,
-            [dcNumber, dispatchMode, s.serial_id]
+            [dcNumber, dispatchMode, s.serial_id, rentMonthlyRate]
           );
         }
       }
@@ -2296,9 +2302,12 @@ exports.generateReturnDc = async (req, res) => {
     const firstItem = itemsRes.rows[0];
     const rdc = await nextDocumentNumber('return_dc');
     const pickupAddr = (typeof t.pickup_address === 'string' ? JSON.parse(t.pickup_address) : t.pickup_address) || {};
-    const deliveryPersonId = dispatchMode === 'inhouse' && technician_user_id
+    const rawDeliveryPersonId = dispatchMode === 'inhouse' && technician_user_id
       ? parseInt(technician_user_id, 10)
       : (firstItem.assigned_to || firstItem.pickup_assigned_to || null);
+    const deliveryPersonId = rawDeliveryPersonId
+      ? await resolveTechnicianId(client, rawDeliveryPersonId)
+      : null;
 
     const rdcTxn = await resolveTxnTypeForDc(client, {
       salesOrderNumber: t.sales_order_number || null,
@@ -3185,6 +3194,13 @@ exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}) => {
   const deliveredAt = new Date();
   const demoRows = [];
 
+  const { resolveSerialRentRate } = require('../services/serialRentRateService');
+
+  async function resolveDcSerialRentRate(serialId) {
+    if (!['rental', 'demo'].includes(String(quotationType || '').toLowerCase())) return null;
+    return resolveSerialRentRate(client, serialId, dcNumber);
+  }
+
   for (const s of serials) {
     const serialId = await resolveSerialId(client, s);
     if (!serialId) continue;
@@ -3205,18 +3221,7 @@ exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}) => {
       }
       continue;
     }
-    const rateRes = await client.query(
-      `SELECT sol.rate
-         FROM delivery_challan_lines dcl
-         JOIN sales_order_lines sol ON sol.sales_order_number = dcl.sales_order_number
-        WHERE dcl.dc_number = $1
-        ORDER BY (sol.brand = dcl.brand) DESC NULLS LAST
-        LIMIT 1`,
-      [dcNumber]
-    );
-    const rentMonthlyRate = ['rental', 'demo'].includes(String(quotationType || '').toLowerCase())
-      ? parseFloat(rateRes.rows[0]?.rate || 0) || null
-      : null;
+    const rentMonthlyRate = await resolveDcSerialRentRate(serialId);
     const result = await inventorySM.markDelivered(client, serialId, {
       quotationType,
       dcNumber,
@@ -3228,6 +3233,7 @@ exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}) => {
       rentMonthlyRate,
       actorUserId: actor.user_id,
       actorName: actor.name,
+      confirmedOnDc: true,
     });
     if (result.to === inventorySM.STATUS.ON_DEMO) {
       demoRows.push({ serialId, ttsplId: row.ttspl_id });
@@ -3485,6 +3491,111 @@ exports.markDcDelivered = async (req, res) => {
   }
 };
 
+/**
+ * Correct delivery date on an already-delivered outbound DC.
+ * Updates DC lines, customer asset delivered_at, and rental rent_start_date (billing anchor).
+ */
+exports.updateDcDeliveryDate = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const dcNumber = req.params.dcNumber;
+    const { parseDeliveredAtInput, rentStartForSerial } = require('../services/deliveryDateService');
+    const deliveredAt = parseDeliveredAtInput(req.body?.delivered_at, { required: true });
+
+    await client.query('BEGIN');
+
+    const headRes = await client.query(
+      `SELECT status, dispatch_mode
+         FROM delivery_challan_lines
+        WHERE dc_number = $1
+        LIMIT 1`,
+      [dcNumber]
+    );
+    if (!headRes.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Delivery challan not found' });
+    }
+    const head = headRes.rows[0];
+    if (String(head.status || '').toLowerCase() !== 'delivered') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'Delivery date can only be updated after the DC is marked delivered',
+      });
+    }
+
+    await client.query(
+      `UPDATE delivery_challan_lines
+          SET delivered_at = $1, delivery_completed_at = $1, updated_at = NOW()
+        WHERE dc_number = $2`,
+      [deliveredAt, dcNumber]
+    );
+
+    const serials = await collectDcSerials(dcNumber);
+    let serialsUpdated = 0;
+    for (const s of serials) {
+      const serialId = await resolveSerialId(client, s);
+      if (!serialId) continue;
+      const sr = await client.query(
+        `SELECT dispatch_mode, dispatched_at, inventory_status
+           FROM vendor_serial_numbers WHERE serial_id = $1`,
+        [serialId]
+      );
+      const row = sr.rows[0] || {};
+      const rentStart = rentStartForSerial({
+        dispatchMode: row.dispatch_mode || head.dispatch_mode,
+        dispatchedAt: row.dispatched_at,
+        deliveredAt,
+        inventoryStatus: row.inventory_status,
+      });
+      await client.query(
+        `UPDATE vendor_serial_numbers
+            SET delivered_at = $1,
+                rent_start_date = COALESCE($2, rent_start_date),
+                updated_at = NOW()
+          WHERE serial_id = $3`,
+        [deliveredAt, rentStart ? rentStart.toISOString().slice(0, 10) : null, serialId]
+      );
+      serialsUpdated += 1;
+    }
+
+    await client.query(
+      `UPDATE demo_agreements SET delivered_at = $1, updated_at = NOW() WHERE dc_number = $2`,
+      [deliveredAt, dcNumber]
+    ).catch(() => {});
+
+    const soRes = await client.query(
+      `SELECT sales_order_number FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
+      [dcNumber]
+    );
+    const soNumber = soRes.rows[0]?.sales_order_number;
+    if (soNumber) {
+      await safeLogSalesOrderActivity({
+        salesOrderNumber: soNumber,
+        activityType: ACTIVITY_TYPES.DELIVERY_CHALLAN,
+        action: 'delivery_date_updated',
+        description: `${dcNumber} delivery date updated to ${deliveredAt.toISOString().slice(0, 10)}.`,
+        metadata: { dc_number: dcNumber, delivered_at: deliveredAt.toISOString() },
+        user: req.user,
+      });
+    }
+
+    await client.query('COMMIT');
+    res.json({
+      success: true,
+      message: 'Delivery date updated',
+      delivered_at: deliveredAt.toISOString(),
+      serials_updated: serialsUpdated,
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('updateDcDeliveryDate:', error);
+    res.status(error.status || 500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
+  }
+};
+
 exports.markDcRejected = async (req, res) => {
   try {
     const dcNumber = req.params.dcNumber;
@@ -3569,6 +3680,27 @@ function sanitizeDeliveryAddress(raw) {
     landmark: a.landmark || '',
     employee_name: a.employee_name || '',
     employee_phone: a.employee_phone || '',
+  };
+}
+
+function sanitizeCustomerShippingAddress(raw) {
+  const { normalizeDeliveryAddress } = require('../utils/deliveryAddressUtils');
+  const a = normalizeDeliveryAddress(parseJsonField(raw)) || {};
+  const name = String(a.name || '').trim();
+  const phone = String(a.phone || '').trim();
+  const address = String(a.address || a.address_line_1 || '').trim();
+  const city = String(a.city || '').trim();
+  const state = String(a.state || '').trim();
+  const zip_code = String(a.zip_code || a.pincode || '').trim();
+  if (!name || !phone || !address || !city || !state || !zip_code) return null;
+  return {
+    name,
+    phone,
+    address,
+    city,
+    state,
+    zip_code,
+    country: a.country || 'India',
   };
 }
 
@@ -4076,6 +4208,101 @@ exports.updateDcHsn = async (req, res) => {
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('updateDcHsn:', error);
+    res.status(500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
+  }
+};
+
+/** PATCH /sales-orders/:soNumber/shipping-address — Super Admin only. */
+exports.updateSalesOrderShippingAddress = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const soNumber = req.params.salesOrderNumber || req.params.soNumber;
+    const shipping = sanitizeCustomerShippingAddress(
+      req.body?.customer_shipping_address ?? req.body
+    );
+    if (!shipping) {
+      return res.status(400).json({
+        success: false,
+        message: 'name, phone, address, city, state, and zip_code are required',
+      });
+    }
+
+    const supplyState = resolveSupplyStateFromAddress(shipping, req.body?.supply_state);
+    const shippingJson = JSON.stringify(shipping);
+
+    await client.query('BEGIN');
+
+    const exists = await client.query(
+      `SELECT id, status FROM sales_order_lines WHERE sales_order_number = $1 LIMIT 1 FOR UPDATE`,
+      [soNumber]
+    );
+    if (!exists.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Sales order not found' });
+    }
+    if (String(exists.rows[0].status || '').toLowerCase() === 'cancelled') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: 'Sales order is cancelled' });
+    }
+
+    await assertReplacementSalesOrderAccessIfScoped(soNumber, req.user, req.permissionCache);
+
+    await client.query(
+      `UPDATE sales_order_lines
+          SET customer_shipping_address = $1::jsonb,
+              supply_state = $2,
+              updated_at = NOW()
+        WHERE sales_order_number = $3`,
+      [shippingJson, supplyState, soNumber]
+    );
+
+    await client.query(
+      `UPDATE delivery_challan_lines
+          SET customer_shipping_address = $1::jsonb,
+              supply_state = $2,
+              updated_at = NOW()
+        WHERE sales_order_number = $3
+          AND COALESCE(status, '') NOT IN ('delivered', 'cancelled', 'rejected')`,
+      [shippingJson, supplyState, soNumber]
+    );
+
+    await client.query('COMMIT');
+
+    let regen = { so_pdf_path: null, dc_pdfs: [] };
+    try {
+      regen = await regenerateSoAndLinkedDcPdfs(soNumber);
+    } catch (pdfErr) {
+      console.warn('PDF regeneration after shipping address update:', pdfErr.message);
+    }
+
+    const dcCount = regen.dc_pdfs.length;
+    res.json({
+      success: true,
+      message: dcCount
+        ? `Shipping address updated — SO and ${dcCount} DC PDF(s) regenerated`
+        : 'Shipping address updated — SO PDF regenerated',
+      customer_shipping_address: shipping,
+      supply_state: supplyState,
+      pdf_path: regen.so_pdf_path,
+      dc_pdfs: regen.dc_pdfs,
+    });
+
+    await safeLogSalesOrderActivity({
+      salesOrderNumber: soNumber,
+      activityType: ACTIVITY_TYPES.CUSTOMER,
+      action: 'shipping_address_updated',
+      description: `${req.user?.name || 'User'} updated the sales order shipping address.`,
+      metadata: { supply_state: supplyState },
+      user: req.user,
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (error.status === 403) {
+      return res.status(403).json({ success: false, message: error.message });
+    }
+    console.error('updateSalesOrderShippingAddress:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
     client.release();

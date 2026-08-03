@@ -102,8 +102,15 @@ async function buildDcFlow(where, params, { includeOtp = false } = {}) {
             sti.customer_otp_verified_at AS support_otp_verified_at,
             sti.customer_otp_sent_at AS support_otp_sent_at
        FROM delivery_challan_lines d
-       LEFT JOIN delivery_technicians dt ON dt.technician_id = d.delivery_person_id
-       LEFT JOIN users u ON u.user_id = d.delivery_person_id
+       LEFT JOIN LATERAL (
+         SELECT dt.*
+           FROM delivery_technicians dt
+          WHERE dt.technician_id = d.delivery_person_id
+             OR dt.user_id = d.delivery_person_id
+          ORDER BY CASE WHEN dt.technician_id = d.delivery_person_id THEN 0 ELSE 1 END
+          LIMIT 1
+       ) dt ON TRUE
+       LEFT JOIN users u ON u.user_id = COALESCE(dt.user_id, d.delivery_person_id)
        LEFT JOIN customers c ON c.customer_id = d.customer_id
        LEFT JOIN LATERAL (
          SELECT COALESCE(customer_otp_code, otp_code) AS customer_otp_code,

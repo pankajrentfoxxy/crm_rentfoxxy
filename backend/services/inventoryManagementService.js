@@ -95,6 +95,13 @@ function offShelfInventoryFilterSql(alias = 's') {
   return ` AND COALESCE(${alias}.inventory_status, 'in_stock') NOT IN (${list})`;
 }
 
+/** QC Process includes customer returns (inventory_status returned) re-entering floor QC. */
+function qcProcessInventoryFilterSql(alias = 's') {
+  const blocked = OFF_SHELF_STATUSES.filter((s) => s !== 'returned');
+  const list = blocked.map((s) => `'${s}'`).join(', ');
+  return ` AND COALESCE(${alias}.inventory_status, 'in_stock') NOT IN (${list})`;
+}
+
 function buildListWhere(segment, params, alias = 's') {
   const cfg = LIST_SEGMENT_MAP[segment];
   if (!cfg) return { sql: ' AND FALSE', params };
@@ -156,7 +163,7 @@ function buildListWhere(segment, params, alias = 's') {
               AND tk.status IN ('in_progress', 'on_hold')
           )
         )
-      )${qcPendingReceiveSql}${offShelfInventoryFilterSql(alias)}`,
+      )${qcPendingReceiveSql}${qcProcessInventoryFilterSql(alias)}`,
       params,
     };
   }
@@ -349,6 +356,7 @@ module.exports = {
   ROUTE_TO_SEGMENT,
   OFF_SHELF_STATUSES,
   offShelfInventoryFilterSql,
+  qcProcessInventoryFilterSql,
   SPARE_PART_TABS,
   SPARE_STATUS_VALUES,
   normalizeListSegment,

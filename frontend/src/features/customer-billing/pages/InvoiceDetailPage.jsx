@@ -14,6 +14,21 @@ function fmt(n) {
   return `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 }
 
+function formatInvoiceDate(d) {
+  if (!d) return '—';
+  const s = String(d);
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (m) {
+    const [y, mo, day] = m[1].split('-').map(Number);
+    return new Date(y, mo - 1, day).toLocaleDateString('en-IN', {
+      day: '2-digit', month: 'short', year: 'numeric',
+    });
+  }
+  const parsed = new Date(d);
+  if (Number.isNaN(parsed.getTime())) return s;
+  return parsed.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
 export default function InvoiceDetailPage() {
   const { id } = useParams();
   const [invoice, setInvoice] = useState(null);
@@ -91,7 +106,7 @@ export default function InvoiceDetailPage() {
       <div className="flex flex-wrap items-start justify-between gap-4 mb-6">
         <div>
           <h1 className="text-2xl font-semibold">{invoice.invoice_number}</h1>
-          <p className="text-sm text-gray-500">{invoice.customer_name} · {invoice.from_date} – {invoice.to_date}</p>
+          <p className="text-sm text-gray-500">{invoice.customer_name} · {formatInvoiceDate(invoice.from_date)} – {formatInvoiceDate(invoice.to_date)}</p>
           <div className="mt-2"><InvoiceStatusBadge status={invoice.status} /></div>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -117,7 +132,7 @@ export default function InvoiceDetailPage() {
                 </div>
                 {line.serial_number && <p className="text-xs text-slate-500">SN: {line.serial_number}</p>}
                 <p className="text-sm text-slate-700">{line.brand} {line.model}</p>
-                <p className="text-xs text-slate-500">{line.rent_start || '—'} → {line.rent_end || '—'}</p>
+                <p className="text-xs text-slate-500">{formatInvoiceDate(line.rent_start)} → {formatInvoiceDate(line.rent_end)}</p>
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
                   <span>{line.days_in_month}{line.month_days ? `/${line.month_days}` : ''} days</span>
                   <span>{fmt(line.daily_rate)}/day</span>
@@ -152,7 +167,7 @@ export default function InvoiceDetailPage() {
                     <td className="px-4 py-3">{line.brand}</td>
                     <td className="px-4 py-3">{line.model}</td>
                     <td className="px-4 py-3 whitespace-nowrap">
-                      <div>{line.rent_start || '—'} → {line.rent_end || '—'}</div>
+                      <div>{formatInvoiceDate(line.rent_start)} → {formatInvoiceDate(line.rent_end)}</div>
                       {line.is_catchup && (
                         <span className="inline-block mt-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">catch-up</span>
                       )}

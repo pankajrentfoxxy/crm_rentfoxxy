@@ -9,6 +9,7 @@ import SoSerialPanel from '../components/SoSerialPanel';
 import SoDeliveryAddressPanel from '../components/SoDeliveryAddressPanel';
 import SoLineRateEditModal from '../components/SoLineRateEditModal';
 import SoLineHsnEditModal from '../components/SoLineHsnEditModal';
+import SoShippingAddressEditModal from '../components/SoShippingAddressEditModal';
 import SoActivityPanel from '../components/SoActivityPanel';
 import { DispatchWorkflowCard } from '../../dispatch/components/DispatchWorkflowPanel';
 import { cancelSalesOrder, getQuotation, getSalesOrderFull, logSoDocumentActivity, regenerateSalesOrderPdf } from '../salesPipelineApi';
@@ -16,7 +17,7 @@ import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
 import { canEditSoLineRateConfig, canViewAnySection } from '../../../utils/permissionHelper';
 import usePermission from '../../../hooks/usePermission';
-import { formatConfig, formatCurrency, formatDate, salesOrderTypeLabel, salesOrderTypeStyle, salesOrderStatusLabel, deliveryChallanDetailPath, parseDeliveryAddress, formatSupplyStateLabel, resolveSupplyStateFromShipping } from '../salesPipelineUtils';
+import { formatConfig, formatCurrency, formatDate, salesOrderTypeLabel, salesOrderTypeStyle, salesOrderStatusLabel, deliveryChallanDetailPath, parseDeliveryAddress, formatDeliveryAddressLine, deliveryAddressPhone, formatSupplyStateLabel, resolveSupplyStateFromShipping } from '../salesPipelineUtils';
 import { getSoScopeConfig, orderMatchesScope, salesOrderListPath, SO_SERIAL_EDIT_SECTIONS, SO_LAPTOPS_TAB_VIEW_SECTIONS } from '../salesOrderScope';
 
 function resolveSoNumber(params) {
@@ -77,6 +78,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
   const [dcOpen, setDcOpen] = useState(false);
   const [editRateLine, setEditRateLine] = useState(null);
   const [editHsnLine, setEditHsnLine] = useState(null);
+  const [editShippingOpen, setEditShippingOpen] = useState(false);
   const [activityRefreshKey, setActivityRefreshKey] = useState(0);
 
   const visibleTabs = useMemo(() => TABS.filter((t) => {
@@ -253,6 +255,33 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
             <p><span className="text-gray-500">Dispatched:</span> <strong className="text-amber-700">{dispatchedCount}</strong></p>
             <p><span className="text-gray-500">Pending:</span> <strong className="text-slate-800">{pendingQty}</strong></p>
             <p><span className="text-gray-500">Shipping State (GST):</span> {supplyStateLabel}</p>
+            <div className="pt-1">
+              <div className="flex items-start justify-between gap-2">
+                <span className="text-gray-500 shrink-0">Shipping Address:</span>
+                {isSuperAdmin && !isCancelled ? (
+                  <button
+                    type="button"
+                    onClick={() => setEditShippingOpen(true)}
+                    className="text-xs text-amber-700 hover:underline shrink-0"
+                  >
+                    Edit
+                  </button>
+                ) : null}
+              </div>
+              {shippingAddr ? (
+                <div className="mt-1 text-gray-900">
+                  <p>{shippingAddr.name || '—'}</p>
+                  {shippingAddr.phone || deliveryAddressPhone(head.customer_shipping_address, head.customer_mobile) ? (
+                    <p className="text-gray-600">
+                      {shippingAddr.phone || deliveryAddressPhone(head.customer_shipping_address, head.customer_mobile)}
+                    </p>
+                  ) : null}
+                  <p className="text-gray-600">{formatDeliveryAddressLine(head.customer_shipping_address) || '—'}</p>
+                </div>
+              ) : (
+                <p className="mt-1 text-gray-500">—</p>
+              )}
+            </div>
             <p><span className="text-gray-500">Remarks:</span> {lines.map((l) => (l.remark || '').trim()).filter(Boolean).join(' · ') || '—'}</p>
           </div>
           <div className="bg-white border rounded-xl p-4 text-sm space-y-1.5">
@@ -441,6 +470,13 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
         open={Boolean(editHsnLine)}
         line={editHsnLine}
         onClose={() => setEditHsnLine(null)}
+        onSaved={load}
+      />
+      <SoShippingAddressEditModal
+        open={editShippingOpen}
+        soNumber={soNumber}
+        shippingRaw={head.customer_shipping_address}
+        onClose={() => setEditShippingOpen(false)}
         onSaved={load}
       />
     </div>

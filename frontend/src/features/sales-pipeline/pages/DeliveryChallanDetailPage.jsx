@@ -12,7 +12,7 @@ import {
   createDcQcTickets, getDC, getDcQcStatus, getDCMeta, getSalesOrderFull,
   markDelivered, markRejected, regenerateDcPdf, cancelDC,
   sendDeliveryOtp, sendWarehouseReturnOtp, verifyDeliveryOtp, verifyWarehouseReturnOtp,
-  updateDC, dispatchDC, updateDcHsn,
+  updateDC, dispatchDC, updateDcHsn, updateDcDeliveryDate,
 } from '../salesPipelineApi';
 import {
   DC_STATUS_STYLES, formatConfig, formatCurrency, formatDate, formatDateTime,
@@ -21,6 +21,7 @@ import {
 import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
 import DcEditModal from '../components/DcEditModal';
+import MarkDeliveredModal from '../components/MarkDeliveredModal';
 
 function resolveDcNumber(params) {
   const raw = params['*'] ?? params.dcNumber ?? '';
@@ -55,6 +56,7 @@ export default function DeliveryChallanDetailPage() {
   const { user } = useAuth();
   const isSuperAdmin = user?.role === 'super_admin';
   const canOverrideHsn = user?.role === 'admin' || user?.role === 'super_admin';
+  const canEditDeliveryDate = isSuperAdmin || canOverrideHsn;
   const [tab, setTab] = useState('details');
   const [lines, setLines] = useState([]);
   const [billingLines, setBillingLines] = useState([]);
@@ -81,6 +83,7 @@ export default function DeliveryChallanDetailPage() {
   const [cancelSaving, setCancelSaving] = useState(false);
   const [saleCompliance, setSaleCompliance] = useState(null);
   const [canDownloadPdf, setCanDownloadPdf] = useState(true);
+  const [updateDeliveryDateOpen, setUpdateDeliveryDateOpen] = useState(false);
 
   const head = lines[0] || {};
   const summaryLines = billingLines.length ? billingLines : lines;
@@ -160,6 +163,18 @@ export default function DeliveryChallanDetailPage() {
       load();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Verification failed');
+    }
+  };
+
+  const confirmUpdateDeliveryDate = async ({ delivered_at }) => {
+    try {
+      await updateDcDeliveryDate(dcNumber, { delivered_at });
+      toast.success('Delivery date updated');
+      setUpdateDeliveryDateOpen(false);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to update delivery date');
+      throw err;
     }
   };
 
@@ -669,6 +684,15 @@ export default function DeliveryChallanDetailPage() {
               {head.status === 'delivered' && (
                 <div className="text-sm space-y-1">
                   <p>Delivered at: {formatDateTime(head.delivered_at)}</p>
+                  {canEditDeliveryDate && (
+                    <button
+                      type="button"
+                      onClick={() => setUpdateDeliveryDateOpen(true)}
+                      className="mt-2 px-3 py-1.5 border border-amber-300 text-amber-800 rounded-lg text-xs font-medium hover:bg-amber-50"
+                    >
+                      Update delivery date
+                    </button>
+                  )}
                   {head.delivery_notes && <p className="text-gray-600">Notes: {head.delivery_notes}</p>}
                   <div className="flex flex-wrap gap-4 mt-2">
                     {uploadUrl(head.pod_photo_url) && (
@@ -753,7 +777,18 @@ export default function DeliveryChallanDetailPage() {
               <p><span className="text-gray-500">Vehicle:</span> {head.vehicle_number}</p>
             ) : null}
             {head.delivered_at ? (
-              <p><span className="text-gray-500">Delivered:</span> {formatDateTime(head.delivered_at)}</p>
+              <p>
+                <span className="text-gray-500">Delivered:</span> {formatDateTime(head.delivered_at)}
+                {canEditDeliveryDate && head.status === 'delivered' ? (
+                  <button
+                    type="button"
+                    onClick={() => setUpdateDeliveryDateOpen(true)}
+                    className="ml-2 text-xs text-amber-700 underline hover:text-amber-900"
+                  >
+                    Edit date
+                  </button>
+                ) : null}
+              </p>
             ) : null}
           </div>
           <div className="bg-white border rounded-xl p-4 text-sm">
@@ -801,6 +836,17 @@ export default function DeliveryChallanDetailPage() {
             <button type="button" onClick={handleVerifyDeliver} className="w-full py-2 bg-blue-600 text-white rounded-lg text-sm">Verify & Deliver</button>
           </div>
         </div>
+      )}
+
+      {updateDeliveryDateOpen && (
+        <MarkDeliveredModal
+          dcNumber={dcNumber}
+          title="Update Delivery Date"
+          initialDate={head.delivered_at}
+          confirmLabel="Save delivery date"
+          onClose={() => setUpdateDeliveryDateOpen(false)}
+          onConfirm={confirmUpdateDeliveryDate}
+        />
       )}
 
       {cancelModal && (
