@@ -229,7 +229,7 @@ function deliveredStatusForType(quotationType) {
 
 const markDelivered = async (db, serialId, {
   quotationType, dcNumber, customerId, entityCode, dispatchMode, dispatchedAt, deliveredAt,
-  rentMonthlyRate, actorUserId, actorName,
+  rentMonthlyRate, actorUserId, actorName, confirmedOnDc = false,
 }) => {
   const client = db || pool;
   const serial = await loadSerial(client, serialId);
@@ -254,10 +254,10 @@ const markDelivered = async (db, serialId, {
     } else if (
       from === STATUS.RETURNED
       && dcNumber
-      && String(serial.current_dc_number || '') === String(dcNumber)
+      && (String(serial.current_dc_number || '') === String(dcNumber) || confirmedOnDc)
     ) {
-      // Outbound DC already holds this serial but status drifted to returned
-      // (e.g. support return on the old unit). Re-assert in_transit, then deliver.
+      // Outbound DC holds this serial but status drifted to returned (e.g. a return
+      // pickup was warehouse-received while the outbound delivery was still open).
       await transitionAsset(client, {
         serialId,
         toStatus: STATUS.IN_TRANSIT,

@@ -3161,16 +3161,31 @@ const warehouseReceiveSinglePickupItem = async (client, it, userId, esignUrl, si
                 await removeRepairPickupFromCustomer(client, it, { user_id: userId });
             }
         } else {
-            await client.query(
-                `UPDATE vendor_serial_numbers SET
-                    inventory_status = 'returned',
-                    current_customer_id = NULL,
-                    current_dc_number = NULL,
-                    status_changed_at = NOW(),
-                    updated_at = NOW()
-                 WHERE serial_id = $1`,
-                [vsn.serial_id]
+            const activeOutbound = await client.query(
+                `SELECT dc_number, status
+                   FROM delivery_challan_lines
+                  WHERE movement_type = 'outbound'
+                    AND status IN ('in_transit', 'reached', 'shipped')
+                    AND serial_number::text ILIKE '%' || $1 || '%'
+                  LIMIT 1`,
+                [code]
             );
+            if (activeOutbound.rows.length) {
+                console.warn(
+                    `[support] Skipping returned status for ${code}: active outbound ${activeOutbound.rows[0].dc_number}`
+                );
+            } else {
+                await client.query(
+                    `UPDATE vendor_serial_numbers SET
+                        inventory_status = 'returned',
+                        current_customer_id = NULL,
+                        current_dc_number = NULL,
+                        status_changed_at = NOW(),
+                        updated_at = NOW()
+                     WHERE serial_id = $1`,
+                    [vsn.serial_id]
+                );
+            }
         }
         await resetVendorSerialForQcReentry(client, vsn.serial_id);
     }

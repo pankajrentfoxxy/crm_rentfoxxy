@@ -3233,6 +3233,7 @@ exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}) => {
       rentMonthlyRate,
       actorUserId: actor.user_id,
       actorName: actor.name,
+      confirmedOnDc: true,
     });
     if (result.to === inventorySM.STATUS.ON_DEMO) {
       demoRows.push({ serialId, ttsplId: row.ttspl_id });
