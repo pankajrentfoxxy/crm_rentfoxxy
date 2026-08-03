@@ -54,9 +54,13 @@ export default function TechnicianDeliveryBucketPage({ movement = null }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await listDeliveryFlow({ status: 'inhouse' });
+      // Sales technician bucket shows outbound Delivery Challans (DC) only.
+      // Return DCs (RDC / support pickups) belong in the Support pickup bucket.
+      const apiMovement = movement || 'outbound';
+      const r = await listDeliveryFlow({ status: 'inhouse', movement: apiMovement });
       let list = r.data?.items || [];
-      if (movement) list = list.filter((d) => (d.movement_type || 'outbound') === movement);
+      // Safety net in case older rows come back without movement_type set.
+      list = list.filter((d) => (d.movement_type || 'outbound') === apiMovement);
       setItems(list);
     } catch {
       toast.error('Failed to load the bucket');

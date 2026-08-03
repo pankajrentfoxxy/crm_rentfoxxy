@@ -361,7 +361,10 @@ export default function MyDeliveriesPage({ movement = null }) {
     try {
       const r = await getMyDeliveries();
       let list = r.data?.items || [];
-      if (movement) list = list.filter((d) => (d.movement_type || 'outbound') === movement);
+      // Sales "My Deliveries" shows outbound Delivery Challans (DC) only.
+      // Return DCs (RDC / support pickups) live under Support's "My Pickups".
+      const filterMovement = movement || 'outbound';
+      list = list.filter((d) => (d.movement_type || 'outbound') === filterMovement);
       setItems(list);
     } catch {
       toast.error('Failed to load your assignments');
