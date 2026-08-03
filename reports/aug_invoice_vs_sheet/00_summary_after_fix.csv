@@ -1,0 +1,11 @@
+metric,value
+excluded_customers,"ASCENT (CRM) / Kinolve (sheet) — same fleet, skipped"
+sheet_aug_assets_clean,2877
+sheet_rent_total,6961702.25
+crm_aug_subtotal_excl_ascent,7153083.2
+diff_sheet_minus_crm,-191380.95
+assets_matched_ok,2768
+assets_amount_diff,74
+assets_missing_in_crm,35
+customers_aligned,104
+customers_with_diff,76

@@ -1,0 +1,1500 @@
+{
+  "updates": [
+    {
+      "serial_id": 8153,
+      "ttspl": "TTSPL7389",
+      "customer_id": null,
+      "sheet_client": "SELECTASTRO PRIVATE LIMITED",
+      "bill_from": "2026-07-01",
+      "bill_to": "2026-07-02",
+      "sheet_rate": 1399,
+      "sheet_rent": 90.25,
+      "current_start": null,
+      "current_rate": 1,
+      "current_status": "returned",
+      "set_rent_start": "2026-07-01",
+      "set_rate": 1399,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-01 (Jul catch-up)",
+        "rate 1->1399"
+      ]
+    },
+    {
+      "serial_id": 8150,
+      "ttspl": "TTSPL7387",
+      "customer_id": 156,
+      "sheet_client": "SELECTASTRO PRIVATE LIMITED",
+      "bill_from": "2026-07-01",
+      "bill_to": "2026-07-02",
+      "sheet_rate": 1399,
+      "sheet_rent": 90.25,
+      "current_start": "2026-07-13",
+      "current_rate": 1300,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-01",
+      "set_rate": 1399,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-01 (Jul catch-up)",
+        "rate 1300->1399"
+      ]
+    },
+    {
+      "serial_id": 4046,
+      "ttspl": "TTSPL7339",
+      "customer_id": 94,
+      "sheet_client": "FLEET LABS TECHNOLOGIES PRIVATE LIMITED (Apna Mart)",
+      "bill_from": "2026-07-12",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 2699,
+      "sheet_rent": 4440.290322580645,
+      "current_start": "2026-07-11",
+      "current_rate": 2699,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-12",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-12 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 1965,
+      "ttspl": "TTSPL6809",
+      "customer_id": 94,
+      "sheet_client": "FLEET LABS TECHNOLOGIES PRIVATE LIMITED (Apna Mart)",
+      "bill_from": "2026-07-18",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 2699,
+      "sheet_rent": 3917.9032258064517,
+      "current_start": "2026-07-17",
+      "current_rate": 2699,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-18",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-18 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 2153,
+      "ttspl": "TTSPL4425",
+      "customer_id": 48,
+      "sheet_client": "LEEWAYHERTZ TECHNOLOGIES PRIVATE LIMITED",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 4849,
+      "sheet_rent": 4849,
+      "current_start": "2026-06-08",
+      "current_rate": 6474,
+      "current_status": "rented",
+      "set_rent_start": null,
+      "set_rate": 4849,
+      "set_status": null,
+      "reason": [
+        "rate 6474->4849"
+      ]
+    },
+    {
+      "serial_id": 1371,
+      "ttspl": "TTSPL4604",
+      "customer_id": 25,
+      "sheet_client": "Synergie Network Engineering India Pvt Ltd",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 2499,
+      "sheet_rent": 2499,
+      "current_start": "2026-07-10",
+      "current_rate": 2499,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-10->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 2763,
+      "ttspl": "TTSPL5414",
+      "customer_id": 11,
+      "sheet_client": "Digital Eco Innovision Private Limited",
+      "bill_from": "2026-07-29",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 2499,
+      "sheet_rent": 2740.8387096774195,
+      "current_start": "2026-07-28",
+      "current_rate": 2499,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-29",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-29 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 7692,
+      "ttspl": "TTSPL5196",
+      "customer_id": null,
+      "sheet_client": "Pibit Technologies Pvt. Ltd.",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 6474,
+      "sheet_rent": 6474,
+      "current_start": null,
+      "current_rate": null,
+      "current_status": "in_stock",
+      "set_rent_start": "2026-08-01",
+      "set_rate": 6474,
+      "set_status": null,
+      "reason": [
+        "rent_start null->2026-08-01",
+        "rate null->6474"
+      ]
+    },
+    {
+      "serial_id": 193,
+      "ttspl": "TTSPL5256",
+      "customer_id": 281,
+      "sheet_client": "Pibit Technologies Pvt. Ltd.",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 2999,
+      "sheet_rent": 2999,
+      "current_start": "2026-02-06",
+      "current_rate": 7499,
+      "current_status": "rented",
+      "set_rent_start": null,
+      "set_rate": 2999,
+      "set_status": null,
+      "reason": [
+        "rate 7499->2999"
+      ]
+    },
+    {
+      "serial_id": 3852,
+      "ttspl": "TTSPL7193",
+      "customer_id": 47,
+      "sheet_client": "BPB ONLINE LLP",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1799,
+      "sheet_rent": 1799,
+      "current_start": "2026-07-07",
+      "current_rate": 1799,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-07->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 3832,
+      "ttspl": "TTSPL7173",
+      "customer_id": 47,
+      "sheet_client": "BPB ONLINE LLP",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1799,
+      "sheet_rent": 1799,
+      "current_start": "2026-07-07",
+      "current_rate": 1799,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-07->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 4090,
+      "ttspl": "TTSPLGR0165",
+      "customer_id": 26,
+      "sheet_client": "Mercury Solutions Limited",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1699,
+      "sheet_rent": 1699,
+      "current_start": "2026-07-03",
+      "current_rate": 1699,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-03->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 3473,
+      "ttspl": "TTSPL6664",
+      "customer_id": 26,
+      "sheet_client": "Mercury Solutions Limited",
+      "bill_from": "2026-07-11",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1699,
+      "sheet_rent": 2849.935483870968,
+      "current_start": "2026-07-10",
+      "current_rate": 1699,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-11",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-11 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 167,
+      "ttspl": "TTSPL4764",
+      "customer_id": 36,
+      "sheet_client": "KULSYS TECHNOLOGIES PRIVATE LIMITED",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 3500,
+      "sheet_rent": 3500,
+      "current_start": "2026-07-07",
+      "current_rate": 3500,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-07->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 1483,
+      "ttspl": "TTSPL4657",
+      "customer_id": 36,
+      "sheet_client": "KULSYS TECHNOLOGIES PRIVATE LIMITED",
+      "bill_from": "2026-07-08",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 3500,
+      "sheet_rent": 6209.677419354839,
+      "current_start": "2026-07-07",
+      "current_rate": 3500,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-08",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-08 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 262,
+      "ttspl": "TTSPL6933",
+      "customer_id": 122,
+      "sheet_client": "G N APNA UDYOG LLP (AU Logistics)/RATHAM TECHNOLOGIES LLP",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 3199,
+      "sheet_rent": 3199,
+      "current_start": "2026-07-07",
+      "current_rate": 3199,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-07->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 3065,
+      "ttspl": "TTSPL3995",
+      "customer_id": 122,
+      "sheet_client": "G N APNA UDYOG LLP (AU Logistics)/RATHAM TECHNOLOGIES LLP",
+      "bill_from": "2026-07-12",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 3199,
+      "sheet_rent": 5262.870967741936,
+      "current_start": "2026-07-11",
+      "current_rate": 3199,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-12",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-12 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 341,
+      "ttspl": "TTSPL4209",
+      "customer_id": 130,
+      "sheet_client": "RESEARCH NESTER PRIVATE LIMITED",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1100,
+      "sheet_rent": 1100,
+      "current_start": "2026-06-25",
+      "current_rate": 1500,
+      "current_status": "rented",
+      "set_rent_start": null,
+      "set_rate": 1100,
+      "set_status": null,
+      "reason": [
+        "rate 1500->1100"
+      ]
+    },
+    {
+      "serial_id": 370,
+      "ttspl": "TTSPL3616",
+      "customer_id": 76,
+      "sheet_client": "Shreyas Management Consulting Services",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1699,
+      "sheet_rent": 1699,
+      "current_start": "2026-07-14",
+      "current_rate": 1699,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-14->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 1596,
+      "ttspl": "TTSPL4066",
+      "customer_id": 79,
+      "sheet_client": "PPG Asian Paint",
+      "bill_from": "2026-07-01",
+      "bill_to": "2026-07-31",
+      "sheet_rate": 1399,
+      "sheet_rent": 1399,
+      "current_start": "2026-02-06",
+      "current_rate": 1399,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-01 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 1597,
+      "ttspl": "TTSPL2103",
+      "customer_id": 79,
+      "sheet_client": "PPG Asian Paint",
+      "bill_from": "2026-07-01",
+      "bill_to": "2026-07-31",
+      "sheet_rate": 1399,
+      "sheet_rent": 1399,
+      "current_start": "2026-02-06",
+      "current_rate": 1399,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-01 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 1598,
+      "ttspl": "TTSPL3263",
+      "customer_id": 79,
+      "sheet_client": "PPG Asian Paint",
+      "bill_from": "2026-07-01",
+      "bill_to": "2026-07-31",
+      "sheet_rate": 1399,
+      "sheet_rent": 1399,
+      "current_start": "2026-02-06",
+      "current_rate": 1399,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-01 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 1600,
+      "ttspl": "TTSPL2411",
+      "customer_id": 79,
+      "sheet_client": "PPG Asian Paint",
+      "bill_from": "2026-07-01",
+      "bill_to": "2026-07-31",
+      "sheet_rate": 1399,
+      "sheet_rent": 1399,
+      "current_start": "2026-02-06",
+      "current_rate": 1399,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-01 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 1601,
+      "ttspl": "TTSPLGR0151",
+      "customer_id": 79,
+      "sheet_client": "PPG Asian Paint",
+      "bill_from": "2026-07-01",
+      "bill_to": "2026-07-31",
+      "sheet_rate": 1399,
+      "sheet_rent": 1399,
+      "current_start": "2026-02-06",
+      "current_rate": 1399,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-01 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 1602,
+      "ttspl": "TTSPL3509",
+      "customer_id": 79,
+      "sheet_client": "PPG Asian Paint",
+      "bill_from": "2026-07-01",
+      "bill_to": "2026-07-31",
+      "sheet_rate": 1399,
+      "sheet_rent": 1399,
+      "current_start": "2026-02-06",
+      "current_rate": 1399,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-01 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 1604,
+      "ttspl": "TTSPL5029",
+      "customer_id": 79,
+      "sheet_client": "PPG Asian Paint",
+      "bill_from": "2026-07-01",
+      "bill_to": "2026-07-31",
+      "sheet_rate": 1399,
+      "sheet_rent": 1399,
+      "current_start": "2026-02-06",
+      "current_rate": 1399,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-01 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 2201,
+      "ttspl": "TTSPL2133",
+      "customer_id": 79,
+      "sheet_client": "PPG Asian Paint",
+      "bill_from": "2026-07-01",
+      "bill_to": "2026-07-31",
+      "sheet_rate": 1399,
+      "sheet_rent": 1399,
+      "current_start": "2026-02-06",
+      "current_rate": 1399,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-01 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 1605,
+      "ttspl": "TTSPL3895",
+      "customer_id": 79,
+      "sheet_client": "PPG Asian Paint",
+      "bill_from": "2026-07-01",
+      "bill_to": "2026-07-31",
+      "sheet_rate": 1399,
+      "sheet_rent": 1399,
+      "current_start": "2026-02-06",
+      "current_rate": 1399,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-01 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 2202,
+      "ttspl": "TTSPL3934",
+      "customer_id": 79,
+      "sheet_client": "PPG Asian Paint",
+      "bill_from": "2026-07-01",
+      "bill_to": "2026-07-31",
+      "sheet_rate": 1399,
+      "sheet_rent": 1399,
+      "current_start": "2026-02-06",
+      "current_rate": 1399,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-01 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 1607,
+      "ttspl": "TTSPL4088",
+      "customer_id": 79,
+      "sheet_client": "PPG Asian Paint",
+      "bill_from": "2026-07-01",
+      "bill_to": "2026-07-31",
+      "sheet_rate": 1399,
+      "sheet_rent": 1399,
+      "current_start": "2026-02-06",
+      "current_rate": 1399,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-01 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 1608,
+      "ttspl": "TTSPL3774",
+      "customer_id": 79,
+      "sheet_client": "PPG Asian Paint",
+      "bill_from": "2026-07-01",
+      "bill_to": "2026-07-31",
+      "sheet_rate": 1399,
+      "sheet_rent": 1399,
+      "current_start": "2026-02-06",
+      "current_rate": 1399,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-01 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 1609,
+      "ttspl": "TTSPL3454",
+      "customer_id": 79,
+      "sheet_client": "PPG Asian Paint",
+      "bill_from": "2026-07-01",
+      "bill_to": "2026-07-31",
+      "sheet_rate": 1399,
+      "sheet_rent": 1399,
+      "current_start": "2026-02-06",
+      "current_rate": 1399,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-01 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 3736,
+      "ttspl": "TTSPL2452",
+      "customer_id": 79,
+      "sheet_client": "PPG Asian Paint",
+      "bill_from": "2026-07-01",
+      "bill_to": "2026-07-31",
+      "sheet_rate": 1399,
+      "sheet_rent": 1399,
+      "current_start": "2026-03-28",
+      "current_rate": 1399,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-01 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 3721,
+      "ttspl": "TTSPL3948",
+      "customer_id": 79,
+      "sheet_client": "PPG Asian Paint",
+      "bill_from": "2026-07-01",
+      "bill_to": "2026-07-31",
+      "sheet_rate": 1399,
+      "sheet_rent": 1399,
+      "current_start": "2026-04-29",
+      "current_rate": 1399,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-01 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 1293,
+      "ttspl": "TTSPL3237",
+      "customer_id": null,
+      "sheet_client": "PPG Asian Paint",
+      "bill_from": "2026-07-27",
+      "bill_to": "2026-07-31",
+      "sheet_rate": 1399,
+      "sheet_rent": 225.65,
+      "current_start": "2026-07-30",
+      "current_rate": 1399,
+      "current_status": "returned",
+      "set_rent_start": "2026-07-27",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-27 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 8205,
+      "ttspl": "TTSPL7441",
+      "customer_id": 29,
+      "sheet_client": "Optimizing Resources Private Limited",
+      "bill_from": "2026-07-08",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1600,
+      "sheet_rent": 2838.709677419355,
+      "current_start": "2026-07-07",
+      "current_rate": 1600,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-08",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-08 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 8197,
+      "ttspl": "TTSPL7433",
+      "customer_id": 29,
+      "sheet_client": "Optimizing Resources Private Limited",
+      "bill_from": "2026-07-08",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1600,
+      "sheet_rent": 2838.709677419355,
+      "current_start": "2026-07-07",
+      "current_rate": 1600,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-08",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-08 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 8201,
+      "ttspl": "TTSPL7437",
+      "customer_id": 29,
+      "sheet_client": "Optimizing Resources Private Limited",
+      "bill_from": "2026-07-08",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1600,
+      "sheet_rent": 2838.709677419355,
+      "current_start": "2026-07-07",
+      "current_rate": 1600,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-08",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-08 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 2720,
+      "ttspl": "TTSPL6255",
+      "customer_id": 127,
+      "sheet_client": "ELYSIUM LABS PRIVATE LIMITED",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1499,
+      "sheet_rent": 1499,
+      "current_start": "2026-07-10",
+      "current_rate": 1499,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-10->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 4057,
+      "ttspl": "TTSPL7350",
+      "customer_id": 41,
+      "sheet_client": "SLEEP MANAGEMENT PRIVATE LIMITED",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 2699,
+      "sheet_rent": 2699,
+      "current_start": "2026-07-07",
+      "current_rate": 2699,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-07->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 8447,
+      "ttspl": "TTSPL7531",
+      "customer_id": 41,
+      "sheet_client": "SLEEP MANAGEMENT PRIVATE LIMITED",
+      "bill_from": "2026-07-30",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1999,
+      "sheet_rent": 2127.967741935484,
+      "current_start": "2026-07-29",
+      "current_rate": 1999,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-30",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-30 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 8240,
+      "ttspl": "TTSPL7476",
+      "customer_id": null,
+      "sheet_client": "Beom Commerce Private Limited",
+      "bill_from": "2026-07-21",
+      "bill_to": "2026-07-24",
+      "sheet_rate": 950,
+      "sheet_rent": 122.58,
+      "current_start": "2026-07-22",
+      "current_rate": 950,
+      "current_status": "returned",
+      "set_rent_start": "2026-07-21",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-21 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 8267,
+      "ttspl": "TTSPL7499",
+      "customer_id": 156,
+      "sheet_client": "Beom Commerce Private Limited",
+      "bill_from": "2026-07-24",
+      "bill_to": "2026-07-24",
+      "sheet_rate": 1250,
+      "sheet_rent": 40.32,
+      "current_start": "2026-07-30",
+      "current_rate": 1300,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-24",
+      "set_rate": 1250,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-24 (Jul catch-up)",
+        "rate 1300->1250"
+      ]
+    },
+    {
+      "serial_id": 2350,
+      "ttspl": "TTSPL6568",
+      "customer_id": 137,
+      "sheet_client": "BMRV Engineering Consultants LLP",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 2199,
+      "sheet_rent": 2199,
+      "current_start": "2026-07-07",
+      "current_rate": 2199,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-07->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 83,
+      "ttspl": "TTSPL4614",
+      "customer_id": 211,
+      "sheet_client": "Techsur Solutions Private Limited/Naraharisetty Bobby B2C",
+      "bill_from": "2026-07-02",
+      "bill_to": "2026-07-08",
+      "sheet_rate": 5000,
+      "sheet_rent": 1290.32,
+      "current_start": "2026-07-15",
+      "current_rate": 2750,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-02",
+      "set_rate": 5000,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-02 (Jul catch-up)",
+        "rate 2750->5000"
+      ]
+    },
+    {
+      "serial_id": 2575,
+      "ttspl": "TTSPL5678",
+      "customer_id": 92,
+      "sheet_client": "URBANLOGIX GLOBAL INDIA PRIVATE LIMITED",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 999,
+      "sheet_rent": 999,
+      "current_start": "2026-07-07",
+      "current_rate": 999,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-07->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 3771,
+      "ttspl": "TTSPL6170",
+      "customer_id": 141,
+      "sheet_client": "Easy Fix Handy Solutions India Private Limited",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1400,
+      "sheet_rent": 1400,
+      "current_start": "2026-07-07",
+      "current_rate": 1400,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-07->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 2447,
+      "ttspl": "TTSPL6672",
+      "customer_id": 261,
+      "sheet_client": "Clanify Media Private Limited",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1200,
+      "sheet_rent": 1200,
+      "current_start": "2026-03-27",
+      "current_rate": 999,
+      "current_status": "rented",
+      "set_rent_start": null,
+      "set_rate": 1200,
+      "set_status": null,
+      "reason": [
+        "rate 999->1200"
+      ]
+    },
+    {
+      "serial_id": 8170,
+      "ttspl": "TTSPL7406",
+      "customer_id": 139,
+      "sheet_client": "ClickOnik Digital Media Pvt Ltd",
+      "bill_from": "2026-07-28",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1599,
+      "sheet_rent": 1805.3225806451615,
+      "current_start": "2026-07-27",
+      "current_rate": 1599,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-28",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-28 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 3367,
+      "ttspl": "TTSPL6379",
+      "customer_id": 153,
+      "sheet_client": "QUICKREPLY TECHNOLOGIES INDIA PVT. LTD.",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 2099,
+      "sheet_rent": 2099,
+      "current_start": "2026-07-07",
+      "current_rate": 2099,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-07->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 229,
+      "ttspl": "TTSPL4341",
+      "customer_id": 153,
+      "sheet_client": "QUICKREPLY TECHNOLOGIES INDIA PVT. LTD.",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 2699,
+      "sheet_rent": 2699,
+      "current_start": "2026-07-07",
+      "current_rate": 2699,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-07->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 1343,
+      "ttspl": "TTSPL4397",
+      "customer_id": 153,
+      "sheet_client": "QUICKREPLY TECHNOLOGIES INDIA PVT. LTD.",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 2099,
+      "sheet_rent": 2099,
+      "current_start": "2026-07-07",
+      "current_rate": 2099,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-07->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 8083,
+      "ttspl": "TTSPL6240",
+      "customer_id": null,
+      "sheet_client": "DROR SERVICES PRIVATE LIMITED",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1599,
+      "sheet_rent": 1599,
+      "current_start": null,
+      "current_rate": null,
+      "current_status": "in_stock",
+      "set_rent_start": "2026-08-01",
+      "set_rate": 1599,
+      "set_status": null,
+      "reason": [
+        "rent_start null->2026-08-01",
+        "rate null->1599"
+      ]
+    },
+    {
+      "serial_id": 3784,
+      "ttspl": "TTSPL7125",
+      "customer_id": 178,
+      "sheet_client": "MNR Solutions Pvt. Ltd.",
+      "bill_from": "2026-07-25",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1600,
+      "sheet_rent": 1961.2903225806454,
+      "current_start": "2026-07-23",
+      "current_rate": 1600,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-25",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-25 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 7974,
+      "ttspl": "TTSPL6119",
+      "customer_id": null,
+      "sheet_client": "Biodeal Pharmaceuticals Limited",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1450,
+      "sheet_rent": 1450,
+      "current_start": null,
+      "current_rate": null,
+      "current_status": "in_stock",
+      "set_rent_start": "2026-08-01",
+      "set_rate": 1450,
+      "set_status": null,
+      "reason": [
+        "rent_start null->2026-08-01",
+        "rate null->1450"
+      ]
+    },
+    {
+      "serial_id": 7707,
+      "ttspl": "TTSPL5390",
+      "customer_id": null,
+      "sheet_client": "Biodeal Pharmaceuticals Limited",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1499,
+      "sheet_rent": 1499,
+      "current_start": null,
+      "current_rate": null,
+      "current_status": "in_stock",
+      "set_rent_start": "2026-08-01",
+      "set_rate": 1499,
+      "set_status": null,
+      "reason": [
+        "rent_start null->2026-08-01",
+        "rate null->1499"
+      ]
+    },
+    {
+      "serial_id": 3277,
+      "ttspl": "TTSPL6400",
+      "customer_id": 180,
+      "sheet_client": "Stylework Innovation Hub Pvt Ltd.",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1899,
+      "sheet_rent": 1899,
+      "current_start": "2026-07-06",
+      "current_rate": 1899,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-06->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 3469,
+      "ttspl": "TTSPL6662",
+      "customer_id": null,
+      "sheet_client": "Carrum Mobility Solutions",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1500,
+      "sheet_rent": 1500,
+      "current_start": null,
+      "current_rate": 1999,
+      "current_status": "in_stock",
+      "set_rent_start": "2026-08-01",
+      "set_rate": 1500,
+      "set_status": null,
+      "reason": [
+        "rent_start null->2026-08-01",
+        "rate 1999->1500"
+      ]
+    },
+    {
+      "serial_id": 3391,
+      "ttspl": "TTSPL6080",
+      "customer_id": 255,
+      "sheet_client": "Carrum Mobility Solutions",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1500,
+      "sheet_rent": 1500,
+      "current_start": "2026-03-21",
+      "current_rate": 1349,
+      "current_status": "rented",
+      "set_rent_start": null,
+      "set_rate": 1500,
+      "set_status": null,
+      "reason": [
+        "rate 1349->1500"
+      ]
+    },
+    {
+      "serial_id": 2339,
+      "ttspl": "TTSPL5702",
+      "customer_id": 206,
+      "sheet_client": "Abjayon Consultancy Pvt. Ltd.",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1,
+      "sheet_rent": 1,
+      "current_start": "2026-07-11",
+      "current_rate": 1,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-11->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 8163,
+      "ttspl": "TTSPL7399",
+      "customer_id": 230,
+      "sheet_client": "The Class One/ Inventify Edtech solution Pvt. Ltd",
+      "bill_from": "2026-07-06",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1100,
+      "sheet_rent": 2022.5806451612902,
+      "current_start": "2026-07-04",
+      "current_rate": 1100,
+      "current_status": "rented",
+      "set_rent_start": "2026-07-06",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-06 (Jul catch-up)"
+      ]
+    },
+    {
+      "serial_id": 2827,
+      "ttspl": "TTSPL5434",
+      "customer_id": 232,
+      "sheet_client": "BIZDATEUP TECHNOLOGIES PRIVATE LIMITED",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1150,
+      "sheet_rent": 1150,
+      "current_start": "2026-07-11",
+      "current_rate": 1150,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-11->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 1370,
+      "ttspl": "TTSPL4602",
+      "customer_id": 242,
+      "sheet_client": "ZYKRR TECHNOLOGIES PRIVATE LIMITED",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 2899,
+      "sheet_rent": 2899,
+      "current_start": "2026-07-07",
+      "current_rate": 2899,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-07->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 3154,
+      "ttspl": "TTSPL3733",
+      "customer_id": 242,
+      "sheet_client": "ZYKRR TECHNOLOGIES PRIVATE LIMITED",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 2899,
+      "sheet_rent": 2899,
+      "current_start": "2026-07-07",
+      "current_rate": 2899,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-07->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 3297,
+      "ttspl": "TTSPL6936",
+      "customer_id": 242,
+      "sheet_client": "ZYKRR TECHNOLOGIES PRIVATE LIMITED",
+      "bill_from": "2026-07-02",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1999,
+      "sheet_rent": 3931.366666666667,
+      "current_start": "2026-07-02",
+      "current_rate": 21610,
+      "current_status": "sold",
+      "set_rent_start": null,
+      "set_rate": 1999,
+      "set_status": null,
+      "reason": [
+        "rate 21610->1999"
+      ]
+    },
+    {
+      "serial_id": 3879,
+      "ttspl": "TTSPL7220",
+      "customer_id": 270,
+      "sheet_client": "EVENTIVE COMMUNICATIONS LLP",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1799,
+      "sheet_rent": 1799,
+      "current_start": "2026-07-03",
+      "current_rate": 1799,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-03->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 3808,
+      "ttspl": "TTSPL7149",
+      "customer_id": 270,
+      "sheet_client": "EVENTIVE COMMUNICATIONS LLP",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1799,
+      "sheet_rent": 1799,
+      "current_start": "2026-07-03",
+      "current_rate": 1799,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-03->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 3788,
+      "ttspl": "TTSPL7290",
+      "customer_id": 256,
+      "sheet_client": "SPNN BUSINESS SERVICES PRIVATE LIMITED",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1900,
+      "sheet_rent": 2091.94,
+      "current_start": "2026-07-15",
+      "current_rate": 1900,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-15->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 3071,
+      "ttspl": "TTSPL3592",
+      "customer_id": 256,
+      "sheet_client": "SPNN BUSINESS SERVICES PRIVATE LIMITED",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1550,
+      "sheet_rent": 1550,
+      "current_start": "2026-07-07",
+      "current_rate": 1550,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-07->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 2749,
+      "ttspl": "TTSPL6628",
+      "customer_id": 256,
+      "sheet_client": "SPNN BUSINESS SERVICES PRIVATE LIMITED",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1900,
+      "sheet_rent": 1900,
+      "current_start": "2026-07-07",
+      "current_rate": 1900,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-07->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 1406,
+      "ttspl": "TTSPL4338",
+      "customer_id": 960,
+      "sheet_client": "IN KNOW TECH PRIVATE LIMITED",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 2500,
+      "sheet_rent": 2500,
+      "current_start": "2026-07-17",
+      "current_rate": 2500,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-17->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 2174,
+      "ttspl": "TTSPL3933",
+      "customer_id": 959,
+      "sheet_client": "QUREX HEALTH PRIVATE LIMITED",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1399,
+      "sheet_rent": 1399,
+      "current_start": "2026-07-16",
+      "current_rate": 1399,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-16->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 3543,
+      "ttspl": "TTSPL3944",
+      "customer_id": 959,
+      "sheet_client": "QUREX HEALTH PRIVATE LIMITED",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1399,
+      "sheet_rent": 1399,
+      "current_start": "2026-07-16",
+      "current_rate": 1399,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-16->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 2086,
+      "ttspl": "TTSPL2741",
+      "customer_id": 968,
+      "sheet_client": "MANTARAV PRIVATE LIMITED",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 5399,
+      "sheet_rent": 5399,
+      "current_start": "2026-07-21",
+      "current_rate": 5399,
+      "current_status": "rented",
+      "set_rent_start": "2026-08-01",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start 2026-07-21->2026-08-01 (sheet Aug-only)"
+      ]
+    },
+    {
+      "serial_id": 8212,
+      "ttspl": "TTSPL7448",
+      "customer_id": 74,
+      "sheet_client": "INNOVA ESI PRIVATE LIMITED",
+      "bill_from": "2026-07-31",
+      "bill_to": "2026-08-31",
+      "sheet_rate": 1,
+      "sheet_rent": 1,
+      "current_start": null,
+      "current_rate": 1,
+      "current_status": "on_demo",
+      "set_rent_start": "2026-07-31",
+      "set_rate": null,
+      "set_status": null,
+      "reason": [
+        "rent_start->2026-07-31 (Jul catch-up)"
+      ]
+    }
+  ],
+  "missing": [
+    {
+      "ttspl": "TTSPL6984",
+      "serial": "5CG2146Y91",
+      "client": "FLEET LABS TECHNOLOGIES PRIVATE LIMITED (Apna Mart)",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "rate": 2699,
+      "rent": 2699,
+      "source": "LOT"
+    },
+    {
+      "ttspl": "TTSPL2016",
+      "serial": "CJNL7S2",
+      "client": "VINCIT TECHNOLOGIES PVT LTD",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "rate": 1499,
+      "rent": 1499,
+      "source": "LOT"
+    },
+    {
+      "ttspl": "TTSPL6671",
+      "serial": "GLSZP13",
+      "client": "ELYSIUM LABS PRIVATE LIMITED",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "rate": 1499,
+      "rent": 1499,
+      "source": "LOT"
+    },
+    {
+      "ttspl": "TTSPL6676",
+      "serial": "3T2FL13",
+      "client": "Mobifly Brain Box",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "rate": 1750,
+      "rent": 1750,
+      "source": "LOT"
+    },
+    {
+      "ttspl": "TTSPL6559",
+      "serial": "5CD112LTG0",
+      "client": "Biodeal Pharmaceuticals Limited",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "rate": 1500,
+      "rent": 1500,
+      "source": "LOT"
+    },
+    {
+      "ttspl": "TTSPL6676-A",
+      "serial": "3T2FL13",
+      "client": "SHINENPRIME HEALTHCARE PRIVATE LIMITED",
+      "bill_from": "2026-08-01",
+      "bill_to": "2026-08-31",
+      "rate": 999,
+      "rent": 999,
+      "source": "LOT"
+    }
+  ]
+}

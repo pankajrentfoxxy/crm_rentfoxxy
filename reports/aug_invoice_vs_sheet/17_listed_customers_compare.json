@@ -1,0 +1,4659 @@
+[
+  {
+    "want": "IIOT INNOVATION PRIVATE LIMITED",
+    "sheetName": "IIOT INNOVATION Private Limited",
+    "customer_id": 214,
+    "company_name": "IIOT INNOVATION PRIVATE LIMITED",
+    "invoice_id": 1174,
+    "invoice_number": "INV-0791",
+    "sheet_count": 12,
+    "crm_count": 11,
+    "sheet_total": 23278.68,
+    "crm_total": 22117.97,
+    "price_diff": 1160.71,
+    "aligned": false,
+    "missing": [
+      "TTSPL3083"
+    ],
+    "extra": [],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "TTSPL3083",
+        "serial": "5CG21727VZ",
+        "start": "2026-07-05",
+        "end": "2026-07-22",
+        "rate": 1999,
+        "rent": 1160.71,
+        "remarks": "Replacement of FNPH1F3",
+        "rows": [
+          {
+            "rent": 1160.71,
+            "rate": 1999,
+            "start": "2026-07-05",
+            "end": "2026-07-22",
+            "remarks": "Replacement of FNPH1F3"
+          }
+        ]
+      }
+    ],
+    "extraDetail": []
+  },
+  {
+    "want": "IMSUCCESS PRIVATE LIMITED",
+    "sheetName": "IMSUCCESS PRIVATE LIMITED",
+    "customer_id": 50,
+    "company_name": "IMSUCCESS PRIVATE LIMITED",
+    "invoice_id": 1238,
+    "invoice_number": "INV-0855",
+    "sheet_count": 5,
+    "crm_count": 5,
+    "sheet_total": 27949,
+    "crm_total": 27949,
+    "price_diff": 0,
+    "aligned": false,
+    "missing": [
+      "1633/FIRMTRUE1400/TTSPL1467"
+    ],
+    "extra": [
+      "TTSPL1467"
+    ],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "1633/FIRMTRUE1400/TTSPL1467",
+        "serial": "C02G7E4SQ6L4",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 5500,
+        "rent": 5500,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 5500,
+            "rate": 5500,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": [
+      {
+        "t": "TTSPL1467",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 5500,
+            "serial": "C02G7E4SQ6L4",
+            "serial_id": 2263,
+            "rate": 5500
+          }
+        ],
+        "sheetZero": null
+      }
+    ]
+  },
+  {
+    "want": "Inaya Reality",
+    "sheetName": "Inaya Reality",
+    "customer_id": null,
+    "company_name": null,
+    "invoice_id": null,
+    "invoice_number": null,
+    "sheet_count": 4,
+    "crm_count": 0,
+    "sheet_total": 6396,
+    "crm_total": 0,
+    "price_diff": 6396,
+    "aligned": false,
+    "missing": [
+      "TRU1011/TTSPL1465",
+      "TTSPL2877",
+      "TTSPL2975",
+      "TTSPL6241"
+    ],
+    "extra": [],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "TRU1011/TTSPL1465",
+        "serial": "5CG6420BYN",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 999,
+        "rent": 999,
+        "remarks": "Replacement of BJ69VD2",
+        "rows": [
+          {
+            "rent": 999,
+            "rate": 999,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": "Replacement of BJ69VD2"
+          }
+        ]
+      },
+      {
+        "t": "TTSPL2877",
+        "serial": "4D48WD2",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 999,
+        "rent": 999,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 999,
+            "rate": 999,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL2975",
+        "serial": "4X87YY2",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 2199,
+        "rent": 2199,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 2199,
+            "rate": 2199,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL6241",
+        "serial": "55GG463",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 2199,
+        "rent": 2199,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 2199,
+            "rate": 2199,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": []
+  },
+  {
+    "want": "Indicold pvt ltd.",
+    "sheetName": "Indicold pvt ltd.",
+    "customer_id": 5,
+    "company_name": "Indicold Private Limited (HR)",
+    "invoice_id": 1205,
+    "invoice_number": "INV-0822",
+    "sheet_count": 12,
+    "crm_count": 12,
+    "sheet_total": 25789,
+    "crm_total": 25789,
+    "price_diff": 0,
+    "aligned": false,
+    "missing": [
+      "TRU1637/TTSPL2271",
+      "YASHTRUE1424/TTSPL2628",
+      "YASHTRUE1458/TTSPL2304",
+      "YASHTRUE1461/TTSPL3456"
+    ],
+    "extra": [
+      "TTSPL2271",
+      "TTSPL2304",
+      "TTSPL2628",
+      "TTSPL3456"
+    ],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "TRU1637/TTSPL2271",
+        "serial": "3490MH2",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1990,
+        "rent": 1990,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1990,
+            "rate": 1990,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "YASHTRUE1424/TTSPL2628",
+        "serial": "CBXMFC2",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1990,
+        "rent": 1990,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1990,
+            "rate": 1990,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "YASHTRUE1458/TTSPL2304",
+        "serial": "780ZVD2",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1990,
+        "rent": 1990,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1990,
+            "rate": 1990,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "YASHTRUE1461/TTSPL3456",
+        "serial": "7PBJMH2",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1990,
+        "rent": 1990,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1990,
+            "rate": 1990,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": [
+      {
+        "t": "TTSPL2271",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1990,
+            "serial": "3490MH2",
+            "serial_id": 469,
+            "rate": 1990
+          }
+        ],
+        "sheetZero": null
+      },
+      {
+        "t": "TTSPL2304",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1990,
+            "serial": "780ZVD2",
+            "serial_id": 471,
+            "rate": 1990
+          }
+        ],
+        "sheetZero": null
+      },
+      {
+        "t": "TTSPL2628",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1990,
+            "serial": "CBXMFC2",
+            "serial_id": 473,
+            "rate": 1990
+          }
+        ],
+        "sheetZero": null
+      },
+      {
+        "t": "TTSPL3456",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1990,
+            "serial": "7PBJMH2",
+            "serial_id": 479,
+            "rate": 1990
+          }
+        ],
+        "sheetZero": null
+      }
+    ]
+  },
+  {
+    "want": "INNOVA ESI PRIVATE LIMITED",
+    "sheetName": "INNOVA ESI PRIVATE LIMITED",
+    "customer_id": 74,
+    "company_name": "INNOVA ESI PRIVATE LIMITED",
+    "invoice_id": null,
+    "invoice_number": null,
+    "sheet_count": 1,
+    "crm_count": 0,
+    "sheet_total": 1,
+    "crm_total": 0,
+    "price_diff": 1,
+    "aligned": false,
+    "missing": [
+      "TTSPL7448"
+    ],
+    "extra": [],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "TTSPL7448",
+        "serial": "GWFS2M3",
+        "start": "2026-07-31",
+        "end": "2026-08-31",
+        "rate": 1,
+        "rent": 1,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1,
+            "rate": 1,
+            "start": "2026-07-31",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": []
+  },
+  {
+    "want": "LEEWAYHERTZ TECHNOLOGIES PRIVATE LIMITED",
+    "sheetName": "LEEWAYHERTZ TECHNOLOGIES PRIVATE LIMITED",
+    "customer_id": 108,
+    "company_name": "LEEWAYHERTZ TECHNOLOGIES PRIVATE LIMITED",
+    "invoice_id": 1145,
+    "invoice_number": "INV-0762",
+    "sheet_count": 93,
+    "crm_count": 92,
+    "sheet_total": 355663,
+    "crm_total": 350814,
+    "price_diff": 4849,
+    "aligned": false,
+    "missing": [
+      "TTSPL4425"
+    ],
+    "extra": [],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "TTSPL4425",
+        "serial": "K7593PK7C7",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 4849,
+        "rent": 4849,
+        "remarks": "Have to provide C.N (Rs- 4364.10)",
+        "rows": [
+          {
+            "rent": 4849,
+            "rate": 4849,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": "Have to provide C.N (Rs- 4364.10)"
+          }
+        ]
+      }
+    ],
+    "extraDetail": []
+  },
+  {
+    "want": "MANNA BIOTECH PRIVATE LIMITED",
+    "sheetName": "MANNA BIOTECH PRIVATE LIMITED",
+    "customer_id": 38,
+    "company_name": "MANNA BIOTECH PRIVATE LIMITED",
+    "invoice_id": 1273,
+    "invoice_number": "INV-0890",
+    "sheet_count": 2,
+    "crm_count": 2,
+    "sheet_total": 3217,
+    "crm_total": 3217,
+    "price_diff": 0,
+    "aligned": false,
+    "missing": [
+      "1316/TTSPL4095"
+    ],
+    "extra": [
+      "TTSPL4095"
+    ],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "1316/TTSPL4095",
+        "serial": "1TZLHC2",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1099,
+        "rent": 1099,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1099,
+            "rate": 1099,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": [
+      {
+        "t": "TTSPL4095",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1099,
+            "serial": "1TZLHC2",
+            "serial_id": 1774,
+            "rate": 1099
+          }
+        ],
+        "sheetZero": null
+      }
+    ]
+  },
+  {
+    "want": "Maxlence Digital (OPC) Private Limited",
+    "sheetName": "Maxlence Digital (OPC) Private Limited",
+    "customer_id": 211,
+    "company_name": "Maxlence Digital (OPC) Private Limited",
+    "invoice_id": 1289,
+    "invoice_number": "INV-0906",
+    "sheet_count": 2,
+    "crm_count": 2,
+    "sheet_total": 11343.55,
+    "crm_total": 18432.26,
+    "price_diff": -7088.71,
+    "aligned": false,
+    "missing": [],
+    "extra": [],
+    "amtMismatches": [
+      {
+        "t": "TTSPL4614",
+        "sAmt": 2750,
+        "cAmt": 9838.71,
+        "diff": -7088.71,
+        "sheetStart": "2026-08-01",
+        "sheetRemarks": "",
+        "sheetRows": [
+          {
+            "rent": 2750,
+            "rate": 2750,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ],
+        "crm": [
+          {
+            "period": "2026-07",
+            "start": "2026-07-02",
+            "end": "2026-07-31",
+            "amount": 4838.71,
+            "serial": "DV4FYD3",
+            "serial_id": 83,
+            "rate": 5000
+          },
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 5000,
+            "serial": "DV4FYD3",
+            "serial_id": 83,
+            "rate": 5000
+          }
+        ]
+      }
+    ],
+    "missingDetail": [],
+    "extraDetail": []
+  },
+  {
+    "want": "Mercury Solutions Limited",
+    "sheetName": "Mercury Solutions Limited",
+    "customer_id": 26,
+    "company_name": "Mercury Solutions Limited",
+    "invoice_id": 1181,
+    "invoice_number": "INV-0798",
+    "sheet_count": 34,
+    "crm_count": 34,
+    "sheet_total": 57574.77,
+    "crm_total": 59154.78,
+    "price_diff": -1580.01,
+    "aligned": false,
+    "missing": [
+      "1283/TTSPL1814"
+    ],
+    "extra": [
+      "TTSPL7198"
+    ],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "1283/TTSPL1814",
+        "serial": "162QX52",
+        "start": "2026-07-02",
+        "end": "2026-07-12",
+        "rate": 899,
+        "rent": 319,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 319,
+            "rate": 899,
+            "start": "2026-07-02",
+            "end": "2026-07-12",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": [
+      {
+        "t": "TTSPL7198",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1899,
+            "serial": "R913GZ5L",
+            "serial_id": 3857,
+            "rate": 1899
+          }
+        ],
+        "sheetZero": {
+          "rent": 0,
+          "rate": 1899,
+          "start": null,
+          "end": null,
+          "remarks": "Have to provide C.N (Rs- 1041.39)",
+          "serial": "R913GZ5L",
+          "rows": [
+            {
+              "rent": 0,
+              "rate": 1899,
+              "start": null,
+              "end": null,
+              "remarks": "Have to provide C.N (Rs- 1041.39)"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "want": "MNR Solutions Pvt. Ltd.",
+    "sheetName": "MNR Solutions Pvt. Ltd.",
+    "customer_id": 178,
+    "company_name": "MNR Solutions Pvt. Ltd.",
+    "invoice_id": 1303,
+    "invoice_number": "INV-0920",
+    "sheet_count": 28,
+    "crm_count": 30,
+    "sheet_total": 32446.13,
+    "crm_total": 35646.13,
+    "price_diff": -3200,
+    "aligned": false,
+    "missing": [],
+    "extra": [
+      "TTSPL7586",
+      "TTSPL7587"
+    ],
+    "amtMismatches": [],
+    "missingDetail": [],
+    "extraDetail": [
+      {
+        "t": "TTSPL7586",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1600,
+            "serial": "JVNXK13",
+            "serial_id": 8833,
+            "rate": 1600
+          }
+        ],
+        "sheetZero": null
+      },
+      {
+        "t": "TTSPL7587",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1600,
+            "serial": "CGT2ZY2",
+            "serial_id": 8834,
+            "rate": 1600
+          }
+        ],
+        "sheetZero": null
+      }
+    ]
+  },
+  {
+    "want": "Mobifly Brain Box",
+    "sheetName": "Mobifly Brain Box",
+    "customer_id": null,
+    "company_name": null,
+    "invoice_id": null,
+    "invoice_number": null,
+    "sheet_count": 17,
+    "crm_count": 0,
+    "sheet_total": 30141,
+    "crm_total": 0,
+    "price_diff": 30141,
+    "aligned": false,
+    "missing": [
+      "1158/TTSPL3830",
+      "GANPTRUE1043/TTSPL2366",
+      "TRU985/TTSPL1486",
+      "TRUETECH-1",
+      "TTSPL1983",
+      "TTSPL2626",
+      "TTSPL3187",
+      "TTSPL3844",
+      "TTSPL5593",
+      "TTSPL6293",
+      "TTSPL6329",
+      "TTSPL6459",
+      "TTSPL6473",
+      "TTSPL6573",
+      "TTSPL6590",
+      "TTSPL6676",
+      "TTSPL6706"
+    ],
+    "extra": [],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "1158/TTSPL3830",
+        "serial": "1NL8102",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1750,
+        "rent": 1750,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1750,
+            "rate": 1750,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "GANPTRUE1043/TTSPL2366",
+        "serial": "146JX52",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1890,
+        "rent": 1890,
+        "remarks": "Replacement of C0VM622",
+        "rows": [
+          {
+            "rent": 1890,
+            "rate": 1890,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": "Replacement of C0VM622"
+          }
+        ]
+      },
+      {
+        "t": "TRU985/TTSPL1486",
+        "serial": "C0VM622",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1750,
+        "rent": 1750,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1750,
+            "rate": 1750,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TRUETECH-1",
+        "serial": "CN-0657PN-64180-548-046B",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1,
+        "rent": 1,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1,
+            "rate": 1,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL1983",
+        "serial": "PC0152DG",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1750,
+        "rent": 1750,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1750,
+            "rate": 1750,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL2626",
+        "serial": "1Q74PV2",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1750,
+        "rent": 1750,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1750,
+            "rate": 1750,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL3187",
+        "serial": "PF26J5SF",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1750,
+        "rent": 1750,
+        "remarks": "REPLACEMENT OF PC1H12F5",
+        "rows": [
+          {
+            "rent": 1750,
+            "rate": 1750,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": "REPLACEMENT OF PC1H12F5"
+          }
+        ]
+      },
+      {
+        "t": "TTSPL3844",
+        "serial": "613CVN2",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1750,
+        "rent": 1750,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1750,
+            "rate": 1750,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL5593",
+        "serial": "PF2GNQWD",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1800,
+        "rent": 1800,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1800,
+            "rate": 1800,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL6293",
+        "serial": "DBP1T93",
+        "start": "2026-07-16",
+        "end": "2026-08-31",
+        "rate": 1800,
+        "rent": 2729.032258064516,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 2729.032258064516,
+            "rate": 1800,
+            "start": "2026-07-16",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL6329",
+        "serial": "4CP1T93",
+        "start": "2026-07-17",
+        "end": "2026-08-31",
+        "rate": 1800,
+        "rent": 2670.967741935484,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 2670.967741935484,
+            "rate": 1800,
+            "start": "2026-07-17",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL6459",
+        "serial": "3F3BW93",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1700,
+        "rent": 1700,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1700,
+            "rate": 1700,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL6473",
+        "serial": "C1QM763",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1800,
+        "rent": 1800,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1800,
+            "rate": 1800,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL6573",
+        "serial": "PC1X7F4D/PC1X7G4H",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1750,
+        "rent": 1750,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1750,
+            "rate": 1750,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL6590",
+        "serial": "8MVDQ13",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1750,
+        "rent": 1750,
+        "remarks": "replacement",
+        "rows": [
+          {
+            "rent": 1750,
+            "rate": 1750,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": "replacement"
+          }
+        ]
+      },
+      {
+        "t": "TTSPL6676",
+        "serial": "3T2FL13",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1750,
+        "rent": 1750,
+        "remarks": "REPLACEMENT OF PF21YNLD",
+        "rows": [
+          {
+            "rent": 1750,
+            "rate": 1750,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": "REPLACEMENT OF PF21YNLD"
+          }
+        ]
+      },
+      {
+        "t": "TTSPL6706",
+        "serial": "GBK5QG3",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1800,
+        "rent": 1800,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1800,
+            "rate": 1800,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": []
+  },
+  {
+    "want": "MOEVING URBAN TECHNOLOGIES PRIVATE LIMITED",
+    "sheetName": "MOEVING URBAN TECHNOLOGIES PRIVATE LIMITED",
+    "customer_id": 6,
+    "company_name": "MOEVING URBAN TECHNOLOGIES PRIVATE LIMITED",
+    "invoice_id": 1224,
+    "invoice_number": "INV-0841",
+    "sheet_count": 30,
+    "crm_count": 30,
+    "sheet_total": 64898,
+    "crm_total": 64898,
+    "price_diff": 0,
+    "aligned": false,
+    "missing": [
+      "1522/TTSPL1056"
+    ],
+    "extra": [
+      "TTSPL1056"
+    ],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "1522/TTSPL1056",
+        "serial": "DMDCQH2",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1800,
+        "rent": 1800,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1800,
+            "rate": 1800,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": [
+      {
+        "t": "TTSPL1056",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1800,
+            "serial": "DMDCQH2",
+            "serial_id": 870,
+            "rate": 1800
+          }
+        ],
+        "sheetZero": null
+      }
+    ]
+  },
+  {
+    "want": "Nexthire LLP",
+    "sheetName": "Nexthire LLP",
+    "customer_id": 52,
+    "company_name": "Nexthire LLP",
+    "invoice_id": 1133,
+    "invoice_number": "INV-0750",
+    "sheet_count": 5,
+    "crm_count": 6,
+    "sheet_total": 4995,
+    "crm_total": 6795,
+    "price_diff": -1800,
+    "aligned": false,
+    "missing": [],
+    "extra": [
+      "TTSPL7148"
+    ],
+    "amtMismatches": [],
+    "missingDetail": [],
+    "extraDetail": [
+      {
+        "t": "TTSPL7148",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1800,
+            "serial": "B187YZ2",
+            "serial_id": 3807,
+            "rate": 1800
+          }
+        ],
+        "sheetZero": {
+          "rent": 0,
+          "rate": 1800,
+          "start": null,
+          "end": null,
+          "remarks": "Have to provide C.N (Rs- 987.09)",
+          "serial": "B187YZ2",
+          "rows": [
+            {
+              "rent": 0,
+              "rate": 1800,
+              "start": null,
+              "end": null,
+              "remarks": "Have to provide C.N (Rs- 987.09)"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "want": "NOTUS SERVICES PRIVATE LIMITED",
+    "sheetName": "NOTUS SERVICES PRIVATE LIMITED",
+    "customer_id": 61,
+    "company_name": "NOTUS SERVICES PRIVATE LIMITED",
+    "invoice_id": 1188,
+    "invoice_number": "INV-0805",
+    "sheet_count": 20,
+    "crm_count": 18,
+    "sheet_total": 31197.19,
+    "crm_total": 28683,
+    "price_diff": 2514.19,
+    "aligned": false,
+    "missing": [
+      "TTSPL5192",
+      "TTSPL7496",
+      "TTSPL7500"
+    ],
+    "extra": [
+      ""
+    ],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "TTSPL5192",
+        "serial": "PG02Y0BH",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1800,
+        "rent": 1800,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1800,
+            "rate": 1800,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL7496",
+        "serial": "5CG0278QJ1",
+        "start": "2026-08-02",
+        "end": "2026-08-31",
+        "rate": 1299,
+        "rent": 1257.0967741935483,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1257.0967741935483,
+            "rate": 1299,
+            "start": "2026-08-02",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL7500",
+        "serial": "5CG02749MF",
+        "start": "2026-08-02",
+        "end": "2026-08-31",
+        "rate": 1299,
+        "rent": 1257.0967741935483,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1257.0967741935483,
+            "rate": 1299,
+            "start": "2026-08-02",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": [
+      {
+        "t": "",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1800,
+            "serial": "PG02Y0BH",
+            "serial_id": 3749,
+            "rate": 1800
+          }
+        ],
+        "sheetZero": null
+      }
+    ]
+  },
+  {
+    "want": "Pas Digital Pvt Ltd",
+    "sheetName": "Pas Digital Pvt Ltd",
+    "customer_id": 62,
+    "company_name": "Pas Digital Pvt Ltd",
+    "invoice_id": 1253,
+    "invoice_number": "INV-0870",
+    "sheet_count": 14,
+    "crm_count": 14,
+    "sheet_total": 28809,
+    "crm_total": 28809,
+    "price_diff": 0,
+    "aligned": false,
+    "missing": [
+      "TRU741/TTSPL4155"
+    ],
+    "extra": [
+      "TTSPL4155"
+    ],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "TRU741/TTSPL4155",
+        "serial": "5CD6400VHM",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1499,
+        "rent": 1499,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1499,
+            "rate": 1499,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": [
+      {
+        "t": "TTSPL4155",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1499,
+            "serial": "5CD6400VHM",
+            "serial_id": 3315,
+            "rate": 1499
+          }
+        ],
+        "sheetZero": null
+      }
+    ]
+  },
+  {
+    "want": "PEOPLE STAFFING SOLUTIONS",
+    "sheetName": "People Staffing Solutions",
+    "customer_id": 7,
+    "company_name": "PEOPLE STAFFING SOLUTIONS",
+    "invoice_id": 1267,
+    "invoice_number": "INV-0884",
+    "sheet_count": 35,
+    "crm_count": 35,
+    "sheet_total": 34426,
+    "crm_total": 34426,
+    "price_diff": 0,
+    "aligned": false,
+    "missing": [
+      "1044/TTSPL4049",
+      "YASHTRUE1471/TTSPL1640",
+      "YASHTRUE1476/TTSPL2243",
+      "YASHTRUE1484/TTSPL4136"
+    ],
+    "extra": [
+      "TTSPL1640",
+      "TTSPL2243",
+      "TTSPL4049",
+      "TTSPL4136"
+    ],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "1044/TTSPL4049",
+        "serial": "5CG7021JXT",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 999,
+        "rent": 999,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 999,
+            "rate": 999,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "YASHTRUE1471/TTSPL1640",
+        "serial": "GF97PH2",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 999,
+        "rent": 999,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 999,
+            "rate": 999,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "YASHTRUE1476/TTSPL2243",
+        "serial": "DC37GH2",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 950,
+        "rent": 950,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 950,
+            "rate": 950,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "YASHTRUE1484/TTSPL4136",
+        "serial": "957ZFH2",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 999,
+        "rent": 999,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 999,
+            "rate": 999,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": [
+      {
+        "t": "TTSPL1640",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 999,
+            "serial": "GF97PH2",
+            "serial_id": 544,
+            "rate": 999
+          }
+        ],
+        "sheetZero": null
+      },
+      {
+        "t": "TTSPL2243",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 950,
+            "serial": "DC37GH2",
+            "serial_id": 555,
+            "rate": 950
+          }
+        ],
+        "sheetZero": null
+      },
+      {
+        "t": "TTSPL4049",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 999,
+            "serial": "5CG7021JXT",
+            "serial_id": 549,
+            "rate": 999
+          }
+        ],
+        "sheetZero": null
+      },
+      {
+        "t": "TTSPL4136",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 999,
+            "serial": "957ZFH2",
+            "serial_id": 543,
+            "rate": 999
+          }
+        ],
+        "sheetZero": null
+      }
+    ]
+  },
+  {
+    "want": "PERNIMIUS FINANCIAL TECHNOLOGIES PRIVATE LIMITED",
+    "sheetName": "Pernimius Financial Technologies Pvt Ltd",
+    "customer_id": 8,
+    "company_name": "PERNIMIUS FINANCIAL TECHNOLOGIES PRIVATE LIMITED",
+    "invoice_id": 1313,
+    "invoice_number": "INV-0930",
+    "sheet_count": 19,
+    "crm_count": 17,
+    "sheet_total": 32770.36,
+    "crm_total": 28901.32,
+    "price_diff": 3869.04,
+    "aligned": false,
+    "missing": [
+      "TTSPL7552",
+      "TTSPL7559"
+    ],
+    "extra": [],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "TTSPL7552",
+        "serial": "JNCM1J3",
+        "start": "2026-08-02",
+        "end": "2026-08-31",
+        "rate": 1999,
+        "rent": 1934.516129032258,
+        "remarks": "replacement against TTSPL: TTSPL6742",
+        "rows": [
+          {
+            "rent": 1934.516129032258,
+            "rate": 1999,
+            "start": "2026-08-02",
+            "end": "2026-08-31",
+            "remarks": "replacement against TTSPL: TTSPL6742"
+          }
+        ]
+      },
+      {
+        "t": "TTSPL7559",
+        "serial": "2HLG7C3",
+        "start": "2026-08-02",
+        "end": "2026-08-31",
+        "rate": 1999,
+        "rent": 1934.516129032258,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1934.516129032258,
+            "rate": 1999,
+            "start": "2026-08-02",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": []
+  },
+  {
+    "want": "Pibit Technologies Private Limited",
+    "sheetName": "Pibit Technologies Pvt. Ltd.",
+    "customer_id": 48,
+    "company_name": "Pibit Technologies Private Limited",
+    "invoice_id": 1315,
+    "invoice_number": "INV-0932",
+    "sheet_count": 228,
+    "crm_count": 221,
+    "sheet_total": 1031065.03,
+    "crm_total": 995065.85,
+    "price_diff": 35999.18,
+    "aligned": false,
+    "missing": [
+      "TTSPL7287",
+      "TTSPL7426",
+      "TTSPL7427",
+      "TTSPL7429",
+      "TTSPL7494",
+      "TTSPL7566",
+      "TTSPL7567",
+      "TTSPL7572"
+    ],
+    "extra": [
+      ""
+    ],
+    "amtMismatches": [
+      {
+        "t": "TTSPL4425",
+        "sAmt": 6474,
+        "cAmt": 4849,
+        "diff": 1625,
+        "sheetStart": "2026-08-01",
+        "sheetRemarks": "",
+        "sheetRows": [
+          {
+            "rent": 6474,
+            "rate": 6474,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ],
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 4849,
+            "serial": "K7593PK7C7",
+            "serial_id": 2153,
+            "rate": 4849
+          }
+        ]
+      }
+    ],
+    "missingDetail": [
+      {
+        "t": "TTSPL7287",
+        "serial": "2TK2460CY4",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 3175,
+        "rent": 3175,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 3175,
+            "rate": 3175,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL7426",
+        "serial": "2MQ4480QQK",
+        "start": "2026-07-21",
+        "end": "2026-08-31",
+        "rate": 4200,
+        "rent": 5690.322580645161,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 5690.322580645161,
+            "rate": 4200,
+            "start": "2026-07-21",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL7427",
+        "serial": "2MQ449129N",
+        "start": "2026-07-21",
+        "end": "2026-08-31",
+        "rate": 4200,
+        "rent": 5690.322580645161,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 5690.322580645161,
+            "rate": 4200,
+            "start": "2026-07-21",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL7429",
+        "serial": "2MQ448107S",
+        "start": "2026-07-21",
+        "end": "2026-08-31",
+        "rate": 4200,
+        "rent": 5690.322580645161,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 5690.322580645161,
+            "rate": 4200,
+            "start": "2026-07-21",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL7494",
+        "serial": "2MQ44808GV",
+        "start": "2026-07-21",
+        "end": "2026-08-31",
+        "rate": 4200,
+        "rent": 5690.322580645161,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 5690.322580645161,
+            "rate": 4200,
+            "start": "2026-07-21",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL7566",
+        "serial": "GNPMGW3",
+        "start": "2026-08-02",
+        "end": "2026-08-31",
+        "rate": 3900,
+        "rent": 3774.1935483870966,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 3774.1935483870966,
+            "rate": 3900,
+            "start": "2026-08-02",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL7567",
+        "serial": "5R28GY3",
+        "start": "2026-08-02",
+        "end": "2026-08-31",
+        "rate": 3900,
+        "rent": 3774.1935483870966,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 3774.1935483870966,
+            "rate": 3900,
+            "start": "2026-08-02",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL7572",
+        "serial": "2MQ44802MC",
+        "start": "2026-08-02",
+        "end": "2026-08-31",
+        "rate": 4200,
+        "rent": 4064.516129032258,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 4064.516129032258,
+            "rate": 4200,
+            "start": "2026-08-02",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": [
+      {
+        "t": "",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 3175,
+            "serial": "2TK2460CY4",
+            "serial_id": 3952,
+            "rate": 3175
+          }
+        ],
+        "sheetZero": null
+      }
+    ]
+  },
+  {
+    "want": "PPG ASIAN PAINTS PRIVATE LIMITED",
+    "sheetName": "PPG Asian Paint",
+    "customer_id": 79,
+    "company_name": "PPG ASIAN PAINTS PRIVATE LIMITED",
+    "invoice_id": 1179,
+    "invoice_number": "INV-0796",
+    "sheet_count": 16,
+    "crm_count": 15,
+    "sheet_total": 21210.65,
+    "crm_total": 41970,
+    "price_diff": -20759.35,
+    "aligned": false,
+    "missing": [
+      "TTSPL3237"
+    ],
+    "extra": [],
+    "amtMismatches": [
+      {
+        "t": "TTSPL4066",
+        "sAmt": 1399,
+        "cAmt": 2798,
+        "diff": -1399,
+        "sheetStart": "2026-07-01",
+        "sheetRemarks": "",
+        "sheetRows": [
+          {
+            "rent": 1399,
+            "rate": 1399,
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "remarks": ""
+          }
+        ],
+        "crm": [
+          {
+            "period": "2026-07",
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "amount": 1399,
+            "serial": "BB326Q2",
+            "serial_id": 1596,
+            "rate": 1399
+          },
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1399,
+            "serial": "BB326Q2",
+            "serial_id": 1596,
+            "rate": 1399
+          }
+        ]
+      },
+      {
+        "t": "TTSPL2103",
+        "sAmt": 1399,
+        "cAmt": 2798,
+        "diff": -1399,
+        "sheetStart": "2026-07-01",
+        "sheetRemarks": "",
+        "sheetRows": [
+          {
+            "rent": 1399,
+            "rate": 1399,
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "remarks": ""
+          }
+        ],
+        "crm": [
+          {
+            "period": "2026-07",
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "amount": 1399,
+            "serial": "8861NF2",
+            "serial_id": 1597,
+            "rate": 1399
+          },
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1399,
+            "serial": "8861NF2",
+            "serial_id": 1597,
+            "rate": 1399
+          }
+        ]
+      },
+      {
+        "t": "TTSPL3263",
+        "sAmt": 1399,
+        "cAmt": 2798,
+        "diff": -1399,
+        "sheetStart": "2026-07-01",
+        "sheetRemarks": "",
+        "sheetRows": [
+          {
+            "rent": 1399,
+            "rate": 1399,
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "remarks": ""
+          }
+        ],
+        "crm": [
+          {
+            "period": "2026-07",
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "amount": 1399,
+            "serial": "4WQVZY2",
+            "serial_id": 1598,
+            "rate": 1399
+          },
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1399,
+            "serial": "4WQVZY2",
+            "serial_id": 1598,
+            "rate": 1399
+          }
+        ]
+      },
+      {
+        "t": "TTSPL2411",
+        "sAmt": 1399,
+        "cAmt": 2798,
+        "diff": -1399,
+        "sheetStart": "2026-07-01",
+        "sheetRemarks": "",
+        "sheetRows": [
+          {
+            "rent": 1399,
+            "rate": 1399,
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "remarks": ""
+          }
+        ],
+        "crm": [
+          {
+            "period": "2026-07",
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "amount": 1399,
+            "serial": "F3CFXT2",
+            "serial_id": 1600,
+            "rate": 1399
+          },
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1399,
+            "serial": "F3CFXT2",
+            "serial_id": 1600,
+            "rate": 1399
+          }
+        ]
+      },
+      {
+        "t": "TTSPLGR0151",
+        "sAmt": 1399,
+        "cAmt": 2798,
+        "diff": -1399,
+        "sheetStart": "2026-07-01",
+        "sheetRemarks": "",
+        "sheetRows": [
+          {
+            "rent": 1399,
+            "rate": 1399,
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "remarks": ""
+          }
+        ],
+        "crm": [
+          {
+            "period": "2026-07",
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "amount": 1399,
+            "serial": "1V02PQ2",
+            "serial_id": 1601,
+            "rate": 1399
+          },
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1399,
+            "serial": "1V02PQ2",
+            "serial_id": 1601,
+            "rate": 1399
+          }
+        ]
+      },
+      {
+        "t": "TTSPL3509",
+        "sAmt": 1399,
+        "cAmt": 2798,
+        "diff": -1399,
+        "sheetStart": "2026-07-01",
+        "sheetRemarks": "",
+        "sheetRows": [
+          {
+            "rent": 1399,
+            "rate": 1399,
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "remarks": ""
+          }
+        ],
+        "crm": [
+          {
+            "period": "2026-07",
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "amount": 1399,
+            "serial": "D1B3PV2",
+            "serial_id": 1602,
+            "rate": 1399
+          },
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1399,
+            "serial": "D1B3PV2",
+            "serial_id": 1602,
+            "rate": 1399
+          }
+        ]
+      },
+      {
+        "t": "TTSPL5029",
+        "sAmt": 1399,
+        "cAmt": 2798,
+        "diff": -1399,
+        "sheetStart": "2026-07-01",
+        "sheetRemarks": "",
+        "sheetRows": [
+          {
+            "rent": 1399,
+            "rate": 1399,
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "remarks": ""
+          }
+        ],
+        "crm": [
+          {
+            "period": "2026-07",
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "amount": 1399,
+            "serial": "1BD5NV2",
+            "serial_id": 1604,
+            "rate": 1399
+          },
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1399,
+            "serial": "1BD5NV2",
+            "serial_id": 1604,
+            "rate": 1399
+          }
+        ]
+      },
+      {
+        "t": "TTSPL2133",
+        "sAmt": 1399,
+        "cAmt": 2798,
+        "diff": -1399,
+        "sheetStart": "2026-07-01",
+        "sheetRemarks": "",
+        "sheetRows": [
+          {
+            "rent": 1399,
+            "rate": 1399,
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "remarks": ""
+          }
+        ],
+        "crm": [
+          {
+            "period": "2026-07",
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "amount": 1399,
+            "serial": "7GQXMF2",
+            "serial_id": 2201,
+            "rate": 1399
+          },
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1399,
+            "serial": "7GQXMF2",
+            "serial_id": 2201,
+            "rate": 1399
+          }
+        ]
+      },
+      {
+        "t": "TTSPL3895",
+        "sAmt": 1399,
+        "cAmt": 2798,
+        "diff": -1399,
+        "sheetStart": "2026-07-01",
+        "sheetRemarks": "",
+        "sheetRows": [
+          {
+            "rent": 1399,
+            "rate": 1399,
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "remarks": ""
+          }
+        ],
+        "crm": [
+          {
+            "period": "2026-07",
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "amount": 1399,
+            "serial": "DR2QHR2",
+            "serial_id": 1605,
+            "rate": 1399
+          },
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1399,
+            "serial": "DR2QHR2",
+            "serial_id": 1605,
+            "rate": 1399
+          }
+        ]
+      },
+      {
+        "t": "TTSPL3934",
+        "sAmt": 1399,
+        "cAmt": 2798,
+        "diff": -1399,
+        "sheetStart": "2026-07-01",
+        "sheetRemarks": "",
+        "sheetRows": [
+          {
+            "rent": 1399,
+            "rate": 1399,
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "remarks": ""
+          }
+        ],
+        "crm": [
+          {
+            "period": "2026-07",
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "amount": 1399,
+            "serial": "DJG5HR2",
+            "serial_id": 2202,
+            "rate": 1399
+          },
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1399,
+            "serial": "DJG5HR2",
+            "serial_id": 2202,
+            "rate": 1399
+          }
+        ]
+      },
+      {
+        "t": "TTSPL4088",
+        "sAmt": 1399,
+        "cAmt": 2798,
+        "diff": -1399,
+        "sheetStart": "2026-07-01",
+        "sheetRemarks": "",
+        "sheetRows": [
+          {
+            "rent": 1399,
+            "rate": 1399,
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "remarks": ""
+          }
+        ],
+        "crm": [
+          {
+            "period": "2026-07",
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "amount": 1399,
+            "serial": "1W8P563",
+            "serial_id": 1607,
+            "rate": 1399
+          },
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1399,
+            "serial": "1W8P563",
+            "serial_id": 1607,
+            "rate": 1399
+          }
+        ]
+      },
+      {
+        "t": "TTSPL3774",
+        "sAmt": 1399,
+        "cAmt": 2798,
+        "diff": -1399,
+        "sheetStart": "2026-07-01",
+        "sheetRemarks": "",
+        "sheetRows": [
+          {
+            "rent": 1399,
+            "rate": 1399,
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "remarks": ""
+          }
+        ],
+        "crm": [
+          {
+            "period": "2026-07",
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "amount": 1399,
+            "serial": "J519BC3",
+            "serial_id": 1608,
+            "rate": 1399
+          },
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1399,
+            "serial": "J519BC3",
+            "serial_id": 1608,
+            "rate": 1399
+          }
+        ]
+      },
+      {
+        "t": "TTSPL3454",
+        "sAmt": 1399,
+        "cAmt": 2798,
+        "diff": -1399,
+        "sheetStart": "2026-07-01",
+        "sheetRemarks": "",
+        "sheetRows": [
+          {
+            "rent": 1399,
+            "rate": 1399,
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "remarks": ""
+          }
+        ],
+        "crm": [
+          {
+            "period": "2026-07",
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "amount": 1399,
+            "serial": "4RGF0B3",
+            "serial_id": 1609,
+            "rate": 1399
+          },
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1399,
+            "serial": "4RGF0B3",
+            "serial_id": 1609,
+            "rate": 1399
+          }
+        ]
+      },
+      {
+        "t": "TTSPL2452",
+        "sAmt": 1399,
+        "cAmt": 2798,
+        "diff": -1399,
+        "sheetStart": "2026-07-01",
+        "sheetRemarks": "REPLACEMENT OF 469YZM2",
+        "sheetRows": [
+          {
+            "rent": 1399,
+            "rate": 1399,
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "remarks": "REPLACEMENT OF 469YZM2"
+          }
+        ],
+        "crm": [
+          {
+            "period": "2026-07",
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "amount": 1399,
+            "serial": "14F87Y2",
+            "serial_id": 3736,
+            "rate": 1399
+          },
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1399,
+            "serial": "14F87Y2",
+            "serial_id": 3736,
+            "rate": 1399
+          }
+        ]
+      },
+      {
+        "t": "TTSPL3948",
+        "sAmt": 1399,
+        "cAmt": 2798,
+        "diff": -1399,
+        "sheetStart": "2026-07-01",
+        "sheetRemarks": "Replacement of 3C4DQH2",
+        "sheetRows": [
+          {
+            "rent": 1399,
+            "rate": 1399,
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "remarks": "Replacement of 3C4DQH2"
+          }
+        ],
+        "crm": [
+          {
+            "period": "2026-07",
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "amount": 1399,
+            "serial": "20XY5S2",
+            "serial_id": 3721,
+            "rate": 1399
+          },
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1399,
+            "serial": "20XY5S2",
+            "serial_id": 3721,
+            "rate": 1399
+          }
+        ]
+      }
+    ],
+    "missingDetail": [
+      {
+        "t": "TTSPL3237",
+        "serial": "5CD9468ZHF",
+        "start": "2026-07-27",
+        "end": "2026-07-31",
+        "rate": 1399,
+        "rent": 225.65,
+        "remarks": "replacement against TTSPL: TTSPLGR0151",
+        "rows": [
+          {
+            "rent": 225.65,
+            "rate": 1399,
+            "start": "2026-07-27",
+            "end": "2026-07-31",
+            "remarks": "replacement against TTSPL: TTSPLGR0151"
+          }
+        ]
+      }
+    ],
+    "extraDetail": []
+  },
+  {
+    "want": "Prisha Insurance Brokers Pvt Ltd",
+    "sheetName": "Prisha Insurance Brokers Pvt Ltd",
+    "customer_id": 54,
+    "company_name": "Prisha Insurance Brokers Pvt Ltd",
+    "invoice_id": 1210,
+    "invoice_number": "INV-0827",
+    "sheet_count": 6,
+    "crm_count": 4,
+    "sheet_total": 11731.48,
+    "crm_total": 6796,
+    "price_diff": 4935.48,
+    "aligned": false,
+    "missing": [
+      "TTSPL7431",
+      "TTSPL7446"
+    ],
+    "extra": [],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "TTSPL7431",
+        "serial": "9G516D3",
+        "start": "2026-07-18",
+        "end": "2026-08-31",
+        "rate": 1700,
+        "rent": 2467.741935483871,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 2467.741935483871,
+            "rate": 1700,
+            "start": "2026-07-18",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL7446",
+        "serial": "C3V51J3",
+        "start": "2026-07-18",
+        "end": "2026-08-31",
+        "rate": 1700,
+        "rent": 2467.741935483871,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 2467.741935483871,
+            "rate": 1700,
+            "start": "2026-07-18",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": []
+  },
+  {
+    "want": "Quest Solutions Private Limited",
+    "sheetName": "Quest Solutions Private Limited",
+    "customer_id": 9,
+    "company_name": "Quest Solutions Private Limited",
+    "invoice_id": 1175,
+    "invoice_number": "INV-0792",
+    "sheet_count": 43,
+    "crm_count": 40,
+    "sheet_total": 90378.44,
+    "crm_total": 87302.49,
+    "price_diff": 3075.95,
+    "aligned": false,
+    "missing": [
+      "TTSPL2454",
+      "TTSPL4377",
+      "TTSPL7445"
+    ],
+    "extra": [],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "TTSPL2454",
+        "serial": "DRSMGJ3",
+        "start": "2026-07-15",
+        "end": "2026-07-15",
+        "rate": 2999,
+        "rent": 96.74,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 96.74,
+            "rate": 2999,
+            "start": "2026-07-15",
+            "end": "2026-07-15",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL4377",
+        "serial": "PC2830BR",
+        "start": "2026-07-13",
+        "end": "2026-07-13",
+        "rate": 2099,
+        "rent": 67.7,
+        "remarks": "Replacement for PC28305S",
+        "rows": [
+          {
+            "rent": 67.7,
+            "rate": 2099,
+            "start": "2026-07-13",
+            "end": "2026-07-13",
+            "remarks": "Replacement for PC28305S"
+          }
+        ]
+      },
+      {
+        "t": "TTSPL7445",
+        "serial": "2CBLPN3",
+        "start": "2026-07-20",
+        "end": "2026-08-31",
+        "rate": 2099,
+        "rent": 2911.5161290322585,
+        "remarks": "Replacement of TTSPL4359",
+        "rows": [
+          {
+            "rent": 2911.5161290322585,
+            "rate": 2099,
+            "start": "2026-07-20",
+            "end": "2026-08-31",
+            "remarks": "Replacement of TTSPL4359"
+          }
+        ]
+      }
+    ],
+    "extraDetail": []
+  },
+  {
+    "want": "RATHAM TECHNOLOGIES LLP",
+    "sheetName": "G N APNA UDYOG LLP (AU Logistics)/RATHAM TECHNOLOGIES LLP",
+    "customer_id": 122,
+    "company_name": "RATHAM TECHNOLOGIES LLP",
+    "invoice_id": 1285,
+    "invoice_number": "INV-0902",
+    "sheet_count": 59,
+    "crm_count": 60,
+    "sheet_total": 128022.97,
+    "crm_total": 131232.29,
+    "price_diff": -3209.32,
+    "aligned": false,
+    "missing": [],
+    "extra": [
+      "TTSPL4314"
+    ],
+    "amtMismatches": [
+      {
+        "t": "TTSPL4809",
+        "sAmt": 6078.1,
+        "cAmt": 6088.42,
+        "diff": -10.32,
+        "sheetStart": "2026-07-04",
+        "sheetRemarks": "",
+        "sheetRows": [
+          {
+            "rent": 6078.1,
+            "rate": 3199,
+            "start": "2026-07-04",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ],
+        "crm": [
+          {
+            "period": "2026-07",
+            "start": "2026-07-04",
+            "end": "2026-07-31",
+            "amount": 2889.42,
+            "serial": "DYTXZH3",
+            "serial_id": 299,
+            "rate": 3199
+          },
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 3199,
+            "serial": "DYTXZH3",
+            "serial_id": 299,
+            "rate": 3199
+          }
+        ]
+      }
+    ],
+    "missingDetail": [],
+    "extraDetail": [
+      {
+        "t": "TTSPL4314",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 3199,
+            "serial": "JC7J3B3",
+            "serial_id": 666,
+            "rate": 3199
+          }
+        ],
+        "sheetZero": {
+          "rent": 0,
+          "rate": 3199,
+          "start": null,
+          "end": null,
+          "remarks": "Have to provide C.N (Rs- 1960.68)",
+          "serial": "JC7J3B3",
+          "rows": [
+            {
+              "rent": 0,
+              "rate": 3199,
+              "start": null,
+              "end": null,
+              "remarks": "Have to provide C.N (Rs- 1960.68)"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "want": "Research Nester Private Limited",
+    "sheetName": "RESEARCH NESTER PRIVATE LIMITED",
+    "customer_id": 20,
+    "company_name": "Research Nester Private Limited",
+    "invoice_id": 1314,
+    "invoice_number": "INV-0931",
+    "sheet_count": 56,
+    "crm_count": 53,
+    "sheet_total": 58476.32,
+    "crm_total": 55297.65,
+    "price_diff": 3178.67,
+    "aligned": false,
+    "missing": [
+      "1449/TTSPL2121",
+      "1529/TTSPL1036",
+      "516/TTSPL1536",
+      "TRU1043/TTSPL1826",
+      "TRU1067/TTSPL2570",
+      "TTSPL2691",
+      "TTSPL3147",
+      "TTSPL7472"
+    ],
+    "extra": [
+      "TTSPL1036",
+      "TTSPL1536",
+      "TTSPL1826",
+      "TTSPL2121",
+      "TTSPL2570"
+    ],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "1449/TTSPL2121",
+        "serial": "7MTWF02",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 599,
+        "rent": 599,
+        "remarks": "with monitor+keyboard+mouse",
+        "rows": [
+          {
+            "rent": 599,
+            "rate": 599,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": "with monitor+keyboard+mouse"
+          }
+        ]
+      },
+      {
+        "t": "1529/TTSPL1036",
+        "serial": "2B5CQH2",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 899,
+        "rent": 899,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 899,
+            "rate": 899,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "516/TTSPL1536",
+        "serial": "6CR6086GJ0",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 599,
+        "rent": 599,
+        "remarks": "with Monitor+keyboard+mouse,REPLACEMENT OF CR7YJ32",
+        "rows": [
+          {
+            "rent": 599,
+            "rate": 599,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": "with Monitor+keyboard+mouse,REPLACEMENT OF CR7YJ32"
+          }
+        ]
+      },
+      {
+        "t": "TRU1043/TTSPL1826",
+        "serial": "5CG7021WWB",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 899,
+        "rent": 899,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 899,
+            "rate": 899,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TRU1067/TTSPL2570",
+        "serial": "R82MWCX",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 599,
+        "rent": 599,
+        "remarks": "with Monitor+keyboard+mouse",
+        "rows": [
+          {
+            "rent": 599,
+            "rate": 599,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": "with Monitor+keyboard+mouse"
+          }
+        ]
+      },
+      {
+        "t": "TTSPL2691",
+        "serial": "PC0GBAWV",
+        "start": "2026-08-02",
+        "end": "2026-08-31",
+        "rate": 899,
+        "rent": 870,
+        "remarks": "replacement against TTSPL: TTSPL1276",
+        "rows": [
+          {
+            "rent": 870,
+            "rate": 899,
+            "start": "2026-08-02",
+            "end": "2026-08-31",
+            "remarks": "replacement against TTSPL: TTSPL1276"
+          }
+        ]
+      },
+      {
+        "t": "TTSPL3147",
+        "serial": "PF225E2C",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1099,
+        "rent": 1099,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1099,
+            "rate": 1099,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL7472",
+        "serial": "5CG0278DQ0",
+        "start": "2026-08-02",
+        "end": "2026-08-31",
+        "rate": 1250,
+        "rent": 1209.6774193548388,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1209.6774193548388,
+            "rate": 1250,
+            "start": "2026-08-02",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": [
+      {
+        "t": "TTSPL1036",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 899,
+            "serial": "2B5CQH2",
+            "serial_id": 985,
+            "rate": 899
+          }
+        ],
+        "sheetZero": null
+      },
+      {
+        "t": "TTSPL1536",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 599,
+            "serial": "6CR6086GJ0",
+            "serial_id": 3007,
+            "rate": 599
+          }
+        ],
+        "sheetZero": null
+      },
+      {
+        "t": "TTSPL1826",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 899,
+            "serial": "5CG7021WWB",
+            "serial_id": 990,
+            "rate": 899
+          }
+        ],
+        "sheetZero": null
+      },
+      {
+        "t": "TTSPL2121",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 599,
+            "serial": "7MTWF02",
+            "serial_id": 981,
+            "rate": 599
+          }
+        ],
+        "sheetZero": null
+      },
+      {
+        "t": "TTSPL2570",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 599,
+            "serial": "R82MWCX",
+            "serial_id": 999,
+            "rate": 599
+          }
+        ],
+        "sheetZero": null
+      }
+    ]
+  },
+  {
+    "want": "RHOPHI ANALYTICS LLP (Punjab)",
+    "sheetName": "RHOPHI ANALYTICS LLP",
+    "customer_id": 106,
+    "company_name": "RHOPHI ANALYTICS LLP (Punjab)",
+    "invoice_id": 1298,
+    "invoice_number": "INV-0915",
+    "sheet_count": 44,
+    "crm_count": 43,
+    "sheet_total": 254691.74,
+    "crm_total": 247773.64,
+    "price_diff": 6918.1,
+    "aligned": false,
+    "missing": [
+      "TTSPL5224"
+    ],
+    "extra": [],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "TTSPL5224",
+        "serial": "JWCX3T97YG",
+        "start": "2026-07-24",
+        "end": "2026-08-31",
+        "rate": 5499,
+        "rent": 6918.096774193549,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 6918.096774193549,
+            "rate": 5499,
+            "start": "2026-07-24",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": []
+  },
+  {
+    "want": "Road Express Technology Pvt. Ltd.",
+    "sheetName": "Road Express Technology Pvt. Ltd.",
+    "customer_id": 66,
+    "company_name": "ROADEXPRESS TECHNOLOGY PRIVATE LIMITED",
+    "invoice_id": 1242,
+    "invoice_number": "INV-0859",
+    "sheet_count": 20,
+    "crm_count": 20,
+    "sheet_total": 21599,
+    "crm_total": 21599,
+    "price_diff": 0,
+    "aligned": false,
+    "missing": [
+      "TRU698/TTSPL1462"
+    ],
+    "extra": [
+      "TTSPL1462"
+    ],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "TRU698/TTSPL1462",
+        "serial": "5CG5073TDC",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 699,
+        "rent": 699,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 699,
+            "rate": 699,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": [
+      {
+        "t": "TTSPL1462",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 699,
+            "serial": "5CG5073TDC",
+            "serial_id": 91,
+            "rate": 699
+          }
+        ],
+        "sheetZero": null
+      }
+    ]
+  },
+  {
+    "want": "Saajha",
+    "sheetName": "Saajha",
+    "customer_id": 14,
+    "company_name": "Saajha",
+    "invoice_id": 1239,
+    "invoice_number": "INV-0856",
+    "sheet_count": 6,
+    "crm_count": 6,
+    "sheet_total": 11658,
+    "crm_total": 11658,
+    "price_diff": 0,
+    "aligned": false,
+    "missing": [
+      "1558/TTSPL1010",
+      "YASHTRUE1434/TTSPL4506"
+    ],
+    "extra": [
+      "TTSPL1010",
+      "TTSPL4506"
+    ],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "1558/TTSPL1010",
+        "serial": "FVTBQH2",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1990,
+        "rent": 1990,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1990,
+            "rate": 1990,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "YASHTRUE1434/TTSPL4506",
+        "serial": "2SR7RC2",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1990,
+        "rent": 1990,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1990,
+            "rate": 1990,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": [
+      {
+        "t": "TTSPL1010",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1990,
+            "serial": "FVTBQH2",
+            "serial_id": 105,
+            "rate": 1990
+          }
+        ],
+        "sheetZero": null
+      },
+      {
+        "t": "TTSPL4506",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1990,
+            "serial": "2SR7RC2",
+            "serial_id": 106,
+            "rate": 1990
+          }
+        ],
+        "sheetZero": null
+      }
+    ]
+  },
+  {
+    "want": "SelectAstro Private Limited",
+    "sheetName": "SELECTASTRO PRIVATE LIMITED",
+    "customer_id": 107,
+    "company_name": "SelectAstro Private Limited",
+    "invoice_id": 1316,
+    "invoice_number": "INV-0933",
+    "sheet_count": 26,
+    "crm_count": 24,
+    "sheet_total": 73579.21,
+    "crm_total": 75249,
+    "price_diff": -1669.79,
+    "aligned": false,
+    "missing": [
+      "TTSPL7389",
+      "TTSPL7392"
+    ],
+    "extra": [],
+    "amtMismatches": [
+      {
+        "t": "TTSPL7387",
+        "sAmt": 90.25,
+        "cAmt": 2798,
+        "diff": -2707.75,
+        "sheetStart": "2026-07-01",
+        "sheetRemarks": "",
+        "sheetRows": [
+          {
+            "rent": 90.25,
+            "rate": 1399,
+            "start": "2026-07-01",
+            "end": "2026-07-02",
+            "remarks": ""
+          }
+        ],
+        "crm": [
+          {
+            "period": "2026-07",
+            "start": "2026-07-01",
+            "end": "2026-07-31",
+            "amount": 1399,
+            "serial": "5CG0278CJB",
+            "serial_id": 8150,
+            "rate": 1399
+          },
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1399,
+            "serial": "5CG0278CJB",
+            "serial_id": 8150,
+            "rate": 1399
+          }
+        ]
+      }
+    ],
+    "missingDetail": [
+      {
+        "t": "TTSPL7389",
+        "serial": "5CG0274LN0",
+        "start": "2026-07-01",
+        "end": "2026-07-02",
+        "rate": 1399,
+        "rent": 90.25,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 90.25,
+            "rate": 1399,
+            "start": "2026-07-01",
+            "end": "2026-07-02",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL7392",
+        "serial": "5CG0278J6M",
+        "start": "2026-07-01",
+        "end": "2026-07-21",
+        "rate": 1399,
+        "rent": 947.71,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 947.71,
+            "rate": 1399,
+            "start": "2026-07-01",
+            "end": "2026-07-21",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": []
+  },
+  {
+    "want": "SHINENPRIME HEALTHCARE PRIVATE LIMITED",
+    "sheetName": "SHINENPRIME HEALTHCARE PRIVATE LIMITED",
+    "customer_id": 261,
+    "company_name": "SHINENPRIME HEALTHCARE PRIVATE LIMITED",
+    "invoice_id": 1324,
+    "invoice_number": "INV-0941",
+    "sheet_count": 19,
+    "crm_count": 19,
+    "sheet_total": 21952.74,
+    "crm_total": 21952.76,
+    "price_diff": -0.02,
+    "aligned": false,
+    "missing": [
+      "1527/TTSPL1055",
+      "TTSPL6671-A",
+      "TTSPL6676-A"
+    ],
+    "extra": [
+      "TTSPL1055",
+      "TTSPL6671_B",
+      "TTSPL6676_B"
+    ],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "1527/TTSPL1055",
+        "serial": "90TBQH2",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 999,
+        "rent": 999,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 999,
+            "rate": 999,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL6671-A",
+        "serial": "5GLZP13",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 999,
+        "rent": 999,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 999,
+            "rate": 999,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL6676-A",
+        "serial": "3T2FL13",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 999,
+        "rent": 999,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 999,
+            "rate": 999,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": [
+      {
+        "t": "TTSPL1055",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 999,
+            "serial": "90TBQH2",
+            "serial_id": 3148,
+            "rate": 999
+          }
+        ],
+        "sheetZero": null
+      },
+      {
+        "t": "TTSPL6671_B",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 999,
+            "serial": "GLSZP13_B",
+            "serial_id": 9156,
+            "rate": 999
+          }
+        ],
+        "sheetZero": null
+      },
+      {
+        "t": "TTSPL6676_B",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 999,
+            "serial": "3T2FL13_B",
+            "serial_id": 3763,
+            "rate": 999
+          }
+        ],
+        "sheetZero": null
+      }
+    ]
+  },
+  {
+    "want": "SPRINGWEL MATTRESSES PRIVATE LIMITED",
+    "sheetName": "SPRINGWEL MATTRESSES PRIVATE LIMITED",
+    "customer_id": 218,
+    "company_name": "SPRINGWELL MATTRESSES PRIVATE LIMITED",
+    "invoice_id": 1286,
+    "invoice_number": "INV-0903",
+    "sheet_count": 1,
+    "crm_count": 1,
+    "sheet_total": 1499,
+    "crm_total": 1499,
+    "price_diff": 0,
+    "aligned": true,
+    "missing": [],
+    "extra": [],
+    "amtMismatches": [],
+    "missingDetail": [],
+    "extraDetail": []
+  },
+  {
+    "want": "SUKHMAA SONS AND ASSOCIATES",
+    "sheetName": "SUKHMAA SONS AND ASSOCIATES",
+    "customer_id": 42,
+    "company_name": "SUKHMAA SONS AND ASSOCIATES",
+    "invoice_id": 1162,
+    "invoice_number": "INV-0779",
+    "sheet_count": 18,
+    "crm_count": 17,
+    "sheet_total": 21842.32,
+    "crm_total": 21843.28,
+    "price_diff": -0.96,
+    "aligned": false,
+    "missing": [
+      "1152/GULSTRUE1019/TTSPL2618",
+      "950/TTSPL2386",
+      "G-COTRUE1034/TTSPL3402",
+      "MOUSE1",
+      "MOUSE2",
+      "YASHTRUE1438/TTSPL2323"
+    ],
+    "extra": [
+      "",
+      "TTSPL2323",
+      "TTSPL2386",
+      "TTSPL2618",
+      "TTSPL3402"
+    ],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "1152/GULSTRUE1019/TTSPL2618",
+        "serial": "GC0KQ12",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 799,
+        "rent": 799,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 799,
+            "rate": 799,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "950/TTSPL2386",
+        "serial": "307X022",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 799,
+        "rent": 799,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 799,
+            "rate": 799,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "G-COTRUE1034/TTSPL3402",
+        "serial": "9GF4T72",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 799,
+        "rent": 799,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 799,
+            "rate": 799,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "MOUSE1",
+        "serial": "CN-05NT8R-PRC00-39K-06KG",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1,
+        "rent": 1,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1,
+            "rate": 1,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "MOUSE2",
+        "serial": "CN-05NT8R-PRC00-39K-06KF",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1,
+        "rent": 1,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1,
+            "rate": 1,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "YASHTRUE1438/TTSPL2323",
+        "serial": "B0B9Q72",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1399,
+        "rent": 1399,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1399,
+            "rate": 1399,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": [
+      {
+        "t": "",
+        "crm": [
+          {
+            "period": "2026-07",
+            "start": "2026-07-17",
+            "end": "2026-07-31",
+            "amount": 0.48,
+            "serial": "CN-05NT8R-PRC00-39K-06KF",
+            "serial_id": 8286,
+            "rate": 1
+          },
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1,
+            "serial": "CN-05NT8R-PRC00-39K-06KF",
+            "serial_id": 8286,
+            "rate": 1
+          },
+          {
+            "period": "2026-07",
+            "start": "2026-07-17",
+            "end": "2026-07-31",
+            "amount": 0.48,
+            "serial": "CN-05NT8R-PRC00-39K-06KG",
+            "serial_id": 8285,
+            "rate": 1
+          },
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1,
+            "serial": "CN-05NT8R-PRC00-39K-06KG",
+            "serial_id": 8285,
+            "rate": 1
+          }
+        ],
+        "sheetZero": null
+      },
+      {
+        "t": "TTSPL2323",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1399,
+            "serial": "B0B9Q72",
+            "serial_id": 796,
+            "rate": 1399
+          }
+        ],
+        "sheetZero": null
+      },
+      {
+        "t": "TTSPL2386",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 799,
+            "serial": "307X022",
+            "serial_id": 793,
+            "rate": 799
+          }
+        ],
+        "sheetZero": null
+      },
+      {
+        "t": "TTSPL2618",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 799,
+            "serial": "GC0KQ12",
+            "serial_id": 791,
+            "rate": 799
+          }
+        ],
+        "sheetZero": null
+      },
+      {
+        "t": "TTSPL3402",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 799,
+            "serial": "9GF4T72",
+            "serial_id": 795,
+            "rate": 799
+          }
+        ],
+        "sheetZero": null
+      }
+    ]
+  },
+  {
+    "want": "SYNERGY SOFTWARES LIMITED",
+    "sheetName": "SYNERGY SOFTWARES LIMITED",
+    "customer_id": 44,
+    "company_name": "SYNERGY SOFTWARES LIMITED",
+    "invoice_id": 1159,
+    "invoice_number": "INV-0776",
+    "sheet_count": 4,
+    "crm_count": 5,
+    "sheet_total": 6550,
+    "crm_total": 8250,
+    "price_diff": -1700,
+    "aligned": false,
+    "missing": [
+      "YASHTRUE1454/TTSPL3993"
+    ],
+    "extra": [
+      "TTSPL3993",
+      "TTSPL5680"
+    ],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "YASHTRUE1454/TTSPL3993",
+        "serial": "1ZBDQ92",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1450,
+        "rent": 1450,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1450,
+            "rate": 1450,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": [
+      {
+        "t": "TTSPL3993",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1450,
+            "serial": "1ZBDQ92",
+            "serial_id": 606,
+            "rate": 1450
+          }
+        ],
+        "sheetZero": null
+      },
+      {
+        "t": "TTSPL5680",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1700,
+            "serial": "7YWXN73",
+            "serial_id": 2385,
+            "rate": 1700
+          }
+        ],
+        "sheetZero": {
+          "rent": 0,
+          "rate": 1700,
+          "start": null,
+          "end": null,
+          "remarks": "Have to provide C.N (Rs- 822.58)",
+          "serial": "7YWXN73",
+          "rows": [
+            {
+              "rent": 0,
+              "rate": 1700,
+              "start": null,
+              "end": null,
+              "remarks": "Have to provide C.N (Rs- 822.58)"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "want": "Techsur Solutions Private Limited/Naraharisetty Bobby B2C",
+    "sheetName": "Techsur Solutions Private Limited/Naraharisetty Bobby B2C",
+    "customer_id": null,
+    "company_name": null,
+    "invoice_id": null,
+    "invoice_number": null,
+    "sheet_count": 15,
+    "crm_count": 0,
+    "sheet_total": 49697.55,
+    "crm_total": 0,
+    "price_diff": 49697.55,
+    "aligned": false,
+    "missing": [
+      "TTSPL4606",
+      "TTSPL4614",
+      "TTSPL4726",
+      "TTSPL4841",
+      "TTSPL4850",
+      "TTSPL5108",
+      "TTSPL5598",
+      "TTSPL5792",
+      "TTSPL6096",
+      "TTSPL6625",
+      "TTSPL6638",
+      "TTSPL6684",
+      "TTSPL6747",
+      "TTSPL7046",
+      "TTSPL7423"
+    ],
+    "extra": [],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "TTSPL4606",
+        "serial": "G249PQ3",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 3500,
+        "rent": 3500,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 3500,
+            "rate": 3500,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL4614",
+        "serial": "DV4FYD3",
+        "start": "2026-07-02",
+        "end": "2026-07-08",
+        "rate": 5000,
+        "rent": 1290.32,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1290.32,
+            "rate": 5000,
+            "start": "2026-07-02",
+            "end": "2026-07-08",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL4726",
+        "serial": "PF32FWCQ",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1999,
+        "rent": 1999,
+        "remarks": "Replacement of PG0324LJ",
+        "rows": [
+          {
+            "rent": 1999,
+            "rate": 1999,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": "Replacement of PG0324LJ"
+          }
+        ]
+      },
+      {
+        "t": "TTSPL4841",
+        "serial": "5SQWZH3",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 3500,
+        "rent": 3500,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 3500,
+            "rate": 3500,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL4850",
+        "serial": "86060J3",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 2999,
+        "rent": 2999,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 2999,
+            "rate": 2999,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL5108",
+        "serial": "PF53B3YJ",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 2399,
+        "rent": 2399,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 2399,
+            "rate": 2399,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL5598",
+        "serial": "PG0324LJ",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1999,
+        "rent": 1999,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1999,
+            "rate": 1999,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL5792",
+        "serial": "4136HK3",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 2999,
+        "rent": 2999,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 2999,
+            "rate": 2999,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL6096",
+        "serial": "5CD102GX1Y",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1999,
+        "rent": 1999,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1999,
+            "rate": 1999,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL6625",
+        "serial": "9XRD2B3",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1999,
+        "rent": 1999,
+        "remarks": "REPLACEMENT OF PG02S34B",
+        "rows": [
+          {
+            "rent": 1999,
+            "rate": 1999,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": "REPLACEMENT OF PG02S34B"
+          }
+        ]
+      },
+      {
+        "t": "TTSPL6638",
+        "serial": "4ND2QG3",
+        "start": "2026-07-04",
+        "end": "2026-08-31",
+        "rate": 1999,
+        "rent": 3804.548387096774,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 3804.548387096774,
+            "rate": 1999,
+            "start": "2026-07-04",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL6684",
+        "serial": "5CG211BD9Q",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 5000,
+        "rent": 5000,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 5000,
+            "rate": 5000,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL6747",
+        "serial": "PG02WQXV",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 2500,
+        "rent": 2500,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 2500,
+            "rate": 2500,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL7046",
+        "serial": "GSJQQG3",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 5000,
+        "rent": 5000,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 5000,
+            "rate": 5000,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL7423",
+        "serial": "87SWVW3",
+        "start": "2026-07-09",
+        "end": "2026-08-31",
+        "rate": 5000,
+        "rent": 8709.677419354839,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 8709.677419354839,
+            "rate": 5000,
+            "start": "2026-07-09",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": []
+  },
+  {
+    "want": "The Class One/ Inventify Edtech solution Pvt. Ltd",
+    "sheetName": "The Class One/ Inventify Edtech solution Pvt. Ltd",
+    "customer_id": 230,
+    "company_name": "The Class One/ Inventify Edtech solution Pvt. Ltd",
+    "invoice_id": 1266,
+    "invoice_number": "INV-0883",
+    "sheet_count": 14,
+    "crm_count": 14,
+    "sheet_total": 18380.65,
+    "crm_total": 18380.64,
+    "price_diff": 0.01,
+    "aligned": false,
+    "missing": [
+      "TRU779/TTSPL1777"
+    ],
+    "extra": [
+      "TTSPL1777"
+    ],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "TRU779/TTSPL1777",
+        "serial": "MP1H36UJ",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1100,
+        "rent": 1100,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1100,
+            "rate": 1100,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": [
+      {
+        "t": "TTSPL1777",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1100,
+            "serial": "MP1H36UJ",
+            "serial_id": 2973,
+            "rate": 1100
+          }
+        ],
+        "sheetZero": null
+      }
+    ]
+  },
+  {
+    "want": "TripHunter In",
+    "sheetName": "TripHunter In",
+    "customer_id": null,
+    "company_name": null,
+    "invoice_id": null,
+    "invoice_number": null,
+    "sheet_count": 9,
+    "crm_count": 0,
+    "sheet_total": 16191,
+    "crm_total": 0,
+    "price_diff": 16191,
+    "aligned": false,
+    "missing": [
+      "TTSPL4535",
+      "TTSPL4684",
+      "TTSPL4696",
+      "TTSPL4706",
+      "TTSPL4730",
+      "TTSPL4733",
+      "TTSPL5228",
+      "TTSPL5233",
+      "TTSPL6546"
+    ],
+    "extra": [],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "TTSPL4535",
+        "serial": "F3V61F3",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1799,
+        "rent": 1799,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1799,
+            "rate": 1799,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL4684",
+        "serial": "PF32G0SH",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1799,
+        "rent": 1799,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1799,
+            "rate": 1799,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL4696",
+        "serial": "PF31NC51",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1799,
+        "rent": 1799,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1799,
+            "rate": 1799,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL4706",
+        "serial": "PF32HESF",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1799,
+        "rent": 1799,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1799,
+            "rate": 1799,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL4730",
+        "serial": "PF32H4L3",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1799,
+        "rent": 1799,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1799,
+            "rate": 1799,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL4733",
+        "serial": "PF31MVF8",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1799,
+        "rent": 1799,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1799,
+            "rate": 1799,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL5228",
+        "serial": "PF3F83WP",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1799,
+        "rent": 1799,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1799,
+            "rate": 1799,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL5233",
+        "serial": "PG02Y0D9",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1799,
+        "rent": 1799,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1799,
+            "rate": 1799,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TTSPL6546",
+        "serial": "HF3BW93",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1799,
+        "rent": 1799,
+        "remarks": "replacement of TTSPL4710",
+        "rows": [
+          {
+            "rent": 1799,
+            "rate": 1799,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": "replacement of TTSPL4710"
+          }
+        ]
+      }
+    ],
+    "extraDetail": []
+  },
+  {
+    "want": "Upila Digital",
+    "sheetName": "Upila Digital",
+    "customer_id": 28,
+    "company_name": "Upila Digital",
+    "invoice_id": 1198,
+    "invoice_number": "INV-0815",
+    "sheet_count": 12,
+    "crm_count": 11,
+    "sheet_total": 34924.35,
+    "crm_total": 31248.16,
+    "price_diff": 3676.19,
+    "aligned": false,
+    "missing": [
+      "TTSPL4226"
+    ],
+    "extra": [],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "TTSPL4226",
+        "serial": "9NS0BC3",
+        "start": "2026-07-25",
+        "end": "2026-08-31",
+        "rate": 2999,
+        "rent": 3676.193548387097,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 3676.193548387097,
+            "rate": 2999,
+            "start": "2026-07-25",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": []
+  },
+  {
+    "want": "URBANLOGIX GLOBAL INDIA PRIVATE LIMITED",
+    "sheetName": "URBANLOGIX GLOBAL INDIA PRIVATE LIMITED",
+    "customer_id": 92,
+    "company_name": "URBANLOGIX GLOBAL INDIA PRIVATE LIMITED",
+    "invoice_id": 1139,
+    "invoice_number": "INV-0756",
+    "sheet_count": 42,
+    "crm_count": 42,
+    "sheet_total": 40558,
+    "crm_total": 40558,
+    "price_diff": 0,
+    "aligned": false,
+    "missing": [
+      "1042/TTSPL1491",
+      "1546/TTSPL1045",
+      "YASHTRUE1421/TTSPL2633",
+      "YASHTRUE1441/TTSPL2341"
+    ],
+    "extra": [
+      "TTSPL1045",
+      "TTSPL1491",
+      "TTSPL2341",
+      "TTSPL2633"
+    ],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "1042/TTSPL1491",
+        "serial": "5CG64669TZ",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 899,
+        "rent": 899,
+        "remarks": "Replacement of 2DDWRF2",
+        "rows": [
+          {
+            "rent": 899,
+            "rate": 899,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": "Replacement of 2DDWRF2"
+          }
+        ]
+      },
+      {
+        "t": "1546/TTSPL1045",
+        "serial": "GN9BQH2",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 999,
+        "rent": 999,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 999,
+            "rate": 999,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "YASHTRUE1421/TTSPL2633",
+        "serial": "JC493G2",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 899,
+        "rent": 899,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 899,
+            "rate": 899,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "YASHTRUE1441/TTSPL2341",
+        "serial": "1PJ3VF2",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 899,
+        "rent": 899,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 899,
+            "rate": 899,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": [
+      {
+        "t": "TTSPL1045",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 999,
+            "serial": "GN9BQH2",
+            "serial_id": 1803,
+            "rate": 999
+          }
+        ],
+        "sheetZero": null
+      },
+      {
+        "t": "TTSPL1491",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 899,
+            "serial": "5CG64669TZ",
+            "serial_id": 1794,
+            "rate": 899
+          }
+        ],
+        "sheetZero": null
+      },
+      {
+        "t": "TTSPL2341",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 899,
+            "serial": "1PJ3VF2",
+            "serial_id": 1798,
+            "rate": 899
+          }
+        ],
+        "sheetZero": null
+      },
+      {
+        "t": "TTSPL2633",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 899,
+            "serial": "JC493G2",
+            "serial_id": 1789,
+            "rate": 899
+          }
+        ],
+        "sheetZero": null
+      }
+    ]
+  },
+  {
+    "want": "VIRALCURRY DIGITAL PRIVATE LIMITED",
+    "sheetName": "Viralcurry Digital Private Limited",
+    "customer_id": 17,
+    "company_name": "VIRALCURRY DIGITAL PRIVATE LIMITED",
+    "invoice_id": 1197,
+    "invoice_number": "INV-0814",
+    "sheet_count": 8,
+    "crm_count": 8,
+    "sheet_total": 11206.45,
+    "crm_total": 11206.45,
+    "price_diff": 0,
+    "aligned": false,
+    "missing": [
+      "1326/TTSPL1769",
+      "TRU848/TTSPL2347"
+    ],
+    "extra": [
+      "TTSPL1769",
+      "TTSPL2347"
+    ],
+    "amtMismatches": [],
+    "missingDetail": [
+      {
+        "t": "1326/TTSPL1769",
+        "serial": "8GKJ882",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1340,
+        "rent": 1340,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1340,
+            "rate": 1340,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      },
+      {
+        "t": "TRU848/TTSPL2347",
+        "serial": "16FRX52",
+        "start": "2026-08-01",
+        "end": "2026-08-31",
+        "rate": 1340,
+        "rent": 1340,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 1340,
+            "rate": 1340,
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": [
+      {
+        "t": "TTSPL1769",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1340,
+            "serial": "8GKJ882",
+            "serial_id": 2,
+            "rate": 1340
+          }
+        ],
+        "sheetZero": null
+      },
+      {
+        "t": "TTSPL2347",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1340,
+            "serial": "16FRX52",
+            "serial_id": 5,
+            "rate": 1340
+          }
+        ],
+        "sheetZero": null
+      }
+    ]
+  },
+  {
+    "want": "XSKY LOUNGE HOSPITALITY PRIVATE LIMITED",
+    "sheetName": "Xsky",
+    "customer_id": 200,
+    "company_name": "XSKY LOUNGE HOSPITALITY PRIVATE LIMITED",
+    "invoice_id": 1157,
+    "invoice_number": "INV-0774",
+    "sheet_count": 1,
+    "crm_count": 2,
+    "sheet_total": 2899,
+    "crm_total": 5121.57,
+    "price_diff": -2222.57,
+    "aligned": false,
+    "missing": [],
+    "extra": [
+      "TTSPL4801"
+    ],
+    "amtMismatches": [],
+    "missingDetail": [],
+    "extraDetail": [
+      {
+        "t": "TTSPL4801",
+        "crm": [
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 2222.57,
+            "serial": "4D7F1J3",
+            "serial_id": 51,
+            "rate": 2222.57
+          }
+        ],
+        "sheetZero": null
+      }
+    ]
+  },
+  {
+    "want": "ZYKRR TECHNOLOGIES PRIVATE LIMITED",
+    "sheetName": "ZYKRR TECHNOLOGIES PRIVATE LIMITED",
+    "customer_id": 242,
+    "company_name": "ZYKRR TECHNOLOGIES PRIVATE LIMITED",
+    "invoice_id": 1199,
+    "invoice_number": "INV-0816",
+    "sheet_count": 38,
+    "crm_count": 37,
+    "sheet_total": 99653.58,
+    "crm_total": 95730.82,
+    "price_diff": 3922.76,
+    "aligned": false,
+    "missing": [
+      "TTSPL6936"
+    ],
+    "extra": [],
+    "amtMismatches": [
+      {
+        "t": "TTSPL7224",
+        "sAmt": 3931.37,
+        "cAmt": 3933.52,
+        "diff": -2.15,
+        "sheetStart": "2026-07-02",
+        "sheetRemarks": "",
+        "sheetRows": [
+          {
+            "rent": 3931.366666666667,
+            "rate": 1999,
+            "start": "2026-07-02",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ],
+        "crm": [
+          {
+            "period": "2026-07",
+            "start": "2026-07-02",
+            "end": "2026-07-31",
+            "amount": 1934.52,
+            "serial": "R913GZE9",
+            "serial_id": 3883,
+            "rate": 1999
+          },
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1999,
+            "serial": "R913GZE9",
+            "serial_id": 3883,
+            "rate": 1999
+          }
+        ]
+      },
+      {
+        "t": "TTSPL7248",
+        "sAmt": 3931.37,
+        "cAmt": 3933.52,
+        "diff": -2.15,
+        "sheetStart": "2026-07-02",
+        "sheetRemarks": "",
+        "sheetRows": [
+          {
+            "rent": 3931.366666666667,
+            "rate": 1999,
+            "start": "2026-07-02",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ],
+        "crm": [
+          {
+            "period": "2026-07",
+            "start": "2026-07-02",
+            "end": "2026-07-31",
+            "amount": 1934.52,
+            "serial": "R913GZ4D",
+            "serial_id": 3907,
+            "rate": 1999
+          },
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1999,
+            "serial": "R913GZ4D",
+            "serial_id": 3907,
+            "rate": 1999
+          }
+        ]
+      },
+      {
+        "t": "TTSPL7270",
+        "sAmt": 3931.37,
+        "cAmt": 3933.52,
+        "diff": -2.15,
+        "sheetStart": "2026-07-02",
+        "sheetRemarks": "",
+        "sheetRows": [
+          {
+            "rent": 3931.366666666667,
+            "rate": 1999,
+            "start": "2026-07-02",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ],
+        "crm": [
+          {
+            "period": "2026-07",
+            "start": "2026-07-02",
+            "end": "2026-07-31",
+            "amount": 1934.52,
+            "serial": "R913GZE0",
+            "serial_id": 3929,
+            "rate": 1999
+          },
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1999,
+            "serial": "R913GZE0",
+            "serial_id": 3929,
+            "rate": 1999
+          }
+        ]
+      },
+      {
+        "t": "TTSPL5722",
+        "sAmt": 3931.37,
+        "cAmt": 3933.52,
+        "diff": -2.15,
+        "sheetStart": "2026-07-02",
+        "sheetRemarks": "",
+        "sheetRows": [
+          {
+            "rent": 3931.366666666667,
+            "rate": 1999,
+            "start": "2026-07-02",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ],
+        "crm": [
+          {
+            "period": "2026-07",
+            "start": "2026-07-02",
+            "end": "2026-07-31",
+            "amount": 1934.52,
+            "serial": "66PYCL3",
+            "serial_id": 2432,
+            "rate": 1999
+          },
+          {
+            "period": "2026-08",
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "amount": 1999,
+            "serial": "66PYCL3",
+            "serial_id": 2432,
+            "rate": 1999
+          }
+        ]
+      }
+    ],
+    "missingDetail": [
+      {
+        "t": "TTSPL6936",
+        "serial": "88R60J3",
+        "start": "2026-07-02",
+        "end": "2026-08-31",
+        "rate": 1999,
+        "rent": 3931.366666666667,
+        "remarks": "",
+        "rows": [
+          {
+            "rent": 3931.366666666667,
+            "rate": 1999,
+            "start": "2026-07-02",
+            "end": "2026-08-31",
+            "remarks": ""
+          }
+        ]
+      }
+    ],
+    "extraDetail": []
+  }
+]

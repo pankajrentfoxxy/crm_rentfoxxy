@@ -1,0 +1,12 @@
+metric,value
+crm_aug_invoices,189
+sheet_aug_active_assets,3036
+sheet_aug_rent_total,7510494.45
+crm_aug_subtotal_total,7310291.17
+overall_diff_sheet_minus_crm,200203.28
+asset_match_ok,2777
+asset_amount_diff,102
+asset_on_sheet_not_in_crm,157
+asset_in_crm_not_on_sheet,113
+customers_aligned,85
+customers_with_diff,107
