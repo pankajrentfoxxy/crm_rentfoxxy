@@ -1,6 +1,8 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { Loader2, ArrowDownToLine, ArrowUpFromLine, Building2, Users, Truck, Package, X } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Loader2, ArrowDownToLine, ArrowUpFromLine, Building2, Users, Truck, X, Search } from 'lucide-react';
 import api from '../../../utils/api';
+import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
+import { normalizeTtsplSearchInput } from '../../../utils/ttspl';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const yesterday = () => new Date(Date.now() - 86400000).toISOString().slice(0, 10);
@@ -25,40 +27,80 @@ const paramsForFilters = (f) => {
   return { ...base, all_time: 1 };
 };
 
-function KpiCard({ title, value, subtitle, icon: Icon, accent = 'blue', big = false, onClick }) {
-  const colors = {
-    blue: 'text-blue-600 bg-blue-100',
-    green: 'text-green-600 bg-green-100',
-    amber: 'text-amber-600 bg-amber-100',
-    purple: 'text-purple-600 bg-purple-100',
-    slate: 'text-slate-700 bg-slate-100',
-  };
-  const c = colors[accent] || colors.blue;
-  const clickable = typeof onClick === 'function';
+function SearchSelect({ value, onChange, options, getValue, getLabel, placeholder, allLabel }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const ref = useRef(null);
+
+  const selected = options.find((o) => String(getValue(o)) === String(value));
+  const label = selected ? getLabel(selected) : '';
+
+  useEffect(() => {
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, []);
+
+  const q = query.trim().toLowerCase();
+  const filtered = q ? options.filter((o) => getLabel(o).toLowerCase().includes(q)) : options;
+
+  const choose = (val) => { onChange(val); setOpen(false); setQuery(''); };
+
   return (
-    <div
-      role={clickable ? 'button' : undefined}
-      tabIndex={clickable ? 0 : undefined}
-      onClick={onClick}
-      onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } } : undefined}
-      className={`bg-white rounded-xl border border-gray-100 shadow-sm p-5 transition ${
-        clickable ? 'cursor-pointer hover:border-blue-300 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-400' : ''
-      }`}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-sm text-gray-500">{title}</p>
-          <p className={`${big ? 'text-3xl' : 'text-2xl'} font-bold mt-1 ${c.split(' ')[0]}`}>{value ?? 0}</p>
-          {subtitle ? <p className="text-xs text-gray-400 mt-1">{subtitle}</p> : null}
-          {clickable ? <p className="text-[11px] text-blue-500 mt-1.5">Click to view details</p> : null}
-        </div>
-        {Icon ? (
-          <div className={`shrink-0 w-10 h-10 rounded-full flex items-center justify-center ${c}`}>
-            <Icon className="w-5 h-5" />
-          </div>
-        ) : null}
+    <div ref={ref} className="relative min-w-[180px] max-w-[240px]">
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
+        <input
+          type="text"
+          value={open ? query : label}
+          placeholder={selected ? label : placeholder}
+          onFocus={() => { setOpen(true); setQuery(''); }}
+          onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+          className="w-full border border-gray-200 rounded-lg pl-8 pr-3 py-2 text-sm"
+        />
       </div>
+      {open && (
+        <div className="absolute z-30 mt-1 w-full max-h-60 overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg text-sm">
+          <button
+            type="button"
+            onClick={() => choose('')}
+            className={`block w-full text-left px-3 py-2 hover:bg-gray-50 ${!value ? 'bg-blue-50 text-blue-700' : 'text-gray-600'}`}
+          >
+            {allLabel}
+          </button>
+          {filtered.map((o) => (
+            <button
+              key={getValue(o)}
+              type="button"
+              onClick={() => choose(String(getValue(o)))}
+              className={`block w-full text-left px-3 py-2 hover:bg-gray-50 ${String(getValue(o)) === String(value) ? 'bg-blue-50 text-blue-700' : 'text-gray-700'}`}
+            >
+              {getLabel(o)}
+            </button>
+          ))}
+          {filtered.length === 0 && <p className="px-3 py-2 text-gray-400">No matches</p>}
+        </div>
+      )}
     </div>
+  );
+}
+
+function CountCell({ cell, onOpen, strong = false }) {
+  if (!cell) {
+    return <td className="px-4 py-3 text-center text-gray-300">—</td>;
+  }
+  return (
+    <td className="px-4 py-3 text-center">
+      <button
+        type="button"
+        onClick={() => onOpen(cell.type, cell.title)}
+        title={`View ${cell.title}`}
+        className={`inline-flex min-w-[3.5rem] justify-center rounded-lg px-3 py-1.5 font-bold text-gray-900 transition
+          hover:bg-blue-50 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-400 ${strong ? 'text-2xl' : 'text-xl'}`}
+      >
+        {cell.value ?? 0}
+      </button>
+    </td>
   );
 }
 
@@ -83,8 +125,22 @@ const PARTY_BADGE = {
   direct: 'bg-purple-50 text-purple-700',
 };
 
-function DetailModal({ open, title, loading, rows, onClose }) {
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
+
+function DetailModal({ open, title, loading, rows, onClose, onTtsplClick }) {
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+
+  useEffect(() => { setPage(1); }, [rows, open]);
+
   if (!open) return null;
+
+  const total = rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const start = (safePage - 1) * pageSize;
+  const pageRows = rows.slice(start, start + pageSize);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
@@ -95,16 +151,18 @@ function DetailModal({ open, title, loading, rows, onClose }) {
             <p className="text-xs text-gray-400 mt-0.5">
               {loading
                 ? 'Loading…'
-                : rows.length >= DETAIL_CAP
-                  ? `Showing first ${DETAIL_CAP.toLocaleString('en-IN')} — refine filters to narrow`
-                  : `${rows.length} laptop${rows.length === 1 ? '' : 's'}`}
+                : total === 0
+                  ? 'No laptops'
+                  : `${total.toLocaleString('en-IN')} laptop${total === 1 ? '' : 's'}`
+                    + (total >= DETAIL_CAP ? ' (capped — refine filters)' : '')
+                    + ` · showing ${(start + 1).toLocaleString('en-IN')}–${(start + pageRows.length).toLocaleString('en-IN')}`}
             </p>
           </div>
           <button type="button" onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500">
             <X className="w-5 h-5" />
           </button>
         </div>
-        <div className="overflow-auto">
+        <div className="overflow-auto flex-1 min-h-0">
           {loading ? (
             <div className="flex justify-center py-16"><Loader2 className="w-7 h-7 animate-spin text-[#534AB7]" /></div>
           ) : rows.length === 0 ? (
@@ -121,10 +179,32 @@ function DetailModal({ open, title, loading, rows, onClose }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {rows.map((r, i) => (
-                  <tr key={`${r.ttspl || r.serial_number || 'row'}-${i}`} className="hover:bg-gray-50">
-                    <td className="px-4 py-2.5 font-medium text-gray-900 whitespace-nowrap">{r.ttspl || '—'}</td>
-                    <td className="px-4 py-2.5 text-gray-600 whitespace-nowrap">{r.serial_number || '—'}</td>
+                {pageRows.map((r, i) => (
+                  <tr key={`${r.ttspl || r.serial_number || 'row'}-${start + i}`} className="hover:bg-gray-50">
+                    <td className="px-4 py-2.5 font-medium whitespace-nowrap">
+                      {r.ttspl ? (
+                        <button
+                          type="button"
+                          onClick={() => onTtsplClick?.(r.ttspl)}
+                          className="text-blue-600 hover:text-blue-800 hover:underline font-medium"
+                          title="View TTSPL history"
+                        >
+                          {r.ttspl}
+                        </button>
+                      ) : <span className="text-gray-900">—</span>}
+                    </td>
+                    <td className="px-4 py-2.5 whitespace-nowrap">
+                      {r.serial_number && r.ttspl ? (
+                        <button
+                          type="button"
+                          onClick={() => onTtsplClick?.(r.ttspl)}
+                          className="text-blue-600 hover:text-blue-800 hover:underline"
+                          title="View TTSPL history"
+                        >
+                          {r.serial_number}
+                        </button>
+                      ) : <span className="text-gray-600">{r.serial_number || '—'}</span>}
+                    </td>
                     <td className="px-4 py-2.5 text-gray-700">{formatConfig(r)}</td>
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-2">
@@ -141,6 +221,40 @@ function DetailModal({ open, title, loading, rows, onClose }) {
             </table>
           )}
         </div>
+
+        {!loading && total > 0 && (
+          <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-gray-100 text-sm">
+            <div className="flex items-center gap-2 text-gray-500">
+              <span>Rows per page</span>
+              <select
+                value={pageSize}
+                onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+                className="border border-gray-200 rounded-lg px-2 py-1 text-sm"
+              >
+                {PAGE_SIZE_OPTIONS.map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500">Page {safePage} of {totalPages}</span>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={safePage <= 1}
+                className="px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 disabled:opacity-40 hover:bg-gray-50"
+              >
+                Prev
+              </button>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={safePage >= totalPages}
+                className="px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 disabled:opacity-40 hover:bg-gray-50"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -156,6 +270,7 @@ export default function InwardOutwardSummaryPage() {
   const [detail, setDetail] = useState({ open: false, title: '' });
   const [detailRows, setDetailRows] = useState([]);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [historyTtspl, setHistoryTtspl] = useState(null);
 
   const set = (key, value) => setFilters((f) => ({ ...f, [key]: value }));
 
@@ -246,22 +361,30 @@ export default function InwardOutwardSummaryPage() {
             <input type="date" value={filters.to} onChange={(e) => setDate('to', e.target.value)}
               className="border border-gray-200 rounded-lg px-3 py-2 text-sm" />
           </label>
-          <label className="text-sm">
+          <div className="text-sm">
             <span className="block text-gray-500 text-xs mb-1">Customer</span>
-            <select value={filters.customer} onChange={(e) => set('customer', e.target.value)}
-              className="border border-gray-200 rounded-lg px-3 py-2 text-sm min-w-[160px] max-w-[220px]">
-              <option value="">All customers</option>
-              {options.customers.map((c) => <option key={c.customer_id} value={c.customer_id}>{c.customer_name}</option>)}
-            </select>
-          </label>
-          <label className="text-sm">
+            <SearchSelect
+              value={filters.customer}
+              onChange={(val) => set('customer', val)}
+              options={options.customers}
+              getValue={(c) => c.customer_id}
+              getLabel={(c) => c.customer_name}
+              placeholder="Search customer…"
+              allLabel="All customers"
+            />
+          </div>
+          <div className="text-sm">
             <span className="block text-gray-500 text-xs mb-1">Vendor</span>
-            <select value={filters.vendor} onChange={(e) => set('vendor', e.target.value)}
-              className="border border-gray-200 rounded-lg px-3 py-2 text-sm min-w-[150px] max-w-[220px]">
-              <option value="">All vendors</option>
-              {options.vendors.map((v) => <option key={v.vendor_id} value={v.vendor_id}>{v.business_name}</option>)}
-            </select>
-          </label>
+            <SearchSelect
+              value={filters.vendor}
+              onChange={(val) => set('vendor', val)}
+              options={options.vendors}
+              getValue={(v) => v.vendor_id}
+              getLabel={(v) => v.business_name}
+              placeholder="Search vendor…"
+              allLabel="All vendors"
+            />
+          </div>
           <button type="button" onClick={reset}
             className="border border-gray-200 text-gray-600 px-4 py-2 rounded-lg text-sm hover:bg-gray-50">Clear</button>
         </div>
@@ -271,42 +394,67 @@ export default function InwardOutwardSummaryPage() {
         <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-[#534AB7]" /></div>
       ) : (
         <>
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <ArrowDownToLine className="w-5 h-5 text-green-600" />
-              <h2 className="text-sm font-semibold text-gray-900">Inward Summary</h2>
-            </div>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              <KpiCard title="Total Inward Laptops" value={inward?.total} icon={ArrowDownToLine} accent="green" big
-                onClick={() => openDetail('inward_total', 'Total Inward Laptops')} />
-              <KpiCard title="Inward from Vendor" value={inward?.vendor} subtitle="GRN / Purchase" icon={Building2} accent="blue"
-                onClick={() => openDetail('inward_vendor', 'Inward from Vendor')} />
-              <KpiCard title="Inward from Customer" value={inward?.customer} subtitle="Support pickup / repair / return" icon={Users} accent="amber"
-                onClick={() => openDetail('inward_customer', 'Inward from Customer')} />
-              <KpiCard title="Direct Inward" value={inward?.direct} subtitle="Courier / Bluedart / Manual" icon={Truck} accent="purple"
-                onClick={() => openDetail('inward_direct', 'Direct Inward')} />
-            </div>
-          </div>
-
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <ArrowUpFromLine className="w-5 h-5 text-red-600" />
-              <h2 className="text-sm font-semibold text-gray-900">Outward Summary</h2>
-            </div>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              <KpiCard title="Total Outward Laptops" value={outward?.total} icon={ArrowUpFromLine} accent="slate" big
-                onClick={() => openDetail('outward_total', 'Total Outward Laptops')} />
-              <KpiCard title="Outward to Customer" value={outward?.customer} subtitle="Delivery challan dispatch" icon={Package} accent="blue"
-                onClick={() => openDetail('outward_customer', 'Outward to Customer')} />
-              <KpiCard title="Outward to Vendor" value={outward?.vendor} subtitle="Vendor / purchase return" icon={Building2} accent="amber"
-                onClick={() => openDetail('outward_vendor', 'Outward to Vendor')} />
-            </div>
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-gray-500 text-xs">
+                <tr>
+                  <th className="text-left font-medium px-4 py-3">Party</th>
+                  <th className="px-4 py-3 text-center">
+                    <span className="inline-flex items-center gap-1.5 text-green-700">
+                      <ArrowDownToLine className="w-4 h-4" /> Inward
+                    </span>
+                  </th>
+                  <th className="px-4 py-3 text-center">
+                    <span className="inline-flex items-center gap-1.5 text-red-600">
+                      <ArrowUpFromLine className="w-4 h-4" /> Outward
+                    </span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                <tr className="hover:bg-gray-50/50">
+                  <td className="px-4 py-3">
+                    <span className="inline-flex items-center gap-2 font-medium text-gray-800">
+                      <Building2 className="w-4 h-4 text-blue-500" /> Vendor
+                    </span>
+                    <p className="text-[11px] text-gray-400 ml-6">GRN / purchase · purchase return</p>
+                  </td>
+                  <CountCell cell={{ value: inward?.vendor, type: 'inward_vendor', title: 'Inward from Vendor' }} onOpen={openDetail} />
+                  <CountCell cell={{ value: outward?.vendor, type: 'outward_vendor', title: 'Outward to Vendor' }} onOpen={openDetail} />
+                </tr>
+                <tr className="hover:bg-gray-50/50">
+                  <td className="px-4 py-3">
+                    <span className="inline-flex items-center gap-2 font-medium text-gray-800">
+                      <Users className="w-4 h-4 text-amber-500" /> Customer
+                    </span>
+                    <p className="text-[11px] text-gray-400 ml-6">Support pickup / return · challan dispatch</p>
+                  </td>
+                  <CountCell cell={{ value: inward?.customer, type: 'inward_customer', title: 'Inward from Customer' }} onOpen={openDetail} />
+                  <CountCell cell={{ value: outward?.customer, type: 'outward_customer', title: 'Outward to Customer' }} onOpen={openDetail} />
+                </tr>
+                <tr className="hover:bg-gray-50/50">
+                  <td className="px-4 py-3">
+                    <span className="inline-flex items-center gap-2 font-medium text-gray-800">
+                      <Truck className="w-4 h-4 text-purple-500" /> Direct
+                    </span>
+                    <p className="text-[11px] text-gray-400 ml-6">Courier / Bluedart / manual</p>
+                  </td>
+                  <CountCell cell={{ value: inward?.direct, type: 'inward_direct', title: 'Direct Inward' }} onOpen={openDetail} />
+                  <CountCell cell={null} onOpen={openDetail} />
+                </tr>
+                <tr className="bg-gray-50">
+                  <td className="px-4 py-3 font-semibold text-gray-900">Total</td>
+                  <CountCell cell={{ value: inward?.total, type: 'inward_total', title: 'Total Inward Laptops' }} onOpen={openDetail} strong />
+                  <CountCell cell={{ value: outward?.total, type: 'outward_total', title: 'Total Outward Laptops' }} onOpen={openDetail} strong />
+                </tr>
+              </tbody>
+            </table>
           </div>
 
           <p className="text-[11px] text-gray-400">
             Inward counts use each source&apos;s receipt date (vendor GRN, warehouse-received pickups, inward ledger).
             Outward counts use the dispatch date on delivery challans and vendor repair DCs.
-            The Vendor and Customer filters scope results to the matching movement type.
+            The Vendor and Customer filters scope results to the matching movement type. Click any count to view the laptops.
           </p>
         </>
       )}
@@ -317,6 +465,13 @@ export default function InwardOutwardSummaryPage() {
         loading={detailLoading}
         rows={detailRows}
         onClose={() => setDetail({ open: false, title: '' })}
+        onTtsplClick={(ttspl) => setHistoryTtspl(normalizeTtsplSearchInput(ttspl))}
+      />
+
+      <TtsplHistoryDrawer
+        open={!!historyTtspl}
+        ttsplId={historyTtspl}
+        onClose={() => setHistoryTtspl(null)}
       />
     </div>
   );
