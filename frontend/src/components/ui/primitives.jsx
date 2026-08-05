@@ -102,7 +102,7 @@ export function Card({ className = '', children, ...props }) {
   );
 }
 
-export function StatCard({ label, value, icon: Icon, tone = 'blue', hint, onClick }) {
+export function StatCard({ label, value, icon: Icon, tone = 'blue', hint, onClick, active = false }) {
   const tones = {
     blue: 'text-blue-600 bg-blue-50',
     green: 'text-emerald-600 bg-emerald-50',
@@ -112,16 +112,29 @@ export function StatCard({ label, value, icon: Icon, tone = 'blue', hint, onClic
     teal: 'text-teal-600 bg-teal-50',
     gray: 'text-slate-600 bg-slate-100',
   };
+  const activeRing = {
+    blue: 'border-blue-500 bg-blue-50 ring-2 ring-blue-200',
+    green: 'border-emerald-500 bg-emerald-50 ring-2 ring-emerald-200',
+    amber: 'border-amber-500 bg-amber-50 ring-2 ring-amber-200',
+    red: 'border-red-500 bg-red-50 ring-2 ring-red-200',
+    purple: 'border-violet-500 bg-violet-50 ring-2 ring-violet-200',
+    teal: 'border-teal-500 bg-teal-50 ring-2 ring-teal-200',
+    gray: 'border-slate-500 bg-slate-50 ring-2 ring-slate-200',
+  };
   const Comp = onClick ? 'button' : 'div';
   return (
     <Comp
       type={onClick ? 'button' : undefined}
       onClick={onClick}
-      className={`text-left w-full bg-white border border-slate-200 rounded-2xl p-4 shadow-sm
+      aria-pressed={onClick ? !!active : undefined}
+      className={`text-left w-full rounded-2xl p-4 shadow-sm border
+        ${active
+          ? (activeRing[tone] || activeRing.blue)
+          : 'bg-white border-slate-200'}
         ${onClick ? 'hover:border-blue-300 hover:shadow transition cursor-pointer' : ''}`}
     >
       <div className="flex items-center justify-between gap-2">
-        <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">{label}</p>
+        <p className={`text-xs font-medium uppercase tracking-wide ${active ? (tones[tone]?.split(' ')[0] || 'text-blue-600') : 'text-slate-500'}`}>{label}</p>
         {Icon && <span className={`w-8 h-8 rounded-lg flex items-center justify-center ${tones[tone] || tones.blue}`}><Icon className="w-4 h-4" /></span>}
       </div>
       <p className="text-2xl font-bold text-slate-900 mt-2">{value}</p>

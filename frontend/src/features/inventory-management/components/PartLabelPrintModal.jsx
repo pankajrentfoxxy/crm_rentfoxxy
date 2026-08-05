@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import QRCode from 'qrcode';
 import { Info, Loader2, Minus, Plus, Printer, QrCode, X } from 'lucide-react';
@@ -11,32 +11,23 @@ const SIZE_OPTIONS = [
   { value: 20, label: '20 × 20 mm' },
 ];
 
-/** Height added under the QR when the PO number is printed as text. */
-const CAPTION_MM = 4;
-/** Matches the floor the PDF renderer will not shrink text below. */
-const MIN_CAPTION_PT = 3;
+/** Stickers per paper strip — fills left→right on one 102.6 × 15 mm page. */
+const COLUMNS = 4;
+/** Exact label printer media size. */
+const PAPER_WIDTH_MM = 102.6;
+const PAPER_HEIGHT_MM = 15;
+/** Serial/PO text band under each QR (within the 15 mm height). */
+const CAPTION_MM = 3.2;
 
-/**
- * Width of `text` in points at 1 pt, using the same bold face the PDF uses, so
- * we can tell the operator up front when a PO number will not fit the sticker
- * rather than quietly printing a truncated one.
- */
-let measureCtx = null;
-function textWidthPerPt(text) {
-  if (!measureCtx) {
-    const canvas = document.createElement('canvas');
-    measureCtx = canvas.getContext('2d');
-  }
-  if (!measureCtx) return String(text).length * 0.6;
-  measureCtx.font = 'bold 100px Helvetica, Arial, sans-serif';
-  return measureCtx.measureText(String(text)).width / 100;
-}
-
-function captionFits(caption, sizeMm) {
-  if (!caption) return true;
-  const usableMm = sizeMm - Math.min(0.3, sizeMm * 0.03) * 2;
-  const usablePt = (usableMm / 25.4) * 72;
-  return textWidthPerPt(caption) * MIN_CAPTION_PT <= usablePt;
+/** Human-readable line under the QR: serial preferred, else PO. */
+function captionFor(unit, { showSerial, showPo }) {
+  const serial = String(unit?.serialNumber || '').trim();
+  const po = String(unit?.poNumber || '').trim();
+  // Prefer serial when requested; fall back to PO so labels still show a number.
+  if (showSerial && serial) return serial;
+  if (showPo && po) return po;
+  if (showSerial && po) return po;
+  return '';    
 }
 
 /** The PO travels in the QR after a slash; the scanner strips it back off. */
@@ -97,14 +88,33 @@ function useQrPreviews(payloads) {
  * `units` is [{ code, title, subtitle, poNumber }]. The QR always carries the
  * Part ID; scanning it resolves the serial, specs, PO and vendor from the
  * system so nothing on the sticker can go stale. The PO can additionally be
- * carried in the symbol, printed as readable text under it, or both.
+ * carried in the symbol, printed as upright text under the QR, or both.
  */
-export default function PartLabelPrintModal({ open, units = [], onClose, defaultCopies = 2, title = 'Print QR labels' }) {
+function openPdfBlob(data, filename) {
+  const url = URL.createObjectURL(new Blob([data], { type: 'application/pdf' }));
+  const win = window.open(url, '_blank');
+  if (!win) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    return { url, opened: false };
+  }
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  return { url, opened: true, win };
+}
+
+export default function PartLabelPrintModal({ open, units = [], onClose, defaultCopies = 4, title = 'Print QR labels' }) {
   const [copies, setCopies] = useState({});
-  const [sizeMm, setSizeMm] = useState(10);
+  const [sizeMm, setSizeMm] = useState(15);
   const [poInQr, setPoInQr] = useState(false);
-  const [poUnderQr, setPoUnderQr] = useState(true);
+  const [showSerialOnLabel, setShowSerialOnLabel] = useState(true);
+  const [showPoOnLabel, setShowPoOnLabel] = useState(true);
   const [busy, setBusy] = useState(false);
+  /** Guided one-by-one queue: list of units still waiting, current index into original queue. */
+  const [oneByOne, setOneByOne] = useState(null);
+  const oneByOneBusy = useRef(false);
 
   const rows = useMemo(
     () => units
@@ -113,15 +123,16 @@ export default function PartLabelPrintModal({ open, units = [], onClose, default
         title: u?.title || '',
         subtitle: u?.subtitle || '',
         poNumber: String(u?.poNumber || '').trim(),
+        serialNumber: String(u?.serialNumber || '').trim(),
       }))
       .filter((u) => u.code),
     [units]
   );
 
   const anyPo = rows.some((u) => u.poNumber);
+  const anySerial = rows.some((u) => u.serialNumber);
   const usePoInQr = poInQr && anyPo;
-  const usePoUnderQr = poUnderQr && anyPo;
-  const captionMm = usePoUnderQr ? CAPTION_MM : 0;
+  const useCaption = (showSerialOnLabel && anySerial) || (showPoOnLabel && anyPo);
 
   const payloads = useMemo(
     () => rows.map((u) => encodedFor(u, usePoInQr)),
@@ -132,16 +143,18 @@ export default function PartLabelPrintModal({ open, units = [], onClose, default
   useEffect(() => {
     if (!open) return;
     setCopies(Object.fromEntries(rows.map((u) => [u.code, defaultCopies])));
+    setOneByOne(null);
   }, [open, rows, defaultCopies]);
 
   useEffect(() => {
     if (!open) return undefined;
-    const onKey = (e) => { if (e.key === 'Escape' && !busy) onClose?.(); };
+    const onKey = (e) => { if (e.key === 'Escape' && !busy && !oneByOne) onClose?.(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, busy, onClose]);
+  }, [open, busy, oneByOne, onClose]);
 
   const totalLabels = rows.reduce((sum, u) => sum + (Number(copies[u.code]) || 0), 0);
+  const rowCount = Math.ceil(totalLabels / COLUMNS) || 0;
 
   // Worst case across the batch, since one roll prints them all.
   const density = useMemo(() => {
@@ -149,11 +162,6 @@ export default function PartLabelPrintModal({ open, units = [], onClose, default
     const longest = payloads.reduce((a, b) => (b.length > a.length ? b : a), payloads[0]);
     return symbolInfo(longest, sizeMm);
   }, [payloads, sizeMm]);
-
-  const overlongPo = useMemo(() => {
-    if (!usePoUnderQr) return null;
-    return rows.find((u) => u.poNumber && !captionFits(u.poNumber, sizeMm))?.poNumber || null;
-  }, [rows, usePoUnderQr, sizeMm]);
 
   function setCopiesFor(code, value) {
     const n = Math.max(0, Math.min(50, Number(value) || 0));
@@ -165,39 +173,60 @@ export default function PartLabelPrintModal({ open, units = [], onClose, default
     setCopies(Object.fromEntries(rows.map((u) => [u.code, n])));
   }
 
-  async function handlePrint() {
-    const labels = rows
-      .map((u) => ({
-        code: encodedFor(u, usePoInQr),
-        caption: usePoUnderQr ? u.poNumber : '',
-        copies: Number(copies[u.code]) || 0,
-      }))
-      .filter((l) => l.copies > 0);
+  function labelPayloadFor(u) {
+    return {
+      code: encodedFor(u, usePoInQr),
+      caption: captionFor(u, { showSerial: showSerialOnLabel, showPo: showPoOnLabel }),
+      copies: Number(copies[u.code]) || 0,
+    };
+  }
+
+  const pdfOptions = () => ({
+    qrMm: sizeMm,
+    columns: COLUMNS,
+    captionMm: useCaption ? CAPTION_MM : 0,
+    paperWidthMm: PAPER_WIDTH_MM,
+    paperHeightMm: PAPER_HEIGHT_MM,
+  });
+
+  async function printLabels(labels, { filename, successMsg } = {}) {
+    const { data } = await buildPartLabelsPdf(labels, pdfOptions());
+    const stickerCount = labels.reduce((s, l) => s + (Number(l.copies) || 0), 0);
+    const result = openPdfBlob(data, filename || `part-labels-${Date.now()}.pdf`);
+    if (!result.opened) {
+      toast.success(successMsg || `${stickerCount} label(s) downloaded`);
+    } else {
+      toast.success(successMsg || `${stickerCount} label(s) ready — use your label printer's print dialog`);
+      try {
+        result.win?.focus();
+        setTimeout(() => {
+          try { result.win?.print?.(); } catch { /* PDF viewer may block auto-print */ }
+        }, 400);
+      } catch { /* ignore */ }
+    }
+    return result;
+  }
+
+  async function printUnit(unit) {
+    const label = labelPayloadFor(unit);
+    if (!label.copies) throw new Error('no_copies');
+    await printLabels([label], {
+      filename: `part-label-${unit.code}.pdf`,
+      successMsg: `${unit.code}: ${label.copies} sticker(s) ready to print`,
+    });
+  }
+
+  async function handlePrintAll() {
+    const labels = rows.map((u) => labelPayloadFor(u)).filter((l) => l.copies > 0);
     if (!labels.length) {
       toast.error('Set at least one copy to print');
       return;
     }
-
     setBusy(true);
     try {
-      const { data } = await buildPartLabelsPdf(labels, {
-        widthMm: sizeMm,
-        heightMm: sizeMm + captionMm,
-        captionMm,
+      await printLabels(labels, {
+        successMsg: `${totalLabels} label(s) ready — use your label printer's print dialog`,
       });
-      const url = URL.createObjectURL(new Blob([data], { type: 'application/pdf' }));
-      const win = window.open(url, '_blank');
-      if (!win) {
-        // Popup blocked — fall back to a download so the job is not lost.
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `part-labels-${Date.now()}.pdf`;
-        a.click();
-        toast.success(`${totalLabels} label(s) downloaded`);
-      } else {
-        toast.success(`${totalLabels} label(s) ready — use your label printer's print dialog`);
-      }
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
     } catch (e) {
       toast.error(e.response?.data?.message || 'Could not build the label sheet');
     } finally {
@@ -205,9 +234,87 @@ export default function PartLabelPrintModal({ open, units = [], onClose, default
     }
   }
 
+  /** Print one part from the list (its configured copy count). */
+  async function handlePrintOnePart(unit) {
+    if (busy || oneByOneBusy.current) return;
+    setBusy(true);
+    try {
+      await printUnit(unit);
+    } catch (e) {
+      if (e?.message === 'no_copies') toast.error('Set at least one copy for this part');
+      else toast.error(e.response?.data?.message || `Could not print ${unit.code}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * Start guided one-by-one printing: each part opens its own print job so
+   * the operator can stick labels before moving to the next part.
+   */
+  async function startOneByOne() {
+    const queue = rows.filter((u) => (Number(copies[u.code]) || 0) > 0);
+    if (!queue.length) {
+      toast.error('Set at least one copy to print');
+      return;
+    }
+    oneByOneBusy.current = true;
+    setBusy(true);
+    setOneByOne({ queue, index: 0, phase: 'printing' });
+    try {
+      await printUnit(queue[0]);
+      if (queue.length === 1) {
+        toast.success('Finished — printed 1 part');
+        setOneByOne(null);
+      } else {
+        setOneByOne({ queue, index: 0, phase: 'awaiting_next' });
+      }
+    } catch (e) {
+      toast.error(e.response?.data?.message || `Could not print ${queue[0].code}`);
+      setOneByOne(null);
+    } finally {
+      oneByOneBusy.current = false;
+      setBusy(false);
+    }
+  }
+
+  async function printNextOneByOne() {
+    if (!oneByOne || oneByOneBusy.current) return;
+    const nextIndex = oneByOne.index + 1;
+    const { queue } = oneByOne;
+    const unit = queue[nextIndex];
+    if (!unit) {
+      setOneByOne(null);
+      return;
+    }
+
+    oneByOneBusy.current = true;
+    setBusy(true);
+    setOneByOne({ queue, index: nextIndex, phase: 'printing' });
+    try {
+      await printUnit(unit);
+      if (nextIndex + 1 >= queue.length) {
+        toast.success(`Finished — printed ${queue.length} part(s) one by one`);
+        setOneByOne(null);
+      } else {
+        setOneByOne({ queue, index: nextIndex, phase: 'awaiting_next' });
+      }
+    } catch (e) {
+      toast.error(e.response?.data?.message || `Could not print ${unit.code}`);
+      setOneByOne({ queue, index: nextIndex, phase: 'awaiting_next' });
+    } finally {
+      oneByOneBusy.current = false;
+      setBusy(false);
+    }
+  }
+
   if (!open) return null;
 
-  const labelDims = `${sizeMm} × ${sizeMm + captionMm} mm`;
+  const rowDims = `${PAPER_WIDTH_MM} × ${PAPER_HEIGHT_MM} mm`;
+  const oneByOneNext = oneByOne?.phase === 'awaiting_next'
+    ? oneByOne.queue[oneByOne.index + 1]
+    : null;
+  const oneByOneCurrent = oneByOne ? oneByOne.queue[oneByOne.index] : null;
 
   return (
     <div
@@ -215,7 +322,7 @@ export default function PartLabelPrintModal({ open, units = [], onClose, default
       role="dialog"
       aria-modal="true"
       aria-label={title}
-      onClick={(e) => { if (!busy && e.target === e.currentTarget) onClose?.(); }}
+      onClick={(e) => { if (!busy && !oneByOne && e.target === e.currentTarget) onClose?.(); }}
     >
       <div className="relative w-full max-w-2xl rounded-2xl bg-white shadow-xl border border-slate-200 overflow-hidden my-8">
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 bg-slate-50">
@@ -226,14 +333,15 @@ export default function PartLabelPrintModal({ open, units = [], onClose, default
             <div>
               <h2 className="text-base font-semibold text-slate-900">{title}</h2>
               <p className="text-[11px] text-slate-500">
-                {rows.length} unit{rows.length === 1 ? '' : 's'} · {totalLabels} sticker{totalLabels === 1 ? '' : 's'} · {labelDims}
+                {rows.length} unit{rows.length === 1 ? '' : 's'} · {totalLabels} sticker{totalLabels === 1 ? '' : 's'}
+                {' · '}paper {rowDims} · {COLUMNS} × {sizeMm} mm QR · {rowCount} strip{rowCount === 1 ? '' : 's'}
               </p>
             </div>
           </div>
           <button
             type="button"
             className="p-2 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 min-h-[44px] min-w-[44px] grid place-items-center"
-            onClick={() => !busy && onClose?.()}
+            onClick={() => { if (!busy) { setOneByOne(null); onClose?.(); } }}
             aria-label="Close"
           >
             <X className="w-4 h-4" />
@@ -244,7 +352,7 @@ export default function PartLabelPrintModal({ open, units = [], onClose, default
           <div className="flex flex-wrap items-end gap-3">
             <div>
               <label className="block text-xs font-semibold text-slate-600 mb-1" htmlFor="label-size">
-                Sticker size
+                QR size
               </label>
               <select
                 id="label-size"
@@ -261,13 +369,17 @@ export default function PartLabelPrintModal({ open, units = [], onClose, default
             <div>
               <span className="block text-xs font-semibold text-slate-600 mb-1">Copies for every unit</span>
               <div className="flex items-center gap-1.5">
-                {[1, 2, 3].map((n) => (
+                {[1, 2, 3, 4].map((n) => (
                   <button
                     key={n}
                     type="button"
-                    disabled={busy}
+                    disabled={busy || Boolean(oneByOne)}
                     onClick={() => setAllCopies(n)}
-                    className="px-3 py-2 rounded-xl border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                    className={`px-3 py-2 rounded-xl border text-sm font-semibold min-w-[2.75rem] ${
+                      rows.length && rows.every((u) => Number(copies[u.code]) === n)
+                        ? 'border-teal-600 bg-teal-50 text-teal-800'
+                        : 'border-slate-200 text-slate-700 hover:bg-slate-50'
+                    }`}
                   >
                     {n}×
                   </button>
@@ -276,22 +388,60 @@ export default function PartLabelPrintModal({ open, units = [], onClose, default
             </div>
           </div>
 
-          {anyPo ? (
+          {/* Visual: one 102.6 × 15 mm strip = 4 QRs left → right */}
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+            <p className="text-[11px] font-semibold text-slate-600 m-0 mb-2">
+              Paper {rowDims} · 4 QR codes in one row (col 1 → 4)
+            </p>
+            <div className="grid grid-cols-4 gap-1">
+              {[1, 2, 3, 4].map((col) => (
+                <div
+                  key={col}
+                  className="flex flex-col items-center justify-center rounded-md border border-dashed border-teal-300 bg-white px-1 py-1.5 min-h-[52px]"
+                >
+                  <span className="w-7 h-7 shrink-0 rounded-sm bg-slate-800/90" aria-hidden />
+                  <span className="mt-0.5 text-[7px] font-bold text-slate-700 leading-none truncate max-w-full">
+                    {useCaption ? 'Serial/PO' : ' '}
+                  </span>
+                  <span className="text-[9px] font-semibold text-teal-700">{col}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {(anyPo || anySerial) ? (
             <fieldset className="rounded-xl border border-slate-200 p-3.5 space-y-2.5">
-              <legend className="px-1.5 text-xs font-semibold text-slate-600">Purchase order on the label</legend>
+              <legend className="px-1.5 text-xs font-semibold text-slate-600">Text under the QR</legend>
 
               <label className="flex items-start gap-2.5 text-sm cursor-pointer">
                 <input
                   type="checkbox"
                   className="mt-0.5"
-                  checked={poUnderQr}
-                  disabled={busy}
-                  onChange={(e) => setPoUnderQr(e.target.checked)}
+                  checked={showSerialOnLabel}
+                  disabled={busy || !anySerial}
+                  onChange={(e) => setShowSerialOnLabel(e.target.checked)}
                 />
                 <span>
-                  <span className="font-medium text-slate-800">Print the PO number under the QR</span>
+                  <span className="font-medium text-slate-800">Print serial number under the QR</span>
                   <span className="block text-[11px] text-slate-500">
-                    Readable without a scanner. Adds {CAPTION_MM} mm of height and leaves the QR at full size.
+                    Small upright text. Preferred when a serial exists.
+                    {!anySerial ? ' (none on these units)' : ''}
+                  </span>
+                </span>
+              </label>
+
+              <label className="flex items-start gap-2.5 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={showPoOnLabel}
+                  disabled={busy || !anyPo}
+                  onChange={(e) => setShowPoOnLabel(e.target.checked)}
+                />
+                <span>
+                  <span className="font-medium text-slate-800">Print PO number under the QR</span>
+                  <span className="block text-[11px] text-slate-500">
+                    Used when serial is off or missing (e.g. SP-PO-0499). Tiny font so it is not cut at the edge.
                   </span>
                 </span>
               </label>
@@ -301,26 +451,16 @@ export default function PartLabelPrintModal({ open, units = [], onClose, default
                   type="checkbox"
                   className="mt-0.5"
                   checked={poInQr}
-                  disabled={busy}
+                  disabled={busy || !anyPo}
                   onChange={(e) => setPoInQr(e.target.checked)}
                 />
                 <span>
                   <span className="font-medium text-slate-800">Include the PO number inside the QR</span>
                   <span className="block text-[11px] text-slate-500">
-                    A phone camera outside the CRM then shows the PO too — at the cost of a denser symbol.
+                    Encodes PO in the QR payload — denser symbol; leave off unless you need it.
                   </span>
                 </span>
               </label>
-
-              {overlongPo ? (
-                <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2 m-0 flex items-start gap-1.5">
-                  <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-                  <span>
-                    &ldquo;{overlongPo}&rdquo; is too long to print legibly on a {sizeMm} mm sticker and would be
-                    cut short. Pick a 12 mm or wider sticker, or leave the PO to the QR only.
-                  </span>
-                </p>
-              ) : null}
 
               {density ? (
                 <p className={`text-[11px] m-0 flex items-start gap-1.5 rounded-lg px-2.5 py-2 ${
@@ -333,7 +473,7 @@ export default function PartLabelPrintModal({ open, units = [], onClose, default
                     Version {density.version} symbol, {density.modules} modules across {sizeMm} mm
                     — {density.moduleMm.toFixed(3)} mm per module ({density.dots300.toFixed(1)} dots on a 300 dpi printer).
                     {density.dots300 < 3.4
-                      ? ' That is tight for a 203 dpi printer; use a 12 mm sticker or turn off the PO inside the QR.'
+                      ? ' That is tight for a 203 dpi printer; turn off the PO inside the QR.'
                       : ''}
                   </span>
                 </p>
@@ -342,10 +482,46 @@ export default function PartLabelPrintModal({ open, units = [], onClose, default
           ) : null}
 
           <p className="text-[11px] text-slate-500 m-0 leading-relaxed">
-            Scanning a sticker pulls the serial, part details, PO and vendor from the system, so the code stays
-            small enough to read at {sizeMm} mm and the details never go stale. Stick two on each part so a
-            damaged label does not lose the unit.
+            Set printer paper to <strong>{rowDims}</strong>, QR size <strong>{sizeMm} × {sizeMm} mm</strong>,
+            copies <strong>4×</strong>. One PDF page = one strip with 4 QRs.
+            Print at <strong>actual size / 100%</strong> (no fit-to-page).
           </p>
+
+          {oneByOne ? (
+            <div className="rounded-xl border border-teal-200 bg-teal-50 px-3.5 py-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0 text-sm text-teal-900">
+                <p className="font-semibold m-0">
+                  One by one · part {oneByOne.index + 1} of {oneByOne.queue.length}
+                </p>
+                <p className="text-xs m-0 mt-0.5 truncate">
+                  {oneByOne.phase === 'printing'
+                    ? `Printing ${oneByOneCurrent?.code}…`
+                    : `Printed ${oneByOneCurrent?.code}. Next: ${oneByOneNext?.code || '—'}`}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setOneByOne(null)}
+                  className="px-3 py-2 rounded-xl border border-teal-200 bg-white text-sm font-semibold text-teal-800 hover:bg-teal-100"
+                >
+                  Cancel
+                </button>
+                {oneByOne.phase === 'awaiting_next' && oneByOneNext ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={printNextOneByOne}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold"
+                  >
+                    {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
+                    Print next ({oneByOneNext.code})
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
 
           <div className="max-h-[min(24rem,calc(100vh-24rem))] overflow-y-auto rounded-xl border border-slate-100 divide-y divide-slate-100">
             {rows.length === 0 ? (
@@ -355,15 +531,15 @@ export default function PartLabelPrintModal({ open, units = [], onClose, default
               return (
                 <div key={u.code} className="flex items-center gap-3 px-3 py-2.5">
                   <div
-                    className="shrink-0 rounded-lg border border-slate-200 bg-white flex flex-col items-center justify-center overflow-hidden p-0.5"
-                    style={{ width: 48, height: 48 + (usePoUnderQr && u.poNumber ? 10 : 0) }}
+                    className="shrink-0 rounded-lg border border-slate-200 bg-white flex flex-col items-center justify-center overflow-hidden px-1 py-1"
+                    style={{ width: 48, height: 52 }}
                   >
                     {previews[payload]
-                      ? <img src={previews[payload]} alt={`QR for ${u.code}`} className="w-full flex-1 object-contain min-h-0" />
+                      ? <img src={previews[payload]} alt={`QR for ${u.code}`} className="w-8 h-8 object-contain" />
                       : <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
-                    {usePoUnderQr && u.poNumber ? (
-                      <span className="block w-full text-center font-bold text-slate-900 leading-none truncate" style={{ fontSize: 5 }}>
-                        {u.poNumber}
+                    {captionFor(u, { showSerial: showSerialOnLabel, showPo: showPoOnLabel }) ? (
+                      <span className="font-medium text-slate-900 leading-none truncate max-w-full" style={{ fontSize: 5.5 }}>
+                        {captionFor(u, { showSerial: showSerialOnLabel, showPo: showPoOnLabel })}
                       </span>
                     ) : null}
                   </div>
@@ -378,7 +554,7 @@ export default function PartLabelPrintModal({ open, units = [], onClose, default
                   <div className="flex items-center gap-1 shrink-0">
                     <button
                       type="button"
-                      disabled={busy}
+                      disabled={busy || Boolean(oneByOne)}
                       onClick={() => setCopiesFor(u.code, (Number(copies[u.code]) || 0) - 1)}
                       className="w-9 h-9 grid place-items-center rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
                       aria-label={`One less copy of ${u.code}`}
@@ -390,19 +566,30 @@ export default function PartLabelPrintModal({ open, units = [], onClose, default
                       min={0}
                       max={50}
                       value={copies[u.code] ?? 0}
-                      disabled={busy}
+                      disabled={busy || Boolean(oneByOne)}
                       onChange={(e) => setCopiesFor(u.code, e.target.value)}
                       className="w-14 text-center border border-slate-200 rounded-lg px-1 py-2 text-sm tabular-nums"
                       aria-label={`Copies of ${u.code}`}
                     />
                     <button
                       type="button"
-                      disabled={busy}
+                      disabled={busy || Boolean(oneByOne)}
                       onClick={() => setCopiesFor(u.code, (Number(copies[u.code]) || 0) + 1)}
                       className="w-9 h-9 grid place-items-center rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
                       aria-label={`One more copy of ${u.code}`}
                     >
                       <Plus className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy || Boolean(oneByOne) || !(Number(copies[u.code]) > 0)}
+                      onClick={() => handlePrintOnePart(u)}
+                      className="ml-1 inline-flex items-center gap-1 px-2.5 h-9 rounded-lg border border-teal-200 bg-teal-50 text-teal-800 text-xs font-semibold hover:bg-teal-100 disabled:opacity-40"
+                      title={`Print only ${u.code}`}
+                      aria-label={`Print ${u.code} only`}
+                    >
+                      <Printer className="w-3.5 h-3.5" />
+                      Print
                     </button>
                   </div>
                 </div>
@@ -414,19 +601,29 @@ export default function PartLabelPrintModal({ open, units = [], onClose, default
             <button
               type="button"
               disabled={busy}
-              onClick={() => onClose?.()}
+              onClick={() => { setOneByOne(null); onClose?.(); }}
               className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 text-sm font-semibold hover:bg-slate-50 min-h-[44px]"
             >
               Close
             </button>
             <button
               type="button"
-              disabled={busy || totalLabels === 0}
-              onClick={handlePrint}
+              disabled={busy || totalLabels === 0 || Boolean(oneByOne)}
+              onClick={startOneByOne}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-teal-600 text-teal-800 bg-white hover:bg-teal-50 text-sm font-semibold disabled:opacity-40 min-h-[44px]"
+              title="Open a separate print job for each part"
+            >
+              {busy && oneByOne ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
+              Print one by one
+            </button>
+            <button
+              type="button"
+              disabled={busy || totalLabels === 0 || Boolean(oneByOne)}
+              onClick={handlePrintAll}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold disabled:opacity-40 min-h-[44px]"
             >
-              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
-              Print {totalLabels || ''} label{totalLabels === 1 ? '' : 's'}
+              {busy && !oneByOne ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
+              Print all ({totalLabels || 0})
             </button>
           </div>
         </div>

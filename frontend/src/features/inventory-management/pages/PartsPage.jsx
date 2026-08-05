@@ -341,6 +341,7 @@ function InstancesTab() {
       title: labelFor.part_name,
       subtitle: labelFor.serial_number ? `Serial ${labelFor.serial_number}` : 'No serial',
       poNumber: labelFor.purchase_order_number || '',
+      serialNumber: labelFor.serial_number || '',
     }] : []),
     [labelFor]
   );

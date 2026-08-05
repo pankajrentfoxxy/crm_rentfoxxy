@@ -68,6 +68,7 @@ export default function PartsDrilldownPanel({ query, onClose }) {
       title: r.part_name,
       subtitle: r.serial_number ? `Serial ${r.serial_number}` : 'No serial',
       poNumber: r.purchase_order_number || '',
+      serialNumber: r.serial_number || '',
     })),
     [rows]
   );
@@ -101,8 +102,9 @@ export default function PartsDrilldownPanel({ query, onClose }) {
                   type="button"
                   onClick={() => setLabelsOpen(true)}
                   className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                  title="Open label printer — choose 4× copies or print one by one"
                 >
-                  <Printer className="w-4 h-4" /> Labels
+                  <Printer className="w-4 h-4" /> Print labels
                 </button>
               ) : null}
               <button

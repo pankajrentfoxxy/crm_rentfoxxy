@@ -6,7 +6,15 @@
  * serial, current status and where it ended up installed.
  */
 const pool = require('../config/db');
-const { buildLabelPdf, renderQrPng, DEFAULT_LABEL_MM } = require('../services/partLabelService');
+const {
+  buildLabelPdf,
+  renderQrPng,
+  DEFAULT_QR_MM,
+  DEFAULT_COLUMNS,
+  DEFAULT_CAPTION_MM,
+  PAPER_WIDTH_MM,
+  PAPER_HEIGHT_MM,
+} = require('../services/partLabelService');
 
 const UNIT_SELECT = `
   SELECT pi.instance_id, pi.prt_id, pi.serial_number, pi.asset_code, pi.part_id,
@@ -192,21 +200,36 @@ exports.getUnitQrPng = async (req, res) => {
 };
 
 // POST /api/parts/labels/print
-// Body: { labels: [{ code, caption?, copies }], width_mm?, height_mm?, caption_mm? }
+// Body: {
+//   labels: [{ code, caption?, copies }],
+//   qr_mm?, columns?, caption_mm?,
+//   paper_width_mm? (default 102.6), paper_height_mm? (default 15)
+// }
 exports.printPartLabels = async (req, res) => {
   try {
-    const { labels, width_mm, height_mm, caption_mm } = req.body || {};
+    const body = req.body || {};
+    const { labels } = body;
     if (!Array.isArray(labels) || !labels.length) {
       return res.status(400).json({ success: false, message: 'labels required' });
     }
 
-    const widthMm = Math.max(6, Math.min(100, Number(width_mm) || DEFAULT_LABEL_MM));
-    const captionMm = Math.max(0, Math.min(20, Number(caption_mm) || 0));
-    // The caption band is added on top of the QR area, so the symbol keeps its
-    // full size instead of being squeezed to make room for the text.
-    const heightMm = Math.max(6, Math.min(120, Number(height_mm) || widthMm + captionMm));
+    const qrMm = Math.max(8, Math.min(40, Number(body.qr_mm ?? body.width_mm) || DEFAULT_QR_MM));
+    const columns = Math.max(1, Math.min(8, Number(body.columns) || DEFAULT_COLUMNS));
+    const paperWidthMm = Math.max(40, Math.min(300, Number(body.paper_width_mm) || PAPER_WIDTH_MM));
+    const paperHeightMm = Math.max(10, Math.min(80, Number(body.paper_height_mm ?? body.cell_height_mm ?? body.height_mm) || PAPER_HEIGHT_MM));
+    // Caption under QR (upright). 0 = QR fills the full 15 mm height.
+    const wantsCaption = Array.isArray(labels) && labels.some((l) => String(l?.caption || '').trim());
+    const captionMm = wantsCaption
+      ? Math.max(0, Math.min(8, Number(body.caption_mm) || DEFAULT_CAPTION_MM))
+      : 0;
 
-    const pdf = await buildLabelPdf(labels, { widthMm, heightMm, captionMm });
+    const pdf = await buildLabelPdf(labels, {
+      qrMm,
+      columns,
+      captionMm,
+      paperWidthMm,
+      paperHeightMm,
+    });
 
     // Track reprints so a unit whose label went missing is visible in inventory.
     // A code may carry a "/PO" suffix, so match on the Part ID part only.

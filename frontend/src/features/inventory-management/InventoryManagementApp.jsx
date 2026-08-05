@@ -22,6 +22,7 @@ import PartsApprovalPage from './pages/PartsApprovalPage';
 import PartsDashboardPage from './pages/PartsDashboardPage';
 import CustomerAssetsPage from './pages/CustomerAssetsPage';
 import PartsMovementHistoryPage from './pages/PartsMovementHistoryPage';
+import MasterDataDashboardPage from './pages/MasterDataDashboardPage';
 import TtsplHistorySearchPage from './pages/TtsplHistorySearchPage';
 
 const g = (section, node) => (
@@ -67,6 +68,7 @@ export default function InventoryManagementApp() {
         <Route path="serial-number-status" element={g('inventory_management', <SerialNumberStatusPage />)} />
         <Route path="universal-search" element={g('inventory_management', <UniversalSearchPage />)} />
         <Route path="npa-assets" element={g('inventory_management', <NpaAssetsPage />)} />
+        <Route path="master-data" element={g('inventory_management', <MasterDataDashboardPage />)} />
         <Route path="ttspl-history" element={g('ttspl_history', <TtsplHistorySearchPage />)} />
 
         <Route path="*" element={<InventoryIndexRedirect />} />

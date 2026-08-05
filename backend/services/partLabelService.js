@@ -1,33 +1,32 @@
 /**
  * QR labels for physical spare-part units.
  *
- * Symbol size is the binding constraint. A Part ID on its own
- * ("PRT-20260729-0042", 17 alphanumeric characters) fits a version-1 symbol:
- * 21 modules plus the 4-module quiet zone is 29 modules, so on a 10 mm sticker
- * each module is 0.345 mm — about 4 dots on a 300 dpi label printer, which
- * scans reliably.
+ * Media: one continuous strip / sheet row of 102.6 mm × 15 mm.
+ * Layout: exactly 4 QR codes of 15 × 15 mm across that strip (left → right).
+ * Optional PO text sits under each QR as normal (not rotated) text. Because the
+ * strip is only 15 mm tall, the QR is nudged up and slightly shortened when a
+ * caption is printed so both fit on the same label.
  *
- * Adding the PO number ("PRT-20260729-0042/SP-PO-0042") pushes it to a
- * version-2 symbol: 25 modules plus quiet zone is 33, so each module drops to
- * 0.303 mm (~3.6 dots at 300 dpi). Still readable on a 300 dpi printer, but
- * with less margin for print quality, so it is opt-in rather than the default.
- *
- * The alternative — and the more legible one — is `captionMm`, which reserves a
- * band under the QR for the PO number in plain text. That leaves the symbol at
- * full size and lets a human read the PO without any scanner at all.
- *
- * Everything else about a unit (serial, specs, vendor, warranty) is resolved
- * from the API on scan, so it is always current rather than frozen at print time.
+ * Everything else about a unit is resolved from the API on scan.
  */
 const PDFDocument = require('pdfkit');
 const QRCode = require('qrcode');
 
 const MM_TO_PT = 72 / 25.4;
-const DEFAULT_LABEL_MM = 10;
+/** Exact printer media size for one row of 4 labels. */
+const PAPER_WIDTH_MM = 102.6;
+const PAPER_HEIGHT_MM = 15;
+/** QR square when no caption is drawn underneath. */
+const DEFAULT_QR_MM = 15;
+const DEFAULT_COLUMNS = 4;
+/** Band reserved under the QR for upright serial/PO text (within the 15 mm height). */
+const DEFAULT_CAPTION_MM = 3.2;
+/** Keep text clear of the die-cut / thermal edge so digits are not clipped. */
+const EDGE_PAD_MM = 0.8;
 const MAX_LABELS_PER_JOB = 500;
-const CAPTION_FONT = 'Helvetica-Bold';
+/** Regular weight reads cleaner than bold at ~3 pt on thermal labels. */
+const CAPTION_FONT = 'Helvetica';
 
-/** High-resolution PNG so the label printer has more dots than it needs. */
 async function renderQrPng(text, pixels = 600) {
   return QRCode.toBuffer(String(text), {
     type: 'png',
@@ -46,34 +45,85 @@ async function renderQrDataUrl(text, pixels = 240) {
   });
 }
 
-/**
- * Largest font size at which `text` still fits `maxWidth`, capped by the height
- * of the caption band. Small label printers cannot resolve much below 3.5 pt.
- */
+/** Prefer a small font that fits width; never grow large enough to hit the cut edge. */
 function fitFontSize(doc, text, maxWidth, maxHeight) {
-  let size = Math.min(maxHeight * 0.78, 7);
+  let size = Math.min(maxHeight * 0.7, 3.2);
   doc.font(CAPTION_FONT);
-  while (size > 3 && doc.fontSize(size).widthOfString(text) > maxWidth) {
-    size -= 0.1;
+  while (size > 2.0 && doc.fontSize(size).widthOfString(text) > maxWidth) {
+    size -= 0.05;
   }
   return size;
 }
 
 /**
- * One PDF page per physical label, sized to the exact sticker dimensions so the
- * printer does not scale it. Repeated codes simply get repeated pages.
+ * One cell: QR centred, optional serial/PO as small upright text under the QR.
+ * IMPORTANT: PDFKit auto-adds pages when text overflows — always pass `height`.
+ * Bottom/side padding avoids the minor cut-off on thermal label edges.
+ */
+function drawSticker(doc, {
+  png, caption, x, y, cellW, cellH, qrMm, captionMm,
+}) {
+  const edgePad = EDGE_PAD_MM * MM_TO_PT;
+  const captionH = caption && captionMm > 0
+    ? Math.min(captionMm * MM_TO_PT, cellH * 0.28)
+    : 0;
+  const qrMax = Math.min(
+    qrMm * MM_TO_PT,
+    cellW - edgePad * 2,
+    cellH - captionH - edgePad
+  );
+  if (qrMax <= 0 || !png) return;
+
+  const qrX = x + (cellW - qrMax) / 2;
+  const qrY = y + edgePad * 0.35;
+
+  doc.image(png, qrX, qrY, { width: qrMax, height: qrMax });
+
+  if (!caption || captionH <= 0) return;
+
+  const padX = Math.max(edgePad, cellW * 0.05);
+  const maxWidth = Math.max(2, cellW - padX * 2);
+  const textBoxH = Math.max(2, captionH - edgePad * 0.5);
+  const size = fitFontSize(doc, caption, maxWidth, textBoxH);
+  // Keep baseline above the die-cut so descenders (g, y, 9) are not clipped.
+  const textY = Math.min(
+    qrY + qrMax + 0.2 * MM_TO_PT,
+    y + cellH - edgePad - size
+  );
+
+  const prevX = doc.x;
+  const prevY = doc.y;
+  doc.font(CAPTION_FONT).fontSize(size).fillColor('#000000');
+  doc.text(caption, x + padX, textY, {
+    width: maxWidth,
+    height: textBoxH,
+    align: 'center',
+    lineBreak: false,
+    ellipsis: true,
+  });
+  doc.x = prevX;
+  doc.y = prevY;
+}
+
+/**
+ * Build a PDF where every page is exactly PAPER_WIDTH × PAPER_HEIGHT and holds
+ * up to `columns` stickers in one horizontal row.
  *
  * @param {{code: string, caption?: string, copies?: number}[]} labels
- * @param {object} opts
- * @param {number} opts.widthMm   total sticker width
- * @param {number} opts.heightMm  total sticker height
- * @param {number} opts.captionMm height reserved at the bottom for caption text
- * @returns {Promise<Buffer>}
  */
 async function buildLabelPdf(labels, {
-  widthMm = DEFAULT_LABEL_MM,
-  heightMm = DEFAULT_LABEL_MM,
-  captionMm = 0,
+  qrMm = DEFAULT_QR_MM,
+  columns = DEFAULT_COLUMNS,
+  captionMm = DEFAULT_CAPTION_MM,
+  paperWidthMm = PAPER_WIDTH_MM,
+  paperHeightMm = PAPER_HEIGHT_MM,
+  // legacy ignored / mapped
+  cellWidthMm,
+  cellHeightMm,
+  gapMm,
+  captionVertical,
+  widthMm,
+  heightMm,
 } = {}) {
   const jobs = [];
   for (const label of Array.isArray(labels) ? labels : []) {
@@ -88,22 +138,30 @@ async function buildLabelPdf(labels, {
     throw new Error(`Too many labels in one job (${jobs.length}); maximum is ${MAX_LABELS_PER_JOB}`);
   }
 
-  const pageW = widthMm * MM_TO_PT;
-  const pageH = heightMm * MM_TO_PT;
+  const cols = Math.max(1, Math.min(8, Number(columns) || DEFAULT_COLUMNS));
+  const qr = Math.max(8, Math.min(40, Number(qrMm) || DEFAULT_QR_MM));
+  const paperWmm = Math.max(40, Math.min(300, Number(paperWidthMm) || PAPER_WIDTH_MM));
+  const paperHmm = Math.max(10, Math.min(80, Number(paperHeightMm) || Number(cellHeightMm) || Number(heightMm) || PAPER_HEIGHT_MM));
+  const capMm = Math.max(0, Math.min(8, Number(captionMm) || 0));
 
-  // Never let the caption band eat more than half the sticker.
-  const captionH = Math.max(0, Math.min(captionMm, heightMm / 2)) * MM_TO_PT;
-  const qrAreaH = pageH - captionH;
-  const side = Math.min(pageW, qrAreaH);
-  if (side <= 0) throw new Error('Label is too small once the caption band is reserved');
+  const pageW = paperWmm * MM_TO_PT;
+  const pageH = paperHmm * MM_TO_PT;
+  const cellW = pageW / cols;
+  const cellH = pageH;
 
-  // Cache renders so printing 2 copies of 50 units does 50 renders, not 100.
   const pngCache = new Map();
   for (const code of new Set(jobs.map((j) => j.code))) {
     pngCache.set(code, await renderQrPng(code));
   }
 
-  const doc = new PDFDocument({ size: [pageW, pageH], margin: 0, autoFirstPage: false });
+  // Left → right across the 102.6 mm strip; next page = next physical label row.
+  // bufferPages avoids PDFKit auto-flush mid-row if text ever misbehaves.
+  const doc = new PDFDocument({
+    size: [pageW, pageH],
+    margin: 0,
+    autoFirstPage: false,
+    bufferPages: true,
+  });
   const chunks = [];
   doc.on('data', (c) => chunks.push(c));
   const done = new Promise((resolve, reject) => {
@@ -111,30 +169,25 @@ async function buildLabelPdf(labels, {
     doc.on('error', reject);
   });
 
-  jobs.forEach(({ code, caption }) => {
+  for (let i = 0; i < jobs.length; i += cols) {
     doc.addPage({ size: [pageW, pageH], margin: 0 });
-    // The quiet zone is baked into the PNG, so filling the area edge to edge
-    // still leaves the margin the scanner needs.
-    doc.image(pngCache.get(code), (pageW - side) / 2, (qrAreaH - side) / 2, {
-      width: side,
-      height: side,
-    });
-
-    if (captionH > 0 && caption) {
-      // Minimal side padding: on a 10 mm sticker every tenth of a millimetre of
-      // width is another usable tenth of a point of font size.
-      const padX = Math.min(0.3 * MM_TO_PT, pageW * 0.03);
-      const maxWidth = pageW - padX * 2;
-      const size = fitFontSize(doc, caption, maxWidth, captionH);
-      doc.font(CAPTION_FONT).fontSize(size).fillColor('#000000');
-      doc.text(caption, padX, qrAreaH + (captionH - size) / 2, {
-        width: maxWidth,
-        align: 'center',
-        lineBreak: false,
-        ellipsis: true,
+    const pageIndex = doc.bufferedPageRange().start + doc.bufferedPageRange().count - 1;
+    const row = jobs.slice(i, i + cols);
+    row.forEach((job, col) => {
+      // Pin drawing to this strip so a text glitch cannot jump pages mid-row.
+      doc.switchToPage(pageIndex);
+      drawSticker(doc, {
+        png: pngCache.get(job.code),
+        caption: job.caption,
+        x: col * cellW,
+        y: 0,
+        cellW,
+        cellH,
+        qrMm: qr,
+        captionMm: job.caption ? capMm : 0,
       });
-    }
-  });
+    });
+  }
 
   doc.end();
   return done;
@@ -144,6 +197,14 @@ module.exports = {
   renderQrPng,
   renderQrDataUrl,
   buildLabelPdf,
-  DEFAULT_LABEL_MM,
+  PAPER_WIDTH_MM,
+  PAPER_HEIGHT_MM,
+  DEFAULT_QR_MM,
+  DEFAULT_LABEL_MM: DEFAULT_QR_MM,
+  DEFAULT_COLUMNS,
+  DEFAULT_CAPTION_MM,
+  DEFAULT_CELL_WIDTH_MM: PAPER_WIDTH_MM / DEFAULT_COLUMNS,
+  DEFAULT_CELL_HEIGHT_MM: PAPER_HEIGHT_MM,
+  DEFAULT_GAP_MM: 0,
   MAX_LABELS_PER_JOB,
 };

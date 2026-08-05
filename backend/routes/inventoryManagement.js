@@ -8,6 +8,7 @@ const qcProcess = require('../controllers/inventoryManagement/qcProcess.controll
 const serialStatus = require('../controllers/inventoryManagement/serialStatus.controller');
 const universalSearch = require('../controllers/inventoryManagement/universalSearch.controller');
 const assetMovement = require('../controllers/inventoryManagement/assetMovement.controller');
+const masterData = require('../controllers/inventoryManagement/masterData.controller');
 
 const router = express.Router();
 
@@ -98,6 +99,7 @@ router.post(
 );
 
 router.get('/lists/counts', invView, inventoryList.getListCounts);
+router.get('/master-data', invView, masterData.getMasterDataDashboard);
 router.get('/customer-assets', custInvView, inventoryList.customerAssetsValidators, inventoryList.customerAssets);
 router.post(
   '/spare-parts/change-status',

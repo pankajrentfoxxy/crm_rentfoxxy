@@ -98,5 +98,7 @@ module.exports = {
     MASTER_LOOKUP: parseInt(process.env.CACHE_TTL_MASTER_LOOKUP_SEC || '86400', 10),
     INVENTORY_LIST: parseInt(process.env.CACHE_TTL_INVENTORY_LIST_SEC || '300', 10),
     INVENTORY_COUNT: parseInt(process.env.CACHE_TTL_INVENTORY_COUNT_SEC || '600', 10),
+    MASTER_DATA: parseInt(process.env.CACHE_TTL_MASTER_DATA_SEC || '120', 10),
+    MASTER_DATA_KPI: parseInt(process.env.CACHE_TTL_MASTER_DATA_KPI_SEC || '180', 10),
   },
 };

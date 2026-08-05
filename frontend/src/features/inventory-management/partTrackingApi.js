@@ -8,18 +8,25 @@ export const lookupPartUnit = (code) => api.get(`${base}/units/lookup`, { params
 export const searchPartUnits = (params) => api.get(`${base}/units`, { params });
 
 /**
- * Label sheet as a PDF blob, one page per physical sticker at the exact
- * millimetre size so the label printer does not rescale it. `captionMm`
- * reserves a band under the QR for readable text (the PO number).
+ * Label strip PDF sized to the physical media.
+ * Default: 102.6 × 15 mm page with 4 × 15 mm QRs across; PO text under each QR.
  */
-export const buildPartLabelsPdf = (labels, { widthMm, heightMm, captionMm = 0 } = {}) =>
+export const buildPartLabelsPdf = (labels, {
+  qrMm = 15,
+  columns = 4,
+  captionMm = 3,
+  paperWidthMm = 102.6,
+  paperHeightMm = 15,
+} = {}) =>
   api.post(
     `${base}/labels/print`,
     {
       labels,
-      width_mm: widthMm,
-      height_mm: heightMm ?? widthMm + captionMm,
+      qr_mm: qrMm,
+      columns,
       caption_mm: captionMm,
+      paper_width_mm: paperWidthMm,
+      paper_height_mm: paperHeightMm,
     },
     { responseType: 'blob' }
   );
