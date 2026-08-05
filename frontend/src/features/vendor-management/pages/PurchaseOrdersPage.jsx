@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
+import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import {
   Check,
   ChevronLeft,
@@ -367,7 +368,7 @@ export default function PurchaseOrdersPage() {
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
   const [searchInput, setSearchInput] = useState('');
-  const [search, setSearch] = useState('');
+  const search = useDebouncedValue(searchInput.trim(), 320);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [metaLoading, setMetaLoading] = useState(false);
@@ -445,12 +446,6 @@ export default function PurchaseOrdersPage() {
   useEffect(() => {
     setPage(1);
   }, [statusTab, search, vendorFilterId]);
-
-  function applySearch(e) {
-    e.preventDefault();
-    setPage(1);
-    setSearch(searchInput.trim());
-  }
 
   const openModal = useCallback(async (preselectVendorId) => {
     setModalOpen(true);
@@ -916,7 +911,7 @@ export default function PurchaseOrdersPage() {
         ))}
       </div>
 
-      <form onSubmit={applySearch} className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <input
           type="search"
           placeholder="Search PO #, type, remark, vendor…"
@@ -924,26 +919,19 @@ export default function PurchaseOrdersPage() {
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
         />
-        <button
-          type="submit"
-          className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900"
-        >
-          Search
-        </button>
-        {search && (
+        {searchInput && (
           <button
             type="button"
             className="text-sm text-slate-600 hover:text-slate-900 underline"
             onClick={() => {
               setSearchInput('');
-              setSearch('');
               setPage(1);
             }}
           >
             Clear
           </button>
         )}
-      </form>
+      </div>
 
       {loading ? (
         <div className="p-8 rounded-lg border text-center text-slate-500 animate-pulse">Loading…</div>

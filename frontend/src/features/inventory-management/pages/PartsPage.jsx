@@ -7,7 +7,7 @@ import PartLabelPrintModal from '../components/PartLabelPrintModal';
 import MetricCard from '../../reporting/components/MetricCard';
 import DataTable from '../../reporting/components/DataTable';
 import { inr } from '../../reporting/reportingUtils';
-import { listPartInstances } from '../../floor-pipeline/partRequestsApi';
+import { listPartInstances, addPartInstances } from '../../floor-pipeline/partRequestsApi';
 import PartSerialsDrawer from '../components/PartSerialsDrawer';
 
 const CATEGORIES = [
@@ -169,9 +169,14 @@ function AddPartDrawer({ open, onClose, onSave, initial }) {
   );
 }
 
+function availableStock(part) {
+  return part.in_stock_count ?? part.quantity ?? 0;
+}
+
 function AdjustStockModal({ part, onClose, onSave }) {
   const [mode, setMode] = useState('add');
   const [qty, setQty] = useState('');
+  const [serials, setSerials] = useState('');
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   if (!part) return null;
@@ -183,10 +188,22 @@ function AdjustStockModal({ part, onClose, onSave }) {
     if ((mode === 'consume' || mode === 'set') && !reason.trim()) return toast.error('Reason is required');
     let delta = n;
     if (mode === 'consume') delta = -n;
-    if (mode === 'set') delta = n - (part.quantity || 0);
+    if (mode === 'set') delta = n - availableStock(part);
+    const serialList = serials.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
+    if (mode === 'add' && serialList.length > 1 && serialList.length !== n) {
+      return toast.error('Serial count must match quantity, or leave serials blank');
+    }
     setBusy(true);
     try {
-      await onSave(part.part_id, delta);
+      if (mode === 'add') {
+        await onSave(part.part_id, {
+          mode: 'add',
+          quantity: serialList.length || n,
+          serial_numbers: serialList.length ? serialList : undefined,
+        });
+      } else {
+        await onSave(part.part_id, { mode, delta });
+      }
       onClose();
     } finally {
       setBusy(false);
@@ -199,7 +216,10 @@ function AdjustStockModal({ part, onClose, onSave }) {
       <form onSubmit={submit} className="relative bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-4">
         <h3 className="text-lg font-semibold">Adjust Stock</h3>
         <p className="text-sm text-gray-600">Part: <strong>{part.part_name}</strong></p>
-        <p className="text-sm">Current stock: <strong>{part.quantity}</strong></p>
+        <p className="text-sm">
+          Available on shelf: <strong>{availableStock(part)}</strong>
+          {part.reserved_count ? <span className="text-amber-700"> · {part.reserved_count} reserved</span> : null}
+        </p>
         <div className="flex gap-2 flex-wrap">
           {['add', 'consume', 'set'].map((m) => (
             <button key={m} type="button" onClick={() => setMode(m)} className={`px-3 py-1.5 rounded-lg text-sm border ${mode === m ? 'bg-blue-600 text-white border-blue-600' : 'border-gray-200'}`}>
@@ -207,7 +227,19 @@ function AdjustStockModal({ part, onClose, onSave }) {
             </button>
           ))}
         </div>
-        <input type="number" min={0} required className="w-full border rounded-lg px-3 py-2" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="Quantity" />
+        <input type="number" min={1} required className="w-full border rounded-lg px-3 py-2" value={qty} onChange={(e) => setQty(e.target.value)} placeholder="Quantity" />
+        {mode === 'add' && (
+          <label className="block space-y-1">
+            <span className="text-sm text-gray-600">Serial numbers (optional — one per line or comma-separated)</span>
+            <textarea
+              className="w-full border rounded-lg px-3 py-2 text-sm font-mono min-h-[88px]"
+              value={serials}
+              onChange={(e) => setSerials(e.target.value)}
+              placeholder={'SN12345\nSN67890'}
+            />
+            <span className="text-xs text-gray-500">Creates tracked PRT units so Serials view matches this count.</span>
+          </label>
+        )}
         {(mode === 'consume' || mode === 'set') && (
           <input required className="w-full border rounded-lg px-3 py-2" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason *" />
         )}
@@ -452,25 +484,32 @@ export default function PartsPage() {
 
   const enriched = useMemo(() => parts
     .filter((p) => !p.archived)
-    .map((p) => ({
-      ...p,
-      cat: partCategory(p),
-      total_value: (p.quantity || 0) * parseFloat(p.cost || 0),
-      category_label: CAT_LABEL[partCategory(p)] || p.part_type,
-    })), [parts]);
+    .map((p) => {
+      const stock = availableStock(p);
+      return {
+        ...p,
+        cat: partCategory(p),
+        total_value: stock * parseFloat(p.cost || 0),
+        category_label: CAT_LABEL[partCategory(p)] || p.part_type,
+      };
+    }), [parts]);
 
   const filtered = useMemo(() => enriched.filter((p) => {
     const q = search.toLowerCase();
+    const stock = availableStock(p);
     if (q && !p.part_name.toLowerCase().includes(q)) return false;
     if (category && p.cat !== category) return false;
-    if (stockFilter === 'in_stock' && p.quantity <= 10) return false;
-    if (stockFilter === 'low' && (p.quantity >= getThreshold(p) || p.quantity === 0)) return false;
-    if (stockFilter === 'out' && p.quantity !== 0) return false;
+    if (stockFilter === 'in_stock' && stock <= 10) return false;
+    if (stockFilter === 'low' && (stock >= getThreshold(p) || stock === 0)) return false;
+    if (stockFilter === 'out' && stock !== 0) return false;
     return true;
   }), [enriched, search, category, stockFilter]);
 
-  const lowCount = enriched.filter((p) => p.quantity > 0 && p.quantity < getThreshold(p)).length;
-  const outCount = enriched.filter((p) => p.quantity === 0).length;
+  const lowCount = enriched.filter((p) => {
+    const stock = availableStock(p);
+    return stock > 0 && stock < getThreshold(p);
+  }).length;
+  const outCount = enriched.filter((p) => availableStock(p) === 0).length;
   const totalValue = enriched.reduce((s, p) => s + p.total_value, 0);
 
   const savePart = async (form) => {
@@ -504,13 +543,22 @@ export default function PartsPage() {
     }
   };
 
-  const adjustStock = async (id, delta) => {
+  const adjustStock = async (id, payload) => {
     try {
-      await api.put(`/parts/${id}/quantity`, { quantity: delta });
-      toast.success('Stock updated');
+      if (payload.mode === 'add') {
+        await addPartInstances({
+          part_id: id,
+          quantity: payload.quantity,
+          serial_numbers: payload.serial_numbers,
+        });
+        toast.success('Stock added with PRT tracking');
+      } else {
+        await api.put(`/parts/${id}/quantity`, { quantity: payload.delta });
+        toast.success('Stock updated');
+      }
       load();
-    } catch {
-      toast.error('Failed to adjust stock');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to adjust stock');
     }
   };
 
@@ -527,8 +575,14 @@ export default function PartsPage() {
       key: 'quantity',
       label: 'In Stock',
       render: (r) => {
-        const b = stockBadge(r.quantity, getThreshold(r));
-        return <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${b.cls}`}>{b.label}</span>;
+        const stock = availableStock(r);
+        const b = stockBadge(stock, getThreshold(r));
+        return (
+          <span className="inline-flex flex-col gap-0.5">
+            <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${b.cls}`}>{b.label}</span>
+            {r.reserved_count ? <span className="text-[10px] text-amber-700">{r.reserved_count} reserved</span> : null}
+          </span>
+        );
       },
     },
     { key: 'part_sku', label: 'SKU', render: (r) => r.part_sku || '—' },

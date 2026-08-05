@@ -3,7 +3,7 @@ const fs = require('fs');
 const multer = require('multer');
 const router = require('express').Router();
 const ctrl = require('../controllers/partRequestController');
-const { authMiddleware, checkRole, checkSectionPermission } = require('../middleware/auth');
+const { authMiddleware, checkRole, checkSectionPermission, checkAnySectionPermission } = require('../middleware/auth');
 const { multerLimits, wrapMulter } = require('../config/uploadLimits');
 
 const photoDir = path.join(__dirname, '..', 'uploads', 'part-requests');
@@ -28,6 +28,12 @@ const photoUpload = multer({
 
 router.use(authMiddleware);
 
+const allowPartInstanceWrite = (req, res, next) => {
+  if (req.user?.role === 'super_admin') return next();
+  if (['warehouse', 'admin', 'manager'].includes(req.user?.role)) return next();
+  return checkAnySectionPermission(['parts_inventory', 'parts_approval'], 'edit')(req, res, next);
+};
+
 router.post('/', checkSectionPermission('parts_requests', 'create'), ctrl.createPartRequest);
 router.post(
   '/upload-photos',
@@ -42,7 +48,7 @@ router.get('/warehouse-queue', checkRole('warehouse', 'admin', 'manager', 'super
 router.get('/procurement-queue', checkRole('procurement', 'admin', 'manager', 'super_admin'), ctrl.getProcurementQueue);
 router.get('/cost-summary/:ttsplId', checkSectionPermission('ttspl_history', 'view'), ctrl.getPartCostSummary);
 router.get('/instances', ctrl.listPartInstances);
-router.post('/instances', checkRole('warehouse', 'admin', 'manager', 'super_admin'), ctrl.addPartInstances);
+router.post('/instances', allowPartInstanceWrite, ctrl.addPartInstances);
 router.patch('/instances/:instanceId', checkRole('warehouse', 'admin', 'manager', 'super_admin'), ctrl.updatePartInstance);
 router.get('/ticket/:ticketId', ctrl.getTicketPartRequests);
 

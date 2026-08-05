@@ -15,15 +15,23 @@ exports.getAllParts = async (req, res) => {
     let where = 'WHERE 1=1';
     if (search) {
       params.push(`%${search}%`);
-      where += ` AND part_name ILIKE $${params.length}`;
+      where += ` AND p.part_name ILIKE $${params.length}`;
     }
     params.push(limit);
     const result = await pool.query(
-      `SELECT part_id, part_name, part_type, category, quantity, vendor, cost,
-              location_code, model_number, pin_size, part_sku, description
-         FROM parts
+      `SELECT p.part_id, p.part_name, p.part_type, p.category, p.quantity, p.vendor, p.cost,
+              p.location_code, p.model_number, p.pin_size, p.part_sku, p.description,
+              COALESCE(st.in_stock_count, 0)::int AS in_stock_count,
+              COALESCE(st.reserved_count, 0)::int AS reserved_count
+         FROM parts p
+         LEFT JOIN LATERAL (
+           SELECT COUNT(*) FILTER (WHERE pi.status = 'in_stock') AS in_stock_count,
+                  COUNT(*) FILTER (WHERE pi.status = 'reserved') AS reserved_count
+             FROM part_instances pi
+            WHERE pi.part_id = p.part_id
+         ) st ON true
         ${where}
-        ORDER BY part_name ASC
+        ORDER BY p.part_name ASC
         LIMIT $${params.length}`,
       params
     );
