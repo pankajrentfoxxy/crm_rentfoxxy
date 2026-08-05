@@ -1022,6 +1022,35 @@ exports.listDeliveryChallans = async (req, res) => {
   }
 };
 
+exports.getDcCourierTracking = async (req, res) => {
+  try {
+    const lines = await getDeliveryChallanLines(req.params.dcNumber);
+    if (!lines.length) {
+      return res.status(404).json({ success: false, message: 'Delivery challan not found' });
+    }
+    const head = lines[0];
+    const awb = String(head.awb_number || '').trim();
+    if (!awb) {
+      return res.status(400).json({ success: false, message: 'No AWB number on this delivery challan' });
+    }
+
+    const bluedartTracking = require('../services/bluedartTrackingService');
+    const tracking = await bluedartTracking.trackAwb(awb);
+    return res.json({
+      success: true,
+      data: {
+        dc_number: req.params.dcNumber,
+        courier_name: head.courier_name || null,
+        courier_tracking_url: head.courier_tracking_url || null,
+        tracking,
+      },
+    });
+  } catch (error) {
+    const status = error.status || 500;
+    res.status(status).json({ success: false, message: error.message });
+  }
+};
+
 exports.getDeliveryChallan = async (req, res) => {
   try {
     const lines = await getDeliveryChallanLines(req.params.dcNumber);

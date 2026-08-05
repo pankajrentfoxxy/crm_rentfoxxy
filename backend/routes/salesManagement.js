@@ -156,6 +156,7 @@ router.post(...dcRoute('/verify-otp', dcEdit, ctrl.verifyDeliveryOtp));
 router.post(...dcRoute('/delivery-register', dcEdit, ctrl.submitDeliveryRegister));
 router.post(...dcRoute('/qc-ticket', dcEdit, ctrl.createPreDispatchQcTicket));
 router.get(...dcRoute('/qc-status', soDcView, ctrl.getDcQcStatus));
+router.get(...dcRoute('/courier-tracking', soDcView, ctrl.getDcCourierTracking));
 router.patch(...dcRoute('/assignment', soDcEdit, ctrl.updateDcAssignment));
 router.patch(...dcRoute('/dispatch', soDcEdit, ctrl.updateDcDispatch));
 router.patch(...dcRoute('/cancel', checkRole('super_admin'), ctrl.cancelDeliveryChallan));

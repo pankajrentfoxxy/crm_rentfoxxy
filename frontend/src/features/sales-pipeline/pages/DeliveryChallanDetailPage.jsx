@@ -22,6 +22,7 @@ import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
 import DcEditModal from '../components/DcEditModal';
 import MarkDeliveredModal from '../components/MarkDeliveredModal';
+import CourierTrackingModal from '../components/CourierTrackingModal';
 
 function resolveDcNumber(params) {
   const raw = params['*'] ?? params.dcNumber ?? '';
@@ -72,6 +73,7 @@ export default function DeliveryChallanDetailPage() {
   const [rejectRemarks, setRejectRemarks] = useState('');
   const [warehouseOtp, setWarehouseOtp] = useState('');
   const [editOpen, setEditOpen] = useState(false);
+  const [trackingOpen, setTrackingOpen] = useState(false);
   const [changeAssigneeOpen, setChangeAssigneeOpen] = useState(false);
   const [assignmentEditable, setAssignmentEditable] = useState(false);
   const [assignmentHistory, setAssignmentHistory] = useState([]);
@@ -446,7 +448,19 @@ export default function DeliveryChallanDetailPage() {
                   <p>
                     Courier: <strong>{head.courier_name || '—'}</strong>
                     {' · '}AWB: <strong>{head.awb_number || '—'}</strong>
-                    {head.courier_tracking_url && (
+                    {head.awb_number && (
+                      <>
+                        {' · '}
+                        <button
+                          type="button"
+                          onClick={() => setTrackingOpen(true)}
+                          className="text-blue-600 underline text-xs ml-1"
+                        >
+                          Track
+                        </button>
+                      </>
+                    )}
+                    {!head.awb_number && head.courier_tracking_url && (
                       <> · <a href={head.courier_tracking_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline text-xs ml-1">Track</a></>
                     )}
                   </p>
@@ -605,7 +619,23 @@ export default function DeliveryChallanDetailPage() {
               <h2 className="font-semibold">Dispatch &amp; Delivery</h2>
               <div className="text-sm text-gray-600 space-y-1 bg-gray-50 border rounded-lg p-3">
                 <p>Mode: <strong className="capitalize">{head.dispatch_mode || head.ship_by || '—'}</strong></p>
-                {head.courier_name && <p>Courier: {head.courier_name} · AWB: {head.awb_number || '—'}</p>}
+                {head.courier_name && (
+                  <p>
+                    Courier: {head.courier_name} · AWB: {head.awb_number || '—'}
+                    {head.awb_number && (
+                      <>
+                        {' · '}
+                        <button
+                          type="button"
+                          onClick={() => setTrackingOpen(true)}
+                          className="text-blue-600 underline text-xs"
+                        >
+                          Track
+                        </button>
+                      </>
+                    )}
+                  </p>
+                )}
                 {(head.dispatch_mode === 'inhouse' || head.ship_by === 'by_hand') && (
                   <p>Technician: <strong>{head.delivery_person_name || head.technician_name || 'Not assigned'}</strong></p>
                 )}
@@ -817,6 +847,16 @@ export default function DeliveryChallanDetailPage() {
       </div>
 
       <DispatchModal open={dispatchOpen} dcNumber={dcNumber} qcBlocked={qc?.total_count > 0 && !qc?.all_passed} onClose={() => setDispatchOpen(false)} onDispatched={load} />
+
+      {trackingOpen && (
+        <CourierTrackingModal
+          dcNumber={dcNumber}
+          awbNumber={head?.awb_number}
+          courierName={head?.courier_name}
+          trackingUrl={head?.courier_tracking_url}
+          onClose={() => setTrackingOpen(false)}
+        />
+      )}
 
       <ChangeAssigneeModal
         open={changeAssigneeOpen}

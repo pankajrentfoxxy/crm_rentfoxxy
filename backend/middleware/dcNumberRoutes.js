@@ -15,6 +15,7 @@ const DC_ACTION_SUFFIXES = [
   '/pdf',
   '/qc-status',
   '/qc-ticket',
+  '/courier-tracking',
   '/send-otp',
   '/verify-otp',
   '/delivery-register',

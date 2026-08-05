@@ -1,7 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-require('dotenv').config();
+// Always load backend/.env (cwd may be repo root when starting via scripts/PM2)
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const errorHandler = require('./middleware/errorHandler');
 const { BODY_PARSER_LIMIT } = require('./config/uploadLimits');

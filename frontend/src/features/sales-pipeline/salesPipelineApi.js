@@ -35,6 +35,7 @@ export const regenerateQuotationPdf = (n) => api.post(`${base}/quotations/${n}/p
 export const regenerateSalesOrderPdf = (n) => api.post(`${base}/sales-orders/${encSo(n)}/pdf`);
 export const getDCMeta = (so) => api.get(`${base}/delivery-challans/meta/add`, { params: { sales_order_number: so } });
 export const getDcQcStatus = (n) => api.get(`${base}/delivery-challans/${encDc(n)}/qc-status`);
+export const getDcCourierTracking = (n) => api.get(`${base}/delivery-challans/${encDc(n)}/courier-tracking`);
 export const createDcQcTickets = (n) => api.post(`${base}/delivery-challans/${encDc(n)}/qc-ticket`);
 export const dispatchDC = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}/dispatch`, d);
 export const updateDcAssignment = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}/assignment`, d);
