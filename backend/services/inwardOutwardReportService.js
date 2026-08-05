@@ -1,25 +1,21 @@
 /**
  * Inward & Outward Summary report.
  *
- * Aggregates laptop-unit movement across the modules that physically move
- * machines in/out of the warehouse:
+ * Aggregates laptop-unit movement with return / replacement breakdowns:
  *
  *  INWARD
- *   - Vendor  : vendor_serial_numbers rows created via a laptop PO/GRN
- *   - Customer: support_ticket_items pickups confirmed received at warehouse
- *   - Direct  : inward_outward ledger rows flagged as inward (courier/manual/ERP)
+ *   - Vendor purchase     : vendor_serial_numbers via laptop PO/GRN
+ *   - Vendor return       : VRDC items received back repaired
+ *   - Vendor replacement  : VRDC items received as replacement units
+ *   - Customer return     : support pickups (pickup_type=return) warehouse-received
+ *   - Customer replacement: warehouse-received pickups tied to replacement Return DC
+ *   - Direct              : inward_outward ledger (courier/manual/ERP)
  *
  *  OUTWARD
- *   - Customer: delivery_challan_lines dispatched to a customer
- *   - Vendor  : vendor_repair_dc_items dispatched to a vendor (repair return)
- *
- * Filter semantics (a filter is applied only where the column exists):
- *   - date range          -> each source's own movement timestamp
- *   - vendor              -> vendor sources; zeroes out customer-only sources
- *   - customer            -> customer sources; zeroes out vendor-only sources
- *   - courier             -> sources that store a courier; zeroes vendor GRN inward
- *   - user                -> sources with an actor column; zeroes vendor GRN inward
- *   - entity / branch     -> delivery challans + vendor GRN inward (others lack the column)
+ *   - Customer standard   : delivery_challan_lines outbound (dc_purpose standard)
+ *   - Customer replacement: outbound DC with dc_purpose=replacement
+ *   - Customer service    : outbound DC with dc_purpose=service_return
+ *   - Vendor return       : vendor_repair_dc_items dispatched to vendor
  */
 const pool = require('../config/db');
 
@@ -56,6 +52,33 @@ const scalar = async (sql, params) => {
   return Number(rows[0]?.n || 0);
 };
 
+const DETAIL_LIMIT = 5000;
+
+const unitSql = `CASE
+  WHEN COALESCE(jsonb_array_length(d.serial_number), 0) > 0 THEN jsonb_array_length(d.serial_number)
+  ELSE COALESCE(d.quantity, 1)
+END`;
+
+/** Replacement return-DC join: pickup.return_dc_number → return challan with dc_purpose. */
+const replacementReturnJoin = `
+  LEFT JOIN LATERAL (
+    SELECT dcl.dc_purpose
+      FROM delivery_challan_lines dcl
+     WHERE dcl.dc_number = i.return_dc_number
+       AND COALESCE(dcl.movement_type, 'return') = 'return'
+     ORDER BY dcl.id ASC
+     LIMIT 1
+  ) rdc ON true
+`;
+
+function isCustomerReplacementInwardSql() {
+  return `(
+    COALESCE(rdc.dc_purpose, '') = 'replacement'
+    OR LOWER(COALESCE(t.ticket_category, '')) = 'replacement'
+    OR LOWER(COALESCE(t.complaint_type, '')) = 'replacement'
+  )`;
+}
+
 async function getInwardOutwardSummary({
   from = null, to = null, entity = '', branch = '', vendor = '', customer = '', courier = '', user = '',
 } = {}) {
@@ -65,41 +88,96 @@ async function getInwardOutwardSummary({
   const hasUser = Boolean(user);
   const hasEntity = Boolean(entity);
 
-  // --- INWARD: Vendor (GRN / purchase) ---
-  const vendorInward = async () => {
-    // A vendor-received laptop has no customer / courier / actor column, so an
-    // explicit filter on any of those excludes this source entirely.
+  // --- INWARD: Vendor purchase (GRN) ---
+  const vendorPurchaseInward = async () => {
     if (hasCustomer || hasCourier || hasUser) return 0;
     const params = [];
     let sql = `SELECT COUNT(*)::int AS n
                FROM vendor_serial_numbers vsn
                JOIN vendor_purchase_orders po ON po.po_id = vsn.po_id
-               WHERE vsn.deleted_at IS NULL AND vsn.spo_id IS NULL`;
+               WHERE vsn.deleted_at IS NULL AND vsn.spo_id IS NULL
+                 AND COALESCE(vsn.extra->>'intake_source', '') <> 'vendor_repair_replacement'`;
     sql += dateClause('vsn.created_at', from, to, params);
     sql += eqNum('po.vendor_id', vendor, params);
     sql += eqText('vsn.current_entity', entity, params);
     return scalar(sql, params);
   };
 
-  // --- INWARD: Customer (support pickup / repair / return, received at warehouse) ---
-  const customerInward = async () => {
+  // --- INWARD: Vendor return (repaired unit back from VRDC) ---
+  const vendorReturnInward = async () => {
+    if (hasCustomer || hasEntity) return 0;
+    const params = [];
+    let sql = `SELECT COUNT(*)::int AS n
+               FROM vendor_repair_dc_items it
+               JOIN vendor_repair_delivery_challans h ON h.dc_number = it.dc_number
+               WHERE it.item_status = 'received'
+                 AND COALESCE(it.receive_mode, 'repaired') = 'repaired'`;
+    sql += dateClause('COALESCE(it.returned_at, h.updated_at, h.dispatched_at)', from, to, params);
+    sql += eqNum('h.vendor_id', vendor, params);
+    sql += ilike('h.courier_name', courier, params);
+    sql += eqNum('h.created_by', user, params);
+    return scalar(sql, params);
+  };
+
+  // --- INWARD: Vendor replacement ---
+  const vendorReplacementInward = async () => {
+    if (hasCustomer || hasEntity) return 0;
+    const params = [];
+    let sql = `SELECT COUNT(*)::int AS n
+               FROM vendor_repair_dc_items it
+               JOIN vendor_repair_delivery_challans h ON h.dc_number = it.dc_number
+               WHERE (
+                 it.item_status = 'replacement_received'
+                 OR COALESCE(it.receive_mode, '') = 'replacement'
+               )`;
+    sql += dateClause('COALESCE(it.returned_at, h.updated_at, h.dispatched_at)', from, to, params);
+    sql += eqNum('h.vendor_id', vendor, params);
+    sql += ilike('h.courier_name', courier, params);
+    sql += eqNum('h.created_by', user, params);
+    return scalar(sql, params);
+  };
+
+  // --- INWARD: Customer return (non-replacement pickups) ---
+  const customerReturnInward = async () => {
     if (hasVendor) return 0;
+    if (hasEntity) return 0;
     const params = [];
     let sql = `SELECT COUNT(*)::int AS n
                FROM support_ticket_items i
                JOIN support_tickets t ON t.id = i.ticket_id
-               WHERE i.item_type = 'pickup' AND i.warehouse_received_at IS NOT NULL`;
+               ${replacementReturnJoin}
+               WHERE i.item_type = 'pickup'
+                 AND i.warehouse_received_at IS NOT NULL
+                 AND COALESCE(i.pickup_type, 'return') IN ('return', 'repair')
+                 AND NOT ${isCustomerReplacementInwardSql()}`;
     sql += dateClause('i.warehouse_received_at', from, to, params);
     sql += eqNum('t.customer_id', customer, params);
     sql += ilike('i.pickup_courier_name', courier, params);
     sql += eqNum('i.warehouse_received_by', user, params);
-    // No entity column on support; drop this source when an entity filter is set.
-    if (hasEntity) return 0;
     return scalar(sql, params);
   };
 
-  // --- INWARD: Direct (inward_outward ledger — courier / bluedart / manual / ERP) ---
+  // --- INWARD: Customer replacement (old unit back) ---
+  const customerReplacementInward = async () => {
+    if (hasVendor || hasEntity) return 0;
+    const params = [];
+    let sql = `SELECT COUNT(*)::int AS n
+               FROM support_ticket_items i
+               JOIN support_tickets t ON t.id = i.ticket_id
+               ${replacementReturnJoin}
+               WHERE i.item_type = 'pickup'
+                 AND i.warehouse_received_at IS NOT NULL
+                 AND ${isCustomerReplacementInwardSql()}`;
+    sql += dateClause('i.warehouse_received_at', from, to, params);
+    sql += eqNum('t.customer_id', customer, params);
+    sql += ilike('i.pickup_courier_name', courier, params);
+    sql += eqNum('i.warehouse_received_by', user, params);
+    return scalar(sql, params);
+  };
+
+  // --- INWARD: Direct ---
   const directInward = async () => {
+    if (hasEntity) return 0;
     const params = [];
     let sql = `SELECT COUNT(*)::int AS n
                FROM inward_outward io
@@ -109,23 +187,22 @@ async function getInwardOutwardSummary({
     sql += eqNum('io.customer_id', customer, params);
     sql += ilike('io.courier_name', courier, params);
     sql += eqNum('io.technician_id', user, params);
-    // No entity column on the ledger; drop when entity filter is set.
-    if (hasEntity) return 0;
     return scalar(sql, params);
   };
 
-  // --- OUTWARD: Customer (delivery challan dispatch) ---
-  const customerOutward = async () => {
+  // --- OUTWARD: Customer by dc_purpose ---
+  const customerOutwardByPurpose = async (purpose) => {
     if (hasVendor) return 0;
     const params = [];
-    const unitSql = `CASE
-      WHEN COALESCE(jsonb_array_length(d.serial_number), 0) > 0 THEN jsonb_array_length(d.serial_number)
-      ELSE COALESCE(d.quantity, 1)
-    END`;
     let sql = `SELECT COALESCE(SUM(${unitSql}), 0)::int AS n
                FROM delivery_challan_lines d
                WHERE COALESCE(d.movement_type, 'outbound') = 'outbound'
                  AND d.dispatched_at IS NOT NULL`;
+    if (purpose === 'standard') {
+      sql += ` AND COALESCE(NULLIF(TRIM(d.dc_purpose), ''), 'standard') = 'standard'`;
+    } else {
+      sql += eqText('d.dc_purpose', purpose, params);
+    }
     sql += dateClause('d.dispatched_at', from, to, params);
     sql += eqText('d.entity_code', entity, params);
     sql += eqText('d.branch', branch, params);
@@ -135,9 +212,10 @@ async function getInwardOutwardSummary({
     return scalar(sql, params);
   };
 
-  // --- OUTWARD: Vendor (vendor repair DC dispatch / purchase return) ---
-  const vendorOutward = async () => {
+  // --- OUTWARD: Vendor return (VRDC dispatch) ---
+  const vendorReturnOutward = async () => {
     if (hasCustomer) return 0;
+    if (hasEntity) return 0;
     const params = [];
     let sql = `SELECT COUNT(*)::int AS n
                FROM vendor_repair_dc_items it
@@ -147,42 +225,63 @@ async function getInwardOutwardSummary({
     sql += eqNum('h.vendor_id', vendor, params);
     sql += ilike('h.courier_name', courier, params);
     sql += eqNum('h.created_by', user, params);
-    // No entity column on VRDC; drop when entity filter is set.
-    if (hasEntity) return 0;
     return scalar(sql, params);
   };
 
-  const [inVendor, inCustomer, inDirect, outCustomer, outVendor] = await Promise.all([
-    vendorInward(), customerInward(), directInward(), customerOutward(), vendorOutward(),
+  const [
+    inVendorPurchase,
+    inVendorReturn,
+    inVendorReplacement,
+    inCustomerReturn,
+    inCustomerReplacement,
+    inDirect,
+    outCustomerStandard,
+    outCustomerReplacement,
+    outCustomerService,
+    outVendorReturn,
+  ] = await Promise.all([
+    vendorPurchaseInward(),
+    vendorReturnInward(),
+    vendorReplacementInward(),
+    customerReturnInward(),
+    customerReplacementInward(),
+    directInward(),
+    customerOutwardByPurpose('standard'),
+    customerOutwardByPurpose('replacement'),
+    customerOutwardByPurpose('service_return'),
+    vendorReturnOutward(),
   ]);
+
+  const inVendor = inVendorPurchase + inVendorReturn + inVendorReplacement;
+  const inCustomer = inCustomerReturn + inCustomerReplacement;
+  const outCustomer = outCustomerStandard + outCustomerReplacement + outCustomerService;
+  const outVendor = outVendorReturn;
 
   return {
     inward: {
       total: inVendor + inCustomer + inDirect,
       vendor: inVendor,
+      vendor_purchase: inVendorPurchase,
+      vendor_return: inVendorReturn,
+      vendor_replacement: inVendorReplacement,
       customer: inCustomer,
+      customer_return: inCustomerReturn,
+      customer_replacement: inCustomerReplacement,
       direct: inDirect,
     },
     outward: {
       total: outCustomer + outVendor,
       customer: outCustomer,
+      customer_standard: outCustomerStandard,
+      customer_replacement: outCustomerReplacement,
+      customer_service_return: outCustomerService,
       vendor: outVendor,
+      vendor_return: outVendorReturn,
+      vendor_replacement: 0,
     },
   };
 }
 
-const DETAIL_LIMIT = 5000;
-
-/**
- * Detailed rows behind a summary count. `type` selects the movement bucket:
- *   inward_vendor | inward_customer | inward_direct | inward_total
- *   outward_customer | outward_vendor | outward_total
- * Each row: { ttspl, serial_number, brand, model, processor, generation, ram,
- *             storage, config_text, party_type, party_name, movement_date }.
- * TTSPL + configuration are resolved from the inventory master by serial, with
- * source-specific fallbacks. Filter/zeroing rules mirror getInwardOutwardSummary
- * so the detail list length matches the card count.
- */
 async function getInwardOutwardDetails({
   type = 'inward_total',
   from = null, to = null, entity = '', branch = '', vendor = '', customer = '', courier = '', user = '',
@@ -195,7 +294,7 @@ async function getInwardOutwardDetails({
 
   const rows = async (sql, params) => (await pool.query(sql, params)).rows;
 
-  const vendorInwardRows = async () => {
+  const vendorPurchaseInwardRows = async () => {
     if (hasCustomer || hasCourier || hasUser) return [];
     const params = [];
     let sql = `SELECT
@@ -207,7 +306,7 @@ async function getInwardOutwardDetails({
         COALESCE(inv.generation, vsn.extra->>'generation') AS generation,
         COALESCE(inv.ram, vsn.extra->>'ram') AS ram,
         COALESCE(inv.storage, vsn.extra->>'storage', vsn.extra->>'ssd') AS storage,
-        NULL::text AS config_text,
+        'Purchase / GRN'::text AS config_text,
         'vendor' AS party_type,
         ven.business_name AS party_name,
         vsn.created_at AS movement_date
@@ -215,7 +314,8 @@ async function getInwardOutwardDetails({
       JOIN vendor_purchase_orders po ON po.po_id = vsn.po_id
       LEFT JOIN vendors ven ON ven.vendor_id = po.vendor_id
       LEFT JOIN inventory inv ON LOWER(inv.serial_number) = LOWER(vsn.serial_number)
-      WHERE vsn.deleted_at IS NULL AND vsn.spo_id IS NULL`;
+      WHERE vsn.deleted_at IS NULL AND vsn.spo_id IS NULL
+        AND COALESCE(vsn.extra->>'intake_source', '') <> 'vendor_repair_replacement'`;
     sql += dateClause('vsn.created_at', from, to, params);
     sql += eqNum('po.vendor_id', vendor, params);
     sql += eqText('vsn.current_entity', entity, params);
@@ -223,11 +323,53 @@ async function getInwardOutwardDetails({
     return rows(sql, params);
   };
 
-  const customerInwardRows = async () => {
+  const vendorRepairInwardRows = async ({ replacement }) => {
+    if (hasCustomer || hasEntity) return [];
+    const params = [];
+    let sql = `SELECT
+        COALESCE(
+          NULLIF(CASE WHEN $REPL$ THEN it.replacement_ttspl_id ELSE it.ttspl_id END, ''),
+          NULLIF(it.ttspl_id, ''),
+          inv.machine_number
+        ) AS ttspl,
+        COALESCE(
+          NULLIF(CASE WHEN $REPL$ THEN it.replacement_serial_number ELSE it.serial_number END, ''),
+          it.serial_number
+        ) AS serial_number,
+        inv.brand AS brand,
+        inv.model AS model,
+        inv.processor AS processor,
+        inv.generation AS generation,
+        inv.ram AS ram,
+        inv.storage AS storage,
+        CASE WHEN $REPL$ THEN 'Vendor replacement'::text ELSE 'Vendor return (repaired)'::text END AS config_text,
+        'vendor' AS party_type,
+        COALESCE(h.vendor_name, ven.business_name) AS party_name,
+        COALESCE(it.returned_at, h.updated_at, h.dispatched_at) AS movement_date
+      FROM vendor_repair_dc_items it
+      JOIN vendor_repair_delivery_challans h ON h.dc_number = it.dc_number
+      LEFT JOIN vendors ven ON ven.vendor_id = h.vendor_id
+      LEFT JOIN inventory inv ON LOWER(inv.serial_number) = LOWER(COALESCE(
+        NULLIF(CASE WHEN $REPL$ THEN it.replacement_serial_number ELSE it.serial_number END, ''),
+        it.serial_number
+      ))
+      WHERE ${replacement
+    ? `(it.item_status = 'replacement_received' OR COALESCE(it.receive_mode, '') = 'replacement')`
+    : `it.item_status = 'received' AND COALESCE(it.receive_mode, 'repaired') = 'repaired'`}`;
+    sql = sql.replaceAll('$REPL$', replacement ? 'TRUE' : 'FALSE');
+    sql += dateClause('COALESCE(it.returned_at, h.updated_at, h.dispatched_at)', from, to, params);
+    sql += eqNum('h.vendor_id', vendor, params);
+    sql += ilike('h.courier_name', courier, params);
+    sql += eqNum('h.created_by', user, params);
+    sql += ` ORDER BY COALESCE(it.returned_at, h.updated_at, h.dispatched_at) DESC LIMIT ${DETAIL_LIMIT}`;
+    return rows(sql, params);
+  };
+
+  const customerPickupInwardRows = async ({ replacementOnly }) => {
     if (hasVendor || hasEntity) return [];
     const params = [];
     let sql = `SELECT
-        inv.machine_number AS ttspl,
+        COALESCE(i.ttspl_id, inv.machine_number) AS ttspl,
         i.serial_number AS serial_number,
         COALESCE(i.brand, inv.brand) AS brand,
         COALESCE(i.model, inv.model) AS model,
@@ -235,14 +377,21 @@ async function getInwardOutwardDetails({
         COALESCE(i.generation, inv.generation) AS generation,
         COALESCE(i.ram, inv.ram) AS ram,
         COALESCE(i.storage, inv.storage) AS storage,
-        NULL::text AS config_text,
+        CASE WHEN ${isCustomerReplacementInwardSql()}
+          THEN 'Customer replacement'::text
+          ELSE CONCAT('Customer ', COALESCE(i.pickup_type, 'return'))::text
+        END AS config_text,
         'customer' AS party_type,
         t.customer_name AS party_name,
         i.warehouse_received_at AS movement_date
       FROM support_ticket_items i
       JOIN support_tickets t ON t.id = i.ticket_id
+      ${replacementReturnJoin}
       LEFT JOIN inventory inv ON LOWER(inv.serial_number) = LOWER(i.serial_number)
-      WHERE i.item_type = 'pickup' AND i.warehouse_received_at IS NOT NULL`;
+      WHERE i.item_type = 'pickup'
+        AND i.warehouse_received_at IS NOT NULL
+        AND COALESCE(i.pickup_type, 'return') IN ('return', 'repair')
+        AND ${replacementOnly ? isCustomerReplacementInwardSql() : `NOT ${isCustomerReplacementInwardSql()}`}`;
     sql += dateClause('i.warehouse_received_at', from, to, params);
     sql += eqNum('t.customer_id', customer, params);
     sql += ilike('i.pickup_courier_name', courier, params);
@@ -283,11 +432,9 @@ async function getInwardOutwardDetails({
     return rows(sql, params);
   };
 
-  const customerOutwardRows = async () => {
+  const customerOutwardRows = async (purpose = null) => {
     if (hasVendor) return [];
     const params = [];
-    // DC line serials are sometimes stored pipe-joined as "<id>|<serial>|<TTSPL>".
-    // Extract a clean serial + TTSPL token so we can resolve config from inventory.
     let sql = `SELECT
         COALESCE(inv.machine_number, ser.ttspl_raw, ser.serial_clean) AS ttspl,
         COALESCE(inv.serial_number, ser.serial_clean) AS serial_number,
@@ -297,7 +444,7 @@ async function getInwardOutwardDetails({
         inv.generation AS generation,
         inv.ram AS ram,
         inv.storage AS storage,
-        NULL::text AS config_text,
+        CONCAT('DC ', COALESCE(NULLIF(TRIM(d.dc_purpose), ''), 'standard'))::text AS config_text,
         'customer' AS party_type,
         d.customer_name AS party_name,
         d.dispatched_at AS movement_date
@@ -315,6 +462,11 @@ async function getInwardOutwardDetails({
         OR (ser.ttspl_raw IS NOT NULL AND UPPER(inv.machine_number) = UPPER(ser.ttspl_raw))
       WHERE COALESCE(d.movement_type, 'outbound') = 'outbound'
         AND d.dispatched_at IS NOT NULL`;
+    if (purpose === 'standard') {
+      sql += ` AND COALESCE(NULLIF(TRIM(d.dc_purpose), ''), 'standard') = 'standard'`;
+    } else if (purpose) {
+      sql += eqText('d.dc_purpose', purpose, params);
+    }
     sql += dateClause('d.dispatched_at', from, to, params);
     sql += eqText('d.entity_code', entity, params);
     sql += eqText('d.branch', branch, params);
@@ -337,7 +489,7 @@ async function getInwardOutwardDetails({
         inv.generation AS generation,
         inv.ram AS ram,
         inv.storage AS storage,
-        NULLIF(it.configuration, '') AS config_text,
+        COALESCE(NULLIF(it.configuration, ''), 'Vendor return / repair')::text AS config_text,
         'vendor' AS party_type,
         COALESCE(h.vendor_name, ven.business_name) AS party_name,
         h.dispatched_at AS movement_date
@@ -362,21 +514,55 @@ async function getInwardOutwardDetails({
 
   switch (type) {
     case 'inward_vendor':
-      return vendorInwardRows();
+    case 'inward_vendor_purchase':
+      return type === 'inward_vendor'
+        ? byDateDesc([
+          ...(await vendorPurchaseInwardRows()),
+          ...(await vendorRepairInwardRows({ replacement: false })),
+          ...(await vendorRepairInwardRows({ replacement: true })),
+        ])
+        : vendorPurchaseInwardRows();
+    case 'inward_vendor_return':
+      return vendorRepairInwardRows({ replacement: false });
+    case 'inward_vendor_replacement':
+      return vendorRepairInwardRows({ replacement: true });
     case 'inward_customer':
-      return customerInwardRows();
+      return byDateDesc([
+        ...(await customerPickupInwardRows({ replacementOnly: false })),
+        ...(await customerPickupInwardRows({ replacementOnly: true })),
+      ]);
+    case 'inward_customer_return':
+      return customerPickupInwardRows({ replacementOnly: false });
+    case 'inward_customer_replacement':
+      return customerPickupInwardRows({ replacementOnly: true });
     case 'inward_direct':
       return directInwardRows();
     case 'inward_total': {
-      const [a, b, c] = await Promise.all([vendorInwardRows(), customerInwardRows(), directInwardRows()]);
-      return byDateDesc([...a, ...b, ...c]);
+      const [a, b, c, d, e, f] = await Promise.all([
+        vendorPurchaseInwardRows(),
+        vendorRepairInwardRows({ replacement: false }),
+        vendorRepairInwardRows({ replacement: true }),
+        customerPickupInwardRows({ replacementOnly: false }),
+        customerPickupInwardRows({ replacementOnly: true }),
+        directInwardRows(),
+      ]);
+      return byDateDesc([...a, ...b, ...c, ...d, ...e, ...f]);
     }
     case 'outward_customer':
-      return customerOutwardRows();
+      return customerOutwardRows(null);
+    case 'outward_customer_standard':
+      return customerOutwardRows('standard');
+    case 'outward_customer_replacement':
+      return customerOutwardRows('replacement');
+    case 'outward_customer_service_return':
+      return customerOutwardRows('service_return');
     case 'outward_vendor':
+    case 'outward_vendor_return':
       return vendorOutwardRows();
+    case 'outward_vendor_replacement':
+      return [];
     case 'outward_total': {
-      const [a, b] = await Promise.all([customerOutwardRows(), vendorOutwardRows()]);
+      const [a, b] = await Promise.all([customerOutwardRows(null), vendorOutwardRows()]);
       return byDateDesc([...a, ...b]);
     }
     default:

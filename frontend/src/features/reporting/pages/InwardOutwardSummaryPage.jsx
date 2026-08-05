@@ -398,7 +398,7 @@ export default function InwardOutwardSummaryPage() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-gray-500 text-xs">
                 <tr>
-                  <th className="text-left font-medium px-4 py-3">Party</th>
+                  <th className="text-left font-medium px-4 py-3">Movement</th>
                   <th className="px-4 py-3 text-center">
                     <span className="inline-flex items-center gap-1.5 text-green-700">
                       <ArrowDownToLine className="w-4 h-4" /> Inward
@@ -412,36 +412,82 @@ export default function InwardOutwardSummaryPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                <tr className="hover:bg-gray-50/50">
-                  <td className="px-4 py-3">
-                    <span className="inline-flex items-center gap-2 font-medium text-gray-800">
-                      <Building2 className="w-4 h-4 text-blue-500" /> Vendor
+                <tr className="bg-slate-50/80">
+                  <td className="px-4 py-2.5" colSpan={3}>
+                    <span className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-blue-700">
+                      <Building2 className="w-3.5 h-3.5" /> Vendor
                     </span>
-                    <p className="text-[11px] text-gray-400 ml-6">GRN / purchase · purchase return</p>
                   </td>
-                  <CountCell cell={{ value: inward?.vendor, type: 'inward_vendor', title: 'Inward from Vendor' }} onOpen={openDetail} />
-                  <CountCell cell={{ value: outward?.vendor, type: 'outward_vendor', title: 'Outward to Vendor' }} onOpen={openDetail} />
                 </tr>
                 <tr className="hover:bg-gray-50/50">
-                  <td className="px-4 py-3">
-                    <span className="inline-flex items-center gap-2 font-medium text-gray-800">
-                      <Users className="w-4 h-4 text-amber-500" /> Customer
-                    </span>
-                    <p className="text-[11px] text-gray-400 ml-6">Support pickup / return · challan dispatch</p>
-                  </td>
-                  <CountCell cell={{ value: inward?.customer, type: 'inward_customer', title: 'Inward from Customer' }} onOpen={openDetail} />
-                  <CountCell cell={{ value: outward?.customer, type: 'outward_customer', title: 'Outward to Customer' }} onOpen={openDetail} />
+                  <td className="px-4 py-3 pl-8 text-gray-800">Purchase / GRN</td>
+                  <CountCell cell={{ value: inward?.vendor_purchase, type: 'inward_vendor_purchase', title: 'Inward — Vendor purchase / GRN' }} onOpen={openDetail} />
+                  <CountCell cell={null} onOpen={openDetail} />
                 </tr>
                 <tr className="hover:bg-gray-50/50">
-                  <td className="px-4 py-3">
-                    <span className="inline-flex items-center gap-2 font-medium text-gray-800">
-                      <Truck className="w-4 h-4 text-purple-500" /> Direct
+                  <td className="px-4 py-3 pl-8 text-gray-800">
+                    Return
+                    <p className="text-[11px] text-gray-400">Repair send-out · repaired receive-back</p>
+                  </td>
+                  <CountCell cell={{ value: inward?.vendor_return, type: 'inward_vendor_return', title: 'Inward — Vendor return (repaired)' }} onOpen={openDetail} />
+                  <CountCell cell={{ value: outward?.vendor_return ?? outward?.vendor, type: 'outward_vendor_return', title: 'Outward — Vendor return (repair DC)' }} onOpen={openDetail} />
+                </tr>
+                <tr className="hover:bg-gray-50/50">
+                  <td className="px-4 py-3 pl-8 text-gray-800">
+                    Replacement
+                    <p className="text-[11px] text-gray-400">Replacement unit received from vendor</p>
+                  </td>
+                  <CountCell cell={{ value: inward?.vendor_replacement, type: 'inward_vendor_replacement', title: 'Inward — Vendor replacement' }} onOpen={openDetail} />
+                  <CountCell cell={null} onOpen={openDetail} />
+                </tr>
+
+                <tr className="bg-slate-50/80">
+                  <td className="px-4 py-2.5" colSpan={3}>
+                    <span className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-amber-700">
+                      <Users className="w-3.5 h-3.5" /> Customer
                     </span>
-                    <p className="text-[11px] text-gray-400 ml-6">Courier / Bluedart / manual</p>
+                  </td>
+                </tr>
+                <tr className="hover:bg-gray-50/50">
+                  <td className="px-4 py-3 pl-8 text-gray-800">
+                    Return
+                    <p className="text-[11px] text-gray-400">Warehouse-received pickup / repair return</p>
+                  </td>
+                  <CountCell cell={{ value: inward?.customer_return, type: 'inward_customer_return', title: 'Inward — Customer return' }} onOpen={openDetail} />
+                  <CountCell cell={{ value: outward?.customer_service_return, type: 'outward_customer_service_return', title: 'Outward — Customer service return' }} onOpen={openDetail} />
+                </tr>
+                <tr className="hover:bg-gray-50/50">
+                  <td className="px-4 py-3 pl-8 text-gray-800">
+                    Replacement
+                    <p className="text-[11px] text-gray-400">Old unit in · new unit dispatch</p>
+                  </td>
+                  <CountCell cell={{ value: inward?.customer_replacement, type: 'inward_customer_replacement', title: 'Inward — Customer replacement' }} onOpen={openDetail} />
+                  <CountCell cell={{ value: outward?.customer_replacement, type: 'outward_customer_replacement', title: 'Outward — Customer replacement' }} onOpen={openDetail} />
+                </tr>
+                <tr className="hover:bg-gray-50/50">
+                  <td className="px-4 py-3 pl-8 text-gray-800">
+                    Standard dispatch
+                    <p className="text-[11px] text-gray-400">Normal delivery challan</p>
+                  </td>
+                  <CountCell cell={null} onOpen={openDetail} />
+                  <CountCell cell={{ value: outward?.customer_standard, type: 'outward_customer_standard', title: 'Outward — Customer standard' }} onOpen={openDetail} />
+                </tr>
+
+                <tr className="bg-slate-50/80">
+                  <td className="px-4 py-2.5" colSpan={3}>
+                    <span className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-purple-700">
+                      <Truck className="w-3.5 h-3.5" /> Direct
+                    </span>
+                  </td>
+                </tr>
+                <tr className="hover:bg-gray-50/50">
+                  <td className="px-4 py-3 pl-8 text-gray-800">
+                    Courier / manual / ERP
                   </td>
                   <CountCell cell={{ value: inward?.direct, type: 'inward_direct', title: 'Direct Inward' }} onOpen={openDetail} />
                   <CountCell cell={null} onOpen={openDetail} />
                 </tr>
+
                 <tr className="bg-gray-50">
                   <td className="px-4 py-3 font-semibold text-gray-900">Total</td>
                   <CountCell cell={{ value: inward?.total, type: 'inward_total', title: 'Total Inward Laptops' }} onOpen={openDetail} strong />
@@ -452,9 +498,9 @@ export default function InwardOutwardSummaryPage() {
           </div>
 
           <p className="text-[11px] text-gray-400">
-            Inward counts use each source&apos;s receipt date (vendor GRN, warehouse-received pickups, inward ledger).
-            Outward counts use the dispatch date on delivery challans and vendor repair DCs.
-            The Vendor and Customer filters scope results to the matching movement type. Click any count to view the laptops.
+            Inward: GRN purchase, vendor repaired/replacement receive-back, customer warehouse-received pickups (return vs replacement), and direct ledger.
+            Outward: customer standard / replacement / service-return challans, and vendor repair DC dispatches.
+            Click any count to view the laptops.
           </p>
         </>
       )}
