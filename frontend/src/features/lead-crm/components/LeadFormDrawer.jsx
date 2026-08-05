@@ -1,8 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import {
-  COMPANY_TYPES, GENERATIONS, INQUIRY_TYPES, LAPTOP_BRANDS, LEAD_SOURCES,
-  PROCESSORS, RAM_OPTIONS, STORAGE_OPTIONS, USE_CASES, EXCLUDED_LEAD_ASSIGNEES,
+  COMPANY_TYPES, INQUIRY_TYPES, LEAD_SOURCES, USE_CASES, EXCLUDED_LEAD_ASSIGNEES,
 } from '../leadConstants';
 import { filterAssignableUsers } from '../leadCrmUtils';
 import { INDIAN_STATES } from '../../../constants/indianStates';
@@ -10,6 +9,7 @@ import { createLead, getAssignableUsers, updateLeadBasic, updateLeadProfile } fr
 import toast from 'react-hot-toast';
 import { formatIndianMobileInput, indianMobileError, normalizeIndianMobile } from '../../../utils/phoneValidation';
 import SearchableSelect from '../../operation-management/components/SearchableSelect';
+import useAssetCascadeCatalog from '../../../hooks/useAssetCascadeCatalog';
 
 const emptyForm = () => ({
   company_name: '', company_brand: '', name: '', designation: '', email: '', phone: '', whatsapp_number: '',
@@ -20,12 +20,27 @@ const emptyForm = () => ({
   assigned_user_id: '', follow_up_date: '', follow_up_time: '', personal_remarks: '',
 });
 
+/** Keep legacy lead values visible when they are not yet in asset configuration. */
+function withCurrentValue(options, current) {
+  const list = options || [];
+  if (!current || list.includes(current)) return list;
+  return [current, ...list];
+}
+
 export default function LeadFormDrawer({ open, lead, onClose, onSaved }) {
   const [form, setForm] = useState(emptyForm());
   const [errors, setErrors] = useState({});
   const [users, setUsers] = useState([]);
   const [saving, setSaving] = useState(false);
   const isEdit = !!lead;
+
+  const {
+    brands,
+    specMasters,
+    processorsByBrand,
+    generationsByBrand,
+    loadBrandData,
+  } = useAssetCascadeCatalog(open);
 
   useEffect(() => {
     if (open) {
@@ -77,9 +92,42 @@ export default function LeadFormDrawer({ open, lead, onClose, onSaved }) {
     setErrors({});
   }, [lead, open]);
 
-  if (!open) return null;
+  useEffect(() => {
+    if (!open || !form.brand) return;
+    loadBrandData(form.brand);
+  }, [open, form.brand, loadBrandData]);
 
-  const set = (key, value) => setForm((f) => ({ ...f, [key]: value }));
+  const brandOptions = useMemo(() => withCurrentValue(brands, form.brand), [brands, form.brand]);
+  const processorOptions = useMemo(
+    () => withCurrentValue(processorsByBrand[form.brand] || [], form.processor),
+    [processorsByBrand, form.brand, form.processor],
+  );
+  const generationOptions = useMemo(
+    () => withCurrentValue(generationsByBrand[form.brand] || [], form.generation),
+    [generationsByBrand, form.brand, form.generation],
+  );
+  const ramOptions = useMemo(
+    () => withCurrentValue(specMasters.rams, form.ram),
+    [specMasters.rams, form.ram],
+  );
+  const storageOptions = useMemo(
+    () => withCurrentValue(specMasters.storages, form.storage),
+    [specMasters.storages, form.storage],
+  );
+
+  const set = useCallback((key, value) => {
+    setForm((f) => {
+      const next = { ...f, [key]: value };
+      if (key === 'brand') {
+        next.processor = '';
+        next.generation = '';
+        if (value) loadBrandData(value);
+      }
+      return next;
+    });
+  }, [loadBrandData]);
+
+  if (!open) return null;
 
   const validate = () => {
     const e = {};
@@ -164,6 +212,7 @@ export default function LeadFormDrawer({ open, lead, onClose, onSaved }) {
           onChange={(v) => set(key, v)}
           options={opts.options || []}
           placeholder={opts.placeholder || 'Select'}
+          disabled={!!opts.disabled}
         />
       ) : (
         <>
@@ -223,11 +272,11 @@ export default function LeadFormDrawer({ open, lead, onClose, onSaved }) {
           <section>
             <h3 className="text-sm font-semibold text-gray-800 mb-3">Requirement</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {field('brand', 'Laptop Brand', { type: 'searchable', options: LAPTOP_BRANDS })}
-              {field('processor', 'Processor', { type: 'searchable', options: PROCESSORS })}
-              {field('generation', 'Generation', { type: 'searchable', options: GENERATIONS })}
-              {field('ram', 'RAM', { type: 'searchable', options: RAM_OPTIONS })}
-              {field('storage', 'Storage', { type: 'searchable', options: STORAGE_OPTIONS })}
+              {field('brand', 'Laptop Brand', { type: 'searchable', options: brandOptions })}
+              {field('processor', 'Processor', { type: 'searchable', options: processorOptions, disabled: !form.brand })}
+              {field('generation', 'Generation', { type: 'searchable', options: generationOptions, disabled: !form.brand })}
+              {field('ram', 'RAM', { type: 'searchable', options: ramOptions })}
+              {field('storage', 'Storage', { type: 'searchable', options: storageOptions })}
               {field('quantity_required', 'Quantity', { type: 'number' })}
               {field('monthly_budget', 'Monthly Budget (₹)', { type: 'number' })}
               {field('rental_duration', 'Rental Duration (months)', { type: 'number' })}
