@@ -26,7 +26,9 @@ export default function TtsplHistoryModal({ ttsplId, onClose }) {
     return () => { alive = false; };
   }, [ttsplId]);
 
-  const audit = data?.auditLog || [];
+  const audit = [...(data?.auditLog || [])].sort(
+    (a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0),
+  );
   const cost = data?.costSummary || null;
   const fmtDt = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
 

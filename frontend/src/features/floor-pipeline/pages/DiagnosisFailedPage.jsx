@@ -13,6 +13,8 @@ import { fetchDeliveryTechnicians } from '../../../utils/deliveryRegisterApi';
 import { ticketStatusLabel } from '../floorPipelineUi';
 import { formatStateLabel } from '../../vendor-management/vendorMgmtUi';
 import FloorPipelineFilterPanel from '../components/FloorPipelineFilterPanel';
+import TtsplHistoryDrawer from '../components/TtsplHistoryDrawer';
+import TtsplHistoryLink from '../components/TtsplHistoryLink';
 import { formatIndianMobileInput, indianMobileError, normalizeIndianMobile } from '../../../utils/phoneValidation';
 import { EMPTY_SPEC_FILTERS } from '../../inventory-management/inventorySpecFilters';
 import useDebouncedSpecParams from '../../inventory-management/hooks/useDebouncedSpecParams';
@@ -51,6 +53,7 @@ export default function DiagnosisFailedPage() {
   const [itemHsnCodes, setItemHsnCodes] = useState({});
   const [defaultHsn, setDefaultHsn] = useState('847330');
   const [ewayThreshold, setEwayThreshold] = useState(50000);
+  const [historyTtspl, setHistoryTtspl] = useState(null);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [specFilters, setSpecFilters] = useState(EMPTY_SPEC_FILTERS);
@@ -326,7 +329,12 @@ export default function DiagnosisFailedPage() {
                       #{r.ticket_id}
                     </Link>
                   </td>
-                  <td className="p-3 font-mono text-xs">{r.ttspl_id || '—'}</td>
+                  <td className="p-3">
+                    <TtsplHistoryLink
+                      ttsplId={r.ttspl_id}
+                      onOpen={setHistoryTtspl}
+                    />
+                  </td>
                   <td className="p-3 text-xs max-w-[220px]">{r.configuration || '—'}</td>
                   <td className="p-3">
                     <span className="px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-900">
@@ -487,6 +495,12 @@ export default function DiagnosisFailedPage() {
           </div>
         </div>
       ) : null}
+
+      <TtsplHistoryDrawer
+        ttsplId={historyTtspl}
+        open={Boolean(historyTtspl)}
+        onClose={() => setHistoryTtspl(null)}
+      />
     </div>
   );
 }

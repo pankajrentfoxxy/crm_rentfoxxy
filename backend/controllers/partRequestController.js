@@ -1161,7 +1161,7 @@ exports.getPartCostSummary = async (req, res) => {
          LEFT JOIN ticket_parts tp ON tp.part_id = pi.part_id AND tp.ticket_id = pi.installed_ticket_id
         WHERE UPPER(COALESCE(pi.installed_ttspl_id, '')) = ANY($1::text[])
           AND pi.status = 'installed'
-        ORDER BY pi.installed_at ASC`,
+        ORDER BY pi.installed_at DESC NULLS LAST`,
       [aliasArr]
     );
 

@@ -15,6 +15,8 @@ import { invalidateInventoryManagement } from '../inventoryCountsEvents';
 import InventorySpecFilterBar from '../components/InventorySpecFilterBar';
 import { EMPTY_SPEC_FILTERS, SPEC_FILTER_KEYS } from '../inventorySpecFilters';
 import useDebouncedSpecParams from '../hooks/useDebouncedSpecParams';
+import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
+import TtsplHistoryLink from '../../floor-pipeline/components/TtsplHistoryLink';
 
 const PAGE_SIZE = 25;
 const WAREHOUSE_ROLES = new Set(['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'support_lead']);
@@ -41,6 +43,7 @@ export default function OutForRepairInventoryPage() {
   const canReceive = WAREHOUSE_ROLES.has(user?.role);
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState([]);
+  const [historyTtspl, setHistoryTtspl] = useState(null);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const { filters, setFilters } = useUrlFilters(OUT_FOR_REPAIR_FILTER_DEFAULTS);
   const { page, dateFrom, dateTo } = filters;
@@ -214,8 +217,20 @@ export default function OutForRepairInventoryPage() {
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.id} className="border-t hover:bg-slate-50/80 align-top">
-                    <td className="p-3 font-mono text-xs">{r.ttspl_id || '—'}</td>
-                    <td className="p-3 font-mono text-xs">{r.serial_number || '—'}</td>
+                    <td className="p-3">
+                      <TtsplHistoryLink ttsplId={r.ttspl_id} onOpen={setHistoryTtspl} />
+                    </td>
+                    <td className="p-3">
+                      {r.serial_number && r.ttspl_id ? (
+                        <TtsplHistoryLink
+                          ttsplId={r.ttspl_id}
+                          label={r.serial_number}
+                          onOpen={setHistoryTtspl}
+                        />
+                      ) : (
+                        <span className="font-mono text-xs text-slate-500">{r.serial_number || '—'}</span>
+                      )}
+                    </td>
                     <td className="p-3 text-xs">
                       <div>{[r.brand, r.model].filter(Boolean).join(' / ') || '—'}</div>
                       <div className="text-slate-400 max-w-[160px] truncate">{r.configuration || ''}</div>
@@ -296,6 +311,12 @@ export default function OutForRepairInventoryPage() {
           />
         </>
       )}
+
+      <TtsplHistoryDrawer
+        ttsplId={historyTtspl}
+        open={Boolean(historyTtspl)}
+        onClose={() => setHistoryTtspl(null)}
+      />
     </div>
   );
 }

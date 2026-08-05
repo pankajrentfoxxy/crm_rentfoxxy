@@ -80,7 +80,101 @@ async function runBillingBatch(runName, fn) {
   }
 }
 
-async function generateCustomerInvoice(customerId, month, year) {
+/**
+ * Build prorated line items for unbilled rental serials and advance rent_billed_until.
+ * Mutates serial rows via the open transaction client.
+ */
+async function buildCustomerInvoiceLines(client, {
+  customerId, month, year, monthStart, monthEnd, includeCurrentMonthStarts = false,
+}) {
+  // Default (cron): mid-month starts wait for the NEXT month (billing lag) —
+  // rent_start_date <= monthStart. On-delivery invoices pass
+  // includeCurrentMonthStarts so delivery-date → month-end is billed immediately.
+  const startCutoff = includeCurrentMonthStarts ? monthEnd : monthStart;
+  const serialsRes = await client.query(
+    `SELECT vsn.serial_id,
+            COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
+            vsn.serial_number,
+            vsn.current_dc_number AS dc_number,
+            vsn.inventory_status,
+            vsn.rent_start_date,
+            vsn.rent_billed_until,
+            COALESCE(vsn.rent_end_date, vsn.returned_at::date) AS rent_end_date,
+            vsn.rent_monthly_rate,
+            COALESCE(vsn.extra->>'brand', '') AS brand,
+            COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', '') AS model
+       FROM vendor_serial_numbers vsn
+      WHERE vsn.current_customer_id = $1
+        AND vsn.deleted_at IS NULL
+        AND vsn.inventory_status IN ('rented', 'returned')
+        AND vsn.rent_start_date IS NOT NULL
+        AND vsn.rent_start_date <= $2::date
+        AND (vsn.rent_billed_until IS NULL OR vsn.rent_billed_until < $3::date)
+      FOR UPDATE`,
+    [customerId, toLocalYmd(startCutoff), toLocalYmd(monthEnd)]
+  );
+
+  const lineItems = [];
+  let subtotal = 0;
+  let periodStart = null;
+  let periodEnd = null;
+
+  for (const row of serialsRes.rows) {
+    const rentStart = new Date(row.rent_start_date);
+    const billedUntil = row.rent_billed_until ? new Date(row.rent_billed_until) : null;
+    const rentEnd = row.rent_end_date ? new Date(row.rent_end_date) : null;
+
+    let billStart = billedUntil ? addDays(billedUntil, 1) : rentStart;
+    if (billStart < rentStart) billStart = rentStart;
+
+    let billEnd = monthEnd;
+    if (rentEnd && rentEnd < billEnd) billEnd = rentEnd;
+
+    if (billStart > billEnd) continue;
+
+    const monthlyRate = parseFloat(row.rent_monthly_rate || 0);
+    for (const seg of monthSegments(billStart, billEnd)) {
+      const days = daysInclusive(seg.segStart, seg.segEnd);
+      const dailyRate = monthlyRate / seg.daysInMonth;
+      const amount = parseFloat((dailyRate * days).toFixed(2));
+      subtotal += amount;
+      const isCatchup = seg.year !== year || seg.month !== month;
+      lineItems.push({
+        serial_id: row.serial_id,
+        ttspl_id: row.ttspl_id || null,
+        serial_number: row.serial_number,
+        dc_number: row.dc_number,
+        brand: row.brand || '',
+        model: row.model || '',
+        period: `${seg.year}-${String(seg.month).padStart(2, '0')}`,
+        rent_start: toLocalYmd(seg.segStart),
+        rent_end: toLocalYmd(seg.segEnd),
+        days_in_month: days,
+        month_days: seg.daysInMonth,
+        monthly_rate: monthlyRate,
+        daily_rate: parseFloat(dailyRate.toFixed(2)),
+        amount,
+        is_catchup: isCatchup,
+        returned: row.inventory_status === 'returned',
+      });
+    }
+
+    if (!periodStart || billStart < periodStart) periodStart = billStart;
+    if (!periodEnd || billEnd > periodEnd) periodEnd = billEnd;
+
+    await client.query(
+      `UPDATE vendor_serial_numbers SET rent_billed_until = $1, updated_at = NOW()
+       WHERE serial_id = $2`,
+      [toLocalYmd(billEnd), row.serial_id]
+    );
+  }
+
+  return { lineItems, subtotal, periodStart, periodEnd };
+}
+
+async function generateCustomerInvoice(customerId, month, year, options = {}) {
+  const includeCurrentMonthStarts = Boolean(options.includeCurrentMonthStarts);
+  const appendToDraft = Boolean(options.appendToDraft);
   const monthStart = new Date(year, month - 1, 1);
   const monthEnd = new Date(year, month, 0);
 
@@ -89,95 +183,83 @@ async function generateCustomerInvoice(customerId, month, year) {
     await client.query('BEGIN');
 
     const existing = await client.query(
-      `SELECT invoice_id FROM customer_invoices
-       WHERE customer_id = $1 AND invoice_month = $2 AND invoice_year = $3`,
+      `SELECT invoice_id, invoice_number, status, line_items, subtotal,
+              gst_percent, credit_note_adjustment, from_date, to_date
+         FROM customer_invoices
+        WHERE customer_id = $1 AND invoice_month = $2 AND invoice_year = $3
+        FOR UPDATE`,
       [customerId, month, year]
     );
-    if (existing.rows.length) {
+
+    const canAppend = appendToDraft
+      && existing.rows.length
+      && String(existing.rows[0].status || '').toLowerCase() === 'draft';
+
+    if (existing.rows.length && !canAppend) {
       await client.query('ROLLBACK');
       return { skipped: true, invoice_id: existing.rows[0].invoice_id };
     }
 
-    // Billing lag: mid-month deliveries wait for the NEXT month's invoice
-    // (prior-month days as catch-up + full current month).
-    // Starts on the 1st of the billing month are included in that month
-    // (rent_start_date <= monthStart).
-    const serialsRes = await client.query(
-      `SELECT vsn.serial_id,
-              COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
-              vsn.serial_number,
-              vsn.current_dc_number AS dc_number,
-              vsn.inventory_status,
-              vsn.rent_start_date,
-              vsn.rent_billed_until,
-              COALESCE(vsn.rent_end_date, vsn.returned_at::date) AS rent_end_date,
-              vsn.rent_monthly_rate,
-              COALESCE(vsn.extra->>'brand', '') AS brand,
-              COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', '') AS model
-         FROM vendor_serial_numbers vsn
-        WHERE vsn.current_customer_id = $1
-          AND vsn.deleted_at IS NULL
-          AND vsn.inventory_status IN ('rented', 'returned')
-          AND vsn.rent_start_date IS NOT NULL
-          AND vsn.rent_start_date <= $2::date
-          AND (vsn.rent_billed_until IS NULL OR vsn.rent_billed_until < $3::date)
-        FOR UPDATE`,
-      [customerId, toLocalYmd(monthStart), toLocalYmd(monthEnd)]
-    );
+    const built = await buildCustomerInvoiceLines(client, {
+      customerId, month, year, monthStart, monthEnd, includeCurrentMonthStarts,
+    });
+    const { lineItems, subtotal, periodStart, periodEnd } = built;
 
-    const lineItems = [];
-    let subtotal = 0;
-    let periodStart = null;
-    let periodEnd = null;
-
-    for (const row of serialsRes.rows) {
-      const rentStart = new Date(row.rent_start_date);
-      const billedUntil = row.rent_billed_until ? new Date(row.rent_billed_until) : null;
-      const rentEnd = row.rent_end_date ? new Date(row.rent_end_date) : null;
-
-      let billStart = billedUntil ? addDays(billedUntil, 1) : rentStart;
-      if (billStart < rentStart) billStart = rentStart;
-
-      let billEnd = monthEnd;
-      if (rentEnd && rentEnd < billEnd) billEnd = rentEnd;
-
-      if (billStart > billEnd) continue;
-
-      const monthlyRate = parseFloat(row.rent_monthly_rate || 0);
-      for (const seg of monthSegments(billStart, billEnd)) {
-        const days = daysInclusive(seg.segStart, seg.segEnd);
-        const dailyRate = monthlyRate / seg.daysInMonth;
-        const amount = parseFloat((dailyRate * days).toFixed(2));
-        subtotal += amount;
-        const isCatchup = seg.year !== year || seg.month !== month;
-        lineItems.push({
-          serial_id: row.serial_id,
-          ttspl_id: row.ttspl_id || null,
-          serial_number: row.serial_number,
-          dc_number: row.dc_number,
-          brand: row.brand || '',
-          model: row.model || '',
-          period: `${seg.year}-${String(seg.month).padStart(2, '0')}`,
-          rent_start: toLocalYmd(seg.segStart),
-          rent_end: toLocalYmd(seg.segEnd),
-          days_in_month: days,
-          month_days: seg.daysInMonth,
-          monthly_rate: monthlyRate,
-          daily_rate: parseFloat(dailyRate.toFixed(2)),
-          amount,
-          is_catchup: isCatchup,
-          returned: row.inventory_status === 'returned',
-        });
+    if (canAppend) {
+      const inv = existing.rows[0];
+      // Second (or later) delivery in the same month: append unbilled lines onto
+      // the existing draft. Sent/approved invoices stay untouched — cron catch-up
+      // remains the safety net for any still-unbilled spans.
+      if (!lineItems.length) {
+        await client.query('ROLLBACK');
+        return { skipped: true, invoice_id: inv.invoice_id, reason: 'No new unbilled rental lines' };
       }
+      const prevLines = Array.isArray(inv.line_items)
+        ? inv.line_items
+        : (typeof inv.line_items === 'string' ? JSON.parse(inv.line_items || '[]') : []);
+      const merged = [...prevLines, ...lineItems];
+      const newSubtotal = parseFloat((parseFloat(inv.subtotal || 0) + subtotal).toFixed(2));
+      const gstPercent = parseFloat(inv.gst_percent != null ? inv.gst_percent : 18);
+      const creditAdjustment = parseFloat(inv.credit_note_adjustment || 0);
+      const gstAmount = parseFloat((newSubtotal * gstPercent / 100).toFixed(2));
+      const grandTotal = Math.max(0, parseFloat((newSubtotal + gstAmount - creditAdjustment).toFixed(2)));
 
-      if (!periodStart || billStart < periodStart) periodStart = billStart;
-      if (!periodEnd || billEnd > periodEnd) periodEnd = billEnd;
+      const prevFrom = inv.from_date ? new Date(inv.from_date) : null;
+      const prevTo = inv.to_date ? new Date(inv.to_date) : null;
+      const fromDate = periodStart && (!prevFrom || periodStart < prevFrom) ? periodStart : (prevFrom || periodStart || monthStart);
+      const toDate = periodEnd && (!prevTo || periodEnd > prevTo) ? periodEnd : (prevTo || periodEnd || monthEnd);
 
       await client.query(
-        `UPDATE vendor_serial_numbers SET rent_billed_until = $1, updated_at = NOW()
-         WHERE serial_id = $2`,
-        [toLocalYmd(billEnd), row.serial_id]
+        `UPDATE customer_invoices
+            SET line_items = $1::jsonb,
+                subtotal = $2,
+                gst_amount = $3,
+                grand_total = $4,
+                from_date = $5,
+                to_date = $6,
+                updated_at = NOW()
+          WHERE invoice_id = $7`,
+        [
+          JSON.stringify(merged),
+          newSubtotal.toFixed(2),
+          gstAmount,
+          grandTotal,
+          toLocalYmd(fromDate),
+          toLocalYmd(toDate),
+          inv.invoice_id,
+        ]
       );
+      await insertCustomerInvoiceLines(client, inv.invoice_id, lineItems);
+      await client.query('COMMIT');
+      billingLog.info(
+        { invoiceNumber: inv.invoice_number, customerId, appended: lineItems.length },
+        'Appended unbilled lines to draft PREPAID customer invoice'
+      );
+      return {
+        invoice_id: inv.invoice_id,
+        invoice_number: inv.invoice_number,
+        appended: true,
+      };
     }
 
     if (!lineItems.length) {
@@ -245,6 +327,181 @@ async function generateCustomerInvoice(customerId, month, year) {
   } finally {
     client.release();
   }
+}
+
+function monthYearFromRentStart(value) {
+  if (value == null || value === '') return null;
+  let ymd;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    // pg DATE often arrives as a JS Date (UTC midnight of the calendar day).
+    // Billing uses local calendar dates — match that.
+    ymd = toLocalYmd(value);
+  } else {
+    const s = String(value).trim();
+    const iso = s.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (iso) {
+      ymd = iso[1];
+    } else {
+      const d = new Date(s);
+      if (Number.isNaN(d.getTime())) return null;
+      ymd = toLocalYmd(d);
+    }
+  }
+  const [year, month] = ymd.split('-').map(Number);
+  if (!year || !month) return null;
+  return { month, year };
+}
+
+/**
+ * Post-commit trigger for first-period rental billing on delivery (or demo→keep).
+ * Gates: rented, rent_billed_until IS NULL, rent_start_date + rent_monthly_rate set.
+ * Never throws to callers — failures are logged; the 1st-of-month cron is the safety net.
+ */
+async function maybeInvoiceOnRentalDelivery({
+  customerId,
+  dcNumber = null,
+  serialIds = null,
+  quotationType = 'rental',
+} = {}) {
+  const qt = String(quotationType || 'rental').toLowerCase();
+  if (qt === 'demo' || qt === 'sales' || qt === 'sale') {
+    return { skipped: true, reason: `not a rental (${qt})` };
+  }
+  if (!customerId) {
+    return { skipped: true, reason: 'no customer' };
+  }
+
+  try {
+    const params = [customerId];
+    let extra = '';
+    if (dcNumber) {
+      params.push(dcNumber);
+      extra += ` AND current_dc_number = $${params.length}`;
+    } else if (Array.isArray(serialIds) && serialIds.length) {
+      params.push(serialIds);
+      extra += ` AND serial_id = ANY($${params.length}::int[])`;
+    }
+
+    const candidates = await pool.query(
+      `SELECT serial_id, rent_start_date
+         FROM vendor_serial_numbers
+        WHERE current_customer_id = $1
+          AND deleted_at IS NULL
+          AND inventory_status = 'rented'
+          AND rent_billed_until IS NULL
+          AND rent_start_date IS NOT NULL
+          AND rent_monthly_rate IS NOT NULL
+          AND rent_monthly_rate > 0
+          ${extra}
+        ORDER BY rent_start_date ASC`,
+      params
+    );
+
+    if (!candidates.rows.length) {
+      billingLog.info(
+        { customerId, dcNumber, serialIds },
+        'On-delivery invoice skipped — no first-billed rental assets'
+      );
+      return { skipped: true, reason: 'no first-billed rental assets' };
+    }
+
+    const anchor = monthYearFromRentStart(candidates.rows[0].rent_start_date);
+    if (!anchor) {
+      billingLog.warn({ customerId, dcNumber }, 'On-delivery invoice skipped — invalid rent_start_date');
+      return { skipped: true, reason: 'invalid rent_start_date' };
+    }
+
+    const result = await generateCustomerInvoice(customerId, anchor.month, anchor.year, {
+      includeCurrentMonthStarts: true,
+      appendToDraft: true,
+    });
+
+    if (result.skipped) {
+      billingLog.info(
+        { customerId, dcNumber, month: anchor.month, year: anchor.year, ...result },
+        'On-delivery invoice skipped (idempotent)'
+      );
+    } else {
+      billingLog.info(
+        { customerId, dcNumber, month: anchor.month, year: anchor.year, ...result },
+        'On-delivery rental invoice generated'
+      );
+    }
+
+    // Always email + mark sent after a new/appended on-delivery invoice.
+    // Opt out with INVOICE_EMAIL_ON_DELIVERY=false.
+    const emailDisabled = String(process.env.INVOICE_EMAIL_ON_DELIVERY || 'true').toLowerCase() === 'false';
+    if (!emailDisabled && result.invoice_id && !result.skipped) {
+      try {
+        const sent = await sendGeneratedCustomerInvoice(result.invoice_id);
+        result.email_sent = sent;
+        billingLog.info(
+          { customerId, invoiceId: result.invoice_id, email_sent: sent },
+          'On-delivery invoice send attempted'
+        );
+      } catch (mailErr) {
+        billingLog.error(
+          { customerId, invoiceId: result.invoice_id, err: mailErr.message },
+          'On-delivery invoice email failed'
+        );
+        result.email_error = mailErr.message;
+      }
+    }
+
+    return result;
+  } catch (err) {
+    billingLog.error(
+      { customerId, dcNumber, serialIds, err: err.message },
+      'On-delivery rental invoice failed — monthly cron remains the safety net'
+    );
+    return { error: err.message };
+  }
+}
+
+/** Generate PDF, email customer, mark invoice sent. Returns whether SMTP accepted the mail. */
+async function sendGeneratedCustomerInvoice(invoiceId, actorUserId = null) {
+  const ctrl = require('../controllers/customerBillingController');
+  const { emailDocument } = require('./salesManagementPdfService');
+  const invRes = await pool.query(
+    `SELECT ci.*, c.company_name AS customer_name, c.email AS customer_email
+       FROM customer_invoices ci
+       LEFT JOIN customers c ON c.customer_id = ci.customer_id
+      WHERE ci.invoice_id = $1`,
+    [invoiceId]
+  );
+  const invoice = invRes.rows[0];
+  if (!invoice) throw new Error('Invoice not found');
+  if (!invoice.customer_email) {
+    billingLog.warn({ invoiceId }, 'On-delivery invoice has no customer email — marked sent without email');
+  }
+
+  let pdfPath = invoice.pdf_path;
+  if (typeof ctrl._generateInvoicePdf === 'function') {
+    pdfPath = await ctrl._generateInvoicePdf(invoice);
+    await pool.query(
+      `UPDATE customer_invoices SET pdf_path = $1, updated_at = NOW() WHERE invoice_id = $2`,
+      [pdfPath, invoiceId]
+    );
+  }
+
+  let sent = false;
+  if (invoice.customer_email && pdfPath) {
+    sent = await emailDocument({
+      to: invoice.customer_email,
+      subject: `Invoice ${invoice.invoice_number} — Rentfoxxy`,
+      text: `Please find attached invoice ${invoice.invoice_number} for the billing period ${invoice.from_date} to ${invoice.to_date}.`,
+      pdfRelativePath: pdfPath,
+    });
+  }
+
+  await pool.query(
+    `UPDATE customer_invoices
+        SET status = 'sent', sent_at = NOW(), sent_by = $1, updated_at = NOW()
+      WHERE invoice_id = $2 AND status = 'draft'`,
+    [actorUserId, invoiceId]
+  );
+
+  return Boolean(sent);
 }
 
 async function createReturnCreditNote(client, { serialId, returnDate, returnTicketId = null, actorUserId = null }) {
@@ -504,4 +761,6 @@ module.exports = {
   generateAllVendorBills,
   createReturnCreditNote,
   runBillingBatch,
+  maybeInvoiceOnRentalDelivery,
+  sendGeneratedCustomerInvoice,
 };

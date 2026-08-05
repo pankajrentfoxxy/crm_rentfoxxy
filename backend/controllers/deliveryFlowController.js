@@ -35,6 +35,31 @@ async function regenerateDcPdfSafe(dcNumber) {
   }
 }
 
+/** Post-commit first-period rental invoice — never throws to the delivery caller. */
+async function fireOnDeliveryRentalInvoice(dcNumber, logLabel) {
+  try {
+    const { maybeInvoiceOnRentalDelivery } = require('../services/billingSchedulerService');
+    const ctxRes = await pool.query(
+      `SELECT dcl.customer_id,
+              COALESCE(sol.quotation_type, sq.quotation_type, 'rental') AS quotation_type
+         FROM delivery_challan_lines dcl
+         LEFT JOIN sales_order_lines sol ON sol.sales_order_number = dcl.sales_order_number
+         LEFT JOIN sales_quotations sq ON sq.quotation_number = dcl.quotation_number
+        WHERE dcl.dc_number = $1
+        LIMIT 1`,
+      [dcNumber]
+    );
+    const ctx = ctxRes.rows[0] || {};
+    await maybeInvoiceOnRentalDelivery({
+      customerId: ctx.customer_id || null,
+      dcNumber,
+      quotationType: ctx.quotation_type || 'rental',
+    });
+  } catch (billingErr) {
+    console.error(`${logLabel} on-delivery invoice:`, billingErr.message);
+  }
+}
+
 const ADMIN_ROLES = ['admin', 'manager', 'super_admin', 'support_lead'];
 
 const podDir = path.join(__dirname, '..', 'uploads', 'pod');
@@ -527,6 +552,8 @@ exports.submitDeliveryWithPod = async (req, res) => {
     await sm.finalizeDeliveryInventory(client, dcNumber, req.user);
     await client.query('COMMIT');
 
+    await fireOnDeliveryRentalInvoice(dcNumber, 'submitDeliveryWithPod');
+
     // Rebuild the DC PDF so the just-captured e-signature shows in its
     // Signature section.
     await regenerateDcPdfSafe(dcNumber);
@@ -599,6 +626,9 @@ exports.adminDeliverOverride = async (req, res) => {
     );
     await sm.finalizeDeliveryInventory(client, dcNumber, req.user);
     await client.query('COMMIT');
+
+    await fireOnDeliveryRentalInvoice(dcNumber, 'adminDeliverOverride');
+
     res.json({ success: true, message: 'Delivery confirmed (admin override)' });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});

@@ -113,6 +113,20 @@ exports.decideDemo = async (req, res) => {
     }
 
     await client.query('COMMIT');
+
+    if (decision === 'keep' && demo.customer_id && demo.serial_id) {
+      try {
+        const { maybeInvoiceOnRentalDelivery } = require('../services/billingSchedulerService');
+        await maybeInvoiceOnRentalDelivery({
+          customerId: demo.customer_id,
+          serialIds: [demo.serial_id],
+          quotationType: 'rental',
+        });
+      } catch (billingErr) {
+        console.error('decideDemo on-delivery invoice:', billingErr.message);
+      }
+    }
+
     res.json({ success: true, message: `Demo marked '${decision}'` });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});

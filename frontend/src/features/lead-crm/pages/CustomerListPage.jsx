@@ -19,8 +19,8 @@ const TYPE_EDIT_ROLES = new Set(['admin', 'super_admin']);
 const PAGE_SIZE = 25;
 
 // Remembers page + filters so returning from a customer's detail restores the list
-// position instead of resetting to page 1.
-const LIST_STATE_KEY = 'lead-crm:customers:list-state';
+// position instead of resetting to page 1. (v2: default sort is newest-first / desc)
+const LIST_STATE_KEY = 'lead-crm:customers:list-state-v2';
 
 function readSavedListState() {
   try {
@@ -39,12 +39,18 @@ export default function CustomerListPage() {
   const { user } = useAuth();
   const canExportCustomers = EXPORT_ROLES.has(user?.role);
   const canBulkEditType = TYPE_EDIT_ROLES.has(user?.role);
-  const saved = useMemo(() => readSavedListState(), []);
+  const saved = useMemo(() => {
+    try {
+      // Drop legacy list-state that defaulted to ascending.
+      sessionStorage.removeItem('lead-crm:customers:list-state');
+    } catch { /* ignore */ }
+    return readSavedListState();
+  }, []);
   const [customers, setCustomers] = useState([]);
   const [page, setPage] = useState(() => saved.page || 1);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
   const [search, setSearch] = useState(() => saved.search || '');
-  const [sortDir, setSortDir] = useState(() => saved.sortDir || 'asc');
+  const [sortDir, setSortDir] = useState('desc');
   const [kycFilter, setKycFilter] = useState(() => saved.kycFilter || '');
   const [customerType, setCustomerType] = useState(() => saved.customerType || 'all');
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -90,6 +96,7 @@ export default function CustomerListPage() {
   useEffect(() => { load(); }, [load]);
 
   // Persist page + filters so returning from a detail view restores this list.
+  // Always start newest-first on a fresh visit; sortDir is persisted only after user toggles.
   useEffect(() => {
     try {
       sessionStorage.setItem(
@@ -533,7 +540,22 @@ export default function CustomerListPage() {
         </div>
       )}
 
-      <CustomerFormDrawer open={drawerOpen} customer={editCustomer} onClose={() => setDrawerOpen(false)} onSaved={() => load()} />
+      <CustomerFormDrawer
+        open={drawerOpen}
+        customer={editCustomer}
+        onClose={() => setDrawerOpen(false)}
+        onSaved={() => {
+          // New customers sort newest-first — ensure page 1 + desc so they appear on top.
+          if (!editCustomer) {
+            setSortDir('desc');
+            setPage(1);
+            // If already on page 1 with desc, state won't change — refresh explicitly.
+            if (page === 1 && sortDir === 'desc') load();
+            return;
+          }
+          load();
+        }}
+      />
       <BulkCustomerTypeModal
         open={bulkModalOpen}
         customers={selectedCustomers}

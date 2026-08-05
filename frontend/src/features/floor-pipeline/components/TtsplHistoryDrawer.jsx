@@ -23,12 +23,16 @@ export default function TtsplHistoryDrawer({ ttsplId, open, onClose }) {
         if (cancelled) return;
         const data = histRes?.data;
         if (data?.success) {
-          setAuditLog(data.auditLog || []);
-          setConfigHistory(data.configHistory || []);
+          const byNewest = (a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0);
+          setAuditLog([...(data.auditLog || [])].sort(byNewest));
+          setConfigHistory([...(data.configHistory || [])].sort(byNewest));
           setCostSummary(data.costSummary || null);
         }
         if (costRes?.data?.success) {
-          setPartsBreakdown(costRes.data.parts_breakdown || []);
+          const parts = [...(costRes.data.parts_breakdown || [])].sort(
+            (a, b) => new Date(b.installed_at || 0) - new Date(a.installed_at || 0),
+          );
+          setPartsBreakdown(parts);
           setCostSummary((prev) => ({
             base_cost: costRes.data.base_cost,
             parts_cost: costRes.data.parts_cost,

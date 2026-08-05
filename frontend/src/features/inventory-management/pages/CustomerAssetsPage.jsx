@@ -5,6 +5,8 @@ import InventoryPageShell from '../components/InventoryPageShell';
 import { SearchField, ListPagination } from '../../../components/ui/primitives';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import { fetchCustomerAssets } from '../inventoryManagementApi';
+import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
+import TtsplHistoryLink from '../../floor-pipeline/components/TtsplHistoryLink';
 
 const PAGE_SIZE = 25;
 
@@ -40,6 +42,7 @@ export default function CustomerAssetsPage() {
   const [toDate, setToDate] = useState('');
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [loading, setLoading] = useState(true);
+  const [historyTtspl, setHistoryTtspl] = useState(null);
 
   useEffect(() => { setPage(1); }, [search, status, fromDate, toDate]);
 
@@ -146,7 +149,12 @@ export default function CustomerAssetsPage() {
         ) : rows.map((r) => (
           <div key={r.serial_id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
             <div className="flex items-center justify-between gap-2">
-              <span className="font-semibold text-gray-900">{r.ttspl_id || r.serial_number || '—'}</span>
+              <TtsplHistoryLink
+                ttsplId={r.ttspl_id || r.serial_number}
+                label={r.ttspl_id || r.serial_number || '—'}
+                className="font-semibold text-blue-700 hover:underline text-left"
+                onOpen={setHistoryTtspl}
+              />
               <span className={['inline-block px-2 py-0.5 rounded-full text-[11px] font-medium capitalize', STATUS_STYLES[r.inventory_status] || 'bg-gray-100 text-gray-700'].join(' ')}>
                 {String(r.inventory_status || '').replace('_', ' ')}
               </span>
@@ -191,8 +199,25 @@ export default function CustomerAssetsPage() {
               <tr><td colSpan={10} className="px-3 py-8 text-center text-gray-400">No assets currently with customers</td></tr>
             ) : rows.map((r) => (
               <tr key={r.serial_id} className="hover:bg-gray-50">
-                <td className="px-3 py-2 font-semibold text-gray-900">{r.ttspl_id || '—'}</td>
-                <td className="px-3 py-2 text-gray-600">{r.serial_number}</td>
+                <td className="px-3 py-2">
+                  <TtsplHistoryLink
+                    ttsplId={r.ttspl_id}
+                    className="font-semibold text-blue-700 hover:underline text-left font-mono text-xs"
+                    onOpen={setHistoryTtspl}
+                  />
+                </td>
+                <td className="px-3 py-2">
+                  {r.serial_number && r.ttspl_id ? (
+                    <TtsplHistoryLink
+                      ttsplId={r.ttspl_id}
+                      label={r.serial_number}
+                      onOpen={setHistoryTtspl}
+                      className="text-blue-700 hover:underline text-left font-mono text-xs"
+                    />
+                  ) : (
+                    <span className="text-gray-600">{r.serial_number || '—'}</span>
+                  )}
+                </td>
                 <td className="px-3 py-2">
                   <div className="text-gray-900">{r.brand} {r.model}</div>
                   <div className="text-[11px] text-gray-400">{[r.processor, r.generation, r.ram, r.storage].filter(Boolean).join(' · ')}</div>
@@ -226,6 +251,12 @@ export default function CustomerAssetsPage() {
         total={pagination.total || 0}
         pageSize={PAGE_SIZE}
         onPageChange={setPage}
+      />
+
+      <TtsplHistoryDrawer
+        ttsplId={historyTtspl}
+        open={Boolean(historyTtspl)}
+        onClose={() => setHistoryTtspl(null)}
       />
     </InventoryPageShell>
   );

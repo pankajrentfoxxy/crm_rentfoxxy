@@ -154,8 +154,8 @@ export default function CustomerAddPage() {
             <Field label="Billing Address 1" required>
               <textarea required rows={2} className="field-input" value={form.billing_address_1} onChange={(e) => update('billing_address_1', e.target.value)} />
             </Field>
-            <Field label="Billing Address 2" required>
-              <textarea required rows={2} className="field-input" value={form.billing_address_2} onChange={(e) => update('billing_address_2', e.target.value)} />
+            <Field label="Billing Address 2">
+              <textarea rows={2} className="field-input" value={form.billing_address_2} onChange={(e) => update('billing_address_2', e.target.value)} />
             </Field>
 
             <Field label="Shipping Country" required>
@@ -178,8 +178,8 @@ export default function CustomerAddPage() {
             <Field label="Shipping Address 1" required>
               <textarea required rows={2} className="field-input" value={form.shipping_address_1} onChange={(e) => update('shipping_address_1', e.target.value)} />
             </Field>
-            <Field label="Shipping Address 2" required>
-              <textarea required rows={2} className="field-input" value={form.shipping_address_2} onChange={(e) => update('shipping_address_2', e.target.value)} />
+            <Field label="Shipping Address 2">
+              <textarea rows={2} className="field-input" value={form.shipping_address_2} onChange={(e) => update('shipping_address_2', e.target.value)} />
             </Field>
 
             <Field label="Business Type" required>

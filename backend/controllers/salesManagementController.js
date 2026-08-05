@@ -3465,6 +3465,21 @@ exports.markDcDelivered = async (req, res) => {
 
     await client.query('COMMIT');
 
+    // Post-commit: first prorated rental invoice (delivery → month-end). Billing
+    // must never roll back a successful delivery; failures are logged and the
+    // 1st-of-month cron remains the safety net.
+    try {
+      const { maybeInvoiceOnRentalDelivery } = require('../services/billingSchedulerService');
+      const ctx = await getDcContext(pool, dcNumber);
+      await maybeInvoiceOnRentalDelivery({
+        customerId: ctx.customer_id || null,
+        dcNumber,
+        quotationType: ctx.quotation_type || 'rental',
+      });
+    } catch (billingErr) {
+      console.error('markDcDelivered on-delivery invoice:', billingErr.message);
+    }
+
     const soRes = await pool.query(
       `SELECT sales_order_number FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
       [dcNumber]

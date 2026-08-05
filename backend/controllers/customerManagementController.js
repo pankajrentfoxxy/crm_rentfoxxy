@@ -439,7 +439,7 @@ exports.listCustomers = async (req, res) => {
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
     const limit = Math.min(parseInt(req.query.limit, 10) || 10, 100);
     const sortByRaw = (req.query.sort_by || 'customer_id').trim();
-    const sortDirRaw = (req.query.sort_dir || 'asc').toLowerCase();
+    const sortDirRaw = (req.query.sort_dir || 'desc').toLowerCase();
     const SORT_COLUMNS = {
       customer_id: 'c.customer_id',
       updated_at: 'c.updated_at',
@@ -956,17 +956,40 @@ exports.setDefaultCustomerAddress = async (req, res) => {
 exports.storeCustomer = async (req, res) => {
   try {
     const body = req.body;
+    const shippingSame = body.shipping_same !== false && body.shipping_same !== 'false'
+      && body.shipping_same_as_billing !== false && body.shipping_same_as_billing !== 'false';
+
+    // Address line 2 is always optional. When shipping is same as billing, shipping
+    // fields are copied from billing and must not be required.
     const required = [
       'customer_name', 'customer_number', 'email', 'contact_person_name',
       'contact_person_number', 'billing_state', 'billing_city', 'billing_pin_code',
-      'billing_address_1', 'billing_address_2', 'shipping_state', 'shipping_city',
-      'shipping_pin_code', 'shipping_address_1', 'shipping_address_2', 'business_type', 'password',
+      'billing_address_1', 'business_type', 'password',
     ];
+    if (!shippingSame) {
+      required.push(
+        'shipping_state', 'shipping_city', 'shipping_pin_code', 'shipping_address_1',
+      );
+    }
     for (const field of required) {
-      if (!body[field]) {
+      if (!String(body[field] ?? '').trim()) {
         return res.status(400).json({ success: false, message: `${field} is required` });
       }
     }
+
+    const joinAddressLines = (line1, line2) => (
+      [line1, line2].map((s) => String(s || '').trim()).filter(Boolean).join(', ')
+    );
+
+    const shippingState = shippingSame ? body.billing_state : body.shipping_state;
+    const shippingCity = shippingSame ? body.billing_city : body.shipping_city;
+    const shippingPin = shippingSame
+      ? (body.billing_pin_code || body.billing_pincode)
+      : (body.shipping_pin_code || body.shipping_pincode);
+    const shippingAddress1 = shippingSame ? body.billing_address_1 : body.shipping_address_1;
+    const shippingAddress2 = shippingSame
+      ? (body.billing_address_2 || '')
+      : (body.shipping_address_2 || '');
 
     const emailCheck = await pool.query(`SELECT customer_id FROM customers WHERE email = $1 LIMIT 1`, [body.email]);
     if (emailCheck.rows.length) {
@@ -1002,17 +1025,17 @@ exports.storeCustomer = async (req, res) => {
       state: body.billing_state,
       city: body.billing_city,
       zip_code: body.billing_pin_code,
-      address: `${body.billing_address_1}, ${body.billing_address_2}`,
+      address: joinAddressLines(body.billing_address_1, body.billing_address_2),
     };
 
     const shippingAddresses = [{
       name: body.contact_person_name,
       phone: contactPersonNumber,
       country: 'India',
-      state: body.shipping_state,
-      city: body.shipping_city,
-      zip_code: body.shipping_pin_code,
-      address: `${body.shipping_address_1}, ${body.shipping_address_2}`,
+      state: shippingState,
+      city: shippingCity,
+      zip_code: shippingPin,
+      address: joinAddressLines(shippingAddress1, shippingAddress2),
     }];
 
     const uploadDocs = [];
@@ -1054,7 +1077,7 @@ exports.storeCustomer = async (req, res) => {
       contact_person_name: body.contact_person_name,
       contact_person_number: contactPersonNumber,
       business_type: body.business_type,
-      pan_card_number: body.pan_card_number || null,
+      pan_card_number: body.pan_card_number || body.pan_number || null,
       billing_address: billingAddress,
       shipping_address: shippingAddresses,
       upload_docs: uploadDocs,
@@ -1064,12 +1087,24 @@ exports.storeCustomer = async (req, res) => {
     applyFinanceSpockDetails(details, body);
 
     const result = await pool.query(
-      `INSERT INTO customers (name, company_name, email, phone, gst_no, address, type, customer_type, details, status, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, NOW(), NOW())
+      `INSERT INTO customers (
+         name, company_name, email, phone, gst_no, address, type, customer_type, details,
+         billing_address, billing_city, billing_state, billing_pincode,
+         shipping_same, shipping_address, shipping_city, shipping_state, shipping_pincode,
+         pan_number, company_type, industry, whatsapp_number, designation, notes,
+         status, created_at, updated_at
+       )
+       VALUES (
+         $1, $2, $3, $4, $5, $6, $7, $8, $9,
+         $10, $11, $12, $13,
+         $14, $15, $16, $17, $18,
+         $19, $20, $21, $22, $23, $24,
+         1, NOW(), NOW()
+       )
        RETURNING *`,
       [
         body.customer_name,
-        body.customer_name,
+        body.company_name || body.customer_name,
         body.email,
         customerNumber,
         body.gst_number || null,
@@ -1077,6 +1112,21 @@ exports.storeCustomer = async (req, res) => {
         body.business_type === 'supplier' ? 'Supplier' : 'Regular',
         customerType,
         JSON.stringify(details),
+        billingAddress.address,
+        body.billing_city || null,
+        body.billing_state || null,
+        body.billing_pin_code || body.billing_pincode || null,
+        shippingSame,
+        shippingSame ? null : shippingAddresses[0].address,
+        shippingSame ? null : (shippingCity || null),
+        shippingSame ? null : (shippingState || null),
+        shippingSame ? null : (shippingPin || null),
+        body.pan_number || body.pan_card_number || null,
+        body.company_type || null,
+        body.industry || null,
+        body.whatsapp_number ? normalizeIndianMobile(body.whatsapp_number) : null,
+        body.designation || null,
+        body.notes || null,
       ]
     );
 

@@ -84,7 +84,7 @@ function mergeEvents(persisted, synthetic) {
     seen.add(key);
     out.push(ev);
   }
-  out.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  out.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   return out;
 }
 
@@ -263,7 +263,7 @@ async function fetchPersistedAuditLog(ctx) {
      FROM ttspl_audit_log l
      LEFT JOIN users u ON u.user_id = l.actor_user_id
      WHERE ${where}
-     ORDER BY l.created_at ASC`,
+     ORDER BY l.created_at DESC`,
     params
   );
   return res.rows.map((row) => ({ ...row, synthetic: false }));
@@ -282,7 +282,7 @@ async function fetchConfigHistory(ctx) {
      FROM ttspl_config_history h
      LEFT JOIN users u ON u.user_id = h.changed_by
      WHERE ${where}
-     ORDER BY h.created_at ASC`,
+     ORDER BY h.created_at DESC`,
     params
   );
   return res.rows;

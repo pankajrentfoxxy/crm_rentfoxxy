@@ -8,6 +8,8 @@ import {
   fetchPendingInventory,
   receiveProductionAsset,
 } from '../floorPipelineApi';
+import TtsplHistoryDrawer from '../components/TtsplHistoryDrawer';
+import TtsplHistoryLink from '../components/TtsplHistoryLink';
 
 const CARRETS = Array.from({ length: 30 }, (_, i) => i + 1);
 const TAG_LABELS = { rental: 'Rental', sale: 'Sale', both: 'Rental + Sale' };
@@ -50,6 +52,7 @@ export default function PendingInventoryPage() {
   const [carretInfo, setCarretInfo] = useState(null);
   const [loadingCarret, setLoadingCarret] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [historyTtspl, setHistoryTtspl] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -198,7 +201,13 @@ export default function PendingInventoryPage() {
                       </Link>
                     ) : '—'}
                   </td>
-                  <td className="px-3 py-2 font-medium">{row.ttspl_id || '—'}</td>
+                  <td className="px-3 py-2">
+                    <TtsplHistoryLink
+                      ttsplId={row.ttspl_id}
+                      className="font-medium text-blue-700 hover:underline text-left"
+                      onOpen={setHistoryTtspl}
+                    />
+                  </td>
                   <td className="px-3 py-2 max-w-xs truncate" title={fmtConfig(row)}>{fmtConfig(row)}</td>
                   <td className="px-3 py-2 whitespace-nowrap">{fmtTag(row.inventory_tag)}</td>
                   <td className="px-3 py-2 whitespace-nowrap text-xs">{fmtSource(row)}</td>
@@ -307,6 +316,12 @@ export default function PendingInventoryPage() {
           </div>
         </div>
       ) : null}
+
+      <TtsplHistoryDrawer
+        ttsplId={historyTtspl}
+        open={Boolean(historyTtspl)}
+        onClose={() => setHistoryTtspl(null)}
+      />
     </div>
   );
 }
