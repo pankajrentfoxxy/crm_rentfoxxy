@@ -5,6 +5,8 @@ import {
     Wifi, Usb, Fan, CircuitBoard, Lock,
     Loader2, Package, Wrench, Upload, MapPin, Scan
 } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { checkTtsplAndSerial } from '../utils/machineIdentityVerify';
 
 const SECTION_ICONS = {
     'Power & Boot': Cpu,
@@ -153,7 +155,10 @@ function PartsManager({ parts, readOnly, isProcurementStage, onAssign, ticketId 
 
     const handleAssignClick = (partId) => {
         const val = scanValues[partId];
-        if (!val) return alert('Please enter Barcode or Location');
+        if (!val) {
+            toast.error('Please enter Barcode or Location');
+            return;
+        }
         onAssign(partId, val);
     };
 
@@ -258,6 +263,10 @@ export default function DiagnosisForm({
     const [submitting, setSubmitting] = useState(false);
     const [showRoutingModal, setShowRoutingModal] = useState(false);
     const [routingStep, setRoutingStep] = useState(null); // 'chip_level' | 'body_paint'
+    const [verifyTtspl, setVerifyTtspl] = useState('');
+    const [verifySerial, setVerifySerial] = useState('');
+    const [confirmDialog, setConfirmDialog] = useState(null);
+    // confirmDialog: { title, message, confirmLabel, tone, onConfirm }
 
     const loadData = React.useCallback(async () => {
         setLoading(true);
@@ -279,7 +288,7 @@ export default function DiagnosisForm({
             if (diagRes.images) setImages(diagRes.images);
         } catch (e) {
             console.error('Failed to load diagnosis:', e);
-            alert('Error loading diagnosis: ' + (e.response?.data?.message || e.message));
+            toast.error(e.response?.data?.message || e.message || 'Failed to load diagnosis');
             setLoading(false);
             return;
         }
@@ -313,20 +322,58 @@ export default function DiagnosisForm({
         });
     };
 
-    const handleSave = async () => {
-        setSaving(true);
-        try {
-            await api.post(`/diagnosis/ticket/${ticket.ticket_id}`, { ...data, remarks });
-            alert('Saved Draft!');
-        } catch (e) { console.error(e); } finally { setSaving(false); }
+    const requireIdentityVerify = () => {
+        const check = checkTtsplAndSerial({
+            expectedTtspl: ticket.ttspl_id,
+            expectedSerial: ticket.serial_number,
+            verifiedTtspl: verifyTtspl,
+            verifiedSerial: verifySerial,
+            label: 'Diagnosis',
+        });
+        if (!check.ok) {
+            toast.error(check.message);
+            return false;
+        }
+        return true;
     };
 
-    const hasFailures = () => {
-        const allFields = Object.values(sections).flatMap(s => (s.fields || []));
-        return allFields.some(f => data[f] === false);
+    const handleSave = async () => {
+        if (!requireIdentityVerify()) return;
+        setSaving(true);
+        try {
+            await api.post(`/diagnosis/ticket/${ticket.ticket_id}`, {
+                ...data,
+                remarks,
+                verify_ttspl: verifyTtspl.trim(),
+                verify_serial: verifySerial.trim(),
+            });
+            toast.success('Draft saved');
+        } catch (e) {
+            toast.error(e.response?.data?.message || e.message || 'Failed to save draft');
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const allDiagnosisFields = () => Object.values(sections).flatMap((s) => s.fields || []);
+
+    const hasFailures = () => allDiagnosisFields().some((f) => data[f] === false);
+
+    /** Every checklist item must be explicitly Good (true) or Bad (false) — neutral is incomplete. */
+    const incompleteDiagnosisFields = () => allDiagnosisFields().filter((f) => data[f] !== true && data[f] !== false);
+
+    const requireDiagnosisComplete = () => {
+        const missing = incompleteDiagnosisFields();
+        if (!missing.length) return true;
+        toast.error(
+            `Complete the diagnosis checklist before submit. ${missing.length} item(s) still unmarked (must be Good or Bad).`
+        );
+        return false;
     };
 
     const doSubmit = async (chipLevelRepair = false, bodyPaintRequired = false) => {
+        if (!requireIdentityVerify()) return;
+        if (!requireDiagnosisComplete()) return;
         setSubmitting(true);
         try {
             const payload = {
@@ -338,26 +385,36 @@ export default function DiagnosisForm({
                     part_type: p.part_type
                 })),
                 chip_level_repair_required: chipLevelRepair,
-                body_paint_required: bodyPaintRequired
+                body_paint_required: bodyPaintRequired,
+                verify_ttspl: verifyTtspl.trim(),
+                verify_serial: verifySerial.trim(),
             };
 
             await api.post(`/diagnosis/ticket/${ticket.ticket_id}/submit`, payload);
-            alert('Diagnosis Submitted!');
+            toast.success('Diagnosis submitted');
             setShowRoutingModal(false);
             setRoutingStep(null);
+            setConfirmDialog(null);
             if (onComplete) onComplete({ fromStageMove: true });
         } catch (e) {
-            alert('Error: ' + (e.response?.data?.message || e.message));
+            toast.error(e.response?.data?.message || e.message || 'Failed to submit diagnosis');
         } finally {
             setSubmitting(false);
         }
     };
 
     const handleSubmit = async () => {
+        if (!requireIdentityVerify()) return;
+        if (!requireDiagnosisComplete()) return;
         const failures = hasFailures();
         if (failures) {
-            if (!window.confirm('Issues found. Ticket will move to Floor Manager for review. Continue?')) return;
-            await doSubmit(false, false);
+            setConfirmDialog({
+                title: 'Issues found',
+                message: 'Issues found in the diagnosis checklist. This ticket will move to Floor Manager for review.',
+                confirmLabel: 'Continue',
+                tone: 'amber',
+                onConfirm: () => doSubmit(false, false),
+            });
             return;
         }
         // No issues: ask routing questions
@@ -367,21 +424,26 @@ export default function DiagnosisForm({
 
     // Procurement Assign
     const handleProcurementAssign = async (diagPartId, scanValue) => {
-        if (!window.confirm(`Confirm assignment: ${scanValue}?`)) return;
-        try {
-            await api.post(`/diagnosis/ticket/${ticket.ticket_id}/parts/assign-procurement`, {
-                diagnosis_part_id: diagPartId,
-                barcode_or_location: scanValue
-            });
-            // alert('Part Assigned!'); // Removed to prevent focus jump
-            loadData(); // Reload to see status update
-
-            // Note: If all assigned, maybe auto-refresh ticket details to show stage change?
-            // The user must manually refresh or we trigger onComplete in parent.
-            if (onComplete) onComplete();
-        } catch (e) {
-            alert('Failed to assign: ' + e.message);
-        }
+        setConfirmDialog({
+            title: 'Confirm part assignment',
+            message: `Assign scanned value "${scanValue}" to this part?`,
+            confirmLabel: 'Assign',
+            tone: 'blue',
+            onConfirm: async () => {
+                setConfirmDialog(null);
+                try {
+                    await api.post(`/diagnosis/ticket/${ticket.ticket_id}/parts/assign-procurement`, {
+                        diagnosis_part_id: diagPartId,
+                        barcode_or_location: scanValue
+                    });
+                    toast.success('Part assigned');
+                    loadData();
+                    if (onComplete) onComplete();
+                } catch (e) {
+                    toast.error(e.response?.data?.message || e.message || 'Failed to assign part');
+                }
+            },
+        });
     };
 
     const isProcurementStage = ticket.stage_name === 'Procurement';
@@ -397,6 +459,32 @@ export default function DiagnosisForm({
                     <p className="text-blue-100">{ticket.brand} {ticket.model} | {ticket.serial_number}</p>
                 </div>
             </div>
+
+            {!readOnly ? (
+                <div className="rounded-xl border-2 border-amber-200 bg-amber-50 p-4 space-y-2">
+                    <h3 className="font-semibold text-amber-900 text-sm">Verify TTSPL + Serial before save / submit</h3>
+                    <p className="text-xs text-amber-800">
+                        Scan or type both values. They must match this ticket
+                        ({ticket.ttspl_id || '—'} / {ticket.serial_number || '—'}).
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <input
+                            value={verifyTtspl}
+                            onChange={(e) => setVerifyTtspl(e.target.value)}
+                            placeholder="TTSPL ID"
+                            className="border rounded-lg px-3 py-2 text-sm font-mono"
+                            autoComplete="off"
+                        />
+                        <input
+                            value={verifySerial}
+                            onChange={(e) => setVerifySerial(e.target.value)}
+                            placeholder="Serial number"
+                            className="border rounded-lg px-3 py-2 text-sm font-mono"
+                            autoComplete="off"
+                        />
+                    </div>
+                </div>
+            ) : null}
 
             {/* Sections */}
             <div className="space-y-4">
@@ -581,6 +669,43 @@ export default function DiagnosisForm({
                     </div>
                 </div>
             )}
+
+            {confirmDialog ? (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+                    <button
+                        type="button"
+                        className="absolute inset-0 bg-black/40"
+                        onClick={() => setConfirmDialog(null)}
+                        aria-label="Close"
+                    />
+                    <div className="relative w-full max-w-md rounded-xl bg-white shadow-xl border border-slate-200 p-5">
+                        <h3 className="text-lg font-semibold text-slate-900">{confirmDialog.title}</h3>
+                        <p className="mt-2 text-sm text-slate-600">{confirmDialog.message}</p>
+                        <div className="mt-5 flex justify-end gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setConfirmDialog(null)}
+                                className="px-4 py-2 rounded-lg border text-sm font-medium text-slate-700 hover:bg-slate-50"
+                                disabled={submitting}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                disabled={submitting}
+                                onClick={() => confirmDialog.onConfirm?.()}
+                                className={`px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-50 ${
+                                    confirmDialog.tone === 'amber'
+                                        ? 'bg-amber-600 hover:bg-amber-700'
+                                        : 'bg-blue-600 hover:bg-blue-700'
+                                }`}
+                            >
+                                {submitting ? 'Working…' : (confirmDialog.confirmLabel || 'Confirm')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            ) : null}
         </div>
     );
 }

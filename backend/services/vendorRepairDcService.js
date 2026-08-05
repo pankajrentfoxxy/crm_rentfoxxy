@@ -647,6 +647,7 @@ async function createOutForRepairDc(client, {
   itemRemarks = {},
   itemPrices = {},
   itemHsnCodes = {},
+  itemVerifications = {},
   ewayBillNumber,
   ewayBillDate,
   ship_by,
@@ -697,6 +698,19 @@ async function createOutForRepairDc(client, {
     throw new Error('One or more tickets were not found');
   }
   const invalid = tRes.rows.filter((t) => t.status !== 'diagnosis_failed');
+
+  const { assertTtsplAndSerial, resolveItemVerifications } = require('../utils/machineIdentityVerify');
+  const verifications = resolveItemVerifications(itemVerifications, ticketIds);
+  for (const ticket of tRes.rows) {
+    const v = verifications.get(Number(ticket.ticket_id)) || { ttspl: '', serial: '' };
+    assertTtsplAndSerial({
+      expectedTtspl: ticket.ttspl_id,
+      expectedSerial: ticket.serial_number,
+      verifiedTtspl: v.ttspl,
+      verifiedSerial: v.serial,
+      label: ticket.ttspl_id || `#${ticket.ticket_id}`,
+    });
+  }
   if (invalid.length) {
     throw new Error('All selected laptops must be in Diagnosis Failed status');
   }

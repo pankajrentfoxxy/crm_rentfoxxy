@@ -113,8 +113,14 @@ export function markTicketDiagnosisFailed(id, body) {
 }
 
 // Work timer (scan-to-start gate)
-export function startWork(id, verify) {
-  return api.post(`${base}/${id}/work/start`, { verify });
+export function startWork(id, verifyOrFields) {
+  const body = typeof verifyOrFields === 'string'
+    ? { verify: verifyOrFields }
+    : {
+        verify_ttspl: verifyOrFields?.verify_ttspl ?? verifyOrFields?.ttspl,
+        verify_serial: verifyOrFields?.verify_serial ?? verifyOrFields?.serial_number,
+      };
+  return api.post(`${base}/${id}/work/start`, body);
 }
 
 export function getActiveWorkLog(id) {

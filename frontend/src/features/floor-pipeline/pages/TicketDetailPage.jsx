@@ -113,7 +113,8 @@ export default function TicketDetailPage() {
   const [nextAssigneeWarning, setNextAssigneeWarning] = useState(false);
   const [activeLog, setActiveLog] = useState(null);
   const [nowTs, setNowTs] = useState(Date.now());
-  const [verifyInput, setVerifyInput] = useState('');
+  const [verifyTtspl, setVerifyTtspl] = useState('');
+  const [verifySerial, setVerifySerial] = useState('');
   const [starting, setStarting] = useState(false);
   const [qcPickerOpen, setQcPickerOpen] = useState(false);
   const [qc2FailPickerOpen, setQc2FailPickerOpen] = useState(false);
@@ -487,11 +488,22 @@ export default function TicketDetailPage() {
     : (activeLog?.start_time ? nowTs - new Date(activeLog.start_time).getTime() : 0);
 
   const handleStartWork = async () => {
-    if (!verifyInput.trim()) { toast.error('Enter the TTSPL ID or Serial number'); return; }
+    if (!verifyTtspl.trim() || !verifySerial.trim()) {
+      toast.error('Enter both TTSPL ID and Serial number');
+      return;
+    }
     setStarting(true);
     try {
-      const { data: res } = await startWork(id, verifyInput.trim());
-      if (res.success) { toast.success(res.message); setVerifyInput(''); loadActiveLog(); }
+      const { data: res } = await startWork(id, {
+        verify_ttspl: verifyTtspl.trim(),
+        verify_serial: verifySerial.trim(),
+      });
+      if (res.success) {
+        toast.success(res.message);
+        setVerifyTtspl('');
+        setVerifySerial('');
+        loadActiveLog();
+      }
     } catch (e) {
       toast.error(e.response?.data?.message || 'Could not start work');
     } finally {
@@ -1058,23 +1070,30 @@ export default function TicketDetailPage() {
                   <div className="rounded-xl border-2 border-blue-200 bg-blue-50 p-4 mb-3">
                     <h3 className="font-semibold text-blue-900 text-sm">Verify machine first</h3>
                     <p className="text-xs text-blue-800 mt-1">
-                      Enter the TTSPL ID or Serial number to start your work timer.
+                      Enter both TTSPL ID and Serial number to start your work timer.
                       Your work tabs will unlock after verification.
                     </p>
-                    <div className="flex gap-2 mt-2">
+                    <div className="space-y-2 mt-2">
                       <input
-                        value={verifyInput}
-                        onChange={(e) => setVerifyInput(e.target.value)}
+                        value={verifyTtspl}
+                        onChange={(e) => setVerifyTtspl(e.target.value)}
                         onKeyDown={(e) => { if (e.key === 'Enter') handleStartWork(); }}
-                        placeholder="TTSPL ID or Serial number"
-                        className="flex-1 border rounded-lg px-2 py-1.5 text-xs"
+                        placeholder="TTSPL ID"
+                        className="w-full border rounded-lg px-2 py-1.5 text-xs font-mono"
                         autoFocus
+                      />
+                      <input
+                        value={verifySerial}
+                        onChange={(e) => setVerifySerial(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') handleStartWork(); }}
+                        placeholder="Serial number"
+                        className="w-full border rounded-lg px-2 py-1.5 text-xs font-mono"
                       />
                       <button
                         type="button"
                         disabled={starting}
                         onClick={handleStartWork}
-                        className="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold disabled:opacity-50"
+                        className="w-full px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold disabled:opacity-50"
                       >
                         Start
                       </button>

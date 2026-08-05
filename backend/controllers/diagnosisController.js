@@ -182,6 +182,27 @@ exports.saveDiagnosis = async (req, res) => {
     const data = req.body;
 
     try {
+        const ticketRes = await pool.query(
+            `SELECT ttspl_id, serial_number FROM tickets WHERE ticket_id = $1`,
+            [id]
+        );
+        const ticket = ticketRes.rows[0];
+        if (!ticket) {
+            return res.status(404).json({ success: false, message: 'Ticket not found' });
+        }
+        const { assertTtsplAndSerial } = require('../utils/machineIdentityVerify');
+        try {
+            assertTtsplAndSerial({
+                expectedTtspl: ticket.ttspl_id,
+                expectedSerial: ticket.serial_number,
+                verifiedTtspl: data.verify_ttspl ?? data.ttspl,
+                verifiedSerial: data.verify_serial ?? data.serial_number,
+                label: 'Diagnosis',
+            });
+        } catch (verifyErr) {
+            return res.status(400).json({ success: false, message: verifyErr.message });
+        }
+
         const existing = await pool.query(`SELECT diagnosis_id FROM diagnosis_results WHERE ticket_id = $1`, [id]);
 
         // Build dynamic field list
@@ -250,6 +271,20 @@ exports.submitDiagnosis = async (req, res) => {
         const ticketBefore = ticketBeforeRes.rows[0] || null;
 
         if (ticketBefore) {
+            const { assertTtsplAndSerial } = require('../utils/machineIdentityVerify');
+            try {
+                assertTtsplAndSerial({
+                    expectedTtspl: ticketBefore.ttspl_id,
+                    expectedSerial: ticketBefore.serial_number,
+                    verifiedTtspl: req.body.verify_ttspl ?? req.body.ttspl ?? diagnosisData?.verify_ttspl,
+                    verifiedSerial: req.body.verify_serial ?? req.body.serial_number ?? diagnosisData?.verify_serial,
+                    label: 'Diagnosis',
+                });
+            } catch (verifyErr) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ success: false, message: verifyErr.message });
+            }
+
             try {
                 await assertTicketNotPartBlocked(client, ticketBefore.ticket_id);
             } catch (blockErr) {
@@ -258,16 +293,23 @@ exports.submitDiagnosis = async (req, res) => {
             }
         }
 
-        // 1. Calculate Failures & Flags
+        // 1. Calculate Failures & Flags — every checklist field must be explicitly true/false
         let totalFailures = 0;
         const flags = {};
+        const incompleteFields = [];
+        const diagnosisPayload = diagnosisData && typeof diagnosisData === 'object' ? diagnosisData : {};
 
         Object.keys(DIAGNOSIS_SECTIONS).forEach(sectionKey => {
             const section = DIAGNOSIS_SECTIONS[sectionKey];
             let sectionFailed = false;
 
             section.fields.forEach(field => {
-                if (diagnosisData[field] === false) {
+                const value = diagnosisPayload[field];
+                if (value !== true && value !== false) {
+                    incompleteFields.push(field);
+                    return;
+                }
+                if (value === false) {
                     totalFailures++;
                     sectionFailed = true;
                 }
@@ -277,6 +319,15 @@ exports.submitDiagnosis = async (req, res) => {
                 flags[section.flag] = sectionFailed;
             }
         });
+
+        if (incompleteFields.length) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                success: false,
+                message: `Complete the diagnosis checklist before submit. ${incompleteFields.length} item(s) still unmarked (must be Good or Bad).`,
+                incomplete_fields: incompleteFields,
+            });
+        }
 
         // 2. Determine Next Team & Stage
         // Flow: Issues found -> Floor Manager | Chip level? -> Chip Level Repair | Body paint? -> Body & Paint | Parts? -> Procurement | Else -> Assembly & Software (keep assignee)

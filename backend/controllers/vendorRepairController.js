@@ -55,6 +55,7 @@ exports.createOutForRepair = async (req, res) => {
       itemRemarks: req.body.item_remarks || req.body.itemRemarks || {},
       itemPrices: req.body.item_prices || req.body.itemPrices || {},
       itemHsnCodes: req.body.item_hsn_codes || req.body.itemHsnCodes || {},
+      itemVerifications: req.body.item_verifications || req.body.itemVerifications || {},
       ewayBillNumber: req.body.eway_bill_number || req.body.ewayBillNumber,
       ewayBillDate: req.body.eway_bill_date || req.body.ewayBillDate,
       ship_by: req.body.ship_by || req.body.shipBy,

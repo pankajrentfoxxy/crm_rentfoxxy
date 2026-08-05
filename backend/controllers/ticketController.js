@@ -1562,8 +1562,11 @@ exports.updateGrade = async (req, res) => {
 // Start Work Timer
 exports.startWork = async (req, res) => {
   const { id } = req.params;
-  const { verify } = req.body; // TTSPL id or serial number the tech scans/types to confirm the machine
   const userId = req.user.user_id;
+  const verifyTtspl = req.body.verify_ttspl ?? req.body.ttspl ?? req.body.ttspl_id;
+  const verifySerial = req.body.verify_serial ?? req.body.serial_number ?? req.body.serial;
+  // Legacy single-field body still accepted only if both dual fields are absent — rejected below.
+  const legacyVerify = req.body.verify;
 
   try {
     const ticketRes = await pool.query(
@@ -1574,16 +1577,26 @@ exports.startWork = async (req, res) => {
     const ticket = ticketRes.rows[0];
     const stageId = ticket.current_stage_id;
 
-    // Machine-identity gate: the tech must confirm the right laptop before the timer starts.
-    const entered = String(verify || '').trim().toLowerCase();
-    if (!entered) {
-      return res.status(400).json({ success: false, message: 'Enter the TTSPL ID or Serial number to start work' });
+    const { assertTtsplAndSerial, normalizeMachineId } = require('../utils/machineIdentityVerify');
+    let verifiedTtspl = verifyTtspl;
+    let verifiedSerial = verifySerial;
+    // If caller still sends a single `verify`, require them to send both fields instead.
+    if ((!verifiedTtspl || !verifiedSerial) && legacyVerify) {
+      return res.status(400).json({
+        success: false,
+        message: 'Enter both TTSPL ID and Serial number to start work',
+      });
     }
-    const valid = [ticket.ttspl_id, ticket.serial_number]
-      .filter(Boolean)
-      .map((x) => String(x).trim().toLowerCase());
-    if (!valid.includes(entered)) {
-      return res.status(400).json({ success: false, message: 'TTSPL ID / Serial number does not match this ticket' });
+    try {
+      assertTtsplAndSerial({
+        expectedTtspl: ticket.ttspl_id,
+        expectedSerial: ticket.serial_number,
+        verifiedTtspl,
+        verifiedSerial,
+        label: 'This ticket',
+      });
+    } catch (verifyErr) {
+      return res.status(400).json({ success: false, message: verifyErr.message });
     }
 
     // Restart the stage timer from this moment: close any open segment, open a fresh one.
@@ -1596,8 +1609,12 @@ exports.startWork = async (req, res) => {
       [id, userId, stageId]
     );
     await pool.query(
-      `INSERT INTO activities (ticket_id, user_id, action, notes) VALUES ($1, $2, 'work_started', 'Verified machine & started work timer')`,
-      [id, userId]
+      `INSERT INTO activities (ticket_id, user_id, action, notes) VALUES ($1, $2, 'work_started', $3)`,
+      [
+        id,
+        userId,
+        `Verified TTSPL ${normalizeMachineId(ticket.ttspl_id)} + Serial ${normalizeMachineId(ticket.serial_number)} & started work timer`,
+      ]
     );
 
     await logWorkStarted(pool, { ticketId: Number(id), stageId, actor: req.user });

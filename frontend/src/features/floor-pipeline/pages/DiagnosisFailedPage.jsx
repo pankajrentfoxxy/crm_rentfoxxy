@@ -18,6 +18,7 @@ import TtsplHistoryLink from '../components/TtsplHistoryLink';
 import { formatIndianMobileInput, indianMobileError, normalizeIndianMobile } from '../../../utils/phoneValidation';
 import { EMPTY_SPEC_FILTERS } from '../../inventory-management/inventorySpecFilters';
 import useDebouncedSpecParams from '../../inventory-management/hooks/useDebouncedSpecParams';
+import { checkTtsplAndSerial } from '../../../utils/machineIdentityVerify';
 
 const WAREHOUSE_ROLES = new Set(['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'support_lead']);
 
@@ -51,6 +52,7 @@ export default function DiagnosisFailedPage() {
   const [itemRemarks, setItemRemarks] = useState({});
   const [itemPrices, setItemPrices] = useState({});
   const [itemHsnCodes, setItemHsnCodes] = useState({});
+  const [itemVerifications, setItemVerifications] = useState({});
   const [defaultHsn, setDefaultHsn] = useState('847330');
   const [ewayThreshold, setEwayThreshold] = useState(50000);
   const [historyTtspl, setHistoryTtspl] = useState(null);
@@ -129,14 +131,17 @@ export default function DiagnosisFailedPage() {
     const remarksInit = {};
     const pricesInit = {};
     const hsnInit = {};
+    const verifyInit = {};
     selectedRows.forEach((r) => {
       remarksInit[r.ticket_id] = r.diagnosis_failed_reason || '';
       pricesInit[r.ticket_id] = '';
       hsnInit[r.ticket_id] = defaultHsn;
+      verifyInit[r.ticket_id] = { ttspl: '', serial: '' };
     });
     setItemRemarks(remarksInit);
     setItemPrices(pricesInit);
     setItemHsnCodes(hsnInit);
+    setItemVerifications(verifyInit);
     setForm((f) => ({ ...f, eway_bill_number: '', eway_bill_date: '' }));
     setModalOpen(true);
   };
@@ -203,6 +208,18 @@ export default function DiagnosisFailedPage() {
         toast.error(`Invalid HSN for ${r.ttspl_id || `#${r.ticket_id}`}`);
         return;
       }
+      const v = itemVerifications[r.ticket_id] || {};
+      const check = checkTtsplAndSerial({
+        expectedTtspl: r.ttspl_id,
+        expectedSerial: r.serial_number,
+        verifiedTtspl: v.ttspl,
+        verifiedSerial: v.serial,
+        label: r.ttspl_id || `#${r.ticket_id}`,
+      });
+      if (!check.ok) {
+        toast.error(check.message);
+        return;
+      }
     }
     if (form.contact_mobile?.trim()) {
       const mobileErr = indianMobileError(form.contact_mobile, { label: 'Contact mobile' });
@@ -229,6 +246,7 @@ export default function DiagnosisFailedPage() {
         item_remarks: itemRemarks,
         item_prices: itemPrices,
         item_hsn_codes: canOverrideHsn ? itemHsnCodes : undefined,
+        item_verifications: itemVerifications,
         eway_bill_number: form.eway_bill_number.trim() || undefined,
         eway_bill_date: form.eway_bill_date || undefined,
         ship_by: shipBy,
@@ -442,12 +460,42 @@ export default function DiagnosisFailedPage() {
             </div>
             <div className="border rounded-lg overflow-hidden">
               <div className="bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
-                Per-laptop Price / HSN / remarks
+                Per-laptop verify TTSPL + Serial / Price / HSN / remarks
               </div>
-              <div className="divide-y max-h-64 overflow-y-auto">
+              <div className="divide-y max-h-72 overflow-y-auto">
                 {selectedRows.map((r) => (
                   <div key={r.ticket_id} className="p-3 space-y-2">
-                    <p className="text-xs font-mono text-slate-700">{r.ttspl_id || '—'} · #{r.ticket_id}</p>
+                    <p className="text-xs font-mono text-slate-700">
+                      Expected: {r.ttspl_id || '—'} · SN {r.serial_number || '—'} · #{r.ticket_id}
+                    </p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[10px] font-medium text-slate-500 mb-0.5">Verify TTSPL *</label>
+                        <input
+                          className="w-full border rounded-lg px-2 py-1.5 text-xs font-mono"
+                          value={itemVerifications[r.ticket_id]?.ttspl ?? ''}
+                          onChange={(e) => setItemVerifications((m) => ({
+                            ...m,
+                            [r.ticket_id]: { ...(m[r.ticket_id] || {}), ttspl: e.target.value },
+                          }))}
+                          placeholder="Scan / type TTSPL"
+                          autoComplete="off"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-medium text-slate-500 mb-0.5">Verify Serial *</label>
+                        <input
+                          className="w-full border rounded-lg px-2 py-1.5 text-xs font-mono"
+                          value={itemVerifications[r.ticket_id]?.serial ?? ''}
+                          onChange={(e) => setItemVerifications((m) => ({
+                            ...m,
+                            [r.ticket_id]: { ...(m[r.ticket_id] || {}), serial: e.target.value },
+                          }))}
+                          placeholder="Scan / type serial"
+                          autoComplete="off"
+                        />
+                      </div>
+                    </div>
                     <div className="grid grid-cols-2 gap-2">
                       <div>
                         <label className="block text-[10px] font-medium text-slate-500 mb-0.5">Price (₹)</label>
