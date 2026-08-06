@@ -10,6 +10,7 @@ const ROLE_ROW_DEFAULTS = {
     ['leads', true, true, false], ['lead_follow_ups', true, true, false], ['lead_conversion', true, true, false],
     ['customers', true, true, false], ['customer_documents', true, true, false],
     ['sales_quotations', true, true, false], ['sales_orders_sale', true, true, false], ['sales_orders_rental', true, true, false],
+    ['sales_order_cancel', true, false, true],
     ['delivery_challans', true, true, false], ['return_dc', false, true, false],
     ['delivery_register_management', false, true, false], ['payment_records', true, true, false],
     ['vendor_management', true, true, false], ['procurement', true, true, false], ['sales_pipeline', true, true, false],
@@ -28,7 +29,8 @@ const ROLE_ROW_DEFAULTS = {
   sales: [
     ['dashboard', false, false, false], ['leads', true, true, false], ['lead_follow_ups', true, true, false],
     ['lead_conversion', true, false, false], ['customers', true, true, false], ['customer_documents', true, false, false],
-    ['sales_quotations', true, false, false], ['sales_orders_sale', true, false, false], ['sales_orders_rental', true, false, false], ['delivery_challans', false, false, false],
+    ['sales_quotations', true, false, false], ['sales_orders_sale', true, false, false], ['sales_orders_rental', true, false, false],
+    ['sales_order_cancel', true, false, true], ['delivery_challans', false, false, false],
     ['inventory', false, false, false], ['inventory_management', false, false, false], ['ttspl_history', false, false, false],
     ['support_tickets', false, false, false], ['reports_access', false, false, false],
   ],

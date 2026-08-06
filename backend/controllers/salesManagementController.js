@@ -2771,6 +2771,93 @@ exports.cancelSalesOrder = async (req, res) => {
   }
 };
 
+exports.getSoLineCancelEligibility = async (req, res) => {
+  const lineId = parseInt(req.params.lineId, 10);
+  if (!Number.isFinite(lineId)) {
+    return res.status(400).json({ success: false, message: 'Invalid line id' });
+  }
+  try {
+    const { getLineCancelEligibility } = require('../services/soPartialCancelService');
+    const eligibility = await getLineCancelEligibility(pool, lineId);
+    res.json({ success: true, eligibility });
+  } catch (error) {
+    console.error('getSoLineCancelEligibility:', error);
+    res.status(error.status || 500).json({ success: false, message: error.message });
+  }
+};
+
+exports.partialCancelSoLine = async (req, res) => {
+  const lineId = parseInt(req.params.lineId, 10);
+  const { cancel_qty: cancelQty, reason } = req.body || {};
+  if (!Number.isFinite(lineId)) {
+    return res.status(400).json({ success: false, message: 'Invalid line id' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { partialCancelSoLine } = require('../services/soPartialCancelService');
+    const result = await partialCancelSoLine(client, {
+      lineId,
+      cancelQty,
+      reason: reason ? String(reason).trim() : null,
+      actorUserId: req.user?.user_id,
+      actorName: req.user?.name,
+    });
+    await client.query('COMMIT');
+
+    const released = result.released_serials?.length || 0;
+    const slotOnly = result.pending_slot_reduction || 0;
+    let message = `Cancelled ${result.cancelled_qty} unit(s) on ${result.sales_order_number}.`;
+    if (released) message += ` ${released} laptop(s) released to inventory.`;
+    else if (slotOnly) message += ' Order quantity reduced (no laptops were attached).';
+
+    res.json({ success: true, message, ...result });
+
+    await safeLogSalesOrderActivity({
+      salesOrderNumber: result.sales_order_number,
+      activityType: ACTIVITY_TYPES.SALES_ORDER,
+      action: 'partial_cancel',
+      description: `${req.user?.name || 'User'} partially cancelled ${result.cancelled_qty} unit(s) on line #${lineId}.`,
+      remarks: reason || null,
+      metadata: {
+        line_id: lineId,
+        cancelled_qty: result.cancelled_qty,
+        released_serials: result.released_serials,
+        before: result.before,
+        after: result.after,
+      },
+      user: req.user,
+    });
+
+    try {
+      const n = result.sales_order_number;
+      const lines = await getSalesOrderLines(n);
+      if (lines.length) {
+        const { dispatch_date: dispatchDate } = await getSalesOrderDispatchDate(n);
+        const pdf = await generateDocumentPdf({
+          docType: 'sales_order',
+          docNumber: n,
+          header: { ...lines[0], dispatch_date: dispatchDate },
+          lines,
+        });
+        await pool.query(
+          `UPDATE sales_order_lines SET pdf_path = $1 WHERE sales_order_number = $2`,
+          [pdf, n]
+        );
+      }
+    } catch (pdfErr) {
+      console.error('partialCancelSoLine pdf:', pdfErr.message);
+    }
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('partialCancelSoLine:', error);
+    res.status(error.status || 500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
+  }
+};
+
 // (Re)generate the branded PDF for a quotation / SO / DC and return its path.
 exports.regenerateQuotationPdf = async (req, res) => {
   try {
@@ -3248,6 +3335,12 @@ exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}) => {
       if (row.inventory_status === inventorySM.STATUS.ON_DEMO) {
         demoRows.push({ serialId, ttsplId: row.ttspl_id });
       }
+      await client.query(
+        `UPDATE inventory SET status = 'Outward', stage = NULL, updated_at = NOW()
+         WHERE machine_number = $1
+            OR serial_number = (SELECT serial_number FROM vendor_serial_numbers WHERE serial_id = $2 LIMIT 1)`,
+        [row.ttspl_id, serialId]
+      ).catch(() => {});
       continue;
     }
     const rentMonthlyRate = await resolveDcSerialRentRate(serialId);
@@ -3267,6 +3360,17 @@ exports.finalizeDeliveryInventory = async (client, dcNumber, actor = {}) => {
     if (result.to === inventorySM.STATUS.ON_DEMO) {
       demoRows.push({ serialId, ttsplId: row.ttspl_id });
     }
+    await client.query(
+      `UPDATE inventory SET status = 'Outward', stage = NULL, updated_at = NOW()
+       WHERE machine_number = $1
+          OR serial_number = (SELECT serial_number FROM vendor_serial_numbers WHERE serial_id = $2 LIMIT 1)`,
+      [row.ttspl_id, serialId]
+    ).catch(() => {});
+    await client.query(
+      `UPDATE tickets SET status = 'completed', completed_at = COALESCE(completed_at, NOW()), updated_at = NOW()
+       WHERE vendor_serial_id = $1 AND status = 'in_progress' AND ticket_type = 'grn_qc'`,
+      [serialId]
+    ).catch(() => {});
   }
 
   if (demoRows.length && ctx.customer_id) {

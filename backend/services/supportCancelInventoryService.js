@@ -52,6 +52,11 @@ function shouldPreserveCustomerAssignment(item, serial, customerId) {
             || !serial.current_customer_id;
     }
 
+    // Courier/porter return pickup: picked up from customer, en route to warehouse.
+    if (!isRepairPickupItem(item) && item.customer_otp_verified_at && !item.warehouse_received_at) {
+        if (serial.inventory_status === 'in_transit') return true;
+    }
+
     if (!serial.current_customer_id || Number(serial.current_customer_id) !== Number(customerId)) {
         return false;
     }

@@ -500,7 +500,11 @@ export default function SupportTicketCreate() {
                 </div>
             )}
 
-            {!assets.length && <p className="support-empty-msg">No machines for this customer.</p>}
+            {!assets.length && (
+                <p className="support-empty-msg">
+                    No delivered machines for this customer. Only laptops already delivered (rented, demo, or sold) can have support tickets — not in-transit or reserved units.
+                </p>
+            )}
             {assets.length > 0 && !filteredAssets.length && (
                 <p className="support-empty-msg">No machines match your search.</p>
             )}

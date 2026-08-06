@@ -27,6 +27,7 @@ const SECTION_ALIASES = {
   sales_orders_replacement: ['sales_orders_replacement'],
   replacement_so_laptop_qc: ['replacement_so_laptop_qc'],
   so_laptop_qc: ['so_laptop_qc'],
+  sales_order_cancel: ['sales_order_cancel'],
 };
 
 function sectionsToCheck(section) {

@@ -136,6 +136,16 @@ export function canEditSoLineRateConfig(user, effectivePermissions) {
   return false;
 }
 
+/** Partial SO line cancel — admin or sales_order_cancel edit grant. */
+export function canPartialCancelSalesOrder(user, effectivePermissions) {
+  if (!user) return false;
+  if (user.role === 'super_admin' || user.role === 'admin') return true;
+  if (effectivePermissions && Object.keys(effectivePermissions).length > 0) {
+    return resolveEffectivePermission(effectivePermissions, 'sales_order_cancel', 'can_edit');
+  }
+  return false;
+}
+
 /** Accordion visibility: explicit parent grant OR any child with view access. */
 export function canViewParentModule(user, effectivePermissions, parentSection) {
   if (!user) return false;

@@ -1509,6 +1509,25 @@ const ACTIVE_FROM_SQL = `
                 )
            )
          )
+         -- Ignore superseded returns when the unit was outbound-delivered again afterward.
+         AND NOT EXISTS (
+           SELECT 1
+             FROM delivery_challan_lines dcl_reout
+             CROSS JOIN LATERAL jsonb_array_elements_text(
+               CASE WHEN jsonb_typeof(dcl_reout.serial_number) = 'array'
+                    THEN dcl_reout.serial_number ELSE '[]'::jsonb END
+             ) AS out_elem
+            WHERE COALESCE(dcl_reout.movement_type, 'outbound') = 'outbound'
+              AND dcl_reout.customer_id = rl.customer_id
+              AND COALESCE(dcl_reout.status, '') = 'delivered'
+              AND (
+                vsn.inventory_asset_code = NULLIF(split_part(out_elem, '|', 3), '')
+                OR vsn.serial_number = NULLIF(split_part(out_elem, '|', 2), '')
+                OR NULLIF(REGEXP_REPLACE(split_part(out_elem, '|', 1), '[^0-9]', '', 'g'), '')::int = vsn.serial_id
+              )
+              AND COALESCE(dcl_reout.delivered_at, dcl_reout.delivery_completed_at, dcl_reout.created_at)
+                  > COALESCE(rl.delivered_at, rl.created_at)
+         )
     )
 `;
 

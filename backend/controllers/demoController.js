@@ -11,11 +11,28 @@ const { isRestricted } = require('../services/customerAccessScope');
 exports.listDemoAgreements = async (req, res) => {
   try {
     const { status } = req.query; // pending | overdue | decided
+    const search = (req.query.search || '').trim();
     const params = [];
     let where = '1=1';
     if (status === 'pending') where = "d.decision = 'pending'";
     else if (status === 'overdue') where = "d.decision = 'pending' AND d.decision_due_at < NOW()";
     else if (status === 'decided') where = "d.decision <> 'pending'";
+
+    if (search) {
+      params.push(`%${search}%`);
+      const i = params.length;
+      where += ` AND (
+        d.ttspl_id ILIKE $${i}
+        OR CAST(d.customer_id AS TEXT) LIKE $${i}
+        OR COALESCE(c.company_name, '') ILIKE $${i}
+        OR COALESCE(c.name, '') ILIKE $${i}
+        OR EXISTS (
+          SELECT 1 FROM vendor_serial_numbers vsn
+           WHERE vsn.serial_id = d.serial_id
+             AND vsn.serial_number ILIKE $${i}
+        )
+      )`;
+    }
 
     // Customer Access scope — hide demos for customers outside the caller's scope
     if (isRestricted(req.allowedCustomerTypes)) {
@@ -25,9 +42,11 @@ exports.listDemoAgreements = async (req, res) => {
 
     const { rows } = await pool.query(
       `SELECT d.*, c.company_name, c.name AS customer_name,
+              vsn.serial_number,
               (d.decision = 'pending' AND d.decision_due_at < NOW()) AS is_overdue
          FROM demo_agreements d
          LEFT JOIN customers c ON c.customer_id = d.customer_id
+         LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = d.serial_id
         WHERE ${where}
         ORDER BY d.decision_due_at ASC`,
       params
