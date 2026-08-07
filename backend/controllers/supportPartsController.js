@@ -159,6 +159,58 @@ exports.raiseSupportPartRequest = async (req, res) => {
   } finally { client.release(); }
 };
 
+// ── CANCEL PART REQUEST (pending only — before warehouse approval) ────────────
+
+exports.cancelSupportPartRequest = async (req, res) => {
+  const reqId = parseInt(req.params.requestId, 10);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const r = await client.query(
+      'SELECT * FROM support_part_requests WHERE id = $1 FOR UPDATE',
+      [reqId]
+    );
+    if (!r.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Request not found' });
+    }
+    const spr = r.rows[0];
+
+    if (spr.status === 'cancelled') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: 'Request is already cancelled' });
+    }
+    if (spr.status !== 'pending') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: `Cannot remove a request that is '${spr.status}'. Only awaiting-warehouse requests can be removed.`,
+      });
+    }
+
+    const isWarehouse = ['warehouse', 'admin', 'support_lead', 'manager', 'super_admin'].includes(req.user.role);
+    const isRequester = Number(spr.requested_by) === Number(req.user.user_id);
+    const canAct = isWarehouse || isRequester || (await userCanActOnPartRequest(client, spr, req.user));
+    if (!canAct) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ success: false, message: 'Not authorised to remove this request' });
+    }
+
+    await client.query(
+      `UPDATE support_part_requests SET status = 'cancelled', updated_at = NOW() WHERE id = $1`,
+      [reqId]
+    );
+    await client.query('COMMIT');
+    res.json({ success: true, message: 'Part request removed.' });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('cancelSupportPartRequest:', e);
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  } finally {
+    client.release();
+  }
+};
+
 // ── LIST REQUESTS (warehouse queue + technician view) ─────────────────────────
 
 exports.listSupportPartRequests = async (req, res) => {

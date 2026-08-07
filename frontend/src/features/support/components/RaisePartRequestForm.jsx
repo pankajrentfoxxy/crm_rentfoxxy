@@ -7,6 +7,7 @@ import { useAuth } from '../../../context/AuthContext';
 import {
   raiseSupportPartRequest,
   listSupportPartRequests,
+  cancelSupportPartRequest,
   markPartUsed,
   returnPart,
 } from '../supportPartsApi';
@@ -32,6 +33,7 @@ function PartRequestRow({ req, onChanged, canManageReturn }) {
   const needsSign = ['approved', 'challan_generated'].includes(req.status) && req.challan_id;
   const canAct = req.status === 'issued';
   const isReturnRequested = req.status === 'return_requested';
+  const canRemove = req.status === 'pending';
 
   const run = async (fn, msg) => {
     setBusy(true);
@@ -67,6 +69,17 @@ function PartRequestRow({ req, onChanged, canManageReturn }) {
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5">
+        {canRemove && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => run(() => cancelSupportPartRequest(req.id), 'Part request removed')}
+            className="inline-flex items-center gap-1 px-2 py-1 border border-red-200 text-red-700 rounded-md font-semibold disabled:opacity-50 bg-white hover:bg-red-50"
+          >
+            <X className="w-3 h-3" />
+            {busy ? 'Removing…' : 'Remove'}
+          </button>
+        )}
         {canAct && (
           <>
             <button
@@ -179,7 +192,9 @@ export default function RaisePartRequestForm({ ticket, item }) {
     listSupportPartRequests({ support_ticket_id: ticket.id })
       .then((r) => {
         const rows = (r.data.requests || []).filter(
-          (req) => !item?.id || req.support_item_id === item.id
+          (req) =>
+            !['cancelled', 'rejected'].includes(req.status) &&
+            (!item?.id || req.support_item_id === item.id)
         );
         setExisting(rows);
       })

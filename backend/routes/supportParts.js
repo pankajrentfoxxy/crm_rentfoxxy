@@ -83,6 +83,7 @@ router.use(authMiddleware);
 // Part requests
 router.post('/requests',                          requireSupportOrWarehouse, ctrl.raiseSupportPartRequest);
 router.get('/requests',                           requireSupportOrWarehouse, ctrl.listSupportPartRequests);
+router.patch('/requests/:requestId/cancel',       requireSupportOrWarehouse, ctrl.cancelSupportPartRequest);
 router.post('/requests/approve-and-challan',      requireWarehouseEdit,      ctrl.approveAndGenerateChallan);
 router.patch('/requests/:requestId/mark-used',    requireSupportOrWarehouse, ctrl.markPartUsed);
 router.post('/requests/:requestId/return',        requireSupportOrWarehouse, ctrl.returnPart);

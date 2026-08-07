@@ -8,6 +8,9 @@ export const raiseSupportPartRequest = (data) =>
 export const listSupportPartRequests = (params) =>
   api.get(`${BASE}/requests`, { params });
 
+export const cancelSupportPartRequest = (requestId) =>
+  api.patch(`${BASE}/requests/${requestId}/cancel`);
+
 export const approveAndGenerateChallan = (requestIds, instanceMap) =>
   api.post(`${BASE}/requests/approve-and-challan`, {
     request_ids: requestIds,
