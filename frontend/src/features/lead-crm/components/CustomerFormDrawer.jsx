@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import { COMPANY_TYPES } from '../leadConstants';
 import {
@@ -8,6 +8,7 @@ import {
 import toast from 'react-hot-toast';
 import { INDIAN_STATES, resolveStateSelectValue } from '../../../constants/indianStates';
 import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
+import { createGstinAutofillHandler } from '../../../utils/gstinLookup';
 import {
   formatIndianMobileInput,
   indianMobileError,
@@ -49,7 +50,26 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
   const [addrSaving, setAddrSaving] = useState(false);
   const [saving, setSaving] = useState(false);
   const [fieldErrors, setFieldErrors] = useState({});
+  const [gstStatus, setGstStatus] = useState(null);
   const isEdit = !!customer;
+
+  const handleGstinChange = useMemo(
+    () => createGstinAutofillHandler(
+      setForm,
+      {
+        gstKey: 'gst_number',
+        companyKey: 'company_name',
+        cityKey: 'billing_city',
+        stateKey: 'billing_state',
+        pinKey: 'billing_pincode',
+        panKey: 'pan_number',
+        companyTypeKey: 'company_type',
+        addressKey: 'billing_address',
+      },
+      { onStatus: setGstStatus },
+    ),
+    [],
+  );
 
   useEffect(() => {
     if (customer) {
@@ -86,11 +106,13 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
       });
       setShippingSame(customer.shipping_same !== false);
       setFieldErrors({});
+      setGstStatus(null);
     } else if (open) {
       setForm(empty());
       setShippingSame(true);
       setSavedAddresses([]);
       setFieldErrors({});
+      setGstStatus(null);
     }
   }, [customer, open]);
 
@@ -123,17 +145,44 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
 
   const validateForm = () => {
     const errors = {};
+    const requiredText = [
+      ['customer_name', 'Contact person'],
+      ['company_name', 'Company'],
+      ['email', 'Email'],
+      ['billing_address', 'Billing address'],
+      ['billing_city', 'Billing city'],
+      ['billing_state', 'Billing state'],
+      ['billing_pincode', 'Billing pincode'],
+    ];
+    requiredText.forEach(([key, label]) => {
+      if (!String(form[key] || '').trim()) errors[key] = `${label} is required`;
+    });
+
+    const emailVal = String(form.email || '').trim();
+    if (emailVal && !EMAIL_RE.test(emailVal)) errors.email = 'Email is invalid';
+
     const phoneErr = indianMobileError(form.customer_number, { required: true, label: 'Phone' });
     if (phoneErr) errors.customer_number = phoneErr;
     const whatsappErr = indianMobileError(form.whatsapp_number, { label: 'WhatsApp number' });
     if (whatsappErr) errors.whatsapp_number = whatsappErr;
+
+    if (!shippingSame) {
+      [
+        ['shipping_address', 'Shipping address'],
+        ['shipping_city', 'Shipping city'],
+        ['shipping_state', 'Shipping state'],
+        ['shipping_pincode', 'Shipping pincode'],
+      ].forEach(([key, label]) => {
+        if (!String(form[key] || '').trim()) errors[key] = `${label} is required`;
+      });
+    }
+
     const requiredSpokeFields = [
       ['spock_person_name', 'Name'],
       ['spock_person_email', 'Email'],
       ['spock_person_mobile', 'Mobile Number'],
     ];
     const optionalEmailFields = [
-      ['email', 'Email'],
       ['finance_contact_email', 'Finance Contact Email'],
     ];
     const optionalMobileFields = [
@@ -334,12 +383,18 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
         </div>
         <div className="flex-1 overflow-y-auto p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
           {[
-            ['customer_name', 'Contact Person'], ['company_name', 'Company'], ['email', 'Email'],
-            ['customer_number', 'Phone', true], ['whatsapp_number', 'WhatsApp', true], ['designation', 'Designation'],
-            ['gst_number', 'GST'], ['pan_number', 'PAN'],
-          ].map(([k, label, mobile]) => (
+            ['customer_name', 'Contact Person', false, true],
+            ['company_name', 'Company', false, true],
+            ['email', 'Email', false, true],
+            ['customer_number', 'Phone', true, true],
+            ['whatsapp_number', 'WhatsApp', true, false],
+            ['designation', 'Designation', false, false],
+          ].map(([k, label, mobile, required]) => (
             <div key={k}>
-              <label className="text-xs text-gray-500">{label}</label>
+              <label className="text-xs text-gray-500">
+                {label}
+                {required ? <span className="text-red-500"> *</span> : null}
+              </label>
               <input
                 value={form[k]}
                 onChange={(e) => (mobile ? setMobile(k, e.target.value) : set(k, e.target.value))}
@@ -352,6 +407,37 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
               {fieldErrors[k] && <p className="mt-1 text-xs text-red-600">{fieldErrors[k]}</p>}
             </div>
           ))}
+          <div>
+            <label className="text-xs text-gray-500">GST</label>
+            <input
+              value={form.gst_number}
+              onChange={(e) => handleGstinChange(e.target.value)}
+              maxLength={15}
+              placeholder="15-digit GSTIN"
+              className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm uppercase ${
+                fieldErrors.gst_number ? 'border-red-300' : 'border-gray-200'
+              }`}
+            />
+            {gstStatus?.message ? (
+              <p className={`mt-1 text-xs ${
+                gstStatus.type === 'error' ? 'text-red-600'
+                  : gstStatus.type === 'success' ? 'text-emerald-600'
+                    : 'text-blue-600'
+              }`}>
+                {gstStatus.message}
+              </p>
+            ) : (
+              <p className="mt-1 text-xs text-gray-400">Enter full GSTIN to autofill company &amp; billing address</p>
+            )}
+          </div>
+          <div>
+            <label className="text-xs text-gray-500">PAN</label>
+            <input
+              value={form.pan_number}
+              onChange={(e) => set('pan_number', e.target.value)}
+              className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm"
+            />
+          </div>
           <div>
             <label className="text-xs text-gray-500">Company Type</label>
             <select value={form.company_type} onChange={(e) => set('company_type', e.target.value)}
@@ -383,16 +469,20 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
             ) : null}
           </div>
           <div className="sm:col-span-2">
-            <label className="text-xs text-gray-500">Billing Address</label>
+            <label className="text-xs text-gray-500">Billing Address <span className="text-red-500">*</span></label>
             <textarea value={form.billing_address} onChange={(e) => set('billing_address', e.target.value)} rows={2}
-              className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm ${fieldErrors.billing_address ? 'border-red-300' : 'border-gray-200'}`} />
+            {fieldErrors.billing_address && <p className="mt-1 text-xs text-red-600">{fieldErrors.billing_address}</p>}
           </div>
           {['billing_city', 'billing_state', 'billing_pincode'].map((k) => (
             <div key={k}>
-              <label className="text-xs text-gray-500 capitalize">{k.replace('billing_', '')}</label>
+              <label className="text-xs text-gray-500 capitalize">
+                {k.replace('billing_', '')}
+                <span className="text-red-500"> *</span>
+              </label>
               {k === 'billing_state' ? (
                 <select value={form.billing_state} onChange={(e) => set('billing_state', e.target.value)}
-                  className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white">
+                  className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm bg-white ${fieldErrors[k] ? 'border-red-300' : 'border-gray-200'}`}>
                   <option value="">Select state</option>
                   {INDIAN_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
                 </select>
@@ -400,11 +490,12 @@ export default function CustomerFormDrawer({ open, customer, onClose, onSaved })
                 <input value={form.billing_pincode}
                   onChange={(e) => handlePincodeAutofill(e.target.value, 'billing_city', 'billing_state', 'billing_pincode')}
                   onBlur={(e) => handlePincodeAutofill(e.target.value, 'billing_city', 'billing_state', 'billing_pincode')}
-                  className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                  className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm ${fieldErrors[k] ? 'border-red-300' : 'border-gray-200'}`} />
               ) : (
                 <input value={form[k]} onChange={(e) => set(k, e.target.value)}
-                  className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                  className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm ${fieldErrors[k] ? 'border-red-300' : 'border-gray-200'}`} />
               )}
+              {fieldErrors[k] && <p className="mt-1 text-xs text-red-600">{fieldErrors[k]}</p>}
             </div>
           ))}
 

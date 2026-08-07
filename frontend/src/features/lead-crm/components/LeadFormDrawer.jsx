@@ -10,10 +10,12 @@ import toast from 'react-hot-toast';
 import { formatIndianMobileInput, indianMobileError, normalizeIndianMobile } from '../../../utils/phoneValidation';
 import SearchableSelect from '../../operation-management/components/SearchableSelect';
 import useAssetCascadeCatalog from '../../../hooks/useAssetCascadeCatalog';
+import { createGstinAutofillHandler } from '../../../utils/gstinLookup';
+import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
 
 const emptyForm = () => ({
   company_name: '', company_brand: '', name: '', designation: '', email: '', phone: '', whatsapp_number: '',
-  source: '', inquiry_type: 'rental', city: '', state: '', pincode: '',
+  source: '', inquiry_type: 'rental', city: '', state: '', pincode: '', billing_address: '',
   brand: '', processor: '', generation: '', ram: '', storage: '',
   quantity_required: '', monthly_budget: '', rental_duration: '', use_case: '',
   company_type: '', company_size: '', industry: '', annual_revenue: '', gst_number: '', pan_number: '',
@@ -32,7 +34,27 @@ export default function LeadFormDrawer({ open, lead, onClose, onSaved }) {
   const [errors, setErrors] = useState({});
   const [users, setUsers] = useState([]);
   const [saving, setSaving] = useState(false);
+  const [gstStatus, setGstStatus] = useState(null);
   const isEdit = !!lead;
+
+  const handleGstinChange = useMemo(
+    () => createGstinAutofillHandler(
+      setForm,
+      {
+        gstKey: 'gst_number',
+        companyKey: 'company_name',
+        brandKey: 'company_brand',
+        cityKey: 'city',
+        stateKey: 'state',
+        pinKey: 'pincode',
+        panKey: 'pan_number',
+        companyTypeKey: 'company_type',
+        addressKey: 'billing_address',
+      },
+      { onStatus: setGstStatus },
+    ),
+    [],
+  );
 
   const {
     brands,
@@ -66,6 +88,7 @@ export default function LeadFormDrawer({ open, lead, onClose, onSaved }) {
         city: lead.city || '',
         state: lead.state || '',
         pincode: lead.pincode || '',
+        billing_address: lead.billingAddress || '',
         brand: lead.brand || '',
         processor: lead.processor || '',
         generation: lead.generation || '',
@@ -90,6 +113,7 @@ export default function LeadFormDrawer({ open, lead, onClose, onSaved }) {
       setForm(emptyForm());
     }
     setErrors({});
+    setGstStatus(null);
   }, [lead, open]);
 
   useEffect(() => {
@@ -232,8 +256,14 @@ export default function LeadFormDrawer({ open, lead, onClose, onSaved }) {
               inputMode={opts.mobile ? 'numeric' : undefined}
               maxLength={opts.mobile ? 10 : undefined}
               value={form[key]}
-              onChange={(e) => set(key, opts.mobile ? formatIndianMobileInput(e.target.value) : e.target.value)}
-              onBlur={validate}
+              onChange={(e) => {
+                if (opts.onChange) opts.onChange(e);
+                else set(key, opts.mobile ? formatIndianMobileInput(e.target.value) : e.target.value);
+              }}
+              onBlur={(e) => {
+                if (opts.onBlur) opts.onBlur(e);
+                validate();
+              }}
               className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm ${errors[key] ? 'border-red-400' : 'border-gray-200'}`}
             />
           )}
@@ -266,7 +296,14 @@ export default function LeadFormDrawer({ open, lead, onClose, onSaved }) {
               {field('inquiry_type', 'Inquiry Type', { type: 'select', options: INQUIRY_TYPES, required: true })}
               {field('city', 'City')}
               {field('state', 'State', { type: 'select', options: INDIAN_STATES })}
-              {field('pincode', 'Pincode')}
+              {field('pincode', 'Pincode', {
+                onChange: (e) => applyPincodeAutofill(e.target.value, setForm, {
+                  pinKey: 'pincode', cityKey: 'city', stateKey: 'state',
+                }),
+              })}
+              <div className="sm:col-span-2">
+                {field('billing_address', 'Billing Address', { type: 'textarea', rows: 2 })}
+              </div>
             </div>
           </section>
           <section>
@@ -290,7 +327,28 @@ export default function LeadFormDrawer({ open, lead, onClose, onSaved }) {
               {field('company_size', 'Company Size', { type: 'number' })}
               {field('industry', 'Industry')}
               {field('annual_revenue', 'Annual Revenue')}
-              {field('gst_number', 'GST Number')}
+              <div>
+                <label className="text-xs text-gray-500">GST Number</label>
+                <input
+                  type="text"
+                  value={form.gst_number}
+                  onChange={(e) => handleGstinChange(e.target.value)}
+                  maxLength={15}
+                  placeholder="15-digit GSTIN"
+                  className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm uppercase ${errors.gst_number ? 'border-red-400' : 'border-gray-200'}`}
+                />
+                {gstStatus?.message ? (
+                  <p className={`text-xs mt-0.5 ${
+                    gstStatus.type === 'error' ? 'text-red-500'
+                      : gstStatus.type === 'success' ? 'text-emerald-600'
+                        : 'text-blue-600'
+                  }`}>
+                    {gstStatus.message}
+                  </p>
+                ) : (
+                  <p className="text-xs text-gray-400 mt-0.5">Enter full GSTIN to autofill company &amp; address</p>
+                )}
+              </div>
               {field('pan_number', 'PAN Number')}
             </div>
           </section>

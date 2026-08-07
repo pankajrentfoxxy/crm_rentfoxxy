@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { convertToCustomer } from '../leadCrmApi';
 import toast from 'react-hot-toast';
-import { INDIAN_STATES } from '../../../constants/indianStates';
+import { INDIAN_STATES, resolveStateSelectValue } from '../../../constants/indianStates';
 import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
+import { createGstinAutofillHandler, isValidGstin, lookupGstin, sanitizeGstin } from '../../../utils/gstinLookup';
 import { formatIndianMobileInput, indianMobileError, INDIAN_MOBILE_RE } from '../../../utils/phoneValidation';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -36,30 +37,79 @@ export default function LeadConvertModal({ open, lead, onClose }) {
   const [shippingSame, setShippingSame] = useState(true);
   const [saving, setSaving] = useState(false);
   const [fieldErrors, setFieldErrors] = useState({});
+  const [gstStatus, setGstStatus] = useState(null);
+
+  const handleGstinChange = useMemo(
+    () => createGstinAutofillHandler(
+      setForm,
+      {
+        gstKey: 'gst_number',
+        companyKey: 'company_name',
+        cityKey: 'billing_city',
+        stateKey: 'billing_state',
+        pinKey: 'billing_pincode',
+        panKey: 'pan_number',
+        addressKey: 'billing_address',
+      },
+      { onStatus: setGstStatus },
+    ),
+    [],
+  );
 
   useEffect(() => {
-    if (lead) {
-      setForm({
-        customer_name: lead.name || '',
-        company_name: lead.companyName || '',
-        email: lead.email || '',
-        phone: lead.phone || '',
-        gst_number: lead.gstNumber || lead.research?.gst || '',
-        pan_number: lead.panNumber || '',
-        billing_address: lead.billingAddress || '',
-        billing_city: lead.city || '',
-        billing_state: lead.state || '',
-        billing_pincode: lead.pincode || '',
-        shipping_address: lead.shippingAddress || '',
-        shipping_city: lead.city || '',
-        shipping_state: lead.state || '',
-        shipping_pincode: lead.pincode || '',
-        spock_person_name: '',
-        spock_person_email: '',
-        spock_person_mobile: '',
-      });
-      setShippingSame(lead.shippingSameAsBilling !== false);
-      setFieldErrors({});
+    if (!lead || !open) return;
+
+    const gstin = sanitizeGstin(lead.gstNumber || lead.research?.gst || '');
+    const initial = {
+      customer_name: lead.name || '',
+      company_name: lead.companyName || '',
+      email: lead.email || '',
+      phone: lead.phone || '',
+      gst_number: gstin,
+      pan_number: lead.panNumber || '',
+      billing_address: lead.billingAddress || '',
+      billing_city: lead.city || '',
+      billing_state: resolveStateSelectValue(lead.state || '') || lead.state || '',
+      billing_pincode: lead.pincode || '',
+      shipping_address: lead.shippingAddress || '',
+      shipping_city: lead.city || '',
+      shipping_state: resolveStateSelectValue(lead.state || '') || lead.state || '',
+      shipping_pincode: lead.pincode || '',
+      spock_person_name: '',
+      spock_person_email: '',
+      spock_person_mobile: '',
+    };
+    setForm(initial);
+    setShippingSame(lead.shippingSameAsBilling !== false);
+    setFieldErrors({});
+    setGstStatus(null);
+
+    // Lead edit GST autofill used to skip address — backfill on convert if needed.
+    if (isValidGstin(gstin) && !String(initial.billing_address || '').trim()) {
+      setGstStatus({ type: 'loading', message: 'Looking up GSTIN for billing address…' });
+      lookupGstin(gstin)
+        .then((info) => {
+          if (!info) {
+            setGstStatus({ type: 'error', message: 'No GST details found' });
+            return;
+          }
+          setForm((f) => ({
+            ...f,
+            company_name: info.company_name || f.company_name,
+            billing_address: info.address || f.billing_address,
+            billing_city: info.city || f.billing_city,
+            billing_state: info.stateSelect || info.state || f.billing_state,
+            billing_pincode: info.pincode || f.billing_pincode,
+            pan_number: info.pan_number || f.pan_number,
+          }));
+          setGstStatus({ type: 'success', message: info.company_name || 'GST details filled' });
+        })
+        .catch((err) => {
+          setGstStatus({
+            type: 'error',
+            message: err.response?.data?.message || err.message || 'GSTIN lookup failed',
+          });
+        });
     }
   }, [lead, open]);
 
@@ -79,8 +129,31 @@ export default function LeadConvertModal({ open, lead, onClose }) {
 
   const validateForm = () => {
     const errors = {};
-    const phoneErr = indianMobileError(form.phone, { label: 'Phone' });
+    [
+      ['customer_name', 'Contact name'],
+      ['company_name', 'Company'],
+      ['email', 'Email'],
+      ['billing_address', 'Billing address'],
+      ['billing_city', 'Billing city'],
+      ['billing_state', 'Billing state'],
+      ['billing_pincode', 'Billing pincode'],
+    ].forEach(([key, label]) => {
+      if (!String(form[key] || '').trim()) errors[key] = `${label} is required`;
+    });
+    const emailVal = String(form.email || '').trim();
+    if (emailVal && !EMAIL_RE.test(emailVal)) errors.email = 'Email is invalid';
+    const phoneErr = indianMobileError(form.phone, { required: true, label: 'Phone' });
     if (phoneErr) errors.phone = phoneErr;
+    if (!shippingSame) {
+      [
+        ['shipping_address', 'Shipping address'],
+        ['shipping_city', 'Shipping city'],
+        ['shipping_state', 'Shipping state'],
+        ['shipping_pincode', 'Shipping pincode'],
+      ].forEach(([key, label]) => {
+        if (!String(form[key] || '').trim()) errors[key] = `${label} is required`;
+      });
+    }
     const requiredSpokeFields = [
       ['spock_person_name', 'Name'],
       ['spock_person_email', 'Email'],
@@ -149,13 +222,43 @@ export default function LeadConvertModal({ open, lead, onClose }) {
           <button type="button" onClick={onClose} className="p-1 rounded-lg hover:bg-gray-100"><X className="w-5 h-5" /></button>
         </div>
         <form onSubmit={handleSubmit} className="p-4 space-y-3 max-h-[70vh] overflow-y-auto">
-          {['customer_name', 'company_name', 'email', 'phone', 'gst_number', 'pan_number'].map((field) => (
+          {['customer_name', 'company_name', 'email', 'phone', 'pan_number'].map((field) => (
             <div key={field}>
-              <label className="text-xs text-gray-500 capitalize">{field.replace(/_/g, ' ')}</label>
-              <input value={form[field] || ''} onChange={(e) => set(field, e.target.value)}
-                className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              <label className="text-xs text-gray-500 capitalize">
+                {field.replace(/_/g, ' ')}
+                {['customer_name', 'company_name', 'email', 'phone'].includes(field) ? ' *' : ''}
+              </label>
+              <input
+                value={form[field] || ''}
+                onChange={(e) => (field === 'phone' ? setMobile(field, e.target.value) : set(field, e.target.value))}
+                maxLength={field === 'phone' ? 10 : undefined}
+                inputMode={field === 'phone' ? 'numeric' : undefined}
+                className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm ${fieldErrors[field] ? 'border-red-300' : 'border-gray-200'}`}
+              />
+              {fieldErrors[field] && <p className="mt-1 text-xs text-red-600">{fieldErrors[field]}</p>}
             </div>
           ))}
+          <div>
+            <label className="text-xs text-gray-500">GST number</label>
+            <input
+              value={form.gst_number || ''}
+              onChange={(e) => handleGstinChange(e.target.value)}
+              maxLength={15}
+              placeholder="15-digit GSTIN"
+              className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm uppercase"
+            />
+            {gstStatus?.message ? (
+              <p className={`mt-1 text-xs ${
+                gstStatus.type === 'error' ? 'text-red-600'
+                  : gstStatus.type === 'success' ? 'text-emerald-600'
+                    : 'text-blue-600'
+              }`}>
+                {gstStatus.message}
+              </p>
+            ) : (
+              <p className="mt-1 text-xs text-gray-400">Enter full GSTIN to autofill company &amp; billing address</p>
+            )}
+          </div>
           <p className="text-sm font-medium text-gray-700 pt-2">Billing Address</p>
           {['billing_address', 'billing_city', 'billing_state', 'billing_pincode'].map((field) => (
             <div key={field}>
@@ -175,10 +278,19 @@ export default function LeadConvertModal({ open, lead, onClose }) {
                     pinKey: 'billing_pincode', cityKey: 'billing_city', stateKey: 'billing_state',
                   })}
                   className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              ) : field === 'billing_address' ? (
+                <textarea
+                  value={form.billing_address || ''}
+                  onChange={(e) => set('billing_address', e.target.value)}
+                  required
+                  rows={3}
+                  className={`w-full mt-1 border rounded-lg px-3 py-2 text-sm ${fieldErrors.billing_address ? 'border-red-300' : 'border-gray-200'}`}
+                />
               ) : (
-                <input value={form[field] || ''} onChange={(e) => set(field, e.target.value)} required={field !== 'billing_address' || true}
+                <input value={form[field] || ''} onChange={(e) => set(field, e.target.value)} required
                   className="w-full mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
               )}
+              {fieldErrors[field] && <p className="mt-1 text-xs text-red-600">{fieldErrors[field]}</p>}
             </div>
           ))}
           <label className="flex items-center gap-2 text-sm">
