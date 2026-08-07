@@ -5,7 +5,7 @@ Same branch (`new_crm_rentfoxxy`) deploys to **two servers** via GitHub Environm
 | Environment | Server | When it deploys |
 |-------------|--------|-----------------|
 | **staging** | `157.173.221.119` | Auto on every push to `new_crm_rentfoxxy`, or manual |
-| **production** | `187.77.187.213` | Manual only (`workflow_dispatch`) |
+| **production** | `187.77.187.213` | Auto on every push (after staging succeeds), or manual |
 
 | Domain (typical) | App |
 |------------------|-----|
@@ -26,16 +26,16 @@ Same branch (`new_crm_rentfoxxy`) deploys to **two servers** via GitHub Environm
 ```mermaid
 flowchart TD
   A[Push to new_crm_rentfoxxy] --> B[deploy-staging]
-  B --> C[SSH staging 157.173.221.119]
+  B --> C[SSH staging]
   C --> D[git reset + npm install/build + pm2 restart]
+  D --> G[deploy-production]
+  G --> H[SSH production]
+  H --> I[git reset + npm install/build + pm2 restart]
 
   E[Actions → Run workflow] --> F{target?}
   F -->|staging| B
-  F -->|production| G[deploy-production]
+  F -->|production| G
   F -->|both| B
-  B -->|both + staging OK| G
-  G --> H[SSH production 187.77.187.213]
-  H --> I[git reset + npm install/build + pm2 restart]
 ```
 
 **Concurrency:** One deploy group at a time (`deploy-new-crm-rentfoxxy`).  
@@ -175,9 +175,9 @@ Point domains to the correct `build/` folders and proxy `/api` to the backend po
 
 ## 4. How to run deployments
 
-### Automatic (staging only)
+### Automatic (staging + production)
 
-Every push to `new_crm_rentfoxxy` → **Deploy staging** job → `157.173.221.119`.
+Every push to `new_crm_rentfoxxy` → **Deploy staging**, then **Deploy production** (only if staging succeeds).
 
 ### Manual
 
@@ -186,7 +186,7 @@ GitHub → **Actions** → **CI/CD Deploy to VPS** → **Run workflow**:
 | Target | Result |
 |--------|--------|
 | `staging` | Staging only |
-| `production` | Production only (approval if configured) |
+| `production` | Production only |
 | `both` | Staging first, then production if staging succeeds |
 
 ---

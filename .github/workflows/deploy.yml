@@ -1,7 +1,7 @@
 name: CI/CD Deploy to VPS
 
-# Staging (157.173.221.119): auto on every push to new_crm_rentfoxxy
-# Production (187.77.187.213): manual via workflow_dispatch only
+# Both staging and production deploy automatically on push to new_crm_rentfoxxy.
+# Manual Run workflow can still target staging / production / both.
 #
 # Secrets live on GitHub Environments `staging` and `production`
 # (each has its own VPS_HOST / VPS_USER / VPS_SSH_KEY).
@@ -20,7 +20,7 @@ on:
           - staging
           - production
           - both
-        default: staging
+        default: both
 
 concurrency:
   group: deploy-new-crm-rentfoxxy
@@ -79,12 +79,14 @@ jobs:
 
   deploy-production:
     name: Deploy production
-    # Manual only. When target=both, wait for staging success.
-    # When target=production, staging is skipped — still allow prod.
+    # Runs on every push after staging succeeds, or on manual production/both.
     if: >
       always() &&
-      github.event_name == 'workflow_dispatch' &&
-      (github.event.inputs.target == 'production' || github.event.inputs.target == 'both') &&
+      (
+        github.event_name == 'push' ||
+        (github.event_name == 'workflow_dispatch' &&
+         (github.event.inputs.target == 'production' || github.event.inputs.target == 'both'))
+      ) &&
       (needs.deploy-staging.result == 'success' || needs.deploy-staging.result == 'skipped')
     needs: [deploy-staging]
     runs-on: ubuntu-latest
