@@ -1,30 +1,109 @@
 name: CI/CD Deploy to VPS
 
-# Single pipeline: deploy on push to the active branch only.
-# No pull_request triggers — avoids duplicate runs on open PRs.
+# Staging (157.173.221.119): auto on every push to new_crm_rentfoxxy
+# Production (187.77.187.213): manual via workflow_dispatch only
+#
+# Secrets live on GitHub Environments `staging` and `production`
+# (each has its own VPS_HOST / VPS_USER / VPS_SSH_KEY).
+
 on:
   push:
     branches:
       - new_crm_rentfoxxy
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Deploy target
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+          - both
+        default: staging
+
+concurrency:
+  group: deploy-new-crm-rentfoxxy
+  cancel-in-progress: false
 
 jobs:
-  deploy:
+  deploy-staging:
+    name: Deploy staging
+    if: >
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.target == 'staging' || github.event.inputs.target == 'both'))
     runs-on: ubuntu-latest
-
+    environment: staging
     steps:
       - name: Configure SSH
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
 
-      - name: Deploy
+      - name: Deploy to staging VPS
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
         run: |
-          ssh -o StrictHostKeyChecking=no ${VPS_USER}@${VPS_HOST} << 'EOF'
+          set -euo pipefail
+          echo "Deploying staging → ${VPS_USER}@${VPS_HOST}"
+          ssh -o StrictHostKeyChecking=no "${VPS_USER}@${VPS_HOST}" << 'EOF'
+          set -euo pipefail
 
-          set -e
+          cd /var/www/crm_rentfoxxy_stagging
+
+          git fetch origin
+          git reset --hard origin/new_crm_rentfoxxy
+
+          cd backend
+          npm install
+
+          cd ../frontend
+          npm install
+          npm run build
+
+          cd ../customer-portal
+          npm install
+          npm run build
+
+          cd ../vendor-portal
+          npm install
+          npm run build
+
+          pm2 restart crm-backend
+          pm2 save
+
+          echo "Staging deploy finished"
+          EOF
+
+  deploy-production:
+    name: Deploy production
+    # Manual only. When target=both, wait for staging success.
+    # When target=production, staging is skipped — still allow prod.
+    if: >
+      always() &&
+      github.event_name == 'workflow_dispatch' &&
+      (github.event.inputs.target == 'production' || github.event.inputs.target == 'both') &&
+      (needs.deploy-staging.result == 'success' || needs.deploy-staging.result == 'skipped')
+    needs: [deploy-staging]
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Configure SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
+
+      - name: Deploy to production VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+          echo "Deploying production → ${VPS_USER}@${VPS_HOST}"
+          ssh -o StrictHostKeyChecking=no "${VPS_USER}@${VPS_HOST}" << 'EOF'
+          set -euo pipefail
 
           cd /var/www/crm_rentfoxxy
 
@@ -49,4 +128,5 @@ jobs:
           pm2 restart crm-backend
           pm2 save
 
+          echo "Production deploy finished"
           EOF
