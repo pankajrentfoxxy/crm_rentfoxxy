@@ -480,7 +480,12 @@ const dailySupportSummary = async ({ dateFrom = '', dateTo = '', assignee = '', 
  * Matches listTickets filters (status_tab + view=overdue).
  * Overdue can overlap open/in_progress (same as UI).
  */
-const countTicketsByStatus = async ({ user, assignedOnly = false } = {}) => {
+const countTicketsByStatus = async ({
+  user,
+  assignedOnly = false,
+  dateFrom = '',
+  dateTo = '',
+} = {}) => {
   const settings = await getSettings();
   const oh = settings.overdue_threshold_hours;
   const params = [oh];
@@ -488,6 +493,14 @@ const countTicketsByStatus = async ({ user, assignedOnly = false } = {}) => {
   if (assignedOnly) {
     const userId = scopeUserId(user);
     if (userId) scope += appendSupportAssignedFilter(userId, params);
+  }
+  if (dateFrom) {
+    params.push(dateFrom);
+    scope += ` AND t.created_at >= $${params.length}::date`;
+  }
+  if (dateTo) {
+    params.push(dateTo);
+    scope += ` AND t.created_at < ($${params.length}::date + INTERVAL '1 day')`;
   }
 
   const { rows } = await pool.query(

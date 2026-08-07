@@ -22,7 +22,7 @@ const {
   isRestrictedToAssignedAny,
   isQcInspectorRole,
 } = require('../services/dataScopeService');
-const { appendDateRangeClauses } = require('../utils/dateRangeFilter');
+const { appendDateRangeClauses, resolveDatePeriod } = require('../utils/dateRangeFilter');
 const { assertTicketNotPartBlocked } = require('../services/ticketPartBlockService');
 const { pickSpecFilters, buildTicketSpecFilter } = require('../utils/inventorySpecFilter');
 
@@ -410,7 +410,6 @@ exports.getTickets = async (req, res) => {
 exports.getFloorStatusCounts = async (req, res) => {
   try {
     const params = [];
-    let paramCount = 1;
     let where = `WHERE t.status <> 'cancelled'`;
 
     if (req.user.role === 'qc') {
@@ -423,8 +422,24 @@ exports.getFloorStatusCounts = async (req, res) => {
     const ticketScope = isQcInspectorRole(req.user?.role)
       ? { mode: 'all' }
       : await resolveTicketListScope(req);
-    const assignmentFilter = buildTicketListAssignmentClause(ticketScope, paramCount, params);
+    const assignmentFilter = buildTicketListAssignmentClause(ticketScope, 1, params);
     where += assignmentFilter.clause;
+
+    const range = resolveDatePeriod({
+      period: req.query.period || req.query.date,
+      dateFrom: req.query.date_from,
+      dateTo: req.query.date_to,
+    });
+    const dateClauses = appendDateRangeClauses({
+      column: 'created_at',
+      dateFrom: range.dateFrom,
+      dateTo: range.dateTo,
+      params,
+      tableAlias: 't',
+    });
+    if (dateClauses.length) {
+      where += ` AND ${dateClauses.join(' AND ')}`;
+    }
 
     const { rows } = await pool.query(
       `SELECT
@@ -442,6 +457,11 @@ exports.getFloorStatusCounts = async (req, res) => {
     const r = rows[0] || {};
     res.json({
       success: true,
+      filter: {
+        period: range.period,
+        date_from: range.dateFrom,
+        date_to: range.dateTo,
+      },
       counts: {
         total: r.total || 0,
         in_progress: r.in_progress || 0,

@@ -1274,12 +1274,28 @@ exports.countTickets = async (req, res) => {
 /** Status tabs: All / Open / In Progress / Overdue */
 exports.countTicketsByStatus = async (req, res) => {
     try {
+        const { resolveDatePeriod } = require('../utils/dateRangeFilter');
+        const range = resolveDatePeriod({
+            period: req.query.period || req.query.date,
+            dateFrom: req.query.date_from,
+            dateTo: req.query.date_to,
+        });
         const assignedOnly = await isRestrictedToAssigned(req, 'support_tickets');
         const counts = await supportQuery.countTicketsByStatus({
             user: req.user,
             assignedOnly,
+            dateFrom: range.dateFrom || '',
+            dateTo: range.dateTo || '',
         });
-        res.json({ success: true, counts });
+        res.json({
+            success: true,
+            filter: {
+                period: range.period,
+                date_from: range.dateFrom,
+                date_to: range.dateTo,
+            },
+            counts,
+        });
     } catch (e) {
         console.error('support countTicketsByStatus', e);
         res.status(500).json({ success: false, message: 'Failed to load ticket status counts' });
