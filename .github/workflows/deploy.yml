@@ -71,7 +71,7 @@ jobs:
           npm install
           npm run build
 
-          pm2 restart crm-backend
+          pm2 restart 5
           pm2 save
 
           echo "Staging deploy finished"
