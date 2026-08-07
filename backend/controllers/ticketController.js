@@ -397,6 +397,64 @@ exports.getTickets = async (req, res) => {
   }
 };
 
+/**
+ * Floor pipeline status buckets — Total / In Progress / Pending / Done.
+ * Scoped like the ticket list (role + assignment).
+ *
+ * Definitions:
+ * - total: all non-cancelled tickets
+ * - in_progress: status = in_progress
+ * - pending: parked / waiting (on_hold, failed, diagnosis_failed, out_for_repair, qc_failed_return_vendor)
+ * - done: status = completed
+ */
+exports.getFloorStatusCounts = async (req, res) => {
+  try {
+    const params = [];
+    let paramCount = 1;
+    let where = `WHERE t.status <> 'cancelled'`;
+
+    if (req.user.role === 'qc') {
+      where += ` AND s.stage_name IN ('QC1', 'QC2', 'Dispatch QC')`;
+    }
+    if (req.user.role === 'dispatch_qc') {
+      where += ` AND s.stage_name = 'Dispatch QC'`;
+    }
+
+    const ticketScope = isQcInspectorRole(req.user?.role)
+      ? { mode: 'all' }
+      : await resolveTicketListScope(req);
+    const assignmentFilter = buildTicketListAssignmentClause(ticketScope, paramCount, params);
+    where += assignmentFilter.clause;
+
+    const { rows } = await pool.query(
+      `SELECT
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE t.status = 'in_progress')::int AS in_progress,
+        COUNT(*) FILTER (WHERE t.status IN (
+          'on_hold', 'failed', 'diagnosis_failed', 'out_for_repair', 'qc_failed_return_vendor'
+        ))::int AS pending,
+        COUNT(*) FILTER (WHERE t.status = 'completed')::int AS done
+      FROM tickets t
+      LEFT JOIN stages s ON s.stage_id = t.current_stage_id
+      ${where}`,
+      params
+    );
+    const r = rows[0] || {};
+    res.json({
+      success: true,
+      counts: {
+        total: r.total || 0,
+        in_progress: r.in_progress || 0,
+        pending: r.pending || 0,
+        done: r.done || 0,
+      },
+    });
+  } catch (error) {
+    console.error('getFloorStatusCounts', error);
+    res.status(500).json({ success: false, message: 'Server error fetching floor status counts' });
+  }
+};
+
 // Floor pipeline sidebar counts — scoped to the same tickets the user can list.
 exports.getFloorNavCounts = async (req, res) => {
   try {

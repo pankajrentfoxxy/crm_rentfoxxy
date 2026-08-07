@@ -474,6 +474,48 @@ const dailySupportSummary = async ({ dateFrom = '', dateTo = '', assignee = '', 
     };
 };
 
+/**
+ * Status-tab counts for Support tickets list:
+ * All / Open / In Progress / Overdue.
+ * Matches listTickets filters (status_tab + view=overdue).
+ * Overdue can overlap open/in_progress (same as UI).
+ */
+const countTicketsByStatus = async ({ user, assignedOnly = false } = {}) => {
+  const settings = await getSettings();
+  const oh = settings.overdue_threshold_hours;
+  const params = [oh];
+  let scope = 'WHERE 1=1';
+  if (assignedOnly) {
+    const userId = scopeUserId(user);
+    if (userId) scope += appendSupportAssignedFilter(userId, params);
+  }
+
+  const { rows } = await pool.query(
+    `
+    SELECT
+      COUNT(*) FILTER (WHERE t.status <> 'cancelled')::int AS all_count,
+      COUNT(*) FILTER (
+        WHERE ${ACTIVE_TICKET_STATUSES} AND t.status <> 'in_progress'
+      )::int AS open_count,
+      COUNT(*) FILTER (WHERE t.status = 'in_progress')::int AS in_progress_count,
+      COUNT(*) FILTER (
+        WHERE ${ACTIVE_TICKET_STATUSES}
+          AND EXTRACT(EPOCH FROM (NOW() - ${activityAtSql})) / 3600.0 >= $1
+      )::int AS overdue_count
+    FROM support_tickets t
+    ${scope}
+    `,
+    params
+  );
+  const r = rows[0] || {};
+  return {
+    all: r.all_count || 0,
+    open: r.open_count || 0,
+    in_progress: r.in_progress_count || 0,
+    overdue: r.overdue_count || 0,
+  };
+};
+
 const navBadges = async (user) => {
     const settings = await getSettings();
     const oh = settings.overdue_threshold_hours;
@@ -532,6 +574,7 @@ module.exports = {
     buildTicketListWhere,
     listTicketsEnriched,
     countTicketsByType,
+    countTicketsByStatus,
     dashboardSummary,
     dailySupportSummary,
     navBadges

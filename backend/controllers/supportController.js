@@ -1246,6 +1246,21 @@ exports.countTickets = async (req, res) => {
     }
 };
 
+/** Status tabs: All / Open / In Progress / Overdue */
+exports.countTicketsByStatus = async (req, res) => {
+    try {
+        const assignedOnly = await isRestrictedToAssigned(req, 'support_tickets');
+        const counts = await supportQuery.countTicketsByStatus({
+            user: req.user,
+            assignedOnly,
+        });
+        res.json({ success: true, counts });
+    } catch (e) {
+        console.error('support countTicketsByStatus', e);
+        res.status(500).json({ success: false, message: 'Failed to load ticket status counts' });
+    }
+};
+
 exports.getDashboard = async (req, res) => {
     try {
         const summary = await supportQuery.dashboardSummary(req.user);

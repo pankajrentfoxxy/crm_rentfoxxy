@@ -13,6 +13,7 @@ const {
     getCustomerAssets,
     listTickets,
     countTickets,
+    countTicketsByStatus,
     getDashboard,
     getNavBadges,
     createTicket,
@@ -148,6 +149,7 @@ router.post('/categories', upsertCategory);
 router.delete('/categories/:categoryId', deleteCategory);
 router.get('/tickets', listTickets);
 router.get('/tickets/counts', countTickets);
+router.get('/tickets/status-counts', countTicketsByStatus);
 router.get('/tickets/export', exportTickets);
 router.get('/tickets/check-duplicate', checkDuplicateTicket);
 router.post('/tickets/pickup-ticket', requireSupportLead, createPickupTicket);

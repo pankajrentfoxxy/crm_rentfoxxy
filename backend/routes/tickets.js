@@ -51,7 +51,8 @@ const {
   addPartToTicketWithConfig,
   removePartFromTicket,
   logNote,
-  getFloorNavCounts
+  getFloorNavCounts,
+  getFloorStatusCounts,
 } = require('../controllers/ticketController');
 const qcController = require('../controllers/qcController');
 const phase2 = require('../controllers/ticketPhase2Controller');
@@ -105,6 +106,7 @@ router.get('/qc/qc2-assignees', qcController.getQC2Assignees);
 
 // Phase 2 — floor pipeline (must be before /:id)
 router.get('/floor-counts', getFloorNavCounts);
+router.get('/floor-status-counts', floorQueueView, getFloorStatusCounts);
 router.get('/floor-dashboard', floorPipelineView, phase2.getFloorDashboard);
 router.get(
   '/floor-manager-queue',
