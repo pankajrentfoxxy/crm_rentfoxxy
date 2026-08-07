@@ -78,6 +78,7 @@ const rdcEdit = cp('return_dc', 'edit');
 const tbView = cp('technician_bucket', 'view');
 const tbEdit = cp('technician_bucket', 'edit');
 const soLineRateConfigEdit = require('../middleware/soLineEditAccess').checkSoLineRateConfigEdit;
+const { checkSalesOrderCancel } = require('../middleware/soCancelAccess');
 /** Warehouse return OTP — warehouse/sales (send) and technicians (verify) both need access. */
 const whReturnEdit = cpAny(['delivery_challans', 'technician_bucket'], 'edit');
 const drView = cpAny(['delivery_register_management', 'technician_bucket'], 'view');
@@ -113,6 +114,8 @@ router.patch('/so-lines/:lineId/config', soLineRateConfigEdit, ctrl.updateSoLine
 router.patch('/so-lines/:lineId/rate', soLineRateConfigEdit, ctrl.updateSoLineRate);
 // Admin / Super Admin — override line HSN/SAC
 router.patch('/so-lines/:lineId/hsn', checkRole('admin', 'super_admin'), ctrl.updateSoLineHsn);
+router.get('/so-lines/:lineId/cancel-eligibility', soView, checkSalesOrderCancel, ctrl.getSoLineCancelEligibility);
+router.patch('/so-lines/:lineId/partial-cancel', checkSalesOrderCancel, ctrl.partialCancelSoLine);
 
 // Phase 13 — delivery flow (technician bucket / my deliveries / OTP / POD)
 router.get('/delivery-flow', drView, flowCtrl.listDeliveryFlow);

@@ -24,6 +24,12 @@ const { regenerateReturnDcPdf, regenerateReturnDcPdfByRdc } = require('../servic
 const replacementFlow = require('../services/supportReplacementFlowService');
 const { preserveCustomerAssetsOnCancel, forceRestoreCustomerAssetsOnCancel } = require('../services/supportCancelInventoryService');
 const { applyReturnPickupAssignment } = require('../services/supportPickupAssignmentService');
+const {
+    assertMachinesEligibleForSupport,
+    assertSerialEligibleForSupportTicket,
+    SUPPORT_TICKET_ELIGIBLE_STATUSES,
+} = require('../services/supportSerialEligibility');
+const { markReturnPickupInTransit } = require('../services/supportReturnPickupInventory');
 const supportServiceDcService = require('../services/supportServiceDcService');
 const { regenerateServiceDcPdfByNumber } = require('../services/serviceDcPdfService');
 const { validateIndianMobile, normalizeIndianMobile } = require('../utils/phoneValidation');
@@ -202,6 +208,10 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
     if (!machines.length) {
         throw Object.assign(new Error('Select at least one laptop for this pickup'), { status: 400 });
     }
+
+    await assertMachinesEligibleForSupport(client, ticket.customer_id, machines, {
+        ticketCategory: 'pickup',
+    });
 
     await assertNoActivePickup(client, ticketId, null);
     for (const m of machines) {
@@ -441,6 +451,10 @@ const appendMachinesToReturnDc = async (client, ticket, ticketId, userId, opts) 
         throw Object.assign(new Error('Select at least one laptop for this pickup'), { status: 400 });
     }
 
+    await assertMachinesEligibleForSupport(client, ticket.customer_id, machines, {
+        ticketCategory: 'pickup',
+    });
+
     for (const m of machines) {
         if (!m.source_item_id) continue;
         const linked = await client.query(
@@ -593,13 +607,13 @@ const TERMINAL_ITEM_STATUSES = ['resolved', 'closed', 'inventory_updated'];
 
 const machineKey = (item) => {
     if (item.customer_inventory_id) return `inv:${item.customer_inventory_id}`;
-    const serial = (item.unique_serial_number || item.serial_number || '').trim();
+    const serial = (item.ttspl_id || item.unique_serial_number || item.serial_number || '').trim();
     return serial ? `serial:${serial}` : null;
 };
 
 /** Open item on any non-closed ticket for this customer/machine. */
 const findOpenTicketForMachine = async (client, customerId, item, excludeTicketId = null) => {
-    const serial = (item.unique_serial_number || item.serial_number || '').trim();
+    const serial = (item.ttspl_id || item.unique_serial_number || item.serial_number || '').trim();
     const invId = item.customer_inventory_id ? parseInt(item.customer_inventory_id, 10) : null;
     if (!invId && !serial) return null;
 
@@ -620,14 +634,14 @@ const findOpenTicketForMachine = async (client, customerId, item, excludeTicketI
         sql += ` AND i.customer_inventory_id = $${params.length}`;
     } else {
         params.push(serial);
-        sql += ` AND (i.serial_number = $${params.length} OR i.unique_serial_number = $${params.length})`;
+        sql += ` AND (i.serial_number = $${params.length} OR i.unique_serial_number = $${params.length} OR i.ttspl_id = $${params.length})`;
     }
     sql += ' LIMIT 1';
     const { rows } = await client.query(sql, params);
     return rows[0] || null;
 };
 
-const assertMachinesAvailable = async (client, customerId, items, excludeTicketId = null) => {
+const assertMachinesAvailable = async (client, customerId, items, excludeTicketId = null, opts = {}) => {
     const seen = new Set();
     for (const item of items) {
         const key = machineKey(item);
@@ -639,13 +653,16 @@ const assertMachinesAvailable = async (client, customerId, items, excludeTicketI
         if (key) seen.add(key);
         const dup = await findOpenTicketForMachine(client, customerId, item, excludeTicketId);
         if (dup) {
-            const label = item.unique_serial_number || item.serial_number || `inventory #${item.customer_inventory_id}`;
+            const label = item.ttspl_id || item.unique_serial_number || item.serial_number || `inventory #${item.customer_inventory_id}`;
             const err = new Error(`Machine ${label} already has an open ticket (#${dup.id})`);
             err.status = 409;
             err.duplicate = { id: dup.id, status: dup.status };
             throw err;
         }
     }
+    await assertMachinesEligibleForSupport(client, customerId, items, {
+        ticketCategory: opts.ticketCategory || 'ticket',
+    });
 };
 
 const insertTicketItem = async (client, ticketId, item, userId, extra = {}) => {
@@ -1165,8 +1182,16 @@ exports.getCustomerAssets = async (req, res) => {
              FROM vendor_serial_numbers vsn
              WHERE vsn.current_customer_id = $1 AND vsn.deleted_at IS NULL
                AND vsn.inventory_status = ANY($2::text[])
+               AND vsn.delivered_at IS NOT NULL
+               AND NOT EXISTS (
+                 SELECT 1 FROM delivery_challan_lines dcl
+                  WHERE dcl.movement_type = 'outbound'
+                    AND dcl.customer_id = $1
+                    AND COALESCE(dcl.status, '') IN ('pending', 'processing', 'shipped', 'in_transit', 'reached')
+                    AND dcl.serial_number::text ILIKE '%' || COALESCE(vsn.inventory_asset_code, vsn.serial_number) || '%'
+               )
              ORDER BY vsn.inventory_asset_code`,
-            [customerId, DEPLOYED_WITH_CUSTOMER_STATUSES]
+            [customerId, SUPPORT_TICKET_ELIGIBLE_STATUSES]
         );
         res.json({ success: true, assets: rows });
     } catch (e) {
@@ -1337,7 +1362,9 @@ exports.createTicket = async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        await assertMachinesAvailable(client, customer_id, items);
+        await assertMachinesAvailable(client, customer_id, items, null, {
+            ticketCategory: ticketCategory,
+        });
 
         const hasUnassigned = items.some((item) => !item.assigned_to);
         const initialStatus = hasUnassigned ? TICKET_OPEN : TICKET_IN_PROGRESS;
@@ -2226,7 +2253,9 @@ exports.addWorkflowPhaseItems = async (req, res) => {
             });
         }
 
-        await assertMachinesAvailable(client, ticket.customer_id, normalized, ticketId);
+        await assertMachinesAvailable(client, ticket.customer_id, normalized, ticketId, {
+            ticketCategory: normalized[0]?.item_type || 'ticket',
+        });
 
         for (const item of normalized) {
             await insertTicketItem(client, ticketId, item, req.user.user_id, { source_item_id: item.source_item_id });
@@ -2405,7 +2434,9 @@ exports.updateTicket = async (req, res) => {
         }
         if (Array.isArray(newItems) && newItems.length) {
             const ticketRow = await client.query('SELECT customer_id FROM support_tickets WHERE id = $1', [ticketId]);
-            await assertMachinesAvailable(client, ticketRow.rows[0].customer_id, newItems, ticketId);
+            await assertMachinesAvailable(client, ticketRow.rows[0].customer_id, newItems, ticketId, {
+                ticketCategory: newItems[0]?.item_type || 'ticket',
+            });
             for (const item of newItems) {
                 await insertTicketItem(client, ticketId, item, req.user.user_id);
             }
@@ -2858,7 +2889,8 @@ exports.createPickupTicket = async (req, res) => {
         await assertMachinesAvailable(client, customer_id, machinesList.map((m) => ({
             serial_number: m.serial_number,
             unique_serial_number: m.unique_serial_number || m.ttspl_id,
-        })));
+            ttspl_id: m.ttspl_id || m.unique_serial_number,
+        })), null, { ticketCategory: 'pickup' });
 
         const firstMachine = machinesList[0];
         const ttspl = firstMachine.unique_serial_number || firstMachine.ttspl_id || null;
@@ -3070,15 +3102,27 @@ exports.verifyPickupCustomerOtp = async (req, res) => {
             [itemId, it.return_dc_number]
         );
         for (const pickupItem of affectedRes.rows) {
-            if (!isRepairPickupItem(pickupItem)) continue;
-            const invResult = await removeRepairPickupFromCustomer(client, pickupItem, req.user);
-            await logAudit(client, {
-                itemId: pickupItem.id,
-                ticketId: pickupItem.ticket_id,
-                userId: req.user.user_id,
-                action: 'repair_pickup_customer_removed',
-                detail: invResult,
-            });
+            if (isRepairPickupItem(pickupItem)) {
+                const invResult = await removeRepairPickupFromCustomer(client, pickupItem, req.user);
+                await logAudit(client, {
+                    itemId: pickupItem.id,
+                    ticketId: pickupItem.ticket_id,
+                    userId: req.user.user_id,
+                    action: 'repair_pickup_customer_removed',
+                    detail: invResult,
+                });
+                continue;
+            }
+            const invResult = await markReturnPickupInTransit(client, pickupItem, req.user);
+            if (invResult.ok) {
+                await logAudit(client, {
+                    itemId: pickupItem.id,
+                    ticketId: pickupItem.ticket_id,
+                    userId: req.user.user_id,
+                    action: 'return_pickup_in_transit',
+                    detail: invResult,
+                });
+            }
         }
 
         await logAudit(client, {
@@ -3798,6 +3842,14 @@ exports.initiateReplacement = async (req, res) => {
 
         if (!sourceItems.length) {
             throw Object.assign(new Error('No complaint items are ready for replacement'), { status: 400 });
+        }
+
+        for (const src of sourceItems) {
+            await assertSerialEligibleForSupportTicket(client, ticket.customer_id, {
+                ttspl_id: src.ttspl_id || src.unique_serial_number,
+                serial_number: src.serial_number,
+                customer_inventory_id: src.customer_inventory_id,
+            }, { ticketCategory: 'replacement pickup' });
         }
 
         for (const src of sourceItems) {

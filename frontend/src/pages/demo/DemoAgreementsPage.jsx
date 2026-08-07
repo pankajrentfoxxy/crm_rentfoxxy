@@ -57,20 +57,30 @@ function KeepModal({ demo, onClose, onDone }) {
 export default function DemoAgreementsPage() {
   const [rows, setRows] = useState([]);
   const [filter, setFilter] = useState('pending');
+  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [keepFor, setKeepFor] = useState(null);
+
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(searchInput.trim()), 350);
+    return () => clearTimeout(t);
+  }, [searchInput]);
 
   const load = React.useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.get('/demo/agreements', { params: filter ? { status: filter } : {} });
+      const params = {};
+      if (filter) params.status = filter;
+      if (search) params.search = search;
+      const res = await api.get('/demo/agreements', { params });
       setRows(res.data?.data || []);
     } catch {
       toast.error('Failed to load demo agreements');
     } finally {
       setLoading(false);
     }
-  }, [filter]);
+  }, [filter, search]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -93,30 +103,38 @@ export default function DemoAgreementsPage() {
         (converts to rental) or arrange a return pickup.
       </p>
 
-      <div className="flex flex-wrap gap-2 mb-4">
+      <div className="flex flex-wrap gap-2 mb-4 items-center">
         {FILTERS.map((f) => (
           <button key={f.key} type="button" onClick={() => setFilter(f.key)}
             className={`px-3 py-1.5 text-sm rounded-lg ${filter === f.key ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
             {f.label}
           </button>
         ))}
+        <input
+          type="search"
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          placeholder="Search customer, TTSPL, or serial…"
+          className="ml-auto min-w-[220px] flex-1 max-w-md border border-gray-200 rounded-lg px-3 py-1.5 text-sm"
+        />
       </div>
 
       <div className="rounded-xl border border-gray-100 bg-white shadow-sm overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-xs text-gray-500 text-left">
             <tr>
-              {['TTSPL', 'Customer', 'Delivered', 'Decision Due', 'Status', 'Actions'].map((h) => <th key={h} className="p-3">{h}</th>)}
+              {['TTSPL', 'Serial', 'Customer', 'Delivered', 'Decision Due', 'Status', 'Actions'].map((h) => <th key={h} className="p-3">{h}</th>)}
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={6} className="p-6 text-center text-gray-400">Loading…</td></tr>
+              <tr><td colSpan={7} className="p-6 text-center text-gray-400">Loading…</td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={6} className="p-6 text-center text-gray-400">No demo agreements</td></tr>
+              <tr><td colSpan={7} className="p-6 text-center text-gray-400">No demo agreements</td></tr>
             ) : rows.map((d) => (
               <tr key={d.demo_id} className={`border-t border-gray-100 ${d.is_overdue ? 'bg-amber-50' : ''}`}>
                 <td className="p-3 font-mono text-xs">{d.ttspl_id || '—'}</td>
+                <td className="p-3 font-mono text-xs text-gray-600">{d.serial_number || '—'}</td>
                 <td className="p-3">{d.company_name || d.customer_name || `#${d.customer_id}`}</td>
                 <td className="p-3 text-xs">{d.delivered_at ? new Date(d.delivered_at).toLocaleDateString('en-IN') : '—'}</td>
                 <td className="p-3 text-xs">

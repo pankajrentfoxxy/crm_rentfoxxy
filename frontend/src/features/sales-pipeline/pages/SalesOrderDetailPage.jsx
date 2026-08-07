@@ -12,10 +12,11 @@ import SoLineHsnEditModal from '../components/SoLineHsnEditModal';
 import SoShippingAddressEditModal from '../components/SoShippingAddressEditModal';
 import SoActivityPanel from '../components/SoActivityPanel';
 import { DispatchWorkflowCard } from '../../dispatch/components/DispatchWorkflowPanel';
+import SoPartialCancelModal from '../components/SoPartialCancelModal';
 import { cancelSalesOrder, getQuotation, getSalesOrderFull, logSoDocumentActivity, regenerateSalesOrderPdf } from '../salesPipelineApi';
 import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
-import { canEditSoLineRateConfig, canViewAnySection } from '../../../utils/permissionHelper';
+import { canEditSoLineRateConfig, canPartialCancelSalesOrder, canViewAnySection } from '../../../utils/permissionHelper';
 import usePermission from '../../../hooks/usePermission';
 import { formatConfig, formatCurrency, formatDate, salesOrderTypeLabel, salesOrderTypeStyle, salesOrderStatusLabel, deliveryChallanDetailPath, parseDeliveryAddress, formatDeliveryAddressLine, deliveryAddressPhone, formatSupplyStateLabel, resolveSupplyStateFromShipping } from '../salesPipelineUtils';
 import { getSoScopeConfig, orderMatchesScope, salesOrderListPath, SO_SERIAL_EDIT_SECTIONS, SO_LAPTOPS_TAB_VIEW_SECTIONS } from '../salesOrderScope';
@@ -62,6 +63,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
   const canViewQuotations = canView('sales_quotations');
   const isSuperAdmin = user?.role === 'super_admin';
   const canEditLineRateConfig = canEditSoLineRateConfig(user, effectivePermissions);
+  const canPartialCancel = canPartialCancelSalesOrder(user, effectivePermissions);
   const isDispatchUser = user?.role === 'dispatch';
   const canViewDispatchOps = isDispatchUser || isSuperAdmin
     || canEdit('dispatch_workflow') || canEdit('dispatch_pending_orders')
@@ -79,6 +81,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
   const [editRateLine, setEditRateLine] = useState(null);
   const [editHsnLine, setEditHsnLine] = useState(null);
   const [editShippingOpen, setEditShippingOpen] = useState(false);
+  const [partialCancelLine, setPartialCancelLine] = useState(null);
   const [activityRefreshKey, setActivityRefreshKey] = useState(0);
 
   const visibleTabs = useMemo(() => TABS.filter((t) => {
@@ -321,7 +324,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
                   <th className="px-4 py-2 text-right">Qty</th>
                   <th className="px-4 py-2 text-right">Rate</th>
                   <th className="px-4 py-2 text-right">Total</th>
-                  {isSuperAdmin || canOverrideHsn || canEditLineRateConfig ? <th className="px-4 py-2 text-right"> </th> : null}
+                  {isSuperAdmin || canOverrideHsn || canEditLineRateConfig || canPartialCancel ? <th className="px-4 py-2 text-right"> </th> : null}
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -333,8 +336,17 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
                     <td className="px-4 py-2 text-right">{l.main_qty || l.quantity}</td>
                     <td className="px-4 py-2 text-right">{formatCurrency(l.rate)}</td>
                     <td className="px-4 py-2 text-right">{formatCurrency((l.main_qty || l.quantity || 0) * (l.rate || 0))}</td>
-                    {isSuperAdmin || canOverrideHsn || canEditLineRateConfig ? (
+                    {isSuperAdmin || canOverrideHsn || canEditLineRateConfig || canPartialCancel ? (
                       <td className="px-4 py-2 text-right space-x-2 whitespace-nowrap">
+                        {canPartialCancel && !isCancelled && String(l.status || '').toLowerCase() !== 'cancelled' ? (
+                          <button
+                            type="button"
+                            onClick={() => setPartialCancelLine({ ...l, line_id: l.line_id || l.id })}
+                            className="text-xs text-red-700 hover:underline"
+                          >
+                            Cancel units
+                          </button>
+                        ) : null}
                         {canOverrideHsn ? (
                           <button
                             type="button"
@@ -477,6 +489,12 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
         soNumber={soNumber}
         shippingRaw={head.customer_shipping_address}
         onClose={() => setEditShippingOpen(false)}
+        onSaved={load}
+      />
+      <SoPartialCancelModal
+        open={Boolean(partialCancelLine)}
+        line={partialCancelLine}
+        onClose={() => setPartialCancelLine(null)}
         onSaved={load}
       />
     </div>
