@@ -51,7 +51,7 @@ jobs:
           ssh -o StrictHostKeyChecking=no "${VPS_USER}@${VPS_HOST}" << 'EOF'
           set -euo pipefail
 
-          cd /var/www/crm_rentfoxxy_stagging
+          cd /var/www/crm_rentfoxxy_staging
 
           git fetch origin
           git reset --hard origin/new_crm_rentfoxxy
