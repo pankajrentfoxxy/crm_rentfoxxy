@@ -219,6 +219,7 @@ const FY_DOC_TYPES = {
   sales_order: { docType: 'so_rentfoxxy', prefix: 'SO', table: 'sales_order_lines', column: 'sales_order_number' },
   delivery_challan: { docType: 'dc_rentfoxxy', prefix: 'DC', table: 'delivery_challan_lines', column: 'dc_number' },
   service_dc: { docType: 'service_dc', prefix: 'SDC', table: 'delivery_challan_lines', column: 'dc_number' },
+  part_dc: { docType: 'part_dc_rentfoxxy', prefix: 'PDC', table: 'delivery_challan_lines', column: 'dc_number' },
 };
 const FY_SEQ_PAD = 4;
 

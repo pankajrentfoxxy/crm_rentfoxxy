@@ -18,6 +18,8 @@ const STATUS_LABEL = {
   approved: 'Approved',
   challan_generated: 'Challan ready - sign at warehouse',
   issued: 'In your bucket',
+  dispatched: 'Dispatched to customer',
+  delivered: 'Delivered to customer',
   used: 'Used on laptop',
   return_requested: 'Return requested',
   returned: 'Returned',
@@ -31,7 +33,7 @@ function PartRequestRow({ req, onChanged, canManageReturn }) {
   const [signReq, setSignReq] = useState(null);
 
   const needsSign = ['approved', 'challan_generated'].includes(req.status) && req.challan_id;
-  const canAct = req.status === 'issued';
+  const canAct = ['issued', 'dispatched', 'delivered'].includes(req.status);
   const isReturnRequested = req.status === 'return_requested';
   const canRemove = req.status === 'pending';
 
@@ -109,6 +111,14 @@ function PartRequestRow({ req, onChanged, canManageReturn }) {
             <PenLine className="w-3 h-3" /> Sign challan
           </Link>
         )}
+        {req.customer_dc_number && (
+          <Link
+            to={`/support-parts/part-dcs/${encodeURIComponent(req.customer_dc_number)}`}
+            className="inline-flex items-center gap-1 px-2 py-1 border border-[#534AB7] text-[#534AB7] rounded-md font-semibold bg-white"
+          >
+            <Truck className="w-3 h-3" /> Part DC
+          </Link>
+        )}
         {canManageReturn && isReturnRequested && (
           <button
             type="button"
@@ -167,6 +177,10 @@ export default function RaisePartRequestForm({ ticket, item }) {
   const [showParts, setShowParts] = useState(false);
   const [quantity, setQuantity] = useState(1);
   const [reason, setReason] = useState('');
+  const [fulfillmentMode, setFulfillmentMode] = useState('warehouse_handover');
+  const [billingType, setBillingType] = useState('under_warranty');
+  const [chargeAmount, setChargeAmount] = useState('');
+  const [tampered, setTampered] = useState(false);
   const [parts, setParts] = useState([]);
   const [saving, setSaving] = useState(false);
   const [existing, setExisting] = useState([]);
@@ -222,6 +236,10 @@ export default function RaisePartRequestForm({ ticket, item }) {
         part_id: Number(partId),
         quantity: Number(quantity),
         reason: reason.trim() || undefined,
+        fulfillment_mode: fulfillmentMode,
+        billing_type: billingType,
+        charge_amount: billingType === 'charge_customer' ? Number(chargeAmount) || 0 : 0,
+        tampered_by_customer: tampered,
       });
       toast.success(data.message || 'Part request raised');
       setPartId('');
@@ -321,6 +339,78 @@ export default function RaisePartRequestForm({ ticket, item }) {
               )}
             </div>
           )}
+
+          <div className="space-y-2">
+            <label className="text-xs text-amber-700 block font-medium">How should the part reach the customer?</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setFulfillmentMode('warehouse_handover')}
+                className={`py-2 px-3 rounded-xl text-sm border text-left ${
+                  fulfillmentMode === 'warehouse_handover'
+                    ? 'border-amber-600 bg-white font-semibold text-amber-900'
+                    : 'border-amber-100 bg-amber-50/50 text-amber-800'
+                }`}
+              >
+                Technician pickup at warehouse
+              </button>
+              <button
+                type="button"
+                onClick={() => setFulfillmentMode('courier_to_customer')}
+                className={`py-2 px-3 rounded-xl text-sm border text-left ${
+                  fulfillmentMode === 'courier_to_customer'
+                    ? 'border-[#534AB7] bg-white font-semibold text-[#534AB7]'
+                    : 'border-amber-100 bg-amber-50/50 text-amber-800'
+                }`}
+              >
+                Send by courier to customer
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-xs text-amber-700 block font-medium">Billing</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setBillingType('under_warranty')}
+                className={`py-2 px-3 rounded-xl text-sm border ${
+                  billingType === 'under_warranty'
+                    ? 'border-green-600 bg-green-50 font-semibold text-green-800'
+                    : 'border-amber-100 text-amber-800'
+                }`}
+              >
+                Under warranty (no charge)
+              </button>
+              <button
+                type="button"
+                onClick={() => setBillingType('charge_customer')}
+                className={`py-2 px-3 rounded-xl text-sm border ${
+                  billingType === 'charge_customer'
+                    ? 'border-amber-600 bg-amber-50 font-semibold text-amber-800'
+                    : 'border-amber-100 text-amber-800'
+                }`}
+              >
+                Charge customer
+              </button>
+            </div>
+            {billingType === 'charge_customer' && (
+              <div className="grid grid-cols-2 gap-2 mt-1">
+                <input
+                  type="number"
+                  min="0"
+                  value={chargeAmount}
+                  onChange={(e) => setChargeAmount(e.target.value)}
+                  placeholder="Amount (Rs.)"
+                  className="border rounded-xl px-3 py-2 text-sm bg-white"
+                />
+                <label className="flex items-center gap-2 text-xs text-amber-800 px-2">
+                  <input type="checkbox" checked={tampered} onChange={(e) => setTampered(e.target.checked)} />
+                  Customer tampering
+                </label>
+              </div>
+            )}
+          </div>
 
           <div className="grid grid-cols-3 gap-2">
             <div>

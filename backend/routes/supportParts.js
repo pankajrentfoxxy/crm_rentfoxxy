@@ -85,6 +85,9 @@ router.post('/requests',                          requireSupportOrWarehouse, ctr
 router.get('/requests',                           requireSupportOrWarehouse, ctrl.listSupportPartRequests);
 router.patch('/requests/:requestId/cancel',       requireSupportOrWarehouse, ctrl.cancelSupportPartRequest);
 router.post('/requests/approve-and-challan',      requireWarehouseEdit,      ctrl.approveAndGenerateChallan);
+router.post('/requests/approve-and-customer-dc',  requireWarehouseEdit,      ctrl.approveAndGenerateCustomerDc);
+router.get('/part-dcs/:dcNumber',                 requireSupportOrWarehouse, ctrl.getPartCustomerDc);
+router.patch('/part-dcs/:dcNumber/delivered',     requireWarehouseEdit,      ctrl.markPartCustomerDcDelivered);
 router.patch('/requests/:requestId/mark-used',    requireSupportOrWarehouse, ctrl.markPartUsed);
 router.post('/requests/:requestId/return',        requireSupportOrWarehouse, ctrl.returnPart);
 router.patch('/requests/:requestId/accept-return', requireWarehouseEdit,         ctrl.acceptReturn);

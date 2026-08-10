@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import SupportTechBucketPage from './pages/SupportTechBucketPage';
 import SupportPartsQueuePage from './pages/SupportPartsQueuePage';
 import ChallanViewPage from './pages/ChallanViewPage';
+import PartCustomerDcViewPage from './pages/PartCustomerDcViewPage';
 
 /**
  * Standalone (global-layout) routing for the support parts bucket / challan flow.
@@ -19,6 +20,7 @@ export default function SupportPartsApp() {
       <Route path="tech-bucket" element={<SupportTechBucketPage />} />
       <Route path="bucket" element={<Navigate to="/support-parts/tech-bucket" replace />} />
       <Route path="challans/:challanId" element={<ChallanViewPage />} />
+      <Route path="part-dcs/:dcNumber" element={<PartCustomerDcViewPage />} />
       <Route path="*" element={<Navigate to="queue" replace />} />
     </Routes>
   );

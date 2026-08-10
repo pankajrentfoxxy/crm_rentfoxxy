@@ -91,22 +91,28 @@ exports.syncPartRequestsTechForItem = syncPartRequestsTechForItem;
 
 exports.raiseSupportPartRequest = async (req, res) => {
   const { support_ticket_id, support_item_id, ttspl_id, serial_number,
-          part_id, quantity, reason } = req.body;
+          part_id, quantity, reason,
+          fulfillment_mode, billing_type, charge_amount, tampered_by_customer } = req.body;
 
   if (!support_ticket_id || !part_id || !quantity) {
     return res.status(400).json({ success: false,
       message: 'support_ticket_id, part_id, quantity are required' });
   }
 
+  const mode = fulfillment_mode === 'courier_to_customer' ? 'courier_to_customer' : 'warehouse_handover';
+  const billing = billing_type === 'charge_customer' ? 'charge_customer' : 'under_warranty';
+  const charge = billing === 'charge_customer' ? Number(charge_amount || 0) : 0;
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
     const tkRes = await client.query(
-      'SELECT id FROM support_tickets WHERE id = $1', [support_ticket_id]
+      `SELECT id, sales_order_number FROM support_tickets WHERE id = $1`, [support_ticket_id]
     );
     if (!tkRes.rows.length)
       throw Object.assign(new Error('Support ticket not found'), { status: 404 });
+    const ticket = tkRes.rows[0];
 
     const partRes = await client.query(
       `SELECT p.*, pi_count.available
@@ -132,12 +138,14 @@ exports.raiseSupportPartRequest = async (req, res) => {
       `INSERT INTO support_part_requests
          (request_number, support_ticket_id, support_item_id, ttspl_id,
           serial_number, requested_by, assigned_to_tech, part_id, quantity,
-          reason, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending')
+          reason, status, fulfillment_mode, billing_type, charge_amount,
+          tampered_by_customer, sales_order_number)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11,$12,$13,$14,$15)
        RETURNING *`,
       [reqNumber, support_ticket_id, support_item_id || null, ttspl_id || null,
        serial_number || null, req.user.user_id, assignedTechId, part_id,
-       Number(quantity), reason || null]
+       Number(quantity), reason || null, mode, billing, charge,
+       Boolean(tampered_by_customer), ticket.sales_order_number || null]
     );
     const spr = rows[0];
 
@@ -150,7 +158,9 @@ exports.raiseSupportPartRequest = async (req, res) => {
       request: { ...spr, part_name: part.part_name, stock_available: available },
       in_stock: available > 0,
       message: available > 0
-        ? 'Request raised. Awaiting warehouse approval.'
+        ? (mode === 'courier_to_customer'
+          ? 'Request raised. Warehouse will dispatch part to customer via courier.'
+          : 'Request raised. Awaiting warehouse approval.')
         : 'Request raised. Part is out of stock - warehouse will procure.'
     });
   } catch (e) {
@@ -435,6 +445,176 @@ exports.approveAndGenerateChallan = async (req, res) => {
   } finally { client.release(); }
 };
 
+// ── WAREHOUSE: APPROVE + GENERATE PART DC (COURIER TO CUSTOMER) ─────────────
+
+exports.approveAndGenerateCustomerDc = async (req, res) => {
+  const {
+    request_ids, instance_map,
+    ship_by, courier_name, awb_number, courier_tracking_url,
+    billing_type, charge_amount, tampered_by_customer,
+    customer_shipping_address, customer_billing_address,
+  } = req.body;
+
+  if (!Array.isArray(request_ids) || !request_ids.length) {
+    return res.status(400).json({ success: false, message: 'request_ids required' });
+  }
+  const shipBy = ship_by || 'by_courier';
+  if (!['by_courier', 'by_hand'].includes(shipBy)) {
+    return res.status(400).json({ success: false, message: 'Invalid ship_by' });
+  }
+  if (shipBy === 'by_courier' && !String(courier_name || '').trim()) {
+    return res.status(400).json({ success: false, message: 'Courier name is required' });
+  }
+
+  const pickedInstances = instance_map && typeof instance_map === 'object' ? instance_map : {};
+  const { createSupportPartCustomerDc } = require('../services/supportPartCustomerDcService');
+  const { generatePartCustomerDcPdf } = require('../services/supportPartCustomerDcPdfService');
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const reqRes = await client.query(
+      `SELECT spr.*, p.part_name, p.cost AS unit_cost
+         FROM support_part_requests spr
+         JOIN parts p ON p.part_id = spr.part_id
+        WHERE spr.id = ANY($1::int[])
+          AND spr.status = 'pending'
+          AND spr.fulfillment_mode = 'courier_to_customer'
+        FOR UPDATE OF spr`,
+      [request_ids]
+    );
+    if (!reqRes.rows.length) {
+      throw Object.assign(new Error('No pending courier part requests found'), { status: 400 });
+    }
+    const requests = reqRes.rows;
+    const ticketIds = [...new Set(requests.map((r) => r.support_ticket_id))];
+    if (ticketIds.length > 1) {
+      throw new Error('All requests must belong to the same support ticket');
+    }
+
+    const result = await createSupportPartCustomerDc(client, {
+      requests,
+      instanceMap: pickedInstances,
+      shipBy,
+      courierName: courier_name,
+      awbNumber: awb_number,
+      courierTrackingUrl: courier_tracking_url,
+      billingType: billing_type === 'charge_customer' ? 'charge_customer' : 'under_warranty',
+      chargeAmount: Number(charge_amount || 0),
+      tamperedByCustomer: Boolean(tampered_by_customer),
+      shippingOverride: customer_shipping_address || null,
+      billingOverride: customer_billing_address || null,
+      actorUserId: req.user.user_id,
+    });
+
+    await client.query('COMMIT');
+
+    let pdfPath = null;
+    try {
+      pdfPath = await generatePartCustomerDcPdf(result.dcNumber);
+    } catch (pdfErr) {
+      console.error('Part DC PDF error:', pdfErr.message);
+    }
+
+    res.status(201).json({
+      success: true,
+      dc_number: result.dcNumber,
+      pdf_path: pdfPath,
+      sales_order_number: result.ctx.salesOrderNumber,
+      billing_type: result.billingType,
+      charge_amount: result.subtotalCharge,
+      message: `Part DC ${result.dcNumber} created and dispatched to customer.`,
+    });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  } finally {
+    client.release();
+  }
+};
+
+// ── GET PART CUSTOMER DC ─────────────────────────────────────────────────────
+
+exports.getPartCustomerDc = async (req, res) => {
+  try {
+    const dcNumber = req.params.dcNumber;
+    const dclRes = await pool.query(
+      `SELECT dcl.*, st.id AS ticket_id,
+              ('STK-' || LPAD(st.id::text, 4, '0')) AS ticket_number
+         FROM delivery_challan_lines dcl
+         LEFT JOIN support_tickets st ON st.id = dcl.support_ticket_id
+        WHERE dcl.dc_number = $1 AND dcl.dc_purpose = 'part_delivery'
+        LIMIT 1`,
+      [dcNumber]
+    );
+    if (!dclRes.rows.length) {
+      return res.status(404).json({ success: false, message: 'Part DC not found' });
+    }
+
+    const partsRes = await pool.query(
+      `SELECT spr.*, p.part_name, pi.prt_id
+         FROM support_part_requests spr
+         JOIN parts p ON p.part_id = spr.part_id
+         LEFT JOIN part_instances pi ON pi.instance_id = spr.instance_id
+        WHERE spr.customer_dc_number = $1
+        ORDER BY spr.id`,
+      [dcNumber]
+    );
+
+    const costsRes = await pool.query(
+      `SELECT * FROM support_part_laptop_costs WHERE customer_dc_number = $1 ORDER BY id`,
+      [dcNumber]
+    );
+
+    res.json({
+      success: true,
+      dc: dclRes.rows[0],
+      parts: partsRes.rows,
+      laptop_costs: costsRes.rows,
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+// ── MARK PART DC DELIVERED ───────────────────────────────────────────────────
+
+exports.markPartCustomerDcDelivered = async (req, res) => {
+  const dcNumber = req.params.dcNumber;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const dclRes = await client.query(
+      `SELECT dc_number, status FROM delivery_challan_lines
+        WHERE dc_number = $1 AND dc_purpose = 'part_delivery' FOR UPDATE`,
+      [dcNumber]
+    );
+    if (!dclRes.rows.length) {
+      throw Object.assign(new Error('Part DC not found'), { status: 404 });
+    }
+
+    await client.query(
+      `UPDATE delivery_challan_lines SET status = 'delivered', delivered_at = NOW(),
+              delivery_completed_at = NOW(), updated_at = NOW()
+        WHERE dc_number = $1`,
+      [dcNumber]
+    );
+    await client.query(
+      `UPDATE support_part_requests SET status = 'delivered', delivered_at = NOW(), updated_at = NOW()
+        WHERE customer_dc_number = $1 AND status = 'dispatched'`,
+      [dcNumber]
+    );
+    await client.query('COMMIT');
+    res.json({ success: true, message: 'Part DC marked as delivered.' });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  } finally {
+    client.release();
+  }
+};
+
 // ── TECHNICIAN: E-SIGN CHALLAN → ISSUE PARTS ─────────────────────────────────
 
 exports.signAndIssueChallan = async (req, res) => {
@@ -527,7 +707,7 @@ exports.markPartUsed = async (req, res) => {
 
     if (!(await userCanActOnPartRequest(client, spr, req.user)))
       throw Object.assign(new Error('Not authorised'), { status: 403 });
-    if (spr.status !== 'issued')
+    if (!['issued', 'dispatched', 'delivered'].includes(spr.status))
       throw new Error(`Cannot mark used: status is '${spr.status}'`);
 
     await client.query(

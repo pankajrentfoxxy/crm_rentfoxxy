@@ -17,6 +17,15 @@ export const approveAndGenerateChallan = (requestIds, instanceMap) =>
     ...(instanceMap ? { instance_map: instanceMap } : {}),
   });
 
+export const approveAndGenerateCustomerDc = (payload) =>
+  api.post(`${BASE}/requests/approve-and-customer-dc`, payload);
+
+export const getPartCustomerDc = (dcNumber) =>
+  api.get(`${BASE}/part-dcs/${encodeURIComponent(dcNumber)}`);
+
+export const markPartCustomerDcDelivered = (dcNumber) =>
+  api.patch(`${BASE}/part-dcs/${encodeURIComponent(dcNumber)}/delivered`);
+
 export const markPartUsed = (requestId) =>
   api.patch(`${BASE}/requests/${requestId}/mark-used`);
 

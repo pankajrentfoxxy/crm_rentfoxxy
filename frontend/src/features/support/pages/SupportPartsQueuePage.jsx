@@ -1,10 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Loader2, ClipboardList, MapPin, PackageCheck, ArrowRightLeft, Check, X, Search } from 'lucide-react';
+import { Loader2, ClipboardList, MapPin, PackageCheck, ArrowRightLeft, Check, X, Search, Truck } from 'lucide-react';
 import { getSupportPartsWarehouseQueue, approveAndGenerateChallan, resolvePartReassign } from '../supportPartsApi';
 import ESignChallanModal from '../components/ESignChallanModal';
 import PickSupportSerialsModal from '../components/PickSupportSerialsModal';
+import PartCourierDispatchModal from '../components/PartCourierDispatchModal';
 import { usePartsBase } from '../partsBase';
 
 function PendingTab({ requests, onAction, base }) {
@@ -13,6 +14,10 @@ function PendingTab({ requests, onAction, base }) {
   const [busy, setBusy] = useState(false);
   const [search, setSearch] = useState('');
   const [pickOpen, setPickOpen] = useState(false);
+  const [courierOpen, setCourierOpen] = useState(false);
+  const [pendingInstanceMap, setPendingInstanceMap] = useState(null);
+  const [pickerMode, setPickerMode] = useState('warehouse');
+  const pickerModeRef = useRef('warehouse');
 
   const toggle = (id) => {
     const next = new Set(selected);
@@ -38,13 +43,41 @@ function PendingTab({ requests, onAction, base }) {
     [requests, selected]
   );
 
-  const openPicker = () => {
+  const openPicker = (mode = 'warehouse') => {
     if (!selectedRequests.length) return;
     const tickets = [...new Set(selectedRequests.map((r) => r.support_ticket_id))];
-    const techs = [...new Set(selectedRequests.map((r) => r.assigned_to_tech))];
     if (tickets.length > 1) { toast.error('Select requests from the same ticket only'); return; }
+    if (mode === 'courier') {
+      const nonCourier = selectedRequests.filter((r) => r.fulfillment_mode !== 'courier_to_customer');
+      if (nonCourier.length) {
+        toast.error('Courier dispatch only works for "Send by courier to customer" requests');
+        return;
+      }
+      setPickerMode('courier');
+      pickerModeRef.current = 'courier';
+      setPickOpen(true);
+      return;
+    }
+    const techs = [...new Set(selectedRequests.map((r) => r.assigned_to_tech))];
     if (techs.length > 1) { toast.error('Select requests for the same technician only'); return; }
+    const courierMixed = selectedRequests.some((r) => r.fulfillment_mode === 'courier_to_customer');
+    if (courierMixed) {
+      toast.error('Deselect courier requests — use "Generate Part DC" for those');
+      return;
+    }
+    setPickerMode('warehouse');
+    pickerModeRef.current = 'warehouse';
     setPickOpen(true);
+  };
+
+  const onSerialsPicked = (instanceMap) => {
+    setPendingInstanceMap(instanceMap);
+    setPickOpen(false);
+    if (pickerModeRef.current === 'courier') {
+      setCourierOpen(true);
+    } else {
+      approve(instanceMap);
+    }
   };
 
   const approve = async (instanceMap) => {
@@ -83,11 +116,16 @@ function PendingTab({ requests, onAction, base }) {
       </div>
 
       {selected.size > 0 && (
-        <div className="flex items-center justify-between bg-[#534AB7]/10 rounded-xl px-4 py-3 sticky top-2 z-10">
+        <div className="flex flex-wrap items-center justify-between gap-2 bg-[#534AB7]/10 rounded-xl px-4 py-3 sticky top-2 z-10">
           <span className="text-sm text-[#534AB7] font-medium">{selected.size} request(s) selected</span>
-          <button type="button" onClick={openPicker} disabled={busy} className="px-4 py-2 min-h-[40px] bg-[#534AB7] text-white rounded-lg text-sm font-semibold disabled:opacity-50">
-            {busy ? 'Working…' : 'Approve + generate challan'}
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => openPicker('warehouse')} disabled={busy} className="px-4 py-2 min-h-[40px] bg-[#534AB7] text-white rounded-lg text-sm font-semibold disabled:opacity-50">
+              {busy ? 'Working…' : 'Approve + warehouse challan'}
+            </button>
+            <button type="button" onClick={() => openPicker('courier')} disabled={busy} className="inline-flex items-center gap-1 px-4 py-2 min-h-[40px] border border-[#534AB7] text-[#534AB7] bg-white rounded-lg text-sm font-semibold disabled:opacity-50">
+              <Truck className="w-4 h-4" /> Generate Part DC (Courier)
+            </button>
+          </div>
         </div>
       )}
 
@@ -121,10 +159,18 @@ function PendingTab({ requests, onAction, base }) {
                   {req.customer_name ? ` · Customer: ${req.customer_name}` : ''}
                 </p>
                 {req.reason && <p className="text-xs text-gray-400 italic mt-0.5">&quot;{req.reason}&quot;</p>}
-                <div className="flex items-center gap-2 mt-2">
+                <div className="flex items-center gap-2 mt-2 flex-wrap">
                   <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${available > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                     {available > 0 ? `In stock: ${available}` : 'Out of stock'}
                   </span>
+                  {req.fulfillment_mode === 'courier_to_customer' && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">Courier to customer</span>
+                  )}
+                  {req.billing_type === 'under_warranty' ? (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700">Warranty</span>
+                  ) : (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">Chargeable</span>
+                  )}
                   {req.location_code && (
                     <span className="inline-flex items-center gap-1 text-xs text-gray-400">
                       <MapPin className="w-3 h-3" /> {req.location_code}
@@ -142,7 +188,21 @@ function PendingTab({ requests, onAction, base }) {
         requests={selectedRequests}
         busy={busy}
         onClose={() => setPickOpen(false)}
-        onConfirm={approve}
+        onConfirm={onSerialsPicked}
+      />
+
+      <PartCourierDispatchModal
+        open={courierOpen}
+        requests={selectedRequests}
+        instanceMap={pendingInstanceMap}
+        onClose={() => { setCourierOpen(false); setPendingInstanceMap(null); }}
+        onSuccess={(data) => {
+          setSelected(new Set());
+          setCourierOpen(false);
+          setPendingInstanceMap(null);
+          onAction();
+          if (data.dc_number) navigate(`${base}/part-dcs/${encodeURIComponent(data.dc_number)}`);
+        }}
       />
     </div>
   );
