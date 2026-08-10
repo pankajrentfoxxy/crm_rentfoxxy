@@ -1051,6 +1051,301 @@ exports.getDcCourierTracking = async (req, res) => {
   }
 };
 
+/** Preview / generate BlueDart AWB before or while creating a DC (does not persist). */
+exports.generateBluedartWaybill = async (req, res) => {
+  try {
+    const bluedartWaybill = require('../services/bluedartWaybillService');
+    if (!bluedartWaybill.isWaybillConfigured()) {
+      return res.status(503).json({
+        success: false,
+        message: 'BlueDart waybill is not configured on the server',
+      });
+    }
+    const body = req.body || {};
+    const result = await bluedartWaybill.generateWayBill({
+      consignee: body.consignee || {},
+      services: body.services || {},
+      creditReferenceNo: body.credit_reference_no || body.creditReferenceNo,
+    });
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    const status = error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: error.message,
+      details: error.details || undefined,
+    });
+  }
+};
+
+/** Generate BlueDart AWB for an existing DC and save awb_number on all lines. */
+exports.generateDcBluedartAwb = async (req, res) => {
+  try {
+    const bluedartWaybill = require('../services/bluedartWaybillService');
+    if (!bluedartWaybill.isWaybillConfigured()) {
+      return res.status(503).json({
+        success: false,
+        message: 'BlueDart waybill is not configured on the server',
+      });
+    }
+
+    const dcNumber = req.params.dcNumber;
+    const lines = await getDeliveryChallanLines(dcNumber);
+    if (!lines.length) {
+      return res.status(404).json({ success: false, message: 'Delivery challan not found' });
+    }
+    const head = lines[0];
+    if (head.awb_number && !req.body?.force) {
+      return res.status(409).json({
+        success: false,
+        message: `DC already has AWB ${head.awb_number}. Pass force=true to generate another.`,
+        data: { awb_number: head.awb_number },
+      });
+    }
+
+    const shipping = parseJsonSafe(head.customer_shipping_address) || {};
+    const body = req.body || {};
+    const consignee = {
+      name: body.consignee?.name || shipping.name || head.customer_name,
+      mobile: body.consignee?.mobile || shipping.phone || shipping.mobile || head.d_customer_mobile,
+      address: body.consignee?.address
+        || [shipping.address, shipping.city, shipping.state].filter(Boolean).join(', ')
+        || shipping.address,
+      pincode: body.consignee?.pincode || shipping.pincode || shipping.zip_code,
+      email: body.consignee?.email || shipping.email || head.email,
+      gst: body.consignee?.gst || head.gst_number,
+      attention: body.consignee?.attention || shipping.name || head.customer_name,
+    };
+
+    const pieceCount = body.services?.pieceCount
+      || lines.reduce((sum, l) => sum + (Number(l.quantity || l.main_qty || 1) || 1), 0)
+      || 1;
+
+    const creditRef = body.credit_reference_no
+      || bluedartWaybill.uniqueCreditRef(
+        `DC${String(dcNumber).replace(/[^A-Za-z0-9]/g, '').slice(-12)}`
+      );
+
+    const result = await bluedartWaybill.generateWayBill({
+      consignee,
+      services: {
+        ...(body.services || {}),
+        pieceCount,
+        declaredValue: body.services?.declaredValue
+          ?? (Number(head.security_amount) > 0 ? Number(head.security_amount) : undefined),
+        itemName: [head.brand, head.model_name].filter(Boolean).join(' ') || 'LAPTOP',
+      },
+      creditReferenceNo: creditRef,
+    });
+
+    await pool.query(
+      `UPDATE delivery_challan_lines
+          SET courier_name = COALESCE(NULLIF(TRIM(courier_name), ''), 'BlueDart'),
+              awb_number = $2,
+              ship_by = COALESCE(ship_by, 'by_courier'),
+              dispatch_mode = COALESCE(dispatch_mode, 'courier'),
+              updated_at = NOW()
+        WHERE dc_number = $1`,
+      [dcNumber, result.awb_number]
+    );
+
+    return res.json({
+      success: true,
+      message: `AWB ${result.awb_number} saved on ${dcNumber}`,
+      data: {
+        dc_number: dcNumber,
+        ...result,
+      },
+    });
+  } catch (error) {
+    const status = error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: error.message,
+      details: error.details || undefined,
+    });
+  }
+};
+
+/** Cancel BlueDart AWB by number (does not require a DC). */
+exports.cancelBluedartWaybill = async (req, res) => {
+  try {
+    const bluedartWaybill = require('../services/bluedartWaybillService');
+    if (!bluedartWaybill.isWaybillConfigured()) {
+      return res.status(503).json({
+        success: false,
+        message: 'BlueDart waybill is not configured on the server',
+      });
+    }
+    const awb = req.body?.awb_number || req.body?.AWBNo || req.body?.awb;
+    const result = await bluedartWaybill.cancelWayBill(awb);
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    const status = error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: error.message,
+      details: error.details || undefined,
+    });
+  }
+};
+
+/** Cancel BlueDart AWB on a DC and clear awb_number. */
+exports.cancelDcBluedartAwb = async (req, res) => {
+  try {
+    const bluedartWaybill = require('../services/bluedartWaybillService');
+    if (!bluedartWaybill.isWaybillConfigured()) {
+      return res.status(503).json({
+        success: false,
+        message: 'BlueDart waybill is not configured on the server',
+      });
+    }
+
+    const dcNumber = req.params.dcNumber;
+    const lines = await getDeliveryChallanLines(dcNumber);
+    if (!lines.length) {
+      return res.status(404).json({ success: false, message: 'Delivery challan not found' });
+    }
+    const head = lines[0];
+    const awb = String(req.body?.awb_number || head.awb_number || '').trim();
+    if (!awb) {
+      return res.status(400).json({ success: false, message: 'No AWB number on this delivery challan' });
+    }
+
+    const result = await bluedartWaybill.cancelWayBill(awb);
+
+    await pool.query(
+      `UPDATE delivery_challan_lines
+          SET awb_number = NULL,
+              updated_at = NOW()
+        WHERE dc_number = $1`,
+      [dcNumber]
+    );
+
+    return res.json({
+      success: true,
+      message: `AWB ${awb} cancelled and cleared from ${dcNumber}`,
+      data: {
+        dc_number: dcNumber,
+        ...result,
+      },
+    });
+  } catch (error) {
+    const status = error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: error.message,
+      details: error.details || undefined,
+    });
+  }
+};
+
+/** Update e-Way Bill details on an existing BlueDart AWB (no DC required). */
+exports.updateBluedartEwayBill = async (req, res) => {
+  try {
+    const bluedartWaybill = require('../services/bluedartWaybillService');
+    if (!bluedartWaybill.isWaybillConfigured()) {
+      return res.status(503).json({
+        success: false,
+        message: 'BlueDart waybill is not configured on the server',
+      });
+    }
+    const body = req.body || {};
+    const result = await bluedartWaybill.updateEwayBill({
+      awbNumber: body.awb_number || body.Waybillnumber || body.awb,
+      eWaybillNumber: body.eway_bill_number || body.eWaybillNumber,
+      eWaybillDate: body.eway_bill_date || body.eWaybillDate,
+      invoiceNumber: body.invoice_number || body.InvoiceNumber,
+      invoiceDate: body.invoice_date || body.InvoiceDate,
+      sellerGstNo: body.seller_gst_no || body.SellerGSTNo,
+    });
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    const status = error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: error.message,
+      details: error.details || undefined,
+    });
+  }
+};
+
+/**
+ * Push DC e-Way Bill + invoice onto the BlueDart AWB (UpdateEwayBill).
+ * Prefills from DC when body fields are omitted.
+ */
+exports.updateDcBluedartEwayBill = async (req, res) => {
+  try {
+    const bluedartWaybill = require('../services/bluedartWaybillService');
+    if (!bluedartWaybill.isWaybillConfigured()) {
+      return res.status(503).json({
+        success: false,
+        message: 'BlueDart waybill is not configured on the server',
+      });
+    }
+
+    const dcNumber = req.params.dcNumber;
+    const lines = await getDeliveryChallanLines(dcNumber);
+    if (!lines.length) {
+      return res.status(404).json({ success: false, message: 'Delivery challan not found' });
+    }
+    const head = lines[0];
+    const body = req.body || {};
+
+    const awb = String(body.awb_number || head.awb_number || '').trim();
+    if (!awb) {
+      return res.status(400).json({
+        success: false,
+        message: 'No BlueDart AWB on this delivery challan — generate AWB first',
+      });
+    }
+
+    const ewbNo = String(body.eway_bill_number || head.eway_bill_number || '').trim();
+    if (!ewbNo) {
+      return res.status(400).json({
+        success: false,
+        message: 'E-Way Bill number is required (generate/upload on DC first, or pass eway_bill_number)',
+      });
+    }
+
+    const invoiceNumber = String(
+      body.invoice_number
+      || head.einvoice_number
+      || body.InvoiceNumber
+      || dcNumber
+    ).trim();
+
+    const result = await bluedartWaybill.updateEwayBill({
+      awbNumber: awb,
+      eWaybillNumber: ewbNo,
+      eWaybillDate: body.eway_bill_date || head.eway_bill_valid_till || body.eWaybillDate || new Date(),
+      invoiceNumber,
+      invoiceDate: body.invoice_date
+        || head.einvoice_uploaded_at
+        || head.irn_generated_at
+        || head.created_at
+        || new Date(),
+      sellerGstNo: body.seller_gst_no || body.SellerGSTNo,
+    });
+
+    return res.json({
+      success: true,
+      message: `E-Way Bill ${ewbNo} updated on BlueDart AWB ${awb}`,
+      data: {
+        dc_number: dcNumber,
+        ...result,
+      },
+    });
+  } catch (error) {
+    const status = error.status || 500;
+    return res.status(status).json({
+      success: false,
+      message: error.message,
+      details: error.details || undefined,
+    });
+  }
+};
+
 exports.getDeliveryChallan = async (req, res) => {
   try {
     const lines = await getDeliveryChallanLines(req.params.dcNumber);

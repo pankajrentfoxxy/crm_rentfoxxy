@@ -160,6 +160,12 @@ router.post(...dcRoute('/delivery-register', dcEdit, ctrl.submitDeliveryRegister
 router.post(...dcRoute('/qc-ticket', dcEdit, ctrl.createPreDispatchQcTicket));
 router.get(...dcRoute('/qc-status', soDcView, ctrl.getDcQcStatus));
 router.get(...dcRoute('/courier-tracking', soDcView, ctrl.getDcCourierTracking));
+router.post('/bluedart/generate-waybill', soDcCreate, ctrl.generateBluedartWaybill);
+router.post('/bluedart/cancel-waybill', soDcEdit, ctrl.cancelBluedartWaybill);
+router.post('/bluedart/update-eway-bill', soDcEdit, ctrl.updateBluedartEwayBill);
+router.post(...dcRoute('/generate-bluedart-awb', soDcEdit, ctrl.generateDcBluedartAwb));
+router.post(...dcRoute('/cancel-bluedart-awb', soDcEdit, ctrl.cancelDcBluedartAwb));
+router.post(...dcRoute('/update-bluedart-eway-bill', soDcEdit, ctrl.updateDcBluedartEwayBill));
 router.patch(...dcRoute('/assignment', soDcEdit, ctrl.updateDcAssignment));
 router.patch(...dcRoute('/dispatch', soDcEdit, ctrl.updateDcDispatch));
 router.patch(...dcRoute('/cancel', checkRole('super_admin'), ctrl.cancelDeliveryChallan));

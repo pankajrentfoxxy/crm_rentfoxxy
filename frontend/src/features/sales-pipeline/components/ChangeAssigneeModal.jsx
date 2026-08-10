@@ -1,12 +1,40 @@
 import React, { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { updateDcAssignment } from '../salesPipelineApi';
+import { updateDcAssignment, generateBluedartWaybill } from '../salesPipelineApi';
 
 function initialMode(head) {
   if (head.dispatch_mode) return head.dispatch_mode;
   if (head.ship_by === 'by_hand') return 'inhouse';
   if (head.ship_by === 'by_porter') return 'porter';
   return 'courier';
+}
+
+function parseAddr(addr) {
+  if (!addr) return {};
+  if (typeof addr === 'object') return addr;
+  try { return JSON.parse(addr); } catch { return {}; }
+}
+
+const isBlueDartCourier = (name) => /bluedart|blue\s*dart/i.test(String(name || ''));
+
+function buildConsigneeFromHead(head) {
+  const shipping = parseAddr(head.customer_shipping_address);
+  const pin = String(shipping.pincode || shipping.zip_code || '').replace(/\D/g, '').slice(0, 6);
+  const mobile = String(
+    shipping.phone || shipping.mobile || head.d_customer_mobile || head.customer_mobile || ''
+  ).replace(/\D/g, '').slice(-10);
+  const address = [shipping.address, shipping.city, shipping.state].filter(Boolean).join(', ')
+    || shipping.address
+    || '';
+  return {
+    name: shipping.name || head.customer_name || '',
+    mobile,
+    address,
+    pincode: pin,
+    email: shipping.email || head.email || head.customer_email || '',
+    gst: head.gst_number || '',
+    attention: shipping.name || head.customer_name || '',
+  };
 }
 
 export default function ChangeAssigneeModal({
@@ -32,13 +60,20 @@ export default function ChangeAssigneeModal({
     reason: '',
   });
   const [saving, setSaving] = useState(false);
+  const [bdBusy, setBdBusy] = useState(false);
+  const [bdOpen, setBdOpen] = useState(true);
+  const [bdForm, setBdForm] = useState({
+    name: '', mobile: '', address: '', pincode: '',
+    declaredValue: '', weight: '2.50', pieceCount: '1',
+  });
 
   useEffect(() => {
     if (!open) return;
     const m = initialMode(head);
     setMode(m);
+    const courierName = head.courier_name || (m === 'courier' ? 'BlueDart' : '');
     setForm({
-      courier_name: head.courier_name || '',
+      courier_name: courierName,
       awb_number: head.awb_number || '',
       courier_tracking_url: head.courier_tracking_url || '',
       porter_booking_id: head.porter_booking_id || '',
@@ -50,9 +85,73 @@ export default function ChangeAssigneeModal({
       estimated_delivery: head.estimated_delivery ? String(head.estimated_delivery).slice(0, 10) : '',
       reason: '',
     });
+    const c = buildConsigneeFromHead(head);
+    const pieces = Math.max(1, Number(head.quantity || head.main_qty || 1));
+    setBdForm({
+      name: c.name,
+      mobile: c.mobile,
+      address: c.address,
+      pincode: c.pincode,
+      declaredValue: '',
+      weight: (2.5 * pieces).toFixed(2),
+      pieceCount: String(pieces),
+    });
+    setBdOpen(isBlueDartCourier(courierName) || m === 'courier');
   }, [open, head]);
 
   if (!open) return null;
+
+  const generateAwb = async () => {
+    const consignee = {
+      name: bdForm.name.trim(),
+      mobile: bdForm.mobile.trim(),
+      address: bdForm.address.trim(),
+      pincode: bdForm.pincode.trim(),
+      email: head.email || head.customer_email || '',
+      gst: head.gst_number || '',
+      attention: bdForm.name.trim(),
+    };
+    if (!consignee.name || !consignee.address || !consignee.pincode || !consignee.mobile) {
+      toast.error('Fill consignee name, mobile, address and pincode for BlueDart');
+      return;
+    }
+    const declaredValue = Number(bdForm.declaredValue);
+    if (!bdForm.declaredValue?.trim() || Number.isNaN(declaredValue) || declaredValue <= 0) {
+      toast.error('Enter declared value (₹)');
+      return;
+    }
+    setBdBusy(true);
+    try {
+      const soKey = String(head.sales_order_number || dcNumber || '')
+        .replace(/[^A-Za-z0-9]/g, '')
+        .slice(-8);
+      const { data } = await generateBluedartWaybill({
+        consignee,
+        services: {
+          pieceCount: Number(bdForm.pieceCount) || 1,
+          actualWeight: bdForm.weight,
+          declaredValue,
+          itemName: [head.brand, head.model_name].filter(Boolean).join(' ') || 'LAPTOP',
+        },
+        credit_reference_no: `SO${soKey}${Date.now().toString(36).toUpperCase()}`.slice(0, 20),
+      });
+      const awb = data?.data?.awb_number;
+      if (!awb) {
+        toast.error(data?.message || 'No AWB returned');
+        return;
+      }
+      setForm((f) => ({
+        ...f,
+        courier_name: f.courier_name?.trim() || 'BlueDart',
+        awb_number: awb,
+      }));
+      toast.success(`BlueDart AWB: ${awb}`);
+    } catch (e) {
+      toast.error(e.response?.data?.message || e.message || 'BlueDart AWB failed');
+    } finally {
+      setBdBusy(false);
+    }
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -97,17 +196,146 @@ export default function ChangeAssigneeModal({
           <div className="flex flex-wrap gap-4 text-sm">
             {['courier', 'porter', 'inhouse'].map((m) => (
               <label key={m} className="flex items-center gap-2 cursor-pointer">
-                <input type="radio" name="dispatch_mode" checked={mode === m} onChange={() => setMode(m)} />
+                <input
+                  type="radio"
+                  name="dispatch_mode"
+                  checked={mode === m}
+                  onChange={() => {
+                    setMode(m);
+                    if (m === 'courier' && !form.courier_name) {
+                      setForm((f) => ({ ...f, courier_name: 'BlueDart' }));
+                      setBdOpen(true);
+                    }
+                  }}
+                />
                 {m === 'inhouse' ? 'By Hand (Technician)' : m.charAt(0).toUpperCase() + m.slice(1)}
               </label>
             ))}
           </div>
           {mode === 'courier' && (
-            <>
-              <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Courier Name *" value={form.courier_name} onChange={(e) => setForm((f) => ({ ...f, courier_name: e.target.value }))} />
-              <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="AWB Number *" value={form.awb_number} onChange={(e) => setForm((f) => ({ ...f, awb_number: e.target.value }))} />
-              <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Tracking URL (optional)" value={form.courier_tracking_url} onChange={(e) => setForm((f) => ({ ...f, courier_tracking_url: e.target.value }))} />
-            </>
+            <div className="space-y-2">
+              <div className="grid grid-cols-2 gap-2">
+                <label className="block text-xs text-gray-600">
+                  Courier *
+                  <select
+                    className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                    value={
+                      isBlueDartCourier(form.courier_name) ? 'BlueDart'
+                        : (form.courier_name ? 'Other' : '')
+                    }
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === 'BlueDart') {
+                        setForm((f) => ({ ...f, courier_name: 'BlueDart' }));
+                        setBdOpen(true);
+                      } else if (v === 'Other') {
+                        setForm((f) => ({
+                          ...f,
+                          courier_name: isBlueDartCourier(f.courier_name) ? '' : f.courier_name,
+                        }));
+                        setBdOpen(false);
+                      } else {
+                        setForm((f) => ({ ...f, courier_name: '' }));
+                      }
+                    }}
+                  >
+                    <option value="">Select…</option>
+                    <option value="BlueDart">BlueDart</option>
+                    <option value="Other">Other courier</option>
+                  </select>
+                </label>
+                <label className="block text-xs text-gray-600">
+                  AWB Number *
+                  <input
+                    className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                    placeholder="AWB Number *"
+                    value={form.awb_number}
+                    onChange={(e) => setForm((f) => ({ ...f, awb_number: e.target.value }))}
+                  />
+                </label>
+              </div>
+              {!isBlueDartCourier(form.courier_name) && (
+                <label className="block text-xs text-gray-600">
+                  Courier name *
+                  <input
+                    className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                    placeholder="Courier Name *"
+                    value={form.courier_name}
+                    onChange={(e) => setForm((f) => ({ ...f, courier_name: e.target.value }))}
+                  />
+                </label>
+              )}
+              <label className="block text-xs text-gray-600">
+                Tracking URL (optional)
+                <input
+                  className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                  placeholder="Tracking URL (optional)"
+                  value={form.courier_tracking_url}
+                  onChange={(e) => setForm((f) => ({ ...f, courier_tracking_url: e.target.value }))}
+                />
+              </label>
+
+              {isBlueDartCourier(form.courier_name) && (
+                <div className="rounded-lg border border-blue-200 bg-blue-50/60 p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-semibold text-blue-900">BlueDart GenerateWayBill</p>
+                    <button type="button" className="text-[11px] text-blue-700 underline" onClick={() => setBdOpen((v) => !v)}>
+                      {bdOpen ? 'Hide' : 'Show'} details
+                    </button>
+                  </div>
+                  {bdOpen && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="col-span-2 block">
+                        <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Consignee name *</span>
+                        <input className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white"
+                          value={bdForm.name} onChange={(e) => setBdForm((f) => ({ ...f, name: e.target.value }))} />
+                      </label>
+                      <label className="block">
+                        <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Mobile *</span>
+                        <input className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white"
+                          value={bdForm.mobile} onChange={(e) => setBdForm((f) => ({ ...f, mobile: e.target.value }))} />
+                      </label>
+                      <label className="block">
+                        <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Pincode *</span>
+                        <input className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white"
+                          value={bdForm.pincode} onChange={(e) => setBdForm((f) => ({ ...f, pincode: e.target.value }))} />
+                      </label>
+                      <label className="col-span-2 block">
+                        <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Address *</span>
+                        <textarea className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white min-h-[56px]"
+                          value={bdForm.address} onChange={(e) => setBdForm((f) => ({ ...f, address: e.target.value }))} />
+                      </label>
+                      <label className="block">
+                        <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Weight (kg)</span>
+                        <input className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white"
+                          value={bdForm.weight} onChange={(e) => setBdForm((f) => ({ ...f, weight: e.target.value }))} />
+                      </label>
+                      <label className="block">
+                        <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Declared value (₹) *</span>
+                        <input className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white" placeholder="Enter amount"
+                          value={bdForm.declaredValue} onChange={(e) => setBdForm((f) => ({ ...f, declaredValue: e.target.value }))} />
+                      </label>
+                      <label className="block">
+                        <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Pieces</span>
+                        <input className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white"
+                          value={bdForm.pieceCount} onChange={(e) => setBdForm((f) => ({ ...f, pieceCount: e.target.value }))} />
+                      </label>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    disabled={bdBusy}
+                    onClick={generateAwb}
+                    className="w-full py-2 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {bdBusy ? 'Generating AWB…' : (form.awb_number ? 'Regenerate BlueDart AWB' : 'Generate BlueDart AWB')}
+                  </button>
+                  {form.awb_number && (
+                    <p className="text-[11px] text-emerald-700">AWB ready — click Save to store it on the DC.</p>
+                  )}
+                </div>
+              )}
+            </div>
           )}
           {mode === 'porter' && (
             <>

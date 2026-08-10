@@ -12,7 +12,7 @@ import {
   createDcQcTickets, getDC, getDcQcStatus, getDCMeta, getSalesOrderFull,
   markDelivered, markRejected, regenerateDcPdf, cancelDC,
   sendDeliveryOtp, sendWarehouseReturnOtp, verifyDeliveryOtp, verifyWarehouseReturnOtp,
-  updateDC, dispatchDC, updateDcHsn, updateDcDeliveryDate,
+  updateDC, dispatchDC, updateDcHsn, updateDcDeliveryDate, generateDcBluedartAwb, cancelDcBluedartAwb,
 } from '../salesPipelineApi';
 import {
   DC_STATUS_STYLES, formatConfig, formatCurrency, formatDate, formatDateTime,
@@ -74,6 +74,7 @@ export default function DeliveryChallanDetailPage() {
   const [warehouseOtp, setWarehouseOtp] = useState('');
   const [editOpen, setEditOpen] = useState(false);
   const [trackingOpen, setTrackingOpen] = useState(false);
+  const [awbGenerating, setAwbGenerating] = useState(false);
   const [changeAssigneeOpen, setChangeAssigneeOpen] = useState(false);
   const [assignmentEditable, setAssignmentEditable] = useState(false);
   const [assignmentHistory, setAssignmentHistory] = useState([]);
@@ -134,6 +135,36 @@ export default function DeliveryChallanDetailPage() {
       }
     }
     setChangeAssigneeOpen(true);
+  };
+
+  const handleGenerateBluedartAwb = async () => {
+    if (!window.confirm('Generate a BlueDart AWB for this DC and save it?')) return;
+    setAwbGenerating(true);
+    try {
+      const { data } = await generateDcBluedartAwb(dcNumber, {});
+      toast.success(data?.message || `AWB ${data?.data?.awb_number} saved`);
+      await load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'BlueDart AWB failed');
+    } finally {
+      setAwbGenerating(false);
+    }
+  };
+
+  const handleCancelBluedartAwb = async () => {
+    const awb = head.awb_number;
+    if (!awb) return;
+    if (!window.confirm(`Cancel BlueDart AWB ${awb} and clear it from this DC?`)) return;
+    setAwbGenerating(true);
+    try {
+      const { data } = await cancelDcBluedartAwb(dcNumber, { awb_number: awb });
+      toast.success(data?.message || `AWB ${awb} cancelled`);
+      await load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'BlueDart cancel failed');
+    } finally {
+      setAwbGenerating(false);
+    }
   };
 
   const initiateQc = async () => {
@@ -458,6 +489,32 @@ export default function DeliveryChallanDetailPage() {
                         >
                           Track
                         </button>
+                        {' · '}
+                        <PermissionGate section={['sales_orders_doc', 'delivery_challans']} action="edit">
+                          <button
+                            type="button"
+                            disabled={awbGenerating}
+                            onClick={handleCancelBluedartAwb}
+                            className="text-red-600 underline text-xs ml-1 disabled:opacity-50"
+                          >
+                            {awbGenerating ? 'Cancelling…' : 'Cancel AWB'}
+                          </button>
+                        </PermissionGate>
+                      </>
+                    )}
+                    {!head.awb_number && (
+                      <>
+                        {' · '}
+                        <PermissionGate section={['sales_orders_doc', 'delivery_challans']} action="edit">
+                          <button
+                            type="button"
+                            disabled={awbGenerating}
+                            onClick={handleGenerateBluedartAwb}
+                            className="text-blue-600 underline text-xs ml-1 disabled:opacity-50"
+                          >
+                            {awbGenerating ? 'Generating…' : 'Generate BlueDart AWB'}
+                          </button>
+                        </PermissionGate>
                       </>
                     )}
                     {!head.awb_number && head.courier_tracking_url && (
@@ -631,6 +688,28 @@ export default function DeliveryChallanDetailPage() {
                           className="text-blue-600 underline text-xs"
                         >
                           Track
+                        </button>
+                        {' · '}
+                        <button
+                          type="button"
+                          disabled={awbGenerating}
+                          onClick={handleCancelBluedartAwb}
+                          className="text-red-600 underline text-xs disabled:opacity-50"
+                        >
+                          {awbGenerating ? 'Cancelling…' : 'Cancel AWB'}
+                        </button>
+                      </>
+                    )}
+                    {!head.awb_number && (
+                      <>
+                        {' · '}
+                        <button
+                          type="button"
+                          disabled={awbGenerating}
+                          onClick={handleGenerateBluedartAwb}
+                          className="text-blue-600 underline text-xs disabled:opacity-50"
+                        >
+                          {awbGenerating ? 'Generating…' : 'Generate BlueDart AWB'}
                         </button>
                       </>
                     )}

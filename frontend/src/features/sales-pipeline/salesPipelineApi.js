@@ -40,6 +40,15 @@ export const regenerateSalesOrderPdf = (n) => api.post(`${base}/sales-orders/${e
 export const getDCMeta = (so) => api.get(`${base}/delivery-challans/meta/add`, { params: { sales_order_number: so } });
 export const getDcQcStatus = (n) => api.get(`${base}/delivery-challans/${encDc(n)}/qc-status`);
 export const getDcCourierTracking = (n) => api.get(`${base}/delivery-challans/${encDc(n)}/courier-tracking`);
+export const generateBluedartWaybill = (data) => api.post(`${base}/bluedart/generate-waybill`, data);
+export const cancelBluedartWaybill = (data) => api.post(`${base}/bluedart/cancel-waybill`, data);
+export const updateBluedartEwayBill = (data) => api.post(`${base}/bluedart/update-eway-bill`, data);
+export const generateDcBluedartAwb = (n, data = {}) =>
+  api.post(`${base}/delivery-challans/${encDc(n)}/generate-bluedart-awb`, data);
+export const cancelDcBluedartAwb = (n, data = {}) =>
+  api.post(`${base}/delivery-challans/${encDc(n)}/cancel-bluedart-awb`, data);
+export const updateDcBluedartEwayBill = (n, data = {}) =>
+  api.post(`${base}/delivery-challans/${encDc(n)}/update-bluedart-eway-bill`, data);
 export const createDcQcTickets = (n) => api.post(`${base}/delivery-challans/${encDc(n)}/qc-ticket`);
 export const dispatchDC = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}/dispatch`, d);
 export const updateDcAssignment = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}/assignment`, d);

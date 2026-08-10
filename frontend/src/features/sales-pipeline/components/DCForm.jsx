@@ -17,7 +17,7 @@ import {
   X, Package, MapPin, ChevronDown, ChevronUp, AlertTriangle, Edit2,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { createDcsByAddress, getDCMeta, listSalesOrders } from '../salesPipelineApi';
+import { createDcsByAddress, getDCMeta, listSalesOrders, generateBluedartWaybill } from '../salesPipelineApi';
 import { deliveryChallanDetailPath } from '../salesPipelineUtils';
 import { BillingAddressPanel } from '../../operation-management/components/CustomerAddressPanels';
 
@@ -42,6 +42,24 @@ const addrLine = (addr) => {
   if (!a) return 'No address set';
   return [a.address, a.city, a.state, a.pincode || a.zip_code].filter(Boolean).join(', ');
 };
+
+const isBlueDartCourier = (name) => /bluedart|blue\s*dart/i.test(String(name || ''));
+
+function buildConsigneeFromAddress(address, meta) {
+  const a = parseAddr(address) || {};
+  const pin = String(a.pincode || a.zip_code || '').replace(/\D/g, '').slice(0, 6);
+  const mobile = String(a.phone || a.mobile || meta?.customer_mobile || meta?.customer_phone || '').replace(/\D/g, '').slice(-10);
+  const line = [a.address, a.city, a.state].filter(Boolean).join(', ') || a.address || '';
+  return {
+    name: a.name || meta?.customer_name || '',
+    mobile,
+    address: line,
+    pincode: pin,
+    email: a.email || meta?.customer_email || meta?.email || '',
+    gst: meta?.gst_number || '',
+    attention: a.name || meta?.customer_name || '',
+  };
+}
 
 // ── AddressEditDrawer ─────────────────────────────────────────────────────────
 
@@ -102,20 +120,186 @@ function AddressEditDrawer({ address, onSave, onClose }) {
 
 // ── DispatchFields ────────────────────────────────────────────────────────────
 
-function DispatchFields({ shipBy, fields, onChange, deliveryTechnicians = [], requireVehicle = false }) {
+function DispatchFields({
+  shipBy, fields, onChange, deliveryTechnicians = [], requireVehicle = false,
+  group = null, meta = null, soNumber = '',
+}) {
   const set = (k) => (e) => onChange({ ...fields, [k]: e.target.value });
-  if (shipBy === 'by_courier') return (
-    <div className="space-y-2 mt-2">
-      <div className="grid grid-cols-2 gap-2">
-        <input className="border rounded-lg px-3 py-2 text-sm" placeholder="Courier Name*"
-          value={fields.courier_name || ''} onChange={set('courier_name')} />
-        <input className="border rounded-lg px-3 py-2 text-sm" placeholder="AWB Number"
-          value={fields.awb_number || ''} onChange={set('awb_number')} />
+  const [bdBusy, setBdBusy] = useState(false);
+  const [bdOpen, setBdOpen] = useState(false);
+  const [bdForm, setBdForm] = useState({
+    name: '', mobile: '', address: '', pincode: '',
+    declaredValue: '', weight: '2.50', pieceCount: '1',
+  });
+
+  useEffect(() => {
+    if (shipBy !== 'by_courier') return;
+    const c = buildConsigneeFromAddress(group?.address, meta);
+    const pieces = (group?.serials || []).filter((s) => s.selected && s.qc_status === 'passed').length || 1;
+    setBdForm((f) => ({
+      ...f,
+      name: c.name || f.name,
+      mobile: c.mobile || f.mobile,
+      address: c.address || f.address,
+      pincode: c.pincode || f.pincode,
+      pieceCount: String(pieces),
+      weight: (2.5 * pieces).toFixed(2),
+    }));
+    if (isBlueDartCourier(fields.courier_name) || !fields.courier_name) {
+      setBdOpen(true);
+    }
+  }, [shipBy, group?.address, group?.serials, meta, fields.courier_name]);
+
+  const generateAwb = async () => {
+    const consignee = {
+      name: bdForm.name.trim(),
+      mobile: bdForm.mobile.trim(),
+      address: bdForm.address.trim(),
+      pincode: bdForm.pincode.trim(),
+      email: meta?.customer_email || meta?.email || '',
+      gst: meta?.gst_number || '',
+      attention: bdForm.name.trim(),
+    };
+    if (!consignee.name || !consignee.address || !consignee.pincode || !consignee.mobile) {
+      toast.error('Fill consignee name, mobile, address and pincode for BlueDart');
+      return;
+    }
+    const declaredValue = Number(bdForm.declaredValue);
+    if (!bdForm.declaredValue?.trim() || Number.isNaN(declaredValue) || declaredValue <= 0) {
+      toast.error('Enter declared value (₹)');
+      return;
+    }
+    setBdBusy(true);
+    try {
+      const { data } = await generateBluedartWaybill({
+        consignee,
+        services: {
+          pieceCount: Number(bdForm.pieceCount) || 1,
+          actualWeight: bdForm.weight,
+          declaredValue,
+          itemName: 'LAPTOP',
+        },
+        credit_reference_no: `SO${String(soNumber || '').replace(/[^A-Za-z0-9]/g, '').slice(-8)}${Date.now().toString(36).toUpperCase()}`.slice(0, 20),
+      });
+      const awb = data?.data?.awb_number;
+      if (!awb) {
+        toast.error(data?.message || 'No AWB returned');
+        return;
+      }
+      onChange({
+        ...fields,
+        courier_name: fields.courier_name?.trim() || 'BlueDart',
+        awb_number: awb,
+      });
+      toast.success(`BlueDart AWB: ${awb}`);
+    } catch (e) {
+      toast.error(e.response?.data?.message || e.message || 'BlueDart AWB failed');
+    } finally {
+      setBdBusy(false);
+    }
+  };
+
+  if (shipBy === 'by_courier') {
+    return (
+      <div className="space-y-2 mt-2">
+        <div className="grid grid-cols-2 gap-2">
+          <select
+            className="border rounded-lg px-3 py-2 text-sm"
+            value={
+              isBlueDartCourier(fields.courier_name) ? 'BlueDart'
+                : (fields.courier_name === 'Other' || (fields.courier_name && !isBlueDartCourier(fields.courier_name)) ? 'Other' : '')
+            }
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === 'BlueDart') {
+                onChange({ ...fields, courier_name: 'BlueDart' });
+                setBdOpen(true);
+              } else if (v === 'Other') {
+                onChange({ ...fields, courier_name: fields.courier_name && !isBlueDartCourier(fields.courier_name) ? fields.courier_name : '' });
+                setBdOpen(false);
+              } else {
+                onChange({ ...fields, courier_name: '' });
+              }
+            }}
+          >
+            <option value="">Courier*</option>
+            <option value="BlueDart">BlueDart</option>
+            <option value="Other">Other courier</option>
+          </select>
+          <input className="border rounded-lg px-3 py-2 text-sm" placeholder="AWB Number"
+            value={fields.awb_number || ''} onChange={set('awb_number')} />
+        </div>
+        {!isBlueDartCourier(fields.courier_name) && fields.courier_name !== undefined && (
+          <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Courier Name*"
+            value={isBlueDartCourier(fields.courier_name) ? '' : (fields.courier_name || '')}
+            onChange={set('courier_name')} />
+        )}
+        <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Tracking URL (optional)"
+          value={fields.courier_tracking_url || ''} onChange={set('courier_tracking_url')} />
+
+        {isBlueDartCourier(fields.courier_name) && (
+          <div className="rounded-lg border border-blue-200 bg-blue-50/60 p-3 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold text-blue-900">BlueDart GenerateWayBill</p>
+              <button type="button" className="text-[11px] text-blue-700 underline" onClick={() => setBdOpen((v) => !v)}>
+                {bdOpen ? 'Hide' : 'Show'} details
+              </button>
+            </div>
+            {bdOpen && (
+              <div className="grid grid-cols-2 gap-2">
+                <label className="col-span-2 block">
+                  <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Consignee name *</span>
+                  <input className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white" placeholder="Name"
+                    value={bdForm.name} onChange={(e) => setBdForm((f) => ({ ...f, name: e.target.value }))} />
+                </label>
+                <label className="block">
+                  <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Mobile *</span>
+                  <input className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white" placeholder="10-digit mobile"
+                    value={bdForm.mobile} onChange={(e) => setBdForm((f) => ({ ...f, mobile: e.target.value }))} />
+                </label>
+                <label className="block">
+                  <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Pincode *</span>
+                  <input className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white" placeholder="6-digit pincode"
+                    value={bdForm.pincode} onChange={(e) => setBdForm((f) => ({ ...f, pincode: e.target.value }))} />
+                </label>
+                <label className="col-span-2 block">
+                  <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Address *</span>
+                  <textarea className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white min-h-[56px]" placeholder="Full delivery address"
+                    value={bdForm.address} onChange={(e) => setBdForm((f) => ({ ...f, address: e.target.value }))} />
+                </label>
+                <label className="block">
+                  <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Weight (kg)</span>
+                  <input className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white" placeholder="e.g. 2.50"
+                    value={bdForm.weight} onChange={(e) => setBdForm((f) => ({ ...f, weight: e.target.value }))} />
+                </label>
+                <label className="block">
+                  <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Declared value (₹) *</span>
+                  <input className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white" placeholder="Enter amount"
+                    value={bdForm.declaredValue} onChange={(e) => setBdForm((f) => ({ ...f, declaredValue: e.target.value }))} />
+                </label>
+                <label className="block">
+                  <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Pieces</span>
+                  <input className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white" placeholder="1"
+                    value={bdForm.pieceCount} onChange={(e) => setBdForm((f) => ({ ...f, pieceCount: e.target.value }))} />
+                </label>
+              </div>
+            )}
+            <button
+              type="button"
+              disabled={bdBusy}
+              onClick={generateAwb}
+              className="w-full py-2 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 disabled:opacity-50"
+            >
+              {bdBusy ? 'Generating AWB…' : (fields.awb_number ? 'Regenerate BlueDart AWB' : 'Generate BlueDart AWB')}
+            </button>
+            {fields.awb_number && (
+              <p className="text-[11px] text-emerald-700">AWB ready — will be saved on the DC when you create it.</p>
+            )}
+          </div>
+        )}
       </div>
-      <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Tracking URL (optional)"
-        value={fields.courier_tracking_url || ''} onChange={set('courier_tracking_url')} />
-    </div>
-  );
+    );
+  }
   if (shipBy === 'by_porter') return (
     <div className="space-y-2 mt-2">
       <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Porter Booking/Tracking ID*"
@@ -159,7 +343,7 @@ function DispatchFields({ shipBy, fields, onChange, deliveryTechnicians = [], re
 
 function DcGroupCard({
   groupIndex, group, meta, shipBy, dispatchFields, onDispatchChange,
-  onAddressEdit, onToggleSerial, requireVehicle = false,
+  onAddressEdit, onToggleSerial, requireVehicle = false, soNumber = '',
 }) {
   const [expanded, setExpanded] = useState(true);
   const [editingAddress, setEditingAddress] = useState(false);
@@ -256,6 +440,9 @@ function DcGroupCard({
             onChange={onDispatchChange}
             deliveryTechnicians={meta?.delivery_technicians || []}
             requireVehicle={requireVehicle}
+            group={group}
+            meta={meta}
+            soNumber={soNumber}
           />
         </div>
       )}
@@ -586,9 +773,12 @@ export default function DCForm({ open, onClose, prefillSo }) {
                 </label>
                 <select className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
                   value={shipBy} onChange={(e) => {
-                    setShipBy(e.target.value);
+                    const mode = e.target.value;
+                    setShipBy(mode);
                     const init = {};
-                    dcGroups.forEach((_, i) => { init[i] = {}; });
+                    dcGroups.forEach((_, i) => {
+                      init[i] = mode === 'by_courier' ? { courier_name: 'BlueDart' } : {};
+                    });
                     setGroupDispatch(init);
                   }}>
                   <option value="">Select dispatch mode…</option>
@@ -618,6 +808,7 @@ export default function DCForm({ open, onClose, prefillSo }) {
                     onAddressEdit={handleAddressEdit}
                     onToggleSerial={handleToggleSerial}
                     requireVehicle={requireVehicle}
+                    soNumber={soNumber}
                   />
                       ))}
                     </div>
