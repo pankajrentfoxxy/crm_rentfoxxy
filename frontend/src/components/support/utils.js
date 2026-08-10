@@ -116,7 +116,14 @@ export const compressImageFile = async (file, opts = {}) => {
 };
 
 export const displayStatus = (ticket) => {
-  if (ticket.status === 'closed') return { label: 'Closed', className: 'closed' };
+  if (ticket.status === 'closed') {
+    const wasReplacement = !!(ticket.sales_order_number
+      || (ticket.items || []).some((i) => i.item_type === 'replacement'));
+    return {
+      label: wasReplacement ? 'Completed' : 'Closed',
+      className: 'closed',
+    };
+  }
   const awaitingServiceReturn = (ticket.items || []).some(
     (item) => item.item_type === 'pickup' && item.status === 'awaiting_service_return'
   );

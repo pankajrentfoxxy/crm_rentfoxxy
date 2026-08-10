@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Loader2, Search, Download, Plus } from 'lucide-react';
+import { Loader2, Search, Download, Plus, MessageSquare } from 'lucide-react';
 import api from '../../utils/api';
 import { canCloseSupportTicket, isSupportLead } from '../../utils/supportAccess';
 import { useAuth } from '../../context/AuthContext';
@@ -17,21 +17,31 @@ const PRIMARY_TYPE_CHIPS = [
   { key: 'replacement', label: 'Replacement', countKey: 'replacement' },
 ];
 
-const STATUS_TABS = [
-  { key: 'all', label: 'All', view: 'all' },
-  { key: 'open', label: 'Open', view: 'active' },
+const LIFECYCLE_TABS = [
+  { key: 'open', label: 'Open' },
+  { key: 'closed', label: 'Closed' },
+];
+
+const OPEN_STATUS_TABS = [
+  { key: 'all', label: 'All', view: 'active' },
+  { key: 'open', label: 'Not started', view: 'active', status: 'open' },
   { key: 'progress', label: 'In Progress', view: 'active', status: 'in_progress' },
   { key: 'overdue', label: 'Overdue', view: 'overdue' },
   { key: 'pickup', label: 'Pending Pickup', view: 'pickups' },
-  { key: 'closed', label: 'Closed', view: 'closed' },
 ];
 
-const VALID_TAB_KEYS = new Set(STATUS_TABS.map((t) => t.key));
+const VALID_OPEN_TAB_KEYS = new Set(OPEN_STATUS_TABS.map((t) => t.key));
 
 function readFiltersFromParams(searchParams) {
+  const rawLifecycle = searchParams.get('status');
+  const legacyClosedTab = searchParams.get('tab') === 'closed';
+  const lifecycle = rawLifecycle === 'closed' || (!rawLifecycle && legacyClosedTab) ? 'closed' : 'open';
   const rawTab = searchParams.get('tab') || 'all';
   return {
-    statusTab: VALID_TAB_KEYS.has(rawTab) ? rawTab : 'all',
+    lifecycle,
+    statusTab: lifecycle === 'closed'
+      ? 'closed'
+      : (VALID_OPEN_TAB_KEYS.has(rawTab) ? rawTab : 'all'),
     debounced: searchParams.get('search') || '',
     typeFilter: searchParams.get('type') || '',
     pickupKindFilter: searchParams.get('pickup_type') || '',
@@ -66,6 +76,16 @@ function primaryCategory(ticket) {
   return item?.issue_category_label || item?.issue_category_name || '—';
 }
 
+function issuePreviewText(ticket) {
+  const item = (ticket.items || []).find((i) => i.remarks || i.issue_category_label || i.issue_category_name)
+    || (ticket.items || [])[0];
+  const category = item?.issue_category_label || item?.issue_category_name || null;
+  const remarks = (item?.remarks || ticket.top_level_remarks || '').trim();
+  if (!category && !remarks) return 'No issue details recorded.';
+  if (category && remarks) return `${category}\n\n${remarks}`;
+  return category || remarks;
+}
+
 function assignedLabel(ticket) {
   const names = [...new Set((ticket.items || []).map((i) => i.assigned_to_name).filter(Boolean))];
   if (!names.length) return 'Unassigned';
@@ -74,6 +94,26 @@ function assignedLabel(ticket) {
 
 function isUnassigned(ticket) {
   return ticketHasUnassignedTechnicianSlots(ticket);
+}
+
+function IssueCommentPreview({ ticket }) {
+  const text = issuePreviewText(ticket);
+  return (
+    <span className="support-issue-preview relative inline-flex">
+      <button
+        type="button"
+        className="inline-flex items-center justify-center min-h-[32px] min-w-[32px] rounded-lg text-slate-500 hover:text-[#534AB7] hover:bg-slate-100"
+        aria-label="View issue comment"
+        title="Issue / comment"
+      >
+        <MessageSquare className="w-4 h-4" />
+      </button>
+      <span className="support-issue-popover" role="tooltip">
+        <span className="block text-[10px] uppercase tracking-wide text-slate-400 mb-1">Reported issue</span>
+        <span className="whitespace-pre-wrap break-words">{text}</span>
+      </span>
+    </span>
+  );
 }
 
 function SubTypeBadge({ ticket }) {
@@ -110,7 +150,7 @@ export default function SupportTicketList() {
   const [historyTtspl, setHistoryTtspl] = useState(null);
 
   const {
-    statusTab, debounced, typeFilter, pickupKindFilter, priorityFilter,
+    lifecycle, statusTab, debounced, typeFilter, pickupKindFilter, priorityFilter,
     assignFilter, dateFrom, dateTo, page,
   } = useMemo(() => readFiltersFromParams(searchParams), [searchParams]);
 
@@ -156,22 +196,26 @@ export default function SupportTicketList() {
 
   useEffect(() => {
     setSelected(new Set());
-  }, [statusTab, debounced, typeFilter, pickupKindFilter, priorityFilter, assignFilter, dateFrom, dateTo, page]);
+  }, [lifecycle, statusTab, debounced, typeFilter, pickupKindFilter, priorityFilter, assignFilter, dateFrom, dateTo, page]);
 
-  const activeTab = STATUS_TABS.find((t) => t.key === statusTab) || STATUS_TABS[0];
+  const activeTab = lifecycle === 'closed'
+    ? { key: 'closed', view: 'closed' }
+    : (OPEN_STATUS_TABS.find((t) => t.key === statusTab) || OPEN_STATUS_TABS[0]);
 
   const buildFilterParams = useCallback(() => {
     const params = new URLSearchParams();
     if (debounced) params.set('search', debounced);
     params.set('view', activeTab.view);
-    if (activeTab.status === 'in_progress') params.set('status_tab', 'in_progress');
-    else if (statusTab === 'open') params.set('status_tab', 'open');
+    if (lifecycle === 'open') {
+      if (activeTab.status === 'in_progress') params.set('status_tab', 'in_progress');
+      else if (statusTab === 'open') params.set('status_tab', 'open');
+    }
     if (priorityFilter) params.set('priority', priorityFilter);
     if (assignFilter) params.set('assignee', assignFilter);
     if (dateFrom) params.set('date_from', dateFrom);
     if (dateTo) params.set('date_to', dateTo);
     return params;
-  }, [debounced, activeTab.view, activeTab.status, statusTab, priorityFilter, assignFilter, dateFrom, dateTo]);
+  }, [debounced, activeTab.view, activeTab.status, lifecycle, statusTab, priorityFilter, assignFilter, dateFrom, dateTo]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -241,11 +285,9 @@ export default function SupportTicketList() {
   };
 
   const exportCsv = async () => {
-    const params = new URLSearchParams();
-    if (debounced) params.set('search', debounced);
+    const params = buildFilterParams();
     if (typeFilter) params.set('type', typeFilter);
     if (pickupKindFilter) params.set('pickup_type', pickupKindFilter);
-    params.set('view', activeTab.view);
     const res = await api.get(`/support/tickets/export?${params}`, { responseType: 'blob' });
     const url = window.URL.createObjectURL(res.data);
     const a = document.createElement('a');
@@ -271,7 +313,10 @@ export default function SupportTicketList() {
 
   const clearFilters = () => {
     setSearch('');
-    setSearchParams({}, { replace: true });
+    setSearchParams(
+      lifecycle === 'closed' ? { status: 'closed' } : { status: 'open' },
+      { replace: true }
+    );
     setSelected(new Set());
   };
 
@@ -313,34 +358,39 @@ export default function SupportTicketList() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const setLifecycle = (key) => {
+    if (key === 'closed') {
+      patchParams({ status: 'closed', tab: null, page: null });
+    } else {
+      patchParams({ status: 'open', tab: null, page: null });
+    }
+  };
+
   return (
     <div className="space-y-4 min-w-0">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-1">
-        <div className="flex flex-wrap gap-1">
-        {STATUS_TABS.map((tab) => {
-          const count = tab.key === 'overdue' ? badges.overdue_tickets
-            : tab.key === 'open' ? badges.open_tickets
-              : tab.key === 'all' ? badges.open_tickets : null;
-          return (
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1 gap-1">
+          {LIFECYCLE_TABS.map((tab) => (
             <button
               key={tab.key}
               type="button"
-              onClick={() => patchParams({ tab: tab.key === 'all' ? null : tab.key, page: null })}
-              className={`px-3 py-2 text-sm font-medium rounded-t-lg border-b-2 -mb-px transition-colors ${
-                statusTab === tab.key
-                  ? 'border-[#534AB7] text-[#534AB7]'
-                  : 'border-transparent text-slate-600 hover:text-slate-900'
+              onClick={() => setLifecycle(tab.key)}
+              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-colors ${
+                lifecycle === tab.key
+                  ? 'bg-[#534AB7] text-white shadow-sm'
+                  : 'text-slate-600 hover:bg-slate-50'
               }`}
             >
               {tab.label}
-              {count != null && count > 0 && (
-                <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${tab.key === 'overdue' ? 'bg-red-100 text-red-700' : 'bg-slate-100'}`}>
-                  {count}
+              {tab.key === 'open' && badges.open_tickets > 0 && (
+                <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${
+                  lifecycle === 'open' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-700'
+                }`}>
+                  {badges.open_tickets}
                 </span>
               )}
             </button>
-          );
-        })}
+          ))}
         </div>
         {canCreate && (
           <button
@@ -352,6 +402,35 @@ export default function SupportTicketList() {
           </button>
         )}
       </div>
+
+      {lifecycle === 'open' && (
+        <div className="flex flex-wrap gap-1 border-b border-slate-200 pb-1">
+          {OPEN_STATUS_TABS.map((tab) => {
+            const count = tab.key === 'overdue' ? badges.overdue_tickets
+              : tab.key === 'open' ? badges.open_tickets
+                : tab.key === 'all' ? badges.open_tickets : null;
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => patchParams({ tab: tab.key === 'all' ? null : tab.key, page: null })}
+                className={`px-3 py-2 text-sm font-medium rounded-t-lg border-b-2 -mb-px transition-colors ${
+                  statusTab === tab.key
+                    ? 'border-[#534AB7] text-[#534AB7]'
+                    : 'border-transparent text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                {tab.label}
+                {count != null && count > 0 && (
+                  <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${tab.key === 'overdue' ? 'bg-red-100 text-red-700' : 'bg-slate-100'}`}>
+                    {count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-2">
         {PRIMARY_TYPE_CHIPS.map((chip) => (
@@ -438,7 +517,6 @@ export default function SupportTicketList() {
         </div>
       ) : (
         <>
-        {/* Mobile: stacked cards (the 12-column table is desktop-only) */}
         <div className="grid gap-3 sm:hidden">
           {filtered.map((ticket) => {
             const st = displayStatus(ticket);
@@ -470,6 +548,7 @@ export default function SupportTicketList() {
                 </div>
                 <p className="text-xs text-slate-400 mt-1">{assignedLabel(ticket)}</p>
                 <div className="flex flex-wrap items-center gap-3 mt-3 pt-3 border-t border-slate-100">
+                  <IssueCommentPreview ticket={ticket} />
                   <Link {...ticketLinkProps(ticket.id)} className="text-sm font-semibold text-blue-600 min-h-[36px] inline-flex items-center">View</Link>
                   {url && <a href={url} target="_blank" rel="noopener noreferrer" className="text-sm text-emerald-600 min-h-[36px] inline-flex items-center">POD</a>}
                   {isSupportLead(user) && isUnassigned(ticket) && (
@@ -556,7 +635,8 @@ export default function SupportTicketList() {
                     </td>
                     <td className="p-3 text-xs">{assignedLabel(ticket)}</td>
                     <td className="p-3">
-                      <div className="flex flex-wrap gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <IssueCommentPreview ticket={ticket} />
                         <Link {...ticketLinkProps(ticket.id)} className="text-blue-600 hover:underline text-xs">View</Link>
                         {(() => {
                           const podItem = (ticket.items || []).find((it) => it.proof_of_completion_path || it.pod_image_path);

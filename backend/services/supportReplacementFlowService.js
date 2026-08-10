@@ -474,6 +474,8 @@ async function onReplacementOutboundDelivered(client, dcNumber, actor = {}) {
 
   const serialIds = await collectSerialIdsFromDc(client, dcNumber);
   let handledAny = false;
+  const ticketIds = new Set();
+  if (row.support_ticket_id) ticketIds.add(row.support_ticket_id);
 
   for (const serialId of serialIds) {
     const order = await findReplacementOrderForSerial(client, serialId);
@@ -507,11 +509,14 @@ async function onReplacementOutboundDelivered(client, dcNumber, actor = {}) {
       `UPDATE support_ticket_items SET status = 'delivered', updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
       [order.item_id]
     );
+    if (order.ticket_id) ticketIds.add(order.ticket_id);
     handledAny = true;
   }
 
-  if (handledAny && row.support_ticket_id) {
-    await tryCloseReplacementTicket(client, row.support_ticket_id);
+  if (handledAny) {
+    for (const ticketId of ticketIds) {
+      await tryCloseReplacementTicket(client, ticketId);
+    }
   }
 
   if (handledAny && row.sales_order_number) {
@@ -536,6 +541,17 @@ async function onReplacementReturnPickedUp(client, { supportTicketId, returnDcNu
     [supportTicketId, returnDcNumber]
   );
   if (!ordRes.rows.length) return { handled: false };
+
+  // Field/return pickup completion — stamp pickup leg so tryClose can finish the ticket
+  // once outbound delivery is also complete (warehouse receive path does the same).
+  await client.query(
+    `UPDATE support_replacement_orders
+        SET pickup_completed_at = COALESCE(pickup_completed_at, CURRENT_TIMESTAMP)
+      WHERE ticket_id = $1 AND return_dc_number = $2
+        AND status NOT IN ('completed','cancelled')`,
+    [supportTicketId, returnDcNumber]
+  );
+  await tryCloseReplacementTicket(client, supportTicketId);
   return { handled: true };
 }
 

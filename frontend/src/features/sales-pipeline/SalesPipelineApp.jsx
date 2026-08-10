@@ -44,7 +44,9 @@ function SalesIndexRedirect() {
   if (canView('delivery_challans')) return <Navigate to="delivery-challans" replace />;
   if (canView('delivery_register_management')) return <Navigate to="delivery-register" replace />;
   if (canView('return_dc')) return <Navigate to="return-dc" replace />;
-  if (canView('technician_bucket')) return <Navigate to="my-deliveries" replace />;
+  if (canView('technician_bucket') || canView('delivery_my_deliveries')) {
+    return <Navigate to="my-deliveries" replace />;
+  }
   return <Navigate to="/dashboard" replace />;
 }
 
@@ -76,8 +78,22 @@ export default function SalesPipelineApp() {
       <Route path="delivery-register/in-transit" element={g('delivery_register_management', <DeliveryRegisterPage />)} />
       <Route path="delivery-register/delivered" element={g('delivery_register_management', <DeliveryRegisterListPage />)} />
       <Route path="delivery-register/rejected" element={g('delivery_register_management', <DeliveryRegisterListPage />)} />
-      <Route path="technician-bucket" element={g('technician_bucket', <TechnicianBucketPage />)} />
-      <Route path="my-deliveries" element={g('technician_bucket', <MyDeliveriesPage />)} />
+      <Route
+        path="technician-bucket"
+        element={(
+          <ProtectedRoute sections={['technicians_bucket_list', 'technician_bucket']} action="view">
+            <TechnicianBucketPage />
+          </ProtectedRoute>
+        )}
+      />
+      <Route
+        path="my-deliveries"
+        element={(
+          <ProtectedRoute sections={['technician_bucket', 'delivery_my_deliveries']} action="view">
+            <MyDeliveriesPage />
+          </ProtectedRoute>
+        )}
+      />
       <Route path="*" element={<SalesIndexRedirect />} />
     </Routes>
   );

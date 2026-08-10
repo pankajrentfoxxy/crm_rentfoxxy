@@ -458,10 +458,16 @@ function ReplacementOrderBanner({ ticket, replacementOrders, pickups, ticketId, 
 
   if (!ticket.sales_order_number) return null;
   const units = replacementOrders.filter((o) => o.sales_order_number === ticket.sales_order_number);
-  const delivered = units.filter((o) => o.status === 'delivered' || o.new_machine_serial).length;
+  const delivered = units.filter((o) => o.status === 'delivered' || o.status === 'completed' || o.delivery_completed_at || o.new_machine_serial).length;
   const hasDeliveryDc = units.some((o) => o.dc_number);
   const soPath = replacementSalesOrderDetailPath(ticket.sales_order_number);
   const linkedPickups = pickups.filter((p) => p.return_dc_number === ticket.return_dc_number);
+  const replacementDelivered = units.some((o) => o.delivery_completed_at || o.status === 'delivered' || o.status === 'completed' || o.new_machine_serial);
+  const pickupInitiated = linkedPickups.some(
+    (p) => p.pickup_method || p.assigned_to || p.pickup_assigned_to || p.picked_up_at || p.warehouse_received_at
+      || (p.status && !['pending_dispatch', 'pending'].includes(p.status))
+  ) || units.some((o) => o.pickup_completed_at);
+  const showReadyToPickupBanner = replacementDelivered && !units.every((o) => o.pickup_completed_at) && !pickupInitiated;
   const pendingPickup = linkedPickups.some(
     (p) => p.status === 'pending_dispatch' || (!p.pickup_method && !p.assigned_to && !p.pickup_assigned_to)
   );
@@ -558,6 +564,19 @@ function ReplacementOrderBanner({ ticket, replacementOrders, pickups, ticketId, 
 
   return (
     <section className="support-v3-card border-pink-200 bg-pink-50/30">
+      {showReadyToPickupBanner && (
+        <div className="mb-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-emerald-950">
+          <p className="font-semibold text-sm">Replacement Laptop Delivered — Ready to Initiate Pickup</p>
+          <p className="text-xs mt-1 text-emerald-900/80">
+            The replacement unit is with the customer. Assign or start the faulty-unit return pickup to complete this ticket.
+          </p>
+          {isLead && pendingPickup && !showAssign && (
+            <button type="button" className="support-btn-primary min-h-[40px] text-sm mt-2" onClick={() => setShowAssign(true)}>
+              Initiate return pickup
+            </button>
+          )}
+        </div>
+      )}
       <h3 className="font-semibold text-sm text-pink-900 mb-2">Replacement order</h3>
       <div className="text-sm space-y-2 text-pink-950">
         <p>
@@ -996,8 +1015,30 @@ export default function SupportTicketDetail() {
   const cityLine = formatAddress(ticket.ticket_address);
   const shortCity = cityLine.length > 80 ? `${cityLine.slice(0, 77)}…` : cityLine;
 
+  const replacementDeliveredReady = (replacementOrders || []).some(
+    (o) => o.delivery_completed_at || o.status === 'delivered' || o.status === 'completed'
+  );
+  const replacementPickupDone = (replacementOrders || []).every(
+    (o) => o.status === 'cancelled' || o.pickup_completed_at || o.status === 'completed'
+  );
+  const pickupStarted = pickups.some(
+    (p) => p.pickup_method || p.assigned_to || p.pickup_assigned_to || p.picked_up_at || p.warehouse_received_at
+      || (p.status && !['pending_dispatch', 'pending'].includes(p.status))
+  );
+  const showDeliveredPickupBanner = !isCancelled
+    && ticket.status !== 'closed'
+    && replacementDeliveredReady
+    && !replacementPickupDone
+    && !pickupStarted;
+
+  const statusPillLabel = isCancelled
+    ? 'Cancelled'
+    : ticket.status === 'closed'
+      ? ((replacementOrders || []).length || ticket.sales_order_number ? 'Completed' : 'Closed')
+      : ticket.status.replace(/_/g, ' ');
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 support-ticket-detail">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Link to={ticketsBackTo} className="text-sm min-h-[44px] inline-flex items-center" style={{ color: 'var(--support-primary)' }}>← All tickets</Link>
         <div className="flex flex-wrap gap-2">
@@ -1040,6 +1081,27 @@ export default function SupportTicketDetail() {
           )}
         </div>
       </div>
+
+      {showDeliveredPickupBanner && (
+        <div className="rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="font-semibold text-emerald-950 text-sm">Replacement Laptop Delivered — Ready to Initiate Pickup</p>
+            <p className="text-xs text-emerald-900/80 mt-0.5">Faulty unit return pickup has not started yet.</p>
+          </div>
+          {isSupportLead(user) && (
+            <button
+              type="button"
+              className="support-btn-primary min-h-[40px] text-sm shrink-0"
+              onClick={() => {
+                setTab('pickup');
+                document.getElementById('support-replacement-order')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}
+            >
+              Go to pickup
+            </button>
+          )}
+        </div>
+      )}
 
       {phasePanel && (
         <AddWorkflowPhasePanel
@@ -1125,7 +1187,7 @@ export default function SupportTicketDetail() {
                 <span className="break-words">{shortCity}</span>
               </span>
               <span className={`support-pill ${isCancelled ? 'cancelled' : ticket.status === 'closed' ? 'closed' : 'progress'}`}>
-                {isCancelled ? 'Cancelled' : ticket.status.replace(/_/g, ' ')}
+                {statusPillLabel}
               </span>
             </div>
             <div className="mt-4">
@@ -1140,6 +1202,7 @@ export default function SupportTicketDetail() {
           </section>
 
           {ticket.sales_order_number && (
+            <div id="support-replacement-order">
             <ReplacementOrderBanner
               ticket={ticket}
               replacementOrders={replacementOrders}
@@ -1149,6 +1212,7 @@ export default function SupportTicketDetail() {
               onRefresh={load}
               assignmentHistory={assignmentHistory}
             />
+            </div>
           )}
 
           {(pickups.length > 0 || ticket.return_dc_number) && (

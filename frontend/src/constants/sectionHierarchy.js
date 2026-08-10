@@ -35,6 +35,8 @@ export const MODULE_CHILDREN = {
     'delivery_register_management',
     'technician_bucket',
     'technicians_bucket_list',
+    'delivery_technicians',
+    'delivery_my_deliveries',
     'payment_records',
   ],
   floor_pipeline: ['floor_tickets', 'floor_ticket_config_edit', 'chip_level_repair', 'qc_management', 'dispatch_qc', 'pending_inventory'],

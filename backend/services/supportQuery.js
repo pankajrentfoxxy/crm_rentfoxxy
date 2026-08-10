@@ -53,7 +53,8 @@ const ticketSelectCore = (overdueHours) => `
         (SELECT COUNT(*)::int FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.assigned_to IS NULL AND i.status NOT IN ('resolved','closed')) AS unassigned_item_count,
         EXISTS (
             SELECT 1 FROM support_ticket_items i
-            WHERE i.ticket_id = t.id AND i.item_type = 'replacement' AND i.status NOT IN ('resolved','closed')
+            WHERE i.ticket_id = t.id AND i.item_type = 'replacement'
+              AND i.status NOT IN ('resolved','closed','inventory_updated','cancelled')
         ) AS has_replacement_pending,
         u.name AS created_by_name,
         cx.name AS cancelled_by_name
@@ -71,9 +72,13 @@ const attachItems = async (tickets) => {
                 i.loan_delivered_at, i.pickup_scheduled_at, i.updated_at, i.replacement_flag_reason,
                 i.visited_at, i.visited_lat, i.visited_lng, i.ttspl_verified, i.outcome,
                 i.pod_image_path, i.proof_of_completion_path,
+                i.issue_category_id, i.issue_category_label,
+                LEFT(COALESCE(i.remarks, ''), 280) AS remarks,
+                c.name AS issue_category_name,
                 ut.name AS assigned_to_name
          FROM support_ticket_items i
          LEFT JOIN users ut ON ut.user_id = i.assigned_to
+         LEFT JOIN support_issue_categories c ON c.id = i.issue_category_id
          WHERE i.ticket_id = ANY($1::int[])
          ORDER BY i.id ASC`,
         [ids]
