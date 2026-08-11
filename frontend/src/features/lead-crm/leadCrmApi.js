@@ -40,6 +40,8 @@ export const exportCustomerAssetsExcel = () =>
 export const getCustomer = (id) => api.get(`/customer-management/customers/${id}`);
 export const createCustomer = (data) => api.post('/customer-management/customers', data);
 export const updateCustomer = (id, data) => api.put(`/customer-management/customers/${id}`, data);
+export const updateCustomerStatus = (id, status) =>
+  api.patch(`/customer-management/customers/${id}/status`, { status });
 export const bulkUpdateCustomerType = (data) =>
   api.patch('/customer-management/customers/bulk-customer-type', data);
 export const verifyCustomerKyc = (id) => api.put(`/customer-management/customers/${id}/verify-kyc`);

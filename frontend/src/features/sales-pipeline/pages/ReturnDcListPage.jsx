@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { FileText, KeyRound, PackageCheck, RotateCcw, Search } from 'lucide-react';
 import ReturnDcDetailModal from '../components/ReturnDcDetailModal';
@@ -9,7 +9,12 @@ import { PageHeader, StatCard, Button, ResponsiveTable, DateRangeFilter } from '
 import { useUrlFilters, useDebouncedUrlSearch } from '../../../hooks/useUrlFilters';
 
 const PAGE_SIZE = 25;
-const RDC_FILTER_DEFAULTS = { page: 1, search: '', dateFrom: '', dateTo: '' };
+const TABS = [
+  { id: 'in_transit', label: 'In Transit' },
+  { id: 'delivered', label: 'Delivered' },
+  { id: 'all', label: 'All' },
+];
+const RDC_FILTER_DEFAULTS = { page: 1, search: '', dateFrom: '', dateTo: '', tab: 'in_transit' };
 
 function pdfUrl(p) {
   if (!p) return null;
@@ -19,10 +24,11 @@ function pdfUrl(p) {
 
 export default function ReturnDcListPage() {
   const { filters, setFilters } = useUrlFilters(RDC_FILTER_DEFAULTS);
-  const { page, dateFrom, dateTo } = filters;
+  const { page, dateFrom, dateTo, tab } = filters;
   const { searchInput, setSearchInput, debouncedSearch: search } = useDebouncedUrlSearch(filters, setFilters);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState({ total: 0, in_transit: 0, delivered: 0 });
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [detailRdc, setDetailRdc] = useState(null);
 
@@ -35,24 +41,19 @@ export default function ReturnDcListPage() {
         search: search.trim() || undefined,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
+        status: tab || 'in_transit',
       });
       setRows(res.data?.return_dcs || res.data?.rows || []);
+      setStats(res.data?.stats || { total: 0, in_transit: 0, delivered: 0 });
       setPagination(res.data?.pagination || { page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
     } catch {
       toast.error('Failed to load return DCs');
     } finally {
       setLoading(false);
     }
-  }, [page, search, dateFrom, dateTo]);
+  }, [page, search, dateFrom, dateTo, tab]);
 
   useEffect(() => { load(); }, [load]);
-
-  const stats = useMemo(() => ({
-    total: pagination.total || rows.length,
-    delivered: rows.filter((r) => r.status === 'delivered').length,
-    inTransit: rows.filter((r) => r.status === 'in_transit' || r.status === 'processing' || r.status === 'shipped').length,
-    pendingWarehouse: rows.filter((r) => r.warehouse_receive_pending).length,
-  }), [rows, pagination.total]);
 
   const otpCell = (row) => {
     if (row.customer_otp_verified_at) {
@@ -94,7 +95,12 @@ export default function ReturnDcListPage() {
         <span className="font-mono text-blue-700 font-semibold">{row.return_dc_number || row.rdc_number}</span>
       ),
     },
-    { key: 'date', header: 'Date', render: (row) => formatDate(row.created_at) },
+    { key: 'date', header: 'Created', render: (row) => formatDate(row.created_at) },
+    {
+      key: 'pickup_date',
+      header: 'Pickup Date',
+      render: (row) => formatDate(row.pickup_date) || <span className="text-xs text-gray-400">—</span>,
+    },
     { key: 'customer_name', header: 'Customer' },
     { key: 'units', header: 'Units', render: (row) => row.unit_count || row.quantity || 1 },
     {
@@ -155,7 +161,8 @@ export default function ReturnDcListPage() {
         </div>
         <p className="font-medium text-slate-800">{row.customer_name}</p>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-          <span>{formatDate(row.created_at)}</span>
+          <span>Created {formatDate(row.created_at)}</span>
+          <span>Pickup {formatDate(row.pickup_date) || '—'}</span>
           <span>{row.unit_count || row.quantity || 1} unit(s)</span>
           {row.original_dc_number && <span className="font-mono">DC {row.original_dc_number}</span>}
           {row.sales_order_number && <span className="font-mono">SO {row.sales_order_number}</span>}
@@ -186,15 +193,52 @@ export default function ReturnDcListPage() {
     <div className="p-4 md:p-6 max-w-7xl mx-auto">
       <PageHeader
         title="Return DC"
-        subtitle="Return pickup challans (RDC series)"
+        subtitle="Return pickup challans (RDC series) — In Transit and Delivered"
         icon={RotateCcw}
       />
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
-        <StatCard label="Total" value={stats.total} tone="gray" />
-        <StatCard label="Delivered (this page)" value={stats.delivered} tone="green" />
-        <StatCard label="In transit (this page)" value={stats.inTransit} tone="amber" />
-        <StatCard label="Pending warehouse (this page)" value={stats.pendingWarehouse} tone="amber" />
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
+        <StatCard
+          label="In Transit"
+          value={stats.in_transit}
+          tone="amber"
+          active={tab === 'in_transit'}
+          onClick={() => setFilters({ tab: 'in_transit', page: 1 })}
+        />
+        <StatCard
+          label="Delivered"
+          value={stats.delivered}
+          tone="green"
+          active={tab === 'delivered'}
+          onClick={() => setFilters({ tab: 'delivered', page: 1 })}
+        />
+        <StatCard
+          label="Total"
+          value={stats.total}
+          tone="gray"
+          active={tab === 'all'}
+          onClick={() => setFilters({ tab: 'all', page: 1 })}
+        />
+      </div>
+
+      <div className="flex flex-wrap gap-2 mb-4 border-b border-gray-200">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => setFilters({ tab: t.id, page: 1 })}
+            className={`px-4 py-2 text-sm -mb-px border-b-2 whitespace-nowrap ${
+              tab === t.id
+                ? 'border-blue-600 text-blue-700 font-medium'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            {t.label}
+            {t.id === 'in_transit' && stats.in_transit != null ? ` (${stats.in_transit})` : ''}
+            {t.id === 'delivered' && stats.delivered != null ? ` (${stats.delivered})` : ''}
+            {t.id === 'all' && stats.total != null ? ` (${stats.total})` : ''}
+          </button>
+        ))}
       </div>
 
       <div className="flex flex-wrap gap-3 mb-4">

@@ -1100,7 +1100,7 @@ exports.searchCustomers = async (req, res) => {
         const limit = Math.min(parseInt(req.query.limit, 10) || 30, 50);
         const term = search ? `%${search}%` : null;
         const params = [];
-        let where = 'WHERE 1=1';
+        let where = 'WHERE COALESCE(c.status, 1) = 1';
         if (term) {
             params.push(term);
             where += ` AND (

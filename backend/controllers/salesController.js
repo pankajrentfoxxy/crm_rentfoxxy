@@ -563,7 +563,10 @@ exports.getCustomers = async (req, res) => {
         if (search && String(search).trim()) {
             const term = `%${String(search).trim()}%`;
             const params = [term];
-            const conditions = ['(name ILIKE $1 OR company_name ILIKE $1 OR email ILIKE $1 OR phone ILIKE $1 OR gst_no ILIKE $1)'];
+            const conditions = [
+                'COALESCE(status, 1) = 1',
+                '(name ILIKE $1 OR company_name ILIKE $1 OR email ILIKE $1 OR phone ILIKE $1 OR gst_no ILIKE $1)',
+            ];
             // Role-based Customer Access scope (all/sales/rental)
             appendCustomerTypeCondition(req.allowedCustomerTypes, conditions, params, 'customer_type');
             result = await pool.query(
@@ -572,11 +575,11 @@ exports.getCustomers = async (req, res) => {
             );
         } else {
             const params = [];
-            const conditions = [];
+            const conditions = ['COALESCE(status, 1) = 1'];
             appendCustomerTypeCondition(req.allowedCustomerTypes, conditions, params, 'customer_type');
             result = await pool.query(
                 `SELECT * FROM customers
-                 ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
+                 WHERE ${conditions.join(' AND ')}
                  ORDER BY created_at DESC`,
                 params
             );

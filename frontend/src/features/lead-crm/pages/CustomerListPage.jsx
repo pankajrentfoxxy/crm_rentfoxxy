@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Building2, Download, Tags } from 'lucide-react';
 import { listSalesOrders } from '../../sales-pipeline/salesPipelineApi';
-import { bulkUpdateCustomerType, exportCustomersExcel, exportCustomerAssetsExcel, getCustomerIds, getCustomers } from '../leadCrmApi';
+import { bulkUpdateCustomerType, exportCustomersExcel, exportCustomerAssetsExcel, getCustomerIds, getCustomers, updateCustomerStatus } from '../leadCrmApi';
 import CustomerFormDrawer from '../components/CustomerFormDrawer';
 import BulkCustomerTypeModal from '../components/BulkCustomerTypeModal';
 import { PageHeader, StatCard, Button, ResponsiveTable } from '../../../components/ui/primitives';
@@ -13,6 +13,7 @@ import {
   customerTypeBadgeClass,
   customerTypeLabel,
 } from '../../../utils/customerType';
+import usePermission from '../../../hooks/usePermission';
 
 const EXPORT_ROLES = new Set(['admin', 'super_admin']);
 const TYPE_EDIT_ROLES = new Set(['admin', 'super_admin']);
@@ -20,7 +21,7 @@ const PAGE_SIZE = 25;
 
 // Remembers page + filters so returning from a customer's detail restores the list
 // position instead of resetting to page 1. (v2: default sort is newest-first / desc)
-const LIST_STATE_KEY = 'lead-crm:customers:list-state-v2';
+const LIST_STATE_KEY = 'lead-crm:customers:list-state-v3';
 
 function readSavedListState() {
   try {
@@ -34,15 +35,22 @@ function formatSelectedCount(n) {
   return `${Number(n || 0).toLocaleString('en-IN')} Customer${n === 1 ? '' : 's'} Selected`;
 }
 
+function isCustomerActive(c) {
+  return Number(c?.status ?? 1) === 1;
+}
+
 export default function CustomerListPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { canEdit } = usePermission();
+  const canEditCustomers = canEdit('customers');
   const canExportCustomers = EXPORT_ROLES.has(user?.role);
   const canBulkEditType = TYPE_EDIT_ROLES.has(user?.role);
   const saved = useMemo(() => {
     try {
       // Drop legacy list-state that defaulted to ascending.
       sessionStorage.removeItem('lead-crm:customers:list-state');
+      sessionStorage.removeItem('lead-crm:customers:list-state-v2');
     } catch { /* ignore */ }
     return readSavedListState();
   }, []);
@@ -53,6 +61,7 @@ export default function CustomerListPage() {
   const [sortDir, setSortDir] = useState('desc');
   const [kycFilter, setKycFilter] = useState(() => saved.kycFilter || '');
   const [customerType, setCustomerType] = useState(() => saved.customerType || 'all');
+  const [statusFilter, setStatusFilter] = useState(() => saved.statusFilter || 'all');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editCustomer, setEditCustomer] = useState(null);
   const [activeOrderCounts, setActiveOrderCounts] = useState({});
@@ -64,12 +73,14 @@ export default function CustomerListPage() {
   const [selectingAll, setSelectingAll] = useState(false);
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
   const [bulkSaving, setBulkSaving] = useState(false);
+  const [statusBusyId, setStatusBusyId] = useState(null);
 
   const listFilterParams = useMemo(() => ({
     search: search || undefined,
     customer_type: customerType === 'all' ? undefined : customerType,
     kyc: kycFilter || undefined,
-  }), [search, customerType, kycFilter]);
+    status: statusFilter || 'all',
+  }), [search, customerType, kycFilter, statusFilter]);
 
   const clearSelection = useCallback(() => {
     setSelectedIds(new Set());
@@ -101,17 +112,17 @@ export default function CustomerListPage() {
     try {
       sessionStorage.setItem(
         LIST_STATE_KEY,
-        JSON.stringify({ page, search, sortDir, kycFilter, customerType })
+        JSON.stringify({ page, search, sortDir, kycFilter, customerType, statusFilter })
       );
     } catch {
       /* storage unavailable — non-fatal */
     }
-  }, [page, search, sortDir, kycFilter, customerType]);
+  }, [page, search, sortDir, kycFilter, customerType, statusFilter]);
 
   // Reset selection when filters/search change (not when paging)
   useEffect(() => {
     clearSelection();
-  }, [search, customerType, kycFilter, clearSelection]);
+  }, [search, customerType, kycFilter, statusFilter, clearSelection]);
 
   useEffect(() => {
     listSalesOrders({ limit: 500 })
@@ -226,11 +237,51 @@ export default function CustomerListPage() {
     portal: customers.filter((c) => c.portal_enabled).length,
   }), [customers, pagination.total]);
 
-  const actionCell = (c) => (
-    <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
-      <button type="button" onClick={() => navigate(`/lead-crm/customers/${c.customer_id}`)} className="text-blue-600 text-sm font-semibold">View</button>
-      <button type="button" onClick={() => { setEditCustomer(c); setDrawerOpen(true); }} className="text-gray-600 text-sm font-semibold">Edit</button>
-    </div>
+  const handleToggleStatus = async (c) => {
+    const active = isCustomerActive(c);
+    const next = active ? 0 : 1;
+    const label = active ? 'deactivate' : 'activate';
+    if (!window.confirm(`${active ? 'Deactivate' : 'Activate'} ${c.company_name || c.customer_name || `customer #${c.customer_id}`}?\n\nInactive customers will not appear in SO, quotation, support, or other pickers.`)) {
+      return;
+    }
+    setStatusBusyId(c.customer_id);
+    try {
+      const { data } = await updateCustomerStatus(c.customer_id, next);
+      toast.success(data?.message || `Customer ${label}d`);
+      await load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || `Failed to ${label} customer`);
+    } finally {
+      setStatusBusyId(null);
+    }
+  };
+
+  const actionCell = (c) => {
+    const active = isCustomerActive(c);
+    return (
+      <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
+        <button type="button" onClick={() => navigate(`/lead-crm/customers/${c.customer_id}`)} className="text-blue-600 text-sm font-semibold">View</button>
+        <button type="button" onClick={() => { setEditCustomer(c); setDrawerOpen(true); }} className="text-gray-600 text-sm font-semibold">Edit</button>
+        {canEditCustomers ? (
+          <button
+            type="button"
+            disabled={statusBusyId === c.customer_id}
+            onClick={() => handleToggleStatus(c)}
+            className={`text-sm font-semibold disabled:opacity-50 ${active ? 'text-amber-700' : 'text-emerald-700'}`}
+          >
+            {statusBusyId === c.customer_id ? '…' : (active ? 'Deactivate' : 'Activate')}
+          </button>
+        ) : null}
+      </div>
+    );
+  };
+
+  const statusBadge = (c) => (
+    isCustomerActive(c) ? (
+      <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Active</span>
+    ) : (
+      <span className="text-xs px-2 py-0.5 rounded-full bg-slate-200 text-slate-600">Inactive</span>
+    )
   );
 
   const kycBadge = (c) => (
@@ -372,6 +423,7 @@ export default function CustomerListPage() {
         <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${customerTypeBadgeClass(c.customer_type)}`}>
           {customerTypeLabel(c.customer_type)}
         </span>
+        {statusBadge(c)}
       </span>
     ) },
     { key: 'contact', header: 'Contact', render: (c) => c.contact_person_name || c.customer_name },
@@ -379,6 +431,7 @@ export default function CustomerListPage() {
     { key: 'email', header: 'Email', render: (c) => c.email || '—' },
     { key: 'gst', header: 'GST', render: (c) => <span className="text-xs">{c.gst_number || '—'}</span> },
     { key: 'city', header: 'City', render: (c) => c.billing_city || '—' },
+    { key: 'status', header: 'Status', render: statusBadge },
     { key: 'items', header: 'Items', align: 'center', render: (c) => c.active_item_count ?? 0 },
     { key: 'orders', header: 'Active Orders', align: 'center', render: (c) => activeOrderCounts[c.customer_id] ?? 0 },
     { key: 'portal', header: 'Portal', render: (c) => <span className={`inline-block w-2 h-2 rounded-full ${c.portal_enabled ? 'bg-green-500' : 'bg-gray-300'}`} /> },
@@ -405,6 +458,7 @@ export default function CustomerListPage() {
             <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${customerTypeBadgeClass(c.customer_type)}`}>
               {customerTypeLabel(c.customer_type)}
             </span>
+            {statusBadge(c)}
           </span>
         </div>
         {kycBadge(c)}
@@ -465,6 +519,12 @@ export default function CustomerListPage() {
           <option value="">All KYC</option>
           <option value="verified">Verified</option>
           <option value="pending">Pending</option>
+        </select>
+        <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
+          className="border border-gray-200 rounded-lg px-3 py-2 text-sm">
+          <option value="all">All status</option>
+          <option value="active">Active</option>
+          <option value="inactive">Inactive</option>
         </select>
       </div>
 

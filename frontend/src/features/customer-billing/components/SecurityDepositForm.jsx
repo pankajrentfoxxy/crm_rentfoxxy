@@ -12,7 +12,7 @@ export default function SecurityDepositForm({ open, onClose, onCreated }) {
 
   useEffect(() => {
     if (!open) return;
-    api.get('/customer-management/customers', { params: { limit: 200 } })
+    api.get('/customer-management/customers', { params: { limit: 200, status: 'active' } })
       .then((r) => setCustomers(r.data?.customers || r.data?.rows || []))
       .catch(() => setCustomers([]));
   }, [open]);

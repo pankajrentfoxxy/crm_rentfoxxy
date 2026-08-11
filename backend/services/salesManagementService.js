@@ -1069,7 +1069,14 @@ function evaluateReturnDcWarehouseConfirm(pickupItems, units, dcl) {
 
 /** Return DC list — sourced from the actual Return DC rows
  *  (delivery_challan_lines with movement_type='return'), one row per RDC. */
-async function listReturnDeliveryChallans({ page = 1, limit = 25, search = '', dateFrom, dateTo } = {}) {
+async function listReturnDeliveryChallans({
+  page = 1,
+  limit = 25,
+  search = '',
+  dateFrom,
+  dateTo,
+  status = 'all',
+} = {}) {
   const params = [];
   let searchSql = '';
   const dateClauses = appendDateRangeClauses({
@@ -1100,11 +1107,33 @@ async function listReturnDeliveryChallans({ page = 1, limit = 25, search = '', d
     )`;
   }
 
+  const statusKey = String(status || 'all').toLowerCase().replace(/-/g, '_');
+  let statusSql = '';
+  if (statusKey === 'delivered') {
+    statusSql = ` AND rl.status = 'delivered'`;
+  } else if (statusKey === 'in_transit') {
+    // Active return pickups — not yet completed at warehouse as delivered RDC
+    statusSql = ` AND COALESCE(rl.status, 'pending') NOT IN ('delivered', 'cancelled')`;
+  }
+
+  const baseWhere = `rl.movement_type = 'return'${searchSql}${dateSql}`;
+
   const countResult = await pool.query(
     `SELECT COUNT(*)::int AS total
        FROM delivery_challan_lines rl
        LEFT JOIN support_tickets st ON st.id = rl.support_ticket_id
-      WHERE rl.movement_type = 'return'${searchSql}${dateSql}`,
+      WHERE ${baseWhere}${statusSql}`,
+    params
+  );
+
+  const statsResult = await pool.query(
+    `SELECT
+       COUNT(*)::int AS total,
+       COUNT(*) FILTER (WHERE COALESCE(rl.status, 'pending') NOT IN ('delivered', 'cancelled'))::int AS in_transit,
+       COUNT(*) FILTER (WHERE rl.status = 'delivered')::int AS delivered
+       FROM delivery_challan_lines rl
+       LEFT JOIN support_tickets st ON st.id = rl.support_ticket_id
+      WHERE ${baseWhere}`,
     params
   );
 
@@ -1119,6 +1148,22 @@ async function listReturnDeliveryChallans({ page = 1, limit = 25, search = '', d
          FROM support_ticket_items
         WHERE item_type = 'pickup' AND return_dc_number IS NOT NULL
         GROUP BY return_dc_number
+     ),
+     pickup_dates AS (
+       SELECT return_dc_number,
+              MIN(picked_up_at) AS picked_up_at,
+              MIN(pickup_scheduled_at) AS pickup_scheduled_at
+         FROM support_ticket_items
+        WHERE item_type = 'pickup' AND return_dc_number IS NOT NULL
+        GROUP BY return_dc_number
+     ),
+     pickup_dates_by_ticket AS (
+       SELECT ticket_id,
+              MIN(picked_up_at) AS picked_up_at,
+              MIN(pickup_scheduled_at) AS pickup_scheduled_at
+         FROM support_ticket_items
+        WHERE item_type = 'pickup' AND return_dc_number IS NULL
+        GROUP BY ticket_id
      ),
      pickup_by_rdc AS (
        SELECT DISTINCT ON (return_dc_number)
@@ -1156,6 +1201,13 @@ async function listReturnDeliveryChallans({ page = 1, limit = 25, search = '', d
        rl.sales_order_number,
        COALESCE(rl.dispatched_at, rl.created_at) AS dispatched_at,
        rl.delivered_at,
+       COALESCE(
+         pd.picked_up_at,
+         pdt.picked_up_at,
+         pd.pickup_scheduled_at,
+         pdt.pickup_scheduled_at,
+         rl.dispatched_at
+       ) AS pickup_date,
        COALESCE(rl.quantity, 1) AS quantity,
        COALESCE(pc.unit_count, COALESCE(rl.quantity, 1)) AS unit_count,
        COALESCE(rl.original_dc_number, st.dc_number) AS original_dc_number,
@@ -1191,18 +1243,27 @@ async function listReturnDeliveryChallans({ page = 1, limit = 25, search = '', d
      FROM delivery_challan_lines rl
      LEFT JOIN support_tickets st ON st.id = rl.support_ticket_id
      LEFT JOIN pickup_counts pc ON pc.return_dc_number = rl.dc_number
+     LEFT JOIN pickup_dates pd ON pd.return_dc_number = rl.dc_number
+     LEFT JOIN pickup_dates_by_ticket pdt
+       ON pdt.ticket_id = rl.support_ticket_id AND pd.return_dc_number IS NULL
      LEFT JOIN pickup_by_rdc sti_rdc ON sti_rdc.return_dc_number = rl.dc_number
      LEFT JOIN pickup_by_ticket sti_tkt
        ON sti_tkt.ticket_id = rl.support_ticket_id AND sti_rdc.return_dc_number IS NULL
-     WHERE rl.movement_type = 'return'${searchSql}${dateSql}
+     WHERE ${baseWhere}${statusSql}
      ORDER BY rl.created_at DESC NULLS LAST
      LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
     listParams
   );
 
   const total = countResult.rows[0]?.total || 0;
+  const statsRow = statsResult.rows[0] || {};
   return {
     return_dcs: result.rows,
+    stats: {
+      total: statsRow.total || 0,
+      in_transit: statsRow.in_transit || 0,
+      delivered: statsRow.delivered || 0,
+    },
     pagination: {
       page,
       limit,

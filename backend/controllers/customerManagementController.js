@@ -400,7 +400,18 @@ exports.getAddCustomerMeta = async (req, res) => {
 /** Shared list filters for paginated customers + bulk ID selection. */
 function buildCustomerListFilters(query = {}, allowedCustomerTypes = null) {
   const params = [];
-  const conditions = ['c.status = 1'];
+  const conditions = [];
+
+  // status: active (default) | inactive | all
+  // Pickers/billing omit the param → active only. Admin list passes status=all|inactive.
+  const statusFilter = String(query.status || query.status_filter || 'active').trim().toLowerCase();
+  if (statusFilter === 'inactive' || statusFilter === '0') {
+    conditions.push('COALESCE(c.status, 1) = 0');
+  } else if (statusFilter === 'all') {
+    // no status condition
+  } else {
+    conditions.push('COALESCE(c.status, 1) = 1');
+  }
 
   const typeFilter = String(query.customer_type || query.for_order || 'all').trim().toLowerCase();
   const typeSql = customerTypeSqlCondition(typeFilter);
@@ -1259,6 +1270,60 @@ exports.updateCustomer = async (req, res) => {
     res.json({ success: true, customer: formatCustomerRow(updated.rows[0]) });
   } catch (error) {
     console.error('updateCustomer:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/** PATCH — activate (1) or deactivate (0) a customer. Inactive customers are hidden from SO/DC pickers. */
+exports.updateCustomerStatus = async (req, res) => {
+  try {
+    const customerId = parseInt(req.params.customerId, 10);
+    if (!Number.isFinite(customerId) || customerId <= 0) {
+      return res.status(400).json({ success: false, message: 'Invalid customer id' });
+    }
+
+    const raw = req.body?.status ?? req.body?.active;
+    let nextStatus;
+    if (raw === true || raw === 'true' || raw === 1 || raw === '1' || String(raw).toLowerCase() === 'active') {
+      nextStatus = 1;
+    } else if (raw === false || raw === 'false' || raw === 0 || raw === '0' || String(raw).toLowerCase() === 'inactive') {
+      nextStatus = 0;
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'status must be 1/active or 0/inactive',
+      });
+    }
+
+    const existing = await pool.query(
+      'SELECT customer_id, customer_type, status FROM customers WHERE customer_id = $1',
+      [customerId]
+    );
+    if (!existing.rows.length) {
+      return res.status(404).json({ success: false, message: 'Customer not found' });
+    }
+    if (!isCustomerTypeAllowed(req.allowedCustomerTypes, existing.rows[0].customer_type)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied: customer is outside your Customer Access scope',
+      });
+    }
+
+    const result = await pool.query(
+      `UPDATE customers
+          SET status = $1, updated_at = NOW()
+        WHERE customer_id = $2
+        RETURNING *`,
+      [nextStatus, customerId]
+    );
+
+    res.json({
+      success: true,
+      message: nextStatus === 1 ? 'Customer activated' : 'Customer deactivated',
+      customer: formatCustomerRow(result.rows[0]),
+    });
+  } catch (error) {
+    console.error('updateCustomerStatus:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };

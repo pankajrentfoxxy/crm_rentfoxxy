@@ -8,6 +8,7 @@ import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
 import {
   getCustomer, getCustomerLaptops, getCustomerAssetActivity, getCustomerAddresses, verifyCustomerKyc, enableCustomerPortal,
+  updateCustomerStatus,
 } from '../leadCrmApi';
 import { formatCurrency, formatAssetCalendarDate as fmtAssetDate } from '../leadCrmUtils';
 import { getBackendOrigin } from '../../../utils/api';
@@ -272,6 +273,22 @@ export default function CustomerDetailPage() {
     load();
   };
 
+  const customerActive = Number(customer.status ?? 1) === 1;
+
+  const handleToggleStatus = async () => {
+    const next = customerActive ? 0 : 1;
+    if (!window.confirm(
+      `${customerActive ? 'Deactivate' : 'Activate'} this customer?\n\nInactive customers will not appear in SO, quotation, support, or other pickers.`
+    )) return;
+    try {
+      const { data } = await updateCustomerStatus(id, next);
+      toast.success(data?.message || (next === 1 ? 'Customer activated' : 'Customer deactivated'));
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to update customer status');
+    }
+  };
+
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto">
       <button type="button" onClick={() => navigate('/lead-crm/customers')}
@@ -281,12 +298,26 @@ export default function CustomerDetailPage() {
 
       <div className="flex flex-wrap items-start justify-between gap-4 mb-6">
         <div>
-          <h1 className="text-2xl font-bold">{customer.company_name || customer.customer_name}</h1>
+          <h1 className="text-2xl font-bold inline-flex items-center gap-2 flex-wrap">
+            {customer.company_name || customer.customer_name}
+            <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${customerActive ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'}`}>
+              {customerActive ? 'Active' : 'Inactive'}
+            </span>
+          </h1>
           <p className="text-gray-500 text-sm">Customer #{customer.customer_id}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <KycBadge status={customer.kyc_status || (customer.kyc_verified ? 'verified' : 'pending')} />
           <Button variant="secondary" size="sm" onClick={() => setEditOpen(true)}>Edit</Button>
+          <PermissionGate section="customers" action="edit">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleToggleStatus}
+            >
+              {customerActive ? 'Deactivate' : 'Activate'}
+            </Button>
+          </PermissionGate>
           <PermissionGate section="kyc_management" action="edit">
             {(customer.kyc_status !== 'verified' && !customer.kyc_verified) && (
               <Button variant="success" size="sm" onClick={handleVerifyKyc}>Verify KYC</Button>

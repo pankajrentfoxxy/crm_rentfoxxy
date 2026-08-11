@@ -433,13 +433,19 @@ exports.storeQuotation = async (req, res) => {
     const quoteCustomerId = toNullableInt(body.customer_id);
     if (quoteCustomerId) {
       const custRes = await pool.query(
-        `SELECT customer_id, customer_type FROM customers WHERE customer_id = $1 LIMIT 1`,
+        `SELECT customer_id, customer_type, status FROM customers WHERE customer_id = $1 LIMIT 1`,
         [quoteCustomerId]
       );
       if (!custRes.rows.length) {
         return res.status(400).json({
           success: false,
           message: `Invalid customer_id (${quoteCustomerId}). Please reselect customer and try again.`,
+        });
+      }
+      if (Number(custRes.rows[0].status ?? 1) !== 1) {
+        return res.status(400).json({
+          success: false,
+          message: 'This customer is inactive and cannot be used on a quotation. Activate the customer first.',
         });
       }
       if (!isCustomerEligibleForQuotation(custRes.rows[0].customer_type, quotationType)) {
@@ -731,13 +737,19 @@ exports.storeSalesOrder = async (req, res) => {
 
     if (customerId) {
       const customerExists = await pool.query(
-        `SELECT customer_id, customer_type FROM customers WHERE customer_id = $1 LIMIT 1`,
+        `SELECT customer_id, customer_type, status FROM customers WHERE customer_id = $1 LIMIT 1`,
         [customerId]
       );
       if (!customerExists.rows.length) {
         return res.status(400).json({
           success: false,
           message: `Invalid customer_id (${customerId}). Please reselect customer and try again.`,
+        });
+      }
+      if (Number(customerExists.rows[0].status ?? 1) !== 1) {
+        return res.status(400).json({
+          success: false,
+          message: 'This customer is inactive and cannot be used on a sales order. Activate the customer first.',
         });
       }
       const soQuotationType = body.quotation_type || 'rental';
@@ -2452,6 +2464,7 @@ exports.listReturnDeliveryChallans = async (req, res) => {
       search: req.query.search || '',
       dateFrom: req.query.date_from,
       dateTo: req.query.date_to,
+      status: req.query.status || req.query.tab || 'all',
     });
     res.json({
       success: true,

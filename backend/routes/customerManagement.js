@@ -57,6 +57,7 @@ router.delete('/customers/:customerId/addresses/:addressId', cp('customers', 'ed
 router.patch('/customers/:customerId/addresses/:addressId/default', cp('customers', 'edit'), ctrl.setDefaultCustomerAddress);
 router.get('/customers/:customerId', cp('customers', 'view'), ctrl.getCustomer);
 router.put('/customers/:customerId', cp('customers', 'edit'), ctrl.updateCustomer);
+router.patch('/customers/:customerId/status', cp('customers', 'edit'), ctrl.updateCustomerStatus);
 router.delete('/customers/:customerId', cp('customers', 'delete'), ctrl.deleteCustomer);
 
 module.exports = router;
