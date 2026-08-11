@@ -220,6 +220,7 @@ const FY_DOC_TYPES = {
   delivery_challan: { docType: 'dc_rentfoxxy', prefix: 'DC', table: 'delivery_challan_lines', column: 'dc_number' },
   service_dc: { docType: 'service_dc', prefix: 'SDC', table: 'delivery_challan_lines', column: 'dc_number' },
   part_dc: { docType: 'part_dc_rentfoxxy', prefix: 'PDC', table: 'delivery_challan_lines', column: 'dc_number' },
+  part_return_dc: { docType: 'part_rpdc_rentfoxxy', prefix: 'RPDC', table: 'delivery_challan_lines', column: 'dc_number' },
 };
 const FY_SEQ_PAD = 4;
 

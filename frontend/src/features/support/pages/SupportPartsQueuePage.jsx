@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Loader2, ClipboardList, MapPin, PackageCheck, ArrowRightLeft, Check, X, Search, Truck } from 'lucide-react';
-import { getSupportPartsWarehouseQueue, approveAndGenerateChallan, resolvePartReassign } from '../supportPartsApi';
+import { getSupportPartsWarehouseQueue, approveAndGenerateChallan, resolvePartReassign, listPartDcsAwaitingCourier, listPartReturnDcsPending } from '../supportPartsApi';
 import ESignChallanModal from '../components/ESignChallanModal';
 import PickSupportSerialsModal from '../components/PickSupportSerialsModal';
 import PartCourierDispatchModal from '../components/PartCourierDispatchModal';
@@ -171,6 +171,11 @@ function PendingTab({ requests, onAction, base }) {
                   ) : (
                     <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">Chargeable</span>
                   )}
+                  {req.collect_old_part && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                      Collect old part ({req.old_part_collection_method === 'courier_pickup' ? 'courier' : 'tech'})
+                    </span>
+                  )}
                   {req.location_code && (
                     <span className="inline-flex items-center gap-1 text-xs text-gray-400">
                       <MapPin className="w-3 h-3" /> {req.location_code}
@@ -326,18 +331,26 @@ export default function SupportPartsQueuePage() {
   const [pending, setPending] = useState([]);
   const [returns, setReturns] = useState([]);
   const [reassigns, setReassigns] = useState([]);
+  const [awaitingCourier, setAwaitingCourier] = useState([]);
+  const [pendingRpdc, setPendingRpdc] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('pending');
 
   const load = useCallback(() => {
     setLoading(true);
-    getSupportPartsWarehouseQueue()
-      .then((r) => {
-        setPending(r.data.pending || []);
-        setReturns(r.data.returns || []);
-        setReassigns(r.data.reassigns || []);
+    Promise.all([
+      getSupportPartsWarehouseQueue(),
+      listPartDcsAwaitingCourier().catch(() => ({ data: { dcs: [] } })),
+      listPartReturnDcsPending().catch(() => ({ data: { dcs: [] } })),
+    ])
+      .then(([queueRes, courierRes, rpdcRes]) => {
+        setPending(queueRes.data.pending || []);
+        setReturns(queueRes.data.returns || []);
+        setReassigns(queueRes.data.reassigns || []);
+        setAwaitingCourier(courierRes.data.dcs || []);
+        setPendingRpdc(rpdcRes.data.dcs || []);
       })
-      .catch(() => { setPending([]); setReturns([]); setReassigns([]); })
+      .catch(() => { setPending([]); setReturns([]); setReassigns([]); setAwaitingCourier([]); setPendingRpdc([]); })
       .finally(() => setLoading(false));
   }, []);
 
@@ -350,6 +363,40 @@ export default function SupportPartsQueuePage() {
         <h1 className="text-lg font-semibold m-0">Support part queue</h1>
         <Link to={`${base}/tech-bucket`} className="ml-auto text-sm text-[#534AB7] hover:underline">View bucket</Link>
       </div>
+
+      {pendingRpdc.length > 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-2">
+          <p className="text-sm font-semibold text-amber-900">
+            Return Part DCs awaiting receipt ({pendingRpdc.length})
+          </p>
+          {pendingRpdc.map((d) => (
+            <Link
+              key={d.dc_number}
+              to={`${base}/part-return-dcs/${encodeURIComponent(d.dc_number)}`}
+              className="block text-sm text-amber-800 hover:underline"
+            >
+              {d.dc_number} · {d.ticket_number} · {d.customer_name}
+            </Link>
+          ))}
+        </div>
+      )}
+
+      {awaitingCourier.length > 0 && (
+        <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 space-y-2">
+          <p className="text-sm font-semibold text-blue-900 flex items-center gap-1">
+            <Truck className="w-4 h-4" /> Part DCs awaiting courier details ({awaitingCourier.length})
+          </p>
+          {awaitingCourier.map((d) => (
+            <Link
+              key={d.dc_number}
+              to={`${base}/part-dcs/${encodeURIComponent(d.dc_number)}`}
+              className="block text-sm text-blue-800 hover:underline"
+            >
+              {d.dc_number} · {d.ticket_number} · {d.customer_name}
+            </Link>
+          ))}
+        </div>
+      )}
 
       <div className="flex gap-2">
         {[

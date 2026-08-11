@@ -4,8 +4,9 @@ import toast from 'react-hot-toast';
 import { Loader2, Package, FileText, Check, RotateCcw, Truck, PenLine, ArrowRightLeft, X, Laptop } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext';
 import api from '../../../utils/api';
-import { getTechnicianBucket, getTechnicianLaptopBucket, markPartUsed, returnPart, requestPartReassign } from '../supportPartsApi';
+import { getTechnicianBucket, getTechnicianLaptopBucket, returnPart, requestPartReassign, submitOldPartRpdc } from '../supportPartsApi';
 import ESignChallanModal from '../components/ESignChallanModal';
+import MarkPartUsedModal from '../components/MarkPartUsedModal';
 import { usePartsBase } from '../partsBase';
 
 function ReassignModal({ part, onClose, onDone }) {
@@ -128,11 +129,53 @@ function ReassignModal({ part, onClose, onDone }) {
   );
 }
 
+function OldPartRow({ part, onChanged, base }) {
+  const [busy, setBusy] = useState(false);
+
+  const submitRpdc = async () => {
+    setBusy(true);
+    try {
+      const { data } = await submitOldPartRpdc([part.id]);
+      toast.success(data.message || 'RPDC created');
+      onChanged();
+      if (data.return_part_dc_number) {
+        window.location.href = `${base}/part-return-dcs/${encodeURIComponent(data.return_part_dc_number)}`;
+      }
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-2 py-3 border-b last:border-0 border-amber-100">
+      <div>
+        <p className="font-mono text-xs text-amber-700">{part.old_part_prt_id || part.request_number}</p>
+        <p className="font-medium text-sm">Old: {part.part_name}</p>
+        <p className="text-xs text-gray-500">
+          {part.ticket_number}{part.ttspl_id ? ` · ${part.ttspl_id}` : ''}
+          {part.old_part_condition ? ` · ${part.old_part_condition}` : ''}
+        </p>
+      </div>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={submitRpdc}
+        className="inline-flex items-center gap-1 px-3 py-2 min-h-[40px] rounded-lg bg-amber-600 text-white text-xs font-semibold disabled:opacity-50 w-fit"
+      >
+        <RotateCcw className="w-4 h-4" /> Submit RPDC to warehouse
+      </button>
+    </div>
+  );
+}
+
 function PartRow({ part, onChanged, canManageReturn, base }) {
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState(false);
   const [signReq, setSignReq] = useState(null);
   const [reassignOpen, setReassignOpen] = useState(false);
+  const [markUsedOpen, setMarkUsedOpen] = useState(false);
   const reassignPending = !!part.reassign_requested_at;
 
   const run = async (fn, msg) => {
@@ -187,7 +230,7 @@ function PartRow({ part, onChanged, canManageReturn, base }) {
           <button
             type="button"
             disabled={busy}
-            onClick={() => run(() => markPartUsed(part.id), 'Marked as used')}
+            onClick={() => setMarkUsedOpen(true)}
             className="inline-flex items-center gap-1 px-3 py-2 min-h-[40px] rounded-lg bg-green-600 text-white text-xs font-semibold disabled:opacity-50"
           >
             <Check className="w-4 h-4" /> Mark used
@@ -269,6 +312,13 @@ function PartRow({ part, onChanged, canManageReturn, base }) {
           onDone={() => { setReassignOpen(false); onChanged(); }}
         />
       )}
+
+      <MarkPartUsedModal
+        open={markUsedOpen}
+        request={part}
+        onClose={() => setMarkUsedOpen(false)}
+        onSuccess={onChanged}
+      />
     </div>
   );
 }
@@ -319,6 +369,8 @@ export default function SupportTechBucketPage() {
   const base = usePartsBase();
   const [tab, setTab] = useState('laptops');
   const [bucket, setBucket] = useState([]);
+  const [oldPartsBucket, setOldPartsBucket] = useState([]);
+  const [oldPartsTotal, setOldPartsTotal] = useState(0);
   const [awaiting, setAwaiting] = useState([]);
   const [total, setTotal] = useState(0);
   const [laptopBucket, setLaptopBucket] = useState([]);
@@ -334,10 +386,12 @@ export default function SupportTechBucketPage() {
       getTechnicianBucket()
         .then((r) => {
           setBucket(r.data.bucket || []);
+          setOldPartsBucket(r.data.old_parts_bucket || []);
+          setOldPartsTotal(r.data.old_parts_total || 0);
           setAwaiting(r.data.awaiting || []);
           setTotal(r.data.total || 0);
         })
-        .catch(() => { setBucket([]); setAwaiting([]); setTotal(0); }),
+        .catch(() => { setBucket([]); setOldPartsBucket([]); setOldPartsTotal(0); setAwaiting([]); setTotal(0); }),
       getTechnicianLaptopBucket()
         .then((r) => {
           setLaptopBucket(r.data.bucket || []);
@@ -359,7 +413,7 @@ export default function SupportTechBucketPage() {
 
   const TABS = [
     { id: 'laptops', label: 'Laptops', icon: Laptop, n: laptopTotal },
-    { id: 'parts', label: 'Parts', icon: Package, n: total },
+    { id: 'parts', label: 'Parts', icon: Package, n: total + oldPartsTotal },
   ];
 
   return (
@@ -469,6 +523,27 @@ export default function SupportTechBucketPage() {
           </div>
         </div>
       ))}
+
+      {oldPartsBucket.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-amber-200">
+            <p className="font-semibold text-sm text-amber-900">Old parts to return (RPDC)</p>
+            <p className="text-xs text-amber-700 mt-0.5">
+              Collected from customer — submit RPDC and hand to warehouse.
+            </p>
+          </div>
+          {oldPartsBucket.map((group) => (
+            <div key={`old-${group.tech_id}`} className="px-4">
+              {!isTech && (
+                <p className="text-xs font-semibold text-amber-800 pt-2">{group.tech_name}</p>
+              )}
+              {group.old_parts.map((part) => (
+                <OldPartRow key={part.id} part={part} onChanged={load} base={base} />
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
       </>
       )}
     </div>

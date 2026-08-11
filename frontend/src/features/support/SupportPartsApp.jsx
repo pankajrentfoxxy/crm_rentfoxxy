@@ -4,6 +4,7 @@ import SupportTechBucketPage from './pages/SupportTechBucketPage';
 import SupportPartsQueuePage from './pages/SupportPartsQueuePage';
 import ChallanViewPage from './pages/ChallanViewPage';
 import PartCustomerDcViewPage from './pages/PartCustomerDcViewPage';
+import PartReturnDcViewPage from './pages/PartReturnDcViewPage';
 
 /**
  * Standalone (global-layout) routing for the support parts bucket / challan flow.
@@ -21,6 +22,7 @@ export default function SupportPartsApp() {
       <Route path="bucket" element={<Navigate to="/support-parts/tech-bucket" replace />} />
       <Route path="challans/:challanId" element={<ChallanViewPage />} />
       <Route path="part-dcs/:dcNumber" element={<PartCustomerDcViewPage />} />
+      <Route path="part-return-dcs/:dcNumber" element={<PartReturnDcViewPage />} />
       <Route path="*" element={<Navigate to="queue" replace />} />
     </Routes>
   );

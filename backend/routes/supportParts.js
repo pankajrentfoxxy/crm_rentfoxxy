@@ -88,6 +88,13 @@ router.post('/requests/approve-and-challan',      requireWarehouseEdit,      ctr
 router.post('/requests/approve-and-customer-dc',  requireWarehouseEdit,      ctrl.approveAndGenerateCustomerDc);
 router.get('/part-dcs/:dcNumber',                 requireSupportOrWarehouse, ctrl.getPartCustomerDc);
 router.patch('/part-dcs/:dcNumber/delivered',     requireWarehouseEdit,      ctrl.markPartCustomerDcDelivered);
+router.patch('/part-dcs/:dcNumber/courier',       requireWarehouseEdit,      ctrl.updatePartCustomerDcCourier);
+router.get('/part-dcs-awaiting-courier',          requireWarehouse,          ctrl.listPartCustomerDcsAwaitingCourier);
+router.post('/old-parts/submit-rpdc',             requireSupportOrWarehouse, ctrl.submitOldPartRpdc);
+router.get('/part-return-dcs/:dcNumber',         requireSupportOrWarehouse, ctrl.getPartReturnDc);
+router.patch('/part-return-dcs/:dcNumber/receive', requireWarehouseEdit,     ctrl.receivePartReturnDc);
+router.patch('/part-return-dcs/:dcNumber/courier', requireWarehouseEdit,    ctrl.updatePartReturnDcCourier);
+router.get('/part-return-dcs-pending',            requireWarehouse,          ctrl.listPartReturnDcsPendingReceive);
 router.patch('/requests/:requestId/mark-used',    requireSupportOrWarehouse, ctrl.markPartUsed);
 router.post('/requests/:requestId/return',        requireSupportOrWarehouse, ctrl.returnPart);
 router.patch('/requests/:requestId/accept-return', requireWarehouseEdit,         ctrl.acceptReturn);

@@ -10,19 +10,28 @@ export default function PartCourierDispatchModal({
   instanceMap,
   onSuccess,
 }) {
+  const [shipBy, setShipBy] = useState('by_courier');
   const [courierName, setCourierName] = useState('');
   const [awbNumber, setAwbNumber] = useState('');
   const [trackingUrl, setTrackingUrl] = useState('');
+  const [addCourierLater, setAddCourierLater] = useState(false);
   const [billingType, setBillingType] = useState('under_warranty');
   const [chargeAmount, setChargeAmount] = useState('');
   const [tampered, setTampered] = useState(false);
+  const hasOldPartCourierPickup = requests.some(
+    (r) => r.collect_old_part && r.old_part_collection_method === 'courier_pickup'
+  );
+  const [oldPartCourierName, setOldPartCourierName] = useState('');
+  const [oldPartAwb, setOldPartAwb] = useState('');
+  const [scheduleOldPartPickup, setScheduleOldPartPickup] = useState(hasOldPartCourierPickup);
   const [busy, setBusy] = useState(false);
 
   if (!open) return null;
 
   const submit = async () => {
-    if (!courierName.trim()) {
-      toast.error('Courier name is required');
+    const isCourier = shipBy === 'by_courier';
+    if (isCourier && !addCourierLater && !courierName.trim()) {
+      toast.error('Courier name is required, or choose "Add courier details later"');
       return;
     }
     if (billingType === 'charge_customer' && !(Number(chargeAmount) > 0)) {
@@ -34,13 +43,20 @@ export default function PartCourierDispatchModal({
       const { data } = await approveAndGenerateCustomerDc({
         request_ids: requests.map((r) => r.id),
         instance_map: instanceMap,
-        ship_by: 'by_courier',
-        courier_name: courierName.trim(),
-        awb_number: awbNumber.trim() || null,
-        courier_tracking_url: trackingUrl.trim() || null,
+        ship_by: shipBy,
+        courier_name: isCourier ? courierName.trim() || null : null,
+        awb_number: isCourier ? awbNumber.trim() || null : null,
+        courier_tracking_url: isCourier ? trackingUrl.trim() || null : null,
+        add_courier_later: isCourier && addCourierLater && !courierName.trim(),
         billing_type: billingType,
         charge_amount: billingType === 'charge_customer' ? Number(chargeAmount) : 0,
         tampered_by_customer: tampered,
+        ...(hasOldPartCourierPickup && scheduleOldPartPickup ? {
+          schedule_old_part_pickup: true,
+          old_part_ship_by: 'by_courier',
+          old_part_courier_name: oldPartCourierName.trim() || null,
+          old_part_awb_number: oldPartAwb.trim() || null,
+        } : { schedule_old_part_pickup: false }),
       });
       toast.success(data.message || `Part DC ${data.dc_number} created`);
       onSuccess?.(data);
@@ -58,7 +74,7 @@ export default function PartCourierDispatchModal({
         <div className="flex items-center justify-between border-b px-4 py-3">
           <div className="flex items-center gap-2">
             <Truck className="w-5 h-5 text-[#534AB7]" />
-            <h3 className="font-semibold text-gray-900">Send Part to Customer (Courier)</h3>
+            <h3 className="font-semibold text-gray-900">Send Part to Customer</h3>
           </div>
           <button type="button" onClick={onClose} className="p-1 rounded hover:bg-gray-100">
             <X className="w-4 h-4" />
@@ -81,6 +97,34 @@ export default function PartCourierDispatchModal({
             <p className="text-xs mt-2 text-blue-700">
               A Part DC (PDC) will be generated with customer billing/shipping address, GST, and SO tag.
             </p>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Delivery method</label>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => { setShipBy('by_courier'); setAddCourierLater(false); }}
+                className={`flex-1 py-2 px-3 rounded-lg text-sm border ${
+                  shipBy === 'by_courier'
+                    ? 'border-[#534AB7] bg-[#534AB7]/10 text-[#534AB7] font-semibold'
+                    : 'border-gray-200 text-gray-600'
+                }`}
+              >
+                Send by courier
+              </button>
+              <button
+                type="button"
+                onClick={() => { setShipBy('by_hand'); setAddCourierLater(false); }}
+                className={`flex-1 py-2 px-3 rounded-lg text-sm border ${
+                  shipBy === 'by_hand'
+                    ? 'border-[#534AB7] bg-[#534AB7]/10 text-[#534AB7] font-semibold'
+                    : 'border-gray-200 text-gray-600'
+                }`}
+              >
+                Hand delivery
+              </button>
+            </div>
           </div>
 
           <div>
@@ -132,27 +176,80 @@ export default function PartCourierDispatchModal({
             </div>
           )}
 
-          <div className="border-t pt-3 space-y-2">
-            <p className="text-xs font-semibold text-gray-500 uppercase">Courier details</p>
-            <input
-              className="w-full border rounded-lg px-3 py-2 text-sm"
-              placeholder="Courier name *"
-              value={courierName}
-              onChange={(e) => setCourierName(e.target.value)}
-            />
-            <input
-              className="w-full border rounded-lg px-3 py-2 text-sm"
-              placeholder="AWB / tracking number"
-              value={awbNumber}
-              onChange={(e) => setAwbNumber(e.target.value)}
-            />
-            <input
-              className="w-full border rounded-lg px-3 py-2 text-sm"
-              placeholder="Tracking URL (optional)"
-              value={trackingUrl}
-              onChange={(e) => setTrackingUrl(e.target.value)}
-            />
-          </div>
+          {shipBy === 'by_courier' && (
+            <div className="border-t pt-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-semibold text-gray-500 uppercase">Courier details</p>
+                <label className="flex items-center gap-1.5 text-xs text-gray-600">
+                  <input
+                    type="checkbox"
+                    checked={addCourierLater}
+                    onChange={(e) => setAddCourierLater(e.target.checked)}
+                  />
+                  Add later on Part DC page
+                </label>
+              </div>
+              {!addCourierLater && (
+                <>
+                  <input
+                    className="w-full border rounded-lg px-3 py-2 text-sm"
+                    placeholder="Courier name *"
+                    value={courierName}
+                    onChange={(e) => setCourierName(e.target.value)}
+                  />
+                  <input
+                    className="w-full border rounded-lg px-3 py-2 text-sm"
+                    placeholder="AWB / tracking number"
+                    value={awbNumber}
+                    onChange={(e) => setAwbNumber(e.target.value)}
+                  />
+                  <input
+                    className="w-full border rounded-lg px-3 py-2 text-sm"
+                    placeholder="Tracking URL (optional)"
+                    value={trackingUrl}
+                    onChange={(e) => setTrackingUrl(e.target.value)}
+                  />
+                </>
+              )}
+              {addCourierLater && (
+                <p className="text-xs text-gray-500 bg-gray-50 border rounded-lg p-2">
+                  Part DC will be created first. Open the Part DC page from the queue to enter courier name and AWB before dispatch.
+                </p>
+              )}
+            </div>
+          )}
+
+          {hasOldPartCourierPickup && (
+            <div className="border-t pt-3 space-y-2">
+              <label className="flex items-center gap-2 text-sm font-medium text-amber-900">
+                <input
+                  type="checkbox"
+                  checked={scheduleOldPartPickup}
+                  onChange={(e) => setScheduleOldPartPickup(e.target.checked)}
+                />
+                Schedule courier pickup for old/damaged part
+              </label>
+              {scheduleOldPartPickup && (
+                <>
+                  <p className="text-xs text-amber-700">
+                    An RPDC (Return Part DC) will be created for warehouse to track old part collection from customer.
+                  </p>
+                  <input
+                    className="w-full border rounded-lg px-3 py-2 text-sm"
+                    placeholder="Pickup courier name (optional now)"
+                    value={oldPartCourierName}
+                    onChange={(e) => setOldPartCourierName(e.target.value)}
+                  />
+                  <input
+                    className="w-full border rounded-lg px-3 py-2 text-sm"
+                    placeholder="Pickup AWB (optional)"
+                    value={oldPartAwb}
+                    onChange={(e) => setOldPartAwb(e.target.value)}
+                  />
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="border-t px-4 py-3 flex gap-2 justify-end">
@@ -165,7 +262,7 @@ export default function PartCourierDispatchModal({
             onClick={submit}
             className="px-4 py-2 bg-[#534AB7] text-white rounded-lg text-sm font-semibold disabled:opacity-50"
           >
-            {busy ? 'Creating…' : 'Generate Part DC & Dispatch'}
+            {busy ? 'Creating…' : addCourierLater && shipBy === 'by_courier' ? 'Generate Part DC' : 'Generate Part DC & Dispatch'}
           </button>
         </div>
       </div>

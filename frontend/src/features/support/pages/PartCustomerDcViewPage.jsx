@@ -2,7 +2,11 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { FileText, Truck, Package } from 'lucide-react';
-import { getPartCustomerDc, markPartCustomerDcDelivered } from '../supportPartsApi';
+import {
+  getPartCustomerDc,
+  markPartCustomerDcDelivered,
+  updatePartCustomerDcCourier,
+} from '../supportPartsApi';
 import { usePartsBase } from '../partsBase';
 
 export default function PartCustomerDcViewPage() {
@@ -10,11 +14,18 @@ export default function PartCustomerDcViewPage() {
   const base = usePartsBase();
   const [data, setData] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [courierName, setCourierName] = useState('');
+  const [awbNumber, setAwbNumber] = useState('');
+  const [trackingUrl, setTrackingUrl] = useState('');
 
   const load = useCallback(async () => {
     try {
       const res = await getPartCustomerDc(decodeURIComponent(dcNumber));
       setData(res.data);
+      const dcRow = res.data?.dc;
+      setCourierName(dcRow?.courier_name || '');
+      setAwbNumber(dcRow?.awb_number || '');
+      setTrackingUrl(dcRow?.courier_tracking_url || '');
     } catch {
       toast.error('Part DC not found');
     }
@@ -26,6 +37,10 @@ export default function PartCustomerDcViewPage() {
   const parts = data?.parts || [];
   const costs = data?.laptop_costs || [];
 
+  const needsCourier = dc?.ship_by === 'by_courier'
+    && ['processing', 'in_transit'].includes(dc?.status)
+    && !dc?.courier_name;
+
   const markDelivered = async () => {
     setBusy(true);
     try {
@@ -34,6 +49,27 @@ export default function PartCustomerDcViewPage() {
       load();
     } catch (e) {
       toast.error(e.response?.data?.message || 'Failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveCourier = async () => {
+    if (!courierName.trim()) {
+      toast.error('Courier name is required');
+      return;
+    }
+    setBusy(true);
+    try {
+      const { data: res } = await updatePartCustomerDcCourier(decodeURIComponent(dcNumber), {
+        courier_name: courierName.trim(),
+        awb_number: awbNumber.trim() || null,
+        courier_tracking_url: trackingUrl.trim() || null,
+      });
+      toast.success(res.message || 'Courier details saved');
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Failed to save courier details');
     } finally {
       setBusy(false);
     }
@@ -64,14 +100,19 @@ export default function PartCustomerDcViewPage() {
       <div className="bg-white border rounded-xl p-4 space-y-3">
         <div className="flex flex-wrap gap-2 text-xs">
           <span className={`px-2 py-1 rounded-full font-medium ${
-            dc.status === 'delivered' ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'
+            dc.status === 'delivered' ? 'bg-green-100 text-green-800'
+              : dc.status === 'processing' ? 'bg-blue-100 text-blue-800'
+                : 'bg-amber-100 text-amber-800'
           }`}>
-            {dc.status}
+            {dc.status === 'processing' ? 'Awaiting courier details' : dc.status}
           </span>
           {parts[0]?.billing_type === 'under_warranty' ? (
             <span className="px-2 py-1 rounded-full bg-green-50 text-green-700 font-medium">Under warranty</span>
           ) : (
             <span className="px-2 py-1 rounded-full bg-amber-50 text-amber-700 font-medium">Chargeable</span>
+          )}
+          {dc.ship_by === 'by_courier' && (
+            <span className="px-2 py-1 rounded-full bg-gray-100 text-gray-700 font-medium">Courier</span>
           )}
         </div>
 
@@ -80,6 +121,38 @@ export default function PartCustomerDcViewPage() {
             <Truck className="w-4 h-4" />
             {dc.courier_name}{dc.awb_number ? ` · AWB ${dc.awb_number}` : ''}
           </p>
+        )}
+
+        {needsCourier && (
+          <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 space-y-2">
+            <p className="text-sm font-semibold text-blue-900">Add courier details to dispatch</p>
+            <input
+              className="w-full border rounded-lg px-3 py-2 text-sm bg-white"
+              placeholder="Courier name *"
+              value={courierName}
+              onChange={(e) => setCourierName(e.target.value)}
+            />
+            <input
+              className="w-full border rounded-lg px-3 py-2 text-sm bg-white"
+              placeholder="AWB / tracking number"
+              value={awbNumber}
+              onChange={(e) => setAwbNumber(e.target.value)}
+            />
+            <input
+              className="w-full border rounded-lg px-3 py-2 text-sm bg-white"
+              placeholder="Tracking URL (optional)"
+              value={trackingUrl}
+              onChange={(e) => setTrackingUrl(e.target.value)}
+            />
+            <button
+              type="button"
+              disabled={busy}
+              onClick={saveCourier}
+              className="px-3 py-2 bg-[#534AB7] text-white rounded-lg text-sm font-semibold disabled:opacity-50"
+            >
+              {busy ? 'Saving…' : 'Save courier & mark in transit'}
+            </button>
+          </div>
         )}
 
         <div className="divide-y">

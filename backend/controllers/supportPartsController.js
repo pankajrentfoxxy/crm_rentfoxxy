@@ -92,7 +92,8 @@ exports.syncPartRequestsTechForItem = syncPartRequestsTechForItem;
 exports.raiseSupportPartRequest = async (req, res) => {
   const { support_ticket_id, support_item_id, ttspl_id, serial_number,
           part_id, quantity, reason,
-          fulfillment_mode, billing_type, charge_amount, tampered_by_customer } = req.body;
+          fulfillment_mode, billing_type, charge_amount, tampered_by_customer,
+          collect_old_part, old_part_collection_method } = req.body;
 
   if (!support_ticket_id || !part_id || !quantity) {
     return res.status(400).json({ success: false,
@@ -102,6 +103,15 @@ exports.raiseSupportPartRequest = async (req, res) => {
   const mode = fulfillment_mode === 'courier_to_customer' ? 'courier_to_customer' : 'warehouse_handover';
   const billing = billing_type === 'charge_customer' ? 'charge_customer' : 'under_warranty';
   const charge = billing === 'charge_customer' ? Number(charge_amount || 0) : 0;
+  const shouldCollectOld = collect_old_part !== false;
+  let oldPartMethod = null;
+  let oldPartStatus = 'not_applicable';
+  if (shouldCollectOld) {
+    oldPartMethod = old_part_collection_method === 'courier_pickup'
+      ? 'courier_pickup'
+      : 'tech_collection';
+    oldPartStatus = 'pending';
+  }
 
   const client = await pool.connect();
   try {
@@ -139,13 +149,15 @@ exports.raiseSupportPartRequest = async (req, res) => {
          (request_number, support_ticket_id, support_item_id, ttspl_id,
           serial_number, requested_by, assigned_to_tech, part_id, quantity,
           reason, status, fulfillment_mode, billing_type, charge_amount,
-          tampered_by_customer, sales_order_number)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11,$12,$13,$14,$15)
+          tampered_by_customer, sales_order_number,
+          collect_old_part, old_part_collection_method, old_part_status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11,$12,$13,$14,$15,$16,$17,$18)
        RETURNING *`,
       [reqNumber, support_ticket_id, support_item_id || null, ttspl_id || null,
        serial_number || null, req.user.user_id, assignedTechId, part_id,
        Number(quantity), reason || null, mode, billing, charge,
-       Boolean(tampered_by_customer), ticket.sales_order_number || null]
+       Boolean(tampered_by_customer), ticket.sales_order_number || null,
+       shouldCollectOld, oldPartMethod, oldPartStatus]
     );
     const spr = rows[0];
 
@@ -462,8 +474,12 @@ exports.approveAndGenerateCustomerDc = async (req, res) => {
   if (!['by_courier', 'by_hand'].includes(shipBy)) {
     return res.status(400).json({ success: false, message: 'Invalid ship_by' });
   }
-  if (shipBy === 'by_courier' && !String(courier_name || '').trim()) {
-    return res.status(400).json({ success: false, message: 'Courier name is required' });
+  const courierNameTrimmed = String(courier_name || '').trim();
+  if (shipBy === 'by_courier' && !courierNameTrimmed && !req.body.add_courier_later) {
+    return res.status(400).json({
+      success: false,
+      message: 'Courier name is required, or choose "Add courier details later"',
+    });
   }
 
   const pickedInstances = instance_map && typeof instance_map === 'object' ? instance_map : {};
@@ -497,7 +513,7 @@ exports.approveAndGenerateCustomerDc = async (req, res) => {
       requests,
       instanceMap: pickedInstances,
       shipBy,
-      courierName: courier_name,
+      courierName: courierNameTrimmed || null,
       awbNumber: awb_number,
       courierTrackingUrl: courier_tracking_url,
       billingType: billing_type === 'charge_customer' ? 'charge_customer' : 'under_warranty',
@@ -505,8 +521,33 @@ exports.approveAndGenerateCustomerDc = async (req, res) => {
       tamperedByCustomer: Boolean(tampered_by_customer),
       shippingOverride: customer_shipping_address || null,
       billingOverride: customer_billing_address || null,
+      addCourierLater: Boolean(req.body.add_courier_later) && shipBy === 'by_courier' && !courierNameTrimmed,
       actorUserId: req.user.user_id,
     });
+
+    // Old part courier pickup from customer (paired with outbound PDC)
+    const courierPickupRequests = requests.filter(
+      (r) => r.collect_old_part && r.old_part_collection_method === 'courier_pickup'
+    );
+    let rpdcNumber = null;
+    if (courierPickupRequests.length && req.body.schedule_old_part_pickup !== false) {
+      const { createSupportPartReturnDc } = require('../services/supportPartReturnDcService');
+      const pickupCourierName = req.body.old_part_courier_name || courierNameTrimmed || null;
+      const pickupAwb = req.body.old_part_awb_number || null;
+      const pickupTracking = req.body.old_part_courier_tracking_url || null;
+      const pickupShipBy = req.body.old_part_ship_by || (pickupCourierName ? 'by_courier' : 'by_courier');
+      const rpdc = await createSupportPartReturnDc(client, {
+        requests: courierPickupRequests.map((r) => ({ ...r, part_name: r.part_name })),
+        returnMode: 'courier_pickup',
+        outboundDcNumber: result.dcNumber,
+        shipBy: pickupShipBy,
+        courierName: pickupCourierName,
+        awbNumber: pickupAwb,
+        courierTrackingUrl: pickupTracking,
+        actorUserId: req.user.user_id,
+      });
+      rpdcNumber = rpdc.rpdcNumber;
+    }
 
     await client.query('COMMIT');
 
@@ -520,11 +561,16 @@ exports.approveAndGenerateCustomerDc = async (req, res) => {
     res.status(201).json({
       success: true,
       dc_number: result.dcNumber,
+      return_part_dc_number: rpdcNumber,
       pdf_path: pdfPath,
       sales_order_number: result.ctx.salesOrderNumber,
       billing_type: result.billingType,
       charge_amount: result.subtotalCharge,
-      message: `Part DC ${result.dcNumber} created and dispatched to customer.`,
+      dc_status: result.dcStatus,
+      add_courier_later: result.addCourierLater,
+      message: result.addCourierLater
+        ? `Part DC ${result.dcNumber} created. Add courier details to dispatch.`
+        : `Part DC ${result.dcNumber} created${rpdcNumber ? ` · Old part pickup ${rpdcNumber} scheduled` : ''}.`,
     });
   } catch (e) {
     await client.query('ROLLBACK');
@@ -615,6 +661,276 @@ exports.markPartCustomerDcDelivered = async (req, res) => {
   }
 };
 
+// ── UPDATE PART DC COURIER (warehouse adds tracking after PDC created) ───────
+
+exports.updatePartCustomerDcCourier = async (req, res) => {
+  const dcNumber = req.params.dcNumber;
+  const courierName = String(req.body.courier_name || '').trim();
+  const awbNumber = String(req.body.awb_number || '').trim() || null;
+  const trackingUrl = String(req.body.courier_tracking_url || '').trim() || null;
+
+  if (!courierName) {
+    return res.status(400).json({ success: false, message: 'Courier name is required' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const dclRes = await client.query(
+      `SELECT dc_number, status, ship_by FROM delivery_challan_lines
+        WHERE dc_number = $1 AND dc_purpose = 'part_delivery' FOR UPDATE`,
+      [dcNumber]
+    );
+    if (!dclRes.rows.length) {
+      throw Object.assign(new Error('Part DC not found'), { status: 404 });
+    }
+    const dcl = dclRes.rows[0];
+    if (!['processing', 'in_transit'].includes(String(dcl.status || ''))) {
+      throw Object.assign(new Error(`Cannot update courier on Part DC in status '${dcl.status}'`), { status: 400 });
+    }
+    if (String(dcl.ship_by || '') !== 'by_courier') {
+      throw Object.assign(new Error('Courier details apply only to courier shipments'), { status: 400 });
+    }
+
+    await client.query(
+      `UPDATE delivery_challan_lines
+          SET courier_name = $2,
+              awb_number = $3,
+              courier_tracking_url = $4,
+              status = 'in_transit',
+              dispatched_at = COALESCE(dispatched_at, NOW()),
+              updated_at = NOW()
+        WHERE dc_number = $1`,
+      [dcNumber, courierName, awbNumber, trackingUrl]
+    );
+
+    await client.query(
+      `UPDATE support_part_requests
+          SET status = 'dispatched',
+              dispatched_at = COALESCE(dispatched_at, NOW()),
+              updated_at = NOW()
+        WHERE customer_dc_number = $1
+          AND status IN ('approved', 'dispatched')`,
+      [dcNumber]
+    );
+
+    await client.query(
+      `UPDATE part_instances pi
+          SET status = 'in_transit', updated_at = NOW()
+        FROM support_part_requests spr
+       WHERE spr.customer_dc_number = $1
+         AND spr.instance_id = pi.instance_id
+         AND pi.status = 'reserved'`,
+      [dcNumber]
+    );
+
+    await client.query('COMMIT');
+    res.json({
+      success: true,
+      message: 'Courier details saved. Part is now in transit to customer.',
+    });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  } finally {
+    client.release();
+  }
+};
+
+// ── LIST PART CUSTOMER DCs (warehouse — awaiting courier) ────────────────────
+
+exports.listPartCustomerDcsAwaitingCourier = async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT dcl.dc_number, dcl.status, dcl.customer_name, dcl.created_at,
+              dcl.ship_by, dcl.courier_name, dcl.awb_number,
+              ('STK-' || LPAD(st.id::text, 4, '0')) AS ticket_number
+         FROM delivery_challan_lines dcl
+         LEFT JOIN support_tickets st ON st.id = dcl.support_ticket_id
+        WHERE dcl.dc_purpose = 'part_delivery'
+          AND dcl.ship_by = 'by_courier'
+          AND dcl.status = 'processing'
+        ORDER BY dcl.created_at ASC`
+    );
+    res.json({ success: true, dcs: rows });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+// ── RETURN PART DC (RPDC) — old part back to warehouse ───────────────────────
+
+exports.submitOldPartRpdc = async (req, res) => {
+  const { request_ids } = req.body;
+  if (!Array.isArray(request_ids) || !request_ids.length) {
+    return res.status(400).json({ success: false, message: 'request_ids required' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const reqRes = await client.query(
+      `SELECT spr.*, p.part_name, pi.prt_id AS old_part_prt_id
+         FROM support_part_requests spr
+         JOIN parts p ON p.part_id = spr.part_id
+         LEFT JOIN part_instances pi ON pi.instance_id = spr.old_part_instance_id
+        WHERE spr.id = ANY($1::int[])
+          AND spr.old_part_status = 'with_tech'
+        FOR UPDATE OF spr`,
+      [request_ids]
+    );
+    if (!reqRes.rows.length) {
+      throw Object.assign(new Error('No old parts ready for RPDC submit'), { status: 400 });
+    }
+    const requests = reqRes.rows;
+    const techIds = [...new Set(requests.map((r) => r.assigned_to_tech))];
+    if (techIds.length > 1) {
+      throw new Error('All selected old parts must belong to the same technician');
+    }
+    if (req.user.role === 'support_tech' && Number(techIds[0]) !== Number(req.user.user_id)) {
+      throw Object.assign(new Error('Not authorised'), { status: 403 });
+    }
+
+    const { createSupportPartReturnDc } = require('../services/supportPartReturnDcService');
+    const result = await createSupportPartReturnDc(client, {
+      requests,
+      returnMode: 'tech_submit',
+      shipBy: 'by_hand',
+      actorUserId: req.user.user_id,
+    });
+
+    await client.query('COMMIT');
+    res.status(201).json({
+      success: true,
+      return_part_dc_number: result.rpdcNumber,
+      message: `Return Part DC ${result.rpdcNumber} created. Hand old part(s) to warehouse for receipt.`,
+    });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  } finally {
+    client.release();
+  }
+};
+
+exports.getPartReturnDc = async (req, res) => {
+  try {
+    const dcNumber = req.params.dcNumber;
+    const dclRes = await pool.query(
+      `SELECT dcl.*, ('STK-' || LPAD(st.id::text, 4, '0')) AS ticket_number
+         FROM delivery_challan_lines dcl
+         LEFT JOIN support_tickets st ON st.id = dcl.support_ticket_id
+        WHERE dcl.dc_number = $1 AND dcl.dc_purpose = 'part_return'
+        LIMIT 1`,
+      [dcNumber]
+    );
+    if (!dclRes.rows.length) {
+      return res.status(404).json({ success: false, message: 'Return Part DC not found' });
+    }
+    const partsRes = await pool.query(
+      `SELECT spr.*, p.part_name, pi.prt_id AS old_part_prt_id
+         FROM support_part_requests spr
+         JOIN parts p ON p.part_id = spr.part_id
+         LEFT JOIN part_instances pi ON pi.instance_id = spr.old_part_instance_id
+        WHERE spr.return_part_dc_number = $1
+        ORDER BY spr.id`,
+      [dcNumber]
+    );
+    res.json({ success: true, dc: dclRes.rows[0], parts: partsRes.rows });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+exports.receivePartReturnDc = async (req, res) => {
+  const dcNumber = req.params.dcNumber;
+  const { items } = req.body || {};
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { receiveSupportPartReturnDc } = require('../services/supportPartReturnDcService');
+    const result = await receiveSupportPartReturnDc(client, {
+      rpdcNumber: dcNumber,
+      items: Array.isArray(items) ? items : [],
+      actorUserId: req.user.user_id,
+    });
+    await client.query('COMMIT');
+    res.json({
+      success: true,
+      message: `Received ${result.received} old part(s) on ${result.rpdcNumber}.`,
+    });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  } finally {
+    client.release();
+  }
+};
+
+exports.updatePartReturnDcCourier = async (req, res) => {
+  const dcNumber = req.params.dcNumber;
+  const courierName = String(req.body.courier_name || '').trim();
+  const awbNumber = String(req.body.awb_number || '').trim() || null;
+  const trackingUrl = String(req.body.courier_tracking_url || '').trim() || null;
+  if (!courierName) {
+    return res.status(400).json({ success: false, message: 'Courier name is required' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const dclRes = await client.query(
+      `SELECT dc_number, status FROM delivery_challan_lines
+        WHERE dc_number = $1 AND dc_purpose = 'part_return' FOR UPDATE`,
+      [dcNumber]
+    );
+    if (!dclRes.rows.length) {
+      throw Object.assign(new Error('Return Part DC not found'), { status: 404 });
+    }
+    if (!['processing', 'in_transit'].includes(String(dclRes.rows[0].status || ''))) {
+      throw Object.assign(new Error('Cannot update courier on this RPDC'), { status: 400 });
+    }
+
+    await client.query(
+      `UPDATE delivery_challan_lines SET
+         courier_name = $2, awb_number = $3, courier_tracking_url = $4,
+         ship_by = 'by_courier', status = 'in_transit',
+         dispatched_at = COALESCE(dispatched_at, NOW()), updated_at = NOW()
+       WHERE dc_number = $1`,
+      [dcNumber, courierName, awbNumber, trackingUrl]
+    );
+    await client.query(
+      `UPDATE support_part_requests SET old_part_status = 'courier_in_transit', updated_at = NOW()
+        WHERE return_part_dc_number = $1`,
+      [dcNumber]
+    );
+    await client.query('COMMIT');
+    res.json({ success: true, message: 'Courier details saved. Old part pickup is in transit.' });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(e.status || 500).json({ success: false, message: e.message });
+  } finally {
+    client.release();
+  }
+};
+
+exports.listPartReturnDcsPendingReceive = async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT dcl.dc_number, dcl.status, dcl.customer_name, dcl.courier_name, dcl.awb_number,
+              dcl.created_at, ('STK-' || LPAD(st.id::text, 4, '0')) AS ticket_number
+         FROM delivery_challan_lines dcl
+         LEFT JOIN support_tickets st ON st.id = dcl.support_ticket_id
+        WHERE dcl.dc_purpose = 'part_return'
+          AND dcl.status IN ('processing', 'in_transit')
+        ORDER BY dcl.created_at ASC`
+    );
+    res.json({ success: true, dcs: rows });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
 // ── TECHNICIAN: E-SIGN CHALLAN → ISSUE PARTS ─────────────────────────────────
 
 exports.signAndIssueChallan = async (req, res) => {
@@ -696,11 +1012,20 @@ exports.signAndIssueChallan = async (req, res) => {
 
 exports.markPartUsed = async (req, res) => {
   const reqId = parseInt(req.params.requestId, 10);
+  const {
+    old_part_collected,
+    old_part_condition,
+    old_part_notes,
+    old_part_serial,
+  } = req.body || {};
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const r = await client.query(
-      'SELECT * FROM support_part_requests WHERE id = $1 FOR UPDATE', [reqId]
+      `SELECT spr.*, p.part_name FROM support_part_requests spr
+        JOIN parts p ON p.part_id = spr.part_id
+       WHERE spr.id = $1 FOR UPDATE OF spr`,
+      [reqId]
     );
     if (!r.rows.length) throw Object.assign(new Error('Request not found'), { status: 404 });
     const spr = r.rows[0];
@@ -710,9 +1035,54 @@ exports.markPartUsed = async (req, res) => {
     if (!['issued', 'dispatched', 'delivered'].includes(spr.status))
       throw new Error(`Cannot mark used: status is '${spr.status}'`);
 
+    const needsOldPart = spr.collect_old_part
+      && spr.old_part_collection_method === 'tech_collection'
+      && spr.old_part_status === 'pending';
+
+    if (needsOldPart && !old_part_collected) {
+      throw Object.assign(
+        new Error('Collect the old/damaged part from the laptop before marking the new part as used.'),
+        { status: 400 }
+      );
+    }
+
+    let oldPartInstance = null;
+    if (needsOldPart && old_part_collected) {
+      const { createSupportOldPartWithTech } = require('../services/supportPartReturnDcService');
+      oldPartInstance = await createSupportOldPartWithTech(client, {
+        supportPartRequest: spr,
+        partId: spr.part_id,
+        condition: old_part_condition || 'defective',
+        serialNumber: old_part_serial || null,
+        notes: old_part_notes || null,
+        actorUserId: req.user.user_id,
+      });
+    }
+
     await client.query(
-      `UPDATE support_part_requests SET status='used', used_at=NOW(), updated_at=NOW() WHERE id=$1`,
-      [reqId]
+      `UPDATE support_part_requests SET
+         status = 'used',
+         used_at = NOW(),
+         old_part_collected_at = CASE WHEN $2 THEN NOW() ELSE old_part_collected_at END,
+         old_part_condition = COALESCE($3, old_part_condition),
+         old_part_notes = COALESCE($4, old_part_notes),
+         old_part_serial = COALESCE($5, old_part_serial),
+         old_part_instance_id = COALESCE($6, old_part_instance_id),
+         old_part_status = CASE
+           WHEN $2 THEN 'with_tech'
+           WHEN old_part_status = 'not_applicable' THEN old_part_status
+           ELSE old_part_status
+         END,
+         updated_at = NOW()
+       WHERE id = $1`,
+      [
+        reqId,
+        Boolean(old_part_collected),
+        old_part_condition || null,
+        old_part_notes || null,
+        old_part_serial || null,
+        oldPartInstance?.instance_id || null,
+      ]
     );
     if (spr.instance_id) {
       await client.query(
@@ -727,7 +1097,10 @@ exports.markPartUsed = async (req, res) => {
     );
 
     await client.query('COMMIT');
-    res.json({ success: true, message: 'Part marked as used on laptop.' });
+    const msg = oldPartInstance
+      ? `Part marked as used. Old part ${oldPartInstance.prt_id} is in your bucket — submit RPDC to warehouse.`
+      : 'Part marked as used on laptop.';
+    res.json({ success: true, message: msg, old_part: oldPartInstance });
   } catch (e) {
     await client.query('ROLLBACK');
     res.status(e.status || 500).json({ success: false, message: e.message });
@@ -892,11 +1265,38 @@ exports.getTechnicianBucket = async (req, res) => {
       ORDER BY spr.challan_id DESC
     `, params)).rows;
 
+    const oldPartRows = (await pool.query(`
+      SELECT spr.*,
+             p.part_name, p.category,
+             opi.prt_id AS old_part_prt_id,
+             u.name AS tech_name,
+             st.customer_name, ${TICKET_NUMBER_SQL} AS ticket_number
+      FROM support_part_requests spr
+      JOIN parts p ON p.part_id = spr.part_id
+      LEFT JOIN part_instances opi ON opi.instance_id = spr.old_part_instance_id
+      JOIN users u ON u.user_id = spr.assigned_to_tech
+      JOIN support_tickets st ON st.id = spr.support_ticket_id
+      WHERE spr.old_part_status = 'with_tech'
+      ${techFilter}
+      ORDER BY spr.old_part_collected_at DESC NULLS LAST
+    `, params)).rows;
+
+    const oldPartsGrouped = {};
+    oldPartRows.forEach((r) => {
+      const key = r.assigned_to_tech;
+      if (!oldPartsGrouped[key]) {
+        oldPartsGrouped[key] = { tech_id: key, tech_name: r.tech_name, old_parts: [] };
+      }
+      oldPartsGrouped[key].old_parts.push(r);
+    });
+
     res.json({
       success: true,
       bucket: Object.values(grouped),
+      old_parts_bucket: Object.values(oldPartsGrouped),
       awaiting: awaitingRows,
       total: rows.length,
+      old_parts_total: oldPartRows.length,
     });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message });

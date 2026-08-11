@@ -8,14 +8,14 @@ import {
   raiseSupportPartRequest,
   listSupportPartRequests,
   cancelSupportPartRequest,
-  markPartUsed,
   returnPart,
 } from '../supportPartsApi';
 import ESignChallanModal from './ESignChallanModal';
+import MarkPartUsedModal from './MarkPartUsedModal';
 
 const STATUS_LABEL = {
   pending: 'Awaiting warehouse',
-  approved: 'Approved',
+  approved: 'Part DC created — awaiting courier dispatch',
   challan_generated: 'Challan ready - sign at warehouse',
   issued: 'In your bucket',
   dispatched: 'Dispatched to customer',
@@ -31,6 +31,7 @@ function PartRequestRow({ req, onChanged, canManageReturn }) {
   const [busy, setBusy] = useState(false);
   const [returnMenu, setReturnMenu] = useState(false);
   const [signReq, setSignReq] = useState(null);
+  const [markUsedOpen, setMarkUsedOpen] = useState(false);
 
   const needsSign = ['approved', 'challan_generated'].includes(req.status) && req.challan_id;
   const canAct = ['issued', 'dispatched', 'delivered'].includes(req.status);
@@ -87,11 +88,11 @@ function PartRequestRow({ req, onChanged, canManageReturn }) {
             <button
               type="button"
               disabled={busy}
-              onClick={() => run(() => markPartUsed(req.id), 'Part marked as used')}
+              onClick={() => setMarkUsedOpen(true)}
               className="inline-flex items-center gap-1 px-2 py-1 bg-green-600 text-white rounded-md font-semibold disabled:opacity-50"
             >
               <Check className="w-3 h-3" />
-              {busy ? 'Saving…' : 'Mark used'}
+              Mark used
             </button>
             <button
               type="button"
@@ -117,6 +118,14 @@ function PartRequestRow({ req, onChanged, canManageReturn }) {
             className="inline-flex items-center gap-1 px-2 py-1 border border-[#534AB7] text-[#534AB7] rounded-md font-semibold bg-white"
           >
             <Truck className="w-3 h-3" /> Part DC
+          </Link>
+        )}
+        {req.return_part_dc_number && (
+          <Link
+            to={`/support-parts/part-return-dcs/${encodeURIComponent(req.return_part_dc_number)}`}
+            className="inline-flex items-center gap-1 px-2 py-1 border border-amber-600 text-amber-700 rounded-md font-semibold bg-white"
+          >
+            <RotateCcw className="w-3 h-3" /> RPDC
           </Link>
         )}
         {canManageReturn && isReturnRequested && (
@@ -164,6 +173,13 @@ function PartRequestRow({ req, onChanged, canManageReturn }) {
           onClose={() => setSignReq(null)}
         />
       )}
+
+      <MarkPartUsedModal
+        open={markUsedOpen}
+        request={req}
+        onClose={() => setMarkUsedOpen(false)}
+        onSuccess={onChanged}
+      />
     </div>
   );
 }
@@ -178,6 +194,8 @@ export default function RaisePartRequestForm({ ticket, item }) {
   const [quantity, setQuantity] = useState(1);
   const [reason, setReason] = useState('');
   const [fulfillmentMode, setFulfillmentMode] = useState('warehouse_handover');
+  const [collectOldPart, setCollectOldPart] = useState(true);
+  const [oldPartMethod, setOldPartMethod] = useState('tech_collection');
   const [billingType, setBillingType] = useState('under_warranty');
   const [chargeAmount, setChargeAmount] = useState('');
   const [tampered, setTampered] = useState(false);
@@ -240,6 +258,8 @@ export default function RaisePartRequestForm({ ticket, item }) {
         billing_type: billingType,
         charge_amount: billingType === 'charge_customer' ? Number(chargeAmount) || 0 : 0,
         tampered_by_customer: tampered,
+        collect_old_part: collectOldPart,
+        old_part_collection_method: collectOldPart ? oldPartMethod : undefined,
       });
       toast.success(data.message || 'Part request raised');
       setPartId('');
@@ -345,7 +365,10 @@ export default function RaisePartRequestForm({ ticket, item }) {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <button
                 type="button"
-                onClick={() => setFulfillmentMode('warehouse_handover')}
+                onClick={() => {
+                  setFulfillmentMode('warehouse_handover');
+                  setOldPartMethod('tech_collection');
+                }}
                 className={`py-2 px-3 rounded-xl text-sm border text-left ${
                   fulfillmentMode === 'warehouse_handover'
                     ? 'border-amber-600 bg-white font-semibold text-amber-900'
@@ -356,7 +379,10 @@ export default function RaisePartRequestForm({ ticket, item }) {
               </button>
               <button
                 type="button"
-                onClick={() => setFulfillmentMode('courier_to_customer')}
+                onClick={() => {
+                  setFulfillmentMode('courier_to_customer');
+                  setOldPartMethod('courier_pickup');
+                }}
                 className={`py-2 px-3 rounded-xl text-sm border text-left ${
                   fulfillmentMode === 'courier_to_customer'
                     ? 'border-[#534AB7] bg-white font-semibold text-[#534AB7]'
@@ -366,6 +392,43 @@ export default function RaisePartRequestForm({ ticket, item }) {
                 Send by courier to customer
               </button>
             </div>
+          </div>
+
+          <div className="space-y-2 rounded-xl border border-amber-100 bg-white/80 p-3">
+            <label className="flex items-center gap-2 text-sm font-medium text-amber-900">
+              <input
+                type="checkbox"
+                checked={collectOldPart}
+                onChange={(e) => setCollectOldPart(e.target.checked)}
+              />
+              Collect old/damaged part from customer
+            </label>
+            {collectOldPart && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setOldPartMethod('tech_collection')}
+                  className={`py-2 px-3 rounded-lg text-xs border text-left ${
+                    oldPartMethod === 'tech_collection'
+                      ? 'border-amber-600 bg-amber-50 font-semibold'
+                      : 'border-gray-200 text-gray-600'
+                  }`}
+                >
+                  Technician collects when installing
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOldPartMethod('courier_pickup')}
+                  className={`py-2 px-3 rounded-lg text-xs border text-left ${
+                    oldPartMethod === 'courier_pickup'
+                      ? 'border-amber-600 bg-amber-50 font-semibold'
+                      : 'border-gray-200 text-gray-600'
+                  }`}
+                >
+                  Courier pickup from customer
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="space-y-2">

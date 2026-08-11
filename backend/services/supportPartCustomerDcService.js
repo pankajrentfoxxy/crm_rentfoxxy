@@ -191,6 +191,7 @@ async function createSupportPartCustomerDc(client, {
   tamperedByCustomer = false,
   shippingOverride = null,
   billingOverride = null,
+  addCourierLater = false,
   actorUserId,
 }) {
   if (!requests.length) throw new Error('No part requests provided');
@@ -204,6 +205,10 @@ async function createSupportPartCustomerDc(client, {
   const supplyState = resolveSupplyStateFromAddress(shipping, ctx.supplyState);
   const dcNumber = await nextFinancialYearNumber('part_dc', client);
   const dispatchMode = shipBy === 'by_hand' ? 'inhouse' : 'courier';
+  const hasCourierDetails = shipBy === 'by_courier' && Boolean(String(courierName || '').trim());
+  const dcStatus = shipBy === 'by_hand' || hasCourierDetails ? 'in_transit' : 'processing';
+  const partInstanceStatus = dcStatus === 'in_transit' ? 'in_transit' : 'reserved';
+  const requestStatus = dcStatus === 'in_transit' ? 'dispatched' : 'approved';
 
   const serialTokens = [];
   const dcItems = [];
@@ -238,11 +243,11 @@ async function createSupportPartCustomerDc(client, {
 
     await client.query(
       `UPDATE support_part_requests SET
-         status = 'dispatched',
+         status = $10,
          instance_id = $1,
          approved_by = $2,
          approved_at = NOW(),
-         dispatched_at = NOW(),
+         dispatched_at = CASE WHEN $10 = 'dispatched' THEN NOW() ELSE NULL END,
          customer_dc_number = $3,
          sales_order_number = COALESCE($4, sales_order_number),
          billing_type = $5,
@@ -255,12 +260,13 @@ async function createSupportPartCustomerDc(client, {
         instance.instance_id, actorUserId, dcNumber,
         ctx.salesOrderNumber, billingType, lineCharge,
         tamperedByCustomer, unitCost, reqRow.id,
+        requestStatus,
       ]
     );
 
     await client.query(
-      `UPDATE part_instances SET status = 'in_transit', updated_at = NOW() WHERE instance_id = $1`,
-      [instance.instance_id]
+      `UPDATE part_instances SET status = $2, updated_at = NOW() WHERE instance_id = $1`,
+      [instance.instance_id, partInstanceStatus]
     );
 
     await client.query(
@@ -304,7 +310,7 @@ async function createSupportPartCustomerDc(client, {
        $10, $11,
        'Spare Part', $12, $13, $13, $14::jsonb,
        $15, $16, $17, $18,
-       $19, NOW(), $20, 'in_transit', $21, '847330'
+       $19, CASE WHEN $20 = 'in_transit' THEN NOW() ELSE NULL END, $21, $20, $22, '847330'
      )`,
     [
       dcNumber, ticketId,
@@ -318,7 +324,7 @@ async function createSupportPartCustomerDc(client, {
       shipBy, shipBy === 'by_courier' ? courierName : null,
       shipBy === 'by_courier' ? awbNumber : null,
       shipBy === 'by_courier' ? courierTrackingUrl : null,
-      dispatchMode, remarksParts.join(' · '), actorUserId,
+      dispatchMode, dcStatus, remarksParts.join(' · '), actorUserId,
     ]
   );
 
@@ -336,6 +342,8 @@ async function createSupportPartCustomerDc(client, {
     billingType,
     subtotalCharge,
     tamperedByCustomer,
+    dcStatus,
+    addCourierLater: addCourierLater || (shipBy === 'by_courier' && !hasCourierDetails),
   };
 }
 

@@ -26,8 +26,29 @@ export const getPartCustomerDc = (dcNumber) =>
 export const markPartCustomerDcDelivered = (dcNumber) =>
   api.patch(`${BASE}/part-dcs/${encodeURIComponent(dcNumber)}/delivered`);
 
-export const markPartUsed = (requestId) =>
-  api.patch(`${BASE}/requests/${requestId}/mark-used`);
+export const updatePartCustomerDcCourier = (dcNumber, data) =>
+  api.patch(`${BASE}/part-dcs/${encodeURIComponent(dcNumber)}/courier`, data);
+
+export const listPartDcsAwaitingCourier = () =>
+  api.get(`${BASE}/part-dcs-awaiting-courier`);
+
+export const submitOldPartRpdc = (requestIds) =>
+  api.post(`${BASE}/old-parts/submit-rpdc`, { request_ids: requestIds });
+
+export const getPartReturnDc = (dcNumber) =>
+  api.get(`${BASE}/part-return-dcs/${encodeURIComponent(dcNumber)}`);
+
+export const receivePartReturnDc = (dcNumber, data) =>
+  api.patch(`${BASE}/part-return-dcs/${encodeURIComponent(dcNumber)}/receive`, data || {});
+
+export const updatePartReturnDcCourier = (dcNumber, data) =>
+  api.patch(`${BASE}/part-return-dcs/${encodeURIComponent(dcNumber)}/courier`, data);
+
+export const listPartReturnDcsPending = () =>
+  api.get(`${BASE}/part-return-dcs-pending`);
+
+export const markPartUsed = (requestId, data) =>
+  api.patch(`${BASE}/requests/${requestId}/mark-used`, data || {});
 
 export const returnPart = (requestId, data) =>
   api.post(`${BASE}/requests/${requestId}/return`, data);
