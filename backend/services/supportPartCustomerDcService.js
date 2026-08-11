@@ -54,7 +54,7 @@ async function resolveTicketPartDcContext(client, ticketId, ttsplId = null) {
   let shipping = billing;
 
   const ecRes = await client.query(
-    `SELECT billing_address, shipping_address, gst_number, company_name, name, email, phone
+    `SELECT billing_address, shipping_address, email, customer_name, contact_person_number
        FROM existing_customer WHERE customer_id = $1 LIMIT 1`,
     [ticket.customer_id]
   );
@@ -89,10 +89,17 @@ async function resolveTicketPartDcContext(client, ticketId, ttsplId = null) {
   const customerName = ticket.customer_name
     || ticket.company_name
     || ticket.cust_name
+    || ec?.customer_name
     || billing?.name
     || 'Customer';
   const email = ticket.ticket_email || ticket.cust_email || ec?.email || billing?.email || null;
-  const gstNumber = ec?.gst_number || ticket.gst_no || billing?.gst_number || null;
+  // existing_customer has no gst column — use customers.gst_no / address JSON
+  const gstNumber = ticket.gst_no
+    || billing?.gst_number
+    || billing?.gst_no
+    || shipping?.gst_number
+    || shipping?.gst_no
+    || null;
 
   let quotationType = 'rental';
   if (salesOrderNumber) {
@@ -243,24 +250,31 @@ async function createSupportPartCustomerDc(client, {
 
     await client.query(
       `UPDATE support_part_requests SET
-         status = $10,
          instance_id = $1,
          approved_by = $2,
          approved_at = NOW(),
-         dispatched_at = CASE WHEN $10 = 'dispatched' THEN NOW() ELSE NULL END,
          customer_dc_number = $3,
          sales_order_number = COALESCE($4, sales_order_number),
          billing_type = $5,
          charge_amount = $6,
          tampered_by_customer = $7,
          internal_unit_cost = $8,
+         status = $9,
+         dispatched_at = $10,
          updated_at = NOW()
-       WHERE id = $9`,
+       WHERE id = $11`,
       [
-        instance.instance_id, actorUserId, dcNumber,
-        ctx.salesOrderNumber, billingType, lineCharge,
-        tamperedByCustomer, unitCost, reqRow.id,
+        instance.instance_id,
+        actorUserId,
+        dcNumber,
+        ctx.salesOrderNumber,
+        billingType,
+        lineCharge,
+        tamperedByCustomer,
+        unitCost,
         requestStatus,
+        requestStatus === 'dispatched' ? new Date() : null,
+        reqRow.id,
       ]
     );
 
@@ -306,25 +320,38 @@ async function createSupportPartCustomerDc(client, {
      ) VALUES (
        $1, 'outbound', 'part_delivery', $2,
        $3, $4, $5, $6, $7,
-       $8, 0, 0, $9, $9,
-       $10, $11,
-       'Spare Part', $12, $13, $13, $14::jsonb,
-       $15, $16, $17, $18,
-       $19, CASE WHEN $20 = 'in_transit' THEN NOW() ELSE NULL END, $21, $20, $22, '847330'
+       $8, 0, 0, $9, $10,
+       $11::jsonb, $12::jsonb,
+       'Spare Part', $13, $14, $15, $16::jsonb,
+       $17, $18, $19, $20,
+       $21, $22, $23, $24, $25, '847330'
      )`,
     [
-      dcNumber, ticketId,
-      ctx.salesOrderNumber, ctx.ticket.customer_id, ctx.customerName,
-      ctx.email, ctx.gstNumber,
-      supplyState, ctx.entityCode,
+      dcNumber,
+      ticketId,
+      ctx.salesOrderNumber,
+      ctx.ticket.customer_id,
+      ctx.customerName,
+      ctx.email,
+      ctx.gstNumber,
+      supplyState,
+      ctx.entityCode,
+      ctx.entityCode,
       billing ? JSON.stringify(billing) : null,
       shipping ? JSON.stringify(shipping) : null,
-      partSummary, dcItems.length,
+      partSummary,
+      dcItems.length,
+      dcItems.length,
       JSON.stringify(serialTokens),
-      shipBy, shipBy === 'by_courier' ? courierName : null,
+      shipBy,
+      shipBy === 'by_courier' ? courierName : null,
       shipBy === 'by_courier' ? awbNumber : null,
       shipBy === 'by_courier' ? courierTrackingUrl : null,
-      dispatchMode, dcStatus, remarksParts.join(' · '), actorUserId,
+      dispatchMode,
+      dcStatus === 'in_transit' ? new Date() : null,
+      remarksParts.join(' · '),
+      dcStatus,
+      actorUserId,
     ]
   );
 
