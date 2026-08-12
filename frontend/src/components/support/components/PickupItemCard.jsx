@@ -329,9 +329,24 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
           {podDone && !otpVerified && podUrl && (
             <div className="rounded-xl overflow-hidden border border-green-200">
               <img src={podUrl} alt="POD" className="w-full max-h-40 object-cover" onError={(e) => { e.target.style.display = 'none'; }} />
-              <div className="bg-green-50 px-3 py-2 flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-green-600" />
-                <span className="text-xs text-green-700 font-medium">Photo uploaded</span>
+              <div className="bg-green-50 px-3 py-2 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <CheckCircle2 className="w-4 h-4 text-green-600 shrink-0" />
+                  <span className="text-xs text-green-700 font-medium">Photo uploaded</span>
+                </div>
+                {canActTech && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      if (!window.confirm('Remove this photo and upload a different one?')) return;
+                      run(() => api.delete(`/support/items/${item.id}/pod`));
+                    }}
+                    className="shrink-0 text-xs font-semibold text-red-700 hover:underline disabled:opacity-50"
+                  >
+                    Remove &amp; retake
+                  </button>
+                )}
               </div>
             </div>
           )}

@@ -2069,20 +2069,57 @@ exports.assignItem = async (req, res) => {
 
 exports.removePod = async (req, res) => {
     const itemId = parseInt(req.params.itemId, 10);
-    const itemRes = await pool.query('SELECT * FROM support_ticket_items WHERE id = $1', [itemId]);
-    if (!itemRes.rows.length) {
-        return res.status(404).json({ success: false, message: 'Item not found' });
+    const client = await pool.connect();
+    try {
+        const itemRes = await client.query('SELECT * FROM support_ticket_items WHERE id = $1', [itemId]);
+        if (!itemRes.rows.length) {
+            return res.status(404).json({ success: false, message: 'Item not found' });
+        }
+        const item = itemRes.rows[0];
+        const isAssignee = Number(item.assigned_to) === Number(req.user.user_id)
+            || Number(item.pickup_assigned_to) === Number(req.user.user_id);
+        if (!isAssignee && !isSupportLead(req.user)) {
+            return res.status(403).json({ success: false, message: 'Not assigned to this item' });
+        }
+        if (item.otp_verified_at || item.customer_otp_verified_at) {
+            return res.status(400).json({
+                success: false,
+                message: 'Cannot remove POD after customer OTP is verified',
+            });
+        }
+        if (!item.pod_image_path && !item.proof_of_completion_path) {
+            return res.status(400).json({ success: false, message: 'No POD photo to remove' });
+        }
+
+        await client.query('BEGIN');
+        await client.query(
+            `UPDATE support_ticket_items SET
+               pod_image_path = NULL,
+               proof_of_completion_path = NULL,
+               pod_uploaded_at = NULL,
+               warehouse_otp_code = NULL,
+               updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1`,
+            [itemId]
+        );
+        await logAudit(client, {
+            itemId,
+            ticketId: item.ticket_id,
+            userId: req.user.user_id,
+            action: 'pod_removed',
+            detail: null,
+        });
+        await bumpTicketActivity(client, item.ticket_id);
+        await client.query('COMMIT');
+        const data = await getTicketWithItems(item.ticket_id, req.user);
+        res.json({ success: true, message: 'POD removed — you can upload a new photo', ...data });
+    } catch (e) {
+        await client.query('ROLLBACK').catch(() => {});
+        console.error('removePod:', e);
+        res.status(500).json({ success: false, message: 'Failed to remove POD' });
+    } finally {
+        client.release();
     }
-    const item = itemRes.rows[0];
-    if (item.assigned_to !== req.user.user_id && !isSupportLead(req.user)) {
-        return res.status(403).json({ success: false, message: 'Not assigned to this item' });
-    }
-    await pool.query(
-        `UPDATE support_ticket_items SET pod_image_path = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
-        [itemId]
-    );
-    const data = await getTicketWithItems(item.ticket_id, req.user);
-    res.json({ success: true, ...data });
 };
 
 exports.getSettings = async (req, res) => {

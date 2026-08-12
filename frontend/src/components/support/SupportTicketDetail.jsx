@@ -343,7 +343,7 @@ function ItemCard({
           />
         )}
 
-        {item.item_type === 'complaint' && canAct && !terminal && st === 'fixed_pending_pod' && item.outcome === 'fixed' && (
+        {item.item_type === 'complaint' && canAct && !terminal && st === 'fixed_pending_pod' && item.outcome === 'fixed' && !podUrl && (
           <div className="support-v3-pod-zone">
             <Camera className="w-8 h-8 mx-auto mb-2 opacity-60" />
             <p className="font-medium text-sm mb-2">Upload proof of completion</p>
@@ -354,25 +354,36 @@ function ItemCard({
           </div>
         )}
 
-        {item.item_type === 'complaint' && canAct && !terminal && st === 'fixed_pending_pod' && item.outcome === 'fixed' && item.pod_image_path && (
-          <button type="button" className="support-btn-primary w-full min-h-[44px]" disabled={busy} onClick={() => run(() => api.post(`/support/items/${item.id}/work-done`))}>
-            Mark work done & proceed to OTP
-          </button>
-        )}
-
-        {item.item_type === 'complaint' && canAct && !terminal && st === 'pod_uploaded' && (
+        {item.item_type === 'complaint' && canAct && !terminal && podUrl && !item.otp_verified_at && (
           <div className="space-y-2">
-            {podUrl && (
-              <div className="space-y-1">
-                <img src={podUrl} alt="POD" className="max-h-40 rounded-lg border" />
-                <button type="button" className="text-sm text-red-700 min-h-[44px]" disabled={busy} onClick={() => run(() => api.delete(`/support/items/${item.id}/pod`))}>Remove POD</button>
-              </div>
+            <div className="space-y-1">
+              <img src={podUrl} alt="POD" className="max-h-40 rounded-lg border" />
+              <button
+                type="button"
+                className="text-sm text-red-700 min-h-[44px] hover:underline"
+                disabled={busy}
+                onClick={() => {
+                  if (!window.confirm('Remove this photo and upload a different one?')) return;
+                  run(() => api.delete(`/support/items/${item.id}/pod`));
+                }}
+              >
+                Remove POD &amp; retake
+              </button>
+            </div>
+            {st === 'fixed_pending_pod' && item.outcome === 'fixed' && (
+              <button type="button" className="support-btn-primary w-full min-h-[44px]" disabled={busy} onClick={() => run(() => api.post(`/support/items/${item.id}/work-done`))}>
+                Mark work done & proceed to OTP
+              </button>
             )}
-            <p className="support-v3-section-label">Customer OTP</p>
-            <OtpInput value={otp} onChange={setOtp} disabled={busy} />
-            <button type="button" className="support-btn-primary w-full min-h-[44px]" disabled={busy || otp.replace(/\D/g, '').length !== 6} onClick={() => run(() => api.post(`/support/items/${item.id}/verify-customer-otp`, { otp }))}>
-              Verify OTP & close item
-            </button>
+            {st === 'pod_uploaded' && (
+              <>
+                <p className="support-v3-section-label">Customer OTP</p>
+                <OtpInput value={otp} onChange={setOtp} disabled={busy} />
+                <button type="button" className="support-btn-primary w-full min-h-[44px]" disabled={busy || otp.replace(/\D/g, '').length !== 6} onClick={() => run(() => api.post(`/support/items/${item.id}/verify-customer-otp`, { otp }))}>
+                  Verify OTP & close item
+                </button>
+              </>
+            )}
           </div>
         )}
 
