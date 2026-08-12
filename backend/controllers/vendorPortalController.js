@@ -653,6 +653,25 @@ async function listVendorReturns(req, res) {
     [vendorId]
   );
 
+  // Part vendor repair/return DCs (item_domain = part)
+  const partRows = await pool.query(
+    `SELECT d.dc_number AS rdc_number,
+            COALESCE(d.dispatched_at, d.created_at) AS return_date,
+            (SELECT COUNT(*)::int FROM vendor_repair_dc_part_items i WHERE i.dc_number = d.dc_number) AS laptop_count,
+            COALESCE(d.remarks, 'Part return for repair/replacement') AS reason,
+            d.status,
+            (
+              SELECT jsonb_agg(COALESCE(i.prt_id, i.serial_number) ORDER BY i.id)
+                FROM vendor_repair_dc_part_items i
+               WHERE i.dc_number = d.dc_number
+            ) AS ttspl_ids
+       FROM vendor_repair_delivery_challans d
+      WHERE d.vendor_id = $1
+        AND COALESCE(d.item_domain, 'laptop') = 'part'
+      ORDER BY COALESCE(d.dispatched_at, d.created_at) DESC NULLS LAST`,
+    [vendorId]
+  );
+
   const merged = [
     ...rdcRows.rows.map((row) => ({
       rdc_number: row.rdc_number,
@@ -662,7 +681,8 @@ async function listVendorReturns(req, res) {
       status: row.status,
       ttspl_ids: Array.isArray(row.ttspl_ids) ? row.ttspl_ids : [],
       ticket_id: null,
-      debit_note_number: null
+      debit_note_number: null,
+      return_type: 'laptop',
     })),
     ...replacedRows.rows.map((row) => ({
       rdc_number: row.rdc_number,
@@ -672,7 +692,8 @@ async function listVendorReturns(req, res) {
       status: row.status,
       ttspl_ids: Array.isArray(row.ttspl_ids) ? row.ttspl_ids : [],
       ticket_id: null,
-      debit_note_number: null
+      debit_note_number: null,
+      return_type: 'laptop',
     })),
     ...floorRows.rows.map((row) => ({
       rdc_number: row.rdc_number || `TKT-${row.ticket_id}`,
@@ -682,8 +703,20 @@ async function listVendorReturns(req, res) {
       status: row.status,
       ttspl_ids: row.ttspl ? [row.ttspl] : [],
       ticket_id: row.ticket_id,
-      debit_note_number: row.debit_note_number || null
-    }))
+      debit_note_number: row.debit_note_number || null,
+      return_type: 'laptop',
+    })),
+    ...partRows.rows.map((row) => ({
+      rdc_number: row.rdc_number,
+      return_date: row.return_date,
+      laptop_count: row.laptop_count,
+      reason: row.reason,
+      status: row.status,
+      ttspl_ids: Array.isArray(row.ttspl_ids) ? row.ttspl_ids.filter(Boolean) : [],
+      ticket_id: null,
+      debit_note_number: null,
+      return_type: 'part',
+    })),
   ].sort((a, b) => new Date(b.return_date || 0) - new Date(a.return_date || 0));
 
   res.json({

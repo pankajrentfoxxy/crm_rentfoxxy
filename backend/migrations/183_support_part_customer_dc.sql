@@ -41,7 +41,8 @@ ALTER TABLE part_instances DROP CONSTRAINT IF EXISTS part_instances_status_check
 ALTER TABLE part_instances ADD CONSTRAINT part_instances_status_check
   CHECK (status IN (
     'in_stock', 'reserved', 'in_transit', 'installed', 'defective',
-    'returned', 'discarded', 'sold', 'with_technician'
+    'returned', 'discarded', 'sold', 'with_technician',
+    'with_vendor_repair', 'qc_pending'
   ));
 
 -- 3. Document sequence for Part DC (PDC/26-27/NNNN)

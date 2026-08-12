@@ -24,6 +24,8 @@ import CustomerAssetsPage from './pages/CustomerAssetsPage';
 import PartsMovementHistoryPage from './pages/PartsMovementHistoryPage';
 import MasterDataDashboardPage from './pages/MasterDataDashboardPage';
 import TtsplHistorySearchPage from './pages/TtsplHistorySearchPage';
+import PartVendorRepairDcListPage from './pages/PartVendorRepairDcListPage';
+import PartVendorRepairDcDetailPage from './pages/PartVendorRepairDcDetailPage';
 
 const g = (section, node) => (
   <ProtectedRoute section={section} action="view">{node}</ProtectedRoute>
@@ -66,6 +68,8 @@ export default function InventoryManagementApp() {
         <Route path="parts" element={g('parts_inventory', <PartsPage />)} />
         <Route path="parts-approval" element={g('parts_inventory', <PartsApprovalPage />)} />
         <Route path="parts-history" element={g('parts_inventory', <PartsMovementHistoryPage />)} />
+        <Route path="part-vendor-repair" element={g('part_vendor_repair', <PartVendorRepairDcListPage />)} />
+        <Route path="part-vendor-repair/:dcNumber" element={g('part_vendor_repair', <PartVendorRepairDcDetailPage />)} />
         <Route path="serial-number-status" element={g('inventory_management', <SerialNumberStatusPage />)} />
         <Route path="universal-search" element={g('inventory_management', <UniversalSearchPage />)} />
         <Route path="npa-assets" element={g('inventory_management', <NpaAssetsPage />)} />

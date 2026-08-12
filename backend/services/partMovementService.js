@@ -18,6 +18,8 @@ const MOVEMENT = Object.freeze({
   RETURNED_GOOD: 'returned_good',
   ADJUSTED: 'adjusted',
   DISCARDED: 'discarded',
+  SENT_TO_VENDOR_REPAIR: 'sent_to_vendor_repair',
+  RECEIVED_FROM_VENDOR_REPAIR: 'received_from_vendor_repair',
 });
 
 // Resolved once per process. A deployment that has not run migration 178 keeps

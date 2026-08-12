@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { X, Loader2, Plus, Search, Check } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
@@ -6,6 +7,7 @@ import {
   addPartInstances,
   updatePartInstance,
 } from '../../floor-pipeline/partRequestsApi';
+import { createPartVendorReturnDc } from '../partVendorRepairApi';
 
 const STATUS_COLORS = {
   in_stock: 'bg-green-100 text-green-700',
@@ -16,6 +18,8 @@ const STATUS_COLORS = {
   discarded: 'bg-gray-100 text-gray-600',
   sold: 'bg-purple-100 text-purple-700',
   with_technician: 'bg-indigo-100 text-indigo-700',
+  with_vendor_repair: 'bg-orange-100 text-orange-800',
+  qc_pending: 'bg-yellow-100 text-yellow-800',
 };
 
 // Only free stock can be reclassified from the UI (workflow statuses are locked).
@@ -84,8 +88,11 @@ function UnitRow({ unit, onSaved }) {
   const [serial, setSerial] = useState(unit.serial_number || '');
   const [location, setLocation] = useState(unit.location_code || '');
   const [busy, setBusy] = useState(false);
+  const [returnOpen, setReturnOpen] = useState(false);
+  const [returnReason, setReturnReason] = useState('');
   const editable = EDITABLE.has(unit.status);
   const dirty = serial !== (unit.serial_number || '') || location !== (unit.location_code || '');
+  const canReturnToVendor = unit.status === 'defective' && !!unit.spo_id && !unit.vendor_repair_dc_number;
 
   const save = async (patch) => {
     setBusy(true);
@@ -95,6 +102,30 @@ function UnitRow({ unit, onSaved }) {
       onSaved?.();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Update failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitReturn = async () => {
+    const reason = returnReason.trim();
+    if (reason.length < 10) {
+      toast.error('Return reason must be at least 10 characters');
+      return;
+    }
+    setBusy(true);
+    try {
+      const { data } = await createPartVendorReturnDc({
+        instance_ids: [unit.instance_id],
+        remarks: reason,
+        item_remarks: { [unit.instance_id]: reason },
+      });
+      toast.success(`Created ${data.dc_number || 'vendor return DC'}`);
+      setReturnOpen(false);
+      setReturnReason('');
+      onSaved?.();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Return to vendor failed');
     } finally {
       setBusy(false);
     }
@@ -127,6 +158,14 @@ function UnitRow({ unit, onSaved }) {
       {unit.installed_ttspl_id && (
         <p className="mt-1 text-[11px] text-teal-700 font-mono">Installed on {unit.installed_ttspl_id}</p>
       )}
+      {unit.vendor_repair_dc_number && (
+        <p className="mt-1 text-[11px] text-orange-700">
+          On vendor DC{' '}
+          <Link className="underline font-semibold" to={`/inventory-management/part-vendor-repair/${encodeURIComponent(unit.vendor_repair_dc_number)}`}>
+            {unit.vendor_repair_dc_number}
+          </Link>
+        </p>
+      )}
       {editable && (
         <div className="mt-2 flex flex-wrap gap-2">
           {dirty && (
@@ -152,6 +191,37 @@ function UnitRow({ unit, onSaved }) {
               Restore to stock
             </button>
           )}
+          {canReturnToVendor && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setReturnOpen((v) => !v)}
+              className="rounded-lg border border-orange-300 text-orange-800 px-2.5 py-1 text-xs font-semibold disabled:opacity-50"
+            >
+              Return to Vendor
+            </button>
+          )}
+        </div>
+      )}
+      {returnOpen && (
+        <div className="mt-2 rounded-lg border border-orange-200 bg-orange-50 p-2 space-y-2">
+          <textarea
+            className="w-full rounded-lg border border-orange-200 px-2 py-1.5 text-xs"
+            rows={2}
+            placeholder="Reason (min 10 chars) — defective / DOA / wrong part / warranty…"
+            value={returnReason}
+            onChange={(e) => setReturnReason(e.target.value)}
+          />
+          <div className="flex gap-2">
+            <button type="button" disabled={busy} onClick={submitReturn}
+              className="rounded-lg bg-orange-700 text-white px-2.5 py-1 text-xs font-semibold disabled:opacity-50">
+              Confirm return
+            </button>
+            <button type="button" disabled={busy} onClick={() => setReturnOpen(false)}
+              className="rounded-lg border px-2.5 py-1 text-xs">
+              Cancel
+            </button>
+          </div>
         </div>
       )}
     </div>

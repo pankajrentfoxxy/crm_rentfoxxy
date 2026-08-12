@@ -1243,6 +1243,7 @@ exports.listPartInstances = async (req, res) => {
       `SELECT pi.instance_id, pi.prt_id, pi.serial_number, pi.part_id, pi.status, pi.location_code,
               pi.unit_cost, pi.notes, pi.installed_ttspl_id, pi.installed_ticket_id, pi.installed_at,
               pi.received_at, pi.created_at, pi.asset_code, pi.source, pi.spo_id, pi.grn_id,
+              pi.vendor_repair_dc_number,
               pi.removed_from_ttspl_id, pi.condition_on_removal,
               p.part_name, p.category, p.part_type,
               spo.purchase_order_number, spo.purchase_order_date,

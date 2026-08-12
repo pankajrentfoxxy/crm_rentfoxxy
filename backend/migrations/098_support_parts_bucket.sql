@@ -107,14 +107,15 @@ VALUES
   ('support_part_challan', 0, 'SPC-')
 ON CONFLICT (doc_type) DO NOTHING;
 
--- 5. Allow 'with_technician' status on part_instances
+-- 5. Allow technician + vendor-repair statuses on part_instances
 ALTER TABLE part_instances
   DROP CONSTRAINT IF EXISTS part_instances_status_check;
 ALTER TABLE part_instances
   ADD CONSTRAINT part_instances_status_check
   CHECK (status IN (
     'in_stock','reserved','installed','defective',
-    'returned','discarded','sold','with_technician'
+    'returned','discarded','sold','with_technician',
+    'in_transit','with_vendor_repair','qc_pending'
   ));
 
 -- 6. FK back-link from support_part_requests to challan

@@ -61,6 +61,7 @@ export const inventoryAccordionChildren = [
   { label: 'Parts Dashboard', path: '/inventory-management/parts-dashboard', section: 'parts_inventory' },
   { label: 'Parts Inventory', path: '/inventory-management/parts', section: 'parts_inventory' },
   { label: 'Parts Movement History', path: '/inventory-management/parts-history', section: 'parts_inventory' },
+  { label: 'Part Vendor Repair DC', path: '/inventory-management/part-vendor-repair', section: 'part_vendor_repair' },
   { label: 'Parts Approval', path: '/inventory-management/parts-approval', countKey: 'parts_pending', section: 'parts_inventory' },
   { label: 'Deployed Fleet (All Customers)', path: '/inventory-management/customer-assets', section: 'customer_inventory' },
   { label: 'TTSPL History', path: '/inventory-management/ttspl-history', section: 'ttspl_history' },
@@ -219,7 +220,7 @@ export const MENU_GROUPS = [
     items: [
       {
         type: 'inventoryAccordion',
-        sections: ['inventory', 'inventory_management', 'parts', 'parts_inventory', 'customer_inventory', 'ttspl_history'],
+        sections: ['inventory', 'inventory_management', 'parts', 'parts_inventory', 'part_vendor_repair', 'customer_inventory', 'ttspl_history'],
         section: 'inventory_management',
         icon: Package,
         label: 'Inventory',

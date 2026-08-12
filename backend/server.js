@@ -122,6 +122,7 @@ app.use('/api/companies', require('./routes/companies'));
 app.use('/api/asset-configuration', require('./routes/assetConfiguration'));
 app.use('/api/production-assets', require('./routes/productionAssets'));
 app.use('/api/vendor-repair', require('./routes/vendorRepair'));
+app.use('/api/part-vendor-repair', require('./routes/partVendorRepair'));
 app.use('/api/utils', require('./routes/utils'));
 
 // Health check

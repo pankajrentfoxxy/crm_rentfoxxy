@@ -20,7 +20,7 @@ export default function ReturnsPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-xl font-bold text-slate-900">Returns</h1>
-        <p className="text-sm text-slate-500 mt-1">Laptops returned to you via RDC</p>
+        <p className="text-sm text-slate-500 mt-1">Laptops and spare parts returned to you for repair or replacement</p>
       </div>
       {/* Mobile cards */}
       <div className="grid gap-3 md:hidden">
@@ -38,7 +38,7 @@ export default function ReturnsPage() {
               </div>
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
                 <span>{r.return_date ? new Date(r.return_date).toLocaleDateString() : '—'}</span>
-                <span>{r.laptop_count ?? ids.length ?? 0} laptop(s)</span>
+                <span>{r.laptop_count ?? ids.length ?? 0} {r.return_type === 'part' ? 'part(s)' : 'laptop(s)'}</span>
                 {r.ticket_id && <span className="font-mono">Ticket #{r.ticket_id}</span>}
                 {r.debit_note_number && <span className="font-mono">DN {r.debit_note_number}</span>}
               </div>

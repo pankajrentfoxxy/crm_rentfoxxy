@@ -597,4 +597,234 @@ async function generateVendorRepairReceivePdf(dcNumber, receiveDcNumber, itemIds
   return rel;
 }
 
-module.exports = { generateVendorRepairPdf, generateVendorRepairReceivePdf, loadCompany, formatCompanyBlock };
+async function loadPartDc(dcNumber) {
+  const headRes = await pool.query(
+    `SELECT d.*,
+            v.business_name AS vendor_business_name,
+            v.first_name AS vendor_first_name,
+            v.last_name AS vendor_last_name,
+            v.address AS vendor_reg_address,
+            v.city AS vendor_reg_city,
+            v.state AS vendor_reg_state,
+            v.pincode AS vendor_reg_pincode,
+            v.shipping_same AS vendor_shipping_same,
+            v.shipping_address AS vendor_ship_address,
+            v.shipping_city AS vendor_ship_city,
+            v.shipping_state AS vendor_ship_state,
+            v.shipping_pincode AS vendor_ship_pincode,
+            dt.first_name AS delivery_person_first_name,
+            dt.last_name AS delivery_person_last_name
+       FROM vendor_repair_delivery_challans d
+       LEFT JOIN vendors v ON v.vendor_id = d.vendor_id AND v.deleted_at IS NULL
+       LEFT JOIN delivery_technicians dt ON dt.technician_id = d.delivery_person_id
+      WHERE d.dc_number = $1
+        AND COALESCE(d.item_domain, 'laptop') = 'part'`,
+    [dcNumber]
+  );
+  const head = headRes.rows[0];
+  if (!head) return null;
+  const itemsRes = await pool.query(
+    `SELECT * FROM vendor_repair_dc_part_items WHERE dc_number = $1 ORDER BY id ASC`,
+    [dcNumber]
+  );
+  const vendorMaster = head.vendor_id ? {
+    business_name: head.vendor_business_name,
+    first_name: head.vendor_first_name,
+    last_name: head.vendor_last_name,
+    address: head.vendor_reg_address,
+    city: head.vendor_reg_city,
+    state: head.vendor_reg_state,
+    pincode: head.vendor_reg_pincode,
+    shipping_same: head.vendor_shipping_same,
+    shipping_address: head.vendor_ship_address,
+    shipping_city: head.vendor_ship_city,
+    shipping_state: head.vendor_ship_state,
+    shipping_pincode: head.vendor_ship_pincode,
+  } : null;
+  return {
+    ...head,
+    items: itemsRes.rows,
+    vendor_billing_display: formatVendorBillingFromRow(vendorMaster) || head.vendor_address || head.vendor_name,
+    vendor_shipping_display: formatVendorShippingFromRow(vendorMaster) || head.shipping_address || head.vendor_address,
+  };
+}
+
+function writePartItemsTable(doc, y, items) {
+  const L = 40;
+  const R = 555;
+  const W = R - L;
+
+  doc.font('Helvetica-Bold').fontSize(11).fillColor(C.ink).text('Spare Parts', L, y);
+  y += 14;
+
+  const cols = [
+    { label: 'PRT / Part', w: 175 },
+    { label: 'Serial', w: 90 },
+    { label: 'HSN', w: 50 },
+    { label: 'Price', w: 60 },
+    { label: 'Remarks', w: W - 375 },
+  ];
+
+  const drawHeader = (yy) => {
+    doc.rect(L, yy, W, 22).fill(C.teal);
+    let cx = L;
+    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(8);
+    for (const c of cols) {
+      doc.text(c.label, cx + 4, yy + 7, { width: c.w - 8 });
+      cx += c.w;
+    }
+    return yy + 22;
+  };
+
+  y = drawHeader(y);
+
+  for (const item of items || []) {
+    const rowH = 42;
+    if (y + rowH > 760) {
+      doc.addPage();
+      y = 40;
+      y = drawHeader(y);
+    }
+    let cx = L;
+    for (const c of cols) {
+      doc.rect(cx, y, c.w, rowH).strokeColor(C.line).lineWidth(0.6).stroke();
+      cx += c.w;
+    }
+    const price = item.price != null && Number.isFinite(Number(item.price))
+      ? `Rs ${Number(item.price).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
+      : '—';
+    const hsn = resolveHsnForDisplay(item.hsn_code, { transactionType: 'repair' }) || item.hsn_code || '—';
+
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(C.ink)
+      .text(item.prt_id || '—', L + 4, y + 6, { width: cols[0].w - 8 });
+    doc.font('Helvetica').fontSize(7.5).fillColor(C.sub)
+      .text(item.part_name || '—', L + 4, y + 18, { width: cols[0].w - 8 });
+
+    let x = L + cols[0].w;
+    doc.font('Helvetica').fontSize(8).fillColor(C.ink)
+      .text(item.serial_number || '—', x + 4, y + 14, { width: cols[1].w - 8 });
+    x += cols[1].w;
+    doc.text(String(hsn), x + 4, y + 14, { width: cols[2].w - 8, align: 'center' });
+    x += cols[2].w;
+    doc.text(price, x + 4, y + 14, { width: cols[3].w - 8, align: 'right' });
+    x += cols[3].w;
+    doc.font('Helvetica').fontSize(7.5).fillColor(C.ink)
+      .text(item.item_remarks || '—', x + 4, y + 8, { width: cols[4].w - 8 });
+
+    y += rowH;
+  }
+  return y + 10;
+}
+
+/**
+ * Dispatch PDF for part-domain VRDC — for technician to carry when sending parts to vendor.
+ */
+async function generatePartVendorRepairPdf(dcNumber) {
+  const dc = await loadPartDc(dcNumber);
+  if (!dc) return null;
+
+  const company = await loadCompany();
+  const vendorBilling = dc.vendor_billing_display || dc.vendor_address || dc.vendor_name || '—';
+  const vendorShipping = dc.vendor_shipping_display || dc.shipping_address || dc.vendor_address || '—';
+
+  const dir = path.join(__dirname, '../uploads/vendor-repair');
+  fs.mkdirSync(dir, { recursive: true });
+  const safe = String(dcNumber).replace(/[^\w-]+/g, '_');
+  const rel = `vendor-repair/VRDC_PART_${safe}.pdf`;
+  const abs = path.join(__dirname, '../uploads', rel);
+
+  await new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ margin: 40, size: 'A4' });
+    const stream = fs.createWriteStream(abs);
+    doc.pipe(stream);
+
+    let y = drawCompanyHeader(doc, company, {
+      docTitle: 'Vendor Part Return — Delivery Challan',
+      docNumber: dc.dc_number,
+      rightLabel: 'Part Dispatch DC',
+      rightValue: dc.dc_number,
+    });
+
+    doc.font('Helvetica').fontSize(9).fillColor(C.sub);
+    const deliveryLabel = dc.vendor_delivered_at
+      ? `Delivered to vendor: ${formatPdfDateIstOrDash(dc.vendor_delivered_at)}`
+      : (dc.dispatched_at ? 'In transit to vendor' : 'Pending dispatch');
+    doc.text(`Status: ${dc.status || '—'} · ${deliveryLabel}`, 40, y);
+    doc.text(`Out Date: ${formatPdfDateIstOrDash(dc.out_date || dc.dispatched_at || dc.created_at)}`, 40, y + 12);
+    doc.text(`Expected Return: ${formatPdfDateIstOrDash(dc.expected_return_date)}`, 280, y + 12);
+    y += 28;
+    doc.font('Helvetica').fontSize(9).fillColor(C.ink)
+      .text(
+        `E-way Bill: ${dc.eway_bill_number || '—'}${dc.eway_bill_number && dc.eway_bill_date ? ` · Date: ${formatPdfDateIstOrDash(dc.eway_bill_date)}` : ''}`,
+        40,
+        y
+      );
+    y += 14;
+
+    y = drawDispatchTags(doc, y, dispatchTagsForDc(dc));
+    y = writeVendorAddressBoxes(doc, y, vendorBilling, vendorShipping);
+
+    doc.font('Helvetica').fontSize(9).fillColor(C.ink);
+    doc.text(`Vendor: ${dc.vendor_name || '—'}`, 40, y);
+    y += 12;
+    doc.text(`Contact: ${dc.contact_person || '—'} · ${dc.contact_mobile || '—'}`, 40, y);
+    y += 12;
+    if (dc.warehouse_name) {
+      doc.text(`From warehouse: ${dc.warehouse_name}`, 40, y);
+      y += 12;
+    }
+    const techName = [dc.delivery_person_first_name, dc.delivery_person_last_name].filter(Boolean).join(' ');
+    if (techName) {
+      doc.text(`Delivery technician: ${techName}`, 40, y);
+      y += 12;
+    }
+    y += 6;
+
+    y = writePartItemsTable(doc, y, dc.items);
+
+    const totalDeclared = (dc.items || []).reduce((sum, it) => {
+      const n = Number(it.price);
+      return sum + (Number.isFinite(n) ? n : 0);
+    }, 0);
+    if (totalDeclared > 0) {
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink)
+        .text(
+          `Total declared value: Rs ${totalDeclared.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`,
+          40,
+          y,
+          { width: 515, align: 'right' }
+        );
+      y += 16;
+    }
+    if (dc.remarks) {
+      y += 4;
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(C.ink).text('DC Remarks:', 40, y);
+      doc.font('Helvetica').fontSize(9).text(dc.remarks, 40, y + 12, { width: 515 });
+      y += 28;
+    }
+
+    y = drawDispatchSignatures(doc, y, dc);
+
+    doc.font('Helvetica').fontSize(8).fillColor(C.sub)
+      .text('Carry this challan with the parts when sending to the vendor.', 40, Math.min(y + 8, 780), { width: 515 });
+
+    doc.end();
+    stream.on('finish', resolve);
+    stream.on('error', reject);
+  });
+
+  await pool.query(
+    `UPDATE vendor_repair_delivery_challans SET pdf_path = $2, updated_at = NOW() WHERE dc_number = $1`,
+    [dcNumber, rel]
+  ).catch(() => {});
+
+  return rel;
+}
+
+module.exports = {
+  generateVendorRepairPdf,
+  generateVendorRepairReceivePdf,
+  generatePartVendorRepairPdf,
+  loadCompany,
+  formatCompanyBlock,
+};
