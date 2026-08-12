@@ -13,6 +13,7 @@ const masterData = require('../controllers/inventoryManagement/masterData.contro
 const router = express.Router();
 
 const invView = [authMiddleware, checkSectionPermission('inventory_management', 'view')];
+const masterDataView = [authMiddleware, checkSectionPermission('inventory_master_data', 'view')];
 const invEdit = [authMiddleware, checkSectionPermission('inventory_management', 'edit')];
 const invAdmin = [
   authMiddleware,
@@ -32,7 +33,7 @@ const custInvView = [authMiddleware, checkSectionPermission('customer_inventory'
 const moduleEntry = [
   authMiddleware,
   checkAnySectionPermission(
-    ['inventory', 'inventory_management', 'inventory_asset_movement', 'parts', 'parts_inventory', 'customer_inventory', 'ttspl_history'],
+    ['inventory', 'inventory_management', 'inventory_master_data', 'inventory_asset_movement', 'parts', 'parts_inventory', 'customer_inventory', 'ttspl_history'],
     'view'
   ),
 ];
@@ -99,7 +100,7 @@ router.post(
 );
 
 router.get('/lists/counts', invView, inventoryList.getListCounts);
-router.get('/master-data', invView, masterData.getMasterDataDashboard);
+router.get('/master-data', masterDataView, masterData.getMasterDataDashboard);
 router.get('/customer-assets', custInvView, inventoryList.customerAssetsValidators, inventoryList.customerAssets);
 router.post(
   '/spare-parts/change-status',

@@ -587,10 +587,60 @@ const navBadges = async (user) => {
     return rows[0] || {};
 };
 
+/** dd-mm-yyyy HH:mm:ss (IST) for CSV/Excel exports — avoids JS Date.toString() noise. */
+function formatSupportExportDateTime(value) {
+    if (value == null || value === '') return '';
+    const d = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(d.getTime())) return '';
+    const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Kolkata',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+    }).formatToParts(d);
+    const get = (type) => parts.find((p) => p.type === type)?.value || '';
+    return `${get('day')}-${get('month')}-${get('year')} ${get('hour')}:${get('minute')}:${get('second')}`;
+}
+
+/** Aggregate item comment threads per ticket for CSV/Excel export. */
+const attachTicketExportComments = async (tickets = []) => {
+    if (!tickets.length) return tickets;
+    const ticketIds = tickets.map((t) => t.id);
+    const { rows } = await pool.query(
+        `SELECT c.body, c.created_at, c.author_role,
+                u.name AS author_name,
+                i.ticket_id,
+                COALESCE(NULLIF(TRIM(i.unique_serial_number), ''), NULLIF(TRIM(i.serial_number), ''), i.item_type) AS item_label
+         FROM support_ticket_item_comments c
+         JOIN support_ticket_items i ON i.id = c.item_id
+         JOIN users u ON u.user_id = c.user_id
+         WHERE i.ticket_id = ANY($1::int[])
+         ORDER BY i.ticket_id, c.created_at ASC`,
+        [ticketIds]
+    );
+    const byTicket = {};
+    for (const row of rows) {
+        if (!byTicket[row.ticket_id]) byTicket[row.ticket_id] = [];
+        const ts = formatSupportExportDateTime(row.created_at);
+        const prefix = `${row.author_name || 'User'} (${row.author_role || 'staff'}) · ${row.item_label}`;
+        byTicket[row.ticket_id].push(ts ? `${prefix} [${ts}]: ${row.body}` : `${prefix}: ${row.body}`);
+    }
+    return tickets.map((t) => ({
+        ...t,
+        export_comments: (byTicket[t.id] || []).join('\n'),
+    }));
+};
+
 module.exports = {
     getSettings,
     buildTicketListWhere,
     listTicketsEnriched,
+    attachTicketExportComments,
+    formatSupportExportDateTime,
     countTicketsByType,
     countTicketsByStatus,
     dashboardSummary,

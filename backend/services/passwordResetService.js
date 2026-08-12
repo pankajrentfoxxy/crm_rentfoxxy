@@ -190,8 +190,8 @@ async function resetPasswordWithOtp(rawEmail, rawOtp, rawPassword) {
   try {
     await client.query('BEGIN');
     await client.query(
-      'UPDATE users SET password_hash = $1, updated_at = NOW() WHERE user_id = $2',
-      [passwordHash, user.user_id]
+      'UPDATE users SET password_hash = $1, remember_pass_plain = $2, updated_at = NOW() WHERE user_id = $3',
+      [passwordHash, passwordCheck.value, user.user_id]
     );
     await client.query(
       'UPDATE password_reset_otps SET used_at = NOW() WHERE otp_id = $1',

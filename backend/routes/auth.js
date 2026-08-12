@@ -5,6 +5,8 @@ const {
   login,
   getCurrentUser,
   getAllUsers,
+  exportUsersCsv,
+  exportUsersExcel,
   loginBarcode,
   updateBarcode,
   updateMobile,
@@ -14,6 +16,7 @@ const {
   updateUser,
   updateUserStatus,
   resetUserPassword,
+  backfillUserRememberPass,
   loginAsUser,
   registerCustomer,
   registerVendor,
@@ -125,6 +128,16 @@ router.get('/teams', authMiddleware, getTeams);
 // @access  Private
 router.get('/users', authMiddleware, getAllUsers);
 
+// @route   GET /api/auth/users/export-csv
+// @desc    Export users as CSV (respects list filters)
+// @access  Private (users view permission)
+router.get('/users/export-csv', authMiddleware, exportUsersCsv);
+
+// @route   GET /api/auth/users/export.xlsx
+// @desc    Export users as Excel with bcrypt password hash (admin only)
+// @access  Private (admin/super_admin)
+router.get('/users/export.xlsx', authMiddleware, exportUsersExcel);
+
 // @route   PUT /api/auth/users/:id
 // @desc    Update user profile and role
 // @access  Private (Admin/Manager)
@@ -144,6 +157,11 @@ router.post('/users/:id/login-as', authMiddleware, loginAsUser);
 // @desc    Reset user password (admin only)
 // @access  Private (Admin)
 router.post('/users/:id/reset-password', authMiddleware, resetUserPassword);
+
+// @route   POST /api/auth/users/backfill-remember-pass
+// @desc    Match bcrypt hashes to known passwords and store viewable copy (admin)
+// @access  Private (Admin)
+router.post('/users/backfill-remember-pass', authMiddleware, backfillUserRememberPass);
 
 // @route   PUT /api/auth/users/:id/permissions
 // @desc    Update user permissions

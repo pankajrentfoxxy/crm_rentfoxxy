@@ -16,7 +16,7 @@ import {
   resetUserPermissions,
   saveUserPermissions,
 } from '../../../utils/rbacApi';
-import { visibleRolePermissionSections } from '../../../constants/sections';
+import { mergeRbacSectionList } from '../../../constants/sections';
 
 export default function UserPermissionsPage() {
   const { user, refreshPermissions } = useAuth();
@@ -84,11 +84,7 @@ export default function UserPermissionsPage() {
     setLoadingPerms(true);
     try {
       const data = await fetchUserPermissions(userId);
-      const sectionList = visibleRolePermissionSections(
-        data.sections?.length
-          ? data.sections.map((s) => (typeof s === 'string' ? s : s.section))
-          : RBAC_SECTIONS
-      );
+      const sectionList = mergeRbacSectionList(data.sections);
       setSections(sectionList);
       setSelectedUser(data.user);
 

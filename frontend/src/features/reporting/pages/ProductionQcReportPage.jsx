@@ -1,9 +1,16 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ClipboardCheck, Download, Eye, Loader2, Search, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { PageHeader, Button, ResponsiveTable, DateRangeFilter } from '../../../components/ui/primitives';
 import { useUrlFilters, useDebouncedUrlSearch } from '../../../hooks/useUrlFilters';
+import InventorySpecMultiFilterBar from '../../inventory-management/components/InventorySpecMultiFilterBar';
+import {
+  EMPTY_SPEC_FILTERS,
+  SPEC_FILTER_KEYS,
+  specMultiFiltersToParams,
+} from '../../inventory-management/inventorySpecFilters';
+import useDebouncedSpecParams from '../../inventory-management/hooks/useDebouncedSpecParams';
 import {
   getProductionQcReport,
   getProductionQcReportDetail,
@@ -22,7 +29,10 @@ async function savePdfBlob(blob, fallbackName) {
   a.remove();
   URL.revokeObjectURL(url);
 }
+
 const PAGE_SIZE = 25;
+const FILTER_CTL = 'border border-slate-200 rounded-lg bg-white text-sm min-h-[36px] px-2.5 py-1.5';
+
 const FILTER_DEFAULTS = {
   page: 1,
   search: '',
@@ -31,11 +41,7 @@ const FILTER_DEFAULTS = {
   technicianId: '',
   stage: '',
   qcStatus: '',
-  ttspl: '',
-  serial: '',
-  brand: '',
-  model: '',
-  customer: '',
+  ...EMPTY_SPEC_FILTERS,
 };
 
 function formatDateTime(value) {
@@ -213,12 +219,14 @@ function DetailModal({ historyId, onClose, onOpenAttempt }) {
                 </div>
               </div>
 
-              <div className="text-xs text-slate-500">
-                Ticket{' '}
-                <Link to={`/floor-pipeline/tickets/${detail.ticket_id}`} className="text-blue-600 underline">
-                  #{detail.ticket_id}
-                </Link>
-              </div>
+              {detail.ticket_id && (
+                <div className="text-xs text-slate-500">
+                  Ticket{' '}
+                  <Link to={`/floor-pipeline/tickets/${detail.ticket_id}`} className="text-blue-600 underline">
+                    #{detail.ticket_id}
+                  </Link>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -230,45 +238,53 @@ function DetailModal({ historyId, onClose, onOpenAttempt }) {
 export default function ProductionQcReportPage() {
   const { filters, setFilters } = useUrlFilters(FILTER_DEFAULTS);
   const {
-    page, dateFrom, dateTo, technicianId, stage, qcStatus,
-    ttspl, serial, brand, model, customer,
+    page,
+    dateFrom,
+    dateTo,
+    technicianId,
+    stage,
+    qcStatus,
   } = filters;
   const { searchInput, setSearchInput, debouncedSearch: search } = useDebouncedUrlSearch(filters, setFilters);
+
+  const specFilters = useMemo(() => {
+    const out = { ...EMPTY_SPEC_FILTERS };
+    SPEC_FILTER_KEYS.forEach((k) => { out[k] = filters[k] || ''; });
+    return out;
+  }, [filters]);
+  const debouncedSpecParams = useDebouncedSpecParams(specFilters);
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
-  const [meta, setMeta] = useState({ technicians: [], stages: [], qc_statuses: ['PASS', 'FAIL'] });
   const [detailId, setDetailId] = useState(null);
+  const [filterOptions, setFilterOptions] = useState({ technicians: [], stages: [], qc_statuses: [] });
 
   useEffect(() => {
     getProductionQcReportFilters()
-      .then((res) => setMeta({
-        technicians: res.data?.technicians || [],
-        stages: res.data?.stages || [],
-        qc_statuses: res.data?.qc_statuses || ['PASS', 'FAIL'],
-      }))
+      .then((res) => {
+        setFilterOptions(res.data?.data || { technicians: [], stages: [], qc_statuses: [] });
+      })
       .catch(() => {});
   }, []);
+
+  const listParams = useMemo(() => ({
+    page,
+    limit: PAGE_SIZE,
+    search: search || undefined,
+    date_from: dateFrom || undefined,
+    date_to: dateTo || undefined,
+    technician_id: technicianId || undefined,
+    stage: stage || undefined,
+    qc_status: qcStatus || undefined,
+    ...specMultiFiltersToParams(debouncedSpecParams),
+  }), [page, search, dateFrom, dateTo, technicianId, stage, qcStatus, debouncedSpecParams]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await getProductionQcReport({
-        page,
-        limit: PAGE_SIZE,
-        date_from: dateFrom || undefined,
-        date_to: dateTo || undefined,
-        technician_id: technicianId || undefined,
-        stage: stage || undefined,
-        qc_status: qcStatus || undefined,
-        ttspl: ttspl || search || undefined,
-        serial: serial || undefined,
-        brand: brand || undefined,
-        model: model || undefined,
-        customer: customer || undefined,
-      });
+      const res = await getProductionQcReport(listParams);
       setRows(res.data?.rows || []);
       setPagination(res.data?.pagination || { page: 1, totalPages: 1, total: 0 });
     } catch (err) {
@@ -276,27 +292,19 @@ export default function ProductionQcReportPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, dateFrom, dateTo, technicianId, stage, qcStatus, ttspl, serial, brand, model, customer, search]);
+  }, [listParams]);
 
   useEffect(() => { load(); }, [load]);
-
-  const reportQuery = {
-    date_from: dateFrom || undefined,
-    date_to: dateTo || undefined,
-    technician_id: technicianId || undefined,
-    stage: stage || undefined,
-    qc_status: qcStatus || undefined,
-    ttspl: ttspl || search || undefined,
-    serial: serial || undefined,
-    brand: brand || undefined,
-    model: model || undefined,
-    customer: customer || undefined,
-  };
 
   const handleListPdf = async () => {
     setPdfBusy(true);
     try {
-      const res = await downloadProductionQcReportPdf(reportQuery);
+      const res = await downloadProductionQcReportPdf({
+        ...listParams,
+        for_export: true,
+        page: 1,
+        limit: 2000,
+      });
       const date = new Date().toISOString().slice(0, 10);
       await savePdfBlob(res.data, `production-qc-report_${date}.pdf`);
       toast.success('PDF downloaded');
@@ -355,7 +363,7 @@ export default function ProductionQcReportPage() {
     <div className="p-4 md:p-6 max-w-7xl mx-auto">
       <PageHeader
         title="Production QC Report"
-        subtitle="Technician QC checklist history for each laptop (re-QC keeps prior attempts)"
+        subtitle="Search and filter completed QC by date, technician, stage, status, and specs"
         icon={ClipboardCheck}
         actions={(
           <Button
@@ -370,85 +378,72 @@ export default function ProductionQcReportPage() {
         )}
       />
 
-      <div className="flex flex-wrap gap-2 mb-4">
-        <div className="relative flex-1 min-w-[200px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-          <input
-            type="search"
-            placeholder="Search TTSPL…"
-            value={searchInput || ttspl}
-            onChange={(e) => {
-              setSearchInput(e.target.value);
-              setFilters({ ttspl: e.target.value, page: 1 });
-            }}
-            className="w-full border border-gray-200 rounded-lg pl-9 pr-3 py-2 text-sm min-h-[40px]"
-          />
-        </div>
-        <DateRangeFilter
-          dateFrom={dateFrom}
-          dateTo={dateTo}
-          onRangeChange={(range) => setFilters({ ...range, page: 1 })}
-          onDateFromChange={(v) => setFilters({ dateFrom: v, page: 1 })}
-          onDateToChange={(v) => setFilters({ dateTo: v, page: 1 })}
-          fromLabel="QC from"
-          toLabel="QC to"
-        />
-        <select
-          value={technicianId}
-          onChange={(e) => setFilters({ technicianId: e.target.value, page: 1 })}
-          className="border border-gray-200 rounded-lg px-3 py-2 text-sm"
-        >
-          <option value="">All technicians</option>
-          {meta.technicians.map((t) => (
-            <option key={t.user_id} value={t.user_id}>{t.name}</option>
-          ))}
-        </select>
-        <select
-          value={stage}
-          onChange={(e) => setFilters({ stage: e.target.value, page: 1 })}
-          className="border border-gray-200 rounded-lg px-3 py-2 text-sm"
-        >
-          <option value="">All stages</option>
-          {meta.stages.map((s) => (
-            <option key={s} value={s}>{s}</option>
-          ))}
-        </select>
-        <select
-          value={qcStatus}
-          onChange={(e) => setFilters({ qcStatus: e.target.value, page: 1 })}
-          className="border border-gray-200 rounded-lg px-3 py-2 text-sm"
-        >
-          <option value="">All QC status</option>
-          {meta.qc_statuses.map((s) => (
-            <option key={s} value={s}>{s}</option>
-          ))}
-        </select>
-      </div>
+      <div className="mb-3 space-y-2">
+        <div className="flex flex-wrap items-end gap-2 rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm">
+          <div className="relative min-w-[12rem] flex-1 max-w-md">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              type="search"
+              placeholder="Search TTSPL, serial, brand, model, customer…"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              className={`${FILTER_CTL} w-full pl-8`}
+            />
+          </div>
 
-      <div className="flex flex-wrap gap-2 mb-4">
-        <input
-          placeholder="Serial number"
-          value={serial}
-          onChange={(e) => setFilters({ serial: e.target.value, page: 1 })}
-          className="border border-gray-200 rounded-lg px-3 py-2 text-sm min-w-[140px]"
-        />
-        <input
-          placeholder="Brand"
-          value={brand}
-          onChange={(e) => setFilters({ brand: e.target.value, page: 1 })}
-          className="border border-gray-200 rounded-lg px-3 py-2 text-sm min-w-[120px]"
-        />
-        <input
-          placeholder="Model"
-          value={model}
-          onChange={(e) => setFilters({ model: e.target.value, page: 1 })}
-          className="border border-gray-200 rounded-lg px-3 py-2 text-sm min-w-[120px]"
-        />
-        <input
-          placeholder="Customer / Vendor"
-          value={customer}
-          onChange={(e) => setFilters({ customer: e.target.value, page: 1 })}
-          className="border border-gray-200 rounded-lg px-3 py-2 text-sm min-w-[160px]"
+          <DateRangeFilter
+            layout="inline"
+            controlClassName="h-9 px-2 text-sm min-h-0"
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            onRangeChange={(range) => setFilters(range)}
+            onDateFromChange={(v) => setFilters({ dateFrom: v })}
+            onDateToChange={(v) => setFilters({ dateTo: v })}
+            fromLabel="QC from"
+            toLabel="QC to"
+          />
+
+          <select
+            className={`${FILTER_CTL} min-w-[9rem] max-w-[11rem]`}
+            value={technicianId}
+            onChange={(e) => setFilters({ technicianId: e.target.value })}
+            aria-label="Technician"
+          >
+            <option value="">All technicians</option>
+            {(filterOptions.technicians || []).map((t) => (
+              <option key={t.user_id} value={String(t.user_id)}>{t.name}</option>
+            ))}
+          </select>
+
+          <select
+            className={`${FILTER_CTL} min-w-[8rem] max-w-[10rem]`}
+            value={stage}
+            onChange={(e) => setFilters({ stage: e.target.value })}
+            aria-label="QC stage"
+          >
+            <option value="">All QC stages</option>
+            {(filterOptions.stages || []).map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+
+          <select
+            className={`${FILTER_CTL} min-w-[7.5rem] max-w-[9rem]`}
+            value={qcStatus}
+            onChange={(e) => setFilters({ qcStatus: e.target.value })}
+            aria-label="QC status"
+          >
+            <option value="">All QC status</option>
+            {(filterOptions.qc_statuses || ['PASS', 'FAIL']).map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+        </div>
+
+        <InventorySpecMultiFilterBar
+          filters={specFilters}
+          onChange={(patch) => setFilters(patch)}
+          onClear={() => setFilters(Object.fromEntries(SPEC_FILTER_KEYS.map((k) => [k, ''])))}
         />
       </div>
 

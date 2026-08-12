@@ -124,7 +124,7 @@ export const leadCrmAccordionChildren = [
 ];
 
 export const masterDataMenuItems = [
-  { icon: LayoutDashboard, label: 'Master Data Dashboard', path: '/inventory-management/master-data', section: 'inventory_management' },
+  { icon: LayoutDashboard, label: 'Master Data Dashboard', path: '/inventory-management/master-data', section: 'inventory_master_data' },
   { icon: Users, label: 'Customers', path: '/lead-crm/customers', section: 'customers' },
   { icon: Building2, label: 'Vendors', path: '/vendor-management/vendors', section: 'vendor_management' },
 ];

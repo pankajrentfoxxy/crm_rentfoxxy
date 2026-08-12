@@ -38,6 +38,7 @@ export const APPLICATION_SECTIONS = [
   'tickets',
   'inventory',
   'inventory_management',
+  'inventory_master_data',
   'inventory_asset_movement',
   'parts',
   'parts_inventory',
@@ -60,6 +61,7 @@ export const APPLICATION_SECTIONS = [
   'reports',
   'reports_access',
   'reports_export',
+  'production_qc_report',
   'manager_dashboard',
   'users',
   'teams',
@@ -109,6 +111,7 @@ export const SECTION_LABELS = {
   tickets: 'Tickets (Legacy)',
   inventory: 'Inventory',
   inventory_management: 'Inventory Management',
+  inventory_master_data: 'Master Data Dashboard',
   inventory_asset_movement: 'Inventory — Asset Movement',
   parts: 'Parts (Legacy)',
   parts_inventory: 'Parts Inventory',
@@ -131,6 +134,7 @@ export const SECTION_LABELS = {
   reports: 'Reports',
   reports_access: 'Reports Access',
   reports_export: 'Export Reports',
+  production_qc_report: 'Production QC Report',
   manager_dashboard: 'Manager Dashboard',
   users: 'User Management',
   teams: 'Team Management',
@@ -150,6 +154,7 @@ export const SECTION_GROUPS = {
     'delivery_register_management', 'delivery_register_otp', 'technician_bucket', 'delivery_technicians', 'delivery_my_deliveries', 'technicians_bucket_list', 'payment_records',
   ],
   'Vendor & Procurement': ['vendor_management', 'procurement', 'sales_pipeline'],
+  'Master Data': ['inventory_master_data'],
   'Floor & Quality': ['floor_pipeline', 'floor_tickets', 'floor_ticket_config_edit', 'chip_level_repair', 'qc_management', 'dispatch_qc', 'pending_inventory', 'tickets'],
   'Inventory & Parts': [
     'inventory', 'inventory_management', 'inventory_asset_movement', 'parts', 'parts_inventory', 'customer_inventory', 'ttspl_history',
@@ -160,7 +165,7 @@ export const SECTION_GROUPS = {
     'security_deposits', 'billing_dashboard', 'einvoice_ewb',
   ],
   Support: ['support_tickets', 'support_settings', 'support_technician'],
-  'Reports & Analytics': ['reports', 'reports_access', 'reports_export', 'manager_dashboard'],
+  'Reports & Analytics': ['reports', 'reports_access', 'reports_export', 'production_qc_report', 'manager_dashboard'],
   'Settings & Admin': ['users', 'teams', 'roles', 'role_permissions', 'user_permissions', 'company_settings', 'asset_configuration'],
 };
 
@@ -168,6 +173,7 @@ export const GROUP_COLORS = {
   Core: 'text-gray-600 border-gray-200',
   'Lead & Sales CRM': 'text-blue-600 border-blue-200',
   'Vendor & Procurement': 'text-emerald-600 border-emerald-200',
+  'Master Data': 'text-purple-600 border-purple-200',
   'Floor & Quality': 'text-indigo-600 border-indigo-200',
   'Inventory & Parts': 'text-teal-600 border-teal-200',
   'Warehouse & Dispatch': 'text-sky-600 border-sky-200',
@@ -191,6 +197,14 @@ export function isHiddenRolePermissionSection(section) {
 
 export function visibleRolePermissionSections(sections) {
   return (sections || []).filter((s) => !isHiddenRolePermissionSection(s));
+}
+
+/** Merge API section keys with the frontend catalog so new modules always appear in RBAC UI. */
+export function mergeRbacSectionList(apiSections) {
+  const fromApi = (apiSections || [])
+    .map((s) => (typeof s === 'string' ? s : s?.section))
+    .filter(Boolean);
+  return visibleRolePermissionSections([...new Set([...APPLICATION_SECTIONS, ...fromApi])]);
 }
 
 export const ACTION_ALIASES = {

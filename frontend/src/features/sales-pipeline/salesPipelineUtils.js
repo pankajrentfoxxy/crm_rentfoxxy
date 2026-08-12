@@ -1,3 +1,5 @@
+import { salesOrderDetailPath, salesOrderListPath } from './salesOrderScope';
+
 export const PRIMARY = '#2563EB';
 
 export {
@@ -62,12 +64,47 @@ export function formatDate(d) {
 }
 
 /** CRM route — SO numbers may contain slashes (e.g. SO/26-27/0590). */
-export { salesOrderDetailPath, salesOrderListPath } from './salesOrderScope';
+export { salesOrderDetailPath, salesOrderListPath };
 
 /** CRM route — DC numbers may contain slashes (e.g. DC/26-27/0765). */
 export function deliveryChallanDetailPath(dcNumber) {
   if (!dcNumber) return '/sales-pipeline/delivery-challans';
   return `/sales-pipeline/delivery-challans/${encodeURIComponent(dcNumber)}`;
+}
+
+/** Router state when opening a DC from a sales order detail page. */
+export const DC_NAV_SOURCE_SALES_ORDER = 'sales-order';
+
+export function salesOrderDcNavState({ salesOrderNumber, soScope, returnTab = 'dcs' } = {}) {
+  if (!salesOrderNumber) return undefined;
+  return {
+    from: DC_NAV_SOURCE_SALES_ORDER,
+    salesOrderNumber,
+    soScope: soScope || null,
+    returnTab: returnTab || 'dcs',
+  };
+}
+
+/** Link target for DC detail — optional SO back-navigation state. */
+export function deliveryChallanDetailTo(dcNumber, navState) {
+  const pathname = deliveryChallanDetailPath(dcNumber);
+  if (!navState) return pathname;
+  return { pathname, state: navState };
+}
+
+/** Resolve Back target from DC detail when opened via sales order. */
+export function resolveDcBackNavigation(locationState) {
+  const nav = locationState || {};
+  if (nav.from === DC_NAV_SOURCE_SALES_ORDER && nav.salesOrderNumber) {
+    return {
+      path: salesOrderDetailPath(nav.salesOrderNumber, nav.soScope),
+      state: nav.returnTab ? { tab: nav.returnTab } : undefined,
+    };
+  }
+  if (typeof nav.from === 'string' && nav.from.startsWith('/')) {
+    return { path: nav.from };
+  }
+  return null;
 }
 
 export function formatDateTime(d) {

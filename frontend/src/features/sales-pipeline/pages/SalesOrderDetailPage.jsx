@@ -18,7 +18,7 @@ import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
 import { canEditSoLineRateConfig, canPartialCancelSalesOrder, canViewAnySection } from '../../../utils/permissionHelper';
 import usePermission from '../../../hooks/usePermission';
-import { formatConfig, formatCurrency, formatDate, salesOrderTypeLabel, salesOrderTypeStyle, salesOrderStatusLabel, deliveryChallanDetailPath, parseDeliveryAddress, formatDeliveryAddressLine, deliveryAddressPhone, formatSupplyStateLabel, resolveSupplyStateFromShipping } from '../salesPipelineUtils';
+import { formatConfig, formatCurrency, formatDate, salesOrderTypeLabel, salesOrderTypeStyle, salesOrderStatusLabel, deliveryChallanDetailTo, salesOrderDcNavState, parseDeliveryAddress, formatDeliveryAddressLine, deliveryAddressPhone, formatSupplyStateLabel, resolveSupplyStateFromShipping } from '../salesPipelineUtils';
 import { getSoScopeConfig, orderMatchesScope, salesOrderListPath, SO_SERIAL_EDIT_SECTIONS, SO_LAPTOPS_TAB_VIEW_SECTIONS } from '../salesOrderScope';
 
 function resolveSoNumber(params) {
@@ -114,6 +114,11 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
     if (!visibleTabs.includes(tab)) setTab('overview');
   }, [visibleTabs, tab]);
 
+  useEffect(() => {
+    const returnTab = location.state?.tab;
+    if (returnTab && visibleTabs.includes(returnTab)) setTab(returnTab);
+  }, [location.key, location.state?.tab, visibleTabs]);
+
   const lines = data?.lines || [];
   const head = lines[0] || {};
   const summary = data?.summary || {};
@@ -145,6 +150,10 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
   const scopeConfig = getSoScopeConfig(resolvedScope);
   const listPath = salesOrderListPath(resolvedScope);
   const cameFromElsewhere = Boolean(location.state?.from);
+  const dcNavState = useMemo(
+    () => salesOrderDcNavState({ salesOrderNumber: soNumber, soScope: resolvedScope, returnTab: 'dcs' }),
+    [soNumber, resolvedScope]
+  );
 
   const handleCancel = useCallback(async () => {
     if (!window.confirm(`Cancel sales order ${soNumber}? Attached laptops will be released back to inventory. This cannot be undone.`)) return;
@@ -441,14 +450,14 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
               {dcs.map((dc) => (
                 <tr key={dc.dc_number}>
                   <td className="px-4 py-2 font-mono text-blue-700">
-                    <Link to={deliveryChallanDetailPath(dc.dc_number)}>{dc.dc_number}</Link>
+                    <Link to={deliveryChallanDetailTo(dc.dc_number, dcNavState)}>{dc.dc_number}</Link>
                   </td>
                   <td className="px-4 py-2">{formatDate(dc.created_at)}</td>
                   <td className="px-4 py-2 font-medium text-slate-800">{formatDate(dc.dispatched_at)}</td>
                   <td className="px-4 py-2">{dc.dispatch_mode || '—'}</td>
                   <td className="px-4 py-2">{dc.status || 'pending'}</td>
                   <td className="px-4 py-2">
-                    <Link to={deliveryChallanDetailPath(dc.dc_number)} className="text-blue-600 text-xs">View</Link>
+                    <Link to={deliveryChallanDetailTo(dc.dc_number, dcNavState)} className="text-blue-600 text-xs">View</Link>
                   </td>
                 </tr>
               ))}
@@ -471,7 +480,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
       )}
 
       <PaymentModal open={paymentOpen} soNumber={soNumber} onClose={() => setPaymentOpen(false)} onSaved={load} />
-      <DCForm open={dcOpen} onClose={() => setDcOpen(false)} prefillSo={soNumber} />
+      <DCForm open={dcOpen} onClose={() => setDcOpen(false)} prefillSo={soNumber} soScope={resolvedScope} />
       <SoLineRateEditModal
         open={Boolean(editRateLine)}
         line={editRateLine}

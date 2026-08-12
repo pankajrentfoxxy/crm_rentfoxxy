@@ -1,14 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Search, ChevronDown, X, Cpu, MonitorSmartphone,
+  Search, X, MonitorSmartphone,
   ClipboardList, Inbox, Wrench, Layers, TestTube2, CircuitBoard, PaintBucket,
   ShieldCheck, ShieldQuestion, PackageCheck, Warehouse,
-  User, Download, ChevronLeft, ChevronRight, Loader2,
+  Download, ChevronLeft, ChevronRight, Loader2,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getLaptopReport, getLaptopReportTickets } from '../reportingApi';
 import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import { useUrlFilterPatch } from '../hooks/useReportFiltersFromUrl';
+import MultiSelectFilter from '../../lead-crm/components/MultiSelectFilter';
+import { parseSpecMultiUrl } from '../../inventory-management/inventorySpecFilters';
 
 const C = {
   bg: '#F5F6F8',
@@ -91,6 +93,35 @@ const STAGE_PERF_POPUP_COLUMNS = [
 ];
 
 const PAGE_SIZE = 8;
+const PRESET_DATE_MODES = ['All', 'Today', 'Yesterday'];
+
+function istTodayString() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+function normalizeDateMode(raw) {
+  const key = String(raw || 'Today').trim().toLowerCase();
+  if (key === 'all') return 'All';
+  if (key === 'today') return 'Today';
+  if (key === 'yesterday') return 'Yesterday';
+  if (key === 'custom') return 'Custom';
+  return 'Today';
+}
+
+function ReportMultiFilter({ label, allLabel, options, value, onChange, minWidth = 120, maxWidth = 200 }) {
+  return (
+    <div style={{ minWidth, flex: `1 1 ${minWidth}px`, maxWidth }}>
+      <p style={{ fontSize: 10, fontWeight: 600, color: C.dim2, margin: '0 0 4px 2px' }}>{label}</p>
+      <MultiSelectFilter
+        options={options}
+        value={parseSpecMultiUrl(value)}
+        onChange={onChange}
+        allLabel={allLabel}
+        className="w-full"
+      />
+    </div>
+  );
+}
 
 function Chip({ active, children, onClick }) {
   return (
@@ -107,31 +138,6 @@ function Chip({ active, children, onClick }) {
     >
       {children}
     </button>
-  );
-}
-
-function Select({ label, value, onChange, options, icon: Icon }) {
-  return (
-    <div style={{ position: 'relative' }}>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        style={{
-          appearance: 'none',
-          background: C.surface2,
-          border: `1px solid ${C.border}`,
-          color: value === 'All' ? C.dim : C.text,
-          fontSize: 12, fontWeight: 500, borderRadius: 8,
-          padding: Icon ? '7px 26px 7px 28px' : '7px 26px 7px 10px',
-          cursor: 'pointer', minWidth: 108,
-        }}
-      >
-        <option value="All">{label}</option>
-        {options.map((o) => (<option key={o} value={o}>{o}</option>))}
-      </select>
-      {Icon && <Icon size={12} color={C.dim2} style={{ position: 'absolute', left: 9, top: 9 }} />}
-      <ChevronDown size={12} color={C.dim2} style={{ position: 'absolute', right: 8, top: 9, pointerEvents: 'none' }} />
-    </div>
   );
 }
 
@@ -203,29 +209,38 @@ function exportCSV(rows, filename, columns) {
   URL.revokeObjectURL(url);
 }
 
+function specParam(raw) {
+  const vals = parseSpecMultiUrl(raw).filter((v) => v !== 'All');
+  return vals.length ? vals.join(',') : undefined;
+}
+
 function buildBaseParams({
   dateMode, customFrom, customTo, search,
   fStage, fTeam, fTech, fStatus, fBrand, fModel, fProcessor, fGeneration, fRam, fSsd,
 }) {
   const params = {
-    dateMode: dateMode === 'All' ? 'all' : dateMode.toLowerCase(),
     search: search || undefined,
-    stage: fStage !== 'All' ? fStage : undefined,
-    team: fTeam !== 'All' ? fTeam : undefined,
-    technician: fTech !== 'All' ? fTech : undefined,
-    status: fStatus !== 'All' ? fStatus : undefined,
-    brand: fBrand !== 'All' ? fBrand : undefined,
-    model: fModel !== 'All' ? fModel : undefined,
-    processor: fProcessor !== 'All' ? fProcessor : undefined,
-    generation: fGeneration !== 'All' ? fGeneration : undefined,
-    ram: fRam !== 'All' ? fRam : undefined,
-    ssd: fSsd !== 'All' ? fSsd : undefined,
+    stage: specParam(fStage),
+    team: specParam(fTeam),
+    technician: specParam(fTech),
+    status: specParam(fStatus),
+    brand: specParam(fBrand),
+    model: specParam(fModel),
+    processor: specParam(fProcessor),
+    generation: specParam(fGeneration),
+    ram: specParam(fRam),
+    ssd: specParam(fSsd),
   };
-  if (customFrom && customTo) {
+
+  if (dateMode === 'Custom' && customFrom) {
     params.dateMode = 'custom';
     params.dateFrom = customFrom;
-    params.dateTo = customTo;
+    params.dateTo = customTo || istTodayString();
+  } else {
+    const mode = dateMode || 'Today';
+    params.dateMode = mode === 'All' ? 'all' : mode.toLowerCase();
   }
+
   return params;
 }
 
@@ -413,39 +428,76 @@ function PopupModal({ title, baseParams, popupParams, columns, onClose }) {
 }
 
 export default function LaptopReportPage() {
-  const { setFilter, get } = useUrlFilterPatch();
-  const dateMode = get('dateMode', 'Today');
-  const customFrom = get('customFrom');
-  const customTo = get('customTo');
+  const { setFilter, get, searchParams } = useUrlFilterPatch();
+  const dateMode = normalizeDateMode(get('dateMode', 'Today'));
+  const customFrom = dateMode === 'Custom' ? get('customFrom') : '';
+  const customTo = dateMode === 'Custom' ? get('customTo') : '';
   const searchInput = get('q');
   const search = useDebouncedValue(searchInput.trim(), 320);
 
-  const fStage = get('fStage', 'All');
-  const fTeam = get('fTeam', 'All');
-  const fTech = get('fTech', 'All');
-  const fStatus = get('fStatus', 'All');
-  const fBrand = get('fBrand', 'All');
-  const fModel = get('fModel', 'All');
-  const fProcessor = get('fProcessor', 'All');
-  const fGeneration = get('fGeneration', 'All');
-  const fRam = get('fRam', 'All');
-  const fSsd = get('fSsd', 'All');
+  const fStage = get('fStage') || '';
+  const fTeam = get('fTeam') || '';
+  const fTech = get('fTech') || '';
+  const fStatus = get('fStatus') || '';
+  const fBrand = get('fBrand') || '';
+  const fModel = get('fModel') || '';
+  const fProcessor = get('fProcessor') || '';
+  const fGeneration = get('fGeneration') || '';
+  const fRam = get('fRam') || '';
+  const fSsd = get('fSsd') || '';
 
   const patchFilter = (patch) => setFilter(patch, { replace: true });
   const setDateMode = (value) => patchFilter({ dateMode: value, customFrom: null, customTo: null });
-  const setCustomFrom = (value) => patchFilter({ customFrom: value });
-  const setCustomTo = (value) => patchFilter({ customTo: value });
+  const setCustomFrom = (value) => {
+    const today = istTodayString();
+    patchFilter({
+      dateMode: 'Custom',
+      customFrom: value || null,
+      customTo: value ? (customTo || today) : null,
+    });
+  };
+  const setCustomTo = (value) => patchFilter({
+    dateMode: 'Custom',
+    customTo: value || null,
+  });
+
+  useEffect(() => {
+    if (dateMode === 'Custom' && customFrom && !customTo) {
+      patchFilter({ customTo: istTodayString() });
+    }
+  }, [dateMode, customFrom, customTo]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const rawMode = searchParams.get('dateMode');
+    const normalized = normalizeDateMode(rawMode || 'Today');
+    const hasStaleCustom = PRESET_DATE_MODES.includes(normalized)
+      && (searchParams.get('customFrom') || searchParams.get('customTo'));
+    const needsNormalize = rawMode && normalized !== rawMode;
+    if (hasStaleCustom || needsNormalize) {
+      patchFilter({
+        dateMode: normalized,
+        ...(hasStaleCustom ? { customFrom: null, customTo: null } : {}),
+      });
+    }
+  }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
   const setSearchInput = (value) => patchFilter({ q: value });
-  const setFStage = (value) => patchFilter({ fStage: value });
-  const setFTeam = (value) => patchFilter({ fTeam: value });
-  const setFTech = (value) => patchFilter({ fTech: value });
-  const setFStatus = (value) => patchFilter({ fStatus: value });
-  const setFBrand = (value) => patchFilter({ fBrand: value });
-  const setFModel = (value) => patchFilter({ fModel: value });
-  const setFProcessor = (value) => patchFilter({ fProcessor: value });
-  const setFGeneration = (value) => patchFilter({ fGeneration: value });
-  const setFRam = (value) => patchFilter({ fRam: value });
-  const setFSsd = (value) => patchFilter({ fSsd: value });
+  const setMultiFilter = (key, values) => patchFilter({ [key]: values.length ? values.join(',') : null });
+  const setFStage = (values) => setMultiFilter('fStage', values);
+  const setFTeam = (values) => setMultiFilter('fTeam', values);
+  const setFTech = (values) => setMultiFilter('fTech', values);
+  const setFStatus = (values) => setMultiFilter('fStatus', values);
+  const setSpecFilter = (key, values) => setMultiFilter(key, values);
+  const setFBrand = (values) => patchFilter({
+    fBrand: values.length ? values.join(',') : null,
+    fModel: null,
+    fProcessor: null,
+    fGeneration: null,
+  });
+  const setFModel = (values) => setSpecFilter('fModel', values);
+  const setFProcessor = (values) => setSpecFilter('fProcessor', values);
+  const setFGeneration = (values) => setSpecFilter('fGeneration', values);
+  const setFRam = (values) => setSpecFilter('fRam', values);
+  const setFSsd = (values) => setSpecFilter('fSsd', values);
 
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -491,7 +543,8 @@ export default function LaptopReportPage() {
     return map;
   }, [stagePerf]);
 
-  const activeFilterCount = [fStage, fTeam, fTech, fStatus, fBrand, fModel, fProcessor, fGeneration, fRam, fSsd].filter((f) => f !== 'All').length;
+  const activeFilterCount = [fStage, fTeam, fTech, fStatus, fBrand, fModel, fProcessor, fGeneration, fRam, fSsd]
+    .filter((v) => parseSpecMultiUrl(v).length > 0).length;
 
   const clearAllFilters = () => {
     patchFilter({
@@ -563,7 +616,7 @@ export default function LaptopReportPage() {
     ? `Live · synced from CRM ${Math.max(1, Math.round((Date.now() - lastSynced.getTime()) / 1000))}s ago`
     : 'Loading…';
 
-  const dateLabel = customFrom && customTo ? 'Custom' : dateMode;
+  const dateLabel = dateMode === 'Custom' && customFrom && customTo ? 'Custom' : dateMode;
 
   return (
     <div style={{ background: C.bg, minHeight: '100vh', fontFamily: "'Inter', -apple-system, sans-serif", color: C.text, padding: '22px 24px 60px' }}>
@@ -592,46 +645,110 @@ export default function LaptopReportPage() {
         </div>
       </div>
 
-      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-        <div style={{ position: 'relative', flex: '1 1 200px', minWidth: 180 }}>
-          <Search size={13} color={C.dim2} style={{ position: 'absolute', left: 9, top: 8 }} />
-          <input
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="TTSPL ID, serial, model..."
-            style={{ width: '100%', background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: '7px 10px 7px 28px', fontSize: 12.5, color: C.text }}
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, marginBottom: 8 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-end' }}>
+          <div style={{ position: 'relative', flex: '1 1 200px', minWidth: 180 }}>
+            <Search size={13} color={C.dim2} style={{ position: 'absolute', left: 9, top: 8 }} />
+            <input
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="TTSPL ID, serial, model..."
+              style={{ width: '100%', background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: '7px 10px 7px 28px', fontSize: 12.5, color: C.text }}
+            />
+          </div>
+          <ReportMultiFilter
+            label="Stage"
+            allLabel="All stages"
+            options={(filterOptions.stages || STAGE_LIST).map((s) => s.label)}
+            value={fStage}
+            onChange={setFStage}
+            minWidth={130}
           />
+          <ReportMultiFilter
+            label="Team"
+            allLabel="All teams"
+            options={filterOptions.teams || []}
+            value={fTeam}
+            onChange={setFTeam}
+          />
+          <ReportMultiFilter
+            label="Technician"
+            allLabel="All technicians"
+            options={filterOptions.technicians || []}
+            value={fTech}
+            onChange={setFTech}
+            minWidth={140}
+          />
+          <ReportMultiFilter
+            label="Status"
+            allLabel="All statuses"
+            options={filterOptions.statuses || STATUS_LIST}
+            value={fStatus}
+            onChange={setFStatus}
+          />
+          <div style={{ display: 'flex', gap: 6, marginLeft: 'auto', alignItems: 'center', flexWrap: 'wrap' }}>
+            {PRESET_DATE_MODES.map((d) => (
+              <Chip key={d} active={dateMode === d} onClick={() => setDateMode(d)}>{d}</Chip>
+            ))}
+            <input
+              type="date"
+              value={customFrom}
+              onChange={(e) => setCustomFrom(e.target.value)}
+              style={{
+                background: C.surface2,
+                border: `1px solid ${dateMode === 'Custom' ? C.cyan : C.border}`,
+                borderRadius: 8,
+                padding: '6px 8px',
+                fontSize: 12,
+                color: C.text,
+              }}
+            />
+            <span style={{ color: C.dim2, fontSize: 12 }}>–</span>
+            <input
+              type="date"
+              value={customTo}
+              onChange={(e) => setCustomTo(e.target.value)}
+              style={{
+                background: C.surface2,
+                border: `1px solid ${dateMode === 'Custom' ? C.cyan : C.border}`,
+                borderRadius: 8,
+                padding: '6px 8px',
+                fontSize: 12,
+                color: C.text,
+              }}
+            />
+          </div>
         </div>
-        <Select label="All stages" value={fStage} onChange={setFStage} options={(filterOptions.stages || STAGE_LIST).map((s) => s.label)} />
-        <Select label="All teams" value={fTeam} onChange={setFTeam} options={filterOptions.teams || []} />
-        <Select label="All technicians" value={fTech} onChange={setFTech} options={filterOptions.technicians || []} icon={User} />
-        <Select label="All statuses" value={fStatus} onChange={setFStatus} options={filterOptions.statuses || STATUS_LIST} />
-
-        <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
-          {['All', 'Today', 'Yesterday'].map((d) => (
-            <Chip key={d} active={dateMode === d && !(customFrom && customTo)} onClick={() => { setDateMode(d); setCustomFrom(''); setCustomTo(''); }}>{d}</Chip>
-          ))}
-        </div>
-        <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)}
-          style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: '6px 8px', fontSize: 12, color: C.text }} />
-        <span style={{ color: C.dim2, fontSize: 12 }}>–</span>
-        <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)}
-          style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: '6px 8px', fontSize: 12, color: C.text }} />
       </div>
 
-      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 20 }}>
-        <span style={{ fontSize: 10.5, color: C.dim2, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, marginRight: 2 }}>Attributes</span>
-        <Select label="Brand" value={fBrand} onChange={setFBrand} options={filterOptions.brands || []} />
-        <Select label="Model" value={fModel} onChange={setFModel} options={filterOptions.models || []} />
-        <Select label="Processor" value={fProcessor} onChange={setFProcessor} options={filterOptions.processors || []} icon={Cpu} />
-        <Select label="Gen" value={fGeneration} onChange={setFGeneration} options={filterOptions.generations || []} />
-        <Select label="RAM" value={fRam} onChange={setFRam} options={filterOptions.rams || []} />
-        <Select label="SSD" value={fSsd} onChange={setFSsd} options={filterOptions.ssds || []} />
-        {activeFilterCount > 0 && (
-          <button type="button" onClick={clearAllFilters} style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'rgba(196,48,43,0.06)', border: '1px solid rgba(196,48,43,0.35)', color: C.red, borderRadius: 8, padding: '7px 11px', fontSize: 12, cursor: 'pointer', fontWeight: 600, marginLeft: 'auto' }}>
-            <X size={12} /> Clear {activeFilterCount} filter{activeFilterCount > 1 ? 's' : ''}
-          </button>
-        )}
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, marginBottom: 20 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-end' }}>
+          <span style={{ fontSize: 10.5, color: C.dim2, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, marginRight: 2, alignSelf: 'center' }}>Specs</span>
+          {[
+            { key: 'fBrand', label: 'Brand', allLabel: 'All brands', options: filterOptions.brands || [], onChange: setFBrand, value: fBrand },
+            { key: 'fModel', label: 'Model', allLabel: 'All models', options: filterOptions.models || [], onChange: setFModel, value: fModel },
+            { key: 'fProcessor', label: 'Processor', allLabel: 'All processors', options: filterOptions.processors || [], onChange: setFProcessor, value: fProcessor },
+            { key: 'fGeneration', label: 'Gen', allLabel: 'All gens', options: filterOptions.generations || [], onChange: setFGeneration, value: fGeneration },
+            { key: 'fRam', label: 'RAM', allLabel: 'All RAM', options: filterOptions.rams || [], onChange: setFRam, value: fRam },
+            { key: 'fSsd', label: 'SSD', allLabel: 'All SSD', options: filterOptions.ssds || [], onChange: setFSsd, value: fSsd },
+          ].map((field) => (
+            <ReportMultiFilter
+              key={field.key}
+              label={field.label}
+              allLabel={field.allLabel}
+              options={field.options}
+              value={field.value}
+              onChange={field.onChange}
+              minWidth={130}
+              maxWidth={220}
+            />
+          ))}
+          {activeFilterCount > 0 && (
+            <button type="button" onClick={clearAllFilters} style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'rgba(196,48,43,0.06)', border: '1px solid rgba(196,48,43,0.35)', color: C.red, borderRadius: 8, padding: '7px 11px', fontSize: 12, cursor: 'pointer', fontWeight: 600, marginLeft: 'auto', alignSelf: 'flex-end' }}>
+              <X size={12} /> Clear {activeFilterCount} filter{activeFilterCount > 1 ? 's' : ''}
+            </button>
+          )}
+        </div>
       </div>
 
       <section style={{ marginBottom: 28 }}>

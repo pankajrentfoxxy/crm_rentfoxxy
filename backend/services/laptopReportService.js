@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { parseMultiSpecValues } = require('../utils/inventorySpecFilter');
 
 const PROCESSOR_BUCKETS_SHORT = ['i3', 'i5', 'i7', 'i9', 'Ryzen 3', 'Ryzen 5', 'Ryzen 7', 'Others'];
 
@@ -53,22 +54,25 @@ function resolvePeriodRange(query = {}) {
   if (mode === 'all') {
     return { from: null, to: null, period: 'all' };
   }
-  if (mode === 'custom' || (query.dateFrom && query.dateTo) || (query.from && query.to)) {
-    return {
-      from: String(query.dateFrom || query.from || today),
-      to: String(query.dateTo || query.to || today),
-      period: 'custom',
-    };
-  }
   if (mode === 'yesterday') {
     const y = addDays(today, -1);
     return { from: y, to: y, period: 'yesterday' };
+  }
+  if (mode === 'today') {
+    return { from: today, to: today, period: 'today' };
   }
   if (mode === 'last_7_days' || mode === 'last7') {
     return { from: addDays(today, -6), to: today, period: 'last_7_days' };
   }
   if (mode === 'last_30_days' || mode === 'last30') {
     return { from: addDays(today, -29), to: today, period: 'last_30_days' };
+  }
+  if (mode === 'custom') {
+    return {
+      from: String(query.dateFrom || query.from || today),
+      to: String(query.dateTo || query.to || today),
+      period: 'custom',
+    };
   }
   return { from: today, to: today, period: 'today' };
 }
@@ -91,6 +95,51 @@ function stageDefForKey(key) {
 
 function stageDefForLabel(label) {
   return REPORT_STAGES.find((s) => s.label === label) || null;
+}
+
+function processorBucketSql(proc) {
+  const p = String(proc).trim();
+  if (p === 'i3') return `COALESCE(t.processor, '') ~* 'i\\s*3|core\\s*i3|\\bi3\\b'`;
+  if (p === 'i5') return `COALESCE(t.processor, '') ~* 'i\\s*5|core\\s*i5|\\bi5\\b'`;
+  if (p === 'i7') return `COALESCE(t.processor, '') ~* 'i\\s*7|core\\s*i7|\\bi7\\b'`;
+  if (p === 'i9') return `COALESCE(t.processor, '') ~* 'i\\s*9|core\\s*i9|\\bi9\\b'`;
+  if (p === 'Ryzen 3') return `COALESCE(t.processor, '') ~* 'ryzen\\s*3|ryzen3'`;
+  if (p === 'Ryzen 5') return `COALESCE(t.processor, '') ~* 'ryzen\\s*5|ryzen5'`;
+  if (p === 'Ryzen 7') return `COALESCE(t.processor, '') ~* 'ryzen\\s*7|ryzen7'`;
+  if (p === 'Others') {
+    return `NOT (COALESCE(t.processor, '') ~* 'i\\s*[3579]|core\\s*i[3579]|ryzen\\s*[357]|ryzen[357]')`;
+  }
+  return null;
+}
+
+function appendMultiIlike(values, fieldExpr, conditions, params, idx) {
+  if (!values.length) return idx;
+  const parts = [];
+  for (const val of values) {
+    params.push(`%${val}%`);
+    parts.push(`${fieldExpr} ILIKE $${idx}`);
+    idx += 1;
+  }
+  conditions.push(`(${parts.join(' OR ')})`);
+  return idx;
+}
+
+function appendMultiProcessor(raw, conditions, params, idx) {
+  const vals = parseMultiSpecValues(raw).filter((v) => v !== 'All');
+  if (!vals.length) return idx;
+  const parts = [];
+  for (const val of vals) {
+    const bucket = processorBucketSql(val);
+    if (bucket) {
+      parts.push(bucket);
+    } else {
+      params.push(`%${val}%`);
+      parts.push(`COALESCE(t.processor, '') ILIKE $${idx}`);
+      idx += 1;
+    }
+  }
+  if (parts.length) conditions.push(`(${parts.join(' OR ')})`);
+  return idx;
 }
 
 function buildTicketFilters(query) {
@@ -118,14 +167,16 @@ function buildTicketFilters(query) {
       idx += 1;
     }
   } else if (stageLabel && stageLabel !== 'All') {
-    const def = stageDefForLabel(String(stageLabel));
-    if (def) {
+    const labels = parseMultiSpecValues(stageLabel).filter((v) => v !== 'All');
+    if (labels.length) {
+      const stageNames = [];
+      for (const label of labels) {
+        const def = stageDefForLabel(String(label));
+        if (def) stageNames.push(...def.names);
+        else stageNames.push(String(label));
+      }
       conditions.push(`s.stage_name = ANY($${idx}::text[])`);
-      params.push(def.names);
-      idx += 1;
-    } else {
-      conditions.push(`s.stage_name = $${idx}`);
-      params.push(String(stageLabel));
+      params.push([...new Set(stageNames)]);
       idx += 1;
     }
   }
@@ -141,9 +192,12 @@ function buildTicketFilters(query) {
 
   const teamName = query.team;
   if (teamName && teamName !== 'All') {
-    conditions.push(`tm.team_name = $${idx}`);
-    params.push(String(teamName));
-    idx += 1;
+    const teams = parseMultiSpecValues(teamName).filter((v) => v !== 'All');
+    if (teams.length) {
+      conditions.push(`tm.team_name = ANY($${idx}::text[])`);
+      params.push(teams);
+      idx += 1;
+    }
   } else if (query.team_id) {
     const tid = parseInt(query.team_id, 10);
     if (Number.isInteger(tid)) {
@@ -155,9 +209,12 @@ function buildTicketFilters(query) {
 
   const techName = query.technician || query.popup_technician;
   if (techName && techName !== 'All') {
-    conditions.push(`u.name = $${idx}`);
-    params.push(String(techName));
-    idx += 1;
+    const techs = parseMultiSpecValues(techName).filter((v) => v !== 'All');
+    if (techs.length) {
+      conditions.push(`u.name = ANY($${idx}::text[])`);
+      params.push(techs);
+      idx += 1;
+    }
   } else if (query.user_id) {
     const uid = parseInt(query.user_id, 10);
     if (Number.isInteger(uid)) {
@@ -169,9 +226,12 @@ function buildTicketFilters(query) {
 
   const displayStatus = query.display_status || query.status || query.popup_status;
   if (displayStatus && displayStatus !== 'All' && displayStatus !== 'Total') {
-    conditions.push(`${DISPLAY_STATUS_SQL} = $${idx}`);
-    params.push(String(displayStatus));
-    idx += 1;
+    const statuses = parseMultiSpecValues(displayStatus).filter((v) => v !== 'All' && v !== 'Total');
+    if (statuses.length) {
+      conditions.push(`${DISPLAY_STATUS_SQL} = ANY($${idx}::text[])`);
+      params.push(statuses);
+      idx += 1;
+    }
   }
 
   const stageMode = query.popup_stage_mode;
@@ -191,56 +251,34 @@ function buildTicketFilters(query) {
   }
 
   if (query.brand && query.brand !== 'All') {
-    conditions.push(`COALESCE(t.brand, '') ILIKE $${idx}`);
-    params.push(`%${String(query.brand).trim()}%`);
-    idx += 1;
+    idx = appendMultiIlike(parseMultiSpecValues(query.brand), `COALESCE(t.brand, '')`, conditions, params, idx);
   }
 
   if (query.model && query.model !== 'All') {
-    conditions.push(`COALESCE(t.model, '') ILIKE $${idx}`);
-    params.push(`%${String(query.model).trim()}%`);
-    idx += 1;
+    idx = appendMultiIlike(parseMultiSpecValues(query.model), `COALESCE(t.model, '')`, conditions, params, idx);
   }
 
   const procFilter = query.popup_processor || query.processor;
   if (procFilter && procFilter !== 'All') {
-    const proc = String(procFilter).trim();
-    const bucketConds = [];
-    if (proc === 'i3') bucketConds.push(`COALESCE(t.processor, '') ~* 'i\\s*3|core\\s*i3|\\bi3\\b'`);
-    else if (proc === 'i5') bucketConds.push(`COALESCE(t.processor, '') ~* 'i\\s*5|core\\s*i5|\\bi5\\b'`);
-    else if (proc === 'i7') bucketConds.push(`COALESCE(t.processor, '') ~* 'i\\s*7|core\\s*i7|\\bi7\\b'`);
-    else if (proc === 'i9') bucketConds.push(`COALESCE(t.processor, '') ~* 'i\\s*9|core\\s*i9|\\bi9\\b'`);
-    else if (proc === 'Ryzen 3') bucketConds.push(`COALESCE(t.processor, '') ~* 'ryzen\\s*3|ryzen3'`);
-    else if (proc === 'Ryzen 5') bucketConds.push(`COALESCE(t.processor, '') ~* 'ryzen\\s*5|ryzen5'`);
-    else if (proc === 'Ryzen 7') bucketConds.push(`COALESCE(t.processor, '') ~* 'ryzen\\s*7|ryzen7'`);
-    else if (proc === 'Others') {
-      bucketConds.push(`NOT (
-        COALESCE(t.processor, '') ~* 'i\\s*[3579]|core\\s*i[3579]|ryzen\\s*[357]|ryzen[357]'
-      )`);
-    } else {
-      conditions.push(`COALESCE(t.processor, '') ILIKE $${idx}`);
-      params.push(`%${proc}%`);
-      idx += 1;
-    }
-    if (bucketConds.length) conditions.push(bucketConds[0]);
+    idx = appendMultiProcessor(procFilter, conditions, params, idx);
   }
 
   if (query.generation && query.generation !== 'All') {
-    conditions.push(`COALESCE(NULLIF(TRIM(vsn.extra->>'generation'), ''), '') ILIKE $${idx}`);
-    params.push(`%${String(query.generation).trim()}%`);
-    idx += 1;
+    idx = appendMultiIlike(
+      parseMultiSpecValues(query.generation),
+      `COALESCE(NULLIF(TRIM(vsn.extra->>'generation'), ''), '')`,
+      conditions,
+      params,
+      idx
+    );
   }
 
   if (query.ram && query.ram !== 'All') {
-    conditions.push(`COALESCE(t.ram, '') ILIKE $${idx}`);
-    params.push(`%${String(query.ram).trim()}%`);
-    idx += 1;
+    idx = appendMultiIlike(parseMultiSpecValues(query.ram), `COALESCE(t.ram, '')`, conditions, params, idx);
   }
 
   if (query.ssd && query.ssd !== 'All') {
-    conditions.push(`COALESCE(t.storage, '') ILIKE $${idx}`);
-    params.push(`%${String(query.ssd).trim()}%`);
-    idx += 1;
+    idx = appendMultiIlike(parseMultiSpecValues(query.ssd), `COALESCE(t.storage, '')`, conditions, params, idx);
   }
 
   const searchRaw = query.search != null ? String(query.search).trim() : '';

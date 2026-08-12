@@ -48,6 +48,16 @@ export async function fetchUsers(params = {}) {
   return data;
 }
 
+export async function exportUsersCsv(params = {}) {
+  const response = await api.get('/auth/users/export-csv', { params, responseType: 'blob' });
+  return response.data;
+}
+
+export async function exportUsersExcel(params = {}) {
+  const response = await api.get('/auth/users/export.xlsx', { params, responseType: 'blob' });
+  return response.data;
+}
+
 export async function fetchAuthTeams() {
   const { data } = await api.get('/auth/teams');
   return data;
@@ -71,6 +81,13 @@ export async function updateUserStatus(userId, status, reason) {
 export async function resetUserPassword(userId, newPassword) {
   const { data } = await api.post(`/auth/users/${userId}/reset-password`, {
     new_password: newPassword || undefined,
+  });
+  return data;
+}
+
+export async function backfillUserRememberPass(userId) {
+  const { data } = await api.post('/auth/users/backfill-remember-pass', {
+    user_id: userId || undefined,
   });
   return data;
 }

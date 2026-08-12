@@ -32,6 +32,7 @@ const g = (section, node) => (
 function InventoryIndexRedirect() {
   const { canView } = usePermission();
   if (canView('inventory_management')) return <Navigate to="qc-process" replace />;
+  if (canView('inventory_master_data')) return <Navigate to="master-data" replace />;
   if (canView('inventory_asset_movement')) return <Navigate to="asset-movement" replace />;
   if (canView('parts_inventory')) return <Navigate to="parts" replace />;
   if (canView('customer_inventory')) return <Navigate to="customer-assets" replace />;
@@ -68,7 +69,7 @@ export default function InventoryManagementApp() {
         <Route path="serial-number-status" element={g('inventory_management', <SerialNumberStatusPage />)} />
         <Route path="universal-search" element={g('inventory_management', <UniversalSearchPage />)} />
         <Route path="npa-assets" element={g('inventory_management', <NpaAssetsPage />)} />
-        <Route path="master-data" element={g('inventory_management', <MasterDataDashboardPage />)} />
+        <Route path="master-data" element={g('inventory_master_data', <MasterDataDashboardPage />)} />
         <Route path="ttspl-history" element={g('ttspl_history', <TtsplHistorySearchPage />)} />
 
         <Route path="*" element={<InventoryIndexRedirect />} />

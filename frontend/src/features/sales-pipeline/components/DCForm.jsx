@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { createDcsByAddress, getDCMeta, listSalesOrders, generateBluedartWaybill } from '../salesPipelineApi';
-import { deliveryChallanDetailPath } from '../salesPipelineUtils';
+import { deliveryChallanDetailTo, salesOrderDcNavState } from '../salesPipelineUtils';
 import { BillingAddressPanel } from '../../operation-management/components/CustomerAddressPanels';
 import { sumDeclaredValueForUnits } from '../bluedartDeclaredValue';
 
@@ -467,7 +467,7 @@ function DcGroupCard({
 
 // ── Main DCForm ───────────────────────────────────────────────────────────────
 
-export default function DCForm({ open, onClose, prefillSo }) {
+export default function DCForm({ open, onClose, prefillSo, soScope, returnTab = 'dcs' }) {
   const navigate = useNavigate();
 
   const [salesOrders, setSalesOrders] = useState([]);
@@ -694,7 +694,12 @@ export default function DCForm({ open, onClose, prefillSo }) {
       }
 
       onClose();
-      if (first_dc) navigate(deliveryChallanDetailPath(first_dc));
+      if (first_dc) {
+        navigate(deliveryChallanDetailTo(
+          first_dc,
+          salesOrderDcNavState({ salesOrderNumber: soNumber, soScope, returnTab })
+        ));
+      }
     } catch (err) {
       toast.error(err.response?.data?.message || 'Create failed');
     } finally {

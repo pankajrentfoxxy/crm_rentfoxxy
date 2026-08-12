@@ -4,6 +4,12 @@ const SPEC_QUERY_KEYS = [
 
 const { normalizeSpecFilterValue } = require('./specFilterNormalize');
 
+function parseMultiSpecValues(raw) {
+  if (raw == null || raw === '') return [];
+  const parts = Array.isArray(raw) ? raw : String(raw).split(',');
+  return parts.map((v) => String(v || '').trim()).filter(Boolean);
+}
+
 function pickSpecFilters(query = {}) {
   const out = {};
   for (const key of SPEC_QUERY_KEYS) {
@@ -14,8 +20,24 @@ function pickSpecFilters(query = {}) {
   return out;
 }
 
+/** Comma-separated (or repeated) query values → array per spec key. */
+function pickMultiSpecFilters(query = {}) {
+  const out = {};
+  for (const key of SPEC_QUERY_KEYS) {
+    const raw = query[key];
+    if (raw == null || raw === '') continue;
+    const vals = parseMultiSpecValues(raw).map((v) => normalizeSpecFilterValue(key, v));
+    if (vals.length) out[key] = vals;
+  }
+  return out;
+}
+
 function hasSpecFilters(filters) {
   return SPEC_QUERY_KEYS.some((k) => Boolean(filters[k]));
+}
+
+function hasMultiSpecFilters(filters) {
+  return SPEC_QUERY_KEYS.some((k) => Array.isArray(filters[k]) && filters[k].length > 0);
 }
 
 /** Extract leading digits for loose RAM/SSD/generation matching ("10" ↔ "10TH", "16" ↔ "16 GB"). */
@@ -24,9 +46,9 @@ function numericPrefixSql(expr) {
 }
 
 /** Build a WHERE clause that matches display-style spec values, not just exact master names. */
-function buildSpecMatchClause(expr, val, params, field) {
+function buildSpecMatchClause(expr, val, params, field, bindOffset = 0) {
   params.push(val);
-  const i = params.length;
+  const i = bindOffset + params.length;
   const e = `LOWER(TRIM(COALESCE(${expr}, '')))`;
   const p = `LOWER(TRIM($${i}))`;
   const exact = `${e} = ${p}`;
@@ -381,14 +403,39 @@ function erpRepairSpecExpr(field) {
   return map[field];
 }
 
-function appendRepairSpecClauses(filters, params, exprFn) {
+function appendRepairSpecClauses(filters, params, exprFn, bindOffset = 0) {
   const clauses = [];
   for (const key of SPEC_QUERY_KEYS) {
     const val = filters[key];
     if (!val) continue;
-    clauses.push(buildSpecMatchClause(exprFn(key), val, params, key));
+    clauses.push(buildSpecMatchClause(exprFn(key), val, params, key, bindOffset));
   }
   return clauses;
+}
+
+function appendMultiSpecClauses(filters, params, exprFn, bindOffset = 0) {
+  const clauses = [];
+  for (const key of SPEC_QUERY_KEYS) {
+    const vals = filters[key];
+    if (!Array.isArray(vals) || !vals.length) continue;
+    const orParts = vals.map((val) => buildSpecMatchClause(exprFn(key), val, params, key, bindOffset));
+    clauses.push(`(${orParts.join(' OR ')})`);
+  }
+  return clauses;
+}
+
+function reportRowSpecExpr(field) {
+  const map = {
+    brand: 'r.brand',
+    model: 'r.model',
+    processor: 'r.processor',
+    generation: 'r.generation',
+    ram: 'r.ram_size',
+    storage: 'r.storage_type',
+    screen_size: 'r.screen_size',
+    gpu: 'r.gpu',
+  };
+  return map[field];
 }
 
 function ticketSpecExpr(field) {
@@ -423,11 +470,16 @@ function buildTicketSpecFilter(filters, params, tAlias = 't') {
 
 module.exports = {
   SPEC_QUERY_KEYS,
+  parseMultiSpecValues,
   pickSpecFilters,
+  pickMultiSpecFilters,
   hasSpecFilters,
+  hasMultiSpecFilters,
   buildSerialSpecFilter,
   buildTicketSpecFilter,
   appendRepairSpecClauses,
+  appendMultiSpecClauses,
+  reportRowSpecExpr,
   vendorRepairSpecExpr,
   erpRepairSpecExpr,
   ticketSpecExpr,

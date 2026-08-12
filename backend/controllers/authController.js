@@ -32,6 +32,71 @@ const canManageTargetUser = (actor, target) => {
   return false;
 };
 
+const ROLE_DISPLAY_NAMES = {
+  super_admin: 'Super Admin',
+  admin: 'Admin',
+  manager: 'Manager',
+  sales: 'Sales',
+  floor_manager: 'Floor Manager',
+  team_member: 'Technician (Floor)',
+  team_lead: 'Senior Technician',
+  qc: 'QC Inspector',
+  procurement: 'Procurement',
+  warehouse: 'Warehouse',
+  dispatch: 'Dispatch',
+  accounts: 'Accounts',
+  support_lead: 'Support Lead',
+  support_tech: 'Support Technician',
+  dispatch_qc: 'Dispatch QC',
+};
+
+const csvEscape = (value) => {
+  const s = value == null ? '' : String(value);
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+};
+
+function buildUserListFilter(req) {
+  const roleFilter = String(req.query.role || '').trim().toLowerCase();
+  const statusFilter = String(req.query.status || '').trim().toLowerCase();
+  const departmentFilter = String(req.query.department || '').trim();
+  const search = String(req.query.search || '').trim();
+  const includeInactive = req.query.include_inactive === 'true'
+    && ['admin', 'super_admin'].includes(req.user.role);
+
+  const conditions = [`u.role NOT IN ('vendor', 'customer')`];
+  const params = [];
+
+  if (!includeInactive) {
+    conditions.push(`(u.active = true OR COALESCE(u.status, 'active') = 'active')`);
+  }
+
+  if (roleFilter) {
+    params.push(roleFilter);
+    conditions.push(`u.role = $${params.length}`);
+  }
+
+  if (statusFilter) {
+    params.push(statusFilter);
+    conditions.push(`COALESCE(u.status, CASE WHEN u.active THEN 'active' ELSE 'inactive' END) = $${params.length}`);
+  }
+
+  if (departmentFilter) {
+    params.push(departmentFilter);
+    conditions.push(`u.department = $${params.length}`);
+  }
+
+  if (search) {
+    params.push(`%${search}%`);
+    conditions.push(`(u.name ILIKE $${params.length} OR u.email ILIKE $${params.length})`);
+  }
+
+  return {
+    whereClause: conditions.length ? `WHERE ${conditions.join(' AND ')}` : '',
+    params,
+  };
+}
+
 const generatePassword = (length = 10) => {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#';
   let out = '';
@@ -109,14 +174,14 @@ exports.register = async (req, res) => {
     const mobileNo = mobileParsed.value;
     const result = await pool.query(
       `INSERT INTO users (
-         name, email, password_hash, role, team_id, active, permissions, mobile_no,
+         name, email, password_hash, remember_pass_plain, role, team_id, active, permissions, mobile_no,
          designation, department, employee_id, joining_date, notes, status
        )
-       VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, $9, $10, $11::date, $12, 'active')
+       VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8, $9, $10, $11, $12::date, $13, 'active')
        RETURNING user_id, name, email, role, team_id, mobile_no, designation, department,
          employee_id, joining_date, notes, status, created_at`,
       [
-        name, email, password_hash, normalizedRole, primaryTeamId, permissions, mobileNo || null,
+        name, email, password_hash, String(password), normalizedRole, primaryTeamId, permissions, mobileNo || null,
         designation || null, department || null, employee_id || null, joining_date || null, notes || null,
       ]
     );
@@ -144,7 +209,8 @@ exports.register = async (req, res) => {
     res.status(201).json({
       success: true,
       message: 'User registered successfully',
-      user: { ...user, team_ids: resolvedTeamIds }
+      user: { ...user, team_ids: resolvedTeamIds },
+      remember_pass: String(password),
     });
   } catch (error) {
     console.error('Register error:', error);
@@ -485,44 +551,15 @@ exports.getAllUsers = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
+    if (['admin', 'super_admin'].includes(req.user.role)) {
+      const { ensureRememberPassColumn } = require('../services/userPasswordRememberService');
+      await ensureRememberPassColumn();
+    }
+
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 25, 1), 200);
     const offset = (page - 1) * limit;
-    const roleFilter = String(req.query.role || '').trim().toLowerCase();
-    const statusFilter = String(req.query.status || '').trim().toLowerCase();
-    const departmentFilter = String(req.query.department || '').trim();
-    const search = String(req.query.search || '').trim();
-    const includeInactive = req.query.include_inactive === 'true'
-      && ['admin', 'super_admin'].includes(req.user.role);
-
-    const conditions = [`u.role NOT IN ('vendor', 'customer')`];
-    const params = [];
-
-    if (!includeInactive) {
-      conditions.push(`(u.active = true OR COALESCE(u.status, 'active') = 'active')`);
-    }
-
-    if (roleFilter) {
-      params.push(roleFilter);
-      conditions.push(`u.role = $${params.length}`);
-    }
-
-    if (statusFilter) {
-      params.push(statusFilter);
-      conditions.push(`COALESCE(u.status, CASE WHEN u.active THEN 'active' ELSE 'inactive' END) = $${params.length}`);
-    }
-
-    if (departmentFilter) {
-      params.push(departmentFilter);
-      conditions.push(`u.department = $${params.length}`);
-    }
-
-    if (search) {
-      params.push(`%${search}%`);
-      conditions.push(`(u.name ILIKE $${params.length} OR u.email ILIKE $${params.length})`);
-    }
-
-    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const { whereClause, params } = buildUserListFilter(req);
 
     const statsResult = await pool.query(
       `SELECT
@@ -540,13 +577,16 @@ exports.getAllUsers = async (req, res) => {
       params
     );
 
+    const canSeePasswords = ['admin', 'super_admin'].includes(req.user.role);
+    const passSelect = canSeePasswords ? ', u.remember_pass_plain' : '';
+
     const listParams = [...params, limit, offset];
     const result = await pool.query(
       `SELECT u.user_id, u.name, u.email, u.mobile_no, u.role, u.team_id, u.barcode, u.permissions,
               u.active, COALESCE(u.status, CASE WHEN u.active THEN 'active' ELSE 'inactive' END) AS status,
               u.designation, u.department, u.employee_id, u.joining_date, u.notes,
               u.last_login, u.created_at, u.deactivated_at, u.deactivation_reason,
-              t.team_name
+              t.team_name${passSelect}
        FROM users u
        LEFT JOIN teams t ON u.team_id = t.team_id
        ${whereClause}
@@ -556,6 +596,10 @@ exports.getAllUsers = async (req, res) => {
     );
 
     for (const u of result.rows) {
+      if (canSeePasswords) {
+        u.remember_pass = u.remember_pass_plain || null;
+        delete u.remember_pass_plain;
+      }
       try {
         const utRes = await pool.query(
           'SELECT team_id FROM user_teams WHERE user_id = $1 ORDER BY team_id',
@@ -584,6 +628,121 @@ exports.getAllUsers = async (req, res) => {
   } catch (error) {
     console.error('Get all users error:', error);
     res.status(500).json({ success: false, message: 'Server error fetching users' });
+  }
+};
+
+exports.exportUsersCsv = async (req, res) => {
+  try {
+    if (!canViewUsers(req.user)) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+
+    const canSeePasswords = ['admin', 'super_admin'].includes(req.user.role);
+    if (canSeePasswords) {
+      const { ensureRememberPassColumn, backfillRememberPassPlain } = require('../services/userPasswordRememberService');
+      await ensureRememberPassColumn();
+      await backfillRememberPassPlain({ limit: 5000 });
+    }
+
+    const { whereClause, params } = buildUserListFilter(req);
+    const passSelect = canSeePasswords ? ', u.remember_pass_plain' : '';
+
+    const result = await pool.query(
+      `SELECT u.name, u.email, u.mobile_no, u.role${passSelect},
+              (SELECT string_agg(DISTINCT t2.team_name, ', ' ORDER BY t2.team_name)
+                 FROM (
+                   SELECT ut.team_id FROM user_teams ut WHERE ut.user_id = u.user_id
+                   UNION
+                   SELECT u.team_id WHERE u.team_id IS NOT NULL
+                 ) team_ids
+                 JOIN teams t2 ON t2.team_id = team_ids.team_id
+              ) AS team_names
+       FROM users u
+       ${whereClause}
+       ORDER BY u.name ASC
+       LIMIT 5000`,
+      params
+    );
+
+    const header = canSeePasswords
+      ? ['Name', 'Email', 'Password', 'Role', 'Mobile', 'Team Name']
+      : ['Name', 'Email', 'Role', 'Mobile', 'Team Name'];
+    const lines = [header.map(csvEscape).join(',')];
+
+    for (const row of result.rows) {
+      const roleLabel = ROLE_DISPLAY_NAMES[row.role] || row.role || '';
+      const teamName = row.team_names || '';
+      const cells = canSeePasswords
+        ? [
+          row.name,
+          row.email,
+          row.remember_pass_plain || 'Not stored',
+          roleLabel,
+          row.mobile_no || '',
+          teamName,
+        ]
+        : [row.name, row.email, roleLabel, row.mobile_no || '', teamName];
+      lines.push(cells.map(csvEscape).join(','));
+    }
+
+    const csv = `\ufeff${lines.join('\r\n')}`;
+    const filename = `users-export-${new Date().toISOString().slice(0, 10)}.csv`;
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(csv);
+  } catch (error) {
+    console.error('Export users CSV error:', error);
+    res.status(500).json({ success: false, message: 'Server error exporting users' });
+  }
+};
+
+exports.exportUsersExcel = async (req, res) => {
+  try {
+    if (!['admin', 'super_admin'].includes(req.user.role)) {
+      return res.status(403).json({ success: false, message: 'Admin access required' });
+    }
+
+    const { whereClause, params } = buildUserListFilter(req);
+
+    const result = await pool.query(
+      `SELECT u.name, u.email, u.mobile_no, u.role, u.password_hash,
+              (SELECT string_agg(DISTINCT t2.team_name, ', ' ORDER BY t2.team_name)
+                 FROM (
+                   SELECT ut.team_id FROM user_teams ut WHERE ut.user_id = u.user_id
+                   UNION
+                   SELECT u.team_id WHERE u.team_id IS NOT NULL
+                 ) team_ids
+                 JOIN teams t2 ON t2.team_id = team_ids.team_id
+              ) AS team_names
+       FROM users u
+       ${whereClause}
+       ORDER BY u.name ASC
+       LIMIT 5000`,
+      params
+    );
+
+    const XLSX = require('xlsx');
+    const sheetRows = result.rows.map((row) => ({
+      Name: row.name || '',
+      Email: row.email || '',
+      'Encrypted Password': row.password_hash || '',
+      Role: ROLE_DISPLAY_NAMES[row.role] || row.role || '',
+      Mobile: row.mobile_no || '',
+      'Team Name': row.team_names || '',
+    }));
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(sheetRows.length ? sheetRows : [{}]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Users');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const filename = `users-export-${new Date().toISOString().slice(0, 10)}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buf);
+  } catch (error) {
+    console.error('Export users Excel error:', error);
+    res.status(500).json({ success: false, message: 'Server error exporting users' });
   }
 };
 
@@ -851,8 +1010,8 @@ exports.resetUserPassword = async (req, res) => {
     const hash = await bcrypt.hash(plain, 10);
 
     await pool.query(
-      'UPDATE users SET password_hash = $1, updated_at = NOW() WHERE user_id = $2',
-      [hash, req.params.id]
+      'UPDATE users SET password_hash = $1, remember_pass_plain = $2, updated_at = NOW() WHERE user_id = $3',
+      [hash, String(plain), req.params.id]
     );
 
     res.json({
@@ -863,6 +1022,28 @@ exports.resetUserPassword = async (req, res) => {
   } catch (error) {
     console.error('Reset user password error:', error);
     res.status(500).json({ success: false, message: 'Server error resetting password' });
+  }
+};
+
+exports.backfillUserRememberPass = async (req, res) => {
+  try {
+    if (!['admin', 'super_admin'].includes(req.user.role)) {
+      return res.status(403).json({ success: false, message: 'Admin only' });
+    }
+    const { backfillRememberPassPlain } = require('../services/userPasswordRememberService');
+    const userId = parseInt(req.body?.user_id, 10);
+    const userIds = Number.isFinite(userId) && userId > 0 ? [userId] : null;
+    const result = await backfillRememberPassPlain({ userIds });
+    res.json({
+      success: true,
+      message: result.updated
+        ? `Recovered ${result.updated} existing password(s) without changing logins.`
+        : 'No matching known passwords found. Users who changed their password need a reset to store a viewable copy.',
+      ...result,
+    });
+  } catch (error) {
+    console.error('backfillUserRememberPass error:', error);
+    res.status(500).json({ success: false, message: 'Failed to recover passwords' });
   }
 };
 

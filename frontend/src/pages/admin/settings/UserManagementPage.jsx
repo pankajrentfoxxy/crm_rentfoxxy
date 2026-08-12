@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Copy, Key, LogIn, Pencil, Plus, Power, Search, X,
+  Copy, Download, Key, LogIn, Pencil, Plus, Power, Search, X,
 } from 'lucide-react';
 import RoleBadge from '../../../components/ui/RoleBadge';
 import { ToastContainer, useToast } from '../../../components/ui/Toast';
@@ -14,6 +14,8 @@ import {
 import { formatIndianMobileInput, indianMobileError, normalizeIndianMobile } from '../../../utils/phoneValidation';
 import {
   createUser,
+  exportUsersCsv,
+  exportUsersExcel,
   fetchAuthTeams,
   fetchUsers,
   loginAsUser,
@@ -21,6 +23,7 @@ import {
   updateUser,
   updateUserStatus,
 } from '../../../utils/rbacApi';
+import { closeTab, navigateTab, openBlankTab } from '../../../utils/openDeferredTab';
 
 function initials(name) {
   return String(name || '?')
@@ -130,6 +133,8 @@ export default function UserManagementPage() {
   const [resetResult, setResetResult] = useState(null);
   const [resetSaving, setResetSaving] = useState(false);
   const [impersonatingId, setImpersonatingId] = useState(null);
+  const [createdPassword, setCreatedPassword] = useState(null);
+  const [exportingCsv, setExportingCsv] = useState(false);
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
@@ -244,11 +249,15 @@ export default function UserManagementPage() {
         await updateUser(editingUser.user_id, payload);
         showToast('User updated', 'success');
       } else {
-        await createUser({
+        const generated = form.autoPassword ? generatePassword() : form.password;
+        const data = await createUser({
           ...payload,
-          password: form.autoPassword ? generatePassword() : form.password,
+          password: generated,
         });
         showToast('User created', 'success');
+        if (data.remember_pass) {
+          setCreatedPassword({ name: form.name.trim(), password: data.remember_pass });
+        }
       }
       closeDrawer();
       loadUsers();
@@ -306,15 +315,31 @@ export default function UserManagementPage() {
       showToast('Cannot log in as another super administrator', 'error');
       return;
     }
+
+    const tab = openBlankTab();
+    if (!tab) {
+      showToast('Pop-up blocked. Allow pop-ups for crm.rentfoxxy.com (Safari: Settings → Websites → Pop-up Windows), then try again.', 'error');
+      return;
+    }
+
     setImpersonatingId(u.user_id);
     try {
+      try {
+        tab.document.title = 'Opening session…';
+      } catch {
+        /* ignore if tab access is restricted */
+      }
       const data = await loginAsUser(u.user_id);
       if (!data.token) throw new Error('No session token returned');
       const by = encodeURIComponent(currentUser?.email || 'super admin');
       const callbackUrl = `${window.location.origin}/auth/impersonate?token=${encodeURIComponent(data.token)}&by=${by}`;
-      window.open(callbackUrl, '_blank', 'noopener,noreferrer');
+      if (!navigateTab(tab, callbackUrl)) {
+        closeTab(tab);
+        throw new Error('Could not open the new tab. Check your browser pop-up settings.');
+      }
       showToast(`Opened ${u.name} in a new tab`, 'success');
     } catch (err) {
+      closeTab(tab);
       showToast(err.response?.data?.message || err.message || 'Login as user failed', 'error');
     } finally {
       setImpersonatingId(null);
@@ -330,12 +355,66 @@ export default function UserManagementPage() {
     setPage(1);
   };
 
+  const handleExportCsv = async () => {
+    setExportingCsv(true);
+    try {
+      const blob = await exportUsersCsv({
+        search: search || undefined,
+        role: roleFilter || undefined,
+        status: statusFilter || undefined,
+        department: departmentFilter || undefined,
+        include_inactive: includeInactive ? 'true' : undefined,
+      });
+      const url = window.URL.createObjectURL(new Blob([blob]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `users-export-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      showToast('Users exported to CSV', 'success');
+    } catch (err) {
+      showToast(err.response?.data?.message || 'Export failed', 'error');
+    } finally {
+      setExportingCsv(false);
+    }
+  };
+
+  const handleExportExcel = async () => {
+    setExportingCsv(true);
+    try {
+      const blob = await exportUsersExcel({
+        search: search || undefined,
+        role: roleFilter || undefined,
+        status: statusFilter || undefined,
+        department: departmentFilter || undefined,
+        include_inactive: includeInactive ? 'true' : undefined,
+      });
+      const url = window.URL.createObjectURL(new Blob([blob]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `users-export-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      showToast('Users exported to Excel', 'success');
+    } catch (err) {
+      showToast(err.response?.data?.message || 'Export failed', 'error');
+    } finally {
+      setExportingCsv(false);
+    }
+  };
+
   const creatableRoles = useMemo(() => {
     if (currentUser?.role === 'manager') {
       return MANAGEABLE_ROLES.filter((r) => !['admin', 'manager', 'super_admin'].includes(r));
     }
     return MANAGEABLE_ROLES;
   }, [currentUser?.role]);
+
+  const tableColSpan = 8;
 
   return (
     <>
@@ -345,14 +424,37 @@ export default function UserManagementPage() {
             <h1 className="text-2xl font-semibold text-gray-800">Users</h1>
             <p className="text-sm text-gray-500">Manage CRM team members and their access</p>
           </div>
-          <button
-            type="button"
-            onClick={openAdd}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
-          >
-            <Plus className="w-4 h-4" />
-            Add User
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {isAdmin ? (
+              <button
+                type="button"
+                onClick={handleExportExcel}
+                disabled={exportingCsv}
+                className="inline-flex items-center gap-2 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
+              >
+                <Download className="w-4 h-4" />
+                {exportingCsv ? 'Exporting…' : 'Export Excel'}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleExportCsv}
+                disabled={exportingCsv}
+                className="inline-flex items-center gap-2 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
+              >
+                <Download className="w-4 h-4" />
+                {exportingCsv ? 'Exporting…' : 'Export CSV'}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={openAdd}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
+            >
+              <Plus className="w-4 h-4" />
+              Add User
+            </button>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
@@ -460,11 +562,11 @@ export default function UserManagementPage() {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-12 text-center text-gray-400">Loading...</td>
+                    <td colSpan={tableColSpan} className="px-4 py-12 text-center text-gray-400">Loading...</td>
                   </tr>
                 ) : users.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-12 text-center text-gray-400">No users found</td>
+                    <td colSpan={tableColSpan} className="px-4 py-12 text-center text-gray-400">No users found</td>
                   </tr>
                 ) : (
                   users.map((u) => {
@@ -926,6 +1028,35 @@ export default function UserManagementPage() {
                 </div>
               </>
             )}
+          </div>
+        </div>
+      ) : null}
+
+      {createdPassword ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/30" onClick={() => setCreatedPassword(null)} role="presentation" />
+          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-md p-5">
+            <h3 className="text-lg font-semibold text-gray-800 mb-2">
+              Password for {createdPassword.name}
+            </h3>
+            <p className="text-sm text-gray-600 mb-3">Save this password — it is shown here for admin reference only.</p>
+            <div className="flex items-center gap-2 bg-gray-50 border rounded-lg p-3 mb-4">
+              <code className="flex-1 text-sm font-mono break-all">{createdPassword.password}</code>
+              <button
+                type="button"
+                onClick={() => navigator.clipboard.writeText(createdPassword.password)}
+                className="p-2 text-blue-600 hover:bg-blue-50 rounded shrink-0"
+              >
+                <Copy className="w-4 h-4" />
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => setCreatedPassword(null)}
+              className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg text-sm"
+            >
+              Done
+            </button>
           </div>
         </div>
       ) : null}

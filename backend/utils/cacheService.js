@@ -100,5 +100,7 @@ module.exports = {
     INVENTORY_COUNT: parseInt(process.env.CACHE_TTL_INVENTORY_COUNT_SEC || '600', 10),
     MASTER_DATA: parseInt(process.env.CACHE_TTL_MASTER_DATA_SEC || '120', 10),
     MASTER_DATA_KPI: parseInt(process.env.CACHE_TTL_MASTER_DATA_KPI_SEC || '180', 10),
+    PRODUCTION_QC_LIST: parseInt(process.env.CACHE_TTL_PRODUCTION_QC_LIST_SEC || '300', 10),
+    PRODUCTION_QC_DETAIL: parseInt(process.env.CACHE_TTL_PRODUCTION_QC_DETAIL_SEC || '600', 10),
   },
 };

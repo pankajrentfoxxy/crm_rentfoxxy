@@ -286,8 +286,12 @@ export default function SupportTicketList() {
 
   const exportCsv = async () => {
     const params = buildFilterParams();
-    if (typeFilter) params.set('type', typeFilter);
-    if (pickupKindFilter) params.set('pickup_type', pickupKindFilter);
+    if (typeFilter && ['complaint', 'pickup', 'replacement'].includes(typeFilter)) {
+      params.set('type', typeFilter);
+    }
+    if (pickupKindFilter && ['repair', 'return'].includes(pickupKindFilter)) {
+      params.set('pickup_type', pickupKindFilter);
+    }
     const res = await api.get(`/support/tickets/export?${params}`, { responseType: 'blob' });
     const url = window.URL.createObjectURL(res.data);
     const a = document.createElement('a');

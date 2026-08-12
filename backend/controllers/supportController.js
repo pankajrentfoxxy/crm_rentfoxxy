@@ -4714,13 +4714,19 @@ exports.exportTickets = async (req, res) => {
             search: (req.query.search || '').trim(),
             type: (req.query.type || '').trim(),
             pickupType: (req.query.pickup_type || '').trim(),
+            statusTab: (req.query.status_tab || '').trim(),
+            priority: (req.query.priority || '').trim(),
+            assignee: (req.query.assignee || '').trim(),
+            dateFrom: (req.query.date_from || '').trim(),
+            dateTo: (req.query.date_to || '').trim(),
             limit: 500,
             offset: 0,
             closedDays: 365
         });
-        const header = ['Ticket ID', 'Customer', 'Phone', 'Machines', 'Types', 'Pickup kind', 'Status', 'Technicians', 'Created', 'Last updated', 'Resolved'];
+        const tickets = await supportQuery.attachTicketExportComments(data.tickets || []);
+        const header = ['Ticket ID', 'Customer', 'Phone', 'Machines', 'Types', 'Pickup kind', 'Status', 'Technicians', 'Created', 'Last updated', 'Comments', 'Resolved'];
         const lines = [header.join(',')];
-        for (const t of data.tickets) {
+        for (const t of tickets) {
             const techs = [...new Set((t.items || []).map((i) => i.assigned_to_name).filter(Boolean))].join('; ');
             const machines = (t.items || []).map((i) => i.unique_serial_number || i.serial_number).join('; ');
             const types = (t.items || []).map((i) => i.item_type).join('; ');
@@ -4733,9 +4739,10 @@ exports.exportTickets = async (req, res) => {
                 JSON.stringify(t.pickup_kind_label || ''),
                 t.status,
                 JSON.stringify(techs),
-                t.created_at,
-                t.updated_at,
-                t.closed_at || ''
+                supportQuery.formatSupportExportDateTime(t.created_at),
+                supportQuery.formatSupportExportDateTime(t.updated_at),
+                JSON.stringify(t.export_comments || ''),
+                supportQuery.formatSupportExportDateTime(t.closed_at)
             ].join(','));
         }
         res.setHeader('Content-Type', 'text/csv');

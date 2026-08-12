@@ -40,7 +40,7 @@ export const MODULE_CHILDREN = {
     'payment_records',
   ],
   floor_pipeline: ['floor_tickets', 'floor_ticket_config_edit', 'chip_level_repair', 'qc_management', 'dispatch_qc', 'pending_inventory'],
-  inventory_management: ['parts', 'parts_inventory', 'customer_inventory', 'ttspl_history'],
+  inventory_management: ['parts', 'parts_inventory', 'customer_inventory', 'ttspl_history', 'inventory_master_data'],
 };
 
 export const ALL_CHILD_SECTIONS = new Set(
@@ -67,6 +67,7 @@ export function childSectionsForParent(parentSection) {
 export const INVENTORY_UMBRELLA_SECTIONS = [
   'inventory',
   'inventory_management',
+  'inventory_master_data',
   'inventory_asset_movement',
   'parts',
   'parts_inventory',
