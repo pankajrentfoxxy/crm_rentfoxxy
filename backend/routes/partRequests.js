@@ -50,6 +50,11 @@ router.get('/cost-summary/:ttsplId', checkSectionPermission('ttspl_history', 'vi
 router.get('/instances', ctrl.listPartInstances);
 router.post('/instances', allowPartInstanceWrite, ctrl.addPartInstances);
 router.patch('/instances/:instanceId', checkRole('warehouse', 'admin', 'manager', 'super_admin'), ctrl.updatePartInstance);
+const allowTtsplPartDetach = (req, res, next) => {
+  if (req.user?.role === 'super_admin') return next();
+  return checkSectionPermission('parts_detach', 'edit')(req, res, next);
+};
+router.post('/instances/:instanceId/detach-from-ttspl', allowTtsplPartDetach, ctrl.detachInstalledPartFromTtspl);
 router.get('/ticket/:ticketId', ctrl.getTicketPartRequests);
 
 router.get('/:requestId', ctrl.getPartRequest);
@@ -59,7 +64,14 @@ router.patch('/:requestId/escalate', checkRole('warehouse', 'admin', 'manager', 
 router.patch('/:requestId/link-spo', checkRole('procurement', 'admin', 'super_admin'), ctrl.linkRequestToSpo);
 router.patch('/:requestId/received', checkRole('warehouse', 'admin', 'manager', 'super_admin'), ctrl.markPartReceived);
 router.post('/:requestId/attach', checkSectionPermission('parts_requests', 'create'), ctrl.attachPartAndReturnOld);
-router.post('/:requestId/detach', checkSectionPermission('parts_requests', 'create'), ctrl.detachAttachedPart);
+const allowPartDetach = (req, res, next) => {
+  if (req.body?.return_to_inventory === true) {
+    if (req.user?.role === 'super_admin') return next();
+    return checkSectionPermission('parts_detach', 'edit')(req, res, next);
+  }
+  return checkSectionPermission('parts_requests', 'create')(req, res, next);
+};
+router.post('/:requestId/detach', allowPartDetach, ctrl.detachAttachedPart);
 router.patch('/:requestId/cancel', ctrl.cancelPartRequest);
 
 module.exports = router;

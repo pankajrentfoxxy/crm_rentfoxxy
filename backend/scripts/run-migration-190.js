@@ -5,20 +5,14 @@ const path = require('path');
 const pool = require('../config/db');
 
 async function main() {
-  const sqlPath = path.join(__dirname, '../migrations/190_part_vendor_repair_permission.sql');
+  const sqlPath = path.join(__dirname, '../migrations/190_parts_detach_permission.sql');
   const sql = fs.readFileSync(sqlPath, 'utf8');
-  console.log('Running 190_part_vendor_repair_permission.sql …');
+  console.log('Running 190_parts_detach_permission.sql …');
   await pool.query(sql);
   const r = await pool.query(
-    `SELECT role, can_view, can_create, can_edit
-       FROM role_permissions
-      WHERE section = 'part_vendor_repair'
-      ORDER BY role`
+    `SELECT section FROM permission_sections WHERE section = 'parts_detach'`
   );
-  console.log('Done. role grants:');
-  r.rows.forEach((row) => {
-    console.log(`  ${row.role}: view=${row.can_view} create=${row.can_create} edit=${row.can_edit}`);
-  });
+  console.log(r.rows.length ? 'Done — parts_detach permission ready.' : 'Section missing after migration.');
   process.exit(0);
 }
 

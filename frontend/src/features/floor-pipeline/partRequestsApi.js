@@ -26,4 +26,7 @@ export const linkRequestToSpo = (id, body) => api.patch(`${base}/${id}/link-spo`
 export const markPartReceived = (id, body) => api.patch(`${base}/${id}/received`, body);
 export const attachPartToRequest = (id, body) => api.post(`${base}/${id}/attach`, body);
 export const detachAttachedPart = (id, body) => api.post(`${base}/${id}/detach`, body || {});
+export const detachPartToInventory = (id, body) => api.post(`${base}/${id}/detach`, { ...(body || {}), return_to_inventory: true });
+export const detachInstalledPartFromTtspl = (instanceId, body) =>
+  api.post(`${base}/instances/${instanceId}/detach-from-ttspl`, body || {});
 export const cancelPartRequest = (id) => api.patch(`${base}/${id}/cancel`);
