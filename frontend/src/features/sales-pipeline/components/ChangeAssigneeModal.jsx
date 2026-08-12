@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { updateDcAssignment, generateBluedartWaybill } from '../salesPipelineApi';
+import { sumDeclaredValueForUnits } from '../bluedartDeclaredValue';
 
 function initialMode(head) {
   if (head.dispatch_mode) return head.dispatch_mode;
@@ -41,6 +42,7 @@ export default function ChangeAssigneeModal({
   open,
   dcNumber,
   head = {},
+  units = [],
   technicians = [],
   onClose,
   onSaved,
@@ -86,18 +88,22 @@ export default function ChangeAssigneeModal({
       reason: '',
     });
     const c = buildConsigneeFromHead(head);
-    const pieces = Math.max(1, Number(head.quantity || head.main_qty || 1));
+    const pieces = Math.max(1, Number(head.quantity || head.main_qty || units.length || 1));
+    const unitList = (units || []).length
+      ? units
+      : [{ processor: head.processor, generation: head.generation }];
+    const declared = sumDeclaredValueForUnits(unitList);
     setBdForm({
       name: c.name,
       mobile: c.mobile,
       address: c.address,
       pincode: c.pincode,
-      declaredValue: '',
+      declaredValue: declared != null ? String(declared) : '',
       weight: (2.5 * pieces).toFixed(2),
       pieceCount: String(pieces),
     });
     setBdOpen(isBlueDartCourier(courierName) || m === 'courier');
-  }, [open, head]);
+  }, [open, head, units]);
 
   if (!open) return null;
 
@@ -310,11 +316,14 @@ export default function ChangeAssigneeModal({
                         <input className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white"
                           value={bdForm.weight} onChange={(e) => setBdForm((f) => ({ ...f, weight: e.target.value }))} />
                       </label>
-                      <label className="block">
-                        <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Declared value (₹) *</span>
-                        <input className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white" placeholder="Enter amount"
-                          value={bdForm.declaredValue} onChange={(e) => setBdForm((f) => ({ ...f, declaredValue: e.target.value }))} />
-                      </label>
+                          <label className="block">
+                            <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Declared value (₹) *</span>
+                            <input className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white" placeholder="Auto from i5/i7/R7 + gen"
+                              value={bdForm.declaredValue} onChange={(e) => setBdForm((f) => ({ ...f, declaredValue: e.target.value }))} />
+                            <span className="block text-[10px] text-slate-500 mt-0.5">
+                              Autofilled from processor + generation matrix (editable)
+                            </span>
+                          </label>
                       <label className="block">
                         <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Pieces</span>
                         <input className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white"

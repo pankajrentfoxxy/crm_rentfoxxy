@@ -15,8 +15,10 @@ import LaptopReportPage from './pages/LaptopReportPage';
 import SalesOrderReportPage from './pages/SalesOrderReportPage';
 import SupportDailySummaryPage from './pages/SupportDailySummaryPage';
 import InwardOutwardSummaryPage from './pages/InwardOutwardSummaryPage';
+import ProductionQcReportPage from './pages/ProductionQcReportPage';
 
 const g = (section, node) => <ProtectedRoute section={section} action="view">{node}</ProtectedRoute>;
+const gAny = (sections, node) => <ProtectedRoute sections={sections} action="view">{node}</ProtectedRoute>;
 
 function ReportsIndexRedirect() {
   const { user, canView } = usePermission();
@@ -24,6 +26,9 @@ function ReportsIndexRedirect() {
     return <Navigate to="sales-dashboard" replace />;
   }
   const canReports = canView('reports') || canView('reports_access');
+  if (canView('production_qc_report') && !canReports && !canView('analytics_dashboard')) {
+    return <Navigate to="production-qc-report" replace />;
+  }
   if (user?.role === 'floor_manager' && canReports) {
     return <Navigate to="technician" replace />;
   }
@@ -46,6 +51,13 @@ export default function ReportingApp() {
       <Route path="vendor-spend" element={g('reports_access', <VendorSpendReportPage />)} />
       <Route path="technician" element={g('reports_access', <TechnicianReportPage />)} />
       <Route path="laptop-report" element={g('reports_access', <LaptopReportPage />)} />
+      <Route
+        path="production-qc-report"
+        element={gAny(
+          ['production_qc_report', 'reports_access', 'reports', 'qc_management'],
+          <ProductionQcReportPage />
+        )}
+      />
       <Route path="sales-order-report" element={g('reports_access', <SalesOrderReportPage />)} />
       <Route path="support-daily-summary" element={g('reports_access', <SupportDailySummaryPage />)} />
       <Route path="inward-outward-summary" element={g('reports_access', <InwardOutwardSummaryPage />)} />

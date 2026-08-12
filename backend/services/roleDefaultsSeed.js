@@ -22,6 +22,7 @@ const ROLE_ROW_DEFAULTS = {
     ['credit_notes', true, true, false], ['debit_notes', true, true, false], ['security_deposits', true, true, false],
     ['billing_dashboard', false, false, false], ['einvoice_ewb', true, false, false],
     ['support_tickets', true, true, false], ['reports', false, false, false], ['reports_access', false, false, false],
+    ['production_qc_report', false, false, false],
     ['reports_export', true, false, false],
     ['users', true, true, false], ['teams', true, true, false], ['roles', false, false, false],
     ['role_permissions', false, true, false], ['user_permissions', false, true, false],
@@ -40,7 +41,8 @@ const ROLE_ROW_DEFAULTS = {
     ['chip_level_repair', true, true, false], ['qc_management', false, true, false],
     ['inventory', false, true, false], ['inventory_management', false, true, false], ['parts_inventory', true, true, false],
     ['ttspl_history', false, false, false], ['warehouse', false, true, false], ['vendor_management', false, false, false],
-    ['reports_access', false, false, false], ['support_tickets', false, false, false],
+    ['reports_access', false, false, false], ['production_qc_report', false, false, false],
+    ['support_tickets', false, false, false],
   ],
   team_member: [
     ['dashboard', false, false, false], ['floor_pipeline', false, true, false], ['floor_tickets', false, true, false],
@@ -53,7 +55,8 @@ const ROLE_ROW_DEFAULTS = {
   ],
   qc: [
     ['dashboard', false, false, false], ['floor_pipeline', false, true, false], ['floor_tickets', false, true, false],
-    ['qc_management', false, true, false], ['ttspl_history', false, false, false], ['inventory_management', false, false, false],
+    ['qc_management', false, true, false], ['production_qc_report', false, false, false],
+    ['ttspl_history', false, false, false], ['inventory_management', false, false, false],
   ],
   dispatch_qc: [
     ['dashboard', false, false, false], ['floor_pipeline', false, true, false], ['floor_tickets', false, true, false],
@@ -79,7 +82,8 @@ const ROLE_ROW_DEFAULTS = {
     ['dashboard', false, false, false], ['customer_billing', true, true, false], ['vendor_billing_mgmt', true, true, false],
     ['credit_notes', true, false, false], ['debit_notes', true, false, false], ['security_deposits', true, true, false],
     ['billing_dashboard', false, false, false], ['einvoice_ewb', true, false, false],
-    ['reports_access', false, false, false], ['reports_export', true, false, false],
+    ['reports_access', false, false, false], ['production_qc_report', false, false, false],
+    ['reports_export', true, false, false],
     ['customers', false, false, false], ['delivery_challans', false, false, false], ['ttspl_history', false, false, false],
     ['payment_records', true, true, false],
   ],

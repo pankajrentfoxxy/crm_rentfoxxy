@@ -18,6 +18,7 @@ import {
   DC_STATUS_STYLES, formatConfig, formatCurrency, formatDate, formatDateTime,
   isDcAssignmentEditable, isDcCancellable, parseSerials, salesOrderDetailPath, statusLabel,
 } from '../salesPipelineUtils';
+import { sumDeclaredValueForUnits } from '../bluedartDeclaredValue';
 import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
 import DcEditModal from '../components/DcEditModal';
@@ -141,7 +142,16 @@ export default function DeliveryChallanDetailPage() {
     if (!window.confirm('Generate a BlueDart AWB for this DC and save it?')) return;
     setAwbGenerating(true);
     try {
-      const { data } = await generateDcBluedartAwb(dcNumber, {});
+      const unitsForValue = lines.flatMap((l) => {
+        if (l.serials_detail?.length) {
+          return l.serials_detail.map((d) => ({ processor: d.processor, generation: d.generation }));
+        }
+        return [{ processor: l.processor, generation: l.generation }];
+      });
+      const declared = sumDeclaredValueForUnits(unitsForValue);
+      const { data } = await generateDcBluedartAwb(dcNumber, {
+        services: declared != null ? { declaredValue: declared } : {},
+      });
       toast.success(data?.message || `AWB ${data?.data?.awb_number} saved`);
       await load();
     } catch (err) {
@@ -941,6 +951,7 @@ export default function DeliveryChallanDetailPage() {
         open={changeAssigneeOpen}
         dcNumber={dcNumber}
         head={head}
+        units={allUnits}
         technicians={technicians}
         onClose={() => setChangeAssigneeOpen(false)}
         onSaved={load}

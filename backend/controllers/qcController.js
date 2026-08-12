@@ -322,6 +322,15 @@ exports.submitQC = async (req, res) => {
             qcId = insertRes.rows[0].qc_id;
         }
 
+        // Append-only history snapshot (does not change QC workflow / unique current row)
+        try {
+            const { snapshotQcResultToHistory } = require('../services/productionQcReportService');
+            await snapshotQcResultToHistory(client, qcId);
+        } catch (histErr) {
+            console.error('QC history snapshot failed:', histErr.message);
+            // Do not fail the QC submit if history table is missing on an unmigrated env
+        }
+
         // Update ticket grade from QC (QC1 and QC2)
         await client.query(
             `UPDATE tickets SET final_grade = $1 WHERE ticket_id = $2`,

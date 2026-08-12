@@ -2210,6 +2210,102 @@ exports.getLaptopReportTickets = async (req, res) => {
     }
 };
 
+exports.getProductionQcReport = async (req, res) => {
+    try {
+        const {
+            listProductionQcReport,
+        } = require('../services/productionQcReportService');
+        const data = await listProductionQcReport(req.query);
+        res.json({ success: true, ...data });
+    } catch (error) {
+        console.error('getProductionQcReport error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Server error loading Production QC report',
+        });
+    }
+};
+
+exports.getProductionQcReportDetail = async (req, res) => {
+    try {
+        const { getProductionQcReportDetail } = require('../services/productionQcReportService');
+        const detail = await getProductionQcReportDetail(req.params.historyId);
+        if (!detail) {
+            return res.status(404).json({ success: false, message: 'QC report not found' });
+        }
+        res.json({ success: true, data: detail });
+    } catch (error) {
+        console.error('getProductionQcReportDetail error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Server error loading QC report detail',
+        });
+    }
+};
+
+exports.getProductionQcReportPdf = async (req, res) => {
+    try {
+        const { listProductionQcReport } = require('../services/productionQcReportService');
+        const { buildProductionQcListPdf } = require('../services/productionQcReportPdfService');
+        const data = await listProductionQcReport({
+            ...req.query,
+            page: 1,
+            limit: 2000,
+            for_export: true,
+        });
+        const buf = await buildProductionQcListPdf(data.rows || [], req.query);
+        const date = new Date().toISOString().slice(0, 10);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="production-qc-report_${date}.pdf"`);
+        res.send(buf);
+    } catch (error) {
+        console.error('getProductionQcReportPdf error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Server error generating Production QC PDF',
+        });
+    }
+};
+
+exports.getProductionQcReportDetailPdf = async (req, res) => {
+    try {
+        const { getProductionQcReportDetail } = require('../services/productionQcReportService');
+        const { buildProductionQcDetailPdf } = require('../services/productionQcReportPdfService');
+        const detail = await getProductionQcReportDetail(req.params.historyId);
+        if (!detail) {
+            return res.status(404).json({ success: false, message: 'QC report not found' });
+        }
+        const buf = await buildProductionQcDetailPdf(detail);
+        const ttspl = String(detail.ttspl_id || detail.history_id || 'qc').replace(/[^\w-]+/g, '_');
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader(
+            'Content-Disposition',
+            `attachment; filename="production-qc_${ttspl}_attempt${detail.attempt_no || 1}.pdf"`
+        );
+        res.send(buf);
+    } catch (error) {
+        console.error('getProductionQcReportDetailPdf error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Server error generating QC detail PDF',
+        });
+    }
+};
+
+exports.getProductionQcReportFilters = async (req, res) => {
+    try {
+        const { getProductionQcReportFilters } = require('../services/productionQcReportService');
+        const data = await getProductionQcReportFilters();
+        res.json({ success: true, ...data });
+    } catch (error) {
+        console.error('getProductionQcReportFilters error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Server error loading QC report filters',
+        });
+    }
+};
+
 exports.getSalesOrderReport = async (req, res) => {
     try {
         const data = await getSalesOrderReport(req.query);

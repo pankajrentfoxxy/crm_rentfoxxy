@@ -1138,13 +1138,72 @@ exports.generateDcBluedartAwb = async (req, res) => {
         `DC${String(dcNumber).replace(/[^A-Za-z0-9]/g, '').slice(-12)}`
       );
 
+    let declaredValue = body.services?.declaredValue;
+    if (declaredValue == null || declaredValue === '' || Number(declaredValue) <= 0) {
+      const { sumDeclaredValueForUnits } = require('../constants/bluedartDeclaredValue');
+      const unitsForValue = [];
+      for (const line of lines) {
+        const details = Array.isArray(line.serials_detail) ? line.serials_detail : [];
+        if (details.length) {
+          details.forEach((d) => unitsForValue.push({ processor: d.processor, generation: d.generation }));
+        } else if (line.processor || line.generation) {
+          const qty = Math.max(1, Number(line.quantity || line.main_qty || 1) || 1);
+          for (let i = 0; i < qty; i += 1) {
+            unitsForValue.push({ processor: line.processor, generation: line.generation });
+          }
+        }
+      }
+
+      if (!unitsForValue.some((u) => u.processor || u.generation)) {
+        const serialRes = await pool.query(
+          `SELECT COALESCE(vsn.extra->>'processor', vpd.processor, inv.processor) AS processor,
+                  COALESCE(vsn.extra->>'generation', vpd.generation, inv.generation) AS generation
+             FROM delivery_challan_lines dcl
+             CROSS JOIN LATERAL jsonb_array_elements_text(
+               CASE
+                 WHEN jsonb_typeof(to_jsonb(dcl.serial_number)) = 'array' THEN to_jsonb(dcl.serial_number)
+                 WHEN dcl.serial_number IS NULL THEN '[]'::jsonb
+                 ELSE jsonb_build_array(dcl.serial_number::text)
+               END
+             ) AS sn(entry)
+             LEFT JOIN vendor_serial_numbers vsn
+               ON vsn.deleted_at IS NULL
+              AND (
+                (split_part(sn.entry, '|', 1) ~ '^[0-9]+$' AND vsn.serial_id = split_part(sn.entry, '|', 1)::int)
+                OR vsn.serial_number = COALESCE(NULLIF(split_part(sn.entry, '|', 2), ''), sn.entry)
+                OR vsn.inventory_asset_code = COALESCE(NULLIF(split_part(sn.entry, '|', 3), ''), sn.entry)
+              )
+             LEFT JOIN vendor_product_details vpd
+               ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id', '')::int
+             LEFT JOIN LATERAL (
+               SELECT i.processor, i.generation
+                 FROM inventory i
+                WHERE i.serial_number = vsn.serial_number
+                   OR i.unique_number = vsn.inventory_asset_code
+                LIMIT 1
+             ) inv ON TRUE
+            WHERE dcl.dc_number = $1`,
+          [dcNumber]
+        ).catch((err) => {
+          console.warn('bluedart declared value serial lookup:', err.message);
+          return { rows: [] };
+        });
+        serialRes.rows.forEach((r) => {
+          unitsForValue.push({ processor: r.processor, generation: r.generation });
+        });
+      }
+
+      const matrixTotal = sumDeclaredValueForUnits(unitsForValue);
+      if (matrixTotal != null) declaredValue = matrixTotal;
+      else if (Number(head.security_amount) > 0) declaredValue = Number(head.security_amount);
+    }
+
     const result = await bluedartWaybill.generateWayBill({
       consignee,
       services: {
         ...(body.services || {}),
         pieceCount,
-        declaredValue: body.services?.declaredValue
-          ?? (Number(head.security_amount) > 0 ? Number(head.security_amount) : undefined),
+        declaredValue,
         itemName: [head.brand, head.model_name].filter(Boolean).join(' ') || 'LAPTOP',
       },
       creditReferenceNo: creditRef,

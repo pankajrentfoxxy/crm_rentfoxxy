@@ -100,6 +100,7 @@ export const reportsMenuItems = [
   { icon: Building2, label: 'Vendor Spend', path: '/reports/vendor-spend', section: 'reports_access' },
   { icon: Wrench, label: 'Technician', path: '/reports/technician', section: 'reports_access' },
   { icon: ClipboardCheck, label: 'Laptop Report', path: '/reports/laptop-report', section: 'reports_access' },
+  { icon: ClipboardCheck, label: 'Production QC Report', path: '/reports/production-qc-report', section: 'production_qc_report' },
   { icon: ShoppingCart, label: 'Sales Order Report', path: '/reports/sales-order-report', section: 'reports_access' },
   { icon: Headphones, label: 'Daily Support Summary', path: '/reports/support-daily-summary', section: 'reports_access' },
   { icon: ArrowLeftRight, label: 'Inward & Outward Summary', path: '/reports/inward-outward-summary', section: 'reports_access' },
@@ -395,6 +396,14 @@ export function isReportsChildVisible(child, canView, userRole = null) {
   if (child.path === '/reports/manager-dashboard' && userRole === 'sales') return false;
   if (child.path === '/reports/sales-dashboard' && !['admin', 'manager', 'sales'].includes(userRole)) {
     return canView(child.section);
+  }
+  if (child.section === 'production_qc_report') {
+    return (
+      canView('production_qc_report')
+      || canView('reports_access')
+      || canView('reports')
+      || canView('qc_management')
+    );
   }
   if (child.section === 'reports_access') {
     return canView('reports_access') || canView('reports');

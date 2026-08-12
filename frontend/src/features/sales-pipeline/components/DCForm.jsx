@@ -20,6 +20,7 @@ import toast from 'react-hot-toast';
 import { createDcsByAddress, getDCMeta, listSalesOrders, generateBluedartWaybill } from '../salesPipelineApi';
 import { deliveryChallanDetailPath } from '../salesPipelineUtils';
 import { BillingAddressPanel } from '../../operation-management/components/CustomerAddressPanels';
+import { sumDeclaredValueForUnits } from '../bluedartDeclaredValue';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -135,7 +136,9 @@ function DispatchFields({
   useEffect(() => {
     if (shipBy !== 'by_courier') return;
     const c = buildConsigneeFromAddress(group?.address, meta);
-    const pieces = (group?.serials || []).filter((s) => s.selected && s.qc_status === 'passed').length || 1;
+    const selected = (group?.serials || []).filter((s) => s.selected && s.qc_status === 'passed');
+    const pieces = selected.length || 1;
+    const declared = sumDeclaredValueForUnits(selected);
     setBdForm((f) => ({
       ...f,
       name: c.name || f.name,
@@ -144,6 +147,7 @@ function DispatchFields({
       pincode: c.pincode || f.pincode,
       pieceCount: String(pieces),
       weight: (2.5 * pieces).toFixed(2),
+      declaredValue: declared != null ? String(declared) : f.declaredValue,
     }));
     if (isBlueDartCourier(fields.courier_name) || !fields.courier_name) {
       setBdOpen(true);
@@ -274,8 +278,11 @@ function DispatchFields({
                 </label>
                 <label className="block">
                   <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Declared value (₹) *</span>
-                  <input className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white" placeholder="Enter amount"
+                  <input className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white" placeholder="Auto from i5/i7/R7 + gen"
                     value={bdForm.declaredValue} onChange={(e) => setBdForm((f) => ({ ...f, declaredValue: e.target.value }))} />
+                  <span className="block text-[10px] text-slate-500 mt-0.5">
+                    Autofilled from processor + generation matrix (editable)
+                  </span>
                 </label>
                 <label className="block">
                   <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Pieces</span>

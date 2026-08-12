@@ -9,6 +9,7 @@ import DiagnosisFailedPage from './pages/DiagnosisFailedPage';
 import PendingInventoryPage from './pages/PendingInventoryPage';
 import VendorRepairDcListPage from './pages/VendorRepairDcListPage';
 import VendorRepairDcDetailPage from './pages/VendorRepairDcDetailPage';
+import ProductionQcReportPage from './pages/ProductionQcReportPage';
 import {
   canAccessFloorStageFilter,
   FLOOR_DASHBOARD_SECTIONS,
@@ -57,6 +58,13 @@ export default function FloorPipelineApp() {
       <Route
         path="pending-inventory"
         element={g(['pending_inventory'], <PendingInventoryPage />)}
+      />
+      <Route
+        path="production-qc-report"
+        element={g(
+          ['production_qc_report', 'qc_management', 'floor_pipeline', 'reports_access', 'reports'],
+          <ProductionQcReportPage />
+        )}
       />
       <Route path="vendor-repair-dc" element={g(FLOOR_DASHBOARD_SECTIONS, <VendorRepairDcListPage />)} />
       <Route path="vendor-repair-dc/:dcNumber" element={g(FLOOR_DASHBOARD_SECTIONS, <VendorRepairDcDetailPage />)} />
