@@ -870,6 +870,7 @@ exports.detachAttachedPart = async (req, res) => {
   try {
     const { requestId } = req.params;
     const reason = String(req.body?.reason || '').trim();
+    const returnToInventory = req.body?.return_to_inventory === true;
     await client.query('BEGIN');
 
     const reqRes = await client.query(
@@ -889,13 +890,15 @@ exports.detachAttachedPart = async (req, res) => {
       });
     }
 
-    const canDetach = PRIVILEGED.includes(req.user.role)
-      || req.user.role === 'floor_manager'
-      || req.user.role === 'warehouse'
-      || Number(r.requested_by) === Number(req.user.user_id);
-    if (!canDetach) {
-      await client.query('ROLLBACK');
-      return res.status(403).json({ success: false, message: 'Not allowed to remove this attached part' });
+    if (!returnToInventory) {
+      const canDetach = PRIVILEGED.includes(req.user.role)
+        || req.user.role === 'floor_manager'
+        || req.user.role === 'warehouse'
+        || Number(r.requested_by) === Number(req.user.user_id);
+      if (!canDetach) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({ success: false, message: 'Not allowed to remove this attached part' });
+      }
     }
 
     const tpRes = await client.query(
@@ -955,29 +958,55 @@ exports.detachAttachedPart = async (req, res) => {
     }
 
     if (r.instance_id) {
-      await client.query(
-        `UPDATE part_instances
-            SET status = 'reserved', installed_ticket_id = NULL, installed_ttspl_id = NULL,
-                installed_at = NULL, updated_at = NOW()
-          WHERE instance_id = $1`,
-        [r.instance_id]
-      );
-      await recordMovement(client, {
-        type: MOVEMENT.UNRESERVED,
-        partId: r.part_id,
-        instanceId: r.instance_id,
-        prtId: r.prt_id,
-        serialNumber: r.instance_serial,
-        category: r.category,
-        partName: r.part_name,
-        unitCost: parseFloat(r.instance_cost || r.catalog_cost || 0),
-        requestId: Number(requestId),
-        ticketId: r.ticket_id,
-        ttsplId: r.ttspl_id,
-        notes: reason || 'Attached part removed — returned to reserved for re-attach',
-        actorUserId: req.user.user_id,
-        actorName: req.user.name,
-      });
+      if (returnToInventory) {
+        await client.query(
+          `UPDATE part_instances
+              SET status = 'in_stock', installed_ticket_id = NULL, installed_ttspl_id = NULL,
+                  installed_at = NULL, updated_at = NOW()
+            WHERE instance_id = $1`,
+          [r.instance_id]
+        );
+        await recordMovement(client, {
+          type: MOVEMENT.RETURNED_GOOD,
+          partId: r.part_id,
+          instanceId: r.instance_id,
+          prtId: r.prt_id,
+          serialNumber: r.instance_serial,
+          category: r.category,
+          partName: r.part_name,
+          unitCost: parseFloat(r.instance_cost || r.catalog_cost || 0),
+          requestId: Number(requestId),
+          ticketId: r.ticket_id,
+          ttsplId: r.ttspl_id,
+          notes: reason || 'Detached from laptop — returned to inventory stock',
+          actorUserId: req.user.user_id,
+          actorName: req.user.name,
+        });
+      } else {
+        await client.query(
+          `UPDATE part_instances
+              SET status = 'reserved', installed_ticket_id = NULL, installed_ttspl_id = NULL,
+                  installed_at = NULL, updated_at = NOW()
+            WHERE instance_id = $1`,
+          [r.instance_id]
+        );
+        await recordMovement(client, {
+          type: MOVEMENT.UNRESERVED,
+          partId: r.part_id,
+          instanceId: r.instance_id,
+          prtId: r.prt_id,
+          serialNumber: r.instance_serial,
+          category: r.category,
+          partName: r.part_name,
+          unitCost: parseFloat(r.instance_cost || r.catalog_cost || 0),
+          requestId: Number(requestId),
+          ticketId: r.ticket_id,
+          ttsplId: r.ttspl_id,
+          notes: reason || 'Attached part removed — returned to reserved for re-attach',
+          actorUserId: req.user.user_id,
+          actorName: req.user.name,
+        });
+      }
     }
 
     const qty = Number(r.quantity) || 1;
@@ -990,40 +1019,54 @@ exports.detachAttachedPart = async (req, res) => {
       await client.query(`DELETE FROM ticket_parts WHERE id = $1`, [tpRes.rows[0].id]);
     }
 
-    await client.query(
-      `UPDATE part_requests
-          SET status = 'approved',
-              attached_by = NULL,
-              attached_at = NULL,
-              updated_at = NOW()
-        WHERE request_id = $1`,
-      [requestId]
-    );
+    if (returnToInventory) {
+      await client.query(
+        `UPDATE part_requests
+            SET status = 'cancelled',
+                instance_id = NULL,
+                attached_by = NULL,
+                attached_at = NULL,
+                updated_at = NOW()
+          WHERE request_id = $1`,
+        [requestId]
+      );
+      await unblockTicket(client, r);
+    } else {
+      await client.query(
+        `UPDATE part_requests
+            SET status = 'approved',
+                attached_by = NULL,
+                attached_at = NULL,
+                updated_at = NOW()
+          WHERE request_id = $1`,
+        [requestId]
+      );
 
-    if (r.blocks_stage) {
-      await client.query(
-        `INSERT INTO ticket_part_blocks (ticket_id, request_id, is_active, blocked_at)
-         VALUES ($1, $2, true, NOW())
-         ON CONFLICT (ticket_id, request_id)
-         DO UPDATE SET is_active = true, unblocked_at = NULL, blocked_at = NOW()`,
-        [r.ticket_id, r.request_id]
-      );
-      await client.query(
-        `UPDATE tickets
-            SET open_part_requests = COALESCE(open_part_requests, 0) + 1, updated_at = NOW()
-          WHERE ticket_id = $1`,
-        [r.ticket_id]
-      );
+      if (r.blocks_stage) {
+        await client.query(
+          `INSERT INTO ticket_part_blocks (ticket_id, request_id, is_active, blocked_at)
+           VALUES ($1, $2, true, NOW())
+           ON CONFLICT (ticket_id, request_id)
+           DO UPDATE SET is_active = true, unblocked_at = NULL, blocked_at = NOW()`,
+          [r.ticket_id, r.request_id]
+        );
+        await client.query(
+          `UPDATE tickets
+              SET open_part_requests = COALESCE(open_part_requests, 0) + 1, updated_at = NOW()
+            WHERE ticket_id = $1`,
+          [r.ticket_id]
+        );
+      }
     }
+
+    const detachNote = returnToInventory
+      ? `Detached ${r.part_name} (${r.prt_id || 'no PRT'}) from laptop — returned to inventory.${reason ? ` Reason: ${reason}` : ''}`
+      : `Removed attached part ${r.part_name} (${r.prt_id || 'no PRT'}). Request back to approved.${reason ? ` Reason: ${reason}` : ''}`;
 
     await client.query(
       `INSERT INTO activities (ticket_id, user_id, action, notes)
        VALUES ($1, $2, 'part_detached', $3)`,
-      [
-        r.ticket_id,
-        req.user.user_id,
-        `Removed attached part ${r.part_name} (${r.prt_id || 'no PRT'}). Request back to approved.${reason ? ` Reason: ${reason}` : ''}`,
-      ]
+      [r.ticket_id, req.user.user_id, detachNote]
     );
 
     if (r.ttspl_id) {
@@ -1031,8 +1074,16 @@ exports.detachAttachedPart = async (req, res) => {
         ttsplId: r.ttspl_id,
         vendorSerialId: r.vendor_serial_id,
         eventType: 'part_detached',
-        description: `Attached part removed: ${r.part_name} (${r.prt_id || ''}) — request reset to approved`,
-        metadata: { request_id: Number(requestId), part_id: r.part_id, prt_id: r.prt_id, reason: reason || null },
+        description: returnToInventory
+          ? `Part detached to inventory: ${r.part_name} (${r.prt_id || ''})`
+          : `Attached part removed: ${r.part_name} (${r.prt_id || ''}) — request reset to approved`,
+        metadata: {
+          request_id: Number(requestId),
+          part_id: r.part_id,
+          prt_id: r.prt_id,
+          reason: reason || null,
+          return_to_inventory: returnToInventory,
+        },
         actorUserId: req.user.user_id,
         actorName: req.user.name,
         db: client,
@@ -1042,11 +1093,147 @@ exports.detachAttachedPart = async (req, res) => {
     await client.query('COMMIT');
     res.json({
       success: true,
-      message: `${r.part_name} removed from ticket. Part request is approved again — re-attach when ready.${r.blocks_stage ? ' Ticket blocked until re-attached.' : ''}`,
+      message: returnToInventory
+        ? `${r.part_name} detached from laptop and returned to inventory stock.`
+        : `${r.part_name} removed from ticket. Part request is approved again — re-attach when ready.${r.blocks_stage ? ' Ticket blocked until re-attached.' : ''}`,
     });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('detachAttachedPart:', err);
+    res.status(err.status || 500).json({ success: false, message: err.message });
+  } finally {
+    client.release();
+  }
+};
+
+// POST /api/part-requests/instances/:instanceId/detach-from-ttspl
+// Detach an installed PRT unit from a TTSPL back to inventory stock.
+// Works even when the unit was installed outside the part-request flow.
+exports.detachInstalledPartFromTtspl = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { instanceId } = req.params;
+    const reason = String(req.body?.reason || '').trim();
+    const ttsplHint = String(req.body?.ttspl_id || '').trim();
+
+    const linkedReq = await pool.query(
+      `SELECT request_id FROM part_requests WHERE instance_id = $1 AND status = 'attached' LIMIT 1`,
+      [Number(instanceId)]
+    );
+    if (linkedReq.rows.length) {
+      client.release();
+      req.params.requestId = String(linkedReq.rows[0].request_id);
+      req.body = { ...(req.body || {}), return_to_inventory: true };
+      return exports.detachAttachedPart(req, res);
+    }
+
+    await client.query('BEGIN');
+    const instRes = await client.query(
+      `SELECT pi.*, p.part_name, p.category, p.cost AS catalog_cost
+         FROM part_instances pi
+         JOIN parts p ON p.part_id = pi.part_id
+        WHERE pi.instance_id = $1 FOR UPDATE OF pi`,
+      [Number(instanceId)]
+    );
+    if (!instRes.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Part unit not found' });
+    }
+    const inst = instRes.rows[0];
+    if (inst.status !== 'installed') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: `Only installed parts can be detached (current status: ${inst.status})`,
+      });
+    }
+    if (
+      ttsplHint
+      && inst.installed_ttspl_id
+      && inst.installed_ttspl_id.toUpperCase() !== ttsplHint.toUpperCase()
+    ) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: `Part is installed on ${inst.installed_ttspl_id}, not ${ttsplHint}`,
+      });
+    }
+
+    const ttsplId = inst.installed_ttspl_id;
+    const ctx = ttsplId ? await resolveTtsplAsset(ttsplId) : null;
+
+    await client.query(
+      `UPDATE part_instances
+          SET status = 'in_stock', installed_ticket_id = NULL, installed_ttspl_id = NULL,
+              installed_at = NULL, updated_at = NOW()
+        WHERE instance_id = $1`,
+      [Number(instanceId)]
+    );
+
+    await recordMovement(client, {
+      type: MOVEMENT.RETURNED_GOOD,
+      partId: inst.part_id,
+      instanceId: inst.instance_id,
+      prtId: inst.prt_id,
+      serialNumber: inst.serial_number,
+      category: inst.category,
+      partName: inst.part_name,
+      unitCost: parseFloat(inst.unit_cost || inst.catalog_cost || 0),
+      ticketId: inst.installed_ticket_id,
+      ttsplId,
+      notes: reason || 'Detached from TTSPL — returned to inventory stock',
+      actorUserId: req.user.user_id,
+      actorName: req.user.name,
+    });
+
+    await client.query(
+      `UPDATE parts SET quantity = COALESCE(quantity, 0) + 1, updated_at = NOW() WHERE part_id = $1`,
+      [inst.part_id]
+    );
+
+    if (inst.installed_ticket_id) {
+      await client.query(
+        `DELETE FROM ticket_parts WHERE ticket_id = $1 AND part_id = $2`,
+        [inst.installed_ticket_id, inst.part_id]
+      );
+      await client.query(
+        `INSERT INTO activities (ticket_id, user_id, action, notes)
+         VALUES ($1, $2, 'part_detached', $3)`,
+        [
+          inst.installed_ticket_id,
+          req.user.user_id,
+          `Detached ${inst.part_name} (${inst.prt_id || 'no PRT'}) from ${ttsplId || 'laptop'} — returned to inventory.${reason ? ` Reason: ${reason}` : ''}`,
+        ]
+      );
+    }
+
+    if (ttsplId) {
+      await logTtsplEvent({
+        ttsplId: ctx?.canonicalTtspl || ttsplId,
+        vendorSerialId: ctx?.serialId || inst.vendor_serial_id || null,
+        eventType: 'part_detached',
+        description: `Part detached to inventory: ${inst.part_name} (${inst.prt_id || ''})`,
+        metadata: {
+          instance_id: inst.instance_id,
+          part_id: inst.part_id,
+          prt_id: inst.prt_id,
+          reason: reason || null,
+          return_to_inventory: true,
+        },
+        actorUserId: req.user.user_id,
+        actorName: req.user.name,
+        db: client,
+      });
+    }
+
+    await client.query('COMMIT');
+    res.json({
+      success: true,
+      message: `${inst.part_name} detached and returned to inventory stock.`,
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('detachInstalledPartFromTtspl:', err);
     res.status(err.status || 500).json({ success: false, message: err.message });
   } finally {
     client.release();
@@ -1153,11 +1340,12 @@ exports.getPartCostSummary = async (req, res) => {
     const aliasArr = ctx.aliases.length ? ctx.aliases : [ctx.canonicalTtspl];
 
     const breakdown = await pool.query(
-      `SELECT pi.prt_id, p.part_name, pi.unit_cost, pi.installed_at,
+      `SELECT pi.prt_id, pi.instance_id, p.part_name, pi.unit_cost, pi.installed_at,
+              pr.request_id,
               COALESCE(pr.request_type, CASE WHEN tp.is_upgrade THEN 'upgrade' ELSE 'replacement' END) AS type
          FROM part_instances pi
          JOIN parts p ON p.part_id = pi.part_id
-         LEFT JOIN part_requests pr ON pr.instance_id = pi.instance_id
+         LEFT JOIN part_requests pr ON pr.instance_id = pi.instance_id AND pr.status = 'attached'
          LEFT JOIN ticket_parts tp ON tp.part_id = pi.part_id AND tp.ticket_id = pi.installed_ticket_id
         WHERE UPPER(COALESCE(pi.installed_ttspl_id, '')) = ANY($1::text[])
           AND pi.status = 'installed'
@@ -1203,10 +1391,13 @@ exports.getPartCostSummary = async (req, res) => {
       total_expense: partsCost + baseCost,
       parts_breakdown: breakdown.rows.map((b) => ({
         prt_id: b.prt_id,
+        instance_id: b.instance_id,
+        request_id: b.request_id,
         part_name: b.part_name,
         unit_cost: parseFloat(b.unit_cost || 0),
         installed_at: b.installed_at,
         type: b.type,
+        can_detach: Boolean(b.instance_id),
       })),
     });
   } catch (err) {

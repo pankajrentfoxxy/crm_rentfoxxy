@@ -1,59 +1,94 @@
-import React, { useEffect, useState } from 'react';
-import { Loader2, X } from 'lucide-react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Loader2, Unlink, X } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { fetchTtsplHistory } from '../floorPipelineApi';
-import { getPartCostSummary } from '../partRequestsApi';
+import { detachAttachedPart, detachInstalledPartFromTtspl, getPartCostSummary } from '../partRequestsApi';
 import { EVENT_ICONS } from '../floorPipelineUi';
+import usePermission from '../../../hooks/usePermission';
+import DetachPartToInventoryModal from './DetachPartToInventoryModal';
 
 export default function TtsplHistoryDrawer({ ttsplId, open, onClose }) {
+  const { canEdit } = usePermission();
+  const canDetachParts = canEdit('parts_detach');
+
   const [loading, setLoading] = useState(false);
+  const [detachingId, setDetachingId] = useState(null);
+  const [detachModalPart, setDetachModalPart] = useState(null);
   const [auditLog, setAuditLog] = useState([]);
   const [configHistory, setConfigHistory] = useState([]);
   const [costSummary, setCostSummary] = useState(null);
   const [partsBreakdown, setPartsBreakdown] = useState([]);
 
+  const loadHistory = useCallback(async () => {
+    if (!ttsplId) return;
+    setLoading(true);
+    try {
+      const [histRes, costRes] = await Promise.all([
+        fetchTtsplHistory(ttsplId),
+        getPartCostSummary(ttsplId).catch(() => null),
+      ]);
+      const data = histRes?.data;
+      if (data?.success) {
+        const byNewest = (a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0);
+        setAuditLog([...(data.auditLog || [])].sort(byNewest));
+        setConfigHistory([...(data.configHistory || [])].sort(byNewest));
+        setCostSummary(data.costSummary || null);
+      }
+      if (costRes?.data?.success) {
+        const parts = [...(costRes.data.parts_breakdown || [])].sort(
+          (a, b) => new Date(b.installed_at || 0) - new Date(a.installed_at || 0),
+        );
+        setPartsBreakdown(parts);
+        setCostSummary((prev) => ({
+          base_cost: costRes.data.base_cost,
+          parts_cost: costRes.data.parts_cost,
+          total_cost: costRes.data.total_expense,
+          ...(prev || {}),
+          ...costRes.data,
+        }));
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [ttsplId]);
+
   useEffect(() => {
     if (!open || !ttsplId) return;
-    let cancelled = false;
-    setLoading(true);
-    Promise.all([
-      fetchTtsplHistory(ttsplId),
-      getPartCostSummary(ttsplId).catch(() => null),
-    ])
-      .then(([histRes, costRes]) => {
-        if (cancelled) return;
-        const data = histRes?.data;
-        if (data?.success) {
-          const byNewest = (a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0);
-          setAuditLog([...(data.auditLog || [])].sort(byNewest));
-          setConfigHistory([...(data.configHistory || [])].sort(byNewest));
-          setCostSummary(data.costSummary || null);
-        }
-        if (costRes?.data?.success) {
-          const parts = [...(costRes.data.parts_breakdown || [])].sort(
-            (a, b) => new Date(b.installed_at || 0) - new Date(a.installed_at || 0),
-          );
-          setPartsBreakdown(parts);
-          setCostSummary((prev) => ({
-            base_cost: costRes.data.base_cost,
-            parts_cost: costRes.data.parts_cost,
-            total_cost: costRes.data.total_expense,
-            ...(prev || {}),
-            // prefer cost-summary endpoint values
-            ...costRes.data,
-          }));
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [open, ttsplId]);
+    loadHistory();
+  }, [open, ttsplId, loadHistory]);
+
+  const confirmDetach = async (reason) => {
+    const part = detachModalPart;
+    if (!part?.instance_id && !part?.request_id) return;
+
+    const detachKey = part.request_id || part.instance_id;
+    setDetachingId(detachKey);
+    try {
+      const { data } = part.request_id
+        ? await detachAttachedPart(part.request_id, {
+          return_to_inventory: true,
+          reason: reason || undefined,
+        })
+        : await detachInstalledPartFromTtspl(part.instance_id, {
+          ttspl_id: ttsplId,
+          reason: reason || undefined,
+        });
+      toast.success(data?.message || 'Part returned to inventory');
+      setDetachModalPart(null);
+      await loadHistory();
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to detach part');
+    } finally {
+      setDetachingId(null);
+    }
+  };
 
   if (!open) return null;
 
   const partsCost = costSummary?.parts_cost ?? configHistory.reduce((s, r) => s + (parseFloat(r.part_cost) || 0), 0);
   const baseCost = costSummary?.base_cost ?? 0;
   const totalCost = costSummary?.total_expense ?? costSummary?.total_cost ?? (partsCost + baseCost);
+  const showDetachColumn = canDetachParts && partsBreakdown.some((b) => b.can_detach && b.instance_id);
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
@@ -138,16 +173,41 @@ export default function TtsplHistoryDrawer({ ttsplId, open, onClose }) {
                           <th className="px-2 py-2 text-left">Type</th>
                           <th className="px-2 py-2 text-left">Date</th>
                           <th className="px-2 py-2 text-right">Cost</th>
+                          {showDetachColumn ? (
+                            <th className="px-2 py-2 text-right">Action</th>
+                          ) : null}
                         </tr>
                       </thead>
                       <tbody>
                         {partsBreakdown.map((b) => (
-                          <tr key={b.prt_id} className="border-t">
+                          <tr key={`${b.prt_id}-${b.request_id || b.instance_id}`} className="border-t">
                             <td className="px-2 py-2 font-mono text-[11px] text-emerald-700">{b.prt_id}</td>
                             <td className="px-2 py-2">{b.part_name}</td>
                             <td className="px-2 py-2 capitalize text-xs">{b.type}</td>
                             <td className="px-2 py-2 text-xs">{b.installed_at ? new Date(b.installed_at).toLocaleDateString() : '—'}</td>
                             <td className="px-2 py-2 text-right">₹{parseFloat(b.unit_cost || 0).toFixed(0)}</td>
+                            {showDetachColumn ? (
+                              <td className="px-2 py-2 text-right">
+                                {b.can_detach && b.instance_id ? (
+                                  <button
+                                    type="button"
+                                    disabled={detachingId === (b.request_id || b.instance_id)}
+                                    onClick={() => setDetachModalPart(b)}
+                                    className="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                                    title="Detach from laptop and return to inventory"
+                                  >
+                                    {detachingId === (b.request_id || b.instance_id) ? (
+                                      <Loader2 className="w-3 h-3 animate-spin" />
+                                    ) : (
+                                      <Unlink className="w-3 h-3" />
+                                    )}
+                                    Detach
+                                  </button>
+                                ) : (
+                                  <span className="text-slate-400">—</span>
+                                )}
+                              </td>
+                            ) : null}
                           </tr>
                         ))}
                       </tbody>
@@ -196,6 +256,17 @@ export default function TtsplHistoryDrawer({ ttsplId, open, onClose }) {
           )}
         </div>
       </aside>
+
+      <DetachPartToInventoryModal
+        open={Boolean(detachModalPart)}
+        part={detachModalPart}
+        ttsplId={ttsplId}
+        confirming={Boolean(detachingId)}
+        onClose={() => {
+          if (!detachingId) setDetachModalPart(null);
+        }}
+        onConfirm={confirmDetach}
+      />
     </div>
   );
 }

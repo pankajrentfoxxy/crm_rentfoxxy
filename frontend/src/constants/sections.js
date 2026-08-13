@@ -42,6 +42,7 @@ export const APPLICATION_SECTIONS = [
   'inventory_asset_movement',
   'parts',
   'parts_inventory',
+  'parts_detach',
   'customer_inventory',
   'ttspl_history',
   'warehouse',
@@ -115,6 +116,7 @@ export const SECTION_LABELS = {
   inventory_asset_movement: 'Inventory — Asset Movement',
   parts: 'Parts (Legacy)',
   parts_inventory: 'Parts Inventory',
+  parts_detach: 'Part Detach (Attached → Inventory)',
   customer_inventory: 'Customer Inventory',
   dispatch_workflow: 'Dispatch Workflow',
   dispatch_pending_orders: 'Dispatch Pending Orders',
@@ -157,7 +159,7 @@ export const SECTION_GROUPS = {
   'Master Data': ['inventory_master_data'],
   'Floor & Quality': ['floor_pipeline', 'floor_tickets', 'floor_ticket_config_edit', 'chip_level_repair', 'qc_management', 'dispatch_qc', 'pending_inventory', 'tickets'],
   'Inventory & Parts': [
-    'inventory', 'inventory_management', 'inventory_asset_movement', 'parts', 'parts_inventory', 'customer_inventory', 'ttspl_history',
+    'inventory', 'inventory_management', 'inventory_asset_movement', 'parts', 'parts_inventory', 'parts_detach', 'customer_inventory', 'ttspl_history',
   ],
   'Warehouse & Dispatch': ['warehouse', 'dispatch', 'dispatch_ops', 'dispatch_workflow', 'dispatch_pending_orders'],
   'Finance & Billing': [
