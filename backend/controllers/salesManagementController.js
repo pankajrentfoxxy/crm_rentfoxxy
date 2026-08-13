@@ -120,6 +120,25 @@ async function getDcContext(client, dcNumber) {
   );
   return r.rows[0] || {};
 }
+
+/** First customer rental invoice that includes this DC in line_items (on-DC-create / on-delivery). */
+async function findRentalInvoiceForDc(dcNumber) {
+  if (!dcNumber) return null;
+  const r = await pool.query(
+    `SELECT ci.invoice_id, ci.invoice_number, ci.status, ci.invoice_month, ci.invoice_year,
+            ci.grand_total, ci.pdf_path, ci.invoice_date, ci.from_date, ci.to_date
+       FROM customer_invoices ci
+      WHERE EXISTS (
+              SELECT 1
+                FROM jsonb_array_elements(COALESCE(ci.line_items, '[]'::jsonb)) elem
+               WHERE elem->>'dc_number' = $1
+            )
+      ORDER BY ci.created_at ASC, ci.invoice_id ASC
+      LIMIT 1`,
+    [String(dcNumber)]
+  );
+  return r.rows[0] || null;
+}
 function parseJsonSafe(value, fallback = null) {
   if (value == null) return fallback;
   if (typeof value === 'object') return value;
@@ -1571,6 +1590,15 @@ exports.getDeliveryChallan = async (req, res) => {
       }
     }
 
+    let rental_invoice = null;
+    if (!isSale) {
+      try {
+        rental_invoice = await findRentalInvoiceForDc(dcNumber);
+      } catch (invErr) {
+        console.warn('DC rental invoice lookup:', invErr.message);
+      }
+    }
+
     res.json({
       success: true,
       dc_number: req.params.dcNumber,
@@ -1582,6 +1610,7 @@ exports.getDeliveryChallan = async (req, res) => {
       is_sale: isSale,
       sale_compliance,
       can_download_pdf,
+      rental_invoice,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1815,12 +1844,15 @@ exports.storeDeliveryChallan = async (req, res) => {
             serialId: sId, serialNumber: parts[1] || parts[0], ttsplId: parts[2] || null,
           });
           if (!serialId) continue;
+          const { resolveSerialRentRate } = require('../services/serialRentRateService');
+          const rentMonthlyRate = await resolveSerialRentRate(client, serialId, dcNumber);
           try {
             await inventorySM.markDispatched(client, serialId, {
               dcNumber,
               customerId: body.customer_id || null,
               entityCode,
               dispatchMode,
+              rentMonthlyRate,
               actorUserId: req.user?.user_id,
               actorName: req.user?.name,
             });
@@ -1828,9 +1860,11 @@ exports.storeDeliveryChallan = async (req, res) => {
             // Non-canonical current state: fallback so the DC still forms.
             await client.query(
               `UPDATE vendor_serial_numbers SET inventory_status = 'in_transit', current_dc_number = $2,
-                      dispatch_mode = $3, dispatched_at = NOW(), updated_at = NOW()
+                      dispatch_mode = $3, dispatched_at = NOW(),
+                      rent_monthly_rate = COALESCE($4, rent_monthly_rate),
+                      updated_at = NOW()
                WHERE serial_id = $1`,
-              [serialId, dcNumber, dispatchMode]
+              [serialId, dcNumber, dispatchMode, rentMonthlyRate]
             );
           }
         }
@@ -1910,6 +1944,21 @@ exports.storeDeliveryChallan = async (req, res) => {
       await pool.query(`UPDATE delivery_challan_lines SET pdf_path = $1 WHERE dc_number = $2`, [pdfPath, dcNumber]);
     } catch (pdfErr) {
       console.error('DC PDF generation failed:', pdfErr.message);
+    }
+
+    // Post-commit: first rental invoice at DC generate (dispatch → month-end).
+    // Delivery path is a no-op safety net once rent_billed_until is set.
+    if (String(quotationType).toLowerCase() === 'rental' && body.customer_id) {
+      try {
+        const { maybeInvoiceOnRentalDcCreate } = require('../services/billingSchedulerService');
+        await maybeInvoiceOnRentalDcCreate({
+          customerId: body.customer_id,
+          dcNumber,
+          quotationType,
+        });
+      } catch (billingErr) {
+        console.error('storeDeliveryChallan on-DC-create invoice:', billingErr.message);
+      }
     }
 
     res.status(201).json({ success: true, message: 'Delivery challan created', dc_number: dcNumber, pdf_path: pdfPath });
@@ -2222,6 +2271,23 @@ exports.createDcsByAddress = async (req, res) => {
         await pool.query(`UPDATE delivery_challan_lines SET pdf_path = $1 WHERE dc_number = $2`, [pdfPath, dcNumber]);
       } catch (pdfErr) {
         console.error(`DC PDF generation failed (${dcNumber}):`, pdfErr.message);
+      }
+    }
+
+    // Post-commit: first rental invoice per DC at generate time.
+    const soQt = String(soLines[0]?.quotation_type || 'rental').toLowerCase();
+    if (soQt === 'rental' && soLines[0]?.customer_id) {
+      const { maybeInvoiceOnRentalDcCreate } = require('../services/billingSchedulerService');
+      for (const dcNumber of createdDcNumbers) {
+        try {
+          await maybeInvoiceOnRentalDcCreate({
+            customerId: soLines[0].customer_id,
+            dcNumber,
+            quotationType: soQt,
+          });
+        } catch (billingErr) {
+          console.error(`createDcsByAddress on-DC-create invoice (${dcNumber}):`, billingErr.message);
+        }
       }
     }
 
@@ -3271,6 +3337,62 @@ exports.regenerateDcPdf = async (req, res) => {
   } catch (e) {
     const status = e.message?.includes('E-Invoice must be uploaded') ? 403 : 500;
     res.status(status).json({ success: false, message: e.message });
+  }
+};
+
+/** Download first rental customer invoice PDF linked to this DC (generated at DC create / delivery). */
+exports.downloadDcRentalInvoicePdf = async (req, res) => {
+  try {
+    const dcNumber = req.params.dcNumber;
+    const lines = await getDeliveryChallanLines(dcNumber);
+    if (!lines.length) {
+      return res.status(404).json({ success: false, message: 'Delivery challan not found' });
+    }
+
+    const ctx = await getDcContext(pool, dcNumber);
+    const qt = String(ctx.quotation_type || '').toLowerCase();
+    if (qt === 'sale' || qt === 'sales' || qt === 'demo') {
+      return res.status(400).json({
+        success: false,
+        message: 'Rental invoice PDF is only available for rental delivery challans',
+      });
+    }
+
+    const rentalInvoice = await findRentalInvoiceForDc(dcNumber);
+    if (!rentalInvoice) {
+      return res.status(404).json({
+        success: false,
+        message: 'No rental invoice found for this DC yet',
+      });
+    }
+
+    const billingCtrl = require('./customerBillingController');
+    const invRes = await pool.query(
+      `SELECT ci.*, c.company_name AS customer_name, c.gst_no AS gst_number
+         FROM customer_invoices ci
+         LEFT JOIN customers c ON c.customer_id = ci.customer_id
+        WHERE ci.invoice_id = $1`,
+      [rentalInvoice.invoice_id]
+    );
+    if (!invRes.rows.length) {
+      return res.status(404).json({ success: false, message: 'Invoice not found' });
+    }
+
+    const invoice = invRes.rows[0];
+    const pdfRel = await billingCtrl._generateInvoicePdf(invoice);
+    await pool.query(
+      `UPDATE customer_invoices SET pdf_path = $1, updated_at = NOW() WHERE invoice_id = $2`,
+      [pdfRel, invoice.invoice_id]
+    );
+
+    const abs = path.join(__dirname, '..', pdfRel);
+    if (!fs.existsSync(abs)) {
+      return res.status(404).json({ success: false, message: 'Invoice PDF file missing' });
+    }
+    res.download(abs, `${invoice.invoice_number || `invoice-${invoice.invoice_id}`}.pdf`);
+  } catch (e) {
+    console.error('downloadDcRentalInvoicePdf:', e);
+    res.status(500).json({ success: false, message: e.message });
   }
 };
 

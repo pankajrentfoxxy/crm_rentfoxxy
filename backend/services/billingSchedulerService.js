@@ -106,7 +106,8 @@ async function buildCustomerInvoiceLines(client, {
        FROM vendor_serial_numbers vsn
       WHERE vsn.current_customer_id = $1
         AND vsn.deleted_at IS NULL
-        AND vsn.inventory_status IN ('rented', 'returned')
+        -- in_transit: first bill can start at DC generate (dispatch), before POD.
+        AND vsn.inventory_status IN ('rented', 'returned', 'in_transit')
         AND vsn.rent_start_date IS NOT NULL
         AND vsn.rent_start_date <= $2::date
         AND (vsn.rent_billed_until IS NULL OR vsn.rent_billed_until < $3::date)
@@ -353,15 +354,16 @@ function monthYearFromRentStart(value) {
 }
 
 /**
- * Post-commit trigger for first-period rental billing on delivery (or demo→keep).
- * Gates: rented, rent_billed_until IS NULL, rent_start_date + rent_monthly_rate set.
+ * Shared first-period invoice path (DC generate or delivery / demo→keep).
  * Never throws to callers — failures are logged; the 1st-of-month cron is the safety net.
  */
-async function maybeInvoiceOnRentalDelivery({
+async function maybeInvoiceFirstRentalPeriod({
   customerId,
   dcNumber = null,
   serialIds = null,
   quotationType = 'rental',
+  statuses = ['rented'],
+  logLabel = 'On-delivery',
 } = {}) {
   const qt = String(quotationType || 'rental').toLowerCase();
   if (qt === 'demo' || qt === 'sales' || qt === 'sale') {
@@ -372,7 +374,7 @@ async function maybeInvoiceOnRentalDelivery({
   }
 
   try {
-    const params = [customerId];
+    const params = [customerId, statuses];
     let extra = '';
     if (dcNumber) {
       params.push(dcNumber);
@@ -387,7 +389,7 @@ async function maybeInvoiceOnRentalDelivery({
          FROM vendor_serial_numbers
         WHERE current_customer_id = $1
           AND deleted_at IS NULL
-          AND inventory_status = 'rented'
+          AND inventory_status = ANY($2::text[])
           AND rent_billed_until IS NULL
           AND rent_start_date IS NOT NULL
           AND rent_monthly_rate IS NOT NULL
@@ -399,15 +401,15 @@ async function maybeInvoiceOnRentalDelivery({
 
     if (!candidates.rows.length) {
       billingLog.info(
-        { customerId, dcNumber, serialIds },
-        'On-delivery invoice skipped — no first-billed rental assets'
+        { customerId, dcNumber, serialIds, statuses },
+        `${logLabel} invoice skipped — no first-billed rental assets`
       );
       return { skipped: true, reason: 'no first-billed rental assets' };
     }
 
     const anchor = monthYearFromRentStart(candidates.rows[0].rent_start_date);
     if (!anchor) {
-      billingLog.warn({ customerId, dcNumber }, 'On-delivery invoice skipped — invalid rent_start_date');
+      billingLog.warn({ customerId, dcNumber }, `${logLabel} invoice skipped — invalid rent_start_date`);
       return { skipped: true, reason: 'invalid rent_start_date' };
     }
 
@@ -419,16 +421,16 @@ async function maybeInvoiceOnRentalDelivery({
     if (result.skipped) {
       billingLog.info(
         { customerId, dcNumber, month: anchor.month, year: anchor.year, ...result },
-        'On-delivery invoice skipped (idempotent)'
+        `${logLabel} invoice skipped (idempotent)`
       );
     } else {
       billingLog.info(
         { customerId, dcNumber, month: anchor.month, year: anchor.year, ...result },
-        'On-delivery rental invoice generated'
+        `${logLabel} rental invoice generated`
       );
     }
 
-    // Always email + mark sent after a new/appended on-delivery invoice.
+    // Always email + mark sent after a new/appended first-period invoice.
     // Opt out with INVOICE_EMAIL_ON_DELIVERY=false.
     const emailDisabled = String(process.env.INVOICE_EMAIL_ON_DELIVERY || 'true').toLowerCase() === 'false';
     if (!emailDisabled && result.invoice_id && !result.skipped) {
@@ -437,12 +439,12 @@ async function maybeInvoiceOnRentalDelivery({
         result.email_sent = sent;
         billingLog.info(
           { customerId, invoiceId: result.invoice_id, email_sent: sent },
-          'On-delivery invoice send attempted'
+          `${logLabel} invoice send attempted`
         );
       } catch (mailErr) {
         billingLog.error(
           { customerId, invoiceId: result.invoice_id, err: mailErr.message },
-          'On-delivery invoice email failed'
+          `${logLabel} invoice email failed`
         );
         result.email_error = mailErr.message;
       }
@@ -452,10 +454,94 @@ async function maybeInvoiceOnRentalDelivery({
   } catch (err) {
     billingLog.error(
       { customerId, dcNumber, serialIds, err: err.message },
-      'On-delivery rental invoice failed — monthly cron remains the safety net'
+      `${logLabel} rental invoice failed — monthly cron remains the safety net`
     );
     return { error: err.message };
   }
+}
+
+/**
+ * Post-commit: first rental invoice when DC is generated (dispatch).
+ * Anchors rent_start_date + rate on in_transit serials, then bills dispatch → month-end.
+ * Delivery path remains a no-op safety net once rent_billed_until is set.
+ */
+async function maybeInvoiceOnRentalDcCreate({
+  customerId,
+  dcNumber = null,
+  quotationType = 'rental',
+} = {}) {
+  const qt = String(quotationType || 'rental').toLowerCase();
+  if (qt === 'demo' || qt === 'sales' || qt === 'sale') {
+    return { skipped: true, reason: `not a rental (${qt})` };
+  }
+  if (!customerId || !dcNumber) {
+    return { skipped: true, reason: !customerId ? 'no customer' : 'no dc' };
+  }
+
+  try {
+    const { resolveSerialRentRate } = require('./serialRentRateService');
+    const serials = await pool.query(
+      `SELECT serial_id, rent_monthly_rate, rent_start_date, rent_billed_until
+         FROM vendor_serial_numbers
+        WHERE current_dc_number = $1
+          AND current_customer_id = $2
+          AND deleted_at IS NULL
+          AND inventory_status = 'in_transit'
+          AND (rent_billed_until IS NULL)`,
+      [dcNumber, customerId]
+    );
+
+    if (!serials.rows.length) {
+      billingLog.info(
+        { customerId, dcNumber },
+        'On-DC-create invoice skipped — no unbilled in_transit serials'
+      );
+      return { skipped: true, reason: 'no unbilled in_transit serials' };
+    }
+
+    for (const row of serials.rows) {
+      let rate = parseFloat(row.rent_monthly_rate || 0);
+      if (!(rate > 0)) {
+        rate = await resolveSerialRentRate(pool, row.serial_id, dcNumber);
+      }
+      if (!(rate > 0)) continue;
+      await pool.query(
+        `UPDATE vendor_serial_numbers
+            SET rent_monthly_rate = $1,
+                rent_start_date = COALESCE(rent_start_date, CURRENT_DATE),
+                updated_at = NOW()
+          WHERE serial_id = $2
+            AND rent_billed_until IS NULL`,
+        [rate, row.serial_id]
+      );
+    }
+
+    return maybeInvoiceFirstRentalPeriod({
+      customerId,
+      dcNumber,
+      quotationType,
+      statuses: ['in_transit', 'rented'],
+      logLabel: 'On-DC-create',
+    });
+  } catch (err) {
+    billingLog.error(
+      { customerId, dcNumber, err: err.message },
+      'On-DC-create rental invoice failed — delivery/cron remain safety nets'
+    );
+    return { error: err.message };
+  }
+}
+
+/**
+ * Post-commit trigger for first-period rental billing on delivery (or demo→keep).
+ * Gates: rented, rent_billed_until IS NULL, rent_start_date + rent_monthly_rate set.
+ */
+async function maybeInvoiceOnRentalDelivery(opts = {}) {
+  return maybeInvoiceFirstRentalPeriod({
+    ...opts,
+    statuses: ['rented'],
+    logLabel: 'On-delivery',
+  });
 }
 
 /** Generate PDF, email customer, mark invoice sent. Returns whether SMTP accepted the mail. */
@@ -762,5 +848,6 @@ module.exports = {
   createReturnCreditNote,
   runBillingBatch,
   maybeInvoiceOnRentalDelivery,
+  maybeInvoiceOnRentalDcCreate,
   sendGeneratedCustomerInvoice,
 };

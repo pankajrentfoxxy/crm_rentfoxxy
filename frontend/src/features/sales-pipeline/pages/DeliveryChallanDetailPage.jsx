@@ -10,7 +10,7 @@ import SaleDcCompliancePanel from '../components/SaleDcCompliancePanel';
 import QcStatusBadge from '../components/QcStatusBadge';
 import {
   createDcQcTickets, getDC, getDcQcStatus, getDCMeta, getSalesOrderFull,
-  markDelivered, markRejected, regenerateDcPdf, cancelDC,
+  markDelivered, markRejected, regenerateDcPdf, downloadDcRentalInvoicePdf, cancelDC,
   sendDeliveryOtp, sendWarehouseReturnOtp, verifyDeliveryOtp, verifyWarehouseReturnOtp,
   updateDC, dispatchDC, updateDcHsn, updateDcDeliveryDate, generateDcBluedartAwb, cancelDcBluedartAwb,
 } from '../salesPipelineApi';
@@ -101,6 +101,8 @@ export default function DeliveryChallanDetailPage() {
   const [cancelSaving, setCancelSaving] = useState(false);
   const [saleCompliance, setSaleCompliance] = useState(null);
   const [canDownloadPdf, setCanDownloadPdf] = useState(true);
+  const [rentalInvoice, setRentalInvoice] = useState(null);
+  const [invoicePdfLoading, setInvoicePdfLoading] = useState(false);
   const [updateDeliveryDateOpen, setUpdateDeliveryDateOpen] = useState(false);
 
   const head = lines[0] || {};
@@ -127,6 +129,7 @@ export default function DeliveryChallanDetailPage() {
       setHsnDraft(res.data?.lines?.[0]?.hsn_code || '');
       setSaleCompliance(res.data?.sale_compliance || null);
       setCanDownloadPdf(res.data?.can_download_pdf !== false);
+      setRentalInvoice(res.data?.rental_invoice || null);
       if (res.data?.lines?.[0]?.sales_order_number) {
         const soRes = await getSalesOrderFull(res.data.lines[0].sales_order_number);
         setPaymentSummary(soRes.data?.summary);
@@ -414,6 +417,45 @@ export default function DeliveryChallanDetailPage() {
               className="inline-flex items-center px-4 min-h-[40px] text-sm font-semibold border border-slate-300 rounded-xl text-gray-700 hover:bg-gray-50"
             >
               Download PDF
+            </button>
+          )}
+          {!isSale && rentalInvoice?.invoice_id && (
+            <button
+              type="button"
+              disabled={invoicePdfLoading}
+              onClick={async () => {
+                setInvoicePdfLoading(true);
+                try {
+                  const res = await downloadDcRentalInvoicePdf(dcNumber);
+                  const blob = new Blob([res.data], { type: 'application/pdf' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `${rentalInvoice.invoice_number || 'invoice'}.pdf`;
+                  document.body.appendChild(a);
+                  a.click();
+                  a.remove();
+                  URL.revokeObjectURL(url);
+                } catch (err) {
+                  let msg = 'Could not download invoice PDF';
+                  const data = err.response?.data;
+                  if (data instanceof Blob) {
+                    try {
+                      const parsed = JSON.parse(await data.text());
+                      msg = parsed.message || msg;
+                    } catch { /* ignore */ }
+                  } else if (data?.message) {
+                    msg = data.message;
+                  }
+                  toast.error(msg);
+                } finally {
+                  setInvoicePdfLoading(false);
+                }
+              }}
+              className="inline-flex items-center px-4 min-h-[40px] text-sm font-semibold border border-emerald-300 rounded-xl text-emerald-800 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-60"
+              title={`${rentalInvoice.invoice_number} · ${rentalInvoice.invoice_month}/${rentalInvoice.invoice_year}`}
+            >
+              {invoicePdfLoading ? 'Preparing…' : 'Download Invoice PDF'}
             </button>
           )}
           {isSale && !canDownloadPdf && !isSuperAdmin && (

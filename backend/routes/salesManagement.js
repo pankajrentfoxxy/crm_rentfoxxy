@@ -151,6 +151,7 @@ router.post('/sales-orders', soCreate, ctrl.storeSalesOrder);
 router.get('/delivery-challans/meta/add', soDcView, ctrl.getAddDeliveryChallanMeta);
 router.get('/delivery-challans', dcView, ctrl.listDeliveryChallans);
 router.post(...dcRoute('/pdf', soDcView, ctrl.regenerateDcPdf));
+router.get(...dcRoute('/rental-invoice/pdf', soDcView, ctrl.downloadDcRentalInvoicePdf));
 router.post('/delivery-challans', soDcCreate, ctrl.storeDeliveryChallan);
 // Phase 15 — create one DC per delivery-address group from QC-passed serials
 router.post('/create-dcs-by-address', soDcCreate, ctrl.createDcsByAddress);

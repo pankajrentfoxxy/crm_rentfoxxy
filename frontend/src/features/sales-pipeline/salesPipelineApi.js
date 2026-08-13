@@ -35,6 +35,8 @@ export const createDC = (d) => api.post(`${base}/delivery-challans`, d);
 export const createDcsByAddress = (data) => api.post(`${base}/create-dcs-by-address`, data);
 export const updateDC = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}`, d);
 export const regenerateDcPdf = (n) => api.post(`${base}/delivery-challans/${encDc(n)}/pdf`);
+export const downloadDcRentalInvoicePdf = (n) =>
+  api.get(`${base}/delivery-challans/${encDc(n)}/rental-invoice/pdf`, { responseType: 'blob' });
 export const regenerateQuotationPdf = (n) => api.post(`${base}/quotations/${n}/pdf`);
 export const regenerateSalesOrderPdf = (n) => api.post(`${base}/sales-orders/${encSo(n)}/pdf`);
 export const getDCMeta = (so) => api.get(`${base}/delivery-challans/meta/add`, { params: { sales_order_number: so } });

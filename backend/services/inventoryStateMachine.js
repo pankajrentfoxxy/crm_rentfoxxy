@@ -276,8 +276,12 @@ const markDelivered = async (db, serialId, {
   }
 
   // Demo + sale do not start rent; rental does.
+  // If first invoice already ran at DC create (rent_billed_until set), keep that
+  // rent_start_date — do not recompute courier T+3 and rewrite the billed anchor.
   const rentStartDate = toStatus === STATUS.RENTED
-    ? toDateStr(computeRentStart({ dispatchMode, dispatchedAt, deliveredAt }))
+    ? (serial.rent_billed_until && serial.rent_start_date
+      ? toDateStr(serial.rent_start_date)
+      : toDateStr(computeRentStart({ dispatchMode, dispatchedAt, deliveredAt })))
     : null;
 
   const correctionReason = deliveryCorrection === 'demo'

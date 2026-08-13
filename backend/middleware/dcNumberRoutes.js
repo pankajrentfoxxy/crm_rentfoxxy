@@ -22,6 +22,7 @@ const DC_ACTION_SUFFIXES = [
   '/warehouse-return-otp',
   '/verify-serial',
   '/deliver',
+  '/rental-invoice/pdf',
 ];
 
 /**
