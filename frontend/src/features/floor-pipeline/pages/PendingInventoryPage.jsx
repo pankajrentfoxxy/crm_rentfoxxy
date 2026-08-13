@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Loader2, PackageCheck, X } from 'lucide-react';
+import { Loader2, PackageCheck, Search, X } from 'lucide-react';
+import { DateRangeFilter } from '../../../components/ui/primitives';
 import usePermission from '../../../hooks/usePermission';
+import { useUrlFilters, useDebouncedUrlSearch } from '../../../hooks/useUrlFilters';
 import {
   fetchCarretAvailability,
   fetchPendingInventory,
@@ -10,9 +12,19 @@ import {
 } from '../floorPipelineApi';
 import TtsplHistoryDrawer from '../components/TtsplHistoryDrawer';
 import TtsplHistoryLink from '../components/TtsplHistoryLink';
+import FloorPipelineFilterPanel, { FILTER_CTL } from '../components/FloorPipelineFilterPanel';
+import { EMPTY_SPEC_FILTERS, SPEC_FILTER_KEYS } from '../../inventory-management/inventorySpecFilters';
+import useDebouncedSpecParams from '../../inventory-management/hooks/useDebouncedSpecParams';
 
 const CARRETS = Array.from({ length: 30 }, (_, i) => i + 1);
 const TAG_LABELS = { rental: 'Rental', sale: 'Sale', both: 'Rental + Sale' };
+
+const PENDING_FILTER_DEFAULTS = {
+  search: '',
+  dateFrom: '',
+  dateTo: '',
+  ...EMPTY_SPEC_FILTERS,
+};
 
 function fmtConfig(row) {
   return [row.brand, row.model, row.processor, row.generation, row.ram, row.ssd || row.storage]
@@ -43,6 +55,15 @@ function fmtTag(tag) {
 export default function PendingInventoryPage() {
   const { canEdit } = usePermission();
   const canReceive = canEdit('pending_inventory');
+  const { filters, setFilters } = useUrlFilters(PENDING_FILTER_DEFAULTS);
+  const { dateFrom, dateTo } = filters;
+  const { searchInput, setSearchInput, debouncedSearch } = useDebouncedUrlSearch(filters, setFilters);
+  const specFilters = useMemo(() => {
+    const out = { ...EMPTY_SPEC_FILTERS };
+    SPEC_FILTER_KEYS.forEach((k) => { out[k] = filters[k] || ''; });
+    return out;
+  }, [filters]);
+  const debouncedSpecParams = useDebouncedSpecParams(specFilters);
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState([]);
   const [receiveFor, setReceiveFor] = useState(null);
@@ -57,14 +78,19 @@ export default function PendingInventoryPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const { data } = await fetchPendingInventory();
+      const params = {};
+      if (debouncedSearch) params.search = debouncedSearch;
+      if (dateFrom) params.date_from = dateFrom;
+      if (dateTo) params.date_to = dateTo;
+      Object.assign(params, debouncedSpecParams);
+      const { data } = await fetchPendingInventory(params);
       setRows(data.data || []);
     } catch (e) {
       toast.error(e.response?.data?.message || 'Failed to load QC Ready queue');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [debouncedSearch, dateFrom, dateTo, debouncedSpecParams]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -167,15 +193,45 @@ export default function PendingInventoryPage() {
         </button>
       </div>
 
+      <FloorPipelineFilterPanel
+        specFilters={specFilters}
+        onSpecFiltersChange={(next) => setFilters(next)}
+        onSpecFiltersClear={() => setFilters(Object.fromEntries(SPEC_FILTER_KEYS.map((k) => [k, ''])))}
+      >
+        <div className="relative min-w-[12rem] flex-1 max-w-sm shrink-0">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input
+            type="search"
+            className={`${FILTER_CTL} w-full pl-8 pr-2`}
+            placeholder="TTSPL ID, serial, model…"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+          />
+        </div>
+        <DateRangeFilter
+          layout="inline"
+          controlClassName="h-9 px-2 text-sm min-h-0"
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onRangeChange={(range) => setFilters(range)}
+          onDateFromChange={(v) => setFilters({ dateFrom: v })}
+          onDateToChange={(v) => setFilters({ dateTo: v })}
+          fromLabel="QC2 from"
+          toLabel="QC2 to"
+        />
+      </FloorPipelineFilterPanel>
+
       {loading ? (
         <div className="flex items-center gap-2 text-slate-500 py-12 justify-center">
           <Loader2 className="w-5 h-5 animate-spin" /> Loading…
         </div>
       ) : rows.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-200 p-10 text-center text-slate-500 text-sm">
-          No units in QC Ready.
+          No units match your filters.
         </div>
       ) : (
+        <>
+        <p className="text-xs text-slate-500">{rows.length} unit{rows.length !== 1 ? 's' : ''} in QC Ready</p>
         <div className="overflow-x-auto rounded-xl border border-slate-100 bg-white shadow-sm">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
@@ -234,6 +290,7 @@ export default function PendingInventoryPage() {
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       {receiveFor ? (

@@ -158,8 +158,8 @@ export function verifyQc2Specs(id, body) {
   return api.post(`/production-assets/${id}/qc2-verify`, body);
 }
 
-export function fetchPendingInventory() {
-  return api.get('/production-assets/pending-inventory');
+export function fetchPendingInventory(params) {
+  return api.get('/production-assets/pending-inventory', { params: params || {} });
 }
 
 export function fetchCarretAvailability(carret) {

@@ -12,6 +12,8 @@ const {
   assignWarehouseLocation,
   formatLocation,
 } = require('./warehouseLocationService');
+const { pickSpecFilters, buildProductionAssetPendingSpecFilter } = require('../utils/inventorySpecFilter');
+const { appendDateRangeClauses } = require('../utils/dateRangeFilter');
 
 // Lazy require to avoid cycle with grnTicketService
 function markVendorSerialReadyForRent(...args) {
@@ -1032,12 +1034,45 @@ async function syncWorkingConfigFromInventory(db, invRow, userId) {
   return updateConfig(db, pa.production_asset_id, patch, userId, 'Inventory');
 }
 
-async function listPendingInventory(db) {
+async function listPendingInventory(db, query = {}) {
   await ensureTables(db);
+  const params = [];
+  const specFilters = pickSpecFilters(query);
+  const specFilter = buildProductionAssetPendingSpecFilter(specFilters, params);
+  const search = String(query.search || '').trim();
+
+  let searchSql = '';
+  if (search) {
+    params.push(`%${search}%`);
+    const i = params.length;
+    const resolvedTtspl = `COALESCE(NULLIF(TRIM(t.ttspl_id), ''), NULLIF(TRIM(t.machine_number), ''), NULLIF(TRIM(pa.ttspl_id), ''))`;
+    const resolvedSerial = `COALESCE(NULLIF(TRIM(t.serial_number), ''), NULLIF(TRIM(vsn.serial_number), ''), NULLIF(TRIM(pa.serial_number), ''))`;
+    searchSql = ` AND (
+      ${resolvedTtspl} ILIKE $${i}
+      OR ${resolvedSerial} ILIKE $${i}
+      OR COALESCE(pa.model, '') ILIKE $${i}
+      OR COALESCE(t.model, '') ILIKE $${i}
+      OR COALESCE(t.brand, '') ILIKE $${i}
+      OR COALESCE(pa.brand, '') ILIKE $${i}
+    )`;
+  }
+
+  const dateClauses = appendDateRangeClauses({
+    expr: 'COALESCE(pa.qc2_completed_at, pa.updated_at)',
+    dateFrom: query.date_from,
+    dateTo: query.date_to,
+    params,
+  });
+  const dateSql = dateClauses.length ? ` AND ${dateClauses.join(' AND ')}` : '';
+
   const r = await db.query(
     `SELECT pa.*,
             t.ticket_id AS ticket_ref,
             t.status AS ticket_status,
+            t.ttspl_id AS ticket_ttspl_id,
+            t.serial_number AS ticket_serial_number,
+            COALESCE(NULLIF(TRIM(t.ttspl_id), ''), NULLIF(TRIM(t.machine_number), ''), NULLIF(TRIM(pa.ttspl_id), '')) AS resolved_ttspl_id,
+            COALESCE(NULLIF(TRIM(t.serial_number), ''), NULLIF(TRIM(vsn.serial_number), ''), NULLIF(TRIM(pa.serial_number), '')) AS resolved_serial_number,
             u.name AS qc2_completed_by_name,
             s.stage_name,
             p.purchase_order_type
@@ -1066,12 +1101,22 @@ async function listPendingInventory(db) {
        LEFT JOIN stages s ON s.stage_id = t.current_stage_id
        LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = pa.vendor_serial_id
        LEFT JOIN vendor_purchase_orders p ON p.po_id = COALESCE(pa.po_id, vsn.po_id) AND p.deleted_at IS NULL
-      WHERE pa.status = 'pending_inventory'
+      WHERE (
+         pa.status = 'pending_inventory'
          OR (s.stage_name = 'Pending Inventory' AND t.status NOT IN ('completed', 'cancelled', 'qc_failed_return_vendor'))
-      ORDER BY COALESCE(pa.qc2_completed_at, pa.updated_at) DESC NULLS LAST`
+      )
+      ${searchSql}
+      ${specFilter.whereSql}
+      ${dateSql}
+      ORDER BY COALESCE(pa.qc2_completed_at, pa.updated_at) DESC NULLS LAST`,
+    params
   );
   return r.rows.map((row) => ({
-    ...rowToDisplayConfig(row),
+    ...rowToDisplayConfig({
+      ...row,
+      ttspl_id: row.resolved_ttspl_id || row.ttspl_id,
+      serial_number: row.resolved_serial_number || row.serial_number,
+    }),
     ticket_id: row.ticket_id || row.ticket_ref,
     qc2_completed_by_name: row.qc2_completed_by_name,
     ticket_status: row.ticket_status,
