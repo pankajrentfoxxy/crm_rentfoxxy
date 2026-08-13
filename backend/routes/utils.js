@@ -25,6 +25,8 @@ router.get('/pincode/:pin', async (req, res) => {
       pincode: pin,
       city: info.city || '',
       state: info.state || '',
+      area: info.area || '',
+      address: info.address || '',
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message || 'Pincode lookup failed' });

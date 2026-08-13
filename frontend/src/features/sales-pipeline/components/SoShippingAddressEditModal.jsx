@@ -33,10 +33,16 @@ export default function SoShippingAddressEditModal({ open, soNumber, shippingRaw
   const set = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
 
   const handlePincodeChange = async (pincode) => {
-    set('zip_code', pincode);
-    const filled = await applyPincodeAutofill(pincode);
-    if (filled?.city) set('city', filled.city);
-    if (filled?.state) set('state', filled.state);
+    const { info } = await applyPincodeAutofill(pincode, setForm, {
+      pinKey: 'zip_code',
+      cityKey: 'city',
+      stateKey: 'state',
+      addressKey: 'address',
+      fillAddressIfEmpty: true,
+    });
+    if (String(pincode || '').replace(/\D/g, '').length === 6 && !info) {
+      toast.error('No city/state found for this pincode');
+    }
   };
 
   const submit = async () => {
@@ -112,7 +118,17 @@ export default function SoShippingAddressEditModal({ open, soNumber, shippingRaw
                 ))}
               </select>
             </label>
-            {field('Zip Code *', 'zip_code')}
+            <label className="text-sm">
+              <span className="text-gray-500 text-xs">Zip / Pincode *</span>
+              <input
+                className="mt-1 w-full border rounded-lg px-3 py-2 text-sm"
+                value={form.zip_code || ''}
+                inputMode="numeric"
+                maxLength={6}
+                onChange={(e) => handlePincodeChange(e.target.value)}
+                onBlur={(e) => handlePincodeChange(e.target.value)}
+              />
+            </label>
           </div>
         </div>
         <div className="border-t p-4 flex justify-end gap-2">

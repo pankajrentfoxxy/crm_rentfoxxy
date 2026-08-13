@@ -97,6 +97,7 @@ function EditDrawer({ title, subtitle, initial, customer, shippingOptions, onClo
   const [isWfh, setIsWfh] = useState(Boolean(initial.is_wfh));
   const [notes, setNotes] = useState(initial.delivery_notes || '');
   const [saving, setSaving] = useState(false);
+  const [pinLookingUp, setPinLookingUp] = useState(false);
   const [selectedShipping, setSelectedShipping] = useState('');
 
   useEffect(() => {
@@ -109,9 +110,28 @@ function EditDrawer({ title, subtitle, initial, customer, shippingOptions, onClo
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
-  const handlePincodeChange = (value) => applyPincodeAutofill(value, setForm, {
-    pinKey: 'pincode', cityKey: 'city', stateKey: 'state',
-  });
+  const handlePincodeChange = async (value) => {
+    const digits = String(value || '').replace(/\D/g, '').slice(0, 6);
+    set('pincode', digits);
+    if (digits.length !== 6) return;
+    setPinLookingUp(true);
+    try {
+      const { info } = await applyPincodeAutofill(digits, setForm, {
+        pinKey: 'pincode',
+        cityKey: 'city',
+        stateKey: 'state',
+        addressKey: 'address',
+        fillAddressIfEmpty: true,
+      });
+      if (info?.city || info?.state) {
+        toast.success(`Location filled: ${[info.city, info.state].filter(Boolean).join(', ')}`);
+      } else {
+        toast.error('No city/state found for this pincode');
+      }
+    } finally {
+      setPinLookingUp(false);
+    }
+  };
 
   const applyShippingOption = (value) => {
     setSelectedShipping(value);
@@ -204,9 +224,23 @@ function EditDrawer({ title, subtitle, initial, customer, shippingOptions, onClo
                 {INDIAN_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
             </label>
-            <Field label="Pincode*" value={form.pincode}
-              onChange={handlePincodeChange}
-              onBlur={handlePincodeChange} />
+            <label className="block">
+              <span className="block text-xs font-medium text-gray-600 mb-1">
+                Pincode*{pinLookingUp ? ' · looking up…' : ''}
+              </span>
+              <input
+                className="w-full border rounded-lg px-3 py-2 text-sm"
+                value={form.pincode}
+                inputMode="numeric"
+                maxLength={6}
+                placeholder="6-digit pincode"
+                onChange={(e) => handlePincodeChange(e.target.value)}
+                onBlur={(e) => handlePincodeChange(e.target.value)}
+              />
+              <p className="text-[11px] text-gray-400 mt-1">
+                Enter 6 digits to auto-fill city, state and locality address
+              </p>
+            </label>
           </div>
           <Field label="Landmark" value={form.landmark} onChange={(v) => set('landmark', v)} />
           <label className="flex items-center gap-2 text-sm">

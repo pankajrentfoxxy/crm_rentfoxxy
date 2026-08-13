@@ -299,7 +299,7 @@ async function generateWayBill(input = {}) {
         Commodity: {},
         CreditReferenceNo: creditRef,
         Dimensions: dims,
-        PDFOutputNotRequired: servicesIn.pdfOutputNotRequired !== false,
+        PDFOutputNotRequired: servicesIn.pdfOutputNotRequired === true,
         PackType: '',
         PickupDate: pickupDate,
         PickupTime: pickupTime,
@@ -386,6 +386,13 @@ async function generateWayBill(input = {}) {
     throw err;
   }
 
+  const pdfBuffer = toPdfBuffer(
+    result.AWBPrintContent
+    || result.AwbPrintContent
+    || result.awbPrintContent
+    || result.LabelPrintContent
+  );
+
   return {
     awb_number: String(awb),
     credit_reference_no: result.CCRCRDREF || creditRef,
@@ -394,8 +401,46 @@ async function generateWayBill(input = {}) {
     cluster_code: result.ClusterCode || null,
     mps_details: result.MPSDetails || null,
     status_information: statusInfo || 'Waybill Generation Successful',
+    pdf_buffer: pdfBuffer,
     raw: result,
   };
+}
+
+/** Normalize BlueDart AWBPrintContent (byte array / base64 / Buffer) to a PDF Buffer. */
+function toPdfBuffer(content) {
+  if (!content) return null;
+  if (Buffer.isBuffer(content)) return content;
+  if (Array.isArray(content)) return Buffer.from(content);
+  if (content?.type === 'Buffer' && Array.isArray(content.data)) return Buffer.from(content.data);
+  if (typeof content === 'string') {
+    const trimmed = content.trim();
+    if (!trimmed) return null;
+    // Heuristic: raw PDF vs base64
+    if (trimmed.startsWith('%PDF')) return Buffer.from(trimmed, 'utf8');
+    try {
+      return Buffer.from(trimmed, 'base64');
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Persist waybill label PDF under uploads/bluedart/.
+ * @returns {string|null} relative path from backend root (e.g. uploads/bluedart/waybill_xxx.pdf)
+ */
+function saveWaybillPdf(awbNumber, pdfBuffer) {
+  if (!pdfBuffer || !pdfBuffer.length) return null;
+  const fs = require('fs');
+  const path = require('path');
+  const safeAwb = String(awbNumber || 'unknown').replace(/[^A-Za-z0-9_-]/g, '_');
+  const dir = path.join(__dirname, '..', 'uploads', 'bluedart');
+  fs.mkdirSync(dir, { recursive: true });
+  const fileName = `waybill_${safeAwb}_${Date.now()}.pdf`;
+  const abs = path.join(dir, fileName);
+  fs.writeFileSync(abs, pdfBuffer);
+  return `uploads/bluedart/${fileName}`;
 }
 
 /**
@@ -602,4 +647,6 @@ module.exports = {
   uniqueCreditRef,
   toDotNetDate,
   getWaybillConfig,
+  toPdfBuffer,
+  saveWaybillPdf,
 };

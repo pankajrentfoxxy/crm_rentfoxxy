@@ -19,25 +19,35 @@ function parsePostalPayload(raw) {
     return null;
   }
   const po = data.PostOffice.find((p) => p.DeliveryStatus === 'Delivery') || data.PostOffice[0];
+  const area = po.Name || po.Block || '';
+  const city = po.District || po.Division || area || '';
+  const state = po.State || '';
   return {
-    city: po.District || po.Name || '',
-    state: po.State || '',
+    city,
+    state,
+    area,
+    address: [area, city].filter(Boolean).filter((v, i, arr) => arr.indexOf(v) === i).join(', '),
   };
 }
 
-function toResult(city, state) {
+function toResult(city, state, extra = {}) {
   const stateName = matchIndianState(state) || state || '';
   return {
     city: city || '',
     state: stateName,
     stateSlug: slugifyState(stateName),
+    area: extra.area || '',
+    address: extra.address || '',
   };
 }
 
 async function lookupViaBackend(pin) {
   const { data } = await api.get(`/utils/pincode/${pin}`, { timeout: LOOKUP_TIMEOUT_MS });
   if (!data?.success) return null;
-  return toResult(data.city, data.state);
+  return toResult(data.city, data.state, {
+    area: data.area || '',
+    address: data.address || '',
+  });
 }
 
 async function lookupViaPostalPincodeIn(pin) {
@@ -49,7 +59,10 @@ async function lookupViaPostalPincodeIn(pin) {
     const raw = await res.json();
     const parsed = parsePostalPayload(raw);
     if (!parsed) return null;
-    return toResult(parsed.city, parsed.state);
+    return toResult(parsed.city, parsed.state, {
+      area: parsed.area,
+      address: parsed.address,
+    });
   } catch {
     return null;
   } finally {
@@ -66,7 +79,8 @@ async function lookupViaZippopotam(pin) {
     const data = await res.json();
     if (!Array.isArray(data?.places) || !data.places.length) return null;
     const place = data.places[0];
-    return toResult(place['place name'], place.state);
+    const area = place['place name'] || '';
+    return toResult(area, place.state, { area, address: area });
   } catch {
     return null;
   } finally {
@@ -104,19 +118,35 @@ export async function lookupAndResolvePincode(pincode) {
   }
 }
 
-/** Apply pincode + optional city/state in one updater call. */
+/**
+ * Apply pincode + city/state (and optional address if empty) in one updater call.
+ * @param {string} rawValue
+ * @param {Function} setForm
+ * @param {{ pinKey: string, cityKey: string, stateKey: string, addressKey?: string, useStateSlug?: boolean, fillAddressIfEmpty?: boolean }} fields
+ */
 export async function applyPincodeAutofill(rawValue, setForm, fields) {
   const { pin, info } = await lookupAndResolvePincode(rawValue);
-  setForm((f) => ({
-    ...f,
-    [fields.pinKey]: pin,
-    ...(info ? {
-      [fields.cityKey]: info.city || f[fields.cityKey],
-      [fields.stateKey]: fields.useStateSlug
-        ? (info.stateSlug || f[fields.stateKey])
-        : (info.state || f[fields.stateKey]),
-    } : {}),
-  }));
+  if (typeof setForm === 'function' && fields?.pinKey) {
+    setForm((f) => {
+      const next = {
+        ...f,
+        [fields.pinKey]: pin,
+      };
+      if (info) {
+        next[fields.cityKey] = info.city || f[fields.cityKey];
+        next[fields.stateKey] = fields.useStateSlug
+          ? (info.stateSlug || f[fields.stateKey])
+          : (info.state || f[fields.stateKey]);
+        if (fields.addressKey && fields.fillAddressIfEmpty !== false) {
+          const existing = String(f[fields.addressKey] || '').trim();
+          if (!existing && info.address) {
+            next[fields.addressKey] = info.address;
+          }
+        }
+      }
+      return next;
+    });
+  }
   return { pin, info };
 }
 

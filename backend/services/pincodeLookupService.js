@@ -32,9 +32,15 @@ function parsePostalPayload(raw) {
     return null;
   }
   const po = data.PostOffice.find((p) => p.DeliveryStatus === 'Delivery') || data.PostOffice[0];
+  const area = po.Name || po.Block || '';
+  const city = po.District || po.Division || area || '';
+  const state = matchIndianState(po.State);
   return {
-    city: po.District || po.Name || '',
-    state: matchIndianState(po.State),
+    city,
+    state,
+    area,
+    // Suggested street/locality line when the form address is still empty
+    address: [area, city].filter(Boolean).filter((v, i, arr) => arr.indexOf(v) === i).join(', '),
   };
 }
 
@@ -65,6 +71,8 @@ async function fetchZippopotam(pin) {
     return {
       city: place['place name'] || '',
       state: matchIndianState(place.state),
+      area: place['place name'] || '',
+      address: place['place name'] || '',
     };
   } catch {
     return null;

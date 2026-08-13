@@ -10,7 +10,7 @@ import SaleDcCompliancePanel from '../components/SaleDcCompliancePanel';
 import QcStatusBadge from '../components/QcStatusBadge';
 import {
   createDcQcTickets, getDC, getDcQcStatus, getDCMeta, getSalesOrderFull,
-  markDelivered, markRejected, regenerateDcPdf, downloadDcRentalInvoicePdf, cancelDC,
+  markDelivered, markRejected, regenerateDcPdf, downloadDcRentalInvoicePdf, downloadDcBluedartAwbPdf, cancelDC,
   sendDeliveryOtp, sendWarehouseReturnOtp, verifyDeliveryOtp, verifyWarehouseReturnOtp,
   updateDC, dispatchDC, updateDcHsn, updateDcDeliveryDate, generateDcBluedartAwb, cancelDcBluedartAwb,
 } from '../salesPipelineApi';
@@ -103,6 +103,7 @@ export default function DeliveryChallanDetailPage() {
   const [canDownloadPdf, setCanDownloadPdf] = useState(true);
   const [rentalInvoice, setRentalInvoice] = useState(null);
   const [invoicePdfLoading, setInvoicePdfLoading] = useState(false);
+  const [bluedartPdfLoading, setBluedartPdfLoading] = useState(false);
   const [updateDeliveryDateOpen, setUpdateDeliveryDateOpen] = useState(false);
 
   const head = lines[0] || {};
@@ -191,6 +192,51 @@ export default function DeliveryChallanDetailPage() {
       toast.error(err.response?.data?.message || 'BlueDart cancel failed');
     } finally {
       setAwbGenerating(false);
+    }
+  };
+
+  const handleDownloadBluedartAwbPdf = async ({ regenerate = false } = {}) => {
+    if (!head.awb_number && !regenerate) {
+      toast.error('Generate BlueDart AWB first');
+      return;
+    }
+    const needsRegenerate = regenerate || (!head.bluedart_awb_pdf_path && !!head.awb_number);
+    if (needsRegenerate) {
+      const ok = window.confirm(
+        head.bluedart_awb_pdf_path
+          ? `Regenerate BlueDart AWB (replacing ${head.awb_number}) and download the label PDF?`
+          : `No BlueDart label PDF is stored for AWB ${head.awb_number}. Create a new AWB and download the label PDF?`
+      );
+      if (!ok) return;
+    }
+    setBluedartPdfLoading(true);
+    try {
+      const res = await downloadDcBluedartAwbPdf(dcNumber, needsRegenerate ? { regenerate: 1 } : {});
+      const blob = new Blob([res.data], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `BlueDart_${head.awb_number || 'AWB'}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      if (needsRegenerate) await load();
+      toast.success('BlueDart AWB PDF downloaded');
+    } catch (err) {
+      let msg = 'Could not download BlueDart AWB PDF';
+      const data = err.response?.data;
+      if (data instanceof Blob) {
+        try {
+          const parsed = JSON.parse(await data.text());
+          msg = parsed.message || msg;
+        } catch { /* ignore */ }
+      } else if (data?.message) {
+        msg = data.message;
+      }
+      toast.error(msg);
+    } finally {
+      setBluedartPdfLoading(false);
     }
   };
 
@@ -458,6 +504,17 @@ export default function DeliveryChallanDetailPage() {
               {invoicePdfLoading ? 'Preparing…' : 'Download Invoice PDF'}
             </button>
           )}
+          {(head.ship_by === 'by_courier' || head.dispatch_mode === 'courier') && head.awb_number && (
+            <button
+              type="button"
+              disabled={bluedartPdfLoading}
+              onClick={() => handleDownloadBluedartAwbPdf()}
+              className="inline-flex items-center px-4 min-h-[40px] text-sm font-semibold border border-sky-300 rounded-xl text-sky-900 bg-sky-50 hover:bg-sky-100 disabled:opacity-60"
+              title={head.bluedart_awb_pdf_path ? `AWB ${head.awb_number}` : `AWB ${head.awb_number} (may regenerate if PDF missing)`}
+            >
+              {bluedartPdfLoading ? 'Preparing…' : 'Download BlueDart PDF'}
+            </button>
+          )}
           {isSale && !canDownloadPdf && !isSuperAdmin && (
             <span className="text-xs text-indigo-700 bg-indigo-50 border border-indigo-200 px-3 py-2 rounded-xl">
               Upload E-Invoice on the E-Invoice tab to unlock PDF
@@ -552,7 +609,7 @@ export default function DeliveryChallanDetailPage() {
                     {' � '}AWB: <strong>{head.awb_number || '�'}</strong>
                     {head.awb_number && (
                       <>
-                        {' � '}
+                        {' · '}
                         <button
                           type="button"
                           onClick={() => setTrackingOpen(true)}
@@ -560,7 +617,16 @@ export default function DeliveryChallanDetailPage() {
                         >
                           Track
                         </button>
-                        {' � '}
+                        {' · '}
+                        <button
+                          type="button"
+                          disabled={bluedartPdfLoading}
+                          onClick={() => handleDownloadBluedartAwbPdf()}
+                          className="text-sky-700 underline text-xs ml-1 disabled:opacity-50"
+                        >
+                          {bluedartPdfLoading ? 'PDF…' : 'BlueDart PDF'}
+                        </button>
+                        {' · '}
                         <PermissionGate section={['sales_orders_doc', 'delivery_challans']} action="edit">
                           <button
                             type="button"
@@ -568,7 +634,7 @@ export default function DeliveryChallanDetailPage() {
                             onClick={handleCancelBluedartAwb}
                             className="text-red-600 underline text-xs ml-1 disabled:opacity-50"
                           >
-                            {awbGenerating ? 'Cancelling�' : 'Cancel AWB'}
+                            {awbGenerating ? 'Cancelling…' : 'Cancel AWB'}
                           </button>
                         </PermissionGate>
                       </>
@@ -752,7 +818,7 @@ export default function DeliveryChallanDetailPage() {
                     Courier: {head.courier_name} � AWB: {head.awb_number || '�'}
                     {head.awb_number && (
                       <>
-                        {' � '}
+                        {' · '}
                         <button
                           type="button"
                           onClick={() => setTrackingOpen(true)}
@@ -760,14 +826,23 @@ export default function DeliveryChallanDetailPage() {
                         >
                           Track
                         </button>
-                        {' � '}
+                        {' · '}
+                        <button
+                          type="button"
+                          disabled={bluedartPdfLoading}
+                          onClick={() => handleDownloadBluedartAwbPdf()}
+                          className="text-sky-700 underline text-xs disabled:opacity-50"
+                        >
+                          {bluedartPdfLoading ? 'PDF…' : 'BlueDart PDF'}
+                        </button>
+                        {' · '}
                         <button
                           type="button"
                           disabled={awbGenerating}
                           onClick={handleCancelBluedartAwb}
                           className="text-red-600 underline text-xs disabled:opacity-50"
                         >
-                          {awbGenerating ? 'Cancelling�' : 'Cancel AWB'}
+                          {awbGenerating ? 'Cancelling…' : 'Cancel AWB'}
                         </button>
                       </>
                     )}

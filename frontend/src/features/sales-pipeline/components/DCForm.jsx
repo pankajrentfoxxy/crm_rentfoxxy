@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { createDcsByAddress, getDCMeta, listSalesOrders, generateBluedartWaybill } from '../salesPipelineApi';
+import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
 import { deliveryChallanDetailTo, salesOrderDcNavState } from '../salesPipelineUtils';
 import { BillingAddressPanel } from '../../operation-management/components/CustomerAddressPanels';
 import { sumDeclaredValueForUnits } from '../bluedartDeclaredValue';
@@ -72,6 +73,17 @@ function AddressEditDrawer({ address, onSave, onClose }) {
   });
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
+  const handlePincodeChange = async (e) => {
+    const value = e.target.value;
+    await applyPincodeAutofill(value, setForm, {
+      pinKey: 'pincode',
+      cityKey: 'city',
+      stateKey: 'state',
+      addressKey: 'address',
+      fillAddressIfEmpty: true,
+    });
+  };
+
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
       <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-5">
@@ -88,7 +100,6 @@ function AddressEditDrawer({ address, onSave, onClose }) {
             ['Address*', 'address', 'text'],
             ['City*', 'city', 'text'],
             ['State*', 'state', 'text'],
-            ['Pincode*', 'pincode', 'text'],
             ['Landmark', 'landmark', 'text'],
           ].map(([label, key, type]) => (
             <div key={key}>
@@ -97,6 +108,19 @@ function AddressEditDrawer({ address, onSave, onClose }) {
                 className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
             </div>
           ))}
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Pincode*</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={6}
+              value={form.pincode || ''}
+              onChange={handlePincodeChange}
+              onBlur={handlePincodeChange}
+              className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+              placeholder="6-digit pincode auto-fills city/state"
+            />
+          </div>
         </div>
         <div className="flex gap-2 mt-5">
           <button type="button" onClick={onClose}
@@ -685,12 +709,20 @@ export default function DCForm({ open, onClose, prefillSo, soScope, returnTab = 
         dc_groups: groups,
       });
 
-      const { dc_numbers, dcs_created, first_dc } = res.data;
+      const { dc_numbers, dcs_created, first_dc, bluedart_awbs } = res.data;
 
       if (dcs_created === 1) {
         toast.success(`DC created: ${first_dc}`);
       } else {
         toast.success(`${dcs_created} DCs created: ${dc_numbers.join(', ')}`);
+      }
+      const awbOk = (bluedart_awbs || []).filter((r) => r.awb_number && !r.error);
+      if (awbOk.length) {
+        toast.success(`BlueDart AWB: ${awbOk.map((r) => r.awb_number).join(', ')}`);
+      }
+      const awbErr = (bluedart_awbs || []).find((r) => r.error);
+      if (awbErr) {
+        toast.error(`BlueDart AWB: ${awbErr.error}`);
       }
 
       onClose();

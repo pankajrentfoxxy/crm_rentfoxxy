@@ -1112,138 +1112,12 @@ exports.generateBluedartWaybill = async (req, res) => {
 /** Generate BlueDart AWB for an existing DC and save awb_number on all lines. */
 exports.generateDcBluedartAwb = async (req, res) => {
   try {
-    const bluedartWaybill = require('../services/bluedartWaybillService');
-    if (!bluedartWaybill.isWaybillConfigured()) {
-      return res.status(503).json({
-        success: false,
-        message: 'BlueDart waybill is not configured on the server',
-      });
-    }
-
-    const dcNumber = req.params.dcNumber;
-    const lines = await getDeliveryChallanLines(dcNumber);
-    if (!lines.length) {
-      return res.status(404).json({ success: false, message: 'Delivery challan not found' });
-    }
-    const head = lines[0];
-    if (head.awb_number && !req.body?.force) {
-      return res.status(409).json({
-        success: false,
-        message: `DC already has AWB ${head.awb_number}. Pass force=true to generate another.`,
-        data: { awb_number: head.awb_number },
-      });
-    }
-
-    const shipping = parseJsonSafe(head.customer_shipping_address) || {};
-    const body = req.body || {};
-    const consignee = {
-      name: body.consignee?.name || shipping.name || head.customer_name,
-      mobile: body.consignee?.mobile || shipping.phone || shipping.mobile || head.d_customer_mobile,
-      address: body.consignee?.address
-        || [shipping.address, shipping.city, shipping.state].filter(Boolean).join(', ')
-        || shipping.address,
-      pincode: body.consignee?.pincode || shipping.pincode || shipping.zip_code,
-      email: body.consignee?.email || shipping.email || head.email,
-      gst: body.consignee?.gst || head.gst_number,
-      attention: body.consignee?.attention || shipping.name || head.customer_name,
-    };
-
-    const pieceCount = body.services?.pieceCount
-      || lines.reduce((sum, l) => sum + (Number(l.quantity || l.main_qty || 1) || 1), 0)
-      || 1;
-
-    const creditRef = body.credit_reference_no
-      || bluedartWaybill.uniqueCreditRef(
-        `DC${String(dcNumber).replace(/[^A-Za-z0-9]/g, '').slice(-12)}`
-      );
-
-    let declaredValue = body.services?.declaredValue;
-    if (declaredValue == null || declaredValue === '' || Number(declaredValue) <= 0) {
-      const { sumDeclaredValueForUnits } = require('../constants/bluedartDeclaredValue');
-      const unitsForValue = [];
-      for (const line of lines) {
-        const details = Array.isArray(line.serials_detail) ? line.serials_detail : [];
-        if (details.length) {
-          details.forEach((d) => unitsForValue.push({ processor: d.processor, generation: d.generation }));
-        } else if (line.processor || line.generation) {
-          const qty = Math.max(1, Number(line.quantity || line.main_qty || 1) || 1);
-          for (let i = 0; i < qty; i += 1) {
-            unitsForValue.push({ processor: line.processor, generation: line.generation });
-          }
-        }
-      }
-
-      if (!unitsForValue.some((u) => u.processor || u.generation)) {
-        const serialRes = await pool.query(
-          `SELECT COALESCE(vsn.extra->>'processor', vpd.processor, inv.processor) AS processor,
-                  COALESCE(vsn.extra->>'generation', vpd.generation, inv.generation) AS generation
-             FROM delivery_challan_lines dcl
-             CROSS JOIN LATERAL jsonb_array_elements_text(
-               CASE
-                 WHEN jsonb_typeof(to_jsonb(dcl.serial_number)) = 'array' THEN to_jsonb(dcl.serial_number)
-                 WHEN dcl.serial_number IS NULL THEN '[]'::jsonb
-                 ELSE jsonb_build_array(dcl.serial_number::text)
-               END
-             ) AS sn(entry)
-             LEFT JOIN vendor_serial_numbers vsn
-               ON vsn.deleted_at IS NULL
-              AND (
-                (split_part(sn.entry, '|', 1) ~ '^[0-9]+$' AND vsn.serial_id = split_part(sn.entry, '|', 1)::int)
-                OR vsn.serial_number = COALESCE(NULLIF(split_part(sn.entry, '|', 2), ''), sn.entry)
-                OR vsn.inventory_asset_code = COALESCE(NULLIF(split_part(sn.entry, '|', 3), ''), sn.entry)
-              )
-             LEFT JOIN vendor_product_details vpd
-               ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id', '')::int
-             LEFT JOIN LATERAL (
-               SELECT i.processor, i.generation
-                 FROM inventory i
-                WHERE i.serial_number = vsn.serial_number
-                   OR i.unique_number = vsn.inventory_asset_code
-                LIMIT 1
-             ) inv ON TRUE
-            WHERE dcl.dc_number = $1`,
-          [dcNumber]
-        ).catch((err) => {
-          console.warn('bluedart declared value serial lookup:', err.message);
-          return { rows: [] };
-        });
-        serialRes.rows.forEach((r) => {
-          unitsForValue.push({ processor: r.processor, generation: r.generation });
-        });
-      }
-
-      const matrixTotal = sumDeclaredValueForUnits(unitsForValue);
-      if (matrixTotal != null) declaredValue = matrixTotal;
-      else if (Number(head.security_amount) > 0) declaredValue = Number(head.security_amount);
-    }
-
-    const result = await bluedartWaybill.generateWayBill({
-      consignee,
-      services: {
-        ...(body.services || {}),
-        pieceCount,
-        declaredValue,
-        itemName: [head.brand, head.model_name].filter(Boolean).join(' ') || 'LAPTOP',
-      },
-      creditReferenceNo: creditRef,
-    });
-
-    await pool.query(
-      `UPDATE delivery_challan_lines
-          SET courier_name = COALESCE(NULLIF(TRIM(courier_name), ''), 'BlueDart'),
-              awb_number = $2,
-              ship_by = COALESCE(ship_by, 'by_courier'),
-              dispatch_mode = COALESCE(dispatch_mode, 'courier'),
-              updated_at = NOW()
-        WHERE dc_number = $1`,
-      [dcNumber, result.awb_number]
-    );
-
+    const result = await generateAndPersistDcBluedartAwb(req.params.dcNumber, req.body || {});
     return res.json({
       success: true,
-      message: `AWB ${result.awb_number} saved on ${dcNumber}`,
+      message: `AWB ${result.awb_number} saved on ${req.params.dcNumber}`,
       data: {
-        dc_number: dcNumber,
+        dc_number: req.params.dcNumber,
         ...result,
       },
     });
@@ -1253,9 +1127,174 @@ exports.generateDcBluedartAwb = async (req, res) => {
       success: false,
       message: error.message,
       details: error.details || undefined,
+      data: error.data || undefined,
     });
   }
 };
+
+/**
+ * Generate BlueDart waybill for a DC, persist AWB + label PDF path.
+ * Used by API and auto-generate on BlueDart DC create.
+ */
+async function generateAndPersistDcBluedartAwb(dcNumber, body = {}) {
+  const bluedartWaybill = require('../services/bluedartWaybillService');
+  if (!bluedartWaybill.isWaybillConfigured()) {
+    const err = new Error('BlueDart waybill is not configured on the server');
+    err.status = 503;
+    throw err;
+  }
+
+  const lines = await getDeliveryChallanLines(dcNumber);
+  if (!lines.length) {
+    const err = new Error('Delivery challan not found');
+    err.status = 404;
+    throw err;
+  }
+  const head = lines[0];
+  if (head.awb_number && !body.force) {
+    const err = new Error(`DC already has AWB ${head.awb_number}. Pass force=true to generate another.`);
+    err.status = 409;
+    err.data = {
+      awb_number: head.awb_number,
+      bluedart_awb_pdf_path: head.bluedart_awb_pdf_path || null,
+    };
+    throw err;
+  }
+
+  const shipping = parseJsonSafe(head.customer_shipping_address) || {};
+  const consignee = {
+    name: body.consignee?.name || shipping.name || head.customer_name,
+    mobile: body.consignee?.mobile || shipping.phone || shipping.mobile || head.d_customer_mobile,
+    address: body.consignee?.address
+      || [shipping.address, shipping.city, shipping.state].filter(Boolean).join(', ')
+      || shipping.address,
+    pincode: body.consignee?.pincode || shipping.pincode || shipping.zip_code,
+    email: body.consignee?.email || shipping.email || head.email,
+    gst: body.consignee?.gst || head.gst_number,
+    attention: body.consignee?.attention || shipping.name || head.customer_name,
+  };
+
+  const pieceCount = body.services?.pieceCount
+    || lines.reduce((sum, l) => sum + (Number(l.quantity || l.main_qty || 1) || 1), 0)
+    || 1;
+
+  const creditRef = body.credit_reference_no
+    || bluedartWaybill.uniqueCreditRef(
+      `DC${String(dcNumber).replace(/[^A-Za-z0-9]/g, '').slice(-12)}`
+    );
+
+  let declaredValue = body.services?.declaredValue;
+  if (declaredValue == null || declaredValue === '' || Number(declaredValue) <= 0) {
+    const { sumDeclaredValueForUnits } = require('../constants/bluedartDeclaredValue');
+    const unitsForValue = [];
+    for (const line of lines) {
+      const details = Array.isArray(line.serials_detail) ? line.serials_detail : [];
+      if (details.length) {
+        details.forEach((d) => unitsForValue.push({ processor: d.processor, generation: d.generation }));
+      } else if (line.processor || line.generation) {
+        const qty = Math.max(1, Number(line.quantity || line.main_qty || 1) || 1);
+        for (let i = 0; i < qty; i += 1) {
+          unitsForValue.push({ processor: line.processor, generation: line.generation });
+        }
+      }
+    }
+
+    if (!unitsForValue.some((u) => u.processor || u.generation)) {
+      const serialRes = await pool.query(
+        `SELECT COALESCE(vsn.extra->>'processor', vpd.processor, inv.processor) AS processor,
+                COALESCE(vsn.extra->>'generation', vpd.generation, inv.generation) AS generation
+           FROM delivery_challan_lines dcl
+           CROSS JOIN LATERAL jsonb_array_elements_text(
+             CASE
+               WHEN jsonb_typeof(to_jsonb(dcl.serial_number)) = 'array' THEN to_jsonb(dcl.serial_number)
+               WHEN dcl.serial_number IS NULL THEN '[]'::jsonb
+               ELSE jsonb_build_array(dcl.serial_number::text)
+             END
+           ) AS sn(entry)
+           LEFT JOIN vendor_serial_numbers vsn
+             ON vsn.deleted_at IS NULL
+            AND (
+              (split_part(sn.entry, '|', 1) ~ '^[0-9]+$' AND vsn.serial_id = split_part(sn.entry, '|', 1)::int)
+              OR vsn.serial_number = COALESCE(NULLIF(split_part(sn.entry, '|', 2), ''), sn.entry)
+              OR vsn.inventory_asset_code = COALESCE(NULLIF(split_part(sn.entry, '|', 3), ''), sn.entry)
+            )
+           LEFT JOIN vendor_product_details vpd
+             ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id', '')::int
+           LEFT JOIN LATERAL (
+             SELECT i.processor, i.generation
+               FROM inventory i
+              WHERE i.serial_number = vsn.serial_number
+                 OR i.unique_number = vsn.inventory_asset_code
+              LIMIT 1
+           ) inv ON TRUE
+          WHERE dcl.dc_number = $1`,
+        [dcNumber]
+      ).catch((err) => {
+        console.warn('bluedart declared value serial lookup:', err.message);
+        return { rows: [] };
+      });
+      serialRes.rows.forEach((r) => {
+        unitsForValue.push({ processor: r.processor, generation: r.generation });
+      });
+    }
+
+    const matrixTotal = sumDeclaredValueForUnits(unitsForValue);
+    if (matrixTotal != null) declaredValue = matrixTotal;
+    else if (Number(head.security_amount) > 0) declaredValue = Number(head.security_amount);
+  }
+
+  const result = await bluedartWaybill.generateWayBill({
+    consignee,
+    services: {
+      ...(body.services || {}),
+      pieceCount,
+      declaredValue,
+      pdfOutputNotRequired: false,
+      itemName: [head.brand, head.model_name].filter(Boolean).join(' ') || 'LAPTOP',
+    },
+    creditReferenceNo: creditRef,
+  });
+
+  const pdfPath = bluedartWaybill.saveWaybillPdf(result.awb_number, result.pdf_buffer);
+
+  await pool.query(
+    `UPDATE delivery_challan_lines
+        SET courier_name = COALESCE(NULLIF(TRIM(courier_name), ''), 'BlueDart'),
+            awb_number = $2,
+            bluedart_awb_pdf_path = COALESCE($3, bluedart_awb_pdf_path),
+            ship_by = COALESCE(ship_by, 'by_courier'),
+            dispatch_mode = COALESCE(dispatch_mode, 'courier'),
+            updated_at = NOW()
+      WHERE dc_number = $1`,
+    [dcNumber, result.awb_number, pdfPath]
+  );
+
+  // Do not leak raw buffer / BlueDart payload in API responses
+  const { pdf_buffer: _buf, raw: _raw, ...safe } = result;
+  return {
+    ...safe,
+    bluedart_awb_pdf_path: pdfPath,
+    pdf_saved: Boolean(pdfPath),
+  };
+}
+
+function isBlueDartCourierName(name) {
+  return /bluedart|blue\s*dart/i.test(String(name || ''));
+}
+
+/** After rental/sale DC create: auto AWB when courier is BlueDart (or blank courier on by_courier). */
+async function maybeAutoGenerateBluedartAwbForDc(dcNumber, { shipBy, courierName, awbNumber } = {}) {
+  if (String(shipBy || '').toLowerCase() !== 'by_courier') return null;
+  if (awbNumber) return null;
+  const courier = String(courierName || '').trim();
+  if (courier && !isBlueDartCourierName(courier)) return null;
+  try {
+    return await generateAndPersistDcBluedartAwb(dcNumber, {});
+  } catch (err) {
+    console.error(`Auto BlueDart AWB failed for ${dcNumber}:`, err.message);
+    return { error: err.message };
+  }
+}
 
 /** Cancel BlueDart AWB by number (does not require a DC). */
 exports.cancelBluedartWaybill = async (req, res) => {
@@ -1307,6 +1346,7 @@ exports.cancelDcBluedartAwb = async (req, res) => {
     await pool.query(
       `UPDATE delivery_challan_lines
           SET awb_number = NULL,
+              bluedart_awb_pdf_path = NULL,
               updated_at = NOW()
         WHERE dc_number = $1`,
       [dcNumber]
@@ -1961,7 +2001,22 @@ exports.storeDeliveryChallan = async (req, res) => {
       }
     }
 
-    res.status(201).json({ success: true, message: 'Delivery challan created', dc_number: dcNumber, pdf_path: pdfPath });
+    // Post-commit: auto BlueDart AWB + label PDF when courier is BlueDart.
+    let bluedartAwb = null;
+    bluedartAwb = await maybeAutoGenerateBluedartAwbForDc(dcNumber, {
+      shipBy: body.ship_by || (dispatchMode === 'courier' ? 'by_courier' : null),
+      courierName: body.courier_name,
+      awbNumber: body.awb_number,
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Delivery challan created',
+      dc_number: dcNumber,
+      pdf_path: pdfPath,
+      bluedart_awb: bluedartAwb && !bluedartAwb.error ? bluedartAwb : undefined,
+      bluedart_awb_error: bluedartAwb?.error || undefined,
+    });
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('storeDeliveryChallan:', error);
@@ -2181,9 +2236,9 @@ exports.createDcsByAddress = async (req, res) => {
           dcBrand, dcModel,
           groupSize, groupSize, JSON.stringify(serialTokens),
           ship_by,
-          ship_by === 'by_courier' ? (body.courier_name || null) : null,
+          ship_by === 'by_courier' ? (group.courier_name || body.courier_name || 'BlueDart') : null,
           ship_by === 'by_courier' ? groupAwb : null,
-          ship_by === 'by_courier' ? (body.courier_tracking_url || null) : null,
+          ship_by === 'by_courier' ? (group.courier_tracking_url || body.courier_tracking_url || null) : null,
           ship_by === 'by_porter' ? (group.porter_tracking_id || body.porter_tracking_id || null) : null,
           ship_by === 'by_porter' ? (group.porter_order_id || body.porter_order_id || null) : null,
           ship_by === 'by_porter' ? (group.porter_booking_url || body.porter_booking_url || null) : null,
@@ -2291,12 +2346,31 @@ exports.createDcsByAddress = async (req, res) => {
       }
     }
 
+    // Post-commit: auto BlueDart AWB + label PDF for courier BlueDart DCs without AWB.
+    const bluedartResults = [];
+    for (const dcNumber of createdDcNumbers) {
+      try {
+        const dcLines = await getDeliveryChallanLines(dcNumber);
+        const head = dcLines[0] || {};
+        const awbOut = await maybeAutoGenerateBluedartAwbForDc(dcNumber, {
+          shipBy: head.ship_by || ship_by,
+          courierName: head.courier_name || body.courier_name,
+          awbNumber: head.awb_number || null,
+        });
+        if (awbOut) bluedartResults.push({ dc_number: dcNumber, ...awbOut });
+      } catch (awbErr) {
+        console.error(`createDcsByAddress auto BlueDart (${dcNumber}):`, awbErr.message);
+        bluedartResults.push({ dc_number: dcNumber, error: awbErr.message });
+      }
+    }
+
     res.status(201).json({
       success: true,
       dc_numbers: createdDcNumbers,
       dcs_created: createdDcNumbers.length,
       first_dc: createdDcNumbers[0],
       message: `${createdDcNumbers.length} DC(s) created: ${createdDcNumbers.join(', ')}`,
+      bluedart_awbs: bluedartResults.length ? bluedartResults : undefined,
     });
 
     for (const dcNumber of createdDcNumbers) {
@@ -3337,6 +3411,50 @@ exports.regenerateDcPdf = async (req, res) => {
   } catch (e) {
     const status = e.message?.includes('E-Invoice must be uploaded') ? 403 : 500;
     res.status(status).json({ success: false, message: e.message });
+  }
+};
+
+/** Download saved BlueDart waybill label PDF for this DC. */
+exports.downloadDcBluedartAwbPdf = async (req, res) => {
+  try {
+    const dcNumber = req.params.dcNumber;
+    const lines = await getDeliveryChallanLines(dcNumber);
+    if (!lines.length) {
+      return res.status(404).json({ success: false, message: 'Delivery challan not found' });
+    }
+    const head = lines[0];
+    let pdfRel = head.bluedart_awb_pdf_path || null;
+
+    // Optional: regenerate AWB to capture label PDF if older AWB has none.
+    if (!pdfRel && head.awb_number && String(req.query.regenerate || '') === '1') {
+      const regenerated = await generateAndPersistDcBluedartAwb(dcNumber, { force: true });
+      pdfRel = regenerated.bluedart_awb_pdf_path || null;
+    }
+
+    if (!pdfRel && !head.awb_number) {
+      return res.status(404).json({
+        success: false,
+        message: 'No BlueDart AWB on this DC — generate AWB first',
+      });
+    }
+
+    if (!pdfRel) {
+      return res.status(404).json({
+        success: false,
+        message: 'BlueDart AWB PDF not stored yet. Click Generate BlueDart AWB again, or use regenerate=1',
+        data: { awb_number: head.awb_number },
+      });
+    }
+
+    const abs = path.isAbsolute(pdfRel) ? pdfRel : path.join(__dirname, '..', pdfRel);
+    if (!fs.existsSync(abs)) {
+      return res.status(404).json({ success: false, message: 'BlueDart AWB PDF file missing on server' });
+    }
+    const fileName = `BlueDart_${head.awb_number || 'AWB'}.pdf`;
+    return res.download(abs, fileName);
+  } catch (e) {
+    console.error('downloadDcBluedartAwbPdf:', e);
+    res.status(e.status || 500).json({ success: false, message: e.message });
   }
 };
 
