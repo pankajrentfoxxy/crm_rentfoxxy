@@ -95,8 +95,8 @@ exports.verifyQc2 = async (req, res) => {
 
 exports.listPending = async (req, res) => {
   try {
-    const rows = await productionAssetService.listPendingInventory(pool);
-    res.json({ success: true, data: rows });
+    const rows = await productionAssetService.listPendingInventory(pool, req.query);
+    res.json({ success: true, data: rows, count: rows.length });
   } catch (e) {
     console.error('listPending inventory:', e);
     res.status(500).json({ success: false, message: e.message || 'Failed to list' });

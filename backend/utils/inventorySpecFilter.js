@@ -468,6 +468,29 @@ function buildTicketSpecFilter(filters, params, tAlias = 't') {
   };
 }
 
+function productionAssetPendingSpecExpr(field) {
+  const map = {
+    brand: `COALESCE(NULLIF(TRIM(pa.brand), ''), NULLIF(TRIM(t.brand), ''), NULLIF(TRIM(vsn.extra->>'brand_name'), ''), NULLIF(TRIM(vsn.extra->>'brand'), ''))`,
+    model: `COALESCE(NULLIF(TRIM(pa.model), ''), NULLIF(TRIM(t.model), ''), NULLIF(TRIM(vsn.extra->>'model'), ''), NULLIF(TRIM(vsn.extra->>'model_name'), ''))`,
+    processor: `COALESCE(NULLIF(TRIM(pa.processor), ''), NULLIF(TRIM(t.processor), ''), NULLIF(TRIM(vsn.extra->>'processor'), ''))`,
+    generation: `COALESCE(NULLIF(TRIM(pa.generation), ''), NULLIF(TRIM(vsn.extra->>'generation'), ''))`,
+    ram: `COALESCE(NULLIF(TRIM(pa.ram), ''), NULLIF(TRIM(t.ram), ''), NULLIF(TRIM(vsn.extra->>'ram'), ''))`,
+    storage: `COALESCE(NULLIF(TRIM(pa.ssd), ''), NULLIF(TRIM(t.storage), ''), NULLIF(TRIM(vsn.extra->>'storage'), ''))`,
+    screen_size: `COALESCE(NULLIF(TRIM(pa.screen_size), ''), NULLIF(TRIM(vsn.extra->>'screen_size'), ''))`,
+    gpu: `COALESCE(NULLIF(TRIM(pa.gpu), ''), NULLIF(TRIM(vsn.extra->>'gpu'), ''))`,
+  };
+  return map[field];
+}
+
+/** Spec filters for QC Ready / pending-inventory list (production_assets + ticket + serial). */
+function buildProductionAssetPendingSpecFilter(filters, params) {
+  if (!hasSpecFilters(filters)) {
+    return { whereSql: '' };
+  }
+  const clauses = appendRepairSpecClauses(filters, params, productionAssetPendingSpecExpr);
+  return { whereSql: clauses.length ? ` AND ${clauses.join(' AND ')}` : '' };
+}
+
 module.exports = {
   SPEC_QUERY_KEYS,
   parseMultiSpecValues,
@@ -477,6 +500,7 @@ module.exports = {
   hasMultiSpecFilters,
   buildSerialSpecFilter,
   buildTicketSpecFilter,
+  buildProductionAssetPendingSpecFilter,
   appendRepairSpecClauses,
   appendMultiSpecClauses,
   reportRowSpecExpr,
