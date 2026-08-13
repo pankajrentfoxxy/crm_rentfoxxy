@@ -10,14 +10,15 @@ import SaleDcCompliancePanel from '../components/SaleDcCompliancePanel';
 import QcStatusBadge from '../components/QcStatusBadge';
 import {
   createDcQcTickets, getDC, getDcQcStatus, getDCMeta, getSalesOrderFull,
-  markDelivered, markRejected, regenerateDcPdf, downloadDcRentalInvoicePdf, downloadDcBluedartAwbPdf, cancelDC,
+  markDelivered, markRejected, regenerateDcPdf, downloadDcRentalInvoicePdf, downloadDcBluedartAwbPdf,
+  downloadBluedartWaybillPdfByAwb, cancelDC,
   sendDeliveryOtp, sendWarehouseReturnOtp, verifyDeliveryOtp, verifyWarehouseReturnOtp,
   updateDC, dispatchDC, updateDcHsn, updateDcDeliveryDate, generateDcBluedartAwb, cancelDcBluedartAwb,
 } from '../salesPipelineApi';
 import {
   DC_STATUS_STYLES, formatConfig, formatCurrency, formatDate, formatDateTime,
   isDcAssignmentEditable, isDcCancellable, parseSerials, salesOrderDetailPath, statusLabel,
-  resolveDcBackNavigation,
+  resolveDcBackNavigation, downloadBlob,
 } from '../salesPipelineUtils';
 import { sumDeclaredValueForUnits } from '../bluedartDeclaredValue';
 import { getBackendOrigin } from '../../../utils/api';
@@ -157,7 +158,7 @@ export default function DeliveryChallanDetailPage() {
   };
 
   const handleGenerateBluedartAwb = async () => {
-    if (!window.confirm('Generate a BlueDart AWB for this DC and save it?')) return;
+    if (!window.confirm('Generate a BlueDart waybill for this DC and save the label PDF?')) return;
     setAwbGenerating(true);
     try {
       const unitsForValue = lines.flatMap((l) => {
@@ -170,7 +171,13 @@ export default function DeliveryChallanDetailPage() {
       const { data } = await generateDcBluedartAwb(dcNumber, {
         services: declared != null ? { declaredValue: declared } : {},
       });
-      toast.success(data?.message || `AWB ${data?.data?.awb_number} saved`);
+      const awb = data?.data?.awb_number;
+      const pdfSaved = Boolean(data?.data?.pdf_saved || data?.data?.bluedart_awb_pdf_path);
+      toast.success(
+        pdfSaved
+          ? `AWB ${awb} generated — PDF saved. Click Download BlueDart PDF.`
+          : (data?.message || `AWB ${awb} saved`)
+      );
       await load();
     } catch (err) {
       toast.error(err.response?.data?.message || 'BlueDart AWB failed');
@@ -200,29 +207,41 @@ export default function DeliveryChallanDetailPage() {
       toast.error('Generate BlueDart AWB first');
       return;
     }
-    const needsRegenerate = regenerate || (!head.bluedart_awb_pdf_path && !!head.awb_number);
-    if (needsRegenerate) {
-      const ok = window.confirm(
-        head.bluedart_awb_pdf_path
-          ? `Regenerate BlueDart AWB (replacing ${head.awb_number}) and download the label PDF?`
-          : `No BlueDart label PDF is stored for AWB ${head.awb_number}. Create a new AWB and download the label PDF?`
-      );
-      if (!ok) return;
-    }
     setBluedartPdfLoading(true);
     try {
-      const res = await downloadDcBluedartAwbPdf(dcNumber, needsRegenerate ? { regenerate: 1 } : {});
-      const blob = new Blob([res.data], { type: 'application/pdf' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `BlueDart_${head.awb_number || 'AWB'}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      if (needsRegenerate) await load();
-      toast.success('BlueDart AWB PDF downloaded');
+      // 1) Try saved PDF on DC / uploads/bluedart (no new AWB)
+      try {
+        const res = await downloadDcBluedartAwbPdf(dcNumber);
+        downloadBlob(new Blob([res.data], { type: 'application/pdf' }), `BlueDart_${head.awb_number || 'AWB'}.pdf`);
+        toast.success('BlueDart PDF downloaded');
+        return;
+      } catch {
+        // fall through
+      }
+
+      // 2) Fallback: fetch by AWB filename
+      if (head.awb_number && !regenerate) {
+        try {
+          const pdfRes = await downloadBluedartWaybillPdfByAwb(head.awb_number);
+          downloadBlob(new Blob([pdfRes.data], { type: 'application/pdf' }), `BlueDart_${head.awb_number}.pdf`);
+          toast.success('BlueDart PDF downloaded');
+          return;
+        } catch {
+          // fall through to optional regenerate
+        }
+      }
+
+      if (!regenerate) {
+        const ok = window.confirm(
+          `No saved BlueDart PDF for AWB ${head.awb_number}. Generate a new waybill and download PDF?`
+        );
+        if (!ok) return;
+      }
+
+      const res = await downloadDcBluedartAwbPdf(dcNumber, { regenerate: 1 });
+      downloadBlob(new Blob([res.data], { type: 'application/pdf' }), `BlueDart_${head.awb_number || 'AWB'}.pdf`);
+      await load();
+      toast.success('BlueDart PDF downloaded');
     } catch (err) {
       let msg = 'Could not download BlueDart AWB PDF';
       const data = err.response?.data;

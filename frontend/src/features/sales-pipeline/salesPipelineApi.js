@@ -48,6 +48,8 @@ export const getDCMeta = (so) => api.get(`${base}/delivery-challans/meta/add`, {
 export const getDcQcStatus = (n) => api.get(`${base}/delivery-challans/${encDc(n)}/qc-status`);
 export const getDcCourierTracking = (n) => api.get(`${base}/delivery-challans/${encDc(n)}/courier-tracking`);
 export const generateBluedartWaybill = (data) => api.post(`${base}/bluedart/generate-waybill`, data);
+export const downloadBluedartWaybillPdfByAwb = (awb) =>
+  api.get(`${base}/bluedart/waybill/${encodeURIComponent(awb)}/pdf`, { responseType: 'blob' });
 export const cancelBluedartWaybill = (data) => api.post(`${base}/bluedart/cancel-waybill`, data);
 export const updateBluedartEwayBill = (data) => api.post(`${base}/bluedart/update-eway-bill`, data);
 export const generateDcBluedartAwb = (n, data = {}) =>

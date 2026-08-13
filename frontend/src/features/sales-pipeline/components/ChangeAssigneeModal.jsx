@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { updateDcAssignment, generateBluedartWaybill } from '../salesPipelineApi';
+import { updateDcAssignment, generateBluedartWaybill, downloadBluedartWaybillPdfByAwb } from '../salesPipelineApi';
 import { sumDeclaredValueForUnits } from '../bluedartDeclaredValue';
+import { downloadBlob } from '../salesPipelineUtils';
 
 function initialMode(head) {
   if (head.dispatch_mode) return head.dispatch_mode;
@@ -142,6 +143,8 @@ export default function ChangeAssigneeModal({
         credit_reference_no: `SO${soKey}${Date.now().toString(36).toUpperCase()}`.slice(0, 20),
       });
       const awb = data?.data?.awb_number;
+      const pdfPath = data?.data?.pdf_path || null;
+      const pdfSaved = Boolean(data?.data?.pdf_saved && pdfPath);
       if (!awb) {
         toast.error(data?.message || 'No AWB returned');
         return;
@@ -150,10 +153,34 @@ export default function ChangeAssigneeModal({
         ...f,
         courier_name: f.courier_name?.trim() || 'BlueDart',
         awb_number: awb,
+        bluedart_awb_pdf_path: pdfPath,
+        bluedart_pdf_ready: pdfSaved,
       }));
-      toast.success(`BlueDart AWB: ${awb}`);
+      if (pdfSaved) {
+        toast.success(`AWB ${awb} generated — PDF saved. Click Download PDF.`);
+      } else {
+        toast.success(`AWB ${awb} generated (PDF not returned by BlueDart)`);
+      }
     } catch (e) {
       toast.error(e.response?.data?.message || e.message || 'BlueDart AWB failed');
+    } finally {
+      setBdBusy(false);
+    }
+  };
+
+  const downloadAwbPdf = async () => {
+    const awb = form.awb_number;
+    if (!awb) {
+      toast.error('Generate BlueDart AWB first');
+      return;
+    }
+    setBdBusy(true);
+    try {
+      const pdfRes = await downloadBluedartWaybillPdfByAwb(awb);
+      downloadBlob(new Blob([pdfRes.data], { type: 'application/pdf' }), `BlueDart_${awb}.pdf`);
+      toast.success('BlueDart PDF downloaded');
+    } catch {
+      toast.error('PDF not found — generate waybill again');
     } finally {
       setBdBusy(false);
     }
@@ -331,16 +358,31 @@ export default function ChangeAssigneeModal({
                       </label>
                     </div>
                   )}
-                  <button
-                    type="button"
-                    disabled={bdBusy}
-                    onClick={generateAwb}
-                    className="w-full py-2 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 disabled:opacity-50"
-                  >
-                    {bdBusy ? 'Generating AWB…' : (form.awb_number ? 'Regenerate BlueDart AWB' : 'Generate BlueDart AWB')}
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      disabled={bdBusy}
+                      onClick={generateAwb}
+                      className="flex-1 py-2 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {bdBusy ? 'Generating…' : (form.awb_number ? 'Regenerate Waybill' : 'Generate Waybill')}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={bdBusy || !form.awb_number}
+                      onClick={downloadAwbPdf}
+                      className="flex-1 py-2 rounded-lg border border-sky-400 bg-sky-50 text-sky-900 text-xs font-semibold hover:bg-sky-100 disabled:opacity-50"
+                    >
+                      Download PDF
+                    </button>
+                  </div>
                   {form.awb_number && (
-                    <p className="text-[11px] text-emerald-700">AWB ready — click Save to store it on the DC.</p>
+                    <p className="text-[11px] text-emerald-700">
+                      AWB <strong className="font-mono">{form.awb_number}</strong>
+                      {form.bluedart_pdf_ready || form.bluedart_awb_pdf_path
+                        ? ' · PDF saved — click Download PDF, then Save'
+                        : ' · click Save to store AWB on the DC'}
+                    </p>
                   )}
                 </div>
               )}

@@ -366,3 +366,16 @@ export function relativeTime(value) {
   const years = Math.floor(months / 12);
   return `${years} year${years === 1 ? '' : 's'} ago`;
 }
+
+/** Trigger a browser file download from a Blob (e.g. BlueDart AWB PDF). */
+export function downloadBlob(blob, filename) {
+  if (!blob) return;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename || 'download.pdf';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}

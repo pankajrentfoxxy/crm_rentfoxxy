@@ -17,8 +17,9 @@ import {
   X, Package, MapPin, ChevronDown, ChevronUp, AlertTriangle, Edit2,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { createDcsByAddress, getDCMeta, listSalesOrders, generateBluedartWaybill } from '../salesPipelineApi';
+import { createDcsByAddress, getDCMeta, listSalesOrders, generateBluedartWaybill, downloadBluedartWaybillPdfByAwb } from '../salesPipelineApi';
 import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
+import { downloadBlob } from '../salesPipelineUtils';
 import { deliveryChallanDetailTo, salesOrderDcNavState } from '../salesPipelineUtils';
 import { BillingAddressPanel } from '../../operation-management/components/CustomerAddressPanels';
 import { sumDeclaredValueForUnits } from '../bluedartDeclaredValue';
@@ -210,6 +211,8 @@ function DispatchFields({
         credit_reference_no: `SO${String(soNumber || '').replace(/[^A-Za-z0-9]/g, '').slice(-8)}${Date.now().toString(36).toUpperCase()}`.slice(0, 20),
       });
       const awb = data?.data?.awb_number;
+      const pdfPath = data?.data?.pdf_path || null;
+      const pdfSaved = Boolean(data?.data?.pdf_saved && pdfPath);
       if (!awb) {
         toast.error(data?.message || 'No AWB returned');
         return;
@@ -218,10 +221,34 @@ function DispatchFields({
         ...fields,
         courier_name: fields.courier_name?.trim() || 'BlueDart',
         awb_number: awb,
+        bluedart_awb_pdf_path: pdfPath,
+        bluedart_pdf_ready: pdfSaved,
       });
-      toast.success(`BlueDart AWB: ${awb}`);
+      if (pdfSaved) {
+        toast.success(`AWB ${awb} generated — PDF saved. Click Download PDF.`);
+      } else {
+        toast.success(`AWB ${awb} generated (PDF not returned by BlueDart)`);
+      }
     } catch (e) {
       toast.error(e.response?.data?.message || e.message || 'BlueDart AWB failed');
+    } finally {
+      setBdBusy(false);
+    }
+  };
+
+  const downloadAwbPdf = async () => {
+    const awb = fields.awb_number;
+    if (!awb) {
+      toast.error('Generate BlueDart AWB first');
+      return;
+    }
+    setBdBusy(true);
+    try {
+      const pdfRes = await downloadBluedartWaybillPdfByAwb(awb);
+      downloadBlob(new Blob([pdfRes.data], { type: 'application/pdf' }), `BlueDart_${awb}.pdf`);
+      toast.success('BlueDart PDF downloaded');
+    } catch {
+      toast.error('PDF not found — generate waybill again');
     } finally {
       setBdBusy(false);
     }
@@ -315,16 +342,31 @@ function DispatchFields({
                 </label>
               </div>
             )}
-            <button
-              type="button"
-              disabled={bdBusy}
-              onClick={generateAwb}
-              className="w-full py-2 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 disabled:opacity-50"
-            >
-              {bdBusy ? 'Generating AWB…' : (fields.awb_number ? 'Regenerate BlueDart AWB' : 'Generate BlueDart AWB')}
-            </button>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={bdBusy}
+                onClick={generateAwb}
+                className="flex-1 py-2 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 disabled:opacity-50"
+              >
+                {bdBusy ? 'Generating…' : (fields.awb_number ? 'Regenerate Waybill' : 'Generate Waybill')}
+              </button>
+              <button
+                type="button"
+                disabled={bdBusy || !fields.awb_number}
+                onClick={downloadAwbPdf}
+                className="flex-1 py-2 rounded-lg border border-sky-400 bg-sky-50 text-sky-900 text-xs font-semibold hover:bg-sky-100 disabled:opacity-50"
+              >
+                Download PDF
+              </button>
+            </div>
             {fields.awb_number && (
-              <p className="text-[11px] text-emerald-700">AWB ready — will be saved on the DC when you create it.</p>
+              <p className="text-[11px] text-emerald-700">
+                AWB <strong className="font-mono">{fields.awb_number}</strong>
+                {fields.bluedart_pdf_ready || fields.bluedart_awb_pdf_path
+                  ? ' · PDF saved — click Download PDF'
+                  : ' · generate again if PDF download fails'}
+              </p>
             )}
           </div>
         )}
