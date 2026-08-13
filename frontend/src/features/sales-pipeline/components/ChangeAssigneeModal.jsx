@@ -129,9 +129,7 @@ export default function ChangeAssigneeModal({
     }
     setBdBusy(true);
     try {
-      const soKey = String(head.sales_order_number || dcNumber || '')
-        .replace(/[^A-Za-z0-9]/g, '')
-        .slice(-8);
+      const firstUnit = (units || [])[0] || {};
       const { data } = await generateBluedartWaybill({
         consignee,
         services: {
@@ -140,7 +138,10 @@ export default function ChangeAssigneeModal({
           declaredValue,
           itemName: [head.brand, head.model_name].filter(Boolean).join(' ') || 'LAPTOP',
         },
-        credit_reference_no: `SO${soKey}${Date.now().toString(36).toUpperCase()}`.slice(0, 20),
+        serial_number: firstUnit.serial_number || firstUnit.serial || null,
+        ttspl_id: firstUnit.ttspl_id || firstUnit.ttspl || null,
+        dc_number: dcNumber || null,
+        sales_order_number: head.sales_order_number || null,
       });
       const awb = data?.data?.awb_number;
       const pdfPath = data?.data?.pdf_path || null;

@@ -13,14 +13,13 @@ import {
   markDelivered, markRejected, regenerateDcPdf, downloadDcRentalInvoicePdf, downloadDcBluedartAwbPdf,
   downloadBluedartWaybillPdfByAwb, cancelDC,
   sendDeliveryOtp, sendWarehouseReturnOtp, verifyDeliveryOtp, verifyWarehouseReturnOtp,
-  updateDC, dispatchDC, updateDcHsn, updateDcDeliveryDate, generateDcBluedartAwb, cancelDcBluedartAwb,
+  updateDC, dispatchDC, updateDcHsn, updateDcDeliveryDate, cancelDcBluedartAwb,
 } from '../salesPipelineApi';
 import {
   DC_STATUS_STYLES, formatConfig, formatCurrency, formatDate, formatDateTime,
   isDcAssignmentEditable, isDcCancellable, parseSerials, salesOrderDetailPath, statusLabel,
   resolveDcBackNavigation, downloadBlob,
 } from '../salesPipelineUtils';
-import { sumDeclaredValueForUnits } from '../bluedartDeclaredValue';
 import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
 import DcEditModal from '../components/DcEditModal';
@@ -155,35 +154,6 @@ export default function DeliveryChallanDetailPage() {
       }
     }
     setChangeAssigneeOpen(true);
-  };
-
-  const handleGenerateBluedartAwb = async () => {
-    if (!window.confirm('Generate a BlueDart waybill for this DC and save the label PDF?')) return;
-    setAwbGenerating(true);
-    try {
-      const unitsForValue = lines.flatMap((l) => {
-        if (l.serials_detail?.length) {
-          return l.serials_detail.map((d) => ({ processor: d.processor, generation: d.generation }));
-        }
-        return [{ processor: l.processor, generation: l.generation }];
-      });
-      const declared = sumDeclaredValueForUnits(unitsForValue);
-      const { data } = await generateDcBluedartAwb(dcNumber, {
-        services: declared != null ? { declaredValue: declared } : {},
-      });
-      const awb = data?.data?.awb_number;
-      const pdfSaved = Boolean(data?.data?.pdf_saved || data?.data?.bluedart_awb_pdf_path);
-      toast.success(
-        pdfSaved
-          ? `AWB ${awb} generated — PDF saved. Click Download BlueDart PDF.`
-          : (data?.message || `AWB ${awb} saved`)
-      );
-      await load();
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'BlueDart AWB failed');
-    } finally {
-      setAwbGenerating(false);
-    }
   };
 
   const handleCancelBluedartAwb = async () => {
@@ -660,21 +630,20 @@ export default function DeliveryChallanDetailPage() {
                     )}
                     {!head.awb_number && (
                       <>
-                        {' � '}
+                        {' · '}
                         <PermissionGate section={['sales_orders_doc', 'delivery_challans']} action="edit">
                           <button
                             type="button"
-                            disabled={awbGenerating}
-                            onClick={handleGenerateBluedartAwb}
-                            className="text-blue-600 underline text-xs ml-1 disabled:opacity-50"
+                            onClick={openChangeAssignee}
+                            className="text-blue-600 underline text-xs ml-1"
                           >
-                            {awbGenerating ? 'Generating�' : 'Generate BlueDart AWB'}
+                            Generate BlueDart AWB
                           </button>
                         </PermissionGate>
                       </>
                     )}
                     {!head.awb_number && head.courier_tracking_url && (
-                      <> � <a href={head.courier_tracking_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline text-xs ml-1">Track</a></>
+                      <> · <a href={head.courier_tracking_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline text-xs ml-1">Track</a></>
                     )}
                   </p>
                 )}
@@ -867,14 +836,13 @@ export default function DeliveryChallanDetailPage() {
                     )}
                     {!head.awb_number && (
                       <>
-                        {' � '}
+                        {' · '}
                         <button
                           type="button"
-                          disabled={awbGenerating}
-                          onClick={handleGenerateBluedartAwb}
-                          className="text-blue-600 underline text-xs disabled:opacity-50"
+                          onClick={openChangeAssignee}
+                          className="text-blue-600 underline text-xs"
                         >
-                          {awbGenerating ? 'Generating�' : 'Generate BlueDart AWB'}
+                          Generate BlueDart AWB
                         </button>
                       </>
                     )}

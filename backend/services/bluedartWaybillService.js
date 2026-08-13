@@ -67,15 +67,79 @@ function isWaybillConfigured() {
   );
 }
 
+/**
+ * BlueDart /Date(ms)/ helper (date-only fields like e-waybill invoice date).
+ * Uses noon IST so the calendar day is stable across UTC/IST.
+ */
 function toDotNetDate(date = new Date()) {
-  const d = new Date(date);
-  d.setUTCHours(0, 0, 0, 0);
-  // Prefer tomorrow if today already passed pickup window
+  const IST_MS = 5.5 * 60 * 60 * 1000;
+  const src = date instanceof Date ? date : new Date(date);
+  const d = Number.isNaN(src.getTime()) ? new Date() : src;
+  const ist = new Date(d.getTime() + IST_MS);
+  const noonUtcMs = Date.UTC(
+    ist.getUTCFullYear(),
+    ist.getUTCMonth(),
+    ist.getUTCDate(),
+    12,
+    0,
+    0
+  ) - IST_MS;
+  return `/Date(${noonUtcMs})/`;
+}
+
+/**
+ * Resolve PickupDate + PickupTime for GenerateWayBill.
+ *
+ * BlueDart often leaves Pickup Date blank on AWBPrintContent when the slot
+ * is already in the past. We previously sent UTC midnight + "1530", which is
+ * usually already past by afternoon IST — so the label printed blank.
+ */
+function resolvePickupSlot(servicesIn = {}) {
+  const IST_MS = 5.5 * 60 * 60 * 1000;
   const now = new Date();
-  if (d.getTime() < Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())) {
-    d.setUTCDate(d.getUTCDate() + 1);
+
+  let hhmm = String(servicesIn.pickupTime || servicesIn.PickupTime || '1530')
+    .replace(/\D/g, '')
+    .padStart(4, '0')
+    .slice(0, 4);
+  if (hhmm.length !== 4) hhmm = '1530';
+  let hour = Number(hhmm.slice(0, 2));
+  let minute = Number(hhmm.slice(2, 4));
+  if (!Number.isFinite(hour) || hour > 23) hour = 15;
+  if (!Number.isFinite(minute) || minute > 59) minute = 30;
+  hhmm = `${String(hour).padStart(2, '0')}${String(minute).padStart(2, '0')}`;
+
+  let baseMs = now.getTime();
+  const rawDate = servicesIn.pickupDate || servicesIn.PickupDate;
+  if (typeof rawDate === 'string' && rawDate.startsWith('/Date(')) {
+    const m = rawDate.match(/\/Date\((-?\d+)/);
+    if (m) baseMs = Number(m[1]);
+  } else if (rawDate) {
+    const parsed = new Date(rawDate);
+    if (!Number.isNaN(parsed.getTime())) baseMs = parsed.getTime();
   }
-  return `/Date(${d.getTime()})/`;
+
+  const ist = new Date(baseMs + IST_MS);
+  let y = ist.getUTCFullYear();
+  let mo = ist.getUTCMonth();
+  let day = ist.getUTCDate();
+
+  const istWallToUtcMs = (Y, M, D, H, Min) => Date.UTC(Y, M, D, H, Min) - IST_MS;
+
+  let slotMs = istWallToUtcMs(y, mo, day, hour, minute);
+  // If slot already passed (or within 5 minutes), use tomorrow same time (IST)
+  if (slotMs <= now.getTime() + 5 * 60 * 1000) {
+    const next = new Date(Date.UTC(y, mo, day + 1));
+    y = next.getUTCFullYear();
+    mo = next.getUTCMonth();
+    day = next.getUTCDate();
+    slotMs = istWallToUtcMs(y, mo, day, hour, minute);
+  }
+
+  return {
+    pickupDate: `/Date(${slotMs})/`,
+    pickupTime: hhmm,
+  };
 }
 
 function uniqueCreditRef(prefix = 'RFX') {
@@ -246,7 +310,7 @@ async function generateWayBill(input = {}) {
       || servicesIn.creditReferenceNo
       || servicesIn.CreditReferenceNo
       || uniqueCreditRef('RFX')
-  ).replace(/[^A-Za-z0-9]/g, '').slice(0, 20);
+  ).replace(/[^A-Za-z0-9-]/g, '').slice(0, 20);
   if (!creditRef) {
     const err = new Error('CreditReferenceNo is required (max 20 chars)');
     err.status = 400;
@@ -264,8 +328,7 @@ async function generateWayBill(input = {}) {
 
   const cAddr = splitAddress(address);
   const sAddr = splitAddress(cfg.shipperAddress);
-  const pickupDate = servicesIn.pickupDate || servicesIn.PickupDate || toDotNetDate(new Date());
-  const pickupTime = String(servicesIn.pickupTime || servicesIn.PickupTime || '1530');
+  const { pickupDate, pickupTime } = resolvePickupSlot(servicesIn);
 
   const payload = {
     Request: {
@@ -401,6 +464,8 @@ async function generateWayBill(input = {}) {
     cluster_code: result.ClusterCode || null,
     mps_details: result.MPSDetails || null,
     status_information: statusInfo || 'Waybill Generation Successful',
+    pickup_date: pickupDate,
+    pickup_time: pickupTime,
     pdf_buffer: pdfBuffer,
     raw: result,
   };
@@ -646,6 +711,7 @@ module.exports = {
   updateEwayBill,
   uniqueCreditRef,
   toDotNetDate,
+  resolvePickupSlot,
   getWaybillConfig,
   toPdfBuffer,
   saveWaybillPdf,

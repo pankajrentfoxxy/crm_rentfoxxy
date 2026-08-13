@@ -1082,10 +1082,132 @@ exports.getDcCourierTracking = async (req, res) => {
   }
 };
 
+/** Prefer final overlay PDF, then fixed/multi/updated, then raw BlueDart label. */
+function findSavedWaybillPdfFile(awb) {
+  const dir = path.join(__dirname, '..', 'uploads', 'bluedart');
+  if (!fs.existsSync(dir)) return null;
+  const all = fs.readdirSync(dir).filter((f) => f.endsWith('.pdf') && f.includes(awb));
+  const prefer = [`_final`, `_fixed`, `_updated`, `_multi`];
+  for (const suffix of prefer) {
+    const exact = `waybill_${awb}${suffix}.pdf`;
+    if (all.includes(exact)) return path.join(dir, exact);
+    const match = all.filter((f) => f.includes(suffix) && f.startsWith(`waybill_${awb}`)).sort();
+    if (match.length) return path.join(dir, match[match.length - 1]);
+  }
+  const printCopies = all.filter((f) => f.startsWith(`waybill_print_${awb}`)).sort();
+  if (printCopies.length) return path.join(dir, printCopies[printCopies.length - 1]);
+  const raw = all.filter((f) => (
+    f.startsWith(`waybill_${awb}`)
+    && !f.includes('_multi')
+    && !f.includes('_updated')
+    && !f.includes('_fixed')
+    && !f.includes('_final')
+  )).sort();
+  if (raw.length) return path.join(dir, raw[raw.length - 1]);
+  return null;
+}
+
+async function resolveDcPrimarySerial(dcNumber) {
+  const r = await pool.query(
+    `SELECT COALESCE(NULLIF(split_part(sn.entry, '|', 2), ''), sn.entry) AS serial_token,
+            NULLIF(split_part(sn.entry, '|', 3), '') AS ttspl_token,
+            NULLIF(split_part(sn.entry, '|', 1), '') AS serial_id_token
+       FROM delivery_challan_lines dcl
+       CROSS JOIN LATERAL jsonb_array_elements_text(
+         CASE
+           WHEN jsonb_typeof(to_jsonb(dcl.serial_number)) = 'array' THEN to_jsonb(dcl.serial_number)
+           WHEN dcl.serial_number IS NULL THEN '[]'::jsonb
+           ELSE jsonb_build_array(dcl.serial_number::text)
+         END
+       ) AS sn(entry)
+      WHERE dcl.dc_number = $1
+      LIMIT 1`,
+    [dcNumber]
+  ).catch(() => ({ rows: [] }));
+  const row = r.rows[0];
+  if (!row) return { serialNumber: null, ttsplId: null };
+
+  let serialNumber = row.serial_token || null;
+  let ttsplId = row.ttspl_token || null;
+  const sid = row.serial_id_token && /^\d+$/.test(row.serial_id_token) ? Number(row.serial_id_token) : null;
+  if (sid) {
+    const v = await pool.query(
+      `SELECT serial_number, inventory_asset_code FROM vendor_serial_numbers WHERE serial_id = $1`,
+      [sid]
+    ).catch(() => ({ rows: [] }));
+    if (v.rows[0]) {
+      serialNumber = v.rows[0].serial_number || serialNumber;
+      ttsplId = v.rows[0].inventory_asset_code || ttsplId;
+    }
+  } else if (serialNumber && !ttsplId) {
+    const v = await pool.query(
+      `SELECT serial_number, inventory_asset_code
+         FROM vendor_serial_numbers
+        WHERE deleted_at IS NULL
+          AND (serial_number = $1 OR inventory_asset_code = $1)
+        LIMIT 1`,
+      [serialNumber]
+    ).catch(() => ({ rows: [] }));
+    if (v.rows[0]) {
+      serialNumber = v.rows[0].serial_number || serialNumber;
+      ttsplId = v.rows[0].inventory_asset_code || ttsplId;
+    }
+  }
+  return { serialNumber, ttsplId };
+}
+
+async function buildAndSavePrintableWaybillPdf({
+  awbNumber,
+  creditReferenceNo,
+  result = {},
+  dcNumber = null,
+  serialNumber = null,
+  ttsplId = null,
+  pickupDate = null,
+  pickupTime = null,
+}) {
+  const courierPdf = require('../services/courierWaybillPdfService');
+
+  let serial = serialNumber;
+  let ttspl = ttsplId;
+  if (dcNumber && (!serial || !ttspl)) {
+    const primary = await resolveDcPrimarySerial(dcNumber);
+    serial = serial || primary.serialNumber;
+    ttspl = ttspl || primary.ttsplId;
+  }
+
+  const referenceId = courierPdf.buildShipmentReference({
+    serialNumber: serial,
+    ttsplId: ttspl,
+    fallback: creditReferenceNo || result.credit_reference_no,
+  });
+
+  const pdfBuffer = result.pdf_buffer || null;
+  if (!pdfBuffer || !pdfBuffer.length) {
+    const err = new Error('BlueDart did not return AWBPrintContent — updated PDF cannot be built');
+    err.status = 502;
+    throw err;
+  }
+
+  const printed = await courierPdf.generateMultiCopyWaybillFromApiPdf(pdfBuffer, awbNumber, {
+    pickupDate: pickupDate || result.pickup_date || result.ShipmentPickupDate || new Date(),
+    pickupTime: pickupTime || result.pickup_time || '1530',
+  });
+
+  return {
+    pdf_path: printed.pdf_path,
+    reference_id: referenceId,
+    serial_number: serial,
+    ttspl_id: ttspl,
+    pickup_date_display: printed.pickup_date_display,
+  };
+}
+
 /** Preview / generate BlueDart AWB before or while creating a DC (does not attach to a DC row). */
 exports.generateBluedartWaybill = async (req, res) => {
   try {
     const bluedartWaybill = require('../services/bluedartWaybillService');
+    const courierPdf = require('../services/courierWaybillPdfService');
     if (!bluedartWaybill.isWaybillConfigured()) {
       return res.status(503).json({
         success: false,
@@ -1093,39 +1215,61 @@ exports.generateBluedartWaybill = async (req, res) => {
       });
     }
     const body = req.body || {};
+    const serialNumber = body.serial_number || body.serialNumber || null;
+    const ttsplId = body.ttspl_id || body.ttsplId || null;
+    const creditRef = body.credit_reference_no || body.creditReferenceNo
+      || courierPdf.buildShipmentReference({
+        serialNumber,
+        ttsplId,
+        fallback: `RFX${Date.now().toString(36).toUpperCase()}`,
+      });
+
     const result = await bluedartWaybill.generateWayBill({
       consignee: body.consignee || {},
       services: {
         ...(body.services || {}),
         pdfOutputNotRequired: false,
       },
-      creditReferenceNo: body.credit_reference_no || body.creditReferenceNo,
+      creditReferenceNo: creditRef,
     });
 
-    const pdfPath = bluedartWaybill.saveWaybillPdf(result.awb_number, result.pdf_buffer);
-    const { pdf_buffer: _buf, raw: _raw, ...safe } = result;
+    const printed = await buildAndSavePrintableWaybillPdf({
+      awbNumber: result.awb_number,
+      creditReferenceNo: creditRef,
+      consignee: body.consignee || {},
+      services: body.services || {},
+      result,
+      itemName: body.services?.itemName,
+      serialNumber,
+      ttsplId,
+      dcNumber: body.dc_number || null,
+      salesOrderNumber: body.sales_order_number || null,
+    });
 
-    // Optional: curl / clients can request the PDF bytes directly
-    // GET-style via query on POST: ?download=1 or body.download_pdf=true
+    bluedartWaybill.saveWaybillPdf(result.awb_number, result.pdf_buffer);
+
+    const { pdf_buffer: _buf, raw: _raw, ...safe } = result;
+    const pdfPath = printed.pdf_path;
+
     const wantDownload = String(req.query.download || '') === '1'
       || body.download_pdf === true
       || String(req.headers.accept || '').includes('application/pdf');
 
-    if (wantDownload && result.pdf_buffer?.length) {
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader(
-        'Content-Disposition',
-        `attachment; filename="BlueDart_${result.awb_number}.pdf"`
-      );
-      res.setHeader('X-BlueDart-AWB', result.awb_number);
-      if (pdfPath) res.setHeader('X-BlueDart-PDF-Path', pdfPath);
-      return res.send(result.pdf_buffer);
+    if (wantDownload && pdfPath) {
+      const abs = path.join(__dirname, '..', pdfPath);
+      if (fs.existsSync(abs)) {
+        return res.download(abs, `Waybill_${result.awb_number}.pdf`);
+      }
     }
 
     return res.json({
       success: true,
       data: {
         ...safe,
+        credit_reference_no: creditRef,
+        reference_id: printed.reference_id,
+        serial_number: printed.serial_number,
+        ttspl_id: printed.ttspl_id,
         pdf_path: pdfPath,
         pdf_url: pdfPath ? `/${String(pdfPath).replace(/^\//, '')}` : null,
         pdf_saved: Boolean(pdfPath),
@@ -1141,28 +1285,21 @@ exports.generateBluedartWaybill = async (req, res) => {
   }
 };
 
-/** Download a previously saved BlueDart waybill PDF by AWB number (from uploads/bluedart). */
+/** Download a previously saved printable waybill PDF by AWB number. */
 exports.downloadBluedartWaybillPdfByAwb = async (req, res) => {
   try {
     const awb = String(req.params.awb || req.query.awb || '').trim();
     if (!awb) {
       return res.status(400).json({ success: false, message: 'AWB number required' });
     }
-    const dir = path.join(__dirname, '..', 'uploads', 'bluedart');
-    if (!fs.existsSync(dir)) {
-      return res.status(404).json({ success: false, message: 'No BlueDart PDFs saved yet' });
-    }
-    const files = fs.readdirSync(dir)
-      .filter((f) => f.startsWith(`waybill_${awb}`) && f.endsWith('.pdf'))
-      .sort();
-    const latest = files[files.length - 1];
-    if (!latest) {
+    const abs = findSavedWaybillPdfFile(awb);
+    if (!abs) {
       return res.status(404).json({
         success: false,
         message: `No saved PDF for AWB ${awb}. Generate the waybill again.`,
       });
     }
-    return res.download(path.join(dir, latest), `BlueDart_${awb}.pdf`);
+    return res.download(abs, `Waybill_${awb}.pdf`);
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -1234,13 +1371,19 @@ async function generateAndPersistDcBluedartAwb(dcNumber, body = {}) {
   };
 
   const pieceCount = body.services?.pieceCount
-    || lines.reduce((sum, l) => sum + (Number(l.quantity || l.main_qty || 1) || 1), 0)
+    || lines.reduce((sum, l) => sum + (Number(l.quantity || l.main_qty || 1) || 0), 0)
     || 1;
 
+  const primarySerial = await resolveDcPrimarySerial(dcNumber);
+  const courierPdf = require('../services/courierWaybillPdfService');
   const creditRef = body.credit_reference_no
-    || bluedartWaybill.uniqueCreditRef(
-      `DC${String(dcNumber).replace(/[^A-Za-z0-9]/g, '').slice(-12)}`
-    );
+    || courierPdf.buildShipmentReference({
+      serialNumber: primarySerial.serialNumber,
+      ttsplId: primarySerial.ttsplId,
+      fallback: bluedartWaybill.uniqueCreditRef(
+        `DC${String(dcNumber).replace(/[^A-Za-z0-9]/g, '').slice(-12)}`
+      ),
+    });
 
   let declaredValue = body.services?.declaredValue;
   if (declaredValue == null || declaredValue === '' || Number(declaredValue) <= 0) {
@@ -1314,7 +1457,28 @@ async function generateAndPersistDcBluedartAwb(dcNumber, body = {}) {
     creditReferenceNo: creditRef,
   });
 
-  const pdfPath = bluedartWaybill.saveWaybillPdf(result.awb_number, result.pdf_buffer);
+  const printed = await buildAndSavePrintableWaybillPdf({
+    awbNumber: result.awb_number,
+    creditReferenceNo: creditRef,
+    consignee,
+    services: {
+      ...(body.services || {}),
+      pieceCount,
+      declaredValue,
+      itemName: [head.brand, head.model_name].filter(Boolean).join(' ') || 'LAPTOP',
+    },
+    result,
+    dcNumber,
+    salesOrderNumber: head.sales_order_number || null,
+    itemName: [head.brand, head.model_name].filter(Boolean).join(' ') || 'LAPTOP',
+    serialNumber: primarySerial.serialNumber,
+    ttsplId: primarySerial.ttsplId,
+  });
+
+  // Secondary: keep BlueDart API label bytes if present
+  bluedartWaybill.saveWaybillPdf(result.awb_number, result.pdf_buffer);
+
+  const pdfPath = printed.pdf_path;
 
   await pool.query(
     `UPDATE delivery_challan_lines
@@ -1332,7 +1496,12 @@ async function generateAndPersistDcBluedartAwb(dcNumber, body = {}) {
   const { pdf_buffer: _buf, raw: _raw, ...safe } = result;
   return {
     ...safe,
+    credit_reference_no: creditRef,
+    reference_id: printed.reference_id,
+    serial_number: printed.serial_number,
+    ttspl_id: printed.ttspl_id,
     bluedart_awb_pdf_path: pdfPath,
+    pdf_path: pdfPath,
     pdf_saved: Boolean(pdfPath),
   };
 }
@@ -3475,7 +3644,7 @@ exports.regenerateDcPdf = async (req, res) => {
   }
 };
 
-/** Download saved BlueDart waybill label PDF for this DC. */
+/** Download saved printable waybill PDF for this DC. */
 exports.downloadDcBluedartAwbPdf = async (req, res) => {
   try {
     const dcNumber = req.params.dcNumber;
@@ -3485,54 +3654,52 @@ exports.downloadDcBluedartAwbPdf = async (req, res) => {
     }
     const head = lines[0];
     let pdfRel = head.bluedart_awb_pdf_path || null;
+    let abs = null;
 
-    // Prefer file already saved for this AWB under uploads/bluedart/
-    if (!pdfRel && head.awb_number) {
-      const dir = path.join(__dirname, '..', 'uploads', 'bluedart');
-      if (fs.existsSync(dir)) {
-        const files = fs.readdirSync(dir)
-          .filter((f) => f.startsWith(`waybill_${head.awb_number}`) && f.endsWith('.pdf'))
-          .sort();
-        const latest = files[files.length - 1];
-        if (latest) {
-          pdfRel = `uploads/bluedart/${latest}`;
-          await pool.query(
-            `UPDATE delivery_challan_lines
-                SET bluedart_awb_pdf_path = $1, updated_at = NOW()
-              WHERE dc_number = $2`,
-            [pdfRel, dcNumber]
-          ).catch(() => {});
-        }
+    if (pdfRel) {
+      abs = path.isAbsolute(pdfRel) ? pdfRel : path.join(__dirname, '..', pdfRel);
+      if (!fs.existsSync(abs)) abs = null;
+    }
+
+    // Prefer printable multi-copy PDF on disk for this AWB
+    if (!abs && head.awb_number) {
+      abs = findSavedWaybillPdfFile(head.awb_number);
+      if (abs) {
+        pdfRel = path.relative(path.join(__dirname, '..'), abs).replace(/\\/g, '/');
+        await pool.query(
+          `UPDATE delivery_challan_lines
+              SET bluedart_awb_pdf_path = $1, updated_at = NOW()
+            WHERE dc_number = $2`,
+          [pdfRel, dcNumber]
+        ).catch(() => {});
       }
     }
 
-    // Optional: regenerate AWB to capture label PDF if still missing.
-    if (!pdfRel && head.awb_number && String(req.query.regenerate || '') === '1') {
+    // Optional: regenerate AWB to capture printable PDF if still missing.
+    if (!abs && head.awb_number && String(req.query.regenerate || '') === '1') {
       const regenerated = await generateAndPersistDcBluedartAwb(dcNumber, { force: true });
-      pdfRel = regenerated.bluedart_awb_pdf_path || null;
+      pdfRel = regenerated.bluedart_awb_pdf_path || regenerated.pdf_path || null;
+      if (pdfRel) {
+        abs = path.isAbsolute(pdfRel) ? pdfRel : path.join(__dirname, '..', pdfRel);
+      }
     }
 
-    if (!pdfRel && !head.awb_number) {
+    if (!abs && !head.awb_number) {
       return res.status(404).json({
         success: false,
         message: 'No BlueDart AWB on this DC — generate AWB first',
       });
     }
 
-    if (!pdfRel) {
+    if (!abs || !fs.existsSync(abs)) {
       return res.status(404).json({
         success: false,
-        message: 'BlueDart AWB PDF not stored yet. Click Generate Waybill again, or use regenerate=1',
+        message: 'Waybill PDF not stored yet. Click Generate Waybill again, or use regenerate=1',
         data: { awb_number: head.awb_number },
       });
     }
 
-    const abs = path.isAbsolute(pdfRel) ? pdfRel : path.join(__dirname, '..', pdfRel);
-    if (!fs.existsSync(abs)) {
-      return res.status(404).json({ success: false, message: 'BlueDart AWB PDF file missing on server' });
-    }
-    const fileName = `BlueDart_${head.awb_number || 'AWB'}.pdf`;
-    return res.download(abs, fileName);
+    return res.download(abs, `Waybill_${head.awb_number || 'AWB'}.pdf`);
   } catch (e) {
     console.error('downloadDcBluedartAwbPdf:', e);
     res.status(e.status || 500).json({ success: false, message: e.message });

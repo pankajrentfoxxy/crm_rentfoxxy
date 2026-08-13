@@ -200,6 +200,8 @@ function DispatchFields({
     }
     setBdBusy(true);
     try {
+      const selected = (group?.serials || []).filter((s) => s.selected && s.qc_status === 'passed');
+      const first = selected[0] || {};
       const { data } = await generateBluedartWaybill({
         consignee,
         services: {
@@ -208,7 +210,10 @@ function DispatchFields({
           declaredValue,
           itemName: 'LAPTOP',
         },
-        credit_reference_no: `SO${String(soNumber || '').replace(/[^A-Za-z0-9]/g, '').slice(-8)}${Date.now().toString(36).toUpperCase()}`.slice(0, 20),
+        credit_reference_no: undefined,
+        serial_number: first.serial_number || first.vsn_serial || null,
+        ttspl_id: first.ttspl_id || first.ttspl_id_vsn || null,
+        sales_order_number: soNumber || null,
       });
       const awb = data?.data?.awb_number;
       const pdfPath = data?.data?.pdf_path || null;
