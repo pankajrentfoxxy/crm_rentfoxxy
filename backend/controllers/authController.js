@@ -206,6 +206,19 @@ exports.register = async (req, res) => {
       }
     }
 
+    try {
+      const { upsertCredential } = require('../services/authCredentialsService');
+      await upsertCredential({
+        email: user.email,
+        passwordHash: password_hash,
+        portal: 'crm',
+        entityId: user.user_id,
+        enabled: true,
+      });
+    } catch (syncErr) {
+      console.warn('auth_credentials sync (create user):', syncErr.message);
+    }
+
     res.status(201).json({
       success: true,
       message: 'User registered successfully',
@@ -268,96 +281,38 @@ const getUserTeamNames = async (userId, fallbackTeamId) => {
   return res.rows.map((r) => r.team_name);
 };
 
-// Login User
+// Login — CRM / vendor / customer via same endpoint; response includes portal type
 exports.login = async (req, res) => {
-  const { email, password } = req.body;
-
   try {
-    const result = await pool.query(
-      `SELECT u.*, t.team_name 
-       FROM users u 
-       LEFT JOIN teams t ON u.team_id = t.team_id 
-       WHERE u.email = $1 AND u.active = true`,
-      [email]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(401).json({
+    const { resolveLogin } = require('./unifiedLoginController');
+    const resolved = await resolveLogin(req);
+    if (!resolved.ok) {
+      return res.status(resolved.status).json({
         success: false,
-        message: 'Invalid credentials'
+        message: resolved.message,
+        portal: resolved.portal || undefined,
       });
     }
 
-    const user = result.rows[0];
-    const isMatch = await bcrypt.compare(password, user.password_hash);
-    if (!isMatch) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials'
-      });
-    }
-
-    if (user.status === 'pending_approval') {
-      return res.status(403).json({
-        success: false,
-        message: 'Your account is pending approval from admin'
-      });
-    }
-    if (user.status === 'rejected') {
-      return res.status(403).json({
-        success: false,
-        message: user.rejection_reason || 'Your registration was rejected'
-      });
-    }
-    if (user.status === 'blocked') {
-      return res.status(403).json({ success: false, message: 'Your account has been blocked' });
-    }
-
-    const teamIds = await getUserTeamIds(user.user_id, user.team_id);
-    const teamNames = await getUserTeamNames(user.user_id, user.team_id);
-
-    try {
-      await pool.query(
-        'UPDATE users SET last_login = NOW(), last_login_ip = $1 WHERE user_id = $2',
-        [req.ip || req.headers['x-forwarded-for'] || null, user.user_id]
+    const data = resolved.data;
+    // Enrich CRM user for existing CRM UI (effective_permissions, team_names)
+    if (data.portal === 'crm' && data.user) {
+      const teamNames = await getUserTeamNames(data.user.user_id, data.user.team_id);
+      data.user.team_names = teamNames;
+      data.user.permissions = Array.isArray(data.user.permissions) ? data.user.permissions : [];
+      data.user.effective_permissions = await buildEffectivePermissionsForUser(
+        data.user.user_id,
+        data.user.role
       );
-    } catch (e) {
-      // non-fatal if columns missing before migration
+      // JWT already signed in tryCrmLogin; team_names on user object is enough for client
     }
 
-    const token = jwt.sign(
-      {
-        user_id: user.user_id,
-        email: user.email,
-        role: user.role,
-        status: user.status || 'active',
-        user_type: user.user_type || 'internal',
-        team_id: user.team_id,
-        team_ids: teamIds,
-        team_names: teamNames,
-        permissions: user.permissions || []
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: '30d' }
-    );
-
-    delete user.password_hash;
-    user.permissions = Array.isArray(user.permissions) ? user.permissions : [];
-    user.team_ids = teamIds;
-    user.team_names = teamNames;
-    user.effective_permissions = await buildEffectivePermissionsForUser(user.user_id, user.role);
-
-    res.json({
-      success: true,
-      message: 'Login successful',
-      token,
-      user
-    });
+    return res.json({ success: true, ...data });
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error during login'
+      message: 'Server error during login',
     });
   }
 };
@@ -1013,6 +968,22 @@ exports.resetUserPassword = async (req, res) => {
       'UPDATE users SET password_hash = $1, remember_pass_plain = $2, updated_at = NOW() WHERE user_id = $3',
       [hash, String(plain), req.params.id]
     );
+
+    try {
+      const emailRow = await pool.query('SELECT email, active FROM users WHERE user_id = $1', [req.params.id]);
+      if (emailRow.rows[0]?.email) {
+        const { upsertCredential } = require('../services/authCredentialsService');
+        await upsertCredential({
+          email: emailRow.rows[0].email,
+          passwordHash: hash,
+          portal: 'crm',
+          entityId: Number(req.params.id),
+          enabled: emailRow.rows[0].active !== false,
+        });
+      }
+    } catch (syncErr) {
+      console.warn('auth_credentials sync (reset password):', syncErr.message);
+    }
 
     res.json({
       success: true,

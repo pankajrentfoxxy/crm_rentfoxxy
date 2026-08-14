@@ -28,11 +28,18 @@ const {
   resetPasswordWithOtp,
 } = require('../controllers/authController');
 const { authMiddleware } = require('../middleware/auth');
+const { unifiedLogin } = require('../controllers/unifiedLoginController');
 
 // @route   POST /api/auth/register
 // @desc    Register a new user
 // @access  Private (manager/admin/superadmin enforced in controller)
 router.post('/register', authMiddleware, register);
+
+// @route   POST /api/auth/unified-login
+// @desc    Single login for CRM / vendor / customer — routes by credentials
+// @access  Public
+router.post('/unified-login', unifiedLogin);
+router.post('/login-unified', unifiedLogin); // alias
 
 // @route   GET /api/auth/debug
 // @desc    Debug connection (remove in production)

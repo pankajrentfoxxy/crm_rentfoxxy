@@ -344,6 +344,19 @@ async function createVendor(req, res) {
 
     await pool.query('COMMIT');
 
+    try {
+      const { upsertCredential } = require('../../services/authCredentialsService');
+      await upsertCredential({
+        email: v.email,
+        passwordHash: password_hash,
+        portal: 'vendor',
+        entityId: v.vendor_id,
+        enabled: true,
+      });
+    } catch (syncErr) {
+      console.warn('auth_credentials sync (vendor create):', syncErr.message);
+    }
+
     await logVendorAudit({
       actorUserId: req.user?.user_id,
       vendorId: v.vendor_id,
@@ -557,6 +570,22 @@ async function updateVendor(req, res) {
     vendor_id
   ]);
 
+  try {
+    const row = upd.rows[0];
+    if (row?.email && (vendor_portal_password_hash || password_hash)) {
+      const { upsertCredential } = require('../../services/authCredentialsService');
+      await upsertCredential({
+        email: row.email,
+        passwordHash: vendor_portal_password_hash || password_hash,
+        portal: 'vendor',
+        entityId: vendor_id,
+        enabled: row.vendor_portal_enabled !== false && row.deleted_at == null,
+      });
+    }
+  } catch (syncErr) {
+    console.warn('auth_credentials sync (vendor update):', syncErr.message);
+  }
+
   await logVendorAudit({
     actorUserId: req.user?.user_id,
     vendorId: vendor_id,
@@ -699,9 +728,30 @@ async function updatePortalAccess(req, res) {
   const r = await pool.query(
     `UPDATE vendors SET ${sets.join(', ')}, updated_at = NOW()
      WHERE vendor_id = $${idx} AND deleted_at IS NULL
-     RETURNING vendor_id, vendor_portal_enabled, vendor_portal_last_login, email`,
+     RETURNING vendor_id, vendor_portal_enabled, vendor_portal_last_login, email,
+               COALESCE(vendor_portal_password_hash, password_hash) AS portal_hash`,
     params
   );
+
+  try {
+    const row = r.rows[0];
+    if (row?.email && row.portal_hash) {
+      const { upsertCredential, setEnabledByEntity } = require('../../services/authCredentialsService');
+      if (newPasswordPlain || req.body.password) {
+        await upsertCredential({
+          email: row.email,
+          passwordHash: row.portal_hash,
+          portal: 'vendor',
+          entityId: vendor_id,
+          enabled: row.vendor_portal_enabled !== false,
+        });
+      } else if (typeof portalEnabled === 'boolean') {
+        await setEnabledByEntity('vendor', vendor_id, portalEnabled);
+      }
+    }
+  } catch (syncErr) {
+    console.warn('auth_credentials sync (vendor portal):', syncErr.message);
+  }
 
   await logVendorAudit({
     actorUserId: req.user?.user_id,

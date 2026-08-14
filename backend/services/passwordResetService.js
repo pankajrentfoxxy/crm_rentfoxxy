@@ -193,6 +193,21 @@ async function resetPasswordWithOtp(rawEmail, rawOtp, rawPassword) {
       'UPDATE users SET password_hash = $1, remember_pass_plain = $2, updated_at = NOW() WHERE user_id = $3',
       [passwordHash, passwordCheck.value, user.user_id]
     );
+    try {
+      const { upsertCredential } = require('./authCredentialsService');
+      await upsertCredential(
+        {
+          email: user.email,
+          passwordHash,
+          portal: 'crm',
+          entityId: user.user_id,
+          enabled: true,
+        },
+        client
+      );
+    } catch (syncErr) {
+      console.warn('auth_credentials sync (password reset):', syncErr.message);
+    }
     await client.query(
       'UPDATE password_reset_otps SET used_at = NOW() WHERE otp_id = $1',
       [row.otp_id]

@@ -36,6 +36,17 @@ export function AuthProvider({ children }) {
 
   const login = async (email, password) => {
     const { data } = await api.post('/auth/login', { email, password });
+    if (!data.success) throw new Error(data.message || 'Login failed');
+
+    // Same endpoint may return vendor/customer — send them to their portal
+    if (data.portal === 'vendor' || data.portal === 'customer') {
+      if (data.redirect_url && typeof window !== 'undefined') {
+        window.location.href = data.redirect_url;
+        return data;
+      }
+      throw new Error(`This account belongs to the ${data.portal} portal`);
+    }
+
     setNormalAuthToken(data.token);
     setUser(data.user);
     return data;

@@ -29,11 +29,20 @@ export function VendorAuthProvider({ children }) {
       loading,
       isAuthenticated: !!vendor,
       async login(email, password) {
-        const { data } = await api.post('/vendor-portal/login', { email, password });
+        const { data } = await api.post('/auth/login', { email, password });
         if (!data.success) throw new Error(data.message || 'Login failed');
-        localStorage.setItem('vendor_token', data.data.token);
-        setVendor(data.data.vendor);
-        return data.data;
+
+        if (data.portal === 'crm' || data.portal === 'customer') {
+          if (data.redirect_url && typeof window !== 'undefined') {
+            window.location.href = data.redirect_url;
+            return data;
+          }
+          throw new Error(`This account belongs to the ${data.portal} portal`);
+        }
+
+        localStorage.setItem('vendor_token', data.token);
+        setVendor(data.vendor);
+        return { token: data.token, vendor: data.vendor };
       },
       async logout() {
         try {

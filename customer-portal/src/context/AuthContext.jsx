@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import api from '../utils/api';
+import axios from 'axios';
+import api, { getApiUrl } from '../utils/api';
 
 const AuthContext = createContext(null);
 
@@ -47,8 +48,21 @@ export function AuthProvider({ children }) {
       loading,
       isAuthenticated: !!customer && !!localStorage.getItem('cp_token'),
       async login(email, password) {
-        const { data } = await api.post('/login', { email, password });
+        const { data } = await axios.post(
+          `${getApiUrl()}/auth/login`,
+          { email, password },
+          { headers: { 'Content-Type': 'application/json' } }
+        );
         if (!data.success) throw new Error(data.message || 'Login failed');
+
+        if (data.portal === 'crm' || data.portal === 'vendor') {
+          if (data.redirect_url && typeof window !== 'undefined') {
+            window.location.href = data.redirect_url;
+            return data;
+          }
+          throw new Error(`This account belongs to the ${data.portal} portal`);
+        }
+
         localStorage.setItem('cp_token', data.token);
         localStorage.setItem('cp_customer', JSON.stringify(data.customer));
         setCustomer(data.customer);

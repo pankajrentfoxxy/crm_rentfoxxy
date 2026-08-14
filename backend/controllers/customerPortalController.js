@@ -504,6 +504,18 @@ exports.changePassword = async (req, res) => {
       `UPDATE customers SET portal_password_hash = $1, updated_at = NOW() WHERE customer_id = $2`,
       [hash, req.customer.customer_id]
     );
+    try {
+      const { upsertCredential } = require('../services/authCredentialsService');
+      await upsertCredential({
+        email: req.customer.email,
+        passwordHash: hash,
+        portal: 'customer',
+        entityId: req.customer.customer_id,
+        enabled: true,
+      });
+    } catch (syncErr) {
+      console.warn('auth_credentials sync (customer change password):', syncErr.message);
+    }
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

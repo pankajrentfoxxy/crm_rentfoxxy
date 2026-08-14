@@ -2382,11 +2382,29 @@ exports.enableCustomerPortal = async (req, res) => {
         `UPDATE customers SET portal_password_hash = $1, portal_enabled = COALESCE($2, portal_enabled, true), updated_at = NOW() WHERE customer_id = $3`,
         [hash, enabled === true ? true : null, customerId]
       );
+      try {
+        const { upsertCredential } = require('../services/authCredentialsService');
+        await upsertCredential({
+          email: row.email,
+          passwordHash: hash,
+          portal: 'customer',
+          entityId: customerId,
+          enabled: true,
+        });
+      } catch (syncErr) {
+        console.warn('auth_credentials sync (customer portal password):', syncErr.message);
+      }
     } else if (enabled === true) {
       await pool.query(
         `UPDATE customers SET portal_enabled = true, updated_at = NOW() WHERE customer_id = $1`,
         [customerId]
       );
+      try {
+        const { setEnabledByEntity } = require('../services/authCredentialsService');
+        await setEnabledByEntity('customer', customerId, true);
+      } catch (syncErr) {
+        console.warn('auth_credentials sync (customer enable):', syncErr.message);
+      }
     } else {
       return res.status(400).json({ success: false, message: 'Specify enabled, reset_password, or send_login_email' });
     }
