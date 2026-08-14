@@ -23,6 +23,7 @@ import { downloadBlob } from '../salesPipelineUtils';
 import { deliveryChallanDetailTo, salesOrderDcNavState } from '../salesPipelineUtils';
 import { BillingAddressPanel } from '../../operation-management/components/CustomerAddressPanels';
 import { sumDeclaredValueForUnits } from '../bluedartDeclaredValue';
+import PerLaptopCourierMapping from './PerLaptopCourierMapping';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -148,7 +149,7 @@ function AddressEditDrawer({ address, onSave, onClose }) {
 
 function DispatchFields({
   shipBy, fields, onChange, deliveryTechnicians = [], requireVehicle = false,
-  group = null, meta = null, soNumber = '',
+  group = null, meta = null, soNumber = '', onUpdateSerial = null,
 }) {
   const set = (k) => (e) => onChange({ ...fields, [k]: e.target.value });
   const [bdBusy, setBdBusy] = useState(false);
@@ -158,10 +159,12 @@ function DispatchFields({
     declaredValue: '', weight: '2.50', pieceCount: '1',
   });
 
+  const selected = (group?.serials || []).filter((s) => s.selected !== false && s.qc_status === 'passed');
+  const joinedAwbs = selected.map((s) => String(s.awb_number || '').trim()).filter(Boolean).join(',');
+
   useEffect(() => {
     if (shipBy !== 'by_courier') return;
     const c = buildConsigneeFromAddress(group?.address, meta);
-    const selected = (group?.serials || []).filter((s) => s.selected && s.qc_status === 'passed');
     const pieces = selected.length || 1;
     const declared = sumDeclaredValueForUnits(selected);
     setBdForm((f) => ({
@@ -174,75 +177,23 @@ function DispatchFields({
       weight: (2.5 * pieces).toFixed(2),
       declaredValue: declared != null ? String(declared) : f.declaredValue,
     }));
-    if (isBlueDartCourier(fields.courier_name) || !fields.courier_name) {
+    if (!fields.courier_name || isBlueDartCourier(fields.courier_name)) {
+      if (fields.courier_name !== 'BlueDart') onChange({ ...fields, courier_name: 'BlueDart' });
       setBdOpen(true);
     }
-  }, [shipBy, group?.address, group?.serials, meta, fields.courier_name]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shipBy, group?.address, group?.serials, meta]);
 
-  const generateAwb = async () => {
-    const consignee = {
-      name: bdForm.name.trim(),
-      mobile: bdForm.mobile.trim(),
-      address: bdForm.address.trim(),
-      pincode: bdForm.pincode.trim(),
-      email: meta?.customer_email || meta?.email || '',
-      gst: meta?.gst_number || '',
-      attention: bdForm.name.trim(),
-    };
-    if (!consignee.name || !consignee.address || !consignee.pincode || !consignee.mobile) {
-      toast.error('Fill consignee name, mobile, address and pincode for BlueDart');
-      return;
+  useEffect(() => {
+    if (shipBy !== 'by_courier') return;
+    if ((fields.awb_number || '') !== joinedAwbs) {
+      onChange({ ...fields, awb_number: joinedAwbs });
     }
-    const declaredValue = Number(bdForm.declaredValue);
-    if (!bdForm.declaredValue?.trim() || Number.isNaN(declaredValue) || declaredValue <= 0) {
-      toast.error('Enter declared value (₹)');
-      return;
-    }
-    setBdBusy(true);
-    try {
-      const selected = (group?.serials || []).filter((s) => s.selected && s.qc_status === 'passed');
-      const first = selected[0] || {};
-      const { data } = await generateBluedartWaybill({
-        consignee,
-        services: {
-          pieceCount: Number(bdForm.pieceCount) || 1,
-          actualWeight: bdForm.weight,
-          declaredValue,
-          itemName: 'LAPTOP',
-        },
-        credit_reference_no: undefined,
-        serial_number: first.serial_number || first.vsn_serial || null,
-        ttspl_id: first.ttspl_id || first.ttspl_id_vsn || null,
-        sales_order_number: soNumber || null,
-      });
-      const awb = data?.data?.awb_number;
-      const pdfPath = data?.data?.pdf_path || null;
-      const pdfSaved = Boolean(data?.data?.pdf_saved && pdfPath);
-      if (!awb) {
-        toast.error(data?.message || 'No AWB returned');
-        return;
-      }
-      onChange({
-        ...fields,
-        courier_name: fields.courier_name?.trim() || 'BlueDart',
-        awb_number: awb,
-        bluedart_awb_pdf_path: pdfPath,
-        bluedart_pdf_ready: pdfSaved,
-      });
-      if (pdfSaved) {
-        toast.success(`AWB ${awb} generated — PDF saved. Click Download PDF.`);
-      } else {
-        toast.success(`AWB ${awb} generated (PDF not returned by BlueDart)`);
-      }
-    } catch (e) {
-      toast.error(e.response?.data?.message || e.message || 'BlueDart AWB failed');
-    } finally {
-      setBdBusy(false);
-    }
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [joinedAwbs, shipBy]);
 
   const downloadAwbPdf = async () => {
-    const awb = fields.awb_number;
+    const awb = String(fields.awb_number || '').split(/[/|,;\s]+/).map((s) => s.trim()).find((s) => /^\d{8,}$/.test(s));
     if (!awb) {
       toast.error('Generate BlueDart AWB first');
       return;
@@ -286,8 +237,13 @@ function DispatchFields({
             <option value="BlueDart">BlueDart</option>
             <option value="Other">Other courier</option>
           </select>
-          <input className="border rounded-lg px-3 py-2 text-sm" placeholder="AWB Number"
-            value={fields.awb_number || ''} onChange={set('awb_number')} />
+          <input
+            className="border rounded-lg px-3 py-2 text-sm bg-slate-50 font-mono text-xs"
+            placeholder="Combined AWBs (auto)"
+            value={joinedAwbs}
+            readOnly
+            title="Built from per-laptop AWBs below"
+          />
         </div>
         {!isBlueDartCourier(fields.courier_name) && fields.courier_name !== undefined && (
           <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Courier Name*"
@@ -298,81 +254,26 @@ function DispatchFields({
           value={fields.courier_tracking_url || ''} onChange={set('courier_tracking_url')} />
 
         {isBlueDartCourier(fields.courier_name) && (
-          <div className="rounded-lg border border-blue-200 bg-blue-50/60 p-3 space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-xs font-semibold text-blue-900">BlueDart GenerateWayBill</p>
-              <button type="button" className="text-[11px] text-blue-700 underline" onClick={() => setBdOpen((v) => !v)}>
-                {bdOpen ? 'Hide' : 'Show'} details
-              </button>
-            </div>
-            {bdOpen && (
-              <div className="grid grid-cols-2 gap-2">
-                <label className="col-span-2 block">
-                  <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Consignee name *</span>
-                  <input className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white" placeholder="Name"
-                    value={bdForm.name} onChange={(e) => setBdForm((f) => ({ ...f, name: e.target.value }))} />
-                </label>
-                <label className="block">
-                  <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Mobile *</span>
-                  <input className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white" placeholder="10-digit mobile"
-                    value={bdForm.mobile} onChange={(e) => setBdForm((f) => ({ ...f, mobile: e.target.value }))} />
-                </label>
-                <label className="block">
-                  <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Pincode *</span>
-                  <input className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white" placeholder="6-digit pincode"
-                    value={bdForm.pincode} onChange={(e) => setBdForm((f) => ({ ...f, pincode: e.target.value }))} />
-                </label>
-                <label className="col-span-2 block">
-                  <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Address *</span>
-                  <textarea className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white min-h-[56px]" placeholder="Full delivery address"
-                    value={bdForm.address} onChange={(e) => setBdForm((f) => ({ ...f, address: e.target.value }))} />
-                </label>
-                <label className="block">
-                  <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Weight (kg)</span>
-                  <input className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white" placeholder="e.g. 2.50"
-                    value={bdForm.weight} onChange={(e) => setBdForm((f) => ({ ...f, weight: e.target.value }))} />
-                </label>
-                <label className="block">
-                  <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Declared value (₹) *</span>
-                  <input className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white" placeholder="Auto from i5/i7/R7 + gen"
-                    value={bdForm.declaredValue} onChange={(e) => setBdForm((f) => ({ ...f, declaredValue: e.target.value }))} />
-                  <span className="block text-[10px] text-slate-500 mt-0.5">
-                    Autofilled from processor + generation matrix (editable)
-                  </span>
-                </label>
-                <label className="block">
-                  <span className="block text-[11px] font-medium text-slate-600 mb-0.5">Pieces</span>
-                  <input className="w-full border rounded-lg px-2 py-1.5 text-xs bg-white" placeholder="1"
-                    value={bdForm.pieceCount} onChange={(e) => setBdForm((f) => ({ ...f, pieceCount: e.target.value }))} />
-                </label>
-              </div>
-            )}
-            <div className="flex gap-2">
-              <button
-                type="button"
-                disabled={bdBusy}
-                onClick={generateAwb}
-                className="flex-1 py-2 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 disabled:opacity-50"
-              >
-                {bdBusy ? 'Generating…' : (fields.awb_number ? 'Regenerate Waybill' : 'Generate Waybill')}
-              </button>
-              <button
-                type="button"
-                disabled={bdBusy || !fields.awb_number}
-                onClick={downloadAwbPdf}
-                className="flex-1 py-2 rounded-lg border border-sky-400 bg-sky-50 text-sky-900 text-xs font-semibold hover:bg-sky-100 disabled:opacity-50"
-              >
-                Download PDF
-              </button>
-            </div>
-            {fields.awb_number && (
-              <p className="text-[11px] text-emerald-700">
-                AWB <strong className="font-mono">{fields.awb_number}</strong>
-                {fields.bluedart_pdf_ready || fields.bluedart_awb_pdf_path
-                  ? ' · PDF saved — click Download PDF'
-                  : ' · generate again if PDF download fails'}
-              </p>
-            )}
+          <PerLaptopCourierMapping
+            selected={selected}
+            meta={meta}
+            groupAddress={group?.address}
+            soNumber={soNumber}
+            onUpdateSerial={onUpdateSerial}
+            onCombinedAwbs={(joined) => {
+              if ((fields.awb_number || '') !== joined) {
+                onChange({ ...fields, courier_name: 'BlueDart', awb_number: joined });
+              }
+            }}
+          />
+        )}
+
+        {!isBlueDartCourier(fields.courier_name) && fields.courier_name && (
+          <div className="flex gap-2">
+            <input className="flex-1 border rounded-lg px-3 py-2 text-sm" placeholder="AWB Number"
+              value={fields.awb_number || ''} onChange={set('awb_number')} />
+            <button type="button" disabled={bdBusy || !fields.awb_number} onClick={downloadAwbPdf}
+              className="px-3 py-2 rounded-lg border text-xs font-semibold disabled:opacity-50">PDF</button>
           </div>
         )}
       </div>
@@ -421,13 +322,15 @@ function DispatchFields({
 
 function DcGroupCard({
   groupIndex, group, meta, shipBy, dispatchFields, onDispatchChange,
-  onAddressEdit, onToggleSerial, requireVehicle = false, soNumber = '',
+  onAddressEdit, onToggleSerial, onUpdateSerial, requireVehicle = false, soNumber = '',
 }) {
   const [expanded, setExpanded] = useState(true);
   const [editingAddress, setEditingAddress] = useState(false);
 
   const allPassed = group.serials.every((s) => s.qc_status === 'passed');
   const someNotPassed = group.serials.some((s) => s.qc_status !== 'passed');
+  const selectedCount = group.serials.filter((s) => s.selected !== false && s.qc_status === 'passed').length;
+  const totalCount = group.serials.length;
 
   return (
     <div className="border rounded-xl overflow-hidden bg-white">
@@ -443,7 +346,9 @@ function DcGroupCard({
                 <span className="ml-2 px-1.5 py-0.5 bg-teal-100 text-teal-700 rounded text-[10px] font-medium">WFH</span>
               )}
             </span>
-            <span className="ml-auto text-xs text-gray-500">{group.serials.length} laptop(s)</span>
+            <span className="ml-auto text-xs text-gray-500">
+              {selectedCount} of {totalCount} selected for this DC
+            </span>
           </div>
           <p className="text-xs text-gray-600 mt-0.5 ml-6 truncate">{addrLine(group.address)}</p>
           {group.address?.name && (
@@ -521,6 +426,7 @@ function DcGroupCard({
             group={group}
             meta={meta}
             soNumber={soNumber}
+            onUpdateSerial={(allocationId, patch) => onUpdateSerial(groupIndex, allocationId, patch)}
           />
         </div>
       )}
@@ -649,6 +555,17 @@ export default function DCForm({ open, onClose, prefillSo, soScope, returnTab = 
     ));
   };
 
+  const handleUpdateSerial = (groupIndex, allocationId, patch) => {
+    setDcGroups((prev) => prev.map((g, i) =>
+      i !== groupIndex ? g : {
+        ...g,
+        serials: g.serials.map((s) =>
+          s.allocation_id === allocationId ? { ...s, ...patch } : s
+        ),
+      }
+    ));
+  };
+
   const handleAddressEdit = (groupIndex, newAddress) => {
     setDcGroups((prev) => prev.map((g, i) =>
       i !== groupIndex ? g : { ...g, address: newAddress }
@@ -739,11 +656,24 @@ export default function DCForm({ open, onClose, prefillSo, soScope, returnTab = 
             (s) => s.selected && s.qc_status === 'passed'
           );
           if (!passedSelected.length) return null;
+          const laptop_shipments = passedSelected.map((s) => ({
+            allocation_id: s.allocation_id,
+            serial_id: s.serial_id || null,
+            serial_number: s.serial_number || s.vsn_serial || null,
+            ttspl_id: s.ttspl_id || s.ttspl_id_vsn || null,
+            courier_name: s.courier_name || groupDispatch[i]?.courier_name || 'BlueDart',
+            awb_number: String(s.awb_number || '').trim() || null,
+            weight: s.shipment_weight ? Number(s.shipment_weight) : null,
+            remarks: s.shipment_remarks || null,
+          }));
+          const combinedAwbs = laptop_shipments.map((x) => x.awb_number).filter(Boolean).join(',');
           return {
             delivery_address: g.address || meta?.billing_address || null,
             is_wfh: g.is_wfh,
             allocation_ids: passedSelected.map((s) => s.allocation_id),
+            laptop_shipments,
             ...groupDispatch[i],
+            awb_number: combinedAwbs || groupDispatch[i]?.awb_number || null,
           };
         })
         .filter(Boolean);
@@ -898,6 +828,7 @@ export default function DCForm({ open, onClose, prefillSo, soScope, returnTab = 
                     onDispatchChange={(fields) => handleGroupDispatchChange(i, fields)}
                     onAddressEdit={handleAddressEdit}
                     onToggleSerial={handleToggleSerial}
+                    onUpdateSerial={handleUpdateSerial}
                     requireVehicle={requireVehicle}
                     soNumber={soNumber}
                   />

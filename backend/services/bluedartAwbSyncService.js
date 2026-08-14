@@ -7,6 +7,7 @@
 
 const pool = require('../config/db');
 const bluedartTracking = require('./bluedartTrackingService');
+const { splitAwbTokens } = require('../utils/bluedartAwbUtils');
 
 const ACTOR = { user_id: null, name: 'BlueDart TNT Sync' };
 const SKIP_STATUSES = ['delivered', 'cancelled', 'rejected'];
@@ -20,16 +21,6 @@ function log(level, msg, meta) {
   } else {
     console[level](prefix, msg);
   }
-}
-
-/** Split stored AWB field ("906.. / 906.." or comma-separated) into unique tokens. */
-function splitAwbTokens(raw) {
-  return [...new Set(
-    String(raw || '')
-      .split(/[/|,;\s]+/)
-      .map((s) => s.trim())
-      .filter((s) => /^\d{8,}$/.test(s))
-  )];
 }
 
 async function ensureTrackingColumns() {
@@ -121,6 +112,27 @@ async function updateTrackingFields(awb, shipment) {
       SKIP_STATUSES,
     ]
   );
+
+  const delivered = bluedartTracking.isDeliveredShipment(shipment);
+  await pool.query(
+    `UPDATE dc_shipment_units
+        SET tracking_status = $2,
+            tracking_status_type = $3,
+            tracking_synced_at = NOW(),
+            received_by = COALESCE($4, received_by),
+            status = CASE WHEN $5 THEN 'delivered' ELSE status END,
+            delivered_at = CASE WHEN $5 THEN COALESCE(delivered_at, NOW()) ELSE delivered_at END,
+            updated_at = NOW()
+      WHERE awb_number = $1
+        AND COALESCE(status, '') <> 'delivered'`,
+    [
+      awb,
+      shipment.status || null,
+      shipment.status_type || null,
+      shipment.received_by || null,
+      delivered,
+    ]
+  ).catch(() => {});
 }
 
 async function fireOnDeliveryRentalInvoice(dcNumber) {

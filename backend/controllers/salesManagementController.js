@@ -1060,20 +1060,98 @@ exports.getDcCourierTracking = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Delivery challan not found' });
     }
     const head = lines[0];
-    const awb = String(head.awb_number || '').trim();
-    if (!awb) {
+    const { splitAwbTokens } = require('../utils/bluedartAwbUtils');
+
+    const unitsRes = await pool.query(
+      `SELECT id, allocation_id, serial_id, serial_number, ttspl_id, courier_name,
+              awb_number, weight, remarks, status, tracking_status, tracking_status_type,
+              tracking_synced_at, received_by, delivered_at
+         FROM dc_shipment_units
+        WHERE dc_number = $1
+        ORDER BY id ASC`,
+      [req.params.dcNumber]
+    ).catch(() => ({ rows: [] }));
+    const units = unitsRes.rows || [];
+
+    const awbNumbers = units.length
+      ? [...new Set(units.map((u) => String(u.awb_number || '').trim()).filter((a) => /^\d{8,}$/.test(a)))]
+      : splitAwbTokens(head.awb_number);
+
+    if (!awbNumbers.length) {
       return res.status(400).json({ success: false, message: 'No AWB number on this delivery challan' });
     }
 
     const bluedartTracking = require('../services/bluedartTrackingService');
-    const tracking = await bluedartTracking.trackAwb(awb);
+    const rawTrackings = await bluedartTracking.trackAwbs(awbNumbers);
+    const byAwb = new Map(rawTrackings.map((t) => [String(t.awb_number || '').trim(), t]));
+
+    const trackings = (units.length ? units : awbNumbers.map((awb) => ({ awb_number: awb }))).map((unit) => {
+      const awb = String(unit.awb_number || '').trim();
+      const t = byAwb.get(awb) || {};
+      const scans = Array.isArray(t.scans) ? t.scans : [];
+      const locationFromScan = scans.find((s) => s?.location)?.location || scans[0]?.location || null;
+      const laptopLabel = unit.ttspl_id || unit.serial_number
+        ? `${unit.ttspl_id || ''}${unit.ttspl_id && unit.serial_number ? ' / ' : ''}${unit.serial_number || ''}`.trim()
+        : null;
+      return {
+        laptop: laptopLabel,
+        serial_number: unit.serial_number || null,
+        ttspl_id: unit.ttspl_id || null,
+        allocation_id: unit.allocation_id || null,
+        courier_name: unit.courier_name || head.courier_name || 'BlueDart',
+        awb_number: awb || null,
+        status: t.status || unit.tracking_status || null,
+        status_type: t.status_type || unit.tracking_status_type || null,
+        status_date: t.status_date || null,
+        status_time: t.status_time || null,
+        last_updated: [t.status_date, t.status_time].filter(Boolean).join(' ') || null,
+        current_location: locationFromScan || t.destination || t.origin || null,
+        received_by: t.received_by || unit.received_by || null,
+        unit_status: unit.status || null,
+        found: t.found !== false,
+        origin: t.origin || null,
+        destination: t.destination || null,
+        expected_delivery: t.expected_delivery || null,
+        scans,
+      };
+    });
+
+    // Persist live tracking onto shipment units (best-effort)
+    for (const row of trackings) {
+      if (!row.awb_number) continue;
+      const delivered = bluedartTracking.isDeliveredShipment(row);
+      await pool.query(
+        `UPDATE dc_shipment_units
+            SET tracking_status = $2,
+                tracking_status_type = $3,
+                tracking_synced_at = NOW(),
+                received_by = COALESCE($4, received_by),
+                status = CASE WHEN $5 THEN 'delivered' ELSE status END,
+                delivered_at = CASE WHEN $5 THEN COALESCE(delivered_at, NOW()) ELSE delivered_at END,
+                updated_at = NOW()
+          WHERE dc_number = $1 AND awb_number = $6`,
+        [
+          req.params.dcNumber,
+          row.status,
+          row.status_type,
+          row.received_by,
+          delivered,
+          row.awb_number,
+        ]
+      ).catch(() => {});
+    }
+
     return res.json({
       success: true,
       data: {
         dc_number: req.params.dcNumber,
         courier_name: head.courier_name || null,
         courier_tracking_url: head.courier_tracking_url || null,
-        tracking,
+        awb_number: awbNumbers.join(','),
+        awb_numbers: awbNumbers,
+        tracking: trackings[0] || null,
+        trackings,
+        shipment_units: units,
       },
     });
   } catch (error) {
@@ -1335,7 +1413,9 @@ exports.generateDcBluedartAwb = async (req, res) => {
     const result = await generateAndPersistDcBluedartAwb(req.params.dcNumber, req.body || {});
     return res.json({
       success: true,
-      message: `AWB ${result.awb_number} saved on ${req.params.dcNumber}`,
+      message: (result.awb_numbers && result.awb_numbers.length > 1)
+      ? `${result.awb_numbers.length} AWBs (${result.awb_number}) saved on ${req.params.dcNumber}`
+      : `AWB ${result.awb_number} saved on ${req.params.dcNumber}`,
       data: {
         dc_number: req.params.dcNumber,
         ...result,
@@ -1356,8 +1436,100 @@ exports.generateDcBluedartAwb = async (req, res) => {
  * Generate BlueDart waybill for a DC, persist AWB + label PDF path.
  * Used by API and auto-generate on BlueDart DC create.
  */
+async function generateOneDcUnitWaybill({
+  dcNumber,
+  head,
+  consignee,
+  body,
+  serialNumber,
+  ttsplId,
+  processor,
+  generation,
+  brand,
+  modelName,
+  pieceCount = 1,
+  declaredValueOverride = null,
+}) {
+  const bluedartWaybill = require('../services/bluedartWaybillService');
+  const courierPdf = require('../services/courierWaybillPdfService');
+  const { lookupDeclaredValueForUnit, sumDeclaredValueForUnits } = require('../constants/bluedartDeclaredValue');
+
+  const creditRef = body.credit_reference_no && !serialNumber && !ttsplId
+    ? body.credit_reference_no
+    : courierPdf.buildShipmentReference({
+      serialNumber,
+      ttsplId,
+      fallback: bluedartWaybill.uniqueCreditRef(
+        `DC${String(dcNumber).replace(/[^A-Za-z0-9]/g, '').slice(-12)}`
+      ),
+    });
+
+  let declaredValue = declaredValueOverride != null
+    ? declaredValueOverride
+    : body.services?.declaredValue;
+  if (declaredValue == null || declaredValue === '' || Number(declaredValue) <= 0) {
+    const unitVal = lookupDeclaredValueForUnit(processor, generation, modelName);
+    if (unitVal != null) declaredValue = unitVal;
+    else if (Number(head.security_amount) > 0) declaredValue = Number(head.security_amount);
+  }
+
+  const itemName = [brand || head.brand, modelName || head.model_name].filter(Boolean).join(' ') || 'LAPTOP';
+  const pcs = Math.max(1, Number(pieceCount) || 1);
+  const result = await bluedartWaybill.generateWayBill({
+    consignee,
+    services: {
+      ...(body.services || {}),
+      pieceCount: pcs,
+      actualWeight: body.services?.actualWeight || (2.5 * pcs).toFixed(2),
+      declaredValue,
+      pdfOutputNotRequired: false,
+      itemName,
+    },
+    creditReferenceNo: creditRef,
+  });
+
+  const printed = await buildAndSavePrintableWaybillPdf({
+    awbNumber: result.awb_number,
+    creditReferenceNo: creditRef,
+    consignee,
+    services: {
+      ...(body.services || {}),
+      pieceCount: pcs,
+      declaredValue,
+      itemName,
+    },
+    result,
+    dcNumber,
+    salesOrderNumber: head.sales_order_number || null,
+    itemName,
+    serialNumber,
+    ttsplId,
+  });
+
+  bluedartWaybill.saveWaybillPdf(result.awb_number, result.pdf_buffer);
+
+  const { pdf_buffer: _buf, raw: _raw, ...safe } = result;
+  return {
+    ...safe,
+    credit_reference_no: creditRef,
+    reference_id: printed.reference_id,
+    serial_number: printed.serial_number || serialNumber || null,
+    ttspl_id: printed.ttspl_id || ttsplId || null,
+    bluedart_awb_pdf_path: printed.pdf_path,
+    pdf_path: printed.pdf_path,
+    pdf_saved: Boolean(printed.pdf_path),
+  };
+}
+
+/**
+ * Generate BlueDart waybill(s) for a DC and persist AWB + label PDF path.
+ * Default: one AWB per laptop, stored comma-separated on the DC.
+ * Pass body.single_shipment=true for legacy one-AWB multi-piece.
+ */
 async function generateAndPersistDcBluedartAwb(dcNumber, body = {}) {
   const bluedartWaybill = require('../services/bluedartWaybillService');
+  const { splitAwbTokens, joinAwbTokens } = require('../utils/bluedartAwbUtils');
+  const { sumDeclaredValueForUnits } = require('../constants/bluedartDeclaredValue');
   if (!bluedartWaybill.isWaybillConfigured()) {
     const err = new Error('BlueDart waybill is not configured on the server');
     err.status = 503;
@@ -1371,11 +1543,13 @@ async function generateAndPersistDcBluedartAwb(dcNumber, body = {}) {
     throw err;
   }
   const head = lines[0];
-  if (head.awb_number && !body.force) {
+  const existingAwbs = splitAwbTokens(head.awb_number);
+  if (existingAwbs.length && !body.force) {
     const err = new Error(`DC already has AWB ${head.awb_number}. Pass force=true to generate another.`);
     err.status = 409;
     err.data = {
       awb_number: head.awb_number,
+      awb_numbers: existingAwbs,
       bluedart_awb_pdf_path: head.bluedart_awb_pdf_path || null,
     };
     throw err;
@@ -1394,141 +1568,178 @@ async function generateAndPersistDcBluedartAwb(dcNumber, body = {}) {
     attention: body.consignee?.attention || shipping.name || head.customer_name,
   };
 
-  const pieceCount = body.services?.pieceCount
-    || lines.reduce((sum, l) => sum + (Number(l.quantity || l.main_qty || 1) || 0), 0)
-    || 1;
-
-  const primarySerial = await resolveDcPrimarySerial(dcNumber);
-  const courierPdf = require('../services/courierWaybillPdfService');
-  const creditRef = body.credit_reference_no
-    || courierPdf.buildShipmentReference({
-      serialNumber: primarySerial.serialNumber,
-      ttsplId: primarySerial.ttsplId,
-      fallback: bluedartWaybill.uniqueCreditRef(
-        `DC${String(dcNumber).replace(/[^A-Za-z0-9]/g, '').slice(-12)}`
-      ),
-    });
-
-  let declaredValue = body.services?.declaredValue;
-  if (declaredValue == null || declaredValue === '' || Number(declaredValue) <= 0) {
-    const { sumDeclaredValueForUnits } = require('../constants/bluedartDeclaredValue');
-    const unitsForValue = [];
+  const dcSerials = await collectDcSerials(dcNumber);
+  const units = [];
+  if (dcSerials.length) {
+    for (const s of dcSerials) {
+      let processor = null;
+      let generation = null;
+      let brand = null;
+      let modelName = null;
+      if (s.serialId) {
+        const sr = await pool.query(
+          `SELECT extra->>'processor' AS processor,
+                  extra->>'generation' AS generation,
+                  extra->>'brand' AS brand,
+                  COALESCE(extra->>'model', extra->>'model_name') AS model_name
+             FROM vendor_serial_numbers WHERE serial_id = $1`,
+          [s.serialId]
+        ).catch(() => ({ rows: [] }));
+        processor = sr.rows[0]?.processor || null;
+        generation = sr.rows[0]?.generation || null;
+        brand = sr.rows[0]?.brand || null;
+        modelName = sr.rows[0]?.model_name || null;
+      }
+      units.push({
+        serialNumber: s.serialNumber || null,
+        ttsplId: s.ttsplId || null,
+        processor,
+        generation,
+        brand,
+        modelName,
+      });
+    }
+  } else {
     for (const line of lines) {
-      const details = Array.isArray(line.serials_detail) ? line.serials_detail : [];
-      if (details.length) {
-        details.forEach((d) => unitsForValue.push({ processor: d.processor, generation: d.generation }));
-      } else if (line.processor || line.generation) {
-        const qty = Math.max(1, Number(line.quantity || line.main_qty || 1) || 1);
-        for (let i = 0; i < qty; i += 1) {
-          unitsForValue.push({ processor: line.processor, generation: line.generation });
-        }
+      const qty = Math.max(1, Number(line.quantity || line.main_qty || 1) || 1);
+      for (let i = 0; i < qty; i += 1) {
+        units.push({
+          serialNumber: null,
+          ttsplId: null,
+          processor: line.processor || null,
+          generation: line.generation || null,
+          brand: line.brand || null,
+          modelName: line.model_name || null,
+        });
       }
     }
+  }
+  if (!units.length) units.push({ serialNumber: null, ttsplId: null });
 
-    if (!unitsForValue.some((u) => u.processor || u.generation)) {
-      const serialRes = await pool.query(
-        `SELECT COALESCE(vsn.extra->>'processor', vpd.processor, inv.processor) AS processor,
-                COALESCE(vsn.extra->>'generation', vpd.generation, inv.generation) AS generation
-           FROM delivery_challan_lines dcl
-           CROSS JOIN LATERAL jsonb_array_elements_text(
-             CASE
-               WHEN jsonb_typeof(to_jsonb(dcl.serial_number)) = 'array' THEN to_jsonb(dcl.serial_number)
-               WHEN dcl.serial_number IS NULL THEN '[]'::jsonb
-               ELSE jsonb_build_array(dcl.serial_number::text)
-             END
-           ) AS sn(entry)
-           LEFT JOIN vendor_serial_numbers vsn
-             ON vsn.deleted_at IS NULL
-            AND (
-              (split_part(sn.entry, '|', 1) ~ '^[0-9]+$' AND vsn.serial_id = split_part(sn.entry, '|', 1)::int)
-              OR vsn.serial_number = COALESCE(NULLIF(split_part(sn.entry, '|', 2), ''), sn.entry)
-              OR vsn.inventory_asset_code = COALESCE(NULLIF(split_part(sn.entry, '|', 3), ''), sn.entry)
-            )
-           LEFT JOIN vendor_product_details vpd
-             ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id', '')::int
-           LEFT JOIN LATERAL (
-             SELECT i.processor, i.generation
-               FROM inventory i
-              WHERE i.serial_number = vsn.serial_number
-                 OR i.unique_number = vsn.inventory_asset_code
-              LIMIT 1
-           ) inv ON TRUE
-          WHERE dcl.dc_number = $1`,
-        [dcNumber]
-      ).catch((err) => {
-        console.warn('bluedart declared value serial lookup:', err.message);
-        return { rows: [] };
-      });
-      serialRes.rows.forEach((r) => {
-        unitsForValue.push({ processor: r.processor, generation: r.generation });
-      });
-    }
+  const singleShipment = body.single_shipment === true || body.singleShipment === true;
 
-    const matrixTotal = sumDeclaredValueForUnits(unitsForValue);
-    if (matrixTotal != null) declaredValue = matrixTotal;
-    else if (Number(head.security_amount) > 0) declaredValue = Number(head.security_amount);
+  async function persistAwb(awbNumber, pdfPath, extra = {}) {
+    await pool.query(
+      `UPDATE delivery_challan_lines
+          SET courier_name = COALESCE(NULLIF(TRIM(courier_name), ''), 'BlueDart'),
+              awb_number = $2,
+              bluedart_awb_pdf_path = COALESCE($3, bluedart_awb_pdf_path),
+              ship_by = COALESCE(ship_by, 'by_courier'),
+              dispatch_mode = COALESCE(dispatch_mode, 'courier'),
+              updated_at = NOW()
+        WHERE dc_number = $1`,
+      [dcNumber, awbNumber, pdfPath]
+    );
+    return extra;
   }
 
-  const result = await bluedartWaybill.generateWayBill({
-    consignee,
-    services: {
-      ...(body.services || {}),
+  // Legacy one AWB for all pieces
+  if (singleShipment) {
+    const unit = units[0];
+    const pieceCount = body.services?.pieceCount
+      || lines.reduce((sum, l) => sum + (Number(l.quantity || l.main_qty || 1) || 0), 0)
+      || units.length
+      || 1;
+    const declaredValue = body.services?.declaredValue
+      || sumDeclaredValueForUnits(units.map((u) => ({ processor: u.processor, generation: u.generation })))
+      || (Number(head.security_amount) > 0 ? Number(head.security_amount) : null);
+    const one = await generateOneDcUnitWaybill({
+      dcNumber,
+      head,
+      consignee,
+      body,
+      serialNumber: unit.serialNumber,
+      ttsplId: unit.ttsplId,
+      processor: unit.processor,
+      generation: unit.generation,
+      brand: unit.brand,
+      modelName: unit.modelName,
       pieceCount,
-      declaredValue,
-      pdfOutputNotRequired: false,
-      itemName: [head.brand, head.model_name].filter(Boolean).join(' ') || 'LAPTOP',
-    },
-    creditReferenceNo: creditRef,
-  });
+      declaredValueOverride: declaredValue,
+    });
+    await persistAwb(one.awb_number, one.pdf_path);
+    return { ...one, awb_numbers: [one.awb_number], per_laptop: false };
+  }
 
-  const printed = await buildAndSavePrintableWaybillPdf({
-    awbNumber: result.awb_number,
-    creditReferenceNo: creditRef,
-    consignee,
-    services: {
-      ...(body.services || {}),
-      pieceCount,
-      declaredValue,
-      itemName: [head.brand, head.model_name].filter(Boolean).join(' ') || 'LAPTOP',
-    },
-    result,
-    dcNumber,
-    salesOrderNumber: head.sales_order_number || null,
-    itemName: [head.brand, head.model_name].filter(Boolean).join(' ') || 'LAPTOP',
-    serialNumber: primarySerial.serialNumber,
-    ttsplId: primarySerial.ttsplId,
-  });
+  // One laptop → one AWB (also covers single-unit DCs)
+  if (units.length === 1) {
+    const unit = units[0];
+    const one = await generateOneDcUnitWaybill({
+      dcNumber,
+      head,
+      consignee,
+      body,
+      serialNumber: unit.serialNumber,
+      ttsplId: unit.ttsplId,
+      processor: unit.processor,
+      generation: unit.generation,
+      brand: unit.brand,
+      modelName: unit.modelName,
+      pieceCount: 1,
+    });
+    await persistAwb(one.awb_number, one.pdf_path);
+    return { ...one, awb_numbers: [one.awb_number], per_laptop: true };
+  }
 
-  // Secondary: keep BlueDart API label bytes if present
-  bluedartWaybill.saveWaybillPdf(result.awb_number, result.pdf_buffer);
+  // Multi-laptop DC → one AWB per laptop, comma-separated
+  const generated = [];
+  const errors = [];
+  for (const unit of units) {
+    try {
+      const one = await generateOneDcUnitWaybill({
+        dcNumber,
+        head,
+        consignee,
+        body: { ...body, credit_reference_no: undefined, services: { ...(body.services || {}), pieceCount: 1, declaredValue: undefined } },
+        serialNumber: unit.serialNumber,
+        ttsplId: unit.ttsplId,
+        processor: unit.processor,
+        generation: unit.generation,
+        brand: unit.brand,
+        modelName: unit.modelName,
+        pieceCount: 1,
+      });
+      generated.push(one);
+    } catch (err) {
+      errors.push({
+        serial_number: unit.serialNumber,
+        ttspl_id: unit.ttsplId,
+        message: err.message,
+      });
+      console.error(`BlueDart AWB failed for ${unit.ttsplId || unit.serialNumber}:`, err.message);
+    }
+  }
 
-  const pdfPath = printed.pdf_path;
+  if (!generated.length) {
+    const err = new Error(errors[0]?.message || 'Failed to generate BlueDart AWBs for DC laptops');
+    err.status = 502;
+    err.details = errors;
+    throw err;
+  }
 
-  await pool.query(
-    `UPDATE delivery_challan_lines
-        SET courier_name = COALESCE(NULLIF(TRIM(courier_name), ''), 'BlueDart'),
-            awb_number = $2,
-            bluedart_awb_pdf_path = COALESCE($3, bluedart_awb_pdf_path),
-            ship_by = COALESCE(ship_by, 'by_courier'),
-            dispatch_mode = COALESCE(dispatch_mode, 'courier'),
-            updated_at = NOW()
-      WHERE dc_number = $1`,
-    [dcNumber, result.awb_number, pdfPath]
-  );
+  const awbNumbers = generated.map((g) => g.awb_number);
+  const joined = joinAwbTokens(awbNumbers);
+  const firstPdf = generated.find((g) => g.pdf_path)?.pdf_path || null;
+  await persistAwb(joined, firstPdf);
 
-  // Do not leak raw buffer / BlueDart payload in API responses
-  const { pdf_buffer: _buf, raw: _raw, ...safe } = result;
   return {
-    ...safe,
-    credit_reference_no: creditRef,
-    reference_id: printed.reference_id,
-    serial_number: printed.serial_number,
-    ttspl_id: printed.ttspl_id,
-    bluedart_awb_pdf_path: pdfPath,
-    pdf_path: pdfPath,
-    pdf_saved: Boolean(pdfPath),
+    awb_number: joined,
+    awb_numbers: awbNumbers,
+    shipments: generated.map((g) => ({
+      awb_number: g.awb_number,
+      serial_number: g.serial_number,
+      ttspl_id: g.ttspl_id,
+      pdf_path: g.pdf_path,
+      credit_reference_no: g.credit_reference_no,
+    })),
+    bluedart_awb_pdf_path: firstPdf,
+    pdf_path: firstPdf,
+    pdf_saved: Boolean(firstPdf),
+    per_laptop: true,
+    errors: errors.length ? errors : undefined,
   };
 }
+
 
 function isBlueDartCourierName(name) {
   return /bluedart|blue\s*dart/i.test(String(name || ''));
@@ -1575,6 +1786,7 @@ exports.cancelBluedartWaybill = async (req, res) => {
 exports.cancelDcBluedartAwb = async (req, res) => {
   try {
     const bluedartWaybill = require('../services/bluedartWaybillService');
+    const { splitAwbTokens } = require('../utils/bluedartAwbUtils');
     if (!bluedartWaybill.isWaybillConfigured()) {
       return res.status(503).json({
         success: false,
@@ -1588,12 +1800,21 @@ exports.cancelDcBluedartAwb = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Delivery challan not found' });
     }
     const head = lines[0];
-    const awb = String(req.body?.awb_number || head.awb_number || '').trim();
-    if (!awb) {
+    const raw = String(req.body?.awb_number || head.awb_number || '').trim();
+    const awbs = splitAwbTokens(raw);
+    if (!awbs.length) {
       return res.status(400).json({ success: false, message: 'No AWB number on this delivery challan' });
     }
 
-    const result = await bluedartWaybill.cancelWayBill(awb);
+    const results = [];
+    const errors = [];
+    for (const awb of awbs) {
+      try {
+        results.push(await bluedartWaybill.cancelWayBill(awb));
+      } catch (err) {
+        errors.push({ awb_number: awb, message: err.message });
+      }
+    }
 
     await pool.query(
       `UPDATE delivery_challan_lines
@@ -1606,10 +1827,12 @@ exports.cancelDcBluedartAwb = async (req, res) => {
 
     return res.json({
       success: true,
-      message: `AWB ${awb} cancelled and cleared from ${dcNumber}`,
+      message: `Cancelled ${results.length}/${awbs.length} AWB(s) and cleared from ${dcNumber}`,
       data: {
         dc_number: dcNumber,
-        ...result,
+        awb_numbers: awbs,
+        results,
+        errors: errors.length ? errors : undefined,
       },
     });
   } catch (error) {
@@ -2425,6 +2648,15 @@ exports.createDcsByAddress = async (req, res) => {
       const groupAwbPdf = group.bluedart_awb_pdf_path || body.bluedart_awb_pdf_path || null;
       const groupDeliveryPersonId = group.delivery_person_id || body.delivery_person_id || null;
       const groupVehicleNumber = normalizeVehicleNumber(group.vehicle_number || body.vehicle_number) || null;
+      const laptopShipments = Array.isArray(group.laptop_shipments) ? group.laptop_shipments : [];
+
+      // Prefer joined AWBs from per-laptop mapping when present
+      const shipmentAwbs = laptopShipments
+        .map((s) => String(s?.awb_number || '').trim())
+        .filter((a) => /^\d{8,}$/.test(a));
+      const resolvedGroupAwb = shipmentAwbs.length
+        ? [...new Set(shipmentAwbs)].join(',')
+        : groupAwb;
 
       const vehicleErr = validateSaleVehicleOnCreate(entityCode, ship_by, {
         ...group,
@@ -2490,7 +2722,7 @@ exports.createDcsByAddress = async (req, res) => {
           groupSize, groupSize, JSON.stringify(serialTokens),
           ship_by,
           ship_by === 'by_courier' ? (group.courier_name || body.courier_name || 'BlueDart') : null,
-          ship_by === 'by_courier' ? groupAwb : null,
+          ship_by === 'by_courier' ? resolvedGroupAwb : null,
           ship_by === 'by_courier' ? groupAwbPdf : null,
           ship_by === 'by_courier' ? (group.courier_tracking_url || body.courier_tracking_url || null) : null,
           ship_by === 'by_porter' ? (group.porter_tracking_id || body.porter_tracking_id || null) : null,
@@ -2501,6 +2733,54 @@ exports.createDcsByAddress = async (req, res) => {
           dispatchMode, dcRemarks, req.user?.user_id, dcHsn,
         ]
       );
+
+      // Per-laptop courier / AWB mapping
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS dc_shipment_units (
+          id SERIAL PRIMARY KEY,
+          dc_number TEXT NOT NULL,
+          allocation_id INTEGER,
+          serial_id INTEGER,
+          serial_number TEXT,
+          ttspl_id TEXT,
+          courier_name TEXT DEFAULT 'BlueDart',
+          awb_number TEXT,
+          weight NUMERIC(10, 2),
+          remarks TEXT,
+          tracking_status TEXT,
+          tracking_status_type TEXT,
+          tracking_synced_at TIMESTAMPTZ,
+          received_by TEXT,
+          delivered_at TIMESTAMPTZ,
+          status TEXT NOT NULL DEFAULT 'in_transit',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `).catch(() => {});
+
+      const shipmentByAlloc = new Map(
+        laptopShipments.map((s) => [Number(s.allocation_id), s])
+      );
+      for (const s of groupSerials) {
+        const mapped = shipmentByAlloc.get(Number(s.allocation_id)) || {};
+        await client.query(
+          `INSERT INTO dc_shipment_units (
+             dc_number, allocation_id, serial_id, serial_number, ttspl_id,
+             courier_name, awb_number, weight, remarks, status
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'in_transit')`,
+          [
+            dcNumber,
+            s.allocation_id || null,
+            s.serial_id || null,
+            s.serial_number || s.vsn_serial || mapped.serial_number || null,
+            s.ttspl_id || s.ttspl_id_vsn || mapped.ttspl_id || null,
+            mapped.courier_name || group.courier_name || body.courier_name || 'BlueDart',
+            mapped.awb_number || null,
+            mapped.weight != null && mapped.weight !== '' ? Number(mapped.weight) : null,
+            mapped.remarks || null,
+          ]
+        );
+      }
 
       // Commit the SO allocations to this DC.
       await client.query(

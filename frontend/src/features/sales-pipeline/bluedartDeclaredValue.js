@@ -27,6 +27,14 @@ export const BLUEDART_DECLARED_VALUE_MATRIX = [
   { category: 'i7', grade: 'u7', amount: 50000 },
 
   { category: 'R7', grade: 'ALL', amount: 60000 },
+
+  // Apple Silicon MacBook
+  { category: 'APPLE', grade: 'm1-air', amount: 60000 },
+  { category: 'APPLE', grade: 'm1-pro', amount: 70000 },
+  { category: 'APPLE', grade: 'm2-pro', amount: 80000 },
+  { category: 'APPLE', grade: 'm3', amount: 100000 },
+  { category: 'APPLE', grade: 'm4', amount: 190000 },
+  { category: 'APPLE', grade: 'm5', amount: 230000 },
 ];
 
 export function normalizeCategory(processor) {
@@ -34,6 +42,9 @@ export function normalizeCategory(processor) {
   if (!raw) return null;
   const p = raw.toLowerCase().replace(/\s+/g, '');
 
+  if (/\bm\s*[1-5]\b/i.test(raw) || /\bm[1-5]\b/i.test(raw) || /apple\s*m[1-5]/i.test(raw)) {
+    return 'APPLE';
+  }
   if (/\br7\b|ryzen7|ryzen.?7|amd.?r7/.test(raw.toLowerCase()) || p.includes('ryzen7') || /(^|[^a-z])r7([^a-z]|$)/i.test(raw)) {
     return 'R7';
   }
@@ -57,10 +68,47 @@ export function normalizeGrade(generation) {
   return raw;
 }
 
+/** M1 Air 60k · M1 Pro 70k · M2 Pro 80k · M3 100k · M4 190k · M5 230k */
+export function resolveAppleGrade(processor, generation, model) {
+  const hay = `${processor || ''} ${generation || ''} ${model || ''}`.toLowerCase();
+  if (!hay.trim()) return null;
+
+  const chip = hay.match(/\bm\s*([1-5])\b/) || hay.match(/\bm([1-5])(?:\s|$|pro|max|air)/);
+  if (!chip) return null;
+  const n = chip[1];
+
+  if (n === '1') {
+    if (/\bpro\b|\bmax\b/.test(hay)) return 'm1-pro';
+    if (/\bair\b/.test(hay)) return 'm1-air';
+    return 'm1-air';
+  }
+  if (n === '2') return 'm2-pro';
+  if (n === '3') return 'm3';
+  if (n === '4') return 'm4';
+  if (n === '5') return 'm5';
+  return null;
+}
+
 /** Amount for one laptop, or null if no matrix match. */
-export function lookupDeclaredValueForUnit(processor, generation) {
+export function lookupDeclaredValueForUnit(processor, generation, model) {
+  const appleGrade = resolveAppleGrade(processor, generation, model);
+  if (appleGrade) {
+    const row = BLUEDART_DECLARED_VALUE_MATRIX.find(
+      (r) => r.category === 'APPLE' && r.grade === appleGrade
+    );
+    return row ? row.amount : null;
+  }
+
   const category = normalizeCategory(processor);
   if (!category) return null;
+
+  if (category === 'APPLE') {
+    const grade = resolveAppleGrade(processor, generation, model) || 'm1-air';
+    const row = BLUEDART_DECLARED_VALUE_MATRIX.find(
+      (r) => r.category === 'APPLE' && r.grade === grade
+    );
+    return row ? row.amount : null;
+  }
 
   if (category === 'R7') {
     const row = BLUEDART_DECLARED_VALUE_MATRIX.find((r) => r.category === 'R7');
@@ -78,14 +126,18 @@ export function lookupDeclaredValueForUnit(processor, generation) {
 }
 
 /**
- * Sum declared values for units ({ processor, generation }).
+ * Sum declared values for units ({ processor, generation, model / model_name }).
  * Returns null if nothing matched.
  */
 export function sumDeclaredValueForUnits(units = []) {
   let total = 0;
   let matched = 0;
   for (const u of units) {
-    const amount = lookupDeclaredValueForUnit(u?.processor, u?.generation);
+    const amount = lookupDeclaredValueForUnit(
+      u?.processor,
+      u?.generation,
+      u?.model || u?.model_name
+    );
     if (amount != null) {
       total += amount;
       matched += 1;

@@ -189,13 +189,19 @@ export default function DeliveryChallanDetailPage() {
         // fall through
       }
 
-      // 2) Fallback: fetch by AWB filename
+      // 2) Fallback: fetch by first AWB filename
       if (head.awb_number && !regenerate) {
         try {
-          const pdfRes = await downloadBluedartWaybillPdfByAwb(head.awb_number);
-          downloadBlob(new Blob([pdfRes.data], { type: 'application/pdf' }), `BlueDart_${head.awb_number}.pdf`);
-          toast.success('BlueDart PDF downloaded');
-          return;
+          const firstAwb = String(head.awb_number)
+            .split(/[/|,;\s]+/)
+            .map((s) => s.trim())
+            .find((s) => /^\d{8,}$/.test(s));
+          if (firstAwb) {
+            const pdfRes = await downloadBluedartWaybillPdfByAwb(firstAwb);
+            downloadBlob(new Blob([pdfRes.data], { type: 'application/pdf' }), `BlueDart_${firstAwb}.pdf`);
+            toast.success('BlueDart PDF downloaded');
+            return;
+          }
         } catch {
           // fall through to optional regenerate
         }
