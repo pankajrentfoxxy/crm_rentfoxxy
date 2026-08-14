@@ -197,6 +197,8 @@ server.listen(PORT, () => {
     startLeadEmailIngestionWorker().catch((err) => console.error('Lead email ingestion worker failed:', err.message));
     const { startDispatchSlaWorker } = require('./services/dispatchSlaWorker');
     startDispatchSlaWorker();
+    const { startBluedartAwbSyncWorker } = require('./services/bluedartAwbSyncWorker');
+    startBluedartAwbSyncWorker();
     // startInventorySyncWorker().catch((err) => console.error('ERP inventory sync worker failed:', err.message));
     // startCustomerInventorySyncWorker().catch((err) => console.error('Customer inventory ERP worker failed:', err.message));
   }

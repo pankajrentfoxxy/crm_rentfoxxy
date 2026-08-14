@@ -1082,6 +1082,30 @@ exports.getDcCourierTracking = async (req, res) => {
   }
 };
 
+/** Manual trigger: BlueDart TNT bulk sync for undelivered AWBs. */
+exports.runBluedartAwbSync = async (req, res) => {
+  try {
+    const bluedartTracking = require('../services/bluedartTrackingService');
+    if (!bluedartTracking.isConfigured()) {
+      return res.status(503).json({
+        success: false,
+        message: 'BlueDart tracking is not configured on the server',
+      });
+    }
+    const dryRun = String(req.query.dry_run || req.body?.dry_run || '') === '1'
+      || req.body?.dry_run === true;
+    const { syncUndeliveredAwbs, isSyncRunning } = require('../services/bluedartAwbSyncService');
+    if (isSyncRunning()) {
+      return res.status(409).json({ success: false, message: 'BlueDart AWB sync already running' });
+    }
+    const summary = await syncUndeliveredAwbs({ dryRun });
+    return res.json({ success: !!summary.success, data: summary });
+  } catch (error) {
+    console.error('runBluedartAwbSync:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 /** Prefer final overlay PDF, then fixed/multi/updated, then raw BlueDart label. */
 function findSavedWaybillPdfFile(awb) {
   const dir = path.join(__dirname, '..', 'uploads', 'bluedart');

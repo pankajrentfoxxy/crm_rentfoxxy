@@ -162,6 +162,7 @@ router.post(...dcRoute('/delivery-register', dcEdit, ctrl.submitDeliveryRegister
 router.post(...dcRoute('/qc-ticket', dcEdit, ctrl.createPreDispatchQcTicket));
 router.get(...dcRoute('/qc-status', soDcView, ctrl.getDcQcStatus));
 router.get(...dcRoute('/courier-tracking', soDcView, ctrl.getDcCourierTracking));
+router.post('/bluedart/sync-awb-status', soDcEdit, ctrl.runBluedartAwbSync);
 router.post('/bluedart/generate-waybill', soDcCreate, ctrl.generateBluedartWaybill);
 router.get('/bluedart/waybill/:awb/pdf', soDcView, ctrl.downloadBluedartWaybillPdfByAwb);
 router.post('/bluedart/cancel-waybill', soDcEdit, ctrl.cancelBluedartWaybill);
