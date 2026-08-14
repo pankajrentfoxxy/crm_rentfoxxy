@@ -22,6 +22,7 @@ const UNIT_SELECT = `
          pi.spo_id, pi.grn_id, pi.spo_line_index, pi.vendor_id, pi.vendor_serial_id,
          pi.installed_ttspl_id, pi.installed_ticket_id, pi.installed_at,
          pi.removed_from_ttspl_id, pi.removed_from_ticket_id, pi.condition_on_removal,
+         pi.scrap_challan_number, pi.updated_at,
          pi.received_at, pi.created_at, pi.label_print_count, pi.label_last_printed_at,
          p.part_name, p.category, p.part_type, p.model_number, p.pin_size,
          p.quantity AS catalog_stock,

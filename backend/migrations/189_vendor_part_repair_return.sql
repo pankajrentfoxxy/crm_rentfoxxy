@@ -11,7 +11,8 @@ ALTER TABLE part_instances ADD CONSTRAINT part_instances_status_check
     'with_technician',
     'in_transit',
     'with_vendor_repair',
-    'qc_pending'
+    'qc_pending',
+    'scrapped'
   ));
 
 -- 2. New movement types for the ledger.
@@ -21,7 +22,8 @@ ALTER TABLE part_movements ADD CONSTRAINT part_movements_type_check
     'received', 'reserved', 'unreserved', 'installed', 'returned_defective', 'returned_good',
     'adjusted', 'discarded',
     'sent_to_vendor_repair',
-    'received_from_vendor_repair'
+    'received_from_vendor_repair',
+    'scrapped'
   ));
 
 -- 3. Restrict an existing VRDC header to a single item domain (laptops OR parts).

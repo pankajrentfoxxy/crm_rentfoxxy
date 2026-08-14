@@ -26,6 +26,9 @@ import MasterDataDashboardPage from './pages/MasterDataDashboardPage';
 import TtsplHistorySearchPage from './pages/TtsplHistorySearchPage';
 import PartVendorRepairDcListPage from './pages/PartVendorRepairDcListPage';
 import PartVendorRepairDcDetailPage from './pages/PartVendorRepairDcDetailPage';
+import DiscardedPartsPage from './pages/DiscardedPartsPage';
+import ScrapChallanListPage from './pages/ScrapChallanListPage';
+import ScrapChallanDetailPage from './pages/ScrapChallanDetailPage';
 
 const g = (section, node) => (
   <ProtectedRoute section={section} action="view">{node}</ProtectedRoute>
@@ -70,6 +73,9 @@ export default function InventoryManagementApp() {
         <Route path="parts-history" element={g('parts_inventory', <PartsMovementHistoryPage />)} />
         <Route path="part-vendor-repair" element={g('part_vendor_repair', <PartVendorRepairDcListPage />)} />
         <Route path="part-vendor-repair/:dcNumber" element={g('part_vendor_repair', <PartVendorRepairDcDetailPage />)} />
+        <Route path="discarded-parts" element={g('parts_inventory', <DiscardedPartsPage />)} />
+        <Route path="scrap-challans" element={g('parts_inventory', <ScrapChallanListPage />)} />
+        <Route path="scrap-challans/:challanNumber" element={g('parts_inventory', <ScrapChallanDetailPage />)} />
         <Route path="serial-number-status" element={g('inventory_management', <SerialNumberStatusPage />)} />
         <Route path="universal-search" element={g('inventory_management', <UniversalSearchPage />)} />
         <Route path="npa-assets" element={g('inventory_management', <NpaAssetsPage />)} />

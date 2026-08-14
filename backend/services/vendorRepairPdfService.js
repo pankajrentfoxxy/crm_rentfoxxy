@@ -827,4 +827,12 @@ module.exports = {
   generatePartVendorRepairPdf,
   loadCompany,
   formatCompanyBlock,
+  resolveLogoPath,
+  drawCompanyHeader,
+  writeVendorAddressBoxes,
+  resolveSignFile,
+  fmtIst,
+  drawDispatchSignatures,
+  dispatchTagsForDc,
+  drawDispatchTags,
 };
