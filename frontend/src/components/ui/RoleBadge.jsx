@@ -16,6 +16,8 @@ const ROLE_STYLES = {
   accounts: 'bg-rose-100 text-rose-700',
   support_lead: 'bg-fuchsia-100 text-fuchsia-700',
   support_tech: 'bg-pink-100 text-pink-700',
+  support_agent: 'bg-rose-100 text-rose-800',
+  support_manager: 'bg-fuchsia-200 text-fuchsia-900',
   technician: 'bg-teal-100 text-teal-700',
   vendor: 'bg-orange-100 text-orange-700',
   customer: 'bg-amber-100 text-amber-700',

@@ -9,6 +9,7 @@ import DispatchQcConfigMatchPage from '../pages/DispatchQcConfigMatchPage';
 import AccessPage from '../features/access/AccessPage';
 import HomeRedirect from '../router/HomeRedirect';
 import UserImpersonateCallbackPage from '../pages/auth/UserImpersonateCallbackPage';
+import CsatPage from '../pages/CsatPage';
 
 export const publicRoutes = [
   { path: '/login', element: <Login /> },
@@ -20,6 +21,7 @@ export const publicRoutes = [
   { path: '/qc2-config-match', element: <Qc2ConfigMatchPage /> },
   { path: '/dispatch-qc-config-match', element: <DispatchQcConfigMatchPage /> },
   { path: '/access', element: <AccessPage /> },
+  { path: '/csat/:token', element: <CsatPage /> },
   { path: '/', element: <HomeRedirect /> },
 ];
 

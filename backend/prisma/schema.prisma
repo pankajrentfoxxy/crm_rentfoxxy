@@ -1,3 +1,6 @@
+// Prisma schema — read-only mirror. SQL migrations are source of truth.
+// Last synced migration: 212
+
 generator client {
   provider = "prisma-client-js"
 }

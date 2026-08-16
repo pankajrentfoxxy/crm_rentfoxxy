@@ -1,0 +1,12 @@
+{
+  "name": "Rentfoxxy Support",
+  "short_name": "Support",
+  "start_url": "/support-v2/bucket",
+  "display": "standalone",
+  "background_color": "#0E1116",
+  "theme_color": "#134B60",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/favicon.ico", "sizes": "64x64", "type": "image/x-icon" }
+  ]
+}

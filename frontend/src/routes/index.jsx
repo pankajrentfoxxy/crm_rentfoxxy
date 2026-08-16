@@ -1,6 +1,7 @@
 import { publicRoutes } from './publicRoutes';
 import { salesRoutes } from './salesRoutes';
 import { supportRoutes } from './supportRoutes';
+import { supportV2Routes } from './supportV2Routes';
 import { warehouseRoutes } from './warehouseRoutes';
 import { teamRoutes } from './teamRoutes';
 import { settingsRoutes } from './settingsRoutes';
@@ -18,6 +19,7 @@ export const appRoutes = [
   ...salesRoutes,
   ...dispatchRoutes,
   ...supportRoutes,
+  ...supportV2Routes,
   ...warehouseRoutes,
   ...teamRoutes,
   ...settingsRoutes,
@@ -35,6 +37,7 @@ export {
   salesRoutes,
   dispatchRoutes,
   supportRoutes,
+  supportV2Routes,
   warehouseRoutes,
   teamRoutes,
   settingsRoutes,

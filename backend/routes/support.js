@@ -126,6 +126,7 @@ const uploadPodFile = (req, res, next) => {
 };
 
 router.use(authMiddleware);
+router.use(require('../middleware/supportLegacyFreeze').freezeLegacyWrites);
 router.use(require('../middleware/customerScope')); // Customer Access scope -> req.allowedCustomerTypes
 
 // Warehouse receipt confirmation must be reachable by the warehouse / manager

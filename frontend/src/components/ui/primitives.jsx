@@ -172,7 +172,7 @@ export function SectionLoader({ label = 'Loading…' }) {
 export function ResponsiveTable({
   columns = [], rows = [], keyField = 'id', renderCard, onRowClick,
   loading = false, empty, className = '',
-  sortKey, sortDirection, onSort,
+  sortKey, sortDirection, onSort, rowClassName,
 }) {
   if (loading) return <SectionLoader />;
   if (!rows.length) {
@@ -229,7 +229,7 @@ export function ResponsiveTable({
             tabIndex={onRowClick ? 0 : undefined}
             onClick={onRowClick ? () => onRowClick(row) : undefined}
             onKeyDown={onRowClick ? (e) => { if (e.key === 'Enter') onRowClick(row); } : undefined}
-            className={`text-left bg-white border border-slate-200 rounded-2xl p-4 shadow-sm ${onRowClick ? 'active:bg-slate-50 cursor-pointer' : ''}`}
+            className={`text-left bg-white border border-slate-200 rounded-2xl p-4 shadow-sm ${onRowClick ? 'active:bg-slate-50 cursor-pointer' : ''} ${rowClassName ? rowClassName(row) : ''}`}
           >
             {(renderCard || defaultCard)(row)}
           </div>
@@ -251,7 +251,7 @@ export function ResponsiveTable({
               <tr
                 key={keyOf(row, i)}
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
-                className={onRowClick ? 'hover:bg-slate-50 cursor-pointer' : ''}
+                className={`${onRowClick ? 'hover:bg-slate-50 cursor-pointer' : ''} ${rowClassName ? rowClassName(row) : ''}`}
               >
                 {columns.map((c) => (
                   <td key={c.key} className={`px-4 py-3 ${align(c.align)} ${c.className || ''}`}>

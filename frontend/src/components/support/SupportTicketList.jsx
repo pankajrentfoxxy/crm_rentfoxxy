@@ -400,7 +400,7 @@ export default function SupportTicketList() {
           <button
             type="button"
             className="support-btn-primary inline-flex items-center gap-2 shrink-0"
-            onClick={() => navigate('/support/tickets/new')}
+            onClick={() => navigate('/support-legacy/tickets/new')}
           >
             <Plus className="w-4 h-4" /> New ticket
           </button>

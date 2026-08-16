@@ -1,105 +1,78 @@
 import React, { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 import api from '../utils/api';
-import { formatIndianMobileInput, indianMobileError, normalizeIndianMobile } from '../utils/phoneValidation';
 
-const ISSUE_TYPES = [
-  'Laptop Not Working', 'Display Issue', 'Keyboard Issue', 'Battery Issue',
-  'Software Issue', 'Replacement Request', 'Return Request', 'Other',
-];
-
-function ticketStatusClass(s) {
-  const map = {
-    open: 'bg-blue-100 text-blue-700',
-    progress: 'bg-amber-100 text-amber-700',
-    replacement: 'bg-purple-100 text-purple-700',
-    closed: 'bg-green-100 text-green-700',
-    cancelled: 'bg-slate-100 text-slate-600',
-  };
-  return map[s] || 'bg-slate-100';
-}
+const STATUS = {
+  NEW: 'Received',
+  TRIAGED: 'Being reviewed',
+  ASSIGNED: 'Assigned',
+  IN_PROGRESS: 'In progress',
+  PENDING: 'Waiting',
+  RESOLVED: 'Resolved',
+  CLOSED: 'Closed',
+  CANCELLED: 'Cancelled',
+};
 
 export default function SupportPage() {
-  const [searchParams] = useSearchParams();
-  const [laptops, setLaptops] = useState([]);
   const [tickets, setTickets] = useState([]);
-  const [expanded, setExpanded] = useState(null);
-  const initialType = ISSUE_TYPES.includes(searchParams.get('type')) ? searchParams.get('type') : ISSUE_TYPES[0];
-  const [subject, setSubject] = useState(searchParams.get('type') === 'Return Request' ? 'Laptop return request' : '');
-  const [ticketType, setTicketType] = useState(initialType);
-  const [ttsplId, setTtsplId] = useState(searchParams.get('ttspl') || '');
-  const [description, setDescription] = useState('');
+  const [assets, setAssets] = useState([]);
+  const [catalog, setCatalog] = useState([]);
+  const [open, setOpen] = useState(null);
+  const [detail, setDetail] = useState(null);
   const [busy, setBusy] = useState(false);
-  const emptyAddr = { name: '', phone: '', address: '', city: '', state: '', pincode: '', landmark: '' };
-  const [pickupAddr, setPickupAddr] = useState(emptyAddr);
-  const isReturn = ticketType === 'Return Request';
+  const [form, setForm] = useState({
+    serial_id: '',
+    reported_issue_id: '',
+    reported_description: '',
+    contact_name: '',
+    contact_phone: '',
+  });
 
   const load = () => {
-    api.get('/laptops')
-      .then(({ data }) => setLaptops(data.laptops || []))
-      .catch(() => setLaptops([]));
-    api.get('/tickets')
-      .then(({ data }) => setTickets(data.tickets || []))
-      .catch(() => setTickets([]));
-    // Prefill pickup address from the customer's shipping/billing address.
-    api.get('/me')
-      .then(({ data }) => {
-        const useShip = data.shipping_address && data.shipping_same === false;
-        setPickupAddr((p) => (p.address ? p : {
-          name: data.company_name || data.name || '',
-          phone: data.phone || data.whatsapp_number || '',
-          address: (useShip ? data.shipping_address : data.billing_address) || data.billing_address || '',
-          city: (useShip ? data.shipping_city : data.billing_city) || data.billing_city || '',
-          state: (useShip ? data.shipping_state : data.billing_state) || data.billing_state || '',
-          pincode: (useShip ? data.shipping_pincode : data.billing_pincode) || data.billing_pincode || '',
-          landmark: '',
-        }));
-      })
-      .catch(() => {});
+    api.get('/v2/tickets').then(({ data }) => setTickets(data.tickets || [])).catch(() => setTickets([]));
+    api.get('/v2/assets').then(({ data }) => setAssets(data.rows || [])).catch(() => setAssets([]));
+    api.get('/v2/catalog').then(({ data }) => setCatalog(data.rows || [])).catch(() => setCatalog([]));
   };
 
   useEffect(() => { load(); }, []);
-  useEffect(() => {
-    const t = searchParams.get('ttspl');
-    if (t) setTtsplId(t);
-    const ty = searchParams.get('type');
-    if (ty && ISSUE_TYPES.includes(ty)) setTicketType(ty);
-  }, [searchParams]);
+
+  const openTicket = async (id) => {
+    setOpen(id);
+    try {
+      const { data } = await api.get(`/v2/tickets/${id}`);
+      setDetail(data);
+    } catch {
+      toast.error('Could not load ticket');
+    }
+  };
 
   async function submit(e) {
     e.preventDefault();
-    if (description.length < 20) {
-      toast.error('Description must be at least 20 characters');
+    if (!form.reported_issue_id) {
+      toast.error('Please classify the issue');
       return;
     }
-    if (isReturn && (!pickupAddr.address || !pickupAddr.city || !pickupAddr.pincode)) {
-      toast.error('Please provide the pickup address (address, city, pincode)');
+    if (form.reported_description.trim().length < 15) {
+      toast.error('Description must be at least 15 characters');
       return;
-    }
-    if (isReturn && pickupAddr.phone?.trim()) {
-      const phoneErr = indianMobileError(pickupAddr.phone, { label: 'Pickup phone' });
-      if (phoneErr) {
-        toast.error(phoneErr);
-        return;
-      }
     }
     setBusy(true);
     try {
-      const { data } = await api.post('/tickets', {
-        subject,
-        description,
-        ticket_type: ticketType,
-        ttspl_id: ttsplId || undefined,
-        pickup_address: isReturn
-          ? { ...pickupAddr, phone: pickupAddr.phone?.trim() ? normalizeIndianMobile(pickupAddr.phone) : '' }
-          : undefined,
-        photos: [],
+      const { data } = await api.post('/v2/tickets', {
+        contact_name: form.contact_name || undefined,
+        contact_phone: form.contact_phone || undefined,
+        asset_lines: [{
+          serial_id: form.serial_id ? Number(form.serial_id) : undefined,
+          asset_unknown: !form.serial_id,
+          reported_issue_id: Number(form.reported_issue_id),
+          reported_description: form.reported_description,
+          impact: 2,
+          urgency: 2,
+        }],
       });
       toast.success(`Ticket ${data.ticket_number} created`);
-      setSubject('');
-      setDescription('');
+      setForm((f) => ({ ...f, reported_description: '', reported_issue_id: '' }));
       load();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to submit ticket');
@@ -108,108 +81,166 @@ export default function SupportPage() {
     }
   }
 
+  const pendingCharge = (detail?.charges || []).find((c) => c.status === 'PENDING');
+
   return (
     <div className="space-y-8">
       <h1 className="text-xl font-bold">Support</h1>
 
       <form onSubmit={submit} className="bg-white border rounded-xl p-6 space-y-4 max-w-2xl">
-        <h2 className="font-semibold">Raise a Ticket</h2>
+        <h2 className="font-semibold">Raise a ticket</h2>
         <label className="block text-sm">
-          Subject *
-          <input required value={subject} onChange={(e) => setSubject(e.target.value)} className="mt-1 w-full border rounded-lg px-3 py-2" />
-        </label>
-        <label className="block text-sm">
-          Issue Type *
-          <select value={ticketType} onChange={(e) => setTicketType(e.target.value)} className="mt-1 w-full border rounded-lg px-3 py-2">
-            {ISSUE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-        </label>
-        <label className="block text-sm">
-          Which Laptop
-          <select value={ttsplId} onChange={(e) => setTtsplId(e.target.value)} className="mt-1 w-full border rounded-lg px-3 py-2">
-            <option value="">— Select —</option>
-            {laptops.map((l) => (
-              <option key={l.ttspl_id} value={l.ttspl_id}>{l.ttspl_id} — {l.brand} {l.model}</option>
+          Machine
+          <select
+            value={form.serial_id}
+            onChange={(e) => setForm((f) => ({ ...f, serial_id: e.target.value }))}
+            className="mt-1 w-full border rounded-lg px-3 py-2"
+          >
+            <option value="">I am not sure which machine</option>
+            {assets.map((a) => (
+              <option key={a.serial_id} value={a.serial_id}>
+                {a.ttspl_id || a.serial_number} — {a.brand} {a.model}
+              </option>
             ))}
           </select>
         </label>
-        {isReturn && (
-          <div className="border rounded-lg p-3 bg-amber-50/50 space-y-2">
-            <p className="text-sm font-semibold text-amber-800">Pickup Address</p>
-            <p className="text-xs text-slate-500">Our team will collect the laptop from this address.</p>
-            <div className="grid grid-cols-2 gap-2">
-              <input placeholder="Contact name" value={pickupAddr.name} onChange={(e) => setPickupAddr((a) => ({ ...a, name: e.target.value }))} className="border rounded-lg px-3 py-2 text-sm" />
-              <input placeholder="Phone" value={pickupAddr.phone} onChange={(e) => setPickupAddr((a) => ({ ...a, phone: formatIndianMobileInput(e.target.value) }))} className="border rounded-lg px-3 py-2 text-sm" maxLength={10} inputMode="numeric" />
-            </div>
-            <input placeholder="Address *" value={pickupAddr.address} onChange={(e) => setPickupAddr((a) => ({ ...a, address: e.target.value }))} className="w-full border rounded-lg px-3 py-2 text-sm" />
-            <div className="grid grid-cols-3 gap-2">
-              <input placeholder="City *" value={pickupAddr.city} onChange={(e) => setPickupAddr((a) => ({ ...a, city: e.target.value }))} className="border rounded-lg px-3 py-2 text-sm" />
-              <input placeholder="State" value={pickupAddr.state} onChange={(e) => setPickupAddr((a) => ({ ...a, state: e.target.value }))} className="border rounded-lg px-3 py-2 text-sm" />
-              <input placeholder="Pincode *" value={pickupAddr.pincode} onChange={(e) => setPickupAddr((a) => ({ ...a, pincode: e.target.value }))} className="border rounded-lg px-3 py-2 text-sm" />
-            </div>
-            <input placeholder="Landmark (optional)" value={pickupAddr.landmark} onChange={(e) => setPickupAddr((a) => ({ ...a, landmark: e.target.value }))} className="w-full border rounded-lg px-3 py-2 text-sm" />
-          </div>
-        )}
-
         <label className="block text-sm">
-          Description * (min 20 chars)
-          <textarea required minLength={20} value={description} onChange={(e) => setDescription(e.target.value)}
-            className="mt-1 w-full border rounded-lg px-3 py-2 min-h-[100px]" />
+          What is wrong *
+          <select
+            required
+            value={form.reported_issue_id}
+            onChange={(e) => setForm((f) => ({ ...f, reported_issue_id: e.target.value }))}
+            className="mt-1 w-full border rounded-lg px-3 py-2"
+          >
+            <option value="">— Select an issue —</option>
+            {catalog.map((c) => (
+              <option key={c.catalog_id} value={c.catalog_id}>
+                {c.type_name} / {c.subtype_name} / {c.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="grid grid-cols-2 gap-2">
+          <input
+            placeholder="Your name"
+            value={form.contact_name}
+            onChange={(e) => setForm((f) => ({ ...f, contact_name: e.target.value }))}
+            className="border rounded-lg px-3 py-2 text-sm"
+          />
+          <input
+            placeholder="Mobile (10 digits)"
+            value={form.contact_phone}
+            onChange={(e) => setForm((f) => ({ ...f, contact_phone: e.target.value }))}
+            className="border rounded-lg px-3 py-2 text-sm"
+            maxLength={10}
+          />
+        </div>
+        <label className="block text-sm">
+          Description * (min 15 chars)
+          <textarea
+            required
+            minLength={15}
+            value={form.reported_description}
+            onChange={(e) => setForm((f) => ({ ...f, reported_description: e.target.value }))}
+            className="mt-1 w-full border rounded-lg px-3 py-2 min-h-[100px]"
+          />
         </label>
         <button type="submit" disabled={busy} className="px-4 py-2 bg-brand text-white rounded-lg font-semibold disabled:opacity-50">
-          Submit Ticket
+          Submit ticket
         </button>
       </form>
 
-      {/* Mobile ticket cards */}
-      <div className="md:hidden space-y-3">
-        <h2 className="font-semibold">My Tickets</h2>
-        {tickets.length === 0 ? (
-          <p className="bg-white border rounded-xl p-6 text-center text-slate-500">No tickets yet</p>
-        ) : tickets.map((t) => (
-          <div key={t.ticket_id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <span className="font-mono text-xs font-semibold text-slate-900">T-{t.ticket_id}</span>
-              <span className={`px-2 py-0.5 rounded-full text-xs capitalize ${ticketStatusClass(t.status)}`}>{t.status}</span>
-            </div>
-            <p className="text-sm font-medium text-slate-900">{t.subject || '—'}</p>
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-              {t.ttspl_id && <span className="font-mono">{t.ttspl_id}</span>}
-              <span>Created {t.created_at ? format(new Date(t.created_at), 'dd MMM yyyy') : '—'}</span>
-            </div>
-            {t.status === 'closed' && <p className="text-xs text-green-700 pt-1 border-t border-slate-100">This ticket has been resolved.</p>}
-          </div>
-        ))}
-      </div>
-
-      <div className="hidden md:block bg-white border rounded-xl overflow-hidden">
-        <h2 className="font-semibold p-4 border-b">My Tickets</h2>
+      <div className="bg-white border rounded-xl overflow-hidden">
+        <h2 className="font-semibold p-4 border-b">My tickets</h2>
         <table className="min-w-full text-sm">
           <thead className="bg-slate-50 text-xs uppercase text-slate-500 text-left">
             <tr>
-              {['Ticket #', 'Subject', 'Laptop', 'Status', 'Created', 'Updated'].map((h) => <th key={h} className="p-3">{h}</th>)}
+              {['Ticket', 'Subject', 'Status', 'Due', 'Created'].map((h) => <th key={h} className="p-3">{h}</th>)}
             </tr>
           </thead>
           <tbody>
             {tickets.length === 0 ? (
-              <tr><td colSpan={6} className="p-6 text-center text-slate-500">No tickets yet</td></tr>
+              <tr><td colSpan={5} className="p-6 text-center text-slate-500">No tickets yet</td></tr>
             ) : tickets.map((t) => (
               <React.Fragment key={t.ticket_id}>
-                <tr className="border-t hover:bg-slate-50 cursor-pointer" onClick={() => setExpanded(expanded === t.ticket_id ? null : t.ticket_id)}>
-                  <td className="p-3 font-mono text-xs">T-{t.ticket_id}</td>
+                <tr className="border-t hover:bg-slate-50 cursor-pointer" onClick={() => openTicket(t.ticket_id)}>
+                  <td className="p-3 font-mono text-xs">{t.ticket_number}</td>
                   <td className="p-3">{t.subject || '—'}</td>
-                  <td className="p-3 font-mono text-xs">{t.ttspl_id || '—'}</td>
-                  <td className="p-3">
-                    <span className={`px-2 py-0.5 rounded-full text-xs capitalize ${ticketStatusClass(t.status)}`}>{t.status}</span>
-                  </td>
+                  <td className="p-3">{t.status_label || STATUS[t.status] || t.status}</td>
+                  <td className="p-3 text-xs">{t.sla_resolution_due_at ? format(new Date(t.sla_resolution_due_at), 'dd MMM HH:mm') : '—'}</td>
                   <td className="p-3 text-xs">{t.created_at ? format(new Date(t.created_at), 'dd MMM yyyy') : '—'}</td>
-                  <td className="p-3 text-xs">{t.updated_at ? format(new Date(t.updated_at), 'dd MMM yyyy') : '—'}</td>
                 </tr>
-                {expanded === t.ticket_id && (
+                {open === t.ticket_id && detail?.ticket?.ticket_id === t.ticket_id && (
                   <tr className="bg-slate-50">
-                    <td colSpan={6} className="p-4 text-sm text-slate-600">
-                      Type: {t.type || '—'} · Status: {t.status}
-                      {t.status === 'closed' && <p className="mt-2 text-green-700">This ticket has been resolved.</p>}
+                    <td colSpan={5} className="p-4 space-y-3">
+                      <div className="text-sm">
+                        Resolution countdown only — we never show internal escalation.
+                      </div>
+                      {(detail.lines || []).map((l) => (
+                        <div key={l.line_id} className="text-sm">
+                          <span className="font-mono text-xs">{l.ttspl_id || l.serial_number || l.line_code}</span>
+                          {' · '}{l.line_status} — {l.reported_description}
+                        </div>
+                      ))}
+                      <ol className="text-sm space-y-1 list-decimal pl-5">
+                        {(detail.events || []).map((ev) => (
+                          <li key={ev.event_id}>{ev.summary} <span className="text-slate-400">{format(new Date(ev.created_at), 'dd MMM HH:mm')}</span></li>
+                        ))}
+                      </ol>
+                      {pendingCharge && (
+                        <div className="border rounded-lg p-3 bg-amber-50 space-y-2">
+                          <div className="font-semibold">Charge awaiting your approval · ₹{Number(pendingCharge.amount).toLocaleString('en-IN')}</div>
+                          <p className="text-sm">{pendingCharge.description}</p>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              className="px-3 py-1.5 bg-brand text-white rounded-lg text-sm"
+                              onClick={async () => {
+                                try {
+                                  await api.post(`/v2/tickets/${t.ticket_id}/approve-charge`);
+                                  toast.success('Charge approved');
+                                  openTicket(t.ticket_id);
+                                } catch (e) { toast.error(e.response?.data?.message || 'Failed'); }
+                              }}
+                            >
+                              Approve
+                            </button>
+                            <button
+                              type="button"
+                              className="px-3 py-1.5 border rounded-lg text-sm"
+                              onClick={async () => {
+                                const reason = window.prompt('Why are you disputing this charge?');
+                                if (!reason) return;
+                                try {
+                                  await api.post(`/v2/tickets/${t.ticket_id}/dispute-charge`, { reason });
+                                  toast.success('Dispute sent to Accounts');
+                                  openTicket(t.ticket_id);
+                                } catch (e) { toast.error(e.response?.data?.message || 'Failed'); }
+                              }}
+                            >
+                              Dispute
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      {['RESOLVED', 'CLOSED'].includes(t.status) && (
+                        <button
+                          type="button"
+                          className="text-sm text-brand font-semibold"
+                          onClick={async () => {
+                            const reason = window.prompt('Why reopen this ticket?');
+                            if (!reason) return;
+                            try {
+                              await api.post(`/v2/tickets/${t.ticket_id}/reopen`, { reason });
+                              toast.success('Reopened');
+                              load();
+                              openTicket(t.ticket_id);
+                            } catch (e) { toast.error(e.response?.data?.message || 'Cannot reopen'); }
+                          }}
+                        >
+                          Reopen
+                        </button>
+                      )}
                     </td>
                   </tr>
                 )}

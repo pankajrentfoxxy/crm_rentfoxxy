@@ -21,42 +21,42 @@ import ChallanViewPage from '../../features/support/pages/ChallanViewPage';
 function SupportHomeRedirect() {
   const { user } = useAuth();
   if (isSupportTechnician(user) && !isSupportLead(user)) {
-    return <Navigate to="/support/my-tickets" replace />;
+    return <Navigate to="/support-legacy/my-tickets" replace />;
   }
-  return <Navigate to="/support/overview" replace />;
+  return <Navigate to="/support-legacy/overview" replace />;
 }
 
 function LeadOnly({ children }) {
   const { user } = useAuth();
-  if (!isSupportLead(user)) return <Navigate to="/support/overview" replace />;
+  if (!isSupportLead(user)) return <Navigate to="/support-legacy/overview" replace />;
   return children;
 }
 
 function StatsOnly({ children }) {
   const { user } = useAuth();
   if (!['super_admin', 'admin', 'manager', 'support_lead'].includes(user?.role)) {
-    return <Navigate to="/support/overview" replace />;
+    return <Navigate to="/support-legacy/overview" replace />;
   }
   return children;
 }
 
 function AdminOnly({ children }) {
   const { user } = useAuth();
-  if (user?.role !== 'admin') return <Navigate to="/support/overview" replace />;
+  if (user?.role !== 'admin') return <Navigate to="/support-legacy/overview" replace />;
   return children;
 }
 
 function PartsQueueOnly({ children }) {
   const { user } = useAuth();
   if (!['warehouse', 'admin', 'manager', 'support_lead', 'super_admin'].includes(user?.role)) {
-    return <Navigate to="/support/overview" replace />;
+    return <Navigate to="/support-legacy/overview" replace />;
   }
   return children;
 }
 
 function CancelSectionOnly({ children }) {
   const { user } = useAuth();
-  if (!canCancelSupportTicket(user)) return <Navigate to="/support/overview" replace />;
+  if (!canCancelSupportTicket(user)) return <Navigate to="/support-legacy/overview" replace />;
   return children;
 }
 
@@ -66,7 +66,7 @@ export default function SupportApp() {
       <Route element={<SupportShell />}>
         <Route index element={<SupportHomeRedirect />} />
         <Route path="overview" element={<SupportOverviewPage />} />
-        <Route path="dashboard" element={<Navigate to="/support/overview" replace />} />
+        <Route path="dashboard" element={<Navigate to="/support-legacy/overview" replace />} />
         <Route path="stats" element={<StatsOnly><SupportStatsPage /></StatsOnly>} />
         <Route path="tickets" element={<SupportTicketsView view="all" splitSections showFilters enhancedList />} />
         <Route path="pending-assign" element={<SupportTicketsView view="pending_assign" showFilters />} />

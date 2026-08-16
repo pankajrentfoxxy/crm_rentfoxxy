@@ -19,7 +19,8 @@ function resolveMobileNo(mobile_no, { required = false } = {}) {
 
 const MANAGEABLE_ROLES = [
   'team_member', 'team_lead', 'sales', 'floor_manager', 'procurement', 'qc', 'dispatch',
-  'manager', 'admin', 'support_lead', 'support_tech', 'accounts', 'warehouse', 'dispatch_qc',
+  'manager', 'admin', 'support_lead', 'support_tech', 'support_agent', 'support_manager',
+  'accounts', 'warehouse', 'dispatch_qc',
 ];
 const FLOOR_ROLES = ['team_member', 'team_lead', 'floor_manager', 'qc'];
 const CRM_EXCLUDED_ROLES = ['vendor', 'customer', 'technician'];
@@ -47,6 +48,8 @@ const ROLE_DISPLAY_NAMES = {
   accounts: 'Accounts',
   support_lead: 'Support Lead',
   support_tech: 'Support Technician',
+  support_agent: 'Support Agent',
+  support_manager: 'Support Manager',
   dispatch_qc: 'Dispatch QC',
 };
 
@@ -136,7 +139,7 @@ exports.register = async (req, res) => {
       permissions = ['qc_access'];
     } else if (normalizedRole === 'dispatch') {
       permissions = ['dispatch_access'];
-    } else if (normalizedRole === 'support_lead') {
+    } else if (normalizedRole === 'support_lead' || normalizedRole === 'support_agent' || normalizedRole === 'support_manager') {
       permissions = ['support_access'];
     } else if (normalizedRole === 'support_tech') {
       permissions = ['support_access', 'customer_inventory_access'];

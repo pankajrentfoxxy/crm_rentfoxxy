@@ -190,7 +190,7 @@ function SupportTicketsViewCards({ view = 'active', showFilters = true, splitSec
                 <p className="font-medium">{empty.title}</p>
                 <p className="text-sm text-slate-500 mt-1">{empty.body}</p>
                 {isSupportLead(user) && view === 'active' && (
-                  <Link to="/support/tickets/new" className="support-btn-primary inline-flex items-center gap-2 mt-4">
+                  <Link to="/support-legacy/tickets/new" className="support-btn-primary inline-flex items-center gap-2 mt-4">
                     <Plus className="w-4 h-4" /> New ticket
                   </Link>
                 )}

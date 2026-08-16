@@ -1043,6 +1043,25 @@ exports.moveToNextStage = async (req, res) => {
       actor: req.user,
     });
 
+    if (isCompleted) {
+      try {
+        const { maybeCreateServiceReturnFromFloorPass } = require('../services/supportWorkOrderService');
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          await maybeCreateServiceReturnFromFloorPass(client, Number(id));
+          await client.query('COMMIT');
+        } catch (hookErr) {
+          await client.query('ROLLBACK').catch(() => {});
+          console.error('support v2 service-return hook:', hookErr);
+        } finally {
+          client.release();
+        }
+      } catch (hookErr) {
+        console.error('support v2 service-return hook:', hookErr);
+      }
+    }
+
     res.json({
       success: true,
       message: successMessage,
