@@ -7,6 +7,7 @@ async function main() {
   const dir = path.join(__dirname, '../migrations');
   const files = fs.readdirSync(dir)
     .filter((file) => file.endsWith('.sql'))
+    .filter((file) => !/dummy|078_clean_and_reseed/i.test(file))
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
 
   await pool.query(`
