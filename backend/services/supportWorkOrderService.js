@@ -74,11 +74,11 @@ async function setStatus(client, wo, to, { actorId, summary, detail } = {}) {
   assertTransition(wo.status, to, { skipsTravel });
   await client.query(
     `UPDATE support_work_orders
-        SET status = $2,
-            accepted_at = CASE WHEN $2 = 'ACCEPTED' THEN COALESCE(accepted_at, NOW()) ELSE accepted_at END,
-            en_route_at = CASE WHEN $2 = 'EN_ROUTE' THEN COALESCE(en_route_at, NOW()) ELSE en_route_at END,
-            on_site_at = CASE WHEN $2 = 'ON_SITE' THEN COALESCE(on_site_at, NOW()) ELSE on_site_at END,
-            completed_at = CASE WHEN $2 = 'COMPLETED' THEN COALESCE(completed_at, NOW()) ELSE completed_at END,
+        SET status = $2::varchar,
+            accepted_at = CASE WHEN $2::text = 'ACCEPTED' THEN COALESCE(accepted_at, NOW()) ELSE accepted_at END,
+            en_route_at = CASE WHEN $2::text = 'EN_ROUTE' THEN COALESCE(en_route_at, NOW()) ELSE en_route_at END,
+            on_site_at = CASE WHEN $2::text = 'ON_SITE' THEN COALESCE(on_site_at, NOW()) ELSE on_site_at END,
+            completed_at = CASE WHEN $2::text = 'COMPLETED' THEN COALESCE(completed_at, NOW()) ELSE completed_at END,
             updated_at = NOW()
       WHERE wo_id = $1`,
     [wo.wo_id, to]

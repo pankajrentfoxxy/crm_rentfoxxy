@@ -13,6 +13,7 @@ function supportLegacyGone(_req, res) {
 
 function freezeLegacyWrites(req, res, next) {
   if (legacyWritesAllowed()) return next();
+  if (req.path === '/v2' || req.path.startsWith('/v2/')) return next();
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
   return supportLegacyGone(req, res);
 }

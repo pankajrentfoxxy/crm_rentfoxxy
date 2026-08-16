@@ -103,6 +103,7 @@ async function addBusinessMinutes(db = pool, calendarId, from, minutes) {
   if (!Number.isFinite(need) || need < 0) {
     throw Object.assign(new Error('minutes must be a non-negative number'), { status: 400 });
   }
+  if (need === 0) return start;
   const cal = await loadCalendar(db, calendarId);
   if (cal.is_always_on || cal.code === 'ALWAYS_ON') {
     return new Date(start.getTime() + need * 60000);

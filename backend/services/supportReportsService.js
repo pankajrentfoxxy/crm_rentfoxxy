@@ -50,7 +50,7 @@ const REPORTS = {
       FROM support_v2_rpt_field
      WHERE COALESCE(completed_at, on_site_at, slot_start) >= $1
        AND COALESCE(completed_at, on_site_at, slot_start) < $2
-     GROUP BY 1,2,7
+     GROUP BY assigned_to, ((on_site_at AT TIME ZONE 'Asia/Kolkata')::date), failure_reason
      ORDER BY day DESC
      LIMIT 500`,
   assets: `
