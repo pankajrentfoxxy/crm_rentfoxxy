@@ -1,4 +1,4 @@
--- Dummy laptops for LOCAL / STAGING only. Do not run via backend/migrations.
+-- Dummy laptops for testing / staging. Safe to re-run: skips existing DUMMY-LAP-* rows.
 -- Tags: is_dummy = true, machine_number prefix DUMMY-LAP-
 -- Status 'In Stock' matches sales-available inventory filters (Cooling Period + In Stock).
 
