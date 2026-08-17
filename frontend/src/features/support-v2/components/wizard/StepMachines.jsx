@@ -2,13 +2,17 @@ import React, { useMemo } from 'react';
 import { Mono } from '../../../../components/ui/supportPrimitives';
 
 export default function StepMachines({ state, setState, assets }) {
-  const site = (state.contextSites || []).find((s) => s.customer_address_id === state.site_id);
-  const pin = site?.pincode ? String(site.pincode) : '';
+  const site = (state.contextSites || []).find((s) => s.site_key === state.site_key)
+    || (state.contextSites || []).find((s) => s.customer_address_id === state.site_id);
+  const pin = String(state.site_pincode || site?.pincode || '').replace(/\D/g, '').slice(0, 6);
   const rows = useMemo(() => {
-    if (!pin) return assets;
-    const matched = assets.filter((a) => a.pincode && String(a.pincode) === pin);
-    return matched.length ? matched : assets;
-  }, [assets, pin]);
+    if (state.unknownAsset) return [];
+    return (assets || []).filter((a) => {
+      if (state.site_key && a.site_key && a.site_key === state.site_key) return true;
+      const ap = String(a.delivery_pincode || a.pincode || '').replace(/\D/g, '').slice(0, 6);
+      return pin && ap && ap === pin;
+    });
+  }, [assets, pin, state.site_key, state.unknownAsset]);
 
   const selected = new Set(state.selectedSerials);
   const toggle = (id) => {
@@ -44,6 +48,7 @@ export default function StepMachines({ state, setState, assets }) {
               <th className="text-left px-2 py-1.5">TTSPL / serial</th>
               <th className="text-left px-2 py-1.5">Model</th>
               <th className="text-left px-2 py-1.5">Assigned</th>
+              <th className="text-left px-2 py-1.5">Delivered to</th>
               <th className="text-left px-2 py-1.5">Deployed</th>
               <th className="text-left px-2 py-1.5">History</th>
               <th className="text-left px-2 py-1.5">Warranty</th>
@@ -63,6 +68,9 @@ export default function StepMachines({ state, setState, assets }) {
                   </td>
                   <td className="px-2 py-1.5">{[a.brand, a.model].filter(Boolean).join(' ') || '—'}</td>
                   <td className="px-2 py-1.5">{a.assigned_employee || '—'}</td>
+                  <td className="px-2 py-1.5">
+                    {[a.delivery_address, a.delivery_pincode || a.pincode].filter(Boolean).join(' · ') || '—'}
+                  </td>
                   <td className="px-2 py-1.5">{a.delivered_at ? String(a.delivered_at).slice(0, 10) : '—'}</td>
                   <td className={`px-2 py-1.5 ${hot ? 'text-pri1 font-semibold' : ''}`}>
                     {a.complaint_count_90d} complaints · 90 d
@@ -73,7 +81,13 @@ export default function StepMachines({ state, setState, assets }) {
               );
             })}
             {!rows.length && (
-              <tr><td colSpan={7} className="px-3 py-6 text-center text-sup-muted">No deployed machines for this customer.</td></tr>
+              <tr>
+                <td colSpan={8} className="px-3 py-6 text-center text-sup-muted">
+                  {state.unknownAsset
+                    ? 'Unknown asset — no laptop will be attached.'
+                    : 'No laptops were delivered to this site. Pick the delivery location from step 1, or mark Unknown asset.'}
+                </td>
+              </tr>
             )}
           </tbody>
         </table>

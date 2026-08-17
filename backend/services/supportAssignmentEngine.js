@@ -3,6 +3,32 @@
 const { logEvent } = require('./supportTicketStateService');
 const { assignWorkOrder } = require('./supportWorkOrderService');
 
+const DISPATCH_SLOTS = ['09:00', '10:30', '12:00', '14:00', '15:30', '17:00'];
+const SUPPORT_ROLES = ['support_tech', 'technician', 'support_lead', 'support_manager', 'support_agent'];
+
+function istDateStr(value) {
+  if (!value) {
+    return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  }
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value).slice(0, 10);
+  return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+function istHm(value) {
+  if (!value) return null;
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) {
+    const m = String(value).match(/T(\d{2}):(\d{2})/);
+    return m ? `${m[1]}:${m[2]}` : null;
+  }
+  return d.toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+function dowForDate(day) {
+  return new Date(`${day}T12:00:00+05:30`).getDay();
+}
+
 function zoneMatch(tech, ctx) {
   if (!ctx.zoneId) return { ok: true };
   const zones = tech.zone_ids || (tech.zone_id != null ? [tech.zone_id] : []);
@@ -17,9 +43,13 @@ function skillMatch(tech, ctx) {
   return { ok: false, rejected_by: 'skillMatch', detail: `missing ${ctx.skillRequired}` };
 }
 
-function availability(tech, ctx) {
-  if (tech.on_leave) return { ok: false, rejected_by: 'availability', detail: 'on approved leave' };
-  if (tech.on_shift === false) return { ok: false, rejected_by: 'availability', detail: 'not on shift' };
+function availability(tech) {
+  if (tech.marked_absent || tech.on_leave) {
+    return { ok: false, rejected_by: 'availability', detail: 'marked absent / on leave' };
+  }
+  if (tech.on_shift === false) {
+    return { ok: false, rejected_by: 'availability', detail: 'not on shift that day' };
+  }
   return { ok: true };
 }
 
@@ -262,20 +292,27 @@ async function loadWoContext(db, wo) {
 }
 
 async function loadTechnicians(db, { date, zoneId, groupId } = {}) {
-  const day = date || new Date().toISOString().slice(0, 10);
-  const dow = new Date(`${day}T12:00:00`).getDay();
-  const params = [day, dow];
+  const day = istDateStr(date);
+  const dow = dowForDate(day);
+  const params = [day, dow, SUPPORT_ROLES];
   let extra = '';
   if (zoneId) {
     params.push(Number(zoneId));
-    extra += ` AND g.zone_id = $${params.length}`;
+    extra += ` AND EXISTS (
+      SELECT 1 FROM support_group_members gm2
+      JOIN support_assignment_groups g2 ON g2.group_id = gm2.group_id AND g2.is_active = TRUE
+      WHERE gm2.user_id = u.user_id AND g2.zone_id = $${params.length}
+    )`;
   }
   if (groupId) {
     params.push(Number(groupId));
-    extra += ` AND g.group_id = $${params.length}`;
+    extra += ` AND EXISTS (
+      SELECT 1 FROM support_group_members gm3
+      WHERE gm3.user_id = u.user_id AND gm3.group_id = $${params.length}
+    )`;
   }
   const rows = await db.query(
-    `SELECT u.user_id, u.name,
+    `SELECT u.user_id, u.name, u.role,
             ARRAY_AGG(DISTINCT g.zone_id) FILTER (WHERE g.zone_id IS NOT NULL) AS zone_ids,
             COALESCE(ARRAY_AGG(DISTINCT sk.code) FILTER (WHERE sk.code IS NOT NULL), '{}') AS skills,
             COALESCE(MAX(s.max_jobs_per_day), 6) AS max_jobs_per_day,
@@ -284,9 +321,17 @@ async function loadTechnicians(db, { date, zoneId, groupId } = {}) {
                WHERE l.user_id = u.user_id AND l.leave_date = $1::date
             ) AS on_leave,
             EXISTS (
+              SELECT 1 FROM support_technician_attendance a
+               WHERE a.user_id = u.user_id AND a.work_date = $1::date AND a.status = 'ABSENT'
+            ) AS marked_absent,
+            EXISTS (
               SELECT 1 FROM user_shifts sh
                WHERE sh.user_id = u.user_id AND sh.day_of_week = $2
-            ) AS on_shift,
+            ) AS on_shift_row,
+            EXISTS (
+              SELECT 1 FROM user_shifts sh
+               WHERE sh.user_id = u.user_id
+            ) AS has_any_shift,
             (
               SELECT COUNT(*)::int FROM support_work_orders w
                WHERE w.assigned_to = u.user_id
@@ -295,22 +340,99 @@ async function loadTechnicians(db, { date, zoneId, groupId } = {}) {
                      = $1::date
             ) AS jobs_today
        FROM users u
-       JOIN support_group_members gm ON gm.user_id = u.user_id
-       JOIN support_assignment_groups g ON g.group_id = gm.group_id AND g.is_active = TRUE
+       LEFT JOIN support_group_members gm ON gm.user_id = u.user_id
+       LEFT JOIN support_assignment_groups g ON g.group_id = gm.group_id AND g.is_active = TRUE
        LEFT JOIN user_skills us ON us.user_id = u.user_id
        LEFT JOIN support_skills sk ON sk.skill_id = us.skill_id
        LEFT JOIN user_shifts s ON s.user_id = u.user_id AND s.day_of_week = $2
-      WHERE 1=1 ${extra}
-      GROUP BY u.user_id, u.name
+      WHERE COALESCE(u.active, TRUE) = TRUE
+        AND (
+          u.role = ANY($3::text[])
+          OR EXISTS (
+            SELECT 1 FROM support_group_members m
+            JOIN support_assignment_groups gg ON gg.group_id = m.group_id AND gg.is_active = TRUE
+            WHERE m.user_id = u.user_id
+          )
+        )
+        ${extra}
+      GROUP BY u.user_id, u.name, u.role
       ORDER BY u.name`,
     params
   );
-  return rows.rows.map((r) => ({
-    ...r,
-    on_shift: r.on_shift !== false,
-    skills: r.skills || [],
-    zone_ids: r.zone_ids || [],
-  }));
+  return rows.rows.map((r) => {
+    const hasAny = Boolean(r.has_any_shift);
+    const onShiftRow = Boolean(r.on_shift_row);
+    const onShift = hasAny ? onShiftRow : dow !== 0;
+    return {
+      ...r,
+      on_leave: Boolean(r.on_leave),
+      marked_absent: Boolean(r.marked_absent),
+      on_shift: onShift,
+      skills: r.skills || [],
+      zone_ids: r.zone_ids || [],
+    };
+  });
+}
+
+async function assertAssignable(db, userId, when) {
+  if (!userId) return;
+  const day = istDateStr(when);
+  const techs = await loadTechnicians(db, { date: day });
+  const tech = techs.find((t) => Number(t.user_id) === Number(userId));
+  if (!tech) {
+    throw Object.assign(new Error('That person is not on the support assignment list'), { status: 400 });
+  }
+  const avail = availability(tech);
+  if (!avail.ok) {
+    throw Object.assign(new Error(`Cannot assign: ${avail.detail}`), { status: 409, code: avail.rejected_by });
+  }
+  const cap = capacity(tech);
+  if (!cap.ok) {
+    throw Object.assign(new Error(`Cannot assign: at daily capacity (${cap.detail})`), { status: 409, code: 'capacity' });
+  }
+}
+
+async function assigneeAvailability(db, userId, { from, days = 7 } = {}) {
+  const start = istDateStr(from);
+  const out = [];
+  for (let i = 0; i < Math.min(Number(days) || 7, 14); i += 1) {
+    const d = new Date(`${start}T12:00:00+05:30`);
+    d.setDate(d.getDate() + i);
+    const day = d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const techs = await loadTechnicians(db, { date: day });
+    const tech = techs.find((t) => Number(t.user_id) === Number(userId));
+    const booked = tech
+      ? (await db.query(
+        `SELECT (COALESCE(slot_start, scheduled_start) AT TIME ZONE 'Asia/Kolkata')::time AS t
+           FROM support_work_orders
+          WHERE assigned_to = $1
+            AND status NOT IN ('COMPLETED','CANCELLED','FAILED')
+            AND (COALESCE(slot_start, scheduled_start, created_at) AT TIME ZONE 'Asia/Kolkata')::date = $2::date`,
+        [userId, day]
+      )).rows.map((r) => String(r.t || '').slice(0, 5))
+      : [];
+    const avail = tech ? availability(tech) : { ok: false, detail: 'not assignable' };
+    const cap = tech ? capacity(tech) : { ok: false };
+    const free = DISPATCH_SLOTS.filter((slot) => !booked.includes(slot));
+    out.push({
+      date: day,
+      dow: dowForDate(day),
+      on_shift: tech ? tech.on_shift : false,
+      on_leave: tech ? tech.on_leave : false,
+      marked_absent: tech ? tech.marked_absent : false,
+      jobs_today: tech ? tech.jobs_today : 0,
+      max_jobs_per_day: tech ? tech.max_jobs_per_day : 0,
+      remaining: tech ? Math.max(0, tech.max_jobs_per_day - tech.jobs_today) : 0,
+      available: Boolean(avail.ok && cap.ok),
+      reason: avail.ok ? (cap.ok ? null : cap.detail) : avail.detail,
+      slots: DISPATCH_SLOTS.map((slot) => ({
+        slot,
+        free: Boolean(avail.ok && cap.ok && !booked.includes(slot)),
+      })),
+      free_slots: avail.ok && cap.ok ? free : [],
+    });
+  }
+  return { user_id: Number(userId), days: out };
 }
 
 async function autoAssign(client, { date, zone, dry_run, actorId }) {
@@ -364,12 +486,17 @@ async function autoAssign(client, { date, zone, dry_run, actorId }) {
 async function dispatchAssign(client, { wo_id, user_id, slot_start, slot_end }, actorId) {
   const wo = (await client.query('SELECT * FROM support_work_orders WHERE wo_id = $1', [wo_id])).rows[0];
   if (!wo) throw Object.assign(new Error('Work order not found'), { status: 404 });
-  const techs = await loadTechnicians(client, {});
+  const day = istDateStr(slot_start);
+  const techs = await loadTechnicians(client, { date: day });
   const tech = techs.find((t) => Number(t.user_id) === Number(user_id));
   const ctx = await loadWoContext(client, wo);
-  const evald = tech ? evaluateCandidate(tech, ctx) : { ok: false, rejected_by: 'unknown', detail: 'technician not in a support group' };
+  const evald = tech
+    ? evaluateCandidate(tech, ctx)
+    : { ok: false, rejected_by: 'unknown', detail: 'person is not on the support assignment list' };
+  if (!evald.ok) {
+    throw Object.assign(new Error(`Cannot assign: ${evald.detail}`), { status: 409, code: evald.rejected_by });
+  }
   const warnings = [];
-  if (!evald.ok) warnings.push({ code: evald.rejected_by, detail: evald.detail });
   if (slot_start && (wo.sla_due_at || ctx.ticket && ctx.ticket.sla_resolution_due_at)) {
     const due = new Date(wo.sla_due_at || ctx.ticket.sla_resolution_due_at);
     if (new Date(slot_start) > due) warnings.push({ code: 'SLA_SLOT', detail: 'will breach — slot too late' });
@@ -409,6 +536,7 @@ async function dispatchBoard(db, query = {}) {
     technicians: techs.map((t) => ({
       ...t,
       over_capacity: Number(t.jobs_today) >= Number(t.max_jobs_per_day),
+      blocked: Boolean(t.marked_absent || t.on_leave || !t.on_shift),
     })),
     unassigned,
     assigned,
@@ -430,6 +558,8 @@ async function dispatchCapacity(db, query = {}) {
       max_jobs_per_day: t.max_jobs_per_day,
       remaining: Math.max(0, t.max_jobs_per_day - t.jobs_today),
       on_leave: t.on_leave,
+      marked_absent: t.marked_absent,
+      on_shift: t.on_shift,
     })),
   };
 }
@@ -454,4 +584,10 @@ module.exports = {
   dispatchBoard,
   dispatchCapacity,
   loadTechnicians,
+  assertAssignable,
+  assigneeAvailability,
+  DISPATCH_SLOTS,
+  SUPPORT_ROLES,
+  istDateStr,
+  istHm,
 };

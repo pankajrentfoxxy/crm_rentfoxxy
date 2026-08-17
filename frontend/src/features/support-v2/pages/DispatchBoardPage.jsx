@@ -112,13 +112,19 @@ export default function DispatchBoardPage() {
           </div>
 
           <div className="min-w-[640px] flex-1 overflow-x-auto">
-            <div className="grid" style={{ gridTemplateColumns: `72px repeat(${(board.technicians || []).length}, minmax(140px,1fr))` }}>
+            {!(board.technicians || []).length && (
+              <p className="text-[12px] text-sup-muted p-4 border border-sup-lineSoft rounded-[10px]">
+                No technicians on the board — mark attendance or add them to a field group.
+              </p>
+            )}
+            <div className="grid" style={{ gridTemplateColumns: `72px repeat(${Math.max((board.technicians || []).length, 1)}, minmax(140px,1fr))` }}>
               <div />
               {(board.technicians || []).map((t) => (
-                <div key={t.user_id} className="px-2 py-1 text-[11px] border-b border-sup-lineSoft">
+                <div key={t.user_id} className={`px-2 py-1 text-[11px] border-b border-sup-lineSoft ${t.blocked ? 'bg-sup-canvas2' : ''}`}>
                   <div className="font-semibold">{t.name}</div>
-                  <div className={t.over_capacity ? 'text-pri1' : 'text-sup-muted'}>
-                    {t.jobs_today} jobs{t.over_capacity ? ' · over capacity' : ''}
+                  <div className={t.over_capacity || t.blocked ? 'text-pri1' : 'text-sup-muted'}>
+                    {t.marked_absent || t.on_leave ? 'Absent' : t.on_shift === false ? 'Off shift' : `${t.jobs_today} jobs`}
+                    {t.over_capacity ? ' · at cap' : ''}
                   </div>
                 </div>
               ))}
@@ -129,18 +135,31 @@ export default function DispatchBoardPage() {
                     const here = (board.assigned || []).filter((j) => (
                       Number(j.assigned_to) === Number(t.user_id)
                       && j.slot_start
-                      && new Date(j.slot_start).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false }) === slot
+                      && new Date(j.slot_start).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }) === slot
                     ));
                     return (
                       <div
                         key={`${t.user_id}-${slot}`}
                         tabIndex={0}
                         onDragOver={(e) => e.preventDefault()}
-                        onDrop={(e) => onDrop(e, t.user_id, slot)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' && picked) assign(picked.wo_id, t.user_id, slot);
+                        onDrop={(e) => {
+                          if (t.blocked || t.over_capacity) {
+                            e.preventDefault();
+                            toast.error(t.blocked ? `${t.name} is not available today` : `${t.name} is at capacity`);
+                            return;
+                          }
+                          onDrop(e, t.user_id, slot);
                         }}
-                        className="min-h-[56px] border border-sup-lineSoft p-1"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && picked) {
+                            if (t.blocked || t.over_capacity) {
+                              toast.error(t.blocked ? `${t.name} is not available today` : `${t.name} is at capacity`);
+                              return;
+                            }
+                            assign(picked.wo_id, t.user_id, slot);
+                          }
+                        }}
+                        className={`min-h-[56px] border border-sup-lineSoft p-1 ${t.blocked || t.over_capacity ? 'bg-sup-canvas2' : ''}`}
                       >
                         {here.map((j) => (
                           <div key={j.wo_id} className={`rounded border px-1.5 py-1 text-[10.5px] mb-1 ${PRI[j.priority] || PRI[4]}`}>

@@ -10,6 +10,7 @@ const {
   forceTicketStatus,
 } = require('./supportTicketStateService');
 const { enqueueEmail } = require('./emailQueueService');
+const { loadSerialDelivery, assertSerialMatchesSite, digitsPin } = require('./supportDeliverySite');
 
 const INDIAN_MOBILE = /^[6-9]\d{9}$/;
 const OPEN = `('NEW','TRIAGED','ASSIGNED','IN_PROGRESS','PENDING')`;
@@ -173,10 +174,11 @@ async function createTicket(db, body, actorId) {
 
   if (body.site_id) {
     const site = await db.query(
-      'SELECT customer_address_id FROM customer_addresses WHERE customer_address_id = $1 AND customer_id = $2',
+      'SELECT customer_address_id, pincode FROM customer_addresses WHERE customer_address_id = $1 AND customer_id = $2',
       [body.site_id, body.customer_id]
     );
     if (!site.rows[0]) throw Object.assign(new Error('Site does not belong to this customer'), { status: 400 });
+    if (!body.site_pincode) body.site_pincode = site.rows[0].pincode;
   }
 
   const prepared = [];
@@ -194,6 +196,11 @@ async function createTicket(db, body, actorId) {
       if (Number(ser.rows[0].current_customer_id) !== Number(body.customer_id)) {
         throw Object.assign(new Error('Serial does not belong to this customer'), { status: 400 });
       }
+      const delivery = await loadSerialDelivery(db, line.serial_id);
+      assertSerialMatchesSite(delivery, {
+        pincode: body.site_pincode || digitsPin(body.site_label),
+        site_key: body.site_key,
+      });
       line._serial = ser.rows[0];
     }
     const repeat = await findRepeat(db, line.serial_id, chain.subtype.catalog_id, null);
@@ -207,6 +214,11 @@ async function createTicket(db, body, actorId) {
       isSlaComplaint: chain.type.code === 'SVC' && chain.subtype.code === 'SVC-SLA',
     });
     prepared.push({ line, chain, repeat, pri });
+  }
+
+  if (body.assigned_to) {
+    const { assertAssignable } = require('./supportAssignmentEngine');
+    await assertAssignable(db, body.assigned_to, body.preferred_slot_start);
   }
 
   const ticketPriority = Math.min(...prepared.map((p) => p.pri.priority));

@@ -22,6 +22,12 @@ const {
 } = require('../services/supportTicketFlowService');
 const { notifyEvent } = require('../services/supportNotificationService');
 const { issueCsatToken } = require('../services/supportCsatService');
+const {
+  LATEST_DC_SQL,
+  decorateSerialRow,
+  siteKey,
+  digitsPin,
+} = require('../services/supportDeliverySite');
 
 function bad(res, e) {
   const status = e.status || 500;
@@ -138,11 +144,16 @@ exports.customerContext = async (req, res) => {
         [id]
       ).catch(() => ({ rows: [{ n: 0 }] })),
       pool.query(
+        `SELECT customer_address_id, address, pincode, city, concern_person, mobile_no
+           FROM customer_addresses WHERE customer_id = $1
+           ORDER BY customer_address_id`,
+        [id]
+      ).catch(() => pool.query(
         `SELECT customer_address_id, address, pincode, concern_person, mobile_no
            FROM customer_addresses WHERE customer_id = $1
            ORDER BY customer_address_id`,
         [id]
-      ),
+      )),
       pool.query(
         `SELECT name FROM support_sla_policies
           WHERE active = TRUE
@@ -153,11 +164,61 @@ exports.customerContext = async (req, res) => {
       ).catch(() => ({ rows: [] })),
     ]);
 
+    const delivered = await pool.query(
+      `SELECT s.serial_id, s.extra->>'pincode' AS extra_pincode,
+              dc.dc_number, dc.customer_shipping_address
+         FROM vendor_serial_numbers s
+         ${LATEST_DC_SQL}
+        WHERE s.current_customer_id = $1
+          AND s.deleted_at IS NULL
+          AND s.inventory_status IN ('rented','on_demo')`,
+      [id]
+    );
+    const deliveryByKey = new Map();
+    for (const row of delivered.rows) {
+      const dec = decorateSerialRow(row);
+      if (!dec.site_key) continue;
+      if (!deliveryByKey.has(dec.site_key)) {
+        deliveryByKey.set(dec.site_key, {
+          site_key: dec.site_key,
+          source: 'delivery',
+          address: dec.delivery_address,
+          pincode: dec.delivery_pincode,
+          city: dec.delivery_city,
+          dc_number: dec.dc_number,
+          machine_count: 0,
+          customer_address_id: null,
+        });
+      }
+      deliveryByKey.get(dec.site_key).machine_count += 1;
+    }
+
     const siteRows = [];
+    for (const site of deliveryByKey.values()) {
+      const crm = sites.rows.find((s) => digitsPin(s.pincode) && digitsPin(s.pincode) === digitsPin(site.pincode));
+      if (crm) site.customer_address_id = crm.customer_address_id;
+      const g = await groupForPincode(pool, site.pincode);
+      siteRows.push({
+        ...site,
+        suggested_group_id: g ? g.group_id : null,
+        suggested_group_name: g ? g.name : null,
+      });
+    }
     for (const s of sites.rows) {
+      const pin = digitsPin(s.pincode);
+      const already = siteRows.some((row) => digitsPin(row.pincode) === pin && pin);
+      if (already) continue;
       const g = await groupForPincode(pool, s.pincode);
       siteRows.push({
-        ...s,
+        site_key: siteKey(pin, s.address),
+        source: 'crm',
+        customer_address_id: s.customer_address_id,
+        address: s.address,
+        pincode: pin || s.pincode,
+        city: s.city || '',
+        concern_person: s.concern_person,
+        mobile_no: s.mobile_no,
+        machine_count: 0,
         suggested_group_id: g ? g.group_id : null,
         suggested_group_name: g ? g.name : null,
       });
@@ -199,9 +260,10 @@ exports.customerAssets = async (req, res) => {
               COALESCE(s.extra->>'storage','') AS storage,
               COALESCE(s.extra->>'assigned_employee', s.extra->>'assigned_to','') AS assigned_employee,
               COALESCE(s.extra->>'warranty_status','unknown') AS warranty_status,
-              COALESCE(s.extra->>'pincode','') AS pincode,
+              COALESCE(s.extra->>'pincode','') AS extra_pincode,
               s.delivered_at, s.rent_start_date, s.rent_end_date, s.rent_monthly_rate, s.inventory_status,
               COALESCE((s.extra->>'locking_period')::int, NULL) AS locking_period,
+              dc.dc_number, dc.customer_shipping_address,
               (
                 SELECT COUNT(*)::int FROM support_ticket_assets a
                  JOIN support_tickets_v2 t ON t.ticket_id = a.ticket_id
@@ -215,13 +277,22 @@ exports.customerAssets = async (req, res) => {
                   AND t.status IN ('NEW','TRIAGED','ASSIGNED','IN_PROGRESS','PENDING')
               ) AS open_ticket_count
          FROM vendor_serial_numbers s
+         ${LATEST_DC_SQL}
         WHERE s.current_customer_id = $1
           AND s.deleted_at IS NULL
           AND s.inventory_status IN ('rented','on_demo')
         ORDER BY s.inventory_asset_code NULLS LAST, s.serial_id`,
       [id]
     );
-    res.json({ success: true, rows: r.rows });
+    const rows = r.rows.map((row) => {
+      const dec = decorateSerialRow(row);
+      return {
+        ...dec,
+        pincode: dec.delivery_pincode || dec.extra_pincode || '',
+        customer_shipping_address: undefined,
+      };
+    });
+    res.json({ success: true, rows });
   } catch (e) { bad(res, e); }
 };
 
@@ -376,6 +447,10 @@ exports.assign = async (req, res) => {
   try {
     const id = Number(req.params.id);
     await loadTicket(pool, id);
+    if (req.body.user_id) {
+      const { assertAssignable } = require('../services/supportAssignmentEngine');
+      await assertAssignable(pool, req.body.user_id, req.body.slot_start || req.body.date);
+    }
     const client = await pool.connect();
     try {
       await client.query('BEGIN');

@@ -28,6 +28,7 @@ const NAV = [
       { to: 'dashboard', label: 'Command centre', icon: LayoutDashboard, section: 'support_dashboard' },
       { to: 'queue', label: 'Ticket queue', icon: ListChecks, section: 'support_tickets', countKey: 'open_tickets' },
       { to: 'dispatch', label: 'Dispatch board', icon: CalendarRange, section: 'support_dispatch', countKey: 'unassigned_wos', danger: true },
+      { to: 'attendance', label: 'Attendance', icon: CheckCircle2, section: 'support_dispatch', action: 'edit' },
       { to: 'parts', label: 'Parts queue', icon: Boxes, section: 'support_parts_approve', countKey: 'parts_pending' },
       { to: 'approvals', label: 'Approvals', icon: CheckCircle2, section: 'support_approvals', countKey: 'approvals_pending', danger: true },
     ],

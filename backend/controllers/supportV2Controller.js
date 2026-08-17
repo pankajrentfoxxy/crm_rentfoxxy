@@ -420,7 +420,7 @@ exports.queueMeta = async (req, res) => {
            FROM users u
           WHERE COALESCE(u.active, TRUE) = TRUE
             AND (
-              u.role IN ('support_tech', 'technician')
+              u.role IN ('support_tech', 'technician', 'support_lead', 'support_manager', 'support_agent')
               OR EXISTS (
                 SELECT 1 FROM user_permissions up
                  WHERE up.user_id = u.user_id

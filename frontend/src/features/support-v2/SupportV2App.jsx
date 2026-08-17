@@ -18,6 +18,7 @@ import PartsQueuePage from './pages/PartsQueuePage';
 import ApprovalsPage from './pages/ApprovalsPage';
 import ReportsPage from './pages/ReportsPage';
 import SettingsPage from './pages/SettingsPage';
+import AttendancePage from './pages/AttendancePage';
 import SupportV2IndexRedirect from './SupportV2IndexRedirect';
 
 const g = (section, node) => <ProtectedRoute section={section} action="view">{node}</ProtectedRoute>;
@@ -41,6 +42,7 @@ export default function SupportV2App() {
         <Route path="tickets/:id" element={g('support_tickets', <TicketDetailPage />)} />
         <Route path="jobs/:woId" element={<ProtectedRoute sections={['support_bucket', 'support_work_orders']} action="view"><JobExecutionPage /></ProtectedRoute>} />
         <Route path="dispatch" element={g('support_dispatch', <DispatchBoardPage />)} />
+        <Route path="attendance" element={<ProtectedRoute section="support_dispatch" action="edit"><AttendancePage /></ProtectedRoute>} />
         <Route path="bucket" element={g('support_bucket', <BucketPage />)} />
         <Route path="parts" element={g('support_parts_approve', <PartsQueuePage />)} />
         <Route path="approvals" element={g('support_approvals', <ApprovalsPage />)} />

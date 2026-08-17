@@ -16,6 +16,7 @@ import ResolveLineModal from '../components/ResolveLineModal';
 import CreateWorkOrderModal from '../components/CreateWorkOrderModal';
 import InitiateReplacementModal from '../components/InitiateReplacementModal';
 import ReplacementPair from '../components/ReplacementPair';
+import TicketLinkPicker from '../components/TicketLinkPicker';
 
 const TABS = ['Overview', 'Machines', 'Work orders', 'Timeline', 'Attachments', 'Costs', 'Approvals'];
 
@@ -123,6 +124,8 @@ export default function TicketDetailPage() {
   const [pauseForm, setPauseForm] = useState({ reason: 'PENDING_CUSTOMER', contact_method: 'PHONE', note: '' });
   const [comment, setComment] = useState('');
   const [owners, setOwners] = useState([]);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkDraft, setLinkDraft] = useState(null);
 
   const load = useCallback(() => {
     getTicket(id).then((r) => setData(r.data)).catch(() => toast.error('Ticket not found'));
@@ -271,10 +274,9 @@ export default function TicketDetailPage() {
                 </PermissionGate>
                 <PermissionGate section="support_tickets" action="edit">
                   <button type="button" className="block text-left w-full underline" onClick={() => setPauseOpen(true)}>Pause — waiting on customer</button>
-                  <button type="button" className="block text-left w-full underline" onClick={() => {
-                    const target = window.prompt('Target ticket id');
-                    if (target) act(() => linkTicket(t.ticket_id, { target_ticket_id: Number(target), link_type: 'RELATED' }), 'Linked');
-                  }}>Link or merge ticket</button>
+                  <button type="button" className="block text-left w-full underline" onClick={() => { setLinkDraft(null); setLinkOpen(true); }}>
+                    Link or merge ticket
+                  </button>
                 </PermissionGate>
                 <PermissionGate section="support_triage" action="edit">
                   <button type="button" className="block text-left w-full underline" onClick={() => {
@@ -465,6 +467,33 @@ export default function TicketDetailPage() {
             )}
             <textarea value={pauseForm.note} onChange={(e) => setPauseForm((f) => ({ ...f, note: e.target.value }))} placeholder="Note" className="w-full border rounded px-2 py-1.5" />
           </div>
+        </Modal>
+      )}
+
+      {linkOpen && (
+        <Modal
+          title="Link to existing ticket"
+          onClose={() => setLinkOpen(false)}
+          size="sm"
+          footer={(
+            <>
+              <Button variant="secondary" onClick={() => setLinkOpen(false)}>Cancel</Button>
+              <Button
+                disabled={!linkDraft?.target_ticket_id}
+                onClick={() => {
+                  act(() => linkTicket(t.ticket_id, {
+                    target_ticket_id: linkDraft.target_ticket_id,
+                    link_type: 'RELATED',
+                  }), `Linked to ${linkDraft.ticket_number || linkDraft.target_ticket_id}`);
+                  setLinkOpen(false);
+                }}
+              >
+                Link
+              </Button>
+            </>
+          )}
+        >
+          <TicketLinkPicker value={linkDraft} onChange={setLinkDraft} allowOpen={false} />
         </Modal>
       )}
     </div>

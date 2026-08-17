@@ -105,6 +105,10 @@ export const fetchDispatchBoard = (params) => api.get(`${BASE}/dispatch/board`, 
 export const dispatchAssign = (data) => api.post(`${BASE}/dispatch/assign`, data);
 export const dispatchAutoAssign = (data) => api.post(`${BASE}/dispatch/auto-assign`, data);
 export const fetchDispatchCapacity = (params) => api.get(`${BASE}/dispatch/capacity`, { params });
+export const fetchAssigneeAvailability = (userId, params) =>
+  api.get(`${BASE}/assignees/${userId}/availability`, { params });
+export const fetchAttendance = (params) => api.get(`${BASE}/attendance`, { params });
+export const putAttendance = (data) => api.put(`${BASE}/attendance`, data);
 
 export const fetchSupportReport = (name, params) => api.get(`${BASE}/reports/${name}`, { params });
 export const downloadSupportReport = (name, params) =>

@@ -12,6 +12,7 @@ const returns = require('../controllers/supportV2ReturnController');
 const repl = require('../controllers/supportV2ReplacementController');
 const parts = require('../controllers/supportV2PartsController');
 const dispatch = require('../controllers/supportV2DispatchController');
+const attendance = require('../controllers/supportV2AttendanceController');
 const reports = require('../controllers/supportV2ReportsController');
 const settings = require('../controllers/supportV2SettingsController');
 const { requireWoType, requireOwnWo, withIdempotency } = require('../middleware/supportWoAccess');
@@ -92,6 +93,9 @@ router.get('/dispatch/board', viewDispatch, dispatch.board);
 router.post('/dispatch/assign', editDispatch, dispatch.assign);
 router.post('/dispatch/auto-assign', editDispatch, dispatch.autoAssign);
 router.get('/dispatch/capacity', viewDispatch, dispatch.capacity);
+router.get('/assignees/:userId/availability', viewTickets, dispatch.assigneeAvailability);
+router.get('/attendance', viewDispatch, attendance.list);
+router.put('/attendance', editDispatch, attendance.upsert);
 
 router.post('/attachments/staging', createTickets, wrapMulter(upload.array('files', 8)), tickets.addAttachment);
 router.get('/lines/:lineId/repeat-check', viewTickets, tickets.repeatCheck);
