@@ -57,6 +57,7 @@ import Qc2InventoryTagModal from '../components/Qc2InventoryTagModal';
 import DispatchQcEtaBadge from '../components/DispatchQcEtaBadge';
 import DispatchQcSnoozeActivityModal from '../components/DispatchQcSnoozeActivityModal';
 import ConfigUpdateModal from '../components/ConfigUpdateModal';
+import { requiresSerialIdentity } from '../../../constants/laptopConditions';
 import DispatchQcReminderModal, {
   isDispatchQcDueCrossed,
   isDispatchQcTicketAssignee,
@@ -488,7 +489,12 @@ export default function TicketDetailPage() {
     : (activeLog?.start_time ? nowTs - new Date(activeLog.start_time).getTime() : 0);
 
   const handleStartWork = async () => {
-    if (!verifyTtspl.trim() || !verifySerial.trim()) {
+    const needSerial = requiresSerialIdentity(ticket?.received_condition);
+    if (!verifyTtspl.trim()) {
+      toast.error('Enter TTSPL ID');
+      return;
+    }
+    if (needSerial && !verifySerial.trim()) {
       toast.error('Enter both TTSPL ID and Serial number');
       return;
     }
@@ -496,7 +502,7 @@ export default function TicketDetailPage() {
     try {
       const { data: res } = await startWork(id, {
         verify_ttspl: verifyTtspl.trim(),
-        verify_serial: verifySerial.trim(),
+        verify_serial: verifySerial.trim() || undefined,
       });
       if (res.success) {
         toast.success(res.message);
@@ -1070,8 +1076,10 @@ export default function TicketDetailPage() {
                   <div className="rounded-xl border-2 border-blue-200 bg-blue-50 p-4 mb-3">
                     <h3 className="font-semibold text-blue-900 text-sm">Verify machine first</h3>
                     <p className="text-xs text-blue-800 mt-1">
-                      Enter both TTSPL ID and Serial number to start your work timer.
-                      Your work tabs will unlock after verification.
+                      {requiresSerialIdentity(ticket?.received_condition)
+                        ? 'Enter both TTSPL ID and Serial number to start your work timer.'
+                        : 'Laptop is NOT ON — enter TTSPL ID to start (Serial optional).'}
+                      {' '}Your work tabs will unlock after verification.
                     </p>
                     <div className="space-y-2 mt-2">
                       <input
@@ -1086,7 +1094,7 @@ export default function TicketDetailPage() {
                         value={verifySerial}
                         onChange={(e) => setVerifySerial(e.target.value)}
                         onKeyDown={(e) => { if (e.key === 'Enter') handleStartWork(); }}
-                        placeholder="Serial number"
+                        placeholder={requiresSerialIdentity(ticket?.received_condition) ? 'Serial number *' : 'Serial number (optional)'}
                         className="w-full border rounded-lg px-2 py-1.5 text-xs font-mono"
                       />
                       <button

@@ -54,6 +54,11 @@ export function requiresConfigCapture(condition) {
   return (condition || DEFAULT_CONDITION) === 'on';
 }
 
+/** Serial is mandatory when laptop is ON / part_missing; optional when NOT ON. */
+export function requiresSerialIdentity(condition) {
+  return (condition || DEFAULT_CONDITION) !== 'not_on';
+}
+
 /** Tailwind classes for the condition badge, keyed by severity. */
 export function conditionBadgeClass(value) {
   if (value === 'not_on') return 'bg-rose-50 text-rose-700 border-rose-200';

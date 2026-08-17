@@ -1061,6 +1061,9 @@ exports.moveToNextStage = async (req, res) => {
 exports.assignTicket = async (req, res) => {
   const { id } = req.params;
   const { user_id, team_id, target_stage_id } = req.body;
+  const laptopConditionRaw = req.body.laptop_condition ?? req.body.received_condition ?? req.body.condition;
+  const assignTtspl = req.body.ttspl_id ?? req.body.ttspl ?? req.body.verify_ttspl;
+  const assignSerial = req.body.serial_number ?? req.body.serial ?? req.body.verify_serial;
 
   try {
     const ticketRes = await pool.query(
@@ -1077,10 +1080,67 @@ exports.assignTicket = async (req, res) => {
     const preserveDispatchQcStage =
       currentTicket.stage_name === 'Dispatch QC' && user_id && !target_stage_id && !team_id;
 
+    // Floor Manager → HW Technician: capture ON / NOT ON + identity when provided.
+    const isFloorManagerAssign = currentTicket.stage_name === 'Floor Manager' && !!user_id;
+    let identityUpdates = null;
+    if (isFloorManagerAssign && laptopConditionRaw != null && String(laptopConditionRaw).trim() !== '') {
+      const { requiresSerialIdentity } = require('../constants/laptopConditions');
+      const { normalizeMachineId } = require('../utils/machineIdentityVerify');
+      const condition = String(laptopConditionRaw || '').trim().toLowerCase();
+      if (condition !== 'on' && condition !== 'not_on') {
+        return res.status(400).json({
+          success: false,
+          message: 'Select whether the laptop is ON or NOT ON before assigning',
+        });
+      }
+      const ttspl = normalizeMachineId(assignTtspl);
+      if (!ttspl) {
+        return res.status(400).json({ success: false, message: 'TTSPL Number is required' });
+      }
+      const needSerial = requiresSerialIdentity(condition);
+      const serial = normalizeMachineId(assignSerial);
+      if (needSerial && !serial) {
+        return res.status(400).json({
+          success: false,
+          message: 'Serial Number is required when the laptop is ON',
+        });
+      }
+      identityUpdates = {
+        received_condition: condition,
+        ttspl_id: ttspl,
+        // Keep existing serial when NOT ON and none provided (column is NOT NULL)
+        serial_number: needSerial
+          ? serial
+          : (serial || normalizeMachineId(currentTicket.serial_number) || 'NOT_ON'),
+      };
+    } else if (isFloorManagerAssign && (assignTtspl || assignSerial)) {
+      // Partial identity without condition — reject so UI stays consistent
+      return res.status(400).json({
+        success: false,
+        message: 'Select whether the laptop is ON or NOT ON before assigning',
+      });
+    }
+
     let updateQuery = 'UPDATE tickets SET ';
     const params = [];
     let paramCount = 1;
     let logMessage = '';
+
+    if (identityUpdates) {
+      updateQuery += `received_condition = $${paramCount}, `;
+      params.push(identityUpdates.received_condition);
+      paramCount++;
+      updateQuery += `ttspl_id = $${paramCount}, `;
+      params.push(identityUpdates.ttspl_id);
+      paramCount++;
+      updateQuery += `serial_number = $${paramCount}, `;
+      params.push(identityUpdates.serial_number);
+      paramCount++;
+      logMessage += `Laptop ${identityUpdates.received_condition === 'on' ? 'ON' : 'NOT ON'}`
+        + ` · TTSPL ${identityUpdates.ttspl_id}`
+        + (identityUpdates.received_condition === 'on' ? ` · Serial ${identityUpdates.serial_number}` : '')
+        + '. ';
+    }
 
     if (user_id) {
       updateQuery += `assigned_user_id = $${paramCount}, `;
@@ -1648,7 +1708,7 @@ exports.startWork = async (req, res) => {
 
   try {
     const ticketRes = await pool.query(
-      'SELECT current_stage_id, ttspl_id, serial_number FROM tickets WHERE ticket_id = $1',
+      'SELECT current_stage_id, ttspl_id, serial_number, received_condition FROM tickets WHERE ticket_id = $1',
       [id]
     );
     if (ticketRes.rows.length === 0) return res.status(404).json({ success: false, message: 'Ticket not found' });
@@ -1656,13 +1716,17 @@ exports.startWork = async (req, res) => {
     const stageId = ticket.current_stage_id;
 
     const { assertTtsplAndSerial, normalizeMachineId } = require('../utils/machineIdentityVerify');
+    const { requiresSerialIdentity } = require('../constants/laptopConditions');
+    const requireSerial = requiresSerialIdentity(ticket.received_condition);
     let verifiedTtspl = verifyTtspl;
     let verifiedSerial = verifySerial;
-    // If caller still sends a single `verify`, require them to send both fields instead.
-    if ((!verifiedTtspl || !verifiedSerial) && legacyVerify) {
+    // If caller still sends a single `verify`, require them to send dual fields instead.
+    if ((!verifiedTtspl || (requireSerial && !verifiedSerial)) && legacyVerify) {
       return res.status(400).json({
         success: false,
-        message: 'Enter both TTSPL ID and Serial number to start work',
+        message: requireSerial
+          ? 'Enter both TTSPL ID and Serial number to start work'
+          : 'Enter TTSPL ID to start work (Serial optional while laptop is NOT ON)',
       });
     }
     try {
@@ -1671,6 +1735,7 @@ exports.startWork = async (req, res) => {
         expectedSerial: ticket.serial_number,
         verifiedTtspl,
         verifiedSerial,
+        requireSerial,
         label: 'This ticket',
       });
     } catch (verifyErr) {
@@ -1686,13 +1751,12 @@ exports.startWork = async (req, res) => {
       `INSERT INTO work_logs (ticket_id, user_id, stage_id) VALUES ($1, $2, $3)`,
       [id, userId, stageId]
     );
+    const verifyNote = requireSerial
+      ? `Verified TTSPL ${normalizeMachineId(ticket.ttspl_id)} + Serial ${normalizeMachineId(ticket.serial_number)} & started work timer`
+      : `Verified TTSPL ${normalizeMachineId(ticket.ttspl_id)} (NOT ON — serial optional) & started work timer`;
     await pool.query(
       `INSERT INTO activities (ticket_id, user_id, action, notes) VALUES ($1, $2, 'work_started', $3)`,
-      [
-        id,
-        userId,
-        `Verified TTSPL ${normalizeMachineId(ticket.ttspl_id)} + Serial ${normalizeMachineId(ticket.serial_number)} & started work timer`,
-      ]
+      [id, userId, verifyNote]
     );
 
     await logWorkStarted(pool, { ticketId: Number(id), stageId, actor: req.user });

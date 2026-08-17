@@ -3,6 +3,7 @@ import { Loader2, Star, User, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { assignTicket, getTeamMembers } from '../floorPipelineApi';
 import { configSummary, priorityBadge, resolveTicketTtspl } from '../floorPipelineUi';
+import { requiresSerialIdentity } from '../../../constants/laptopConditions';
 
 function getRelevantTeams(stageName) {
   if (stageName === 'Floor Manager') {
@@ -40,11 +41,31 @@ export default function AssignmentModal({ ticket, open, onClose, onAssigned }) {
   const [members, setMembers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [assigning, setAssigning] = useState(null);
+  const askPowerState = stageName === 'Floor Manager' && tab === 'hw';
+  const [laptopCondition, setLaptopCondition] = useState(
+    ticket?.received_condition === 'not_on' ? 'not_on' : (ticket?.received_condition === 'on' ? 'on' : '')
+  );
+  const [ttsplId, setTtsplId] = useState(ticket?.ttspl_id || '');
+  const [serialNumber, setSerialNumber] = useState(ticket?.serial_number || '');
 
   const team = teams.find((t) => t.key === tab) || teams[0];
   const isSalesQc = ticket?.ticket_type === 'sales_order_qc' || ticket?.priority === 'sales_order';
   const isQcStage = ['QC1', 'QC2'].includes(stageName);
   const isDispatchQcStage = stageName === 'Dispatch QC';
+  const needSerial = askPowerState && requiresSerialIdentity(laptopCondition || 'on');
+
+  useEffect(() => {
+    if (!open || !ticket) return;
+    setLaptopCondition(
+      ticket.received_condition === 'not_on' ? 'not_on'
+        : ticket.received_condition === 'on' ? 'on'
+          : ''
+    );
+    setTtsplId(ticket.ttspl_id || '');
+    setSerialNumber(
+      ticket.serial_number && ticket.serial_number !== 'NOT_ON' ? ticket.serial_number : ''
+    );
+  }, [open, ticket]);
 
   useEffect(() => {
     if (!open || !ticket || !teams.length) return;
@@ -74,9 +95,31 @@ export default function AssignmentModal({ ticket, open, onClose, onAssigned }) {
     : null;
 
   const handleAssign = async (userId) => {
+    if (askPowerState) {
+      if (laptopCondition !== 'on' && laptopCondition !== 'not_on') {
+        toast.error('Select whether the laptop is ON or NOT ON');
+        return;
+      }
+      if (!ttsplId.trim()) {
+        toast.error('TTSPL Number is required');
+        return;
+      }
+      if (needSerial && !serialNumber.trim()) {
+        toast.error('Serial Number is required when the laptop is ON');
+        return;
+      }
+    }
     setAssigning(userId);
     try {
-      const { data } = await assignTicket(ticket.ticket_id, { user_id: userId });
+      const body = { user_id: userId };
+      if (askPowerState) {
+        body.laptop_condition = laptopCondition;
+        body.ttspl_id = ttsplId.trim();
+        if (needSerial || serialNumber.trim()) {
+          body.serial_number = serialNumber.trim();
+        }
+      }
+      const { data } = await assignTicket(ticket.ticket_id, body);
       if (data.success) {
         toast.success(`Assigned to ${members.find((m) => m.user_id === userId)?.name || 'technician'}`);
         onAssigned?.();
@@ -108,6 +151,61 @@ export default function AssignmentModal({ ticket, open, onClose, onAssigned }) {
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {askPowerState ? (
+          <div className="px-4 py-3 border-b space-y-3 bg-slate-50">
+            <div>
+              <p className="text-xs font-semibold uppercase text-slate-600 mb-2">Is the laptop ON or NOT ON?</p>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setLaptopCondition('on')}
+                  className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                    laptopCondition === 'on'
+                      ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
+                      : 'border-slate-200 bg-white text-slate-700'
+                  }`}
+                >
+                  ON
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLaptopCondition('not_on')}
+                  className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                    laptopCondition === 'not_on'
+                      ? 'border-rose-500 bg-rose-50 text-rose-800'
+                      : 'border-slate-200 bg-white text-slate-700'
+                  }`}
+                >
+                  NOT ON
+                </button>
+              </div>
+            </div>
+            {laptopCondition ? (
+              <div className="space-y-2">
+                <input
+                  className="w-full border rounded-lg px-3 py-2 text-sm font-mono"
+                  placeholder="TTSPL Number *"
+                  value={ttsplId}
+                  onChange={(e) => setTtsplId(e.target.value)}
+                  autoComplete="off"
+                />
+                <input
+                  className="w-full border rounded-lg px-3 py-2 text-sm font-mono"
+                  placeholder={needSerial ? 'Serial Number *' : 'Serial Number (optional)'}
+                  value={serialNumber}
+                  onChange={(e) => setSerialNumber(e.target.value)}
+                  autoComplete="off"
+                />
+                {laptopCondition === 'not_on' ? (
+                  <p className="text-[11px] text-slate-500">
+                    Serial is optional while NOT ON. If the laptop powers on later, serial will be required before diagnosis can be completed.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         {teams.length > 1 ? (
           <div className="flex border-b text-sm">

@@ -183,7 +183,7 @@ exports.saveDiagnosis = async (req, res) => {
 
     try {
         const ticketRes = await pool.query(
-            `SELECT ttspl_id, serial_number FROM tickets WHERE ticket_id = $1`,
+            `SELECT ttspl_id, serial_number, received_condition FROM tickets WHERE ticket_id = $1`,
             [id]
         );
         const ticket = ticketRes.rows[0];
@@ -191,12 +191,14 @@ exports.saveDiagnosis = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Ticket not found' });
         }
         const { assertTtsplAndSerial } = require('../utils/machineIdentityVerify');
+        const { requiresSerialIdentity } = require('../constants/laptopConditions');
         try {
             assertTtsplAndSerial({
                 expectedTtspl: ticket.ttspl_id,
                 expectedSerial: ticket.serial_number,
                 verifiedTtspl: data.verify_ttspl ?? data.ttspl,
                 verifiedSerial: data.verify_serial ?? data.serial_number,
+                requireSerial: requiresSerialIdentity(ticket.received_condition),
                 label: 'Diagnosis',
             });
         } catch (verifyErr) {
@@ -271,18 +273,74 @@ exports.submitDiagnosis = async (req, res) => {
         const ticketBefore = ticketBeforeRes.rows[0] || null;
 
         if (ticketBefore) {
-            const { assertTtsplAndSerial } = require('../utils/machineIdentityVerify');
+            const { assertTtsplAndSerial, normalizeMachineId } = require('../utils/machineIdentityVerify');
+            const { requiresSerialIdentity } = require('../constants/laptopConditions');
+
+            // Allow flipping NOT ON → ON at submit time (serial becomes mandatory).
+            const conditionOverride = String(
+              req.body.laptop_condition
+              ?? req.body.received_condition
+              ?? diagnosisData?.laptop_condition
+              ?? diagnosisData?.received_condition
+              ?? ''
+            ).trim().toLowerCase();
+            let effectiveCondition = ticketBefore.received_condition;
+            let effectiveSerial = ticketBefore.serial_number;
+            if (conditionOverride === 'on' || conditionOverride === 'not_on') {
+              effectiveCondition = conditionOverride;
+            }
+            const serialOverride = normalizeMachineId(
+              req.body.serial_number
+              ?? req.body.verify_serial
+              ?? diagnosisData?.serial_number
+              ?? diagnosisData?.verify_serial
+            );
+            if (effectiveCondition === 'on' && serialOverride) {
+              effectiveSerial = serialOverride;
+            }
+
+            const requireSerial = requiresSerialIdentity(effectiveCondition);
+            if (requireSerial && !normalizeMachineId(effectiveSerial)) {
+              await client.query('ROLLBACK');
+              return res.status(400).json({
+                success: false,
+                message: 'Serial Number is required when the laptop is ON before diagnosis can be completed',
+              });
+            }
+            if (normalizeMachineId(effectiveSerial) === 'NOT_ON' && requireSerial) {
+              await client.query('ROLLBACK');
+              return res.status(400).json({
+                success: false,
+                message: 'Enter a real Serial Number before completing diagnosis (laptop is ON)',
+              });
+            }
+
             try {
                 assertTtsplAndSerial({
                     expectedTtspl: ticketBefore.ttspl_id,
-                    expectedSerial: ticketBefore.serial_number,
+                    expectedSerial: effectiveSerial,
                     verifiedTtspl: req.body.verify_ttspl ?? req.body.ttspl ?? diagnosisData?.verify_ttspl,
                     verifiedSerial: req.body.verify_serial ?? req.body.serial_number ?? diagnosisData?.verify_serial,
+                    requireSerial,
                     label: 'Diagnosis',
                 });
             } catch (verifyErr) {
                 await client.query('ROLLBACK');
                 return res.status(400).json({ success: false, message: verifyErr.message });
+            }
+
+            if (
+              effectiveCondition !== ticketBefore.received_condition
+              || (requireSerial && normalizeMachineId(effectiveSerial) !== normalizeMachineId(ticketBefore.serial_number))
+            ) {
+              await client.query(
+                `UPDATE tickets
+                    SET received_condition = $2,
+                        serial_number = COALESCE(NULLIF($3, ''), serial_number),
+                        updated_at = CURRENT_TIMESTAMP
+                  WHERE ticket_id = $1`,
+                [id, effectiveCondition, requireSerial ? effectiveSerial : null]
+              );
             }
 
             try {
