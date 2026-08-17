@@ -10,7 +10,6 @@ import LeadConversionReportPage from './pages/LeadConversionReportPage';
 import SalespersonReportPage from './pages/SalespersonReportPage';
 import CollectionsReportPage from './pages/CollectionsReportPage';
 import VendorSpendReportPage from './pages/VendorSpendReportPage';
-import TechnicianReportPage from './pages/TechnicianReportPage';
 import LaptopReportPage from './pages/LaptopReportPage';
 import SalesOrderReportPage from './pages/SalesOrderReportPage';
 import SupportDailySummaryPage from './pages/SupportDailySummaryPage';
@@ -30,10 +29,10 @@ function ReportsIndexRedirect() {
     return <Navigate to="production-qc-report" replace />;
   }
   if (user?.role === 'floor_manager' && canReports) {
-    return <Navigate to="technician" replace />;
+    return <Navigate to="laptop-report" replace />;
   }
   if (canView('analytics_dashboard')) return <Navigate to="manager-dashboard" replace />;
-  if (canReports) return <Navigate to="technician" replace />;
+  if (canReports) return <Navigate to="laptop-report" replace />;
   return <Navigate to="/dashboard" replace />;
 }
 
@@ -49,7 +48,7 @@ export default function ReportingApp() {
       <Route path="salesperson" element={g('reports_access', <SalespersonReportPage />)} />
       <Route path="collections" element={g('reports_access', <CollectionsReportPage />)} />
       <Route path="vendor-spend" element={g('reports_access', <VendorSpendReportPage />)} />
-      <Route path="technician" element={g('reports_access', <TechnicianReportPage />)} />
+      <Route path="technician" element={<Navigate to="/reports/laptop-report" replace />} />
       <Route path="laptop-report" element={g('reports_access', <LaptopReportPage />)} />
       <Route
         path="production-qc-report"

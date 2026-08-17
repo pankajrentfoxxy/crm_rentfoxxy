@@ -636,7 +636,7 @@ export default function LaptopReportPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
         <div>
           <div style={{ fontSize: 11, color: C.dim2, fontWeight: 600, marginBottom: 4, letterSpacing: 0.3 }}>/reports/laptop-report</div>
-          <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, letterSpacing: -0.3 }}>Laptop Report</h1>
+          <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, letterSpacing: -0.3 }}>Technician Report</h1>
           <p style={{ fontSize: 12.5, color: C.dim, margin: '4px 0 0' }}>Today&apos;s overall production summary, live from the floor</p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: C.dim2 }}>
