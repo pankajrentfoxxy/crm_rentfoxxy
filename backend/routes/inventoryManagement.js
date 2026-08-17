@@ -33,7 +33,7 @@ const custInvView = [authMiddleware, checkSectionPermission('customer_inventory'
 const moduleEntry = [
   authMiddleware,
   checkAnySectionPermission(
-    ['inventory', 'inventory_management', 'inventory_master_data', 'inventory_asset_movement', 'parts', 'parts_inventory', 'part_vendor_repair', 'customer_inventory', 'ttspl_history'],
+    ['inventory', 'inventory_management', 'inventory_master_data', 'inventory_asset_movement', 'parts', 'parts_dashboard', 'parts_inventory', 'parts_approval', 'parts_history', 'parts_discarded', 'scrap_challans', 'part_vendor_repair', 'customer_inventory', 'ttspl_history'],
     'view'
   ),
 ];

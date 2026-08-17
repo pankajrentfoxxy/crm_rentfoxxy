@@ -4,13 +4,15 @@ const { authMiddleware } = require('../middleware/auth');
 const { vrdcRoute } = require('../middleware/dcNumberRoutes');
 const ctrl = require('../controllers/scrapChallanController');
 
-// Reuse parts_procurement / parts_inventory grants (no new RBAC section — see migration 190 review).
+// Dedicated scrap challans RBAC (+ legacy viewers during rollout).
 const viewAny = (req, res, next) => {
   const { hasPermission } = require('../services/permissionService');
   (async () => {
     try {
       const cache = {};
       for (const section of [
+        'scrap_challans',
+        'parts_discarded',
         'parts_procurement',
         'parts_inventory',
         'part_vendor_repair',

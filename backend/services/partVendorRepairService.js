@@ -102,6 +102,18 @@ async function createPartVendorReturnDc(client, {
     }
   }
 
+  const vendorKeys = [...new Set(
+    instRes.rows
+      .map((r) => r.resolved_vendor_id || r.spo_vendor_name || null)
+      .filter(Boolean)
+      .map((v) => String(v).trim().toLowerCase())
+  )];
+  if (vendorKeys.length > 1) {
+    throw new Error(
+      'Selected parts belong to different vendors. Create separate return DCs per vendor.'
+    );
+  }
+
   const autoVendor = instRes.rows.find((r) => r.spo_vendor_name || r.resolved_vendor_id) || instRes.rows[0];
   const resolvedName = (vendorName || autoVendor?.spo_vendor_name || '').trim();
   if (!resolvedName) throw new Error('Vendor name is required');
@@ -432,14 +444,20 @@ async function receivePartsFromVendor(client, {
     let itemStatus = 'received';
 
     if (mode === 'repaired') {
+      // Skip QC gate — repaired unit returns straight to available stock.
       await client.query(
         `UPDATE part_instances
-            SET status = 'qc_pending',
+            SET status = 'in_stock',
                 vendor_repair_dc_number = NULL,
                 notes = COALESCE($2, notes),
                 updated_at = NOW()
           WHERE instance_id = $1`,
         [instanceId, item.remarks || null]
+      );
+      await client.query(
+        `UPDATE parts SET quantity = COALESCE(quantity, 0) + 1, updated_at = NOW()
+          WHERE part_id = $1`,
+        [line.live_part_id]
       );
       await recordMovement(client, {
         type: MOVEMENT.RECEIVED_FROM_VENDOR_REPAIR,
@@ -454,12 +472,13 @@ async function receivePartsFromVendor(client, {
         grnId: line.grn_id,
         vendorId: head.vendor_id || line.vendor_id,
         condition: 'repaired',
-        notes: item.remarks || `Repaired and returned on ${dcNumber}`,
+        notes: item.remarks || `Repaired and returned to stock on ${dcNumber}`,
         actorUserId,
         actorName,
       });
     } else {
-      // replacement — create new instance via GRN receive path, then QC-gate it
+      // replacement — create new instance already in_stock (receiveUnitsIntoInventory);
+      // discard the original defective unit. No QC pending step.
       const created = await receiveUnitsIntoInventory(client, {
         partId: line.live_part_id,
         units: [{
@@ -479,21 +498,14 @@ async function receivePartsFromVendor(client, {
       if (!neu) throw new Error('Failed to create replacement part instance');
       replacementInstanceId = neu.instance_id;
 
-      // Safer default: hold replacement in qc_pending (undo auto in_stock qty bump until QC)
       await client.query(
         `UPDATE part_instances
-            SET status = 'qc_pending',
-                source = 'defective_return',
+            SET source = 'defective_return',
                 notes = COALESCE(notes, '') || CASE WHEN notes IS NULL OR notes = '' THEN '' ELSE ' | ' END
                   || $2,
                 updated_at = NOW()
           WHERE instance_id = $1`,
         [replacementInstanceId, `Replacement for ${line.prt_id} via ${dcNumber}`]
-      );
-      await client.query(
-        `UPDATE parts SET quantity = GREATEST(0, COALESCE(quantity, 0) - 1), updated_at = NOW()
-          WHERE part_id = $1`,
-        [line.live_part_id]
       );
 
       await client.query(
@@ -531,7 +543,7 @@ async function receivePartsFromVendor(client, {
         unitCost: neu.unit_cost,
         vendorId: head.vendor_id || line.vendor_id,
         condition: 'replacement',
-        notes: `Replacement received for ${line.prt_id} on ${dcNumber}`,
+        notes: `Replacement received into stock for ${line.prt_id} on ${dcNumber}`,
         actorUserId,
         actorName,
       });
@@ -805,6 +817,48 @@ async function listQcPendingPartInstances({ page = 1, limit = 50, search } = {})
   };
 }
 
+/** Defective units eligible for a new Parts VRDC (have SPO, not already on a DC). */
+async function listDefectiveEligibleForVendorReturn({ search, limit = 200 } = {}) {
+  const params = [];
+  const conditions = [
+    `pi.status = 'defective'`,
+    `pi.spo_id IS NOT NULL`,
+    `pi.vendor_repair_dc_number IS NULL`,
+  ];
+  if (search?.trim()) {
+    params.push(`%${search.trim()}%`);
+    const i = params.length;
+    conditions.push(
+      `(pi.prt_id ILIKE $${i} OR COALESCE(pi.serial_number,'') ILIKE $${i}
+        OR p.part_name ILIKE $${i} OR COALESCE(v.business_name,'') ILIKE $${i})`
+    );
+  }
+  params.push(Math.min(300, Math.max(1, Number(limit) || 200)));
+  const { rows } = await pool.query(
+    `SELECT pi.instance_id, pi.prt_id, pi.serial_number, pi.status, pi.unit_cost,
+            pi.spo_id, pi.notes, pi.updated_at,
+            p.part_id, p.part_name, p.category,
+            spo.purchase_order_number,
+            COALESCE(pi.vendor_id, spo.vendor_id) AS resolved_vendor_id,
+            COALESCE(NULLIF(TRIM(v.business_name), ''), NULLIF(TRIM(v.first_name), '')) AS vendor_name,
+            COALESCE(
+              NULLIF(TRIM(v.shipping_address), ''),
+              NULLIF(TRIM(v.address), '')
+            ) AS vendor_address,
+            v.contact_person_name AS vendor_contact_person,
+            COALESCE(v.contact_person_phone, v.phone) AS vendor_contact_mobile
+       FROM part_instances pi
+       JOIN parts p ON p.part_id = pi.part_id
+       LEFT JOIN vendor_spare_parts_purchase_orders spo ON spo.spo_id = pi.spo_id
+       LEFT JOIN vendors v ON v.vendor_id = COALESCE(pi.vendor_id, spo.vendor_id) AND v.deleted_at IS NULL
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY COALESCE(v.business_name, ''), p.part_name, pi.prt_id
+      LIMIT $${params.length}`,
+    params
+  );
+  return { data: rows };
+}
+
 module.exports = {
   WAREHOUSE_ROLES,
   createPartVendorReturnDc,
@@ -815,5 +869,6 @@ module.exports = {
   getPartVendorReturnDc,
   listPartVendorReturns,
   listQcPendingPartInstances,
+  listDefectiveEligibleForVendorReturn,
   getPartMeta,
 };

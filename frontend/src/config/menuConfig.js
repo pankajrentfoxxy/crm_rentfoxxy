@@ -24,14 +24,15 @@ import {
   Headphones,
   ArrowLeftRight,
   Warehouse,
+  Boxes,
 } from 'lucide-react';
 
 /** Vendor Management accordion (procurement only — billing lives under Finance).
  *  GRN / receiving happens inside the Purchase Orders page, so there is no
- *  separate "GRN" item (that was a duplicate link to Purchase Orders). */
+ *  separate "GRN" item (that was a duplicate link to Purchase Orders).
+ *  Spare Parts PO lives under Part Management. */
 export const vendorAccordionChildren = [
   { label: 'Purchase Orders', path: '/vendor-management/purchase-orders' },
-  { label: 'Spare Parts PO', path: '/vendor-management/spare-parts-po' },
   { label: 'Serial Numbers', path: '/vendor-management/serial-numbers' },
   { label: 'Replaced Products', path: '/vendor-management/replaced-products' },
 ];
@@ -50,7 +51,7 @@ export const floorPipelineAccordionChildren = [
   { label: 'Vendor Repair DC', path: '/floor-pipeline/vendor-repair-dc', section: 'floor_pipeline' },
 ];
 
-/** Inventory accordion — each child maps to the RBAC section the route/API enforces. */
+/** Inventory accordion — laptop stock only (parts live under Part Management). */
 export const inventoryAccordionChildren = [
   { label: 'QC Process Laptops', path: '/inventory-management/qc-process', countKey: 'qc_process', section: 'inventory_management' },
   { label: 'Out for Repair', path: '/inventory-management/out-for-repair', countKey: 'out_for_repair', section: 'inventory_management' },
@@ -59,16 +60,36 @@ export const inventoryAccordionChildren = [
   { label: 'Dead Laptops', path: '/inventory-management/dead-laptops', countKey: 'dead_laptops', section: 'inventory_management' },
   { label: 'Missing Laptops', path: '/inventory-management/missing-laptops', countKey: 'missing_laptops', section: 'inventory_management' },
   { label: 'Asset Movement', path: '/inventory-management/asset-movement', section: 'inventory_asset_movement' },
-  { label: 'Parts Dashboard', path: '/inventory-management/parts-dashboard', section: 'parts_inventory' },
-  { label: 'Parts Inventory', path: '/inventory-management/parts', section: 'parts_inventory' },
-  { label: 'Parts Movement History', path: '/inventory-management/parts-history', section: 'parts_inventory' },
-  { label: 'Part Vendor Repair DC', path: '/inventory-management/part-vendor-repair', section: 'part_vendor_repair' },
-  { label: 'Discarded Parts', path: '/inventory-management/discarded-parts', section: 'parts_inventory' },
-  { label: 'Scrap Challans', path: '/inventory-management/scrap-challans', section: 'parts_inventory' },
-  { label: 'Parts Approval', path: '/inventory-management/parts-approval', countKey: 'parts_pending', section: 'parts_inventory' },
   { label: 'Deployed Fleet (All Customers)', path: '/inventory-management/customer-assets', section: 'customer_inventory' },
   { label: 'TTSPL History', path: '/inventory-management/ttspl-history', section: 'ttspl_history' },
 ];
+
+/** Part Management — spare parts stock, approval, vendor return, scrap, field queue. */
+export const partsManagementAccordionChildren = [
+  { label: 'Parts Dashboard', path: '/inventory-management/parts-dashboard', section: 'parts_dashboard' },
+  { label: 'Parts Inventory', path: '/inventory-management/parts', section: 'parts_inventory' },
+  { label: 'Parts Approval', path: '/inventory-management/parts-approval', countKey: 'parts_pending', section: 'parts_approval' },
+  { label: 'Parts Movement History', path: '/inventory-management/parts-history', section: 'parts_history' },
+  { label: 'Spare Parts PO', path: '/vendor-management/spare-parts-po', section: 'parts_procurement' },
+  { label: 'Part Vendor Repair DC', path: '/inventory-management/part-vendor-repair', section: 'part_vendor_repair' },
+  { label: 'Discarded Parts', path: '/inventory-management/discarded-parts', section: 'parts_discarded' },
+  { label: 'Scrap Challans', path: '/inventory-management/scrap-challans', section: 'scrap_challans' },
+  { label: 'Support Part Queue', path: '/support-parts/queue', section: 'support_part_challan', countKey: 'support_part_requests' },
+  { label: 'Technician Parts Bucket', path: '/support-parts/tech-bucket', section: 'support_part_requests' },
+];
+
+/** True when pathname belongs under Part Management (not laptop Inventory). */
+export function isPartsManagementRoute(pathname) {
+  if (!pathname) return false;
+  if (pathname.startsWith('/support-parts')) return true;
+  if (pathname.startsWith('/vendor-management/spare-parts-po')) return true;
+  if (pathname.startsWith('/inventory-management/part-vendor-repair')) return true;
+  if (pathname.startsWith('/inventory-management/discarded-parts')) return true;
+  if (pathname.startsWith('/inventory-management/scrap-challans')) return true;
+  // parts, parts-dashboard, parts-history, parts-approval
+  if (pathname.startsWith('/inventory-management/parts')) return true;
+  return false;
+}
 
 /** Dispatch — pending acceptance queue only. */
 export const dispatchAccordionChildren = [
@@ -223,10 +244,36 @@ export const MENU_GROUPS = [
     items: [
       {
         type: 'inventoryAccordion',
-        sections: ['inventory', 'inventory_management', 'parts', 'parts_inventory', 'part_vendor_repair', 'customer_inventory', 'ttspl_history'],
+        sections: ['inventory', 'inventory_management', 'inventory_asset_movement', 'customer_inventory', 'ttspl_history'],
         section: 'inventory_management',
         icon: Package,
         label: 'Inventory',
+      },
+    ],
+  },
+  {
+    key: 'part_management',
+    label: 'Part Management',
+    items: [
+      {
+        type: 'partsManagementAccordion',
+        sections: [
+          'parts_dashboard',
+          'parts_inventory',
+          'parts_approval',
+          'parts_history',
+          'parts_procurement',
+          'part_vendor_repair',
+          'parts_discarded',
+          'scrap_challans',
+          'parts_detach',
+          'parts',
+          'support_part_challan',
+          'support_part_requests',
+        ],
+        section: 'parts_inventory',
+        icon: Boxes,
+        label: 'Part Management',
       },
     ],
   },
@@ -266,19 +313,6 @@ export const MENU_GROUPS = [
         label: 'Replacement Sales Orders',
         path: '/sales-pipeline/sales-orders-replacement',
         section: 'sales_orders_replacement',
-      },
-      {
-        icon: ClipboardCheck,
-        label: 'Support Part Queue',
-        path: '/support-parts/queue',
-        section: 'support_part_challan',
-        countKey: 'support_part_requests',
-      },
-      {
-        icon: Package,
-        label: 'Technician Parts Bucket',
-        path: '/support-parts/tech-bucket',
-        section: 'support_part_requests',
       },
     ],
   },
@@ -342,6 +376,10 @@ export function isMenuItemVisible(item, canView) {
       return item.sections.some((section) => canView(section));
     }
     return item.section ? canView(item.section) : false;
+  }
+
+  if (item.type === 'partsManagementAccordion') {
+    return partsManagementAccordionChildren.some((child) => isPartsManagementChildVisible(child, canView));
   }
 
   if (item.type === 'floorPipelineAccordion') {
@@ -422,6 +460,11 @@ export function isSettingsChildVisible(child, canView) {
 }
 
 export function isInventoryChildVisible(child, canView) {
+  if (child.section) return canView(child.section);
+  return false;
+}
+
+export function isPartsManagementChildVisible(child, canView) {
   if (child.section) return canView(child.section);
   return false;
 }

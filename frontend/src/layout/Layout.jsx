@@ -77,6 +77,7 @@ import {
   floorPipelineAccordionChildren,
   qcAccordionChildren,
   inventoryAccordionChildren,
+  partsManagementAccordionChildren,
   settingsAccordionChildren,
   operationAccordionChildren,
   salesPipelineAccordionChildren,
@@ -95,6 +96,8 @@ import {
   isLeadCrmChildVisible,
   isFloorPipelineChildVisible,
   isInventoryChildVisible,
+  isPartsManagementChildVisible,
+  isPartsManagementRoute,
   masterDataMenuItems,
 } from '../config/menuConfig';
 
@@ -150,7 +153,9 @@ export default function Layout({ children }) {
   const showReportsAccordion =
     canView('analytics_dashboard') || canView('reports');
 
-  const showSupportNav = canView('support_tickets');
+  const showSupportNav = canView('support_tickets')
+    || canView('support_part_challan')
+    || canView('support_part_requests');
   const { counts: supportCounts } = useSupportCounts(showSupportNav);
 
   const showDispatchAccordion = (user?.role === 'dispatch' || user?.role === 'super_admin')
@@ -199,9 +204,11 @@ export default function Layout({ children }) {
   );
 
   const [inventoryAccordionOpen, setInventoryAccordionOpen] = useState(() =>
+    location.pathname.startsWith('/inventory-management') && !isPartsManagementRoute(location.pathname)
+  );
 
-    location.pathname.startsWith('/inventory-management')
-
+  const [partsManagementAccordionOpen, setPartsManagementAccordionOpen] = useState(() =>
+    isPartsManagementRoute(location.pathname)
   );
 
   const [settingsAccordionOpen, setSettingsAccordionOpen] = useState(() =>
@@ -256,10 +263,10 @@ export default function Layout({ children }) {
 
     }
 
-    if (location.pathname.startsWith('/inventory-management')) {
-
+    if (isPartsManagementRoute(location.pathname)) {
+      setPartsManagementAccordionOpen(true);
+    } else if (location.pathname.startsWith('/inventory-management')) {
       setInventoryAccordionOpen(true);
-
     }
 
     if (location.pathname.startsWith('/settings')) {
@@ -323,6 +330,7 @@ export default function Layout({ children }) {
   const dispatchVisibleChildren = dispatchAccordionChildren.filter((c) => isDispatchChildVisible(c, canView));
   const floorVisibleChildren = floorPipelineAccordionChildren.filter((c) => isFloorPipelineChildVisible(c, canView));
   const inventoryVisibleChildren = inventoryAccordionChildren.filter((c) => isInventoryChildVisible(c, canView));
+  const partsVisibleChildren = partsManagementAccordionChildren.filter((c) => isPartsManagementChildVisible(c, canView));
   const financeVisibleChildren = financeMenuItems.filter((c) => isFinanceChildVisible(c, canView));
   const settingsVisibleChildren = settingsAccordionChildren.filter((c) => isSettingsChildVisible(c, canView));
   const showVendorAccordion = canView('vendor_management');
@@ -337,6 +345,7 @@ export default function Layout({ children }) {
     dispatch: showDispatchAccordion && dispatchVisibleChildren.length > 0,
     floor_quality: floorVisibleChildren.length > 0,
     inventory: inventoryVisibleChildren.length > 0,
+    part_management: partsVisibleChildren.length > 0,
     vendor: showVendorAccordion,
     finance: showFinanceAccordion && financeVisibleChildren.length > 0,
     support: showSupportNav2,
@@ -350,6 +359,7 @@ export default function Layout({ children }) {
     dispatchAccordion: 'dispatch',
     floorPipelineAccordion: 'floor_quality',
     inventoryAccordion: 'inventory',
+    partsManagementAccordion: 'part_management',
     vendorAccordion: 'vendor',
     financeAccordion: 'finance',
     settingsAccordion: 'settings',
@@ -386,6 +396,7 @@ export default function Layout({ children }) {
     ['Dispatch', dispatchVisibleChildren],
     ['Production', floorVisibleChildren],
     ['Inventory', inventoryVisibleChildren],
+    ['Part Management', partsVisibleChildren],
     ['Finance', financeVisibleChildren],
     ['Settings', settingsVisibleChildren],
   ].forEach(([groupLabel, children]) =>
@@ -949,8 +960,10 @@ export default function Layout({ children }) {
 
                     onClick={() => setInventoryAccordionOpen((o) => !o)}
 
-                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors text-left hover:bg-gray-100 ${location.pathname.startsWith('/inventory-management') ? 'text-sky-700 bg-sky-50/60' : 'text-gray-800'
-
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors text-left hover:bg-gray-100 ${
+                      location.pathname.startsWith('/inventory-management') && !isPartsManagementRoute(location.pathname)
+                        ? 'text-sky-700 bg-sky-50/60'
+                        : 'text-gray-800'
                       }`}
 
                   >
@@ -1028,6 +1041,66 @@ export default function Layout({ children }) {
 
               );
 
+            }
+
+
+
+            if (item.type === 'partsManagementAccordion') {
+              return (
+                <div key="parts-management-accordion" className="space-y-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setPartsManagementAccordionOpen((o) => !o)}
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors text-left hover:bg-gray-100 ${
+                      isPartsManagementRoute(location.pathname)
+                        ? 'text-violet-700 bg-violet-50/60'
+                        : 'text-gray-800'
+                    }`}
+                  >
+                    <Package className="w-5 h-5 text-gray-600 shrink-0" />
+                    <span className="flex-1">Part Management</span>
+                    <ChevronDown
+                      className={`w-4 h-4 text-gray-500 shrink-0 transition-transform duration-200 ${
+                        partsManagementAccordionOpen ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </button>
+                  {partsManagementAccordionOpen && (
+                    <div className="mt-1 ml-2 pl-3 border-l border-violet-100 space-y-0.5">
+                      {partsVisibleChildren.map((child) => {
+                        let badge = null;
+                        if (child.countKey === 'support_part_requests') {
+                          badge = supportCounts?.[child.countKey] ?? null;
+                        } else if (child.countKey && child.section && canView(child.section)) {
+                          badge = inventoryCounts?.[child.countKey] ?? 0;
+                        }
+                        return (
+                          <NavLink
+                            key={child.path}
+                            to={child.path}
+                            onClick={() => setSidebarOpen(false)}
+                            className={() =>
+                              [
+                                'flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-xs transition-colors',
+                                isNavPathActive(child.path, location.pathname)
+                                  ? 'bg-violet-100 text-violet-900 font-semibold'
+                                  : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900',
+                              ].join(' ')
+                            }
+                          >
+                            <span>{child.label}</span>
+                            {badge != null ? (
+                              <span className="shrink-0 rounded-full bg-violet-100 text-violet-900 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums">
+                                {badge}
+                              </span>
+                            ) : null}
+                          </NavLink>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
             }
 
 

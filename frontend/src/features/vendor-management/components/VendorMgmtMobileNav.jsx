@@ -1,6 +1,7 @@
 import React from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import { Building2, FileText, Package, Receipt, Users } from 'lucide-react';
+import usePermission from '../../../hooks/usePermission';
 
 const TABS = [
   { to: '/vendor-management/vendors', label: 'Vendors', icon: Users, end: false },
@@ -12,6 +13,11 @@ const TABS = [
 
 /** Bottom tab bar for vendor management on mobile (< md) */
 export default function VendorMgmtMobileNav() {
+  const location = useLocation();
+  const { canView } = usePermission();
+  const onSparePartsPo = location.pathname.startsWith('/vendor-management/spare-parts-po');
+  if (onSparePartsPo || !canView('vendor_management')) return null;
+
   return (
     <nav
       className="md:hidden fixed bottom-0 inset-x-0 z-40 border-t border-gray-200 bg-white shadow-[0_-4px_12px_rgba(0,0,0,0.06)] pb-[env(safe-area-inset-bottom)]"

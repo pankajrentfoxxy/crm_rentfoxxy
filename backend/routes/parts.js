@@ -36,8 +36,8 @@ router.get('/units/:code/qr.png', partsCatalogView, getUnitQrPng);
 router.post('/labels/print', partsCatalogView, printPartLabels);
 
 // Parts tracking dashboard.
-router.get('/dashboard', cp('parts_inventory', 'view'), getPartsDashboard);
-router.get('/dashboard/drilldown', cp('parts_inventory', 'view'), getPartsDashboardDrilldown);
+router.get('/dashboard', checkAnySectionPermission(['parts_dashboard', 'parts_inventory'], 'view'), getPartsDashboard);
+router.get('/dashboard/drilldown', checkAnySectionPermission(['parts_dashboard', 'parts_inventory'], 'view'), getPartsDashboardDrilldown);
 
 // @route   GET /api/parts
 // @desc    Get / search parts by part_name (?search=)

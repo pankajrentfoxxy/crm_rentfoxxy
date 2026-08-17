@@ -2,7 +2,7 @@ import React from 'react';
 import api from '../utils/api';
 import Layout from '../layout/Layout';
 import ProtectedRoute from '../router/ProtectedRoute';
-import { INVENTORY_UMBRELLA_SECTIONS, FLOOR_UMBRELLA_SECTIONS } from '../constants/sectionHierarchy';
+import { INVENTORY_UMBRELLA_SECTIONS, FLOOR_UMBRELLA_SECTIONS, PARTS_PROCUREMENT_UMBRELLA_SECTIONS } from '../constants/sectionHierarchy';
 import Procurement from '../components/Procurement';
 import Warehouse from '../components/Warehouse';
 import Dispatch from '../components/Dispatch';
@@ -27,7 +27,7 @@ export const warehouseRoutes = [
   { path: '/warehouse', element: guard('warehouse', 'view', withLayout(<Warehouse api={api} />)) },
   { path: '/qc-orders', element: guard('qc_management', 'view', withLayout(<QCOrders api={api} />)) },
   { path: '/dispatch', element: guard('dispatch', 'view', withLayout(<Dispatch api={api} />)) },
-  { path: '/vendor-management/*', element: guard('vendor_management', 'view', withLayout(<VendorManagement />)) },
+  { path: '/vendor-management/*', element: guardSections(PARTS_PROCUREMENT_UMBRELLA_SECTIONS, 'view', withLayout(<VendorManagement />)) },
   { path: '/qc-management/*', element: guard('qc_management', 'view', withLayout(<QCManagement />)) },
   {
     path: '/inventory-management/*',

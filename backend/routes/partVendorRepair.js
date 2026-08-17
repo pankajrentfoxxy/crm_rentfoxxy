@@ -32,6 +32,7 @@ router.use(authMiddleware);
 
 router.get('/dc', viewAny, ctrl.listPartVendorReturns);
 router.post('/return', ctrl.requireWarehouse, ctrl.createPartVendorReturn);
+router.get('/defective-eligible', viewAny, ctrl.listDefectiveEligible);
 router.get('/qc-pending', viewAny, ctrl.listQcPending);
 router.post('/qc-pending/:instanceId/pass', ctrl.requireWarehouse, ctrl.passQc);
 router.post('/qc-pending/:instanceId/fail', ctrl.requireWarehouse, ctrl.failQc);

@@ -14,6 +14,10 @@ export function createPartVendorReturnDc(body) {
   return api.post(`${base}/return`, body);
 }
 
+export function fetchDefectiveEligibleForVendorReturn(params) {
+  return api.get(`${base}/defective-eligible`, { params });
+}
+
 export function dispatchPartVendorReturnDc(dcNumber, body) {
   return api.post(`${base}/dc/${encodeURIComponent(dcNumber)}/dispatch-sign`, body, { timeout: 120000 });
 }

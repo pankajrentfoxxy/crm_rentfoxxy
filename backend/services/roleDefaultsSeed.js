@@ -16,7 +16,10 @@ const ROLE_ROW_DEFAULTS = {
     ['vendor_management', true, true, false], ['procurement', true, true, false], ['sales_pipeline', true, true, false],
     ['floor_pipeline', true, true, false], ['floor_tickets', false, true, false], ['floor_ticket_config_edit', false, true, false], ['chip_level_repair', false, true, false],
     ['qc_management', false, true, false], ['inventory', false, true, false], ['inventory_management', false, true, false],
-    ['parts_inventory', true, true, false], ['parts_detach', false, true, false], ['part_vendor_repair', true, true, false], ['ttspl_history', false, false, false],
+    ['parts_inventory', true, true, false], ['parts_dashboard', false, false, false], ['parts_approval', false, true, false],
+    ['parts_history', false, false, false], ['parts_procurement', true, true, false], ['parts_discarded', false, true, false],
+    ['scrap_challans', false, true, false], ['parts_detach', false, true, false], ['part_vendor_repair', true, true, false], ['ttspl_history', false, false, false],
+    ['support_part_challan', false, true, false], ['support_part_requests', false, true, false],
     ['warehouse', false, true, false], ['dispatch', false, true, false], ['dispatch_ops', false, true, false],
     ['customer_billing', true, true, false], ['vendor_billing_mgmt', true, true, false],
     ['credit_notes', true, true, false], ['debit_notes', true, true, false], ['security_deposits', true, true, false],
@@ -40,6 +43,7 @@ const ROLE_ROW_DEFAULTS = {
     ['floor_ticket_config_edit', false, true, false],
     ['chip_level_repair', true, true, false], ['qc_management', false, true, false],
     ['inventory', false, true, false], ['inventory_management', false, true, false], ['parts_inventory', true, true, false],
+    ['parts_dashboard', false, false, false], ['parts_approval', false, true, false],
     ['parts_detach', false, true, false],
     ['part_vendor_repair', true, true, false],
     ['ttspl_history', false, false, false], ['warehouse', false, true, false], ['vendor_management', false, false, false],
@@ -68,13 +72,17 @@ const ROLE_ROW_DEFAULTS = {
   procurement: [
     ['dashboard', false, false, false], ['vendor_management', true, true, false], ['procurement', true, true, false],
     ['inventory_management', false, false, false], ['parts_inventory', true, true, false],
+    ['parts_procurement', true, true, false],
     ['part_vendor_repair', true, true, false],
   ],
   warehouse: [
     ['dashboard', false, false, false], ['warehouse', true, true, false], ['inventory', false, true, false],
     ['inventory_management', false, true, false], ['parts_inventory', true, true, false],
+    ['parts_dashboard', false, false, false], ['parts_approval', false, true, false], ['parts_history', false, false, false],
+    ['parts_discarded', true, true, false], ['scrap_challans', true, true, false],
     ['parts_detach', false, true, false],
     ['part_vendor_repair', true, true, false],
+    ['support_part_challan', true, true, false],
     ['delivery_challans', false, true, false], ['ttspl_history', false, false, false], ['vendor_management', false, false, false],
   ],
   dispatch: [
@@ -95,12 +103,14 @@ const ROLE_ROW_DEFAULTS = {
   support_lead: [
     ['dashboard', false, false, false], ['support_tickets', true, true, false], ['support_settings', false, true, false],
     ['support_technician', false, true, false], ['technician_bucket', false, true, false],
+    ['support_part_requests', true, true, false], ['support_part_challan', true, true, false],
     ['sales_orders_replacement', true, true, false], ['replacement_so_laptop_qc', false, true, false],
     ['customers', false, false, false], ['customer_inventory', false, false, false], ['ttspl_history', false, false, false],
   ],
   support_tech: [
     ['dashboard', false, false, false], ['support_tickets', true, true, false],
     ['support_technician', false, true, false], ['technician_bucket', false, true, false],
+    ['support_part_requests', true, true, false],
     ['customers', false, false, false], ['customer_inventory', false, false, false],
   ],
 };
