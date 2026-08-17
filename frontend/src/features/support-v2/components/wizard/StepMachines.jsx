@@ -22,7 +22,7 @@ export default function StepMachines({ state, setState, assets }) {
   const selectAll = () => setState((s) => ({ ...s, selectedSerials: rows.map((a) => a.serial_id) }));
 
   return (
-    <div className="bg-white rounded-xl border border-sup-lineSoft overflow-hidden">
+    <div className="bg-white rounded-[10px] border border-sup-lineSoft overflow-hidden">
       <div className="px-3 py-2 flex items-center justify-between gap-2 border-b border-sup-lineSoft">
         <button type="button" className="text-[12px] text-sup-accent underline" onClick={selectAll}>
           Select all at this site

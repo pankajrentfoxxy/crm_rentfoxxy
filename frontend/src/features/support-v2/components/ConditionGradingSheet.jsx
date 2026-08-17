@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Button } from '../../../components/ui/primitives';
+import { Button } from '../../../components/ui/supportPrimitives';
 import { fetchReturnCatalog, saveWorkOrderCondition, uploadAttachments } from '../supportV2Api';
 
 const DEFAULT_GRADES = {
@@ -138,7 +138,7 @@ export default function ConditionGradingSheet({ wo, assets, ticketId, disabled, 
             type="button"
             disabled={disabled}
             onClick={() => patch({ grade: g })}
-            className={`min-h-[72px] rounded-xl border p-2 text-left ${sheet.grade === g ? 'ring-2 ring-sup-accent bg-sup-accentSoft' : 'border-sup-line bg-white'}`}
+            className={`min-h-[72px] rounded-[10px] border p-2 text-left ${sheet.grade === g ? 'ring-2 ring-sup-accent bg-sup-accentSoft' : 'border-sup-line bg-white'}`}
           >
             <div className="text-[16px] font-bold">Grade {g}</div>
             <div className="text-[11px] text-sup-muted">{catalog.grades[g] || DEFAULT_GRADES[g]}</div>
@@ -200,7 +200,7 @@ export default function ConditionGradingSheet({ wo, assets, ticketId, disabled, 
       <div className="font-semibold text-[13px]">
         Chargeable so far: ₹{running.toLocaleString('en-IN')}
       </div>
-      <Button size="sm" disabled={disabled} loading={saving} onClick={saveAll}>
+      <Button size="touch" disabled={disabled} loading={saving} onClick={saveAll}>
         Save grades
       </Button>
     </div>

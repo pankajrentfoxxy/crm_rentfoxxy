@@ -2,9 +2,10 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { ListChecks, Plus, Search, Bookmark } from 'lucide-react';
-import { PageHeader, Button, EmptyState, ResponsiveTable, ListPagination } from '../../../components/ui/primitives';
-import { PriorityChip, prioritySpine, SlaChip, ClassificationChain, Mono, StatusPill, Modal }
-  from '../../../components/ui/supportPrimitives';
+import {
+  Button, DataTable, EmptyState, ListPagination, Modal, Mono, PageHeader,
+  PriorityChip, SlaChip, StatusPill, ClassificationChain, prioritySpine,
+} from '../../../components/ui/supportPrimitives';
 import PermissionGate from '../../../components/PermissionGate';
 import { usePermission } from '../../../hooks/usePermission';
 import { useUrlFilters } from '../../../hooks/useUrlFilters';
@@ -288,7 +289,6 @@ export default function TicketQueuePage() {
         <PageHeader
           title="Ticket queue"
           subtitle="One list. Everything else is a saved view of it."
-          icon={ListChecks}
         />
         <div className="flex gap-2">
           <Button variant="secondary" icon={Bookmark} onClick={() => setSaveOpen(true)}>
@@ -302,7 +302,7 @@ export default function TicketQueuePage() {
         </div>
       </div>
 
-      <div className="mt-4 bg-white border border-sup-line rounded-xl shadow-sup">
+      <div className="mt-4 bg-white border border-sup-line rounded-[10px] shadow-sup">
         <div className="flex items-center gap-2 flex-wrap px-4 pt-3">
           <span className="text-[9.5px] uppercase tracking-[0.11em] text-sup-faint font-semibold mr-1">
             Saved views
@@ -353,7 +353,7 @@ export default function TicketQueuePage() {
           </div>
         </div>
 
-        <ResponsiveTable
+        <DataTable
           columns={columns}
           rows={rows}
           keyField="ticket_id"

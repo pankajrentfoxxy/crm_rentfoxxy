@@ -2,8 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Phone } from 'lucide-react';
-import { Button } from '../../../components/ui/primitives';
-import { PriorityChip, prioritySpine, SlaChip, Mono, TypeTag } from '../../../components/ui/supportPrimitives';
+import { Button, Mono, PriorityChip, SlaChip, TypeTag, prioritySpine } from '../../../components/ui/supportPrimitives';
 import { usePermission } from '../../../hooks/usePermission';
 import { fetchMyBucket, fetchMyBucketSummary, listPartRequests } from '../supportV2Api';
 import { SUPPORT_V2_BASE, woTypeLabel } from '../supportV2Utils';
@@ -26,7 +25,7 @@ function JobCard({ group, onOpen }) {
   const first = group.jobs[0];
   const extra = Math.max(0, (first?.asset_count || 1) - 1);
   return (
-    <div className={`bg-white rounded-xl border border-sup-lineSoft p-3 ${prioritySpine(group.priority)}`}>
+    <div className={`bg-white rounded-[10px] border border-sup-lineSoft p-3 ${prioritySpine(group.priority)}`}>
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-1.5 flex-wrap">
           <PriorityChip priority={group.priority} />
@@ -76,7 +75,7 @@ function JobCard({ group, onOpen }) {
         >
           <span className="inline-flex items-center gap-1"><Phone className="w-3.5 h-3.5" /> Call</span>
         </a>
-        <Button className="min-h-[44px]" onClick={() => onOpen(first)}>Start job ▶</Button>
+        <Button size="touch" onClick={() => onOpen(first)}>Start job ▶</Button>
       </div>
     </div>
   );

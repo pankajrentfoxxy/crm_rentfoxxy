@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Button } from '../../../components/ui/primitives';
-import { Modal } from '../../../components/ui/supportPrimitives';
+import { Button, Modal } from '../../../components/ui/supportPrimitives';
 import {
   fetchActionCodes, fetchResolutionCodes, fetchRootCauses, fetchTaxonomyTree,
   resolveLine, uploadAttachments,

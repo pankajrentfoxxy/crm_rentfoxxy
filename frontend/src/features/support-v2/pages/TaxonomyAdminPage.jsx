@@ -2,8 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Plus, Search } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
-import { Badge, Button, PageHeader } from '../../../components/ui/primitives';
-import { Modal, TypeTag } from '../../../components/ui/supportPrimitives';
+import { Badge, Button, Modal, PageHeader, TypeTag } from '../../../components/ui/supportPrimitives';
 import usePermission from '../../../hooks/usePermission';
 import {
   createCatalogNode,
@@ -122,7 +121,7 @@ export default function TaxonomyAdminPage() {
       />
 
       <div className="grid gap-4 md:grid-cols-[1.3fr_1fr]">
-        <div className="bg-white rounded-xl border border-sup-lineSoft shadow-sup min-h-[560px]">
+        <div className="bg-white rounded-[10px] border border-sup-lineSoft shadow-sup min-h-[560px]">
           <div className="p-3 border-b border-sup-lineSoft">
             <label className="flex items-center gap-2 h-9 px-2.5 rounded-lg border border-sup-line bg-sup-canvas">
               <Search className="w-3.5 h-3.5 text-sup-faint" />
@@ -224,14 +223,14 @@ function Toggle({ label, checked, disabled, onChange }) {
 function DetailPanel({ selected, stats, editable, onSave, onDelete }) {
   if (!selected) {
     return (
-      <div className="bg-white rounded-xl border border-dashed border-sup-line p-8 text-center text-[12px] text-sup-muted">
+      <div className="bg-white rounded-[10px] border border-dashed border-sup-line p-8 text-center text-[12px] text-sup-muted">
         Select a node in the tree.
       </div>
     );
   }
   const disabled = !editable;
   return (
-    <div className="bg-white rounded-xl border border-sup-lineSoft shadow-sup p-4 space-y-4">
+    <div className="bg-white rounded-[10px] border border-sup-lineSoft shadow-sup p-4 space-y-4">
       <div>
         <div className="font-mono text-[11px] text-sup-muted">{selected.code}</div>
         <h2 className="text-[16px] font-bold text-sup-ink tracking-tight">{selected.name}</h2>

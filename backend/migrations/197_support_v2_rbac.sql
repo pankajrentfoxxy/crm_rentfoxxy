@@ -257,3 +257,19 @@ SELECT DISTINCT up.user_id, s.section, true, false, false, false
   ) AS s(section)
  WHERE up.section = 'support_tickets' AND up.can_view = true
 ON CONFLICT (user_id, section) DO NOTHING;
+
+-- Legacy `technician` role: same field access as support_tech so they appear
+-- in Assign to and can act on their own bucket.
+INSERT INTO role_permissions (role, section, can_view, can_create, can_edit, can_delete) VALUES
+  ('technician', 'support_work_orders',    true,  false, false, false),
+  ('technician', 'support_pickup_repair',  true,  false, true,  false),
+  ('technician', 'support_pickup_return',  true,  false, true,  false),
+  ('technician', 'support_replacement',    true,  false, true,  false),
+  ('technician', 'support_field_visit',    true,  false, true,  false),
+  ('technician', 'support_parts_request',  true,  true,  false, false),
+  ('technician', 'support_bucket',         true,  false, true,  false),
+  ('technician', 'support_charges',        false, true,  false, false),
+  ('technician', 'support_taxonomy',       true,  false, false, false)
+ON CONFLICT (role, section) DO UPDATE
+  SET can_view = EXCLUDED.can_view, can_create = EXCLUDED.can_create,
+      can_edit = EXCLUDED.can_edit, can_delete = EXCLUDED.can_delete;

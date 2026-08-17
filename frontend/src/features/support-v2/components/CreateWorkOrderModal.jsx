@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import toast from 'react-hot-toast';
-import { Button } from '../../../components/ui/primitives';
-import { Modal, TypeTag } from '../../../components/ui/supportPrimitives';
+import { Button, Modal, TypeTag } from '../../../components/ui/supportPrimitives';
 import { usePermission } from '../../../hooks/usePermission';
 import { createWorkOrder, fetchQueueMeta } from '../supportV2Api';
 import { WO_TYPES, WO_TYPE_SECTION, woTypeLabel } from '../supportV2Utils';

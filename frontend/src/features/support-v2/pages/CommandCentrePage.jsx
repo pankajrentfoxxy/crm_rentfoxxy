@@ -1,10 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { LayoutDashboard } from 'lucide-react';
-import { PageHeader, Button, EmptyState } from '../../../components/ui/primitives';
 import {
-  PriorityChip, prioritySpine, SlaChip, ClassificationChain, Mono, StatusPill,
+  Button, EmptyState, Mono, PageHeader, PriorityChip, SlaChip, StatusPill,
+  ClassificationChain, prioritySpine, StatCard,
 } from '../../../components/ui/supportPrimitives';
 import PermissionGate from '../../../components/PermissionGate';
 import { fetchDashboard } from '../supportV2Api';
@@ -15,20 +14,6 @@ const PRI = {
   3: { label: 'P3', bar: 'bg-pri3', text: 'text-pri3' },
   4: { label: 'P4', bar: 'bg-pri4', text: 'text-pri4' },
 };
-
-function Kpi({ label, value, hint, alarm }) {
-  return (
-    <div className={`bg-white rounded-xl shadow-sup border px-3.5 py-3
-      ${alarm ? 'border-pri1-ring bg-[#FEF7F8]' : 'border-sup-lineSoft'}`}>
-      <div className="text-[10.5px] uppercase tracking-[0.08em] text-sup-faint font-semibold">{label}</div>
-      <div className={`font-mono tabular-nums text-[27px] font-bold tracking-[-0.035em] mt-0.5
-        ${alarm ? 'text-pri1' : 'text-sup-ink'}`}>
-        {value}
-      </div>
-      {hint ? <div className="text-[11px] text-sup-muted mt-0.5">{hint}</div> : null}
-    </div>
-  );
-}
 
 function capTone(row) {
   if (row.on_leave) return 'bg-sup-canvas2';
@@ -67,27 +52,26 @@ export default function CommandCentrePage() {
       <PageHeader
         title="Command centre"
         subtitle="What needs a decision in the next four hours."
-        icon={LayoutDashboard}
       />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <Kpi
+        <StatCard
           alarm
           label="Breaching in 4 h"
           value={k.breaching_4h ?? 0}
           hint={`${k.breaching_4h_p1 || 0} of them P1`}
         />
-        <Kpi
+        <StatCard
           label="Unassigned"
           value={k.unassigned ?? 0}
           hint={`${k.unassigned_field || 0} field jobs`}
         />
-        <Kpi
+        <StatCard
           label="Open tickets"
           value={k.open ?? 0}
           hint={k.open_delta ? `+${k.open_delta} in last 24 h` : 'No new tickets today'}
         />
-        <Kpi
+        <StatCard
           label="Resolution SLA · MTD"
           value={`${k.sla_mtd_pct ?? 0}%`}
           hint={`Target ${k.sla_target_pct}% · ${k.breaches_mtd || 0} breaches`}
@@ -95,7 +79,7 @@ export default function CommandCentrePage() {
       </div>
 
       {(data.pinned || []).length > 0 && (
-        <div className="bg-[#FEF7F8] border border-pri1-ring rounded-xl shadow-sup px-4 py-3">
+        <div className="bg-[#FEF7F8] border border-pri1-ring rounded-[10px] shadow-sup px-4 py-3">
           <div className="text-[13px] font-semibold text-pri1 mb-2">Pinned — 150% past SLA</div>
           {data.pinned.map((r) => (
             <button
@@ -113,7 +97,7 @@ export default function CommandCentrePage() {
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-[1.4fr_1fr] gap-3">
-        <div className="bg-white border border-sup-line rounded-xl shadow-sup">
+        <div className="bg-white border border-sup-line rounded-[10px] shadow-sup">
           <div className="flex items-center justify-between px-4 py-3 border-b border-sup-lineSoft">
             <div className="text-[13px] font-semibold text-sup-ink">SLA risk — act now</div>
             <Button variant="ghost" size="sm" onClick={() => nav('/support/queue?view=breaching')}>
@@ -149,7 +133,7 @@ export default function CommandCentrePage() {
         </div>
 
         <div className="space-y-3">
-          <div className="bg-white border border-sup-line rounded-xl shadow-sup px-4 py-3">
+          <div className="bg-white border border-sup-line rounded-[10px] shadow-sup px-4 py-3">
             <div className="text-[13px] font-semibold text-sup-ink mb-3">Open tickets by priority</div>
             <div className="h-2 rounded-full overflow-hidden flex bg-sup-canvas2">
               {[1, 2, 3, 4].map((p) => (
@@ -169,7 +153,7 @@ export default function CommandCentrePage() {
             </div>
           </div>
 
-          <div className="bg-white border border-sup-line rounded-xl shadow-sup px-4 py-3">
+          <div className="bg-white border border-sup-line rounded-[10px] shadow-sup px-4 py-3">
             <div className="text-[13px] font-semibold text-sup-ink mb-2">Today&apos;s field capacity</div>
             {(data.capacity || []).length === 0 && (
               <div className="text-[12px] text-sup-muted">No field technicians in a group yet.</div>
@@ -220,7 +204,7 @@ export default function CommandCentrePage() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <div className="bg-white border border-sup-line rounded-xl shadow-sup px-4 py-3">
+        <div className="bg-white border border-sup-line rounded-[10px] shadow-sup px-4 py-3">
           <div className="text-[13px] font-semibold text-sup-ink mb-2">Waiting on someone</div>
           {[
             ['PENDING_CUSTOMER', 'Pending customer', true],
@@ -247,7 +231,7 @@ export default function CommandCentrePage() {
           ))}
         </div>
 
-        <div className="bg-white border border-sup-line rounded-xl shadow-sup px-4 py-3">
+        <div className="bg-white border border-sup-line rounded-[10px] shadow-sup px-4 py-3">
           <div className="text-[13px] font-semibold text-sup-ink mb-2">Quality signals</div>
           <Row label="Reopened this week" value={quality.reopened_week ?? 0}
                hint={quality.reopened_delta ? `${quality.reopened_delta > 0 ? '+' : ''}${quality.reopened_delta} vs prior` : null} />
@@ -257,7 +241,7 @@ export default function CommandCentrePage() {
         </div>
 
         <PermissionGate section="support_approvals" action="view">
-          <div className="bg-white border border-sup-line rounded-xl shadow-sup px-4 py-3">
+          <div className="bg-white border border-sup-line rounded-[10px] shadow-sup px-4 py-3">
             <div className="text-[13px] font-semibold text-sup-ink mb-2">Needs your decision</div>
             {(data.approvals || []).length === 0 && (
               <div className="text-[12px] text-sup-muted">No pending approvals.</div>

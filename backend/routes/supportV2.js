@@ -154,6 +154,7 @@ router.post('/work-orders/:woId/assign', editDispatch, wos.assign);
 router.post('/work-orders/:woId/accept', editBucket, requireOwnWo(), requireWoType('can_edit', { generalSection: 'support_bucket' }), withIdempotency, wos.accept);
 router.post('/work-orders/:woId/en-route', editBucket, requireOwnWo(), requireWoType('can_edit', { generalSection: 'support_bucket' }), withIdempotency, wos.enRoute);
 router.post('/work-orders/:woId/on-site', editBucket, requireOwnWo(), requireWoType('can_edit', { generalSection: 'support_bucket' }), withIdempotency, wos.onSite);
+router.post('/work-orders/:woId/start', editBucket, requireOwnWo(), requireWoType('can_edit', { generalSection: 'support_bucket' }), withIdempotency, wos.start);
 router.post('/work-orders/:woId/steps/:code', editBucket, requireOwnWo(), requireWoType('can_edit', { generalSection: 'support_bucket' }), withIdempotency, wos.completeStep);
 router.post('/work-orders/:woId/verify-otp', editBucket, requireOwnWo(), requireWoType('can_edit', { generalSection: 'support_bucket' }), withIdempotency, wos.verifyOtp);
 router.post('/work-orders/:woId/complete', editBucket, requireOwnWo(), requireWoType('can_edit', { generalSection: 'support_bucket' }), withIdempotency, wos.complete);

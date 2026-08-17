@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { PageHeader, EmptyState } from '../../../components/ui/primitives';
-import { WorkOrderCard } from '../../../components/ui/supportPrimitives';
+import { EmptyState, PageHeader, WorkOrderCard } from '../../../components/ui/supportPrimitives';
 import { listWorkOrders } from '../supportV2Api';
 import OfflineBanner from '../components/OfflineBanner';
 import { SUPPORT_V2_BASE } from '../supportV2Utils';

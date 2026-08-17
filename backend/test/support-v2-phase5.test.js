@@ -21,6 +21,10 @@ test('phase 5: legal transitions include unassign and remote skip hook', () => {
     () => assertTransition('ACCEPTED', 'EN_ROUTE', { skipsTravel: true }),
     (e) => e.status === 409
   );
+  const routes = fs.readFileSync(path.join(__dirname, '../routes/supportV2.js'), 'utf8');
+  assert.match(routes, /work-orders\/:woId\/start/);
+  const complete = fs.readFileSync(path.join(__dirname, '../services/supportWorkOrderService.js'), 'utf8');
+  assert.match(complete, /skipsTravel && wo\.status === 'ACCEPTED'/);
 });
 
 test('phase 5: TRANSITIONS map is the only status machine', () => {

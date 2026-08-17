@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Settings } from 'lucide-react';
-import { PageHeader, Button, EmptyState } from '../../../components/ui/primitives';
+import { Button, EmptyState, PageHeader } from '../../../components/ui/supportPrimitives';
 import usePermission from '../../../hooks/usePermission';
 import { fetchSupportSettings, patchSupportSettings, patchSupportTemplate } from '../supportV2Api';
 
@@ -79,12 +78,11 @@ export default function SettingsPage() {
       <PageHeader
         title="Settings"
         subtitle="S19 · stored in support_settings_v2. No deploy required."
-        icon={Settings}
         actions={canEdit ? <Button size="sm" disabled={saving} onClick={save}>{saving ? 'Saving…' : 'Save'}</Button> : null}
       />
 
       {groups.map((g) => (
-        <div key={g} className="bg-white rounded-xl border border-sup-lineSoft shadow-sup p-4 space-y-2">
+        <div key={g} className="bg-white rounded-[10px] border border-sup-lineSoft shadow-sup p-4 space-y-2">
           <div className="text-[13px] font-semibold text-sup-ink">{g}</div>
           {FIELDS.filter((f) => f.group === g).map((f) => (
             <label key={f.key} className="flex items-center justify-between gap-3 text-[12.5px]">
@@ -101,7 +99,7 @@ export default function SettingsPage() {
         </div>
       ))}
 
-      <div className="bg-white rounded-xl border border-sup-lineSoft shadow-sup p-4">
+      <div className="bg-white rounded-[10px] border border-sup-lineSoft shadow-sup p-4">
         <div className="text-[13px] font-semibold mb-2">Notifications</div>
         {(data.templates || []).map((t) => (
           <div key={t.template_id} className="flex items-center justify-between gap-2 py-1.5 border-t border-sup-lineSoft text-[12.5px]">

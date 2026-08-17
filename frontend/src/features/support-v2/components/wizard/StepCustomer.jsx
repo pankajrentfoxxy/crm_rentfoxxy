@@ -38,7 +38,7 @@ export default function StepCustomer({ state, setState, context }) {
 
   return (
     <div className="grid gap-4" style={{ gridTemplateColumns: '1.4fr 1fr' }}>
-      <div className="bg-white rounded-xl border border-sup-lineSoft p-4 space-y-3">
+      <div className="bg-white rounded-[10px] border border-sup-lineSoft p-4 space-y-3">
         <label className="block text-[12px] font-semibold text-sup-ink">
           Customer *
           <input
@@ -128,7 +128,7 @@ export default function StepCustomer({ state, setState, context }) {
         </label>
       </div>
 
-      <div className="bg-white rounded-xl border border-sup-lineSoft p-4 space-y-2 text-[12px]">
+      <div className="bg-white rounded-[10px] border border-sup-lineSoft p-4 space-y-2 text-[12px]">
         <div className="font-semibold text-sup-ink">Customer context</div>
         {!state.customer_id ? (
           <p className="text-sup-muted">Pick a customer to see tier, fleet and open tickets.</p>

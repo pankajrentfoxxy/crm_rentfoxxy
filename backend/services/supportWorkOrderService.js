@@ -294,6 +294,10 @@ async function verifyOtp(client, woId, otp, userId) {
 
 async function completeWorkOrder(client, woId, body, actorId) {
   const wo = await loadWo(client, woId, { forUpdate: true });
+  const skipsTravel = await typeSkipsTravel(client, wo.wo_type);
+  if (wo.status === 'ON_SITE' || (skipsTravel && wo.status === 'ACCEPTED')) {
+    await setStatus(client, wo, 'IN_PROGRESS', { actorId, summary: `Started ${wo.wo_number}` });
+  }
   const gate = await checkMandatorySteps(client, woId);
   if (!gate.ok) {
     throw Object.assign(new Error('Mandatory steps incomplete'), { status: 409, missing: gate.missing });

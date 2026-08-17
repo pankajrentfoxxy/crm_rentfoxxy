@@ -31,6 +31,12 @@ function cat(t) {
   return String(t.ticket_category || '').toLowerCase();
 }
 
+function clip(value, max) {
+  if (value == null) return null;
+  const s = String(value);
+  return s.length > max ? s.slice(0, max) : s;
+}
+
 async function loadCatalog(db) {
   const r = await db.query('SELECT catalog_id, code, level, parent_id FROM support_issue_catalog');
   const byId = new Map(r.rows.map((x) => [x.catalog_id, x]));
@@ -472,10 +478,10 @@ async function applyJob(db, job, plan, reviews) {
         overridden,
         overridden ? 'MIGRATED' : null,
         customerId,
-        legacy.ticket_address || null,
-        legacy.customer_name || null,
-        legacy.ticket_phone_override || legacy.customer_phone || null,
-        legacy.ticket_email || null,
+        clip(legacy.ticket_address, 200),
+        clip(legacy.customer_name, 120),
+        clip(legacy.ticket_phone_override || legacy.customer_phone, 40),
+        clip(legacy.ticket_email, 120),
         legacy.top_level_remarks || `Migrated ${legacyTicketNumber(legacy.id)}`,
         assignedTo,
         await validUser(client, legacy.created_by),
@@ -521,8 +527,8 @@ async function applyJob(db, job, plan, reviews) {
           ticketId,
           lineCode(lineIdx),
           serial && serial.serial_id,
-          serial && serial.inventory_asset_code,
-          (a.item && (a.item.serial_number || a.item.unique_serial_number)) || (serial && serial.serial_number),
+          clip(serial && serial.inventory_asset_code, 40),
+          clip((a.item && (a.item.serial_number || a.item.unique_serial_number)) || (serial && serial.serial_number), 120),
           !(serial && serial.serial_id) && !(a.item && a.item.serial_number),
           chain.typeId,
           chain.subtypeId,
@@ -568,11 +574,11 @@ async function applyJob(db, job, plan, reviews) {
           sm.status,
           woAssigned,
           w.item && w.item.remarks,
-          sm.failure_reason || null,
+          clip(sm.failure_reason, 40),
           w.replacement_group_id || null,
           w.item && w.item.id,
           confidence,
-          rule,
+          clip(rule, 40),
           (w.item && w.item.created_at) || legacy.created_at || new Date(),
         ]
       );

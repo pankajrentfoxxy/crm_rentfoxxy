@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { PageHeader, Button } from '../../../components/ui/primitives';
-import { PriorityChip, Mono } from '../../../components/ui/supportPrimitives';
+import { Button, Mono, PageHeader, PriorityChip } from '../../../components/ui/supportPrimitives';
 import {
   dispatchAssign, dispatchAutoAssign, fetchDispatchBoard, fetchDispatchCapacity,
 } from '../supportV2Api';
@@ -160,17 +159,17 @@ export default function DispatchBoardPage() {
       )}
 
       <div className="grid md:grid-cols-3 gap-3">
-        <div className="bg-white border border-sup-lineSoft rounded-xl p-3 text-[12px]">
+        <div className="bg-white border border-sup-lineSoft rounded-[10px] p-3 text-[12px]">
           <div className="font-semibold">Capacity warning</div>
           <div className="text-sup-muted mt-1">
             {insights.over.length ? insights.over.map((t) => t.name).join(', ') : 'Everyone is inside their daily cap.'}
           </div>
         </div>
-        <div className="bg-white border border-sup-lineSoft rounded-xl p-3 text-[12px]">
+        <div className="bg-white border border-sup-lineSoft rounded-[10px] p-3 text-[12px]">
           <div className="font-semibold">Grouped visits</div>
           <div className="text-sup-muted mt-1">{insights.grouped} unassigned job(s) — group same site before sending two people.</div>
         </div>
-        <div className="bg-white border border-sup-lineSoft rounded-xl p-3 text-[12px]">
+        <div className="bg-white border border-sup-lineSoft rounded-[10px] p-3 text-[12px]">
           <div className="font-semibold">Skill match</div>
           <div className="text-sup-muted mt-1">
             {insights.chip.length ? `${insights.chip.length} chip-level job(s) waiting — do not give these to delivery-only techs.` : 'No unmatched chip-level jobs in the rail.'}

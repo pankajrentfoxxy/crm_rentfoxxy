@@ -29,7 +29,7 @@ export default function StepConfirm({ state, setState, groups, owners, supportTi
 
   return (
     <div className="grid md:grid-cols-2 gap-4">
-      <div className="bg-white rounded-xl border border-sup-lineSoft p-4 space-y-3 text-[12px]">
+      <div className="bg-white rounded-[10px] border border-sup-lineSoft p-4 space-y-3 text-[12px]">
         <label className="block font-semibold">
           Assignment group
           <select
@@ -83,7 +83,7 @@ export default function StepConfirm({ state, setState, groups, owners, supportTi
           />
         </label>
       </div>
-      <div className="bg-white rounded-xl border border-sup-lineSoft p-4 space-y-2 text-[12px]">
+      <div className="bg-white rounded-[10px] border border-sup-lineSoft p-4 space-y-2 text-[12px]">
         <div className="font-semibold text-sup-ink">What will happen</div>
         <div>Ticket priority <b>P{preview?.priority || pri.priority}</b></div>
         <ul className="text-sup-muted list-disc pl-4">

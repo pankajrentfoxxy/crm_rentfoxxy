@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Badge, Button, PageHeader } from '../../../components/ui/primitives';
-import { PriorityChip, Mono } from '../../../components/ui/supportPrimitives';
+import { Badge, Button, Mono, PageHeader, PriorityChip } from '../../../components/ui/supportPrimitives';
 import usePermission from '../../../hooks/usePermission';
 import { addSlaHoliday, fetchSlaBreaches, fetchSlaCalendars, fetchSlaPolicies, patchSlaPolicy } from '../supportV2Api';
 
@@ -31,7 +30,7 @@ function BreachRegister({ data }) {
           { label: 'Avg time to resolve', value: avg },
           { label: 'Total paused time', value: `${Math.round((k.paused_minutes || 0) / 60)} h` },
         ].map((tile) => (
-          <div key={tile.label} className="bg-white rounded-xl border border-sup-lineSoft shadow-sup px-3.5 py-3">
+          <div key={tile.label} className="bg-white rounded-[10px] border border-sup-lineSoft shadow-sup px-3.5 py-3">
             <div className="text-[10.5px] uppercase tracking-[0.08em] text-sup-faint font-semibold">{tile.label}</div>
             <div className="font-mono tabular-nums text-[20px] font-bold tracking-[-0.03em] mt-0.5 text-sup-ink">
               {tile.value}
@@ -39,7 +38,7 @@ function BreachRegister({ data }) {
           </div>
         ))}
       </div>
-      <div className="bg-white rounded-xl border border-sup-lineSoft shadow-sup p-4">
+      <div className="bg-white rounded-[10px] border border-sup-lineSoft shadow-sup p-4">
         <div className="text-[13px] font-semibold text-sup-ink mb-2">Breaches by reason</div>
         {reasons.length === 0 && <div className="text-[12px] text-sup-muted">No breaches yet.</div>}
         {reasons.map((r) => (
@@ -52,7 +51,7 @@ function BreachRegister({ data }) {
           </div>
         ))}
       </div>
-      <div className="bg-white rounded-xl border border-sup-lineSoft shadow-sup overflow-hidden">
+      <div className="bg-white rounded-[10px] border border-sup-lineSoft shadow-sup overflow-hidden">
         <div className="px-4 py-3 border-b border-sup-lineSoft text-[13px] font-semibold">Breached tickets</div>
         <table className="w-full text-[12.5px]">
           <thead className="bg-sup-canvas text-sup-muted text-left">
@@ -160,7 +159,7 @@ export default function SlaAdminPage() {
 
       <BreachRegister data={breaches} />
 
-      <div className="bg-white rounded-xl border border-sup-lineSoft shadow-sup overflow-hidden">
+      <div className="bg-white rounded-[10px] border border-sup-lineSoft shadow-sup overflow-hidden">
         <div className="px-4 py-3 border-b border-sup-lineSoft text-[13px] font-semibold text-sup-ink">Policies</div>
         <div className="overflow-x-auto">
           <table className="w-full text-[12.5px]">
@@ -233,7 +232,7 @@ export default function SlaAdminPage() {
         </div>
       </div>
 
-      <div className="bg-white rounded-xl border border-sup-lineSoft shadow-sup p-4 space-y-3">
+      <div className="bg-white rounded-[10px] border border-sup-lineSoft shadow-sup p-4 space-y-3">
         <div className="text-[13px] font-semibold text-sup-ink">Calendars & holidays</div>
         <div className="flex flex-wrap gap-2 items-end">
           <label className="text-[12px]">

@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Button } from '../../../components/ui/primitives';
-import { Modal, Mono } from '../../../components/ui/supportPrimitives';
+import { Button, Modal, Mono } from '../../../components/ui/supportPrimitives';
 import { createPartRequest, fetchCompatibleParts, uploadAttachments } from '../supportV2Api';
 
 export default function RequestPartSheet({ ticketId, line, onClose, onCreated }) {
@@ -64,8 +63,8 @@ export default function RequestPartSheet({ ticketId, line, onClose, onCreated })
       onClose={onClose}
       footer={(
         <>
-          <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button loading={saving} onClick={submit}>Submit request</Button>
+          <Button size="touch" variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button size="touch" loading={saving} onClick={submit}>Submit request</Button>
         </>
       )}
     >

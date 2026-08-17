@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { PageHeader, Button } from '../../../components/ui/primitives';
+import { Button, PageHeader } from '../../../components/ui/supportPrimitives';
 import { createTicket, fetchQueueMeta, fetchTaxonomyTree, getCustomerAssets, getCustomerContext } from '../supportV2Api';
 import { SUPPORT_V2_BASE } from '../supportV2Utils';
 import StepCustomer, { customerStepValid } from '../components/wizard/StepCustomer';
