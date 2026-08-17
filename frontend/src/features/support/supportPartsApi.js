@@ -65,8 +65,8 @@ export const signAndIssueChallan = (challanId, data) =>
 export const getTechnicianBucket = () =>
   api.get(`${BASE}/bucket`);
 
-export const getSupportPartsWarehouseQueue = () =>
-  api.get(`${BASE}/warehouse-queue`);
+export const getSupportPartsWarehouseQueue = (params) =>
+  api.get(`${BASE}/warehouse-queue`, { params });
 
 export const requestPartReassign = (requestId, data) =>
   api.post(`${BASE}/requests/${requestId}/request-reassign`, data);
