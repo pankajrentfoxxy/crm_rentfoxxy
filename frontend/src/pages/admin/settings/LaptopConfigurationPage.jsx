@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Link, NavLink } from 'react-router-dom';
 import ConfigEntityPanel from './components/ConfigEntityPanel';
 import LaptopMappingPanel from './components/LaptopMappingPanel';
+import BluedartDeclaredValuePanel from './components/BluedartDeclaredValuePanel';
 import {
   listBrands, createBrand, updateBrand, deleteBrand, setBrandStatus,
   listModels, createModel, updateModel, deleteModel, setModelStatus,
@@ -95,6 +96,7 @@ const ENTITY_TABS = [
     setStatusFn: setGpuStatus,
   },
   { id: 'mapping', label: 'Mapping' },
+  { id: 'bluedart-value', label: 'BlueDart Value' },
 ];
 
 const SECTION_LINKS = [
@@ -114,6 +116,7 @@ export default function LaptopConfigurationPage() {
           <p className="text-gray-500 text-sm">
             Manage laptop brands, models, processors, generations, RAM, SSD, screen size, and graphics.
             Use Mapping to assign models, processors, and generations per brand.
+            Use BlueDart Value for AWB declared amounts.
           </p>
         </div>
         <div className="inline-flex p-1 bg-gray-100 rounded-lg">
@@ -161,6 +164,8 @@ export default function LaptopConfigurationPage() {
           deleteFn={entityTab.deleteFn}
           setStatusFn={entityTab.setStatusFn}
         />
+      ) : tab === 'bluedart-value' ? (
+        <BluedartDeclaredValuePanel />
       ) : (
         <LaptopMappingPanel />
       )}

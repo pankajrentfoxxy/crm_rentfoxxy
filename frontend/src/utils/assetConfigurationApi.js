@@ -110,3 +110,17 @@ export const bulkStatusBrandProcessors = (ids, status) =>
 export const bulkStatusBrandGenerations = (ids, status) =>
   api.post(`${base}/mappings/laptop-spec/generations/bulk-status`, { ids, status });
 export const bulkStatusBrandProcessorGenerations = bulkStatusBrandGenerations;
+
+// BlueDart AWB declared-value matrix
+export const listBluedartDeclaredValues = (p) =>
+  api.get(`${base}/bluedart-declared-values`, { params: p });
+export const fetchActiveBluedartDeclaredValues = (p) =>
+  api.get(`${base}/bluedart-declared-values/active`, { params: p });
+export const createBluedartDeclaredValue = (d) =>
+  api.post(`${base}/bluedart-declared-values`, d);
+export const updateBluedartDeclaredValue = (id, d) =>
+  api.put(`${base}/bluedart-declared-values/${id}`, d);
+export const deleteBluedartDeclaredValue = (id) =>
+  api.delete(`${base}/bluedart-declared-values/${id}`);
+export const setBluedartDeclaredValueStatus = (id, active) =>
+  api.patch(`${base}/bluedart-declared-values/${id}/status`, { active });
