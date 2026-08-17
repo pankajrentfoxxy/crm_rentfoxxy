@@ -39,6 +39,9 @@ router.get('/collections', authMiddleware, reportsView, reportsController.getCol
 router.get('/vendor-spend', authMiddleware, reportsView, reportsController.getVendorSpendReport);
 router.get('/laptop-report', authMiddleware, reportsView, reportsController.getLaptopReport);
 router.get('/laptop-report/tickets', authMiddleware, reportsView, reportsController.getLaptopReportTickets);
+router.get('/warehouse-laptops/summary', authMiddleware, reportsView, require('../controllers/warehouseLaptopReportController').getWarehouseLaptopSummary);
+router.get('/warehouse-laptops/list', authMiddleware, reportsView, require('../controllers/warehouseLaptopReportController').getWarehouseLaptopList);
+router.get('/warehouse-laptops/filters', authMiddleware, reportsView, require('../controllers/warehouseLaptopReportController').getWarehouseLaptopFilters);
 router.get('/production-qc', authMiddleware, productionQcView, reportsController.getProductionQcReport);
 router.get('/production-qc/filters', authMiddleware, productionQcView, reportsController.getProductionQcReportFilters);
 router.get('/production-qc/pdf', authMiddleware, productionQcView, reportsController.getProductionQcReportPdf);

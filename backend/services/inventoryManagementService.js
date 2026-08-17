@@ -95,6 +95,30 @@ function offShelfInventoryFilterSql(alias = 's') {
   return ` AND COALESCE(${alias}.inventory_status, 'in_stock') NOT IN (${list})`;
 }
 
+/**
+ * Boolean SQL matching Inventory Management → Ready to Rent or Sell
+ * (`/inventory-management/ready-to-rent-or-sell`, segment `passed`).
+ * Keep in sync with buildListWhere('passed', …).
+ */
+function readyToRentOrSellMatchSql(alias = 's') {
+  const list = OFF_SHELF_STATUSES.map((s) => `'${s}'`).join(', ');
+  return `(
+    ${alias}.po_id IS NOT NULL
+    AND EXISTS (
+      SELECT 1 FROM vendor_purchase_orders p
+       WHERE p.po_id = ${alias}.po_id AND p.deleted_at IS NULL
+    )
+    AND ${effectiveStatusSql(alias)} = 'passed'
+    AND COALESCE(${alias}.inventory_status, 'in_stock') NOT IN (${list})
+    AND COALESCE(${alias}.extra->>'awaiting_inventory_receive', 'false') <> 'true'
+    AND NOT EXISTS (
+      SELECT 1 FROM production_assets pa
+       WHERE pa.vendor_serial_id = ${alias}.serial_id
+         AND pa.status = 'pending_inventory'
+    )
+  )`;
+}
+
 /** QC Process includes customer returns (inventory_status returned) re-entering floor QC. */
 function qcProcessInventoryFilterSql(alias = 's') {
   const blocked = OFF_SHELF_STATUSES.filter((s) => s !== 'returned');
@@ -356,6 +380,7 @@ module.exports = {
   ROUTE_TO_SEGMENT,
   OFF_SHELF_STATUSES,
   offShelfInventoryFilterSql,
+  readyToRentOrSellMatchSql,
   qcProcessInventoryFilterSql,
   SPARE_PART_TABS,
   SPARE_STATUS_VALUES,

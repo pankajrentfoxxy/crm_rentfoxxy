@@ -11,6 +11,9 @@ export const getVendorSpendReport = (p) => api.get('/reports/vendor-spend', { pa
 export const getTechnicianReport = (p) => api.get('/reports/technician-performance', { params: p });
 export const getLaptopReport = (p) => api.get('/reports/laptop-report', { params: p });
 export const getLaptopReportTickets = (p) => api.get('/reports/laptop-report/tickets', { params: p });
+export const getWarehouseLaptopSummary = (p) => api.get('/reports/warehouse-laptops/summary', { params: p });
+export const getWarehouseLaptopList = (p) => api.get('/reports/warehouse-laptops/list', { params: p });
+export const getWarehouseLaptopFilters = () => api.get('/reports/warehouse-laptops/filters');
 export const getProductionQcReport = (p) => api.get('/reports/production-qc', { params: p });
 export const getProductionQcReportDetail = (historyId) =>
   api.get(`/reports/production-qc/${encodeURIComponent(historyId)}`);

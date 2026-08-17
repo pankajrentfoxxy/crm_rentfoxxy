@@ -23,6 +23,7 @@ import {
   RefreshCw,
   Headphones,
   ArrowLeftRight,
+  Warehouse,
 } from 'lucide-react';
 
 /** Vendor Management accordion (procurement only — billing lives under Finance).
@@ -102,6 +103,7 @@ export const reportsMenuItems = [
   { icon: CreditCard, label: 'Collections', path: '/reports/collections', section: 'reports_access' },
   { icon: Building2, label: 'Vendor Spend', path: '/reports/vendor-spend', section: 'reports_access' },
   { icon: ClipboardCheck, label: 'Technician Report', path: '/reports/laptop-report', section: 'reports_access' },
+  { icon: Warehouse, label: 'Warehouse Laptop Report', path: '/reports/warehouse-laptops', section: 'reports_access' },
   { icon: ClipboardCheck, label: 'Production QC Report', path: '/reports/production-qc-report', section: 'production_qc_report' },
   { icon: ShoppingCart, label: 'Sales Order Report', path: '/reports/sales-order-report', section: 'reports_access' },
   { icon: Headphones, label: 'Daily Support Summary', path: '/reports/support-daily-summary', section: 'reports_access' },

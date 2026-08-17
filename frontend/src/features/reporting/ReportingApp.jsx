@@ -11,6 +11,7 @@ import SalespersonReportPage from './pages/SalespersonReportPage';
 import CollectionsReportPage from './pages/CollectionsReportPage';
 import VendorSpendReportPage from './pages/VendorSpendReportPage';
 import LaptopReportPage from './pages/LaptopReportPage';
+import WarehouseLaptopReportPage from './pages/WarehouseLaptopReportPage';
 import SalesOrderReportPage from './pages/SalesOrderReportPage';
 import SupportDailySummaryPage from './pages/SupportDailySummaryPage';
 import InwardOutwardSummaryPage from './pages/InwardOutwardSummaryPage';
@@ -50,6 +51,7 @@ export default function ReportingApp() {
       <Route path="vendor-spend" element={g('reports_access', <VendorSpendReportPage />)} />
       <Route path="technician" element={<Navigate to="/reports/laptop-report" replace />} />
       <Route path="laptop-report" element={g('reports_access', <LaptopReportPage />)} />
+      <Route path="warehouse-laptops" element={g('reports_access', <WarehouseLaptopReportPage />)} />
       <Route
         path="production-qc-report"
         element={gAny(
