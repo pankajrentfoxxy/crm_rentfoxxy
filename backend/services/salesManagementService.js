@@ -1292,13 +1292,14 @@ async function getReturnDcDetail(rdcNumber) {
 
   const itemsRes = await pool.query(
     `SELECT sti.*,
-            u1.name AS tech_name,
-            u2.name AS warehouse_receiver_name,
+            COALESCE(sti.technician_esign_name, u_tech_esign.name, u_tech_esign.email, u1.name, u1.email) AS tech_name,
+            COALESCE(sti.warehouse_esign_name, u2.name, u2.email) AS warehouse_receiver_name,
             vsn.inventory_status,
             vsn.current_customer_id
        FROM support_ticket_items sti
        LEFT JOIN users u1 ON u1.user_id = COALESCE(sti.pickup_assigned_to, sti.assigned_to)
-       LEFT JOIN users u2 ON u2.user_id = sti.warehouse_received_by
+       LEFT JOIN users u_tech_esign ON u_tech_esign.user_id = sti.technician_esign_by
+       LEFT JOIN users u2 ON u2.user_id = COALESCE(sti.warehouse_esign_by, sti.warehouse_received_by)
        LEFT JOIN LATERAL (
          SELECT v.inventory_status, v.current_customer_id
            FROM vendor_serial_numbers v

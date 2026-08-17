@@ -137,7 +137,7 @@ export default function VendorRepairDcDetailPage() {
   const [receiveForm, setReceiveForm] = useState({
     receive_mode: 'repaired',
     verified_serial: '',
-    wh_signer_name: '',
+    wh_signer_name: user?.name || user?.email || '',
     wh_esign: null,
     replacement_serial_number: '',
     replacement_brand: '',
@@ -146,7 +146,7 @@ export default function VendorRepairDcDetailPage() {
   });
   const [receiveBusy, setReceiveBusy] = useState(false);
   const [receivePdfBusy, setReceivePdfBusy] = useState(false);
-  const [whDispatchSignerName, setWhDispatchSignerName] = useState('');
+  const [whDispatchSignerName, setWhDispatchSignerName] = useState(() => user?.name || user?.email || '');
   const [vendorDispatchSignerName, setVendorDispatchSignerName] = useState('');
   const [pendingWhDispatch, setPendingWhDispatch] = useState(null);
   const [pendingVendorDispatch, setPendingVendorDispatch] = useState(null);
@@ -241,11 +241,11 @@ export default function VendorRepairDcDetailPage() {
   }, [dcNumber, syncDispatchFromDc]);
 
   useEffect(() => {
-    if (user?.name) {
-      setWhDispatchSignerName((prev) => prev || user.name);
-      setReceiveForm((prev) => ({ ...prev, wh_signer_name: prev.wh_signer_name || user.name }));
-    }
-  }, [user?.name]);
+    const loginName = user?.name || user?.email || '';
+    if (!loginName) return;
+    setWhDispatchSignerName((prev) => prev || loginName);
+    setReceiveForm((prev) => ({ ...prev, wh_signer_name: prev.wh_signer_name || loginName }));
+  }, [user?.name, user?.email]);
 
   const openReceiveForItem = (item) => {
     const cfg = parseVrdcItemConfig(item);
@@ -253,7 +253,7 @@ export default function VendorRepairDcDetailPage() {
     setReceiveForm({
       receive_mode: 'repaired',
       verified_serial: '',
-      wh_signer_name: user?.name || '',
+      wh_signer_name: user?.name || user?.email || '',
       wh_esign: null,
       replacement_serial_number: '',
       replacement_brand: cfg.brand,

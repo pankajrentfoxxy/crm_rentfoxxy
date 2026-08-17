@@ -751,6 +751,8 @@ const ensureSupportTicketItemV3Columns = async (client) => {
             ADD COLUMN IF NOT EXISTS technician_esign_url TEXT,
             ADD COLUMN IF NOT EXISTS technician_esign_at TIMESTAMP WITH TIME ZONE,
             ADD COLUMN IF NOT EXISTS technician_esign_by INTEGER REFERENCES users (user_id),
+            ADD COLUMN IF NOT EXISTS technician_esign_name VARCHAR(255),
+            ADD COLUMN IF NOT EXISTS warehouse_esign_name VARCHAR(255),
             ADD COLUMN IF NOT EXISTS processor VARCHAR(200)
     `);
 };
@@ -3059,12 +3061,14 @@ exports.technicianSignPickup = async (req, res) => {
         const b64 = String(esign_data).replace(/^data:image\/\w+;base64,/, '');
         fs.writeFileSync(path.join(dir, fname), Buffer.from(b64, 'base64'));
         const esignUrl = `uploads/support-pickups/${fname}`;
+        const signerLabel = String(signer_name || req.user?.name || req.user?.email || '').trim() || null;
 
         await client.query(
             `UPDATE support_ticket_items SET
                 technician_esign_url = $2,
                 technician_esign_at = CURRENT_TIMESTAMP,
                 technician_esign_by = $3,
+                technician_esign_name = COALESCE($5, technician_esign_name),
                 updated_at = CURRENT_TIMESTAMP
              WHERE id = $1
                 OR (
@@ -3073,11 +3077,11 @@ exports.technicianSignPickup = async (req, res) => {
                   AND item_type = 'pickup'
                   AND technician_esign_url IS NULL
                 )`,
-            [itemId, esignUrl, req.user.user_id, it.return_dc_number]
+            [itemId, esignUrl, req.user.user_id, it.return_dc_number, signerLabel]
         );
         await logAudit(client, {
             itemId, ticketId: it.ticket_id, userId: req.user.user_id,
-            action: 'technician_esign', detail: { signer_name: signer_name || null }
+            action: 'technician_esign', detail: { signer_name: signerLabel }
         });
         await bumpTicketActivity(client, it.ticket_id);
         await client.query('COMMIT');
@@ -3217,6 +3221,7 @@ const warehouseReceiveSinglePickupItem = async (client, it, userId, esignUrl, si
     const effectivePickupType = it.pickup_type || (it.source_item_id ? 'repair' : 'return');
     const isRepair = effectivePickupType === 'repair';
     const terminalStatus = isRepair ? AWAITING_SDC_STATUS : 'inventory_updated';
+    const signerLabel = String(signerName || '').trim() || null;
 
     await client.query(
         `UPDATE support_ticket_items SET
@@ -3226,11 +3231,12 @@ const warehouseReceiveSinglePickupItem = async (client, it, userId, esignUrl, si
             warehouse_esign_url = $2,
             warehouse_esign_at = CURRENT_TIMESTAMP,
             warehouse_esign_by = $3,
+            warehouse_esign_name = COALESCE($6, warehouse_esign_name),
             status = $4,
             resolved_at = CASE WHEN $5 THEN resolved_at ELSE COALESCE(resolved_at, CURRENT_TIMESTAMP) END,
             updated_at = CURRENT_TIMESTAMP
          WHERE id = $1`,
-        [it.id, esignUrl, userId, terminalStatus, isRepair]
+        [it.id, esignUrl, userId, terminalStatus, isRepair, signerLabel]
     );
 
     let floorTicketId = null;
@@ -3384,6 +3390,7 @@ const warehouseReceiveReturnDcBatch = async (client, triggerItem, userId, esignU
                             warehouse_esign_url = NULL,
                             warehouse_esign_at = NULL,
                             warehouse_esign_by = NULL,
+                            warehouse_esign_name = NULL,
                             reached_warehouse_at = NULL,
                             updated_at = NOW()
                       WHERE id = $1`,
@@ -3479,6 +3486,7 @@ exports.confirmWarehouseReceipt = async (req, res) => {
                 `UPDATE support_ticket_items
                     SET warehouse_received_at = NULL, warehouse_esign_url = NULL,
                         warehouse_esign_at = NULL, warehouse_esign_by = NULL,
+                        warehouse_esign_name = NULL,
                         reached_warehouse_at = NULL,
                         updated_at = NOW()
                   WHERE id = $1`,
@@ -3490,6 +3498,7 @@ exports.confirmWarehouseReceipt = async (req, res) => {
                 `UPDATE support_ticket_items
                     SET warehouse_received_at = NULL, warehouse_esign_url = NULL,
                         warehouse_esign_at = NULL, warehouse_esign_by = NULL,
+                        warehouse_esign_name = NULL,
                         updated_at = NOW()
                   WHERE id = $1`,
                 [it.id]
@@ -3498,8 +3507,9 @@ exports.confirmWarehouseReceipt = async (req, res) => {
         }
 
         const esignUrl = saveWarehouseEsignPng(it.id, esign_data);
+        const signerLabel = String(signer_name || req.user?.name || req.user?.email || '').trim() || null;
         const { floorTicketIds, unitCount } = await warehouseReceiveReturnDcBatch(
-            client, it, req.user.user_id, esignUrl, signer_name
+            client, it, req.user.user_id, esignUrl, signerLabel
         );
         await client.query('COMMIT');
 
@@ -3601,6 +3611,7 @@ exports.confirmReturnDcWarehouseReceipt = async (req, res) => {
                 `UPDATE support_ticket_items
                     SET warehouse_received_at = NULL, warehouse_esign_url = NULL,
                         warehouse_esign_at = NULL, warehouse_esign_by = NULL,
+                        warehouse_esign_name = NULL,
                         reached_warehouse_at = NULL,
                         updated_at = NOW()
                   WHERE id = $1`,
@@ -3610,8 +3621,9 @@ exports.confirmReturnDcWarehouseReceipt = async (req, res) => {
         }
 
         const esignUrl = saveWarehouseEsignPng(trigger.id, esign_data);
+        const signerLabel = String(signer_name || req.user?.name || req.user?.email || '').trim() || null;
         const { floorTicketIds, unitCount } = await warehouseReceiveReturnDcBatch(
-            client, trigger, req.user.user_id, esignUrl, signer_name, dcl
+            client, trigger, req.user.user_id, esignUrl, signerLabel, dcl
         );
         await client.query('COMMIT');
 

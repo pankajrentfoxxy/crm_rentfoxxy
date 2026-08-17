@@ -458,10 +458,17 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
 }
 
 function TechnicianSignModal({ item, onSigned, onClose }) {
+  const { user } = useAuth();
   const canvasRef = useRef(null);
   const padRef = useRef(null);
-  const [name, setName] = useState('');
+  const [name, setName] = useState(() => user?.name || user?.email || '');
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const loginName = user?.name || user?.email || '';
+    if (!loginName) return;
+    setName((prev) => (prev?.trim() ? prev : loginName));
+  }, [user?.name, user?.email]);
 
   useEffect(() => {
     let pad;
@@ -537,10 +544,17 @@ function TechnicianSignModal({ item, onSigned, onClose }) {
 }
 
 function WarehouseReceiptSignModal({ item, onSigned, onClose }) {
+  const { user } = useAuth();
   const canvasRef = useRef(null);
   const padRef = useRef(null);
-  const [name, setName] = useState('');
+  const [name, setName] = useState(() => user?.name || user?.email || '');
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const loginName = user?.name || user?.email || '';
+    if (!loginName) return;
+    setName((prev) => (prev?.trim() ? prev : loginName));
+  }, [user?.name, user?.email]);
 
   useEffect(() => {
     let pad;
