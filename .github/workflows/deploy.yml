@@ -1,6 +1,9 @@
 name: CI/CD Deploy to VPS
 
-# Both staging and production deploy automatically on push to new_crm_rentfoxxy.
+# Dual-branch / dual-server deploy:
+#   support_revamp     → staging    (157.173.221.119)  /var/www/crm_rentfoxxy_staging
+#   new_crm_rentfoxxy  → production (187.77.187.213)   /var/www/crm_rentfoxxy
+#
 # Manual Run workflow can still target staging / production / both.
 #
 # Secrets live on GitHub Environments `staging` and `production`
@@ -9,6 +12,7 @@ name: CI/CD Deploy to VPS
 on:
   push:
     branches:
+      - support_revamp
       - new_crm_rentfoxxy
   workflow_dispatch:
     inputs:
@@ -20,17 +24,17 @@ on:
           - staging
           - production
           - both
-        default: both
+        default: staging
 
 concurrency:
-  group: deploy-new-crm-rentfoxxy
+  group: deploy-crm-rentfoxxy
   cancel-in-progress: false
 
 jobs:
   deploy-staging:
-    name: Deploy staging
+    name: Deploy staging (support_revamp → 157)
     if: >
-      github.event_name == 'push' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/support_revamp') ||
       (github.event_name == 'workflow_dispatch' &&
        (github.event.inputs.target == 'staging' || github.event.inputs.target == 'both'))
     runs-on: ubuntu-latest
@@ -47,14 +51,23 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
         run: |
           set -euo pipefail
-          echo "Deploying staging → ${VPS_USER}@${VPS_HOST}"
+          echo "Deploying staging (support_revamp) → ${VPS_USER}@${VPS_HOST}"
           ssh -o StrictHostKeyChecking=no "${VPS_USER}@${VPS_HOST}" << 'EOF'
           set -euo pipefail
 
           cd /var/www/crm_rentfoxxy_staging
 
           git fetch origin
-          git reset --hard origin/new_crm_rentfoxxy
+          if git show-ref --verify --quiet refs/heads/support_revamp; then
+            git checkout support_revamp
+          else
+            git checkout -b support_revamp origin/support_revamp
+          fi
+          git pull origin support_revamp
+          git reset --hard origin/support_revamp
+
+          echo "Active branch: $(git branch --show-current)"
+          echo "HEAD: $(git rev-parse --short HEAD)"
 
           cd backend
           npm install
@@ -74,16 +87,17 @@ jobs:
           pm2 restart 5
           pm2 save
 
-          echo "Staging deploy finished"
+          echo "Staging deploy finished (support_revamp)"
           EOF
 
   deploy-production:
-    name: Deploy production
-    # Runs on every push after staging succeeds, or on manual production/both.
+    name: Deploy production (new_crm_rentfoxxy → 187)
+    # Push to new_crm_rentfoxxy → production only.
+    # Manual "both" → after staging succeeds; manual "production" → staging skipped OK.
     if: >
       always() &&
       (
-        github.event_name == 'push' ||
+        (github.event_name == 'push' && github.ref == 'refs/heads/new_crm_rentfoxxy') ||
         (github.event_name == 'workflow_dispatch' &&
          (github.event.inputs.target == 'production' || github.event.inputs.target == 'both'))
       ) &&
@@ -103,14 +117,23 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
         run: |
           set -euo pipefail
-          echo "Deploying production → ${VPS_USER}@${VPS_HOST}"
+          echo "Deploying production (new_crm_rentfoxxy) → ${VPS_USER}@${VPS_HOST}"
           ssh -o StrictHostKeyChecking=no "${VPS_USER}@${VPS_HOST}" << 'EOF'
           set -euo pipefail
 
           cd /var/www/crm_rentfoxxy
 
           git fetch origin
+          if git show-ref --verify --quiet refs/heads/new_crm_rentfoxxy; then
+            git checkout new_crm_rentfoxxy
+          else
+            git checkout -b new_crm_rentfoxxy origin/new_crm_rentfoxxy
+          fi
+          git pull origin new_crm_rentfoxxy
           git reset --hard origin/new_crm_rentfoxxy
+
+          echo "Active branch: $(git branch --show-current)"
+          echo "HEAD: $(git rev-parse --short HEAD)"
 
           cd backend
           npm install
@@ -130,5 +153,5 @@ jobs:
           pm2 restart crm-backend
           pm2 save
 
-          echo "Production deploy finished"
+          echo "Production deploy finished (new_crm_rentfoxxy)"
           EOF
