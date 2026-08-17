@@ -15,7 +15,6 @@ const emptyForm = () => ({
   grade: '',
   amount: '',
   label: '',
-  sort_order: '0',
   active: true,
 });
 
@@ -54,7 +53,6 @@ export default function BluedartDeclaredValuePanel() {
       grade: row.grade || '',
       amount: String(row.amount ?? ''),
       label: row.label || '',
-      sort_order: String(row.sort_order ?? 0),
       active: row.active !== false,
     });
     setModalOpen(true);
@@ -63,7 +61,7 @@ export default function BluedartDeclaredValuePanel() {
   const save = async (e) => {
     e.preventDefault();
     if (!form.category.trim() || !form.grade.trim()) {
-      toast.error('Category and grade are required');
+      toast.error('Processor and generation are required');
       return;
     }
     const amount = Number(form.amount);
@@ -78,7 +76,7 @@ export default function BluedartDeclaredValuePanel() {
         grade: form.grade.trim(),
         amount,
         label: form.label.trim() || undefined,
-        sort_order: Number(form.sort_order) || 0,
+        sort_order: editing?.sort_order ?? 0,
         active: form.active,
       };
       if (editing) {
@@ -126,8 +124,8 @@ export default function BluedartDeclaredValuePanel() {
         <div>
           <h2 className="text-lg font-semibold text-gray-900">BlueDart Declared Value</h2>
           <p className="text-sm text-gray-500 mt-0.5 max-w-2xl">
-            Amounts used when generating BlueDart AWB (₹). Matched by processor category
-            (i5 / i7 / R7 / APPLE) and grade (generation or Apple chip). Add rows here — they are not hardcoded.
+            Amounts used when generating BlueDart AWB (₹). Matched by processor
+            (i5 / i7 / R7 / APPLE) and generation (Intel gen or Apple chip). Add rows here — they are not hardcoded.
           </p>
         </div>
         <button
@@ -143,11 +141,10 @@ export default function BluedartDeclaredValuePanel() {
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-left text-gray-600">
             <tr>
-              <th className="px-3 py-2 font-medium">Category</th>
-              <th className="px-3 py-2 font-medium">Grade</th>
+              <th className="px-3 py-2 font-medium">Processor</th>
+              <th className="px-3 py-2 font-medium">Generation</th>
               <th className="px-3 py-2 font-medium">Amount (₹)</th>
               <th className="px-3 py-2 font-medium">Label</th>
-              <th className="px-3 py-2 font-medium">Order</th>
               <th className="px-3 py-2 font-medium">Status</th>
               <th className="px-3 py-2 font-medium w-28">Actions</th>
             </tr>
@@ -155,11 +152,11 @@ export default function BluedartDeclaredValuePanel() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={7} className="px-3 py-8 text-center text-gray-400">Loading…</td>
+                <td colSpan={6} className="px-3 py-8 text-center text-gray-400">Loading…</td>
               </tr>
             ) : !items.length ? (
               <tr>
-                <td colSpan={7} className="px-3 py-8 text-center text-gray-400">No rows yet. Add the first declared value.</td>
+                <td colSpan={6} className="px-3 py-8 text-center text-gray-400">No rows yet. Add the first declared value.</td>
               </tr>
             ) : (
               items.map((row) => (
@@ -170,7 +167,6 @@ export default function BluedartDeclaredValuePanel() {
                     {Number(row.amount).toLocaleString('en-IN')}
                   </td>
                   <td className="px-3 py-2 text-gray-500">{row.label || '—'}</td>
-                  <td className="px-3 py-2 text-gray-500">{row.sort_order}</td>
                   <td className="px-3 py-2">
                     <button
                       type="button"
@@ -212,9 +208,9 @@ export default function BluedartDeclaredValuePanel() {
       </div>
 
       <p className="text-xs text-gray-400 mt-3">
-        Tips: use grade <code className="bg-gray-100 px-1 rounded">ALL</code> for R7;
-        Apple grades like <code className="bg-gray-100 px-1 rounded">m1-air</code>, <code className="bg-gray-100 px-1 rounded">m4</code>;
-        Intel generations like <code className="bg-gray-100 px-1 rounded">12th</code>.
+        Tips: use generation <code className="bg-gray-100 px-1 rounded">ALL</code> for R7;
+        Apple chips like <code className="bg-gray-100 px-1 rounded">m1-air</code>, <code className="bg-gray-100 px-1 rounded">m4</code>;
+        Intel like <code className="bg-gray-100 px-1 rounded">12th</code>.
       </p>
 
       {modalOpen && (
@@ -227,15 +223,15 @@ export default function BluedartDeclaredValuePanel() {
               {editing ? 'Edit declared value' : 'Add declared value'}
             </h3>
             <label className="block text-sm">
-              <span className="text-gray-600">Category</span>
+              <span className="text-gray-600">Processor</span>
               <input
                 className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2"
                 value={form.category}
                 onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
                 placeholder="i5 / i7 / R7 / APPLE"
-                list="bd-dv-categories"
+                list="bd-dv-processors"
               />
-              <datalist id="bd-dv-categories">
+              <datalist id="bd-dv-processors">
                 <option value="i5" />
                 <option value="i7" />
                 <option value="R7" />
@@ -243,7 +239,7 @@ export default function BluedartDeclaredValuePanel() {
               </datalist>
             </label>
             <label className="block text-sm">
-              <span className="text-gray-600">Grade</span>
+              <span className="text-gray-600">Generation</span>
               <input
                 className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2"
                 value={form.grade}
@@ -270,15 +266,6 @@ export default function BluedartDeclaredValuePanel() {
                 className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2"
                 value={form.label}
                 onChange={(e) => setForm((f) => ({ ...f, label: e.target.value }))}
-              />
-            </label>
-            <label className="block text-sm">
-              <span className="text-gray-600">Sort order</span>
-              <input
-                type="number"
-                className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2"
-                value={form.sort_order}
-                onChange={(e) => setForm((f) => ({ ...f, sort_order: e.target.value }))}
               />
             </label>
             <label className="flex items-center gap-2 text-sm text-gray-700">

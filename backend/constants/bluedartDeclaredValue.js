@@ -195,7 +195,7 @@ async function createDeclaredValueRow({ category, grade, amount, label, sort_ord
   const gr = String(grade || '').trim();
   const amt = Number(amount);
   if (!cat || !gr) {
-    const err = new Error('category and grade are required');
+    const err = new Error('processor and generation are required');
     err.status = 400;
     throw err;
   }
@@ -222,7 +222,7 @@ async function createDeclaredValueRow({ category, grade, amount, label, sort_ord
     return mapRow(rows[0]);
   } catch (e) {
     if (e.code === '23505') {
-      const err = new Error('A row with this category and grade already exists');
+      const err = new Error('A row with this processor and generation already exists');
       err.status = 409;
       throw err;
     }
