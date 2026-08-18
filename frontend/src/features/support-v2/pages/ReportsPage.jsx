@@ -1,9 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import toast from 'react-hot-toast';
-import { BarChart3 } from 'lucide-react';
-import { PageHeader, Button, EmptyState } from '../../../components/ui/primitives';
-import { Mono } from '../../../components/ui/supportPrimitives';
+import { Button, EmptyState, Mono, PageHeader } from '../../../components/ui/supportPrimitives';
 import { downloadSupportReport, fetchSupportReport } from '../supportV2Api';
 
 const TABS = [
@@ -51,7 +49,7 @@ function BarList({ rows, nameKey, valueKey }) {
 
 function Kpi({ label, value }) {
   return (
-    <div className="bg-white rounded-xl border border-sup-lineSoft shadow-sup px-3.5 py-3">
+    <div className="bg-white rounded-[10px] border border-sup-lineSoft shadow-sup px-3.5 py-3">
       <div className="text-[10.5px] uppercase tracking-[0.08em] text-sup-faint font-semibold">{label}</div>
       <div className="font-mono tabular-nums text-[20px] font-bold tracking-[-0.03em] mt-0.5 text-sup-ink">{value ?? '—'}</div>
     </div>
@@ -96,7 +94,6 @@ export default function ReportsPage() {
       <PageHeader
         title="Reports"
         subtitle="S20 · read-only. Definitions live in supportReportsService.js."
-        icon={BarChart3}
         actions={(
           <div className="flex items-center gap-2">
             <input
@@ -130,11 +127,11 @@ export default function ReportsPage() {
 
       {!loading && data && tab === 'volume' ? (
         <div className="grid lg:grid-cols-2 gap-3">
-          <div className="bg-white rounded-xl border border-sup-lineSoft shadow-sup p-4">
+          <div className="bg-white rounded-[10px] border border-sup-lineSoft shadow-sup p-4">
             <div className="text-[13px] font-semibold mb-2">Top issue types</div>
             <BarList rows={data.top_issues} nameKey="issue_label" valueKey="n" />
           </div>
-          <div className="bg-white rounded-xl border border-sup-lineSoft shadow-sup p-4 overflow-auto">
+          <div className="bg-white rounded-[10px] border border-sup-lineSoft shadow-sup p-4 overflow-auto">
             <table className="w-full text-[12.5px]">
               <thead className="text-sup-muted text-left">
                 <tr><th className="py-1">Channel</th><th>Class</th><th>City</th><th className="text-right">n</th></tr>
@@ -162,7 +159,7 @@ export default function ReportsPage() {
             <Kpi label="Avg hours" value={data.rows?.[0]?.avg_hours} />
             <Kpi label="Breaches" value={data.rows?.[0]?.breaches} />
           </div>
-          <div className="bg-white rounded-xl border border-sup-lineSoft shadow-sup p-4">
+          <div className="bg-white rounded-[10px] border border-sup-lineSoft shadow-sup p-4">
             <div className="text-[13px] font-semibold mb-2">Breaches by reason</div>
             <BarList rows={data.by_reason} nameKey="reason" valueKey="n" />
           </div>
@@ -176,7 +173,7 @@ export default function ReportsPage() {
             <Kpi label="Reopen %" value={data.rows?.[0]?.reopen_rate} />
             <Kpi label="Reported vs found" value={data.rows?.[0]?.accuracy} />
           </div>
-          <div className="bg-white rounded-xl border border-sup-lineSoft shadow-sup p-4">
+          <div className="bg-white rounded-[10px] border border-sup-lineSoft shadow-sup p-4">
             <div className="text-[13px] font-semibold mb-2">CSAT ≤ 2</div>
             {(data.csat_low || []).length === 0 ? <div className="text-[12px] text-sup-muted">None.</div> : null}
             {(data.csat_low || []).map((r) => (
@@ -190,7 +187,7 @@ export default function ReportsPage() {
       ) : null}
 
       {!loading && data && ['field', 'assets', 'parts', 'commercial'].includes(tab) ? (
-        <div className="bg-white rounded-xl border border-sup-lineSoft shadow-sup overflow-auto">
+        <div className="bg-white rounded-[10px] border border-sup-lineSoft shadow-sup overflow-auto">
           <table className="w-full text-[12.5px]">
             <thead className="bg-sup-canvas text-sup-muted text-left">
               <tr>

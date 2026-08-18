@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Boxes } from 'lucide-react';
-import { PageHeader, Button, ResponsiveTable } from '../../../components/ui/primitives';
-import { PriorityChip, prioritySpine, SlaChip, Mono, StatusPill, Modal } from '../../../components/ui/supportPrimitives';
+import {
+  Button, DataTable, Modal, Mono, PageHeader, PriorityChip, SlaChip, StatusPill, prioritySpine,
+} from '../../../components/ui/supportPrimitives';
 import {
   fetchPartsQueue, approvePartRequest, rejectPartRequest, escalatePartRequest, issuePartRequest,
 } from '../supportV2Api';
@@ -155,9 +155,9 @@ export default function PartsQueuePage() {
 
   return (
     <div className="p-4 md:p-6 max-w-[1600px] mx-auto">
-      <PageHeader title="Parts queue" subtitle="One queue. Ticket priority first — not warehouse FIFO." icon={Boxes} />
+      <PageHeader title="Parts queue" subtitle="One queue. Ticket priority first — not warehouse FIFO." />
 
-      <div className="mt-4 bg-white border border-sup-line rounded-xl shadow-sup">
+      <div className="mt-4 bg-white border border-sup-line rounded-[10px] shadow-sup">
         <div className="flex items-center gap-2 flex-wrap px-4 pt-3">
           {CHIPS.map((c) => (
             <button
@@ -192,7 +192,7 @@ export default function PartsQueuePage() {
           </div>
         </div>
 
-        <ResponsiveTable
+        <DataTable
           columns={columns}
           rows={rows}
           keyField="request_id"

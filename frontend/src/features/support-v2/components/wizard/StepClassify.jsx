@@ -124,7 +124,7 @@ function LineCard({
   };
 
   return (
-    <div className={`rounded-xl border bg-white p-3 space-y-2 ${errors.length ? 'border-pri1' : 'border-sup-lineSoft'}`}>
+    <div className={`rounded-[10px] border bg-white p-3 space-y-2 ${errors.length ? 'border-pri1' : 'border-sup-lineSoft'}`}>
       <div className="flex items-center justify-between gap-2">
         <div className="text-[12px] font-semibold">
           [{line.line_code}] {line.ttspl_id || 'Unknown'} · {line.model || '—'}

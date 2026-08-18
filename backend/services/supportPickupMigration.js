@@ -48,6 +48,8 @@ const ITEM_STATUS_MAP = {
   closed: { status: 'COMPLETED' },
   cancelled: { status: 'CANCELLED' },
   open: { status: 'DRAFT' },
+  delivered: { status: 'COMPLETED' },
+  order_placed: { status: 'PENDING_ASSIGNMENT' },
 };
 
 function mapItemStatus(status) {

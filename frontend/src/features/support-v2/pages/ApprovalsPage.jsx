@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { CheckCircle2 } from 'lucide-react';
-import { PageHeader, Button, ResponsiveTable } from '../../../components/ui/primitives';
-import { PriorityChip, prioritySpine, Mono, StatusPill, Modal } from '../../../components/ui/supportPrimitives';
+import {
+  Button, DataTable, Modal, Mono, PageHeader, PriorityChip, StatusPill, prioritySpine,
+} from '../../../components/ui/supportPrimitives';
 import usePermission from '../../../hooks/usePermission';
 import { fetchApprovals, decideApproval } from '../supportV2Api';
 
@@ -134,7 +134,6 @@ export default function ApprovalsPage() {
       <PageHeader
         title="Approvals"
         subtitle="Everything waiting on a decision, in one inbox."
-        icon={CheckCircle2}
       />
       <div className="flex gap-1">
         {TABS.map((t) => (
@@ -150,8 +149,8 @@ export default function ApprovalsPage() {
           </button>
         ))}
       </div>
-      <div className="bg-white rounded-xl border border-sup-lineSoft shadow-sup overflow-hidden">
-        <ResponsiveTable
+      <div className="bg-white rounded-[10px] border border-sup-lineSoft shadow-sup overflow-hidden">
+        <DataTable
           columns={columns}
           rows={rows}
           keyField="approval_id"

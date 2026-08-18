@@ -418,8 +418,24 @@ exports.queueMeta = async (req, res) => {
       pool.query(
         `SELECT DISTINCT u.user_id, u.name
            FROM users u
-           JOIN support_group_members m ON m.user_id = u.user_id
           WHERE COALESCE(u.active, TRUE) = TRUE
+            AND (
+              u.role IN ('support_tech', 'technician', 'support_lead', 'support_manager', 'support_agent')
+              OR EXISTS (
+                SELECT 1 FROM user_permissions up
+                 WHERE up.user_id = u.user_id
+                   AND up.section = 'support_bucket'
+                   AND COALESCE(up.can_edit, FALSE) = TRUE
+              )
+              OR EXISTS (
+                SELECT 1
+                  FROM support_group_members m
+                  JOIN support_assignment_groups g ON g.group_id = m.group_id
+                 WHERE m.user_id = u.user_id
+                   AND g.is_active = TRUE
+                   AND g.group_type IN ('FIELD', 'REMOTE')
+              )
+            )
           ORDER BY u.name`
       ),
     ]);

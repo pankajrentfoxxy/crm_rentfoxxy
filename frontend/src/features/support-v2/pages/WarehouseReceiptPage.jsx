@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { PageHeader, Button } from '../../../components/ui/primitives';
+import { Button, PageHeader } from '../../../components/ui/supportPrimitives';
 import { getWorkOrder, listWorkOrders, submitWarehouseReceipt } from '../supportV2Api';
 import { SUPPORT_V2_BASE } from '../supportV2Utils';
 import CameraScanner from '../../../components/CameraScanner';
@@ -80,7 +80,7 @@ export default function WarehouseReceiptPage() {
           <button
             key={w.wo_id}
             type="button"
-            className="block w-full text-left bg-white rounded-xl border border-sup-lineSoft p-3"
+            className="block w-full text-left bg-white rounded-[10px] border border-sup-lineSoft p-3"
             onClick={() => nav(`${SUPPORT_V2_BASE}/returns/receipt/${w.wo_id}`)}
           >
             <div className="font-mono font-semibold">{w.wo_number}</div>
@@ -109,7 +109,7 @@ export default function WarehouseReceiptPage() {
         <Button size="sm" variant="secondary" onClick={() => setCam((v) => !v)}>Camera</Button>
       </div>
       {cam && <CameraScanner onScan={(v) => { setCam(false); addScan(v); }} />}
-      <div className="bg-white rounded-xl border border-sup-lineSoft divide-y">
+      <div className="bg-white rounded-[10px] border border-sup-lineSoft divide-y">
         {expected.map((a) => {
           const ok = scanned.includes(a.serial_id);
           return (
@@ -129,7 +129,7 @@ export default function WarehouseReceiptPage() {
           rows={2}
         />
       )}
-      <Button loading={saving} onClick={submit}>Submit receipt</Button>
+      <Button size="touch" loading={saving} onClick={submit}>Submit receipt</Button>
     </div>
   );
 }

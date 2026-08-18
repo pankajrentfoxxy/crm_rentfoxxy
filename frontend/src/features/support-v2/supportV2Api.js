@@ -65,6 +65,7 @@ export const assignWorkOrder = (woId, data) => api.post(`${BASE}/work-orders/${w
 export const acceptWorkOrder = (woId, headers) => api.post(`${BASE}/work-orders/${woId}/accept`, {}, { headers });
 export const enRouteWorkOrder = (woId, headers) => api.post(`${BASE}/work-orders/${woId}/en-route`, {}, { headers });
 export const onSiteWorkOrder = (woId, headers) => api.post(`${BASE}/work-orders/${woId}/on-site`, {}, { headers });
+export const startWorkOrder = (woId, headers) => api.post(`${BASE}/work-orders/${woId}/start`, {}, { headers });
 export const completeWoStep = (woId, code, data, headers) => api.post(`${BASE}/work-orders/${woId}/steps/${code}`, data, { headers });
 export const verifyWoOtp = (woId, data, headers) => api.post(`${BASE}/work-orders/${woId}/verify-otp`, data, { headers });
 export const completeWorkOrder = (woId, data, headers) => api.post(`${BASE}/work-orders/${woId}/complete`, data, { headers });
@@ -104,6 +105,10 @@ export const fetchDispatchBoard = (params) => api.get(`${BASE}/dispatch/board`, 
 export const dispatchAssign = (data) => api.post(`${BASE}/dispatch/assign`, data);
 export const dispatchAutoAssign = (data) => api.post(`${BASE}/dispatch/auto-assign`, data);
 export const fetchDispatchCapacity = (params) => api.get(`${BASE}/dispatch/capacity`, { params });
+export const fetchAssigneeAvailability = (userId, params) =>
+  api.get(`${BASE}/assignees/${userId}/availability`, { params });
+export const fetchAttendance = (params) => api.get(`${BASE}/attendance`, { params });
+export const putAttendance = (data) => api.put(`${BASE}/attendance`, data);
 
 export const fetchSupportReport = (name, params) => api.get(`${BASE}/reports/${name}`, { params });
 export const downloadSupportReport = (name, params) =>

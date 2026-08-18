@@ -1,9 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Button } from '../../../components/ui/primitives';
 import {
-  ClassificationChain, Mono, PriorityChip, SlaChip, StatusPill, WorkOrderCard, prioritySpine, Modal,
+  Button, ClassificationChain, Modal, Mono, PriorityChip, SlaChip, StatusPill, WorkOrderCard, prioritySpine,
 } from '../../../components/ui/supportPrimitives';
 import PermissionGate from '../../../components/PermissionGate';
 import { usePermission } from '../../../hooks/usePermission';
@@ -17,6 +16,7 @@ import ResolveLineModal from '../components/ResolveLineModal';
 import CreateWorkOrderModal from '../components/CreateWorkOrderModal';
 import InitiateReplacementModal from '../components/InitiateReplacementModal';
 import ReplacementPair from '../components/ReplacementPair';
+import TicketLinkPicker from '../components/TicketLinkPicker';
 
 const TABS = ['Overview', 'Machines', 'Work orders', 'Timeline', 'Attachments', 'Costs', 'Approvals'];
 
@@ -32,7 +32,7 @@ function AssetCard({ line, canEdit, onResolve, onCreateWo, onReplace, onOpenWo, 
   const found = line.found_issue_id;
   const match = found && Number(found) === Number(line.reported_issue_id);
   return (
-    <div className="bg-white rounded-xl border border-sup-lineSoft p-3 space-y-2">
+    <div className="bg-white rounded-[10px] border border-sup-lineSoft p-3 space-y-2">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-[12px]">
           <span className="font-semibold">{line.line_code}</span>
@@ -124,6 +124,8 @@ export default function TicketDetailPage() {
   const [pauseForm, setPauseForm] = useState({ reason: 'PENDING_CUSTOMER', contact_method: 'PHONE', note: '' });
   const [comment, setComment] = useState('');
   const [owners, setOwners] = useState([]);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkDraft, setLinkDraft] = useState(null);
 
   const load = useCallback(() => {
     getTicket(id).then((r) => setData(r.data)).catch(() => toast.error('Ticket not found'));
@@ -147,7 +149,7 @@ export default function TicketDetailPage() {
 
   return (
     <div className="space-y-3">
-      <div className={`bg-white rounded-xl border border-sup-lineSoft p-4 ${prioritySpine(t.priority)}`}>
+      <div className={`bg-white rounded-[10px] border border-sup-lineSoft p-4 ${prioritySpine(t.priority)}`}>
         <div className="flex flex-wrap items-center gap-2">
           <PriorityChip priority={t.priority} showLabel />
           <Mono bold className="text-[15px]">{t.ticket_number}</Mono>
@@ -243,7 +245,7 @@ export default function TicketDetailPage() {
           </div>
           {tab === 'Overview' && (
             <div className="space-y-3">
-              <div className="bg-white rounded-xl border border-sup-lineSoft p-3">
+              <div className="bg-white rounded-[10px] border border-sup-lineSoft p-3">
                 <div className="font-semibold text-[12px] mb-2">Timeline</div>
                 <ol className="space-y-2">
                   {events.slice(0, 8).map((e) => (
@@ -260,22 +262,21 @@ export default function TicketDetailPage() {
                   ))}
                 </ol>
               </div>
-              <div className="bg-white rounded-xl border border-sup-lineSoft p-3 text-[12px]">
+              <div className="bg-white rounded-[10px] border border-sup-lineSoft p-3 text-[12px]">
                 <div className="font-semibold mb-1">Costs on this ticket</div>
                 <div>Chargeable ₹{data.costs?.chargeable_total || 0}</div>
                 <div>Pending lines {data.costs?.pending_lines || 0}</div>
               </div>
-              <div className="bg-white rounded-xl border border-sup-lineSoft p-3 space-y-2 text-[12px]">
+              <div className="bg-white rounded-[10px] border border-sup-lineSoft p-3 space-y-2 text-[12px]">
                 <div className="font-semibold">Quick actions</div>
                 <PermissionGate section="support_work_orders" action="create">
                   <button type="button" className="block text-left w-full underline" onClick={() => setWoOpen(true)}>Create work order</button>
                 </PermissionGate>
                 <PermissionGate section="support_tickets" action="edit">
                   <button type="button" className="block text-left w-full underline" onClick={() => setPauseOpen(true)}>Pause — waiting on customer</button>
-                  <button type="button" className="block text-left w-full underline" onClick={() => {
-                    const target = window.prompt('Target ticket id');
-                    if (target) act(() => linkTicket(t.ticket_id, { target_ticket_id: Number(target), link_type: 'RELATED' }), 'Linked');
-                  }}>Link or merge ticket</button>
+                  <button type="button" className="block text-left w-full underline" onClick={() => { setLinkDraft(null); setLinkOpen(true); }}>
+                    Link or merge ticket
+                  </button>
                 </PermissionGate>
                 <PermissionGate section="support_triage" action="edit">
                   <button type="button" className="block text-left w-full underline" onClick={() => {
@@ -348,7 +349,7 @@ export default function TicketDetailPage() {
       )}
 
       {tab === 'Timeline' && (
-        <ol className="space-y-2 bg-white rounded-xl border border-sup-lineSoft p-4">
+        <ol className="space-y-2 bg-white rounded-[10px] border border-sup-lineSoft p-4">
           {events.map((e) => (
             <li key={e.event_id} className="flex gap-2 text-[12px]">
               <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${eventTone(e.event_type)}`} />
@@ -365,7 +366,7 @@ export default function TicketDetailPage() {
       )}
 
       {tab === 'Attachments' && (
-        <ul className="bg-white rounded-xl border border-sup-lineSoft p-4 text-[12px] space-y-1">
+        <ul className="bg-white rounded-[10px] border border-sup-lineSoft p-4 text-[12px] space-y-1">
           {(data.attachments || []).map((a) => (
             <li key={a.attachment_id}>{a.original_name || a.file_path} · {a.kind}</li>
           ))}
@@ -374,13 +375,13 @@ export default function TicketDetailPage() {
       )}
 
       {tab === 'Costs' && (
-        <div className="bg-white rounded-xl border border-sup-lineSoft p-4 text-[12px]">
+        <div className="bg-white rounded-[10px] border border-sup-lineSoft p-4 text-[12px]">
           Chargeable total ₹{data.costs?.chargeable_total || 0} · pending {data.costs?.pending_lines || 0} · open holds {data.costs?.open_holds || 0}
         </div>
       )}
 
       {tab === 'Approvals' && (
-        <ul className="bg-white rounded-xl border border-sup-lineSoft p-4 text-[12px] space-y-1">
+        <ul className="bg-white rounded-[10px] border border-sup-lineSoft p-4 text-[12px] space-y-1">
           {(data.approvals || []).map((a) => (
             <li key={a.approval_id}>{a.label || a.approval_type} · {a.status} {a.amount ? `· ₹${a.amount}` : ''}</li>
           ))}
@@ -388,7 +389,7 @@ export default function TicketDetailPage() {
         </ul>
       )}
 
-      <div className="bg-white rounded-xl border border-sup-lineSoft p-3 flex gap-2">
+      <div className="bg-white rounded-[10px] border border-sup-lineSoft p-3 flex gap-2">
         <input
           value={comment}
           onChange={(e) => setComment(e.target.value)}
@@ -466,6 +467,33 @@ export default function TicketDetailPage() {
             )}
             <textarea value={pauseForm.note} onChange={(e) => setPauseForm((f) => ({ ...f, note: e.target.value }))} placeholder="Note" className="w-full border rounded px-2 py-1.5" />
           </div>
+        </Modal>
+      )}
+
+      {linkOpen && (
+        <Modal
+          title="Link to existing ticket"
+          onClose={() => setLinkOpen(false)}
+          size="sm"
+          footer={(
+            <>
+              <Button variant="secondary" onClick={() => setLinkOpen(false)}>Cancel</Button>
+              <Button
+                disabled={!linkDraft?.target_ticket_id}
+                onClick={() => {
+                  act(() => linkTicket(t.ticket_id, {
+                    target_ticket_id: linkDraft.target_ticket_id,
+                    link_type: 'RELATED',
+                  }), `Linked to ${linkDraft.ticket_number || linkDraft.target_ticket_id}`);
+                  setLinkOpen(false);
+                }}
+              >
+                Link
+              </Button>
+            </>
+          )}
+        >
+          <TicketLinkPicker value={linkDraft} onChange={setLinkDraft} allowOpen={false} />
         </Modal>
       )}
     </div>

@@ -5,6 +5,11 @@ name: CI/CD Deploy to VPS
 #   new_crm_rentfoxxy  → production (187.x) only
 #
 # Manual "Run workflow" can still target staging / production / both.
+# Dual-branch / dual-server deploy:
+#   support_revamp     → staging    (157.173.221.119)  /var/www/crm_rentfoxxy_staging
+#   new_crm_rentfoxxy  → production (187.77.187.213)   /var/www/crm_rentfoxxy
+#
+# Manual Run workflow can still target staging / production / both.
 #
 # Secrets live on GitHub Environments `staging` and `production`
 # (each has its own VPS_HOST / VPS_USER / VPS_SSH_KEY).
@@ -12,6 +17,7 @@ name: CI/CD Deploy to VPS
 on:
   push:
     branches:
+      - support_revamp
       - new_crm_rentfoxxy
       - support_revemp
   workflow_dispatch:
@@ -109,7 +115,16 @@ jobs:
           cd /var/www/crm_rentfoxxy
 
           git fetch origin
+          if git show-ref --verify --quiet refs/heads/new_crm_rentfoxxy; then
+            git checkout new_crm_rentfoxxy
+          else
+            git checkout -b new_crm_rentfoxxy origin/new_crm_rentfoxxy
+          fi
+          git pull origin new_crm_rentfoxxy
           git reset --hard origin/new_crm_rentfoxxy
+
+          echo "Active branch: $(git branch --show-current)"
+          echo "HEAD: $(git rev-parse --short HEAD)"
 
           cd backend
           npm install

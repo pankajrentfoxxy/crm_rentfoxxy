@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Loader2, Search, X } from 'lucide-react';
 
 /* ───────────────────────── Mono ───────────────────────── */
 export function Mono({ children, className = '', bold = false }) {
@@ -114,7 +114,7 @@ export function Modal({ open = true, title, subtitle, onClose, footer, size = 'l
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center p-4 overflow-y-auto">
       <button type="button" className="fixed inset-0 bg-black/40" onClick={onClose} aria-label="Close" />
-      <div className={`relative bg-white rounded-xl shadow-supLg w-full ${w} my-8`} role="dialog" aria-modal="true">
+      <div className={`relative bg-white rounded-[10px] shadow-supLg w-full ${w} my-8`} role="dialog" aria-modal="true">
         <div className="flex items-start gap-3 px-4 py-3.5 border-b border-sup-lineSoft">
           <div className="flex-1">
             <h3 className="text-[13px] font-semibold text-sup-ink">{title}</h3>
@@ -126,7 +126,7 @@ export function Modal({ open = true, title, subtitle, onClose, footer, size = 'l
         </div>
         <div className="p-4">{children}</div>
         {footer && (
-          <div className="px-4 py-3 border-t border-sup-lineSoft bg-sup-canvas rounded-b-xl flex justify-end gap-2">
+          <div className="px-4 py-3 border-t border-sup-lineSoft bg-sup-canvas rounded-b-[10px] flex justify-end gap-2">
             {footer}
           </div>
         )}
@@ -365,8 +365,227 @@ export function KpiTile({ label, value, hint, tone = 'default', onClick }) {
 export function SectionDivider({ children, className = '' }) {
   return (
     <div className={`flex items-center gap-2 ${className}`}>
-      <span className="text-[10px] uppercase tracking-[0.12em] text-sup-faint font-semibold whitespace-nowrap">{children}</span>
-      <span className="flex-1 h-px bg-sup-lineSoft" />
+      <span className="text-[9.5px] uppercase tracking-[0.13em] text-sup-faint font-bold whitespace-nowrap">{children}</span>
+      <span className="flex-1 h-px bg-sup-line" />
     </div>
+  );
+}
+
+/* ═══════════════ SUPPORT-SCOPED OVERRIDES ═══════════════
+   Same names and props as components/ui/primitives.jsx, restyled to the
+   support console spec. Support-v2 must import these, never the CRM ones.
+   ════════════════════════════════════════════════════════ */
+
+const SUP_BTN = {
+  primary:   'bg-sup-accent text-white hover:bg-[#0F3E50] active:bg-[#0C3242] border border-sup-accent',
+  secondary: 'bg-white text-sup-ink2 border border-sup-line hover:bg-sup-canvas2',
+  ghost:     'bg-transparent text-sup-ink2 border border-transparent hover:bg-sup-canvas2',
+  success:   'bg-sup-ok text-white hover:bg-[#166341] border border-sup-ok',
+  danger:    'bg-white text-pri1 border border-pri1-ring hover:bg-pri1-bg',
+  subtle:    'bg-sup-accentSoft text-sup-accent border border-transparent hover:bg-[#D5E9EC]',
+};
+const SUP_BTN_SIZE = {
+  sm:    'h-[25px] px-[9px] text-[11.5px] gap-1.5',
+  md:    'h-[30px] px-3 text-[12px] gap-1.5',
+  lg:    'h-[34px] px-3.5 text-[12.5px] gap-2',
+  touch: 'min-h-[44px] px-4 text-[13px] gap-2',
+};
+
+export function Button({
+  variant = 'primary', size = 'md', icon: Icon, iconRight: IconRight,
+  loading = false, disabled, className = '', children, ...props
+}) {
+  return (
+    <button
+      type={props.type || 'button'}
+      disabled={disabled || loading}
+      className={`inline-flex items-center justify-center font-medium rounded-md transition-colors
+        select-none disabled:opacity-45 disabled:cursor-not-allowed
+        focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-sup-accent2
+        ${SUP_BTN[variant] || SUP_BTN.primary} ${SUP_BTN_SIZE[size] || SUP_BTN_SIZE.md} ${className}`}
+      {...props}
+    >
+      {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : (Icon ? <Icon className="w-3.5 h-3.5 shrink-0" /> : null)}
+      {children}
+      {IconRight && !loading ? <IconRight className="w-3.5 h-3.5 shrink-0" /> : null}
+    </button>
+  );
+}
+
+const SUP_BADGE = {
+  gray:   'bg-sup-canvas2 text-sup-ink2',
+  blue:   'bg-sup-accentSoft text-sup-accent',
+  green:  'bg-sup-okBg text-sup-ok',
+  amber:  'bg-pri3-bg text-pri3',
+  orange: 'bg-pri2-bg text-pri2',
+  red:    'bg-pri1-bg text-pri1',
+  purple: 'bg-sup-canvas2 text-sup-ink2',
+  outline:'bg-transparent border border-sup-line text-sup-muted',
+};
+export function Badge({ tone = 'gray', className = '', children }) {
+  return (
+    <span className={`inline-flex items-center gap-1 h-[19px] px-[7px] rounded-full
+                      text-[10.5px] font-semibold whitespace-nowrap
+                      ${SUP_BADGE[tone] || SUP_BADGE.gray} ${className}`}>
+      {children}
+    </span>
+  );
+}
+
+export function Card({ className = '', children, ...props }) {
+  return (
+    <div className={`bg-white border border-sup-line rounded-[10px] shadow-sup ${className}`} {...props}>
+      {children}
+    </div>
+  );
+}
+export function CardHeader({ title, actions, className = '', children }) {
+  return (
+    <div className={`flex items-center gap-2.5 px-[15px] py-3 border-b border-sup-lineSoft ${className}`}>
+      {title && <span className="text-[12.5px] font-semibold tracking-[-0.01em] text-sup-ink">{title}</span>}
+      {children}
+      {actions && <div className="ml-auto flex items-center gap-2">{actions}</div>}
+    </div>
+  );
+}
+export function CardBody({ className = '', children }) {
+  return <div className={`p-[15px] ${className}`}>{children}</div>;
+}
+
+/** No icon chip. Eyebrow + tight title + muted subtitle, exactly as the mockup. */
+export function PageHeader({ title, subtitle, eyebrow, actions, className = '' }) {
+  return (
+    <div className={`flex items-start justify-between gap-3 flex-wrap mb-4 ${className}`}>
+      <div className="min-w-0">
+        {eyebrow && (
+          <div className="text-[9.5px] uppercase tracking-[0.11em] text-sup-faint font-semibold">{eyebrow}</div>
+        )}
+        <h1 className="text-[19px] font-bold tracking-[-0.025em] text-sup-ink leading-tight">{title}</h1>
+        {subtitle && <p className="text-[12px] text-sup-muted mt-0.5">{subtitle}</p>}
+      </div>
+      {actions && <div className="flex items-center gap-2 shrink-0">{actions}</div>}
+    </div>
+  );
+}
+
+export function StatCard({ label, value, hint, alarm = false, active = false, onClick }) {
+  const Tag = onClick ? 'button' : 'div';
+  return (
+    <Tag
+      type={onClick ? 'button' : undefined}
+      onClick={onClick}
+      className={`text-left w-full bg-white border rounded-[10px] px-3.5 py-3
+        ${alarm ? 'border-pri1-ring bg-[#FEF7F8]' : 'border-sup-line'}
+        ${active ? 'ring-2 ring-sup-accent2' : ''}
+        ${onClick ? 'hover:border-sup-accent2 transition-colors' : ''}`}
+    >
+      <div className="text-[10px] uppercase tracking-[0.08em] text-sup-faint font-semibold">{label}</div>
+      <div className={`text-[27px] font-bold tracking-[-0.035em] tabular-nums mt-1
+                       ${alarm ? 'text-pri1' : 'text-sup-ink'}`}>{value}</div>
+      {hint && <div className="text-[11px] text-sup-muted mt-0.5">{hint}</div>}
+    </Tag>
+  );
+}
+
+export function EmptyState({ icon: Icon, title = 'Nothing here', hint, action }) {
+  return (
+    <div className="text-center py-10 px-4">
+      {Icon && <Icon className="w-8 h-8 text-sup-faint mx-auto mb-2.5" strokeWidth={1.5} />}
+      <p className="text-[12.5px] font-semibold text-sup-ink2">{title}</p>
+      {hint && <p className="text-[11.5px] text-sup-muted mt-1 max-w-sm mx-auto">{hint}</p>}
+      {action && <div className="mt-3 flex justify-center">{action}</div>}
+    </div>
+  );
+}
+
+export function SectionLoader({ label = 'Loading…' }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-12 text-sup-muted">
+      <Loader2 className="w-6 h-6 animate-spin text-sup-accent2" />
+      <p className="text-[11.5px] mt-2.5">{label}</p>
+    </div>
+  );
+}
+
+export function SearchField({ value, onChange, placeholder, className = '', touch = false }) {
+  return (
+    <div className={`relative ${className}`}>
+      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-sup-faint pointer-events-none" />
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className={`w-full border border-sup-line rounded-md pl-9 pr-3 text-[11.5px] bg-white
+                    text-sup-ink placeholder:text-sup-faint
+                    focus:outline focus:outline-2 focus:outline-offset-[-1px] focus:outline-sup-accent2
+                    ${touch ? 'min-h-[44px]' : 'h-7'}`}
+      />
+    </div>
+  );
+}
+
+export function ListPagination({ page, totalPages, total, pageSize, onPageChange }) {
+  if (!totalPages || totalPages <= 1) return null;
+  return (
+    <div className="flex items-center gap-2">
+      <Button size="sm" variant="secondary" disabled={page <= 1}
+              onClick={() => onPageChange(page - 1)} aria-label="Previous page">
+        <ChevronLeft className="w-3.5 h-3.5" />
+      </Button>
+      <span className="font-mono tabular-nums text-[11px] text-sup-muted">{page} / {totalPages}</span>
+      <Button size="sm" variant="secondary" disabled={page >= totalPages}
+              onClick={() => onPageChange(page + 1)} aria-label="Next page">
+        <ChevronRight className="w-3.5 h-3.5" />
+      </Button>
+    </div>
+  );
+}
+
+export function DataTable({
+  columns, rows, keyField, loading, empty, onRowClick, renderCard, rowClassName,
+}) {
+  if (loading) return <SectionLoader />;
+  if (!rows?.length) return empty || <EmptyState title="No records" />;
+  return (
+    <>
+      <div className="md:hidden p-3 space-y-2.5">
+        {rows.map((r, i) => (
+          <div key={r[keyField] ?? i} onClick={() => onRowClick?.(r)} role={onRowClick ? 'button' : undefined}>
+            {renderCard ? renderCard(r) : null}
+          </div>
+        ))}
+      </div>
+      <div className="hidden md:block overflow-x-auto">
+        <table className="w-full border-collapse">
+          <thead>
+            <tr>
+              {columns.map((c) => (
+                <th key={c.key}
+                    className={`text-left text-[9.5px] uppercase tracking-[0.09em] text-sup-faint
+                                font-semibold px-2.5 py-2 bg-sup-canvas border-b border-sup-line
+                                ${c.className || ''}`}>
+                  {c.header}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={r[keyField] ?? i}
+                  onClick={() => onRowClick?.(r)}
+                  className={`${onRowClick ? 'cursor-pointer' : ''} hover:bg-[#FAFBFC]
+                              ${rowClassName ? rowClassName(r) : ''}`}>
+                {columns.map((c) => (
+                  <td key={c.key} className={`px-2.5 py-[9px] border-b border-sup-lineSoft align-middle
+                                              text-[12px] text-sup-ink ${c.className || ''}`}>
+                    {c.render ? c.render(r) : r[c.key]}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }

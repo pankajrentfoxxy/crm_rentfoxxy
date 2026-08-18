@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Button } from '../../../components/ui/primitives';
-import { Modal, Mono } from '../../../components/ui/supportPrimitives';
+import { Button, Modal, Mono } from '../../../components/ui/supportPrimitives';
 import {
   fetchReplacementCandidates, fetchReplacementContext, createReplacement,
 } from '../supportV2Api';
@@ -88,7 +87,7 @@ export default function InitiateReplacementModal({ line, ticket, onClose, onCrea
               key={r.value}
               type="button"
               onClick={() => setReason(r.value)}
-              className={`text-left rounded-xl border p-3 ${reason === r.value ? 'ring-2 ring-sup-accent bg-sup-accentSoft' : 'border-sup-line'}`}
+              className={`text-left rounded-[10px] border p-3 ${reason === r.value ? 'ring-2 ring-sup-accent bg-sup-accentSoft' : 'border-sup-line'}`}
             >
               <div className="font-semibold text-[13px]">{r.label}</div>
               <div className="text-[12px] text-sup-muted">{r.blurb}</div>
@@ -119,7 +118,7 @@ export default function InitiateReplacementModal({ line, ticket, onClose, onCrea
                 key={c.serial_id}
                 type="button"
                 onClick={() => setPicked(c)}
-                className={`w-full text-left rounded-xl border p-2.5 ${picked?.serial_id === c.serial_id ? 'ring-2 ring-sup-accent' : 'border-sup-line'}`}
+                className={`w-full text-left rounded-[10px] border p-2.5 ${picked?.serial_id === c.serial_id ? 'ring-2 ring-sup-accent' : 'border-sup-line'}`}
               >
                 <div className="flex justify-between gap-2 text-[12px]">
                   <Mono bold>{c.ttspl_id}</Mono>

@@ -125,3 +125,15 @@ exports.capacity = async (req, res) => {
     res.json({ success: true, ...row });
   } catch (e) { bad(res, e); }
 };
+
+exports.assigneeAvailability = async (req, res) => {
+  try {
+    const userId = Number(req.params.userId);
+    if (!userId) return res.status(400).json({ success: false, message: 'userId required' });
+    const data = await engine.assigneeAvailability(pool, userId, {
+      from: req.query.from,
+      days: req.query.days,
+    });
+    res.json({ success: true, ...data });
+  } catch (e) { bad(res, e); }
+};

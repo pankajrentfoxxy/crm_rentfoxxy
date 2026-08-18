@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { PageHeader, Button } from '../../../components/ui/primitives';
+import { Button, PageHeader } from '../../../components/ui/supportPrimitives';
 import { createTicket, fetchQueueMeta, fetchTaxonomyTree, getCustomerAssets, getCustomerContext } from '../supportV2Api';
 import { SUPPORT_V2_BASE } from '../supportV2Utils';
 import StepCustomer, { customerStepValid } from '../components/wizard/StepCustomer';
@@ -18,6 +18,8 @@ const empty = {
   customer_id: null,
   customer: null,
   site_id: null,
+  site_key: '',
+  site_pincode: '',
   site_label: '',
   contact_name: '',
   contact_phone: '',
@@ -127,6 +129,8 @@ export default function NewTicketPage() {
         channel: state.channel,
         customer_id: state.customer_id,
         site_id: state.site_id,
+        site_key: state.site_key || undefined,
+        site_pincode: state.site_pincode || undefined,
         site_label: state.site_label,
         contact_name: state.contact_name,
         contact_phone: state.contact_phone,

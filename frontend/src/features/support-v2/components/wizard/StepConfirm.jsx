@@ -1,10 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { TypeTag } from '../../../../components/ui/supportPrimitives';
-import { previewSla } from '../../supportV2Api';
+import { fetchAssigneeAvailability, previewSla } from '../../supportV2Api';
 import { previewTicketPriority, woTypeLabel } from '../../supportV2Utils';
+
+function toLocalInput(date, hm) {
+  return `${date}T${hm}`;
+}
 
 export default function StepConfirm({ state, setState, groups, owners, supportTier, fleetSize }) {
   const [preview, setPreview] = useState(null);
+  const [avail, setAvail] = useState(null);
   const pri = previewTicketPriority(state, supportTier, fleetSize);
   const suggested = [...new Set((state.lines || []).map((l) => l.default_wo_type).filter(Boolean))];
   const skill = [...new Set((state.lines || []).map((l) => l.skill_required).filter(Boolean))].join(', ') || '—';
@@ -27,9 +32,17 @@ export default function StepConfirm({ state, setState, groups, owners, supportTi
     return undefined;
   }, [state.customer_id, state.ticket_class, state.contact_is_vip, state.lines, supportTier, fleetSize]);
 
+  useEffect(() => {
+    if (!state.assigned_to) { setAvail(null); return undefined; }
+    fetchAssigneeAvailability(state.assigned_to, { days: 7 })
+      .then((r) => setAvail(r.data))
+      .catch(() => setAvail(null));
+    return undefined;
+  }, [state.assigned_to]);
+
   return (
     <div className="grid md:grid-cols-2 gap-4">
-      <div className="bg-white rounded-xl border border-sup-lineSoft p-4 space-y-3 text-[12px]">
+      <div className="bg-white rounded-[10px] border border-sup-lineSoft p-4 space-y-3 text-[12px]">
         <label className="block font-semibold">
           Assignment group
           <select
@@ -52,6 +65,45 @@ export default function StepConfirm({ state, setState, groups, owners, supportTi
             {owners.map((u) => <option key={u.user_id} value={u.user_id}>{u.name}</option>)}
           </select>
         </label>
+        {avail?.days?.length > 0 && (
+          <div className="space-y-2">
+            <div className="font-semibold">Availability (next 7 days)</div>
+            <div className="grid grid-cols-7 gap-1">
+              {avail.days.map((d) => (
+                <div
+                  key={d.date}
+                  className={`rounded border p-1 text-[10px] ${d.available ? 'border-sup-ok bg-sup-okBg' : 'border-sup-lineSoft bg-sup-canvas2 text-sup-muted'}`}
+                >
+                  <div className="font-semibold">{d.date.slice(5)}</div>
+                  <div>{d.available ? `${d.remaining} left` : (d.reason || 'Off')}</div>
+                </div>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {avail.days.filter((d) => d.available).flatMap((day) => (
+                (day.free_slots || []).map((slot) => (
+                  <button
+                    key={`${day.date}-${slot}`}
+                    type="button"
+                    className="px-2 py-0.5 rounded border border-sup-line text-[11px] hover:bg-sup-accentSoft"
+                    onClick={() => {
+                      const [h, m] = slot.split(':').map(Number);
+                      const endH = String(h + 1).padStart(2, '0');
+                      setState((s) => ({
+                        ...s,
+                        preferred_slot_start: toLocalInput(day.date, slot),
+                        preferred_slot_end: toLocalInput(day.date, `${endH}:${String(m).padStart(2, '0')}`),
+                      }));
+                    }}
+                  >
+                    {day.date.slice(5)} {slot}
+                  </button>
+                ))
+              ))}
+            </div>
+            <p className="text-[11px] text-sup-muted">Grey days are absent, off-shift, or at capacity — they cannot be assigned.</p>
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-2">
           <label className="block font-semibold">
             Slot start
@@ -72,6 +124,12 @@ export default function StepConfirm({ state, setState, groups, owners, supportTi
             />
           </label>
         </div>
+        {state.link?.target_ticket_id && (
+          <div className="rounded-md bg-sup-accentSoft px-2 py-1.5 text-[12px]">
+            Linked to existing ticket #{state.link.target_ticket_id}
+            {state.link.ticket_number ? ` (${state.link.ticket_number})` : ''}
+          </div>
+        )}
         <div>Skill required <b>{skill}</b></div>
         <label className="block font-semibold">
           Internal note
@@ -83,7 +141,7 @@ export default function StepConfirm({ state, setState, groups, owners, supportTi
           />
         </label>
       </div>
-      <div className="bg-white rounded-xl border border-sup-lineSoft p-4 space-y-2 text-[12px]">
+      <div className="bg-white rounded-[10px] border border-sup-lineSoft p-4 space-y-2 text-[12px]">
         <div className="font-semibold text-sup-ink">What will happen</div>
         <div>Ticket priority <b>P{preview?.priority || pri.priority}</b></div>
         <ul className="text-sup-muted list-disc pl-4">

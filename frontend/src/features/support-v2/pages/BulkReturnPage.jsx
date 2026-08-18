@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { PageHeader, Button } from '../../../components/ui/primitives';
+import { Button, PageHeader } from '../../../components/ui/supportPrimitives';
 import { searchCustomers, getCustomerContext, getCustomerAssets, previewBulkReturn, createBulkReturn } from '../supportV2Api';
 import { indianMobile, SUPPORT_V2_BASE } from '../supportV2Utils';
 
@@ -125,7 +125,7 @@ export default function BulkReturnPage() {
       </div>
 
       {step === 0 && (
-        <div className="bg-white rounded-xl border border-sup-lineSoft p-4 space-y-3 text-[13px]">
+        <div className="bg-white rounded-[10px] border border-sup-lineSoft p-4 space-y-3 text-[13px]">
           <label className="block font-semibold">
             Customer *
             <input
@@ -164,7 +164,7 @@ export default function BulkReturnPage() {
       )}
 
       {step === 1 && (
-        <div className="bg-white rounded-xl border border-sup-lineSoft p-4 space-y-2 text-[13px]">
+        <div className="bg-white rounded-[10px] border border-sup-lineSoft p-4 space-y-2 text-[13px]">
           <div className="flex justify-between items-center">
             <button type="button" className="underline text-sup-accent" onClick={() => setSelected(atSite.map((a) => a.serial_id))}>
               Select all at site
@@ -184,7 +184,7 @@ export default function BulkReturnPage() {
       )}
 
       {step === 2 && (
-        <div className="bg-white rounded-xl border border-sup-lineSoft p-4 space-y-2 text-[13px]">
+        <div className="bg-white rounded-[10px] border border-sup-lineSoft p-4 space-y-2 text-[13px]">
           {lockedAssets.length ? (
             <>
               <p className="font-semibold text-pri1">{lockedAssets.length} asset(s) are inside lock-in.</p>
@@ -202,7 +202,7 @@ export default function BulkReturnPage() {
       )}
 
       {step === 3 && (
-        <div className="bg-white rounded-xl border border-sup-lineSoft p-4 space-y-3 text-[13px]">
+        <div className="bg-white rounded-[10px] border border-sup-lineSoft p-4 space-y-3 text-[13px]">
           <label className="block font-semibold">
             Target date
             <input type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} className="mt-1 w-full border rounded px-2 py-1.5" />

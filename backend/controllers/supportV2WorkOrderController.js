@@ -141,6 +141,13 @@ exports.onSite = async (req, res) => {
   } catch (e) { bad(res, e); }
 };
 
+exports.start = async (req, res) => {
+  try {
+    const row = await tx((c) => wo.advance(c, Number(req.params.woId), 'IN_PROGRESS', req.user.user_id));
+    res.json({ success: true, wo: row, wo_id: row.wo_id });
+  } catch (e) { bad(res, e); }
+};
+
 exports.completeStep = async (req, res) => {
   try {
     const result = await tx((c) => wo.completeStep(c, {

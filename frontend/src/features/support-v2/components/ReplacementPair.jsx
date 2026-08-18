@@ -1,7 +1,6 @@
 import React from 'react';
-import { WorkOrderCard, Mono } from '../../../components/ui/supportPrimitives';
+import { Button, Mono, WorkOrderCard } from '../../../components/ui/supportPrimitives';
 import PermissionGate from '../../../components/PermissionGate';
-import { Button } from '../../../components/ui/primitives';
 
 function slotLabel(w) {
   if (!w?.scheduled_start) return '';
@@ -23,7 +22,7 @@ export default function ReplacementPair({ pair, workOrders, onOpenWo, onWaive, b
   );
 
   return (
-    <div className="rounded-xl border border-sup-lineSoft bg-white p-2 space-y-1.5">
+    <div className="rounded-[10px] border border-sup-lineSoft bg-white p-2 space-y-1.5">
       <div className="flex items-center justify-between px-1 text-[11px] uppercase tracking-wide text-sup-faint font-semibold">
         <span>Replacement pair</span>
         <Mono>group {group}</Mono>
@@ -42,7 +41,7 @@ export default function ReplacementPair({ pair, workOrders, onOpenWo, onWaive, b
         />
       )}
       {collect && (
-        <div className={collectBlocked || blocked ? 'ring-1 ring-pri2 rounded-xl' : ''}>
+        <div className={collectBlocked || blocked ? 'ring-1 ring-pri2 rounded-[10px]' : ''}>
           <WorkOrderCard
             woNumber={collect.wo_number}
             type={collect.wo_type}

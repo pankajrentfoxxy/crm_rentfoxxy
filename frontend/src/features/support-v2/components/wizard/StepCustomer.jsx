@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
 import { searchCustomers } from '../../supportV2Api';
-import { indianMobile, SUPPORT_V2_BASE } from '../../supportV2Utils';
+import { indianMobile } from '../../supportV2Utils';
+import TicketLinkPicker from '../TicketLinkPicker';
 
 const CHANNELS = ['PHONE', 'EMAIL', 'WHATSAPP', 'PORTAL', 'INTERNAL', 'CHAT'];
 
@@ -27,6 +27,12 @@ export default function StepCustomer({ state, setState, context }) {
       contact_name: s.contact_name || c.name || '',
       contact_phone: s.contact_phone || c.phone || '',
       contact_email: s.contact_email || c.email || '',
+      site_id: null,
+      site_key: '',
+      site_pincode: '',
+      site_label: '',
+      selectedSerials: [],
+      link: null,
     }));
     setQ('');
     setHits([]);
@@ -38,7 +44,7 @@ export default function StepCustomer({ state, setState, context }) {
 
   return (
     <div className="grid gap-4" style={{ gridTemplateColumns: '1.4fr 1fr' }}>
-      <div className="bg-white rounded-xl border border-sup-lineSoft p-4 space-y-3">
+      <div className="bg-white rounded-[10px] border border-sup-lineSoft p-4 space-y-3">
         <label className="block text-[12px] font-semibold text-sup-ink">
           Customer *
           <input
@@ -60,28 +66,35 @@ export default function StepCustomer({ state, setState, context }) {
           </ul>
         )}
         <label className="block text-[12px] font-semibold">
-          Site *
+          Delivery site *
           <select
-            value={state.site_id || ''}
+            value={state.site_key || ''}
             onChange={(e) => {
-              const site = sites.find((s) => String(s.customer_address_id) === e.target.value);
+              const site = sites.find((s) => s.site_key === e.target.value);
               setState((s) => ({
                 ...s,
+                site_key: site ? site.site_key : '',
                 site_id: site ? site.customer_address_id : null,
-                site_label: site ? (site.address || '').slice(0, 120) : '',
+                site_pincode: site ? (site.pincode || '') : '',
+                site_label: site ? (site.address || site.city || site.pincode || '').slice(0, 120) : '',
                 assignment_group_id: site?.suggested_group_id || s.assignment_group_id,
+                selectedSerials: [],
               }));
             }}
             className="mt-1 w-full rounded-md border border-sup-line px-2 py-1.5 text-[13px]"
           >
-            <option value="">Select site</option>
+            <option value="">Select the location where the laptop was delivered</option>
             {sites.map((s) => (
-              <option key={s.customer_address_id} value={s.customer_address_id}>
-                {(s.address || 'Address')} · {s.pincode || '—'}
+              <option key={s.site_key || s.customer_address_id} value={s.site_key}>
+                {(s.address || s.city || 'Address')} · {s.pincode || '—'}
+                {s.source === 'delivery' ? ` · ${s.machine_count || 0} laptop(s)` : ' · CRM address'}
               </option>
             ))}
           </select>
         </label>
+        <p className="text-[11px] text-sup-muted -mt-1">
+          Site is taken from the delivery challan. Only laptops delivered here can be selected next.
+        </p>
         <label className="block text-[12px] font-semibold">
           Channel *
           <select
@@ -128,7 +141,7 @@ export default function StepCustomer({ state, setState, context }) {
         </label>
       </div>
 
-      <div className="bg-white rounded-xl border border-sup-lineSoft p-4 space-y-2 text-[12px]">
+      <div className="bg-white rounded-[10px] border border-sup-lineSoft p-4 space-y-2 text-[12px]">
         <div className="font-semibold text-sup-ink">Customer context</div>
         {!state.customer_id ? (
           <p className="text-sup-muted">Pick a customer to see tier, fleet and open tickets.</p>
@@ -142,28 +155,13 @@ export default function StepCustomer({ state, setState, context }) {
               <div>Buffer <b>{context?.buffer_units ?? 0}</b></div>
               <div>Overdue invoices <b className={context?.overdue_invoices ? 'text-pri1' : ''}>{context?.overdue_invoices ?? 0}</b></div>
             </div>
-            {open.length > 0 && (
-              <div className="mt-2 rounded-md bg-pri2-bg p-2 space-y-1">
-                <div className="font-semibold text-pri2">Open tickets</div>
-                {open.map((t) => (
-                  <div key={t.ticket_id} className="flex items-center justify-between gap-2">
-                    <Link className="text-sup-accent underline" to={`${SUPPORT_V2_BASE}/tickets/${t.ticket_id}`}>
-                      {t.ticket_number}
-                    </Link>
-                    <button
-                      type="button"
-                      className="text-[11px] underline"
-                      onClick={() => setState((s) => ({
-                        ...s,
-                        link: { target_ticket_id: t.ticket_id, link_type: 'RELATED' },
-                      }))}
-                    >
-                      Link to existing
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
+            <div className="mt-2 rounded-md bg-pri2-bg p-2">
+              <TicketLinkPicker
+                value={state.link}
+                onChange={(link) => setState((s) => ({ ...s, link }))}
+                suggestions={open}
+              />
+            </div>
           </>
         )}
       </div>
@@ -173,6 +171,6 @@ export default function StepCustomer({ state, setState, context }) {
 
 export function customerStepValid(state) {
   return Boolean(
-    state.customer_id && state.site_id && state.channel && state.contact_name && indianMobile(state.contact_phone)
+    state.customer_id && (state.site_key || state.site_id) && state.channel && state.contact_name && indianMobile(state.contact_phone)
   );
 }

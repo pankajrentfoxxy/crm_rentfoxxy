@@ -22,13 +22,68 @@ const DRY = process.argv.includes('--dry-run');
 const APPLY = process.argv.includes('--apply');
 const REPORT_PATH = path.join(__dirname, '../../docs/support-revamp/MIGRATION_RECONCILIATION.md');
 
+function arg(name) {
+  const i = process.argv.indexOf(name);
+  if (i === -1) return null;
+  return process.argv[i + 1] || null;
+}
+
+/** Default handover window: 1 Jul 2026 → now, plus any older ticket still open. */
+const FROM_DATE = arg('--from') || '2026-07-01';
+const INCLUDE_OPEN = !process.argv.includes('--only-from');
+
 if (DRY === APPLY) {
-  console.error('Usage: node scripts/migrate-support-to-v2.js --dry-run | --apply');
+  console.error('Usage: node scripts/migrate-support-to-v2.js --dry-run | --apply [--from YYYY-MM-DD] [--only-from]');
   process.exit(1);
 }
 
 function cat(t) {
   return String(t.ticket_category || '').toLowerCase();
+}
+
+function clip(value, max) {
+  if (value == null) return null;
+  const s = String(value);
+  return s.length > max ? s.slice(0, max) : s;
+}
+
+function mapLineStatus(ticketStatus, itemStatus) {
+  const t = String(ticketStatus || '').toLowerCase();
+  const s = String(itemStatus || '').toLowerCase();
+  if (t === 'cancelled' || s === 'cancelled') return 'CANCELLED';
+  if (t === 'closed') return 'RESOLVED';
+  if (['resolved', 'closed', 'inventory_updated', 'delivered', 'returned'].includes(s)) return 'RESOLVED';
+  if ([
+    'visited', 'work_done', 'awaiting_otp', 'awaiting_service_return',
+    'picked_up', 'assigned', 'in_transit', 'repair_failed', 'swap_initiated',
+  ].includes(s)) {
+    return 'IN_PROGRESS';
+  }
+  if (['pending_dispatch', 'order_placed'].includes(s)) return 'PENDING';
+  return 'OPEN';
+}
+
+function genericTimelineComment(legacy, status) {
+  const num = legacyTicketNumber(legacy.id);
+  const kind = String(legacy.ticket_category || 'support').toLowerCase();
+  const remarks = String(legacy.top_level_remarks || '').trim();
+  if (status === 'CLOSED' || status === 'CANCELLED') {
+    return remarks
+      ? `Migrated from ${num} (${kind}). Legacy status ${legacy.status}. ${remarks}`
+      : `Migrated from ${num} (${kind}). Legacy ticket was ${legacy.status}. No technician comments were recorded on the old ticket. Historical record only — no further action required.`;
+  }
+  return remarks
+    ? `Migrated from ${num} (${kind}). Still ${legacy.status} in the old module. ${remarks} Continue this ticket in Support V2.`
+    : `Migrated from ${num} (${kind}). Still ${legacy.status} in the old module. No technician comments were recorded. Please review the machine line and work order, then continue in the new support flow.`;
+}
+
+async function markAllStepsDone(db, woId) {
+  await db.query(
+    `UPDATE support_work_order_steps
+        SET status = 'DONE', completed_at = COALESCE(completed_at, NOW())
+      WHERE wo_id = $1 AND status = 'PENDING'`,
+    [woId]
+  );
 }
 
 async function loadCatalog(db) {
@@ -156,13 +211,45 @@ async function buildPlan(db) {
   const cats = await db.query('SELECT id, name FROM support_issue_categories');
   const catName = new Map(cats.rows.map((r) => [r.id, r.name]));
 
-  const tickets = (await db.query('SELECT * FROM support_tickets ORDER BY id')).rows;
-  const items = (await db.query('SELECT * FROM support_ticket_items ORDER BY id')).rows;
+  const tickets = (await db.query(
+    INCLUDE_OPEN
+      ? `SELECT * FROM support_tickets
+          WHERE created_at >= $1::timestamptz
+             OR LOWER(COALESCE(status,'')) IN ('open','in_progress')
+          ORDER BY id`
+      : `SELECT * FROM support_tickets
+          WHERE created_at >= $1::timestamptz
+          ORDER BY id`,
+    [FROM_DATE]
+  )).rows;
+  const ticketIds = tickets.map((t) => t.id);
+  const items = ticketIds.length
+    ? (await db.query(
+      'SELECT * FROM support_ticket_items WHERE ticket_id = ANY($1::int[]) ORDER BY id',
+      [ticketIds]
+    )).rows
+    : [];
   const orders = (await db.query(
-    `SELECT * FROM support_replacement_orders ORDER BY id`
+    ticketIds.length
+      ? `SELECT * FROM support_replacement_orders WHERE ticket_id = ANY($1::int[]) ORDER BY id`
+      : `SELECT * FROM support_replacement_orders WHERE FALSE`,
+    ticketIds.length ? [ticketIds] : []
   ).catch(() => ({ rows: [] }))).rows;
-  const audits = (await db.query('SELECT * FROM support_ticket_item_audit ORDER BY id')).rows;
-  const comments = (await db.query('SELECT * FROM support_ticket_item_comments ORDER BY id')).rows;
+  const audits = ticketIds.length
+    ? (await db.query(
+      'SELECT * FROM support_ticket_item_audit WHERE ticket_id = ANY($1::int[]) ORDER BY id',
+      [ticketIds]
+    )).rows
+    : [];
+  const comments = (await db.query(
+    ticketIds.length
+      ? `SELECT c.* FROM support_ticket_item_comments c
+          JOIN support_ticket_items i ON i.id = c.item_id
+         WHERE i.ticket_id = ANY($1::int[])
+         ORDER BY c.id`
+      : `SELECT * FROM support_ticket_item_comments WHERE FALSE`,
+    ticketIds.length ? [ticketIds] : []
+  )).rows;
 
   const ticketsById = new Map(tickets.map((t) => [t.id, t]));
   const itemsById = new Map(items.map((i) => [i.id, i]));
@@ -371,6 +458,7 @@ function writeReport(plan, extras = {}) {
   lines.push('# Support v2 migration — reconciliation');
   lines.push('');
   lines.push(`Generated: ${new Date().toISOString()} (${DRY ? 'dry-run' : 'apply'})`);
+  lines.push(`Window: created_at >= ${FROM_DATE}${INCLUDE_OPEN ? ' OR status IN (open, in_progress)' : ''}`);
   lines.push('');
   lines.push('## Counts');
   lines.push('| Legacy | Count | New | Count | Match |');
@@ -472,10 +560,10 @@ async function applyJob(db, job, plan, reviews) {
         overridden,
         overridden ? 'MIGRATED' : null,
         customerId,
-        legacy.ticket_address || null,
-        legacy.customer_name || null,
-        legacy.ticket_phone_override || legacy.customer_phone || null,
-        legacy.ticket_email || null,
+        clip(legacy.ticket_address, 200),
+        clip(legacy.customer_name, 120),
+        clip(legacy.ticket_phone_override || legacy.customer_phone, 40),
+        clip(legacy.ticket_email, 120),
         legacy.top_level_remarks || `Migrated ${legacyTicketNumber(legacy.id)}`,
         assignedTo,
         await validUser(client, legacy.created_by),
@@ -510,24 +598,26 @@ async function applyJob(db, job, plan, reviews) {
     for (const a of assetSources) {
       const chain = a.chain || chainDefault;
       const serial = a.serial;
+      const lineStatus = mapLineStatus(legacy.status, a.item && a.item.status);
       const line = await client.query(
         `INSERT INTO support_ticket_assets (
            ticket_id, line_code, serial_id, ttspl_id, serial_number, asset_unknown,
            reported_type_id, reported_subtype_id, reported_issue_id, reported_description,
            impact, urgency, line_status, legacy_item_id
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,2,2,'OPEN',$11)
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,2,2,$11,$12)
          RETURNING line_id`,
         [
           ticketId,
           lineCode(lineIdx),
           serial && serial.serial_id,
-          serial && serial.inventory_asset_code,
-          (a.item && (a.item.serial_number || a.item.unique_serial_number)) || (serial && serial.serial_number),
+          clip(serial && serial.inventory_asset_code, 40),
+          clip((a.item && (a.item.serial_number || a.item.unique_serial_number)) || (serial && serial.serial_number), 120),
           !(serial && serial.serial_id) && !(a.item && a.item.serial_number),
           chain.typeId,
           chain.subtypeId,
           chain.issueId,
-          (a.item && a.item.remarks) || 'Migrated from legacy support',
+          (a.item && a.item.remarks) || genericTimelineComment(legacy, status),
+          lineStatus,
           a.item && a.item.id,
         ]
       );
@@ -568,17 +658,20 @@ async function applyJob(db, job, plan, reviews) {
           sm.status,
           woAssigned,
           w.item && w.item.remarks,
-          sm.failure_reason || null,
+          clip(sm.failure_reason, 40),
           w.replacement_group_id || null,
           w.item && w.item.id,
           confidence,
-          rule,
+          clip(rule, 40),
           (w.item && w.item.created_at) || legacy.created_at || new Date(),
         ]
       );
       const woId = woIns.rows[0].wo_id;
       await instantiateWoSteps(client, woId, woType);
       if (sm.otpDone) await markStepDone(client, woId, 'CUSTOMER_OTP');
+      if (['COMPLETED', 'CANCELLED', 'FAILED'].includes(sm.status)) {
+        await markAllStepsDone(client, woId);
+      }
       const lineId = (w.item && lineByLegacyItem.get(w.item.id)) || [...lineByLegacyItem.values()][0] || null;
       if (lineId) {
         await client.query(
@@ -587,7 +680,7 @@ async function applyJob(db, job, plan, reviews) {
           [woId, lineId]
         );
       }
-      if (sm.followOnServiceReturn) {
+      if (sm.followOnServiceReturn && status !== 'CLOSED' && status !== 'CANCELLED') {
         const followNo = await nextWoNumber(client);
         const follow = await client.query(
           `INSERT INTO support_work_orders (
@@ -620,14 +713,26 @@ async function applyJob(db, job, plan, reviews) {
       evs.push(...(plan.eventsByTicket.get(id) || []));
     }
     evs.sort((a, b) => new Date(a.at) - new Date(b.at));
+    let hasComment = false;
     for (const ev of evs) {
+      const summary = String(ev.summary || '').trim();
+      if (ev.type === 'COMMENT' && summary) hasComment = true;
       await logEvent(client, {
         ticketId,
         eventType: ev.type,
         actorId: ev.actorId,
         actorKind: 'USER',
-        summary: ev.summary,
+        summary: summary || genericTimelineComment(legacy, status),
         detail: ev.detail,
+      });
+    }
+    if (!hasComment) {
+      await logEvent(client, {
+        ticketId,
+        eventType: 'COMMENT',
+        actorKind: 'SYSTEM',
+        summary: genericTimelineComment(legacy, status),
+        isCustomerVisible: false,
       });
     }
 

@@ -1,20 +1,19 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Button, PageHeader } from '../../../components/ui/primitives';
-import { Mono, StatusPill, TypeTag } from '../../../components/ui/supportPrimitives';
+import { Button, Modal, Mono, PageHeader, StatusPill, TypeTag } from '../../../components/ui/supportPrimitives';
 import { usePermission } from '../../../hooks/usePermission';
 import api from '../../../utils/api';
 import {
   acceptWorkOrder, completeWorkOrder, consumePartRequest, enRouteWorkOrder, failWorkOrder,
-  getWorkOrder, onSiteWorkOrder, returnUnusedPart, uploadAttachments,
+  getWorkOrder, onSiteWorkOrder, returnUnusedPart, startWorkOrder, uploadAttachments,
 } from '../supportV2Api';
 import { newIdempotencyKey } from '../supportV2Utils';
 import { enqueueOffline } from '../offlineQueue';
 import { StepBody } from '../components/steps/StepRenderers';
 import OfflineBanner from '../components/OfflineBanner';
 import RequestPartSheet from '../components/RequestPartSheet';
-import { Modal } from '../../../components/ui/supportPrimitives';
+
 function isPrevDone(steps, index) {
   if (index === 0) return true;
   return steps[index - 1].status === 'DONE' || !steps[index - 1].is_mandatory;
@@ -83,7 +82,7 @@ export default function JobExecutionPage() {
       </div>
       <PageHeader title={w.wo_number} subtitle={`${w.ticket_number} · ${w.wo_type}`} />
       <OfflineBanner />
-      <div className="bg-white rounded-xl border border-sup-lineSoft p-3 flex flex-wrap items-center gap-2">
+      <div className="bg-white rounded-[10px] border border-sup-lineSoft p-3 flex flex-wrap items-center gap-2">
         <Mono bold className="text-[15px]">{w.wo_number}</Mono>
         <TypeTag type={w.wo_type} />
         <StatusPill kind="wo" status={w.status} />
@@ -93,7 +92,7 @@ export default function JobExecutionPage() {
         <Button size="sm" variant="secondary" onClick={() => setPartOpen(true)}>Request a part</Button>
       )}
       {mine && data.part_request && ['ISSUED', 'RESERVED', 'IN_TRANSIT', 'DELIVERED'].includes(data.part_request.status_v2) && (
-        <div className="bg-white rounded-xl border border-sup-lineSoft p-3 space-y-2 text-[12px]">
+        <div className="bg-white rounded-[10px] border border-sup-lineSoft p-3 space-y-2 text-[12px]">
           <div className="font-semibold">Fit part {data.part_request.request_number}</div>
           <input placeholder="Part QR / PRT" className="w-full border rounded px-2 py-1.5" value={fit.prt}
             onChange={(e) => setFit((f) => ({ ...f, prt: e.target.value }))} />
@@ -122,16 +121,17 @@ export default function JobExecutionPage() {
       )}
       {mine && (
         <div className="flex flex-wrap gap-2">
-          {w.status === 'ASSIGNED' && <Button size="sm" onClick={() => act(() => acceptWorkOrder(w.wo_id, { 'Idempotency-Key': newIdempotencyKey() }), 'Accepted')}>Accept</Button>}
-          {w.status === 'ACCEPTED' && !w.skips_travel && <Button size="sm" onClick={() => act(() => enRouteWorkOrder(w.wo_id, { 'Idempotency-Key': newIdempotencyKey() }), 'En route')}>En route</Button>}
-          {(w.status === 'EN_ROUTE' || w.status === 'ACCEPTED') && <Button size="sm" onClick={() => act(() => onSiteWorkOrder(w.wo_id, { 'Idempotency-Key': newIdempotencyKey() }), 'On site')}>On site</Button>}
+          {w.status === 'ASSIGNED' && <Button size="touch" onClick={() => act(() => acceptWorkOrder(w.wo_id, { 'Idempotency-Key': newIdempotencyKey() }), 'Accepted')}>Accept</Button>}
+          {w.status === 'ACCEPTED' && !w.skips_travel && <Button size="touch" onClick={() => act(() => enRouteWorkOrder(w.wo_id, { 'Idempotency-Key': newIdempotencyKey() }), 'En route')}>En route</Button>}
+          {(w.status === 'EN_ROUTE' || (w.status === 'ACCEPTED' && !w.skips_travel)) && <Button size="touch" onClick={() => act(() => onSiteWorkOrder(w.wo_id, { 'Idempotency-Key': newIdempotencyKey() }), 'On site')}>On site</Button>}
+          {(w.status === 'ON_SITE' || (w.status === 'ACCEPTED' && w.skips_travel)) && <Button size="touch" onClick={() => act(() => startWorkOrder(w.wo_id, { 'Idempotency-Key': newIdempotencyKey() }), 'Started')}>Start work</Button>}
         </div>
       )}
       <div className="space-y-2">
         {steps.map((s, i) => {
           const locked = !mine || !isPrevDone(steps, i) || s.status === 'DONE';
           return (
-            <div key={s.step_code} className="bg-white rounded-xl border border-sup-lineSoft p-3">
+            <div key={s.step_code} className="bg-white rounded-[10px] border border-sup-lineSoft p-3">
               <div className="flex items-center justify-between gap-2 text-[12px]">
                 <div>
                   <span className="font-semibold">{s.step_label}</span>
@@ -157,14 +157,15 @@ export default function JobExecutionPage() {
         })}
       </div>
       <Button
-        className="min-h-[44px] w-full"
+        size="touch"
+        className="w-full"
         disabled={!mine || !allMandatoryDone || w.status === 'COMPLETED'}
         onClick={() => setCompleteOpen(true)}
       >
         {allMandatoryDone ? 'Complete job' : `${remaining} step${remaining === 1 ? '' : 's'} remaining`}
       </Button>
       {mine && w.status !== 'COMPLETED' && w.status !== 'FAILED' && (
-        <Button variant="danger" size="sm" onClick={() => {
+        <Button variant="danger" size="touch" onClick={() => {
           const reason = window.prompt('Failure reason (e.g. CUSTOMER_UNAVAILABLE)');
           if (!reason) return;
           act(() => failWorkOrder(w.wo_id, { failure_reason: reason, notes: 'Failed on site', create_retry: true }, { 'Idempotency-Key': newIdempotencyKey() }), 'Failed · retry created');
