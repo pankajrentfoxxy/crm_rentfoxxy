@@ -1,22 +1,22 @@
-# CI/CD — GitHub Actions → Dual VPS (staging + production)
+# CI/CD — GitHub Actions → Separate branch → separate VPS
 
-Same branch (`new_crm_rentfoxxy`) deploys to **two servers** via GitHub Environments.
+Each branch deploys to **one** server. Pushing `support_revemp` never touches 187; pushing `new_crm_rentfoxxy` never touches 157.
 
-| Environment | Server | When it deploys |
-|-------------|--------|-----------------|
-| **staging** | `157.173.221.119` | Auto on every push to `new_crm_rentfoxxy`, or manual |
-| **production** | `187.77.187.213` | Auto on every push (after staging succeeds), or manual |
+| Branch | Environment | Server | Auto deploy |
+|--------|-------------|--------|-------------|
+| **`support_revemp`** | staging | `157.173.221.119` | Yes — staging job only |
+| **`new_crm_rentfoxxy`** | production | `187.77.187.213` | Yes — production job only |
 
 | Domain (typical) | App |
 |------------------|-----|
-| https://staging.rentfoxxy.com | Admin CRM (`frontend`) |
-| https://staging.rentfoxxy.com/api | Backend API (`backend`) |
+| https://staging.rentfoxxy.com | Admin CRM (`frontend`) on 157 |
+| https://staging.rentfoxxy.com/api | Backend API (`backend`) on 157 |
 | https://customer.rentfoxxy.com | Customer portal |
 | https://vendor.rentfoxxy.com | Vendor portal |
 
 **Workflow file:** `.github/workflows/deploy.yml`  
-**VPS project path (both servers):** `/var/www/crm_rentfoxxy`  
-**PM2 process name:** `crm-backend`  
+**Staging VPS path:** `/var/www/crm_rentfoxxy_staging` (branch `support_revemp`)  
+**Production VPS path:** `/var/www/crm_rentfoxxy` (branch `new_crm_rentfoxxy`)  
 **Each VPS keeps its own** `backend/.env` (DB, URLs, API keys).
 
 ---
@@ -25,21 +25,22 @@ Same branch (`new_crm_rentfoxxy`) deploys to **two servers** via GitHub Environm
 
 ```mermaid
 flowchart TD
-  A[Push to new_crm_rentfoxxy] --> B[deploy-staging]
-  B --> C[SSH staging]
-  C --> D[git reset + npm install/build + pm2 restart]
-  D --> G[deploy-production]
-  G --> H[SSH production]
-  H --> I[git reset + npm install/build + pm2 restart]
+  A[Push support_revemp] --> B[deploy-staging 157]
+  B --> C[git reset origin/support_revemp + build + pm2]
 
-  E[Actions → Run workflow] --> F{target?}
-  F -->|staging| B
-  F -->|production| G
-  F -->|both| B
+  D[Push new_crm_rentfoxxy] --> E[deploy-production 187]
+  E --> F[git reset origin/new_crm_rentfoxxy + build + pm2]
+
+  G[Actions → Run workflow] --> H{target?}
+  H -->|staging| B
+  H -->|production| E
+  H -->|both| B
+  H -->|both| E
 ```
 
-**Concurrency:** One deploy group at a time (`deploy-new-crm-rentfoxxy`).  
-**Safety:** Remote script uses `set -euo pipefail`. If install/build fails, PM2 is not restarted.
+**Jobs are independent** — no staging → production chain.  
+**Concurrency:** separate per branch/target so 157 and 187 do not block each other.  
+**Safety:** remote script uses `set -euo pipefail`. If install/build fails, PM2 is not restarted.
 
 ---
 
@@ -106,22 +107,31 @@ ssh -i ~/.ssh/crm_rentfoxxy_deploy root@187.77.187.213 "echo production-ok"
 
 ## 3. VPS one-time setup (each server)
 
-Run on **staging** and **production**:
+### Production (187) — `new_crm_rentfoxxy`
 
 ```bash
-sudo apt update
-sudo apt install -y git curl nginx certbot python3-certbot-nginx
-
-curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
-sudo apt install -y nodejs
-sudo npm install -g pm2
-
 sudo mkdir -p /var/www/crm_rentfoxxy
 sudo chown -R $USER:$USER /var/www/crm_rentfoxxy
-
 cd /var/www
 git clone -b new_crm_rentfoxxy https://github.com/YOUR_ORG/crm_rentfoxxy.git crm_rentfoxxy
-cd crm_rentfoxxy
+```
+
+### Staging (157) — `support_revemp`
+
+```bash
+sudo mkdir -p /var/www/crm_rentfoxxy_staging
+sudo chown -R $USER:$USER /var/www/crm_rentfoxxy_staging
+cd /var/www
+git clone -b support_revemp https://github.com/YOUR_ORG/crm_rentfoxxy.git crm_rentfoxxy_staging
+```
+
+If staging already exists on `new_crm_rentfoxxy`, switch once:
+
+```bash
+cd /var/www/crm_rentfoxxy_staging
+git fetch origin
+git checkout support_revemp
+git reset --hard origin/support_revemp
 ```
 
 ### Backend environment (per server — different values)
@@ -131,53 +141,28 @@ cp backend/.env.example backend/.env
 nano backend/.env
 ```
 
-```env
-NODE_ENV=production
-PORT=5000
-
-DB_HOST=127.0.0.1
-DB_PORT=5432
-DB_NAME=your_db
-DB_USER=your_user
-DB_PASSWORD=your_password
-DB_SSL=false
-
-JWT_SECRET=long-random-secret
-
-FRONTEND_URL=https://staging.rentfoxxy.com,https://vendor.rentfoxxy.com,https://customer.rentfoxxy.com
-VENDOR_PORTAL_URL=https://vendor.rentfoxxy.com
-CUSTOMER_PORTAL_URL=https://customer.rentfoxxy.com
-```
-
-Adjust domains/DB for production if they differ.
+Adjust domains/DB for each server.
 
 ### First PM2 start
 
 ```bash
-cd /var/www/crm_rentfoxxy/backend
+cd /var/www/crm_rentfoxxy/backend   # or crm_rentfoxxy_staging/backend
 npm ci --omit=dev
 pm2 start ecosystem.config.cjs --only crm-backend
 pm2 save
 pm2 startup
 ```
 
-### Nginx / SSL
-
-Point domains to the correct `build/` folders and proxy `/api` to the backend port. Example roots:
-
-| Domain | `root` |
-|--------|--------|
-| CRM host | `/var/www/crm_rentfoxxy/frontend/build` |
-| Customer portal | `/var/www/crm_rentfoxxy/customer-portal/build` |
-| Vendor portal | `/var/www/crm_rentfoxxy/vendor-portal/build` |
-
 ---
 
 ## 4. How to run deployments
 
-### Automatic (staging + production)
+### Automatic (branch-gated)
 
-Every push to `new_crm_rentfoxxy` → **Deploy staging**, then **Deploy production** (only if staging succeeds).
+| Push to | What runs | What does **not** run |
+|---------|-----------|------------------------|
+| `support_revemp` | Deploy staging (157) | Production (187) |
+| `new_crm_rentfoxxy` | Deploy production (187) | Staging (157) |
 
 ### Manual
 
@@ -185,20 +170,20 @@ GitHub → **Actions** → **CI/CD Deploy to VPS** → **Run workflow**:
 
 | Target | Result |
 |--------|--------|
-| `staging` | Staging only |
-| `production` | Production only |
-| `both` | Staging first, then production if staging succeeds |
+| `staging` | 157 only (`origin/support_revemp`) |
+| `production` | 187 only (`origin/new_crm_rentfoxxy`) |
+| `both` | Both jobs in parallel (independent) |
 
 ---
 
 ## 5. Verify
 
 ```bash
-# Staging
-ssh root@157.173.221.119 "pm2 status && pm2 logs crm-backend --lines 30"
+# Staging (157)
+ssh root@157.173.221.119 "cd /var/www/crm_rentfoxxy_staging && git branch --show-current && pm2 status"
 
-# Production
-ssh root@187.77.187.213 "pm2 status && pm2 logs crm-backend --lines 30"
+# Production (187)
+ssh root@187.77.187.213 "cd /var/www/crm_rentfoxxy && git branch --show-current && pm2 status"
 ```
 
 ---
@@ -208,16 +193,16 @@ ssh root@187.77.187.213 "pm2 status && pm2 logs crm-backend --lines 30"
 | Issue | Fix |
 |-------|-----|
 | Wrong server updated | Check Environment secrets: staging=`157…`, production=`187…` |
+| Push to support_revemp also hit 187 | Old workflow — ensure latest `deploy.yml` is on the default branch GitHub uses for workflows |
+| Staging resets wrong branch | VPS must track `support_revemp`; workflow uses `git reset --hard origin/support_revemp` |
 | SSH permission denied | Environment `VPS_SSH_KEY` / `VPS_USER` / `authorized_keys` |
-| Job skipped unexpectedly | Push only runs staging; prod needs **Run workflow** |
-| `both` skipped production | Staging job failed — fix staging first |
 | Build OOM | Add swap on that VPS |
 | CORS / wrong API URL | Fix that server’s `backend/.env` |
 
 ### Manual rollback on a VPS
 
 ```bash
-cd /var/www/crm_rentfoxxy
+cd /var/www/crm_rentfoxxy   # or crm_rentfoxxy_staging
 git log --oneline -5
 git reset --hard <previous-good-commit>
 # rebuild frontends + pm2 restart, or re-run workflow
@@ -240,6 +225,6 @@ git reset --hard <previous-good-commit>
 
 | File | Purpose |
 |------|---------|
-| `.github/workflows/deploy.yml` | Dual-environment deploy workflow |
+| `.github/workflows/deploy.yml` | Branch-separated dual VPS deploy |
 | `backend/ecosystem.config.cjs` | PM2 process definition |
 | `deploy/CI_CD_SETUP.md` | This document |
