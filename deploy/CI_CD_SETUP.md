@@ -1,10 +1,10 @@
 # CI/CD — GitHub Actions → Separate branch → separate VPS
 
-Each branch deploys to **one** server. Pushing `support_revemp` never touches 187; pushing `new_crm_rentfoxxy` never touches 157.
+Each branch deploys to **one** server. Pushing `support_revamp` never touches 187; pushing `new_crm_rentfoxxy` never touches 157.
 
 | Branch | Environment | Server | Auto deploy |
 |--------|-------------|--------|-------------|
-| **`support_revemp`** | staging | `157.173.221.119` | Yes — staging job only |
+| **`support_revamp`** | staging | `157.173.221.119` | Yes — staging job only |
 | **`new_crm_rentfoxxy`** | production | `187.77.187.213` | Yes — production job only |
 Two branches deploy to two servers. Infrastructure, domains, and PM2 setup stay the same.
 
@@ -21,7 +21,7 @@ Two branches deploy to two servers. Infrastructure, domains, and PM2 setup stay 
 | https://vendor.rentfoxxy.com | Vendor portal |
 
 **Workflow file:** `.github/workflows/deploy.yml`  
-**Staging VPS path:** `/var/www/crm_rentfoxxy_staging` (branch `support_revemp`)  
+**Staging VPS path:** `/var/www/crm_rentfoxxy_staging` (branch `support_revamp`)  
 **Production VPS path:** `/var/www/crm_rentfoxxy` (branch `new_crm_rentfoxxy`)  
 **PM2 (staging):** process id / name as configured on `157` (workflow restarts `5`)  
 **PM2 (production):** `crm-backend`  
@@ -33,8 +33,8 @@ Two branches deploy to two servers. Infrastructure, domains, and PM2 setup stay 
 
 ```mermaid
 flowchart TD
-  A[Push support_revemp] --> B[deploy-staging 157]
-  B --> C[git reset origin/support_revemp + build + pm2]
+  A[Push support_revamp] --> B[deploy-staging 157]
+  B --> C[git reset origin/support_revamp + build + pm2]
 
   D[Push new_crm_rentfoxxy] --> E[deploy-production 187]
   E --> F[git reset origin/new_crm_rentfoxxy + build + pm2]
@@ -173,13 +173,13 @@ cd /var/www
 git clone -b new_crm_rentfoxxy https://github.com/YOUR_ORG/crm_rentfoxxy.git crm_rentfoxxy
 ```
 
-### Staging (157) — `support_revemp`
+### Staging (157) — `support_revamp`
 
 ```bash
 sudo mkdir -p /var/www/crm_rentfoxxy_staging
 sudo chown -R $USER:$USER /var/www/crm_rentfoxxy_staging
 cd /var/www
-git clone -b support_revemp https://github.com/YOUR_ORG/crm_rentfoxxy.git crm_rentfoxxy_staging
+git clone -b support_revamp https://github.com/YOUR_ORG/crm_rentfoxxy.git crm_rentfoxxy_staging
 ```
 
 If staging already exists on `new_crm_rentfoxxy`, switch once:
@@ -187,8 +187,8 @@ If staging already exists on `new_crm_rentfoxxy`, switch once:
 ```bash
 cd /var/www/crm_rentfoxxy_staging
 git fetch origin
-git checkout support_revemp
-git reset --hard origin/support_revemp
+git checkout support_revamp
+git reset --hard origin/support_revamp
 ### Worktree (only if you use a shared bare/main repo)
 
 Not required for the current layout (separate clones). If you do use worktrees:
@@ -237,7 +237,7 @@ Point domains to the correct `build/` folders and proxy `/api` to the backend po
 
 | Push to | What runs | What does **not** run |
 |---------|-----------|------------------------|
-| `support_revemp` | Deploy staging (157) | Production (187) |
+| `support_revamp` | Deploy staging (157) | Production (187) |
 | `new_crm_rentfoxxy` | Deploy production (187) | Staging (157) |
 ### Automatic
 
@@ -252,7 +252,7 @@ GitHub → **Actions** → **CI/CD Deploy to VPS** → **Run workflow**:
 
 | Target | Result |
 |--------|--------|
-| `staging` | 157 only (`origin/support_revemp`) |
+| `staging` | 157 only (`origin/support_revamp`) |
 | `production` | 187 only (`origin/new_crm_rentfoxxy`) |
 | `both` | Both jobs in parallel (independent) |
 | `staging` | Staging only (`support_revamp` → 157) |
@@ -307,8 +307,8 @@ ssh root@187.77.187.213 "cd /var/www/crm_rentfoxxy && git branch --show-current 
 | Issue | Fix |
 |-------|-----|
 | Wrong server updated | Check Environment secrets: staging=`157…`, production=`187…` |
-| Push to support_revemp also hit 187 | Old workflow — ensure latest `deploy.yml` is on the default branch GitHub uses for workflows |
-| Staging resets wrong branch | VPS must track `support_revemp`; workflow uses `git reset --hard origin/support_revemp` |
+| Push to support_revamp also hit 187 | Old workflow — ensure latest `deploy.yml` is on the default branch GitHub uses for workflows |
+| Staging resets wrong branch | VPS must track `support_revamp`; workflow uses `git reset --hard origin/support_revamp` |
 | SSH permission denied | Environment `VPS_SSH_KEY` / `VPS_USER` / `authorized_keys` |
 | Wrong branch on server | `git branch --show-current` — staging must be `support_revamp`, prod `new_crm_rentfoxxy` |
 | SSH permission denied | Environment `VPS_SSH_KEY` / `VPS_USER` / `authorized_keys` |

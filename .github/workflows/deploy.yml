@@ -1,15 +1,10 @@
 name: CI/CD Deploy to VPS
 
 # Branch → server mapping (separate deploys; never cross-deploy):
-#   support_revemp     → staging  (157.x) only
-#   new_crm_rentfoxxy  → production (187.x) only
+#   support_revamp     → staging    (157.x)  /var/www/crm_rentfoxxy_staging
+#   new_crm_rentfoxxy  → production (187.x)  /var/www/crm_rentfoxxy
 #
 # Manual "Run workflow" can still target staging / production / both.
-# Dual-branch / dual-server deploy:
-#   support_revamp     → staging    (157.173.221.119)  /var/www/crm_rentfoxxy_staging
-#   new_crm_rentfoxxy  → production (187.77.187.213)   /var/www/crm_rentfoxxy
-#
-# Manual Run workflow can still target staging / production / both.
 #
 # Secrets live on GitHub Environments `staging` and `production`
 # (each has its own VPS_HOST / VPS_USER / VPS_SSH_KEY).
@@ -19,7 +14,6 @@ on:
     branches:
       - support_revamp
       - new_crm_rentfoxxy
-      - support_revemp
   workflow_dispatch:
     inputs:
       target:
@@ -39,9 +33,10 @@ concurrency:
 
 jobs:
   deploy-staging:
-    name: Deploy staging (157 / support_revemp)
+    name: Deploy staging (157 / support_revamp)
+    # Use ref_name so push to support_revamp always matches (not a typo of support_revemp).
     if: >
-      (github.event_name == 'push' && github.ref == 'refs/heads/support_revemp') ||
+      (github.event_name == 'push' && github.ref_name == 'support_revamp') ||
       (github.event_name == 'workflow_dispatch' &&
        (github.event.inputs.target == 'staging' || github.event.inputs.target == 'both'))
     runs-on: ubuntu-latest
@@ -52,20 +47,28 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
 
-      - name: Deploy support_revemp → staging VPS (157)
+      - name: Deploy support_revamp → staging VPS (157)
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
         run: |
           set -euo pipefail
-          echo "Deploying staging (support_revemp) → ${VPS_USER}@${VPS_HOST}"
+          echo "Deploying staging (support_revamp) → ${VPS_USER}@${VPS_HOST}"
           ssh -o StrictHostKeyChecking=no "${VPS_USER}@${VPS_HOST}" << 'EOF'
           set -euo pipefail
 
           cd /var/www/crm_rentfoxxy_staging
 
           git fetch origin
-          git reset --hard origin/support_revemp
+          if git show-ref --verify --quiet refs/heads/support_revamp; then
+            git checkout support_revamp
+          else
+            git checkout -b support_revamp origin/support_revamp
+          fi
+          git reset --hard origin/support_revamp
+
+          echo "Active branch: $(git branch --show-current)"
+          echo "HEAD: $(git rev-parse --short HEAD)"
 
           cd backend
           npm install
@@ -85,13 +88,13 @@ jobs:
           pm2 restart 5
           pm2 save
 
-          echo "Staging (157) deploy finished — branch support_revemp"
+          echo "Staging (157) deploy finished — branch support_revamp"
           EOF
 
   deploy-production:
     name: Deploy production (187 / new_crm_rentfoxxy)
     if: >
-      (github.event_name == 'push' && github.ref == 'refs/heads/new_crm_rentfoxxy') ||
+      (github.event_name == 'push' && github.ref_name == 'new_crm_rentfoxxy') ||
       (github.event_name == 'workflow_dispatch' &&
        (github.event.inputs.target == 'production' || github.event.inputs.target == 'both'))
     runs-on: ubuntu-latest
@@ -120,7 +123,6 @@ jobs:
           else
             git checkout -b new_crm_rentfoxxy origin/new_crm_rentfoxxy
           fi
-          git pull origin new_crm_rentfoxxy
           git reset --hard origin/new_crm_rentfoxxy
 
           echo "Active branch: $(git branch --show-current)"
