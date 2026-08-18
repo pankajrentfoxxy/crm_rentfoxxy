@@ -247,7 +247,7 @@ export default function PartVendorRepairDcDetailPage() {
         warehouse_esign: pendingReceiveEsign || undefined,
         warehouse_signer_name: receiveSignerName.trim(),
       });
-      toast.success('Parts received — QC pending');
+      toast.success('Parts received — added to stock');
       setPendingReceiveEsign(null);
       load();
     } catch (e) {
@@ -394,7 +394,7 @@ export default function PartVendorRepairDcDetailPage() {
       {canMutate && pendingItems.length > 0 && (
         <div className="rounded-xl border bg-white p-4 space-y-3">
           <h3 className="font-semibold text-sm">Receive from vendor</h3>
-          <p className="text-xs text-slate-500">Select repaired / replacement per line, then receive. Parts go to QC pending.</p>
+          <p className="text-xs text-slate-500">Select repaired / replacement per line, then receive. Parts go straight to stock (no QC pending).</p>
           <EsignBox
             label={`${warehouseLabel} receive e-sign`}
             previewUrl={pendingReceiveEsign}

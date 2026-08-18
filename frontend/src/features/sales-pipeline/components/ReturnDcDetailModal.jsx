@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { X, FileText, KeyRound, Image as ImageIcon, CheckCircle2 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { useAuth } from '../../../context/AuthContext';
 import { confirmReturnDcWarehouse, getReturnDcDetail } from '../salesPipelineApi';
 import { formatDate, formatDateTime } from '../salesPipelineUtils';
 import { getBackendOrigin } from '../../../utils/api';
@@ -13,10 +14,17 @@ function assetUrl(p) {
 }
 
 function WarehouseSignPanel({ rdcNumber, onSigned }) {
+  const { user } = useAuth();
   const canvasRef = useRef(null);
   const padRef = useRef(null);
-  const [name, setName] = useState('');
+  const [name, setName] = useState(() => user?.name || user?.email || '');
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const loginName = user?.name || user?.email || '';
+    if (!loginName) return;
+    setName((prev) => (prev?.trim() ? prev : loginName));
+  }, [user?.name, user?.email]);
 
   useEffect(() => {
     let pad;

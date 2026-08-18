@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { generateBluedartWaybill, downloadBluedartWaybillPdfByAwb } from '../salesPipelineApi';
 import { downloadBlob } from '../salesPipelineUtils';
-import { lookupDeclaredValueForUnit } from '../bluedartDeclaredValue';
+import { lookupDeclaredValueForUnit, ensureDeclaredValueMatrixLoaded } from '../bluedartDeclaredValue';
 
 function buildConsigneeFromAddress(address, meta) {
   const a = address || {};
@@ -40,28 +40,34 @@ export default function PerLaptopCourierMapping({
   );
 
   useEffect(() => {
-    const c = buildConsigneeFromAddress(groupAddress, meta);
-    setBdForm((f) => ({
-      ...f,
-      name: c.name || f.name,
-      mobile: c.mobile || f.mobile,
-      address: c.address || f.address,
-      pincode: c.pincode || f.pincode,
-    }));
-    selected.forEach((s) => {
-      const patch = {};
-      if (!s.courier_name) patch.courier_name = 'BlueDart';
-      if (!s.shipment_weight) patch.shipment_weight = '2.50';
-      if (s.declared_value == null || s.declared_value === '') {
-        const auto = lookupDeclaredValueForUnit(
-          s.processor,
-          s.generation,
-          s.model || s.model_name
-        );
-        if (auto != null) patch.declared_value = String(auto);
-      }
-      if (Object.keys(patch).length) onUpdateSerial?.(s.allocation_id, patch);
-    });
+    let cancelled = false;
+    (async () => {
+      await ensureDeclaredValueMatrixLoaded();
+      if (cancelled) return;
+      const c = buildConsigneeFromAddress(groupAddress, meta);
+      setBdForm((f) => ({
+        ...f,
+        name: c.name || f.name,
+        mobile: c.mobile || f.mobile,
+        address: c.address || f.address,
+        pincode: c.pincode || f.pincode,
+      }));
+      selected.forEach((s) => {
+        const patch = {};
+        if (!s.courier_name) patch.courier_name = 'BlueDart';
+        if (!s.shipment_weight) patch.shipment_weight = '2.50';
+        if (s.declared_value == null || s.declared_value === '') {
+          const auto = lookupDeclaredValueForUnit(
+            s.processor,
+            s.generation,
+            s.model || s.model_name
+          );
+          if (auto != null) patch.declared_value = String(auto);
+        }
+        if (Object.keys(patch).length) onUpdateSerial?.(s.allocation_id, patch);
+      });
+    })();
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupAddress, meta, selected.length]);
 
@@ -84,6 +90,7 @@ export default function PerLaptopCourierMapping({
       toast.error('Fill consignee name, mobile, address and pincode');
       return null;
     }
+    await ensureDeclaredValueMatrixLoaded();
     const unitDeclared = Number(unit.declared_value);
     const matrixDeclared = lookupDeclaredValueForUnit(
       unit.processor,

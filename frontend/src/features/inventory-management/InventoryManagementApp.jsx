@@ -39,7 +39,13 @@ function InventoryIndexRedirect() {
   if (canView('inventory_management')) return <Navigate to="qc-process" replace />;
   if (canView('inventory_master_data')) return <Navigate to="master-data" replace />;
   if (canView('inventory_asset_movement')) return <Navigate to="asset-movement" replace />;
+  if (canView('parts_dashboard')) return <Navigate to="parts-dashboard" replace />;
   if (canView('parts_inventory')) return <Navigate to="parts" replace />;
+  if (canView('parts_approval')) return <Navigate to="parts-approval" replace />;
+  if (canView('parts_history')) return <Navigate to="parts-history" replace />;
+  if (canView('part_vendor_repair')) return <Navigate to="part-vendor-repair" replace />;
+  if (canView('parts_discarded')) return <Navigate to="discarded-parts" replace />;
+  if (canView('scrap_challans')) return <Navigate to="scrap-challans" replace />;
   if (canView('customer_inventory')) return <Navigate to="customer-assets" replace />;
   if (canView('ttspl_history')) return <Navigate to="ttspl-history" replace />;
   return <Navigate to="/dashboard" replace />;
@@ -67,15 +73,15 @@ export default function InventoryManagementApp() {
         <Route path="direct-purchase" element={g('inventory_management', <DirectPurchasePage />)} />
         <Route path="out-for-repare" element={g('inventory_management', <OutForReparePage />)} />
         <Route path="spare-parts" element={g('inventory_management', <SparePartsInventoryPage />)} />
-        <Route path="parts-dashboard" element={g('parts_inventory', <PartsDashboardPage />)} />
+        <Route path="parts-dashboard" element={g('parts_dashboard', <PartsDashboardPage />)} />
         <Route path="parts" element={g('parts_inventory', <PartsPage />)} />
-        <Route path="parts-approval" element={g('parts_inventory', <PartsApprovalPage />)} />
-        <Route path="parts-history" element={g('parts_inventory', <PartsMovementHistoryPage />)} />
+        <Route path="parts-approval" element={g('parts_approval', <PartsApprovalPage />)} />
+        <Route path="parts-history" element={g('parts_history', <PartsMovementHistoryPage />)} />
         <Route path="part-vendor-repair" element={g('part_vendor_repair', <PartVendorRepairDcListPage />)} />
         <Route path="part-vendor-repair/:dcNumber" element={g('part_vendor_repair', <PartVendorRepairDcDetailPage />)} />
-        <Route path="discarded-parts" element={g('parts_inventory', <DiscardedPartsPage />)} />
-        <Route path="scrap-challans" element={g('parts_inventory', <ScrapChallanListPage />)} />
-        <Route path="scrap-challans/:challanNumber" element={g('parts_inventory', <ScrapChallanDetailPage />)} />
+        <Route path="discarded-parts" element={g('parts_discarded', <DiscardedPartsPage />)} />
+        <Route path="scrap-challans" element={g('scrap_challans', <ScrapChallanListPage />)} />
+        <Route path="scrap-challans/:challanNumber" element={g('scrap_challans', <ScrapChallanDetailPage />)} />
         <Route path="serial-number-status" element={g('inventory_management', <SerialNumberStatusPage />)} />
         <Route path="universal-search" element={g('inventory_management', <UniversalSearchPage />)} />
         <Route path="npa-assets" element={g('inventory_management', <NpaAssetsPage />)} />

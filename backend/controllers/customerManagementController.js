@@ -2307,6 +2307,310 @@ exports.getCustomerLaptops = async (req, res) => {
   }
 };
 
+/** Support ticket item statuses treated as still open (mirrors supportQuery.js). */
+const OPEN_ITEM_STATUSES_SQL = `sti.status NOT IN ('resolved', 'closed')`;
+
+exports.getCustomerTickets = async (req, res) => {
+  try {
+    const customerId = parseInt(req.params.customerId, 10);
+    if (!Number.isInteger(customerId)) {
+      return res.status(400).json({ success: false, message: 'Invalid customer id' });
+    }
+    const access = await checkCustomerAccessById(req, customerId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, message: access.message });
+    }
+
+    const status = (req.query.status || '').trim();
+    const search = (req.query.search || '').trim();
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const offset = (page - 1) * limit;
+
+    const params = [customerId];
+    const conditions = ['t.customer_id = $1'];
+
+    if (status && status !== 'all') {
+      params.push(status);
+      conditions.push(`t.status = $${params.length}`);
+    }
+
+    if (search) {
+      const like = `%${search}%`;
+      params.push(like);
+      const likeIdx = params.length;
+      const digits = search.replace(/^#?\s*STK-?/i, '').replace(/\D/g, '');
+      const ticketId = digits ? parseInt(digits, 10) : NaN;
+      const ttsplMatch = `EXISTS (
+        SELECT 1 FROM support_ticket_items sti
+         WHERE sti.ticket_id = t.id
+           AND (
+             COALESCE(sti.ttspl_id, '') ILIKE $${likeIdx}
+             OR COALESCE(sti.unique_serial_number, '') ILIKE $${likeIdx}
+             OR COALESCE(sti.serial_number, '') ILIKE $${likeIdx}
+           )
+      )`;
+      if (Number.isInteger(ticketId) && ticketId > 0) {
+        params.push(ticketId);
+        conditions.push(`(
+          t.customer_name ILIKE $${likeIdx}
+          OR COALESCE(t.customer_phone, '') ILIKE $${likeIdx}
+          OR COALESCE(t.ttspl_id, '') ILIKE $${likeIdx}
+          OR t.id::text ILIKE $${likeIdx}
+          OR t.id = $${params.length}
+          OR ${ttsplMatch}
+        )`);
+      } else {
+        conditions.push(`(
+          t.customer_name ILIKE $${likeIdx}
+          OR COALESCE(t.customer_phone, '') ILIKE $${likeIdx}
+          OR COALESCE(t.ttspl_id, '') ILIKE $${likeIdx}
+          OR t.id::text ILIKE $${likeIdx}
+          OR ${ttsplMatch}
+        )`);
+      }
+    }
+
+    const whereSql = `WHERE ${conditions.join(' AND ')}`;
+
+    const countR = await pool.query(
+      `SELECT COUNT(*)::int AS total FROM support_tickets t ${whereSql}`,
+      params
+    );
+    const total = countR.rows[0]?.total || 0;
+
+    const listParams = [...params, limit, offset];
+    const { rows } = await pool.query(
+      `SELECT t.id,
+              t.status,
+              t.customer_name,
+              t.customer_phone,
+              t.priority,
+              t.ticket_category,
+              t.complaint_type,
+              t.created_at,
+              t.updated_at,
+              t.closed_at,
+              COALESCE(u1.name, t.created_by_name) AS created_by_name,
+              u2.name AS closed_by_name,
+              NULLIF(TRIM(t.top_level_remarks), '') AS top_level_remarks,
+              (SELECT COUNT(*)::int FROM support_ticket_items sti WHERE sti.ticket_id = t.id) AS item_count,
+              (SELECT COUNT(*)::int FROM support_ticket_items sti
+                WHERE sti.ticket_id = t.id AND ${OPEN_ITEM_STATUSES_SQL}) AS open_item_count,
+              COALESCE(
+                NULLIF(TRIM(t.ttspl_id), ''),
+                (
+                  SELECT COALESCE(NULLIF(TRIM(sti.ttspl_id), ''), NULLIF(TRIM(sti.unique_serial_number), ''))
+                    FROM support_ticket_items sti
+                   WHERE sti.ticket_id = t.id
+                     AND COALESCE(NULLIF(TRIM(sti.ttspl_id), ''), NULLIF(TRIM(sti.unique_serial_number), '')) IS NOT NULL
+                   ORDER BY sti.id ASC
+                   LIMIT 1
+                )
+              ) AS ttspl_id,
+              (
+                SELECT STRING_AGG(DISTINCT code, ', ' ORDER BY code)
+                  FROM (
+                    SELECT NULLIF(TRIM(t.ttspl_id), '') AS code
+                    UNION ALL
+                    SELECT COALESCE(NULLIF(TRIM(sti.ttspl_id), ''), NULLIF(TRIM(sti.unique_serial_number), ''))
+                      FROM support_ticket_items sti
+                     WHERE sti.ticket_id = t.id
+                  ) codes
+                 WHERE code IS NOT NULL AND code <> ''
+              ) AS ttspl_list,
+              COALESCE(
+                NULLIF(TRIM(t.ticket_category), ''),
+                (
+                  SELECT sti.item_type
+                    FROM support_ticket_items sti
+                   WHERE sti.ticket_id = t.id
+                   ORDER BY sti.id ASC
+                   LIMIT 1
+                ),
+                'complaint'
+              ) AS complaint_type_label,
+              (
+                SELECT CASE
+                  WHEN COUNT(DISTINCT kind) = 0 THEN NULL
+                  WHEN COUNT(DISTINCT kind) > 1 THEN 'mixed'
+                  ELSE MIN(kind)
+                END
+                  FROM (
+                    SELECT COALESCE(
+                      NULLIF(TRIM(sti.pickup_type), ''),
+                      CASE WHEN sti.source_item_id IS NOT NULL THEN 'repair' ELSE 'return' END
+                    ) AS kind
+                      FROM support_ticket_items sti
+                     WHERE sti.ticket_id = t.id
+                       AND sti.item_type = 'pickup'
+                  ) pk
+              ) AS pickup_kind,
+              (
+                SELECT COALESCE(NULLIF(TRIM(sti.issue_category_label), ''), c.name)
+                  FROM support_ticket_items sti
+                  LEFT JOIN support_issue_categories c ON c.id = sti.issue_category_id
+                 WHERE sti.ticket_id = t.id
+                   AND (
+                     NULLIF(TRIM(sti.issue_category_label), '') IS NOT NULL
+                     OR sti.issue_category_id IS NOT NULL
+                   )
+                 ORDER BY sti.id ASC
+                 LIMIT 1
+              ) AS issue_category_label,
+              (
+                SELECT NULLIF(TRIM(sti.remarks), '')
+                  FROM support_ticket_items sti
+                 WHERE sti.ticket_id = t.id
+                   AND NULLIF(TRIM(sti.remarks), '') IS NOT NULL
+                 ORDER BY sti.id ASC
+                 LIMIT 1
+              ) AS item_remarks,
+              (
+                SELECT COALESCE(
+                  json_agg(
+                    json_build_object(
+                      'old_ttspl', COALESCE(
+                        NULLIF(TRIM(ro.old_machine_serial), ''),
+                        NULLIF(TRIM(old_v.inventory_asset_code), ''),
+                        NULLIF(TRIM(old_v.serial_number), '')
+                      ),
+                      'new_ttspl', COALESCE(
+                        NULLIF(TRIM(ro.new_machine_serial), ''),
+                        NULLIF(TRIM(new_v.inventory_asset_code), ''),
+                        NULLIF(TRIM(new_v.serial_number), '')
+                      ),
+                      'status', ro.status
+                    )
+                    ORDER BY ro.id
+                  ),
+                  '[]'::json
+                )
+                  FROM support_replacement_orders ro
+                  LEFT JOIN vendor_serial_numbers old_v
+                    ON old_v.serial_id = ro.old_serial_id AND old_v.deleted_at IS NULL
+                  LEFT JOIN vendor_serial_numbers new_v
+                    ON new_v.serial_id = ro.new_serial_id AND new_v.deleted_at IS NULL
+                 WHERE ro.ticket_id = t.id
+              ) AS replacements
+         FROM support_tickets t
+         LEFT JOIN users u1 ON u1.user_id = t.created_by
+         LEFT JOIN users u2 ON u2.user_id = t.closed_by
+         ${whereSql}
+        ORDER BY t.created_at DESC, t.id DESC
+        LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+      listParams
+    );
+
+    const tickets = rows.map((row) => {
+      const type = String(row.complaint_type_label || row.ticket_category || 'complaint').toLowerCase();
+      const pickupKind = row.pickup_kind || null;
+      let complaint_subtype = null;
+      if (type === 'pickup' || pickupKind) {
+        if (pickupKind === 'repair') complaint_subtype = 'Repair';
+        else if (pickupKind === 'return') complaint_subtype = 'Return';
+        else if (pickupKind === 'mixed') complaint_subtype = 'Mixed';
+      }
+      if (!complaint_subtype && row.issue_category_label) {
+        complaint_subtype = row.issue_category_label;
+      }
+      // Legacy ERP: complaint_type often "complain" / "pickup"
+      if (!complaint_subtype && row.complaint_type && !['pickup', 'complain', 'complaint'].includes(String(row.complaint_type).toLowerCase())) {
+        complaint_subtype = row.complaint_type;
+      }
+
+      let replacements = row.replacements;
+      if (typeof replacements === 'string') {
+        try { replacements = JSON.parse(replacements); } catch { replacements = []; }
+      }
+      if (!Array.isArray(replacements)) replacements = [];
+      replacements = replacements
+        .map((r) => ({
+          old_ttspl: r.old_ttspl || null,
+          new_ttspl: r.new_ttspl || null,
+          status: r.status || null,
+        }))
+        .filter((r) => r.old_ttspl || r.new_ttspl);
+
+      const replacement_summary = replacements.length
+        ? replacements.map((r) => {
+          const from = r.old_ttspl || '—';
+          const to = r.new_ttspl || 'pending';
+          return `${from} → ${to}`;
+        }).join('; ')
+        : null;
+
+      return {
+        ...row,
+        complaint_type_label: type,
+        complaint_subtype,
+        pickup_kind: pickupKind,
+        pickup_kind_label: pickupKind === 'repair'
+          ? 'Repair Pickup'
+          : pickupKind === 'return'
+            ? 'Return Pickup'
+            : pickupKind === 'mixed'
+              ? 'Mixed Pickup'
+              : null,
+        ttspl_id: row.ttspl_id || null,
+        ttspl_list: row.ttspl_list || row.ttspl_id || null,
+        remarks: row.item_remarks || row.top_level_remarks || null,
+        replacements,
+        replacement_summary,
+      };
+    });
+
+    res.json({
+      success: true,
+      tickets,
+      total,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      },
+      statuses: ['open', 'in_progress', 'closed', 'cancelled'],
+    });
+  } catch (e) {
+    console.error('customerManagement getCustomerTickets', e);
+    res.status(500).json({ success: false, message: 'Failed to load tickets' });
+  }
+};
+
+/**
+ * Current monthly rental: sum of effective rent_monthly_rate across the same
+ * active assets shown on the Assets tab (DEPLOYED + ACTIVE_FROM_SQL rules).
+ */
+exports.getCustomerRentalSummary = async (req, res) => {
+  try {
+    const customerId = parseInt(req.params.customerId, 10);
+    if (!Number.isInteger(customerId)) {
+      return res.status(400).json({ success: false, message: 'Invalid customer id' });
+    }
+    const access = await checkCustomerAccessById(req, customerId);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, message: access.message });
+    }
+
+    const { rows } = await pool.query(
+      `SELECT COALESCE(SUM(COALESCE(NULLIF(vsn.rent_monthly_rate, 0), sos_rate.rate)), 0)::numeric AS total_monthly_rent,
+              COUNT(*)::int AS active_asset_count
+         ${ACTIVE_FROM_SQL}`,
+      [customerId, DEPLOYED_WITH_CUSTOMER_STATUSES]
+    );
+
+    res.json({
+      success: true,
+      total_monthly_rent: Number(rows[0]?.total_monthly_rent || 0),
+      active_asset_count: rows[0]?.active_asset_count || 0,
+    });
+  } catch (e) {
+    console.error('customerManagement getCustomerRentalSummary', e);
+    res.status(500).json({ success: false, message: 'Failed to load rental summary' });
+  }
+};
+
 exports.deleteCustomer = async (req, res) => {
   try {
     const result = await pool.query(`SELECT * FROM customers WHERE customer_id = $1`, [req.params.customerId]);

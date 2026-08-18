@@ -1,9 +1,10 @@
 /**
- * BlueDart declared-value matrix by processor category + generation (grade).
- * Autofills GenerateWayBill Declared Value (₹) from laptop config.
+ * BlueDart declared-value matrix — loaded from API (not hardcoded amounts).
+ * Lookup logic: processor category + generation / Apple grade → amount.
  */
+import api from '../../utils/api';
 
-export const BLUEDART_DECLARED_VALUE_MATRIX = [
+const FALLBACK_MATRIX = [
   { category: 'i5', grade: '5th', amount: 14000 },
   { category: 'i5', grade: '6th', amount: 16000 },
   { category: 'i5', grade: '7th', amount: 18000 },
@@ -13,7 +14,6 @@ export const BLUEDART_DECLARED_VALUE_MATRIX = [
   { category: 'i5', grade: '12th', amount: 35000 },
   { category: 'i5', grade: '13th', amount: 40000 },
   { category: 'i5', grade: '14th', amount: 45000 },
-
   { category: 'i7', grade: '4th', amount: 14000 },
   { category: 'i7', grade: '5th', amount: 15000 },
   { category: 'i7', grade: '6th', amount: 18000 },
@@ -25,10 +25,7 @@ export const BLUEDART_DECLARED_VALUE_MATRIX = [
   { category: 'i7', grade: '13th', amount: 40000 },
   { category: 'i7', grade: '14th', amount: 45000 },
   { category: 'i7', grade: 'u7', amount: 50000 },
-
   { category: 'R7', grade: 'ALL', amount: 60000 },
-
-  // Apple Silicon MacBook
   { category: 'APPLE', grade: 'm1-air', amount: 60000 },
   { category: 'APPLE', grade: 'm1-pro', amount: 70000 },
   { category: 'APPLE', grade: 'm2-pro', amount: 80000 },
@@ -36,6 +33,64 @@ export const BLUEDART_DECLARED_VALUE_MATRIX = [
   { category: 'APPLE', grade: 'm4', amount: 190000 },
   { category: 'APPLE', grade: 'm5', amount: 230000 },
 ];
+
+/** @deprecated use getDeclaredValueMatrix() — kept for rare direct imports */
+export let BLUEDART_DECLARED_VALUE_MATRIX = FALLBACK_MATRIX.slice();
+
+let cache = { at: 0, rows: FALLBACK_MATRIX.slice(), loaded: false };
+let inflight = null;
+const CACHE_TTL_MS = 60_000;
+
+export function invalidateDeclaredValueMatrixCache() {
+  cache = { at: 0, rows: FALLBACK_MATRIX.slice(), loaded: false };
+  BLUEDART_DECLARED_VALUE_MATRIX = cache.rows;
+  inflight = null;
+}
+
+export function getDeclaredValueMatrix() {
+  return cache.rows;
+}
+
+/** Fetch active matrix from API; sync lookups use the cached result. */
+export async function ensureDeclaredValueMatrixLoaded({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && cache.loaded && now - cache.at < CACHE_TTL_MS) {
+    return cache.rows;
+  }
+  if (inflight) return inflight;
+  inflight = (async () => {
+    try {
+      const { data } = await api.get('/asset-configuration/bluedart-declared-values/active', {
+        params: force ? { refresh: '1' } : undefined,
+      });
+      const items = Array.isArray(data?.items) ? data.items : [];
+      if (items.length) {
+        cache = {
+          at: Date.now(),
+          rows: items.map((r) => ({
+            category: r.category,
+            grade: r.grade,
+            amount: Number(r.amount),
+            label: r.label,
+          })),
+          loaded: true,
+        };
+        BLUEDART_DECLARED_VALUE_MATRIX = cache.rows;
+      } else {
+        cache = { at: Date.now(), rows: FALLBACK_MATRIX.slice(), loaded: true };
+        BLUEDART_DECLARED_VALUE_MATRIX = cache.rows;
+      }
+      return cache.rows;
+    } catch {
+      cache = { at: Date.now(), rows: FALLBACK_MATRIX.slice(), loaded: true };
+      BLUEDART_DECLARED_VALUE_MATRIX = cache.rows;
+      return cache.rows;
+    } finally {
+      inflight = null;
+    }
+  })();
+  return inflight;
+}
 
 export function normalizeCategory(processor) {
   const raw = String(processor || '').trim();
@@ -68,7 +123,7 @@ export function normalizeGrade(generation) {
   return raw;
 }
 
-/** M1 Air 60k · M1 Pro 70k · M2 Pro 80k · M3 100k · M4 190k · M5 230k */
+/** M1 Air · M1 Pro · M2 Pro · M3 · M4 · M5 */
 export function resolveAppleGrade(processor, generation, model) {
   const hay = `${processor || ''} ${generation || ''} ${model || ''}`.toLowerCase();
   if (!hay.trim()) return null;
@@ -89,14 +144,12 @@ export function resolveAppleGrade(processor, generation, model) {
   return null;
 }
 
-/** Amount for one laptop, or null if no matrix match. */
-export function lookupDeclaredValueForUnit(processor, generation, model) {
+function lookupInMatrix(matrix, processor, generation, model) {
+  const rows = Array.isArray(matrix) ? matrix : [];
   const appleGrade = resolveAppleGrade(processor, generation, model);
   if (appleGrade) {
-    const row = BLUEDART_DECLARED_VALUE_MATRIX.find(
-      (r) => r.category === 'APPLE' && r.grade === appleGrade
-    );
-    return row ? row.amount : null;
+    const row = rows.find((r) => r.category === 'APPLE' && String(r.grade).toLowerCase() === appleGrade);
+    return row ? Number(row.amount) : null;
   }
 
   const category = normalizeCategory(processor);
@@ -104,25 +157,28 @@ export function lookupDeclaredValueForUnit(processor, generation, model) {
 
   if (category === 'APPLE') {
     const grade = resolveAppleGrade(processor, generation, model) || 'm1-air';
-    const row = BLUEDART_DECLARED_VALUE_MATRIX.find(
-      (r) => r.category === 'APPLE' && r.grade === grade
-    );
-    return row ? row.amount : null;
+    const row = rows.find((r) => r.category === 'APPLE' && String(r.grade).toLowerCase() === grade);
+    return row ? Number(row.amount) : null;
   }
 
   if (category === 'R7') {
-    const row = BLUEDART_DECLARED_VALUE_MATRIX.find((r) => r.category === 'R7');
-    return row ? row.amount : 60000;
+    const row = rows.find((r) => r.category === 'R7');
+    return row ? Number(row.amount) : 60000;
   }
 
   const grade = normalizeGrade(generation);
   if (!grade) return null;
 
-  const row = BLUEDART_DECLARED_VALUE_MATRIX.find(
-    (r) => r.category.toLowerCase() === category.toLowerCase()
-      && r.grade.toLowerCase() === grade.toLowerCase()
+  const row = rows.find(
+    (r) => String(r.category).toLowerCase() === category.toLowerCase()
+      && String(r.grade).toLowerCase() === grade.toLowerCase()
   );
-  return row ? row.amount : null;
+  return row ? Number(row.amount) : null;
+}
+
+/** Amount for one laptop, or null if no matrix match. Uses cached matrix. */
+export function lookupDeclaredValueForUnit(processor, generation, model) {
+  return lookupInMatrix(cache.rows, processor, generation, model);
 }
 
 /**

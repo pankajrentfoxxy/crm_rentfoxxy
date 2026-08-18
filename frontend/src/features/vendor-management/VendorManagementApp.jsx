@@ -1,5 +1,6 @@
 import React from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
+import ProtectedRoute from '../../router/ProtectedRoute';
 import VendorMgmtMobileNav from './components/VendorMgmtMobileNav';
 import VendorsPage from './pages/VendorsPage';
 import VendorDetailPage from './pages/VendorDetailPage';
@@ -12,6 +13,12 @@ import SpareGeneratedGrnDetailPage from './pages/SpareGeneratedGrnDetailPage';
 import SerialNumberPage from './pages/SerialNumberPage';
 import ReplacedProductsPage from './pages/ReplacedProductsPage';
 import BillingMonthlyPage from './pages/BillingMonthlyPage';
+import VendorRepairDcListPage from '../floor-pipeline/pages/VendorRepairDcListPage';
+import VendorRepairDcDetailPage from '../floor-pipeline/pages/VendorRepairDcDetailPage';
+
+const g = (section, node) => (
+  <ProtectedRoute section={section} action="view">{node}</ProtectedRoute>
+);
 
 /**
  * Nested routes only — navigation lives in Layout sidebar (accordion).
@@ -44,22 +51,25 @@ export default function VendorManagementApp() {
 
         <Route path="vendors/new" element={<Navigate to="/vendor-management/vendors" replace />} />
         <Route path="vendors/:id/edit" element={<Navigate to="/vendor-management/vendors" replace />} />
-        <Route path="vendors/:id" element={<VendorDetailPage />} />
-        <Route path="vendors" element={<VendorsPage />} />
+        <Route path="vendors/:id" element={g('vendor_management', <VendorDetailPage />)} />
+        <Route path="vendors" element={g('vendor_management', <VendorsPage />)} />
 
-        <Route path="purchase-orders" element={<PurchaseOrdersPage />} />
-        <Route path="purchase-orders/:poId/grn-detail" element={<GeneratedGrnDetailPage />} />
-        <Route path="purchase-orders/:poId/receive" element={<ProductReceivedPage />} />
-        <Route path="spare-parts-po/:spoId/grn-detail" element={<SpareGeneratedGrnDetailPage />} />
-        <Route path="spare-parts-po/:spoId/receive" element={<SparePartsProductReceivedPage />} />
-        <Route path="spare-parts-po" element={<SparePartsPoPage />} />
-        <Route path="serial-numbers" element={<SerialNumberPage />} />
-        <Route path="replaced-products" element={<ReplacedProductsPage />} />
+        <Route path="purchase-orders" element={g('vendor_management', <PurchaseOrdersPage />)} />
+        <Route path="purchase-orders/:poId/grn-detail" element={g('vendor_management', <GeneratedGrnDetailPage />)} />
+        <Route path="purchase-orders/:poId/receive" element={g('vendor_management', <ProductReceivedPage />)} />
+        <Route path="spare-parts-po/:spoId/grn-detail" element={g('parts_procurement', <SpareGeneratedGrnDetailPage />)} />
+        <Route path="spare-parts-po/:spoId/receive" element={g('parts_procurement', <SparePartsProductReceivedPage />)} />
+        <Route path="spare-parts-po" element={g('parts_procurement', <SparePartsPoPage />)} />
+        <Route path="serial-numbers" element={g('vendor_management', <SerialNumberPage />)} />
+        <Route path="replaced-products" element={g('vendor_management', <ReplacedProductsPage />)} />
 
-        <Route path="billing/vendor-overview" element={<BillingMonthlyPage view="overview" />} />
-        <Route path="billing/pending" element={<BillingMonthlyPage view="pending" />} />
-        <Route path="billing/approved" element={<BillingMonthlyPage view="approved" />} />
-        <Route path="billing/completed" element={<BillingMonthlyPage view="completed" />} />
+        <Route path="vendor-repair-dc" element={g('vendor_repair_dc', <VendorRepairDcListPage />)} />
+        <Route path="vendor-repair-dc/:dcNumber" element={g('vendor_repair_dc', <VendorRepairDcDetailPage />)} />
+
+        <Route path="billing/vendor-overview" element={g('vendor_management', <BillingMonthlyPage view="overview" />)} />
+        <Route path="billing/pending" element={g('vendor_management', <BillingMonthlyPage view="pending" />)} />
+        <Route path="billing/approved" element={g('vendor_management', <BillingMonthlyPage view="approved" />)} />
+        <Route path="billing/completed" element={g('vendor_management', <BillingMonthlyPage view="completed" />)} />
 
         <Route path="*" element={<Navigate to="/vendor-management" replace />} />
       </Routes>

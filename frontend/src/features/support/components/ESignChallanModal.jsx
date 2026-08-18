@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { X } from 'lucide-react';
+import { useAuth } from '../../../context/AuthContext';
 import { signAndIssueChallan, returnPart, acceptReturn } from '../supportPartsApi';
 
 /**
@@ -10,10 +11,17 @@ import { signAndIssueChallan, returnPart, acceptReturn } from '../supportPartsAp
  *   'return' -> warehouse signs to accept a returned part (needs requestId)
  */
 export default function ESignChallanModal({ challan, mode = 'tech', requestId, viaPickup = false, onSigned, onClose }) {
+  const { user } = useAuth();
   const canvasRef = useRef(null);
   const padRef = useRef(null);
-  const [signerName, setSignerName] = useState('');
+  const [signerName, setSignerName] = useState(() => user?.name || user?.email || '');
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const loginName = user?.name || user?.email || '';
+    if (!loginName) return;
+    setSignerName((prev) => (prev?.trim() ? prev : loginName));
+  }, [user?.name, user?.email]);
 
   useEffect(() => {
     let pad;

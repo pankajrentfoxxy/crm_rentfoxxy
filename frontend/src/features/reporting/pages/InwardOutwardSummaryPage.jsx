@@ -85,22 +85,74 @@ function SearchSelect({ value, onChange, options, getValue, getLabel, placeholde
   );
 }
 
-function CountCell({ cell, onOpen, strong = false }) {
-  if (!cell) {
-    return <td className="px-4 py-3 text-center text-gray-300">—</td>;
-  }
+function PanelRow({ row, onOpen, accent }) {
+  const hasActivity = (row.value ?? 0) > 0;
   return (
-    <td className="px-4 py-3 text-center">
-      <button
-        type="button"
-        onClick={() => onOpen(cell.type, cell.title)}
-        title={`View ${cell.title}`}
-        className={`inline-flex min-w-[3.5rem] justify-center rounded-lg px-3 py-1.5 font-bold text-gray-900 transition
-          hover:bg-blue-50 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-400 ${strong ? 'text-2xl' : 'text-xl'}`}
-      >
-        {cell.value ?? 0}
-      </button>
-    </td>
+    <button
+      type="button"
+      onClick={() => onOpen(row.type, row.title)}
+      title={`View ${row.title}`}
+      className={`w-full flex items-center justify-between gap-3 px-2 py-1.5 rounded-lg text-left transition-colors ${
+        hasActivity
+          ? accent === 'success' ? 'bg-green-50 hover:bg-green-100' : 'bg-red-50 hover:bg-red-100'
+          : 'hover:bg-gray-50'
+      }`}
+    >
+      <span className="min-w-0">
+        <span className={`text-sm ${hasActivity ? 'text-gray-900' : 'text-gray-500'}`}>{row.label}</span>
+        {row.sublabel ? <span className="block text-[11px] text-gray-400">{row.sublabel}</span> : null}
+      </span>
+      <span className={`shrink-0 text-sm font-semibold tabular-nums ${
+        hasActivity
+          ? accent === 'success' ? 'text-green-700' : 'text-red-600'
+          : 'text-gray-400'
+      }`}>
+        {row.value ?? 0}
+      </span>
+    </button>
+  );
+}
+
+function DirectionPanel({ direction, total, groups, onOpen }) {
+  const isInward = direction === 'inward';
+  return (
+    <div className={`bg-white rounded-xl border border-gray-100 shadow-sm p-4 border-t-2 ${
+      isInward ? 'border-t-green-500' : 'border-t-red-500'
+    }`}>
+      <div className="flex items-baseline justify-between mb-3">
+        <span className={`inline-flex items-center gap-1.5 text-sm font-semibold ${
+          isInward ? 'text-green-700' : 'text-red-600'
+        }`}>
+          {isInward ? <ArrowDownToLine className="w-4 h-4" /> : <ArrowUpFromLine className="w-4 h-4" />}
+          {isInward ? 'Inward' : 'Outward'}
+        </span>
+        <button
+          type="button"
+          onClick={() => onOpen(`${direction}_total`, `Total ${isInward ? 'Inward' : 'Outward'} Laptops`)}
+          title={`View Total ${isInward ? 'Inward' : 'Outward'} Laptops`}
+          className="text-2xl font-bold text-gray-900 hover:text-blue-700 tabular-nums"
+        >
+          {total ?? 0}
+        </button>
+      </div>
+      {groups.map((group) => (
+        <div key={group.label} className="mb-3 last:mb-0">
+          <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-gray-400 mb-1">
+            <group.Icon className="w-3.5 h-3.5" /> {group.label}
+          </p>
+          <div className="space-y-0.5">
+            {group.rows.map((row) => (
+              <PanelRow
+                key={row.type}
+                row={row}
+                onOpen={onOpen}
+                accent={isInward ? 'success' : 'danger'}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -326,6 +378,52 @@ export default function InwardOutwardSummaryPage() {
   const inward = summary?.inward;
   const outward = summary?.outward;
 
+  const inwardGroups = [
+    {
+      label: 'Vendor',
+      Icon: Building2,
+      rows: [
+        { type: 'inward_vendor_purchase', title: 'Inward — Vendor purchase / GRN', label: 'Purchase / GRN', value: inward?.vendor_purchase },
+        { type: 'inward_vendor_return', title: 'Inward — Vendor return (repaired)', label: 'Repair return', sublabel: 'Repair send-out · repaired receive-back', value: inward?.vendor_return },
+        { type: 'inward_vendor_replacement', title: 'Inward — Vendor replacement', label: 'Replacement', sublabel: 'Replacement unit received from vendor', value: inward?.vendor_replacement },
+      ],
+    },
+    {
+      label: 'Customer',
+      Icon: Users,
+      rows: [
+        { type: 'inward_customer_return', title: 'Inward — Customer return', label: 'Return', sublabel: 'Warehouse-received pickup / repair return', value: inward?.customer_return },
+        { type: 'inward_customer_replacement', title: 'Inward — Customer replacement', label: 'Replacement', sublabel: 'Old unit in · new unit dispatch', value: inward?.customer_replacement },
+      ],
+    },
+    {
+      label: 'Direct',
+      Icon: Truck,
+      rows: [
+        { type: 'inward_direct', title: 'Direct Inward', label: 'Courier / manual / ERP', value: inward?.direct },
+      ],
+    },
+  ];
+
+  const outwardGroups = [
+    {
+      label: 'Vendor',
+      Icon: Building2,
+      rows: [
+        { type: 'outward_vendor_return', title: 'Outward — Vendor return (repair DC)', label: 'Repair return', value: outward?.vendor_return ?? outward?.vendor },
+      ],
+    },
+    {
+      label: 'Customer',
+      Icon: Users,
+      rows: [
+        { type: 'outward_customer_service_return', title: 'Outward — Customer service return', label: 'Return', sublabel: 'Warehouse-received pickup / repair return', value: outward?.customer_service_return },
+        { type: 'outward_customer_replacement', title: 'Outward — Customer replacement', label: 'Replacement', sublabel: 'Old unit in · new unit dispatch', value: outward?.customer_replacement },
+        { type: 'outward_customer_standard', title: 'Outward — Customer standard', label: 'Standard dispatch', sublabel: 'Normal delivery challan', value: outward?.customer_standard },
+      ],
+    },
+  ];
+
   return (
     <div className="p-4 max-w-7xl mx-auto space-y-6">
       <div>
@@ -394,107 +492,19 @@ export default function InwardOutwardSummaryPage() {
         <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-[#534AB7]" /></div>
       ) : (
         <>
-          <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-gray-500 text-xs">
-                <tr>
-                  <th className="text-left font-medium px-4 py-3">Movement</th>
-                  <th className="px-4 py-3 text-center">
-                    <span className="inline-flex items-center gap-1.5 text-green-700">
-                      <ArrowDownToLine className="w-4 h-4" /> Inward
-                    </span>
-                  </th>
-                  <th className="px-4 py-3 text-center">
-                    <span className="inline-flex items-center gap-1.5 text-red-600">
-                      <ArrowUpFromLine className="w-4 h-4" /> Outward
-                    </span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                <tr className="bg-slate-50/80">
-                  <td className="px-4 py-2.5" colSpan={3}>
-                    <span className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-blue-700">
-                      <Building2 className="w-3.5 h-3.5" /> Vendor
-                    </span>
-                  </td>
-                </tr>
-                <tr className="hover:bg-gray-50/50">
-                  <td className="px-4 py-3 pl-8 text-gray-800">Purchase / GRN</td>
-                  <CountCell cell={{ value: inward?.vendor_purchase, type: 'inward_vendor_purchase', title: 'Inward — Vendor purchase / GRN' }} onOpen={openDetail} />
-                  <CountCell cell={null} onOpen={openDetail} />
-                </tr>
-                <tr className="hover:bg-gray-50/50">
-                  <td className="px-4 py-3 pl-8 text-gray-800">
-                    Return
-                    <p className="text-[11px] text-gray-400">Repair send-out · repaired receive-back</p>
-                  </td>
-                  <CountCell cell={{ value: inward?.vendor_return, type: 'inward_vendor_return', title: 'Inward — Vendor return (repaired)' }} onOpen={openDetail} />
-                  <CountCell cell={{ value: outward?.vendor_return ?? outward?.vendor, type: 'outward_vendor_return', title: 'Outward — Vendor return (repair DC)' }} onOpen={openDetail} />
-                </tr>
-                <tr className="hover:bg-gray-50/50">
-                  <td className="px-4 py-3 pl-8 text-gray-800">
-                    Replacement
-                    <p className="text-[11px] text-gray-400">Replacement unit received from vendor</p>
-                  </td>
-                  <CountCell cell={{ value: inward?.vendor_replacement, type: 'inward_vendor_replacement', title: 'Inward — Vendor replacement' }} onOpen={openDetail} />
-                  <CountCell cell={null} onOpen={openDetail} />
-                </tr>
-
-                <tr className="bg-slate-50/80">
-                  <td className="px-4 py-2.5" colSpan={3}>
-                    <span className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-amber-700">
-                      <Users className="w-3.5 h-3.5" /> Customer
-                    </span>
-                  </td>
-                </tr>
-                <tr className="hover:bg-gray-50/50">
-                  <td className="px-4 py-3 pl-8 text-gray-800">
-                    Return
-                    <p className="text-[11px] text-gray-400">Warehouse-received pickup / repair return</p>
-                  </td>
-                  <CountCell cell={{ value: inward?.customer_return, type: 'inward_customer_return', title: 'Inward — Customer return' }} onOpen={openDetail} />
-                  <CountCell cell={{ value: outward?.customer_service_return, type: 'outward_customer_service_return', title: 'Outward — Customer service return' }} onOpen={openDetail} />
-                </tr>
-                <tr className="hover:bg-gray-50/50">
-                  <td className="px-4 py-3 pl-8 text-gray-800">
-                    Replacement
-                    <p className="text-[11px] text-gray-400">Old unit in · new unit dispatch</p>
-                  </td>
-                  <CountCell cell={{ value: inward?.customer_replacement, type: 'inward_customer_replacement', title: 'Inward — Customer replacement' }} onOpen={openDetail} />
-                  <CountCell cell={{ value: outward?.customer_replacement, type: 'outward_customer_replacement', title: 'Outward — Customer replacement' }} onOpen={openDetail} />
-                </tr>
-                <tr className="hover:bg-gray-50/50">
-                  <td className="px-4 py-3 pl-8 text-gray-800">
-                    Standard dispatch
-                    <p className="text-[11px] text-gray-400">Normal delivery challan</p>
-                  </td>
-                  <CountCell cell={null} onOpen={openDetail} />
-                  <CountCell cell={{ value: outward?.customer_standard, type: 'outward_customer_standard', title: 'Outward — Customer standard' }} onOpen={openDetail} />
-                </tr>
-
-                <tr className="bg-slate-50/80">
-                  <td className="px-4 py-2.5" colSpan={3}>
-                    <span className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-purple-700">
-                      <Truck className="w-3.5 h-3.5" /> Direct
-                    </span>
-                  </td>
-                </tr>
-                <tr className="hover:bg-gray-50/50">
-                  <td className="px-4 py-3 pl-8 text-gray-800">
-                    Courier / manual / ERP
-                  </td>
-                  <CountCell cell={{ value: inward?.direct, type: 'inward_direct', title: 'Direct Inward' }} onOpen={openDetail} />
-                  <CountCell cell={null} onOpen={openDetail} />
-                </tr>
-
-                <tr className="bg-gray-50">
-                  <td className="px-4 py-3 font-semibold text-gray-900">Total</td>
-                  <CountCell cell={{ value: inward?.total, type: 'inward_total', title: 'Total Inward Laptops' }} onOpen={openDetail} strong />
-                  <CountCell cell={{ value: outward?.total, type: 'outward_total', title: 'Total Outward Laptops' }} onOpen={openDetail} strong />
-                </tr>
-              </tbody>
-            </table>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <DirectionPanel
+              direction="inward"
+              total={inward?.total}
+              groups={inwardGroups}
+              onOpen={openDetail}
+            />
+            <DirectionPanel
+              direction="outward"
+              total={outward?.total}
+              groups={outwardGroups}
+              onOpen={openDetail}
+            />
           </div>
 
           <p className="text-[11px] text-gray-400">

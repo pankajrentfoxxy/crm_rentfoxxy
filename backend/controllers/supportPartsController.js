@@ -1337,12 +1337,47 @@ exports.getChallan = async (req, res) => {
 
 exports.getWarehouseQueue = async (req, res) => {
   try {
+    const { from, to, tech_id, sort } = req.query;
+    const sortDir = String(sort || 'asc').toLowerCase() === 'desc' ? 'DESC' : 'ASC';
+
+    const params = [];
+    let dateSql = '';
+    if (from || to) {
+      const pendingParts = [];
+      const returnParts = [];
+      if (from) {
+        params.push(from);
+        const i = params.length;
+        pendingParts.push(`spr.created_at >= $${i}::date`);
+        returnParts.push(`COALESCE(spr.return_requested_at, spr.created_at) >= $${i}::date`);
+      }
+      if (to) {
+        params.push(to);
+        const i = params.length;
+        pendingParts.push(`spr.created_at < ($${i}::date + INTERVAL '1 day')`);
+        returnParts.push(`COALESCE(spr.return_requested_at, spr.created_at) < ($${i}::date + INTERVAL '1 day')`);
+      }
+      dateSql = ` AND (
+        (spr.status = 'pending' AND ${pendingParts.join(' AND ')})
+        OR (spr.status = 'return_requested' AND ${returnParts.join(' AND ')})
+      )`;
+    }
+    let techClause = '';
+    if (tech_id) {
+      const tid = parseInt(tech_id, 10);
+      if (Number.isInteger(tid)) {
+        params.push(tid);
+        techClause = ` AND spr.assigned_to_tech = $${params.length}`;
+      }
+    }
+
     const { rows } = await pool.query(`
       SELECT spr.*,
              p.part_name, p.category, p.quantity AS stock_qty,
              p.location_code, p.cost AS unit_cost,
              COALESCE(pi_count.available, 0) AS instances_available,
              GREATEST(COALESCE(pi_count.available, 0), COALESCE(p.quantity, 0))::int AS available,
+             u.user_id AS tech_id,
              u.name AS tech_name,
              st.customer_name, ${TICKET_NUMBER_SQL} AS ticket_number
       FROM support_part_requests spr
@@ -1354,19 +1389,46 @@ exports.getWarehouseQueue = async (req, res) => {
       JOIN users u ON u.user_id = spr.assigned_to_tech
       JOIN support_tickets st ON st.id = spr.support_ticket_id
       WHERE spr.status IN ('pending','return_requested')
-      ORDER BY spr.created_at ASC
-    `);
+      ${dateSql}
+      ${techClause}
+      ORDER BY
+        CASE WHEN spr.status = 'return_requested'
+          THEN COALESCE(spr.return_requested_at, spr.created_at)
+          ELSE spr.created_at
+        END ${sortDir},
+        spr.id ${sortDir}
+    `, params);
 
     const pending = rows.filter((r) => r.status === 'pending');
     const returns = rows.filter((r) => r.status === 'return_requested');
 
-    // Reassignment requests: part is still issued/held by the tech, but they
-    // asked to move it to a different ticket. Warehouse approves the move.
+    // Reassignment requests — same person/date/sort filters (date on reassign_requested_at).
+    const reParams = [];
+    const reDate = [];
+    if (from) {
+      reParams.push(from);
+      reDate.push(`spr.reassign_requested_at >= $${reParams.length}::date`);
+    }
+    if (to) {
+      reParams.push(to);
+      reDate.push(`spr.reassign_requested_at < ($${reParams.length}::date + INTERVAL '1 day')`);
+    }
+    let reTech = '';
+    if (tech_id) {
+      const tid = parseInt(tech_id, 10);
+      if (Number.isInteger(tid)) {
+        reParams.push(tid);
+        reTech = ` AND spr.assigned_to_tech = $${reParams.length}`;
+      }
+    }
+    const reDateSql = reDate.length ? ` AND ${reDate.join(' AND ')}` : '';
+
     const reassignRes = await pool.query(`
       SELECT spr.id, spr.request_number, spr.quantity, spr.status,
              spr.reassign_reason, spr.reassign_requested_at,
              spr.reassign_to_ticket_id, spr.reassign_to_ttspl_id, spr.reassign_to_serial,
              p.part_name, pi.prt_id,
+             u.user_id AS tech_id,
              u.name AS tech_name,
              ${TICKET_NUMBER_SQL} AS from_ticket_number, st.customer_name AS from_customer,
              spr.ttspl_id AS from_ttspl_id,
@@ -1380,15 +1442,75 @@ exports.getWarehouseQueue = async (req, res) => {
       LEFT JOIN support_tickets stn ON stn.id = spr.reassign_to_ticket_id
       WHERE spr.reassign_requested_at IS NOT NULL
         AND spr.status IN ('issued','return_requested')
-      ORDER BY spr.reassign_requested_at ASC
-    `);
+        ${reDateSql}
+        ${reTech}
+      ORDER BY spr.reassign_requested_at ${sortDir}, spr.id ${sortDir}
+    `, reParams);
     const reassigns = reassignRes.rows;
+
+    // Person dropdown: technicians with any open queue work (ignore tech_id filter).
+    const techParams = [];
+    let techPendingSql = '';
+    let techReturnSql = '';
+    let techReSql = '';
+    if (from || to) {
+      const pParts = [];
+      const rParts = [];
+      const reParts = [];
+      if (from) {
+        techParams.push(from);
+        const i = techParams.length;
+        pParts.push(`spr.created_at >= $${i}::date`);
+        rParts.push(`COALESCE(spr.return_requested_at, spr.created_at) >= $${i}::date`);
+        reParts.push(`spr.reassign_requested_at >= $${i}::date`);
+      }
+      if (to) {
+        techParams.push(to);
+        const i = techParams.length;
+        pParts.push(`spr.created_at < ($${i}::date + INTERVAL '1 day')`);
+        rParts.push(`COALESCE(spr.return_requested_at, spr.created_at) < ($${i}::date + INTERVAL '1 day')`);
+        reParts.push(`spr.reassign_requested_at < ($${i}::date + INTERVAL '1 day')`);
+      }
+      techPendingSql = ` AND ${pParts.join(' AND ')}`;
+      techReturnSql = ` AND ${rParts.join(' AND ')}`;
+      techReSql = ` AND ${reParts.join(' AND ')}`;
+    }
+
+    const techRes = await pool.query(`
+      SELECT DISTINCT u.user_id AS tech_id, u.name AS tech_name
+      FROM users u
+      WHERE u.user_id IN (
+        SELECT spr.assigned_to_tech
+          FROM support_part_requests spr
+         WHERE spr.status = 'pending'
+         ${techPendingSql}
+        UNION
+        SELECT spr.assigned_to_tech
+          FROM support_part_requests spr
+         WHERE spr.status = 'return_requested'
+         ${techReturnSql}
+        UNION
+        SELECT spr.assigned_to_tech
+          FROM support_part_requests spr
+         WHERE spr.reassign_requested_at IS NOT NULL
+           AND spr.status IN ('issued','return_requested')
+         ${techReSql}
+      )
+      ORDER BY u.name ASC
+    `, techParams);
 
     res.json({
       success: true,
       pending,
       returns,
       reassigns,
+      technicians: techRes.rows,
+      filters: {
+        from: from || null,
+        to: to || null,
+        tech_id: tech_id ? Number(tech_id) : null,
+        sort: sortDir === 'DESC' ? 'desc' : 'asc',
+      },
       total: rows.length + reassigns.length,
     });
   } catch (e) {

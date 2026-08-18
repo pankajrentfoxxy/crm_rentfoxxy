@@ -40,7 +40,23 @@ export const MODULE_CHILDREN = {
     'payment_records',
   ],
   floor_pipeline: ['floor_tickets', 'floor_ticket_config_edit', 'chip_level_repair', 'qc_management', 'dispatch_qc', 'pending_inventory'],
-  inventory_management: ['parts', 'parts_inventory', 'parts_detach', 'part_vendor_repair', 'customer_inventory', 'ttspl_history', 'inventory_master_data'],
+  vendor_management: ['vendor_repair_dc'],
+  inventory_management: ['customer_inventory', 'ttspl_history', 'inventory_master_data', 'inventory_asset_movement'],
+  parts_management: [
+    'parts_dashboard',
+    'parts_inventory',
+    'parts_approval',
+    'parts_history',
+    'parts_procurement',
+    'part_vendor_repair',
+    'parts_discarded',
+    'scrap_challans',
+    'parts_detach',
+    'parts_requests',
+    'support_part_challan',
+    'support_part_requests',
+    'parts',
+  ],
 };
 
 export const ALL_CHILD_SECTIONS = new Set(
@@ -70,12 +86,27 @@ export const INVENTORY_UMBRELLA_SECTIONS = [
   'inventory_master_data',
   'inventory_asset_movement',
   'parts',
+  'parts_dashboard',
   'parts_inventory',
+  'parts_approval',
+  'parts_history',
+  'parts_discarded',
+  'scrap_challans',
   'parts_detach',
   'part_vendor_repair',
   'customer_inventory',
   'ttspl_history',
 ];
+
+/** Sections that grant entry to /vendor-management/* (umbrella route guard). */
+export const VENDOR_UMBRELLA_SECTIONS = [
+  'vendor_management',
+  'parts_procurement',
+  'vendor_repair_dc',
+];
+
+/** @deprecated use VENDOR_UMBRELLA_SECTIONS */
+export const PARTS_PROCUREMENT_UMBRELLA_SECTIONS = VENDOR_UMBRELLA_SECTIONS;
 
 /** Sections that grant entry to /floor-pipeline/* (umbrella route guard). */
 export const FLOOR_UMBRELLA_SECTIONS = [

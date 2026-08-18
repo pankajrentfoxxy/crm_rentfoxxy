@@ -17,7 +17,12 @@ const LANDING_ORDER = [
   ['chip_level_repair', '/floor-pipeline/tickets?stage=Chip+Level+Repair'],
   ['floor_pipeline', '/floor-pipeline/dashboard'],
   ['ttspl_history', '/inventory-management/ttspl-history'],
+  ['parts_dashboard', '/inventory-management/parts-dashboard'],
   ['parts_inventory', '/inventory-management/parts'],
+  ['parts_approval', '/inventory-management/parts-approval'],
+  ['parts_procurement', '/vendor-management/spare-parts-po'],
+  ['vendor_repair_dc', '/vendor-management/vendor-repair-dc'],
+  ['part_vendor_repair', '/inventory-management/part-vendor-repair'],
   ['customer_inventory', '/inventory-management/customer-assets'],
   ['inventory_management', '/inventory-management/universal-search'],
   ['technician_bucket', '/sales-pipeline/my-deliveries'],
@@ -30,6 +35,8 @@ const LANDING_ORDER = [
   ['customer_billing', '/customer-billing/invoices'],
   ['vendor_billing_mgmt', '/vendor-billing/bills'],
   ['support_tickets', '/support'],
+  ['support_part_challan', '/support-parts/queue'],
+  ['support_part_requests', '/support-parts/tech-bucket'],
   ['customers', '/lead-crm/customers'],
 ];
 

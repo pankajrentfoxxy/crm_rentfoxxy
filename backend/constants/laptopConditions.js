@@ -95,6 +95,11 @@ function requiresConfigVerification(condition) {
   return normalizeCondition(condition) === 'on';
 }
 
+/** Floor identity: Serial is mandatory when laptop is ON (or part_missing); optional when NOT ON. */
+function requiresSerialIdentity(condition) {
+  return normalizeCondition(condition) !== 'not_on';
+}
+
 /**
  * Floor-ticket highlight so the technician immediately sees a non-standard intake.
  * @returns {{ highlighted: boolean, reason: string|null }}
@@ -129,5 +134,6 @@ module.exports = {
   partCategoryLabel,
   partCategoryLabels,
   requiresConfigVerification,
+  requiresSerialIdentity,
   conditionHighlight,
 };

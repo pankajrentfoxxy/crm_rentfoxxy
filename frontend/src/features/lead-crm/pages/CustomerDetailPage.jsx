@@ -8,7 +8,7 @@ import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
 import {
   getCustomer, getCustomerLaptops, getCustomerAssetActivity, getCustomerAddresses, verifyCustomerKyc, enableCustomerPortal,
-  updateCustomerStatus,
+  updateCustomerStatus, getCustomerTickets, getCustomerRentalSummary,
 } from '../leadCrmApi';
 import { formatCurrency, formatAssetCalendarDate as fmtAssetDate } from '../leadCrmUtils';
 import { getBackendOrigin } from '../../../utils/api';
@@ -20,12 +20,50 @@ import CustomerAssetEditModal from '../components/CustomerAssetEditModal';
 import CustomerAssetActivityFeed from '../components/CustomerAssetActivityFeed';
 import usePermission from '../../../hooks/usePermission';
 
-const TABS = ['Profile', 'Addresses', 'Documents', 'Assets', 'Orders', 'Lead Origin', 'Portal Access'];
+const TABS = ['Profile', 'Addresses', 'Documents', 'Assets', 'Tickets', 'Orders', 'Lead Origin', 'Portal Access'];
 const TAB_PROFILE = 0;
 const TAB_ADDRESSES = 1;
 const TAB_DOCUMENTS = 2;
 const TAB_ASSETS = 3;
+const TAB_TICKETS = 4;
+const TAB_ORDERS = 5;
+const TAB_LEAD_ORIGIN = 6;
+const TAB_PORTAL = 7;
 const ASSET_PAGE_SIZE = 25;
+const TICKET_PAGE_SIZE = 20;
+const TICKET_STATUS_CHIPS = [
+  { key: '', label: 'All' },
+  { key: 'open', label: 'Open' },
+  { key: 'in_progress', label: 'In Progress' },
+  { key: 'closed', label: 'Closed' },
+  { key: 'cancelled', label: 'Cancelled' },
+];
+
+function formatTicketNumber(id) {
+  return `STK-${String(id).padStart(4, '0')}`;
+}
+
+function ticketStatusClass(status) {
+  const map = {
+    open: 'bg-blue-100 text-blue-700',
+    in_progress: 'bg-amber-100 text-amber-800',
+    closed: 'bg-green-100 text-green-700',
+    cancelled: 'bg-gray-100 text-gray-600',
+  };
+  return map[status] || 'bg-slate-100 text-slate-700';
+}
+
+const COMPLAINT_TYPE_BADGE = {
+  complaint: 'bg-blue-100 text-blue-800',
+  replacement: 'bg-purple-100 text-purple-800',
+  pickup: 'bg-amber-100 text-amber-800',
+};
+
+const COMPLAINT_SUBTYPE_BADGE = {
+  repair: 'bg-orange-100 text-orange-800',
+  return: 'bg-emerald-100 text-emerald-800',
+  mixed: 'bg-slate-100 text-slate-700',
+};
 
 function podFileUrl(path) {
   if (!path) return '';
@@ -163,6 +201,14 @@ export default function CustomerDetailPage() {
   const [assetEdit, setAssetEdit] = useState(null);
   const [assetActivity, setAssetActivity] = useState([]);
   const [assetActivityLoading, setAssetActivityLoading] = useState(false);
+  const [ticketRows, setTicketRows] = useState([]);
+  const [ticketsLoading, setTicketsLoading] = useState(false);
+  const [ticketPage, setTicketPage] = useState(1);
+  const [ticketSearchInput, setTicketSearchInput] = useState('');
+  const ticketSearch = useDebouncedValue(ticketSearchInput.trim(), 320);
+  const [ticketStatus, setTicketStatus] = useState('');
+  const [ticketPagination, setTicketPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: TICKET_PAGE_SIZE });
+  const [rentalSummary, setRentalSummary] = useState({ total_monthly_rent: 0, active_asset_count: 0 });
   const { canEdit: canEditCustomerAssets } = usePermission();
 
   const loadCustomer = useCallback(async () => {
@@ -230,6 +276,37 @@ export default function CustomerDetailPage() {
     await Promise.all([loadAssets(), loadAssetActivity()]);
   }, [loadAssets, loadAssetActivity]);
 
+  const loadTickets = useCallback(async () => {
+    setTicketsLoading(true);
+    try {
+      const [ticketsRes, rentalRes] = await Promise.all([
+        getCustomerTickets(id, {
+          page: ticketPage,
+          limit: TICKET_PAGE_SIZE,
+          search: ticketSearch || undefined,
+          status: ticketStatus || undefined,
+        }),
+        getCustomerRentalSummary(id),
+      ]);
+      setTicketRows(ticketsRes.data?.tickets || []);
+      setTicketPagination(ticketsRes.data?.pagination || {
+        page: ticketPage,
+        totalPages: 1,
+        total: ticketsRes.data?.total || 0,
+        limit: TICKET_PAGE_SIZE,
+      });
+      setRentalSummary({
+        total_monthly_rent: Number(rentalRes.data?.total_monthly_rent || 0),
+        active_asset_count: Number(rentalRes.data?.active_asset_count || 0),
+      });
+    } catch {
+      toast.error('Failed to load customer tickets');
+      setTicketRows([]);
+    } finally {
+      setTicketsLoading(false);
+    }
+  }, [id, ticketPage, ticketSearch, ticketStatus]);
+
   useEffect(() => { loadCustomer(); }, [loadCustomer]);
 
   useEffect(() => {
@@ -243,13 +320,20 @@ export default function CustomerDetailPage() {
     loadAddresses();
   }, [tab, loadAddresses]);
 
+  useEffect(() => {
+    if (tab !== TAB_TICKETS) return;
+    loadTickets();
+  }, [tab, loadTickets]);
+
   useEffect(() => { setAssetPage(1); }, [assetSearch, assetView, assetFrom, assetTo]);
+  useEffect(() => { setTicketPage(1); }, [ticketSearch, ticketStatus]);
 
   const load = useCallback(async () => {
     await loadCustomer();
     if (tab === TAB_ASSETS) await refreshAssetsTab();
     if (tab === TAB_ADDRESSES) await loadAddresses();
-  }, [loadCustomer, refreshAssetsTab, loadAddresses, tab]);
+    if (tab === TAB_TICKETS) await loadTickets();
+  }, [loadCustomer, refreshAssetsTab, loadAddresses, loadTickets, tab]);
 
   if (!customer) return <div className="p-6 text-center text-gray-400">Loading...</div>;
 
@@ -664,13 +748,188 @@ export default function CustomerDetailPage() {
         </div>
       )}
 
-      {tab === 4 && (
+      {tab === TAB_TICKETS && (
+        <div className="space-y-4">
+          <div className="rounded-xl border border-gray-100 bg-white p-4 sm:max-w-xs">
+            <p className="text-xs text-gray-500">Current Rental Amount / month</p>
+            <p className="text-2xl font-bold text-slate-800">
+              {formatCurrency(rentalSummary.total_monthly_rent || 0)}
+            </p>
+            <p className="text-xs text-gray-400 mt-1">
+              {rentalSummary.active_asset_count || 0} active asset(s)
+            </p>
+          </div>
+
+          <SearchField
+            value={ticketSearchInput}
+            onChange={(e) => setTicketSearchInput(e.target.value)}
+            placeholder="Search ticket #, TTSPL, name, phone…"
+            className="max-w-md"
+          />
+
+          <div className="flex flex-wrap gap-2">
+            {TICKET_STATUS_CHIPS.map((chip) => (
+              <button
+                key={chip.key || 'all'}
+                type="button"
+                onClick={() => setTicketStatus(chip.key)}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${
+                  ticketStatus === chip.key
+                    ? 'border-blue-500 bg-blue-50 text-blue-700'
+                    : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                {chip.label}
+              </button>
+            ))}
+          </div>
+
+          {ticketsLoading ? (
+            <div className="flex justify-center py-12">
+              <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+            </div>
+          ) : (
+            <>
+              <div className="rounded-xl border border-gray-100 bg-white shadow-sm overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 text-xs text-gray-500 text-left">
+                    <tr>
+                      {['Ticket #', 'TTSPL', 'Type', 'Sub-type', 'Replacement', 'Status', 'Items', 'Created', 'Created By', 'Closed', 'Remark'].map((h) => (
+                        <th key={h} className="p-3">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ticketRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={11} className="p-6 text-center text-gray-400">
+                          No tickets for this customer
+                        </td>
+                      </tr>
+                    ) : ticketRows.map((tk) => {
+                      const typeLabel = tk.complaint_type_label || tk.ticket_category || 'complaint';
+                      const subtype = tk.complaint_subtype || null;
+                      const ttspl = tk.ttspl_list || tk.ttspl_id || null;
+                      const remark = (tk.remarks || tk.top_level_remarks || tk.item_remarks || '').trim();
+                      const replacements = Array.isArray(tk.replacements) ? tk.replacements : [];
+                      const showReplacement = typeLabel === 'replacement' || replacements.length > 0;
+                      return (
+                        <tr key={tk.id} className="border-t border-gray-100">
+                          <td className="p-3">
+                            <Link
+                              to={`/support/tickets/${tk.id}`}
+                              className="text-blue-600 hover:underline font-mono text-xs"
+                            >
+                              {formatTicketNumber(tk.id)}
+                            </Link>
+                          </td>
+                          <td className="p-3">
+                            {ttspl ? (
+                              <button
+                                type="button"
+                                onClick={() => setTtsplOpen(String(ttspl).split(',')[0].trim())}
+                                className="text-blue-600 hover:underline font-mono text-xs text-left"
+                                title={ttspl}
+                              >
+                                {ttspl}
+                              </button>
+                            ) : (
+                              <span className="text-gray-400 text-xs">—</span>
+                            )}
+                          </td>
+                          <td className="p-3">
+                            <span className={`px-2 py-0.5 rounded-full text-xs capitalize ${COMPLAINT_TYPE_BADGE[typeLabel] || 'bg-slate-100 text-slate-700'}`}>
+                              {String(typeLabel).replace(/_/g, ' ')}
+                            </span>
+                          </td>
+                          <td className="p-3">
+                            {subtype ? (
+                              <span className={`px-2 py-0.5 rounded-full text-xs ${COMPLAINT_SUBTYPE_BADGE[tk.pickup_kind] || 'bg-slate-100 text-slate-700'}`}>
+                                {subtype}
+                              </span>
+                            ) : (
+                              <span className="text-gray-400 text-xs">—</span>
+                            )}
+                          </td>
+                          <td className="p-3 min-w-[160px]">
+                            {!showReplacement ? (
+                              <span className="text-gray-400 text-xs">—</span>
+                            ) : replacements.length === 0 ? (
+                              <span className="text-xs text-amber-700">Replacement pending</span>
+                            ) : (
+                              <div className="space-y-1">
+                                {replacements.map((r, idx) => (
+                                  <div key={`${tk.id}-repl-${idx}`} className="text-xs text-slate-700">
+                                    <button
+                                      type="button"
+                                      className="font-mono text-blue-600 hover:underline"
+                                      onClick={() => r.old_ttspl && setTtsplOpen(r.old_ttspl)}
+                                      disabled={!r.old_ttspl}
+                                    >
+                                      {r.old_ttspl || '—'}
+                                    </button>
+                                    <span className="mx-1 text-slate-400">→</span>
+                                    {r.new_ttspl ? (
+                                      <button
+                                        type="button"
+                                        className="font-mono text-emerald-700 hover:underline"
+                                        onClick={() => setTtsplOpen(r.new_ttspl)}
+                                      >
+                                        {r.new_ttspl}
+                                      </button>
+                                    ) : (
+                                      <span className="text-amber-700">pending</span>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </td>
+                          <td className="p-3">
+                            <span className={`px-2 py-0.5 rounded-full text-xs capitalize ${ticketStatusClass(tk.status)}`}>
+                              {String(tk.status || '').replace(/_/g, ' ')}
+                            </span>
+                          </td>
+                          <td className="p-3 text-xs">
+                            {tk.open_item_count}/{tk.item_count} open
+                          </td>
+                          <td className="p-3 text-xs">{fmtAssetDate(tk.created_at)}</td>
+                          <td className="p-3 text-xs">{tk.created_by_name || '—'}</td>
+                          <td className="p-3 text-xs">{tk.closed_at ? fmtAssetDate(tk.closed_at) : '—'}</td>
+                          <td className="p-3 max-w-[220px]">
+                            {remark ? (
+                              <p className="text-xs text-slate-600 line-clamp-3 whitespace-pre-wrap break-words" title={remark}>
+                                {remark}
+                              </p>
+                            ) : (
+                              <span className="text-gray-400 text-xs">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <ListPagination
+                page={ticketPage}
+                totalPages={ticketPagination.totalPages || 1}
+                total={ticketPagination.total || 0}
+                pageSize={TICKET_PAGE_SIZE}
+                onPageChange={setTicketPage}
+              />
+            </>
+          )}
+        </div>
+      )}
+
+      {tab === TAB_ORDERS && (
         <p className="text-sm text-gray-500 p-4 rounded-xl border border-gray-100 bg-white">
           Orders are managed in Operation Management. Link customer orders from sales orders module.
         </p>
       )}
 
-      {tab === 5 && (
+      {tab === TAB_LEAD_ORIGIN && (
         <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 text-sm">
           {customer.source_lead_id ? (
             <>
@@ -684,7 +943,7 @@ export default function CustomerDetailPage() {
         </div>
       )}
 
-      {tab === 6 && (
+      {tab === TAB_PORTAL && (
         <div className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 space-y-4">
           <PermissionGate section="customers" action="edit">
             <div className="flex items-center justify-between">

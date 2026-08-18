@@ -97,17 +97,18 @@ function stageDefForLabel(label) {
   return REPORT_STAGES.find((s) => s.label === label) || null;
 }
 
-function processorBucketSql(proc) {
+function processorBucketSql(proc, fieldExpr = `COALESCE(t.processor, '')`) {
   const p = String(proc).trim();
-  if (p === 'i3') return `COALESCE(t.processor, '') ~* 'i\\s*3|core\\s*i3|\\bi3\\b'`;
-  if (p === 'i5') return `COALESCE(t.processor, '') ~* 'i\\s*5|core\\s*i5|\\bi5\\b'`;
-  if (p === 'i7') return `COALESCE(t.processor, '') ~* 'i\\s*7|core\\s*i7|\\bi7\\b'`;
-  if (p === 'i9') return `COALESCE(t.processor, '') ~* 'i\\s*9|core\\s*i9|\\bi9\\b'`;
-  if (p === 'Ryzen 3') return `COALESCE(t.processor, '') ~* 'ryzen\\s*3|ryzen3'`;
-  if (p === 'Ryzen 5') return `COALESCE(t.processor, '') ~* 'ryzen\\s*5|ryzen5'`;
-  if (p === 'Ryzen 7') return `COALESCE(t.processor, '') ~* 'ryzen\\s*7|ryzen7'`;
+  const f = fieldExpr;
+  if (p === 'i3') return `${f} ~* 'i\\s*3|core\\s*i3|\\bi3\\b'`;
+  if (p === 'i5') return `${f} ~* 'i\\s*5|core\\s*i5|\\bi5\\b'`;
+  if (p === 'i7') return `${f} ~* 'i\\s*7|core\\s*i7|\\bi7\\b'`;
+  if (p === 'i9') return `${f} ~* 'i\\s*9|core\\s*i9|\\bi9\\b'`;
+  if (p === 'Ryzen 3') return `${f} ~* 'ryzen\\s*3|ryzen3'`;
+  if (p === 'Ryzen 5') return `${f} ~* 'ryzen\\s*5|ryzen5'`;
+  if (p === 'Ryzen 7') return `${f} ~* 'ryzen\\s*7|ryzen7'`;
   if (p === 'Others') {
-    return `NOT (COALESCE(t.processor, '') ~* 'i\\s*[3579]|core\\s*i[3579]|ryzen\\s*[357]|ryzen[357]')`;
+    return `NOT (${f} ~* 'i\\s*[3579]|core\\s*i[3579]|ryzen\\s*[357]|ryzen[357]')`;
   }
   return null;
 }
@@ -124,17 +125,17 @@ function appendMultiIlike(values, fieldExpr, conditions, params, idx) {
   return idx;
 }
 
-function appendMultiProcessor(raw, conditions, params, idx) {
+function appendMultiProcessor(raw, conditions, params, idx, fieldExpr = `COALESCE(t.processor, '')`) {
   const vals = parseMultiSpecValues(raw).filter((v) => v !== 'All');
   if (!vals.length) return idx;
   const parts = [];
   for (const val of vals) {
-    const bucket = processorBucketSql(val);
+    const bucket = processorBucketSql(val, fieldExpr);
     if (bucket) {
       parts.push(bucket);
     } else {
       params.push(`%${val}%`);
-      parts.push(`COALESCE(t.processor, '') ILIKE $${idx}`);
+      parts.push(`${fieldExpr} ILIKE $${idx}`);
       idx += 1;
     }
   }
@@ -569,6 +570,9 @@ module.exports = {
   PROCESSOR_BUCKETS_SHORT,
   resolvePeriodRange,
   bucketProcessorShort,
+  processorBucketSql,
+  appendMultiIlike,
+  appendMultiProcessor,
   getLaptopReport,
   getTicketRows,
   getStagePerformanceTickets: (...args) => require('./laptopReportStagePerformanceService').getStagePerformanceTickets(...args),

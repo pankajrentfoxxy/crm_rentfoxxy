@@ -242,7 +242,7 @@ export default function OutForRepairInventoryPage() {
                     <td className="p-3">
                       {r.dc_number ? (
                         <Link
-                          to={`/floor-pipeline/vendor-repair-dc/${encodeURIComponent(r.dc_number)}`}
+                          to={`/vendor-management/vendor-repair-dc/${encodeURIComponent(r.dc_number)}`}
                           state={listReturn}
                           className="font-mono text-xs text-blue-700 hover:underline"
                         >
@@ -281,7 +281,7 @@ export default function OutForRepairInventoryPage() {
                           </button>
                         ) : (
                           <Link
-                            to={`/floor-pipeline/vendor-repair-dc/${encodeURIComponent(r.dc_number)}`}
+                            to={`/vendor-management/vendor-repair-dc/${encodeURIComponent(r.dc_number)}`}
                             state={listReturn}
                             className="inline-flex items-center gap-1 text-xs font-semibold text-green-700 hover:underline"
                           >

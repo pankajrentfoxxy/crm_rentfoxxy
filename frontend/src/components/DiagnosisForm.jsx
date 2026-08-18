@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { checkTtsplAndSerial } from '../utils/machineIdentityVerify';
+import { requiresSerialIdentity } from '../constants/laptopConditions';
 
 const SECTION_ICONS = {
     'Power & Boot': Cpu,
@@ -265,8 +266,17 @@ export default function DiagnosisForm({
     const [routingStep, setRoutingStep] = useState(null); // 'chip_level' | 'body_paint'
     const [verifyTtspl, setVerifyTtspl] = useState('');
     const [verifySerial, setVerifySerial] = useState('');
+    const [laptopCondition, setLaptopCondition] = useState(
+      ticket?.received_condition === 'not_on' ? 'not_on' : 'on'
+    );
     const [confirmDialog, setConfirmDialog] = useState(null);
     // confirmDialog: { title, message, confirmLabel, tone, onConfirm }
+
+    useEffect(() => {
+      setLaptopCondition(ticket?.received_condition === 'not_on' ? 'not_on' : 'on');
+    }, [ticket?.ticket_id, ticket?.received_condition]);
+
+    const needSerial = requiresSerialIdentity(laptopCondition);
 
     const loadData = React.useCallback(async () => {
         setLoading(true);
@@ -323,11 +333,19 @@ export default function DiagnosisForm({
     };
 
     const requireIdentityVerify = () => {
+        if (needSerial && !verifySerial.trim()) {
+            toast.error('Serial Number is required when the laptop is ON');
+            return false;
+        }
+        const storedSerial = ticket.serial_number && ticket.serial_number !== 'NOT_ON'
+          ? ticket.serial_number
+          : '';
         const check = checkTtsplAndSerial({
             expectedTtspl: ticket.ttspl_id,
-            expectedSerial: ticket.serial_number,
+            expectedSerial: needSerial ? (storedSerial || verifySerial) : ticket.serial_number,
             verifiedTtspl: verifyTtspl,
             verifiedSerial: verifySerial,
+            requireSerial: needSerial,
             label: 'Diagnosis',
         });
         if (!check.ok) {
@@ -345,7 +363,7 @@ export default function DiagnosisForm({
                 ...data,
                 remarks,
                 verify_ttspl: verifyTtspl.trim(),
-                verify_serial: verifySerial.trim(),
+                verify_serial: verifySerial.trim() || undefined,
             });
             toast.success('Draft saved');
         } catch (e) {
@@ -387,7 +405,9 @@ export default function DiagnosisForm({
                 chip_level_repair_required: chipLevelRepair,
                 body_paint_required: bodyPaintRequired,
                 verify_ttspl: verifyTtspl.trim(),
-                verify_serial: verifySerial.trim(),
+                verify_serial: verifySerial.trim() || undefined,
+                laptop_condition: laptopCondition,
+                serial_number: needSerial ? verifySerial.trim() : undefined,
             };
 
             await api.post(`/diagnosis/ticket/${ticket.ticket_id}/submit`, payload);
@@ -461,24 +481,62 @@ export default function DiagnosisForm({
             </div>
 
             {!readOnly ? (
-                <div className="rounded-xl border-2 border-amber-200 bg-amber-50 p-4 space-y-2">
-                    <h3 className="font-semibold text-amber-900 text-sm">Verify TTSPL + Serial before save / submit</h3>
+                <div className="rounded-xl border-2 border-amber-200 bg-amber-50 p-4 space-y-3">
+                    <h3 className="font-semibold text-amber-900 text-sm">Verify machine before save / submit</h3>
+                    {ticket.received_condition === 'not_on' || laptopCondition === 'not_on' ? (
+                      <div className="space-y-2">
+                        <p className="text-xs text-amber-800">
+                          Laptop power state for this diagnosis:
+                        </p>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setLaptopCondition('not_on')}
+                            className={`rounded-lg border px-3 py-2 text-xs font-semibold ${
+                              laptopCondition === 'not_on'
+                                ? 'border-rose-500 bg-rose-50 text-rose-800'
+                                : 'border-amber-200 bg-white text-slate-700'
+                            }`}
+                          >
+                            NOT ON
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setLaptopCondition('on')}
+                            className={`rounded-lg border px-3 py-2 text-xs font-semibold ${
+                              laptopCondition === 'on'
+                                ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
+                                : 'border-amber-200 bg-white text-slate-700'
+                            }`}
+                          >
+                            Now ON
+                          </button>
+                        </div>
+                        {laptopCondition === 'on' && ticket.received_condition === 'not_on' ? (
+                          <p className="text-[11px] text-emerald-800">
+                            Serial Number is required before diagnosis can be marked complete.
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
                     <p className="text-xs text-amber-800">
-                        Scan or type both values. They must match this ticket
-                        ({ticket.ttspl_id || '—'} / {ticket.serial_number || '—'}).
+                        Scan or type values. They must match this ticket
+                        ({ticket.ttspl_id || '—'}
+                        {needSerial ? ` / ${ticket.serial_number && ticket.serial_number !== 'NOT_ON' ? ticket.serial_number : 'enter serial'}` : ' · serial optional while NOT ON'}
+                        ).
                     </p>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         <input
                             value={verifyTtspl}
                             onChange={(e) => setVerifyTtspl(e.target.value)}
-                            placeholder="TTSPL ID"
+                            placeholder="TTSPL ID *"
                             className="border rounded-lg px-3 py-2 text-sm font-mono"
                             autoComplete="off"
                         />
                         <input
                             value={verifySerial}
                             onChange={(e) => setVerifySerial(e.target.value)}
-                            placeholder="Serial number"
+                            placeholder={needSerial ? 'Serial number *' : 'Serial number (optional)'}
                             className="border rounded-lg px-3 py-2 text-sm font-mono"
                             autoComplete="off"
                         />

@@ -1452,7 +1452,7 @@ async function generateOneDcUnitWaybill({
 }) {
   const bluedartWaybill = require('../services/bluedartWaybillService');
   const courierPdf = require('../services/courierWaybillPdfService');
-  const { lookupDeclaredValueForUnit, sumDeclaredValueForUnits } = require('../constants/bluedartDeclaredValue');
+  const { lookupDeclaredValueForUnit } = require('../constants/bluedartDeclaredValue');
 
   const creditRef = body.credit_reference_no && !serialNumber && !ttsplId
     ? body.credit_reference_no
@@ -1468,7 +1468,7 @@ async function generateOneDcUnitWaybill({
     ? declaredValueOverride
     : body.services?.declaredValue;
   if (declaredValue == null || declaredValue === '' || Number(declaredValue) <= 0) {
-    const unitVal = lookupDeclaredValueForUnit(processor, generation, modelName);
+    const unitVal = await lookupDeclaredValueForUnit(processor, generation, modelName);
     if (unitVal != null) declaredValue = unitVal;
     else if (Number(head.security_amount) > 0) declaredValue = Number(head.security_amount);
   }
@@ -1641,7 +1641,7 @@ async function generateAndPersistDcBluedartAwb(dcNumber, body = {}) {
       || units.length
       || 1;
     const declaredValue = body.services?.declaredValue
-      || sumDeclaredValueForUnits(units.map((u) => ({ processor: u.processor, generation: u.generation })))
+      || await sumDeclaredValueForUnits(units.map((u) => ({ processor: u.processor, generation: u.generation, model: u.modelName })))
       || (Number(head.security_amount) > 0 ? Number(head.security_amount) : null);
     const one = await generateOneDcUnitWaybill({
       dcNumber,

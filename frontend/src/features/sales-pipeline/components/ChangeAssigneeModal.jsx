@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { updateDcAssignment, generateBluedartWaybill, downloadBluedartWaybillPdfByAwb } from '../salesPipelineApi';
-import { sumDeclaredValueForUnits } from '../bluedartDeclaredValue';
+import { sumDeclaredValueForUnits, ensureDeclaredValueMatrixLoaded } from '../bluedartDeclaredValue';
 import { downloadBlob } from '../salesPipelineUtils';
 
 function initialMode(head) {
@@ -72,38 +72,44 @@ export default function ChangeAssigneeModal({
 
   useEffect(() => {
     if (!open) return;
-    const m = initialMode(head);
-    setMode(m);
-    const courierName = head.courier_name || (m === 'courier' ? 'BlueDart' : '');
-    setForm({
-      courier_name: courierName,
-      awb_number: head.awb_number || '',
-      courier_tracking_url: head.courier_tracking_url || '',
-      porter_booking_id: head.porter_booking_id || '',
-      porter_tracking_id: head.porter_tracking_id || head.porter_booking_id || '',
-      porter_order_id: head.porter_order_id || '',
-      porter_booking_url: head.porter_booking_url || '',
-      delivery_person_id: head.delivery_person_id ? String(head.delivery_person_id) : '',
-      dispatch_date: head.dispatched_at ? String(head.dispatched_at).slice(0, 10) : '',
-      estimated_delivery: head.estimated_delivery ? String(head.estimated_delivery).slice(0, 10) : '',
-      reason: '',
-    });
-    const c = buildConsigneeFromHead(head);
-    const pieces = Math.max(1, Number(head.quantity || head.main_qty || units.length || 1));
-    const unitList = (units || []).length
-      ? units
-      : [{ processor: head.processor, generation: head.generation }];
-    const declared = sumDeclaredValueForUnits(unitList);
-    setBdForm({
-      name: c.name,
-      mobile: c.mobile,
-      address: c.address,
-      pincode: c.pincode,
-      declaredValue: declared != null ? String(declared) : '',
-      weight: (2.5 * pieces).toFixed(2),
-      pieceCount: String(pieces),
-    });
-    setBdOpen(isBlueDartCourier(courierName) || m === 'courier');
+    let cancelled = false;
+    (async () => {
+      await ensureDeclaredValueMatrixLoaded();
+      if (cancelled) return;
+      const m = initialMode(head);
+      setMode(m);
+      const courierName = head.courier_name || (m === 'courier' ? 'BlueDart' : '');
+      setForm({
+        courier_name: courierName,
+        awb_number: head.awb_number || '',
+        courier_tracking_url: head.courier_tracking_url || '',
+        porter_booking_id: head.porter_booking_id || '',
+        porter_tracking_id: head.porter_tracking_id || head.porter_booking_id || '',
+        porter_order_id: head.porter_order_id || '',
+        porter_booking_url: head.porter_booking_url || '',
+        delivery_person_id: head.delivery_person_id ? String(head.delivery_person_id) : '',
+        dispatch_date: head.dispatched_at ? String(head.dispatched_at).slice(0, 10) : '',
+        estimated_delivery: head.estimated_delivery ? String(head.estimated_delivery).slice(0, 10) : '',
+        reason: '',
+      });
+      const c = buildConsigneeFromHead(head);
+      const pieces = Math.max(1, Number(head.quantity || head.main_qty || units.length || 1));
+      const unitList = (units || []).length
+        ? units
+        : [{ processor: head.processor, generation: head.generation }];
+      const declared = sumDeclaredValueForUnits(unitList);
+      setBdForm({
+        name: c.name,
+        mobile: c.mobile,
+        address: c.address,
+        pincode: c.pincode,
+        declaredValue: declared != null ? String(declared) : '',
+        weight: (2.5 * pieces).toFixed(2),
+        pieceCount: String(pieces),
+      });
+      setBdOpen(isBlueDartCourier(courierName) || m === 'courier');
+    })();
+    return () => { cancelled = true; };
   }, [open, head, units]);
 
   if (!open) return null;

@@ -10,9 +10,21 @@ const parseJson = (raw) => {
 async function nameFor(db, uid) {
   if (!uid) return null;
   try {
-    const r = await db.query('SELECT name FROM users WHERE user_id = $1', [uid]);
-    return r.rows[0]?.name || null;
+    const r = await db.query('SELECT name, email FROM users WHERE user_id = $1', [uid]);
+    const row = r.rows[0];
+    if (!row) return null;
+    return String(row.name || '').trim() || String(row.email || '').trim() || null;
   } catch (_) { return null; }
+}
+
+async function resolveSignerLabel(db, storedName, ...userIds) {
+  const fromStore = String(storedName || '').trim();
+  if (fromStore) return fromStore;
+  for (const uid of userIds) {
+    const n = await nameFor(db, uid);
+    if (n) return n;
+  }
+  return null;
 }
 
 async function resolveUnitSpec(db, code) {
@@ -169,10 +181,21 @@ async function regenerateReturnDcPdfByRdc(db, rdcNumber) {
       }],
       esign: {
         technician_url: techItem.technician_esign_url || null,
-        technician_name: await nameFor(db, techItem.technician_esign_by || techItem.pickup_assigned_to || techItem.assigned_to),
+        technician_name: await resolveSignerLabel(
+          db,
+          techItem.technician_esign_name,
+          techItem.technician_esign_by,
+          techItem.pickup_assigned_to,
+          techItem.assigned_to
+        ),
         technician_at: techItem.technician_esign_at || null,
         warehouse_url: whItem.warehouse_esign_url || null,
-        warehouse_name: await nameFor(db, whItem.warehouse_esign_by || whItem.warehouse_received_by),
+        warehouse_name: await resolveSignerLabel(
+          db,
+          whItem.warehouse_esign_name,
+          whItem.warehouse_esign_by,
+          whItem.warehouse_received_by
+        ),
         warehouse_at: whItem.warehouse_esign_at || whItem.warehouse_received_at || null,
         customer_otp_verified: allOtpVerified || !!primary.customer_otp_verified_at,
       },

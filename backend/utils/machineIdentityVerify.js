@@ -1,5 +1,5 @@
 /**
- * Require both TTSPL ID and Serial number to match the expected machine.
+ * Require TTSPL ID (always) and Serial number (when machine is ON).
  * Used for Out-for-Repair DC creation and Production Diagnosis gates.
  */
 
@@ -8,29 +8,43 @@ function normalizeMachineId(value) {
 }
 
 /**
- * @param {{ expectedTtspl?: string|null, expectedSerial?: string|null, verifiedTtspl?: string|null, verifiedSerial?: string|null, label?: string }} opts
+ * @param {{
+ *   expectedTtspl?: string|null,
+ *   expectedSerial?: string|null,
+ *   verifiedTtspl?: string|null,
+ *   verifiedSerial?: string|null,
+ *   label?: string,
+ *   requireSerial?: boolean,
+ * }} opts
  * @returns {{ ok: true } | { ok: false, message: string }}
  */
 function checkTtsplAndSerial(opts = {}) {
   const label = opts.label || 'This laptop';
+  const requireSerial = opts.requireSerial !== false;
   const expectedTtspl = normalizeMachineId(opts.expectedTtspl);
   const expectedSerial = normalizeMachineId(opts.expectedSerial);
   const verifiedTtspl = normalizeMachineId(opts.verifiedTtspl);
   const verifiedSerial = normalizeMachineId(opts.verifiedSerial);
 
-  if (!verifiedTtspl || !verifiedSerial) {
+  if (!verifiedTtspl) {
+    return { ok: false, message: `${label}: enter TTSPL ID to verify` };
+  }
+  if (requireSerial && !verifiedSerial) {
     return { ok: false, message: `${label}: enter both TTSPL ID and Serial number to verify` };
   }
   if (!expectedTtspl) {
     return { ok: false, message: `${label}: missing TTSPL ID on record` };
   }
-  if (!expectedSerial) {
-    return { ok: false, message: `${label}: missing Serial number on record` };
+  if (requireSerial && !expectedSerial) {
+    return { ok: false, message: `${label}: missing Serial number on record — laptop is ON, serial is required` };
   }
   if (verifiedTtspl !== expectedTtspl) {
     return { ok: false, message: `${label}: TTSPL ID does not match` };
   }
-  if (verifiedSerial !== expectedSerial) {
+  if (requireSerial && verifiedSerial !== expectedSerial) {
+    return { ok: false, message: `${label}: Serial number does not match` };
+  }
+  if (!requireSerial && verifiedSerial && expectedSerial && verifiedSerial !== expectedSerial) {
     return { ok: false, message: `${label}: Serial number does not match` };
   }
   return { ok: true };

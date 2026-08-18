@@ -142,6 +142,18 @@ exports.listQcPending = async (req, res) => {
   }
 };
 
+exports.listDefectiveEligible = async (req, res) => {
+  try {
+    const data = await svc.listDefectiveEligibleForVendorReturn({
+      search: req.query.search,
+      limit: req.query.limit,
+    });
+    res.json({ success: true, ...data });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message || 'Failed to list defective parts' });
+  }
+};
+
 exports.passQc = async (req, res) => {
   const client = await pool.connect();
   try {

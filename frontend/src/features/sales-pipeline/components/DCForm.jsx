@@ -22,7 +22,7 @@ import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
 import { downloadBlob } from '../salesPipelineUtils';
 import { deliveryChallanDetailTo, salesOrderDcNavState } from '../salesPipelineUtils';
 import { BillingAddressPanel } from '../../operation-management/components/CustomerAddressPanels';
-import { sumDeclaredValueForUnits } from '../bluedartDeclaredValue';
+import { sumDeclaredValueForUnits, ensureDeclaredValueMatrixLoaded } from '../bluedartDeclaredValue';
 import PerLaptopCourierMapping from './PerLaptopCourierMapping';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -164,23 +164,29 @@ function DispatchFields({
 
   useEffect(() => {
     if (shipBy !== 'by_courier') return;
-    const c = buildConsigneeFromAddress(group?.address, meta);
-    const pieces = selected.length || 1;
-    const declared = sumDeclaredValueForUnits(selected);
-    setBdForm((f) => ({
-      ...f,
-      name: c.name || f.name,
-      mobile: c.mobile || f.mobile,
-      address: c.address || f.address,
-      pincode: c.pincode || f.pincode,
-      pieceCount: String(pieces),
-      weight: (2.5 * pieces).toFixed(2),
-      declaredValue: declared != null ? String(declared) : f.declaredValue,
-    }));
-    if (!fields.courier_name || isBlueDartCourier(fields.courier_name)) {
-      if (fields.courier_name !== 'BlueDart') onChange({ ...fields, courier_name: 'BlueDart' });
-      setBdOpen(true);
-    }
+    let cancelled = false;
+    (async () => {
+      await ensureDeclaredValueMatrixLoaded();
+      if (cancelled) return;
+      const c = buildConsigneeFromAddress(group?.address, meta);
+      const pieces = selected.length || 1;
+      const declared = sumDeclaredValueForUnits(selected);
+      setBdForm((f) => ({
+        ...f,
+        name: c.name || f.name,
+        mobile: c.mobile || f.mobile,
+        address: c.address || f.address,
+        pincode: c.pincode || f.pincode,
+        pieceCount: String(pieces),
+        weight: (2.5 * pieces).toFixed(2),
+        declaredValue: declared != null ? String(declared) : f.declaredValue,
+      }));
+      if (!fields.courier_name || isBlueDartCourier(fields.courier_name)) {
+        if (fields.courier_name !== 'BlueDart') onChange({ ...fields, courier_name: 'BlueDart' });
+        setBdOpen(true);
+      }
+    })();
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shipBy, group?.address, group?.serials, meta]);
 

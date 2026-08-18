@@ -1,12 +1,27 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Loader2, ClipboardList, MapPin, PackageCheck, ArrowRightLeft, Check, X, Search, Truck } from 'lucide-react';
+import { Loader2, ClipboardList, MapPin, PackageCheck, ArrowRightLeft, Check, X, Search, Truck, CalendarDays, ArrowUpDown } from 'lucide-react';
 import { getSupportPartsWarehouseQueue, approveAndGenerateChallan, resolvePartReassign, listPartDcsAwaitingCourier, listPartReturnDcsPending } from '../supportPartsApi';
 import ESignChallanModal from '../components/ESignChallanModal';
 import PickSupportSerialsModal from '../components/PickSupportSerialsModal';
 import PartCourierDispatchModal from '../components/PartCourierDispatchModal';
 import { usePartsBase } from '../partsBase';
+
+function formatQueueDate(value) {
+  if (!value) return null;
+  try {
+    return new Date(value).toLocaleString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return null;
+  }
+}
 
 function PendingTab({ requests, onAction, base }) {
   const navigate = useNavigate();
@@ -133,6 +148,7 @@ function PendingTab({ requests, onAction, base }) {
         <div className="bg-white rounded-2xl border p-8 text-center text-sm text-gray-500">No requests match your search.</div>
       ) : filtered.map((req) => {
         const available = Number(req.available ?? req.instances_available ?? req.stock_qty ?? 0);
+        const when = formatQueueDate(req.created_at);
         return (
           <div
             key={req.id}
@@ -152,6 +168,11 @@ function PendingTab({ requests, onAction, base }) {
                   <span className="font-mono text-xs text-[#534AB7] font-medium">{req.request_number}</span>
                   <span className="font-mono text-xs bg-gray-100 px-2 py-0.5 rounded">{req.ticket_number}</span>
                   {req.ttspl_id && <span className="font-mono text-xs bg-gray-100 px-2 py-0.5 rounded">{req.ttspl_id}</span>}
+                  {when && (
+                    <span className="inline-flex items-center gap-1 text-xs text-gray-400 ml-auto">
+                      <CalendarDays className="w-3 h-3" /> {when}
+                    </span>
+                  )}
                 </div>
                 <p className="font-semibold text-gray-900 mt-1">{req.part_name}</p>
                 <p className="text-xs text-gray-500 mt-0.5">
@@ -222,27 +243,35 @@ function ReturnsTab({ requests, onAction }) {
 
   return (
     <div className="space-y-3">
-      {requests.map((req) => (
-        <div key={req.id} className="bg-white border rounded-xl p-4">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="font-mono text-xs text-[#534AB7] font-medium">{req.request_number}</span>
-                <span className="font-mono text-xs bg-gray-100 px-2 py-0.5 rounded">{req.ticket_number}</span>
+      {requests.map((req) => {
+        const when = formatQueueDate(req.return_requested_at || req.created_at);
+        return (
+          <div key={req.id} className="bg-white border rounded-xl p-4">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-mono text-xs text-[#534AB7] font-medium">{req.request_number}</span>
+                  <span className="font-mono text-xs bg-gray-100 px-2 py-0.5 rounded">{req.ticket_number}</span>
+                  {when && (
+                    <span className="inline-flex items-center gap-1 text-xs text-gray-400">
+                      <CalendarDays className="w-3 h-3" /> {when}
+                    </span>
+                  )}
+                </div>
+                <p className="font-semibold text-gray-900 mt-1">{req.part_name}</p>
+                <p className="text-xs text-gray-500 mt-0.5">Qty: {req.quantity} · From: {req.tech_name}</p>
               </div>
-              <p className="font-semibold text-gray-900 mt-1">{req.part_name}</p>
-              <p className="text-xs text-gray-500 mt-0.5">Qty: {req.quantity} · From: {req.tech_name}</p>
+              <button
+                type="button"
+                onClick={() => setSignReq(req.id)}
+                className="shrink-0 inline-flex items-center gap-1 px-3 py-2 min-h-[40px] bg-[#534AB7] text-white rounded-lg text-xs font-semibold"
+              >
+                <PackageCheck className="w-4 h-4" /> Accept return
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => setSignReq(req.id)}
-              className="shrink-0 inline-flex items-center gap-1 px-3 py-2 min-h-[40px] bg-[#534AB7] text-white rounded-lg text-xs font-semibold"
-            >
-              <PackageCheck className="w-4 h-4" /> Accept return
-            </button>
           </div>
-        </div>
-      ))}
+        );
+      })}
 
       {signReq && (
         <ESignChallanModal
@@ -280,48 +309,56 @@ function ReassignsTab({ requests, onAction }) {
 
   return (
     <div className="space-y-3">
-      {requests.map((req) => (
-        <div key={req.id} className="bg-white border rounded-xl p-4">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-mono text-xs text-[#534AB7] font-medium">{req.request_number}</span>
-            {req.prt_id && <span className="font-mono text-xs bg-gray-100 px-2 py-0.5 rounded">{req.prt_id}</span>}
-          </div>
-          <p className="font-semibold text-gray-900 mt-1">{req.part_name} <span className="text-xs font-normal text-gray-500">· Qty {req.quantity}</span></p>
-          <div className="flex items-center gap-2 mt-2 text-sm">
-            <div className="min-w-0">
-              <p className="text-[11px] text-gray-400">From</p>
-              <p className="font-mono text-xs">{req.from_ticket_number}</p>
-              {req.from_ttspl_id && <p className="font-mono text-[11px] text-gray-500">{req.from_ttspl_id}</p>}
+      {requests.map((req) => {
+        const when = formatQueueDate(req.reassign_requested_at);
+        return (
+          <div key={req.id} className="bg-white border rounded-xl p-4">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-mono text-xs text-[#534AB7] font-medium">{req.request_number}</span>
+              {req.prt_id && <span className="font-mono text-xs bg-gray-100 px-2 py-0.5 rounded">{req.prt_id}</span>}
+              {when && (
+                <span className="inline-flex items-center gap-1 text-xs text-gray-400 ml-auto">
+                  <CalendarDays className="w-3 h-3" /> {when}
+                </span>
+              )}
             </div>
-            <ArrowRightLeft className="w-4 h-4 text-purple-500 shrink-0" />
-            <div className="min-w-0">
-              <p className="text-[11px] text-gray-400">To</p>
-              <p className="font-mono text-xs text-purple-700">{req.to_ticket_number || `#${req.reassign_to_ticket_id}`}</p>
-              {req.reassign_to_ttspl_id && <p className="font-mono text-[11px] text-gray-500">{req.reassign_to_ttspl_id}</p>}
+            <p className="font-semibold text-gray-900 mt-1">{req.part_name} <span className="text-xs font-normal text-gray-500">· Qty {req.quantity}</span></p>
+            <div className="flex items-center gap-2 mt-2 text-sm">
+              <div className="min-w-0">
+                <p className="text-[11px] text-gray-400">From</p>
+                <p className="font-mono text-xs">{req.from_ticket_number}</p>
+                {req.from_ttspl_id && <p className="font-mono text-[11px] text-gray-500">{req.from_ttspl_id}</p>}
+              </div>
+              <ArrowRightLeft className="w-4 h-4 text-purple-500 shrink-0" />
+              <div className="min-w-0">
+                <p className="text-[11px] text-gray-400">To</p>
+                <p className="font-mono text-xs text-purple-700">{req.to_ticket_number || `#${req.reassign_to_ticket_id}`}</p>
+                {req.reassign_to_ttspl_id && <p className="font-mono text-[11px] text-gray-500">{req.reassign_to_ttspl_id}</p>}
+              </div>
+            </div>
+            <p className="text-xs text-gray-500 mt-2">By: {req.tech_name}</p>
+            {req.reassign_reason && <p className="text-xs text-gray-400 italic mt-0.5">&quot;{req.reassign_reason}&quot;</p>}
+            <div className="flex gap-2 mt-3">
+              <button
+                type="button"
+                disabled={busyId === req.id}
+                onClick={() => resolve(req.id, 'approve')}
+                className="inline-flex items-center gap-1 px-3 py-2 min-h-[40px] rounded-lg bg-[#534AB7] text-white text-xs font-semibold disabled:opacity-50"
+              >
+                <Check className="w-4 h-4" /> Approve move
+              </button>
+              <button
+                type="button"
+                disabled={busyId === req.id}
+                onClick={() => resolve(req.id, 'reject')}
+                className="inline-flex items-center gap-1 px-3 py-2 min-h-[40px] rounded-lg border border-gray-300 text-gray-700 text-xs font-semibold disabled:opacity-50"
+              >
+                <X className="w-4 h-4" /> Reject
+              </button>
             </div>
           </div>
-          <p className="text-xs text-gray-500 mt-2">By: {req.tech_name}</p>
-          {req.reassign_reason && <p className="text-xs text-gray-400 italic mt-0.5">&quot;{req.reassign_reason}&quot;</p>}
-          <div className="flex gap-2 mt-3">
-            <button
-              type="button"
-              disabled={busyId === req.id}
-              onClick={() => resolve(req.id, 'approve')}
-              className="inline-flex items-center gap-1 px-3 py-2 min-h-[40px] rounded-lg bg-[#534AB7] text-white text-xs font-semibold disabled:opacity-50"
-            >
-              <Check className="w-4 h-4" /> Approve move
-            </button>
-            <button
-              type="button"
-              disabled={busyId === req.id}
-              onClick={() => resolve(req.id, 'reject')}
-              className="inline-flex items-center gap-1 px-3 py-2 min-h-[40px] rounded-lg border border-gray-300 text-gray-700 text-xs font-semibold disabled:opacity-50"
-            >
-              <X className="w-4 h-4" /> Reject
-            </button>
-          </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -331,15 +368,28 @@ export default function SupportPartsQueuePage() {
   const [pending, setPending] = useState([]);
   const [returns, setReturns] = useState([]);
   const [reassigns, setReassigns] = useState([]);
+  const [technicians, setTechnicians] = useState([]);
   const [awaitingCourier, setAwaitingCourier] = useState([]);
   const [pendingRpdc, setPendingRpdc] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('pending');
 
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [techId, setTechId] = useState('');
+  const [sort, setSort] = useState('asc');
+
+  const queueParams = useMemo(() => ({
+    ...(dateFrom ? { from: dateFrom } : {}),
+    ...(dateTo ? { to: dateTo } : {}),
+    ...(techId ? { tech_id: techId } : {}),
+    sort,
+  }), [dateFrom, dateTo, techId, sort]);
+
   const load = useCallback(() => {
     setLoading(true);
     Promise.all([
-      getSupportPartsWarehouseQueue(),
+      getSupportPartsWarehouseQueue(queueParams),
       listPartDcsAwaitingCourier().catch(() => ({ data: { dcs: [] } })),
       listPartReturnDcsPending().catch(() => ({ data: { dcs: [] } })),
     ])
@@ -347,14 +397,31 @@ export default function SupportPartsQueuePage() {
         setPending(queueRes.data.pending || []);
         setReturns(queueRes.data.returns || []);
         setReassigns(queueRes.data.reassigns || []);
+        setTechnicians(queueRes.data.technicians || []);
         setAwaitingCourier(courierRes.data.dcs || []);
         setPendingRpdc(rpdcRes.data.dcs || []);
       })
-      .catch(() => { setPending([]); setReturns([]); setReassigns([]); setAwaitingCourier([]); setPendingRpdc([]); })
+      .catch(() => {
+        setPending([]);
+        setReturns([]);
+        setReassigns([]);
+        setTechnicians([]);
+        setAwaitingCourier([]);
+        setPendingRpdc([]);
+      })
       .finally(() => setLoading(false));
-  }, []);
+  }, [queueParams]);
 
   useEffect(() => { load(); }, [load]);
+
+  const clearFilters = () => {
+    setDateFrom('');
+    setDateTo('');
+    setTechId('');
+    setSort('asc');
+  };
+
+  const hasFilters = Boolean(dateFrom || dateTo || techId || sort !== 'asc');
 
   return (
     <div className="max-w-3xl mx-auto p-4 space-y-4">
@@ -362,6 +429,66 @@ export default function SupportPartsQueuePage() {
         <ClipboardList className="w-5 h-5 text-[#534AB7]" />
         <h1 className="text-lg font-semibold m-0">Support part queue</h1>
         <Link to={`${base}/tech-bucket`} className="ml-auto text-sm text-[#534AB7] hover:underline">View bucket</Link>
+      </div>
+
+      <div className="bg-white rounded-xl border border-gray-200 p-3 space-y-3">
+        <div className="flex flex-wrap gap-2 items-end">
+          <div className="min-w-[140px] flex-1">
+            <label className="block text-[11px] font-semibold text-gray-500 mb-1">From date</label>
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+            />
+          </div>
+          <div className="min-w-[140px] flex-1">
+            <label className="block text-[11px] font-semibold text-gray-500 mb-1">To date</label>
+            <input
+              type="date"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+            />
+          </div>
+          <div className="min-w-[160px] flex-[1.2]">
+            <label className="block text-[11px] font-semibold text-gray-500 mb-1">Person</label>
+            <select
+              value={techId}
+              onChange={(e) => setTechId(e.target.value)}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white"
+            >
+              <option value="">All technicians</option>
+              {technicians.map((t) => (
+                <option key={t.tech_id} value={String(t.tech_id)}>{t.tech_name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="min-w-[150px]">
+            <label className="block text-[11px] font-semibold text-gray-500 mb-1">Sort by date</label>
+            <select
+              value={sort}
+              onChange={(e) => setSort(e.target.value)}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white"
+            >
+              <option value="asc">Oldest first</option>
+              <option value="desc">Newest first</option>
+            </select>
+          </div>
+          {hasFilters ? (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="px-3 py-2 min-h-[40px] rounded-lg border border-gray-200 text-sm text-gray-600 hover:bg-gray-50"
+            >
+              Clear
+            </button>
+          ) : null}
+        </div>
+        <p className="text-[11px] text-gray-400 flex items-center gap-1 m-0">
+          <ArrowUpDown className="w-3 h-3" />
+          Date filter: requests by created date, returns by return date, moves by reassignment date. Person = assigned technician.
+        </p>
       </div>
 
       {pendingRpdc.length > 0 && (

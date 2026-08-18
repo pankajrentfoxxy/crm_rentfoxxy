@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
 const ctrl = require('../controllers/assetConfigurationController');
+const bdCtrl = require('../controllers/bluedartDeclaredValueController');
 
 const cp = checkSectionPermission;
 const view = cp('asset_configuration', 'view');
@@ -22,6 +23,15 @@ router.get('/cascade/brands/:brandName/generations', ctrl.listCascadeGenerations
 router.get('/cascade/brands/:brandName/processors/:processorName/generations', ctrl.listCascadeGenerationsForBrandProcessor);
 // Read-only spec tree — floor pipeline filters, QC, SO forms (any authenticated user)
 router.get('/mappings/laptop-spec/tree', ctrl.getLaptopSpecMapping);
+
+// BlueDart declared-value matrix — active rows for AWB autofill (any auth)
+router.get('/bluedart-declared-values/active', bdCtrl.getActiveBluedartDeclaredValueMatrix);
+// Admin CRUD
+router.get('/bluedart-declared-values', view, bdCtrl.listBluedartDeclaredValues);
+router.post('/bluedart-declared-values', create, bdCtrl.createBluedartDeclaredValue);
+router.put('/bluedart-declared-values/:id', edit, bdCtrl.updateBluedartDeclaredValue);
+router.delete('/bluedart-declared-values/:id', del, bdCtrl.deleteBluedartDeclaredValue);
+router.patch('/bluedart-declared-values/:id/status', edit, bdCtrl.setBluedartDeclaredValueStatus);
 
 // Settings CRUD meta
 router.get('/types', view, ctrl.listEntityTypes);

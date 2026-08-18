@@ -3,7 +3,7 @@
  * Base path: /api/vendor-management (mounted from server.js)
  */
 const express = require('express');
-const { authMiddleware, checkSectionPermission } = require('../middleware/auth');
+const { authMiddleware, checkSectionPermission, checkAnySectionPermission } = require('../middleware/auth');
 const { wrapMulter } = require('../config/uploadLimits');
 const vendors = require('../controllers/vendorManagement/vendors.controller');
 const purchaseOrders = require('../controllers/vendorManagement/purchaseOrders.controller');
@@ -21,6 +21,12 @@ const router = express.Router();
 const authorize = [
   authMiddleware,
   checkSectionPermission('vendor_management', 'view')
+];
+
+/** Spare Parts PO — Part Management RBAC (parts_procurement) or legacy vendor_management. */
+const authorizeSpareParts = [
+  authMiddleware,
+  checkAnySectionPermission(['parts_procurement', 'vendor_management'], 'view'),
 ];
 
 const upload = vendors.buildMulter();
@@ -154,61 +160,61 @@ router.post('/serial-numbers', authorize, serials.createSerial);
 router.put('/serial-numbers/update', authorize, serials.serialUpdateValidators, serials.checkAndUpdate);
 
 // ---------- Spare parts PO ---------------------------------------------------------
-router.get('/spare-parts-orders/next-number', authorize, sparePo.nextNumber);
-router.get('/spare-parts-orders/form-meta', authorize, sparePo.formMeta);
-router.get('/spare-parts-catalog', authorize, spareCatalog.listCatalog);
-router.post('/spare-parts-catalog', authorize, spareCatalog.createValidators, spareCatalog.createCatalogItem);
-router.patch('/spare-parts-catalog/:id', authorize, spareCatalog.updateValidators, spareCatalog.updateCatalogItem);
-router.patch('/spare-parts-orders/:id/status', authorize, sparePo.statusValidators, sparePo.updateStatus);
+router.get('/spare-parts-orders/next-number', authorizeSpareParts, sparePo.nextNumber);
+router.get('/spare-parts-orders/form-meta', authorizeSpareParts, sparePo.formMeta);
+router.get('/spare-parts-catalog', authorizeSpareParts, spareCatalog.listCatalog);
+router.post('/spare-parts-catalog', authorizeSpareParts, spareCatalog.createValidators, spareCatalog.createCatalogItem);
+router.patch('/spare-parts-catalog/:id', authorizeSpareParts, spareCatalog.updateValidators, spareCatalog.updateCatalogItem);
+router.patch('/spare-parts-orders/:id/status', authorizeSpareParts, sparePo.statusValidators, sparePo.updateStatus);
 const spoBillsUpload = sparePo.createSpoBillsUpload();
 router.post(
   '/spare-parts-orders/:id/bills',
-  authorize,
+  authorizeSpareParts,
   wrapMulter(spoBillsUpload.array('files', 25)),
   sparePo.uploadBills
 );
 router.get(
   '/spare-parts-orders/:spoId/product-received',
-  authorize,
+  authorizeSpareParts,
   ...sparePo.spareProductReceivedValidators,
   sparePo.getSpareProductReceivedContext
 );
 router.post(
   '/spare-parts-orders/:spoId/product-received/receive',
-  authorize,
+  authorizeSpareParts,
   ...sparePo.receiveSpareSerialValidators,
   sparePo.receiveSpareLineSerial
 );
 router.post(
   '/spare-parts-orders/:spoId/product-received/receive-bulk',
-  authorize,
+  authorizeSpareParts,
   ...sparePo.receiveSpareLineBulkValidators,
   sparePo.receiveSpareLineBulk
 );
 router.get(
   '/spare-parts-orders/:spoId/generated-grn',
-  authorize,
+  authorizeSpareParts,
   ...sparePo.spareGeneratedGrnValidators,
   sparePo.getSpareGeneratedGrnOverview
 );
 router.get(
   '/spare-parts-orders/:spoId/grns/:grnId/received-products',
-  authorize,
+  authorizeSpareParts,
   ...sparePo.spareGrnReceivedProductsValidators,
   sparePo.getSpareGrnReceivedProducts
 );
 router.post(
   '/spare-parts-orders/:spoId/grns',
-  authorize,
+  authorizeSpareParts,
   ...sparePo.spareGrnPoParam,
   ...sparePo.spareGrnCreateValidators,
   sparePo.createSpareGrn
 );
-router.get('/spare-parts-orders', authorize, sparePo.listValidators, sparePo.list);
-router.get('/spare-parts-orders/:id', authorize, sparePo.getValidators, sparePo.getOne);
-router.post('/spare-parts-orders', authorize, ...sparePo.createValidators(), sparePo.create);
-router.put('/spare-parts-orders/:id', authorize, sparePo.updateValidators, sparePo.update);
-router.delete('/spare-parts-orders/:id', authorize, sparePo.getValidators, sparePo.remove);
+router.get('/spare-parts-orders', authorizeSpareParts, sparePo.listValidators, sparePo.list);
+router.get('/spare-parts-orders/:id', authorizeSpareParts, sparePo.getValidators, sparePo.getOne);
+router.post('/spare-parts-orders', authorizeSpareParts, ...sparePo.createValidators(), sparePo.create);
+router.put('/spare-parts-orders/:id', authorizeSpareParts, sparePo.updateValidators, sparePo.update);
+router.delete('/spare-parts-orders/:id', authorizeSpareParts, sparePo.getValidators, sparePo.remove);
 
 // ---------- Billing (monthly views map to status + period filters) ----------------
 router.get('/billing', authorize, billing.listValidators, billing.list);
