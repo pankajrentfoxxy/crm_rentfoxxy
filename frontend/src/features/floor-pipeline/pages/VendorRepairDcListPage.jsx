@@ -175,7 +175,7 @@ export default function VendorRepairDcListPage() {
                     <td className="p-3">
                       <div className="flex flex-wrap gap-2">
                         <Link
-                          to={`/floor-pipeline/vendor-repair-dc/${encodeURIComponent(r.dc_number)}`}
+                          to={`/vendor-management/vendor-repair-dc/${encodeURIComponent(r.dc_number)}`}
                           className="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 hover:underline"
                         >
                           <Eye className="w-3.5 h-3.5" /> Open
@@ -191,7 +191,7 @@ export default function VendorRepairDcListPage() {
                         </button>
                         {canReceive && ['dispatched', 'partially_returned'].includes(r.status) && (r.pending_count > 0) ? (
                           <Link
-                            to={`/floor-pipeline/vendor-repair-dc/${encodeURIComponent(r.dc_number)}`}
+                            to={`/vendor-management/vendor-repair-dc/${encodeURIComponent(r.dc_number)}`}
                             className="inline-flex items-center gap-1 text-xs font-semibold text-green-700 hover:underline"
                           >
                             <RotateCcw className="w-3.5 h-3.5" /> Receive

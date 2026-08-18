@@ -913,7 +913,7 @@ export default function TicketDetailPage() {
                   {ticket.vendor_repair_dc_number ? (
                     <p>
                       <span className="text-slate-500">Vendor DC:</span>{' '}
-                      <Link to={`/floor-pipeline/vendor-repair-dc/${encodeURIComponent(ticket.vendor_repair_dc_number)}`} className="text-blue-600">
+                      <Link to={`/vendor-management/vendor-repair-dc/${encodeURIComponent(ticket.vendor_repair_dc_number)}`} className="text-blue-600">
                         {ticket.vendor_repair_dc_number}
                       </Link>
                     </p>

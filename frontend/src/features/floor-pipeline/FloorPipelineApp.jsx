@@ -1,5 +1,5 @@
 import React from 'react';
-import { Navigate, Route, Routes, useSearchParams } from 'react-router-dom';
+import { Navigate, Route, Routes, useParams, useSearchParams } from 'react-router-dom';
 import ProtectedRoute from '../../router/ProtectedRoute';
 import usePermission from '../../hooks/usePermission';
 import FloorTicketListPage from './pages/FloorTicketListPage';
@@ -7,8 +7,6 @@ import FloorDashboardPage from './pages/FloorDashboardPage';
 import TicketDetailPage from './pages/TicketDetailPage';
 import DiagnosisFailedPage from './pages/DiagnosisFailedPage';
 import PendingInventoryPage from './pages/PendingInventoryPage';
-import VendorRepairDcListPage from './pages/VendorRepairDcListPage';
-import VendorRepairDcDetailPage from './pages/VendorRepairDcDetailPage';
 import ProductionQcReportPage from './pages/ProductionQcReportPage';
 import {
   canAccessFloorStageFilter,
@@ -41,6 +39,11 @@ function FloorIndexRedirect() {
   return <Navigate to="/dashboard" replace />;
 }
 
+function VendorRepairDcLegacyRedirect() {
+  const { dcNumber } = useParams();
+  return <Navigate to={`/vendor-management/vendor-repair-dc/${encodeURIComponent(dcNumber || '')}`} replace />;
+}
+
 export default function FloorPipelineApp() {
   return (
     <Routes>
@@ -66,8 +69,8 @@ export default function FloorPipelineApp() {
           <ProductionQcReportPage />
         )}
       />
-      <Route path="vendor-repair-dc" element={g(FLOOR_DASHBOARD_SECTIONS, <VendorRepairDcListPage />)} />
-      <Route path="vendor-repair-dc/:dcNumber" element={g(FLOOR_DASHBOARD_SECTIONS, <VendorRepairDcDetailPage />)} />
+      <Route path="vendor-repair-dc" element={<Navigate to="/vendor-management/vendor-repair-dc" replace />} />
+      <Route path="vendor-repair-dc/:dcNumber" element={<VendorRepairDcLegacyRedirect />} />
       <Route path="*" element={<FloorIndexRedirect />} />
     </Routes>
   );

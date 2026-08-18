@@ -473,7 +473,7 @@ export default function VendorRepairDcDetailPage() {
     <div className="p-4 md:p-6 max-w-5xl mx-auto space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <Link to="/floor-pipeline/vendor-repair-dc" className="text-sm text-blue-600 hover:underline">← Vendor Repair DC</Link>
+          <Link to="/vendor-management/vendor-repair-dc" className="text-sm text-blue-600 hover:underline">← Vendor Repair DC</Link>
           <h1 className="text-xl font-bold mt-1">Vendor Repair DC</h1>
           <p className="font-mono text-purple-800">{dc.dc_number}</p>
           <span className="inline-block mt-2 px-2 py-0.5 rounded-full text-xs bg-purple-100 text-purple-900">{statusLabel(dc.status)}</span>

@@ -260,7 +260,7 @@ export default function DiagnosisFailedPage() {
       });
       toast.success(data.message || 'Vendor DC created');
       setModalOpen(false);
-      navigate(`/floor-pipeline/vendor-repair-dc/${encodeURIComponent(data.dc_number)}`);
+      navigate(`/vendor-management/vendor-repair-dc/${encodeURIComponent(data.dc_number)}`);
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to create DC');
     } finally {

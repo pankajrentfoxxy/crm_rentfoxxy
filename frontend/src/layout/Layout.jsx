@@ -98,6 +98,7 @@ import {
   isInventoryChildVisible,
   isPartsManagementChildVisible,
   isPartsManagementRoute,
+  isVendorChildVisible,
   masterDataMenuItems,
 } from '../config/menuConfig';
 
@@ -331,9 +332,10 @@ export default function Layout({ children }) {
   const floorVisibleChildren = floorPipelineAccordionChildren.filter((c) => isFloorPipelineChildVisible(c, canView));
   const inventoryVisibleChildren = inventoryAccordionChildren.filter((c) => isInventoryChildVisible(c, canView));
   const partsVisibleChildren = partsManagementAccordionChildren.filter((c) => isPartsManagementChildVisible(c, canView));
+  const vendorVisibleChildren = vendorAccordionChildren.filter((c) => isVendorChildVisible(c, canView));
   const financeVisibleChildren = financeMenuItems.filter((c) => isFinanceChildVisible(c, canView));
   const settingsVisibleChildren = settingsAccordionChildren.filter((c) => isSettingsChildVisible(c, canView));
-  const showVendorAccordion = canView('vendor_management');
+  const showVendorAccordion = vendorVisibleChildren.length > 0;
   const showSupportNav2 = canAccessSupportModule(user, effectivePermissions) || canView('customer_inventory');
 
   // Whether each sidebar group has any content the user can reach.
@@ -403,7 +405,7 @@ export default function Layout({ children }) {
     (children || []).forEach((child) => addSearchRoute(child.label, child.path, groupLabel))
   );
   if (showVendorAccordion) {
-    vendorAccordionChildren
+    vendorVisibleChildren
       .filter((child) => child.type !== 'subheader')
       .forEach((child) => addSearchRoute(child.label, child.path, 'Vendor Management'));
   }
@@ -689,7 +691,7 @@ export default function Layout({ children }) {
 
                     <div className="mt-1 ml-2 pl-3 border-l border-orange-100 space-y-0.5">
 
-                      {vendorAccordionChildren.map((child) => {
+                      {vendorVisibleChildren.map((child) => {
 
                         if (child.type === 'subheader') {
 

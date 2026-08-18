@@ -40,6 +40,7 @@ export const MODULE_CHILDREN = {
     'payment_records',
   ],
   floor_pipeline: ['floor_tickets', 'floor_ticket_config_edit', 'chip_level_repair', 'qc_management', 'dispatch_qc', 'pending_inventory'],
+  vendor_management: ['vendor_repair_dc'],
   inventory_management: ['customer_inventory', 'ttspl_history', 'inventory_master_data', 'inventory_asset_movement'],
   parts_management: [
     'parts_dashboard',
@@ -97,11 +98,15 @@ export const INVENTORY_UMBRELLA_SECTIONS = [
   'ttspl_history',
 ];
 
-/** Sections that grant entry to Spare Parts PO under /vendor-management. */
-export const PARTS_PROCUREMENT_UMBRELLA_SECTIONS = [
-  'parts_procurement',
+/** Sections that grant entry to /vendor-management/* (umbrella route guard). */
+export const VENDOR_UMBRELLA_SECTIONS = [
   'vendor_management',
+  'parts_procurement',
+  'vendor_repair_dc',
 ];
+
+/** @deprecated use VENDOR_UMBRELLA_SECTIONS */
+export const PARTS_PROCUREMENT_UMBRELLA_SECTIONS = VENDOR_UMBRELLA_SECTIONS;
 
 /** Sections that grant entry to /floor-pipeline/* (umbrella route guard). */
 export const FLOOR_UMBRELLA_SECTIONS = [

@@ -13,6 +13,8 @@ import SpareGeneratedGrnDetailPage from './pages/SpareGeneratedGrnDetailPage';
 import SerialNumberPage from './pages/SerialNumberPage';
 import ReplacedProductsPage from './pages/ReplacedProductsPage';
 import BillingMonthlyPage from './pages/BillingMonthlyPage';
+import VendorRepairDcListPage from '../floor-pipeline/pages/VendorRepairDcListPage';
+import VendorRepairDcDetailPage from '../floor-pipeline/pages/VendorRepairDcDetailPage';
 
 const g = (section, node) => (
   <ProtectedRoute section={section} action="view">{node}</ProtectedRoute>
@@ -60,6 +62,9 @@ export default function VendorManagementApp() {
         <Route path="spare-parts-po" element={g('parts_procurement', <SparePartsPoPage />)} />
         <Route path="serial-numbers" element={g('vendor_management', <SerialNumberPage />)} />
         <Route path="replaced-products" element={g('vendor_management', <ReplacedProductsPage />)} />
+
+        <Route path="vendor-repair-dc" element={g('vendor_repair_dc', <VendorRepairDcListPage />)} />
+        <Route path="vendor-repair-dc/:dcNumber" element={g('vendor_repair_dc', <VendorRepairDcDetailPage />)} />
 
         <Route path="billing/vendor-overview" element={g('vendor_management', <BillingMonthlyPage view="overview" />)} />
         <Route path="billing/pending" element={g('vendor_management', <BillingMonthlyPage view="pending" />)} />

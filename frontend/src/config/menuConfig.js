@@ -30,11 +30,13 @@ import {
 /** Vendor Management accordion (procurement only — billing lives under Finance).
  *  GRN / receiving happens inside the Purchase Orders page, so there is no
  *  separate "GRN" item (that was a duplicate link to Purchase Orders).
- *  Spare Parts PO lives under Part Management. */
+ *  Spare Parts PO lives under Part Management.
+ *  Laptop Vendor Repair DC lives here (not Floor Pipeline). */
 export const vendorAccordionChildren = [
-  { label: 'Purchase Orders', path: '/vendor-management/purchase-orders' },
-  { label: 'Serial Numbers', path: '/vendor-management/serial-numbers' },
-  { label: 'Replaced Products', path: '/vendor-management/replaced-products' },
+  { label: 'Purchase Orders', path: '/vendor-management/purchase-orders', section: 'vendor_management' },
+  { label: 'Serial Numbers', path: '/vendor-management/serial-numbers', section: 'vendor_management' },
+  { label: 'Replaced Products', path: '/vendor-management/replaced-products', section: 'vendor_management' },
+  { label: 'Vendor Repair DC', path: '/vendor-management/vendor-repair-dc', section: 'vendor_repair_dc' },
 ];
 
 /** Production accordion (formerly Floor & Quality).
@@ -48,7 +50,6 @@ export const floorPipelineAccordionChildren = [
   { label: 'Body & Paint', path: '/floor-pipeline/tickets?stage=Body+%26+Paint', section: 'floor_pipeline', countKey: 'body_paint' },
   { label: 'Diagnosis Failed', path: '/floor-pipeline/diagnosis-failed', section: 'floor_pipeline', countKey: 'diagnosis_failed' },
   { label: 'QC Ready', path: '/floor-pipeline/pending-inventory', section: 'pending_inventory', countKey: 'pending_inventory' },
-  { label: 'Vendor Repair DC', path: '/floor-pipeline/vendor-repair-dc', section: 'floor_pipeline' },
 ];
 
 /** Inventory accordion — laptop stock only (parts live under Part Management). */
@@ -281,7 +282,7 @@ export const MENU_GROUPS = [
     key: 'vendor',
     label: 'Vendor Management',
     items: [
-      { type: 'vendorAccordion', section: 'vendor_management', icon: Store, label: 'Vendor Management' },
+      { type: 'vendorAccordion', sections: ['vendor_management', 'vendor_repair_dc'], section: 'vendor_management', icon: Store, label: 'Vendor Management' },
     ],
   },
   {
@@ -390,9 +391,12 @@ export function isMenuItemVisible(item, canView) {
     return leadCrmAccordionChildren.some((child) => isLeadCrmChildVisible(child, canView));
   }
 
+  if (item.type === 'vendorAccordion') {
+    return vendorAccordionChildren.some((child) => isVendorChildVisible(child, canView));
+  }
+
   if (
-    item.type === 'vendorAccordion'
-    || item.type === 'dispatchAccordion'
+    item.type === 'dispatchAccordion'
     || item.type === 'salesPipelineAccordion'
     || item.type === 'financeAccordion'
     || item.type === 'reportsAccordion'
@@ -407,6 +411,11 @@ export function isMenuItemVisible(item, canView) {
 
   if (item.section) return canView(item.section);
   return true;
+}
+
+export function isVendorChildVisible(child, canView) {
+  if (child.section) return canView(child.section);
+  return canView('vendor_management');
 }
 
 export function isLeadCrmChildVisible(child, canView) {
