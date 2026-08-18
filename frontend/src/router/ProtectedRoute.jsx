@@ -50,7 +50,7 @@ export default function ProtectedRoute({
   if (isSupportTechnician(user)) {
     const canViewSection = (s) => checkPermission(user, effectivePermissions, s, 'view');
     if (!supportTechnicianMayAccessPath(location.pathname, canViewSection)) {
-      return <Navigate to="/support/my-tickets" replace />;
+      return <Navigate to="/support/bucket" replace />;
     }
   }
 

@@ -55,7 +55,7 @@ export default function HomeRedirect() {
     if (canView('technician_bucket')) return <Navigate to="/sales-pipeline/my-deliveries" replace />;
     if (canView('delivery_register_management')) return <Navigate to="/sales-pipeline/delivery-register" replace />;
     if (canView('delivery_challans')) return <Navigate to="/sales-pipeline/delivery-challans" replace />;
-    return <Navigate to="/support/my-tickets" replace />;
+    return <Navigate to="/support/bucket" replace />;
   }
   for (const [section, path] of LANDING_ORDER) {
     if (canView(section)) return <Navigate to={path} replace />;

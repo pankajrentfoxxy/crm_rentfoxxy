@@ -27,6 +27,8 @@ const allowedOrigins = [
   'http://crm.rentfoxxy.com',
   'https://crm.rentfoxxy.com',
   'http://staging.rentfoxxy.com',
+  'http://157.173.221.119',
+  'http://157.173.221.119:8000',
   'https://staging.rentfoxxy.com'
 ];
 
@@ -106,6 +108,10 @@ app.use('/api/grn-access', require('./routes/grnAccess'));
 app.use('/api/leads', require('./routes/leads'));
 app.use('/api/customer-documents', require('./routes/customerDocuments'));
 app.use('/api/customer-inventory', require('./routes/customerInventory'));
+app.use('/api/support/v2/public', require('./routes/supportV2Public'));
+app.use('/api/support/v2/taxonomy', require('./routes/supportTaxonomy'));
+app.use('/api/support/v2/sla', require('./routes/supportSla'));
+app.use('/api/support/v2', require('./routes/supportV2'));
 app.use('/api/support', require('./routes/support'));
 app.use('/api/support-parts', require('./routes/supportParts'));
 app.use('/api/vendor-management', require('./routes/vendorManagement'));
@@ -198,6 +204,10 @@ server.listen(PORT, () => {
     startLeadEmailIngestionWorker().catch((err) => console.error('Lead email ingestion worker failed:', err.message));
     const { startDispatchSlaWorker } = require('./services/dispatchSlaWorker');
     startDispatchSlaWorker();
+    const { startSupportSlaWorker } = require('./services/supportSlaWorker');
+    startSupportSlaWorker();
+    const { startDualRunWorker } = require('./services/supportDualRunWorker');
+    startDualRunWorker();
     const { startBluedartAwbSyncWorker } = require('./services/bluedartAwbSyncWorker');
     startBluedartAwbSyncWorker();
     // startInventorySyncWorker().catch((err) => console.error('ERP inventory sync worker failed:', err.message));

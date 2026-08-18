@@ -23,6 +23,7 @@ import {
   RefreshCw,
   Headphones,
   ArrowLeftRight,
+  LifeBuoy,
   Warehouse,
   Boxes,
 } from 'lucide-react';
@@ -303,10 +304,21 @@ export const MENU_GROUPS = [
     label: 'Support',
     items: [
       {
-        icon: Headphones,
+        icon: LifeBuoy,
         label: 'Support',
         path: '/support',
-        section: 'support_tickets',
+        section: 'support_dashboard',
+        sections: [
+          'support_dashboard',
+          'support_tickets',
+          'support_bucket',
+          'support_dispatch',
+          'support_parts_approve',
+          'support_approvals',
+          'support_reports',
+          'support_taxonomy',
+          'support_sla_admin',
+        ],
         countKey: 'open_tickets',
       },
       {
@@ -314,6 +326,13 @@ export const MENU_GROUPS = [
         label: 'Replacement Sales Orders',
         path: '/sales-pipeline/sales-orders-replacement',
         section: 'sales_orders_replacement',
+      },
+      {
+        icon: Headphones,
+        label: 'Support (legacy, read-only)',
+        path: '/support-legacy',
+        section: 'support_tickets',
+        adminOnly: true,
       },
     ],
   },
@@ -337,7 +356,8 @@ export const FLAT_MENU_ITEMS = MENU_GROUPS.flatMap((group) => [
   ...group.items,
 ]);
 
-export function isMenuItemVisible(item, canView) {
+export function isMenuItemVisible(item, canView, userRole) {
+  if (item.adminOnly && !['admin', 'super_admin'].includes(userRole)) return false;
   if (item.type === 'section') {
     const group = MENU_GROUPS.find((g) => g.key === item.groupKey);
     if (!group) return false;
@@ -409,6 +429,9 @@ export function isMenuItemVisible(item, canView) {
     return item.section ? canView(item.section) : false;
   }
 
+  if (item.sections?.length) {
+    return item.sections.some((section) => canView(section));
+  }
   if (item.section) return canView(item.section);
   return true;
 }

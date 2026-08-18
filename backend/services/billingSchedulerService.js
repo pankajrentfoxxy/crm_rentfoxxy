@@ -17,6 +17,13 @@ const {
   insertCustomerInvoiceLines,
   insertVendorBillLines,
 } = require('./billingLineItemsService');
+const {
+  supportHooksEnabled,
+  applyRentHolds,
+  pullApprovedExtraLines,
+  extraLinesAsInvoiceItems,
+  stampExtraLinesBilled,
+} = require('./supportBillingHooks');
 
 const billingLog = logger.child ? logger.child({ module: 'billing' }) : logger;
 
@@ -116,6 +123,7 @@ async function buildCustomerInvoiceLines(client, {
   );
 
   const lineItems = [];
+  const billedUntilUpdates = [];
   let subtotal = 0;
   let periodStart = null;
   let periodEnd = null;
@@ -163,14 +171,43 @@ async function buildCustomerInvoiceLines(client, {
     if (!periodStart || billStart < periodStart) periodStart = billStart;
     if (!periodEnd || billEnd > periodEnd) periodEnd = billEnd;
 
+    billedUntilUpdates.push({ serialId: row.serial_id, billEnd: toLocalYmd(billEnd) });
+  }
+
+  return { lineItems, subtotal, periodStart, periodEnd, billedUntilUpdates };
+}
+
+async function markSerialsBilled(client, billedUntilUpdates) {
+  for (const row of billedUntilUpdates || []) {
     await client.query(
       `UPDATE vendor_serial_numbers SET rent_billed_until = $1, updated_at = NOW()
        WHERE serial_id = $2`,
-      [toLocalYmd(billEnd), row.serial_id]
+      [row.billEnd, row.serialId]
     );
   }
+}
 
-  return { lineItems, subtotal, periodStart, periodEnd };
+async function applySupportInvoiceHooks(client, {
+  customerId, month, year, monthStart, monthEnd, lineItems, subtotal,
+}) {
+  if (!supportHooksEnabled()) {
+    return { lineItems, subtotal, daysWaived: 0, amountWaived: 0, extraRows: [] };
+  }
+  const held = await applyRentHolds(client, lineItems, monthStart, monthEnd);
+  const extraRows = await pullApprovedExtraLines(client, customerId);
+  const extraItems = extraLinesAsInvoiceItems(
+    extraRows,
+    `${year}-${String(month).padStart(2, '0')}`
+  );
+  const next = [...held.lineItems, ...extraItems];
+  const nextSub = parseFloat((held.subtotal + extraItems.reduce((s, l) => s + Number(l.amount || 0), 0)).toFixed(2));
+  return {
+    lineItems: next,
+    subtotal: nextSub,
+    daysWaived: held.daysWaived,
+    amountWaived: held.amountWaived,
+    extraRows,
+  };
 }
 
 async function generateCustomerInvoice(customerId, month, year, options = {}) {
@@ -204,7 +241,15 @@ async function generateCustomerInvoice(customerId, month, year, options = {}) {
     const built = await buildCustomerInvoiceLines(client, {
       customerId, month, year, monthStart, monthEnd, includeCurrentMonthStarts,
     });
-    const { lineItems, subtotal, periodStart, periodEnd } = built;
+    const hooked = await applySupportInvoiceHooks(client, {
+      customerId, month, year, monthStart, monthEnd,
+      lineItems: built.lineItems,
+      subtotal: built.subtotal,
+    });
+    const lineItems = hooked.lineItems;
+    const subtotal = hooked.subtotal;
+    const { periodStart, periodEnd } = built;
+    const extraIds = (hooked.extraRows || []).map((r) => r.extra_line_id);
 
     if (canAppend) {
       const inv = existing.rows[0];
@@ -251,6 +296,8 @@ async function generateCustomerInvoice(customerId, month, year, options = {}) {
         ]
       );
       await insertCustomerInvoiceLines(client, inv.invoice_id, lineItems);
+      await markSerialsBilled(client, built.billedUntilUpdates);
+      await stampExtraLinesBilled(client, extraIds, inv.invoice_id);
       await client.query('COMMIT');
       billingLog.info(
         { invoiceNumber: inv.invoice_number, customerId, appended: lineItems.length },
@@ -267,6 +314,8 @@ async function generateCustomerInvoice(customerId, month, year, options = {}) {
       await client.query('ROLLBACK');
       return { skipped: true, reason: 'No active rental laptops' };
     }
+
+    await markSerialsBilled(client, built.billedUntilUpdates);
 
     const cnRes = await client.query(
       `SELECT COALESCE(SUM(amount), 0) AS total_cn
@@ -305,6 +354,7 @@ async function generateCustomerInvoice(customerId, month, year, options = {}) {
 
     const invoiceId = insertRes.rows[0].invoice_id;
     await insertCustomerInvoiceLines(client, invoiceId, lineItems);
+    await stampExtraLinesBilled(client, extraIds, invoiceId);
 
     if (creditAdjustment > 0) {
       await client.query(
@@ -850,4 +900,6 @@ module.exports = {
   maybeInvoiceOnRentalDelivery,
   maybeInvoiceOnRentalDcCreate,
   sendGeneratedCustomerInvoice,
+  buildCustomerInvoiceLines,
+  applySupportInvoiceHooks,
 };

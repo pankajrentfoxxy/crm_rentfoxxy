@@ -67,6 +67,8 @@ import { useDeliveryRegisterCounts } from '../features/delivery-register-managem
 import { useLeadCrmCounts } from '../features/lead-crm/hooks/useLeadCrmCounts';
 import { useFinanceCounts } from '../features/finance-overview/hooks/useFinanceCounts';
 import { useSupportCounts } from '../features/support-module/hooks/useSupportCounts';
+import { searchTickets } from '../features/support-v2/supportV2Api';
+import { looksLikeTicketQuery } from '../features/support-v2/supportV2Utils';
 import { useFloorCounts } from '../features/floor-pipeline/hooks/useFloorCounts';
 import useDispatchPendingCount from '../features/dispatch/hooks/useDispatchPendingCount';
 import { isFloorPipelineNavActive } from '../features/floor-pipeline/floorPipelineAccess';
@@ -118,6 +120,7 @@ export default function Layout({ children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const [menuQuery, setMenuQuery] = useState('');
+  const [ticketHits, setTicketHits] = useState([]);
 
   const location = useLocation();
 
@@ -374,6 +377,9 @@ export default function Layout({ children }) {
     if (ACCORDION_GROUP[item.type]) {
       return !!groupHasContent[ACCORDION_GROUP[item.type]];
     }
+    if (item.adminOnly) {
+      return ['admin', 'super_admin'].includes(user?.role);
+    }
     if (item.label === 'Support') {
       return showSupportNav2;
     }
@@ -423,6 +429,20 @@ export default function Layout({ children }) {
           || r.group.toLowerCase().includes(trimmedMenuQuery)
       )
     : [];
+  const canSearchTickets = canView('support_tickets');
+
+  useEffect(() => {
+    if (!looksLikeTicketQuery(menuQuery) || !canSearchTickets) {
+      setTicketHits([]);
+      return undefined;
+    }
+    const handle = setTimeout(() => {
+      searchTickets(menuQuery.trim())
+        .then((r) => setTicketHits(r.data?.rows || []))
+        .catch(() => setTicketHits([]));
+    }, 250);
+    return () => clearTimeout(handle);
+  }, [menuQuery, canSearchTickets]);
 
 
 
@@ -511,7 +531,18 @@ export default function Layout({ children }) {
 
           {trimmedMenuQuery ? (
             <div className="space-y-0.5">
-              {searchResults.length === 0 ? (
+              {ticketHits.map((t) => (
+                <NavLink
+                  key={`stk-${t.ticket_id}`}
+                  to={`/support/tickets/${t.ticket_id}`}
+                  onClick={() => { setSidebarOpen(false); setMenuQuery(''); }}
+                  className="flex items-center justify-between gap-2 px-3 py-2 rounded-md text-sm text-gray-700 hover:bg-gray-100"
+                >
+                  <span className="truncate font-mono">{t.ticket_number || t.legacy_ticket_number}</span>
+                  <span className="text-[10px] text-gray-400 shrink-0 uppercase tracking-wide">Ticket</span>
+                </NavLink>
+              ))}
+              {searchResults.length === 0 && ticketHits.length === 0 ? (
                 <p className="px-3 py-4 text-xs text-gray-400">No matching pages.</p>
               ) : (
                 searchResults.map((r) => (

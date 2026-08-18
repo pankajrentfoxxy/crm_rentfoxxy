@@ -12,6 +12,7 @@ import InvoiceDetailPage from './pages/InvoiceDetailPage';
 import CreditNotesPage from './pages/CreditNotesPage';
 import DeliveriesPage from './pages/DeliveriesPage';
 import SupportPage from './pages/SupportPage';
+import CsatPage from './pages/CsatPage';
 import ProfilePage from './pages/ProfilePage';
 
 export default function App() {
@@ -21,6 +22,7 @@ export default function App() {
 
   return (
     <Routes>
+      <Route path="/csat/:token" element={<CsatPage />} />
       <Route path="/login" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <LoginPage />} />
       <Route
         element={

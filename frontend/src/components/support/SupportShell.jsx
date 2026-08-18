@@ -45,48 +45,48 @@ export default function SupportShell() {
           {techOnly ? (
             <nav>
               <div className="support-nav-label">Work</div>
-              <NavItem to="/support/my-tickets" icon={ClipboardList} label="My tickets" badge={badges.my_open} badgeDanger />
+              <NavItem to="/support-legacy/my-tickets" icon={ClipboardList} label="My tickets" badge={badges.my_open} badgeDanger />
               {showMyDeliveries && (
                 <NavItem to="/sales-pipeline/my-deliveries" icon={Truck} label="My deliveries" />
               )}
-              <NavItem to="/support/my-pickups" icon={Truck} label="My pickups" />
-              <NavItem to="/support/tech-bucket" icon={Package} label="My parts" />
-              <NavItem to="/support/my-resolved" icon={CheckCircle2} label="Resolved by me" badge={badges.my_resolved} />
+              <NavItem to="/support-legacy/my-pickups" icon={Truck} label="My pickups" />
+              <NavItem to="/support-legacy/tech-bucket" icon={Package} label="My parts" />
+              <NavItem to="/support-legacy/my-resolved" icon={CheckCircle2} label="Resolved by me" badge={badges.my_resolved} />
             </nav>
           ) : (
             <nav>
               <div className="support-nav-label">Overview</div>
-              <NavItem to="/support/overview" icon={LayoutDashboard} label="Overview" badge={badges.open_tickets} />
-              <NavItem to="/support/tickets" icon={Ticket} label="All tickets" />
-              <NavItem to="/support/my-tickets" icon={ClipboardList} label="My tickets" badge={badges.my_open} badgeDanger />
+              <NavItem to="/support-legacy/overview" icon={LayoutDashboard} label="Overview" badge={badges.open_tickets} />
+              <NavItem to="/support-legacy/tickets" icon={Ticket} label="All tickets" />
+              <NavItem to="/support-legacy/my-tickets" icon={ClipboardList} label="My tickets" badge={badges.my_open} badgeDanger />
 
               <div className="support-nav-label">Work</div>
-              <NavItem to="/support/pending-assign" icon={UserCog} label="Pending assign" badge={badges.pending_assign} badgeDanger />
-              <NavItem to="/support/overdue" icon={Clock} label="Overdue" badge={badges.overdue_tickets} badgeDanger />
-              <NavItem to="/support/pickups" icon={Truck} label="Pickups" />
-              <NavItem to="/support/pickup-bucket" icon={Package} label="Pickup bucket" />
-              <NavItem to="/support/my-pickups" icon={Truck} label="My pickups" />
-              <NavItem to="/support/complaints" icon={MessageSquare} label="Complaints" />
+              <NavItem to="/support-legacy/pending-assign" icon={UserCog} label="Pending assign" badge={badges.pending_assign} badgeDanger />
+              <NavItem to="/support-legacy/overdue" icon={Clock} label="Overdue" badge={badges.overdue_tickets} badgeDanger />
+              <NavItem to="/support-legacy/pickups" icon={Truck} label="Pickups" />
+              <NavItem to="/support-legacy/pickup-bucket" icon={Package} label="Pickup bucket" />
+              <NavItem to="/support-legacy/my-pickups" icon={Truck} label="My pickups" />
+              <NavItem to="/support-legacy/complaints" icon={MessageSquare} label="Complaints" />
               {canCancelSupportTicket(user) && (
-                <NavItem to="/support/cancelled-tickets" icon={Ticket} label="Cancelled tickets" />
+                <NavItem to="/support-legacy/cancelled-tickets" icon={Ticket} label="Cancelled tickets" />
               )}
-              <NavItem to="/support/my-resolved" icon={CheckCircle2} label="My resolved" badge={badges.my_resolved} />
+              <NavItem to="/support-legacy/my-resolved" icon={CheckCircle2} label="My resolved" badge={badges.my_resolved} />
 
               <div className="support-nav-label">Parts</div>
-              <NavItem to="/support/parts-queue" icon={ClipboardList} label="Part queue" badge={badges.support_part_requests} badgeDanger />
-              <NavItem to="/support/tech-bucket" icon={Package} label="Parts bucket" />
+              <NavItem to="/support-legacy/parts-queue" icon={ClipboardList} label="Part queue" badge={badges.support_part_requests} badgeDanger />
+              <NavItem to="/support-legacy/tech-bucket" icon={Package} label="Parts bucket" />
 
               <div className="support-nav-label">Manage</div>
               {(user?.role === 'admin' || user?.role === 'manager' || user?.role === 'support_lead') && (
-                <NavItem to="/support/stats" icon={BarChart2} label="Stats & Reports" />
+                <NavItem to="/support-legacy/stats" icon={BarChart2} label="Stats & Reports" />
               )}
-              <NavItem to="/support/technicians" icon={Users} label="Technicians" />
+              <NavItem to="/support-legacy/technicians" icon={Users} label="Technicians" />
               {canAccessCustomerInventory(user) && (
                 <Link to="/customer-inventory" className="support-nav-link">
                   <Package className="w-5 h-5" /> Customer inventory
                 </Link>
               )}
-              {user?.role === 'admin' && <NavItem to="/support/settings" icon={Settings} label="Settings" />}
+              {user?.role === 'admin' && <NavItem to="/support-legacy/settings" icon={Settings} label="Settings" />}
             </nav>
           )}
         </aside>
@@ -99,7 +99,7 @@ export default function SupportShell() {
       <nav className="support-bottom-nav md:hidden">
         {techOnly ? (
           <>
-            <NavLink to="/support/my-tickets" className={({ isActive }) => (isActive ? 'active' : '')}>
+            <NavLink to="/support-legacy/my-tickets" className={({ isActive }) => (isActive ? 'active' : '')}>
               <ClipboardList className="w-5 h-5" /> My tickets
             </NavLink>
             {showMyDeliveries && (
@@ -107,24 +107,24 @@ export default function SupportShell() {
                 <Truck className="w-5 h-5" /> Deliveries
               </NavLink>
             )}
-            <NavLink to="/support/my-resolved" className={({ isActive }) => (isActive ? 'active' : '')}>
+            <NavLink to="/support-legacy/my-resolved" className={({ isActive }) => (isActive ? 'active' : '')}>
               <CheckCircle2 className="w-5 h-5" /> Resolved
             </NavLink>
           </>
         ) : (
           <>
-            <NavLink to="/support/overview" className={({ isActive }) => (isActive ? 'active' : '')}>
+            <NavLink to="/support-legacy/overview" className={({ isActive }) => (isActive ? 'active' : '')}>
               <LayoutDashboard className="w-5 h-5" /> Home
             </NavLink>
-            <NavLink to="/support/tickets" className={({ isActive }) => (isActive ? 'active' : '')}>
+            <NavLink to="/support-legacy/tickets" className={({ isActive }) => (isActive ? 'active' : '')}>
               <Ticket className="w-5 h-5" /> Tickets
             </NavLink>
             {canCreate && (
-              <NavLink to="/support/tickets/new" className={({ isActive }) => (isActive ? 'active' : '')}>
+              <NavLink to="/support-legacy/tickets/new" className={({ isActive }) => (isActive ? 'active' : '')}>
                 <Plus className="w-5 h-5" /> New
               </NavLink>
             )}
-            <NavLink to="/support/overdue" className={({ isActive }) => (isActive ? 'active' : '')}>
+            <NavLink to="/support-legacy/overdue" className={({ isActive }) => (isActive ? 'active' : '')}>
               <Clock className="w-5 h-5" /> Overdue
             </NavLink>
           </>

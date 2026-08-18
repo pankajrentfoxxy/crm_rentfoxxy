@@ -827,8 +827,8 @@ export default function SupportTicketDetail() {
   const location = useLocation();
   const { user } = useAuth();
   const ticketsBackTo = location.state?.ticketsListSearch
-    ? `/support/tickets?${location.state.ticketsListSearch}`
-    : '/support/tickets';
+    ? `/support-legacy/tickets?${location.state.ticketsListSearch}`
+    : '/support-legacy/tickets';
   const [data, setData] = useState(null);
   const [technicians, setTechnicians] = useState([]);
   const [categories, setCategories] = useState([]);

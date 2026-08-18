@@ -14,13 +14,17 @@ export const CRM_ROLES = [
   'accounts',
   'support_lead',
   'support_tech',
-   'dispatch_qc'
+  'technician',
+  'support_agent',
+  'support_manager',
+  'dispatch_qc',
 ];
 
 export const MANAGEABLE_ROLES = [
   'team_member', 'team_lead', 'sales', 'floor_manager', 'procurement', 'qc',
-  'dispatch', 'manager', 'admin', 'support_lead', 'support_tech', 'accounts', 'warehouse',
-  'dispatch_qc'
+  'dispatch', 'manager', 'admin', 'support_lead', 'support_tech', 'technician', 'support_agent',
+  'support_manager', 'accounts', 'warehouse',
+  'dispatch_qc',
 ];
 
 export const ROLE_DESCRIPTIONS = {
@@ -38,6 +42,9 @@ export const ROLE_DESCRIPTIONS = {
   accounts: 'Billing, invoices, e-invoice, credit/debit notes',
   support_lead: 'All support tickets, manage support team',
   support_tech: 'Own assigned support tickets',
+  technician: 'Field technician — own jobs in My bucket',
+  support_agent: 'Raise and classify tickets. Cannot assign field jobs or approve charges.',
+  support_manager: 'Full support operations: assign, approve, administer SLA and taxonomy.',
   dispatch_qc: 'Dispatch QC',
 };
 
@@ -56,6 +63,9 @@ export const ROLE_DISPLAY_NAMES = {
   accounts: 'Accounts',
   support_lead: 'Support Lead',
   support_tech: 'Support Technician',
+  technician: 'Technician',
+  support_agent: 'Support Agent',
+  support_manager: 'Support Manager',
   dispatch_qc: 'Dispatch QC',
 };
 
@@ -77,5 +87,8 @@ export const ROLE_REFERENCE_ROWS = [
   { role: 'accounts', access: 'All billing, invoices, e-invoice', cannot: 'Floor, sales, vendors' },
   { role: 'support_lead', access: 'All support tickets, team mgmt', cannot: 'Billing, floor, sales' },
   { role: 'support_tech', access: 'Own support tickets', cannot: 'Everything else' },
+  { role: 'technician', access: 'Own field jobs in My bucket', cannot: 'Assign others, approve charges' },
+  { role: 'support_agent', access: 'Raise and classify tickets', cannot: 'Assign field jobs, approve charges' },
+  { role: 'support_manager', access: 'Assign, approve, SLA and taxonomy', cannot: 'Billing, floor, sales' },
   { role: 'dispatch_qc', access: 'Dispatch QC', cannot: 'Everything else' },
 ];

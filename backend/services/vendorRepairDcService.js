@@ -66,11 +66,11 @@ async function ensureVendorRepairSchema() {
         '148_vrdc_price_hsn_eway.sql',
       ]) {
         const migrationPath = path.join(__dirname, '../migrations', file);
-        if (fs.existsSync(migrationPath)) {
-          await pool.query(fs.readFileSync(migrationPath, 'utf8'));
+  if (fs.existsSync(migrationPath)) {
+    await pool.query(fs.readFileSync(migrationPath, 'utf8'));
         }
-      }
-      schemaEnsured = true;
+  }
+  schemaEnsured = true;
     })().finally(() => {
       schemaEnsurePromise = null;
     });
@@ -1299,8 +1299,8 @@ async function receiveItemsFromVendor(client, {
 
   let itemsQuery = `
     SELECT i.*, t.serial_number AS ticket_serial_number, t.*
-      FROM vendor_repair_dc_items i
-      JOIN tickets t ON t.ticket_id = i.ticket_id
+       FROM vendor_repair_dc_items i
+       JOIN tickets t ON t.ticket_id = i.ticket_id
      WHERE i.dc_number = $1 AND COALESCE(i.item_status, 'dispatched') = 'dispatched'`;
   const params = [dcNumber, selectedTicketIds];
   itemsQuery += ` AND i.ticket_id = ANY($2::int[])`;
@@ -1604,8 +1604,8 @@ async function receiveFromVendor(client, {
   receiveItems,
   warehouseEsign,
   vendorEsign,
-  actorUserId,
-  actorName,
+      actorUserId,
+      actorName,
 }) {
   return receiveItemsFromVendor(client, {
     dcNumber,
@@ -1613,8 +1613,8 @@ async function receiveFromVendor(client, {
     receiveItems,
     warehouseEsign,
     vendorEsign,
-    actorUserId,
-    actorName,
+      actorUserId,
+      actorName,
   });
 }
 
@@ -1872,15 +1872,15 @@ async function listOutForRepairInventory({
     pool.query(
       `SELECT i.id, i.ticket_id, i.ttspl_id, i.serial_number, i.serial_id, i.configuration,
               i.item_remarks, i.item_status, i.price, i.hsn_code,
-              t.status AS ticket_status,
-              t.brand AS ticket_brand, t.model AS ticket_model,
+            t.status AS ticket_status,
+            t.brand AS ticket_brand, t.model AS ticket_model,
               d.dc_number, d.vendor_name, d.vendor_address, d.billing_address, d.shipping_address,
-              d.out_date, d.expected_return_date, d.remarks, d.dispatched_at,
+            d.out_date, d.expected_return_date, d.remarks, d.dispatched_at,
               d.items_received_count, d.items_dispatched_count,
               d.eway_bill_number, d.eway_bill_date, d.ship_by, d.dispatch_mode,
-              vsn.extra AS vsn_extra
+            vsn.extra AS vsn_extra
        ${vendorFrom}
-       ORDER BY d.dispatched_at DESC NULLS LAST, i.id DESC
+     ORDER BY d.dispatched_at DESC NULLS LAST, i.id DESC
        LIMIT ${fetchEach}`,
       vendorParams
     ),
@@ -1915,7 +1915,7 @@ async function listOutForRepairInventory({
 
   const data = merged.slice(offset, offset + safeLimit).map(({ sort_ts, ...row }) => row);
 
-  return {
+    return {
     data,
     pagination: {
       page: safePage,
@@ -2022,10 +2022,10 @@ async function countOutForRepairInventory() {
   await ensureVendorRepairSchema();
   const [vendorR, erpR] = await Promise.all([
     pool.query(
-      `SELECT COUNT(*)::int AS c
-         FROM vendor_repair_dc_items i
-         JOIN vendor_repair_delivery_challans d ON d.dc_number = i.dc_number
-         JOIN tickets t ON t.ticket_id = i.ticket_id
+    `SELECT COUNT(*)::int AS c
+       FROM vendor_repair_dc_items i
+       JOIN vendor_repair_delivery_challans d ON d.dc_number = i.dc_number
+       JOIN tickets t ON t.ticket_id = i.ticket_id
         WHERE d.status IN ('dispatched', 'partially_returned') AND t.status = 'out_for_repair'
           AND COALESCE(i.item_status, 'dispatched') = 'dispatched'`
     ),

@@ -87,12 +87,23 @@ const ROLE_ROW_DEFAULTS = {
     ['vendor_repair_dc', true, true, false],
     ['support_part_challan', true, true, false],
     ['delivery_challans', false, true, false], ['ttspl_history', false, false, false], ['vendor_management', false, false, false],
+    ['support_tickets', false, false, false], ['support_work_orders', false, false, false],
+    ['support_pickup_repair', false, true, false], ['support_pickup_return', false, true, false],
+    ['support_replacement', false, false, false], ['support_parts_request', true, true, false],
+    ['support_parts_approve', false, true, false], ['support_bucket', false, true, false],
+    ['support_taxonomy', false, false, false],
   ],
   dispatch: [
     ['dashboard', false, false, false], ['dispatch', false, true, false], ['dispatch_ops', false, true, false],
     ['delivery_challans', false, true, false], ['delivery_register_management', false, true, false],
     ['technician_bucket', false, true, false],
     ['einvoice_ewb', true, true, false], ['customers', false, false, false],
+    ['support_tickets', false, false, false], ['support_dashboard', false, false, false],
+    ['support_work_orders', true, true, false], ['support_pickup_repair', false, true, false],
+    ['support_pickup_return', false, true, false], ['support_replacement', false, true, false],
+    ['support_field_visit', false, true, false], ['support_bucket', false, false, false],
+    ['support_dispatch', false, true, false], ['support_taxonomy', false, false, false],
+    ['support_groups', false, false, false], ['support_reports', false, false, false],
   ],
   accounts: [
     ['dashboard', false, false, false], ['customer_billing', true, true, false], ['vendor_billing_mgmt', true, true, false],
@@ -102,6 +113,8 @@ const ROLE_ROW_DEFAULTS = {
     ['reports_export', true, false, false],
     ['customers', false, false, false], ['delivery_challans', false, false, false], ['ttspl_history', false, false, false],
     ['payment_records', true, true, false],
+    ['support_tickets', false, false, false], ['support_approvals', false, false, false],
+    ['support_charges', false, true, false], ['support_reports', false, false, false],
   ],
   support_lead: [
     ['dashboard', false, false, false], ['support_tickets', true, true, false], ['support_settings', false, true, false],
@@ -109,11 +122,49 @@ const ROLE_ROW_DEFAULTS = {
     ['support_part_requests', true, true, false], ['support_part_challan', true, true, false],
     ['sales_orders_replacement', true, true, false], ['replacement_so_laptop_qc', false, true, false],
     ['customers', false, false, false], ['customer_inventory', false, false, false], ['ttspl_history', false, false, false],
+    ['support_dashboard', false, false, false], ['support_triage', false, true, false],
+    ['support_work_orders', true, true, true], ['support_pickup_repair', true, true, false],
+    ['support_pickup_return', true, true, false], ['support_replacement', true, false, false],
+    ['support_field_visit', true, true, false], ['support_parts_request', true, true, false],
+    ['support_parts_approve', false, true, false], ['support_bucket', false, false, false],
+    ['support_dispatch', false, true, false], ['support_approvals', false, true, false],
+    ['support_charges', true, false, false], ['support_sla_admin', false, false, false],
+    ['support_taxonomy', false, false, false], ['support_groups', false, false, false],
+    ['support_reports', false, false, false], ['support_customer_portal', false, false, false],
   ],
   support_tech: [
     ['dashboard', false, false, false], ['support_tickets', true, true, false],
     ['support_technician', false, true, false], ['technician_bucket', false, true, false],
     ['support_part_requests', true, true, false],
+    ['customers', false, false, false], ['customer_inventory', false, false, false],
+    ['support_work_orders', false, false, false], ['support_pickup_repair', false, true, false],
+    ['support_pickup_return', false, true, false], ['support_replacement', false, true, false],
+    ['support_field_visit', false, true, false], ['support_parts_request', true, false, false],
+    ['support_bucket', false, true, false], ['support_taxonomy', false, false, false],
+    ['support_charges', true, false, false, false],
+  ],
+  support_agent: [
+    ['dashboard', false, false, false],
+    ['support_tickets', true, true, false], ['support_dashboard', false, false, false],
+    ['support_triage', false, false, false], ['support_work_orders', false, false, false],
+    ['support_pickup_repair', false, false, false], ['support_pickup_return', false, false, false],
+    ['support_replacement', false, false, false], ['support_field_visit', true, false, false],
+    ['support_parts_request', true, false, false], ['support_taxonomy', false, false, false],
+    ['support_reports', false, false, false],
+    ['customers', false, false, false],
+  ],
+  support_manager: [
+    ['dashboard', false, false, false],
+    ['support_tickets', true, true, true], ['support_dashboard', false, false, false],
+    ['support_triage', false, true, false], ['support_work_orders', true, true, true],
+    ['support_pickup_repair', true, true, true], ['support_pickup_return', true, true, true],
+    ['support_replacement', true, true, true], ['support_field_visit', true, true, true],
+    ['support_parts_request', true, true, false], ['support_parts_approve', false, true, false],
+    ['support_bucket', false, false, false], ['support_dispatch', false, true, false],
+    ['support_approvals', false, true, false], ['support_charges', true, true, false],
+    ['support_sla_admin', false, true, false], ['support_taxonomy', true, true, false],
+    ['support_groups', true, true, false], ['support_reports', false, false, false],
+    ['support_settings', false, false, false], ['support_customer_portal', false, true, false],
     ['customers', false, false, false], ['customer_inventory', false, false, false],
   ],
 };
@@ -148,11 +199,11 @@ async function seedRoleDefaults(client, role) {
   const rows = ROLE_ROW_DEFAULTS[role];
   if (!rows) return;
 
-  for (const [section, create, edit, del] of rows) {
+  for (const [section, create, edit, del, view] of rows) {
     await client.query(
       `INSERT INTO role_permissions (role, section, can_view, can_create, can_edit, can_delete)
-       VALUES ($1, $2, true, $3, $4, $5)`,
-      [role, section, create, edit, del]
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [role, section, view !== false, create, edit, del]
     );
   }
 }

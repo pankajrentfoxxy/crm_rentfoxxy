@@ -41,10 +41,10 @@ const STATUS = Object.freeze({
 const ALLOWED = {
   in_stock:   ['reserved', 'in_transit', 'in_repair', 'qc_failed', 'scrapped'], // in_transit = direct dispatch (no explicit reserve)
   reserved:   ['in_transit', 'in_stock'],                 // in_stock = de-allocate
-  in_transit: ['rented', 'on_demo', 'sold', 'in_stock'],  // in_stock = dispatch rejected
-  on_demo:    ['rented', 'returned'],                     // keep -> rented, return
-  rented:     ['returned'],
-  sold:       ['returned'],                               // sales return / RMA
+  in_transit: ['rented', 'on_demo', 'sold', 'in_stock', 'returned'],  // returned = support return warehouse receipt
+  on_demo:    ['rented', 'returned', 'in_transit'],       // keep -> rented, return, support pickup
+  rented:     ['returned', 'in_transit'],                 // in_transit = support repair pickup (customer kept)
+  sold:       ['returned', 'in_transit'],                 // sales return / RMA / support pickup
   returned:   ['in_stock', 'in_repair', 'qc_failed', 'scrapped'],
   in_repair:  ['in_stock', 'qc_failed', 'scrapped'],
   qc_failed:  ['in_stock', 'in_repair', 'scrapped'],
@@ -384,6 +384,30 @@ async function bridgeSupportReplacement(db, {
   return result;
 }
 
+/** Support repair pickup: rented/on_demo/sold → in_transit. Keeps current_customer_id. */
+const markInTransit = async (db, serialId, {
+  reason = 'SUPPORT_REPAIR_PICKUP',
+  woId = null,
+  dcNumber = null,
+  actorUserId = null,
+  actorName = null,
+} = {}) => {
+  const client = db || pool;
+  const serial = await loadSerial(client, serialId);
+  if (!serial) throw new Error(`Serial ${serialId} not found`);
+  if (serial.inventory_status === STATUS.IN_TRANSIT) {
+    return { ok: true, from: STATUS.IN_TRANSIT, to: STATUS.IN_TRANSIT, skipped: true };
+  }
+  return transitionAsset(client, {
+    serialId,
+    toStatus: STATUS.IN_TRANSIT,
+    reason: woId ? `${reason} wo=${woId}` : reason,
+    dcNumber,
+    actorUserId,
+    actorName,
+  });
+};
+
 module.exports = {
   STATUS,
   ALLOWED,
@@ -394,6 +418,7 @@ module.exports = {
   reserveForDc,
   markDispatched,
   markDelivered,
+  markInTransit,
   markReturned,
   convertDemoToRental,
   backToStock,

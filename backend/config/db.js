@@ -9,6 +9,12 @@ function resolveDbHost(raw) {
 }
 
 const dbHost = resolveDbHost(process.env.DB_HOST);
+const dbTarget = `${dbHost} ${process.env.DATABASE_URL || ''}`;
+if (/rlwy\.net|railway\.(internal|app)/i.test(dbTarget) && process.env.ALLOW_REMOTE_DB !== 'true') {
+  throw new Error(
+    'Refusing Railway DB. Local Docker only (127.0.0.1:5433 / rentfoxxy_prod_copy). Set ALLOW_REMOTE_DB=true only if you really mean it.'
+  );
+}
 
 // SSL: disabled for localhost / Docker postgres. For remote hostnames, SSL defaults ON
 // unless DB_SSL=false (typical VPS Postgres without TLS). Managed DBs often need ssl on.

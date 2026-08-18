@@ -13,7 +13,7 @@ export default function SupportProtectedRoute({ children, leadOnly }) {
     return <Navigate to="/dashboard" replace />;
   }
   if (leadOnly && user.role === 'support_tech') {
-    return <Navigate to="/support/my-tickets" replace />;
+    return <Navigate to="/support-legacy/my-tickets" replace />;
   }
   return children;
 }
