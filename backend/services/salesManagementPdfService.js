@@ -310,7 +310,8 @@ async function generateDocumentPdf({ docType, docNumber, header = {}, lines = []
     header.customer_shipping_address || lines[0]?.customer_shipping_address,
     header.supply_state || lines[0]?.supply_state
   );
-  const gst = computeGstBreakdown({ subtotal, shipping, security, supplyState });
+  const gstOnShipping = (lines || []).some((l) => l.is_wfh === true || l.is_wfh === 't' || l.is_wfh === 1);
+  const gst = computeGstBreakdown({ subtotal, shipping, security, supplyState, gstOnShipping });
   const intra = gst.gst_type === 'intra';
   const gstRate = gst.gst_rate;
   const gstAmount = gst.gst_total;

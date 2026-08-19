@@ -120,6 +120,8 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
   const [saving, setSaving] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [advanceRequired, setAdvanceRequired] = useState(false);
+  const [isWfh, setIsWfh] = useState(false);
+  const [wfhEmployee, setWfhEmployee] = useState({ employee_name: '', employee_phone: '' });
   const [customerDetail, setCustomerDetail] = useState(null);
   const [billingAddress, setBillingAddress] = useState(null);
   const [shippingOptions, setShippingOptions] = useState([]);
@@ -162,6 +164,13 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
       const data = res.data;
       const soLines = data?.lines || [];
       const head = soLines[0] || {};
+      const lineWfh = soLines.some((l) => l.is_wfh === true || l.is_wfh === 't' || l.is_wfh === 1);
+      const delivery = parseAddress(head.delivery_address) || {};
+      setIsWfh(Boolean(lineWfh));
+      setWfhEmployee({
+        employee_name: delivery.employee_name || '',
+        employee_phone: delivery.employee_phone || '',
+      });
       setLines(soLines.length ? linesFromSo(soLines) : [emptyLineItem()]);
       setForm({
         customer_id: head.customer_id || '',
@@ -338,7 +347,8 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
     shipping: shippingCharges,
     security,
     supplyState,
-  }), [totalValue, shippingCharges, security, supplyState]);
+    gstOnShipping: isWfh,
+  }), [totalValue, shippingCharges, security, supplyState, isWfh]);
   const isSaleType = form.quotation_type === 'sale' || form.quotation_type === 'sales';
   const advance = advanceRequired ? (Number(form.advance_amount) || 0) : 0;
   const collectBeforeDispatch = gstTotals.grand_total + (advanceRequired ? advance : 0);
@@ -354,8 +364,19 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
       return;
     }
     if (!selectedShippingAddress) {
-      toast.error('Select a delivery (shipping) address');
+      toast.error(isWfh ? 'Select or enter a WFH address' : 'Select a delivery (shipping) address');
       return;
+    }
+    if (isWfh) {
+      const a = selectedShippingAddress;
+      if (!a.name?.trim() || !a.phone?.trim() || !a.address?.trim() || !a.city?.trim() || !a.state?.trim() || !(a.zip_code || a.pincode)?.toString().trim()) {
+        toast.error('WFH requires Name, Phone, Address, City, State and Pincode');
+        return;
+      }
+      if (!(Number(form.shiping_charges) > 0)) {
+        toast.error('Enter shipping charges for WFH (GST applies on shipping)');
+        return;
+      }
     }
     const invalidLine = lines.find((line) =>
       SO_ASSET_REQUIRED_FIELDS.some((field) => !String(line[field] || '').trim())
@@ -366,12 +387,22 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
     }
     setSaving(true);
     try {
+      const shippingPayload = isWfh
+        ? {
+            ...selectedShippingAddress,
+            employee_name: wfhEmployee.employee_name || undefined,
+            employee_phone: wfhEmployee.employee_phone || undefined,
+          }
+        : selectedShippingAddress;
       const payload = {
         ...form,
         supply_state: supplyState,
         security_amount: security,
-        customer_shipping_address: selectedShippingAddress,
+        customer_shipping_address: shippingPayload,
         customer_billing_address: billingAddress,
+        is_wfh: isWfh,
+        wfh_employee_name: wfhEmployee.employee_name || undefined,
+        wfh_employee_phone: wfhEmployee.employee_phone || undefined,
         ...lineItemsToPayload(lines),
       };
       if (isEdit) {
@@ -511,15 +542,61 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
             </div>
           )}
           <div>
-            <input type="number" placeholder="Shipping Charges (₹)" className="w-full border rounded-lg px-3 py-2 text-sm" value={form.shiping_charges} onChange={(e) => setForm((f) => ({ ...f, shiping_charges: e.target.value }))} />
+            <input
+              type="number"
+              placeholder={isWfh ? 'Shipping Charges (₹) * — GST applies for WFH' : 'Shipping Charges (₹)'}
+              className={`w-full border rounded-lg px-3 py-2 text-sm ${isWfh ? 'border-purple-300 bg-purple-50/40' : ''}`}
+              value={form.shiping_charges}
+              min="0"
+              onChange={(e) => setForm((f) => ({ ...f, shiping_charges: e.target.value }))}
+            />
+            {isWfh && (
+              <p className="text-[11px] text-purple-700 mt-1">
+                WFH: shipping is taxable — GST {gstTotals.gst_rate}% is calculated on goods + shipping.
+              </p>
+            )}
           </div>
+
+          <label className="flex items-center gap-2 text-sm font-medium text-gray-800">
+            <input
+              type="checkbox"
+              checked={isWfh}
+              onChange={(e) => setIsWfh(e.target.checked)}
+              className="rounded border-gray-300"
+            />
+            Work-From-Home (WFH) delivery
+          </label>
+          {isWfh && (
+            <div className="grid grid-cols-2 gap-3 rounded-lg border border-purple-100 bg-purple-50/50 p-3">
+              <div>
+                <label className="text-xs text-gray-600">Employee Name</label>
+                <input
+                  className="w-full mt-1 border rounded-lg px-3 py-2 text-sm"
+                  value={wfhEmployee.employee_name}
+                  onChange={(e) => setWfhEmployee((w) => ({ ...w, employee_name: e.target.value }))}
+                  placeholder="Employee / recipient name"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-600">Employee Phone</label>
+                <input
+                  className="w-full mt-1 border rounded-lg px-3 py-2 text-sm"
+                  value={wfhEmployee.employee_phone}
+                  onChange={(e) => setWfhEmployee((w) => ({ ...w, employee_phone: e.target.value }))}
+                  placeholder="Employee phone"
+                />
+              </div>
+            </div>
+          )}
 
           {customerDetail && billingAddress && (
             <div className="grid grid-cols-1 gap-3">
               <BillingAddressPanel billing={billingAddress} gstNumber={form.GST_number || billingAddress.gst_number} />
-              <div className="border border-gray-200 rounded-xl overflow-hidden">
-                <div className="p-2 border-b bg-gray-50">
-                  <label className="text-xs font-medium text-gray-600">Delivery / Shipping Address *</label>
+              <div className={`border rounded-xl overflow-hidden ${isWfh ? 'border-purple-200' : 'border-gray-200'}`}>
+                <div className={`p-2 border-b ${isWfh ? 'bg-purple-50' : 'bg-gray-50'}`}>
+                  <label className="text-xs font-medium text-gray-600">
+                    {isWfh ? 'WFH Address *' : 'Delivery / Shipping Address *'}
+                  </label>
                   <select
                     className="w-full mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white"
                     value={selectedShippingValue}
@@ -640,6 +717,11 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
 
           <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 text-sm space-y-1">
             <p>Subtotal: <strong>{formatCurrency(gstTotals.subtotal)}</strong></p>
+            {shippingCharges > 0 && (
+              <p>
+                Shipping{isWfh ? ' (taxable)' : ''}: <strong>{formatCurrency(shippingCharges)}</strong>
+              </p>
+            )}
             {gstTotals.gst_type === 'inter' ? (
               <p>IGST ({gstTotals.gst_rate}%): <strong>{formatCurrency(gstTotals.igst)}</strong></p>
             ) : (
@@ -648,7 +730,11 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
                 <p>SGST ({gstTotals.gst_rate / 2}%): <strong>{formatCurrency(gstTotals.sgst)}</strong></p>
               </>
             )}
-            {shippingCharges > 0 && <p>Shipping: <strong>{formatCurrency(shippingCharges)}</strong></p>}
+            {isWfh && shippingCharges > 0 && (
+              <p className="text-[11px] text-purple-700">
+                GST includes tax on shipping (WFH).
+              </p>
+            )}
             <p>Security Deposit: <strong>{formatCurrency(security)}</strong></p>
             {advanceRequired && <p>Advance Required: <strong>{formatCurrency(advance)}</strong></p>}
             <p className="text-blue-800 font-medium">Grand Total: {formatCurrency(gstTotals.grand_total + (advanceRequired ? advance : 0))}</p>
@@ -656,6 +742,7 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
               <p className="text-[11px] text-gray-500 pt-1">
                 GST for shipping state: {formatSupplyStateLabel(supplyState)}
                 {gstTotals.gst_type === 'inter' ? ' (IGST 18%)' : ' (CGST 9% + SGST 9%)'}
+                {isWfh ? ' · on goods + shipping' : ' · on goods only'}
               </p>
             ) : (
               <p className="text-[11px] text-amber-700 pt-1">Select a shipping address to apply GST.</p>
@@ -694,6 +781,7 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
           supplyState={supplyState}
           fromQuote={fromQuote}
           isSaleType={isSaleType}
+          isWfh={isWfh}
         />
       )}
     </div>
@@ -724,14 +812,16 @@ function PreviewAddress({ title, addr, gstNumber }) {
 
 function SalesOrderPreview({
   onClose, soNumber, form, lines, billingAddress, shippingAddress, security, advance,
-  advanceRequired, collectBeforeDispatch, gstTotals, supplyState, fromQuote, isSaleType,
+  advanceRequired, collectBeforeDispatch, gstTotals, supplyState, fromQuote, isSaleType, isWfh,
 }) {
   const subtotal = sumLines(lines);
   const shipping = Number(form.shiping_charges) || 0;
   const showSecurity = !isSaleType && security > 0;
   const validLines = (lines || []).filter((l) => l.brand || l.model_name || l.model || Number(l.quantity) > 0);
   const totals = gstTotals || computeGstBreakdown({
-    subtotal, shipping, security, supplyState: resolveSupplyStateFromShipping(shippingAddress),
+    subtotal, shipping, security,
+    supplyState: resolveSupplyStateFromShipping(shippingAddress),
+    gstOnShipping: isWfh,
   });
   const isGorefurbo = String(form.branch || '').toLowerCase() === 'gorefurbo'
     || isSaleType;
@@ -752,6 +842,11 @@ function SalesOrderPreview({
             <div>
               <h2 className="text-xl font-bold" style={{ color: brandColor }}>{brandName}</h2>
               <p className="text-xs text-gray-500 mt-0.5">{typeLabel(form.quotation_type)} Sales Order</p>
+              {isWfh ? (
+                <span className="inline-block mt-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-100 text-purple-700">
+                  WFH Delivery · GST on shipping
+                </span>
+              ) : null}
             </div>
             <div className="text-right text-sm">
               <p className="font-semibold text-gray-900">{soNumber || 'Draft'}</p>
@@ -768,7 +863,7 @@ function SalesOrderPreview({
               addr={billingAddress ? { ...billingAddress, name: form.customer_name || billingAddress.name } : null}
               gstNumber={form.GST_number}
             />
-            <PreviewAddress title="Ship To" addr={shippingAddress} />
+            <PreviewAddress title={isWfh ? 'WFH Ship To' : 'Ship To'} addr={shippingAddress} />
           </div>
 
           <div className="border rounded-lg overflow-hidden">

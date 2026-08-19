@@ -1894,11 +1894,13 @@ async function syncDcSecurityForSo(db, salesOrderNumber) {
 function computeGstBreakdown({
   subtotal = 0, shipping = 0, security = 0, supplyState = '',
   sellerStateCode = SELLER_STATE_CODE, gstRate = GST_RATE,
+  gstOnShipping = false,
 } = {}) {
   const sub = +Number(subtotal || 0).toFixed(2);
   const ship = +Number(shipping || 0).toFixed(2);
   const sec = +Number(security || 0).toFixed(2);
-  const gstTotal = +(sub * gstRate / 100).toFixed(2);
+  const taxable = +(sub + (gstOnShipping ? ship : 0)).toFixed(2);
+  const gstTotal = +(taxable * gstRate / 100).toFixed(2);
   const intra = isIntraState(supplyState, sellerStateCode);
   const half = +(gstTotal / 2).toFixed(2);
   return {
@@ -1910,8 +1912,10 @@ function computeGstBreakdown({
     igst: intra ? 0 : gstTotal,
     gst_total: gstTotal,
     shipping: ship,
+    shipping_taxable: !!gstOnShipping,
     security: sec,
-    grand_total: +(sub + gstTotal + ship + sec).toFixed(2),
+    taxable,
+    grand_total: +(taxable + gstTotal + (gstOnShipping ? 0 : ship) + sec).toFixed(2),
   };
 }
 

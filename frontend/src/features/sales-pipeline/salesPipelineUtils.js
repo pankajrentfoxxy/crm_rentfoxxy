@@ -225,14 +225,16 @@ export function formatSupplyStateLabel(slug) {
   return String(slug).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-/** GST on goods subtotal only; shipping + security added after tax (matches backend). */
+/** GST on goods subtotal; optionally also on shipping (WFH). Security is never taxed. */
 export function computeGstBreakdown({
   subtotal = 0, shipping = 0, security = 0, supplyState = '',
+  gstOnShipping = false,
 } = {}) {
   const sub = +Number(subtotal || 0).toFixed(2);
   const ship = +Number(shipping || 0).toFixed(2);
   const sec = +Number(security || 0).toFixed(2);
-  const gstTotal = +(sub * GST_RATE / 100).toFixed(2);
+  const taxable = +(sub + (gstOnShipping ? ship : 0)).toFixed(2);
+  const gstTotal = +(taxable * GST_RATE / 100).toFixed(2);
   const intra = isIntraStateGst(supplyState);
   const half = +(gstTotal / 2).toFixed(2);
   return {
@@ -244,8 +246,10 @@ export function computeGstBreakdown({
     igst: intra ? 0 : gstTotal,
     gst_total: gstTotal,
     shipping: ship,
+    shipping_taxable: !!gstOnShipping,
     security: sec,
-    grand_total: +(sub + gstTotal + ship + sec).toFixed(2),
+    taxable,
+    grand_total: +(taxable + gstTotal + (gstOnShipping ? 0 : ship) + sec).toFixed(2),
   };
 }
 

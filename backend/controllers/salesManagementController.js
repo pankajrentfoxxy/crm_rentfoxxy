@@ -772,6 +772,46 @@ exports.storeSalesOrder = async (req, res) => {
     }
     const supplyState = resolveSupplyStateFromAddress(shipping, body.supply_state);
     const customerId = toNullableInt(body.customer_id);
+    const isWfh = body.is_wfh === true || body.is_wfh === 'true' || body.is_wfh === 1;
+    const shippingCharge = Number(body.shiping_charges || 0) || 0;
+    if (isWfh && shippingCharge <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'WFH sales orders require shipping charges greater than zero (GST applies on shipping).',
+      });
+    }
+    // Map SO shipping address into per-line delivery_address shape used by Addresses / DC.
+    let lineDeliveryAddress = null;
+    if (shipping && typeof shipping === 'object') {
+      const name = String(shipping.name || '').trim();
+      const phone = String(shipping.phone || shipping.mobile || '').trim();
+      const address = String(shipping.address || '').trim();
+      const city = String(shipping.city || '').trim();
+      const state = String(shipping.state || '').trim();
+      const pincode = String(shipping.pincode || shipping.zip_code || '').trim();
+      if (isWfh && (!name || !phone || !address || !city || !state || !pincode)) {
+        return res.status(400).json({
+          success: false,
+          message: 'WFH requires Name, Phone, Address, City, State and Pincode on the WFH address.',
+        });
+      }
+      lineDeliveryAddress = {
+        name,
+        phone,
+        address,
+        city,
+        state,
+        pincode,
+        landmark: String(shipping.landmark || '').trim() || undefined,
+        employee_name: String(body.wfh_employee_name || shipping.employee_name || '').trim() || undefined,
+        employee_phone: String(body.wfh_employee_phone || shipping.employee_phone || '').trim() || undefined,
+      };
+    } else if (isWfh) {
+      return res.status(400).json({
+        success: false,
+        message: 'WFH requires a complete WFH delivery address.',
+      });
+    }
 
     if (customerId) {
       const customerExists = await pool.query(
@@ -819,8 +859,9 @@ exports.storeSalesOrder = async (req, res) => {
           customer_shipping_address, customer_billing_address, gst_number, supply_state, security_amount,
           shiping_charges, quotation_type, branch, brand, model_name, processor, generation, ram, storage,
           gpu, screen_size, quantity, main_qty, rate, locking_period, battery_charger_warranty,
-          technical_warranty, remark, status, token, created_by, hsn_code
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,'pending',$30,$31,$32)`,
+          technical_warranty, remark, status, token, created_by, hsn_code,
+          is_wfh, delivery_address, delivery_notes
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,'pending',$30,$31,$32,$33,$34::jsonb,$35)`,
         [
           salesOrderNumber,
           quotationNumber,
@@ -833,7 +874,7 @@ exports.storeSalesOrder = async (req, res) => {
           body.GST_number || body.gst_number,
           supplyState,
           body.security_amount || 0,
-          body.shiping_charges || 0,
+          shippingCharge,
           soQuotationTypeForHsn,
           body.branch || 'rentfoxxy',
           item.brand,
@@ -854,6 +895,9 @@ exports.storeSalesOrder = async (req, res) => {
           generateToken(),
           req.user?.user_id,
           lineHsn,
+          isWfh,
+          lineDeliveryAddress ? JSON.stringify(lineDeliveryAddress) : null,
+          body.delivery_notes != null ? String(body.delivery_notes) : null,
         ]
       );
     }
@@ -1133,8 +1177,10 @@ exports.updateSalesOrder = async (req, res) => {
          shiping_charges = COALESCE($7, shiping_charges),
          customer_shipping_address = COALESCE($8::jsonb, customer_shipping_address),
          customer_billing_address = COALESCE($9::jsonb, customer_billing_address),
+         is_wfh = $10,
+         delivery_address = COALESCE($11::jsonb, delivery_address),
          updated_at = NOW()
-       WHERE sales_order_number = $10`,
+       WHERE sales_order_number = $12`,
       [
         customerId,
         body.customer_name ?? null,
@@ -1145,6 +1191,28 @@ exports.updateSalesOrder = async (req, res) => {
         body.shiping_charges != null ? Number(body.shiping_charges) || 0 : null,
         shippingJson,
         billingJson,
+        body.is_wfh === true || body.is_wfh === 'true' || body.is_wfh === 1,
+        (() => {
+          if (!shipping || typeof shipping !== 'object') return null;
+          const name = String(shipping.name || '').trim();
+          const phone = String(shipping.phone || shipping.mobile || '').trim();
+          const address = String(shipping.address || '').trim();
+          const city = String(shipping.city || '').trim();
+          const state = String(shipping.state || '').trim();
+          const pincode = String(shipping.pincode || shipping.zip_code || '').trim();
+          if (!name && !address) return null;
+          return JSON.stringify({
+            name,
+            phone,
+            address,
+            city,
+            state,
+            pincode,
+            landmark: String(shipping.landmark || '').trim() || undefined,
+            employee_name: String(body.wfh_employee_name || shipping.employee_name || '').trim() || undefined,
+            employee_phone: String(body.wfh_employee_phone || shipping.employee_phone || '').trim() || undefined,
+          });
+        })(),
         soNumber,
       ]
     );
@@ -3922,11 +3990,13 @@ exports.getSoWithPayments = async (req, res) => {
       ? paymentRows.reduce((s, p) => s + Number(p.amount || 0), 0)
       : null;
     const soSecurity = sumSoSecurityAmount(lines);
+    const gstOnShipping = lines.some((l) => l.is_wfh === true || l.is_wfh === 't' || l.is_wfh === 1);
     const totals = computeGstBreakdown({
       subtotal: totalValue,
       shipping: lines[0].shiping_charges,
       security: soSecurity,
       supplyState: resolveSupplyStateFromAddress(lines[0].customer_shipping_address, lines[0].supply_state),
+      gstOnShipping,
     });
     const soStatus = deriveSalesOrderListStatus({
       status: lines.every((l) => String(l.status).toLowerCase() === 'cancelled') ? 'cancelled' : (lines[0].status || 'pending'),
