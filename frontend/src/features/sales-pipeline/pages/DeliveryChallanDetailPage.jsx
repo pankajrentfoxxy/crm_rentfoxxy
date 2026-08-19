@@ -289,7 +289,7 @@ export default function DeliveryChallanDetailPage() {
         rejection_reason: rejectReason.trim(),
         rejection_remarks: rejectRemarks.trim() || undefined,
       });
-      toast.success('Marked rejected � confirm warehouse return with OTP when laptops are back');
+      toast.success('Marked rejected · confirm warehouse return with OTP when laptops are back');
       setRejectModal(false);
       load();
     } catch (err) {
@@ -307,7 +307,7 @@ export default function DeliveryChallanDetailPage() {
         rejection_reason: rejectReason.trim(),
         rejection_remarks: rejectRemarks.trim() || undefined,
       });
-      toast.success('Marked rejected � send warehouse return OTP when laptops arrive');
+      toast.success('Marked rejected · send warehouse return OTP when laptops arrive');
       setRejectModal(false);
       load();
     } catch (err) {
@@ -333,7 +333,7 @@ export default function DeliveryChallanDetailPage() {
   const handleVerifyWarehouseReturn = async () => {
     try {
       await verifyWarehouseReturnOtp(dcNumber, { otp: warehouseOtp });
-      toast.success('Return confirmed � laptops in QC');
+      toast.success('Return confirmed · laptops in QC');
       setWarehouseOtp('');
       load();
     } catch (err) {
@@ -363,10 +363,10 @@ export default function DeliveryChallanDetailPage() {
   const pendingWarehouseReturn = isRejected && !head.return_to_warehouse_at;
 
   const specStr = (d) => [d.processor, d.generation, d.ram, d.storage, d.gpu, d.screen_size]
-    .filter(Boolean).join(' � ');
+    .filter(Boolean).join(' · ');
   const laptops = lines.flatMap((l) => (
     (l.serials_detail && l.serials_detail.length)
-      ? l.serials_detail.map((d) => ({ ttspl: d.ttspl, config: `${d.brand} ${d.model} � ${specStr(d)}`.trim() }))
+      ? l.serials_detail.map((d) => ({ ttspl: d.ttspl, config: `${d.brand} ${d.model} · ${specStr(d)}`.trim() }))
       : parseSerials(l.serial_number).map((s) => {
         const parts = String(s).split('|');
         return { ttspl: parts[2] || parts[1] || parts[0], config: formatConfig(l) };
@@ -414,11 +414,11 @@ export default function DeliveryChallanDetailPage() {
             onClick={handleBack}
             className="text-sm text-blue-600 hover:underline"
           >
-            ? Back
+            ← Back
           </button>
           <h1 className={`text-2xl font-semibold font-mono mt-1 ${isRejected || isCancelled ? 'text-red-700 line-through decoration-red-400' : 'text-black'}`}>{dcNumber}</h1>
           <p className="text-gray-600">
-            {head.customer_name || '�'} � SO:{' '}
+            {head.customer_name || '—'} · SO:{' '}
             <Link className="text-blue-600" to={salesOrderDetailPath(head.sales_order_number, location.state?.soScope)}>
               {head.sales_order_number}
             </Link>
@@ -545,7 +545,7 @@ export default function DeliveryChallanDetailPage() {
             <>
             {isCancelled && (
               <div className="p-3 mb-4 bg-slate-100 border border-slate-300 rounded-lg text-sm text-slate-800">
-                This delivery challan was cancelled. Laptops are attached on the sales order again � open the SO and create new DC(s), one per package if needed.
+                This delivery challan was cancelled. Laptops are attached on the sales order again · open the SO and create new DC(s), one per package if needed.
               </div>
             )}
             <div className="bg-white border rounded-xl overflow-hidden">
@@ -571,15 +571,15 @@ export default function DeliveryChallanDetailPage() {
                     ) : allUnits.map((d, i) => (
                       <tr key={d.ttspl || i}>
                         <td className="px-3 py-2 font-mono text-xs text-blue-700">{d.ttspl}</td>
-                        <td className="px-3 py-2">{d.brand || '�'}</td>
-                        <td className="px-3 py-2">{d.model || '�'}</td>
-                        <td className="px-3 py-2">{d.processor || '�'}</td>
-                        <td className="px-3 py-2">{d.generation || '�'}</td>
-                        <td className="px-3 py-2">{d.ram || '�'}</td>
-                        <td className="px-3 py-2">{d.storage || '�'}</td>
-                        <td className="px-3 py-2">{d.gpu || '�'}</td>
-                        <td className="px-3 py-2">{d.screen_size || '�'}</td>
-                        <td className="px-3 py-2 text-xs text-gray-700 max-w-[200px] whitespace-pre-wrap">{d.remark || '�'}</td>
+                        <td className="px-3 py-2">{d.brand || '—'}</td>
+                        <td className="px-3 py-2">{d.model || '—'}</td>
+                        <td className="px-3 py-2">{d.processor || '—'}</td>
+                        <td className="px-3 py-2">{d.generation || '—'}</td>
+                        <td className="px-3 py-2">{d.ram || '—'}</td>
+                        <td className="px-3 py-2">{d.storage || '—'}</td>
+                        <td className="px-3 py-2">{d.gpu || '—'}</td>
+                        <td className="px-3 py-2">{d.screen_size || '—'}</td>
+                        <td className="px-3 py-2 text-xs text-gray-700 max-w-[200px] whitespace-pre-wrap">{d.remark || '—'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -589,8 +589,8 @@ export default function DeliveryChallanDetailPage() {
                 <div className="p-4 text-sm border-t space-y-1">
                   {lines.map((l, i) => (
                     <p key={l.id || i}>
-                      <span className="text-gray-500">{[l.brand, l.model_name].filter(Boolean).join(' ') || `Item ${i + 1}`} � Remarks:</span>{' '}
-                      {(l.remarks || '').trim() || '�'}
+                      <span className="text-gray-500">{[l.brand, l.model_name].filter(Boolean).join(' ') || `Item ${i + 1}`} · Remarks:</span>{' '}
+                      {(l.remarks || '').trim() || '—'}
                     </p>
                   ))}
                 </div>
@@ -600,8 +600,8 @@ export default function DeliveryChallanDetailPage() {
                 <p className="font-medium text-slate-800">Dispatch date: {formatDateTime(head.dispatched_at)}</p>
                 {(head.ship_by === 'by_courier' || head.dispatch_mode === 'courier') && (
                   <p>
-                    Courier: <strong>{head.courier_name || '�'}</strong>
-                    {' � '}AWB: <strong>{head.awb_number || '�'}</strong>
+                    Courier: <strong>{head.courier_name || '—'}</strong>
+                    { ' · ' }AWB: <strong>{head.awb_number || '—'}</strong>
                     {head.awb_number && (
                       <>
                         {' · '}
@@ -655,10 +655,10 @@ export default function DeliveryChallanDetailPage() {
                 )}
                 {(head.ship_by === 'by_porter' || head.dispatch_mode === 'porter') && (
                   <p>
-                    Porter ID: <strong>{head.porter_tracking_id || '�'}</strong>
-                    {head.porter_order_id && <> � Order: <strong>{head.porter_order_id}</strong></>}
+                    Porter ID: <strong>{head.porter_tracking_id || '—'}</strong>
+                    {head.porter_order_id && <> · Order: <strong>{head.porter_order_id}</strong></>}
                     {head.porter_booking_url && (
-                      <> � <a href={head.porter_booking_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline text-xs ml-1">Track</a></>
+                      <> · <a href={head.porter_booking_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline text-xs ml-1">Track</a></>
                     )}
                   </p>
                 )}
@@ -666,10 +666,10 @@ export default function DeliveryChallanDetailPage() {
                   <p>
                     Delivery Technician:{' '}
                     <strong>{head.delivery_person_name || head.technician_name || 'Not assigned'}</strong>
-                    {head.delivery_person_phone && <> � {head.delivery_person_phone}</>}
+                    {head.delivery_person_phone && <> · {head.delivery_person_phone}</>}
                   </p>
                 )}
-                <p>Security: {formatCurrency(head.security_amount)} � Shipping: {formatCurrency(head.shiping_charges)}</p>
+                <p>Security: {formatCurrency(head.security_amount)} · Shipping: {formatCurrency(head.shiping_charges)}</p>
                 <p className="text-xs text-gray-400">
                   Security per laptop: {formatCurrency((Number(head.security_amount) || 0) / (Number(head.quantity) || 1))}
                 </p>
@@ -692,8 +692,8 @@ export default function DeliveryChallanDetailPage() {
                   <tbody className="divide-y">
                     {summaryLines.map((l, i) => (
                       <tr key={i}>
-                        <td className="px-4 py-2">{[l.brand, l.model_name].filter(Boolean).join(' ') || '�'}</td>
-                        <td className="px-4 py-2 text-center font-mono text-xs">{l.hsn_code || head.hsn_code || '�'}</td>
+                        <td className="px-4 py-2">{[l.brand, l.model_name].filter(Boolean).join(' ') || '—'}</td>
+                        <td className="px-4 py-2 text-center font-mono text-xs">{l.hsn_code || head.hsn_code || '—'}</td>
                         <td className="px-4 py-2 text-right">{l.quantity || l.main_qty || 1}</td>
                         <td className="px-4 py-2 text-right">{formatCurrency(l.rate)}</td>
                         <td className="px-4 py-2 text-right">{formatCurrency(l.amount ?? (Number(l.rate || 0) * Number(l.quantity || l.main_qty || 1)))}</td>
@@ -719,7 +719,7 @@ export default function DeliveryChallanDetailPage() {
                     onClick={async () => {
                       const trimmed = String(hsnDraft || '').trim();
                       if (!/^\d{4,8}$/.test(trimmed)) {
-                        toast.error('HSN/SAC must be 4�8 digits');
+                        toast.error('HSN/SAC must be 4–8 digits');
                         return;
                       }
                       setHsnSaving(true);
@@ -735,7 +735,7 @@ export default function DeliveryChallanDetailPage() {
                     }}
                     className="px-3 py-1.5 text-xs bg-teal-700 text-white rounded-lg disabled:opacity-60"
                   >
-                    {hsnSaving ? 'Saving�' : 'Save HSN'}
+                    {hsnSaving ? 'Saving…' : 'Save HSN'}
                   </button>
                 </div>
               ) : null}
@@ -790,7 +790,7 @@ export default function DeliveryChallanDetailPage() {
                         <tr key={t.ticket_id}>
                           <td className="py-2 font-mono text-blue-700">{t.ttspl_id}</td>
                           <td className="py-2"><Link to={`/floor-pipeline/tickets/${t.ticket_id}`} className="text-blue-600">#{t.ticket_id}</Link></td>
-                          <td className="py-2">{t.stage_name || '�'}</td>
+                          <td className="py-2">{t.stage_name || '—'}</td>
                           <td className="py-2 capitalize">{t.status?.replace('_', ' ')}</td>
                         </tr>
                       ))}
@@ -806,10 +806,10 @@ export default function DeliveryChallanDetailPage() {
             <div className="bg-white border rounded-xl p-4 space-y-4">
               <h2 className="font-semibold">Dispatch &amp; Delivery</h2>
               <div className="text-sm text-gray-600 space-y-1 bg-gray-50 border rounded-lg p-3">
-                <p>Mode: <strong className="capitalize">{head.dispatch_mode || head.ship_by || '�'}</strong></p>
+                <p>Mode: <strong className="capitalize">{head.dispatch_mode || head.ship_by || '—'}</strong></p>
                 {head.courier_name && (
                   <p>
-                    Courier: {head.courier_name} � AWB: {head.awb_number || '�'}
+                    Courier: {head.courier_name} · AWB: {head.awb_number || '—'}
                     {head.awb_number && (
                       <>
                         {' · '}
@@ -858,10 +858,10 @@ export default function DeliveryChallanDetailPage() {
                   <p>Technician: <strong>{head.delivery_person_name || head.technician_name || 'Not assigned'}</strong></p>
                 )}
                 {(head.dispatch_mode === 'porter' || head.ship_by === 'by_porter') && (
-                  <p>Porter: <strong>{head.porter_tracking_id || head.porter_order_id || '�'}</strong></p>
+                  <p>Porter: <strong>{head.porter_tracking_id || head.porter_order_id || '—'}</strong></p>
                 )}
                 {(head.dispatch_mode === 'inhouse' || head.ship_by === 'by_hand') && (
-                  <p className="text-xs text-gray-500">Assigned delivery technician � visible in their delivery bucket.</p>
+                  <p className="text-xs text-gray-500">Assigned delivery technician · visible in their delivery bucket.</p>
                 )}
               </div>
               {assignmentEditable ? (
@@ -878,7 +878,7 @@ export default function DeliveryChallanDetailPage() {
                   </p>
                 </PermissionGate>
               ) : (
-                <p className="text-xs text-gray-500">Delivery details are locked � pickup/delivery has already started or completed.</p>
+                <p className="text-xs text-gray-500">Delivery details are locked · pickup/delivery has already started or completed.</p>
               )}
               {assignmentHistory.length > 0 && (
                 <div className="border rounded-lg p-3 space-y-2">
@@ -886,11 +886,11 @@ export default function DeliveryChallanDetailPage() {
                   <ul className="space-y-2 text-xs text-gray-600">
                     {assignmentHistory.map((row) => (
                       <li key={row.id} className="border-b border-gray-100 pb-2 last:border-0 last:pb-0">
-                        <p><strong>{row.previous_assignee_label || '�'}</strong> ? <strong>{row.new_assignee_label || '�'}</strong></p>
+                        <p><strong>{row.previous_assignee_label || '—'}</strong> → <strong>{row.new_assignee_label || '—'}</strong></p>
                         <p className="text-gray-400">
                           {formatDateTime(row.changed_at)}
-                          {row.changed_by_name ? ` � ${row.changed_by_name}` : ''}
-                          {row.reason ? ` � ${row.reason}` : ''}
+                          {row.changed_by_name ? ` · ${row.changed_by_name}` : ''}
+                          {row.reason ? ` · ${row.reason}` : ''}
                         </p>
                       </li>
                     ))}
@@ -961,18 +961,18 @@ export default function DeliveryChallanDetailPage() {
                     )}
                   </div>
                   {!head.pod_photo_url && !head.esign_url && (
-                    <p className="text-xs text-gray-400">POD type: {head.pod_type || '�'}</p>
+                    <p className="text-xs text-gray-400">POD type: {head.pod_type || '—'}</p>
                   )}
                 </div>
               )}
               {isRejected && (
                 <div className="text-sm space-y-3 border border-red-200 bg-red-50 rounded-lg p-4">
                   <p className="text-red-800 font-semibold line-through decoration-red-400">Delivery Rejected</p>
-                  <p className="text-red-700">Reason: {head.rejection_reason || '�'}</p>
+                  <p className="text-red-700">Reason: {head.rejection_reason || '—'}</p>
                   {head.rejection_remarks && <p className="text-gray-700">Remarks: {head.rejection_remarks}</p>}
                   {head.rejected_at && <p className="text-gray-600">Rejected at: {formatDateTime(head.rejected_at)}</p>}
                   {head.return_to_warehouse_at ? (
-                    <p className="text-emerald-700">Returned to warehouse: {formatDateTime(head.return_to_warehouse_at)} � QC tickets created</p>
+                    <p className="text-emerald-700">Returned to warehouse: {formatDateTime(head.return_to_warehouse_at)} · QC tickets created</p>
                   ) : pendingWarehouseReturn ? (
                     <div className="space-y-2 pt-2 border-t border-red-200">
                       <p className="text-xs text-gray-600">
@@ -1020,7 +1020,7 @@ export default function DeliveryChallanDetailPage() {
             <h3 className="font-semibold mb-2">Dispatch</h3>
             <p><span className="text-gray-500">Created:</span> {formatDate(head.created_at)}</p>
             <p><span className="text-gray-500">Dispatch date:</span> <strong>{formatDateTime(head.dispatched_at)}</strong></p>
-            <p><span className="text-gray-500">Mode:</span> {head.dispatch_mode || head.ship_by || '�'}</p>
+            <p><span className="text-gray-500">Mode:</span> {head.dispatch_mode || head.ship_by || '—'}</p>
             {head.vehicle_number ? (
               <p><span className="text-gray-500">Vehicle:</span> {head.vehicle_number}</p>
             ) : null}
@@ -1049,7 +1049,7 @@ export default function DeliveryChallanDetailPage() {
             <h3 className="font-semibold mb-2">Laptops in this DC</h3>
             {laptops.map((l, i) => (
               <button key={i} type="button" onClick={() => setTtsplDrawer(l.ttspl)} className="block w-full text-left py-1 text-blue-700 font-mono text-xs hover:underline">
-                {l.ttspl} � {l.config}
+                {l.ttspl} · {l.config}
               </button>
             ))}
           </div>
@@ -1115,7 +1115,7 @@ export default function DeliveryChallanDetailPage() {
             <h3 className="font-semibold">Cancel delivery challan</h3>
             <p className="text-sm text-gray-600">
               All laptops on this DC will return to <strong>Attached</strong> on sales order{' '}
-              <strong>{head.sales_order_number || '�'}</strong>. You can then create separate DCs (e.g. one per package).
+              <strong>{head.sales_order_number || '—'}</strong>. You can then create separate DCs (e.g. one per package).
             </p>
             <p className="text-xs text-amber-700">
               If an e-invoice was generated for this DC, cancel or void it separately before re-dispatching.
@@ -1142,7 +1142,7 @@ export default function DeliveryChallanDetailPage() {
                 onClick={handleCancelDc}
                 className="flex-1 py-2 bg-red-600 text-white rounded-lg text-sm disabled:opacity-60"
               >
-                {cancelSaving ? 'Cancelling�' : 'Cancel DC'}
+                {cancelSaving ? 'Cancelling…' : 'Cancel DC'}
               </button>
             </div>
           </div>
