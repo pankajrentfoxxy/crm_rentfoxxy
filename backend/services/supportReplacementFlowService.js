@@ -376,7 +376,31 @@ async function findReplacementOrderForSerial(client, serialId) {
   return r.rows[0] || null;
 }
 
+/** Backfill pickup_completed_at from warehouse/pickup timestamps when the hook missed it. */
+async function syncReplacementPickupLeg(client, ticketId) {
+  await client.query(
+    `UPDATE support_replacement_orders ro
+        SET pickup_completed_at = COALESCE(
+          ro.pickup_completed_at,
+          pi.warehouse_received_at,
+          pi.picked_up_at
+        )
+       FROM support_ticket_items pi
+      WHERE ro.ticket_id = $1
+        AND ro.status NOT IN ('completed', 'cancelled')
+        AND pi.ticket_id = ro.ticket_id
+        AND pi.item_type = 'pickup'
+        AND (pi.warehouse_received_at IS NOT NULL OR pi.picked_up_at IS NOT NULL)
+        AND (
+          ro.pickup_item_id = pi.id
+          OR ro.return_dc_number IS NOT DISTINCT FROM pi.return_dc_number
+        )`,
+    [ticketId]
+  );
+}
+
 async function tryCloseReplacementTicket(client, ticketId) {
+  await syncReplacementPickupLeg(client, ticketId);
   const ordRes = await client.query(
     `SELECT * FROM support_replacement_orders
       WHERE ticket_id = $1 AND status NOT IN ('completed','cancelled')
@@ -402,6 +426,15 @@ async function tryCloseReplacementTicket(client, ticketId) {
         SET status = 'inventory_updated', updated_at = CURRENT_TIMESTAMP
       WHERE ticket_id = $1 AND item_type = 'replacement'
         AND status NOT IN ('inventory_updated', 'closed')`,
+    [ticketId]
+  );
+  await client.query(
+    `UPDATE support_ticket_items
+        SET status = 'inventory_updated',
+            resolved_at = COALESCE(resolved_at, CURRENT_TIMESTAMP),
+            updated_at = CURRENT_TIMESTAMP
+      WHERE ticket_id = $1 AND item_type = 'pickup'
+        AND status = 'awaiting_service_return'`,
     [ticketId]
   );
   await client.query(
@@ -565,16 +598,26 @@ async function onReplacementWarehouseReceived(client, pickupItemId) {
 
   const ordRes = await client.query(
     `SELECT id FROM support_replacement_orders
-      WHERE ticket_id = $1 AND return_dc_number = $2 AND status NOT IN ('completed','cancelled')`,
-    [it.ticket_id, it.return_dc_number]
+      WHERE ticket_id = $1 AND status NOT IN ('completed','cancelled')
+        AND (
+          return_dc_number IS NOT DISTINCT FROM $2
+          OR pickup_item_id = $3
+        )
+      ORDER BY id DESC LIMIT 1`,
+    [it.ticket_id, it.return_dc_number, pickupItemId]
   );
   if (!ordRes.rows.length) return { handled: false };
 
   await client.query(
-    `UPDATE support_replacement_orders
-        SET pickup_completed_at = CURRENT_TIMESTAMP
-      WHERE ticket_id = $1 AND return_dc_number = $2`,
-    [it.ticket_id, it.return_dc_number]
+    `UPDATE support_replacement_orders ro
+        SET pickup_completed_at = COALESCE(
+          ro.pickup_completed_at,
+          (SELECT COALESCE(pi.warehouse_received_at, pi.picked_up_at)
+             FROM support_ticket_items pi WHERE pi.id = $3),
+          CURRENT_TIMESTAMP
+        )
+      WHERE ro.id = $1`,
+    [ordRes.rows[0].id, it.ticket_id, pickupItemId]
   );
   await tryCloseReplacementTicket(client, it.ticket_id);
   return { handled: true };
@@ -1623,6 +1666,7 @@ module.exports = {
   onReplacementReturnPickedUp,
   onReplacementWarehouseReceived,
   tryCloseReplacementTicket,
+  syncReplacementPickupLeg,
   tagReplacementOutboundDc,
   loadDeliveryDefaults,
 };

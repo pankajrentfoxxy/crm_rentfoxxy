@@ -322,9 +322,27 @@ async function collectDcSerials(dcNumber) {
 }
 
 const normalizeLineItems = (body) => {
-  if (Array.isArray(body.line_items) && body.line_items.length) return body.line_items;
+  if (Array.isArray(body.line_items) && body.line_items.length) {
+    return body.line_items.map((item) => ({
+      line_id: item.line_id ?? item.id ?? null,
+      brand: item.brand || '',
+      model_name: item.model_name || item.model || '',
+      processor: item.processor || '',
+      generation: item.generation || '',
+      ram: item.ram || '',
+      storage: item.storage || '',
+      gpu: item.gpu || '',
+      screen_size: item.screen_size || '',
+      quantity: Number(item.quantity || 1),
+      rate: Number(item.rate || 0),
+      locking_period: toNullableInt(item.locking_period),
+      technical_warranty: toNullableInt(item.technical_warranty),
+      battery_charger_warranty: toNullableInt(item.battery_charger_warranty),
+      remark: item.remark ?? item.remarks ?? null,
+    }));
+  }
   const count = Math.max(
-    ...['quantity', 'Processor', 'processor', 'brand', 'brands', 'remarks', 'remark'].map((key) => {
+    ...['quantity', 'Processor', 'processor', 'brand', 'brands', 'remarks', 'remark', 'line_id'].map((key) => {
       const value = body[key];
       return Array.isArray(value) ? value.length : 0;
     })
@@ -333,6 +351,7 @@ const normalizeLineItems = (body) => {
   const items = [];
   for (let i = 0; i < count; i++) {
     items.push({
+      line_id: (body.line_id || [])[i] || null,
       brand: (body.brand || body.brands || [])[i] || '',
       model_name: (body.Model || body.model_name || [])[i],
       processor: (body.Processor || body.processor || [])[i],
@@ -913,6 +932,272 @@ exports.storeSalesOrder = async (req, res) => {
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('storeSalesOrder:', error);
+    res.status(500).json({ success: false, message: error.message });
+  } finally {
+    client.release();
+  }
+};
+
+/** PATCH /sales-orders/:soNumber — Edit rental/sale SO before any DC is created. */
+exports.updateSalesOrder = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const soNumber = req.params.soNumber || req.params.salesOrderNumber;
+    const body = req.body || {};
+    const lineItems = normalizeLineItems(body);
+    if (!lineItems.length) {
+      return res.status(400).json({ success: false, message: 'At least one line item is required' });
+    }
+
+    await client.query('BEGIN');
+
+    const existingRes = await client.query(
+      `SELECT id, status, quotation_type, quotation_number, customer_id
+         FROM sales_order_lines
+        WHERE sales_order_number = $1
+        ORDER BY id ASC
+        FOR UPDATE`,
+      [soNumber]
+    );
+    if (!existingRes.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Sales order not found' });
+    }
+    if (existingRes.rows.every((r) => String(r.status || '').toLowerCase() === 'cancelled')) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: 'Sales order is cancelled' });
+    }
+
+    await assertReplacementSalesOrderAccessIfScoped(soNumber, req.user, req.permissionCache);
+
+    const dcRes = await client.query(
+      `SELECT COUNT(DISTINCT dc_number)::int AS c FROM delivery_challan_lines WHERE sales_order_number = $1`,
+      [soNumber]
+    );
+    if (Number(dcRes.rows[0]?.c || 0) > 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'Cannot edit: a delivery challan has already been created for this sales order.',
+      });
+    }
+
+    const head = existingRes.rows[0];
+    const supportMeta = await getSalesOrderSupportMeta(soNumber);
+    if (supportMeta.is_replacement_order) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({
+        success: false,
+        message: 'Replacement sales orders cannot be edited from this screen.',
+      });
+    }
+
+    const shipping = parseJsonField(body.customer_shipping_address);
+    let billing = parseJsonField(body.customer_billing_address);
+    if (billing && body.customer_name) {
+      billing = { ...billing, name: body.customer_name };
+    }
+    const supplyState = resolveSupplyStateFromAddress(
+      shipping,
+      body.supply_state || head.supply_state
+    );
+    const shippingJson = shipping ? JSON.stringify(shipping) : null;
+    const billingJson = billing ? JSON.stringify(billing) : null;
+    const customerId = body.customer_id != null && body.customer_id !== ''
+      ? toNullableInt(body.customer_id)
+      : head.customer_id;
+
+    const attachedByLine = {};
+    const attachedRes = await client.query(
+      `SELECT line_id, COUNT(*)::int AS n
+         FROM sales_order_serials
+        WHERE sales_order_number = $1 AND status <> 'removed'
+        GROUP BY line_id`,
+      [soNumber]
+    );
+    attachedRes.rows.forEach((r) => {
+      attachedByLine[r.line_id] = Number(r.n || 0);
+    });
+
+    const keptLineIds = new Set();
+    for (const item of lineItems) {
+      const qty = Number(item.quantity || 1);
+      if (!Number.isInteger(qty) || qty < 1) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: 'Each line quantity must be at least 1' });
+      }
+      if (!item.brand || !item.processor || !item.generation || !item.ram || !item.storage) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Each line requires brand, processor, generation, RAM, and storage',
+        });
+      }
+      const rate = Number(item.rate || 0);
+      if (!Number.isFinite(rate) || rate <= 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: 'Each line requires a positive rate' });
+      }
+
+      const lineId = item.line_id ? parseInt(item.line_id, 10) : null;
+      if (lineId) {
+        const existingLine = existingRes.rows.find((r) => r.id === lineId);
+        if (!existingLine) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ success: false, message: `Invalid line id ${lineId}` });
+        }
+        const attachedCount = attachedByLine[lineId] || 0;
+        if (qty < attachedCount) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({
+            success: false,
+            message: `Quantity cannot be less than attached units (${attachedCount}).`,
+          });
+        }
+        await client.query(
+          `UPDATE sales_order_lines SET
+             brand = $1, model_name = $2, processor = $3, generation = $4,
+             ram = $5, storage = $6, gpu = $7, screen_size = $8,
+             quantity = $9, main_qty = $9, rate = $10,
+             locking_period = $11, technical_warranty = $12,
+             battery_charger_warranty = $13, remark = $14,
+             updated_at = NOW()
+           WHERE id = $15 AND sales_order_number = $16`,
+          [
+            item.brand, item.model_name, item.processor, item.generation,
+            item.ram, item.storage, item.gpu || null, item.screen_size || null,
+            qty, +rate.toFixed(2),
+            item.locking_period, item.technical_warranty, item.battery_charger_warranty,
+            item.remark, lineId, soNumber,
+          ]
+        );
+        keptLineIds.add(lineId);
+      } else {
+        const soQuotationType = body.quotation_type || head.quotation_type || 'rental';
+        const lineHsn = resolveHsnForPersist({
+          quotationType: soQuotationType,
+          override: item.hsn_code ?? item.hsnCode ?? body.hsn_code,
+          role: req.user?.role,
+        });
+        const ins = await client.query(
+          `INSERT INTO sales_order_lines (
+             sales_order_number, quotation_number, customer_id, customer_name, customer_email, customer_mobile,
+             customer_shipping_address, customer_billing_address, gst_number, supply_state, security_amount,
+             shiping_charges, quotation_type, branch, brand, model_name, processor, generation, ram, storage,
+             gpu, screen_size, quantity, main_qty, rate, locking_period, battery_charger_warranty,
+             technical_warranty, remark, status, token, created_by, hsn_code
+           ) SELECT
+             $1, quotation_number, customer_id, customer_name, customer_email, customer_mobile,
+             customer_shipping_address, customer_billing_address, gst_number, supply_state, security_amount,
+             shiping_charges, quotation_type, branch, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $11,
+             $12, $13, $14, $15, 'pending', $16, created_by, $17
+             FROM sales_order_lines WHERE sales_order_number = $1 LIMIT 1
+           RETURNING id`,
+          [
+            soNumber,
+            item.brand, item.model_name, item.processor, item.generation,
+            item.ram, item.storage, item.gpu || null, item.screen_size || null,
+            qty, +rate.toFixed(2),
+            item.locking_period, item.battery_charger_warranty, item.technical_warranty,
+            item.remark, generateToken(), lineHsn,
+          ]
+        );
+        keptLineIds.add(ins.rows[0].id);
+      }
+    }
+
+    for (const row of existingRes.rows) {
+      if (keptLineIds.has(row.id)) continue;
+      const attachedCount = attachedByLine[row.id] || 0;
+      if (attachedCount > 0) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          success: false,
+          message: 'Cannot remove a line that has laptops attached. Detach them first.',
+        });
+      }
+      await client.query(
+        `DELETE FROM sales_order_lines WHERE id = $1 AND sales_order_number = $2`,
+        [row.id, soNumber]
+      );
+    }
+
+    await client.query(
+      `UPDATE sales_order_lines SET
+         customer_id = COALESCE($1, customer_id),
+         customer_name = COALESCE($2, customer_name),
+         customer_email = COALESCE($3, customer_email),
+         customer_mobile = COALESCE($4, customer_mobile),
+         gst_number = COALESCE($5, gst_number),
+         supply_state = $6,
+         shiping_charges = COALESCE($7, shiping_charges),
+         customer_shipping_address = COALESCE($8::jsonb, customer_shipping_address),
+         customer_billing_address = COALESCE($9::jsonb, customer_billing_address),
+         updated_at = NOW()
+       WHERE sales_order_number = $10`,
+      [
+        customerId,
+        body.customer_name ?? null,
+        body.email || body.customer_email || null,
+        body.customer_mobile ?? null,
+        body.GST_number || body.gst_number || null,
+        supplyState,
+        body.shiping_charges != null ? Number(body.shiping_charges) || 0 : null,
+        shippingJson,
+        billingJson,
+        soNumber,
+      ]
+    );
+
+    const securityType = String(body.security_type || 'none').toLowerCase();
+    if (securityType === 'one_month_rental') {
+      await client.query(
+        `UPDATE sales_order_lines
+            SET security_amount = ROUND((COALESCE(rate, 0) * COALESCE(main_qty, quantity, 1))::numeric, 2),
+                security_type = 'one_month_rental'
+          WHERE sales_order_number = $1`,
+        [soNumber]
+      );
+    } else if (body.security_amount != null || body.security_type != null) {
+      await client.query(
+        `UPDATE sales_order_lines
+            SET security_amount = COALESCE($1, security_amount),
+                security_type = 'none'
+          WHERE sales_order_number = $2`,
+        [body.security_amount != null ? Number(body.security_amount) || 0 : null, soNumber]
+      );
+    }
+
+    await client.query('COMMIT');
+
+    let pdfPath = null;
+    try {
+      const regen = await regenerateSoAndLinkedDcPdfs(soNumber);
+      pdfPath = regen.so_pdf_path;
+    } catch (pdfErr) {
+      console.warn('SO PDF regeneration after update:', pdfErr.message);
+    }
+
+    res.json({
+      success: true,
+      message: 'Sales order updated',
+      sales_order_number: soNumber,
+      pdf_path: pdfPath,
+    });
+
+    await safeLogSalesOrderActivity({
+      salesOrderNumber: soNumber,
+      activityType: ACTIVITY_TYPES.SALES_ORDER,
+      action: 'updated',
+      description: `${req.user?.name || 'User'} updated Sales Order ${soNumber}.`,
+      user: req.user,
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (error.status === 403) {
+      return res.status(403).json({ success: false, message: error.message });
+    }
+    console.error('updateSalesOrder:', error);
     res.status(500).json({ success: false, message: error.message });
   } finally {
     client.release();

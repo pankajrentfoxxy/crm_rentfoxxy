@@ -858,9 +858,19 @@ const recomputeTicketStatus = async (client, ticketId, manualCloseUserId = null)
     const statuses = itemsRes.rows.map((r) => r.status);
     if (statuses.length === 0) return;
 
+    if (!manualCloseUserId) {
+        try {
+            await replacementFlow.tryCloseReplacementTicket(client, ticketId);
+        } catch (closeErr) {
+            console.error('[support] tryCloseReplacementTicket on recompute:', closeErr.message);
+        }
+    }
+
     if (!manualCloseUserId && await ticketHasRepairAwaitingSdc(client, ticketId)) {
         await client.query(
-            `UPDATE support_tickets SET status = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+            `UPDATE support_tickets
+             SET status = $2, closed_at = NULL, closed_by = NULL, updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1`,
             [ticketId, TICKET_IN_PROGRESS]
         );
         return;

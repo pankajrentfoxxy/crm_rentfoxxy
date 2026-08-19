@@ -145,6 +145,7 @@ router.post(...soRoute('/payments', payCreate, ctrl.recordPayment));
 router.post(...soRoute('/pdf', soView, ctrl.regenerateSalesOrderPdf));
 router.patch(...soRoute('/cancel', soEdit, ctrl.cancelSalesOrder));
 router.patch(...soRoute('/shipping-address', checkRole('super_admin'), ctrl.updateSalesOrderShippingAddress));
+router.patch(/^\/sales-orders\/(.+)$/, bindSoNumber, soEdit, ctrl.updateSalesOrder);
 router.get(/^\/sales-orders\/(.+)$/, bindSoNumber, checkSoViewOrAssignedDispatch, ctrl.getSalesOrder);
 router.post('/sales-orders', soCreate, ctrl.storeSalesOrder);
 

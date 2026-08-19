@@ -33,6 +33,7 @@ export function lineItemsToPayload(lines) {
     technical_warranty: lines.map((l) => l.technical_warranty || ''),
     battery_charger_warranty: lines.map((l) => l.battery_charger_warranty || ''),
     remarks: lines.map((l) => l.remark || ''),
+    line_id: lines.map((l) => l.line_id || l.id || null),
   };
 }
 

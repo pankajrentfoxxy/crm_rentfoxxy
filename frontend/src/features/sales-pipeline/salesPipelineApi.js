@@ -17,6 +17,7 @@ export const getSalesOrderFull = (n) => api.get(`${base}/sales-orders/${encSo(n)
 export const listSoActivities = (n, p) => api.get(`${base}/sales-orders/${encSo(n)}/activities`, { params: p });
 export const logSoDocumentActivity = (n, d) => api.post(`${base}/sales-orders/${encSo(n)}/activities`, d);
 export const createSalesOrder = (d) => api.post(`${base}/sales-orders`, d);
+export const updateSalesOrder = (n, d) => api.patch(`${base}/sales-orders/${encSo(n)}`, d);
 export const cancelSalesOrder = (n) => api.patch(`${base}/sales-orders/${encSo(n)}/cancel`);
 export const getSoLineCancelEligibility = (lineId) =>
   api.get(`${base}/so-lines/${lineId}/cancel-eligibility`);

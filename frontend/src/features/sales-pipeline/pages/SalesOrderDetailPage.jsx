@@ -13,6 +13,7 @@ import SoShippingAddressEditModal from '../components/SoShippingAddressEditModal
 import SoActivityPanel from '../components/SoActivityPanel';
 import { DispatchWorkflowCard } from '../../dispatch/components/DispatchWorkflowPanel';
 import SoPartialCancelModal from '../components/SoPartialCancelModal';
+import SalesOrderForm from '../components/SalesOrderForm';
 import { cancelSalesOrder, getQuotation, getSalesOrderFull, logSoDocumentActivity, regenerateSalesOrderPdf } from '../salesPipelineApi';
 import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
@@ -82,6 +83,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
   const [editHsnLine, setEditHsnLine] = useState(null);
   const [editShippingOpen, setEditShippingOpen] = useState(false);
   const [partialCancelLine, setPartialCancelLine] = useState(null);
+  const [editOpen, setEditOpen] = useState(false);
   const [activityRefreshKey, setActivityRefreshKey] = useState(0);
 
   const visibleTabs = useMemo(() => TABS.filter((t) => {
@@ -137,7 +139,6 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
   );
   const dispatchDate = data?.dispatch_date ?? summary.dispatch_date ?? null;
   const hasAttachedLaptops = attachedCount > 0;
-  const hasDc = (deliveredCount + dispatchedCount) > 0;
   const halfGst = (Number(totals.gst_rate) || 18) / 2;
   const shippingAddr = parseDeliveryAddress(head.customer_shipping_address);
   const supplyStateLabel = formatSupplyStateLabel(
@@ -148,6 +149,12 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
     || (data?.is_replacement_order ? 'replacement' : null)
     || (orderMatchesScope(head, 'sale') ? 'sale' : orderMatchesScope(head, 'rental') ? 'rental' : null);
   const scopeConfig = getSoScopeConfig(resolvedScope);
+  const hasDcCreated = dcs.length > 0;
+  const hasDc = hasDcCreated || (deliveredCount + dispatchedCount) > 0;
+  const canEditSo = (resolvedScope === 'rental' || resolvedScope === 'sale')
+    && !isCancelled
+    && !hasDcCreated
+    && canEdit(scopeConfig?.permissionSection || 'sales_orders_doc');
   const listPath = salesOrderListPath(resolvedScope);
   const cameFromElsewhere = Boolean(location.state?.from);
   const dcNavState = useMemo(
@@ -239,11 +246,14 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
           <PermissionGate section="payment_records" action="create">
             <Button onClick={() => setPaymentOpen(true)}>Record Payment</Button>
           </PermissionGate>
-          {!isCancelled && !hasDc && (
+          {!isCancelled && !hasDcCreated && (
             <PermissionGate section="sales_orders_doc" action="edit">
               <Button variant="danger" onClick={handleCancel}>Cancel SO</Button>
             </PermissionGate>
           )}
+          {canEditSo ? (
+            <Button variant="secondary" onClick={() => setEditOpen(true)}>Edit SO</Button>
+          ) : null}
         </div>
       </div>
 
@@ -270,7 +280,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
             <div className="pt-1">
               <div className="flex items-start justify-between gap-2">
                 <span className="text-gray-500 shrink-0">Shipping Address:</span>
-                {isSuperAdmin && !isCancelled ? (
+                {isSuperAdmin && !isCancelled && !hasDcCreated ? (
                   <button
                     type="button"
                     onClick={() => setEditShippingOpen(true)}
@@ -504,6 +514,13 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
         open={Boolean(partialCancelLine)}
         line={partialCancelLine}
         onClose={() => setPartialCancelLine(null)}
+        onSaved={load}
+      />
+      <SalesOrderForm
+        open={editOpen}
+        editSoNumber={soNumber}
+        scope={resolvedScope}
+        onClose={() => setEditOpen(false)}
         onSaved={load}
       />
     </div>

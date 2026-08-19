@@ -6,7 +6,7 @@ import { BillingAddressPanel, ShippingAddressPanel } from '../../operation-manag
 import SearchableSelect from '../../operation-management/components/SearchableSelect';
 import { branchForQuotationType } from '../../operation-management/utils/quotationHelpers';
 import {
-  createSalesOrder, getCustomerAddresses, getCustomerDetail, getQuotation, getSalesOrderMeta, listQuotations,
+  createSalesOrder, getCustomerAddresses, getCustomerDetail, getQuotation, getSalesOrderFull, getSalesOrderMeta, listQuotations, updateSalesOrder,
 } from '../salesPipelineApi';
 import {
   formatCurrency, sumLines, formatConfig, lineTotal, typeLabel, countLaptops,
@@ -83,10 +83,32 @@ function linesFromQuote(quoteLines) {
     locking_period: l.locking_period || '',
     technical_warranty: l.technical_warranty || '',
     battery_charger_warranty: l.battery_charger_warranty || '',
+    remark: l.remark || '',
   }));
 }
 
-export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotation, scope }) {
+function linesFromSo(soLines) {
+  return (soLines || []).map((l) => ({
+    line_id: l.id || l.line_id || null,
+    brand: l.brand || '',
+    model_name: l.model_name || l.model || '',
+    processor: l.processor || '',
+    generation: l.generation || '',
+    ram: l.ram || '',
+    storage: l.storage || '',
+    gpu: l.gpu || '',
+    screen_size: l.screen_size || '',
+    quantity: l.main_qty || l.quantity || 1,
+    rate: l.rate || '',
+    locking_period: l.locking_period || '',
+    technical_warranty: l.technical_warranty || '',
+    battery_charger_warranty: l.battery_charger_warranty || '',
+    remark: l.remark || '',
+  }));
+}
+
+export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotation, scope, editSoNumber }) {
+  const isEdit = Boolean(editSoNumber);
   const scopeConfig = getSoScopeConfig(scope);
   const defaultType = scopeConfig?.defaultQuotationType || 'rental';
   const defaultBranch = scopeConfig?.defaultBranch || branchForQuotationType(defaultType);
@@ -116,7 +138,7 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
   };
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || isEdit) return;
     setForm((f) => ({
       ...f,
       quotation_type: defaultType,
@@ -131,7 +153,38 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
       const all = res.data?.quotations || [];
       setQuotations(scope ? all.filter((q) => orderMatchesScope(q, scope)) : all);
     }).catch(() => {});
-  }, [open, scope, defaultType, defaultBranch]);
+  }, [open, scope, defaultType, defaultBranch, isEdit]);
+
+  useEffect(() => {
+    if (!open || !editSoNumber) return;
+    setFromQuote(false);
+    getSalesOrderFull(editSoNumber).then((res) => {
+      const data = res.data;
+      const soLines = data?.lines || [];
+      const head = soLines[0] || {};
+      setLines(soLines.length ? linesFromSo(soLines) : [emptyLineItem()]);
+      setForm({
+        customer_id: head.customer_id || '',
+        customer_name: head.customer_name || '',
+        email: head.customer_email || '',
+        customer_mobile: head.customer_mobile || '',
+        quotation_number: head.quotation_number || '',
+        quotation_type: head.quotation_type || defaultType,
+        branch: head.branch || defaultBranch,
+        security_type: head.security_type || (Number(head.security_amount) > 0 ? 'one_month_rental' : 'none'),
+        security_amount: head.security_amount ?? '',
+        shiping_charges: head.shiping_charges ?? '',
+        remarks: '',
+        advance_amount: '',
+        advance_due_date: '',
+        GST_number: head.gst_number || '',
+      });
+      if (head.customer_id) {
+        loadCustomerDetail(head.customer_id, parseAddress(head.customer_shipping_address));
+      }
+    }).catch(() => toast.error('Failed to load sales order'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, editSoNumber, defaultType, defaultBranch]);
 
   useEffect(() => {
     if (!prefillQuotation || !open) return;
@@ -313,16 +366,24 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
     }
     setSaving(true);
     try {
-      await createSalesOrder({
-        sales_order_number: meta?.sales_order_number,
+      const payload = {
         ...form,
         supply_state: supplyState,
         security_amount: security,
         customer_shipping_address: selectedShippingAddress,
         customer_billing_address: billingAddress,
         ...lineItemsToPayload(lines),
-      });
-      toast.success('Sales order created');
+      };
+      if (isEdit) {
+        await updateSalesOrder(editSoNumber, payload);
+        toast.success('Sales order updated');
+      } else {
+        await createSalesOrder({
+          sales_order_number: meta?.sales_order_number,
+          ...payload,
+        });
+        toast.success('Sales order created');
+      }
       onSaved?.();
       onClose();
     } catch (err) {
@@ -340,7 +401,7 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
       <aside className="relative w-full max-w-[600px] bg-white shadow-xl flex flex-col max-h-full overflow-hidden">
         <div className="flex items-center justify-between border-b px-4 py-3">
           <div>
-            <h2 className="font-semibold text-gray-900">Create Sales Order</h2>
+            <h2 className="font-semibold text-gray-900">{isEdit ? 'Edit Sales Order' : 'Create Sales Order'}</h2>
             {scopeConfig && (
               <p className="text-xs font-semibold mt-0.5" style={{ color: scopeConfig.brandColor }}>
                 {scopeConfig.brandName}
@@ -350,11 +411,15 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
           <button type="button" onClick={onClose} className="p-1 rounded hover:bg-gray-100"><X className="w-5 h-5" /></button>
         </div>
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={fromQuote} onChange={(e) => setFromQuote(e.target.checked)} />
-            Create from Quotation?
-          </label>
-          {fromQuote ? (
+          {!isEdit ? (
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={fromQuote} onChange={(e) => setFromQuote(e.target.checked)} />
+              Create from Quotation?
+            </label>
+          ) : (
+            <p className="text-xs text-gray-500 font-mono">{editSoNumber}</p>
+          )}
+          {!isEdit && fromQuote ? (
             <select
               className="w-full border rounded-lg px-3 py-2 text-sm"
               value={form.quotation_number}
@@ -370,6 +435,7 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
                 id="so-customer"
                 label="Customer"
                 required
+                disabled={isEdit}
                 value={form.customer_id ? String(form.customer_id) : ''}
                 onChange={onCustomerChange}
                 options={customerOptions}
@@ -379,8 +445,9 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
             <div>
               <label className="text-xs font-medium text-gray-600">Type *</label>
               <select
-                className="w-full mt-1 border rounded-lg px-3 py-2 text-sm"
+                className="w-full mt-1 border rounded-lg px-3 py-2 text-sm disabled:bg-gray-100"
                 value={form.quotation_type}
+                disabled={isEdit}
                 onChange={(e) => {
                   const nextType = e.target.value;
                   setForm((f) => {
@@ -528,7 +595,9 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
           )}
           <div className="border border-gray-200 rounded-lg overflow-hidden">
             <div className="px-3 py-2 bg-gray-50 border-b flex items-center justify-between">
-              <p className="text-xs font-semibold text-gray-700">Configuration Review — verify before creating</p>
+              <p className="text-xs font-semibold text-gray-700">
+                {isEdit ? 'Configuration Review — verify before saving' : 'Configuration Review — verify before creating'}
+              </p>
               <span className="text-[11px] text-gray-500">{countLaptops(lines)} unit(s)</span>
             </div>
             <div className="divide-y">
@@ -603,14 +672,16 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
           >
             <Eye className="w-4 h-4" /> Preview
           </button>
-          <button type="button" disabled={saving} onClick={submit} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">Create SO</button>
+          <button type="button" disabled={saving} onClick={submit} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
+            {isEdit ? 'Save Changes' : 'Create SO'}
+          </button>
         </div>
       </aside>
 
       {previewOpen && (
         <SalesOrderPreview
           onClose={() => setPreviewOpen(false)}
-          soNumber={meta?.sales_order_number}
+          soNumber={isEdit ? editSoNumber : meta?.sales_order_number}
           form={form}
           lines={lines}
           billingAddress={billingAddress}
