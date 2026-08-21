@@ -208,7 +208,7 @@ export default function SupportTicketCreate() {
         setCustomer(picked);
         setTicketPhone(picked.contact_person_number || picked.customer_number || '');
         setTicketEmail(picked.email || '');
-        setTicketAddress(formatAddress(picked.billing_address || picked.shipping_address) || '');
+        setTicketAddress(formatAddress(picked.shipping_address || picked.billing_address) || '');
         setAssets(assetsRes.data.assets || []);
         if (isMobile) setStep(1);
     };

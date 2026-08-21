@@ -122,7 +122,6 @@ export default function DetailSidebar({
             </select>
           </label>
         )}
-        <p className="text-sm mt-2" style={{ color: 'var(--color-text-tertiary)' }}>Remarks: {ticket.top_level_remarks || '—'}</p>
       </section>
 
       <section className="support-v3-card">

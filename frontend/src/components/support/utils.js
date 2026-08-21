@@ -176,9 +176,12 @@ export const formatAddress = (value) => {
     return s;
   }
   if (typeof value === 'object') {
-    const line1 = [value.line1, value.line2, value.landmark].filter(Boolean).join(', ');
+    const line1 = [value.address, value.line1, value.address_line_1, value.line2, value.landmark]
+      .filter(Boolean)
+      .filter((v, i, arr) => arr.indexOf(v) === i)
+      .join(', ');
     const cityState = [value.city, value.state].filter(Boolean).join(', ');
-    const pin = value.pincode || value.pin || value.postal_code;
+    const pin = value.pincode || value.pin || value.postal_code || value.postal;
     const mid = [line1, cityState].filter(Boolean).join(', ');
     if (pin) return mid ? `${mid} — ${pin}` : String(pin);
     return mid || '—';

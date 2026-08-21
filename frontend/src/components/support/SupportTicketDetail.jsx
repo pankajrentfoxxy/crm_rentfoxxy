@@ -171,6 +171,18 @@ function ItemCard({
           </div>
         )}
 
+        {!isNewPickup && (item.remarks || item.issue_category_label) && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2.5">
+            <p className="support-v3-section-label !mb-1 !mt-0 text-amber-900">Issue / remarks</p>
+            {item.issue_category_label ? (
+              <p className="text-xs font-medium text-amber-800 mb-0.5">{item.issue_category_label}</p>
+            ) : null}
+            {item.remarks ? (
+              <p className="text-sm whitespace-pre-wrap text-amber-950">{item.remarks}</p>
+            ) : null}
+          </div>
+        )}
+
         {item.item_type === 'complaint' && item.outcome === 'replacement_required' && !ticket.sales_order_number && (
           <div className="rounded-lg p-3 space-y-2" style={{ border: '1.5px solid #dc2626', background: '#FCEBEB', color: '#991b1b' }}>
             <p className="font-semibold text-sm">Replacement required</p>
@@ -1201,6 +1213,14 @@ export default function SupportTicketDetail() {
                 {statusPillLabel}
               </span>
             </div>
+            {(ticket.top_level_remarks || complaints[0]?.remarks) && (
+              <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">Issue / remarks</p>
+                <p className="text-sm whitespace-pre-wrap text-slate-900">
+                  {ticket.top_level_remarks || complaints[0]?.remarks}
+                </p>
+              </div>
+            )}
             <div className="mt-4">
               <div className="flex justify-between text-sm mb-1" style={{ color: 'var(--color-text-secondary)' }}>
                 <span>Overall resolution</span>

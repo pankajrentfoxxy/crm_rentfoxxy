@@ -5,6 +5,32 @@ const {
   checkSerialEligibleForSupportTicket,
 } = require('../services/supportSerialEligibility');
 
+/** Match Support CRM create form address display (shipping preferred). */
+function formatTicketAddress(value) {
+  if (value == null || value === '') return null;
+  if (typeof value === 'string') {
+    const s = value.trim();
+    if (!s) return null;
+    if (s.startsWith('{')) {
+      try {
+        return formatTicketAddress(JSON.parse(s));
+      } catch {
+        return s;
+      }
+    }
+    return s;
+  }
+  if (typeof value === 'object') {
+    const line1 = [value.address, value.line1, value.line2, value.landmark].filter(Boolean).join(', ');
+    const cityState = [value.city, value.state].filter(Boolean).join(', ');
+    const pin = value.pincode || value.pin || value.zip_code || value.postal;
+    const mid = [line1, cityState].filter(Boolean).join(', ');
+    if (pin) return mid ? `${mid} — ${pin}` : String(pin);
+    return mid || null;
+  }
+  return String(value);
+}
+
 async function findCustomerByMobile(client, mobile) {
   if (!mobile) return null;
   const r = await client.query(
@@ -493,7 +519,9 @@ exports.convertToTicket = async (req, res) => {
     }
 
     const custRes = await client.query(
-      `SELECT customer_id, name, company_name, email, phone FROM customers WHERE customer_id = $1`,
+      `SELECT customer_id, name, company_name, email, phone,
+              shipping_address, billing_address, address
+         FROM customers WHERE customer_id = $1`,
       [customerId]
     );
     if (!custRes.rows.length) {
@@ -501,6 +529,11 @@ exports.convertToTicket = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
     const cust = custRes.rows[0];
+    const ticketAddress = formatTicketAddress(
+      cust.shipping_address || cust.billing_address || cust.address
+    );
+    const ticketEmail = cust.email || null;
+    const ticketPhone = row.mobile_number || cust.phone || null;
 
     const serial = eligibility.serial || {};
     const exRes = await client.query(
@@ -524,34 +557,27 @@ exports.convertToTicket = async (req, res) => {
       processor: ex.processor || null,
     };
 
-    const subject = `QR support request #${row.id}`;
-    const remarks = [
-      subject,
-      '',
-      row.issue_description,
-      row.company_name ? `Company: ${row.company_name}` : null,
-      `Submitted by: ${row.customer_name} (${row.mobile_number})`,
-      `Device: ${ttspl}`,
-      'Source: QR / public support form',
-    ].filter(Boolean).join('\n');
+    // Customer-facing issue only — meta stays on the support_request row.
+    const issueRemarks = String(row.issue_description || '').trim();
 
-    // Same shape as CRM createTicket (complaint, open, unassigned).
+    // Same shape as CRM createTicket (complaint, open, unassigned) + autofilled address/contact.
     const ticketRes = await client.query(
       `INSERT INTO support_tickets (
          customer_id, customer_name, customer_phone, status, created_by, last_activity_at,
-         priority, top_level_remarks, ticket_phone_override, ticket_email, ticket_category,
-         ttspl_id, customer_portal_ticket
-       ) VALUES ($1,$2,$3,'open',$4,NOW(),$5,$6,$7,$8,$9,$10,FALSE)
+         priority, top_level_remarks, ticket_phone_override, ticket_email, ticket_address,
+         ticket_category, ttspl_id, customer_portal_ticket
+       ) VALUES ($1,$2,$3,'open',$4,NOW(),$5,$6,$7,$8,$9,$10,$11,FALSE)
        RETURNING id`,
       [
         customerId,
         cust.company_name || cust.name || row.customer_name,
-        row.mobile_number || cust.phone || null,
+        ticketPhone,
         req.user?.user_id || null,
         priority,
-        remarks,
-        row.mobile_number || null,
-        cust.email || null,
+        issueRemarks,
+        ticketPhone,
+        ticketEmail,
+        ticketAddress,
         category,
         ttspl,
       ]
@@ -571,7 +597,7 @@ exports.convertToTicket = async (req, res) => {
         ttspl,
         category,
         'QR support request',
-        row.issue_description,
+        issueRemarks,
         String(Math.floor(100000 + Math.random() * 900000)),
         specs.brand,
         specs.model,
