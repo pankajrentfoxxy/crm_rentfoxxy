@@ -175,8 +175,10 @@ export default function JobExecutionPage() {
         {allMandatoryDone ? 'Complete job' : `${remaining} step${remaining === 1 ? '' : 's'} remaining`}
       </Button>
       {mine && w.status !== 'COMPLETED' && w.status !== 'FAILED' && (
-        <Button size="touch" className="w-full" onClick={() => setPartOpen(true)}>Request a part</Button>
-        <Button variant="danger" size="touch" onClick={() => setFailOpen(true)}>Fail + retry</Button>
+        <>
+          <Button size="touch" className="w-full" onClick={() => setPartOpen(true)}>Request a part</Button>
+          <Button variant="danger" size="touch" onClick={() => setFailOpen(true)}>Fail + retry</Button>
+        </>
       )}
 
       {completeOpen && (
