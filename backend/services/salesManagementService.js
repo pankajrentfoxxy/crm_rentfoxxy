@@ -2138,16 +2138,57 @@ async function loadSerialInventorySpec({ serialId, serialNumber, ttspl } = {}) {
   const tt = ttspl ? String(ttspl).trim() : '';
   if (!sid && !sn && !tt) return null;
 
+  // Match SO Laptops tab / DC detail: extra → GRN received → VPD → inventory.
   const r = await pool.query(
     `SELECT vsn.serial_id, vsn.serial_number, vsn.inventory_asset_code,
-            COALESCE(vsn.extra->>'brand', vpd.brand, inv.brand) AS brand,
-            COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', vpd.model, inv.model) AS model,
-            COALESCE(vsn.extra->>'processor', vpd.processor, inv.processor) AS processor,
-            COALESCE(vsn.extra->>'generation', vpd.generation, inv.generation) AS generation,
-            COALESCE(vsn.extra->>'ram', vpd.ram, inv.ram) AS ram,
-            COALESCE(vsn.extra->>'storage', vpd.storage, inv.storage) AS storage,
-            COALESCE(vsn.extra->>'gpu', vpd.gpu, inv.gpu) AS gpu,
-            COALESCE(vsn.extra->>'screen_size', vpd.screen_size, inv.screen_size) AS screen_size
+            COALESCE(
+              NULLIF(TRIM(vsn.extra->>'brand'), ''),
+              NULLIF(TRIM(vsn.grn_received_config->>'brand'), ''),
+              NULLIF(TRIM(vpd.brand), ''),
+              NULLIF(TRIM(inv.brand), '')
+            ) AS brand,
+            COALESCE(
+              NULLIF(TRIM(vsn.extra->>'model'), ''),
+              NULLIF(TRIM(vsn.extra->>'model_name'), ''),
+              NULLIF(TRIM(vsn.grn_received_config->>'model'), ''),
+              NULLIF(TRIM(vpd.model), ''),
+              NULLIF(TRIM(inv.model), '')
+            ) AS model,
+            COALESCE(
+              NULLIF(TRIM(vsn.extra->>'processor'), ''),
+              NULLIF(TRIM(vsn.grn_received_config->>'processor'), ''),
+              NULLIF(TRIM(vpd.processor), ''),
+              NULLIF(TRIM(inv.processor), '')
+            ) AS processor,
+            COALESCE(
+              NULLIF(TRIM(vsn.extra->>'generation'), ''),
+              NULLIF(TRIM(vsn.grn_received_config->>'generation'), ''),
+              NULLIF(TRIM(vpd.generation), ''),
+              NULLIF(TRIM(inv.generation), '')
+            ) AS generation,
+            COALESCE(
+              NULLIF(TRIM(vsn.extra->>'ram'), ''),
+              NULLIF(TRIM(vsn.grn_received_config->>'ram'), ''),
+              NULLIF(TRIM(vpd.ram), ''),
+              NULLIF(TRIM(inv.ram), '')
+            ) AS ram,
+            COALESCE(
+              NULLIF(TRIM(vsn.extra->>'storage'), ''),
+              NULLIF(TRIM(vsn.extra->>'ssd'), ''),
+              NULLIF(TRIM(vsn.grn_received_config->>'storage'), ''),
+              NULLIF(TRIM(vpd.storage), ''),
+              NULLIF(TRIM(inv.storage), '')
+            ) AS storage,
+            COALESCE(
+              NULLIF(TRIM(vsn.extra->>'gpu'), ''),
+              NULLIF(TRIM(vpd.gpu), ''),
+              NULLIF(TRIM(inv.gpu), '')
+            ) AS gpu,
+            COALESCE(
+              NULLIF(TRIM(vsn.extra->>'screen_size'), ''),
+              NULLIF(TRIM(vpd.screen_size), ''),
+              NULLIF(TRIM(inv.screen_size), '')
+            ) AS screen_size
        FROM vendor_serial_numbers vsn
        LEFT JOIN vendor_product_details vpd
          ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id', '')::int

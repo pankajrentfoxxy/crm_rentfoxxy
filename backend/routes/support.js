@@ -203,6 +203,13 @@ router.get('/tech-bucket/laptops', getTechnicianLaptopBucket);
 router.patch('/replacement-orders/:orderId', requireSupportLead, updateReplacementOrder);
 router.post('/replacement-orders/:orderId/deliver', requireSupportLead, deliverReplacement);
 
+const supportRequestCtrl = require('../controllers/supportRequestController');
+router.get('/requests', supportRequestCtrl.listRequests);
+router.get('/requests/pending-count', supportRequestCtrl.pendingCount);
+router.get('/requests/:id', supportRequestCtrl.getRequest);
+router.patch('/requests/:id', requireSupportLead, supportRequestCtrl.updateRequestStatus);
+router.post('/requests/:id/convert', requireSupportLead, supportRequestCtrl.convertToTicket);
+
 router.post('/admin/ensure-schema', requireSupportLead, async (req, res) => {
     try {
         await ensureSupportSchema();

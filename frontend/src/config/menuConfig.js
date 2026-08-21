@@ -310,6 +310,13 @@ export const MENU_GROUPS = [
         countKey: 'open_tickets',
       },
       {
+        icon: Headphones,
+        label: 'Support Requests',
+        path: '/support/requests',
+        section: 'support_requests',
+        countKey: 'support_requests',
+      },
+      {
         icon: RefreshCw,
         label: 'Replacement Sales Orders',
         path: '/sales-pipeline/sales-orders-replacement',

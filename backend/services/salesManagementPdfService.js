@@ -185,15 +185,17 @@ async function resolveDcUnitRows(lines, dcNumber) {
       const ttspl = parts[2] || null;
       const priced = lookupSerialRate(serialLookup, { serialId, serialNumber, ttspl });
       const spec = await loadSerialInventorySpec({ serialId, serialNumber, ttspl }) || {};
+      // Hardware from serial/QC inventory first; SO line config only fills gaps.
+      // (Previously SO line won and every unit looked identical on multi-config DCs.)
       rows.push({
-        brand: priced?.brand || spec.brand || line.brand,
-        model_name: priced?.model_name || spec.model || line.model_name,
-        processor: priced?.processor || spec.processor || line.processor,
-        generation: priced?.generation || spec.generation || line.generation,
-        ram: priced?.ram || spec.ram || line.ram,
-        storage: priced?.storage || spec.storage || line.storage,
-        gpu: priced?.gpu || spec.gpu || line.gpu,
-        screen_size: priced?.screen_size || spec.screen_size || line.screen_size,
+        brand: spec.brand || priced?.brand || line.brand,
+        model_name: spec.model || priced?.model_name || line.model_name,
+        processor: spec.processor || priced?.processor || line.processor,
+        generation: spec.generation || priced?.generation || line.generation,
+        ram: spec.ram || priced?.ram || line.ram,
+        storage: spec.storage || priced?.storage || line.storage,
+        gpu: spec.gpu || priced?.gpu || line.gpu,
+        screen_size: spec.screen_size || priced?.screen_size || line.screen_size,
         serial: spec.serial_number || serialNumber,
         ttspl: spec.inventory_asset_code || ttspl || '',
         rate: priced?.rate ?? (rateMap ? rateForDcLine(line, rateMap) : line.rate),

@@ -2318,16 +2318,58 @@ exports.getDeliveryChallan = async (req, res) => {
     // Resolve full laptop specs for every attached serial. Migrated units often
     // have empty extra/vendor_product_details, so fall back to the inventory
     // table (the authoritative spec store for legacy stock).
+    // Same priority as SO Laptops tab: serial/QC hardware first, then inventory,
+    // then ordered SO line only as last resort (never overwrite distinct units).
     const specSelect = `
       SELECT vsn.serial_id, vsn.serial_number, vsn.inventory_asset_code,
-             COALESCE(vsn.extra->>'brand', vpd.brand, inv.brand) AS brand,
-             COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', vpd.model, inv.model) AS model,
-             COALESCE(vsn.extra->>'processor', vpd.processor, inv.processor) AS processor,
-             COALESCE(vsn.extra->>'generation', vpd.generation, inv.generation) AS generation,
-             COALESCE(vsn.extra->>'ram', vpd.ram, inv.ram) AS ram,
-             COALESCE(vsn.extra->>'storage', vpd.storage, inv.storage) AS storage,
-             COALESCE(vsn.extra->>'gpu', vpd.gpu, inv.gpu) AS gpu,
-             COALESCE(vsn.extra->>'screen_size', vpd.screen_size, inv.screen_size) AS screen_size,
+             COALESCE(
+               NULLIF(TRIM(vsn.extra->>'brand'), ''),
+               NULLIF(TRIM(vsn.grn_received_config->>'brand'), ''),
+               NULLIF(TRIM(vpd.brand), ''),
+               NULLIF(TRIM(inv.brand), '')
+             ) AS brand,
+             COALESCE(
+               NULLIF(TRIM(vsn.extra->>'model'), ''),
+               NULLIF(TRIM(vsn.extra->>'model_name'), ''),
+               NULLIF(TRIM(vsn.grn_received_config->>'model'), ''),
+               NULLIF(TRIM(vpd.model), ''),
+               NULLIF(TRIM(inv.model), '')
+             ) AS model,
+             COALESCE(
+               NULLIF(TRIM(vsn.extra->>'processor'), ''),
+               NULLIF(TRIM(vsn.grn_received_config->>'processor'), ''),
+               NULLIF(TRIM(vpd.processor), ''),
+               NULLIF(TRIM(inv.processor), '')
+             ) AS processor,
+             COALESCE(
+               NULLIF(TRIM(vsn.extra->>'generation'), ''),
+               NULLIF(TRIM(vsn.grn_received_config->>'generation'), ''),
+               NULLIF(TRIM(vpd.generation), ''),
+               NULLIF(TRIM(inv.generation), '')
+             ) AS generation,
+             COALESCE(
+               NULLIF(TRIM(vsn.extra->>'ram'), ''),
+               NULLIF(TRIM(vsn.grn_received_config->>'ram'), ''),
+               NULLIF(TRIM(vpd.ram), ''),
+               NULLIF(TRIM(inv.ram), '')
+             ) AS ram,
+             COALESCE(
+               NULLIF(TRIM(vsn.extra->>'storage'), ''),
+               NULLIF(TRIM(vsn.extra->>'ssd'), ''),
+               NULLIF(TRIM(vsn.grn_received_config->>'storage'), ''),
+               NULLIF(TRIM(vpd.storage), ''),
+               NULLIF(TRIM(inv.storage), '')
+             ) AS storage,
+             COALESCE(
+               NULLIF(TRIM(vsn.extra->>'gpu'), ''),
+               NULLIF(TRIM(vpd.gpu), ''),
+               NULLIF(TRIM(inv.gpu), '')
+             ) AS gpu,
+             COALESCE(
+               NULLIF(TRIM(vsn.extra->>'screen_size'), ''),
+               NULLIF(TRIM(vpd.screen_size), ''),
+               NULLIF(TRIM(inv.screen_size), '')
+             ) AS screen_size,
              vsn.inventory_status
       FROM vendor_serial_numbers vsn
       LEFT JOIN vendor_product_details vpd
@@ -2376,14 +2418,14 @@ exports.getDeliveryChallan = async (req, res) => {
         return {
           ttspl: d.inventory_asset_code || e.ttsplId || e.serialNumber,
           serial_number: d.serial_number || e.serialNumber,
-          brand: priced?.brand || d.brand || line.brand || '',
-          model: priced?.model_name || d.model || line.model_name || '',
-          processor: priced?.processor || d.processor || '',
-          generation: priced?.generation || d.generation || '',
-          ram: priced?.ram || d.ram || '',
-          storage: priced?.storage || d.storage || '',
-          gpu: priced?.gpu || d.gpu || '',
-          screen_size: priced?.screen_size || d.screen_size || '',
+          brand: d.brand || priced?.brand || line.brand || '',
+          model: d.model || priced?.model_name || line.model_name || '',
+          processor: d.processor || priced?.processor || '',
+          generation: d.generation || priced?.generation || '',
+          ram: d.ram || priced?.ram || '',
+          storage: d.storage || priced?.storage || '',
+          gpu: d.gpu || priced?.gpu || '',
+          screen_size: d.screen_size || priced?.screen_size || '',
           status: d.inventory_status || '',
           remark,
         };
@@ -2899,15 +2941,61 @@ exports.createDcsByAddress = async (req, res) => {
       `SELECT sos.allocation_id, sos.serial_id, sos.line_id, sos.qc_status, sos.status, sos.qc_ticket_id,
               sos.ttspl_id, sos.serial_number,
               vsn.serial_number AS vsn_serial, vsn.inventory_asset_code AS ttspl_id_vsn,
-              COALESCE(vsn.extra->>'brand', vpd.brand, '') AS brand,
-              COALESCE(vsn.extra->>'model', vsn.extra->>'model_name', vpd.model, '') AS model,
-              COALESCE(vsn.extra->>'processor', vpd.processor, '') AS processor,
-              COALESCE(vsn.extra->>'generation', vpd.generation, '') AS generation,
-              COALESCE(vsn.extra->>'ram', vpd.ram, '') AS ram,
-              COALESCE(vsn.extra->>'storage', vpd.storage, '') AS storage
+              COALESCE(
+                NULLIF(TRIM(vsn.extra->>'brand'), ''),
+                NULLIF(TRIM(vsn.grn_received_config->>'brand'), ''),
+                NULLIF(TRIM(vpd.brand), ''),
+                NULLIF(TRIM(inv.brand), ''),
+                ''
+              ) AS brand,
+              COALESCE(
+                NULLIF(TRIM(vsn.extra->>'model'), ''),
+                NULLIF(TRIM(vsn.extra->>'model_name'), ''),
+                NULLIF(TRIM(vsn.grn_received_config->>'model'), ''),
+                NULLIF(TRIM(vpd.model), ''),
+                NULLIF(TRIM(inv.model), ''),
+                ''
+              ) AS model,
+              COALESCE(
+                NULLIF(TRIM(vsn.extra->>'processor'), ''),
+                NULLIF(TRIM(vsn.grn_received_config->>'processor'), ''),
+                NULLIF(TRIM(vpd.processor), ''),
+                NULLIF(TRIM(inv.processor), ''),
+                ''
+              ) AS processor,
+              COALESCE(
+                NULLIF(TRIM(vsn.extra->>'generation'), ''),
+                NULLIF(TRIM(vsn.grn_received_config->>'generation'), ''),
+                NULLIF(TRIM(vpd.generation), ''),
+                NULLIF(TRIM(inv.generation), ''),
+                ''
+              ) AS generation,
+              COALESCE(
+                NULLIF(TRIM(vsn.extra->>'ram'), ''),
+                NULLIF(TRIM(vsn.grn_received_config->>'ram'), ''),
+                NULLIF(TRIM(vpd.ram), ''),
+                NULLIF(TRIM(inv.ram), ''),
+                ''
+              ) AS ram,
+              COALESCE(
+                NULLIF(TRIM(vsn.extra->>'storage'), ''),
+                NULLIF(TRIM(vsn.extra->>'ssd'), ''),
+                NULLIF(TRIM(vsn.grn_received_config->>'storage'), ''),
+                NULLIF(TRIM(vpd.storage), ''),
+                NULLIF(TRIM(inv.storage), ''),
+                ''
+              ) AS storage
          FROM sales_order_serials sos
          LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = sos.serial_id
          LEFT JOIN vendor_product_details vpd ON vpd.product_detail_id = NULLIF(vsn.extra->>'product_detail_id','')::int
+         LEFT JOIN LATERAL (
+           SELECT i.brand, i.model, i.processor, i.generation, i.ram, i.storage
+             FROM inventory i
+            WHERE i.serial_number = vsn.serial_number
+               OR i.machine_number = vsn.serial_number
+               OR i.machine_number = vsn.inventory_asset_code
+            LIMIT 1
+         ) inv ON TRUE
         WHERE sos.allocation_id = ANY($1::int[])
           AND sos.sales_order_number = $2
           AND sos.status = 'attached'`,

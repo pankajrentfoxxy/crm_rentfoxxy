@@ -58,6 +58,7 @@ export default function SupportShell() {
               <div className="support-nav-label">Overview</div>
               <NavItem to="/support/overview" icon={LayoutDashboard} label="Overview" badge={badges.open_tickets} />
               <NavItem to="/support/tickets" icon={Ticket} label="All tickets" />
+              <NavItem to="/support/requests" icon={ClipboardList} label="Support Requests" badge={badges.support_requests} badgeDanger />
               <NavItem to="/support/my-tickets" icon={ClipboardList} label="My tickets" badge={badges.my_open} badgeDanger />
 
               <div className="support-nav-label">Work</div>

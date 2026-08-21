@@ -102,6 +102,7 @@ app.use('/api/qc2', require('./routes/qc2'));
 app.use('/api/dispatch-qc-capture', require('./routes/dispatchQcCapturePublic'));
 app.use('/api/dispatch-qc', require('./routes/dispatchQc'));
 app.use('/api/grn-access-public', require('./routes/grnAccessPublic'));
+app.use('/api/support-public', require('./routes/supportRequestPublic'));
 app.use('/api/grn-access', require('./routes/grnAccess'));
 app.use('/api/leads', require('./routes/leads'));
 app.use('/api/customer-documents', require('./routes/customerDocuments'));

@@ -566,7 +566,8 @@ const navBadges = async (user) => {
                 (SELECT COUNT(*)::int FROM support_part_requests spr
                     WHERE spr.status IN ('pending','return_requested')
                        OR (spr.reassign_requested_at IS NOT NULL AND spr.status IN ('issued','return_requested'))
-                ) AS support_part_requests
+                ) AS support_part_requests,
+                (SELECT COUNT(*)::int FROM support_requests WHERE status = 'pending') AS support_requests
             `,
             [oh]
         ));
@@ -579,7 +580,8 @@ const navBadges = async (user) => {
                     AND EXTRACT(EPOCH FROM (NOW() - ${activityAtSql})) / 3600.0 >= $1) AS overdue_tickets,
                 (SELECT COUNT(*)::int FROM support_tickets t WHERE ${ACTIVE_TICKET_STATUSES}
                     AND EXISTS (SELECT 1 FROM support_ticket_items i WHERE i.ticket_id = t.id AND i.assigned_to IS NULL AND i.status NOT IN ('resolved','closed','cancelled'))) AS pending_assign,
-                0::int AS support_part_requests
+                0::int AS support_part_requests,
+                0::int AS support_requests
             `,
             [oh]
         ));

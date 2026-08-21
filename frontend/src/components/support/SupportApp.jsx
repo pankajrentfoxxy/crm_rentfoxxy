@@ -16,6 +16,7 @@ import MyDeliveriesPage from '../../features/sales-pipeline/pages/MyDeliveriesPa
 import TechnicianDeliveryBucketPage from '../../features/sales-pipeline/pages/TechnicianDeliveryBucketPage';
 import SupportTechBucketPage from '../../features/support/pages/SupportTechBucketPage';
 import SupportPartsQueuePage from '../../features/support/pages/SupportPartsQueuePage';
+import SupportRequestsPage from '../../features/support/pages/SupportRequestsPage';
 import ChallanViewPage from '../../features/support/pages/ChallanViewPage';
 
 function SupportHomeRedirect() {
@@ -69,6 +70,7 @@ export default function SupportApp() {
         <Route path="dashboard" element={<Navigate to="/support/overview" replace />} />
         <Route path="stats" element={<StatsOnly><SupportStatsPage /></StatsOnly>} />
         <Route path="tickets" element={<SupportTicketsView view="all" splitSections showFilters enhancedList />} />
+        <Route path="requests" element={<SupportRequestsPage />} />
         <Route path="pending-assign" element={<SupportTicketsView view="pending_assign" showFilters />} />
         <Route path="overdue" element={<SupportTicketsView view="overdue" showFilters />} />
         <Route path="pickups" element={<SupportTicketsView view="pickups" showFilters />} />
