@@ -44,8 +44,9 @@ const NAV = [
   {
     group: 'Field',
     items: [
-      { to: 'bucket', label: 'My bucket', icon: Smartphone, section: 'support_bucket' },
-      { to: 'returns/receipt', label: 'Warehouse receipt', icon: ScanLine, section: 'support_pickup_return' },
+      { to: 'bucket', label: 'My jobs', icon: Smartphone, section: 'support_bucket' },
+      { to: 'my-parts', label: 'My parts', icon: Package, section: 'support_parts_request' },
+      { to: 'warehouse/receipts', label: 'Warehouse receipt', icon: ScanLine, section: 'support_warehouse_receipt' },
     ],
   },
   {

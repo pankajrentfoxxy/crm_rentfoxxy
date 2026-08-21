@@ -277,28 +277,72 @@ exports.listWorkOrders = async (req, res) => {
       params.push(Number(req.query.ticket_id));
       conds.push(`w.ticket_id = $${params.length}`);
     }
+    const { applyTechnicianTicketScope, isFieldTechnician } = require('../services/supportTicketScope');
+    applyTechnicianTicketScope(req.user, conds, params, 't');
+    if (isFieldTechnician(req.user) && req.query.assigned_to !== 'ME') {
+      params.push(req.user.user_id);
+      conds.push(`w.assigned_to = $${params.length}`);
+    }
+    if (req.query.q) {
+      params.push(`%${String(req.query.q).trim()}%`);
+      conds.push(`(
+        w.wo_number ILIKE $${params.length}
+        OR t.ticket_number ILIKE $${params.length}
+        OR COALESCE(c.company_name, c.name) ILIKE $${params.length}
+        OR w.document_number ILIKE $${params.length}
+        OR w.courier_awb ILIKE $${params.length}
+        OR EXISTS (
+          SELECT 1 FROM support_work_order_assets lq
+          JOIN support_ticket_assets aq ON aq.line_id = lq.line_id
+          WHERE lq.wo_id = w.wo_id
+            AND (aq.ttspl_id ILIKE $${params.length} OR aq.serial_number ILIKE $${params.length})
+        )
+      )`);
+    }
     const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+    const from = `FROM support_work_orders w
+         JOIN support_tickets_v2 t ON t.ticket_id = w.ticket_id
+         LEFT JOIN customers c ON c.customer_id = t.customer_id
+         LEFT JOIN users u ON u.user_id = w.assigned_to`;
     const count = await pool.query(
-      `SELECT COUNT(*)::int AS n FROM support_work_orders w ${where}`,
+      `SELECT COUNT(*)::int AS n ${from} ${where}`,
       params
     );
     params.push(limit, offset);
+    const { serializeWorkOrder } = require('../services/supportWoSerialize');
     const rows = await pool.query(
       `SELECT w.*, t.ticket_number, t.priority, t.customer_id,
               COALESCE(c.company_name, c.name) AS customer_name,
               u.name AS assigned_to_name
-         FROM support_work_orders w
-         JOIN support_tickets_v2 t ON t.ticket_id = w.ticket_id
-         LEFT JOIN customers c ON c.customer_id = t.customer_id
-         LEFT JOIN users u ON u.user_id = w.assigned_to
+         ${from}
          ${where}
         ORDER BY w.created_at ASC, w.wo_id ASC
         LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params
     );
+    const woIds = rows.rows.map((r) => r.wo_id);
+    let assetsByWo = {};
+    if (woIds.length) {
+      const ast = await pool.query(
+        `SELECT l.wo_id, a.ttspl_id, a.serial_number, a.line_id
+           FROM support_work_order_assets l
+           JOIN support_ticket_assets a ON a.line_id = l.line_id
+          WHERE l.wo_id = ANY($1)`,
+        [woIds]
+      );
+      for (const a of ast.rows) {
+        (assetsByWo[a.wo_id] || (assetsByWo[a.wo_id] = [])).push(a);
+      }
+    }
     res.json({
       success: true,
-      rows: rows.rows,
+      rows: rows.rows.map((r) => ({
+        ...serializeWorkOrder(r),
+        ticket_number: r.ticket_number,
+        customer_name: r.customer_name,
+        assigned_to_name: r.assigned_to_name,
+        assets: assetsByWo[r.wo_id] || [],
+      })),
       pagination: {
         page,
         limit,

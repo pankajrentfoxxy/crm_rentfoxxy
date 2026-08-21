@@ -33,35 +33,49 @@ async function tx(fn) {
 exports.create = async (req, res) => {
   try {
     const row = await tx((c) => wo.createWorkOrder(c, Number(req.params.id), req.body || {}, req.user.user_id));
-    res.status(201).json({ success: true, wo: row, wo_id: row.wo_id });
+    res.status(201).json({ success: true, wo: wo.serializeWorkOrder(row), wo_id: row.wo_id });
   } catch (e) { bad(res, e); }
 };
 
 exports.getOne = async (req, res) => {
   try {
     const id = Number(req.params.woId);
+    const { assertOwnWorkOrder } = require('../services/supportTicketScope');
+    await assertOwnWorkOrder(pool, req.user, id);
     const row = await wo.loadWo(pool, id);
-    const ticketBits = (await pool.query(
-      `SELECT site_label, site_pincode, contact_name, contact_phone, customer_id
-         FROM support_tickets_v2 WHERE ticket_id = $1`,
+    const ticket = (await pool.query(
+      `SELECT t.ticket_number, t.priority, t.sla_resolution_due_at, t.internal_note,
+              t.site_label, t.site_pincode, t.contact_name, t.contact_phone, t.customer_id,
+              COALESCE(c.company_name, c.name) AS customer_name
+         FROM support_tickets_v2 t
+         LEFT JOIN customers c ON c.customer_id = t.customer_id
+        WHERE t.ticket_id = $1`,
       [row.ticket_id]
     )).rows[0] || {};
-    Object.assign(row, {
-      site_label: ticketBits.site_label,
-      site_pincode: ticketBits.site_pincode,
-      contact_name: ticketBits.contact_name,
-      contact_phone: ticketBits.contact_phone,
-    });
     const [steps, assets, actions] = await Promise.all([
       pool.query(
-        `SELECT * FROM support_work_order_steps WHERE wo_id = $1 ORDER BY sort_order`,
-        [id]
+        `SELECT s.*, cfg.help_text, cfg.per_asset, cfg.offline_safe, cfg.method_scope
+           FROM support_work_order_steps s
+           LEFT JOIN support_work_order_type_config cfg
+             ON cfg.wo_type = $2 AND cfg.step_code = s.step_code
+          WHERE s.wo_id = $1
+          ORDER BY s.sort_order, s.asset_seq`,
+        [id, row.wo_type]
       ),
       pool.query(
-        `SELECT a.*, l.wo_asset_id
+        `SELECT a.*, l.wo_asset_id,
+                rt.name AS reported_type_name, rs.name AS reported_subtype_name,
+                ri.name AS reported_issue_name,
+                COALESCE(vsn.extra->>'brand','') AS brand,
+                COALESCE(vsn.extra->>'model', vsn.extra->>'model_name','') AS model,
+                COALESCE(vsn.extra->>'assigned_employee','') AS assigned_employee
            FROM support_work_order_assets l
            JOIN support_ticket_assets a ON a.line_id = l.line_id
-          WHERE l.wo_id = $1`,
+           LEFT JOIN support_issue_catalog rt ON rt.catalog_id = a.reported_type_id
+           LEFT JOIN support_issue_catalog rs ON rs.catalog_id = a.reported_subtype_id
+           LEFT JOIN support_issue_catalog ri ON ri.catalog_id = a.reported_issue_id
+           LEFT JOIN vendor_serial_numbers vsn ON vsn.serial_id = a.serial_id
+          WHERE l.wo_id = $1 ORDER BY a.line_code`,
         [id]
       ),
       pool.query(
@@ -72,27 +86,48 @@ exports.getOne = async (req, res) => {
         [id]
       ),
     ]);
-    const partReq = await pool.query(
-      `SELECT request_id, status_v2, request_number, collect_old_part
+    const partReqs = await pool.query(
+      `SELECT request_id, status_v2, request_number, collect_old_part, part_id
          FROM part_requests WHERE work_order_id = $1 OR return_wo_id = $1
-         ORDER BY request_id DESC LIMIT 1`,
+         ORDER BY request_id DESC`,
       [id]
     ).catch(() => ({ rows: [] }));
+    const attachments = await pool.query(
+      `SELECT attachment_id, line_id, kind, file_path
+         FROM support_attachments
+        WHERE ticket_id = $1 AND kind = 'PHOTO_CUSTOMER'`,
+      [row.ticket_id]
+    ).catch(() => ({ rows: [] }));
+    const serialIds = assets.rows.map((a) => a.serial_id).filter(Boolean);
+    let history = [];
+    if (serialIds.length) {
+      history = (await pool.query(
+        `SELECT w.wo_number, w.wo_type, w.completed_at, w.outcome
+           FROM support_work_orders w
+           JOIN support_work_order_assets l ON l.wo_id = w.wo_id
+           JOIN support_ticket_assets a ON a.line_id = l.line_id
+          WHERE a.serial_id = ANY($1) AND w.status = 'COMPLETED' AND w.wo_id <> $2
+          ORDER BY w.completed_at DESC NULLS LAST LIMIT 3`,
+        [serialIds, id]
+      )).rows;
+    }
     const skips = await wo.typeSkipsTravel(pool, row.wo_type);
-    const conditions = row.wo_type === 'RETURN_PICKUP'
-      ? (await pool.query(
-        `SELECT * FROM support_asset_condition WHERE wo_id = $1 ORDER BY serial_id`,
-        [id]
-      ).catch(() => ({ rows: [] }))).rows
-      : [];
+    const conditions = (await pool.query(
+      `SELECT * FROM support_asset_condition WHERE wo_id = $1 ORDER BY serial_id`,
+      [id]
+    ).catch(() => ({ rows: [] }))).rows;
     res.json({
       success: true,
-      wo: { ...row, skips_travel: skips },
+      wo: wo.serializeWorkOrder({ ...row, ...ticket, skips_travel: skips }),
+      ticket,
       steps: steps.rows,
       assets: assets.rows,
       actions: actions.rows,
       conditions,
-      part_request: partReq.rows[0] || null,
+      attachments: attachments.rows,
+      history,
+      part_requests: partReqs.rows,
+      part_request: partReqs.rows[0] || null,
     });
   } catch (e) { bad(res, e); }
 };
@@ -126,14 +161,14 @@ exports.assign = async (req, res) => {
     if (row && row.assigned_to) {
       notifyTechnicianVisit(pool, row, 'TECHNICIAN_ASSIGNED').catch((e) => console.error('tech assigned notify:', e));
     }
-    res.json({ success: true, wo: row });
+    res.json({ success: true, wo: wo.serializeWorkOrder(row) });
   } catch (e) { bad(res, e); }
 };
 
 exports.accept = async (req, res) => {
   try {
     const row = await tx((c) => wo.advance(c, Number(req.params.woId), 'ACCEPTED', req.user.user_id));
-    res.json({ success: true, wo: row, wo_id: row.wo_id });
+    res.json({ success: true, wo: wo.serializeWorkOrder(row), wo_id: row.wo_id });
   } catch (e) { bad(res, e); }
 };
 
@@ -141,21 +176,28 @@ exports.enRoute = async (req, res) => {
   try {
     const row = await tx((c) => wo.advance(c, Number(req.params.woId), 'EN_ROUTE', req.user.user_id));
     notifyTechnicianVisit(pool, row, 'TECHNICIAN_EN_ROUTE').catch((e) => console.error('en-route notify:', e));
-    res.json({ success: true, wo: row, wo_id: row.wo_id });
+    res.json({ success: true, wo: wo.serializeWorkOrder(row), wo_id: row.wo_id });
   } catch (e) { bad(res, e); }
 };
 
 exports.onSite = async (req, res) => {
   try {
-    const row = await tx((c) => wo.advance(c, Number(req.params.woId), 'ON_SITE', req.user.user_id));
-    res.json({ success: true, wo: row, wo_id: row.wo_id });
+    const row = await tx(async (c) => {
+      const advanced = await wo.advance(c, Number(req.params.woId), 'ON_SITE', req.user.user_id);
+      if (String(advanced.method || 'TECHNICIAN').toUpperCase() === 'TECHNICIAN') {
+        const otp = require('../services/supportOtpService');
+        await otp.sendOtp(c, advanced.wo_id, req.user.user_id, {}).catch((e) => console.error('otp on-site:', e));
+      }
+      return advanced;
+    });
+    res.json({ success: true, wo: wo.serializeWorkOrder(row), wo_id: row.wo_id });
   } catch (e) { bad(res, e); }
 };
 
 exports.start = async (req, res) => {
   try {
     const row = await tx((c) => wo.advance(c, Number(req.params.woId), 'IN_PROGRESS', req.user.user_id));
-    res.json({ success: true, wo: row, wo_id: row.wo_id });
+    res.json({ success: true, wo: wo.serializeWorkOrder(row), wo_id: row.wo_id });
   } catch (e) { bad(res, e); }
 };
 
@@ -167,6 +209,7 @@ exports.completeStep = async (req, res) => {
       payload: req.body || {},
       userId: req.user.user_id,
     }));
+    if (result.wo) result.wo = wo.serializeWorkOrder(result.wo);
     res.json({ success: true, ...result, wo_id: Number(req.params.woId) });
   } catch (e) { bad(res, e); }
 };
@@ -187,7 +230,7 @@ exports.complete = async (req, res) => {
       }
     }
     const row = await tx((c) => wo.completeWorkOrder(c, Number(req.params.woId), req.body || {}, req.user.user_id));
-    res.json({ success: true, wo: row, wo_id: row.wo_id });
+    res.json({ success: true, wo: wo.serializeWorkOrder(row), wo_id: row.wo_id });
   } catch (e) { bad(res, e); }
 };
 
@@ -201,7 +244,39 @@ exports.fail = async (req, res) => {
 exports.cancel = async (req, res) => {
   try {
     const row = await tx((c) => wo.cancelWorkOrder(c, Number(req.params.woId), req.user.user_id, req.body.reason));
-    res.json({ success: true, wo: row });
+    res.json({ success: true, wo: wo.serializeWorkOrder(row) });
+  } catch (e) { bad(res, e); }
+};
+
+exports.sendOtp = async (req, res) => {
+  try {
+    const otp = require('../services/supportOtpService');
+    const out = await tx((c) => otp.sendOtp(c, Number(req.params.woId), req.user.user_id, req.body || {}));
+    res.json({ success: true, ...out });
+  } catch (e) { bad(res, e); }
+};
+
+exports.resendOtp = async (req, res) => {
+  try {
+    const otp = require('../services/supportOtpService');
+    const out = await tx((c) => otp.sendOtp(c, Number(req.params.woId), req.user.user_id, { ...(req.body || {}), resend: true }));
+    res.json({ success: true, ...out });
+  } catch (e) { bad(res, e); }
+};
+
+exports.revealOtp = async (req, res) => {
+  try {
+    const otp = require('../services/supportOtpService');
+    const out = await tx((c) => otp.revealOtp(c, Number(req.params.woId), req.user.user_id, req.body && req.body.reason));
+    res.json({ success: true, ...out });
+  } catch (e) { bad(res, e); }
+};
+
+exports.bypassOtp = async (req, res) => {
+  try {
+    const otp = require('../services/supportOtpService');
+    const out = await tx((c) => otp.requestBypass(c, Number(req.params.woId), req.user.user_id, req.body && req.body.reason));
+    res.json({ success: true, ...out });
   } catch (e) { bad(res, e); }
 };
 

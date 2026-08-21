@@ -33,17 +33,12 @@ async function onCreate(client, wo) {
     }
   }
   const dcNumber = await generateReturnDc(client, wo);
-  const otp = String(Math.floor(100000 + Math.random() * 900000));
-  await client.query(
-    `UPDATE support_work_orders SET customer_otp = $2, updated_at = NOW() WHERE wo_id = $1`,
-    [wo.wo_id, otp]
-  );
   await client.query(
     `UPDATE support_work_order_steps SET status = 'DONE', completed_at = NOW(), payload = $2
       WHERE wo_id = $1 AND step_code = 'DOC_GENERATED'`,
     [wo.wo_id, JSON.stringify({ document_number: dcNumber })]
   );
-  return { document_number: dcNumber, customer_otp: otp };
+  return { document_number: dcNumber };
 }
 
 async function onAssign() { return null; }
@@ -61,12 +56,28 @@ async function onStep(client, wo, step, payload) {
     );
   }
   if (wo.floor_ticket_id) return { floor_ticket_id: wo.floor_ticket_id };
+  const t = (await client.query(
+    `SELECT t.ticket_number, COALESCE(c.company_name,c.name) AS customer_name, a.notes
+       FROM support_tickets_v2 t
+       JOIN support_ticket_assets a ON a.ticket_id = t.ticket_id
+       LEFT JOIN customers c ON c.customer_id = t.customer_id
+      WHERE t.ticket_id = $1 AND a.line_id = $2`,
+    [wo.ticket_id, a.line_id]
+  )).rows[0] || {};
+  const { pauseAtRepairCentre } = require('../supportRepairLoopService');
   const ft = await createFloorTicketFromSupportPickup(client, {
     ttspl_id: a.ttspl_id,
     unique_serial_number: a.ttspl_id,
     serial_number: a.serial_number,
     pickup_type: 'repair',
+    support_ticket_id: wo.ticket_id,
+    support_wo_id: wo.wo_id,
+    support_line_id: a.line_id,
+    support_origin: 'REPAIR_PICKUP',
+    support_customer_name: t.customer_name,
+    support_reported_issue: t.notes,
   }, null);
+  await pauseAtRepairCentre(client, wo.ticket_id);
   if (ft && ft.ticket_id) {
     await client.query(
       `UPDATE support_work_orders SET floor_ticket_id = $2, updated_at = NOW() WHERE wo_id = $1`,

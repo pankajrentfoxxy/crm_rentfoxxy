@@ -913,7 +913,14 @@ exports.moveToNextStage = async (req, res) => {
     let isCompleted = false;
     let successMessage = `Ticket moved to ${nextStage.stage_name}`;
 
-    if (nextStage.stage_name === 'Inventory') {
+    if (nextStage.stage_name === 'Inventory' && ticket.customer_owned) {
+      isCompleted = true;
+      successMessage = 'Customer machine ready for dispatch — not returned to rentable stock';
+      if (ticket.support_ticket_id) {
+        const loop = require('../services/supportRepairLoopService');
+        await loop.onFloorTicketCompleted(pool, ticket, req.user.user_id);
+      }
+    } else if (nextStage.stage_name === 'Inventory') {
       isCompleted = true;
       successMessage = 'Ticket moved to Inventory and marked as Ready Stock';
 
@@ -930,6 +937,10 @@ exports.moveToNextStage = async (req, res) => {
           const qcPass = await applyGrnVendorQcPassOnTicketComplete(pool, ticket, req.user.user_id);
           if (qcPass.applied) {
             successMessage = 'Ticket completed — laptop marked QC Passed';
+          }
+          if (ticket.support_ticket_id) {
+            const loop = require('../services/supportRepairLoopService');
+            await loop.onFloorTicketCompleted(pool, ticket, req.user.user_id);
           }
         } catch (grnQcErr) {
           console.error('GRN vendor QC pass on ticket complete failed:', grnQcErr);

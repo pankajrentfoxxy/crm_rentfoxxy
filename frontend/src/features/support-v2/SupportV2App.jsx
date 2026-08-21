@@ -20,6 +20,7 @@ import ReportsPage from './pages/ReportsPage';
 import SettingsPage from './pages/SettingsPage';
 import SupportChargesPage from './pages/SupportChargesPage';
 import AttendancePage from './pages/AttendancePage';
+import MyPartsPage from './pages/MyPartsPage';
 import SupportV2IndexRedirect from './SupportV2IndexRedirect';
 
 const g = (section, node) => <ProtectedRoute section={section} action="view">{node}</ProtectedRoute>;
@@ -38,8 +39,11 @@ export default function SupportV2App() {
         <Route path="queue" element={g('support_tickets', <TicketQueuePage />)} />
         <Route path="tickets/new" element={g('support_tickets', <NewTicketPage />)} />
         <Route path="returns/bulk" element={<ProtectedRoute section="support_pickup_return" action="create"><BulkReturnPage /></ProtectedRoute>} />
-        <Route path="returns/receipt/:woId" element={<ProtectedRoute section="support_pickup_return" action="view"><WarehouseReceiptPage /></ProtectedRoute>} />
-        <Route path="returns/receipt" element={<ProtectedRoute section="support_pickup_return" action="view"><WarehouseReceiptPage /></ProtectedRoute>} />
+        <Route path="returns/receipt/:woId" element={<ProtectedRoute section="support_warehouse_receipt" action="view"><WarehouseReceiptPage /></ProtectedRoute>} />
+        <Route path="returns/receipt" element={<ProtectedRoute section="support_warehouse_receipt" action="view"><WarehouseReceiptPage /></ProtectedRoute>} />
+        <Route path="warehouse/receipts/:woId" element={<ProtectedRoute section="support_warehouse_receipt" action="view"><WarehouseReceiptPage /></ProtectedRoute>} />
+        <Route path="warehouse/receipts" element={<ProtectedRoute section="support_warehouse_receipt" action="view"><WarehouseReceiptPage /></ProtectedRoute>} />
+        <Route path="my-parts" element={g('support_parts_request', <MyPartsPage />)} />
         <Route path="tickets/:id" element={g('support_tickets', <TicketDetailPage />)} />
         <Route path="jobs/:woId" element={<ProtectedRoute sections={['support_bucket', 'support_work_orders']} action="view"><JobExecutionPage /></ProtectedRoute>} />
         <Route path="dispatch" element={g('support_dispatch', <DispatchBoardPage />)} />

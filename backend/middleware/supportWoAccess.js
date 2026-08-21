@@ -45,7 +45,11 @@ function requireOwnWo() {
       );
       if (!r.rows[0]) return res.status(404).json({ success: false, message: 'Work order not found' });
       if (Number(r.rows[0].assigned_to) !== Number(req.user.user_id)) {
-        return res.status(403).json({ success: false, message: 'You can only act on your own job' });
+        const field = ['support_tech', 'technician'].includes(req.user.role);
+        return res.status(field ? 404 : 403).json({
+          success: false,
+          message: field ? 'Work order not found' : 'You can only act on your own job',
+        });
       }
       next();
     } catch (e) {

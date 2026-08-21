@@ -72,6 +72,10 @@ export const onSiteWorkOrder = (woId, headers) => api.post(`${BASE}/work-orders/
 export const startWorkOrder = (woId, headers) => api.post(`${BASE}/work-orders/${woId}/start`, {}, { headers });
 export const completeWoStep = (woId, code, data, headers) => api.post(`${BASE}/work-orders/${woId}/steps/${code}`, data, { headers });
 export const verifyWoOtp = (woId, data, headers) => api.post(`${BASE}/work-orders/${woId}/verify-otp`, data, { headers });
+export const sendWoOtp = (woId, data) => api.post(`${BASE}/work-orders/${woId}/otp/send`, data || {});
+export const resendWoOtp = (woId) => api.post(`${BASE}/work-orders/${woId}/otp/resend`, {});
+export const revealWoOtp = (woId, reason) => api.post(`${BASE}/work-orders/${woId}/otp/reveal`, { reason });
+export const requestOtpBypass = (woId, reason) => api.post(`${BASE}/work-orders/${woId}/otp/bypass-request`, { reason });
 export const completeWorkOrder = (woId, data, headers) => api.post(`${BASE}/work-orders/${woId}/complete`, data, { headers });
 export const failWorkOrder = (woId, data, headers) => api.post(`${BASE}/work-orders/${woId}/fail`, data, { headers });
 export const cancelWorkOrder = (woId, data) => api.post(`${BASE}/work-orders/${woId}/cancel`, data);

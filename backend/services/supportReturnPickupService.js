@@ -103,11 +103,16 @@ async function saveCondition(client, woId, body, userId) {
 
 async function warehouseReceipt(client, woId, body, userId) {
   const wo = await loadWo(client, woId);
-  if (wo.wo_type !== 'RETURN_PICKUP') {
-    throw Object.assign(new Error('Warehouse receipt is only for return pickup'), { status: 400 });
+  if (!['RETURN_PICKUP', 'REPAIR_PICKUP'].includes(wo.wo_type)) {
+    throw Object.assign(new Error('Warehouse receipt is only for pickup work orders'), { status: 400 });
+  }
+  if (!body.signature_attachment_id && !body.signer_name) {
+    throw Object.assign(new Error('Signature is required before inventory can move'), { status: 400 });
   }
   const serialIds = (body.serial_ids || []).map(Number).filter(Boolean);
-  if (!serialIds.length) throw Object.assign(new Error('serial_ids required'), { status: 400 });
+  if (!serialIds.length && !body.scanned) {
+    throw Object.assign(new Error('serial_ids required'), { status: 400 });
+  }
   if (!body.scanned && !body.short_shipment_reason) {
     throw Object.assign(new Error('Unscanned serials need a short-shipment reason'), { status: 400 });
   }
@@ -122,8 +127,28 @@ async function warehouseReceipt(client, woId, body, userId) {
   if (missing.length && !body.short_shipment_reason) {
     throw Object.assign(new Error('Cannot submit with unscanned serials unless a short-shipment reason is given'), { status: 400 });
   }
-  const { onWarehouseReceipt } = require('./workOrderEffects/returnPickup');
-  const extra = await onWarehouseReceipt(client, wo, { serialIds, userId });
+  const year = new Date().getFullYear();
+  const seq = (await client.query("SELECT nextval('support_wh_receipt_seq') AS n")).rows[0].n;
+  const receiptNumber = `WHR/${year}/${String(seq).padStart(5, '0')}`;
+  await client.query(
+    `INSERT INTO support_warehouse_receipts (
+       receipt_number, wo_id, ticket_id, dc_number, received_by, handover_by_user,
+       signature_attachment_id, signer_name, status, short_shipment_reason
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'SIGNED',$9)`,
+    [
+      receiptNumber, woId, wo.ticket_id, wo.document_number, userId, wo.assigned_to,
+      body.signature_attachment_id || null, body.signer_name || null,
+      body.short_shipment_reason || null,
+    ]
+  );
+  let extra = {};
+  if (wo.wo_type === 'RETURN_PICKUP') {
+    const { onWarehouseReceipt } = require('./workOrderEffects/returnPickup');
+    extra = await onWarehouseReceipt(client, wo, { serialIds, userId });
+  } else {
+    const { onStep } = require('./workOrderEffects/repairPickup');
+    extra = await onStep(client, wo, { step_code: 'WH_RECEIPT' }, body);
+  }
   await client.query(
     `UPDATE support_work_order_steps
         SET status = 'DONE', completed_at = NOW(), payload = $2, completed_by = $3

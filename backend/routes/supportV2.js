@@ -35,6 +35,7 @@ const editBucket = checkSectionPermission('support_bucket', 'edit');
 const viewReturn = checkSectionPermission('support_pickup_return', 'view');
 const createReturn = checkSectionPermission('support_pickup_return', 'create');
 const editReturn = checkSectionPermission('support_pickup_return', 'edit');
+const editWhReceipt = checkSectionPermission('support_warehouse_receipt', 'edit');
 const viewApprovals = checkSectionPermission('support_approvals', 'view');
 const editApprovals = checkSectionPermission('support_approvals', 'edit');
 const viewRepl = checkSectionPermission('support_replacement', 'view');
@@ -157,7 +158,7 @@ router.post('/tickets/:id/work-orders', createWos, requireWoType('can_create', {
 
 router.get('/work-orders', viewWos, ctrl.listWorkOrders);
 router.post('/work-orders/:woId/condition', editBucket, requireOwnWo(), requireWoType('can_edit', { generalSection: 'support_bucket' }), returns.saveCondition);
-router.post('/work-orders/:woId/warehouse-receipt', editReturn, requireWoType('can_edit', { generalSection: 'support_pickup_return' }), returns.warehouseReceipt);
+router.post('/work-orders/:woId/warehouse-receipt', editWhReceipt, returns.warehouseReceipt);
 router.get('/work-orders/:woId', viewWos, wos.getOne);
 router.patch('/work-orders/:woId', editWos, requireWoType('can_edit'), wos.patch);
 router.post('/work-orders/:woId/assign', editDispatch, wos.assign);
@@ -167,6 +168,11 @@ router.post('/work-orders/:woId/on-site', editBucket, requireOwnWo(), requireWoT
 router.post('/work-orders/:woId/start', editBucket, requireOwnWo(), requireWoType('can_edit', { generalSection: 'support_bucket' }), withIdempotency, wos.start);
 router.post('/work-orders/:woId/steps/:code', editBucket, requireOwnWo(), requireWoType('can_edit', { generalSection: 'support_bucket' }), withIdempotency, wos.completeStep);
 router.post('/work-orders/:woId/verify-otp', editBucket, requireOwnWo(), requireWoType('can_edit', { generalSection: 'support_bucket' }), withIdempotency, wos.verifyOtp);
+router.post('/work-orders/:woId/otp/send', editBucket, requireOwnWo(), withIdempotency, wos.sendOtp);
+router.post('/work-orders/:woId/otp/resend', editBucket, requireOwnWo(), withIdempotency, wos.resendOtp);
+router.post('/work-orders/:woId/otp/alternate', editWos, wos.sendOtp);
+router.post('/work-orders/:woId/otp/reveal', editWos, wos.revealOtp);
+router.post('/work-orders/:woId/otp/bypass-request', editBucket, requireOwnWo(), withIdempotency, wos.bypassOtp);
 router.post('/work-orders/:woId/complete', editBucket, requireOwnWo(), requireWoType('can_edit', { generalSection: 'support_bucket' }), withIdempotency, wos.complete);
 router.post('/work-orders/:woId/fail', editBucket, requireOwnWo(), requireWoType('can_edit', { generalSection: 'support_bucket' }), withIdempotency, wos.fail);
 router.post('/work-orders/:woId/cancel', deleteWos, requireWoType('can_delete'), wos.cancel);

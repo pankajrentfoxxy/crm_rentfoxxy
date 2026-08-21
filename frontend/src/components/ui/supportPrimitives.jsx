@@ -622,3 +622,41 @@ export function BlockedReason({ children }) {
   if (!children) return null;
   return <p className="text-[12px] text-pri1">{children}</p>;
 }
+
+export function ProgressSegments({ total, current }) {
+  const n = Math.max(1, Number(total) || 1);
+  const cur = Number(current) || 0;
+  return (
+    <div className="flex gap-1" aria-hidden>
+      {Array.from({ length: n }).map((_, i) => (
+        <span
+          key={i}
+          className={`h-1.5 flex-1 rounded-full ${
+            i < cur ? 'bg-sup-ok' : i === cur ? 'bg-sup-accent animate-pulse' : 'bg-sup-lineSoft'
+          }`}
+        />
+      ))}
+    </div>
+  );
+}
+
+export function SerialScanInput({ value, onChange, onSubmit, placeholder = 'Scan or type TTSPL / serial' }) {
+  return (
+    <form
+      className="flex gap-2"
+      onSubmit={(e) => { e.preventDefault(); onSubmit?.(value); }}
+    >
+      <input
+        autoFocus
+        autoCapitalize="characters"
+        className="flex-1 min-h-[44px] px-3 rounded-md border border-sup-line text-[14px] uppercase"
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => onChange(e.target.value.toUpperCase())}
+      />
+      <button type="submit" className="min-h-[44px] px-4 rounded-md bg-sup-accent2 text-white text-[13px] font-medium">
+        OK
+      </button>
+    </form>
+  );
+}

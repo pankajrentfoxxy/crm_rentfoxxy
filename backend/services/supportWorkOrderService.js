@@ -5,6 +5,7 @@ const { instantiateWoSteps } = require('./supportWorkOrderSteps');
 const { computeTicketStatus, computeAssetLineStatus, logEvent } = require('./supportTicketStateService');
 const { catalogChain } = require('./supportTicketFlowService');
 const effects = require('./workOrderEffects');
+const { matchesAsset, serializeWorkOrder } = require('./supportWoSerialize');
 
 const TRANSITIONS = {
   DRAFT: ['PENDING_ASSIGNMENT', 'CANCELLED'],
@@ -106,11 +107,8 @@ function validateStepPayload(step, payload, wo, assets) {
     const scanned = String(p.scanned_value || '').trim();
     const expected = String(p.expected_value || assets[0]?.ttspl_id || assets[0]?.serial_number || '').trim();
     if (!scanned) throw Object.assign(new Error('scanned_value required'), { status: 400 });
-    const ok = assets.some((a) => (
-      scanned === String(a.ttspl_id || '')
-      || scanned === String(a.serial_number || '')
-      || scanned === String(a.serial_id || '')
-    )) || (expected && scanned === expected);
+    const ok = assets.some((a) => matchesAsset(scanned, a))
+      || (expected && matchesAsset(scanned, { ttspl_id: expected, serial_number: expected }));
     if (!ok) {
       throw Object.assign(new Error('ASSET_MISMATCH'), { status: 409, code: 'ASSET_MISMATCH' });
     }
@@ -139,11 +137,30 @@ async function instantiateSteps(client, woId, woType) {
 
 async function completeStep(client, { woId, stepCode, payload, userId }) {
   const wo = await loadWo(client, woId, { forUpdate: true });
+  const lineId = payload && payload.line_id ? Number(payload.line_id) : null;
   const step = (await client.query(
-    `SELECT * FROM support_work_order_steps WHERE wo_id = $1 AND step_code = $2`,
-    [woId, stepCode]
+    `SELECT * FROM support_work_order_steps
+      WHERE wo_id = $1 AND step_code = $2
+        AND ($3::int IS NULL OR line_id IS NOT DISTINCT FROM $3)
+      ORDER BY asset_seq NULLS FIRST
+      LIMIT 1`,
+    [woId, stepCode, lineId]
   )).rows[0];
   if (!step) throw Object.assign(new Error('Step not found'), { status: 404 });
+  const blocker = (await client.query(
+    `SELECT step_label FROM support_work_order_steps
+      WHERE wo_id = $1 AND is_mandatory = TRUE AND status <> 'DONE'
+        AND (sort_order < $2 OR (sort_order = $2 AND COALESCE(asset_seq,0) < COALESCE($3,0)))
+      ORDER BY sort_order, asset_seq
+      LIMIT 1`,
+    [woId, step.sort_order, step.asset_seq]
+  )).rows[0];
+  if (blocker) {
+    throw Object.assign(
+      new Error(`Complete "${blocker.step_label}" first`),
+      { status: 409, code: 'STEP_OUT_OF_ORDER' }
+    );
+  }
   const assets = (await client.query(
     `SELECT a.serial_id, a.ttspl_id, a.serial_number, a.line_id
        FROM support_work_order_assets l
@@ -161,8 +178,9 @@ async function completeStep(client, { woId, stepCode, payload, userId }) {
   await client.query(
     `UPDATE support_work_order_steps
         SET status = 'DONE', payload = $3, completed_at = NOW(), completed_by = $4
-      WHERE wo_id = $1 AND step_code = $2`,
-    [woId, stepCode, JSON.stringify(payload || {}), userId || null]
+      WHERE wo_id = $1 AND step_code = $2
+        AND ($5::int IS NULL OR line_id IS NOT DISTINCT FROM $5)`,
+    [woId, stepCode, JSON.stringify(payload || {}), userId || null, step.line_id]
   );
   const effect = effects[wo.wo_type];
   let extra = null;
@@ -494,6 +512,7 @@ module.exports = {
   failWorkOrder,
   cancelWorkOrder,
   loadWo,
+  serializeWorkOrder,
   typeSkipsTravel,
   maybeCreateServiceReturnFromFloorPass,
 };

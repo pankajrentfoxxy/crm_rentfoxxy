@@ -42,17 +42,16 @@ async function onCreate(client, wo) {
       console.error('replacement reserve:', e);
     }
   }
-  const otp = String(Math.floor(100000 + Math.random() * 900000));
   await client.query(
-    `UPDATE support_work_orders SET customer_otp = $2, updated_at = NOW() WHERE wo_id = $1`,
-    [wo.wo_id, otp]
+    `UPDATE support_work_orders SET updated_at = NOW() WHERE wo_id = $1`,
+    [wo.wo_id]
   );
   await client.query(
     `UPDATE support_work_order_steps SET status = 'DONE', completed_at = NOW(), payload = $2
       WHERE wo_id = $1 AND step_code = 'DOC_GENERATED'`,
     [wo.wo_id, JSON.stringify({ document_number: dcNumber, dc_purpose: 'replacement' })]
   );
-  return { document_number: dcNumber, customer_otp: otp };
+  return { document_number: dcNumber };
 }
 
 async function onAssign() { return null; }

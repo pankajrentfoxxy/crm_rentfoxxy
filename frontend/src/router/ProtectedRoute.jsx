@@ -28,6 +28,13 @@ export default function ProtectedRoute({
     return <Navigate to="/login" />;
   }
 
+  if (isSupportTechnician(user)) {
+    const canViewSection = (s) => checkPermission(user, effectivePermissions, s, 'view');
+    if (!supportTechnicianMayAccessPath(location.pathname, canViewSection)) {
+      return <Navigate to="/support/bucket" replace />;
+    }
+  }
+
   let allowed = true;
 
   if (Array.isArray(sections) && sections.length) {
@@ -45,13 +52,6 @@ export default function ProtectedRoute({
 
   if (!allowed) {
     return <Navigate to={fallback} replace />;
-  }
-
-  if (isSupportTechnician(user)) {
-    const canViewSection = (s) => checkPermission(user, effectivePermissions, s, 'view');
-    if (!supportTechnicianMayAccessPath(location.pathname, canViewSection)) {
-      return <Navigate to="/support/bucket" replace />;
-    }
   }
 
   return children;

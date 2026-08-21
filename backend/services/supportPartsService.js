@@ -283,7 +283,7 @@ async function listRequests(db, query, user) {
     params.push(Number(query.priority));
     conds.push(`t.priority = $${params.length}`);
   }
-  if (query.own_only) {
+  if (query.own_only || (user && ['support_tech', 'technician'].includes(user.role))) {
     params.push(user.user_id);
     conds.push(`pr.requested_by = $${params.length}`);
   }

@@ -22,7 +22,7 @@ export function canAccessSupportModule(user, effectivePermissions) {
   return canViewSection(user, effectivePermissions, 'support_tickets');
 }
 
-export const isSupportTechnician = (user) => user?.role === 'support_tech';
+export const isSupportTechnician = (user) => ['support_tech', 'technician'].includes(user?.role);
 
 export const isSupportLead = (user) =>
   ['super_admin', 'admin', 'manager', 'support_lead'].includes(user?.role);
@@ -45,7 +45,12 @@ export const canAccessCustomerInventory = (user) => {
 /** True when a support_tech may leave the /support shell for this path (permission-aware). */
 export function supportTechnicianMayAccessPath(pathname, canView) {
   if (!pathname) return false;
-  if (pathname.startsWith('/support')) return true;
+  if (pathname.startsWith('/support/bucket')) return true;
+  if (pathname.startsWith('/support/jobs/')) return true;
+  if (pathname.startsWith('/support/my-parts')) return true;
+  if (pathname.startsWith('/support/attendance')) return true;
+  if (pathname === '/support' || pathname === '/support/') return true;
+  if (pathname.startsWith('/support')) return false;
   if (pathname.startsWith('/customer-inventory') && canView('customer_inventory')) return true;
   if (pathname.startsWith('/sales-pipeline')) {
     return SUPPORT_TECH_DELIVERY_SECTIONS.some((s) => canView(s));

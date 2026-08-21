@@ -20,6 +20,17 @@ function applyTechnicianTicketScope(user, conds, params, alias = 't') {
   conds.push(technicianVisibleSql(alias, `$${params.length}`));
 }
 
+async function assertOwnWorkOrder(db, user, woId) {
+  if (!isFieldTechnician(user)) return;
+  const r = await db.query(
+    'SELECT assigned_to FROM support_work_orders WHERE wo_id = $1',
+    [woId]
+  );
+  if (!r.rows[0] || Number(r.rows[0].assigned_to) !== Number(user.user_id)) {
+    throw Object.assign(new Error('Work order not found'), { status: 404 });
+  }
+}
+
 async function assertTechnicianCanSeeTicket(db, user, ticketId) {
   if (!isFieldTechnician(user)) return;
   const r = await db.query(
@@ -38,4 +49,5 @@ module.exports = {
   technicianVisibleSql,
   applyTechnicianTicketScope,
   assertTechnicianCanSeeTicket,
+  assertOwnWorkOrder,
 };

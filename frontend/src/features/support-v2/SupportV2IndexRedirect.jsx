@@ -1,6 +1,7 @@
 import React from 'react';
 import { Navigate } from 'react-router-dom';
 import usePermission from '../../hooks/usePermission';
+import { isSupportTechnician } from '../../utils/supportAccess';
 
 const LANDING = [
   { section: 'support_dashboard', to: 'dashboard' },
@@ -16,7 +17,8 @@ const LANDING = [
 ];
 
 export default function SupportV2IndexRedirect() {
-  const { canView } = usePermission();
+  const { canView, user } = usePermission();
+  if (isSupportTechnician(user)) return <Navigate to="bucket" replace />;
   const first = LANDING.find((x) => canView(x.section));
   return <Navigate to={first?.to || '/dashboard'} replace />;
 }

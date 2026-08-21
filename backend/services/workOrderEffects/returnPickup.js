@@ -88,12 +88,11 @@ async function onCreate(client, wo) {
   });
   const value = await consignmentValue(client, assets.map((a) => a.serial_id).filter(Boolean));
   const requiresEway = value > EWAY_THRESHOLD;
-  const otp = String(Math.floor(100000 + Math.random() * 900000));
   await client.query(
     `UPDATE support_work_orders
-        SET customer_otp = $2, requires_eway_bill = $3, updated_at = NOW()
+        SET requires_eway_bill = $2, updated_at = NOW()
       WHERE wo_id = $1`,
-    [wo.wo_id, otp, requiresEway]
+    [wo.wo_id, requiresEway]
   );
   await client.query(
     `UPDATE support_work_order_steps SET status = 'DONE', completed_at = NOW(), payload = $2
@@ -103,7 +102,6 @@ async function onCreate(client, wo) {
 
   return {
     document_number: dcNumber,
-    customer_otp: otp,
     requires_eway_bill: requiresEway,
     hold_as_draft: holdAsDraft,
     overdue_notified: dues.overdue,

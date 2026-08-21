@@ -109,6 +109,37 @@ export const LABELS = {
     VENDOR_WARRANTY: { label: 'Vendor warranty claim', hint: 'A warranty claim will be raised.', chargeable: false },
     UNKNOWN: { label: 'Cannot determine yet', hint: 'Lead will decide after the visit.', chargeable: false },
   },
+  STEPS: {
+    ON_SITE_GPS: 'Arrived on site',
+    SERIAL_SCAN: 'Scan machine serial',
+    PHOTO_CONDITION: 'Condition photos',
+    ACCESSORIES: 'Accessories',
+    CUSTOMER_OTP: 'Customer handover code',
+    TECH_ESIGN: 'Technician signature',
+    DIAGNOSIS: 'Diagnosis',
+    WH_RECEIPT: 'Warehouse receipt',
+    AWB_BOOKED: 'Courier booked',
+    PACKED_PHOTO: 'Packed-parcel photos',
+    COURIER_HANDOVER: 'Handed to courier',
+    POD_UPLOAD: 'Proof of delivery',
+    GRADE: 'Grade',
+    PART_SCAN: 'Scan part',
+  },
+  PENDING: {
+    PENDING_CUSTOMER: 'Waiting on customer',
+    PENDING_PART: 'Waiting for a part',
+    PENDING_APPROVAL: 'Waiting for approval',
+    PENDING_VENDOR: 'Waiting on vendor',
+    AT_REPAIR_CENTRE: 'At repair centre',
+    IN_TRANSIT: 'In transit',
+    PENDING_SCHEDULE: 'Waiting to schedule',
+  },
+  RECEIPT: {
+    DRAFT: 'Draft',
+    SIGNED: 'Signed',
+    DISPUTED: 'Disputed',
+    CANCELLED: 'Cancelled',
+  },
 };
 
 export function labelOf(group, code, fallback) {

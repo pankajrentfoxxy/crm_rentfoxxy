@@ -34,5 +34,15 @@ Walk this on the local prod-copy stack before merge.
 1. Pre-book a chargeable part (Customer damage). Photo required. Price from master.
 2. Lead approves. Technician fits. Extra line appears. Bill now vs Add to monthly.
 
+## 8. Field + repair loop (Phase 2)
+1. Log in as technician → sidebar has only My jobs and My parts. `/support/queue`, `/support/tickets/new`, `/support/taxonomy`, `/support/returns/receipt` redirect to `/support/bucket`.
+2. Open a job → reported issue, TTSPL, model, customer photos and history visible before any step.
+3. Run a repair pickup: wrong serial once, correct once, OTP resend once, complete.
+4. Three-machine visit → three scans and three photo sets.
+5. Courier repair pickup → AWB / packed photo / handover / POD. No GPS or OTP.
+6. Warehouse: search/scan from the queue, receive partially, sign. Inventory must not move before the signature.
+7. Floor ticket shows CUSTOMER MACHINE banner + reported problem. Completing it drafts a SERVICE_RETURN and notifies the lead.
+8. Completing the service return sets `hold_to` and restores the customer inventory state.
+
 ## Login (local copy only)
 `admin@rentfoxxy.com` / the password already set on `rentfoxxy_prod_copy`.

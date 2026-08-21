@@ -727,8 +727,12 @@ async function createFloorTicketFromSupportPickup(db, item, actorUserId) {
     `INSERT INTO tickets (
        serial_number, ttspl_id, machine_number, brand, model, processor, ram, storage,
        initial_condition, priority, ticket_type, current_stage_id, assigned_team_id, assigned_user_id,
-       vendor_serial_id
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'normal','grn_qc',$10,$11,$12,$13)
+       vendor_serial_id,
+       support_ticket_id, support_wo_id, support_line_id, support_origin, customer_owned,
+       support_customer_name, support_reported_issue, support_field_diagnosis,
+       support_photo_attachment_ids, support_target_tat_at
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'normal','grn_qc',$10,$11,$12,$13,
+               $14,$15,$16,$17,$18,$19,$20,$21,$22::jsonb, NOW() + INTERVAL '72 hours')
      RETURNING ticket_id`,
     [
       vsn.serial_number,
@@ -742,6 +746,15 @@ async function createFloorTicketFromSupportPickup(db, item, actorUserId) {
       stage.team_id,
       floorManagerUserId,
       vsn.serial_id,
+      item.support_ticket_id || null,
+      item.support_wo_id || null,
+      item.support_line_id || null,
+      item.support_origin || (item.pickup_type === 'repair' ? 'REPAIR_PICKUP' : 'RETURN_PICKUP'),
+      item.pickup_type === 'repair',
+      item.support_customer_name || null,
+      item.support_reported_issue || null,
+      item.support_field_diagnosis || null,
+      JSON.stringify(item.support_photo_attachment_ids || []),
     ]
   );
   const ticketId = ins.rows[0].ticket_id;

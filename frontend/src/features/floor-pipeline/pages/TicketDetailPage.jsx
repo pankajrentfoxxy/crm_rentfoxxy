@@ -781,6 +781,20 @@ export default function TicketDetailPage() {
 
   return (
     <div className="pb-10">
+      {ticket.customer_owned && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 mb-3">
+          <p className="text-sm font-semibold text-amber-900">
+            CUSTOMER MACHINE — {ticket.support_customer_name || 'Support'} · return by{' '}
+            {ticket.support_target_tat_at ? new Date(ticket.support_target_tat_at).toLocaleString() : 'TAT pending'}
+          </p>
+          {ticket.support_reported_issue && (
+            <p className="text-sm text-amber-900 mt-1">Reported: {ticket.support_reported_issue}</p>
+          )}
+          {ticket.support_field_diagnosis && (
+            <p className="text-sm text-amber-800 mt-1">Field diagnosis: {ticket.support_field_diagnosis}</p>
+          )}
+        </div>
+      )}
       <div className="rounded-xl border border-gray-100 bg-white shadow-sm px-4 py-3 mb-4">
         <div className="flex flex-wrap items-center gap-3">
           <button
