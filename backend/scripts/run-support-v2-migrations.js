@@ -34,6 +34,7 @@ const MIGRATIONS = [
   '215_support_v2_wo_logistics.sql',
   '216_support_v2_part_pricing.sql',
   '217_support_v2_charge_billing.sql',
+  '218_support_v2_site_key.sql',
 ];
 
 async function main() {

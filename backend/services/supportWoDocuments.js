@@ -26,19 +26,61 @@ async function loadWoAssets(client, woId) {
   )).rows;
 }
 
+function dispatchFromWo(wo) {
+  const method = String(wo.method || '').toUpperCase();
+  if (method === 'COURIER') {
+    return {
+      dispatch_mode: 'courier',
+      delivery_person_id: null,
+      courier_name: wo.courier_partner === 'OTHER' ? (wo.courier_other_name || 'Courier') : (wo.courier_partner || null),
+      awb_number: wo.courier_awb || null,
+    };
+  }
+  return {
+    dispatch_mode: 'inhouse',
+    delivery_person_id: wo.assigned_to || null,
+    courier_name: null,
+    awb_number: null,
+  };
+}
+
+async function nextReturnDcNumber(client) {
+  const seq = await client.query(
+    `SELECT last_value, prefix FROM sm_document_sequences WHERE doc_type = 'return_dc' FOR UPDATE`
+  );
+  let lastValue = 1;
+  let prefix = 'RDC';
+  if (seq.rows.length) {
+    lastValue = Number(seq.rows[0].last_value) + 1;
+    prefix = seq.rows[0].prefix || 'RDC';
+    await client.query(
+      `UPDATE sm_document_sequences SET last_value = $1, updated_at = NOW() WHERE doc_type = 'return_dc'`,
+      [lastValue]
+    );
+  } else {
+    await client.query(
+      `INSERT INTO sm_document_sequences (doc_type, last_value, prefix) VALUES ('return_dc', 1, 'RDC')`
+    );
+  }
+  return `${prefix}${String(lastValue).padStart(6, '0')}`;
+}
+
 async function insertChallan(client, {
   dcNumber, ticket, wo, purpose, movement, remarks, entries, first,
 }) {
   const hsnCode = resolveHsnForPersist({ transactionType: purpose === 'service_return' ? 'repair' : 'rental', role: null });
   const entityCode = entityForQuotationType('rental');
+  const dispatch = dispatchFromWo(wo);
   await client.query(
     `INSERT INTO delivery_challan_lines
         (dc_number, movement_type, support_ticket_id, customer_id, customer_name, email,
          customer_shipping_address, brand, model_name, quantity, serial_number,
+         dispatch_mode, delivery_person_id, courier_name, awb_number,
          dc_purpose, remarks, status, created_by, created_at, updated_at,
          entity_code, hsn_code, pre_dispatch_qc_passed)
      VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11::jsonb,
-             $12,$13,'pending',$14,NOW(),NOW(),$15,$16,FALSE)`,
+             $12,$13,$14,$15,
+             $16,$17,'pending',$18,NOW(),NOW(),$19,$20,FALSE)`,
     [
       dcNumber,
       movement,
@@ -48,9 +90,13 @@ async function insertChallan(client, {
       ticket.email || null,
       JSON.stringify({ address: ticket.site_label || '', contact: ticket.contact_name }),
       first.brand || null,
-      first.model || null,
+      first.model || first.model_name || null,
       Math.max(1, entries.length),
       JSON.stringify(entries),
+      dispatch.dispatch_mode,
+      dispatch.delivery_person_id,
+      dispatch.courier_name,
+      dispatch.awb_number,
       purpose,
       remarks,
       wo.created_by || null,
@@ -64,7 +110,7 @@ async function generateReturnDc(client, wo, opts = {}) {
   const purpose = opts.purpose || 'repair_pickup';
   const ticket = await loadTicketCustomer(client, wo.ticket_id);
   const assets = await loadWoAssets(client, wo.wo_id);
-  const dcNumber = await nextFinancialYearNumber('delivery_challan', client);
+  const dcNumber = await nextReturnDcNumber(client);
   const entries = assets.map((a) => `${a.serial_id || ''}|${a.serial_number || ''}|${a.ttspl_id || ''}`);
   let first = {};
   if (assets[0] && assets[0].serial_id) {
@@ -79,7 +125,7 @@ async function generateReturnDc(client, wo, opts = {}) {
     ticket,
     wo,
     purpose,
-    movement: 'inbound',
+    movement: 'return',
     remarks: opts.remarks || (purpose === 'return' ? `Return pickup ${wo.wo_number}` : `Repair pickup ${wo.wo_number}`),
     entries,
     first,
@@ -183,7 +229,7 @@ async function generatePartReturnDc(client, wo, opts = {}) {
     ticket,
     wo,
     purpose: 'part_return',
-    movement: 'inbound',
+    movement: 'return',
     remarks: opts.remarks || `Part return ${wo.wo_number}`,
     entries,
     first: opts.first || {},
