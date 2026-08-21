@@ -121,6 +121,7 @@ exports.updatePart = async (req, res) => {
     part_name, part_type, vendor, cost, location_code,
     category, description, part_sku, compatible_brands, is_consumable,
     warranty_months, notes, min_threshold, model_number, pin_size,
+    selling_price, hsn_code, gst_rate,
   } = req.body;
 
   try {
@@ -142,6 +143,10 @@ exports.updatePart = async (req, res) => {
            min_threshold = COALESCE($14, min_threshold),
            model_number = COALESCE($15, model_number),
            pin_size = COALESCE($16, pin_size),
+           selling_price = COALESCE($17, selling_price),
+           hsn_code = COALESCE($18, hsn_code),
+           gst_rate = COALESCE($19, gst_rate),
+           price_updated_at = CASE WHEN $17::numeric IS NOT NULL THEN NOW() ELSE price_updated_at END,
            updated_at = NOW()
        WHERE part_id = $6
        RETURNING *`,
@@ -154,6 +159,9 @@ exports.updatePart = async (req, res) => {
         min_threshold != null && min_threshold !== '' ? Number(min_threshold) : null,
         model_number !== undefined ? (model_number ? String(model_number).trim() : null) : null,
         pin_size !== undefined ? (pin_size ? String(pin_size).trim() : null) : null,
+        selling_price !== undefined && selling_price !== '' ? Number(selling_price) : null,
+        hsn_code || null,
+        gst_rate !== undefined && gst_rate !== '' ? Number(gst_rate) : null,
       ]
     );
 

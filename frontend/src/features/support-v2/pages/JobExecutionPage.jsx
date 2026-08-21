@@ -34,6 +34,8 @@ export default function JobExecutionPage() {
   const [data, setData] = useState(null);
   const [completeOpen, setCompleteOpen] = useState(false);
   const [partOpen, setPartOpen] = useState(false);
+  const [failOpen, setFailOpen] = useState(false);
+  const [failForm, setFailForm] = useState({ failure_reason: 'CUSTOMER_UNAVAILABLE', notes: '', create_retry: true });
   const [form, setForm] = useState({ found_issue_id: '', notes: '', outcome: 'RESOLVED', action_code_ids: [], time_spent_minutes: '' });
   const [fit, setFit] = useState({ prt: '', serial: '', files: [] });
 
@@ -78,6 +80,14 @@ export default function JobExecutionPage() {
         </div>
         <div className="h-1.5 bg-sup-canvas2 rounded-full mt-1 overflow-hidden">
           <div className="h-full bg-sup-accent" style={{ width: `${mandatory.length ? (doneCount / mandatory.length) * 100 : 0}%` }} />
+        </div>
+        <div className="flex flex-wrap gap-3 text-[11.5px] mt-1">
+          {w.site_label && (
+            <a className="text-sup-accent underline" href={`https://maps.google.com/?q=${encodeURIComponent(w.site_label)}`} target="_blank" rel="noreferrer">Directions</a>
+          )}
+          {w.contact_phone && (
+            <a className="text-sup-accent underline" href={`tel:${w.contact_phone}`}>Call {w.contact_name || w.contact_phone}</a>
+          )}
         </div>
       </div>
       <PageHeader title={w.wo_number} subtitle={`${w.ticket_number} · ${w.wo_type}`} />
@@ -165,11 +175,8 @@ export default function JobExecutionPage() {
         {allMandatoryDone ? 'Complete job' : `${remaining} step${remaining === 1 ? '' : 's'} remaining`}
       </Button>
       {mine && w.status !== 'COMPLETED' && w.status !== 'FAILED' && (
-        <Button variant="danger" size="touch" onClick={() => {
-          const reason = window.prompt('Failure reason (e.g. CUSTOMER_UNAVAILABLE)');
-          if (!reason) return;
-          act(() => failWorkOrder(w.wo_id, { failure_reason: reason, notes: 'Failed on site', create_retry: true }, { 'Idempotency-Key': newIdempotencyKey() }), 'Failed · retry created');
-        }}>Fail + retry</Button>
+        <Button size="touch" className="w-full" onClick={() => setPartOpen(true)}>Request a part</Button>
+        <Button variant="danger" size="touch" onClick={() => setFailOpen(true)}>Fail + retry</Button>
       )}
 
       {completeOpen && (
@@ -199,6 +206,31 @@ export default function JobExecutionPage() {
               <option value="PARTIAL">Partial</option>
             </select>
             <textarea placeholder="Notes (min 20)" value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} className="w-full border rounded px-2 py-1.5" rows={3} />
+          </div>
+        </Modal>
+      )}
+      {failOpen && (
+        <Modal title="Fail this visit" onClose={() => setFailOpen(false)} footer={(
+          <>
+            <Button variant="secondary" onClick={() => setFailOpen(false)}>Keep job</Button>
+            <Button variant="danger" disabled={String(failForm.notes).trim().length < 5} onClick={() => {
+              act(() => failWorkOrder(w.wo_id, failForm, { 'Idempotency-Key': newIdempotencyKey() }), 'Failed · retry created');
+              setFailOpen(false);
+            }}>Fail job</Button>
+          </>
+        )}>
+          <div className="space-y-2 text-[12px]">
+            {['CUSTOMER_UNAVAILABLE', 'ADDRESS_WRONG', 'MACHINE_NOT_READY', 'PART_NOT_AVAILABLE', 'ACCESS_DENIED', 'OTHER'].map((r) => (
+              <label key={r} className="flex items-center gap-2">
+                <input type="radio" checked={failForm.failure_reason === r} onChange={() => setFailForm((f) => ({ ...f, failure_reason: r }))} />
+                {r.replace(/_/g, ' ')}
+              </label>
+            ))}
+            <textarea value={failForm.notes} onChange={(e) => setFailForm((f) => ({ ...f, notes: e.target.value }))} rows={3} className="w-full border rounded px-2 py-1.5" placeholder="What happened" />
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={failForm.create_retry} onChange={(e) => setFailForm((f) => ({ ...f, create_retry: e.target.checked }))} />
+              Create retry work order
+            </label>
           </div>
         </Modal>
       )}

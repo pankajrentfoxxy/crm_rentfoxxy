@@ -79,12 +79,44 @@ export function classifyLineErrors(line) {
   if (!line.reported_description || String(line.reported_description).trim().length < 15) {
     e.push('reported_description too short');
   }
-  if (line.requires_photo && !(line.attachment_ids || []).length) e.push('photo required');
+  if ((line.requires_photo || line.chargeable_default) && !(line.attachment_ids || []).length && !line.photos_deferred) {
+    e.push('photo required');
+  }
   return e;
 }
 
+export const LABELS = {
+  WO_TYPES: {
+    FIELD_VISIT: { label: 'Field visit', hint: 'A technician goes to the customer site.' },
+    REMOTE_FIX: { label: 'Remote fix', hint: 'Fix on a call or remote session. No travel.' },
+    REPAIR_PICKUP: { label: 'Repair pickup', hint: 'We collect the laptop and repair it at our facility. Generates a Return DC.' },
+    SERVICE_RETURN: { label: 'Service return', hint: 'We send the repaired laptop back. Generates a Service DC.' },
+    RETURN_PICKUP: { label: 'Return pickup', hint: 'We collect a laptop that is leaving the contract.' },
+    REPLACEMENT_DELIVERY: { label: 'Replacement delivery', hint: 'A swap unit goes out to the customer.' },
+    PART_DELIVERY: { label: 'Part delivery', hint: 'A spare part is sent to site.' },
+    PART_RETURN: { label: 'Part return', hint: 'The old part comes back to warehouse.' },
+  },
+  METHODS: {
+    TECHNICIAN: { label: 'Technician visit', hint: 'A field engineer goes to the location.' },
+    COURIER: { label: 'Courier', hint: 'BlueDart / Delhivery / DTDC / Porter moves the machine.' },
+    REMOTE: { label: 'Remote', hint: 'No visit unless remote fails.' },
+  },
+  FAULT: {
+    COMPANY_FAULT: { label: 'Manufacturing / component failure', hint: 'Covered under rental.', chargeable: false },
+    WEAR_AND_TEAR: { label: 'Normal wear and tear', hint: 'Covered under rental.', chargeable: false },
+    CUSTOMER_DAMAGE: { label: 'Customer damage', hint: 'Photos required · customer will be billed.', chargeable: true },
+    CUSTOMER_BREAKAGE: { label: 'Breakage', hint: 'Photos required · customer will be billed.', chargeable: true },
+    VENDOR_WARRANTY: { label: 'Vendor warranty claim', hint: 'A warranty claim will be raised.', chargeable: false },
+    UNKNOWN: { label: 'Cannot determine yet', hint: 'Lead will decide after the visit.', chargeable: false },
+  },
+};
+
+export function labelOf(group, code, fallback) {
+  return (LABELS[group] && LABELS[group][code] && LABELS[group][code].label) || fallback || code || '—';
+}
+
 export function woTypeLabel(code) {
-  return String(code || '').replace(/_/g, ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase());
+  return labelOf('WO_TYPES', code, String(code || '').replace(/_/g, ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase()));
 }
 
 export const WO_TYPE_SECTION = {

@@ -86,17 +86,24 @@ async function loadSerialDelivery(db, serialId) {
   return decorateSerialRow(r.rows[0]);
 }
 
-function assertSerialMatchesSite(delivery, site) {
+function assertSerialMatchesSite(delivery, site, opts = {}) {
   if (!delivery || delivery.asset_unknown) return;
   const want = digitsPin(site && site.pincode);
   const got = digitsPin(delivery.delivery_pincode);
   if (want && got && want !== got) {
     const label = delivery.inventory_asset_code || delivery.serial_number || delivery.serial_id;
+    if (opts.site_source === 'MANUAL_OVERRIDE' && String(opts.reason || '').trim().length >= 10) {
+      return {
+        overridden: true,
+        warning: `Laptop ${label} delivered to ${got}; ticket site overridden to ${want}`,
+      };
+    }
     throw Object.assign(
       new Error(`Laptop ${label} was delivered to pincode ${got}, not the selected site (${want})`),
       { status: 400 }
     );
   }
+  return null;
 }
 
 module.exports = {

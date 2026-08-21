@@ -247,9 +247,47 @@ exports.customerContext = async (req, res) => {
   } catch (e) { bad(res, e); }
 };
 
+exports.customerContacts = async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const r = await pool.query(
+      `SELECT * FROM (
+          SELECT 'c-' || c.customer_id::text AS contact_id,
+                 COALESCE(c.name, c.company_name) AS name,
+                 c.phone, c.email, 'CUSTOMER'::text AS source,
+                 NULL::text AS site_label, TRUE AS is_primary
+            FROM customers c WHERE c.customer_id = $1
+          UNION ALL
+          SELECT 'a-' || a.customer_address_id::text,
+                 NULLIF(a.concern_person, ''),
+                 a.mobile_no, NULL,
+                 'SITE_CONTACT'::text,
+                 CONCAT_WS(', ', NULLIF(a.address, ''), NULLIF(a.city, ''), NULLIF(a.pincode, '')),
+                 FALSE
+            FROM customer_addresses a
+           WHERE a.customer_id = $1
+             AND (NULLIF(a.concern_person, '') IS NOT NULL OR NULLIF(a.mobile_no, '') IS NOT NULL)
+        ) x
+       WHERE name IS NOT NULL OR phone IS NOT NULL`
+      ,
+      [id]
+    );
+    const seen = new Set();
+    const rows = [];
+    for (const row of r.rows) {
+      const key = String(row.phone || '').replace(/\D/g, '').slice(-10) + '|' + String(row.name || '').toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push(row);
+    }
+    res.json({ success: true, rows });
+  } catch (e) { bad(res, e); }
+};
+
 exports.customerAssets = async (req, res) => {
   try {
     const id = Number(req.params.id);
+    const q = String(req.query.q || '').trim();
     const r = await pool.query(
       `SELECT s.serial_id,
               s.inventory_asset_code AS ttspl_id,
@@ -281,8 +319,15 @@ exports.customerAssets = async (req, res) => {
         WHERE s.current_customer_id = $1
           AND s.deleted_at IS NULL
           AND s.inventory_status IN ('rented','on_demo')
+          AND (
+            $2 = ''
+            OR s.inventory_asset_code ILIKE '%' || $2 || '%'
+            OR s.serial_number ILIKE '%' || $2 || '%'
+            OR COALESCE(s.extra->>'assigned_employee','') ILIKE '%' || $2 || '%'
+            OR COALESCE(s.extra->>'assigned_to','') ILIKE '%' || $2 || '%'
+          )
         ORDER BY s.inventory_asset_code NULLS LAST, s.serial_id`,
-      [id]
+      [id, q]
     );
     const rows = r.rows.map((row) => {
       const dec = decorateSerialRow(row);

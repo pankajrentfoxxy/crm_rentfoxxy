@@ -170,6 +170,10 @@ function applyFilterBag(bag, userId, conds, params) {
     conds.push(`t.created_at < ($${params.length}::date + INTERVAL '1 day')`);
   }
 
+  if (bag.photos_deferred === true || bag.photos_deferred === 'true' || bag.photos_deferred === '1') {
+    conds.push(`t.photos_deferred = TRUE`);
+  }
+
   if (bag.search) {
     params.push(`%${String(bag.search).trim()}%`);
     const p = `$${params.length}`;
@@ -193,7 +197,7 @@ function explicitFromQuery(q) {
   const keys = [
     'class', 'priority', 'status', 'pending_reason', 'type_id', 'subtype_id', 'issue_id',
     'sla', 'group_id', 'assigned_to', 'channel', 'customer_id', 'date_from', 'date_to',
-    'search', 'has_wo_today', 'resolved_within_days',
+    'search', 'has_wo_today', 'resolved_within_days', 'photos_deferred',
   ];
   for (const k of keys) {
     if (q[k] !== undefined && q[k] !== null && q[k] !== '') bag[k] = q[k];

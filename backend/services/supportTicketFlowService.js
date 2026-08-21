@@ -163,6 +163,34 @@ function validateCreate(body) {
   return { ok: true, phone };
 }
 
+function digitsOnlyPhone(raw) {
+  return String(raw || '').replace(/\D/g, '').slice(-10);
+}
+
+async function assertContactBelongsToCustomer(db, customerId, phone, source) {
+  if (String(source || '').toUpperCase() === 'MANUAL') return;
+  const p = digitsOnlyPhone(phone);
+  if (!p) return;
+  const r = await db.query(
+    `SELECT 1 FROM (
+        SELECT regexp_replace(COALESCE(phone,''), '\\D', '', 'g') AS digits
+          FROM customers WHERE customer_id = $1
+        UNION ALL
+        SELECT regexp_replace(COALESCE(mobile_no,''), '\\D', '', 'g')
+          FROM customer_addresses WHERE customer_id = $1
+      ) x
+      WHERE right(digits, 10) = $2
+      LIMIT 1`,
+    [customerId, p]
+  );
+  if (!r.rows[0]) {
+    throw Object.assign(
+      new Error('contact_phone does not match any contact for this customer. Set contact_source to MANUAL to override.'),
+      { status: 400 }
+    );
+  }
+}
+
 async function createTicket(db, body, actorId) {
   const v = validateCreate(body);
   if (!v.ok) {
@@ -171,6 +199,7 @@ async function createTicket(db, body, actorId) {
   }
   const customer = await loadCustomer(db, body.customer_id);
   if (!customer) throw Object.assign(new Error('Customer not found'), { status: 400 });
+  await assertContactBelongsToCustomer(db, body.customer_id, v.phone, body.contact_source);
 
   if (body.site_id) {
     const site = await db.query(
@@ -197,10 +226,15 @@ async function createTicket(db, body, actorId) {
         throw Object.assign(new Error('Serial does not belong to this customer'), { status: 400 });
       }
       const delivery = await loadSerialDelivery(db, line.serial_id);
-      assertSerialMatchesSite(delivery, {
+      const mismatch = assertSerialMatchesSite(delivery, {
         pincode: body.site_pincode || digitsPin(body.site_label),
         site_key: body.site_key,
+      }, {
+        site_source: body.site_source,
+        reason: body.site_override_reason,
       });
+      if (mismatch && mismatch.overridden) line._siteOverrideWarning = mismatch.warning;
+      if (delivery && delivery.dc_number && !body.site_dc_number) body.site_dc_number = delivery.dc_number;
       line._serial = ser.rows[0];
     }
     const repeat = await findRepeat(db, line.serial_id, chain.subtype.catalog_id, null);
@@ -231,14 +265,18 @@ async function createTicket(db, body, actorId) {
     const ins = await client.query(
       `INSERT INTO support_tickets_v2 (
          ticket_number, ticket_class, channel, status, priority, impact, urgency,
-         customer_id, site_id, site_label, contact_name, contact_phone, contact_email,
+         customer_id, site_id, site_key, site_pincode, site_label,
+         site_source, site_override_reason, site_dc_number,
+         contact_name, contact_phone, contact_email, contact_source,
          contact_is_vip, subject, assignment_group_id, assigned_to,
-         preferred_slot_start, preferred_slot_end, internal_note, created_by
+         internal_note, photos_deferred, created_by
        ) VALUES (
          $1,$2,$3,'NEW',$4,$5,$6,
-         $7,$8,$9,$10,$11,$12,
-         $13,$14,$15,$16,
-         $17,$18,$19,$20
+         $7,$8,$9,$10,$11,
+         $12,$13,$14,
+         $15,$16,$17,$18,
+         $19,$20,$21,$22,
+         $23,$24,$25
        ) RETURNING *`,
       [
         number,
@@ -249,17 +287,22 @@ async function createTicket(db, body, actorId) {
         prepared[0].line.urgency || 2,
         body.customer_id,
         body.site_id || null,
+        body.site_key || null,
+        body.site_pincode || null,
         body.site_label || null,
+        body.site_source || (body.site_dc_number ? 'DERIVED_FROM_ASSET' : (body.site_id ? 'CRM_ADDRESS' : null)),
+        body.site_override_reason || null,
+        body.site_dc_number || null,
         body.contact_name,
         v.phone,
         body.contact_email || null,
+        body.contact_source || null,
         Boolean(body.contact_is_vip),
         body.subject || `${prepared.length} machine(s) — ${customer.company_name || customer.name}`,
         body.assignment_group_id || null,
         body.assigned_to || null,
-        body.preferred_slot_start || null,
-        body.preferred_slot_end || null,
         body.internal_note || null,
+        Boolean(body.photos_deferred) || prepared.some((p) => p.line.photos_deferred),
         actorId || null,
       ]
     );
@@ -272,8 +315,9 @@ async function createTicket(db, body, actorId) {
         `INSERT INTO support_ticket_assets (
            ticket_id, line_code, serial_id, ttspl_id, serial_number, asset_unknown,
            reported_type_id, reported_subtype_id, reported_issue_id, reported_description,
-           impact, urgency, is_repeat, repeat_of_ticket_id, is_safety, line_status
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'OPEN')
+           impact, urgency, is_repeat, repeat_of_ticket_id, is_safety, line_status,
+           photos_required, photos_deferred, photo_count
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'OPEN',$16,$17,$18)
          RETURNING line_id`,
         [
           ticket.ticket_id,
@@ -291,6 +335,9 @@ async function createTicket(db, body, actorId) {
           Boolean(p.repeat),
           p.repeat ? p.repeat.ticket_id : null,
           Boolean(p.chain.issue.is_safety),
+          Boolean(p.line.photos_required || p.chain.issue.requires_photo || p.chain.issue.chargeable_default),
+          Boolean(p.line.photos_deferred),
+          Array.isArray(p.line.attachment_ids) ? p.line.attachment_ids.length : 0,
         ]
       );
       if (p.repeat) {
@@ -332,6 +379,15 @@ async function createTicket(db, body, actorId) {
       summary: `Created ${number}`,
       isCustomerVisible: true,
     });
+    if (body.site_source === 'MANUAL_OVERRIDE' && body.site_override_reason) {
+      await logEvent(client, {
+        ticketId: ticket.ticket_id,
+        eventType: 'SITE_OVERRIDDEN',
+        actorId,
+        summary: `Location overridden: ${body.site_label || body.site_pincode || ''}`.trim(),
+        detail: { reason: body.site_override_reason, site_pincode: body.site_pincode },
+      });
+    }
     await logEvent(client, {
       ticketId: ticket.ticket_id,
       eventType: 'PRIORITY_COMPUTED',
@@ -513,6 +569,7 @@ module.exports = {
   findRepeat,
   loadCustomer,
   validateCreate,
+  assertContactBelongsToCustomer,
   validateResolveLine,
   validatePause,
   normalizePauseContactMethod,

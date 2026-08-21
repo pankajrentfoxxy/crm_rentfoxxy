@@ -18,6 +18,7 @@ import PartsQueuePage from './pages/PartsQueuePage';
 import ApprovalsPage from './pages/ApprovalsPage';
 import ReportsPage from './pages/ReportsPage';
 import SettingsPage from './pages/SettingsPage';
+import SupportChargesPage from './pages/SupportChargesPage';
 import AttendancePage from './pages/AttendancePage';
 import SupportV2IndexRedirect from './SupportV2IndexRedirect';
 
@@ -49,6 +50,7 @@ export default function SupportV2App() {
         <Route path="sla" element={g('support_sla_admin', <SlaAdminPage />)} />
         <Route path="taxonomy" element={g('support_taxonomy', <TaxonomyAdminPage />)} />
         <Route path="reports" element={g('support_reports', <ReportsPage />)} />
+        <Route path="charges" element={g('support_charges_billing', <SupportChargesPage />)} />
         <Route path="settings" element={g('support_settings', <SettingsPage />)} />
         <Route path="foundation" element={g('support_settings', <FoundationPage />)} />
         <Route path="*" element={<SupportV2IndexRedirect />} />

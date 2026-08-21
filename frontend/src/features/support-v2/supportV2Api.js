@@ -36,7 +36,11 @@ export const bulkAssign = (data) => api.post(`${BASE}/tickets/bulk-assign`, data
 
 export const searchCustomers = (q) => api.get(`${BASE}/customers/search`, { params: { q } });
 export const getCustomerContext = (id) => api.get(`${BASE}/customers/${id}/context`);
-export const getCustomerAssets = (id) => api.get(`${BASE}/customers/${id}/assets`);
+export const getCustomerAssets = (id, params) => api.get(`${BASE}/customers/${id}/assets`, { params });
+export const getCustomerContacts = (id) => api.get(`${BASE}/customers/${id}/contacts`);
+export const fetchSlotAvailability = (params) => api.get(`${BASE}/assignees/availability`, { params });
+export const fetchSupportCharges = (params) => api.get(`${BASE}/charges`, { params });
+export const decideSupportCharge = (id, data) => api.post(`${BASE}/charges/${id}/decide`, data);
 export const searchTickets = (q) => api.get(`${BASE}/tickets/search`, { params: { q } });
 export const repeatCheck = (params) => api.get(`${BASE}/lines/0/repeat-check`, { params });
 export const createTicket = (data) => api.post(`${BASE}/tickets`, data);

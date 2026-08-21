@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
   Button, ClassificationChain, Modal, Mono, PriorityChip, SlaChip, StatusPill, WorkOrderCard, prioritySpine,
@@ -13,7 +13,7 @@ import {
 } from '../supportV2Api';
 import { SUPPORT_V2_BASE } from '../supportV2Utils';
 import ResolveLineModal from '../components/ResolveLineModal';
-import CreateWorkOrderModal from '../components/CreateWorkOrderModal';
+import CreateWorkOrderWizard from '../components/wizard/wo/CreateWorkOrderWizard';
 import InitiateReplacementModal from '../components/InitiateReplacementModal';
 import ReplacementPair from '../components/ReplacementPair';
 import TicketLinkPicker from '../components/TicketLinkPicker';
@@ -113,6 +113,7 @@ function AssetCard({ line, canEdit, onResolve, onCreateWo, onReplace, onOpenWo, 
 
 export default function TicketDetailPage() {
   const { id } = useParams();
+  const [params] = useSearchParams();
   const nav = useNavigate();
   const { canEdit, canDelete, hasPermission } = usePermission();
   const [data, setData] = useState(null);
@@ -126,12 +127,17 @@ export default function TicketDetailPage() {
   const [owners, setOwners] = useState([]);
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkDraft, setLinkDraft] = useState(null);
+  const [reasonModal, setReasonModal] = useState(null);
+  const [reasonText, setReasonText] = useState('');
 
   const load = useCallback(() => {
     getTicket(id).then((r) => setData(r.data)).catch(() => toast.error('Ticket not found'));
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (params.get('wo') === '1') setWoOpen(true);
+  }, [params]);
   useEffect(() => {
     fetchQueueMeta().then((r) => setOwners(r.data?.owners || [])).catch(() => {});
   }, []);
@@ -165,8 +171,36 @@ export default function TicketDetailPage() {
           </div>
         )}
         <div className="text-[12px] text-sup-muted mt-1">
-          {t.customer_name} · {t.contact_name} {t.contact_phone} · {t.assignment_group_name || 'No group'} · {t.assigned_to_name || 'Unassigned'}
+          {t.customer_name} · {t.contact_name} {t.contact_phone} · {t.assignment_group_name || 'No group'} · Desk {t.assigned_to_name || 'Unassigned'}
         </div>
+        {t.photos_deferred && (
+          <div className="mt-2 rounded-md bg-pri2-bg text-pri2 px-2 py-1.5 text-[12px] flex justify-between gap-2">
+            <span>Photos pending from customer — a chargeable outcome cannot be approved without them.</span>
+            <Button size="sm" onClick={() => setTab('Attachments')}>Add photos now</Button>
+          </div>
+        )}
+        {(() => {
+          const wos = lines.flatMap((l) => l.work_orders || []);
+          const pendingWo = wos.find((w) => w.status === 'PENDING_ASSIGNMENT');
+          const assignedWo = wos.find((w) => w.status === 'ASSIGNED');
+          const pendingAppr = (data.approvals || []).find((a) => a.status === 'PENDING');
+          const allResolved = lines.length && lines.every((l) => l.line_status === 'RESOLVED');
+          let label = 'Classified, not scheduled.';
+          let cta = 'Create work order';
+          let go = () => setWoOpen(true);
+          if (t.photos_deferred && !wos.length) { label = 'Photos pending from customer.'; cta = 'Add photos'; go = () => setTab('Attachments'); }
+          else if (pendingAppr) { label = pendingAppr.label || 'A request is awaiting your approval.'; cta = 'Review request'; go = () => setTab('Approvals'); }
+          else if (allResolved) { label = `All ${lines.length} machines resolved.`; cta = 'Close ticket'; go = () => act(() => closeTicket(t.ticket_id, {}), 'Closed'); }
+          else if (assignedWo) { label = `${assignedWo.assigned_to_name || 'Technician'} is assigned on ${assignedWo.wo_number}.`; cta = 'View work order'; go = () => nav(`${SUPPORT_V2_BASE}/jobs/${assignedWo.wo_id}`); }
+          else if (pendingWo) { label = `${pendingWo.wo_number} has no technician.`; cta = 'Assign'; go = () => nav(`${SUPPORT_V2_BASE}/jobs/${pendingWo.wo_id}`); }
+          else if (!wos.length) { label = 'Classified, not scheduled.'; cta = 'Create work order'; go = () => setWoOpen(true); }
+          return (
+            <div className="mt-3 flex items-center justify-between gap-3 rounded-[10px] bg-sup-canvas2 px-3 py-2">
+              <span className="text-[12.5px]">{label}</span>
+              <Button size="sm" onClick={go}>{cta}</Button>
+            </div>
+          );
+        })()}
         <div className="flex flex-wrap items-end justify-between gap-3 mt-3">
           <div className="flex gap-4">
             <div>
@@ -188,16 +222,10 @@ export default function TicketDetailPage() {
               </>
             )}
             {canEdit('support_tickets') && (t.status === 'CLOSED' || t.status === 'RESOLVED') && (
-              <Button size="sm" onClick={() => {
-                const reason = window.prompt('Reopen reason');
-                if (reason) act(() => reopenTicket(t.ticket_id, { reason }), 'Reopened');
-              }}>Reopen</Button>
+              <Button size="sm" onClick={() => { setReasonText(''); setReasonModal('reopen'); }}>Reopen</Button>
             )}
             {canDelete('support_tickets') && t.status !== 'CANCELLED' && (
-              <Button size="sm" variant="danger" onClick={() => {
-                const reason = window.prompt('Cancel reason');
-                if (reason) act(() => cancelTicket(t.ticket_id, { reason }), 'Cancelled');
-              }}>Cancel</Button>
+              <Button size="sm" variant="danger" onClick={() => { setReasonText(''); setReasonModal('cancel'); }}>Cancel</Button>
             )}
           </div>
         </div>
@@ -344,7 +372,9 @@ export default function TicketDetailPage() {
               onClick={() => nav(`${SUPPORT_V2_BASE}/jobs/${w.wo_id}`)}
             />
           ))}
-          {!lines.some((l) => (l.work_orders || []).length) && <p className="text-sup-muted text-sm">No work orders yet.</p>}
+          {!lines.some((l) => (l.work_orders || []).length) && (
+            <p className="text-sup-muted text-sm">No work order yet — create one to schedule a technician or a courier.</p>
+          )}
         </div>
       )}
 
@@ -423,12 +453,32 @@ export default function TicketDetailPage() {
         />
       )}
       {woOpen && (
-        <CreateWorkOrderModal
+        <CreateWorkOrderWizard
           ticket={t}
           lines={lines}
           onClose={() => setWoOpen(false)}
           onCreated={() => { setWoOpen(false); load(); }}
         />
+      )}
+      {reasonModal && (
+        <Modal
+          title={reasonModal === 'reopen' ? 'Reopen ticket' : 'Cancel ticket'}
+          onClose={() => setReasonModal(null)}
+          footer={(
+            <>
+              <Button variant="secondary" onClick={() => setReasonModal(null)}>Keep</Button>
+              <Button disabled={!reasonText.trim()} onClick={() => {
+                const fn = reasonModal === 'reopen'
+                  ? () => reopenTicket(t.ticket_id, { reason: reasonText })
+                  : () => cancelTicket(t.ticket_id, { reason: reasonText });
+                act(fn, reasonModal === 'reopen' ? 'Reopened' : 'Cancelled');
+                setReasonModal(null);
+              }}>{reasonModal === 'reopen' ? 'Reopen' : 'Cancel ticket'}</Button>
+            </>
+          )}
+        >
+          <textarea value={reasonText} onChange={(e) => setReasonText(e.target.value)} rows={3} className="w-full border rounded-md px-2 py-1.5 text-[13px]" placeholder="Reason" />
+        </Modal>
       )}
       {resolveLine && (
         <ResolveLineModal

@@ -412,8 +412,10 @@ exports.queueMeta = async (req, res) => {
           ORDER BY level, sort_order, name`
       ),
       pool.query(
-        `SELECT group_id, name, group_type FROM support_assignment_groups
-          WHERE is_active = TRUE ORDER BY name`
+        `SELECT group_id, name, display_name, group_type, zone_id, sort_order
+           FROM support_assignment_groups
+          WHERE is_active = TRUE
+          ORDER BY sort_order, name`
       ),
       pool.query(
         `SELECT DISTINCT u.user_id, u.name

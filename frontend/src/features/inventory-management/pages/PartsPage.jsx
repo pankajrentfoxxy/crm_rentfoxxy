@@ -50,6 +50,7 @@ function AddPartDrawer({ open, onClose, onSave, initial }) {
     part_name: '', category: 'general', description: '', quantity: 0,
     min_threshold: 5, cost: '', location_code: '', vendor: '',
     part_sku: '', compatible_brands: '', warranty_months: 0, is_consumable: false, notes: '',
+    selling_price: '', hsn_code: '', gst_rate: 18,
   };
   const [form, setForm] = useState(blank);
   const [busy, setBusy] = useState(false);
@@ -72,6 +73,9 @@ function AddPartDrawer({ open, onClose, onSave, initial }) {
         warranty_months: initial.warranty_months || 0,
         is_consumable: !!initial.is_consumable,
         notes: initial.notes || '',
+        selling_price: initial.selling_price || '',
+        hsn_code: initial.hsn_code || '',
+        gst_rate: initial.gst_rate ?? 18,
       });
     } else {
       setForm(blank);
@@ -143,6 +147,20 @@ function AddPartDrawer({ open, onClose, onSave, initial }) {
             <span className="text-gray-600">Unit Cost (₹)</span>
             <input type="number" min={0} step="0.01" className="mt-1 w-full border rounded-lg px-3 py-2" value={form.cost} onChange={(e) => setForm({ ...form, cost: e.target.value })} />
           </label>
+          <div className="grid grid-cols-3 gap-3">
+            <label className="block">
+              <span className="text-gray-600">Selling price (₹)</span>
+              <input type="number" min={0} step="0.01" className="mt-1 w-full border rounded-lg px-3 py-2" value={form.selling_price} onChange={(e) => setForm({ ...form, selling_price: e.target.value })} />
+            </label>
+            <label className="block">
+              <span className="text-gray-600">HSN</span>
+              <input className="mt-1 w-full border rounded-lg px-3 py-2" value={form.hsn_code} onChange={(e) => setForm({ ...form, hsn_code: e.target.value })} />
+            </label>
+            <label className="block">
+              <span className="text-gray-600">GST %</span>
+              <input type="number" min={0} className="mt-1 w-full border rounded-lg px-3 py-2" value={form.gst_rate} onChange={(e) => setForm({ ...form, gst_rate: e.target.value })} />
+            </label>
+          </div>
           <label className="block">
             <span className="text-gray-600">Location Code</span>
             <input className="mt-1 w-full border rounded-lg px-3 py-2 font-mono" placeholder="Shelf A-3" value={form.location_code} onChange={(e) => setForm({ ...form, location_code: e.target.value })} />
@@ -503,6 +521,7 @@ export default function PartsPage() {
     if (stockFilter === 'in_stock' && stock <= 10) return false;
     if (stockFilter === 'low' && (stock >= getThreshold(p) || stock === 0)) return false;
     if (stockFilter === 'out' && stock !== 0) return false;
+    if (stockFilter === 'no_price' && p.selling_price != null && p.selling_price !== '') return false;
     return true;
   }), [enriched, search, category, stockFilter]);
 
@@ -529,6 +548,9 @@ export default function PartsPage() {
       warranty_months: form.warranty_months,
       notes: form.notes,
       min_threshold: form.min_threshold,
+      selling_price: form.selling_price,
+      hsn_code: form.hsn_code,
+      gst_rate: form.gst_rate,
     };
     try {
       if (editPart) {
@@ -670,6 +692,7 @@ export default function PartsPage() {
                 <option value="in_stock">In Stock</option>
                 <option value="low">Low Stock</option>
                 <option value="out">Out of Stock</option>
+                <option value="no_price">Missing selling price</option>
               </select>
             </label>
             <button type="button" onClick={() => { setSearch(''); setCategory(''); setStockFilter(''); }} className="text-sm text-blue-600 hover:underline pb-2">

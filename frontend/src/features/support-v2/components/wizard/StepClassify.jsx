@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { PriorityChip } from '../../../../components/ui/supportPrimitives';
-import { repeatCheck, searchTaxonomy, uploadAttachments } from '../../supportV2Api';
+import { repeatCheck, searchTaxonomy } from '../../supportV2Api';
+import EvidenceUploader from '../EvidenceUploader';
 import { classifyLineErrors, computePriority, SUPPORT_V2_BASE, woTypeLabel } from '../../supportV2Utils';
 
 function childrenOf(tree, parentId) {
@@ -111,17 +112,7 @@ function LineCard({
     applyIssue(node, type, subtype);
   };
 
-  const attach = async (e) => {
-    const files = e.target.files;
-    if (!files?.length) return;
-    try {
-      const r = await uploadAttachments(null, files, { kind: 'PHOTO_CUSTOMER' });
-      const ids = (r.data?.rows || []).map((x) => x.attachment_id);
-      onChange({ attachment_ids: [...(line.attachment_ids || []), ...ids] });
-    } catch {
-      /* toast at page */
-    }
-  };
+  const photoRequired = Boolean(line.requires_photo || line.chargeable_default);
 
   return (
     <div className={`rounded-[10px] border bg-white p-3 space-y-2 ${errors.length ? 'border-pri1' : 'border-sup-lineSoft'}`}>
@@ -189,12 +180,15 @@ function LineCard({
             <option value={1}>1</option><option value={2}>2</option><option value={3}>3</option>
           </select>
         </label>
-        <label className="text-sup-accent underline cursor-pointer">
-          ＋ Attach
-          <input type="file" multiple className="hidden" onChange={attach} />
-        </label>
-        {(line.attachment_ids || []).length ? <span>{line.attachment_ids.length} file(s)</span> : null}
       </div>
+      <EvidenceUploader
+        attachmentIds={line.attachment_ids || []}
+        onChange={(ids) => onChange({ attachment_ids: ids, photos_deferred: false })}
+        required={photoRequired}
+        canSkip
+        deferred={line.photos_deferred}
+        onSkip={() => onChange({ photos_deferred: true })}
+      />
       {line.chargeable_default && (
         <div className="rounded-md bg-pri2-bg text-pri2 px-2 py-1.5 text-[11.5px]">
           This issue type is usually chargeable. Photos are mandatory before a charge can be raised.

@@ -15,6 +15,7 @@ const dispatch = require('../controllers/supportV2DispatchController');
 const attendance = require('../controllers/supportV2AttendanceController');
 const reports = require('../controllers/supportV2ReportsController');
 const settings = require('../controllers/supportV2SettingsController');
+const charges = require('../controllers/supportV2ChargesController');
 const { requireWoType, requireOwnWo, withIdempotency } = require('../middleware/supportWoAccess');
 
 const viewTickets = checkSectionPermission('support_tickets', 'view');
@@ -60,7 +61,7 @@ const upload = multer({
       cb(null, `sv2-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`);
     },
   }),
-  limits: multerLimits({ files: 8 }),
+  limits: multerLimits({ files: 12, fileSize: 15 * 1024 * 1024 }),
 });
 
 router.use(authMiddleware);
@@ -79,6 +80,7 @@ router.delete('/views/:id', viewTickets, ctrl.deleteView);
 router.get('/customers/search', viewTickets, tickets.searchCustomers);
 router.get('/customers/:id/context', viewTickets, tickets.customerContext);
 router.get('/customers/:id/assets', viewTickets, tickets.customerAssets);
+router.get('/customers/:id/contacts', viewTickets, tickets.customerContacts);
 
 router.get('/tickets/search', viewTickets, tickets.searchTickets);
 router.get('/tickets/counts', viewTickets, ctrl.ticketCounts);
@@ -93,11 +95,15 @@ router.get('/dispatch/board', viewDispatch, dispatch.board);
 router.post('/dispatch/assign', editDispatch, dispatch.assign);
 router.post('/dispatch/auto-assign', editDispatch, dispatch.autoAssign);
 router.get('/dispatch/capacity', viewDispatch, dispatch.capacity);
+router.get('/assignees/availability', viewTickets, dispatch.slotAvailability);
 router.get('/assignees/:userId/availability', viewTickets, dispatch.assigneeAvailability);
+router.get('/charges', checkSectionPermission('support_charges_billing', 'view'), charges.list);
+router.post('/charges/:id/decide', checkSectionPermission('support_charges_billing', 'edit'), charges.decide);
+router.post('/charges/bulk', checkSectionPermission('support_charges_billing', 'edit'), charges.bulk);
 router.get('/attendance', viewDispatch, attendance.list);
 router.put('/attendance', editDispatch, attendance.upsert);
 
-router.post('/attachments/staging', createTickets, wrapMulter(upload.array('files', 8)), tickets.addAttachment);
+router.post('/attachments/staging', createTickets, wrapMulter(upload.array('files', 12)), tickets.addAttachment);
 router.get('/lines/:lineId/repeat-check', viewTickets, tickets.repeatCheck);
 router.get('/lines/:lineId/replacement-context', viewRepl, repl.context);
 router.post('/lines/:lineId/replacement', createRepl, repl.create);
@@ -124,7 +130,7 @@ router.post('/tickets/:id/reopen', editTickets, tickets.reopenTicket);
 router.post('/tickets/:id/cancel', deleteTickets, tickets.cancelTicket);
 router.post('/tickets/:id/link', editTickets, tickets.linkTicket);
 router.post('/tickets/:id/comment', viewTickets, tickets.comment);
-router.post('/tickets/:id/attachments', editTickets, wrapMulter(upload.array('files', 8)), tickets.addAttachment);
+router.post('/tickets/:id/attachments', editTickets, wrapMulter(upload.array('files', 12)), tickets.addAttachment);
 router.post('/returns/bulk', createReturn, returns.createBulk);
 router.get('/returns/bulk/:groupId', viewReturn, returns.getBulk);
 router.get('/returns/catalog', checkAnySectionPermission(

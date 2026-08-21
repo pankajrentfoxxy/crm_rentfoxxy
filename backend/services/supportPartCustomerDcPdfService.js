@@ -156,14 +156,15 @@ async function generatePartCustomerDcPdf(dcNumber) {
     y += 6;
 
     parts.forEach((p, i) => {
-      const amt = p.billing_type === 'charge_customer' ? Number(p.charge_amount || 0) : 0;
+      const chargeable = p.billing_type === 'charge_customer' || p.liability === 'CUSTOMER_CHARGEABLE';
+      const amt = chargeable ? Number(p.charge_amount || p.unit_selling_price || 0) : 0;
       doc.font('Helvetica').fontSize(8).fillColor(C.ink);
       doc.text(String(i + 1), L, y, { width: 20 });
       doc.text(p.part_name || 'Spare Part', L + 22, y, { width: 180 });
       doc.text(p.prt_id || '—', L + 210, y, { width: 80 });
       doc.text(p.ttspl_id || '—', L + 295, y, { width: 80 });
       doc.text(dcl.hsn_code || '847330', L + 380, y, { width: 50 });
-      doc.text(amt > 0 ? money(amt) : 'Warranty', L + 440, y, { width: 80, align: 'right' });
+      doc.text(amt > 0 ? money(amt) : 'Under warranty — no charge', L + 440, y, { width: 80, align: 'right' });
       y += 16;
     });
 

@@ -31,6 +31,7 @@ const NAV = [
       { to: 'attendance', label: 'Attendance', icon: CheckCircle2, section: 'support_dispatch', action: 'edit' },
       { to: 'parts', label: 'Parts queue', icon: Boxes, section: 'support_parts_approve', countKey: 'parts_pending' },
       { to: 'approvals', label: 'Approvals', icon: CheckCircle2, section: 'support_approvals', countKey: 'approvals_pending', danger: true },
+      { to: 'charges', label: 'Charges', icon: CheckCircle2, section: 'support_charges_billing' },
     ],
   },
   {

@@ -269,6 +269,18 @@ async function decideApproval(client, approvalId, body, userId) {
   if (row.status !== 'PENDING') {
     throw Object.assign(new Error('Approval already decided'), { status: 409 });
   }
+  if (decision === 'APPROVED' && ['CHARGEABLE_PART', 'DAMAGE_CHARGE'].includes(row.approval_type) && row.ticket_id) {
+    const t = (await client.query(
+      `SELECT photos_deferred FROM support_tickets_v2 WHERE ticket_id = $1`,
+      [row.ticket_id]
+    )).rows[0];
+    if (t && t.photos_deferred) {
+      throw Object.assign(
+        new Error('Photos pending from customer — a chargeable outcome cannot be approved without them'),
+        { status: 409 }
+      );
+    }
+  }
   await client.query(
     `UPDATE support_approvals
         SET status = $2, decided_by = $3, decided_at = NOW(), decision_reason = $4

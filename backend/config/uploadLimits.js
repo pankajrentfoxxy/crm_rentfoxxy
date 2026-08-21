@@ -39,7 +39,8 @@ function wrapMulter(middleware) {
   return (req, res, next) => {
     middleware(req, res, (err) => {
       if (err) {
-        return res.status(err.type === 'entity.too.large' ? 413 : 400).json({
+        const code = err.type === 'entity.too.large' || err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+        return res.status(code).json({
           success: false,
           message: multerErrorMessage(err),
         });

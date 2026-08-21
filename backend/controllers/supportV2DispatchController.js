@@ -126,6 +126,79 @@ exports.capacity = async (req, res) => {
   } catch (e) { bad(res, e); }
 };
 
+exports.slotAvailability = async (req, res) => {
+  try {
+    const groupId = req.query.group_id ? Number(req.query.group_id) : null;
+    const days = Math.min(14, Math.max(1, Number(req.query.days) || 7));
+    const from = req.query.date_from || new Date().toISOString().slice(0, 10);
+    const siteKey = req.query.site_key || null;
+    const users = await pool.query(
+      `SELECT DISTINCT u.user_id, u.name
+         FROM users u
+         LEFT JOIN support_group_members m ON m.user_id = u.user_id
+        WHERE COALESCE(u.active, TRUE) = TRUE
+          AND (
+            ($1::int IS NULL AND u.role IN ('support_tech','technician'))
+            OR m.group_id = $1
+          )
+        ORDER BY u.name`,
+      [groupId]
+    );
+    const slots = [];
+    for (let t = 9 * 60 + 30; t < 19 * 60; t += 30) {
+      const hh = String(Math.floor(t / 60)).padStart(2, '0');
+      const mm = String(t % 60).padStart(2, '0');
+      slots.push(`${hh}:${mm}`);
+    }
+    const rows = [];
+    for (const u of users.rows) {
+      const busy = await pool.query(
+        `SELECT slot_date::text, to_char(slot_start,'HH24:MI') AS slot_start, wo_id
+           FROM support_wo_slots
+          WHERE user_id = $1 AND slot_date >= $2::date AND slot_date < $2::date + ($3 || ' days')::interval`,
+        [u.user_id, from, days]
+      );
+      const leaves = await pool.query(
+        `SELECT leave_date::text FROM user_leaves
+          WHERE user_id = $1 AND leave_date >= $2::date AND leave_date < $2::date + ($3 || ' days')::interval`,
+        [u.user_id, from, days]
+      );
+      const leaveSet = new Set(leaves.rows.map((r) => r.leave_date));
+      const busyMap = {};
+      for (const b of busy.rows) {
+        busyMap[`${b.slot_date}|${b.slot_start}`] = b.wo_id;
+      }
+      const sameSite = siteKey
+        ? (await pool.query(
+          `SELECT COUNT(*)::int AS n FROM support_work_orders w
+             JOIN support_tickets_v2 t ON t.ticket_id = w.ticket_id
+            WHERE w.assigned_to = $1 AND t.site_key = $2
+              AND w.status NOT IN ('COMPLETED','CANCELLED','FAILED')`,
+          [u.user_id, siteKey]
+        )).rows[0].n
+        : 0;
+      const jobsToday = (await pool.query(
+        `SELECT COUNT(*)::int AS n FROM support_work_orders
+          WHERE assigned_to = $1 AND status NOT IN ('COMPLETED','CANCELLED','FAILED')
+            AND (COALESCE(scheduled_start, created_at) AT TIME ZONE 'Asia/Kolkata')::date
+                = (NOW() AT TIME ZONE 'Asia/Kolkata')::date`,
+        [u.user_id]
+      )).rows[0].n;
+      rows.push({
+        user_id: u.user_id,
+        name: u.name,
+        jobs_today: jobsToday,
+        jobs_at_site: sameSite,
+        leave_dates: [...leaveSet],
+        busy: busyMap,
+        slots,
+      });
+    }
+    rows.sort((a, b) => (b.jobs_at_site - a.jobs_at_site) || (a.jobs_today - b.jobs_today) || a.name.localeCompare(b.name));
+    res.json({ success: true, from, days, slots, users: rows });
+  } catch (e) { bad(res, e); }
+};
+
 exports.assigneeAvailability = async (req, res) => {
   try {
     const userId = Number(req.params.userId);

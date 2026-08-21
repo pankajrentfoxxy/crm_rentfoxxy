@@ -104,6 +104,7 @@ async function pullApprovedExtraLines(client, customerId) {
        FROM customer_invoice_extra_lines
       WHERE customer_id = $1
         AND status = 'APPROVED'
+        AND COALESCE(billing_mode, 'MONTHLY') = 'MONTHLY'
         AND billed_in_invoice_id IS NULL
       ORDER BY extra_line_id`,
     [customerId]

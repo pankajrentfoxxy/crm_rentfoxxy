@@ -208,26 +208,61 @@ async function createWorkOrder(client, ticketId, body, actorId) {
   if (lines.length !== lineIds.length) {
     throw Object.assign(new Error('One or more lines do not belong to this ticket'), { status: 400 });
   }
-  const number = await nextWoNumber(client);
+  const {
+    assertMethodForType, normalizeMethod, courierDirectionFor,
+    slotsToScheduled, assertSlotsFree, writeSlots,
+  } = require('./supportWoLogistics');
+  const method = assertMethodForType(woType, body.method);
+  const slots = Array.isArray(body.slots) ? body.slots : [];
+  if (method === 'TECHNICIAN' && !slots.length && !body.scheduled_start && !body.slot_start) {
+    throw Object.assign(new Error('At least one slot is required for a technician visit'), { status: 400 });
+  }
+  if (method === 'COURIER' && !body.courier_partner) {
+    throw Object.assign(new Error('courier_partner is required for courier work orders'), { status: 400 });
+  }
   const assignedTo = body.assigned_to || null;
+  if (method === 'TECHNICIAN' && assignedTo && slots.length) {
+    await assertSlotsFree(client, assignedTo, slots);
+  }
+  let slotStart = body.slot_start || body.scheduled_start || null;
+  let slotEnd = body.slot_end || body.scheduled_end || null;
+  if (slots.length) {
+    const derived = slotsToScheduled(slots);
+    slotStart = derived.start;
+    slotEnd = derived.end;
+  } else if (method === 'COURIER' && body.courier_pickup_date) {
+    slotStart = new Date(`${body.courier_pickup_date}T09:30:00+05:30`);
+    slotEnd = new Date(`${body.courier_pickup_date}T19:00:00+05:30`);
+  }
+  const number = await nextWoNumber(client);
   const initial = body.hold_as_draft ? 'DRAFT' : (assignedTo ? 'ASSIGNED' : 'PENDING_ASSIGNMENT');
-  const slotStart = body.slot_start || body.scheduled_start || null;
-  const slotEnd = body.slot_end || body.scheduled_end || null;
   const ins = await client.query(
     `INSERT INTO support_work_orders (
        wo_number, ticket_id, wo_type, status, assigned_to, assignment_group_id,
        scheduled_start, scheduled_end, method, notes,
        replacement_group_id, linked_wo_id,
-       slot_start, slot_end, priority, sla_due_at, distance_km
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+       slot_start, slot_end, priority, sla_due_at, distance_km,
+       courier_partner, courier_other_name, courier_direction, courier_awb,
+       courier_pickup_date, courier_declared_value, courier_packaging_note,
+       remote_contact_window, batch_group_id
+     ) VALUES (
+       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
+       $18,$19,$20,$21,$22,$23,$24,$25,$26
+     )
      RETURNING *`,
     [
       number, ticketId, woType, initial, assignedTo, body.assignment_group_id || null,
       slotStart, slotEnd,
-      body.method || null, body.notes || null,
+      method || normalizeMethod(body.method), body.notes || null,
       body.replacement_group_id || null, body.linked_wo_id || null,
       slotStart, slotEnd, ticket.priority || null, ticket.sla_resolution_due_at || null,
       body.distance_km != null ? Number(body.distance_km) : null,
+      body.courier_partner || null, body.courier_other_name || null,
+      body.courier_direction || courierDirectionFor(woType),
+      body.courier_awb || null, body.courier_pickup_date || null,
+      body.courier_declared_value != null ? Number(body.courier_declared_value) : null,
+      body.courier_packaging_note || null,
+      body.remote_contact_window || null, body.batch_group_id || null,
     ]
   );
   const wo = ins.rows[0];
@@ -237,6 +272,7 @@ async function createWorkOrder(client, ticketId, body, actorId) {
       [wo.wo_id, lineId]
     );
   }
+  if (slots.length) await writeSlots(client, wo.wo_id, assignedTo, slots);
   await instantiateSteps(client, wo.wo_id, woType);
   await logEvent(client, {
     ticketId,

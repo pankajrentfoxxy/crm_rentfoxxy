@@ -41,6 +41,17 @@ exports.getOne = async (req, res) => {
   try {
     const id = Number(req.params.woId);
     const row = await wo.loadWo(pool, id);
+    const ticketBits = (await pool.query(
+      `SELECT site_label, site_pincode, contact_name, contact_phone, customer_id
+         FROM support_tickets_v2 WHERE ticket_id = $1`,
+      [row.ticket_id]
+    )).rows[0] || {};
+    Object.assign(row, {
+      site_label: ticketBits.site_label,
+      site_pincode: ticketBits.site_pincode,
+      contact_name: ticketBits.contact_name,
+      contact_phone: ticketBits.contact_phone,
+    });
     const [steps, assets, actions] = await Promise.all([
       pool.query(
         `SELECT * FROM support_work_order_steps WHERE wo_id = $1 ORDER BY sort_order`,

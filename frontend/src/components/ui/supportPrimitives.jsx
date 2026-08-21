@@ -589,3 +589,36 @@ export function DataTable({
     </>
   );
 }
+
+export function WizardRail({ steps, current, onGo, photoCount }) {
+  return (
+    <ol className="flex flex-wrap gap-2 text-[12px]">
+      {steps.map((label, i) => {
+        const done = i < current;
+        const active = i === current;
+        return (
+          <li key={label}>
+            <button
+              type="button"
+              disabled={!done && !active}
+              onClick={() => done && onGo?.(i)}
+              className={`px-2.5 py-1 rounded-md ${
+                active ? 'bg-sup-accentSoft text-sup-accent font-semibold'
+                  : done ? 'bg-sup-okBg text-sup-ok cursor-pointer'
+                    : 'text-sup-faint'
+              }`}
+            >
+              {done ? '✓ ' : `${i + 1}. `}{label}
+              {i === 2 && photoCount > 0 ? ` · ${photoCount}` : ''}
+            </button>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+export function BlockedReason({ children }) {
+  if (!children) return null;
+  return <p className="text-[12px] text-pri1">{children}</p>;
+}

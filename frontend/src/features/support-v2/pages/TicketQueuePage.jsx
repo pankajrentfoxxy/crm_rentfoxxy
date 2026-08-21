@@ -18,7 +18,7 @@ const DEFAULTS = {
   page: 1, view: 'all_open', search: '',
   class: '', priority: '', type_id: '', subtype_id: '', issue_id: '',
   status: '', pending_reason: '', sla: '', group_id: '', assigned_to: '', channel: '',
-  date_from: '', date_to: '', sort: 'priority_sla',
+  date_from: '', date_to: '', sort: 'priority_sla', photos_deferred: '',
 };
 
 const CLASS_OPTS = [
@@ -335,6 +335,13 @@ export default function TicketQueuePage() {
               className="w-[260px] h-7 border border-sup-line rounded-md pl-9 pr-3 text-[11.5px]"
             />
           </div>
+          <button
+            type="button"
+            onClick={() => setFilters({ photos_deferred: filters.photos_deferred ? '' : 'true', page: 1 })}
+            className={`h-7 px-2.5 rounded-full text-[11.5px] border ${filters.photos_deferred ? 'bg-pri2-bg border-pri2 text-pri2' : 'border-sup-line'}`}
+          >
+            Photos pending
+          </button>
           <Sel value={filters.class}       onChange={(v) => setFilters({ class: v, page: 1 })}       label="Class"     options={CLASS_OPTS} />
           <Sel value={filters.priority}    onChange={(v) => setFilters({ priority: v, page: 1 })}    label="Priority"  options={PRIORITY_OPTS} />
           <Sel value={filters.type_id}     onChange={(v) => setFilters({ type_id: v, subtype_id: '', issue_id: '', page: 1 })} label="Type" options={typeOpts} />

@@ -1,43 +1,17 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Button, PageHeader } from '../../../components/ui/supportPrimitives';
+import { Button, BlockedReason, PageHeader, WizardRail } from '../../../components/ui/supportPrimitives';
 import { createTicket, fetchQueueMeta, fetchTaxonomyTree, getCustomerAssets, getCustomerContext } from '../supportV2Api';
 import { SUPPORT_V2_BASE } from '../supportV2Utils';
+import { EMPTY_TICKET_DRAFT } from '../ticketDraft';
+import { useAuth } from '../../../context/AuthContext';
 import StepCustomer, { customerStepValid } from '../components/wizard/StepCustomer';
 import StepMachines, { machinesStepValid } from '../components/wizard/StepMachines';
 import StepClassify, { classifyStepValid } from '../components/wizard/StepClassify';
 import StepConfirm from '../components/wizard/StepConfirm';
 
-const STEPS = ['Customer', 'Machines', 'Classify', 'Confirm'];
-
-const empty = {
-  step: 0,
-  ticket_class: 'INCIDENT',
-  channel: 'PHONE',
-  customer_id: null,
-  customer: null,
-  site_id: null,
-  site_key: '',
-  site_pincode: '',
-  site_label: '',
-  contact_name: '',
-  contact_phone: '',
-  contact_email: '',
-  contact_is_vip: false,
-  subject: '',
-  selectedSerials: [],
-  unknownAsset: false,
-  lines: [],
-  sameIssue: false,
-  assignment_group_id: null,
-  assigned_to: null,
-  preferred_slot_start: '',
-  preferred_slot_end: '',
-  internal_note: '',
-  link: null,
-  contextSites: [],
-};
+const STEPS = ['Customer & contact', 'Machines & location', 'Issue & evidence', 'Assign & review'];
 
 function buildLines(state, assets) {
   if (state.unknownAsset && !state.selectedSerials.length) {
@@ -69,9 +43,17 @@ function buildLines(state, assets) {
   });
 }
 
+function blockedReason(state) {
+  if (state.step === 0 && !customerStepValid(state)) return 'Select a customer and a valid 10-digit mobile to continue.';
+  if (state.step === 1 && !machinesStepValid(state)) return 'Search and select a machine, or mark it as not listed.';
+  if (state.step === 2 && !classifyStepValid(state)) return 'Classify every machine. Add a photo, or choose Skip, to continue.';
+  return '';
+}
+
 export default function NewTicketPage() {
   const nav = useNavigate();
-  const [state, setState] = useState(empty);
+  const { user } = useAuth();
+  const [state, setState] = useState(EMPTY_TICKET_DRAFT);
   const [context, setContext] = useState(null);
   const [assets, setAssets] = useState([]);
   const [tree, setTree] = useState([]);
@@ -108,6 +90,8 @@ export default function NewTicketPage() {
     return true;
   }, [state]);
 
+  const photoCount = (state.lines || []).reduce((n, l) => n + (l.attachment_ids || []).length, 0);
+
   const goNext = () => {
     if (state.step === 1) {
       setState((s) => {
@@ -121,71 +105,70 @@ export default function NewTicketPage() {
     setState((s) => ({ ...s, step: s.step + 1 }));
   };
 
-  const submit = async () => {
+  const payloadFromState = () => ({
+    ticket_class: state.ticket_class,
+    channel: state.channel,
+    customer_id: state.customer_id,
+    site_id: state.site_id,
+    site_key: state.site_key || undefined,
+    site_pincode: state.site_pincode || undefined,
+    site_label: state.site_label,
+    site_source: state.site_source,
+    site_dc_number: state.site_dc_number || undefined,
+    site_override_reason: state.site_override_reason || undefined,
+    contact_name: state.contact_name,
+    contact_phone: state.contact_phone,
+    contact_email: state.contact_email,
+    contact_source: state.contact_source,
+    contact_is_vip: state.contact_is_vip,
+    subject: state.subject || undefined,
+    assignment_group_id: state.assignment_group_id,
+    assigned_to: state.assigned_to,
+    internal_note: state.internal_note,
+    photos_deferred: (state.lines || []).some((l) => l.photos_deferred),
+    asset_lines: state.lines.map((l) => ({
+      serial_id: l.serial_id,
+      ttspl_id: l.ttspl_id,
+      serial_number: l.serial_number,
+      asset_unknown: Boolean(l.asset_unknown),
+      reported_issue_id: l.reported_issue_id,
+      reported_description: l.reported_description,
+      impact: l.impact,
+      urgency: l.urgency,
+      attachment_ids: l.attachment_ids || [],
+      photos_required: Boolean(l.requires_photo || l.chargeable_default),
+      photos_deferred: Boolean(l.photos_deferred),
+    })),
+    link: state.link || undefined,
+  });
+
+  const submit = async (continueToWo) => {
     setSaving(true);
     try {
-      const payload = {
-        ticket_class: state.ticket_class,
-        channel: state.channel,
-        customer_id: state.customer_id,
-        site_id: state.site_id,
-        site_key: state.site_key || undefined,
-        site_pincode: state.site_pincode || undefined,
-        site_label: state.site_label,
-        contact_name: state.contact_name,
-        contact_phone: state.contact_phone,
-        contact_email: state.contact_email,
-        contact_is_vip: state.contact_is_vip,
-        subject: state.subject || undefined,
-        assignment_group_id: state.assignment_group_id,
-        assigned_to: state.assigned_to,
-        preferred_slot_start: state.preferred_slot_start ? new Date(state.preferred_slot_start).toISOString() : null,
-        preferred_slot_end: state.preferred_slot_end ? new Date(state.preferred_slot_end).toISOString() : null,
-        internal_note: state.internal_note,
-        asset_lines: state.lines.map((l) => ({
-          serial_id: l.serial_id,
-          ttspl_id: l.ttspl_id,
-          serial_number: l.serial_number,
-          asset_unknown: Boolean(l.asset_unknown),
-          reported_issue_id: l.reported_issue_id,
-          reported_description: l.reported_description,
-          impact: l.impact,
-          urgency: l.urgency,
-          attachment_ids: l.attachment_ids || [],
-        })),
-        link: state.link || undefined,
-      };
-      const r = await createTicket(payload);
+      const r = await createTicket(payloadFromState());
       toast.success(`Created ${r.data.ticket_number}`);
-      nav(`${SUPPORT_V2_BASE}/tickets/${r.data.ticket_id}`);
+      if (continueToWo) nav(`${SUPPORT_V2_BASE}/tickets/${r.data.ticket_id}?wo=1`);
+      else nav(`${SUPPORT_V2_BASE}/tickets/${r.data.ticket_id}`);
     } catch (e) {
-      const msg = e.response?.data?.message || 'Could not create ticket';
-      toast.error(msg);
+      toast.error(e.response?.data?.message || 'Could not create ticket');
     } finally {
       setSaving(false);
     }
   };
 
+  const cust = state.customer;
+  const headerBits = cust
+    ? [cust.display_name || cust.company_name || cust.name, `#${cust.customer_id}`, context?.support_tier, context?.fleet_size != null ? `${context.fleet_size} machines` : null].filter(Boolean).join(' · ')
+    : 'Classify every machine before the ticket exists.';
+
   return (
     <div className="space-y-4">
-      <PageHeader title="New ticket" subtitle="Classify every machine before the ticket exists." />
-      <div className="flex gap-2 text-[12px]">
-        {STEPS.map((label, i) => (
-          <span key={label} className={`px-2 py-1 rounded ${i === state.step ? 'bg-sup-accentSoft text-sup-accent font-semibold' : 'text-sup-muted'}`}>
-            {i + 1}. {label}
-          </span>
-        ))}
-      </div>
+      <PageHeader title="New ticket" subtitle={headerBits} />
+      <WizardRail steps={STEPS} current={state.step} onGo={(i) => setState((s) => ({ ...s, step: i }))} photoCount={photoCount} />
       {state.step === 0 && <StepCustomer state={state} setState={setState} context={context} />}
       {state.step === 1 && <StepMachines state={state} setState={setState} assets={assets} />}
       {state.step === 2 && (
-        <StepClassify
-          state={state}
-          setState={setState}
-          tree={tree}
-          supportTier={context?.support_tier}
-          fleetSize={context?.fleet_size}
-        />
+        <StepClassify state={state} setState={setState} tree={tree} supportTier={context?.support_tier} fleetSize={context?.fleet_size} />
       )}
       {state.step === 3 && (
         <StepConfirm
@@ -195,17 +178,22 @@ export default function NewTicketPage() {
           owners={owners}
           supportTier={context?.support_tier}
           fleetSize={context?.fleet_size}
+          currentUserId={user?.user_id}
         />
       )}
-      <div className="flex justify-between">
-        <Button variant="secondary" disabled={state.step === 0} onClick={() => setState((s) => ({ ...s, step: s.step - 1 }))}>
-          Back
-        </Button>
-        {state.step < 3 ? (
-          <Button disabled={!canContinue} onClick={goNext}>Continue</Button>
-        ) : (
-          <Button loading={saving} onClick={submit}>Create ticket</Button>
-        )}
+      <div className="flex justify-between items-center gap-3">
+        <Button variant="secondary" disabled={state.step === 0} onClick={() => setState((s) => ({ ...s, step: s.step - 1 }))}>Back</Button>
+        <div className="flex items-center gap-3">
+          <BlockedReason>{!canContinue ? blockedReason(state) : ''}</BlockedReason>
+          {state.step < 3 ? (
+            <Button disabled={!canContinue} onClick={goNext}>Continue</Button>
+          ) : (
+            <>
+              <Button variant="secondary" loading={saving} onClick={() => submit(false)}>Create ticket</Button>
+              <Button loading={saving} onClick={() => submit(true)}>Create ticket and continue to work order</Button>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );

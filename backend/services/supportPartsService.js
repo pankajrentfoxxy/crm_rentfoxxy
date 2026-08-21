@@ -122,7 +122,8 @@ async function compatibleParts(db, serialId) {
   const configKey = extra.config_key || extra.config || null;
 
   const catalogue = (await db.query(
-    `SELECT part_id, part_name, part_sku, category, quantity, cost, location_code
+    `SELECT part_id, part_name, part_sku, category, quantity, cost, location_code,
+            selling_price, gst_rate, hsn_code
        FROM parts
       WHERE COALESCE(archived, FALSE) = FALSE
       ORDER BY part_name`
@@ -163,7 +164,7 @@ async function createPartRequest(client, body, actorId) {
   if (!partId || !lineId || !ticketId) fail('part_id, support_line_id and support_ticket_id are required', 400);
 
   const part = (await client.query(
-    'SELECT part_id, part_name, quantity FROM parts WHERE part_id = $1',
+    'SELECT part_id, part_name, quantity, selling_price, gst_rate, hsn_code FROM parts WHERE part_id = $1',
     [partId]
   )).rows[0];
   if (!part) fail('Part not found', 404);
@@ -182,37 +183,62 @@ async function createPartRequest(client, body, actorId) {
     [partId]
   )).rows.length > 0;
 
-  const liability = body.liability || 'COMPANY';
-  const chargeable = liability === 'CUSTOMER_CHARGEABLE';
+  const { resolveAttribution } = require('./supportFaultAttribution');
+  const attr = resolveAttribution(body.fault_attribution) || resolveAttribution(
+    body.liability === 'CUSTOMER_CHARGEABLE' ? 'CUSTOMER_DAMAGE' : body.liability === 'VENDOR_WARRANTY' ? 'VENDOR_WARRANTY' : 'COMPANY_FAULT'
+  );
+  const liability = attr.liability;
+  const chargeable = attr.chargeable;
+  if (chargeable && (part.selling_price == null || Number(part.selling_price) <= 0) && body.unit_selling_price == null) {
+    fail('No selling price set for this part. Ask Parts to set it before raising a charge.', 400);
+  }
+  if (chargeable && (!photos || !photos.length)) {
+    fail('Photos are required for a customer-chargeable part', 400);
+  }
+  const qty = Number(body.quantity) || 1;
+  const unitPrice = chargeable
+    ? Number(body.unit_selling_price != null ? body.unit_selling_price : part.selling_price)
+    : null;
+  const chargeAmount = chargeable ? Number((unitPrice * qty).toFixed(2)) : null;
   const statusV2 = inStock ? 'REQUESTED' : 'ESCALATED_TO_PROCUREMENT';
   const number = await generatePrqNumber(client);
 
   const ins = await client.query(
     `INSERT INTO part_requests (
        ticket_id, requested_by, part_name, description, status, request_number,
-       part_id, quantity, context, support_ticket_id, support_line_id, status_v2,
-       liability, charge_amount, collect_old_part, photo_attachment_ids, updated_at
+       part_id, quantity, context, support_ticket_id, support_line_id, work_order_id, status_v2,
+       liability, charge_amount, collect_old_part, photo_attachment_ids, updated_at,
+       fault_attribution, unit_selling_price, price_override_reason, needs_lead_approval,
+       requested_before_visit
      ) VALUES (
        NULL, $1, $2, $3, $4, $5,
-       $6, $7, 'FIELD', $8, $9, $10,
-       $11, $12, $13, $14::jsonb, NOW()
+       $6, $7, 'FIELD', $8, $9, $10, $11,
+       $12, $13, $14, $15::jsonb, NOW(),
+       $16, $17, $18, $19, $20
      ) RETURNING *`,
     [
       actorId, part.part_name, body.reason || null, inStock ? 'pending' : 'escalated', number,
-      partId, Number(body.quantity) || 1, ticketId, lineId, statusV2,
-      liability, chargeable ? Number(body.charge_amount || 0) : null,
+      partId, qty, ticketId, lineId, body.work_order_id || null, statusV2,
+      liability, chargeAmount,
       Boolean(body.collect_old_part), JSON.stringify(photos),
+      attr.code, unitPrice, body.price_override_reason || null, Boolean(attr.needsApproval),
+      Boolean(body.requested_before_visit),
     ]
   );
   const row = ins.rows[0];
 
-  if (chargeable) {
-    await client.query(
+  if (attr.needsApproval) {
+    const appr = await client.query(
       `INSERT INTO support_approvals (
          ticket_id, line_id, approval_type, status, amount, label, requested_by, customer_side
-       ) VALUES ($1,$2,'CHARGEABLE_PART','PENDING',$3,$4,$5,TRUE)`,
+       ) VALUES ($1,$2,'CHARGEABLE_PART','PENDING',$3,$4,$5,TRUE)
+       RETURNING approval_id`,
       [ticketId, lineId, row.charge_amount || 0, `Chargeable part ${number}`, actorId]
     );
+    await client.query('UPDATE part_requests SET approval_id = $2 WHERE request_id = $1', [
+      row.request_id, appr.rows[0].approval_id,
+    ]);
+    row.approval_id = appr.rows[0].approval_id;
     await setPendingCustomer(client, ticketId, actorId, `Chargeable part ${number}`);
   }
 
@@ -439,6 +465,17 @@ async function issueRequest(client, requestId, body, actorId) {
   if (!['RESERVED', 'APPROVED'].includes(row.status_v2)) {
     fail(`Cannot issue a request in ${row.status_v2}`, 409);
   }
+  if (row.needs_lead_approval) {
+    const ap = row.approval_id
+      ? (await client.query(
+        `SELECT status FROM support_approvals WHERE approval_id = $1`,
+        [row.approval_id]
+      )).rows[0]
+      : null;
+    if (!ap || ap.status !== 'APPROVED') {
+      fail('This part needs support-lead approval before it can be issued', 409);
+    }
+  }
   if (!body.signature_attachment_id) fail('signature_attachment_id required', 400);
   if (row.instance_id) {
     await client.query(
@@ -548,12 +585,20 @@ async function consumePart(client, requestId, body, actorId) {
     )).rows[0];
     await client.query(
       `INSERT INTO customer_invoice_extra_lines (
-         ticket_id, line_id, customer_id, charge_type, description, amount, status, photo_attachment_ids
-       ) VALUES ($1,$2,$3,'CHARGEABLE_PART',$4,$5,'PENDING',$6::jsonb)`,
+         ticket_id, line_id, customer_id, charge_type, description, amount, status, photo_attachment_ids,
+         billing_mode, source_part_request_id, source_wo_id, unit_price, quantity, gst_rate, hsn_code,
+         raised_at, raised_by
+       ) VALUES (
+         $1,$2,$3,'CHARGEABLE_PART',$4,$5,'PENDING',$6::jsonb,
+         'MONTHLY',$7,$8,$9,$10,$11,$12, NOW(), $13
+       )`,
       [
         row.support_ticket_id, row.support_line_id, ticket && ticket.customer_id,
         `Part ${row.request_number} · ${row.part_name || row.catalog_name}`,
         row.charge_amount, JSON.stringify(photos),
+        row.request_id, row.work_order_id || null,
+        row.unit_selling_price || row.charge_amount,
+        Number(row.quantity) || 1, 18, null, actorId,
       ]
     );
   }

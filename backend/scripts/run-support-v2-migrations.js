@@ -29,6 +29,10 @@ const MIGRATIONS = [
   '210_support_v2_identity.sql',
   '211_support_v2_notifications.sql',
   '212_support_v2_reports_cutover.sql',
+  '214_support_v2_flow_fix.sql',
+  '215_support_v2_wo_logistics.sql',
+  '216_support_v2_part_pricing.sql',
+  '217_support_v2_charge_billing.sql',
 ];
 
 async function main() {

@@ -1,49 +1,76 @@
 import React, { useEffect, useState } from 'react';
-import { searchCustomers } from '../../supportV2Api';
+import { searchCustomers, getCustomerContacts } from '../../supportV2Api';
 import { indianMobile } from '../../supportV2Utils';
 import TicketLinkPicker from '../TicketLinkPicker';
+import { applyCustomer, customerHasDraftWork } from '../../ticketDraft';
+import { Modal, Button } from '../../../../components/ui/supportPrimitives';
 
 const CHANNELS = ['PHONE', 'EMAIL', 'WHATSAPP', 'PORTAL', 'INTERNAL', 'CHAT'];
 
 export default function StepCustomer({ state, setState, context }) {
   const [q, setQ] = useState('');
   const [hits, setHits] = useState([]);
+  const [contacts, setContacts] = useState([]);
+  const [pending, setPending] = useState(null);
+  const [manual, setManual] = useState(state.contact_source === 'MANUAL');
 
   useEffect(() => {
     if (!q.trim()) { setHits([]); return undefined; }
     const t = setTimeout(() => {
-      searchCustomers(q.trim())
-        .then((r) => setHits(r.data?.rows || []))
-        .catch(() => setHits([]));
+      searchCustomers(q.trim()).then((r) => setHits(r.data?.rows || [])).catch(() => setHits([]));
     }, 250);
     return () => clearTimeout(t);
   }, [q]);
 
+  useEffect(() => {
+    if (!state.customer_id) { setContacts([]); return undefined; }
+    getCustomerContacts(state.customer_id).then((r) => setContacts(r.data?.rows || [])).catch(() => setContacts([]));
+    return undefined;
+  }, [state.customer_id]);
+
   const pick = (c) => {
+    if (Number(state.customer_id) === Number(c.customer_id)) {
+      setQ(''); setHits([]);
+      return;
+    }
+    if (customerHasDraftWork(state)) {
+      setPending(c);
+      return;
+    }
+    setState((s) => applyCustomer(s, c));
+    setManual(false);
+    setQ(''); setHits([]);
+  };
+
+  const confirmChange = () => {
+    if (!pending) return;
+    setState((s) => applyCustomer(s, pending));
+    setManual(false);
+    setPending(null);
+    setQ(''); setHits([]);
+  };
+
+  const applyContact = (row) => {
+    if (row === 'MANUAL') {
+      setManual(true);
+      setState((s) => ({ ...s, contact_source: 'MANUAL', contact_name: '', contact_phone: '', contact_email: '' }));
+      return;
+    }
+    setManual(false);
     setState((s) => ({
       ...s,
-      customer_id: c.customer_id,
-      customer: c,
-      contact_name: s.contact_name || c.name || '',
-      contact_phone: s.contact_phone || c.phone || '',
-      contact_email: s.contact_email || c.email || '',
-      site_id: null,
-      site_key: '',
-      site_pincode: '',
-      site_label: '',
-      selectedSerials: [],
-      link: null,
+      contact_source: row.source,
+      contact_name: row.name || '',
+      contact_phone: row.phone || '',
+      contact_email: row.email || '',
     }));
-    setQ('');
-    setHits([]);
   };
 
   const phoneOk = Boolean(indianMobile(state.contact_phone));
-  const sites = context?.sites || [];
   const open = context?.open_tickets || [];
 
   return (
-    <div className="grid gap-4" style={{ gridTemplateColumns: '1.4fr 1fr' }}>
+    <div className="grid gap-4 md:grid-cols-[1.4fr_1fr]">
       <div className="bg-white rounded-[10px] border border-sup-lineSoft p-4 space-y-3">
         <label className="block text-[12px] font-semibold text-sup-ink">
           Customer *
@@ -65,52 +92,39 @@ export default function StepCustomer({ state, setState, context }) {
             ))}
           </ul>
         )}
-        <label className="block text-[12px] font-semibold">
-          Delivery site *
-          <select
-            value={state.site_key || ''}
-            onChange={(e) => {
-              const site = sites.find((s) => s.site_key === e.target.value);
-              setState((s) => ({
-                ...s,
-                site_key: site ? site.site_key : '',
-                site_id: site ? site.customer_address_id : null,
-                site_pincode: site ? (site.pincode || '') : '',
-                site_label: site ? (site.address || site.city || site.pincode || '').slice(0, 120) : '',
-                assignment_group_id: site?.suggested_group_id || s.assignment_group_id,
-                selectedSerials: [],
-              }));
-            }}
-            className="mt-1 w-full rounded-md border border-sup-line px-2 py-1.5 text-[13px]"
-          >
-            <option value="">Select the location where the laptop was delivered</option>
-            {sites.map((s) => (
-              <option key={s.site_key || s.customer_address_id} value={s.site_key}>
-                {(s.address || s.city || 'Address')} · {s.pincode || '—'}
-                {s.source === 'delivery' ? ` · ${s.machine_count || 0} laptop(s)` : ' · CRM address'}
-              </option>
-            ))}
-          </select>
-        </label>
-        <p className="text-[11px] text-sup-muted -mt-1">
-          Site is taken from the delivery challan. Only laptops delivered here can be selected next.
-        </p>
-        <label className="block text-[12px] font-semibold">
-          Channel *
-          <select
-            value={state.channel}
-            onChange={(e) => setState((s) => ({ ...s, channel: e.target.value }))}
-            className="mt-1 w-full rounded-md border border-sup-line px-2 py-1.5 text-[13px]"
-          >
-            {CHANNELS.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-        </label>
+
+        {state.customer_id && (
+          <label className="block text-[12px] font-semibold">
+            Reporting contact *
+            <select
+              value={state.contact_source === 'MANUAL' ? 'MANUAL' : `${state.contact_name}|${state.contact_phone}`}
+              onChange={(e) => {
+                if (e.target.value === 'MANUAL') applyContact('MANUAL');
+                else {
+                  const row = contacts.find((c) => `${c.name}|${c.phone}` === e.target.value);
+                  if (row) applyContact(row);
+                }
+              }}
+              className="mt-1 w-full rounded-md border border-sup-line px-2 py-1.5 text-[13px]"
+            >
+              <option value="">Select who is calling</option>
+              {contacts.map((c) => (
+                <option key={c.contact_id} value={`${c.name}|${c.phone}`}>
+                  {c.name || 'Unnamed'} · {c.phone || '—'}{c.is_primary ? ' · Primary' : ''}{c.site_label ? ` · ${c.site_label}` : ''}
+                </option>
+              ))}
+              <option value="MANUAL">＋ Someone else</option>
+            </select>
+          </label>
+        )}
+
         <div className="grid grid-cols-2 gap-2">
           <label className="block text-[12px] font-semibold">
             Contact name *
             <input
               value={state.contact_name}
-              onChange={(e) => setState((s) => ({ ...s, contact_name: e.target.value }))}
+              readOnly={!manual}
+              onChange={(e) => setState((s) => ({ ...s, contact_name: e.target.value, contact_source: 'MANUAL' }))}
               className="mt-1 w-full rounded-md border border-sup-line px-2 py-1.5 text-[13px]"
             />
           </label>
@@ -118,25 +132,35 @@ export default function StepCustomer({ state, setState, context }) {
             Mobile *
             <input
               value={state.contact_phone}
-              onChange={(e) => setState((s) => ({ ...s, contact_phone: e.target.value }))}
+              readOnly={!manual}
+              onChange={(e) => setState((s) => ({ ...s, contact_phone: e.target.value, contact_source: 'MANUAL' }))}
               className={`mt-1 w-full rounded-md border px-2 py-1.5 text-[13px] ${state.contact_phone && !phoneOk ? 'border-pri1' : 'border-sup-line'}`}
             />
+            {state.contact_phone && !phoneOk && (
+              <span className="text-[11px] text-pri1 font-normal">Enter a 10-digit Indian mobile number.</span>
+            )}
           </label>
         </div>
+        {state.customer_id && !manual && (
+          <button type="button" className="text-[11px] text-sup-accent underline" onClick={() => setManual(true)}>Edit</button>
+        )}
         <label className="block text-[12px] font-semibold">
           Email
           <input
             value={state.contact_email}
-            onChange={(e) => setState((s) => ({ ...s, contact_email: e.target.value }))}
+            readOnly={!manual}
+            onChange={(e) => setState((s) => ({ ...s, contact_email: e.target.value, contact_source: 'MANUAL' }))}
             className="mt-1 w-full rounded-md border border-sup-line px-2 py-1.5 text-[13px]"
           />
         </label>
+        <label className="block text-[12px] font-semibold">
+          Channel *
+          <select value={state.channel} onChange={(e) => setState((s) => ({ ...s, channel: e.target.value }))} className="mt-1 w-full rounded-md border border-sup-line px-2 py-1.5 text-[13px]">
+            {CHANNELS.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </label>
         <label className="flex items-center gap-2 text-[12px]">
-          <input
-            type="checkbox"
-            checked={state.contact_is_vip}
-            onChange={(e) => setState((s) => ({ ...s, contact_is_vip: e.target.checked }))}
-          />
+          <input type="checkbox" checked={state.contact_is_vip} onChange={(e) => setState((s) => ({ ...s, contact_is_vip: e.target.checked }))} />
           VIP contact
         </label>
       </div>
@@ -152,25 +176,30 @@ export default function StepCustomer({ state, setState, context }) {
               <div>Fleet <b>{context?.fleet_size ?? '—'}</b></div>
               <div>Contract end <b>{context?.contract_end ? String(context.contract_end).slice(0, 10) : '—'}</b></div>
               <div>SLA <b>{context?.sla_policy_name || '—'}</b></div>
-              <div>Buffer <b>{context?.buffer_units ?? 0}</b></div>
-              <div>Overdue invoices <b className={context?.overdue_invoices ? 'text-pri1' : ''}>{context?.overdue_invoices ?? 0}</b></div>
             </div>
             <div className="mt-2 rounded-md bg-pri2-bg p-2">
-              <TicketLinkPicker
-                value={state.link}
-                onChange={(link) => setState((s) => ({ ...s, link }))}
-                suggestions={open}
-              />
+              <TicketLinkPicker value={state.link} onChange={(link) => setState((s) => ({ ...s, link }))} suggestions={open} />
             </div>
           </>
         )}
       </div>
+
+      {pending && (
+        <Modal title="Change customer?" onClose={() => setPending(null)} footer={(
+          <>
+            <Button variant="secondary" onClick={() => setPending(null)}>Keep {state.customer?.display_name || state.customer?.name}</Button>
+            <Button onClick={confirmChange}>Change customer</Button>
+          </>
+        )}>
+          <p className="text-[13px]">
+            You have {(state.lines || []).length || (state.selectedSerials || []).length} machine(s) entered for {state.customer?.display_name || state.customer?.name}. Changing the customer will clear them.
+          </p>
+        </Modal>
+      )}
     </div>
   );
 }
 
 export function customerStepValid(state) {
-  return Boolean(
-    state.customer_id && (state.site_key || state.site_id) && state.channel && state.contact_name && indianMobile(state.contact_phone)
-  );
+  return Boolean(state.customer_id && state.channel && state.contact_name && indianMobile(state.contact_phone));
 }
