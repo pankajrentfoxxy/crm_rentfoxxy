@@ -10,6 +10,7 @@ import { useUrlFilters, useDebouncedUrlSearch, listReturnState } from '../../../
 import { getBackendOrigin } from '../../../utils/api';
 import AdminDeliverModal from '../components/AdminDeliverModal';
 import ReturnWarehouseReceiveModal from '../components/ReturnWarehouseReceiveModal';
+import RefusedWarehouseReceiveModal from '../components/RefusedWarehouseReceiveModal';
 import PermissionGate from '../../../components/PermissionGate';
 import DispatchDashboardWidget from '../../dispatch/components/DispatchWorkflowPanel';
 
@@ -20,6 +21,7 @@ const TABS = [
   { id: 'porter', label: 'Porter' },
   { id: 'delivered', label: 'Delivered' },
   { id: 'rejected', label: 'Rejected' },
+  { id: 'awaiting_warehouse_return', label: 'Refused — Awaiting Warehouse' },
 ];
 
 const PAGE_SIZE = 25;
@@ -44,12 +46,13 @@ export default function DeliveryRegisterPage() {
   const [otpModal, setOtpModal] = useState(null);
   const [deliverModal, setDeliverModal] = useState(null);
   const [receiveModal, setReceiveModal] = useState(null);
+  const [receiveBackModal, setReceiveBackModal] = useState(null);
   const [rejectModal, setRejectModal] = useState(null);
   const [rejectReason, setRejectReason] = useState('');
   const [rejectRemarks, setRejectRemarks] = useState('');
 
   const isDelivered = tab === 'delivered';
-  const isRejectedTab = tab === 'rejected';
+  const isRejectedTab = tab === 'rejected' || tab === 'awaiting_warehouse_return';
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -162,8 +165,14 @@ export default function DeliveryRegisterPage() {
               <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-500">No deliveries in this view.</td></tr>
             ) : rows.map((row) => (
               <tr key={row.dc_number} className={row.status === 'rejected' ? 'bg-red-50/60' : ''}>
-                <td className={`px-4 py-3 font-mono ${row.status === 'rejected' ? 'text-red-700 line-through decoration-red-400' : 'text-blue-700'}`}>
-                  {row.dc_number}
+                <td className="px-4 py-3 font-mono">
+                  <Link
+                    to={deliveryChallanDetailPath(row.dc_number)}
+                    state={listReturnState(location)}
+                    className={`hover:underline ${row.status === 'rejected' ? 'text-red-700 line-through decoration-red-400' : 'text-blue-700'}`}
+                  >
+                    {row.dc_number}
+                  </Link>
                   {row.movement_type === 'return' && (
                     <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-700">RDC</span>
                   )}
@@ -192,7 +201,13 @@ export default function DeliveryRegisterPage() {
                     {statusLabel(row.status)}
                   </span>
                   {row.rejected_at && <p className="text-[10px] text-red-600">{formatDateTime(row.rejected_at)}</p>}
+                  {row.refusal_stage === 'awaiting_warehouse_receipt' && (
+                    <p className="text-[10px] font-medium text-amber-700">Awaiting warehouse receipt</p>
+                  )}
                   {row.return_to_warehouse_at && <p className="text-[10px] text-emerald-700">WH: {formatDateTime(row.return_to_warehouse_at)}</p>}
+                  {row.warehouse_receiver_name && (
+                    <p className="text-[10px] text-emerald-700">Received by {row.warehouse_receiver_name}</p>
+                  )}
                 </td>
                 <td className="px-4 py-3">
                   {row.otp_verified_at ? (
@@ -231,13 +246,24 @@ export default function DeliveryRegisterPage() {
                         row.return_to_warehouse_at ? (
                           <span className="text-xs text-emerald-700">Returned to QC</span>
                         ) : (
-                          <Link
-                            to={deliveryChallanDetailPath(row.dc_number)}
-                            state={listReturnState(location)}
-                            className="text-xs text-red-700 inline-flex items-center gap-1"
-                          >
-                            <XCircle className="w-3.5 h-3.5" /> Warehouse return
-                          </Link>
+                          <>
+                            <PermissionGate section="delivery_challans" action="edit">
+                              <button
+                                type="button"
+                                onClick={() => setReceiveBackModal(row)}
+                                className="text-xs text-red-700 font-medium inline-flex items-center gap-1"
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5" /> Receive Back
+                              </button>
+                            </PermissionGate>
+                            <Link
+                              to={deliveryChallanDetailPath(row.dc_number)}
+                              state={listReturnState(location)}
+                              className="text-xs text-gray-600 inline-flex items-center gap-1"
+                            >
+                              <XCircle className="w-3.5 h-3.5" /> Warehouse return
+                            </Link>
+                          </>
                         )
                       ) : (
                         <>
@@ -293,6 +319,15 @@ export default function DeliveryRegisterPage() {
         <ReturnWarehouseReceiveModal
           dc={receiveModal}
           onClose={() => setReceiveModal(null)}
+          onReceived={load}
+        />
+      )}
+
+      {receiveBackModal && (
+        <RefusedWarehouseReceiveModal
+          dcNumber={receiveBackModal.dc_number}
+          customerName={receiveBackModal.customer_name}
+          onClose={() => setReceiveBackModal(null)}
           onReceived={load}
         />
       )}

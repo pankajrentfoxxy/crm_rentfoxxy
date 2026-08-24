@@ -296,11 +296,16 @@ function DeliveryCard({ dc, onChanged }) {
         {isRejectedPendingReturn && (
           <div className="border-t pt-3 space-y-3 bg-red-50/50 -mx-4 px-4 pb-1">
             <div className="text-sm text-red-800">
-              <p className="font-semibold flex items-center gap-1.5"><XCircle className="w-4 h-4" /> Customer rejected delivery</p>
+              <p className="font-semibold flex items-center gap-1.5"><XCircle className="w-4 h-4" /> Customer refused delivery</p>
               {dc.rejection_reason && <p className="text-xs mt-1">Reason: {dc.rejection_reason}</p>}
-              {dc.rejected_at && <p className="text-xs text-red-600">Rejected: {formatDateTime(dc.rejected_at)}</p>}
+              {dc.rejected_at && <p className="text-xs text-red-600">Refused: {formatDateTime(dc.rejected_at)}</p>}
+              <p className="text-xs font-medium text-amber-800 mt-1">
+                {dc.refusal_stage_label || 'Waiting for Warehouse Receipt'}
+              </p>
             </div>
-            <p className="text-xs text-gray-600">Return laptops to warehouse and enter the OTP from the warehouse lead.</p>
+            <p className="text-xs text-gray-600">
+              Hand the laptops back at the warehouse. They sign the inward — or give you the return OTP to enter below.
+            </p>
             {!otpRequested && (
               <button type="button" disabled={busy} onClick={handleRequestWarehouseOtp}
                 className="w-full py-2.5 border border-red-200 text-red-700 rounded-xl text-sm font-medium disabled:opacity-50">

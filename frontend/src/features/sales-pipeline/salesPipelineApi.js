@@ -83,6 +83,9 @@ export const markCustomerRejected = (n, d) => api.patch(`${base}/delivery-challa
 export const sendWarehouseReturnOtp = (n) => api.post(`${base}/delivery-challans/${encDc(n)}/warehouse-return-otp`);
 export const verifyWarehouseReturnOtp = (n, d) => api.post(`${base}/delivery-challans/${encDc(n)}/warehouse-return-otp/verify`, d);
 export const markCourierRejected = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}/courier-rejected`, d);
+// Refused delivery -> warehouse "Receive Back" e-sign inward.
+export const getRefusedReturnUnits = (n) => api.get(`${base}/delivery-challans/${encDc(n)}/warehouse-return-units`);
+export const receiveRefusedReturn = (n, d) => api.post(`${base}/delivery-challans/${encDc(n)}/warehouse-receive-back`, d);
 
 export const listReturnDCs = (p) => api.get(`${base}/return-dc`, { params: p });
 export const getReturnDcDetail = (rdcNumber) => api.get(`${base}/return-dc/${encodeURIComponent(rdcNumber)}/detail`);

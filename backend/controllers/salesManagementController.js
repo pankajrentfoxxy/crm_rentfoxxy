@@ -4246,10 +4246,18 @@ exports.getSoWithPayments = async (req, res) => {
       pending_qty: fulfillment.pending_qty,
     });
     const supportMeta = await getSalesOrderSupportMeta(soNumber);
+    // Refusal branch, derived from the challan state — no new SO status column.
+    const rejectionSvc = require('../services/deliveryRejectionService');
+    const dcCancelEligibility = await rejectionSvc
+      .getSoCancelDcEligibility(pool, soNumber)
+      .catch(() => null);
     res.json({
       success: true,
       sales_order_number: soNumber,
       status: soStatus,
+      refusal_status: refusalStatusLabel(soStatus, dcCancelEligibility),
+      dc_cancel_eligibility: dcCancelEligibility,
+      can_cancel: soStatus !== 'cancelled' && (dcCancelEligibility?.can_cancel !== false),
       is_replacement_order: supportMeta.is_replacement_order,
       support_ticket_id: supportMeta.support_ticket_id,
       laptop_qty: laptopQty,
@@ -4289,14 +4297,35 @@ exports.getSoWithPayments = async (req, res) => {
   }
 };
 
+/**
+ * Derived label for the customer-refusal branch:
+ *   Dispatched -> Customer Refused -> Waiting for Warehouse Receipt -> Warehouse Received -> Cancelled
+ * Expressed from the existing challan state instead of a new SO status column, so the
+ * successful branch (Dispatched -> Customer Accepted -> ... -> Order Completed) is unchanged
+ * and reads `null` here.
+ */
+function refusalStatusLabel(soStatus, eligibility) {
+  if (!eligibility?.has_dc) return null;
+  if (soStatus === 'cancelled') {
+    return eligibility.all_refused_and_received ? 'Cancelled after Customer Refusal' : null;
+  }
+  if (eligibility.awaiting_warehouse_count > 0) return 'Customer Refused — Waiting for Warehouse Receipt';
+  if (eligibility.all_refused_and_received) return 'Customer Refused — Warehouse Received';
+  return null;
+}
+
 // Cancel a sales order. Sets every line's status to 'cancelled' so the SO is
 // excluded from the downstream workflow (DC creation is blocked while cancelled).
-// Refused once any delivery challan exists for the SO (already dispatched).
-// Releases all attached laptops back to inventory when cancelled before DC creation.
+// Refused once any delivery challan exists for the SO (already dispatched) — with one
+// exception: if every challan line was refused by the customer AND received back at the
+// warehouse, nothing is out with a customer or a delivery person, so the order can close.
+// Releases all attached laptops back to inventory when cancelled.
 exports.cancelSalesOrder = async (req, res) => {
   const client = await pool.connect();
   try {
     const soNumber = req.params.soNumber;
+    const rejectionSvc = require('../services/deliveryRejectionService');
+    await rejectionSvc.ensureDeliveryRejectionSchema();
     await client.query('BEGIN');
 
     const existing = await client.query(
@@ -4312,15 +4341,18 @@ exports.cancelSalesOrder = async (req, res) => {
       return res.status(409).json({ success: false, message: 'Sales order is already cancelled' });
     }
 
-    const dcRes = await client.query(
-      `SELECT COUNT(DISTINCT dc_number)::int AS c FROM delivery_challan_lines WHERE sales_order_number = $1`,
-      [soNumber]
-    );
-    if (Number(dcRes.rows[0]?.c || 0) > 0) {
+    // A challan on the SO locks cancellation, unless the whole DC footprint came back
+    // through the customer-refusal branch (refused + warehouse-received). Units still with
+    // the delivery person, awaiting warehouse receipt, or delivered keep the original lock.
+    const dcEligibility = await rejectionSvc.getSoCancelDcEligibility(client, soNumber);
+    if (!dcEligibility.can_cancel) {
       await client.query('ROLLBACK');
       return res.status(409).json({
         success: false,
-        message: 'Cannot cancel: a delivery challan has already been created for this sales order.',
+        message: dcEligibility.awaiting_warehouse_count > 0
+          ? 'Cannot cancel: refused units are still awaiting warehouse receipt. Receive them back at the warehouse first.'
+          : 'Cannot cancel: a delivery challan has already been created for this sales order.',
+        dc_cancel_eligibility: dcEligibility,
       });
     }
 
@@ -4343,9 +4375,13 @@ exports.cancelSalesOrder = async (req, res) => {
         } catch (_) { /* tolerate non-canonical inventory state */ }
       }
       if (alloc.qc_ticket_id) {
+        // A 'return_qc' ticket is the warehouse's re-entry inspection of a laptop that is
+        // already physically back (customer-refusal branch). That work is independent of
+        // the sales order, so only the order's own pre-dispatch QC ticket is cancelled.
         await client.query(
           `UPDATE tickets SET status = 'cancelled', updated_at = NOW()
-            WHERE ticket_id = $1 AND status NOT IN ('completed','cancelled')`,
+            WHERE ticket_id = $1 AND status NOT IN ('completed','cancelled')
+              AND COALESCE(ticket_type, '') <> 'return_qc'`,
           [alloc.qc_ticket_id]
         );
       }
@@ -4381,6 +4417,7 @@ exports.cancelSalesOrder = async (req, res) => {
     }
 
     const released = attachedRes.rows.length;
+    const afterRefusal = dcEligibility.has_dc && dcEligibility.all_refused_and_received;
     res.json({
       success: true,
       message: released
@@ -4388,14 +4425,24 @@ exports.cancelSalesOrder = async (req, res) => {
         : 'Sales order cancelled',
       status: 'cancelled',
       released_serials: released,
+      cancelled_after_customer_refusal: afterRefusal,
     });
 
     await safeLogSalesOrderActivity({
       salesOrderNumber: soNumber,
       activityType: ACTIVITY_TYPES.SALES_ORDER,
       action: 'cancelled',
-      description: `${req.user?.name || 'User'} cancelled Sales Order ${soNumber}.`,
+      description: afterRefusal
+        ? `${req.user?.name || 'User'} cancelled Sales Order ${soNumber} after customer refusal and warehouse receipt.`
+        : `${req.user?.name || 'User'} cancelled Sales Order ${soNumber}.`,
       remarks: released ? `${released} laptop(s) released to inventory` : null,
+      metadata: afterRefusal
+        ? {
+          cancelled_after_customer_refusal: true,
+          dc_count: dcEligibility.dc_count,
+          dc_line_count: dcEligibility.dc_line_count,
+        }
+        : {},
       user: req.user,
     });
   } catch (error) {
@@ -5590,20 +5637,40 @@ exports.markDcRejected = async (req, res) => {
         });
       }
 
-      await rejectionSvc.markDeliveryRejectedByCustomer(client, {
+      const source = isCourier ? 'warehouse' : 'dispatch';
+      const result = await rejectionSvc.markDeliveryRejectedByCustomer(client, {
         dcNumber,
         reason,
         remarks,
-        source: isCourier ? 'warehouse' : 'dispatch',
+        source,
         actorUserId: req.user.user_id,
       });
       await client.query('COMMIT');
       res.json({
         success: true,
         message: isCourier
-          ? 'Marked rejected — send warehouse return OTP when laptops arrive back'
-          : 'Marked rejected — technician must return laptops; warehouse sends return OTP',
+          ? 'Marked rejected — receive the units back at the warehouse to release the sales order'
+          : 'Marked rejected — technician must return the units; warehouse confirms receipt',
+        refusal_stage: 'awaiting_warehouse_receipt',
+        ...result,
       });
+
+      if (result?.rejected) {
+        await rejectionSvc.logRefusalActivity(result.sales_order_numbers, {
+          action: 'customer_refused',
+          description: `${req.user?.name || 'User'} recorded customer refusal on ${dcNumber}: ${reason}`,
+          remarks: remarks || null,
+          metadata: {
+            dc_number: dcNumber,
+            rejection_reason: reason,
+            rejection_remarks: remarks || null,
+            rejection_source: source,
+            units: (result.units || []).map((u) => ({ ttspl: u.ttspl, serial_number: u.serial_number })),
+            warehouse_return_pending: true,
+          },
+          user: req.user,
+        });
+      }
     } catch (txErr) {
       await client.query('ROLLBACK').catch(() => {});
       throw txErr;

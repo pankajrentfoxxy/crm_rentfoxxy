@@ -69,6 +69,12 @@ const ACTION_TITLES = {
   eway_accounts_requested: 'E-Way Bill Request Sent to Accounts',
   eway_uploaded: 'E-Way Bill Uploaded',
   dc_access_enabled: 'DC Access Enabled',
+  // Customer refusal branch (refused at delivery -> warehouse receive back -> SO cancel)
+  customer_refused: 'Customer Refused Delivery',
+  returned_to_warehouse: 'Laptop Returned to Warehouse',
+  warehouse_received: 'Warehouse Received',
+  warehouse_esign_completed: 'Warehouse E-Sign Completed',
+  inventory_updated: 'Inventory Updated',
 };
 
 function actorFromUser(user) {

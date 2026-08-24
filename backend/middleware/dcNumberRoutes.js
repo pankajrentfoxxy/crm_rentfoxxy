@@ -20,6 +20,8 @@ const DC_ACTION_SUFFIXES = [
   '/verify-otp',
   '/delivery-register',
   '/warehouse-return-otp',
+  '/warehouse-return-units',
+  '/warehouse-receive-back',
   '/verify-serial',
   '/deliver',
   '/rental-invoice/pdf',

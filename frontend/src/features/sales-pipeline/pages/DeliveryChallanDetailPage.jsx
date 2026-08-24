@@ -22,12 +22,14 @@ import {
   isDcAssignmentEditable, isDcCancellable, parseSerials, salesOrderDetailPath, statusLabel,
   resolveDcBackNavigation, downloadBlob, collectBluedartAwbRows,
 } from '../salesPipelineUtils';
+import { SO_PERMISSION_SECTIONS } from '../salesOrderScope';
 import DcBluedartAwbTable from '../components/DcBluedartAwbTable';
 import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
 import DcEditModal from '../components/DcEditModal';
 import MarkDeliveredModal from '../components/MarkDeliveredModal';
 import CourierTrackingModal from '../components/CourierTrackingModal';
+import RefusedWarehouseReceiveModal from '../components/RefusedWarehouseReceiveModal';
 
 function resolveDcNumber(params) {
   const raw = params['*'] ?? params.dcNumber ?? '';
@@ -90,6 +92,7 @@ export default function DeliveryChallanDetailPage() {
   const [rejectReason, setRejectReason] = useState('');
   const [rejectRemarks, setRejectRemarks] = useState('');
   const [warehouseOtp, setWarehouseOtp] = useState('');
+  const [receiveBackOpen, setReceiveBackOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [trackingOpen, setTrackingOpen] = useState(false);
   const [awbGenerating, setAwbGenerating] = useState(false);
@@ -308,36 +311,26 @@ export default function DeliveryChallanDetailPage() {
     }
   };
 
+  // Customer refused the delivery. Inventory is deliberately untouched here: the units stay
+  // in transit until the warehouse receives them back, and that receipt is what releases the
+  // sales order for cancellation.
   const handleReject = async () => {
     if (!rejectReason.trim()) {
       toast.error('Rejection reason is required');
       return;
     }
+    const courierDc = head.dispatch_mode === 'courier' || head.ship_by === 'by_courier';
     try {
       await markRejected(dcNumber, {
         rejection_reason: rejectReason.trim(),
         rejection_remarks: rejectRemarks.trim() || undefined,
       });
-      toast.success('Marked rejected · confirm warehouse return with OTP when laptops are back');
+      toast.success(courierDc
+        ? 'Marked refused · receive the units back when the courier returns them'
+        : 'Marked refused · receive the units back at the warehouse to release the sales order');
       setRejectModal(false);
-      load();
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed');
-    }
-  };
-
-  const handleCourierReject = async () => {
-    if (!rejectReason.trim()) {
-      toast.error('Rejection reason is required');
-      return;
-    }
-    try {
-      await markRejected(dcNumber, {
-        rejection_reason: rejectReason.trim(),
-        rejection_remarks: rejectRemarks.trim() || undefined,
-      });
-      toast.success('Marked rejected · send warehouse return OTP when laptops arrive');
-      setRejectModal(false);
+      setRejectReason('');
+      setRejectRemarks('');
       load();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed');
@@ -670,7 +663,20 @@ export default function DeliveryChallanDetailPage() {
                       <tr><td colSpan={10} className="px-3 py-6 text-center text-gray-400">No laptops attached</td></tr>
                     ) : allUnits.map((d, i) => (
                       <tr key={d.ttspl || i}>
-                        <td className="px-3 py-2 font-mono text-xs text-blue-700">{d.ttspl}</td>
+                        <td className="px-3 py-2 font-mono text-xs">
+                          {d.ttspl ? (
+                            <button
+                              type="button"
+                              onClick={() => setTtsplDrawer(d.ttspl)}
+                              className="text-blue-700 hover:underline"
+                              title="View TTSPL history"
+                            >
+                              {d.ttspl}
+                            </button>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                        </td>
                         <td className="px-3 py-2">{d.brand || '—'}</td>
                         <td className="px-3 py-2">{d.model || '—'}</td>
                         <td className="px-3 py-2">{d.processor || '—'}</td>
@@ -872,7 +878,20 @@ export default function DeliveryChallanDetailPage() {
                     <tbody className="divide-y">
                       {(qc.tickets || []).map((t) => (
                         <tr key={t.ticket_id}>
-                          <td className="py-2 font-mono text-blue-700">{t.ttspl_id}</td>
+                          <td className="py-2 font-mono">
+                            {t.ttspl_id ? (
+                              <button
+                                type="button"
+                                onClick={() => setTtsplDrawer(t.ttspl_id)}
+                                className="text-blue-700 hover:underline"
+                                title="View TTSPL history"
+                              >
+                                {t.ttspl_id}
+                              </button>
+                            ) : (
+                              <span className="text-gray-400">—</span>
+                            )}
+                          </td>
                           <td className="py-2"><Link to={`/floor-pipeline/tickets/${t.ticket_id}`} className="text-blue-600">#{t.ticket_id}</Link></td>
                           <td className="py-2">{t.stage_name || '—'}</td>
                           <td className="py-2 capitalize">{t.status?.replace('_', ' ')}</td>
@@ -982,19 +1001,17 @@ export default function DeliveryChallanDetailPage() {
                       <button type="button" onClick={handleSendOtp} className="px-3 py-1 border rounded-lg text-xs">Send OTP</button>
                       <button type="button" onClick={() => setOtpModal(true)} className="ml-2 px-3 py-1 bg-blue-600 text-white rounded-lg text-xs">Verify & Deliver</button>
                     </>
-                  ) : isCourier ? (
-                    <PermissionGate section="dispatch_ops" action="edit">
-                      <button type="button" onClick={() => markDelivered(dcNumber, {}).then(load).then(() => toast.success('Delivered'))} className="px-3 py-1 bg-emerald-600 text-white rounded-lg text-xs">Mark Delivered</button>
-                      <button type="button" onClick={() => setRejectModal(true)} className="ml-2 px-3 py-1 text-red-700 border border-red-200 rounded-lg text-xs">Warehouse: Mark Rejected</button>
-                    </PermissionGate>
                   ) : (
                     <PermissionGate section="dispatch_ops" action="edit">
                       <button type="button" onClick={() => markDelivered(dcNumber, {}).then(load).then(() => toast.success('Delivered'))} className="px-3 py-1 bg-emerald-600 text-white rounded-lg text-xs">Mark Delivered</button>
                     </PermissionGate>
                   )}
-                  {!isCourier && (
-                    <button type="button" onClick={() => setRejectModal(true)} className="ml-2 px-3 py-1 text-red-700 border border-red-200 rounded-lg text-xs">Mark Rejected</button>
-                  )}
+                  {/* Gated on the same sections the PATCH /rejected route enforces. */}
+                  <PermissionGate section={[...SO_PERMISSION_SECTIONS, 'delivery_challans']} action="edit">
+                    <button type="button" onClick={() => setRejectModal(true)} className="ml-2 px-3 py-1 text-red-700 border border-red-200 rounded-lg text-xs">
+                      {isCourier ? 'Customer Refused (Courier)' : 'Customer Refused'}
+                    </button>
+                  </PermissionGate>
                 </div>
               )}
               {head.status === 'delivered' && (
@@ -1040,21 +1057,52 @@ export default function DeliveryChallanDetailPage() {
                   {head.rejection_remarks && <p className="text-gray-700">Remarks: {head.rejection_remarks}</p>}
                   {head.rejected_at && <p className="text-gray-600">Rejected at: {formatDateTime(head.rejected_at)}</p>}
                   {head.return_to_warehouse_at ? (
-                    <p className="text-emerald-700">Returned to warehouse: {formatDateTime(head.return_to_warehouse_at)} · QC tickets created</p>
+                    <div className="space-y-1">
+                      <p className="text-emerald-700">Returned to warehouse: {formatDateTime(head.return_to_warehouse_at)} · QC tickets created</p>
+                      {head.warehouse_receiver_name && (
+                        <p className="text-gray-600">Received by: {head.warehouse_receiver_name}</p>
+                      )}
+                      {head.warehouse_receive_remarks && (
+                        <p className="text-gray-600">Warehouse remarks: {head.warehouse_receive_remarks}</p>
+                      )}
+                      {uploadUrl(head.warehouse_esign_url) && (
+                        <div>
+                          <p className="text-xs text-gray-500 mb-1">Warehouse Signature</p>
+                          <a href={uploadUrl(head.warehouse_esign_url)} target="_blank" rel="noreferrer">
+                            <img src={uploadUrl(head.warehouse_esign_url)} alt="Warehouse e-sign" className="h-24 rounded border bg-white" />
+                          </a>
+                        </div>
+                      )}
+                      <p className="text-xs text-gray-500">The sales order can now be cancelled.</p>
+                    </div>
                   ) : pendingWarehouseReturn ? (
                     <div className="space-y-2 pt-2 border-t border-red-200">
+                      <p className="text-xs font-medium text-amber-800">Waiting for warehouse receipt</p>
                       <p className="text-xs text-gray-600">
-                        Laptops stay in transit until warehouse confirms return. Send OTP when the technician
-                        brings units back, then enter it below to move them to QC.
+                        Laptops stay in transit and no customer asset is created. Receive them back with the
+                        warehouse e-sign inward (or the return OTP) to move them to stock and QC — only then can
+                        the sales order be cancelled.
                       </p>
-                      {head.warehouse_return_otp_sent_at && (
-                        <p className="text-xs text-gray-500">OTP sent: {formatDateTime(head.warehouse_return_otp_sent_at)}</p>
-                      )}
-                      <button type="button" onClick={handleSendWarehouseReturnOtp} className="px-3 py-1 border border-red-300 rounded-lg text-xs text-red-700">Send Warehouse Return OTP</button>
-                      <div className="flex gap-2 items-center">
-                        <input className="flex-1 border rounded-lg px-2 py-1 text-sm" value={warehouseOtp} onChange={(e) => setWarehouseOtp(e.target.value)} placeholder="Warehouse OTP" />
-                        <button type="button" onClick={handleVerifyWarehouseReturn} className="px-3 py-1 bg-red-600 text-white rounded-lg text-xs">Confirm Return</button>
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setReceiveBackOpen(true)}
+                        className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-semibold"
+                      >
+                        Receive Back (Warehouse E-Sign)
+                      </button>
+                      <details className="pt-1">
+                        <summary className="text-xs text-gray-500 cursor-pointer">Use warehouse return OTP instead</summary>
+                        <div className="space-y-2 pt-2">
+                          {head.warehouse_return_otp_sent_at && (
+                            <p className="text-xs text-gray-500">OTP sent: {formatDateTime(head.warehouse_return_otp_sent_at)}</p>
+                          )}
+                          <button type="button" onClick={handleSendWarehouseReturnOtp} className="px-3 py-1 border border-red-300 rounded-lg text-xs text-red-700">Send Warehouse Return OTP</button>
+                          <div className="flex gap-2 items-center">
+                            <input className="flex-1 border rounded-lg px-2 py-1 text-sm" value={warehouseOtp} onChange={(e) => setWarehouseOtp(e.target.value)} placeholder="Warehouse OTP" />
+                            <button type="button" onClick={handleVerifyWarehouseReturn} className="px-3 py-1 bg-red-600 text-white rounded-lg text-xs">Confirm Return</button>
+                          </div>
+                        </div>
+                      </details>
                     </div>
                   ) : null}
                 </div>
@@ -1174,6 +1222,15 @@ export default function DeliveryChallanDetailPage() {
         </div>
       )}
 
+      {receiveBackOpen && (
+        <RefusedWarehouseReceiveModal
+          dcNumber={dcNumber}
+          customerName={head.customer_name}
+          onClose={() => setReceiveBackOpen(false)}
+          onReceived={load}
+        />
+      )}
+
       {updateDeliveryDateOpen && (
         <MarkDeliveredModal
           dcNumber={dcNumber}
@@ -1230,15 +1287,14 @@ export default function DeliveryChallanDetailPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <button type="button" className="absolute inset-0 bg-black/40" onClick={() => setRejectModal(false)} aria-label="Close" />
           <div className="relative bg-white rounded-xl p-6 w-full max-w-sm space-y-3">
-            <h3 className="font-semibold mb-1">{isCourier ? 'Reject Courier Delivery' : 'Rejection Reason'}</h3>
-            {isCourier && (
-              <p className="text-xs text-gray-500">
-                Laptops are not moved to inventory until warehouse return OTP is confirmed.
-              </p>
-            )}
+            <h3 className="font-semibold mb-1">Customer Refused — {dcNumber}</h3>
+            <p className="text-xs text-gray-500">
+              No customer asset is created and the laptops stay in transit. Receive them back at the
+              warehouse to return them to stock — only then can the sales order be cancelled.
+            </p>
             <textarea className="w-full border rounded-lg px-3 py-2 mb-1" rows={2} placeholder="Rejection reason (required)" value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} />
             <textarea className="w-full border rounded-lg px-3 py-2" rows={2} placeholder="Remarks (optional)" value={rejectRemarks} onChange={(e) => setRejectRemarks(e.target.value)} />
-            <button type="button" onClick={isCourier ? handleCourierReject : handleReject} className="w-full py-2 bg-red-600 text-white rounded-lg text-sm">Confirm Reject</button>
+            <button type="button" onClick={handleReject} className="w-full py-2 bg-red-600 text-white rounded-lg text-sm">Confirm Refusal</button>
           </div>
         </div>
       )}

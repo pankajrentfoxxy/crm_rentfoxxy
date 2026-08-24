@@ -8,6 +8,8 @@ import {
   changeDeliveryPerson,
   fetchDeliveryRegisterList,
 } from '../../utils/deliveryRegisterApi';
+import { deliveryChallanDetailPath } from '../../features/sales-pipeline/salesPipelineUtils';
+import { listReturnState } from '../../hooks/useUrlFilters';
 
 const PAGE_SIZES = [10, 25, 50, 100];
 
@@ -297,7 +299,13 @@ export default function DeliveryRegisterListPage() {
                   <tr key={row.dc_number} className="hover:bg-gray-50/80">
                     <td className="px-4 py-3">{from + idx}</td>
                     <td className="px-4 py-3">
-                      <span className="text-cyan-700 font-medium">{row.dc_number}</span>
+                      <Link
+                        to={deliveryChallanDetailPath(row.dc_number)}
+                        state={listReturnState(location)}
+                        className="text-cyan-700 font-medium hover:underline"
+                      >
+                        {row.dc_number}
+                      </Link>
                       <div className="text-xs text-gray-500">{formatDate(row.created_at)}</div>
                     </td>
                     <td className="px-4 py-3 text-xs space-y-1">

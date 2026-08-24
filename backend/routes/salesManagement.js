@@ -81,6 +81,7 @@ const soLineRateConfigEdit = require('../middleware/soLineEditAccess').checkSoLi
 const { checkSalesOrderCancel } = require('../middleware/soCancelAccess');
 /** Warehouse return OTP — warehouse/sales (send) and technicians (verify) both need access. */
 const whReturnEdit = cpAny(['delivery_challans', 'technician_bucket'], 'edit');
+const whReturnView = cpAny(['delivery_challans', 'technician_bucket', 'delivery_register_management'], 'view');
 const drView = cpAny(['delivery_register_management', 'technician_bucket'], 'view');
 const ctrl = require('../controllers/salesManagementController');
 const saleComplianceCtrl = require('../controllers/saleDcComplianceController');
@@ -216,6 +217,10 @@ router.patch(...dcRoute('/rejected', soDcEdit, ctrl.markDcRejected));
 router.patch(...dcRoute('/customer-rejected', tbEdit, flowCtrl.markCustomerRejected));
 router.post(...dcRoute('/warehouse-return-otp', whReturnEdit, flowCtrl.sendWarehouseReturnOtp));
 router.post(...dcRoute('/warehouse-return-otp/verify', whReturnEdit, flowCtrl.verifyWarehouseReturnOtp));
+// Refused delivery -> warehouse "Receive Back" e-sign inward (same sections as the
+// warehouse return OTP path: warehouse/sales edit or the technician bucket).
+router.get(...dcRoute('/warehouse-return-units', whReturnView, flowCtrl.getRefusedReturnUnits));
+router.post(...dcRoute('/warehouse-receive-back', whReturnEdit, flowCtrl.receiveRefusedReturn));
 router.patch(...dcRoute('/courier-rejected', soDcEdit, flowCtrl.markCourierRejected));
 router.patch(...dcRoute('/hsn', checkRole('admin', 'super_admin'), ctrl.updateDcHsn));
 // Catch-all DC routes MUST be registered last: their greedy (.+) pattern would

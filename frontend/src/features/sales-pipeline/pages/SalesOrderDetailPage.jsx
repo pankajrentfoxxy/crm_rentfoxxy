@@ -151,6 +151,12 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
   const scopeConfig = getSoScopeConfig(resolvedScope);
   const hasDcCreated = dcs.length > 0;
   const hasDc = hasDcCreated || (deliveredCount + dispatchedCount) > 0;
+  // A DC normally locks cancellation, but the backend opens it once every challan line
+  // was refused by the customer and received back at the warehouse. Fall back to the old
+  // rule when the API predates that field.
+  const refusalStatus = data?.refusal_status || null;
+  const cancelAfterRefusal = Boolean(data?.dc_cancel_eligibility?.all_refused_and_received);
+  const canCancelSo = !isCancelled && (data?.can_cancel ?? !hasDcCreated);
   const canEditSo = (resolvedScope === 'rental' || resolvedScope === 'sale')
     && !isCancelled
     && !hasDcCreated
@@ -163,7 +169,10 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
   );
 
   const handleCancel = useCallback(async () => {
-    if (!window.confirm(`Cancel sales order ${soNumber}? Attached laptops will be released back to inventory. This cannot be undone.`)) return;
+    const prompt = cancelAfterRefusal
+      ? `Cancel sales order ${soNumber}? The customer refused delivery and all units are back in warehouse stock. This cannot be undone.`
+      : `Cancel sales order ${soNumber}? Attached laptops will be released back to inventory. This cannot be undone.`;
+    if (!window.confirm(prompt)) return;
     try {
       const res = await cancelSalesOrder(soNumber);
       toast.success(res.data?.message || 'Sales order cancelled');
@@ -171,7 +180,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
     } catch (err) {
       toast.error(err?.response?.data?.message || 'Failed to cancel sales order');
     }
-  }, [soNumber, load]);
+  }, [soNumber, load, cancelAfterRefusal]);
 
   return (
     <div className="p-4 max-w-6xl mx-auto">
@@ -225,6 +234,11 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
             {isCancelled && (
               <span className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">Cancelled</span>
             )}
+            {refusalStatus && (
+              <span className="inline-block px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800">
+                {refusalStatus}
+              </span>
+            )}
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -246,9 +260,11 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
           <PermissionGate section="payment_records" action="create">
             <Button onClick={() => setPaymentOpen(true)}>Record Payment</Button>
           </PermissionGate>
-          {!isCancelled && !hasDcCreated && (
+          {canCancelSo && (
             <PermissionGate section="sales_orders_doc" action="edit">
-              <Button variant="danger" onClick={handleCancel}>Cancel SO</Button>
+              <Button variant="danger" onClick={handleCancel}>
+                {cancelAfterRefusal ? 'Cancel SO (Refused)' : 'Cancel SO'}
+              </Button>
             </PermissionGate>
           )}
           {canEditSo ? (

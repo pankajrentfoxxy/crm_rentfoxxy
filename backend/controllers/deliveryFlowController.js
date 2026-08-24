@@ -113,6 +113,24 @@ async function resolveSpecs(entries) {
 }
 
 /**
+ * Where a refused delivery sits on the refusal branch:
+ * Dispatched -> Customer Refused -> Waiting for Warehouse Receipt -> Warehouse Received -> Cancelled.
+ * Derived from the existing delivery status + warehouse-receipt timestamps rather than
+ * a new status column, so the happy path is untouched.
+ */
+const REFUSAL_STAGE_LABELS = {
+  awaiting_warehouse_receipt: 'Customer Refused — Waiting for Warehouse Receipt',
+  warehouse_received: 'Customer Refused — Warehouse Received',
+};
+
+function refusalStage(line) {
+  if (!line || line.status !== 'rejected') return null;
+  return (line.return_to_warehouse_at || line.warehouse_received_at)
+    ? 'warehouse_received'
+    : 'awaiting_warehouse_receipt';
+}
+
+/**
  * Build grouped DC rows (one object per DC) with serials, specs, technician,
  * customer phone and the chosen delivery address.
  */
@@ -185,6 +203,7 @@ async function buildDcFlow(where, params, { includeOtp = false } = {}) {
     });
 
     const shipping = normalizeDeliveryAddress(first.customer_shipping_address);
+    const stage = refusalStage(first);
 
     out.push({
       dc_number: dcNumber,
@@ -238,6 +257,13 @@ async function buildDcFlow(where, params, { includeOtp = false } = {}) {
       return_to_warehouse_at: first.return_to_warehouse_at,
       warehouse_return_pending: first.status === 'rejected' && !first.return_to_warehouse_at,
       warehouse_return_otp_sent: Boolean(first.warehouse_return_otp_sent_at),
+      warehouse_received_at: first.warehouse_received_at,
+      warehouse_received_by: first.warehouse_received_by,
+      warehouse_receiver_name: first.warehouse_receiver_name,
+      warehouse_esign_url: first.warehouse_esign_url,
+      warehouse_receive_remarks: first.warehouse_receive_remarks,
+      refusal_stage: stage,
+      refusal_stage_label: stage ? REFUSAL_STAGE_LABELS[stage] : null,
       serials,
     });
   }
@@ -248,6 +274,8 @@ async function buildDcFlow(where, params, { includeOtp = false } = {}) {
 exports.listDeliveryFlow = async (req, res) => {
   try {
     const status = String(req.query.status || 'active').toLowerCase();
+    // The refusal buckets filter on the warehouse-receipt columns from migration 203.
+    await rejectionSvc.ensureDeliveryRejectionSchema();
     const permissionCache = {};
     const includeOtp = await userCanViewDeliveryRegisterOtp(req.user, permissionCache);
     const conditions = [];
@@ -266,6 +294,15 @@ exports.listDeliveryFlow = async (req, res) => {
       conditions.push(`d.status IN ('shipped','in_transit','reached')`);
     } else if (status === 'rejected') {
       conditions.push(`d.status = 'rejected'`);
+    } else if (status === 'awaiting_warehouse_return') {
+      // "Refused — awaiting warehouse receipt": refused by the customer, still not
+      // physically back on the shelf, so the SO cannot be cancelled yet.
+      conditions.push(`d.status = 'rejected'`);
+      conditions.push(`d.return_to_warehouse_at IS NULL`);
+      conditions.push(`d.warehouse_received_at IS NULL`);
+    } else if (status === 'warehouse_received') {
+      conditions.push(`d.status = 'rejected'`);
+      conditions.push(`COALESCE(d.return_to_warehouse_at, d.warehouse_received_at) IS NOT NULL`);
     } else {
       params.push(status);
       conditions.push(`d.status = $${params.length}`);
@@ -642,6 +679,80 @@ exports.adminDeliverOverride = async (req, res) => {
 const rejectionSvc = require('../services/deliveryRejectionService');
 const WAREHOUSE_ROLES = ['warehouse', 'admin', 'manager', 'super_admin', 'support_lead', 'floor_manager'];
 
+/** One-line description of the units on a DC, for the SO activity feed. */
+function unitsLabel(units) {
+  return (units || [])
+    .map((u) => [u.ttspl, u.serial_number].filter(Boolean).join(' / '))
+    .filter(Boolean)
+    .join(', ');
+}
+
+/** Timeline: Customer Refused (reason). Runs after COMMIT — never throws. */
+async function logCustomerRefused(result, { dcNumber, reason, remarks, source, user }) {
+  const units = result?.units || [];
+  await rejectionSvc.logRefusalActivity(result?.sales_order_numbers, {
+    action: 'customer_refused',
+    description: `${user?.name || 'User'} recorded customer refusal on ${dcNumber}: ${reason}`,
+    remarks: [remarks, unitsLabel(units) && `Units: ${unitsLabel(units)}`].filter(Boolean).join(' · ') || null,
+    metadata: {
+      dc_number: dcNumber,
+      rejection_reason: reason,
+      rejection_remarks: remarks || null,
+      rejection_source: source,
+      units: units.map((u) => ({ ttspl: u.ttspl, serial_number: u.serial_number })),
+      warehouse_return_pending: true,
+    },
+    user,
+  });
+}
+
+/**
+ * Timeline: Laptop Returned to Warehouse -> Warehouse Received -> Warehouse E-Sign
+ * Completed -> Inventory Updated. Runs after COMMIT.
+ */
+async function logWarehouseReceipt(result, { dcNumber, user, method }) {
+  const soNumbers = result?.sales_order_numbers;
+  const serialResults = result?.serial_results || [];
+  const ttspls = serialResults.map((s) => s.ttspl).filter(Boolean).join(', ');
+
+  await rejectionSvc.logRefusalActivity(soNumbers, {
+    action: 'returned_to_warehouse',
+    description: `Refused units on ${dcNumber} returned to the warehouse.`,
+    remarks: ttspls ? `Units: ${ttspls}` : null,
+    metadata: { dc_number: dcNumber, method, units: serialResults },
+    user,
+  });
+
+  await rejectionSvc.logRefusalActivity(soNumbers, {
+    action: 'warehouse_received',
+    description: `${result?.warehouse_receiver_name || user?.name || 'Warehouse'} received ${dcNumber} back at the warehouse.`,
+    remarks: result?.warehouse_receiver_name ? `Receiver: ${result.warehouse_receiver_name}` : null,
+    metadata: {
+      dc_number: dcNumber,
+      method,
+      warehouse_receiver_name: result?.warehouse_receiver_name || null,
+    },
+    user,
+  });
+
+  if (result?.warehouse_esign_url) {
+    await rejectionSvc.logRefusalActivity(soNumbers, {
+      action: 'warehouse_esign_completed',
+      description: `Warehouse e-signature captured for the return of ${dcNumber}.`,
+      metadata: { dc_number: dcNumber, warehouse_esign_url: result.warehouse_esign_url },
+      user,
+    });
+  }
+
+  await rejectionSvc.logRefusalActivity(soNumbers, {
+    action: 'inventory_updated',
+    description: `${serialResults.length || 'The'} unit(s) from ${dcNumber} moved back to warehouse stock and re-entered QC.`,
+    remarks: ttspls ? `Units: ${ttspls}` : null,
+    metadata: { dc_number: dcNumber, units: serialResults },
+    user,
+  });
+}
+
 // PATCH /delivery-challans/:dcNumber/customer-rejected
 exports.markCustomerRejected = async (req, res) => {
   const client = await pool.connect();
@@ -661,10 +772,92 @@ exports.markCustomerRejected = async (req, res) => {
       actorUserId: req.user.user_id,
     });
     await client.query('COMMIT');
-    res.json({ success: true, message: 'Delivery marked as rejected by customer', ...result });
+    res.json({
+      success: true,
+      message: 'Delivery marked as rejected by customer — awaiting warehouse receipt',
+      refusal_stage: 'awaiting_warehouse_receipt',
+      ...result,
+    });
+
+    if (result?.rejected) {
+      await logCustomerRefused(result, { dcNumber, reason, remarks, source, user: req.user });
+    }
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('markCustomerRejected:', error);
+    res.status(error.message.includes('not found') ? 404 : 400).json({ success: false, message: error.message });
+  } finally {
+    client.release();
+  }
+};
+
+// GET /delivery-challans/:dcNumber/warehouse-return-units
+// Units the warehouse has to verify (TTSPL + serial + config) before signing the inward.
+exports.getRefusedReturnUnits = async (req, res) => {
+  try {
+    await rejectionSvc.ensureDeliveryRejectionSchema();
+    const dcNumber = req.params.dcNumber;
+    const headRes = await pool.query(
+      `SELECT dc_number, sales_order_number, customer_id, customer_name, status,
+              rejection_reason, rejection_remarks, rejection_source, rejected_at,
+              return_to_warehouse_at, warehouse_received_at, warehouse_receiver_name,
+              warehouse_esign_url, warehouse_receive_remarks
+         FROM delivery_challan_lines WHERE dc_number = $1 LIMIT 1`,
+      [dcNumber]
+    );
+    const head = headRes.rows[0];
+    if (!head) return res.status(404).json({ success: false, message: 'Delivery challan not found' });
+
+    const units = await rejectionSvc.listRefusedReturnUnits(pool, dcNumber);
+    res.json({
+      success: true,
+      dc: head,
+      refusal_stage: refusalStage(head),
+      warehouse_return_pending: head.status === 'rejected' && !head.return_to_warehouse_at,
+      units,
+    });
+  } catch (error) {
+    console.error('getRefusedReturnUnits:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// POST /delivery-challans/:dcNumber/warehouse-receive-back
+// Warehouse e-sign inward for a customer-refused delivery: verify TTSPL + serial of every
+// unit, capture receiver + signature + remarks, then move the assets back to stock through
+// the inventory state machine (shared with the OTP return path).
+exports.receiveRefusedReturn = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await rejectionSvc.ensureDeliveryRejectionSchema();
+    const dcNumber = req.params.dcNumber;
+    const body = req.body || {};
+    await client.query('BEGIN');
+    const result = await rejectionSvc.receiveRefusedReturnWithEsign(client, {
+      dcNumber,
+      esignData: body.esign_data,
+      receiverName: body.signer_name || body.warehouse_receiver_name,
+      remarks: body.remarks || body.warehouse_receive_remarks,
+      verifiedUnits: body.units || body.verified_units,
+      actorUserId: req.user.user_id,
+      actorName: req.user.name,
+    });
+    await client.query('COMMIT');
+    res.json({
+      success: true,
+      message: result.already_completed
+        ? 'Warehouse return was already confirmed for this challan'
+        : 'Units received back at the warehouse and sent to QC — the sales order can now be cancelled',
+      refusal_stage: 'warehouse_received',
+      ...result,
+    });
+
+    if (!result.already_completed) {
+      await logWarehouseReceipt(result, { dcNumber, user: req.user, method: 'warehouse_esign' });
+    }
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('receiveRefusedReturn:', error);
     res.status(error.message.includes('not found') ? 404 : 400).json({ success: false, message: error.message });
   } finally {
     client.release();
@@ -700,8 +893,17 @@ exports.verifyWarehouseReturnOtp = async (req, res) => {
     res.json({
       success: true,
       message: 'Laptops returned to warehouse and sent to QC',
+      refusal_stage: 'warehouse_received',
       ...result,
     });
+
+    if (!result.already_completed) {
+      await logWarehouseReceipt(result, {
+        dcNumber: req.params.dcNumber,
+        user: req.user,
+        method: 'warehouse_return_otp',
+      });
+    }
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('verifyWarehouseReturnOtp:', error);
@@ -732,9 +934,20 @@ exports.markCourierRejected = async (req, res) => {
     await client.query('COMMIT');
     res.json({
       success: true,
-      message: 'Delivery marked rejected — confirm warehouse return with OTP when laptops arrive',
+      message: 'Delivery marked rejected — receive the units back at the warehouse to release the sales order',
+      refusal_stage: 'awaiting_warehouse_receipt',
       ...result,
     });
+
+    if (result?.rejected) {
+      await logCustomerRefused(result, {
+        dcNumber: req.params.dcNumber,
+        reason,
+        remarks,
+        source: 'warehouse',
+        user: req.user,
+      });
+    }
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('markCourierRejected:', error);
