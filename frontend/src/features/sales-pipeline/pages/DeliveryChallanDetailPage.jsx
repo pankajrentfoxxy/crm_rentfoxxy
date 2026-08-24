@@ -26,6 +26,8 @@ import { SO_PERMISSION_SECTIONS } from '../salesOrderScope';
 import DcBluedartAwbTable from '../components/DcBluedartAwbTable';
 import { getBackendOrigin } from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
+import usePermission from '../../../hooks/usePermission';
+import { Copy, KeyRound } from 'lucide-react';
 import DcEditModal from '../components/DcEditModal';
 import MarkDeliveredModal from '../components/MarkDeliveredModal';
 import CourierTrackingModal from '../components/CourierTrackingModal';
@@ -54,6 +56,27 @@ function uploadUrl(p) {
   return `${getBackendOrigin().replace(/\/$/, '')}/uploads/${p.replace(/^\/?uploads\//, '')}`;
 }
 
+function OtpBox({ label, code, onCopy }) {
+  if (!code) return null;
+  return (
+    <div className="mt-3 inline-flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
+      <KeyRound className="w-4 h-4 text-amber-800 shrink-0" />
+      <div>
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-800 m-0">{label}</p>
+        <p className="font-mono text-2xl font-bold tracking-widest text-amber-950 m-0 leading-none">{code}</p>
+      </div>
+      <button
+        type="button"
+        onClick={() => onCopy(code)}
+        className="p-2 rounded-lg hover:bg-amber-100 text-amber-800"
+        title="Copy OTP"
+      >
+        <Copy className="w-4 h-4" />
+      </button>
+    </div>
+  );
+}
+
 export default function DeliveryChallanDetailPage() {
   const params = useParams();
   const location = useLocation();
@@ -75,6 +98,8 @@ export default function DeliveryChallanDetailPage() {
     navigate(listPath);
   }, [cameFromElsewhere, listPath, location.state, navigate]);
   const { user } = useAuth();
+  const { canView } = usePermission();
+  const canViewOtp = canView('delivery_register_otp');
   const isSuperAdmin = user?.role === 'super_admin';
   const canOverrideHsn = user?.role === 'admin' || user?.role === 'super_admin';
   const canEditDeliveryDate = isSuperAdmin || canOverrideHsn;
@@ -114,8 +139,14 @@ export default function DeliveryChallanDetailPage() {
   const [shipmentUnits, setShipmentUnits] = useState([]);
   const [updateDeliveryDateOpen, setUpdateDeliveryDateOpen] = useState(false);
   const [sendingAccountsMail, setSendingAccountsMail] = useState(false);
+  const [apiCanViewOtp, setApiCanViewOtp] = useState(false);
+  const [apiDeliveryOtp, setApiDeliveryOtp] = useState(null);
+  const [apiWarehouseOtp, setApiWarehouseOtp] = useState(null);
 
   const head = lines[0] || {};
+  const showOtp = canViewOtp || apiCanViewOtp || isSuperAdmin;
+  const deliveryOtpCode = apiDeliveryOtp || head.otp_code || head.d_otp || head.delivery_otp || null;
+  const warehouseReturnOtpCode = apiWarehouseOtp || head.warehouse_return_otp || null;
   const summaryLines = billingLines.length ? billingLines : lines;
   const isSale = head.entity_code === 'gorefurbo' || head.quotation_type === 'sale' || head.quotation_type === 'sales';
   const needsInvoice = Boolean(saleCompliance?.requires_invoice_compliance) || isSale;
@@ -144,6 +175,9 @@ export default function DeliveryChallanDetailPage() {
       setCanDownloadPdf(res.data?.can_download_pdf !== false);
       setRentalInvoice(res.data?.rental_invoice || null);
       setShipmentUnits(res.data?.shipment_units || []);
+      setApiCanViewOtp(Boolean(res.data?.can_view_otp));
+      setApiDeliveryOtp(res.data?.otp_code || res.data?.lines?.[0]?.otp_code || res.data?.lines?.[0]?.d_otp || null);
+      setApiWarehouseOtp(res.data?.warehouse_return_otp || res.data?.lines?.[0]?.warehouse_return_otp || null);
       if (res.data?.lines?.[0]?.sales_order_number) {
         const soRes = await getSalesOrderFull(res.data.lines[0].sales_order_number);
         setPaymentSummary(soRes.data?.summary);
@@ -279,11 +313,25 @@ export default function DeliveryChallanDetailPage() {
 
   const handleSendOtp = async () => {
     try {
-      await sendDeliveryOtp(dcNumber, {});
-      toast.success('OTP sent to customer');
+      const r = await sendDeliveryOtp(dcNumber, {});
+      if (r.data?.otp_visible) {
+        setApiDeliveryOtp(r.data.otp_visible);
+        toast.success(`OTP: ${r.data.otp_visible}`);
+      } else {
+        toast.success('OTP sent to customer');
+      }
       load();
     } catch (err) {
       toast.error(err.response?.data?.message || 'OTP send failed');
+    }
+  };
+
+  const copyOtp = async (code) => {
+    try {
+      await navigator.clipboard.writeText(String(code));
+      toast.success('OTP copied');
+    } catch {
+      toast.error('Could not copy OTP');
     }
   };
 
@@ -342,6 +390,7 @@ export default function DeliveryChallanDetailPage() {
       const r = await sendWarehouseReturnOtp(dcNumber);
       if (r.data?.otp_visible) {
         setWarehouseOtp(r.data.otp_visible);
+        setApiWarehouseOtp(r.data.otp_visible);
         toast.success(`Warehouse OTP: ${r.data.otp_visible}`);
       } else {
         toast.success(r.data?.message || 'Warehouse OTP sent');
@@ -462,6 +511,12 @@ export default function DeliveryChallanDetailPage() {
             )}
             <QcStatusBadge allPassed={qc?.all_passed} pendingCount={qc?.pending_count} failedCount={qc?.tickets?.filter((t) => t.status === 'qc_failed').length} totalCount={qc?.total_count} />
           </div>
+          {showOtp && deliveryOtpCode ? (
+            <OtpBox label="Delivery OTP" code={deliveryOtpCode} onCopy={copyOtp} />
+          ) : null}
+          {showOtp && warehouseReturnOtpCode ? (
+            <OtpBox label="Warehouse return OTP" code={warehouseReturnOtpCode} onCopy={copyOtp} />
+          ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {(canDownloadPdf || isSuperAdmin) && (
@@ -997,7 +1052,10 @@ export default function DeliveryChallanDetailPage() {
                   <p>Mode: {head.dispatch_mode || head.ship_by}</p>
                   {head.dispatch_mode === 'inhouse' || head.ship_by === 'by_hand' ? (
                     <>
-                      <p>OTP: {(head.otp_sent_at || head.delivery_otp_sent_at || head.d_otp) ? 'Sent' : 'Not Sent'}</p>
+                      <p>OTP: {(head.otp_sent_at || head.delivery_otp_sent_at || head.d_otp || head.otp_code) ? 'Sent' : 'Not Sent'}</p>
+                      {showOtp && deliveryOtpCode ? (
+                        <OtpBox label="Delivery OTP" code={deliveryOtpCode} onCopy={copyOtp} />
+                      ) : null}
                       <button type="button" onClick={handleSendOtp} className="px-3 py-1 border rounded-lg text-xs">Send OTP</button>
                       <button type="button" onClick={() => setOtpModal(true)} className="ml-2 px-3 py-1 bg-blue-600 text-white rounded-lg text-xs">Verify & Deliver</button>
                     </>
@@ -1096,6 +1154,9 @@ export default function DeliveryChallanDetailPage() {
                           {head.warehouse_return_otp_sent_at && (
                             <p className="text-xs text-gray-500">OTP sent: {formatDateTime(head.warehouse_return_otp_sent_at)}</p>
                           )}
+                          {showOtp && warehouseReturnOtpCode ? (
+                            <OtpBox label="Warehouse return OTP" code={warehouseReturnOtpCode} onCopy={copyOtp} />
+                          ) : null}
                           <button type="button" onClick={handleSendWarehouseReturnOtp} className="px-3 py-1 border border-red-300 rounded-lg text-xs text-red-700">Send Warehouse Return OTP</button>
                           <div className="flex gap-2 items-center">
                             <input className="flex-1 border rounded-lg px-2 py-1 text-sm" value={warehouseOtp} onChange={(e) => setWarehouseOtp(e.target.value)} placeholder="Warehouse OTP" />

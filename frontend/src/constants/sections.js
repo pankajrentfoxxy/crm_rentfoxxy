@@ -75,6 +75,17 @@ export const APPLICATION_SECTIONS = [
   'reports',
   'reports_access',
   'reports_export',
+  'report_revenue',
+  'report_inventory',
+  'report_lead_conversion',
+  'report_salesperson',
+  'report_collections',
+  'report_vendor_spend',
+  'report_laptop',
+  'report_warehouse_laptops',
+  'report_sales_order',
+  'report_support_daily',
+  'report_inward_outward',
   'production_qc_report',
   'manager_dashboard',
   'users',
@@ -88,7 +99,7 @@ export const APPLICATION_SECTIONS = [
 
 export const SECTION_LABELS = {
   dashboard: 'Dashboard',
-  analytics_dashboard: 'Analytics Dashboard',
+  analytics_dashboard: 'Analytics Dashboards (Manager & Sales)',
   leads: 'Leads',
   lead_follow_ups: 'Follow-ups',
   lead_conversion: 'Lead Conversion',
@@ -159,11 +170,22 @@ export const SECTION_LABELS = {
   support_tickets: 'Support Tickets',
   support_requests: 'Support Requests (QR)',
   support_settings: 'Support Settings',
-  reports: 'Reports',
-  reports_access: 'Reports Access',
+  reports: 'Reports (legacy)',
+  reports_access: 'Reports Access (legacy)',
   reports_export: 'Export Reports',
-  production_qc_report: 'Production QC Report',
-  manager_dashboard: 'Manager Dashboard',
+  report_revenue: 'Report — Revenue',
+  report_inventory: 'Report — Inventory Utilisation',
+  report_lead_conversion: 'Report — Lead Conversion',
+  report_salesperson: 'Report — Salesperson',
+  report_collections: 'Report — Collections',
+  report_vendor_spend: 'Report — Vendor Spend',
+  report_laptop: 'Report — Technician / Laptop',
+  report_warehouse_laptops: 'Report — Warehouse Laptops',
+  report_sales_order: 'Report — Sales Order',
+  report_support_daily: 'Report — Daily Support Summary',
+  report_inward_outward: 'Report — Inward & Outward Summary',
+  production_qc_report: 'Report — Production QC',
+  manager_dashboard: 'Manager Dashboard (legacy)',
   users: 'User Management',
   teams: 'Team Management',
   roles: 'Role Management',
@@ -174,7 +196,7 @@ export const SECTION_LABELS = {
 };
 
 export const SECTION_GROUPS = {
-  Core: ['dashboard', 'analytics_dashboard'],
+  Core: ['dashboard'],
   'Lead & Sales CRM': [
     'leads', 'lead_follow_ups', 'lead_conversion', 'customers', 'customer_documents',
     'sales_quotations', 'sales_orders_sale', 'sales_orders_rental', 'sales_orders_replacement',
@@ -208,7 +230,22 @@ export const SECTION_GROUPS = {
     'security_deposits', 'billing_dashboard', 'einvoice_ewb', 'dc_eway_bill',
   ],
   Support: ['support_tickets', 'support_requests', 'support_settings', 'support_technician'],
-  'Reports & Analytics': ['reports', 'reports_access', 'reports_export', 'production_qc_report', 'manager_dashboard'],
+  'Reports & Analytics': [
+    'analytics_dashboard',
+    'report_revenue',
+    'report_inventory',
+    'report_lead_conversion',
+    'report_salesperson',
+    'report_collections',
+    'report_vendor_spend',
+    'report_laptop',
+    'report_warehouse_laptops',
+    'report_sales_order',
+    'report_support_daily',
+    'report_inward_outward',
+    'production_qc_report',
+    'reports_export',
+  ],
   'Settings & Admin': ['users', 'teams', 'roles', 'role_permissions', 'user_permissions', 'company_settings', 'asset_configuration'],
 };
 
@@ -233,6 +270,9 @@ export const PERMISSION_ACTIONS = ['can_view', 'can_create', 'can_edit', 'can_de
 export const HIDDEN_ROLE_PERMISSION_SECTIONS = new Set([
   'sales_orders',
   'sales_orders_doc',
+  'reports',
+  'reports_access',
+  'manager_dashboard',
 ]);
 
 export function isHiddenRolePermissionSection(section) {

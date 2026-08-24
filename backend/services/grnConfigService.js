@@ -196,16 +196,78 @@ const MODEL_NOISE = new Set([
   'the', 'and', 'for',
 ]);
 
-/** Significant model tokens — ignores screen size (14, 15.6) and marketing noise. */
+const MODEL_BRAND_NOISE = new Set([
+  'lenovo', 'dell', 'hp', 'hewlett', 'packard', 'asus', 'acer', 'apple',
+  'msi', 'toshiba', 'samsung', 'microsoft',
+]);
+
+const THINK_LINE_ALIASES = new Set([
+  'thinkbook', 'thinkpad', 'thinkcentre', 'thinkedge',
+]);
+
+function isMachineTypeCode(s) {
+  return /^[0-9]{2}[a-z0-9]{6,}$/i.test(String(s || '').replace(/\s+/g, ''));
+}
+
+function preferredActualModel(actual = {}) {
+  const candidates = [actual.model_version, actual.system_family, actual.model];
+  return candidates.find((s) => s && !isMachineTypeCode(s)) || actual.model || '';
+}
+
+/**
+ * Significant model tokens.
+ * Keeps series numbers (14 / 15) so ThinkBook 14 ≠ ThinkBook 15.
+ * Drops decimal inch sizes (15.6). Treats ThinkBook/ThinkPad as one line
+ * and Gen2 / G2 / Gen 2i as the same generation token.
+ */
 function modelTokens(s) {
-  return norm(s)
+  const raw = norm(s)
     .split(' ')
     .filter((t) => {
       if (!t || t.length < 2) return false;
-      if (MODEL_NOISE.has(t)) return false;
-      if (/^\d{1,2}(?:\.\d)?$/.test(t)) return false; // lone screen sizes
+      if (MODEL_NOISE.has(t) || MODEL_BRAND_NOISE.has(t)) return false;
+      if (/^\d{1,2}\.\d$/.test(t)) return false;
       return true;
     });
+
+  const out = [];
+  for (let i = 0; i < raw.length; i += 1) {
+    const t = raw[i];
+    if (THINK_LINE_ALIASES.has(t)) {
+      out.push('thinkline');
+      continue;
+    }
+    if (t === 'gen' && raw[i + 1] && /^(\d{1,2})[a-z]?$/.test(raw[i + 1])) {
+      out.push(`gen${raw[i + 1].replace(/[a-z]/g, '')}`);
+      i += 1;
+      continue;
+    }
+    const genOnly = t.match(/^g(?:en)?(\d{1,2})[a-z]?$/);
+    if (genOnly) {
+      out.push(`gen${genOnly[1]}`);
+      continue;
+    }
+    const series = t.match(/^[a-z](\d{2})$/);
+    if (series) {
+      out.push(t);
+      out.push(series[1]);
+      continue;
+    }
+    out.push(t);
+  }
+  return out;
+}
+
+function tokenMatches(expectedTok, actualTokenSet, joined) {
+  if (!expectedTok) return true;
+  if (joined.includes(expectedTok) || actualTokenSet.has(expectedTok)) return true;
+  return [...actualTokenSet].some((at) => {
+    if (at === expectedTok) return true;
+    if (expectedTok.length >= 3 && at.length >= 3 && (at.includes(expectedTok) || expectedTok.includes(at))) {
+      return true;
+    }
+    return false;
+  });
 }
 
 function processorsMatch(expectedProcessor, actualProcessor) {
@@ -231,27 +293,27 @@ function modelsMatch(expectedModel, actual) {
   if (appleHit) return appleHit;
 
   const e = normModel(expectedModel);
-  if (!e) return { matched: true, matchedRaw: actual?.model || '' };
-  const rawCandidates = [actual.model, actual.model_version, actual.system_family].filter(Boolean);
+  if (!e) return { matched: true, matchedRaw: preferredActualModel(actual) };
+  const rawCandidates = [actual.model_version, actual.system_family, actual.model]
+    .filter(Boolean);
   const candidates = rawCandidates.map(normModel).filter((c) => c.length >= 2);
   const hit = candidates.find((c) => bothContain(c, e));
-  if (hit) return { matched: true, matchedRaw: rawCandidates[candidates.indexOf(hit)] || actual.model };
+  if (hit) return { matched: true, matchedRaw: rawCandidates[candidates.indexOf(hit)] || preferredActualModel(actual) };
 
   const expectedTokens = modelTokens(expectedModel);
-  if (!expectedTokens.length) return { matched: true, matchedRaw: actual.model || '' };
+  if (!expectedTokens.length) return { matched: true, matchedRaw: preferredActualModel(actual) };
 
   for (let i = 0; i < rawCandidates.length; i += 1) {
     const raw = rawCandidates[i];
+    if (isMachineTypeCode(raw) && expectedTokens.some((tok) => /[a-z]/.test(tok))) {
+      continue;
+    }
     const joined = candidates[i] || normModel(raw);
     const actualTokenSet = new Set(modelTokens(raw));
-    const allFound = expectedTokens.every(
-      (tok) => joined.includes(tok)
-        || actualTokenSet.has(tok)
-        || [...actualTokenSet].some((at) => at.includes(tok) || tok.includes(at))
-    );
+    const allFound = expectedTokens.every((tok) => tokenMatches(tok, actualTokenSet, joined));
     if (allFound) return { matched: true, matchedRaw: raw };
   }
-  return { matched: false, matchedRaw: actual.model || '' };
+  return { matched: false, matchedRaw: preferredActualModel(actual) };
 }
 
 /**

@@ -2655,9 +2655,25 @@ exports.getDeliveryChallan = async (req, res) => {
 
     const shipmentUnits = await listDcAwbShipments(dcNumber, headLine);
 
+    const { userCanViewDeliveryRegisterOtp } = require('../services/deliveryOtpAccess');
+    const canViewOtp = await userCanViewDeliveryRegisterOtp(req.user, req.permissionCache);
+    const deliveryOtp = headLine.otp_code || headLine.d_otp || headLine.delivery_otp || null;
+    const warehouseReturnOtp = headLine.warehouse_return_otp || null;
+    if (!canViewOtp) {
+      for (const line of lines) {
+        delete line.otp_code;
+        delete line.d_otp;
+        delete line.delivery_otp;
+        delete line.warehouse_return_otp;
+      }
+    }
+
     res.json({
       success: true,
       dc_number: req.params.dcNumber,
+      can_view_otp: canViewOtp,
+      otp_code: canViewOtp ? deliveryOtp : undefined,
+      warehouse_return_otp: canViewOtp ? warehouseReturnOtp : undefined,
       lines,
       billing_lines: billingLines,
       totals,

@@ -39,3 +39,7 @@ export const buildPartLabelsPdf = (labels, {
 
 export const fetchPartsDashboard = (params) => api.get(`${base}/dashboard`, { params });
 export const fetchPartsDrilldown = (params) => api.get(`${base}/dashboard/drilldown`, { params });
+export const exportPartsDashboard = (params) =>
+  api.get(`${base}/dashboard`, { params: { ...params, export: 1 }, responseType: 'blob' });
+export const exportPartsDrilldown = (params) =>
+  api.get(`${base}/dashboard/drilldown`, { params: { ...params, export: 1 }, responseType: 'blob' });
