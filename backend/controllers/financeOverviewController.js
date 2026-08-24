@@ -9,6 +9,7 @@ const PENDING_DC_INVOICE_WHERE = `
     OR LOWER(COALESCE(dcl.entity_code, '')) = 'gorefurbo'
     OR (
       dcl.customer_id IS NOT NULL
+      AND LOWER(COALESCE(sol.quotation_type, '')) <> 'demo'
       AND LOWER(COALESCE(dcl.status, '')) IN ('pending', 'processing', 'in_transit', 'reached', 'shipped')
       AND NOT EXISTS (
         SELECT 1 FROM sales_order_lines prior
@@ -61,6 +62,29 @@ const DC_INVOICE_FROM = `
   ) dcl_amt ON TRUE
 `;
 
+const DEMO_EWAY_WHERE = `
+  COALESCE(dcl.movement_type, 'outbound') = 'outbound'
+  AND LOWER(COALESCE(dcl.status, '')) NOT IN ('cancelled')
+  AND LOWER(COALESCE(sol.quotation_type, '')) = 'demo'
+  AND dcl.customer_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM sales_order_lines prior
+     WHERE prior.customer_id = dcl.customer_id
+       AND prior.sales_order_number IS DISTINCT FROM dcl.sales_order_number
+       AND LOWER(COALESCE(prior.status, '')) NOT IN ('cancelled')
+       AND prior.created_at < COALESCE(sol.created_at, dcl.created_at)
+  )
+  AND COALESCE(dcl_amt.amount, 0) > ${EWAY_VALUE_THRESHOLD}
+`;
+
+const DEMO_EWAY_PENDING_WHERE = `
+  ${DEMO_EWAY_WHERE}
+  AND (
+    NULLIF(TRIM(COALESCE(dcl.eway_bill_number, '')), '') IS NULL
+    OR NULLIF(TRIM(COALESCE(dcl.eway_bill_pdf_path, '')), '') IS NULL
+  )
+`;
+
 exports.getCounts = async (req, res) => {
   try {
     const [draftRes, queueRes, dcInvRes] = await Promise.all([
@@ -75,9 +99,14 @@ exports.getCounts = async (req, res) => {
            AND COALESCE(sol.quotation_type, sq.quotation_type) = 'sale'`
       ),
       pool.query(
-        `SELECT COUNT(DISTINCT dcl.dc_number)::int AS c
-         ${DC_INVOICE_FROM}
-         WHERE ${PENDING_DC_INVOICE_WHERE}`
+        `SELECT (
+            (SELECT COUNT(DISTINCT dcl.dc_number)::int
+               ${DC_INVOICE_FROM}
+              WHERE ${PENDING_DC_INVOICE_WHERE})
+          + (SELECT COUNT(DISTINCT dcl.dc_number)::int
+               ${DC_INVOICE_FROM}
+              WHERE ${DEMO_EWAY_PENDING_WHERE})
+         ) AS c`
       ),
     ]);
     res.json({
@@ -278,7 +307,53 @@ exports.getDcInvoiceQueue = async (req, res) => {
        ORDER BY created_at DESC NULLS LAST, dc_number DESC`,
       [EWAY_VALUE_THRESHOLD]
     );
-    res.json({ success: true, queue: result.rows });
+    const demoRes = await pool.query(
+      `SELECT * FROM (
+         SELECT DISTINCT ON (dcl.dc_number)
+           dcl.dc_number,
+           dcl.sales_order_number,
+           dcl.created_at,
+           dcl.status,
+           COALESCE(dcl.customer_name, sol.customer_name) AS customer_name,
+           dcl.customer_id,
+           sol.quotation_type,
+           dcl.entity_code,
+           dcl.eway_bill_number,
+           dcl.eway_bill_date,
+           dcl.eway_bill_pdf_path,
+           dcl.accounts_notified_at,
+           COALESCE(dcq.dc_qty, 0) AS quantity,
+           COALESCE(dcl_amt.amount, 0) AS amount,
+           CASE
+             WHEN NULLIF(TRIM(COALESCE(dcl.eway_bill_number, '')), '') IS NOT NULL
+              AND NULLIF(TRIM(COALESCE(dcl.eway_bill_pdf_path, '')), '') IS NOT NULL
+             THEN 'uploaded'
+             ELSE 'pending'
+           END AS eway_status,
+           (
+             SELECT string_agg(DISTINCT token, ', ')
+               FROM (
+                 SELECT COALESCE(NULLIF(TRIM(u.ttspl_id), ''), NULLIF(TRIM(u.serial_number), '')) AS token
+                   FROM dc_shipment_units u
+                  WHERE u.dc_number = dcl.dc_number
+               ) t
+              WHERE token IS NOT NULL
+           ) AS laptops
+         ${DC_INVOICE_FROM}
+         WHERE ${DEMO_EWAY_WHERE}
+         ORDER BY dcl.dc_number, dcl.created_at DESC
+       ) q
+       ORDER BY
+         CASE WHEN eway_status = 'pending' THEN 0 ELSE 1 END,
+         created_at DESC NULLS LAST,
+         dc_number DESC`
+    );
+    res.json({
+      success: true,
+      queue: result.rows,
+      demo_eway: demoRes.rows,
+      eway_threshold: EWAY_VALUE_THRESHOLD,
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

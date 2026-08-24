@@ -65,6 +65,10 @@ const ACTION_TITLES = {
   dispatch_qc_reminder_sent: 'Dispatch QC Reminder Sent',
   dispatch_qc_overdue: 'Dispatch QC Overdue',
   customer_asset_created: 'Customer Asset Created',
+  eway_required: 'E-Way Bill Required',
+  eway_accounts_requested: 'E-Way Bill Request Sent to Accounts',
+  eway_uploaded: 'E-Way Bill Uploaded',
+  dc_access_enabled: 'DC Access Enabled',
 };
 
 function actorFromUser(user) {

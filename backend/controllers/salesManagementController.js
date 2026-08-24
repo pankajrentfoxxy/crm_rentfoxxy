@@ -50,6 +50,9 @@ const {
   isSaleDc,
   isNewCustomerFirstOrder,
   requiresInvoiceCompliance,
+  requiresDemoEwayCompliance,
+  buildDemoEwayCompliance,
+  canManageDcEwayBill,
   buildSaleCompliance,
   assertCanDownloadSaleDcPdf,
   normalizeVehicleNumber,
@@ -2596,7 +2599,10 @@ exports.getDeliveryChallan = async (req, res) => {
     );
     const needsInvoice = requiresInvoiceCompliance(headLine.entity_code, soQuotationType, firstCustomerOrder);
     const isSale = isSaleDc(headLine.entity_code, soQuotationType);
+    const productValue = Number(totals?.subtotal ?? 0);
+    const needsDemoEway = requiresDemoEwayCompliance(soQuotationType, firstCustomerOrder, productValue);
     let sale_compliance = null;
+    let demo_eway_compliance = null;
     let can_download_pdf = true;
     if (needsInvoice) {
       const canDispatchAction = req.user?.role === 'super_admin'
@@ -2612,6 +2618,25 @@ exports.getDeliveryChallan = async (req, res) => {
         }
       );
       can_download_pdf = sale_compliance.can_download_pdf;
+      if (!can_download_pdf) {
+        for (const line of lines) {
+          line.pdf_path = null;
+        }
+      }
+    } else if (needsDemoEway) {
+      const canUploadEway = req.user?.role === 'super_admin'
+        || await canManageDcEwayBill(req.user, req.permissionCache);
+      demo_eway_compliance = buildDemoEwayCompliance(
+        { ...headLine, quotation_type: soQuotationType },
+        totals,
+        req.user?.role,
+        {
+          canUpload: canUploadEway,
+          canRequest: true,
+          isFirstCustomerOrder: firstCustomerOrder,
+        }
+      );
+      can_download_pdf = demo_eway_compliance.can_download_pdf;
       if (!can_download_pdf) {
         for (const line of lines) {
           line.pdf_path = null;
@@ -2641,7 +2666,9 @@ exports.getDeliveryChallan = async (req, res) => {
       is_sale: isSale,
       is_first_customer_order: firstCustomerOrder,
       requires_invoice_compliance: needsInvoice,
+      requires_demo_eway: needsDemoEway,
       sale_compliance,
+      demo_eway_compliance,
       can_download_pdf,
       rental_invoice,
       shipment_units: shipmentUnits,

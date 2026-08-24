@@ -7,13 +7,14 @@ import DispatchModal from '../components/DispatchModal';
 import ChangeAssigneeModal from '../components/ChangeAssigneeModal';
 import EInvoicePanel from '../components/EInvoicePanel';
 import SaleDcCompliancePanel from '../components/SaleDcCompliancePanel';
+import DemoEwayPanel from '../components/DemoEwayPanel';
 import QcStatusBadge from '../components/QcStatusBadge';
 import {
   createDcQcTickets, getDC, getDcQcStatus, getDCMeta, getSalesOrderFull,
   markDelivered, markRejected, regenerateDcPdf, downloadDcRentalInvoicePdf, downloadDcBluedartAwbPdf,
   downloadBluedartWaybillPdfByAwb, cancelDC,
   sendDeliveryOtp, sendWarehouseReturnOtp, verifyDeliveryOtp, verifyWarehouseReturnOtp,
-  sendAccountsDcMail,
+  sendAccountsDcMail, requestDemoEway,
   updateDC, dispatchDC, updateDcHsn, updateDcDeliveryDate, cancelDcBluedartAwb,
 } from '../salesPipelineApi';
 import {
@@ -37,7 +38,7 @@ function resolveDcNumber(params) {
   }
 }
 
-const TABS = ['details', 'qc', 'dispatch', 'einvoice'];
+const TABS = ['details', 'qc', 'dispatch', 'einvoice', 'eway'];
 
 function dcPdfUrl(path) {
   if (!path) return null;
@@ -102,6 +103,7 @@ export default function DeliveryChallanDetailPage() {
   const [cancelReason, setCancelReason] = useState('');
   const [cancelSaving, setCancelSaving] = useState(false);
   const [saleCompliance, setSaleCompliance] = useState(null);
+  const [demoEwayCompliance, setDemoEwayCompliance] = useState(null);
   const [canDownloadPdf, setCanDownloadPdf] = useState(true);
   const [rentalInvoice, setRentalInvoice] = useState(null);
   const [invoicePdfLoading, setInvoicePdfLoading] = useState(false);
@@ -114,6 +116,7 @@ export default function DeliveryChallanDetailPage() {
   const summaryLines = billingLines.length ? billingLines : lines;
   const isSale = head.entity_code === 'gorefurbo' || head.quotation_type === 'sale' || head.quotation_type === 'sales';
   const needsInvoice = Boolean(saleCompliance?.requires_invoice_compliance) || isSale;
+  const needsDemoEway = Boolean(demoEwayCompliance?.applies || demoEwayCompliance?.requires_eway_bill);
 
   const loadQc = useCallback(async () => {
     try {
@@ -134,6 +137,7 @@ export default function DeliveryChallanDetailPage() {
       setAssignmentHistory(res.data?.assignment_history || []);
       setHsnDraft(res.data?.lines?.[0]?.hsn_code || '');
       setSaleCompliance(res.data?.sale_compliance || null);
+      setDemoEwayCompliance(res.data?.demo_eway_compliance || null);
       setCanDownloadPdf(res.data?.can_download_pdf !== false);
       setRentalInvoice(res.data?.rental_invoice || null);
       setShipmentUnits(res.data?.shipment_units || []);
@@ -529,6 +533,11 @@ export default function DeliveryChallanDetailPage() {
               DC PDF is locked until Accounts uploads the e-invoice
             </span>
           )}
+          {needsDemoEway && !canDownloadPdf && !isSuperAdmin && (
+            <span className="text-xs text-amber-800 bg-amber-50 border border-amber-200 px-3 py-2 rounded-xl">
+              DC Download → Locked
+            </span>
+          )}
           {isSuperAdmin && (
             <button type="button" onClick={() => setEditOpen(true)}
               className="inline-flex items-center px-4 min-h-[40px] text-sm font-semibold bg-amber-600 text-white rounded-xl hover:bg-amber-700">Edit DC</button>
@@ -548,15 +557,53 @@ export default function DeliveryChallanDetailPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2 space-y-4">
           <div className="flex gap-2 border-b overflow-x-auto">
-            {TABS.filter((t) => t !== 'einvoice' || needsInvoice).map((t) => (
+            {TABS.filter((t) => (t !== 'einvoice' || needsInvoice) && (t !== 'eway' || needsDemoEway)).map((t) => (
               <button key={t} type="button" onClick={() => setTab(t)} className={`px-4 py-2 text-sm capitalize border-b-2 -mb-px whitespace-nowrap ${tab === t ? 'border-blue-600 text-blue-700 font-medium' : 'border-transparent text-gray-500'}`}>
-                {t === 'qc' ? 'Pre-Dispatch QC' : t === 'einvoice' ? 'E-Invoice' : t}
+                {t === 'qc' ? 'Pre-Dispatch QC' : t === 'einvoice' ? 'E-Invoice' : t === 'eway' ? 'E-Way Bill' : t}
               </button>
             ))}
           </div>
 
           {tab === 'details' && (
             <>
+            {needsDemoEway && !demoEwayCompliance?.eway_complete && (
+              <div className="p-4 mb-4 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-950 space-y-2">
+                <p className="font-semibold">E-Way Bill Required</p>
+                <p>
+                  New-customer demo value is above ₹{Number(demoEwayCompliance?.eway_threshold || 50000).toLocaleString('en-IN')}.
+                  DC download stays locked until Accounts uploads the E-Way Bill.
+                </p>
+                {demoEwayCompliance?.request_sent ? (
+                  <p className="text-xs font-semibold text-emerald-800">E-Way Bill Request Sent</p>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={sendingAccountsMail || demoEwayCompliance?.dispatch_mail_configured === false}
+                    onClick={async () => {
+                      if (!window.confirm(`Request E-Way Bill from ${demoEwayCompliance?.accounts_email || 'Accounts'}?`)) return;
+                      setSendingAccountsMail(true);
+                      try {
+                        const res = await requestDemoEway(dcNumber);
+                        toast.success(res.data?.message || 'E-Way Bill Request Sent');
+                        load();
+                      } catch (err) {
+                        if (err.response?.status === 409) {
+                          toast.success(err.response?.data?.message || 'E-Way Bill Request Sent');
+                          load();
+                        } else {
+                          toast.error(err.response?.data?.message || 'Could not send request');
+                        }
+                      } finally {
+                        setSendingAccountsMail(false);
+                      }
+                    }}
+                    className="px-4 py-2 bg-teal-700 text-white rounded-lg text-sm font-semibold hover:bg-teal-800 disabled:opacity-50"
+                  >
+                    {sendingAccountsMail ? 'Sending…' : 'Request E-Way Bill from Accounts'}
+                  </button>
+                )}
+              </div>
+            )}
             {needsInvoice && !saleCompliance?.einvoice_complete && (
               <div className="p-4 mb-4 bg-teal-50 border border-teal-200 rounded-xl text-sm text-teal-950 space-y-2">
                 <p className="font-semibold">Accounts invoice required</p>
@@ -1013,6 +1060,15 @@ export default function DeliveryChallanDetailPage() {
                 </div>
               )}
             </div>
+          )}
+
+          {tab === 'eway' && needsDemoEway && (
+            <DemoEwayPanel
+              dcNumber={dcNumber}
+              compliance={demoEwayCompliance}
+              onReload={load}
+              isSuperAdmin={isSuperAdmin}
+            />
           )}
 
           {tab === 'einvoice' && needsInvoice && (

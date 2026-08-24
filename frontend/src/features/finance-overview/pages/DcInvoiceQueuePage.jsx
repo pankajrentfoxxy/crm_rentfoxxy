@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { getDcInvoiceQueue } from '../financeOverviewApi';
-import { uploadSaleDcCompliance } from '../../sales-pipeline/salesPipelineApi';
+import { uploadSaleDcCompliance, uploadDemoEway } from '../../sales-pipeline/salesPipelineApi';
 import { deliveryChallanDetailPath } from '../../sales-pipeline/salesPipelineUtils';
 import { salesOrderDetailPath } from '../../sales-pipeline/salesOrderScope';
 import { getBackendOrigin } from '../../../utils/api';
@@ -32,10 +32,14 @@ function soPath(row) {
 
 export default function DcInvoiceQueuePage() {
   const [rows, setRows] = useState([]);
+  const [demoRows, setDemoRows] = useState([]);
+  const [ewayThreshold, setEwayThreshold] = useState(50000);
   const [loading, setLoading] = useState(true);
   const [uploadRow, setUploadRow] = useState(null);
+  const [demoUploadRow, setDemoUploadRow] = useState(null);
   const [einvoiceNumber, setEinvoiceNumber] = useState('');
   const [ewayNumber, setEwayNumber] = useState('');
+  const [ewayDate, setEwayDate] = useState('');
   const [einvoiceFile, setEinvoiceFile] = useState(null);
   const [ewayFile, setEwayFile] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -45,6 +49,8 @@ export default function DcInvoiceQueuePage() {
     try {
       const res = await getDcInvoiceQueue();
       setRows(res.data?.queue || []);
+      setDemoRows(res.data?.demo_eway || []);
+      if (res.data?.eway_threshold) setEwayThreshold(Number(res.data.eway_threshold));
     } catch {
       toast.error('Failed to load DC invoice queue');
     } finally {
@@ -60,6 +66,40 @@ export default function DcInvoiceQueuePage() {
     setEwayNumber(row.eway_bill_number || '');
     setEinvoiceFile(null);
     setEwayFile(null);
+  };
+
+  const openDemoUpload = (row) => {
+    setDemoUploadRow(row);
+    setEwayNumber(row.eway_bill_number || '');
+    setEwayDate(row.eway_bill_date ? String(row.eway_bill_date).slice(0, 10) : '');
+    setEwayFile(null);
+  };
+
+  const submitDemoUpload = async () => {
+    if (!demoUploadRow) return;
+    if (!ewayNumber.trim() && !demoUploadRow.eway_bill_number) {
+      toast.error('E-Way Bill number is required');
+      return;
+    }
+    if (!ewayFile && !demoUploadRow.eway_bill_pdf_path) {
+      toast.error('E-Way Bill document is required');
+      return;
+    }
+    const fd = new FormData();
+    if (ewayNumber.trim()) fd.append('eway_bill_number', ewayNumber.trim());
+    if (ewayDate) fd.append('eway_bill_date', ewayDate);
+    if (ewayFile) fd.append('eway_bill_pdf', ewayFile);
+    setSaving(true);
+    try {
+      const res = await uploadDemoEway(demoUploadRow.dc_number, fd);
+      toast.success(res.data?.message || 'E-Way Bill Uploaded');
+      setDemoUploadRow(null);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Upload failed');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const submitUpload = async () => {
@@ -178,6 +218,104 @@ export default function DcInvoiceQueuePage() {
           </tbody>
         </table>
       </div>
+
+      <div className="mt-8 mb-3">
+        <h2 className="text-lg font-semibold">New Customer Demo — E-Way Bill</h2>
+        <p className="text-sm text-gray-500 mt-1">
+          Demo DCs for a first-time customer when consignment value is above ₹{Number(ewayThreshold).toLocaleString('en-IN')}.
+        </p>
+      </div>
+      <div className="bg-white border rounded-xl overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
+            <tr>
+              <th className="px-4 py-3 text-left">DC Number</th>
+              <th className="px-4 py-3 text-left">Customer</th>
+              <th className="px-4 py-3 text-left">SO Number</th>
+              <th className="px-4 py-3 text-left">Laptop</th>
+              <th className="px-4 py-3 text-left">Value</th>
+              <th className="px-4 py-3 text-left">E-Way Bill Status</th>
+              <th className="px-4 py-3 text-left">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {loading ? (
+              <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-500">Loading…</td></tr>
+            ) : demoRows.length === 0 ? (
+              <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-500">No new-customer demo E-Way Bills</td></tr>
+            ) : demoRows.map((r) => (
+              <tr key={`demo-${r.dc_number}`}>
+                <td className="px-4 py-3 font-mono">
+                  <Link to={deliveryChallanDetailPath(r.dc_number)} className="text-blue-600 hover:underline">
+                    {r.dc_number}
+                  </Link>
+                </td>
+                <td className="px-4 py-3">{r.customer_name || '—'}</td>
+                <td className="px-4 py-3">
+                  {r.sales_order_number ? (
+                    <Link to={soPath(r)} className="text-blue-600 hover:underline">{r.sales_order_number}</Link>
+                  ) : '—'}
+                </td>
+                <td className="px-4 py-3 font-mono text-xs">{r.laptops || '—'}</td>
+                <td className="px-4 py-3">{formatMoney(r.amount)}</td>
+                <td className="px-4 py-3">
+                  {r.eway_status === 'uploaded'
+                    ? <span className="text-emerald-700 font-medium">Uploaded</span>
+                    : <span className="text-amber-700 font-medium">Pending</span>}
+                </td>
+                <td className="px-4 py-3">
+                  <div className="flex flex-wrap gap-2">
+                    <Link to={deliveryChallanDetailPath(r.dc_number)} className="text-xs text-blue-600 hover:underline">View DC</Link>
+                    <button type="button" onClick={() => openDemoUpload(r)} className="text-xs text-teal-700 hover:underline font-semibold">
+                      Upload E-Way Bill
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {demoUploadRow && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <button type="button" className="absolute inset-0 bg-black/40" onClick={() => setDemoUploadRow(null)} aria-label="Close" />
+          <div className="relative bg-white rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4">
+            <h3 className="font-semibold text-gray-900">Upload E-Way Bill — {demoUploadRow.dc_number}</h3>
+            <p className="text-sm text-gray-600">
+              {demoUploadRow.customer_name} · {demoUploadRow.sales_order_number || 'No SO'} · {formatMoney(demoUploadRow.amount)}
+            </p>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">E-Way Bill number *</label>
+              <input
+                className="w-full border rounded-lg px-3 py-2 text-sm"
+                value={ewayNumber}
+                onChange={(e) => setEwayNumber(e.target.value)}
+                placeholder="E-Way Bill number"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">E-Way Bill date</label>
+              <input
+                type="date"
+                className="w-full border rounded-lg px-3 py-2 text-sm"
+                value={ewayDate}
+                onChange={(e) => setEwayDate(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">E-Way Bill document *</label>
+              <input type="file" accept=".pdf,image/*" className="w-full text-sm" onChange={(e) => setEwayFile(e.target.files?.[0] || null)} />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" onClick={() => setDemoUploadRow(null)} className="px-4 py-2 border rounded-lg text-sm">Cancel</button>
+              <button type="button" disabled={saving} onClick={submitDemoUpload} className="px-4 py-2 bg-teal-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50">
+                {saving ? 'Saving…' : 'Save E-Way Bill'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {uploadRow && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">

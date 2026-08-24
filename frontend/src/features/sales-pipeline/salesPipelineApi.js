@@ -73,6 +73,12 @@ export const uploadSaleDcCompliance = (n, formData) => api.post(
   { headers: { 'Content-Type': 'multipart/form-data' } }
 );
 export const sendAccountsDcMail = (n) => api.post(`${base}/delivery-challans/${encDc(n)}/send-accounts-mail`);
+export const requestDemoEway = (n) => api.post(`${base}/delivery-challans/${encDc(n)}/request-demo-eway`);
+export const uploadDemoEway = (n, formData) => api.post(
+  `${base}/delivery-challans/${encDc(n)}/demo-eway`,
+  formData,
+  { headers: { 'Content-Type': 'multipart/form-data' } }
+);
 export const markCustomerRejected = (n, d) => api.patch(`${base}/delivery-challans/${encDc(n)}/customer-rejected`, d);
 export const sendWarehouseReturnOtp = (n) => api.post(`${base}/delivery-challans/${encDc(n)}/warehouse-return-otp`);
 export const verifyWarehouseReturnOtp = (n, d) => api.post(`${base}/delivery-challans/${encDc(n)}/warehouse-return-otp/verify`, d);

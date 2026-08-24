@@ -193,6 +193,23 @@ router.post(
     saleComplianceCtrl.sendAccountsNotification
   )
 );
+router.post(
+  ...dcRoute(
+    '/request-demo-eway',
+    soDcView,
+    saleComplianceCtrl.requestDemoEway
+  )
+);
+router.post(
+  ...dcRoute(
+    '/demo-eway',
+    saleComplianceCtrl.checkDemoEwayUpload,
+    wrapMulter(uploadSaleCompliance.fields([
+      { name: 'eway_bill_pdf', maxCount: 1 },
+    ])),
+    saleComplianceCtrl.uploadDemoEway
+  )
+);
 router.patch(...dcRoute('/delivered', soDcEdit, ctrl.markDcDelivered));
 router.patch(...dcRoute('/delivery-date', soDcEdit, ctrl.updateDcDeliveryDate));
 router.patch(...dcRoute('/rejected', soDcEdit, ctrl.markDcRejected));

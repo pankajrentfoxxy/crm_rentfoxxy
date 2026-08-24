@@ -24,6 +24,8 @@ const DC_ACTION_SUFFIXES = [
   '/deliver',
   '/rental-invoice/pdf',
   '/bluedart-awb/pdf',
+  '/request-demo-eway',
+  '/demo-eway',
 ];
 
 /**

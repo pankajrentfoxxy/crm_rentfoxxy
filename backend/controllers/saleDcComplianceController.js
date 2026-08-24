@@ -9,14 +9,19 @@ const {
 } = require('../services/salesManagementService');
 const {
   isSaleDc,
+  isDemoDc,
   isNewCustomerFirstOrder,
   requiresInvoiceCompliance,
+  requiresDemoEwayCompliance,
   requiresEwayBill,
   buildSaleCompliance,
+  buildDemoEwayCompliance,
   normalizeVehicleNumber,
   canUploadSaleDcCompliance,
+  canManageDcEwayBill,
   computeDcGrandTotal,
   sendAccountsSaleDcEmail,
+  sendAccountsDemoEwayEmail,
   ACCOUNTS_EMAIL,
 } = require('../services/saleDcComplianceService');
 const { generateDocumentPdf } = require('../services/salesManagementPdfService');
@@ -41,6 +46,59 @@ exports.checkSaleDcComplianceUpload = async (req, res, next) => {
     return res.status(500).json({ success: false, message: 'Server error checking permissions' });
   }
 };
+
+exports.checkDemoEwayUpload = async (req, res, next) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+    if (req.user.role === 'super_admin') return next();
+    if (!req.permissionCache) req.permissionCache = {};
+    const allowed = await canManageDcEwayBill(req.user, req.permissionCache);
+    if (allowed) return next();
+    return res.status(403).json({
+      success: false,
+      message: 'Permission denied — requires Accounts E-Way Bill upload access',
+    });
+  } catch (error) {
+    console.error('checkDemoEwayUpload:', error);
+    return res.status(500).json({ success: false, message: 'Server error checking permissions' });
+  }
+};
+
+function parseLineSerials(raw) {
+  if (!raw) return [];
+  let parsed = raw;
+  if (typeof raw === 'string') {
+    try { parsed = JSON.parse(raw); } catch { parsed = raw; }
+  }
+  const list = Array.isArray(parsed) ? parsed : [parsed];
+  return list.filter(Boolean).map((entry) => {
+    const parts = String(entry).split('|');
+    return {
+      serial: parts[1] || parts[0] || null,
+      ttspl: parts[2] || null,
+    };
+  });
+}
+
+function laptopRowsFromLines(lines) {
+  const rows = [];
+  for (const line of lines || []) {
+    const config = [line.brand, line.model_name || line.model, line.processor, line.generation, line.ram, line.storage]
+      .filter(Boolean).join(' · ');
+    const serials = Array.isArray(line.serials_detail) && line.serials_detail.length
+      ? line.serials_detail.map((d) => ({
+        ttspl: d.ttspl || d.inventory_asset_code || null,
+        serial: d.serial_number || null,
+        config: [d.brand, d.model, d.processor, d.generation, d.ram, d.storage].filter(Boolean).join(' · ') || config,
+      }))
+      : parseLineSerials(line.serial_number).map((s) => ({ ...s, config }));
+    if (serials.length) rows.push(...serials);
+    else rows.push({ ttspl: null, serial: null, config });
+  }
+  return rows;
+}
 
 function relativeUploadPath(absPath) {
   const rel = path.relative(path.join(__dirname, '..'), absPath).replace(/\\/g, '/');
@@ -294,5 +352,218 @@ exports.sendAccountsNotification = async (req, res) => {
     console.error('sendAccountsNotification:', error);
     const status = error.message?.includes('not configured') ? 503 : 500;
     res.status(status).json({ success: false, message: error.message });
+  }
+};
+
+/** POST — one-time E-Way Bill request to Accounts (new-customer demo only). */
+exports.requestDemoEway = async (req, res) => {
+  const dcNumber = req.params.dcNumber;
+  try {
+    const lines = await getDeliveryChallanLines(dcNumber);
+    if (!lines.length) {
+      return res.status(404).json({ success: false, message: 'Delivery challan not found' });
+    }
+    let head = lines[0];
+
+    let quotationType = null;
+    if (head.sales_order_number) {
+      const qtRes = await pool.query(
+        `SELECT quotation_type, customer_name FROM sales_order_lines
+          WHERE sales_order_number = $1 LIMIT 1`,
+        [head.sales_order_number]
+      );
+      quotationType = qtRes.rows[0]?.quotation_type || null;
+      if (!head.customer_name && qtRes.rows[0]?.customer_name) {
+        head = { ...head, customer_name: qtRes.rows[0].customer_name };
+      }
+    }
+
+    const firstOrder = await isNewCustomerFirstOrder(pool, head.customer_id, head.sales_order_number);
+    const productValue = await computeDcGrandTotal(dcNumber);
+    if (!requiresDemoEwayCompliance(quotationType, firstOrder, productValue)) {
+      return res.status(400).json({
+        success: false,
+        message: 'E-Way Bill request applies only to new-customer demo DCs at or above the configured threshold',
+      });
+    }
+
+    if (head.accounts_notified_at) {
+      return res.status(409).json({
+        success: false,
+        message: 'E-Way Bill Request Sent',
+        already_sent: true,
+        accounts_notified_at: head.accounts_notified_at,
+      });
+    }
+
+    const mailResult = await sendAccountsDemoEwayEmail({
+      dcNumber,
+      salesOrderNumber: head.sales_order_number,
+      customerName: head.customer_name,
+      productValue,
+      laptops: laptopRowsFromLines(lines),
+    });
+
+    await pool.query(
+      `UPDATE delivery_challan_lines SET
+          accounts_notified_at = NOW(),
+          accounts_notified_by = $1,
+          updated_at = NOW()
+        WHERE dc_number = $2`,
+      [req.user?.user_id || null, dcNumber]
+    );
+
+    if (head.sales_order_number) {
+      await safeLogSalesOrderActivity({
+        salesOrderNumber: head.sales_order_number,
+        activityType: ACTIVITY_TYPES.DELIVERY_CHALLAN,
+        action: 'eway_accounts_requested',
+        description: `E-Way Bill request emailed to ${ACCOUNTS_EMAIL} for demo DC ${dcNumber}.`,
+        metadata: { dc_number: dcNumber, to: mailResult.to, from: mailResult.from },
+        user: req.user,
+      }).catch(() => {});
+    }
+
+    const updated = await getDeliveryChallanLines(dcNumber);
+    const { subtotal } = await resolveDcBilling(dcNumber, updated);
+    const totals = computeGstBreakdown({
+      subtotal,
+      shipping: updated[0].shiping_charges,
+      security: updated[0].security_amount,
+      supplyState: resolveSupplyStateFromAddress(updated[0].customer_shipping_address, updated[0].supply_state),
+    });
+    const canUpload = await canManageDcEwayBill(req.user, req.permissionCache);
+    const demoEway = buildDemoEwayCompliance(
+      { ...updated[0], quotation_type: quotationType },
+      totals,
+      req.user?.role,
+      { canUpload, canRequest: true, isFirstCustomerOrder: firstOrder },
+    );
+
+    return res.json({
+      success: true,
+      message: 'E-Way Bill Request Sent',
+      from: mailResult.from,
+      to: mailResult.to,
+      demo_eway_compliance: demoEway,
+    });
+  } catch (error) {
+    console.error('requestDemoEway:', error);
+    const status = error.message?.includes('not configured') ? 503 : 500;
+    return res.status(status).json({ success: false, message: error.message });
+  }
+};
+
+/** POST multipart: eway_bill_number, eway_bill_date, eway_bill_pdf */
+exports.uploadDemoEway = async (req, res) => {
+  const dcNumber = req.params.dcNumber;
+  const body = req.body || {};
+  const ewayBillNumber = String(body.eway_bill_number || '').trim();
+  const ewayBillDate = String(body.eway_bill_date || '').trim() || null;
+
+  try {
+    const lines = await getDeliveryChallanLines(dcNumber);
+    if (!lines.length) {
+      return res.status(404).json({ success: false, message: 'Delivery challan not found' });
+    }
+    const head = lines[0];
+
+    let quotationType = null;
+    if (head.sales_order_number) {
+      const qtRes = await pool.query(
+        `SELECT quotation_type FROM sales_order_lines WHERE sales_order_number = $1 LIMIT 1`,
+        [head.sales_order_number]
+      );
+      quotationType = qtRes.rows[0]?.quotation_type || null;
+    }
+
+    const firstOrder = await isNewCustomerFirstOrder(pool, head.customer_id, head.sales_order_number);
+    const productValue = await computeDcGrandTotal(dcNumber);
+    if (!requiresDemoEwayCompliance(quotationType, firstOrder, productValue)
+      && !isDemoDc(quotationType)) {
+      return res.status(400).json({
+        success: false,
+        message: 'E-Way Bill upload on this endpoint is for new-customer demo DCs only',
+      });
+    }
+    if (!requiresDemoEwayCompliance(quotationType, firstOrder, productValue)) {
+      return res.status(400).json({
+        success: false,
+        message: 'E-Way Bill is not required for this demo DC value',
+      });
+    }
+
+    const files = req.files || {};
+    const ewayFile = files.eway_bill_pdf?.[0] || files.eway_bill_pdf;
+    const hasExistingPdf = Boolean(head.eway_bill_pdf_path);
+    if (!ewayBillNumber && !head.eway_bill_number) {
+      return res.status(400).json({ success: false, message: 'E-Way Bill number is required' });
+    }
+    if (!ewayFile && !hasExistingPdf) {
+      return res.status(400).json({ success: false, message: 'E-Way Bill document is required' });
+    }
+
+    const ewayPdfPath = ewayFile ? relativeUploadPath(ewayFile.path) : head.eway_bill_pdf_path;
+    const finalNum = ewayBillNumber || head.eway_bill_number;
+
+    await pool.query(
+      `UPDATE delivery_challan_lines SET
+          eway_bill_number = $1,
+          eway_bill_date = COALESCE($2::date, eway_bill_date),
+          eway_bill_pdf_path = COALESCE($3, eway_bill_pdf_path),
+          eway_bill_uploaded_at = NOW(),
+          eway_bill_uploaded_by = $4,
+          updated_at = NOW()
+        WHERE dc_number = $5`,
+      [finalNum, ewayBillDate, ewayPdfPath, req.user?.user_id || null, dcNumber]
+    );
+
+    if (head.sales_order_number) {
+      await safeLogSalesOrderActivity({
+        salesOrderNumber: head.sales_order_number,
+        activityType: ACTIVITY_TYPES.DELIVERY_CHALLAN,
+        action: 'eway_uploaded',
+        description: `E-Way Bill ${finalNum} uploaded for demo DC ${dcNumber}. DC download enabled.`,
+        metadata: {
+          dc_number: dcNumber,
+          eway_bill_number: finalNum,
+          eway_bill_date: ewayBillDate,
+        },
+        user: req.user,
+      }).catch(() => {});
+      await safeLogSalesOrderActivity({
+        salesOrderNumber: head.sales_order_number,
+        activityType: ACTIVITY_TYPES.DELIVERY_CHALLAN,
+        action: 'dc_access_enabled',
+        description: `DC access enabled for ${dcNumber} after E-Way Bill upload.`,
+        metadata: { dc_number: dcNumber },
+        user: req.user,
+      }).catch(() => {});
+    }
+
+    const updated = await getDeliveryChallanLines(dcNumber);
+    const { subtotal } = await resolveDcBilling(dcNumber, updated);
+    const totals = computeGstBreakdown({
+      subtotal,
+      shipping: updated[0].shiping_charges,
+      security: updated[0].security_amount,
+      supplyState: resolveSupplyStateFromAddress(updated[0].customer_shipping_address, updated[0].supply_state),
+    });
+    const canUpload = await canManageDcEwayBill(req.user, req.permissionCache);
+    const demoEway = buildDemoEwayCompliance(
+      { ...updated[0], quotation_type: quotationType },
+      totals,
+      req.user?.role,
+      { canUpload, canRequest: true, isFirstCustomerOrder: firstOrder },
+    );
+
+    return res.json({
+      success: true,
+      message: 'E-Way Bill Uploaded',
+      demo_eway_compliance: demoEway,
+    });
+  } catch (error) {
+    console.error('uploadDemoEway:', error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };

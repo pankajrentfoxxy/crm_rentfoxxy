@@ -26,6 +26,23 @@ const CONFIG_FIELDS = [
 
 const QC1_CHECK_FIELDS = ['brand', 'model', 'processor', 'generation', 'ram', 'ssd'];
 
+function normalizeSerialToken(value) {
+  return String(value || '').trim().toUpperCase();
+}
+
+/** PA serial may be stored as "MACHINE/LAPTOP" (Lenovo) — accept either token. */
+function serialMatchesProductionAsset(expectedRaw, enteredRaw, linkedSerial = '') {
+  const entered = normalizeSerialToken(enteredRaw);
+  if (!entered) return false;
+  const expected = normalizeSerialToken(expectedRaw);
+  if (expected && expected === entered) return true;
+  const tokens = [expectedRaw, linkedSerial]
+    .flatMap((raw) => String(raw || '').split(/[/|,;]+/))
+    .map((s) => normalizeSerialToken(s))
+    .filter(Boolean);
+  return tokens.includes(entered);
+}
+
 function pick(obj, ...keys) {
   if (!obj || typeof obj !== 'object') return '';
   for (const k of keys) {
@@ -772,9 +789,17 @@ async function receiveIntoInventory(db, productionAssetId, {
     }
   }
 
-  const expected = String(pa.serial_number || '').trim().toUpperCase();
-  const entered = String(serialNumber || '').trim().toUpperCase();
-  if (!expected || !entered || expected !== entered) {
+  let linkedSerial = '';
+  if (pa.vendor_serial_id) {
+    const linked = await db.query(
+      `SELECT serial_number FROM vendor_serial_numbers
+        WHERE serial_id = $1 AND deleted_at IS NULL`,
+      [pa.vendor_serial_id]
+    );
+    linkedSerial = linked.rows[0]?.serial_number || '';
+  }
+  const entered = normalizeSerialToken(serialNumber);
+  if (!serialMatchesProductionAsset(pa.serial_number, serialNumber, linkedSerial)) {
     const err = new Error('Serial number does not match Production Asset');
     err.status = 400;
     throw err;
