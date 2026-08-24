@@ -1,8 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Loader2, ArrowDownToLine, ArrowUpFromLine, Building2, Users, Truck, X, Search } from 'lucide-react';
+import { Loader2, ArrowDownToLine, ArrowUpFromLine, Building2, Users, Truck, X, Search, Download } from 'lucide-react';
+import toast from 'react-hot-toast';
 import api from '../../../utils/api';
 import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
 import { normalizeTtsplSearchInput } from '../../../utils/ttspl';
+import ExportButton from '../components/ExportButton';
+import { exportReport } from '../reportingApi';
+import usePermission from '../../../hooks/usePermission';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const yesterday = () => new Date(Date.now() - 86400000).toISOString().slice(0, 10);
@@ -85,55 +89,149 @@ function SearchSelect({ value, onChange, options, getValue, getLabel, placeholde
   );
 }
 
-function PanelRow({ row, onOpen, accent }) {
-  const hasActivity = (row.value ?? 0) > 0;
+function downloadBlob(res, fileName) {
+  const blob = new Blob([res.data], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function CategoryExportButton({ filters, type, title, compact = false, disabled = false, label }) {
+  const [loading, setLoading] = useState(false);
+
+  const handleExport = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (disabled || loading) return;
+    setLoading(true);
+    try {
+      const res = await exportReport({
+        report_type: 'inward_outward',
+        filters: { ...filters, type, category_label: title },
+      });
+      const date = new Date().toISOString().slice(0, 10);
+      const slug = String(title || type || 'list').replace(/[^\w]+/g, '_').replace(/^_|_$/g, '').toLowerCase();
+      downloadBlob(res, `${slug || type}_${date}.xlsx`);
+      toast.success('List exported');
+    } catch {
+      toast.error('Export failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (compact) {
+    return (
+      <button
+        type="button"
+        onClick={handleExport}
+        disabled={disabled || loading}
+        title={`Export ${title || 'list'}`}
+        className="inline-flex items-center justify-center p-1.5 rounded-md text-green-700 hover:bg-green-50 disabled:opacity-40"
+      >
+        {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+      </button>
+    );
+  }
+
   return (
     <button
       type="button"
-      onClick={() => onOpen(row.type, row.title)}
-      title={`View ${row.title}`}
-      className={`w-full flex items-center justify-between gap-3 px-2 py-1.5 rounded-lg text-left transition-colors ${
-        hasActivity
-          ? accent === 'success' ? 'bg-green-50 hover:bg-green-100' : 'bg-red-50 hover:bg-red-100'
-          : 'hover:bg-gray-50'
-      }`}
+      onClick={handleExport}
+      disabled={disabled || loading}
+      className="bg-green-600 text-white px-3 py-1.5 rounded-lg text-sm inline-flex gap-2 items-center hover:bg-green-700 disabled:opacity-60"
     >
-      <span className="min-w-0">
-        <span className={`text-sm ${hasActivity ? 'text-gray-900' : 'text-gray-500'}`}>{row.label}</span>
-        {row.sublabel ? <span className="block text-[11px] text-gray-400">{row.sublabel}</span> : null}
-      </span>
-      <span className={`shrink-0 text-sm font-semibold tabular-nums ${
-        hasActivity
-          ? accent === 'success' ? 'text-green-700' : 'text-red-600'
-          : 'text-gray-400'
-      }`}>
-        {row.value ?? 0}
-      </span>
+      {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+      {label || 'Export all listed'}
     </button>
   );
 }
 
-function DirectionPanel({ direction, total, groups, onOpen }) {
+function PanelRow({ row, onOpen, onExport, accent, canExport }) {
+  const hasActivity = (row.value ?? 0) > 0;
+  return (
+    <div
+      className={`w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg ${
+        hasActivity
+          ? accent === 'success' ? 'bg-green-50' : 'bg-red-50'
+          : ''
+      }`}
+    >
+      <button
+        type="button"
+        onClick={() => onOpen(row.type, row.title)}
+        title={`View ${row.title}`}
+        className={`min-w-0 flex-1 flex items-center justify-between gap-3 text-left rounded-md ${
+          hasActivity
+            ? accent === 'success' ? 'hover:bg-green-100' : 'hover:bg-red-100'
+            : 'hover:bg-gray-50'
+        }`}
+      >
+        <span className="min-w-0">
+          <span className={`text-sm ${hasActivity ? 'text-gray-900' : 'text-gray-500'}`}>{row.label}</span>
+          {row.sublabel ? <span className="block text-[11px] text-gray-400">{row.sublabel}</span> : null}
+        </span>
+        <span className={`shrink-0 text-sm font-semibold tabular-nums ${
+          hasActivity
+            ? accent === 'success' ? 'text-green-700' : 'text-red-600'
+            : 'text-gray-400'
+        }`}>
+          {row.value ?? 0}
+        </span>
+      </button>
+      {canExport ? (
+        <CategoryExportButton
+          compact
+          filters={onExport}
+          type={row.type}
+          title={row.title}
+          disabled={!hasActivity}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function DirectionPanel({ direction, total, groups, onOpen, exportFilters, canExport }) {
   const isInward = direction === 'inward';
+  const totalTitle = `Total ${isInward ? 'Inward' : 'Outward'} Laptops`;
   return (
     <div className={`bg-white rounded-xl border border-gray-100 shadow-sm p-4 border-t-2 ${
       isInward ? 'border-t-green-500' : 'border-t-red-500'
     }`}>
-      <div className="flex items-baseline justify-between mb-3">
+      <div className="flex items-center justify-between mb-3 gap-2">
         <span className={`inline-flex items-center gap-1.5 text-sm font-semibold ${
           isInward ? 'text-green-700' : 'text-red-600'
         }`}>
           {isInward ? <ArrowDownToLine className="w-4 h-4" /> : <ArrowUpFromLine className="w-4 h-4" />}
           {isInward ? 'Inward' : 'Outward'}
         </span>
-        <button
-          type="button"
-          onClick={() => onOpen(`${direction}_total`, `Total ${isInward ? 'Inward' : 'Outward'} Laptops`)}
-          title={`View Total ${isInward ? 'Inward' : 'Outward'} Laptops`}
-          className="text-2xl font-bold text-gray-900 hover:text-blue-700 tabular-nums"
-        >
-          {total ?? 0}
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => onOpen(`${direction}_total`, totalTitle)}
+            title={`View ${totalTitle}`}
+            className="text-2xl font-bold text-gray-900 hover:text-blue-700 tabular-nums"
+          >
+            {total ?? 0}
+          </button>
+          {canExport ? (
+            <CategoryExportButton
+              compact
+              filters={exportFilters}
+              type={`${direction}_total`}
+              title={totalTitle}
+              disabled={!total}
+            />
+          ) : null}
+        </div>
       </div>
       {groups.map((group) => (
         <div key={group.label} className="mb-3 last:mb-0">
@@ -146,6 +244,8 @@ function DirectionPanel({ direction, total, groups, onOpen }) {
                 key={row.type}
                 row={row}
                 onOpen={onOpen}
+                onExport={exportFilters}
+                canExport={canExport}
                 accent={isInward ? 'success' : 'danger'}
               />
             ))}
@@ -179,7 +279,7 @@ const PARTY_BADGE = {
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
 
-function DetailModal({ open, title, loading, rows, onClose, onTtsplClick }) {
+function DetailModal({ open, title, type, loading, rows, onClose, onTtsplClick, canExport, exportFilters }) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
 
@@ -210,9 +310,19 @@ function DetailModal({ open, title, loading, rows, onClose, onTtsplClick }) {
                     + ` · showing ${(start + 1).toLocaleString('en-IN')}–${(start + pageRows.length).toLocaleString('en-IN')}`}
             </p>
           </div>
-          <button type="button" onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500">
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            {canExport && !loading && rows.length > 0 ? (
+              <CategoryExportButton
+                filters={exportFilters}
+                type={type}
+                title={title}
+                label="Export all listed"
+              />
+            ) : null}
+            <button type="button" onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
         <div className="overflow-auto flex-1 min-h-0">
           {loading ? (
@@ -315,11 +425,13 @@ function DetailModal({ open, title, loading, rows, onClose, onTtsplClick }) {
 const DEFAULT_FILTERS = { preset: 'today', from: today(), to: today(), customer: '', vendor: '' };
 
 export default function InwardOutwardSummaryPage() {
+  const { canView } = usePermission();
+  const canExport = canView('reports_export') || canView('report_inward_outward');
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const [options, setOptions] = useState({ vendors: [], customers: [] });
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [detail, setDetail] = useState({ open: false, title: '' });
+  const [detail, setDetail] = useState({ open: false, title: '', type: '' });
   const [detailRows, setDetailRows] = useState([]);
   const [detailLoading, setDetailLoading] = useState(false);
   const [historyTtspl, setHistoryTtspl] = useState(null);
@@ -327,7 +439,7 @@ export default function InwardOutwardSummaryPage() {
   const set = (key, value) => setFilters((f) => ({ ...f, [key]: value }));
 
   const openDetail = useCallback(async (type, title) => {
-    setDetail({ open: true, title });
+    setDetail({ open: true, title, type });
     setDetailRows([]);
     setDetailLoading(true);
     try {
@@ -424,11 +536,30 @@ export default function InwardOutwardSummaryPage() {
     },
   ];
 
+  const exportFilters = {
+    from: filters.from,
+    to: filters.to,
+    customer: filters.customer,
+    vendor: filters.vendor,
+    preset: filters.preset,
+    all_time: filters.preset === 'all' ? 1 : undefined,
+  };
+
   return (
     <div className="p-4 max-w-7xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold text-gray-900">Inward &amp; Outward Summary</h1>
-        <p className="text-sm text-gray-500 mt-1">Laptop movement — received into and dispatched from the warehouse</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold text-gray-900">Inward &amp; Outward Summary</h1>
+          <p className="text-sm text-gray-500 mt-1">Laptop movement — received into and dispatched from the warehouse</p>
+        </div>
+        {canExport ? (
+          <ExportButton
+            reportType="inward_outward"
+            filters={exportFilters}
+            label="Export Excel"
+            fileNameBase="inward_outward"
+          />
+        ) : null}
       </div>
 
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 space-y-3">
@@ -498,19 +629,23 @@ export default function InwardOutwardSummaryPage() {
               total={inward?.total}
               groups={inwardGroups}
               onOpen={openDetail}
+              exportFilters={exportFilters}
+              canExport={canExport}
             />
             <DirectionPanel
               direction="outward"
               total={outward?.total}
               groups={outwardGroups}
               onOpen={openDetail}
+              exportFilters={exportFilters}
+              canExport={canExport}
             />
           </div>
 
           <p className="text-[11px] text-gray-400">
             Inward: GRN purchase, vendor repaired/replacement receive-back, customer warehouse-received pickups (return vs replacement), and direct ledger.
             Outward: customer standard / replacement / service-return challans, and vendor repair DC dispatches.
-            Click any count to view the laptops.
+            Click any count to view the laptops. Use the download icon to export that list.
           </p>
         </>
       )}
@@ -518,9 +653,12 @@ export default function InwardOutwardSummaryPage() {
       <DetailModal
         open={detail.open}
         title={detail.title}
+        type={detail.type}
         loading={detailLoading}
         rows={detailRows}
-        onClose={() => setDetail({ open: false, title: '' })}
+        canExport={canExport}
+        exportFilters={exportFilters}
+        onClose={() => setDetail({ open: false, title: '', type: '' })}
         onTtsplClick={(ttspl) => setHistoryTtspl(normalizeTtsplSearchInput(ttspl))}
       />
 

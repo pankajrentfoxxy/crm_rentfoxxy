@@ -1972,6 +1972,93 @@ exports.exportToExcel = async (req, res) => {
                 { key: 'total_count', label: 'Total Count' },
             ];
             sheetName = scopeKey === 'sale' ? 'Sale Orders' : 'Rental Orders';
+        } else if (reportType === 'inward_outward') {
+            const query = { ...filters };
+            if (filters.preset === 'all' || filters.all_time === 1 || filters.all_time === '1' || filters.all_time === true) {
+                query.all_time = '1';
+            }
+            const { from, to } = resolveDateRange(query);
+            const opts = {
+                from,
+                to,
+                vendor: filters.vendor || '',
+                customer: filters.customer || '',
+                entity: filters.entity || '',
+                branch: filters.branch || '',
+                courier: filters.courier || '',
+                user: filters.user || '',
+            };
+            const detailHeaders = [
+                { key: 'direction', label: 'Direction' },
+                { key: 'category', label: 'Category' },
+                { key: 'ttspl', label: 'TTSPL' },
+                { key: 'serial_number', label: 'Serial' },
+                { key: 'brand', label: 'Brand' },
+                { key: 'model', label: 'Model' },
+                { key: 'processor', label: 'Processor' },
+                { key: 'generation', label: 'Generation' },
+                { key: 'ram', label: 'RAM' },
+                { key: 'storage', label: 'Storage' },
+                { key: 'party_type', label: 'Party type' },
+                { key: 'party_name', label: 'Customer / Vendor' },
+                { key: 'movement_date', label: 'Date' },
+            ];
+            const categoryType = String(filters.type || '').trim();
+            const XLSXIo = require('xlsx');
+            const wbIo = XLSXIo.utils.book_new();
+
+            if (categoryType) {
+                const categoryRows = await getInwardOutwardDetails({ ...opts, type: categoryType });
+                const direction = categoryType.startsWith('outward') ? 'Outward' : 'Inward';
+                const categoryLabel = String(filters.category_label || categoryType).trim();
+                const detailRows = categoryRows.map((r) => ({
+                    direction,
+                    category: categoryLabel,
+                    ...r,
+                }));
+                XLSXIo.utils.book_append_sheet(wbIo, sheetFromRows(detailRows, detailHeaders), 'Laptops');
+                const bufOne = XLSXIo.write(wbIo, { type: 'buffer', bookType: 'xlsx' });
+                res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+                res.setHeader('Content-Disposition', `attachment; filename="inward_outward_${categoryType}_${date}.xlsx"`);
+                return res.send(bufOne);
+            }
+
+            const [summary, inwardRows, outwardRows] = await Promise.all([
+                getInwardOutwardSummary(opts),
+                getInwardOutwardDetails({ ...opts, type: 'inward_total' }),
+                getInwardOutwardDetails({ ...opts, type: 'outward_total' }),
+            ]);
+            const inward = summary.inward || {};
+            const outward = summary.outward || {};
+            const summaryRows = [
+                { direction: 'Inward', category: 'Total', count: inward.total || 0 },
+                { direction: 'Inward', category: 'Vendor purchase / GRN', count: inward.vendor_purchase || 0 },
+                { direction: 'Inward', category: 'Vendor repair return', count: inward.vendor_return || 0 },
+                { direction: 'Inward', category: 'Vendor replacement', count: inward.vendor_replacement || 0 },
+                { direction: 'Inward', category: 'Customer return', count: inward.customer_return || 0 },
+                { direction: 'Inward', category: 'Customer replacement', count: inward.customer_replacement || 0 },
+                { direction: 'Inward', category: 'Direct', count: inward.direct || 0 },
+                { direction: 'Outward', category: 'Total', count: outward.total || 0 },
+                { direction: 'Outward', category: 'Vendor repair DC', count: outward.vendor_return || 0 },
+                { direction: 'Outward', category: 'Customer return', count: outward.customer_service_return || 0 },
+                { direction: 'Outward', category: 'Customer replacement', count: outward.customer_replacement || 0 },
+                { direction: 'Outward', category: 'Customer standard dispatch', count: outward.customer_standard || 0 },
+            ];
+            const detailRows = [
+                ...inwardRows.map((r) => ({ direction: 'Inward', category: 'Inward', ...r })),
+                ...outwardRows.map((r) => ({ direction: 'Outward', category: 'Outward', ...r })),
+            ];
+            const summaryHeaders = [
+                { key: 'direction', label: 'Direction' },
+                { key: 'category', label: 'Category' },
+                { key: 'count', label: 'Laptops' },
+            ];
+            XLSXIo.utils.book_append_sheet(wbIo, sheetFromRows(summaryRows, summaryHeaders), 'Summary');
+            XLSXIo.utils.book_append_sheet(wbIo, sheetFromRows(detailRows, detailHeaders), 'Laptops');
+            const bufIo = XLSXIo.write(wbIo, { type: 'buffer', bookType: 'xlsx' });
+            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            res.setHeader('Content-Disposition', `attachment; filename="inward_outward_${date}.xlsx"`);
+            return res.send(bufIo);
         } else {
             return res.status(400).json({ success: false, message: 'Invalid report_type' });
         }

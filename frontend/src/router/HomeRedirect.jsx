@@ -2,14 +2,12 @@ import React from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import usePermission from '../hooks/usePermission';
+import { firstAccessibleReportPath } from '../utils/reportAccess';
 
 // First match wins — sends each user to the first module they can actually open,
 // so nobody lands on a blank page or a "permission denied" screen. Sections here
 // are the SAME ones the sidebar/route guards use (role_permissions matrix).
 const LANDING_ORDER = [
-  ['analytics_dashboard', '/reports'],
-  ['reports', '/reports'],
-  ['reports_access', '/reports'],
   ['billing_dashboard', '/finance/dashboard'],
   ['leads', '/lead-crm/leads'],
   ['floor_tickets', '/floor-pipeline/tickets'],
@@ -57,6 +55,9 @@ export default function HomeRedirect() {
     if (canView('delivery_challans')) return <Navigate to="/sales-pipeline/delivery-challans" replace />;
     return <Navigate to="/support/my-tickets" replace />;
   }
+  const reportPath = firstAccessibleReportPath(canView, user?.role);
+  if (reportPath) return <Navigate to={reportPath} replace />;
+
   for (const [section, path] of LANDING_ORDER) {
     if (canView(section)) return <Navigate to={path} replace />;
   }

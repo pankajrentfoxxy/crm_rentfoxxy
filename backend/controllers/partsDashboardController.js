@@ -128,7 +128,7 @@ exports.getPartsDashboard = async (req, res) => {
     ]);
 
     const t = totals.rows[0] || {};
-    res.json({
+    const payload = {
       success: true,
       range: { from, to, tz, category },
       totals: {
@@ -174,7 +174,13 @@ exports.getPartsDashboard = async (req, res) => {
         stock_value: Number(r.stock_value || 0),
       })),
       recent: recent.rows,
-    });
+    };
+
+    if (req.query.export === '1' || req.query.format === 'xlsx') {
+      return sendPartsDashboardExcel(res, payload, String(req.query.sheet || 'all'));
+    }
+
+    res.json(payload);
   } catch (err) {
     console.error('getPartsDashboard:', err);
     res.status(500).json({ success: false, message: err.message });
@@ -211,7 +217,8 @@ exports.getPartsDashboardDrilldown = async (req, res) => {
       clauses.push(`m.part_id = $${params.length}`);
     }
 
-    params.push(Math.min(1000, Number(req.query.limit) || 300));
+    const isExport = req.query.export === '1' || req.query.format === 'xlsx';
+    params.push(Math.min(isExport ? 5000 : 1000, Number(req.query.limit) || (isExport ? 5000 : 300)));
 
     const r = await pool.query(
       `SELECT m.movement_id, m.movement_type, m.occurred_at,
@@ -233,6 +240,15 @@ exports.getPartsDashboardDrilldown = async (req, res) => {
       params
     );
 
+    if (req.query.export === '1' || req.query.format === 'xlsx') {
+      return sendDrilldownExcel(res, {
+        metric,
+        from,
+        to,
+        rows: r.rows,
+      });
+    }
+
     res.json({
       success: true,
       metric,
@@ -245,3 +261,221 @@ exports.getPartsDashboardDrilldown = async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 };
+
+const CATEGORY_LABELS = {
+  ram: 'RAM',
+  storage: 'Storage / SSD',
+  display: 'Display',
+  battery: 'Battery',
+  keyboard: 'Keyboard',
+  motherboard: 'Motherboard / Chip Level',
+  cooling: 'Cooling / Thermal',
+  power: 'Power / Charger',
+  body: 'Body / Casing',
+  general: 'General / Other',
+};
+
+const METRIC_TITLES = {
+  received: 'Parts received',
+  installed: 'Parts installed on laptops',
+  installed_upgrade: 'Upgrades installed',
+  installed_replacement: 'Replacements installed',
+  returned_defective: 'Defective parts returned',
+  returned_good: 'Reusable parts returned',
+  reserved: 'Parts reserved',
+  discarded: 'Parts written off',
+};
+
+function categoryLabel(value) {
+  const key = String(value ?? '').trim().toLowerCase();
+  return CATEGORY_LABELS[key] || key || '—';
+}
+
+function sheetFromRows(rows, headers) {
+  const XLSX = require('xlsx');
+  const mapped = rows.map((row) => {
+    const out = {};
+    headers.forEach((h) => {
+      out[h.label] = row[h.key] ?? '';
+    });
+    return out;
+  });
+  const ws = XLSX.utils.json_to_sheet(mapped.length ? mapped : [{}]);
+  ws['!cols'] = headers.map((h) => ({ wch: Math.max(String(h.label).length, 16) }));
+  return ws;
+}
+
+function sendWorkbook(res, wb, filename) {
+  const XLSX = require('xlsx');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  return res.send(buf);
+}
+
+function sendPartsDashboardExcel(res, data, sheet) {
+  const XLSX = require('xlsx');
+  const wb = XLSX.utils.book_new();
+  const date = new Date().toISOString().slice(0, 10);
+  const range = data.range || {};
+  const want = String(sheet || 'all').trim().toLowerCase();
+
+  const summaryRows = [
+    { metric: 'Received', count: data.totals.received, value: data.totals.value_received },
+    { metric: 'Installed on laptops', count: data.totals.installed, value: data.totals.value_installed },
+    { metric: 'Upgrades', count: data.totals.installed_upgrade, value: '' },
+    { metric: 'Replacements', count: data.totals.installed_replacement, value: '' },
+    { metric: 'Defective returned', count: data.totals.returned_defective, value: '' },
+    { metric: 'Reusable returned', count: data.totals.returned_good, value: '' },
+    { metric: 'Written off', count: data.totals.discarded, value: '' },
+    { metric: 'Laptops touched', count: data.totals.laptops_touched, value: '' },
+  ];
+  const dailyRows = (data.series || []).map((r) => ({
+    day: r.day,
+    received: r.received,
+    installed: r.installed,
+    returned_defective: r.returned_defective,
+  }));
+  const categoryRows = (data.by_category || []).map((r) => ({
+    category: categoryLabel(r.category),
+    received: r.received,
+    installed: r.installed,
+    upgrade: r.upgrade,
+    replacement: r.replacement,
+    returned_defective: r.returned_defective,
+    value_installed: r.value_installed,
+  }));
+  const stockRows = (data.stock_by_category || []).map((r) => ({
+    category: categoryLabel(r.category),
+    in_stock: r.in_stock,
+    reserved: r.reserved,
+    defective: r.defective,
+    stock_value: r.stock_value,
+  }));
+  const topRows = (data.top_parts || []).map((r) => ({
+    part_name: r.part_name,
+    category: categoryLabel(r.category),
+    installed: r.installed,
+    received: r.received,
+    value_installed: r.value_installed,
+  }));
+  const recentRows = (data.recent || []).map((r) => ({
+    occurred_at: r.occurred_at,
+    movement_type: r.movement_type,
+    prt_id: r.prt_id,
+    part_name: r.part_name,
+    category: categoryLabel(r.category),
+    ttspl_id: r.ttspl_id || '',
+    actor_name: r.actor_name || '',
+    unit_cost: r.unit_cost || '',
+  }));
+
+  const sheets = {
+    summary: ['Summary', sheetFromRows(summaryRows, [
+      { key: 'metric', label: 'Metric' },
+      { key: 'count', label: 'Count' },
+      { key: 'value', label: 'Value' },
+    ])],
+    daily: ['Day by day', sheetFromRows(dailyRows, [
+      { key: 'day', label: 'Day' },
+      { key: 'received', label: 'Received' },
+      { key: 'installed', label: 'Installed' },
+      { key: 'returned_defective', label: 'Defective returned' },
+    ])],
+    category: ['By category', sheetFromRows(categoryRows, [
+      { key: 'category', label: 'Category' },
+      { key: 'received', label: 'Received' },
+      { key: 'installed', label: 'Installed' },
+      { key: 'upgrade', label: 'Upgrade' },
+      { key: 'replacement', label: 'Replace' },
+      { key: 'returned_defective', label: 'Defective' },
+      { key: 'value_installed', label: 'Value installed' },
+    ])],
+    stock: ['Stock on hand', sheetFromRows(stockRows, [
+      { key: 'category', label: 'Category' },
+      { key: 'in_stock', label: 'In stock' },
+      { key: 'reserved', label: 'Reserved' },
+      { key: 'defective', label: 'Defective' },
+      { key: 'stock_value', label: 'Stock value' },
+    ])],
+    top_parts: ['Most used parts', sheetFromRows(topRows, [
+      { key: 'part_name', label: 'Part' },
+      { key: 'category', label: 'Category' },
+      { key: 'installed', label: 'Installed' },
+      { key: 'received', label: 'Received' },
+      { key: 'value_installed', label: 'Value installed' },
+    ])],
+    recent: ['Latest activity', sheetFromRows(recentRows, [
+      { key: 'occurred_at', label: 'When' },
+      { key: 'movement_type', label: 'Movement' },
+      { key: 'prt_id', label: 'Part ID' },
+      { key: 'part_name', label: 'Part' },
+      { key: 'category', label: 'Category' },
+      { key: 'ttspl_id', label: 'TTSPL' },
+      { key: 'actor_name', label: 'User' },
+      { key: 'unit_cost', label: 'Cost' },
+    ])],
+  };
+
+  const add = (key) => {
+    const entry = sheets[key];
+    if (entry) XLSX.utils.book_append_sheet(wb, entry[1], entry[0]);
+  };
+
+  if (want === 'all') {
+    Object.keys(sheets).forEach(add);
+  } else if (sheets[want]) {
+    add(want);
+  } else {
+    Object.keys(sheets).forEach(add);
+  }
+
+  const suffix = want === 'all' ? 'all' : want;
+  const from = range.from || date;
+  const to = range.to || date;
+  return sendWorkbook(res, wb, `parts_dashboard_${suffix}_${from}_to_${to}.xlsx`);
+}
+
+function sendDrilldownExcel(res, { metric, from, to, rows }) {
+  const XLSX = require('xlsx');
+  const wb = XLSX.utils.book_new();
+  const mapped = (rows || []).map((r) => ({
+    prt_id: r.prt_id || '',
+    serial_number: r.serial_number || '',
+    part_name: r.part_name || '',
+    category: categoryLabel(r.category),
+    movement_type: r.movement_type || '',
+    is_upgrade: r.is_upgrade ? 'Yes' : '',
+    ttspl_id: r.ttspl_id || '',
+    laptop: [r.laptop_brand, r.laptop_model].filter(Boolean).join(' '),
+    laptop_serial: r.laptop_serial || '',
+    request_number: r.request_number || '',
+    purchase_order_number: r.purchase_order_number || '',
+    actor_name: r.actor_name || '',
+    occurred_at: r.occurred_at || '',
+    quantity: r.quantity || 1,
+    unit_cost: r.unit_cost || 0,
+    value: (Number(r.unit_cost) || 0) * (Number(r.quantity) || 1),
+  }));
+  const headers = [
+    { key: 'prt_id', label: 'Part ID' },
+    { key: 'serial_number', label: 'Serial' },
+    { key: 'part_name', label: 'Part' },
+    { key: 'category', label: 'Category' },
+    { key: 'movement_type', label: 'Movement' },
+    { key: 'is_upgrade', label: 'Upgrade' },
+    { key: 'ttspl_id', label: 'TTSPL' },
+    { key: 'laptop', label: 'Laptop' },
+    { key: 'laptop_serial', label: 'Laptop serial' },
+    { key: 'request_number', label: 'Request' },
+    { key: 'purchase_order_number', label: 'PO' },
+    { key: 'actor_name', label: 'User' },
+    { key: 'occurred_at', label: 'When' },
+    { key: 'quantity', label: 'Qty' },
+    { key: 'unit_cost', label: 'Unit cost' },
+    { key: 'value', label: 'Value' },
+  ];
+  XLSX.utils.book_append_sheet(wb, sheetFromRows(mapped, headers), 'Listed units');
+  const title = (METRIC_TITLES[metric] || metric || 'parts').replace(/[^\w]+/g, '_').toLowerCase();
+  return sendWorkbook(res, wb, `parts_${title}_${from}_to_${to}.xlsx`);
+}

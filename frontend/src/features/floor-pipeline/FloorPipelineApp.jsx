@@ -65,7 +65,7 @@ export default function FloorPipelineApp() {
       <Route
         path="production-qc-report"
         element={g(
-          ['production_qc_report', 'qc_management', 'floor_pipeline', 'reports_access', 'reports'],
+          ['production_qc_report', 'qc_management'],
           <ProductionQcReportPage />
         )}
       />

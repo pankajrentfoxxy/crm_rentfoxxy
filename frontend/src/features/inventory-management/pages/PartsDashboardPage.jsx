@@ -11,6 +11,7 @@ import {
 import { fetchPartsDashboard } from '../partTrackingApi';
 import { partCategoryLabel } from '../../../constants/laptopConditions';
 import PartsDrilldownPanel from '../components/PartsDrilldownPanel';
+import PartsExportButton from '../components/PartsExportButton';
 
 const EMPTY_ARR = [];
 const EMPTY_OBJ = {};
@@ -188,13 +189,21 @@ export default function PartsDashboardPage() {
             What came in, what went into laptops, and what came back — every number opens the units behind it.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={load}
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50 min-h-[44px]"
-        >
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <PartsExportButton
+            params={{ from, to, category: category || undefined }}
+            sheet="all"
+            label="Export all"
+            filename={`parts_dashboard_all_${from}_to_${to}.xlsx`}
+          />
+          <button
+            type="button"
+            onClick={load}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50 min-h-[44px]"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
+          </button>
+        </div>
       </header>
 
       <div className="flex flex-wrap items-end gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -332,6 +341,15 @@ export default function PartsDashboardPage() {
           <Panel
             title="Day by day"
             subtitle="Received versus used, with defective returns. Click a bar to see that day's units."
+            action={(
+              <PartsExportButton
+                compact
+                params={{ from, to, category: category || undefined }}
+                sheet="daily"
+                label="Export"
+                filename={`parts_daily_${from}_to_${to}.xlsx`}
+              />
+            )}
           >
             {chartData.length === 0 ? (
               <p className="text-sm text-slate-400 text-center py-16 m-0">No movements in this range.</p>
@@ -367,7 +385,19 @@ export default function PartsDashboardPage() {
 
           <div className="grid gap-4 lg:grid-cols-5">
             <div className="lg:col-span-3">
-              <Panel title="By category" subtitle="Every count opens the units behind it.">
+              <Panel
+                title="By category"
+                subtitle="Every count opens the units behind it."
+                action={(
+                  <PartsExportButton
+                    compact
+                    params={{ from, to, category: category || undefined }}
+                    sheet="category"
+                    label="Export"
+                    filename={`parts_by_category_${from}_to_${to}.xlsx`}
+                  />
+                )}
+              >
                 {byCategory.length === 0 ? (
                   <p className="text-sm text-slate-400 text-center py-12 m-0">No movements in this range.</p>
                 ) : (
@@ -414,7 +444,19 @@ export default function PartsDashboardPage() {
             </div>
 
             <div className="lg:col-span-2">
-              <Panel title="Stock on hand" subtitle="Available units right now, by category.">
+              <Panel
+                title="Stock on hand"
+                subtitle="Available units right now, by category."
+                action={(
+                  <PartsExportButton
+                    compact
+                    params={{ from, to, category: category || undefined }}
+                    sheet="stock"
+                    label="Export"
+                    filename={`parts_stock_${from}_to_${to}.xlsx`}
+                  />
+                )}
+              >
                 {stockPie.length === 0 ? (
                   <p className="text-sm text-slate-400 text-center py-12 m-0">No stocked units.</p>
                 ) : (
@@ -444,7 +486,19 @@ export default function PartsDashboardPage() {
           </div>
 
           <div className="grid gap-4 lg:grid-cols-2">
-            <Panel title="Most used parts" subtitle="Highest install count in this range.">
+            <Panel
+              title="Most used parts"
+              subtitle="Highest install count in this range."
+              action={(
+                <PartsExportButton
+                  compact
+                  params={{ from, to, category: category || undefined }}
+                  sheet="top_parts"
+                  label="Export"
+                  filename={`parts_most_used_${from}_to_${to}.xlsx`}
+                />
+              )}
+            >
               {topParts.length === 0 ? (
                 <p className="text-sm text-slate-400 text-center py-10 m-0">Nothing installed in this range.</p>
               ) : (
@@ -477,7 +531,19 @@ export default function PartsDashboardPage() {
               )}
             </Panel>
 
-            <Panel title="Latest activity" subtitle="The 25 most recent part movements.">
+            <Panel
+              title="Latest activity"
+              subtitle="The 25 most recent part movements."
+              action={(
+                <PartsExportButton
+                  compact
+                  params={{ from, to, category: category || undefined }}
+                  sheet="recent"
+                  label="Export"
+                  filename={`parts_latest_${from}_to_${to}.xlsx`}
+                />
+              )}
+            >
               {recent.length === 0 ? (
                 <p className="text-sm text-slate-400 text-center py-10 m-0">Nothing recorded yet.</p>
               ) : (

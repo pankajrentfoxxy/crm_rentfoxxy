@@ -16,27 +16,12 @@ export function canViewReportPath(pathname, canView) {
   const section = reportSectionForPath(pathname);
 
   if (section === 'production_qc_report') {
-    return (
-      canView('production_qc_report')
-      || canView('qc_management')
-      || canView('reports_access')
-      || canView('reports')
-    );
+    return canView('production_qc_report') || canView('qc_management');
   }
 
-  if (section?.startsWith('report_')) {
-    return canView(section);
-  }
+  if (section) return canView(section);
 
-  if (section === 'analytics_dashboard') {
-    return canView('analytics_dashboard');
-  }
-
-  return (
-    canView('reports')
-    || canView('reports_access')
-    || canView('analytics_dashboard')
-  );
+  return reportsMenuItems.some((child) => isReportsChildVisible(child, canView));
 }
 
 /** First sidebar report this user may open (for /reports index redirect). */
@@ -46,5 +31,8 @@ export function firstAccessibleReportPath(canView, userRole = null) {
 }
 
 export function hasAnyGranularReportAccess(canView) {
-  return GRANULAR_REPORT_SECTIONS.some((section) => canView(section));
+  return GRANULAR_REPORT_SECTIONS.some((section) => canView(section))
+    || canView('analytics_dashboard')
+    || canView('production_qc_report')
+    || canView('qc_management');
 }

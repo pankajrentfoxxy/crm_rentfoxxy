@@ -119,18 +119,18 @@ export const salesPipelineAccordionChildren = [
 export const reportsMenuItems = [
   { icon: BarChart2, label: 'Manager Dashboard', path: '/reports/manager-dashboard', section: 'analytics_dashboard' },
   { icon: TrendingUp, label: 'Sales Dashboard', path: '/reports/sales-dashboard', section: 'analytics_dashboard' },
-  { icon: DollarSign, label: 'Revenue', path: '/reports/revenue', section: 'reports_access' },
-  { icon: Package, label: 'Inventory', path: '/reports/inventory', section: 'reports_access' },
-  { icon: Users, label: 'Lead Conversion', path: '/reports/lead-conversion', section: 'reports_access' },
-  { icon: UserCheck, label: 'Salesperson', path: '/reports/salesperson', section: 'reports_access' },
-  { icon: CreditCard, label: 'Collections', path: '/reports/collections', section: 'reports_access' },
-  { icon: Building2, label: 'Vendor Spend', path: '/reports/vendor-spend', section: 'reports_access' },
-  { icon: ClipboardCheck, label: 'Technician Report', path: '/reports/laptop-report', section: 'reports_access' },
-  { icon: Warehouse, label: 'Warehouse Laptop Report', path: '/reports/warehouse-laptops', section: 'reports_access' },
+  { icon: DollarSign, label: 'Revenue', path: '/reports/revenue', section: 'report_revenue' },
+  { icon: Package, label: 'Inventory', path: '/reports/inventory', section: 'report_inventory' },
+  { icon: Users, label: 'Lead Conversion', path: '/reports/lead-conversion', section: 'report_lead_conversion' },
+  { icon: UserCheck, label: 'Salesperson', path: '/reports/salesperson', section: 'report_salesperson' },
+  { icon: CreditCard, label: 'Collections', path: '/reports/collections', section: 'report_collections' },
+  { icon: Building2, label: 'Vendor Spend', path: '/reports/vendor-spend', section: 'report_vendor_spend' },
+  { icon: ClipboardCheck, label: 'Technician Report', path: '/reports/laptop-report', section: 'report_laptop' },
+  { icon: Warehouse, label: 'Warehouse Laptop Report', path: '/reports/warehouse-laptops', section: 'report_warehouse_laptops' },
   { icon: ClipboardCheck, label: 'Production QC Report', path: '/reports/production-qc-report', section: 'production_qc_report' },
-  { icon: ShoppingCart, label: 'Sales Order Report', path: '/reports/sales-order-report', section: 'reports_access' },
-  { icon: Headphones, label: 'Daily Support Summary', path: '/reports/support-daily-summary', section: 'reports_access' },
-  { icon: ArrowLeftRight, label: 'Inward & Outward Summary', path: '/reports/inward-outward-summary', section: 'reports_access' },
+  { icon: ShoppingCart, label: 'Sales Order Report', path: '/reports/sales-order-report', section: 'report_sales_order' },
+  { icon: Headphones, label: 'Daily Support Summary', path: '/reports/support-daily-summary', section: 'report_support_daily' },
+  { icon: ArrowLeftRight, label: 'Inward & Outward Summary', path: '/reports/inward-outward-summary', section: 'report_inward_outward' },
 ];
 
 // Each section matches that page's REAL backend + route guard exactly, so a user
@@ -454,19 +454,8 @@ export function isFinanceChildVisible(child, canView) {
 
 export function isReportsChildVisible(child, canView, userRole = null) {
   if (child.path === '/reports/manager-dashboard' && userRole === 'sales') return false;
-  if (child.path === '/reports/sales-dashboard' && !['admin', 'manager', 'sales'].includes(userRole)) {
-    return canView(child.section);
-  }
   if (child.section === 'production_qc_report') {
-    return (
-      canView('production_qc_report')
-      || canView('reports_access')
-      || canView('reports')
-      || canView('qc_management')
-    );
-  }
-  if (child.section === 'reports_access') {
-    return canView('reports_access') || canView('reports');
+    return canView('production_qc_report') || canView('qc_management');
   }
   if (child.section) return canView(child.section);
   return false;

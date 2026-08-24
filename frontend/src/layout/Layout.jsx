@@ -151,8 +151,9 @@ export default function Layout({ children }) {
     canView('billing_dashboard') ||
     canView('einvoice_ewb');
 
-  const showReportsAccordion =
-    canView('analytics_dashboard') || canView('reports');
+  const showReportsAccordion = reportsMenuItems.some((child) =>
+    isReportsChildVisible(child, canView, user?.role)
+  );
 
   const showSupportNav = canView('support_tickets')
     || canView('support_part_challan')

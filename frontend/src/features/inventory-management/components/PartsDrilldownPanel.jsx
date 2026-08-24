@@ -4,6 +4,7 @@ import { Laptop, Loader2, Printer, X } from 'lucide-react';
 import { fetchPartsDrilldown } from '../partTrackingApi';
 import { partCategoryLabel } from '../../../constants/laptopConditions';
 import PartLabelPrintModal from './PartLabelPrintModal';
+import PartsExportButton from './PartsExportButton';
 
 const METRIC_TITLES = {
   received: 'Parts received',
@@ -97,6 +98,15 @@ export default function PartsDrilldownPanel({ query, onClose }) {
               </p>
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              {!loading && rows.length > 0 ? (
+                <PartsExportButton
+                  compact
+                  kind="drilldown"
+                  params={query}
+                  label="Export listed"
+                  filename={`parts_${query.metric || 'listed'}_${query.from || ''}_to_${query.to || ''}.xlsx`}
+                />
+              ) : null}
               {labelUnits.length > 0 ? (
                 <button
                   type="button"
