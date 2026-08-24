@@ -19,6 +19,7 @@ import {
   Shield,
   AlertCircle,
   Zap,
+  FileStack,
   DollarSign,
   RefreshCw,
   Headphones,
@@ -141,6 +142,7 @@ export const financeMenuItems = [
   { icon: Shield, label: 'Security Deposits', path: '/customer-billing/security-deposits', section: 'security_deposits' },
   { icon: Building2, label: 'Vendor Bills', path: '/vendor-billing/bills', section: 'vendor_billing_mgmt' },
   { icon: AlertCircle, label: 'Debit Notes', path: '/vendor-billing/debit-notes', section: 'debit_notes' },
+  { icon: FileStack, label: 'DC Invoice', path: '/finance/dc-invoice', section: 'einvoice_ewb', countKey: 'dc_invoice_queue' },
   { icon: Zap, label: 'E-Invoice Queue', path: '/finance/einvoice-queue', section: 'einvoice_ewb', countKey: 'einvoice_queue' },
 ];
 

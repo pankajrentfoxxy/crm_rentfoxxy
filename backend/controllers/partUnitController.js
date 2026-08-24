@@ -14,6 +14,9 @@ const {
   DEFAULT_CAPTION_MM,
   PAPER_WIDTH_MM,
   PAPER_HEIGHT_MM,
+  LABEL_MM,
+  GAP_MM,
+  SIDE_MARGIN_MM,
 } = require('../services/partLabelService');
 
 const UNIT_SELECT = `
@@ -204,7 +207,8 @@ exports.getUnitQrPng = async (req, res) => {
 // Body: {
 //   labels: [{ code, caption?, copies }],
 //   qr_mm?, columns?, caption_mm?,
-//   paper_width_mm? (default 102.6), paper_height_mm? (default 15)
+//   paper_width_mm? (default 71.6), paper_height_mm? (default 15)
+//   label_mm? (default 15), gap_mm? (default 3)
 // }
 exports.printPartLabels = async (req, res) => {
   try {
@@ -216,7 +220,9 @@ exports.printPartLabels = async (req, res) => {
 
     const qrMm = Math.max(8, Math.min(40, Number(body.qr_mm ?? body.width_mm) || DEFAULT_QR_MM));
     const columns = Math.max(1, Math.min(8, Number(body.columns) || DEFAULT_COLUMNS));
-    const paperWidthMm = Math.max(40, Math.min(300, Number(body.paper_width_mm) || PAPER_WIDTH_MM));
+    let paperWidthMm = Math.max(40, Math.min(300, Number(body.paper_width_mm) || PAPER_WIDTH_MM));
+    // Old UI sent 102.6 mm (no gaps). Physical stock is 71.6 mm (4×15 + 3×3 + 1.3 sides).
+    if (Number(body.paper_width_mm) === 102.6) paperWidthMm = PAPER_WIDTH_MM;
     const paperHeightMm = Math.max(10, Math.min(80, Number(body.paper_height_mm ?? body.cell_height_mm ?? body.height_mm) || PAPER_HEIGHT_MM));
     // Caption under QR (upright). 0 = QR fills the full 15 mm height.
     const wantsCaption = Array.isArray(labels) && labels.some((l) => String(l?.caption || '').trim());
@@ -224,12 +230,19 @@ exports.printPartLabels = async (req, res) => {
       ? Math.max(0, Math.min(8, Number(body.caption_mm) || DEFAULT_CAPTION_MM))
       : 0;
 
+    const labelMm = Math.max(8, Math.min(40, Number(body.label_mm) || LABEL_MM));
+    const gapMm = Math.max(0, Math.min(20, Number(body.gap_mm) ?? GAP_MM));
+    const sideMarginMm = Math.max(0, Math.min(20, Number(body.side_margin_mm) ?? SIDE_MARGIN_MM));
+
     const pdf = await buildLabelPdf(labels, {
       qrMm,
       columns,
       captionMm,
       paperWidthMm,
       paperHeightMm,
+      labelMm,
+      gapMm,
+      sideMarginMm,
     });
 
     // Track reprints so a unit whose label went missing is visible in inventory.

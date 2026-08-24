@@ -37,13 +37,14 @@ function buildDefaultCcRecipients(senderEmail) {
 /** @deprecated use getDefaultQuotationCc() */
 const DEFAULT_CC = FALLBACK_QUOTATION_CC;
 
-/** Rentfoxxy branding — lighter orange accents on white */
-const BRAND_PRIMARY = '#fb923c';
-const BRAND_PRIMARY_DARK = '#ea580c';
+/** Rentfoxxy brand orange — bright, not burnt/dark */
+const BRAND_PRIMARY = '#F97316';
+const BRAND_PRIMARY_DARK = '#EA580C';
 const BRAND_BG_LIGHT = '#ffffff';
-const BRAND_BORDER = '#fed7aa';
-const BRAND_CELL_HEADER_BG = '#fff7ed';
-const BRAND_HEADER_TEXT = '#9a3412';
+const BRAND_BORDER = '#FDBA74';
+const BRAND_CELL_HEADER_BG = '#FFF7ED';
+const BRAND_HEADER_TEXT = '#FFFFFF';
+const BRAND_LABEL = '#C2410C';
 
 const TERMS = [
   '1-The quotation is valid for 10 days from the date of issuance.',
@@ -170,11 +171,25 @@ function isConfigTwoActive(c2) {
   return Boolean(hasProc || hasRam || hasSt || hasRate);
 }
 
-function buildQuotationEmailHtml({ senderName, senderPhone, estimateNo, sentAtLine, config1, config2, acceptUrl }) {
+function buildQuotationEmailHtml({
+  senderName,
+  senderPhone,
+  estimateNo,
+  sentAtLine,
+  config1,
+  config2,
+  acceptUrl,
+  isSale = false,
+  priceLabel,
+}) {
   const hasC2 = isConfigTwoActive(config2);
-  const thMain = `padding:10px 12px;text-align:left;font-size:13px;border:1px solid ${BRAND_BORDER};background:${BRAND_CELL_HEADER_BG};color:${BRAND_HEADER_TEXT};font-weight:bold;`;
-  const td = `padding:10px 12px;font-size:13px;border:1px solid ${BRAND_BORDER};color:#334155;vertical-align:top;`;
-  const tdSpec = `${td}background:${BRAND_CELL_HEADER_BG};color:${BRAND_PRIMARY_DARK};font-weight:600;width:34%;`;
+  const unitLabel = priceLabel || (isSale ? 'Unit Price' : 'Monthly Unit Rental Price');
+  const introLine = isSale
+    ? 'Please find below the details of the laptop pricing for the configuration below:'
+    : 'Please find below the details of the laptop rental pricing for the configuration below:';
+  const thMain = `padding:10px 12px;text-align:left;font-size:13px;border:1px solid ${BRAND_PRIMARY};background:${BRAND_PRIMARY};color:#ffffff;font-weight:bold;`;
+  const td = `padding:10px 12px;font-size:13px;border:1px solid ${BRAND_BORDER};color:#1f2937;vertical-align:top;background:#ffffff;`;
+  const tdSpec = `padding:10px 12px;font-size:13px;border:1px solid ${BRAND_BORDER};background:${BRAND_CELL_HEADER_BG};color:${BRAND_PRIMARY};font-weight:700;width:34%;`;
 
   const c1p = escapeHtml(config1.processor);
   const c1r = escapeHtml(config1.ram);
@@ -200,50 +215,49 @@ function buildQuotationEmailHtml({ senderName, senderPhone, estimateNo, sentAtLi
     ? `<tr><td style="${tdSpec}">Storage</td><td style="${td}">${c1s}</td><td style="${td}">${c2s}</td></tr>`
     : `<tr><td style="${tdSpec}">Storage</td><td style="${td}">${c1s}</td></tr>`;
   const rowPrice = hasC2
-    ? `<tr><td style="${tdSpec}">Monthly Unit Rental Price</td><td style="${td}"><strong>${c1m}</strong></td><td style="${td}"><strong>${c2m}</strong></td></tr>`
-    : `<tr><td style="${tdSpec}">Monthly Unit Rental Price</td><td style="${td}"><strong>${c1m}</strong></td></tr>`;
+    ? `<tr><td style="${tdSpec}">${escapeHtml(unitLabel)}</td><td style="${td}"><strong>${c1m}</strong></td><td style="${td}"><strong>${c2m}</strong></td></tr>`
+    : `<tr><td style="${tdSpec}">${escapeHtml(unitLabel)}</td><td style="${td}"><strong>${c1m}</strong></td></tr>`;
 
   const phoneLine = escapeHtml(senderPhone || '');
 
   const acceptBlock = acceptUrl
-    ? `<p style="margin:0 0 12px;text-align:center;">
-        <a href="${escapeHtml(acceptUrl)}" style="display:inline-block;background:${BRAND_PRIMARY};color:#ffffff;text-decoration:none;font-weight:600;padding:12px 24px;border-radius:8px;font-size:14px;">Accept quotation</a>
+    ? `<p style="margin:20px 0 8px;text-align:center;">
+        <a href="${escapeHtml(acceptUrl)}" style="display:inline-block;background:${BRAND_PRIMARY};color:#ffffff;text-decoration:none;font-weight:700;padding:12px 28px;border-radius:8px;font-size:15px;">Accept</a>
       </p>
-      <p style="margin:0 0 16px;font-size:12px;color:#64748b;text-align:center;">Click to confirm you accept this rental quotation.</p>`
+      <p style="margin:0 0 16px;font-size:12px;color:#64748b;text-align:center;">Click Accept to confirm this quotation.</p>`
     : '';
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8" /></head>
-<body style="margin:0;padding:0;background:#ffffff;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+<body style="margin:0;padding:0;background:#FFF7ED;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
   <div style="max-width:640px;margin:0 auto;padding:24px 16px 32px;">
     <div style="border-radius:12px;border:1px solid ${BRAND_BORDER};overflow:hidden;background:#ffffff;">
-      <div style="background:${BRAND_CELL_HEADER_BG};border-bottom:2px solid ${BRAND_PRIMARY};padding:14px 20px;">
-        <div style="font-size:18px;font-weight:700;letter-spacing:0.03em;color:${BRAND_HEADER_TEXT};">Rentfoxxy</div>
-        <div style="font-size:12px;color:#78716c;margin-top:4px;">Quotation · ${escapeHtml(
+      <div style="background:${BRAND_PRIMARY};padding:18px 22px;">
+        <div style="font-size:22px;font-weight:700;letter-spacing:0.02em;color:#ffffff;">Rentfoxxy</div>
+        <div style="font-size:13px;color:#ffffff;opacity:0.95;margin-top:6px;">Quotation • ${escapeHtml(
           estimateNo
-        )}${sentAtLine ? ` · ${escapeHtml(sentAtLine)}` : ''}</div>
+        )}${sentAtLine ? ` • ${escapeHtml(sentAtLine)}` : ''}</div>
       </div>
-      <div style="padding:22px 20px;color:#334155;line-height:1.55;font-size:14px;">
+      <div style="padding:22px 20px;color:#1f2937;line-height:1.55;font-size:14px;">
         <p style="margin:0 0 14px;"><strong>Dear Sir,</strong></p>
-        <p style="margin:0 0 14px;">Thank you for your invaluable time today.</p>
-        <p style="margin:0 0 8px;">Please find below the details of the laptop rental pricing for the configuration below:</p>
-        <p style="margin:0 0 16px;font-size:13px;color:#475569;"><em>Models can vary as per Stock availability but configuration will be the same.</em></p>
+        <p style="margin:0 0 14px;">Thank you for your invaluable time today. ${introLine}</p>
+        <p style="margin:0 0 16px;font-size:13px;color:#57534e;"><em>Models can vary as per Stock availability but configuration will be the same.</em></p>
         <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:0 0 16px;">
           <thead><tr>${headerCols}</tr></thead>
           <tbody>${rowProcessor}${rowRam}${rowStorage}${rowPrice}</tbody>
         </table>
-        <p style="margin:0 0 14px;font-size:13px;color:${BRAND_PRIMARY_DARK};font-weight:600;">Note: Prices are exclusive of taxes.</p>
-        <p style="margin:0 0 6px;font-weight:700;color:${BRAND_PRIMARY_DARK};font-size:14px;">Terms &amp; Conditions</p>
-        <ul style="margin:0 0 16px;padding-left:20px;color:#475569;font-size:13px;">
+        <p style="margin:0 0 14px;font-size:13px;color:${BRAND_PRIMARY};font-weight:700;">Note: Prices are exclusive of taxes.</p>
+        <p style="margin:0 0 6px;font-weight:700;color:${BRAND_PRIMARY};font-size:14px;">Terms &amp; Conditions</p>
+        <ul style="margin:0 0 8px;padding-left:20px;color:#44403c;font-size:13px;">
           <li style="margin-bottom:6px;">The quotation is valid for 10 days from the date of issuance.</li>
+          <li style="margin-bottom:6px;">All rented equipment remains the property of Rentfoxxy.</li>
         </ul>
         ${acceptBlock}
         <p style="margin:0 0 20px;font-size:14px;">Please feel free to contact or revert for any clarification required.</p>
         <p style="margin:0;font-size:14px;"><strong>Regards</strong><br/>
-        <strong>${escapeHtml(senderName || 'Team')}</strong>${phoneLine ? ` (${phoneLine})` : ''}<br/>
-        <span style="color:${BRAND_PRIMARY};font-weight:bold;">Team Rentfoxxy</span></p>
+        ${escapeHtml(senderName || 'Team')}${phoneLine ? ` (${phoneLine})` : ''}<br/>
+        <span style="color:${BRAND_PRIMARY};font-weight:700;">Team Rentfoxxy</span></p>
       </div>
     </div>
-    <p style="text-align:center;font-size:11px;color:#94a3b8;margin-top:16px;">Proforma invoice PDF is attached.</p>
   </div>
 </body></html>`;
 }
@@ -290,9 +304,10 @@ Note: Prices are exclusive of taxes.
 
 Terms & Conditions
 - The quotation is valid for 10 days from the date of issuance.
+- All rented equipment remains the property of Rentfoxxy.
 
 Please feel free to contact or revert for any clarification required.
-${acceptUrl ? `\nAccept quotation: ${acceptUrl}\n` : ''}
+${acceptUrl ? `\nAccept: ${acceptUrl}\n` : ''}
 
 Regards
 ${senderName || 'Team'} (${senderPhone || '—'})
@@ -568,8 +583,18 @@ function parseCcList(input) {
 }
 
 function getFrontendBaseUrl() {
-  const raw = process.env.FRONTEND_URL || process.env.PUBLIC_APP_URL || 'https://crm.rentfoxxy.com';
-  return String(raw).split(',')[0].trim().replace(/\/$/, '');
+  const candidates = [
+    process.env.CRM_PUBLIC_URL,
+    process.env.PUBLIC_APP_URL,
+    ...String(process.env.FRONTEND_URL || '').split(','),
+  ]
+    .map((s) => String(s || '').trim())
+    .filter(Boolean);
+  const httpsCrm = candidates.find((s) => /^https:\/\/crm\./i.test(s));
+  if (httpsCrm) return httpsCrm.replace(/\/$/, '');
+  const nonLocal = candidates.find((s) => /^https:\/\//i.test(s) && !/localhost|127\.0\.0\.1/i.test(s));
+  if (nonLocal) return nonLocal.replace(/\/$/, '');
+  return 'https://crm.rentfoxxy.com';
 }
 
 function buildAcceptUrl(token) {
@@ -655,7 +680,9 @@ async function buildQuotationPdfAndSend(params) {
     sentAtLine,
     config1: emailConfig.config1,
     config2: emailConfig.config2,
-    acceptUrl
+    acceptUrl,
+    isSale: Boolean(emailConfig.isSale),
+    priceLabel: emailConfig.priceLabel,
   });
   const text = buildQuotationEmailText({
     senderName: senderName || 'Team',

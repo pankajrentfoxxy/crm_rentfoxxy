@@ -11,11 +11,13 @@ const SIZE_OPTIONS = [
   { value: 20, label: '20 × 20 mm' },
 ];
 
-/** Stickers per paper strip — fills left→right on one 102.6 × 15 mm page. */
+/** Stickers per paper strip — 4 × 15 mm die-cuts with 3 mm gaps on a 71.6 × 15 mm row. */
 const COLUMNS = 4;
-/** Exact label printer media size. */
-const PAPER_WIDTH_MM = 102.6;
+const PAPER_WIDTH_MM = 71.6;
 const PAPER_HEIGHT_MM = 15;
+const LABEL_MM = 15;
+const GAP_MM = 3;
+const SIDE_MARGIN_MM = 1.3;
 /** Serial/PO text band under each QR (within the 15 mm height). */
 const CAPTION_MM = 3.2;
 
@@ -187,6 +189,9 @@ export default function PartLabelPrintModal({ open, units = [], onClose, default
     captionMm: useCaption ? CAPTION_MM : 0,
     paperWidthMm: PAPER_WIDTH_MM,
     paperHeightMm: PAPER_HEIGHT_MM,
+    labelMm: LABEL_MM,
+    gapMm: GAP_MM,
+    sideMarginMm: SIDE_MARGIN_MM,
   });
 
   async function printLabels(labels, { filename, successMsg } = {}) {
@@ -334,7 +339,7 @@ export default function PartLabelPrintModal({ open, units = [], onClose, default
               <h2 className="text-base font-semibold text-slate-900">{title}</h2>
               <p className="text-[11px] text-slate-500">
                 {rows.length} unit{rows.length === 1 ? '' : 's'} · {totalLabels} sticker{totalLabels === 1 ? '' : 's'}
-                {' · '}paper {rowDims} · {COLUMNS} × {sizeMm} mm QR · {rowCount} strip{rowCount === 1 ? '' : 's'}
+                {' · '}paper {rowDims} · 4 × {LABEL_MM} mm · {GAP_MM} mm gap · {rowCount} strip{rowCount === 1 ? '' : 's'}
               </p>
             </div>
           </div>
@@ -388,21 +393,18 @@ export default function PartLabelPrintModal({ open, units = [], onClose, default
             </div>
           </div>
 
-          {/* Visual: one 102.6 × 15 mm strip = 4 QRs left → right */}
           <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
             <p className="text-[11px] font-semibold text-slate-600 m-0 mb-2">
-              Paper {rowDims} · 4 QR codes in one row (col 1 → 4)
+              Paper {rowDims} · four {LABEL_MM}×{LABEL_MM} mm labels · {GAP_MM} mm gap
             </p>
-            <div className="grid grid-cols-4 gap-1">
+            <div className="flex items-center justify-center" style={{ gap: 6 }}>
               {[1, 2, 3, 4].map((col) => (
                 <div
                   key={col}
-                  className="flex flex-col items-center justify-center rounded-md border border-dashed border-teal-300 bg-white px-1 py-1.5 min-h-[52px]"
+                  className="flex flex-col items-center justify-center rounded-sm border border-dashed border-teal-300 bg-white"
+                  style={{ width: 48, height: 48 }}
                 >
                   <span className="w-7 h-7 shrink-0 rounded-sm bg-slate-800/90" aria-hidden />
-                  <span className="mt-0.5 text-[7px] font-bold text-slate-700 leading-none truncate max-w-full">
-                    {useCaption ? 'Serial/PO' : ' '}
-                  </span>
                   <span className="text-[9px] font-semibold text-teal-700">{col}</span>
                 </div>
               ))}
@@ -482,9 +484,8 @@ export default function PartLabelPrintModal({ open, units = [], onClose, default
           ) : null}
 
           <p className="text-[11px] text-slate-500 m-0 leading-relaxed">
-            Set printer paper to <strong>{rowDims}</strong>, QR size <strong>{sizeMm} × {sizeMm} mm</strong>,
-            copies <strong>4×</strong>. One PDF page = one strip with 4 QRs.
-            Print at <strong>actual size / 100%</strong> (no fit-to-page).
+            Set printer paper to <strong>{rowDims}</strong> (4 labels of <strong>{LABEL_MM}×{LABEL_MM} mm</strong>,
+            {' '}<strong>{GAP_MM} mm</strong> gap). Print at <strong>actual size / 100%</strong> (no fit-to-page).
           </p>
 
           {oneByOne ? (

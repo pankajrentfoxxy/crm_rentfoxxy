@@ -1269,7 +1269,7 @@ export default function SupportTicketDetail() {
                   >
                     Send another laptop (new order)
                   </button>
-                  {ticket.sales_order_number && (
+                  {replacementOrders.some((o) => o.status !== 'cancelled') && ticket.sales_order_number && (
                     <button
                       type="button"
                       className="support-btn-outline min-h-[40px] text-sm text-pink-800 border-pink-300"

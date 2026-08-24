@@ -12,6 +12,11 @@ const { logTtsplEvent, logConfigChange, resolveTtsplAsset } = require('../servic
 const { recordMovement, MOVEMENT } = require('../services/partMovementService');
 const { createReturnedPartInstance, normalizeCategory } = require('../services/partInventoryService');
 const productionAssetService = require('../services/productionAssetService');
+const {
+  resolvePartConfigUpdate,
+  applyConfigFromPartAttach,
+  revertConfigFromPartDetach,
+} = require('../services/partConfigUpdateService');
 
 const FULL_SELECT = `
   SELECT pr.*,
@@ -678,11 +683,14 @@ exports.attachPartAndReturnOld = async (req, res) => {
     const reqRes = await client.query(
       `SELECT pr.*, p.part_name, p.cost AS part_cost, p.category,
               pi.prt_id, pi.serial_number AS instance_serial, pi.unit_cost AS instance_cost,
-              t.ttspl_id, t.vendor_serial_id, t.current_stage_id
+              t.ttspl_id, t.serial_number, t.vendor_serial_id, t.current_stage_id,
+              t.ram, t.storage, t.processor,
+              st.stage_name
          FROM part_requests pr
          JOIN parts p ON p.part_id = pr.part_id
          LEFT JOIN part_instances pi ON pi.instance_id = pr.instance_id
          JOIN tickets t ON t.ticket_id = pr.ticket_id
+         LEFT JOIN stages st ON st.stage_id = COALESCE(pr.ticket_stage_id, t.current_stage_id)
         WHERE pr.request_id = $1 FOR UPDATE OF pr`,
       [requestId]
     );
@@ -722,55 +730,33 @@ exports.attachPartAndReturnOld = async (req, res) => {
     );
 
     let configUpdated = false;
-    if (isUpgrade && r.config_field && r.new_value) {
-      await logConfigChange({
-        ttsplId: r.ttspl_id, vendorSerialId: r.vendor_serial_id, ticketId: r.ticket_id,
-        changedBy: req.user.user_id, changeType: 'upgrade', fieldName: r.config_field,
-        oldValue: r.old_value, newValue: r.new_value,
-        notes: `Part ${r.part_name} upgraded (${r.old_value || '—'} → ${r.new_value})`,
-        partUsedId: r.part_id, partCost: unitCost, db: client,
+    const ticket = {
+      ticket_id: r.ticket_id,
+      ttspl_id: r.ttspl_id,
+      serial_number: r.serial_number,
+      vendor_serial_id: r.vendor_serial_id,
+      ram: r.ram,
+      storage: r.storage,
+      processor: r.processor,
+    };
+    const resolved = resolvePartConfigUpdate(r, ticket, { isUpgrade });
+    if (resolved?.configField && resolved?.newValue) {
+      configUpdated = await applyConfigFromPartAttach(client, {
+        ticket,
+        configField: resolved.configField,
+        newValue: resolved.newValue,
+        oldValue: resolved.oldValue,
+        changeType: resolved.changeType || (isUpgrade ? 'upgrade' : 'replacement'),
+        unitCost,
+        partId: r.part_id,
+        partName: r.part_name,
+        stageName: r.stage_name || null,
+        notes: isUpgrade
+          ? `Part ${r.part_name} upgraded (${resolved.oldValue || '—'} → ${resolved.newValue})`
+          : `Part ${r.part_name} attached (${resolved.oldValue || '—'} → ${resolved.newValue})`,
+        userId: req.user.user_id,
+        userName: req.user.name,
       });
-
-      // Prefer the production asset writer: it normalizes RAM and storage to the
-      // same format the rest of the pipeline uses and mirrors the change to the
-      // inventory record, the ticket header and the change log in one place.
-      const paPatch = PA_CONFIG_PATCH[r.config_field];
-      let wroteViaProductionAsset = false;
-      if (paPatch) {
-        const pa = await productionAssetService.getByTicket(client, r.ticket_id);
-        if (pa) {
-          await productionAssetService.updateConfig(
-            client,
-            pa.production_asset_id,
-            { [paPatch]: r.new_value },
-            req.user.user_id,
-            r.stage_name || null
-          );
-          wroteViaProductionAsset = true;
-        }
-      }
-
-      // Laptops that never entered the production pipeline have no asset row;
-      // fall back to writing the inventory record and ticket header directly.
-      if (!wroteViaProductionAsset) {
-        const fieldMap = { ram: 'ram', storage: 'storage', display: 'screen_size', processor: 'processor', gpu: 'gpu', os: 'os' };
-        const jsonbKey = fieldMap[r.config_field] || r.config_field;
-        if (r.vendor_serial_id) {
-          await client.query(
-            `UPDATE vendor_serial_numbers
-                SET extra = jsonb_set(COALESCE(extra, '{}'::jsonb), $1, $2::jsonb), updated_at = NOW()
-              WHERE serial_id = $3`,
-            [`{${jsonbKey}}`, JSON.stringify(r.new_value), r.vendor_serial_id]
-          );
-        }
-        if (['ram', 'storage', 'processor'].includes(r.config_field)) {
-          await client.query(
-            `UPDATE tickets SET ${r.config_field} = $1, updated_at = NOW() WHERE ticket_id = $2`,
-            [r.new_value, r.ticket_id]
-          );
-        }
-      }
-      configUpdated = true;
     }
 
     // The removed part becomes its own tracked unit with its own Part ID, so it
@@ -906,55 +892,25 @@ exports.detachAttachedPart = async (req, res) => {
       [r.ticket_id, r.part_id]
     );
 
-    if (r.request_type === 'upgrade' && r.config_field && r.old_value != null && r.ttspl_id) {
-      await logConfigChange({
-        ttsplId: r.ttspl_id,
-        vendorSerialId: r.vendor_serial_id,
-        ticketId: r.ticket_id,
-        changedBy: req.user.user_id,
-        changeType: 'correction',
-        fieldName: r.config_field,
-        oldValue: r.new_value,
-        newValue: r.old_value,
-        notes: reason || `Revert upgrade — attached part removed (${r.part_name})`,
-        partUsedId: r.part_id,
-        partCost: 0,
-        db: client,
+    if (r.ttspl_id) {
+      const ticket = {
+        ticket_id: r.ticket_id,
+        ttspl_id: r.ttspl_id,
+        serial_number: r.serial_number,
+        vendor_serial_id: r.vendor_serial_id,
+        ram: r.ram,
+        storage: r.storage,
+        processor: r.processor,
+      };
+      await revertConfigFromPartDetach(client, {
+        partRequestOrPart: r,
+        ticket,
+        isUpgrade: r.request_type === 'upgrade',
+        userId: req.user.user_id,
+        userName: req.user.name,
+        stageName: r.stage_name || null,
+        reason,
       });
-
-      const paPatch = PA_CONFIG_PATCH[r.config_field];
-      let wroteViaProductionAsset = false;
-      if (paPatch) {
-        const pa = await productionAssetService.getByTicket(client, r.ticket_id);
-        if (pa) {
-          await productionAssetService.updateConfig(
-            client,
-            pa.production_asset_id,
-            { [paPatch]: r.old_value },
-            req.user.user_id,
-            r.stage_name || null
-          );
-          wroteViaProductionAsset = true;
-        }
-      }
-      if (!wroteViaProductionAsset) {
-        const fieldMap = { ram: 'ram', storage: 'storage', display: 'screen_size', processor: 'processor', gpu: 'gpu', os: 'os' };
-        const jsonbKey = fieldMap[r.config_field] || r.config_field;
-        if (r.vendor_serial_id) {
-          await client.query(
-            `UPDATE vendor_serial_numbers
-                SET extra = jsonb_set(COALESCE(extra, '{}'::jsonb), $1, $2::jsonb), updated_at = NOW()
-              WHERE serial_id = $3`,
-            [`{${jsonbKey}}`, JSON.stringify(r.old_value), r.vendor_serial_id]
-          );
-        }
-        if (['ram', 'storage', 'processor'].includes(r.config_field)) {
-          await client.query(
-            `UPDATE tickets SET ${r.config_field} = $1, updated_at = NOW() WHERE ticket_id = $2`,
-            [r.old_value, r.ticket_id]
-          );
-        }
-      }
     }
 
     if (r.instance_id) {

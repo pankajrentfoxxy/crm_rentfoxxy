@@ -10,6 +10,10 @@ const {
 const { applyGrnVendorQcPassOnTicketComplete } = require('../services/grnTicketService');
 const ttsplAuditService = require('../services/ttsplAuditService');
 const {
+  resolvePartConfigUpdate,
+  applyConfigFromPartAttach,
+} = require('../services/partConfigUpdateService');
+const {
   logProductionHistory,
   logWorkStarted,
   getTicketProductionHistory,
@@ -2384,48 +2388,25 @@ exports.addPartToTicketWithConfig = async (req, res) => {
         db: client
       });
 
-      if (isUpgrade && configFieldRaw && newValueRaw) {
-        const fieldName = CONFIG_FIELD_MAP[configFieldRaw] || String(configFieldRaw).toLowerCase();
-        const oldValue = oldValueRaw || ticket[fieldName] || '';
-        const newValue = String(newValueRaw).trim();
-
-        await ttsplAuditService.logConfigChange({
-          ttsplId: ticket.ttspl_id,
-          vendorSerialId: ticket.vendor_serial_id,
-          ticketId: ticket.ticket_id,
-          changedBy: req.user.user_id,
-          changeType: 'upgrade',
-          fieldName,
-          oldValue,
-          newValue,
-          notes: notes || `Upgrade via part: ${part.part_name}`,
-          partUsedId: part_id,
-          partCost: totalCost,
-          db: client
+      const resolved = resolvePartConfigUpdate(
+        { part_name: part.part_name, category: part.category, part_type: part.part_type, config_field: configFieldRaw, new_value: newValueRaw, old_value: oldValueRaw },
+        ticket,
+        { isUpgrade }
+      );
+      if (resolved?.configField && resolved?.newValue) {
+        configUpdated = await applyConfigFromPartAttach(client, {
+          ticket,
+          configField: resolved.configField,
+          newValue: resolved.newValue,
+          oldValue: resolved.oldValue,
+          changeType: resolved.changeType || (isUpgrade ? 'upgrade' : 'replacement'),
+          unitCost: totalCost,
+          partId: part_id,
+          partName: part.part_name,
+          notes: notes || (isUpgrade ? `Upgrade via part: ${part.part_name}` : `Part attached: ${part.part_name}`),
+          userId: req.user.user_id,
+          userName: req.user.name,
         });
-
-        if (ticket.vendor_serial_id) {
-          const vs = await client.query(
-            `SELECT extra FROM vendor_serial_numbers WHERE serial_id = $1`,
-            [ticket.vendor_serial_id]
-          );
-          let extra = vs.rows[0]?.extra || {};
-          if (typeof extra === 'string') {
-            try { extra = JSON.parse(extra); } catch { extra = {}; }
-          }
-          if (fieldName !== 'other') extra[fieldName] = newValue;
-          await client.query(
-            `UPDATE vendor_serial_numbers SET extra = $1::jsonb, updated_at = NOW() WHERE serial_id = $2`,
-            [JSON.stringify(extra), ticket.vendor_serial_id]
-          );
-          if (['processor', 'ram', 'storage'].includes(fieldName)) {
-            await client.query(
-              `UPDATE tickets SET ${fieldName} = $1 WHERE ticket_id = $2`,
-              [newValue, id]
-            );
-          }
-        }
-        configUpdated = true;
       }
     }
 

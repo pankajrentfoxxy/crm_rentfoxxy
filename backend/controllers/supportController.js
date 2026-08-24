@@ -3439,8 +3439,11 @@ const warehouseReceiveReturnDcBatch = async (client, triggerItem, userId, esignU
 
     for (const s of siblings) {
         try {
+            await client.query('SAVEPOINT replacement_wh_hook');
             await replacementFlow.onReplacementWarehouseReceived(client, s.id);
+            await client.query('RELEASE SAVEPOINT replacement_wh_hook');
         } catch (whErr) {
+            await client.query('ROLLBACK TO SAVEPOINT replacement_wh_hook').catch(() => {});
             console.error('[support] replacement warehouse hook:', whErr.message);
         }
     }

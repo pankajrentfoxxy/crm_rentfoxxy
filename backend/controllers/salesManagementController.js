@@ -42,7 +42,14 @@ const {
 const { generateDocumentPdf } = require('../services/salesManagementPdfService');
 const { emailDocument } = require('../services/salesManagementPdfService');
 const {
+  sendSalesQuotationEmail,
+  assertQuotationSendFields,
+  assertLeadAllowsQuotationSend,
+} = require('../services/salesQuotationEmailService');
+const {
   isSaleDc,
+  isNewCustomerFirstOrder,
+  requiresInvoiceCompliance,
   buildSaleCompliance,
   assertCanDownloadSaleDcPdf,
   normalizeVehicleNumber,
@@ -456,14 +463,31 @@ exports.storeQuotation = async (req, res) => {
       return res.status(400).json({ success: false, message: 'At least one line item is required' });
     }
 
+    const contactName = String(body.contact_name || body.customer_name || '').trim();
+    const companyName = String(body.company_name || body.customer_name || '').trim();
+    const phone = String(body.customer_mobile || body.phone || '').trim();
+    if (!contactName) {
+      return res.status(400).json({ success: false, message: 'Customer name is required' });
+    }
+    if (!companyName) {
+      return res.status(400).json({ success: false, message: 'Company name is required' });
+    }
+    if (!phone) {
+      return res.status(400).json({ success: false, message: 'Phone is required' });
+    }
+    const leadBlock = await assertLeadAllowsQuotationSend(toNullableInt(body.source_lead_id));
+    if (leadBlock) {
+      return res.status(400).json({ success: false, message: leadBlock });
+    }
+
     const quoteEntity = entityForQuotationType(body.quotation_type || 'rental');
     const quotationNumber = body.quotation_number
       || (await nextDocumentNumber(entityDocType('quotation', quoteEntity)));
     const token = generateToken();
     const shipping = parseJsonField(body.customer_shipping_address);
     let billing = parseJsonField(body.customer_billing_address);
-    if (billing && body.customer_name) {
-      billing = { ...billing, name: body.customer_name };
+    if (billing && companyName) {
+      billing = { ...billing, name: companyName };
     }
     const supplyState = resolveSupplyStateFromAddress(shipping, body.supply_state);
 
@@ -509,14 +533,14 @@ exports.storeQuotation = async (req, res) => {
           security_amount, shiping_charges, quotation_type, brand, model_name, processor,
           generation, ram, storage, gpu, screen_size, quantity, main_quantity, rate,
           locking_period, battery_charger_warranty, technical_warranty, remark, status, token,
-          created_by, source_lead_id
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,'pending',$28,$29,$30)`,
+          created_by, source_lead_id, company_name, contact_name
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,'pending',$28,$29,$30,$31,$32)`,
         [
           quotationNumber,
-          body.customer_id || null,
-          body.customer_name || null,
-          body.email || body.customer_email,
-          body.customer_mobile,
+          quoteCustomerId || null,
+          companyName,
+          body.email || body.customer_email || null,
+          phone,
           shipping ? JSON.stringify(shipping) : null,
           billing ? JSON.stringify(billing) : null,
           body.GST_number || body.gst_number,
@@ -542,6 +566,8 @@ exports.storeQuotation = async (req, res) => {
           token,
           req.user?.user_id,
           toNullableInt(body.source_lead_id),
+          companyName,
+          contactName,
         ]
       );
     }
@@ -576,16 +602,8 @@ exports.storeQuotation = async (req, res) => {
         lines: savedLines,
       });
       await pool.query(`UPDATE sales_quotations SET pdf_path = $1 WHERE quotation_number = $2`, [pdfPath, quotationNumber]);
-      if (header.customer_email) {
-        await emailDocument({
-          to: header.customer_email,
-          subject: `Quotation ${quotationNumber}`,
-          text: `Your quotation ${quotationNumber} has been created.`,
-          pdfRelativePath: pdfPath,
-        });
-      }
     } catch (pdfErr) {
-      console.warn('Quotation PDF/email skipped:', pdfErr.message);
+      console.warn('Quotation PDF skipped:', pdfErr.message);
     }
 
     res.status(201).json({ success: true, message: 'Quotation created', quotation_number: quotationNumber });
@@ -601,7 +619,7 @@ exports.storeQuotation = async (req, res) => {
 exports.updateQuotationStatus = async (req, res) => {
   try {
     const { status, email, cc } = req.body;
-    if (!['pending', 'sent', 'approved', 'rejected'].includes(status)) {
+    if (!['pending', 'sent', 'accepted', 'approved', 'rejected'].includes(status)) {
       return res.status(400).json({ success: false, message: 'Invalid status' });
     }
     const quotationNumber = req.params.quotationNumber;
@@ -609,8 +627,22 @@ exports.updateQuotationStatus = async (req, res) => {
     if (!lines.length) {
       return res.status(404).json({ success: false, message: 'Quotation not found' });
     }
-    const header = lines[0];
     const updaterName = req.user?.name || req.user?.username || req.user?.email || 'Admin';
+
+    if (status === 'sent') {
+      const result = await sendSalesQuotationEmail({
+        quotationNumber,
+        lines,
+        toEmail: email,
+        cc,
+        user: req.user,
+      });
+      return res.json({
+        success: true,
+        message: `Quotation sent to ${result.to} from ${result.from}`,
+        ...result,
+      });
+    }
 
     await pool.query(
       `UPDATE sales_quotations SET status = $1, status_updated_by_id = $2, status_updated_by_name = $3, updated_at = NOW()
@@ -618,43 +650,44 @@ exports.updateQuotationStatus = async (req, res) => {
       [status, req.user?.user_id, updaterName, quotationNumber]
     );
 
-    if (status === 'sent') {
-      try {
-        let pdfPath = header.pdf_path;
-        if (!pdfPath) {
-          pdfPath = await generateDocumentPdf({
-            docType: 'quotation',
-            docNumber: quotationNumber,
-            header,
-            lines,
-          });
-          await pool.query(
-            `UPDATE sales_quotations SET pdf_path = $1 WHERE quotation_number = $2`,
-            [pdfPath, quotationNumber]
-          );
-        }
-        const to = email || header.customer_email;
-        if (to) {
-          await emailDocument({
-            to,
-            cc: cc || undefined,
-            subject: `Quotation ${quotationNumber}`,
-            text: `Please find attached quotation ${quotationNumber}.`,
-            pdfRelativePath: pdfPath,
-          });
-        }
-      } catch (sendErr) {
-        console.warn('Quotation send email skipped:', sendErr.message);
-      }
-    }
-
     res.json({
       success: true,
-      message: status === 'sent' ? 'Quotation sent' : 'Status updated',
+      message: 'Status updated',
     });
   } catch (error) {
     console.error('updateQuotationStatus:', error);
-    res.status(500).json({ success: false, message: error.message });
+    const statusCode = /required|not found|can be sent/i.test(error.message || '') ? 400 : 500;
+    res.status(statusCode).json({ success: false, message: error.message });
+  }
+};
+
+exports.sendQuotationEmail = async (req, res) => {
+  try {
+    const quotationNumber = req.params.quotationNumber;
+    const lines = await getQuotationLines(quotationNumber);
+    if (!lines.length) {
+      return res.status(404).json({ success: false, message: 'Quotation not found' });
+    }
+    const fieldError = assertQuotationSendFields(lines[0]);
+    if (fieldError) {
+      return res.status(400).json({ success: false, message: fieldError });
+    }
+    const result = await sendSalesQuotationEmail({
+      quotationNumber,
+      lines,
+      toEmail: req.body?.email || req.body?.to,
+      cc: req.body?.cc,
+      user: req.user,
+    });
+    res.json({
+      success: true,
+      message: `Quotation sent to ${result.to} from ${result.from}`,
+      ...result,
+    });
+  } catch (error) {
+    console.error('sendQuotationEmail:', error);
+    const statusCode = /required|not found|can be sent|not configured/i.test(error.message || '') ? 400 : 500;
+    res.status(statusCode).json({ success: false, message: error.message });
   }
 };
 
@@ -1539,6 +1572,13 @@ exports.runBluedartAwbSync = async (req, res) => {
 
 /** Prefer final overlay PDF, then fixed/multi/updated, then raw BlueDart label. */
 function findSavedWaybillPdfFile(awb) {
+  const { splitAwbTokens } = require('../utils/bluedartAwbUtils');
+  const tokens = splitAwbTokens(awb);
+  if (tokens.length > 1) {
+    return findSavedWaybillPdfFile(tokens[0]);
+  }
+  awb = tokens[0] || String(awb || '').trim();
+  if (!awb) return null;
   const dir = path.join(__dirname, '..', 'uploads', 'bluedart');
   if (!fs.existsSync(dir)) return null;
   const all = fs.readdirSync(dir).filter((f) => f.endsWith('.pdf') && f.includes(awb));
@@ -1560,6 +1600,58 @@ function findSavedWaybillPdfFile(awb) {
   )).sort();
   if (raw.length) return path.join(dir, raw[raw.length - 1]);
   return null;
+}
+
+async function listDcAwbShipments(dcNumber, head = {}) {
+  const { splitAwbTokens } = require('../utils/bluedartAwbUtils');
+  const unitsRes = await pool.query(
+    `SELECT id, allocation_id, serial_id, serial_number, ttspl_id, courier_name, awb_number
+       FROM dc_shipment_units
+      WHERE dc_number = $1
+      ORDER BY id ASC`,
+    [dcNumber]
+  ).catch(() => ({ rows: [] }));
+
+  const fromUnits = (unitsRes.rows || [])
+    .map((u) => ({
+      id: u.id,
+      allocation_id: u.allocation_id || null,
+      serial_id: u.serial_id || null,
+      serial_number: u.serial_number || null,
+      ttspl_id: u.ttspl_id || null,
+      courier_name: u.courier_name || head.courier_name || 'BlueDart',
+      awb_number: String(u.awb_number || '').trim(),
+    }))
+    .filter((u) => /^\d{8,}$/.test(u.awb_number));
+
+  const source = fromUnits.length
+    ? fromUnits
+    : splitAwbTokens(head.awb_number).map((awb) => ({
+      id: null,
+      allocation_id: null,
+      serial_id: null,
+      serial_number: null,
+      ttspl_id: null,
+      courier_name: head.courier_name || 'BlueDart',
+      awb_number: awb,
+    }));
+
+  return source.map((row) => ({
+    ...row,
+    pdf_available: Boolean(findSavedWaybillPdfFile(row.awb_number)),
+  }));
+}
+
+async function mergeWaybillPdfBuffers(absPaths) {
+  const { PDFDocument } = require('pdf-lib');
+  const out = await PDFDocument.create();
+  for (const abs of absPaths) {
+    const bytes = fs.readFileSync(abs);
+    const src = await PDFDocument.load(bytes, { ignoreEncryption: true });
+    const copied = await out.copyPages(src, src.getPageIndices());
+    copied.forEach((page) => out.addPage(page));
+  }
+  return Buffer.from(await out.save());
 }
 
 async function resolveDcPrimarySerial(dcNumber) {
@@ -2075,6 +2167,21 @@ async function generateAndPersistDcBluedartAwb(dcNumber, body = {}) {
   const firstPdf = generated.find((g) => g.pdf_path)?.pdf_path || null;
   await persistAwb(joined, firstPdf);
 
+  for (const g of generated) {
+    await pool.query(
+      `UPDATE dc_shipment_units
+          SET awb_number = $2,
+              courier_name = COALESCE(NULLIF(TRIM(courier_name), ''), 'BlueDart'),
+              updated_at = NOW()
+        WHERE dc_number = $1
+          AND (
+            ($3::text IS NOT NULL AND ttspl_id = $3)
+            OR ($4::text IS NOT NULL AND serial_number = $4)
+          )`,
+      [dcNumber, g.awb_number, g.ttspl_id || null, g.serial_number || null]
+    ).catch(() => {});
+  }
+
   return {
     awb_number: joined,
     awb_numbers: awbNumbers,
@@ -2482,16 +2589,28 @@ exports.getDeliveryChallan = async (req, res) => {
       });
     }
 
+    const firstCustomerOrder = await isNewCustomerFirstOrder(
+      pool,
+      headLine.customer_id,
+      son || headLine.sales_order_number
+    );
+    const needsInvoice = requiresInvoiceCompliance(headLine.entity_code, soQuotationType, firstCustomerOrder);
     const isSale = isSaleDc(headLine.entity_code, soQuotationType);
     let sale_compliance = null;
     let can_download_pdf = true;
-    if (isSale) {
+    if (needsInvoice) {
       const canDispatchAction = req.user?.role === 'super_admin'
         || await canUploadSaleDcCompliance(req.user, req.permissionCache);
-      sale_compliance = buildSaleCompliance(headLine, totals, req.user?.role, {
-        canUpload: canDispatchAction,
-        canSendMail: canDispatchAction,
-      });
+      sale_compliance = buildSaleCompliance(
+        { ...headLine, quotation_type: soQuotationType },
+        totals,
+        req.user?.role,
+        {
+          canUpload: canDispatchAction,
+          canSendMail: canDispatchAction,
+          isFirstCustomerOrder: firstCustomerOrder,
+        }
+      );
       can_download_pdf = sale_compliance.can_download_pdf;
       if (!can_download_pdf) {
         for (const line of lines) {
@@ -2509,6 +2628,8 @@ exports.getDeliveryChallan = async (req, res) => {
       }
     }
 
+    const shipmentUnits = await listDcAwbShipments(dcNumber, headLine);
+
     res.json({
       success: true,
       dc_number: req.params.dcNumber,
@@ -2518,9 +2639,13 @@ exports.getDeliveryChallan = async (req, res) => {
       assignment_editable: assignmentEditable,
       assignment_history: assignmentHistory,
       is_sale: isSale,
+      is_first_customer_order: firstCustomerOrder,
+      requires_invoice_compliance: needsInvoice,
       sale_compliance,
       can_download_pdf,
       rental_invoice,
+      shipment_units: shipmentUnits,
+      awb_numbers: shipmentUnits.map((u) => u.awb_number),
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -4391,7 +4516,7 @@ exports.regenerateDcPdf = async (req, res) => {
   }
 };
 
-/** Download saved printable waybill PDF for this DC. */
+/** Download saved printable waybill PDF for this DC (one AWB, or all merged). */
 exports.downloadDcBluedartAwbPdf = async (req, res) => {
   try {
     const dcNumber = req.params.dcNumber;
@@ -4400,7 +4525,58 @@ exports.downloadDcBluedartAwbPdf = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Delivery challan not found' });
     }
     const head = lines[0];
-    let pdfRel = head.bluedart_awb_pdf_path || null;
+    const { splitAwbTokens } = require('../utils/bluedartAwbUtils');
+    const shipments = await listDcAwbShipments(dcNumber, head);
+    const allowedAwbs = new Set([
+      ...shipments.map((s) => s.awb_number),
+      ...splitAwbTokens(head.awb_number),
+    ]);
+    const requestedAwb = String(req.query.awb || '').trim();
+    const wantAll = String(req.query.all || '') === '1';
+
+    const resolveAbs = (awb) => {
+      const found = findSavedWaybillPdfFile(awb);
+      return found && fs.existsSync(found) ? found : null;
+    };
+
+    if (requestedAwb) {
+      if (!/^\d{8,}$/.test(requestedAwb) || !allowedAwbs.has(requestedAwb)) {
+        return res.status(404).json({
+          success: false,
+          message: `AWB ${requestedAwb} is not on this delivery challan`,
+        });
+      }
+      const oneAbs = resolveAbs(requestedAwb);
+      if (!oneAbs) {
+        return res.status(404).json({
+          success: false,
+          message: `Waybill PDF not stored yet for AWB ${requestedAwb}`,
+          data: { awb_number: requestedAwb },
+        });
+      }
+      return res.download(oneAbs, `Waybill_${requestedAwb}.pdf`);
+    }
+
+    const uniqueAwbs = [...new Set(
+      (shipments.length ? shipments.map((s) => s.awb_number) : splitAwbTokens(head.awb_number))
+    )];
+    const foundPdfs = uniqueAwbs
+      .map((awb) => ({ awb, abs: resolveAbs(awb) }))
+      .filter((row) => row.abs);
+
+    if ((wantAll || uniqueAwbs.length > 1) && foundPdfs.length > 1) {
+      const buf = await mergeWaybillPdfBuffers(foundPdfs.map((row) => row.abs));
+      const safeDc = String(dcNumber).replace(/[^\w.-]+/g, '-');
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="Waybill_${safeDc}_all.pdf"`);
+      return res.send(buf);
+    }
+
+    if (foundPdfs.length === 1) {
+      return res.download(foundPdfs[0].abs, `Waybill_${foundPdfs[0].awb}.pdf`);
+    }
+
+    let pdfRel = uniqueAwbs.length <= 1 ? (head.bluedart_awb_pdf_path || null) : null;
     let abs = null;
 
     if (pdfRel) {
@@ -4408,9 +4584,8 @@ exports.downloadDcBluedartAwbPdf = async (req, res) => {
       if (!fs.existsSync(abs)) abs = null;
     }
 
-    // Prefer printable multi-copy PDF on disk for this AWB
-    if (!abs && head.awb_number) {
-      abs = findSavedWaybillPdfFile(head.awb_number);
+    if (!abs && uniqueAwbs.length === 1) {
+      abs = resolveAbs(uniqueAwbs[0]);
       if (abs) {
         pdfRel = path.relative(path.join(__dirname, '..'), abs).replace(/\\/g, '/');
         await pool.query(
@@ -4422,8 +4597,7 @@ exports.downloadDcBluedartAwbPdf = async (req, res) => {
       }
     }
 
-    // Optional: regenerate AWB to capture printable PDF if still missing.
-    if (!abs && head.awb_number && String(req.query.regenerate || '') === '1') {
+    if (!abs && uniqueAwbs.length === 1 && String(req.query.regenerate || '') === '1') {
       const regenerated = await generateAndPersistDcBluedartAwb(dcNumber, { force: true });
       pdfRel = regenerated.bluedart_awb_pdf_path || regenerated.pdf_path || null;
       if (pdfRel) {
@@ -4431,7 +4605,7 @@ exports.downloadDcBluedartAwbPdf = async (req, res) => {
       }
     }
 
-    if (!abs && !head.awb_number) {
+    if (!abs && !uniqueAwbs.length && !head.awb_number) {
       return res.status(404).json({
         success: false,
         message: 'No BlueDart AWB on this DC — generate AWB first',
@@ -4441,12 +4615,14 @@ exports.downloadDcBluedartAwbPdf = async (req, res) => {
     if (!abs || !fs.existsSync(abs)) {
       return res.status(404).json({
         success: false,
-        message: 'Waybill PDF not stored yet. Click Generate Waybill again, or use regenerate=1',
-        data: { awb_number: head.awb_number },
+        message: uniqueAwbs.length > 1
+          ? 'Waybill PDFs are not stored yet for these AWBs. Generate waybills again.'
+          : 'Waybill PDF not stored yet. Click Generate Waybill again, or use regenerate=1',
+        data: { awb_number: head.awb_number, awb_numbers: uniqueAwbs },
       });
     }
 
-    return res.download(abs, `Waybill_${head.awb_number || 'AWB'}.pdf`);
+    return res.download(abs, `Waybill_${uniqueAwbs[0] || head.awb_number || 'AWB'}.pdf`);
   } catch (e) {
     console.error('downloadDcBluedartAwbPdf:', e);
     res.status(e.status || 500).json({ success: false, message: e.message });

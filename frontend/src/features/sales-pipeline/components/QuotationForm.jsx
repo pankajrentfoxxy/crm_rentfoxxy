@@ -6,7 +6,7 @@ import { BillingAddressPanel, ShippingAddressPanel } from '../../operation-manag
 import { branchForQuotationType } from '../../operation-management/utils/quotationHelpers';
 import { INDIAN_STATES, slugifyState } from '../../../constants/indianStates';
 import {
-  createQuotation, getCustomerAddresses, getCustomerDetail, getQuotationMeta, updateQuotationStatus,
+  createQuotation, getCustomerAddresses, getCustomerDetail, getQuotationMeta, sendQuotationEmail,
 } from '../salesPipelineApi';
 import {
   formatCurrency, sumLines, formatDate, formatConfig, lineTotal, typeLabel, countLaptops,
@@ -76,7 +76,8 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
   const [form, setForm] = useState({
     customer_id: '', supply_state: slugifyState('Haryana'), quotation_type: 'rental',
     branch: 'rentfoxxy', security_type: 'none', security_amount: '', shiping_charges: '', GST_number: '',
-    customer_mobile: '', email: '', customer_name: '', remarks: '', terms: DEFAULT_TERMS,
+    customer_mobile: '', email: '', customer_name: '', contact_name: '', company_name: '',
+    remarks: '', terms: DEFAULT_TERMS,
     validity_date: '', source_lead_id: '',
   });
 
@@ -177,6 +178,8 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
     setForm((prev) => ({
       ...prev,
       customer_id: customerId,
+      contact_name: customer?.name || customer?.company_name || '',
+      company_name: customer?.company_name || customer?.name || '',
       customer_name: customer?.company_name || customer?.name || '',
       email: customer?.email || '',
       customer_mobile: customer?.phone || '',
@@ -215,8 +218,23 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
     if (prefill.lead_id) {
       setForm((f) => ({ ...f, source_lead_id: prefill.lead_id }));
     }
-    if (prefill.email) setForm((f) => ({ ...f, email: prefill.email }));
-    if (prefill.customer_name) setForm((f) => ({ ...f, customer_name: prefill.customer_name }));
+    if (prefill.email) {
+      setForm((f) => ({ ...f, email: prefill.email }));
+      setSendEmail(prefill.email);
+    }
+    if (prefill.phone || prefill.customer_mobile) {
+      setForm((f) => ({ ...f, customer_mobile: prefill.phone || prefill.customer_mobile }));
+    }
+    if (prefill.contact_name || prefill.lead_name) {
+      setForm((f) => ({ ...f, contact_name: prefill.contact_name || prefill.lead_name }));
+    }
+    if (prefill.company_name || prefill.customer_name) {
+      setForm((f) => ({
+        ...f,
+        company_name: prefill.company_name || prefill.customer_name,
+        customer_name: prefill.company_name || prefill.customer_name,
+      }));
+    }
     if (prefill.line_items?.length) {
       setLines(prefill.line_items.map((item) => ({
         ...emptyLineItem(),
@@ -253,7 +271,7 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
         ...prev,
         quotation_type: quotationType,
         branch: branchForQuotationType(quotationType),
-        ...(stillOk ? {} : { customer_id: '', customer_name: '', GST_number: '', email: '', customer_mobile: '' }),
+        ...(stillOk ? {} : { customer_id: '', customer_name: '', contact_name: '', company_name: '', GST_number: '', email: '', customer_mobile: '' }),
       };
     });
   };
@@ -268,8 +286,23 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
   const isSaleType = form.quotation_type === 'sale' || form.quotation_type === 'sales';
 
   const submit = async (andSend) => {
-    if (!form.customer_id) {
-      toast.error('Select a customer');
+    const contactName = (form.contact_name || form.customer_name || '').trim();
+    const companyName = (form.company_name || form.customer_name || '').trim();
+    const phone = (form.customer_mobile || '').trim();
+    if (!contactName) {
+      toast.error('Customer name is required');
+      return;
+    }
+    if (!companyName) {
+      toast.error('Company name is required');
+      return;
+    }
+    if (!phone) {
+      toast.error('Phone is required');
+      return;
+    }
+    if (andSend && !sendEmail.trim()) {
+      toast.error('Customer email is required to send the quotation');
       return;
     }
     const selectedCustomer = customers.find((c) => String(c.customer_id) === String(form.customer_id));
@@ -277,29 +310,27 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
       toast.error(customerTypeMismatchMessage(selectedCustomer.customer_type, form.quotation_type));
       return;
     }
-    if (!selectedShippingAddress) {
-      toast.error('Select a shipping address');
-      return;
-    }
-    if (!billingAddress) {
-      toast.error('Billing address is missing');
-      return;
-    }
     setSaving(true);
     try {
       const res = await createQuotation({
         quotation_number: meta?.quotation_number,
         ...form,
+        contact_name: contactName,
+        company_name: companyName,
+        customer_name: companyName,
+        customer_mobile: phone,
+        email: sendEmail || form.email,
+        GST_number: form.GST_number || null,
         security_amount: security,
         source_lead_id: form.source_lead_id || prefill.lead_id || null,
         ...lineItemsToPayload(lines),
-        customer_shipping_address: selectedShippingAddress,
-        customer_billing_address: billingAddress,
+        customer_shipping_address: selectedShippingAddress || null,
+        customer_billing_address: billingAddress || null,
       });
       const qn = res.data?.quotation_number || meta?.quotation_number;
       if (andSend && qn) {
-        await updateQuotationStatus(qn, { status: 'sent', email: sendEmail, cc: ccEmail });
-        toast.success('Quotation saved and sent');
+        await sendQuotationEmail(qn, { email: sendEmail, cc: ccEmail });
+        toast.success('Quotation saved and sent from sales@rentfoxxy.com');
       } else {
         toast.success('Quotation saved as draft');
       }
@@ -324,12 +355,28 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
         </div>
         <div className="flex-1 overflow-y-auto p-4 space-y-5">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-medium text-gray-600">Customer *</label>
+            <div className="sm:col-span-2">
+              <label className="text-xs font-medium text-gray-600">Existing customer (optional)</label>
               <select className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" value={form.customer_id} onChange={(e) => onCustomerChange(e.target.value)}>
-                <option value="">Select customer</option>
+                <option value="">New contact — enter details below</option>
                 {eligibleCustomers.map((c) => <option key={c.customer_id} value={c.customer_id}>{c.company_name || c.name}</option>)}
               </select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-600">Customer name *</label>
+              <input className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" value={form.contact_name} onChange={(e) => setForm((f) => ({ ...f, contact_name: e.target.value }))} />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-600">Company name *</label>
+              <input className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" value={form.company_name} onChange={(e) => setForm((f) => ({ ...f, company_name: e.target.value, customer_name: e.target.value }))} />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-600">Phone *</label>
+              <input className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" value={form.customer_mobile} onChange={(e) => setForm((f) => ({ ...f, customer_mobile: e.target.value }))} />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-600">GST (optional)</label>
+              <input className="w-full mt-1 border rounded-lg px-3 py-2 text-sm" value={form.GST_number} onChange={(e) => setForm((f) => ({ ...f, GST_number: e.target.value }))} placeholder="Not required to send quotation" />
             </div>
             <div>
               <label className="text-xs font-medium text-gray-600">Type *</label>
@@ -383,7 +430,7 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
               <BillingAddressPanel billing={billingAddress} gstNumber={form.GST_number || billingAddress.gst_number} />
               <div className="border border-gray-200 rounded-xl overflow-hidden">
                 <div className="p-2 border-b bg-gray-50">
-                  <label className="text-xs font-medium text-gray-600">Shipping Address *</label>
+                  <label className="text-xs font-medium text-gray-600">Shipping Address (optional)</label>
                   <select
                     className="w-full mt-1 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white"
                     value={selectedShippingValue}
@@ -449,6 +496,7 @@ export default function QuotationForm({ open, onClose, onSaved, initialCustomerI
 
           <div className="border-t pt-4 space-y-2">
             <p className="text-xs font-semibold text-gray-700">Send Options</p>
+            <p className="text-[11px] text-gray-500">Sent from sales@rentfoxxy.com. Email is required only when sending. GST is not required.</p>
             <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Send to email" value={sendEmail} onChange={(e) => setSendEmail(e.target.value)} />
             <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="CC (comma-separated)" value={ccEmail} onChange={(e) => setCcEmail(e.target.value)} />
           </div>

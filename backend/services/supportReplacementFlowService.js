@@ -613,11 +613,11 @@ async function onReplacementWarehouseReceived(client, pickupItemId) {
         SET pickup_completed_at = COALESCE(
           ro.pickup_completed_at,
           (SELECT COALESCE(pi.warehouse_received_at, pi.picked_up_at)
-             FROM support_ticket_items pi WHERE pi.id = $3),
+             FROM support_ticket_items pi WHERE pi.id = $2),
           CURRENT_TIMESTAMP
         )
       WHERE ro.id = $1`,
-    [ordRes.rows[0].id, it.ticket_id, pickupItemId]
+    [ordRes.rows[0].id, pickupItemId]
   );
   await tryCloseReplacementTicket(client, it.ticket_id);
   return { handled: true };
@@ -752,7 +752,7 @@ async function listRepairPickupSwapCandidates(client, ticketId) {
   return r.rows;
 }
 
-/** Return pickup already in warehouse — eligible for a new replacement SO (no new Return DC). */
+/** Return / repair pickup already in warehouse — eligible for a new replacement SO (no new Return DC). */
 async function listReturnPickupRedeliveryCandidates(client, ticketId) {
   const r = await client.query(
     `SELECT sti.*
@@ -760,12 +760,17 @@ async function listReturnPickupRedeliveryCandidates(client, ticketId) {
       WHERE sti.ticket_id = $1
         AND sti.item_type = 'pickup'
         AND sti.warehouse_received_at IS NOT NULL
-        AND sti.source_item_id IS NOT NULL
+        AND sti.status NOT IN ('swap_initiated', 'closed')
         AND NOT EXISTS (
           SELECT 1 FROM support_replacement_orders ro
            WHERE ro.ticket_id = $1
              AND ro.status NOT IN ('completed', 'cancelled')
              AND ro.delivery_completed_at IS NULL
+             AND (
+               ro.pickup_item_id = sti.id
+               OR ro.source_item_id = sti.id
+               OR ro.source_item_id = sti.source_item_id
+             )
         )
       ORDER BY sti.id ASC`,
     [ticketId]
@@ -806,11 +811,10 @@ async function buildReturnRedeliveryContext(db, ticketId) {
       );
       complaint = cRes.rows[0] || null;
     }
-    if (!complaint) continue;
     const cfg = await resolveConfigFromRepairPickup(db, pickup, complaint, ticket.customer_id);
     eligible.push({
       pickup_item_id: pickup.id,
-      complaint_item_id: complaint.id,
+      complaint_item_id: complaint?.id || pickup.id,
       ttspl_id: pickup.ttspl_id || pickup.unique_serial_number || pickup.serial_number,
       serial_number: pickup.serial_number,
       brand: cfg.brand,
@@ -837,7 +841,7 @@ async function buildReturnRedeliveryContext(db, ticketId) {
     previous_sales_order_number: ticket.sales_order_number || null,
     block_reason: eligible.length
       ? null
-      : 'No return pickup with warehouse receipt found, or a replacement delivery is still in progress.',
+      : 'No warehouse-received pickup found, or a replacement delivery is still in progress.',
     next_steps: eligible.length ? [
       'Creates a new replacement sales order (does not reuse the old SO)',
       'Attach a QC-passed laptop on the new SO',
@@ -900,15 +904,16 @@ async function initiateReturnRedelivery(client, {
   const lineConfigs = [];
   const sourceComplaints = [];
   for (const pickup of pickups) {
-    const cRes = await client.query(
-      'SELECT * FROM support_ticket_items WHERE id = $1 AND ticket_id = $2',
-      [pickup.source_item_id, ticketId]
-    );
-    const complaint = cRes.rows[0];
-    if (!complaint) {
-      throw Object.assign(new Error(`Return pickup #${pickup.id} is not linked to a complaint`), { status: 400 });
+    let complaint = null;
+    if (pickup.source_item_id) {
+      const cRes = await client.query(
+        'SELECT * FROM support_ticket_items WHERE id = $1 AND ticket_id = $2',
+        [pickup.source_item_id, ticketId]
+      );
+      complaint = cRes.rows[0] || null;
     }
-    sourceComplaints.push({ pickup, complaint });
+    const sourceItem = complaint || pickup;
+    sourceComplaints.push({ pickup, complaint, sourceItem });
     lineConfigs.push(await resolveConfigFromRepairPickup(client, pickup, complaint, ticket.customer_id));
   }
 
@@ -930,7 +935,7 @@ async function initiateReturnRedelivery(client, {
     || 'Send different laptop to customer — return unit already in warehouse';
 
   for (let i = 0; i < sourceComplaints.length; i += 1) {
-    const { pickup, complaint } = sourceComplaints[i];
+    const { pickup, sourceItem } = sourceComplaints[i];
     const cfg = lineConfigs[i];
     const lineId = lineIds[i];
 
@@ -943,7 +948,7 @@ async function initiateReturnRedelivery(client, {
           replacement_flag_reason = $3,
           updated_at = CURRENT_TIMESTAMP
        WHERE id = $1`,
-      [complaint.id, userId, sharedReason]
+      [sourceItem.id, userId, sharedReason]
     );
 
     const itemIns = await client.query(
@@ -960,7 +965,7 @@ async function initiateReturnRedelivery(client, {
         cfg.ram,
         cfg.storage,
         sharedReason,
-        complaint.id,
+        sourceItem.id,
       ]
     );
     const replacementItemId = itemIns.rows[0].id;
@@ -981,7 +986,7 @@ async function initiateReturnRedelivery(client, {
       [
         ticketId,
         replacementItemId,
-        complaint.id,
+        sourceItem.id,
         salesOrderNumber,
         lineId,
         cfg.old_customer_inventory_id,
@@ -1001,10 +1006,12 @@ async function initiateReturnRedelivery(client, {
 
     await client.query(
       `UPDATE support_ticket_items SET
+          status = CASE WHEN status IN ('swap_initiated', 'inventory_updated', 'closed') THEN status ELSE 'swap_initiated' END,
           replacement_approved_by = $2,
-          replacement_approved_at = CURRENT_TIMESTAMP
+          replacement_approved_at = CURRENT_TIMESTAMP,
+          updated_at = CURRENT_TIMESTAMP
        WHERE id = $1`,
-      [complaint.id, userId]
+      [pickup.id, userId]
     );
   }
 
@@ -1162,13 +1169,8 @@ async function initiateSwapFromRepairPickup(client, {
       );
       complaint = cRes.rows[0] || null;
     }
-    if (!complaint) {
-      throw Object.assign(
-        new Error(`Repair pickup #${pickup.id} is not linked to a complaint item`),
-        { status: 400 }
-      );
-    }
-    sourceComplaints.push({ pickup, complaint });
+    const sourceItem = complaint || pickup;
+    sourceComplaints.push({ pickup, complaint, sourceItem });
     lineConfigs.push(await resolveConfigFromRepairPickup(client, pickup, complaint, ticket.customer_id));
   }
 
@@ -1189,22 +1191,36 @@ async function initiateSwapFromRepairPickup(client, {
   const sharedReason = String(reason || '').trim() || 'Swap — send different laptop (repair pickup unit in warehouse)';
 
   for (let i = 0; i < sourceComplaints.length; i += 1) {
-    const { pickup, complaint } = sourceComplaints[i];
+    const { pickup, complaint, sourceItem } = sourceComplaints[i];
     const cfg = lineConfigs[i];
     const lineId = lineIds[i];
 
-    await client.query(
-      `UPDATE support_ticket_items SET
-          outcome = 'replacement_required',
-          outcome_set_by = $2,
-          outcome_set_at = CURRENT_TIMESTAMP,
-          replacement_flagged_by = $2,
-          replacement_flag_reason = $3,
-          status = CASE WHEN status IN ('resolved','closed') THEN status ELSE 'repair_failed' END,
-          updated_at = CURRENT_TIMESTAMP
-       WHERE id = $1`,
-      [complaint.id, userId, sharedReason]
-    );
+    if (complaint && complaint.id !== pickup.id) {
+      await client.query(
+        `UPDATE support_ticket_items SET
+            outcome = 'replacement_required',
+            outcome_set_by = $2,
+            outcome_set_at = CURRENT_TIMESTAMP,
+            replacement_flagged_by = $2,
+            replacement_flag_reason = $3,
+            status = CASE WHEN status IN ('resolved','closed') THEN status ELSE 'repair_failed' END,
+            updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1`,
+        [complaint.id, userId, sharedReason]
+      );
+    } else {
+      await client.query(
+        `UPDATE support_ticket_items SET
+            outcome = COALESCE(outcome, 'replacement_required'),
+            outcome_set_by = $2,
+            outcome_set_at = COALESCE(outcome_set_at, CURRENT_TIMESTAMP),
+            replacement_flagged_by = $2,
+            replacement_flag_reason = $3,
+            updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1`,
+        [sourceItem.id, userId, sharedReason]
+      );
+    }
 
     const itemIns = await client.query(
       `INSERT INTO support_ticket_items (
@@ -1220,7 +1236,7 @@ async function initiateSwapFromRepairPickup(client, {
         cfg.ram,
         cfg.storage,
         sharedReason,
-        complaint.id,
+        sourceItem.id,
       ]
     );
     const replacementItemId = itemIns.rows[0].id;
@@ -1241,7 +1257,7 @@ async function initiateSwapFromRepairPickup(client, {
       [
         ticketId,
         replacementItemId,
-        complaint.id,
+        sourceItem.id,
         salesOrderNumber,
         lineId,
         cfg.old_customer_inventory_id,
@@ -1262,17 +1278,11 @@ async function initiateSwapFromRepairPickup(client, {
     await client.query(
       `UPDATE support_ticket_items SET
           status = 'swap_initiated',
+          replacement_approved_by = $2,
+          replacement_approved_at = CURRENT_TIMESTAMP,
           updated_at = CURRENT_TIMESTAMP
        WHERE id = $1`,
-      [pickup.id]
-    );
-
-    await client.query(
-      `UPDATE support_ticket_items SET
-          replacement_approved_by = $2,
-          replacement_approved_at = CURRENT_TIMESTAMP
-       WHERE id = $1`,
-      [complaint.id, userId]
+      [pickup.id, userId]
     );
   }
 

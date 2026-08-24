@@ -148,10 +148,10 @@ function AcceptQuotationForm({ companyName, estimateNo, submitting, onAccept }) 
                 type="button"
                 onClick={onAccept}
                 disabled={submitting}
-                className="w-full bg-orange-400 hover:bg-orange-500 disabled:opacity-60 text-white font-semibold rounded-lg py-3 text-sm flex items-center justify-center gap-2"
+                                className="w-full bg-[#F97316] hover:bg-[#EA580C] disabled:opacity-60 text-white font-semibold rounded-lg py-3 text-sm flex items-center justify-center gap-2"
             >
                 {submitting ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckCircle className="w-5 h-5" />}
-                Accept quotation
+                Accept
             </button>
         </div>
     );

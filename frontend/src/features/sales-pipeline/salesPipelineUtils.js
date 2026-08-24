@@ -13,9 +13,22 @@ export const QUOTE_STATUS_STYLES = {
   draft: 'bg-gray-100 text-gray-700',
   pending: 'bg-gray-100 text-gray-700',
   sent: 'bg-amber-100 text-amber-800',
+  accepted: 'bg-teal-100 text-teal-800',
   approved: 'bg-emerald-100 text-emerald-800',
   rejected: 'bg-red-100 text-red-800',
 };
+
+export const QUOTE_SEND_LEAD_STATUSES = ['Cold', 'Warm', 'Hot', 'Deal', 'Repeat', 'Hold'];
+
+export function canSendQuotationForLeadStatus(status) {
+  return QUOTE_SEND_LEAD_STATUSES.some((s) => s.toLowerCase() === String(status || '').toLowerCase());
+}
+
+export function quoteStatusLabel(status) {
+  const s = String(status || '').toLowerCase();
+  if (s === 'pending') return 'draft';
+  return s || '—';
+}
 
 export const TYPE_STYLES = {
   rental: 'bg-blue-100 text-blue-800',
@@ -369,6 +382,37 @@ export function relativeTime(value) {
   if (months < 12) return `${months} month${months === 1 ? '' : 's'} ago`;
   const years = Math.floor(months / 12);
   return `${years} year${years === 1 ? '' : 's'} ago`;
+}
+
+/** Split a stored AWB field that may contain multiple BlueDart numbers. */
+export function splitAwbTokens(raw) {
+  return [...new Set(
+    String(raw || '')
+      .split(/[/|,;\s]+/)
+      .map((s) => s.trim())
+      .filter((s) => /^\d{8,}$/.test(s))
+  )];
+}
+
+/** Build AWB rows from shipment units, falling back to the joined header AWB field. */
+export function collectBluedartAwbRows(head, shipmentUnits = []) {
+  const fromUnits = (Array.isArray(shipmentUnits) ? shipmentUnits : [])
+    .map((u) => ({
+      awb_number: String(u.awb_number || '').trim(),
+      ttspl_id: u.ttspl_id || null,
+      serial_number: u.serial_number || null,
+      pdf_available: u.pdf_available,
+      courier_name: u.courier_name || head?.courier_name || 'BlueDart',
+    }))
+    .filter((u) => /^\d{8,}$/.test(u.awb_number));
+  if (fromUnits.length) return fromUnits;
+  return splitAwbTokens(head?.awb_number).map((awb) => ({
+    awb_number: awb,
+    ttspl_id: null,
+    serial_number: null,
+    pdf_available: undefined,
+    courier_name: head?.courier_name || 'BlueDart',
+  }));
 }
 
 /** Trigger a browser file download from a Blob (e.g. BlueDart AWB PDF). */

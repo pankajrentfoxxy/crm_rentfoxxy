@@ -498,11 +498,14 @@ async function listQuotationsGrouped({ page = 1, limit = 20, search = '', status
   const listParams = [...params, limit, offset];
   const listResult = await pool.query(
     `SELECT g.*,
-       (SELECT COALESCE(SUM(quantity), 0) FROM sales_quotations sq WHERE sq.quotation_number = g.quotation_number) AS remaining_qty
+       (SELECT COALESCE(SUM(quantity), 0) FROM sales_quotations sq WHERE sq.quotation_number = g.quotation_number) AS remaining_qty,
+       (SELECT COALESCE(SUM(COALESCE(rate,0) * COALESCE(quantity,0)), 0) FROM sales_quotations sq WHERE sq.quotation_number = g.quotation_number) AS total_value
      FROM (
        SELECT DISTINCT ON (quotation_number)
-         quotation_number, customer_id, customer_name, gst_number, status, quotation_type,
-         pdf_path, status_updated_by_id, status_updated_by_name, created_at, updated_at, source_lead_id
+         quotation_number, customer_id, customer_name, company_name, contact_name,
+         customer_email, customer_mobile, gst_number, status, quotation_type,
+         pdf_path, accepted_at, quotation_sent_at, status_updated_by_id, status_updated_by_name,
+         created_at, updated_at, source_lead_id
        FROM sales_quotations
        ${where}
        ORDER BY quotation_number, updated_at DESC

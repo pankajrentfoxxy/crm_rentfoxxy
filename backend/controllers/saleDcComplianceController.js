@@ -9,6 +9,8 @@ const {
 } = require('../services/salesManagementService');
 const {
   isSaleDc,
+  isNewCustomerFirstOrder,
+  requiresInvoiceCompliance,
   requiresEwayBill,
   buildSaleCompliance,
   normalizeVehicleNumber,
@@ -71,10 +73,11 @@ exports.uploadSaleDcCompliance = async (req, res) => {
       quotationType = qtRes.rows[0]?.quotation_type || null;
     }
 
-    if (!isSaleDc(head.entity_code, quotationType)) {
+    const firstOrder = await isNewCustomerFirstOrder(pool, head.customer_id, head.sales_order_number);
+    if (!requiresInvoiceCompliance(head.entity_code, quotationType, firstOrder)) {
       return res.status(400).json({
         success: false,
-        message: 'E-Invoice upload applies to Sale delivery challans only',
+        message: 'E-Invoice upload applies to Sale DCs and new-customer first orders only',
       });
     }
 
@@ -85,7 +88,7 @@ exports.uploadSaleDcCompliance = async (req, res) => {
       security: head.security_amount,
       supplyState: resolveSupplyStateFromAddress(head.customer_shipping_address, head.supply_state),
     });
-    const needsEway = requiresEwayBill(totals.grand_total);
+    const needsEway = requiresEwayBill(subtotal);
 
     const files = req.files || {};
     const einvoiceFile = files.einvoice_pdf?.[0] || files.einvoice_pdf;
@@ -104,7 +107,7 @@ exports.uploadSaleDcCompliance = async (req, res) => {
       if (!ewayBillNumber && !head.eway_bill_number) {
         return res.status(400).json({
           success: false,
-          message: `E-Way Bill number is required — DC value exceeds ₹50,000 (₹${Number(totals.grand_total).toLocaleString('en-IN')})`,
+          message: `E-Way Bill number is required — DC laptop value exceeds ₹50,000 (₹${Number(subtotal).toLocaleString('en-IN')})`,
         });
       }
       if (!ewayFile && !hasExistingEwbPdf) {
@@ -140,10 +143,12 @@ exports.uploadSaleDcCompliance = async (req, res) => {
 
     const updated = await getDeliveryChallanLines(dcNumber);
     const canUpload = await canUploadSaleDcCompliance(req.user, req.permissionCache);
-    const compliance = buildSaleCompliance(updated[0], totals, req.user?.role, {
-      canUpload,
-      canSendMail: canUpload,
-    });
+    const compliance = buildSaleCompliance(
+      { ...updated[0], quotation_type: quotationType },
+      totals,
+      req.user?.role,
+      { canUpload, canSendMail: canUpload, isFirstCustomerOrder: firstOrder },
+    );
 
     if (head.sales_order_number) {
       await safeLogSalesOrderActivity({
@@ -203,10 +208,11 @@ exports.sendAccountsNotification = async (req, res) => {
       }
     }
 
-    if (!isSaleDc(head.entity_code, quotationType)) {
+    const firstOrder = await isNewCustomerFirstOrder(pool, head.customer_id, head.sales_order_number);
+    if (!requiresInvoiceCompliance(head.entity_code, quotationType, firstOrder)) {
       return res.status(400).json({
         success: false,
-        message: 'Accounts notification applies to Sale delivery challans only',
+        message: 'Accounts notification applies to Sale DCs and new-customer first orders only',
       });
     }
 
@@ -224,16 +230,20 @@ exports.sendAccountsNotification = async (req, res) => {
       );
     }
 
-    const grandTotal = await computeDcGrandTotal(dcNumber);
+    const productValue = await computeDcGrandTotal(dcNumber);
     const laptopCount = lines.reduce((s, l) => s + (Number(l.quantity) || 0), 0);
+    const isSale = isSaleDc(head.entity_code, quotationType);
 
     const mailResult = await sendAccountsSaleDcEmail({
       dcNumber,
       salesOrderNumber: head.sales_order_number,
       customerName: head.customer_name,
       pdfPath,
-      grandTotal,
+      productValue,
+      grandTotal: productValue,
       laptopCount,
+      isSale,
+      isFirstCustomerOrder: firstOrder,
     });
 
     await pool.query(
@@ -255,10 +265,12 @@ exports.sendAccountsNotification = async (req, res) => {
       supplyState: resolveSupplyStateFromAddress(head.customer_shipping_address, head.supply_state),
     });
     const canSend = await canUploadSaleDcCompliance(req.user, req.permissionCache);
-    const saleCompliance = buildSaleCompliance(head, totals, req.user?.role, {
-      canUpload: canSend,
-      canSendMail: canSend,
-    });
+    const saleCompliance = buildSaleCompliance(
+      { ...head, quotation_type: quotationType },
+      totals,
+      req.user?.role,
+      { canUpload: canSend, canSendMail: canSend, isFirstCustomerOrder: firstOrder },
+    );
 
     if (head.sales_order_number) {
       await safeLogSalesOrderActivity({
@@ -273,7 +285,7 @@ exports.sendAccountsNotification = async (req, res) => {
 
     res.json({
       success: true,
-      message: `Mail sent to ${ACCOUNTS_EMAIL} from ${mailResult.from}`,
+      message: `Mail sent to ${ACCOUNTS_EMAIL}${mailResult.cc ? ` (cc ${mailResult.cc})` : ''} from ${mailResult.from}`,
       from: mailResult.from,
       to: mailResult.to,
       sale_compliance: saleCompliance,

@@ -1,8 +1,69 @@
 const pool = require('../config/db');
+const { EWAY_VALUE_THRESHOLD } = require('../services/saleDcComplianceService');
+
+const PENDING_DC_INVOICE_WHERE = `
+  COALESCE(dcl.movement_type, 'outbound') = 'outbound'
+  AND LOWER(COALESCE(dcl.status, '')) NOT IN ('cancelled')
+  AND (
+    LOWER(COALESCE(sol.quotation_type, '')) IN ('sale', 'sales')
+    OR LOWER(COALESCE(dcl.entity_code, '')) = 'gorefurbo'
+    OR (
+      dcl.customer_id IS NOT NULL
+      AND LOWER(COALESCE(dcl.status, '')) IN ('pending', 'processing', 'in_transit', 'reached', 'shipped')
+      AND NOT EXISTS (
+        SELECT 1 FROM sales_order_lines prior
+         WHERE prior.customer_id = dcl.customer_id
+           AND prior.sales_order_number IS DISTINCT FROM dcl.sales_order_number
+           AND LOWER(COALESCE(prior.status, '')) NOT IN ('cancelled')
+           AND prior.created_at < COALESCE(sol.created_at, dcl.created_at)
+      )
+    )
+  )
+  AND (
+    COALESCE(NULLIF(TRIM(dcl.einvoice_number), ''), NULLIF(TRIM(dcl.irn), '')) IS NULL
+    OR (
+      NULLIF(TRIM(COALESCE(dcl.einvoice_pdf_path, '')), '') IS NULL
+      AND NULLIF(TRIM(COALESCE(dcl.qr_code_url, '')), '') IS NULL
+    )
+    OR (
+      COALESCE(dcl_amt.amount, 0) > ${EWAY_VALUE_THRESHOLD}
+      AND (
+        NULLIF(TRIM(COALESCE(dcl.eway_bill_number, '')), '') IS NULL
+        OR NULLIF(TRIM(COALESCE(dcl.eway_bill_pdf_path, '')), '') IS NULL
+      )
+    )
+  )
+`;
+
+const DC_INVOICE_FROM = `
+  FROM delivery_challan_lines dcl
+  LEFT JOIN LATERAL (
+    SELECT quotation_type, created_at, customer_name
+      FROM sales_order_lines
+     WHERE sales_order_number = dcl.sales_order_number
+     ORDER BY id ASC
+     LIMIT 1
+  ) sol ON TRUE
+  LEFT JOIN LATERAL (
+    SELECT COALESCE(SUM(COALESCE(x.quantity, 0)), 0)::numeric AS dc_qty
+      FROM delivery_challan_lines x
+     WHERE x.dc_number = dcl.dc_number
+  ) dcq ON TRUE
+  LEFT JOIN LATERAL (
+    SELECT COALESCE(AVG(rate) FILTER (WHERE COALESCE(rate, 0) > 0), 0)::numeric AS unit_rate
+      FROM sales_order_lines
+     WHERE sales_order_number = dcl.sales_order_number
+  ) sor ON TRUE
+  LEFT JOIN LATERAL (
+    SELECT ROUND((
+      COALESCE(dcq.dc_qty, 0) * COALESCE(sor.unit_rate, 0)
+    )::numeric, 2) AS amount
+  ) dcl_amt ON TRUE
+`;
 
 exports.getCounts = async (req, res) => {
   try {
-    const [draftRes, queueRes] = await Promise.all([
+    const [draftRes, queueRes, dcInvRes] = await Promise.all([
       pool.query(`SELECT COUNT(*)::int AS c FROM customer_invoices WHERE status = 'draft'`),
       pool.query(
         `SELECT COUNT(DISTINCT dcl.dc_number)::int AS c
@@ -13,11 +74,17 @@ exports.getCounts = async (req, res) => {
            AND dcl.irn IS NULL
            AND COALESCE(sol.quotation_type, sq.quotation_type) = 'sale'`
       ),
+      pool.query(
+        `SELECT COUNT(DISTINCT dcl.dc_number)::int AS c
+         ${DC_INVOICE_FROM}
+         WHERE ${PENDING_DC_INVOICE_WHERE}`
+      ),
     ]);
     res.json({
       success: true,
       draft_invoices: draftRes.rows[0]?.c || 0,
       einvoice_queue: queueRes.rows[0]?.c || 0,
+      dc_invoice_queue: dcInvRes.rows[0]?.c || 0,
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -175,6 +242,41 @@ exports.getEinvoiceQueue = async (req, res) => {
          AND dcl.irn IS NULL
          AND COALESCE(sol.quotation_type, sq.quotation_type) = 'sale'
        ORDER BY dcl.dc_number, dcl.created_at DESC`
+    );
+    res.json({ success: true, queue: result.rows });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.getDcInvoiceQueue = async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM (
+         SELECT DISTINCT ON (dcl.dc_number)
+           dcl.dc_number,
+           dcl.sales_order_number,
+           dcl.created_at,
+           dcl.status,
+           COALESCE(dcl.customer_name, sol.customer_name) AS customer_name,
+           dcl.customer_id,
+           sol.quotation_type,
+           dcl.entity_code,
+           dcl.einvoice_number,
+           dcl.einvoice_pdf_path,
+           dcl.irn,
+           dcl.eway_bill_number,
+           dcl.eway_bill_pdf_path,
+           dcl.accounts_notified_at,
+           COALESCE(dcq.dc_qty, 0) AS quantity,
+           COALESCE(dcl_amt.amount, 0) AS amount,
+           (COALESCE(dcl_amt.amount, 0) > $1) AS requires_eway_bill
+         ${DC_INVOICE_FROM}
+         WHERE ${PENDING_DC_INVOICE_WHERE}
+         ORDER BY dcl.dc_number, dcl.created_at DESC
+       ) q
+       ORDER BY created_at DESC NULLS LAST, dc_number DESC`,
+      [EWAY_VALUE_THRESHOLD]
     );
     res.json({ success: true, queue: result.rows });
   } catch (err) {

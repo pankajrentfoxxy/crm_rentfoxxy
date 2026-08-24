@@ -19,7 +19,7 @@ export default function SaleDcCompliancePanel({
 }) {
   const compliance = saleCompliance || {};
   const needsEway = compliance.requires_eway_bill;
-  const grandTotal = compliance.grand_total ?? totals?.grand_total;
+  const grandTotal = compliance.product_value ?? compliance.grand_total ?? totals?.subtotal ?? totals?.grand_total;
   const canUpload = compliance.can_upload_compliance ?? isSuperAdmin;
   const canSendMail = compliance.can_send_accounts_mail ?? isSuperAdmin;
   const dispatchMailConfigured = compliance.dispatch_mail_configured === true;
@@ -94,9 +94,15 @@ export default function SaleDcCompliancePanel({
   return (
     <div className="space-y-4">
       <div className="p-4 bg-indigo-50 border border-indigo-200 rounded-xl text-sm text-indigo-950">
-        <p className="font-semibold">Sale DC — E-Invoice required</p>
+        <p className="font-semibold">
+          {compliance.is_first_customer_order && !compliance.is_sale_dc
+            ? 'New-customer first order — E-Invoice required'
+            : 'Sale DC — E-Invoice required'}
+        </p>
         <p className="mt-1">
           DC value: <strong>{formatCurrency(grandTotal)}</strong>
+          {' '}
+          <span className="font-normal">(laptop prices, exclusive of GST)</span>
           {needsEway
             ? ' — E-Way Bill is mandatory (above ₹50,000).'
             : ' — E-Way Bill is not required for this DC.'}
@@ -123,7 +129,7 @@ export default function SaleDcCompliancePanel({
         <section className="bg-white border rounded-xl p-5 space-y-3">
           <h3 className="font-semibold text-gray-900">Notify Accounts</h3>
           <p className="text-sm text-gray-600">
-            Send E-Invoice request to <strong>{accountsEmail}</strong>
+            Send invoice request to <strong>{accountsEmail}</strong>
             {dispatchFrom ? <> from <strong>{dispatchFrom}</strong> (dispatch mail)</> : ' using the dispatch mail account.'}
             {' '}DC PDF will be attached. Mail is <strong>not</strong> sent automatically when the DC is created.
           </p>

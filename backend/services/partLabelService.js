@@ -1,21 +1,27 @@
 /**
  * QR labels for physical spare-part units.
  *
- * Media: one continuous strip / sheet row of 102.6 mm × 15 mm.
- * Layout: exactly 4 QR codes of 15 × 15 mm across that strip (left → right).
- * Optional PO text sits under each QR as normal (not rotated) text. Because the
- * strip is only 15 mm tall, the QR is nudged up and slightly shortened when a
- * caption is printed so both fit on the same label.
+ * Physical media (one strip / one PDF page):
+ *   4 die-cut labels of 15 × 15 mm, 3 mm gap between each, 1.3 mm side margin.
+ *   Total strip: 71.6 × 15 mm
+ *     1.3 + (4 × 15) + (3 × 3) + 1.3 = 71.6
  *
- * Everything else about a unit is resolved from the API on scan.
+ * Optional serial/PO text sits under each QR inside the 15 mm square (QR is
+ * shortened slightly when a caption is on). Scan resolves the rest from the API.
  */
 const PDFDocument = require('pdfkit');
 const QRCode = require('qrcode');
 
 const MM_TO_PT = 72 / 25.4;
 /** Exact printer media size for one row of 4 labels. */
-const PAPER_WIDTH_MM = 102.6;
+const PAPER_WIDTH_MM = 71.6;
 const PAPER_HEIGHT_MM = 15;
+/** Die-cut sticker size. */
+const LABEL_MM = 15;
+/** Gap between the four stickers on the strip. */
+const GAP_MM = 3;
+/** Left/right liner margin so 4×15 + 3×3 + margins = 71.6 mm. */
+const SIDE_MARGIN_MM = 1.3;
 /** QR square when no caption is drawn underneath. */
 const DEFAULT_QR_MM = 15;
 const DEFAULT_COLUMNS = 4;
@@ -117,10 +123,12 @@ async function buildLabelPdf(labels, {
   captionMm = DEFAULT_CAPTION_MM,
   paperWidthMm = PAPER_WIDTH_MM,
   paperHeightMm = PAPER_HEIGHT_MM,
+  labelMm = LABEL_MM,
+  gapMm = GAP_MM,
+  sideMarginMm = SIDE_MARGIN_MM,
   // legacy ignored / mapped
   cellWidthMm,
   cellHeightMm,
-  gapMm,
   captionVertical,
   widthMm,
   heightMm,
@@ -143,18 +151,23 @@ async function buildLabelPdf(labels, {
   const paperWmm = Math.max(40, Math.min(300, Number(paperWidthMm) || PAPER_WIDTH_MM));
   const paperHmm = Math.max(10, Math.min(80, Number(paperHeightMm) || Number(cellHeightMm) || Number(heightMm) || PAPER_HEIGHT_MM));
   const capMm = Math.max(0, Math.min(8, Number(captionMm) || 0));
+  const stickerMm = Math.max(8, Math.min(paperHmm, Number(labelMm) || Number(cellWidthMm) || LABEL_MM));
+  const gap = Math.max(0, Math.min(20, Number(gapMm) ?? GAP_MM));
+  const side = Math.max(0, Number.isFinite(Number(sideMarginMm)) ? Number(sideMarginMm) : SIDE_MARGIN_MM);
 
   const pageW = paperWmm * MM_TO_PT;
   const pageH = paperHmm * MM_TO_PT;
-  const cellW = pageW / cols;
-  const cellH = pageH;
+  const cellW = stickerMm * MM_TO_PT;
+  const cellH = paperHmm * MM_TO_PT;
+  const gapPt = gap * MM_TO_PT;
+  const sidePt = side * MM_TO_PT;
 
   const pngCache = new Map();
   for (const code of new Set(jobs.map((j) => j.code))) {
     pngCache.set(code, await renderQrPng(code));
   }
 
-  // Left → right across the 102.6 mm strip; next page = next physical label row.
+  // Left → right: 1.3 mm margin, then 15 mm sticker + 3 mm gap × 4, on a 71.6 mm strip.
   // bufferPages avoids PDFKit auto-flush mid-row if text ever misbehaves.
   const doc = new PDFDocument({
     size: [pageW, pageH],
@@ -179,11 +192,11 @@ async function buildLabelPdf(labels, {
       drawSticker(doc, {
         png: pngCache.get(job.code),
         caption: job.caption,
-        x: col * cellW,
+        x: sidePt + col * (cellW + gapPt),
         y: 0,
         cellW,
         cellH,
-        qrMm: qr,
+        qrMm: Math.min(qr, stickerMm),
         captionMm: job.caption ? capMm : 0,
       });
     });
@@ -199,12 +212,15 @@ module.exports = {
   buildLabelPdf,
   PAPER_WIDTH_MM,
   PAPER_HEIGHT_MM,
+  LABEL_MM,
+  GAP_MM,
+  SIDE_MARGIN_MM,
   DEFAULT_QR_MM,
-  DEFAULT_LABEL_MM: DEFAULT_QR_MM,
+  DEFAULT_LABEL_MM: LABEL_MM,
   DEFAULT_COLUMNS,
   DEFAULT_CAPTION_MM,
-  DEFAULT_CELL_WIDTH_MM: PAPER_WIDTH_MM / DEFAULT_COLUMNS,
+  DEFAULT_CELL_WIDTH_MM: LABEL_MM,
   DEFAULT_CELL_HEIGHT_MM: PAPER_HEIGHT_MM,
-  DEFAULT_GAP_MM: 0,
+  DEFAULT_GAP_MM: GAP_MM,
   MAX_LABELS_PER_JOB,
 };

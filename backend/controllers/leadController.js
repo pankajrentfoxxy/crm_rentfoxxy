@@ -751,6 +751,10 @@ exports.getQuotationAcceptPreview = async (req, res) => {
     return res.status(400).json({ success: false, message: 'Invalid link' });
   }
   try {
+    const { previewSalesQuotationByToken } = require('../services/salesQuotationEmailService');
+    const salesPreview = await previewSalesQuotationByToken(token);
+    if (salesPreview) return res.json(salesPreview);
+
     await ensureLeadQuotationColumns();
     const qRes = await pool.query(
       `SELECT lead_id, company_name, name, quotation_last_estimate_no, quotation_accepted_at, quotation_last_sent_at
@@ -780,6 +784,10 @@ exports.acceptLeadQuotation = async (req, res) => {
     return res.status(400).json({ success: false, message: 'Invalid link' });
   }
   try {
+    const { acceptSalesQuotationByToken } = require('../services/salesQuotationEmailService');
+    const salesAccept = await acceptSalesQuotationByToken(token);
+    if (salesAccept) return res.json(salesAccept);
+
     await ensureLeadQuotationColumns();
     const qRes = await pool.query(
       `SELECT lead_id, company_name, name, email, quotation_last_estimate_no, quotation_last_to_email,

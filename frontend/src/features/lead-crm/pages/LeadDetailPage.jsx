@@ -15,7 +15,7 @@ import LeadConvertModal from '../components/LeadConvertModal';
 import LeadFormDrawer from '../components/LeadFormDrawer';
 import PersonalRemarksPanel from '../components/PersonalRemarksPanel';
 import { listQuotations } from '../../sales-pipeline/salesPipelineApi';
-import { formatDate, QUOTE_STATUS_STYLES, typeLabel, TYPE_STYLES } from '../../sales-pipeline/salesPipelineUtils';
+import { canSendQuotationForLeadStatus, formatDate, QUOTE_STATUS_STYLES, quoteStatusLabel, typeLabel, TYPE_STYLES } from '../../sales-pipeline/salesPipelineUtils';
 
 const TABS = ['Activity & Remarks', 'Lead Profile', 'Follow-ups', 'Quotations', 'Addresses'];
 
@@ -66,22 +66,23 @@ export default function LeadDetailPage() {
   }, [tab, lead?.leadId]);
 
   const navigateToQuotation = () => {
-    const customerId = conversion?.customer_id || lead.customerId || null;
-    if (!customerId) {
-      toast('Note: Convert this lead to a customer first for full quotation details.', {
-        icon: 'ℹ️',
-        duration: 4000,
-      });
+    if (!canSendQuotationForLeadStatus(lead.status)) {
+      toast.error(`Quotations can be sent for Cold, Warm, Hot, Deal, Repeat, or Hold leads. This lead is ${lead.status}.`);
+      return;
     }
+    const customerId = conversion?.customer_id || lead.customerId || null;
     navigate('/sales-pipeline/quotations', {
       state: {
         openForm: true,
         prefill: {
           customer_id: customerId,
+          contact_name: lead.name,
+          company_name: lead.companyName || lead.name,
           customer_name: lead.companyName || lead.name,
           lead_id: lead.leadId,
           lead_name: lead.name,
           email: lead.email,
+          phone: lead.phone,
           quotation_type: lead.inquiryType === 'sales' ? 'sale' : 'rental',
           line_items: lead.processor ? [{
             brand: lead.brand || '',
@@ -268,7 +269,7 @@ export default function LeadDetailPage() {
                           </td>
                           <td className="py-2 pr-3">
                             <span className={`px-2 py-0.5 rounded-full text-xs ${QUOTE_STATUS_STYLES[q.status] || 'bg-gray-100'}`}>
-                              {q.status}
+                              {quoteStatusLabel(q.status)}
                             </span>
                           </td>
                           <td className="py-2">

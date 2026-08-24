@@ -134,6 +134,7 @@ router.get('/quotations/:quotationNumber', quoteView, ctrl.getQuotation);
 router.post('/quotations/:quotationNumber/pdf', quoteView, ctrl.regenerateQuotationPdf);
 router.post('/quotations', quoteCreate, ctrl.storeQuotation);
 router.patch('/quotations/:quotationNumber/status', quoteEdit, ctrl.updateQuotationStatus);
+router.post('/quotations/:quotationNumber/send', quoteEdit, ctrl.sendQuotationEmail);
 
 router.get('/sales-orders/meta/add', soView, ctrl.getAddSalesOrderMeta);
 router.get('/sales-orders', soView, ctrl.listSalesOrders);

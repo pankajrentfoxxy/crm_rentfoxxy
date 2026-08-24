@@ -30,18 +30,27 @@ function isDispatchMailConfigured() {
  * Send email using the dispatch SMTP account only.
  * @returns {Promise<boolean>}
  */
-async function sendDispatchMail({ to, subject, text, html, pdfRelativePath, cc, replyTo }) {
+async function sendDispatchMail({ to, subject, text, html, pdfRelativePath, cc, replyTo, extraAttachments = [] }) {
   const transport = getDispatchMailTransport();
   const from = getDispatchFromAddress();
   if (!transport || !from || !to) return false;
 
   const abs = pdfRelativePath ? path.join(__dirname, '..', pdfRelativePath) : null;
+  const attachments = [];
+  if (Array.isArray(extraAttachments)) {
+    for (const item of extraAttachments) {
+      if (item?.path && fs.existsSync(item.path)) attachments.push(item);
+    }
+  }
+  if (abs && fs.existsSync(abs)) {
+    attachments.push({ filename: path.basename(abs), path: abs });
+  }
   const mail = {
     from,
     to,
     subject,
     text,
-    attachments: abs && fs.existsSync(abs) ? [{ filename: path.basename(abs), path: abs }] : [],
+    attachments,
   };
   if (html) mail.html = html;
   if (cc) mail.cc = cc;

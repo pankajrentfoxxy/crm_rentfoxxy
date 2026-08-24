@@ -6,9 +6,10 @@ const encSo = (n) => encodeURIComponent(n);
 const encDc = (n) => encodeURIComponent(n);
 
 export const listQuotations = (p) => api.get(`${base}/quotations`, { params: p });
-export const getQuotation = (n) => api.get(`${base}/quotations/${n}`);
+export const getQuotation = (n) => api.get(`${base}/quotations/${encodeURIComponent(n)}`);
 export const createQuotation = (d) => api.post(`${base}/quotations`, d);
-export const updateQuotationStatus = (n, d) => api.patch(`${base}/quotations/${n}/status`, d);
+export const updateQuotationStatus = (n, d) => api.patch(`${base}/quotations/${encodeURIComponent(n)}/status`, d);
+export const sendQuotationEmail = (n, d) => api.post(`${base}/quotations/${encodeURIComponent(n)}/send`, d);
 export const getQuotationMeta = (p) => api.get(`${base}/quotations/meta/add`, { params: p });
 
 export const listSalesOrders = (p) => api.get(`${base}/sales-orders`, { params: p });
@@ -43,7 +44,7 @@ export const downloadDcBluedartAwbPdf = (n, params = {}) =>
     responseType: 'blob',
     params,
   });
-export const regenerateQuotationPdf = (n) => api.post(`${base}/quotations/${n}/pdf`);
+export const regenerateQuotationPdf = (n) => api.post(`${base}/quotations/${encodeURIComponent(n)}/pdf`);
 export const regenerateSalesOrderPdf = (n) => api.post(`${base}/sales-orders/${encSo(n)}/pdf`);
 export const getDCMeta = (so) => api.get(`${base}/delivery-challans/meta/add`, { params: { sales_order_number: so } });
 export const getDcQcStatus = (n) => api.get(`${base}/delivery-challans/${encDc(n)}/qc-status`);

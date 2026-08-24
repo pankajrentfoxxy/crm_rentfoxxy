@@ -2,17 +2,26 @@
  * Sale delivery challan compliance — e-invoice upload, conditional e-way bill (> ₹50k).
  * Rental / demo DCs are unaffected.
  */
+const fs = require('fs');
+const path = require('path');
 const { sendDispatchMail, isDispatchMailConfigured, getDispatchFromAddress } = require('./dispatchEmailService');
 const {
-  computeGstBreakdown,
   resolveDcBilling,
-  resolveSupplyStateFromAddress,
   getDeliveryChallanLines,
 } = require('./salesManagementService');
 
 const EWAY_VALUE_THRESHOLD = 50000;
 const ACCOUNTS_EMAIL = process.env.ACCOUNTS_EMAIL || 'accounts@truetechservices.in';
-const FRONTEND_URL = (process.env.FRONTEND_URL || 'https://crm.rentfoxxy.com').replace(/\/$/, '');
+const ACCOUNTS_EMAIL_CC = process.env.ACCOUNTS_EMAIL_CC || 'adminn@rentfoxxy.com,pankkajyadav@rentfoxxy.com';
+const FRONTEND_URL = (
+  process.env.CRM_PUBLIC_URL
+  || process.env.PUBLIC_APP_URL
+  || String(process.env.FRONTEND_URL || '')
+    .split(',')
+    .map((s) => s.trim())
+    .find((s) => /^https:\/\/crm\./i.test(s))
+  || 'https://crm.rentfoxxy.com'
+).replace(/\/$/, '');
 
 /** Dispatch, accounts, or DC editors may upload sale compliance documents. */
 const UPLOAD_PERMISSION_CHECKS = [
@@ -42,6 +51,28 @@ function isSaleDc(entityCode, quotationType) {
   return ec === 'gorefurbo' || qt === 'sale' || qt === 'sales';
 }
 
+/**
+ * First live sales order for this customer (new-customer 1st order).
+ * Cancelled SOs are ignored.
+ */
+async function isNewCustomerFirstOrder(db, customerId, salesOrderNumber) {
+  if (!customerId || !salesOrderNumber) return false;
+  const first = await db.query(
+    `SELECT sales_order_number
+       FROM sales_order_lines
+      WHERE customer_id = $1
+        AND LOWER(COALESCE(status, '')) NOT IN ('cancelled')
+      ORDER BY created_at ASC, id ASC
+      LIMIT 1`,
+    [customerId]
+  );
+  return first.rows[0]?.sales_order_number === salesOrderNumber;
+}
+
+function requiresInvoiceCompliance(entityCode, quotationType, isFirstOrder = false) {
+  return isSaleDc(entityCode, quotationType) || Boolean(isFirstOrder);
+}
+
 function requiresEwayBill(grandTotal) {
   return Number(grandTotal) > EWAY_VALUE_THRESHOLD;
 }
@@ -62,19 +93,28 @@ function isEwayComplete(head, needsEway) {
   return Boolean(num && pdf);
 }
 
-function buildSaleCompliance(head, totals, userRole, { canUpload = false, canSendMail = false } = {}) {
-  const needsEway = requiresEwayBill(totals?.grand_total);
+function buildSaleCompliance(head, totals, userRole, {
+  canUpload = false,
+  canSendMail = false,
+  isFirstCustomerOrder = false,
+} = {}) {
+  const productValue = Number(totals?.subtotal ?? totals?.grand_total ?? 0);
+  const needsEway = requiresEwayBill(productValue);
   const einvoiceComplete = isEinvoiceComplete(head);
   const ewayComplete = isEwayComplete(head, needsEway);
   const isSuperAdmin = userRole === 'super_admin';
   const mayUpload = isSuperAdmin || canUpload;
   const maySendMail = isSuperAdmin || canSendMail;
+  const sale = isSaleDc(head?.entity_code, head?.quotation_type);
 
   return {
-    is_sale_dc: true,
+    is_sale_dc: sale,
+    is_first_customer_order: Boolean(isFirstCustomerOrder),
+    requires_invoice_compliance: true,
     requires_eway_bill: needsEway,
     eway_threshold: EWAY_VALUE_THRESHOLD,
-    grand_total: totals?.grand_total ?? null,
+    product_value: productValue,
+    grand_total: productValue,
     einvoice_complete: einvoiceComplete,
     eway_complete: ewayComplete,
     compliance_complete: einvoiceComplete && ewayComplete,
@@ -94,18 +134,29 @@ function buildSaleCompliance(head, totals, userRole, { canUpload = false, canSen
   };
 }
 
-async function computeDcGrandTotal(dcNumber) {
+/** Laptop / line prices on this DC only — GST is added later on the e-invoice. */
+async function computeDcProductValue(dcNumber) {
   const lines = await getDeliveryChallanLines(dcNumber);
   if (!lines.length) return 0;
   const { subtotal } = await resolveDcBilling(dcNumber, lines);
-  const head = lines[0];
-  const totals = computeGstBreakdown({
-    subtotal,
-    shipping: head.shiping_charges,
-    security: head.security_amount,
-    supplyState: resolveSupplyStateFromAddress(head.customer_shipping_address, head.supply_state),
-  });
-  return totals.grand_total;
+  return +Number(subtotal || 0).toFixed(2);
+}
+
+async function computeDcGrandTotal(dcNumber) {
+  return computeDcProductValue(dcNumber);
+}
+
+function resolveAccountsMailLogo({ isSale = false } = {}) {
+  const filename = isSale ? 'gorefurbo-logo.png' : 'rentfoxxy-logo.png';
+  const abs = path.join(__dirname, '..', 'assets', filename);
+  if (!fs.existsSync(abs)) return null;
+  return {
+    filename,
+    path: abs,
+    cid: 'brand-logo',
+    contentDisposition: 'inline',
+    brandLabel: isSale ? 'Gorefurbo' : 'Rentfoxxy',
+  };
 }
 
 async function assertCanDownloadSaleDcPdf(user, dcNumber) {
@@ -113,7 +164,17 @@ async function assertCanDownloadSaleDcPdf(user, dcNumber) {
   const lines = await getDeliveryChallanLines(dcNumber);
   if (!lines.length) return;
   const head = lines[0];
-  if (!isSaleDc(head.entity_code)) return;
+  const pool = require('../config/db');
+  let quotationType = head.quotation_type || null;
+  if (!quotationType && head.sales_order_number) {
+    const qt = await pool.query(
+      `SELECT quotation_type FROM sales_order_lines WHERE sales_order_number = $1 LIMIT 1`,
+      [head.sales_order_number]
+    );
+    quotationType = qt.rows[0]?.quotation_type || null;
+  }
+  const firstOrder = await isNewCustomerFirstOrder(pool, head.customer_id, head.sales_order_number);
+  if (!requiresInvoiceCompliance(head.entity_code, quotationType, firstOrder)) return;
 
   const grandTotal = await computeDcGrandTotal(dcNumber);
   if (isEinvoiceComplete(head)) return;
@@ -143,36 +204,42 @@ function buildAccountsSaleDcEmailHtml({
   valueStr,
   needsEway,
   portalUrl,
+  brandLabel,
+  hasLogo,
 }) {
   const ewayBlock = needsEway
     ? `<p style="margin:0 0 12px;padding:12px 14px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;color:#9a3412;">
-         <strong>E-Way Bill required:</strong> DC value is <strong>₹${escapeHtml(valueStr)}</strong>
-         (above ₹${EWAY_VALUE_THRESHOLD.toLocaleString('en-IN')}). Please include E-Way Bill with the E-Invoice.
+         DC laptop value is greater than ₹${EWAY_VALUE_THRESHOLD.toLocaleString('en-IN')}
+         (value <strong>₹${escapeHtml(valueStr)}</strong>, exclusive of GST) so <strong>e-way bill is mandatory</strong>.
+         Please upload the waybill also.
        </p>`
     : `<p style="margin:0 0 12px;padding:12px 14px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;color:#166534;">
-         E-Way Bill is <strong>not required</strong> for this DC (value ₹${escapeHtml(valueStr)}).
+         E-Way Bill is <strong>not required</strong> for this DC (laptop value ₹${escapeHtml(valueStr)}, exclusive of GST).
        </p>`;
+
+  const logoBlock = hasLogo
+    ? `<img src="cid:brand-logo" alt="${escapeHtml(brandLabel || 'Logo')}" style="height:44px;max-width:240px;display:block;margin:0;" />`
+    : `<p style="margin:0;font-size:18px;font-weight:700;color:#0f172a;">${escapeHtml(brandLabel || 'Rentfoxxy')}</p>`;
 
   return `<!DOCTYPE html>
 <html>
 <body style="margin:0;padding:24px;font-family:Segoe UI,Helvetica,Arial,sans-serif;background:#f8fafc;color:#334155;">
   <div style="max-width:600px;margin:0 auto;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;background:#ffffff;">
-    <div style="padding:20px 24px;background:#0e7490;color:#ffffff;">
-      <p style="margin:0;font-size:12px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.9;">Rentfoxxy CRM</p>
-      <h1 style="margin:8px 0 0;font-size:20px;font-weight:600;">Sale Delivery Challan — E-Invoice Required</h1>
+    <div style="padding:20px 24px;background:#ffffff;border-bottom:1px solid #e2e8f0;">
+      ${logoBlock}
+      <p style="margin:12px 0 0;font-size:12px;letter-spacing:0.06em;text-transform:uppercase;color:#64748b;">Create Invoice</p>
     </div>
     <div style="padding:24px;">
-      <p style="margin:0 0 16px;font-size:15px;">Dear Sir,</p>
+      <p style="margin:0 0 16px;font-size:15px;">Hi Ankesh Sir,</p>
       <p style="margin:0 0 16px;line-height:1.6;">
-        As we are going to <strong>sell ${escapeHtml(laptopCount)} laptop(s)</strong> under the attached delivery challan.
-        Please create the <strong>E-Invoice</strong> and upload it in the CRM portal, or reply to this email with the documents.
+        Please create e-invoice and upload in the Delivery challan.
       </p>
       <table style="width:100%;border-collapse:collapse;margin:0 0 16px;font-size:14px;">
         <tr><td style="padding:8px 0;color:#64748b;width:140px;">Delivery Challan</td><td style="padding:8px 0;font-weight:600;">${escapeHtml(dcNumber)}</td></tr>
         <tr><td style="padding:8px 0;color:#64748b;">Sales Order</td><td style="padding:8px 0;font-weight:600;">${escapeHtml(salesOrderNumber)}</td></tr>
         <tr><td style="padding:8px 0;color:#64748b;">Customer</td><td style="padding:8px 0;">${escapeHtml(customerName || '—')}</td></tr>
         <tr><td style="padding:8px 0;color:#64748b;">Laptops</td><td style="padding:8px 0;">${escapeHtml(laptopCount)}</td></tr>
-        <tr><td style="padding:8px 0;color:#64748b;">DC Value</td><td style="padding:8px 0;">₹${escapeHtml(valueStr)}</td></tr>
+        <tr><td style="padding:8px 0;color:#64748b;">DC Value</td><td style="padding:8px 0;">₹${escapeHtml(valueStr)} <span style="font-weight:400;color:#64748b;">(exclusive of GST)</span></td></tr>
       </table>
       ${ewayBlock}
       <p style="margin:0 0 20px;line-height:1.6;">
@@ -199,7 +266,10 @@ async function sendAccountsSaleDcEmail({
   customerName,
   pdfPath,
   grandTotal,
+  productValue,
   laptopCount,
+  isSale = false,
+  isFirstCustomerOrder = false,
 }) {
   if (!isDispatchMailConfigured()) {
     throw new Error(
@@ -207,10 +277,15 @@ async function sendAccountsSaleDcEmail({
     );
   }
 
-  const needsEway = requiresEwayBill(grandTotal);
+  const value = Number(productValue ?? grandTotal ?? 0);
+  const needsEway = requiresEwayBill(value);
   const portalUrl = `${FRONTEND_URL}/sales-pipeline/delivery-challans/${encodeURIComponent(dcNumber)}`;
-  const valueStr = Number(grandTotal || 0).toLocaleString('en-IN');
+  const valueStr = value.toLocaleString('en-IN');
   const fromAddress = getDispatchFromAddress();
+  // Sale SOs use Gorefurbo; new-customer first orders (rental) use Rentfoxxy.
+  const useGorefurbo = Boolean(isSale);
+  const logo = resolveAccountsMailLogo({ isSale: useGorefurbo });
+  const brandLabel = useGorefurbo ? 'Gorefurbo' : 'Rentfoxxy';
 
   const html = buildAccountsSaleDcEmailHtml({
     dcNumber,
@@ -220,36 +295,48 @@ async function sendAccountsSaleDcEmail({
     valueStr,
     needsEway,
     portalUrl,
+    brandLabel,
+    hasLogo: Boolean(logo),
   });
 
   const text = [
-    'Dear Sir,',
+    'Hi Ankesh Sir,',
     '',
-    `We are going to sell ${laptopCount} laptop(s) under delivery challan ${dcNumber}.`,
-    `Sales Order: ${salesOrderNumber}`,
+    'Please create e-invoice and upload in the Delivery challan.',
+    '',
+    `Delivery Challan: ${dcNumber}`,
+    `Sales Order: ${salesOrderNumber || '—'}`,
     `Customer: ${customerName || '—'}`,
-    `DC Value: ₹${valueStr}`,
-    '',
-    'Please create the E-Invoice and upload it in the CRM portal:',
-    portalUrl,
+    `Laptops: ${laptopCount}`,
+    `DC value (exclusive of GST): ₹${valueStr}`,
     '',
     needsEway
-      ? `E-Way Bill is also required (DC value above ₹${EWAY_VALUE_THRESHOLD.toLocaleString('en-IN')}).`
-      : 'E-Way Bill is not required for this DC value.',
+      ? `DC laptop value is greater than ₹${EWAY_VALUE_THRESHOLD.toLocaleString('en-IN')} — e-way bill is mandatory. Please upload the waybill also.`
+      : 'E-Way Bill is not required for this value.',
+    '',
+    'Upload in CRM (Finance → DC Invoice or DC E-Invoice tab):',
+    portalUrl,
     '',
     'The delivery challan PDF is attached.',
     '',
     'Regards,',
     'Team Rentfoxxy',
-    'Truetech Services Pvt Ltd',
   ].join('\n');
 
   const sent = await sendDispatchMail({
     to: ACCOUNTS_EMAIL,
-    subject: `Sale DC ${dcNumber} — E-Invoice required${needsEway ? ' + E-Way Bill' : ''}`,
+    cc: ACCOUNTS_EMAIL_CC,
+    subject: `${dcNumber} : ${customerName || 'Customer'} : Create Invoice`,
     html,
     text,
     pdfRelativePath: pdfPath,
+    extraAttachments: logo ? [{
+      filename: logo.filename,
+      path: logo.path,
+      cid: logo.cid,
+      contentType: 'image/png',
+      contentDisposition: 'inline',
+    }] : [],
     replyTo: process.env.DISPATCH_SMTP_REPLY_TO || fromAddress,
   });
 
@@ -257,8 +344,8 @@ async function sendAccountsSaleDcEmail({
     throw new Error('Failed to send mail — check DISPATCH_SMTP settings and DC PDF path');
   }
 
-  console.log(`Accounts sale DC email sent: ${dcNumber} → ${ACCOUNTS_EMAIL} (from dispatch: ${fromAddress})`);
-  return { sent: true, from: fromAddress, to: ACCOUNTS_EMAIL };
+  console.log(`Accounts sale DC email sent: ${dcNumber} → ${ACCOUNTS_EMAIL} cc ${ACCOUNTS_EMAIL_CC} (from dispatch: ${fromAddress})`);
+  return { sent: true, from: fromAddress, to: ACCOUNTS_EMAIL, cc: ACCOUNTS_EMAIL_CC };
 }
 
 /** @deprecated Auto-send on DC create removed — use sendAccountsSaleDcEmail via API. */
@@ -269,11 +356,15 @@ async function emailAccountsSaleDcCreated(params) {
 module.exports = {
   EWAY_VALUE_THRESHOLD,
   ACCOUNTS_EMAIL,
+  ACCOUNTS_EMAIL_CC,
   isSaleDc,
+  isNewCustomerFirstOrder,
+  requiresInvoiceCompliance,
   requiresEwayBill,
   isEinvoiceComplete,
   isEwayComplete,
   buildSaleCompliance,
+  computeDcProductValue,
   computeDcGrandTotal,
   assertCanDownloadSaleDcPdf,
   normalizeVehicleNumber,

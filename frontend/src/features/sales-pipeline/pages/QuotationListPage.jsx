@@ -5,10 +5,10 @@ import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import { PageHeader, StatCard, Button } from '../../../components/ui/primitives';
 import QuotationForm from '../components/QuotationForm';
-import { listQuotations, updateQuotationStatus } from '../salesPipelineApi';
-import { formatCurrency, formatDate, QUOTE_STATUS_STYLES, typeLabel, TYPE_STYLES } from '../salesPipelineUtils';
+import { listQuotations, sendQuotationEmail } from '../salesPipelineApi';
+import { formatCurrency, formatDate, QUOTE_STATUS_STYLES, quoteStatusLabel, typeLabel, TYPE_STYLES } from '../salesPipelineUtils';
 
-const TABS = ['all', 'draft', 'sent', 'approved', 'rejected'];
+const TABS = ['all', 'draft', 'sent', 'accepted', 'approved', 'rejected'];
 
 export default function QuotationListPage() {
   const navigate = useNavigate();
@@ -48,17 +48,18 @@ export default function QuotationListPage() {
     total: rows.length,
     draft: rows.filter((r) => r.status === 'pending' || r.status === 'draft').length,
     sent: rows.filter((r) => r.status === 'sent').length,
+    accepted: rows.filter((r) => r.status === 'accepted').length,
     approved: rows.filter((r) => r.status === 'approved').length,
     rejected: rows.filter((r) => r.status === 'rejected').length,
   }), [rows]);
 
-  const onResend = async (qn) => {
+  const onResend = async (row) => {
     try {
-      await updateQuotationStatus(qn, { status: 'sent' });
-      toast.success('Quotation sent');
+      await sendQuotationEmail(row.quotation_number, { email: row.customer_email });
+      toast.success('Quotation sent from sales@rentfoxxy.com');
       load();
-    } catch {
-      toast.error('Send failed');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Send failed');
     }
   };
 
@@ -75,10 +76,11 @@ export default function QuotationListPage() {
         )}
       />
 
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
+      <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 mb-4">
         <StatCard label="Total" value={stats.total} tone="gray" />
         <StatCard label="Draft" value={stats.draft} tone="amber" />
         <StatCard label="Sent" value={stats.sent} tone="blue" />
+        <StatCard label="Accepted" value={stats.accepted} tone="green" />
         <StatCard label="Approved" value={stats.approved} tone="green" />
         <StatCard label="Rejected" value={stats.rejected} tone="red" />
       </div>
@@ -106,7 +108,7 @@ export default function QuotationListPage() {
           <div key={row.quotation_number} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
             <div className="flex items-center justify-between gap-2">
               <span className="font-mono text-blue-700 font-semibold">{row.quotation_number}</span>
-              <span className={`px-2 py-0.5 rounded-full text-xs ${QUOTE_STATUS_STYLES[row.status] || 'bg-gray-100'}`}>{row.status}</span>
+              <span className={`px-2 py-0.5 rounded-full text-xs ${QUOTE_STATUS_STYLES[row.status] || 'bg-gray-100'}`}>{quoteStatusLabel(row.status)}</span>
             </div>
             <p className="font-medium text-slate-800">{row.customer_name}</p>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
@@ -119,10 +121,10 @@ export default function QuotationListPage() {
             )}
             <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-slate-100">
               <button type="button" className="text-blue-600 text-sm font-semibold" onClick={() => navigate(`/sales-pipeline/quotations/${row.quotation_number}`)}>View</button>
-              {row.status === 'approved' && (
+              {['approved', 'accepted'].includes(row.status) && (
                 <Link to="/sales-pipeline/sales-orders" state={{ fromQuote: row.quotation_number }} className="text-sm text-emerald-700 font-semibold">Create SO</Link>
               )}
-              <button type="button" className="text-sm text-gray-600 font-semibold" onClick={() => onResend(row.quotation_number)}>Send Email</button>
+              <button type="button" className="text-sm text-gray-600 font-semibold" onClick={() => onResend(row)}>Send Email</button>
             </div>
           </div>
         ))}
@@ -157,14 +159,14 @@ export default function QuotationListPage() {
                   </td>
                   <td className="px-4 py-3">{formatCurrency(row.total_value || row.line_total)}</td>
                   <td className="px-4 py-3">
-                    <span className={`px-2 py-0.5 rounded-full text-xs ${QUOTE_STATUS_STYLES[row.status] || 'bg-gray-100'}`}>{row.status}</span>
+                    <span className={`px-2 py-0.5 rounded-full text-xs ${QUOTE_STATUS_STYLES[row.status] || 'bg-gray-100'}`}>{quoteStatusLabel(row.status)}</span>
                   </td>
                   <td className="px-4 py-3 space-x-2" onClick={(e) => e.stopPropagation()}>
                     <button type="button" className="text-blue-600 text-xs" onClick={() => navigate(`/sales-pipeline/quotations/${row.quotation_number}`)}>View</button>
-                    {row.status === 'approved' && (
+                    {['approved', 'accepted'].includes(row.status) && (
                       <Link to="/sales-pipeline/sales-orders" state={{ fromQuote: row.quotation_number }} className="text-xs text-emerald-700">Create SO</Link>
                     )}
-                    <button type="button" className="text-xs text-gray-600" onClick={() => onResend(row.quotation_number)}>Send Email</button>
+                    <button type="button" className="text-xs text-gray-600" onClick={() => onResend(row)}>Send Email</button>
                   </td>
                 </tr>
                 {expanded === row.quotation_number && row.lines?.length > 0 && (
