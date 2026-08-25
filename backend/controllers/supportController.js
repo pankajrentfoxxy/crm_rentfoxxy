@@ -422,6 +422,8 @@ const executePickupWithReturnDc = async (client, ticket, ticketId, userId, opts)
     return { pickupItemIds, pickupItemId: pickupItemIds[0], rdc, customerOtp, machines };
 };
 
+exports.executePickupWithReturnDc = executePickupWithReturnDc;
+
 /** Add pickup items and serial entries to an existing Return DC (multi-complaint replacement). */
 const appendMachinesToReturnDc = async (client, ticket, ticketId, userId, opts) => {
     const {
@@ -2523,6 +2525,102 @@ exports.updateTicket = async (req, res) => {
     }
     const data = await getTicketWithItems(ticketId, req.user);
     res.json({ success: true, ...data });
+};
+
+exports.updatePickupAddress = async (req, res) => {
+    if (!isSupportLead(req.user)) {
+        return res.status(403).json({ success: false, message: 'Only team lead can edit pickup address' });
+    }
+    const ticketId = parseInt(req.params.ticketId, 10);
+    if (!Number.isFinite(ticketId)) {
+        return res.status(400).json({ success: false, message: 'Invalid ticket' });
+    }
+    try {
+        await assertTicketNotCancelled(pool, ticketId);
+    } catch (e) {
+        return res.status(e.status || 500).json({ success: false, message: e.message });
+    }
+
+    const src = req.body?.pickup_address && typeof req.body.pickup_address === 'object'
+        ? req.body.pickup_address
+        : (req.body || {});
+    const name = String(src.name || '').trim();
+    const address = String(src.address || src.address_line_1 || '').trim();
+    const city = String(src.city || '').trim();
+    const state = String(src.state || '').trim();
+    const pincode = String(src.pincode || src.zip_code || '').replace(/\D/g, '').slice(0, 6);
+    const phoneRaw = src.phone || src.mobile || src.poc_mobile;
+    if (!name) return res.status(400).json({ success: false, message: 'Contact name is required' });
+    const phoneError = validateIndianMobile(phoneRaw, { required: true, label: 'Mobile number' });
+    if (phoneError) return res.status(400).json({ success: false, message: phoneError });
+    if (!address) return res.status(400).json({ success: false, message: 'Pickup address is required' });
+    if (pincode && pincode.length !== 6) {
+        return res.status(400).json({ success: false, message: 'Pincode must be 6 digits' });
+    }
+
+    const pickupAddr = {
+        name,
+        phone: normalizeIndianMobile(phoneRaw),
+        address,
+        city,
+        state,
+        pincode,
+    };
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const ticketRes = await client.query(
+            'SELECT id, return_dc_number, pickup_address FROM support_tickets WHERE id = $1 FOR UPDATE',
+            [ticketId]
+        );
+        if (!ticketRes.rows.length) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ success: false, message: 'Ticket not found' });
+        }
+        const ticket = ticketRes.rows[0];
+        await client.query(
+            `UPDATE support_tickets
+                SET pickup_address = $2::jsonb,
+                    ticket_phone_override = COALESCE($3, ticket_phone_override),
+                    updated_at = NOW(),
+                    last_activity_at = NOW()
+              WHERE id = $1`,
+            [ticketId, JSON.stringify(pickupAddr), pickupAddr.phone]
+        );
+        if (ticket.return_dc_number) {
+            await client.query(
+                `UPDATE delivery_challan_lines
+                    SET customer_shipping_address = $2::jsonb,
+                        customer_name = COALESCE(NULLIF($3, ''), customer_name),
+                        updated_at = NOW()
+                  WHERE support_ticket_id = $1
+                    AND movement_type = 'return'`,
+                [ticketId, JSON.stringify(pickupAddr), name]
+            );
+        }
+        await logAudit(client, {
+            itemId: null,
+            ticketId,
+            userId: req.user.user_id,
+            action: 'pickup_address_updated',
+            detail: pickupAddr,
+        });
+        await client.query('COMMIT');
+
+        if (ticket.return_dc_number) {
+            try { await regenerateReturnDcPdfByRdc(pool, ticket.return_dc_number); }
+            catch (pdfErr) { console.warn('pickup address return DC pdf:', pdfErr.message); }
+        }
+
+        const data = await getTicketWithItems(ticketId, req.user);
+        return res.json({ success: true, pickup_address: pickupAddr, ...data });
+    } catch (e) {
+        await client.query('ROLLBACK');
+        return res.status(500).json({ success: false, message: e.message || 'Failed to update pickup address' });
+    } finally {
+        client.release();
+    }
 };
 
 exports.logVisit = async (req, res) => {

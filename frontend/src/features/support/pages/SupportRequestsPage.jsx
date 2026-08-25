@@ -261,9 +261,16 @@ function DetailDrawer({ request, onClose, onConvert, onReject, canAct }) {
           <button type="button" onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
         </div>
         <div className="flex-1 overflow-y-auto p-4 text-sm space-y-3">
-          <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${statusTone(request.status)}`}>
-            {statusLabel(request.status)}
-          </span>
+          <div className="flex flex-wrap gap-1.5">
+            <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${statusTone(request.status)}`}>
+              {statusLabel(request.status)}
+            </span>
+            <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
+              request.request_type === 'pickup' ? 'bg-violet-100 text-violet-800' : 'bg-slate-100 text-slate-700'
+            }`}>
+              {request.request_type === 'pickup' ? 'Pickup' : 'Complaint'}
+            </span>
+          </div>
           <p><span className="text-slate-500">CRM customer:</span>{' '}
             <strong>{request.crm_customer_display || request.matched_company_name || request.matched_customer_name || '—'}</strong>
             {request.matched_customer_id ? ` (ID ${request.matched_customer_id})` : ''}
@@ -272,6 +279,21 @@ function DetailDrawer({ request, onClose, onConvert, onReject, canAct }) {
           <p><span className="text-slate-500">Mobile:</span> {request.mobile_number}</p>
           <p><span className="text-slate-500">Company (form):</span> {request.company_name || '—'}</p>
           <p><span className="text-slate-500">Device:</span> {request.device_serial || '—'}</p>
+          {Array.isArray(request.extra?.devices) && request.extra.devices.length > 1 ? (
+            <p><span className="text-slate-500">Laptops:</span> {request.extra.devices.join(', ')}</p>
+          ) : null}
+          {request.extra?.pickup_address ? (
+            <p>
+              <span className="text-slate-500">Pickup:</span>{' '}
+              {[
+                request.extra.pickup_address.address,
+                request.extra.pickup_address.city,
+                request.extra.pickup_address.state,
+                request.extra.pickup_address.pincode,
+              ].filter(Boolean).join(', ')}
+              {request.extra.pickup_address.phone ? ` · POC ${request.extra.pickup_address.phone}` : ''}
+            </p>
+          ) : null}
           <p><span className="text-slate-500">Submitted:</span> {formatWhen(request.created_at)}</p>
           <div>
             <p className="text-slate-500 mb-1">Issue</p>
@@ -441,6 +463,7 @@ export default function SupportRequestsPage() {
                   <th className="px-3 py-2">CRM customer</th>
                   <th className="px-3 py-2">Submitted by</th>
                   <th className="px-3 py-2">Mobile</th>
+                  <th className="px-3 py-2">Type</th>
                   <th className="px-3 py-2">TTSPL</th>
                   <th className="px-3 py-2">Issue</th>
                   <th className="px-3 py-2">Created</th>
@@ -469,7 +492,19 @@ export default function SupportRequestsPage() {
                       ) : null}
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">{r.mobile_number}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{r.device_serial || '—'}</td>
+                    <td className="px-3 py-2">
+                      <span className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${
+                        r.request_type === 'pickup' ? 'bg-violet-100 text-violet-800' : 'bg-slate-100 text-slate-600'
+                      }`}>
+                        {r.request_type === 'pickup' ? 'Pickup' : 'Complaint'}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs">
+                      {r.device_serial || '—'}
+                      {Array.isArray(r.extra?.devices) && r.extra.devices.length > 1
+                        ? ` +${r.extra.devices.length - 1}`
+                        : ''}
+                    </td>
                     <td className="px-3 py-2 max-w-xs">
                       <p className="line-clamp-2 text-slate-700">{r.issue_description}</p>
                     </td>

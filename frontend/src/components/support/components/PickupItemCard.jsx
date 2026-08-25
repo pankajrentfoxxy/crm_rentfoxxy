@@ -6,6 +6,13 @@ import { useAuth } from '../../../context/AuthContext';
 import { isSupportLead, isSupportTechnician } from '../../../utils/supportAccess';
 import { podUrl as podUrlFor, compressImageFile, uploadAssetUrl, isPickupAssignmentEditable } from '../utils';
 import { formatDeliveryAddressLine, parseDeliveryAddress } from '../../../features/sales-pipeline/salesPipelineUtils';
+import { applyPincodeAutofill, sanitizePincode } from '../../../utils/pincodeLookup';
+import {
+  formatIndianMobileInput,
+  indianMobileError,
+  normalizeIndianMobile,
+} from '../../../utils/phoneValidation';
+import { INDIAN_STATES } from '../../../constants/indianStates';
 import PickupSetupForm from './PickupSetupForm';
 import AssignmentHistoryList from './AssignmentHistoryList';
 
@@ -22,6 +29,11 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
   const [busy, setBusy] = useState(false);
   const [changeAssigneeOpen, setChangeAssigneeOpen] = useState(false);
   const [changeBusy, setChangeBusy] = useState(false);
+  const [addrEditing, setAddrEditing] = useState(false);
+  const [addrSaving, setAddrSaving] = useState(false);
+  const [addrForm, setAddrForm] = useState({
+    name: '', phone: '', address: '', city: '', state: '', pincode: '',
+  });
 
   const run = async (fn) => {
     setBusy(true);
@@ -97,7 +109,61 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
   const whDone = !!item.warehouse_received_at;
   const addr = parseDeliveryAddress(ticket?.pickup_address);
   const addrLine = formatDeliveryAddressLine(ticket?.pickup_address);
+  const canEditAddress = lead && !readOnly;
   const canChangeAssignee = lead && isPickupAssignmentEditable(item);
+
+  const startEditAddress = () => {
+    setAddrForm({
+      name: addr?.name || ticket?.customer_name || '',
+      phone: formatIndianMobileInput(addr?.phone || ticket?.display_phone || ticket?.customer_phone || ''),
+      address: addr?.address || addr?.address_line_1 || addr?.line1 || '',
+      city: addr?.city || '',
+      state: addr?.state || '',
+      pincode: sanitizePincode(addr?.pincode || addr?.zip_code || ''),
+    });
+    setAddrEditing(true);
+  };
+
+  const saveAddress = async () => {
+    const phoneErr = indianMobileError(addrForm.phone, { required: true, label: 'Mobile number' });
+    if (!String(addrForm.name || '').trim()) {
+      toast.error('Contact name is required');
+      return;
+    }
+    if (phoneErr) {
+      toast.error(phoneErr);
+      return;
+    }
+    if (!String(addrForm.address || '').trim()) {
+      toast.error('Pickup address is required');
+      return;
+    }
+    const pin = sanitizePincode(addrForm.pincode);
+    if (pin && pin.length !== 6) {
+      toast.error('Pincode must be 6 digits');
+      return;
+    }
+    setAddrSaving(true);
+    try {
+      await api.patch(`/support/tickets/${ticket.id}/pickup-address`, {
+        pickup_address: {
+          name: addrForm.name.trim(),
+          phone: normalizeIndianMobile(addrForm.phone),
+          address: addrForm.address.trim(),
+          city: addrForm.city.trim(),
+          state: addrForm.state.trim(),
+          pincode: pin,
+        },
+      });
+      toast.success('Pickup address updated');
+      setAddrEditing(false);
+      onRefresh?.();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Failed to update address');
+    } finally {
+      setAddrSaving(false);
+    }
+  };
 
   const changeAssignee = async (form) => {
     setChangeBusy(true);
@@ -190,20 +256,129 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
       )}
 
       {/* Pickup address */}
-      {addr && (addrLine || addr.name || addr.phone) && (
+      {(canEditAddress || addrLine || addr?.name || addr?.phone) && (
         <div className="mx-4 mt-3 p-3 bg-gray-50 rounded-xl text-sm">
-          <p className="text-xs text-gray-400 font-medium uppercase tracking-wide mb-1">Pickup Address</p>
-          {addr.name && <p className="font-medium text-gray-800">{addr.name}</p>}
-          {addr.phone && <p className="text-gray-600">{addr.phone}</p>}
-          {addrLine && <p className="text-gray-600">{addrLine}</p>}
-          {addrLine && (
-            <a
-              href={`https://www.google.com/maps/search/${encodeURIComponent(addrLine)}`}
-              target="_blank" rel="noopener noreferrer"
-              className="text-xs text-blue-600 mt-1 inline-block"
-            >
-              🗺 Open in Maps
-            </a>
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <p className="text-xs text-gray-400 font-medium uppercase tracking-wide">Pickup Address</p>
+            {canEditAddress && !addrEditing ? (
+              <button
+                type="button"
+                onClick={startEditAddress}
+                className="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 hover:underline"
+              >
+                <PenLine className="w-3.5 h-3.5" /> Edit
+              </button>
+            ) : null}
+          </div>
+          {addrEditing ? (
+            <div className="space-y-2 pt-1">
+              <label className="block">
+                <span className="text-[11px] font-semibold text-gray-500">Name *</span>
+                <input
+                  className="mt-0.5 w-full border border-gray-200 rounded-lg px-2.5 py-2 text-sm"
+                  value={addrForm.name}
+                  onChange={(e) => setAddrForm((f) => ({ ...f, name: e.target.value }))}
+                />
+              </label>
+              <label className="block">
+                <span className="text-[11px] font-semibold text-gray-500">Mobile *</span>
+                <input
+                  className="mt-0.5 w-full border border-gray-200 rounded-lg px-2.5 py-2 text-sm"
+                  value={addrForm.phone}
+                  onChange={(e) => setAddrForm((f) => ({ ...f, phone: formatIndianMobileInput(e.target.value) }))}
+                  inputMode="numeric"
+                  maxLength={10}
+                  placeholder="10-digit mobile"
+                />
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                <label className="block">
+                  <span className="text-[11px] font-semibold text-gray-500">Pincode</span>
+                  <input
+                    className="mt-0.5 w-full border border-gray-200 rounded-lg px-2.5 py-2 text-sm"
+                    value={addrForm.pincode}
+                    onChange={async (e) => {
+                      const pin = sanitizePincode(e.target.value);
+                      setAddrForm((f) => ({ ...f, pincode: pin }));
+                      if (pin.length === 6) {
+                        await applyPincodeAutofill(pin, setAddrForm, {
+                          pinKey: 'pincode',
+                          cityKey: 'city',
+                          stateKey: 'state',
+                          fillAddressIfEmpty: false,
+                        });
+                      }
+                    }}
+                    inputMode="numeric"
+                    maxLength={6}
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-[11px] font-semibold text-gray-500">City</span>
+                  <input
+                    className="mt-0.5 w-full border border-gray-200 rounded-lg px-2.5 py-2 text-sm"
+                    value={addrForm.city}
+                    onChange={(e) => setAddrForm((f) => ({ ...f, city: e.target.value }))}
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-[11px] font-semibold text-gray-500">State</span>
+                  <select
+                    className="mt-0.5 w-full border border-gray-200 rounded-lg px-2.5 py-2 text-sm bg-white"
+                    value={addrForm.state}
+                    onChange={(e) => setAddrForm((f) => ({ ...f, state: e.target.value }))}
+                  >
+                    <option value="">Select</option>
+                    {INDIAN_STATES.map((state) => (
+                      <option key={state} value={state}>{state}</option>
+                    ))}
+                    {addrForm.state && !INDIAN_STATES.includes(addrForm.state) ? (
+                      <option value={addrForm.state}>{addrForm.state}</option>
+                    ) : null}
+                  </select>
+                </label>
+              </div>
+              <label className="block">
+                <span className="text-[11px] font-semibold text-gray-500">Address *</span>
+                <textarea
+                  className="mt-0.5 w-full border border-gray-200 rounded-lg px-2.5 py-2 text-sm min-h-[72px]"
+                  value={addrForm.address}
+                  onChange={(e) => setAddrForm((f) => ({ ...f, address: e.target.value }))}
+                />
+              </label>
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setAddrEditing(false)}
+                  className="flex-1 py-2 border border-gray-200 rounded-lg text-xs font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={addrSaving}
+                  onClick={saveAddress}
+                  className="flex-[2] py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold disabled:opacity-50"
+                >
+                  {addrSaving ? 'Saving…' : 'Save address'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              {addr?.name && <p className="font-medium text-gray-800">{addr.name}</p>}
+              {addr?.phone && <p className="text-gray-600">{addr.phone}</p>}
+              {addrLine && <p className="text-gray-600">{addrLine}</p>}
+              {addrLine && (
+                <a
+                  href={`https://www.google.com/maps/search/${encodeURIComponent(addrLine)}`}
+                  target="_blank" rel="noopener noreferrer"
+                  className="text-xs text-blue-600 mt-1 inline-block"
+                >
+                  🗺 Open in Maps
+                </a>
+              )}
+            </>
           )}
         </div>
       )}

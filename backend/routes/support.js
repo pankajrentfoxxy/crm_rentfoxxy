@@ -34,6 +34,7 @@ const {
     addWorkflowPhaseItems,
     assignTicketBulk,
     updateTicket,
+    updatePickupAddress,
     logVisit,
     markVisited,
     verifyTtspl,
@@ -156,6 +157,7 @@ router.post('/tickets/pickup-ticket', requireSupportLead, createPickupTicket);
 router.post('/tickets', createTicket);
 router.get('/tickets/:ticketId', getTicket);
 router.patch('/tickets/:ticketId', requireSupportLead, updateTicket);
+router.patch('/tickets/:ticketId/pickup-address', requireSupportLead, updatePickupAddress);
 router.post('/tickets/:ticketId/phases', requireSupportLead, addWorkflowPhaseItems);
 router.post('/tickets/:ticketId/assign-all', requireSupportLead, assignTicketBulk);
 router.post('/tickets/:ticketId/close', requireSupportTicketClose, closeTicket);

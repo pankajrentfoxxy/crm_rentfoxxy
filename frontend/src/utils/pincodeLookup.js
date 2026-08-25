@@ -50,6 +50,15 @@ async function lookupViaBackend(pin) {
   });
 }
 
+async function lookupViaPublicBackend(pin) {
+  const { data } = await api.get(`/support-public/pincode/${pin}`, { timeout: LOOKUP_TIMEOUT_MS });
+  if (!data?.success) return null;
+  return toResult(data.city, data.state, {
+    area: data.area || '',
+    address: data.address || '',
+  });
+}
+
 async function lookupViaPostalPincodeIn(pin) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), LOOKUP_TIMEOUT_MS);
@@ -93,7 +102,7 @@ export async function lookupPincode(pincode) {
   if (pin.length !== 6) return null;
   if (cache.has(pin)) return cache.get(pin);
 
-  const sources = [lookupViaBackend, lookupViaPostalPincodeIn, lookupViaZippopotam];
+  const sources = [lookupViaPublicBackend, lookupViaBackend, lookupViaPostalPincodeIn, lookupViaZippopotam];
   let result = null;
   for (const source of sources) {
     try {

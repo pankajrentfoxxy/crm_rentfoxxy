@@ -1,5 +1,7 @@
 const pool = require('../config/db');
 const { validateIndianMobile, normalizeIndianMobile } = require('../utils/phoneValidation');
+const { lookupPincode, sanitizePincode } = require('../services/pincodeLookupService');
+const { regenerateReturnDcPdfByRdc } = require('../services/returnDcPdfService');
 const {
   SUPPORT_TICKET_ELIGIBLE_STATUSES,
   checkSerialEligibleForSupportTicket,
@@ -115,14 +117,339 @@ async function findPendingQrRequestForTtspl(client, code) {
   return r.rows[0] || null;
 }
 
+function collectSerialCodes(body) {
+  const raw = [];
+  if (Array.isArray(body.device_serials)) raw.push(...body.device_serials);
+  if (Array.isArray(body.devices)) raw.push(...body.devices);
+  if (body.device_serial || body.ttspl_id) raw.push(body.device_serial || body.ttspl_id);
+  const seen = new Set();
+  const codes = [];
+  for (const item of raw) {
+    const code = String(item || '').trim().toUpperCase();
+    if (!code || seen.has(code)) continue;
+    seen.add(code);
+    codes.push(code);
+  }
+  return codes;
+}
+
+function describeDeployed(deployed, deviceSerial) {
+  if (!deployed) {
+    return {
+      ok: false,
+      status: 404,
+      code: 'ttspl_not_found',
+      message: `TTSPL ${deviceSerial} was not found in our system. Please check the ID and try again.`,
+    };
+  }
+  const st = String(deployed.inventory_status || '').toLowerCase();
+  if (!deployed.current_customer_id || !deployed.customer_id) {
+    return {
+      ok: false,
+      status: 400,
+      code: 'ttspl_not_in_customer_bucket',
+      message: `TTSPL ${deployed.ttspl_id || deviceSerial} is not assigned to any customer. Support requests can only be raised for laptops currently with a customer.`,
+    };
+  }
+  if (!SUPPORT_TICKET_ELIGIBLE_STATUSES.includes(st) || !deployed.delivered_at) {
+    return {
+      ok: false,
+      status: 400,
+      code: 'ttspl_not_in_customer_bucket',
+      message: `TTSPL ${deployed.ttspl_id || deviceSerial} is not in the customer bucket (status: ${st || 'unknown'}). It must be delivered to the customer before raising a support request.`,
+    };
+  }
+  return { ok: true };
+}
+
+function rejectDeployed(res, deployed, deviceSerial) {
+  const check = describeDeployed(deployed, deviceSerial);
+  if (check.ok) return null;
+  return res.status(check.status).json({
+    success: false,
+    message: check.message,
+    code: check.code,
+  });
+}
+
+async function rejectOpenOrPending(res, client, ttsplCode) {
+  const openTicket = await findOpenTicketForTtspl(client, ttsplCode);
+  if (openTicket) {
+    return res.status(409).json({
+      success: false,
+      message: `A support ticket (T-${openTicket.id}) is already open for TTSPL ${ttsplCode}. Please wait until it is closed before submitting a new request.`,
+      code: 'open_ticket_exists',
+      ticket_id: openTicket.id,
+    });
+  }
+  const pendingReq = await findPendingQrRequestForTtspl(client, ttsplCode);
+  if (pendingReq) {
+    return res.status(409).json({
+      success: false,
+      message: `A support request (#${pendingReq.id}) is already pending for TTSPL ${ttsplCode}. Our team will contact you shortly.`,
+      code: 'pending_request_exists',
+      request_id: pendingReq.id,
+    });
+  }
+  return null;
+}
+
+function parsePickupAddress(body, customerName, contactMobile) {
+  const src = body.pickup_address && typeof body.pickup_address === 'object' ? body.pickup_address : body;
+  const mobileIsPoc = body.mobile_is_poc !== false && body.mobile_is_poc !== 'false';
+  const pocRaw = mobileIsPoc ? contactMobile : (src.poc_mobile || src.phone || body.poc_mobile);
+  const pocError = validateIndianMobile(pocRaw, { required: true, label: 'POC mobile number' });
+  if (pocError) return { error: pocError };
+  const pincode = sanitizePincode(src.pincode || body.pincode);
+  const city = String(src.city || body.city || '').trim();
+  const state = String(src.state || body.state || '').trim();
+  const address = String(src.address || body.pickup_location || '').trim();
+  if (!address) return { error: 'Pickup address is required' };
+  if (pincode.length !== 6) return { error: 'Enter a valid 6-digit pincode' };
+  if (!city) return { error: 'City is required. Enter pincode to auto-fill city and state.' };
+  if (!state) return { error: 'State is required. Enter pincode to auto-fill city and state.' };
+  return {
+    value: {
+      name: String(src.name || customerName || '').trim(),
+      phone: normalizeIndianMobile(pocRaw),
+      address,
+      city,
+      state,
+      pincode,
+    },
+    mobileIsPoc,
+  };
+}
+
+async function createPublicPickup(req, res, client, ctx) {
+  const { customer_name, company_name, issue_description, mobile } = ctx;
+  const codes = collectSerialCodes(req.body || {});
+  if (!codes.length) {
+    return res.status(400).json({
+      success: false,
+      message: 'Add at least one TTSPL / laptop for pickup.',
+    });
+  }
+
+  const addrParsed = parsePickupAddress(req.body || {}, customer_name, mobile);
+  if (addrParsed.error) {
+    return res.status(400).json({ success: false, message: addrParsed.error });
+  }
+
+  const resolved = [];
+  for (const code of codes) {
+    const deployed = await resolveDeployedTtspl(client, code);
+    const bad = rejectDeployed(res, deployed, code);
+    if (bad) return bad;
+    const ttsplCode = deployed.ttspl_id || code;
+    const blocked = await rejectOpenOrPending(res, client, ttsplCode);
+    if (blocked) return blocked;
+    resolved.push({ ...deployed, ttspl_id: ttsplCode });
+  }
+
+  const customerId = resolved[0].customer_id;
+  const mismatch = resolved.find((row) => Number(row.customer_id) !== Number(customerId));
+  if (mismatch) {
+    return res.status(400).json({
+      success: false,
+      message: `All laptops must belong to the same customer. ${mismatch.ttspl_id} is with a different customer.`,
+      code: 'customer_mismatch',
+    });
+  }
+
+  const firstCode = resolved[0].ttspl_id;
+  const dup = await client.query(
+    `SELECT id, ticket_id FROM support_requests
+      WHERE mobile_number = $1
+        AND request_type = 'pickup'
+        AND UPPER(TRIM(COALESCE(device_serial, ''))) = UPPER(TRIM($2))
+        AND created_at > NOW() - INTERVAL '2 minutes'
+      LIMIT 1`,
+    [mobile, firstCode]
+  );
+  if (dup.rows.length) {
+    return res.status(200).json({
+      success: true,
+      request_type: 'pickup',
+      message: 'Your pickup request has been submitted. Our team will arrange collection.',
+      request_id: dup.rows[0].id,
+      ticket_id: dup.rows[0].ticket_id || undefined,
+      duplicate: true,
+    });
+  }
+
+  const machines = resolved.map((row) => ({
+    serial_number: row.serial_number,
+    unique_serial_number: row.ttspl_id,
+    ttspl_id: row.ttspl_id,
+  }));
+  const remarks = issue_description || 'Public pickup request';
+  const extra = {
+    devices: machines.map((m) => m.ttspl_id),
+    pickup_address: addrParsed.value,
+    mobile_is_poc: addrParsed.mobileIsPoc,
+  };
+
+  const { executePickupWithReturnDc } = require('./supportController');
+  await client.query('BEGIN');
+  try {
+    const ticketRes = await client.query(
+      `INSERT INTO support_tickets (
+          customer_id, customer_name, customer_phone, status, created_by, last_activity_at,
+          priority, top_level_remarks, ticket_phone_override, ticket_address,
+          ticket_category, ttspl_id, serial_number, complaint_type
+       ) VALUES ($1,$2,$3,'in_progress',NULL,CURRENT_TIMESTAMP,'normal',$4,$5,$6,
+                 'pickup',$7,$8,'pickup')
+       RETURNING *`,
+      [
+        customerId,
+        customer_name,
+        mobile,
+        remarks,
+        mobile,
+        formatTicketAddress(addrParsed.value),
+        firstCode,
+        resolved[0].serial_number || null,
+      ]
+    );
+    const ticket = ticketRes.rows[0];
+    const result = await executePickupWithReturnDc(client, ticket, ticket.id, null, {
+      pickup_type: 'return',
+      pickup_address: addrParsed.value,
+      machines,
+      remarks,
+    });
+
+    const crmCompany = resolved[0].company_name || resolved[0].customer_name || null;
+    const ins = await client.query(
+      `INSERT INTO support_requests (
+         customer_name, mobile_number, company_name, issue_description,
+         device_serial, source, status, matched_customer_id,
+         request_type, extra, ticket_id, converted_at
+       ) VALUES ($1,$2,$3,$4,$5,'qr','converted',$6,'pickup',$7::jsonb,$8,NOW())
+       RETURNING id, created_at`,
+      [
+        customer_name,
+        mobile,
+        company_name || crmCompany,
+        remarks,
+        firstCode,
+        customerId,
+        JSON.stringify(extra),
+        ticket.id,
+      ]
+    );
+    await client.query('COMMIT');
+
+    try { await regenerateReturnDcPdfByRdc(pool, result.rdc); } catch (pdfErr) {
+      console.warn('public pickup return DC pdf:', pdfErr.message);
+    }
+
+    return res.status(201).json({
+      success: true,
+      request_type: 'pickup',
+      message: `Pickup created for ${machines.length} laptop(s). Our team will arrange collection.`,
+      request_id: ins.rows[0].id,
+      ticket_id: ticket.id,
+      return_dc_number: result.rdc,
+      unit_count: machines.length,
+      created_at: ins.rows[0].created_at,
+      customer: {
+        customer_id: customerId,
+        name: resolved[0].customer_name,
+        company_name: resolved[0].company_name,
+      },
+      ttspl_ids: machines.map((m) => m.ttspl_id),
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  }
+}
+
+exports.lookupPublicTtspl = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const code = String(req.params.code || req.query.ttspl || '').trim();
+    if (!code) {
+      return res.status(400).json({ success: false, message: 'TTSPL / device ID is required' });
+    }
+    const expectedCustomer = Number(req.query.customer_id);
+    const deployed = await resolveDeployedTtspl(client, code);
+    const check = describeDeployed(deployed, code);
+    if (!check.ok) {
+      return res.status(check.status).json({
+        success: false,
+        message: check.message,
+        code: check.code,
+      });
+    }
+    const ttsplCode = deployed.ttspl_id || code;
+    if (Number.isFinite(expectedCustomer) && Number(deployed.customer_id) !== expectedCustomer) {
+      return res.status(400).json({
+        success: false,
+        message: `TTSPL ${ttsplCode} belongs to a different customer than the laptops already added.`,
+        code: 'customer_mismatch',
+      });
+    }
+    const openTicket = await findOpenTicketForTtspl(client, ttsplCode);
+    if (openTicket) {
+      return res.status(409).json({
+        success: false,
+        message: `A support ticket (T-${openTicket.id}) is already open for TTSPL ${ttsplCode}.`,
+        code: 'open_ticket_exists',
+        ticket_id: openTicket.id,
+      });
+    }
+    return res.json({
+      success: true,
+      ttspl_id: ttsplCode,
+      customer_id: deployed.customer_id,
+      customer_name: deployed.company_name || deployed.customer_name || null,
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message || 'Could not validate TTSPL' });
+  } finally {
+    client.release();
+  }
+};
+
+exports.lookupPublicPincode = async (req, res) => {
+  try {
+    const pin = sanitizePincode(req.params.pin);
+    if (pin.length !== 6) {
+      return res.status(400).json({ success: false, message: 'Pincode must be 6 digits' });
+    }
+    const info = await lookupPincode(pin);
+    if (!info?.city && !info?.state) {
+      return res.json({ success: false, pincode: pin, message: 'No location found for this pincode' });
+    }
+    return res.json({
+      success: true,
+      pincode: pin,
+      city: info.city || '',
+      state: info.state || '',
+      area: info.area || '',
+      address: info.address || '',
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message || 'Pincode lookup failed' });
+  }
+};
+
 /** Public — no auth. QR / universal link intake. */
 exports.createPublicRequest = async (req, res) => {
   const client = await pool.connect();
   try {
     const body = req.body || {};
+    const requestType = String(body.request_type || body.ticket_type || 'complaint').trim().toLowerCase();
+    if (!['complaint', 'pickup'].includes(requestType)) {
+      return res.status(400).json({ success: false, message: 'Ticket type must be complaint or pickup' });
+    }
+
     const customer_name = String(body.customer_name || '').trim();
     const company_name = String(body.company_name || '').trim() || null;
-    const issue_description = String(body.issue_description || '').trim();
+    const issue_description = String(body.issue_description || body.remarks || '').trim();
     const device_serial = String(body.device_serial || body.ttspl_id || '').trim();
     const mobileRaw = body.mobile_number || body.mobile;
     const mobileError = validateIndianMobile(mobileRaw, { required: true, label: 'Mobile number' });
@@ -134,6 +461,16 @@ exports.createPublicRequest = async (req, res) => {
     if (!customer_name) {
       return res.status(400).json({ success: false, message: 'Customer name is required' });
     }
+
+    if (requestType === 'pickup') {
+      return await createPublicPickup(req, res, client, {
+        customer_name,
+        company_name,
+        issue_description,
+        mobile,
+      });
+    }
+
     if (!device_serial) {
       return res.status(400).json({
         success: false,
@@ -145,50 +482,12 @@ exports.createPublicRequest = async (req, res) => {
     }
 
     const deployed = await resolveDeployedTtspl(client, device_serial);
-    if (!deployed) {
-      return res.status(404).json({
-        success: false,
-        message: `TTSPL ${device_serial} was not found in our system. Please check the ID and try again.`,
-        code: 'ttspl_not_found',
-      });
-    }
-
-    const st = String(deployed.inventory_status || '').toLowerCase();
-    if (!deployed.current_customer_id || !deployed.customer_id) {
-      return res.status(400).json({
-        success: false,
-        message: `TTSPL ${deployed.ttspl_id || device_serial} is not assigned to any customer. Support requests can only be raised for laptops currently with a customer.`,
-        code: 'ttspl_not_in_customer_bucket',
-      });
-    }
-    if (!SUPPORT_TICKET_ELIGIBLE_STATUSES.includes(st) || !deployed.delivered_at) {
-      return res.status(400).json({
-        success: false,
-        message: `TTSPL ${deployed.ttspl_id || device_serial} is not in the customer bucket (status: ${st || 'unknown'}). It must be delivered to the customer before raising a support request.`,
-        code: 'ttspl_not_in_customer_bucket',
-      });
-    }
+    const bad = rejectDeployed(res, deployed, device_serial);
+    if (bad) return bad;
 
     const ttsplCode = deployed.ttspl_id || device_serial;
-    const openTicket = await findOpenTicketForTtspl(client, ttsplCode);
-    if (openTicket) {
-      return res.status(409).json({
-        success: false,
-        message: `A support ticket (T-${openTicket.id}) is already open for TTSPL ${ttsplCode}. Please wait until it is closed before submitting a new request.`,
-        code: 'open_ticket_exists',
-        ticket_id: openTicket.id,
-      });
-    }
-
-    const pendingReq = await findPendingQrRequestForTtspl(client, ttsplCode);
-    if (pendingReq) {
-      return res.status(409).json({
-        success: false,
-        message: `A support request (#${pendingReq.id}) is already pending for TTSPL ${ttsplCode}. Our team will contact you shortly.`,
-        code: 'pending_request_exists',
-        request_id: pendingReq.id,
-      });
-    }
+    const blocked = await rejectOpenOrPending(res, client, ttsplCode);
+    if (blocked) return blocked;
 
     // Light rate limit: same mobile + same TTSPL within 2 minutes
     const dup = await client.query(
@@ -202,6 +501,7 @@ exports.createPublicRequest = async (req, res) => {
     if (dup.rows.length) {
       return res.status(200).json({
         success: true,
+        request_type: 'complaint',
         message: 'Your request has been submitted. Our team will contact you shortly.',
         request_id: dup.rows[0].id,
         duplicate: true,
@@ -214,8 +514,8 @@ exports.createPublicRequest = async (req, res) => {
     const ins = await client.query(
       `INSERT INTO support_requests (
          customer_name, mobile_number, company_name, issue_description,
-         device_serial, source, status, matched_customer_id
-       ) VALUES ($1,$2,$3,$4,$5,'qr','pending',$6)
+         device_serial, source, status, matched_customer_id, request_type
+       ) VALUES ($1,$2,$3,$4,$5,'qr','pending',$6,'complaint')
        RETURNING id, created_at`,
       [
         customer_name,
@@ -229,6 +529,7 @@ exports.createPublicRequest = async (req, res) => {
 
     res.status(201).json({
       success: true,
+      request_type: 'complaint',
       message: 'Your request has been submitted. Our team will contact you shortly.',
       request_id: ins.rows[0].id,
       created_at: ins.rows[0].created_at,
@@ -241,7 +542,7 @@ exports.createPublicRequest = async (req, res) => {
     });
   } catch (err) {
     console.error('createPublicRequest:', err);
-    res.status(500).json({ success: false, message: 'Could not submit request. Please try again.' });
+    res.status(500).json({ success: false, message: err.message || 'Could not submit request. Please try again.' });
   } finally {
     client.release();
   }
