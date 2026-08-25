@@ -67,12 +67,21 @@ export default function CreateTicketPage() {
       toast.error('Please describe the issue in at least 20 characters');
       return;
     }
+    if (isReturn && !ttsplId) {
+      toast.error('Select the laptop you want to return');
+      return;
+    }
     if (isReturn && (!pickupAddr.address || !pickupAddr.city || !pickupAddr.pincode)) {
       toast.error('Pickup address needs at least address, city and pincode');
       return;
     }
-    if (isReturn && pickupAddr.phone?.trim()) {
-      const phoneErr = indianMobileError(pickupAddr.phone, { label: 'Pickup phone' });
+    if (isReturn) {
+      // Whoever collects the laptop needs someone to call, so this is required
+      // for a return even though it is optional elsewhere.
+      const phoneErr = indianMobileError(pickupAddr.phone, {
+        required: true,
+        label: 'Pickup phone',
+      });
       if (phoneErr) {
         toast.error(phoneErr);
         return;
@@ -94,8 +103,14 @@ export default function CreateTicketPage() {
           : undefined,
         photos: [],
       });
-      toast.success(`Ticket ${data.ticket_number} created`);
-      navigate(`/support/tickets/${data.ticket_id}`);
+      // A return is queued for review instead of becoming a ticket straight away.
+      if (data.request_id) {
+        toast.success(`Return request ${data.request_reference} submitted for review`);
+        navigate('/support/tickets');
+      } else {
+        toast.success(`Ticket ${data.ticket_number} created`);
+        navigate(`/support/tickets/${data.ticket_id}`);
+      }
     } catch (err) {
       toast.error(err.response?.data?.message || 'Could not submit the ticket');
     } finally {
@@ -157,7 +172,7 @@ export default function CreateTicketPage() {
         </label>
 
         <label className="block text-sm">
-          <span className="text-slate-700">Which Laptop</span>
+          <span className="text-slate-700">Which Laptop{isReturn ? ' *' : ''}</span>
           <select
             value={ttsplId}
             onChange={(e) => setTtsplId(e.target.value)}
@@ -180,7 +195,9 @@ export default function CreateTicketPage() {
         {isReturn && (
           <div className="border rounded-lg p-3 bg-amber-50/50 space-y-2">
             <p className="text-sm font-semibold text-amber-800">Pickup Address</p>
-            <p className="text-xs text-slate-500">Our team will collect the laptop from this address.</p>
+            <p className="text-xs text-slate-500">
+              Our team will review the request and collect the laptop from this address.
+            </p>
             <div className="grid grid-cols-2 gap-2">
               <input
                 placeholder="Contact name"
@@ -189,7 +206,7 @@ export default function CreateTicketPage() {
                 className={INPUT}
               />
               <input
-                placeholder="Phone"
+                placeholder="Phone *"
                 value={pickupAddr.phone}
                 onChange={(e) => setPickupAddr((a) => ({ ...a, phone: formatIndianMobileInput(e.target.value) }))}
                 className={INPUT}

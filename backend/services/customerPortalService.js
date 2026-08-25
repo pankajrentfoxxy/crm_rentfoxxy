@@ -577,6 +577,35 @@ async function listCustomerTickets(customerId, filters = {}) {
   };
 }
 
+/**
+ * Submissions still waiting on the Support team. These are not tickets yet, so
+ * without this the customer who raised one would see nothing at all until it
+ * gets converted.
+ */
+async function listCustomerPendingRequests(customerId) {
+  const { rows } = await pool.query(
+    `SELECT id, request_type, device_serial, issue_description, status, created_at, extra
+       FROM support_requests
+      WHERE matched_customer_id = $1
+        AND status IN ('pending', 'reviewed')
+      ORDER BY created_at DESC
+      LIMIT 50`,
+    [customerId]
+  );
+
+  return rows.map((r) => ({
+    request_id: r.id,
+    reference: `SR-${r.id}`,
+    request_type: r.request_type || 'complaint',
+    ttspl_ids: Array.isArray(r.extra?.devices) && r.extra.devices.length
+      ? r.extra.devices
+      : [r.device_serial].filter(Boolean),
+    subject: firstLine(r.issue_description) || 'Support request',
+    stage_label: r.status === 'reviewed' ? 'Under review' : 'Submitted',
+    created_at: r.created_at,
+  }));
+}
+
 async function getCustomerTicket(customerId, ticketId) {
   const { rows } = await pool.query(
     `SELECT st.id, st.status, st.priority, st.ticket_category, st.top_level_remarks,
@@ -865,6 +894,7 @@ module.exports = {
   listCustomerOrders,
   getCustomerOrder,
   listCustomerTickets,
+  listCustomerPendingRequests,
   getCustomerTicket,
   findCustomerAsset,
   listCustomerDeliveries,

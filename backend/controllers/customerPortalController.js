@@ -6,6 +6,7 @@ const pool = require('../config/db');
 const { DEPLOYED_WITH_CUSTOMER_STATUSES } = require('../services/customerDeployedAssets');
 const { validateIndianMobile, normalizeIndianMobile } = require('../utils/phoneValidation');
 const portalSvc = require('../services/customerPortalService');
+const supportRequestCtrl = require('./supportRequestController');
 
 /**
  * Document numbers arrive percent-encoded (SO%2F26-27%2F1023) and are sometimes
@@ -481,6 +482,78 @@ exports.raiseTicket = async (req, res) => {
       };
     }
 
+    // A return is a pickup, and pickups are reviewed before anything is
+    // committed to the warehouse. Park it in the same queue the public form
+    // uses; Support converts it into the ticket and Return DC.
+    if (category === 'pickup') {
+      if (!ttspl_id) {
+        return res.status(400).json({
+          success: false,
+          message: 'Select the laptop you want to return',
+        });
+      }
+      const addr = pickup_address && typeof pickup_address === 'object' ? pickup_address : null;
+      if (!addr?.address || !addr?.city || !addr?.pincode) {
+        return res.status(400).json({
+          success: false,
+          message: 'Pickup address needs at least address, city and pincode',
+        });
+      }
+      const pocPhone = normalizeIndianMobile(addr.phone || cust.phone || '');
+      const pocError = validateIndianMobile(pocPhone, {
+        required: true,
+        label: 'Pickup contact number',
+      });
+      if (pocError) {
+        return res.status(400).json({ success: false, message: pocError });
+      }
+
+      const conflict = await supportRequestCtrl.findConflictingSupportWork(client, ttspl_id);
+      if (conflict) {
+        const { status, ...body } = conflict;
+        return res.status(status).json({ success: false, ...body });
+      }
+
+      const extra = {
+        devices: [ttspl_id],
+        machines: [{
+          serial_number: assetSerial,
+          unique_serial_number: ttspl_id,
+          ttspl_id,
+        }],
+        pickup_address: { ...addr, phone: pocPhone },
+        mobile_is_poc: false,
+        portal_customer_id: customerId,
+      };
+
+      const reqRes = await client.query(
+        `INSERT INTO support_requests (
+           customer_name, mobile_number, company_name, issue_description,
+           device_serial, source, status, matched_customer_id, request_type, extra
+         ) VALUES ($1,$2,$3,$4,$5,'portal','pending',$6,'pickup',$7::jsonb)
+         RETURNING id, created_at`,
+        [
+          cust.company_name || cust.name,
+          pocPhone,
+          cust.company_name || null,
+          `${subject}\n\n${description}`,
+          ttspl_id,
+          customerId,
+          JSON.stringify(extra),
+        ]
+      );
+      const request = reqRes.rows[0];
+
+      return res.status(201).json({
+        success: true,
+        request_id: request.id,
+        request_reference: `SR-${request.id}`,
+        request_type: 'pickup',
+        created_at: request.created_at,
+        message: 'Your return request has been submitted. Our team will review it and arrange pickup.',
+      });
+    }
+
     await client.query('BEGIN');
     const ticketRes = await client.query(
       `INSERT INTO support_tickets (
@@ -536,6 +609,17 @@ exports.raiseTicket = async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   } finally {
     client.release();
+  }
+};
+
+// GET /support-requests — submissions still awaiting Support review.
+exports.listPendingRequests = async (req, res) => {
+  try {
+    const requests = await portalSvc.listCustomerPendingRequests(req.customer.customer_id);
+    res.json({ success: true, requests });
+  } catch (err) {
+    console.error('listPendingRequests:', err);
+    res.status(500).json({ success: false, message: err.message });
   }
 };
 

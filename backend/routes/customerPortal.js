@@ -22,6 +22,7 @@ router.get(/^\/deliveries\/(.+)$/, ctrl.getDelivery);
 router.post('/tickets', blockImpersonatedWrites, ctrl.raiseTicket);
 router.get('/tickets', ctrl.listTickets);
 router.get('/tickets/:ticketId', ctrl.getTicket);
+router.get('/support-requests', ctrl.listPendingRequests);
 router.post('/change-password', blockImpersonatedWrites, ctrl.changePassword);
 
 module.exports = router;

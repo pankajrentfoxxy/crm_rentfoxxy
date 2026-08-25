@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus } from 'lucide-react';
+import { Plus, Clock } from 'lucide-react';
+import api from '../utils/api';
 import DataTable from '../components/DataTable';
 import FilterBar from '../components/FilterBar';
 import Pagination from '../components/Pagination';
@@ -58,6 +59,15 @@ export default function SupportTicketsPage() {
   const { rows, pagination, loading, error, filters, setFilters, setPage } = useListQuery('/tickets', {
     resultKey: 'tickets',
   });
+
+  // Requests waiting on our team are not tickets yet, so they have no row in the
+  // table below and would otherwise look like they had vanished.
+  const [pending, setPending] = useState([]);
+  useEffect(() => {
+    api.get('/support-requests')
+      .then(({ data }) => setPending(data.requests || []))
+      .catch(() => setPending([]));
+  }, []);
 
   const columns = [
     {
@@ -125,6 +135,39 @@ export default function SupportTicketsPage() {
           </Link>
         )}
       </div>
+
+      {pending.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+          <p className="flex items-center gap-1.5 text-sm font-semibold text-amber-900">
+            <Clock className="w-4 h-4" />
+            Awaiting review ({pending.length})
+          </p>
+          <p className="text-xs text-amber-800 mt-1">
+            Our team is reviewing these requests. They will appear as tickets below once accepted.
+          </p>
+          <ul className="mt-3 space-y-2">
+            {pending.map((p) => (
+              <li
+                key={p.request_id}
+                className="bg-white border border-amber-200 rounded-lg px-3 py-2 text-sm flex flex-wrap items-center gap-x-3 gap-y-1"
+              >
+                <span className="font-mono text-xs">{p.reference}</span>
+                <span className="capitalize text-slate-600">
+                  {p.request_type === 'pickup' ? 'Return / pickup' : p.request_type}
+                </span>
+                {p.ttspl_ids.length > 0 && (
+                  <span className="font-mono text-xs text-slate-500">{p.ttspl_ids.join(', ')}</span>
+                )}
+                <span className="text-slate-700 truncate max-w-[280px]" title={p.subject}>{p.subject}</span>
+                <span className="ml-auto flex items-center gap-2 text-xs text-slate-500">
+                  {fmtDate(p.created_at)}
+                  <StatusBadge status="pending" label={p.stage_label} />
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <FilterBar
         value={filters}

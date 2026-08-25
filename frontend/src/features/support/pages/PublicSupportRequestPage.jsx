@@ -246,17 +246,11 @@ export default function PublicSupportRequestPage() {
             <div className="text-center py-6 space-y-3">
               <CheckCircle2 className="w-12 h-12 text-emerald-600 mx-auto" />
               <h2 className="text-lg font-semibold text-slate-900">
-                {done.request_type === 'pickup' ? 'Pickup created' : 'Request submitted'}
+                {done.request_type === 'pickup' ? 'Pickup request submitted' : 'Request submitted'}
               </h2>
               <p className="text-sm text-slate-600">
                 {done.message || 'Your request has been submitted. Our team will contact you shortly.'}
               </p>
-              {done.ticket_id ? (
-                <p className="text-xs text-slate-500">Ticket T-{done.ticket_id}</p>
-              ) : null}
-              {done.return_dc_number ? (
-                <p className="text-xs text-slate-500">Return DC {done.return_dc_number}</p>
-              ) : null}
               {done.request_id ? (
                 <p className="text-xs text-slate-400">Reference #{done.request_id}</p>
               ) : null}

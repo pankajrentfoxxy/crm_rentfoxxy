@@ -109,7 +109,20 @@ async function findPendingQrRequestForTtspl(client, code) {
     `SELECT id, status, created_at
        FROM support_requests
       WHERE status IN ('pending', 'reviewed')
-        AND UPPER(TRIM(COALESCE(device_serial, ''))) = UPPER(TRIM($1))
+        AND (
+          UPPER(TRIM(COALESCE(device_serial, ''))) = UPPER(TRIM($1))
+          -- A multi-laptop pickup keeps every TTSPL in extra.devices and only the
+          -- first in device_serial, so the rest would go unprotected without this.
+          OR EXISTS (
+            SELECT 1
+              FROM jsonb_array_elements_text(
+                CASE WHEN jsonb_typeof(extra -> 'devices') = 'array'
+                     THEN extra -> 'devices'
+                     ELSE '[]'::jsonb END
+              ) AS d(ttspl)
+             WHERE UPPER(TRIM(d.ttspl)) = UPPER(TRIM($1))
+          )
+        )
       ORDER BY id DESC
       LIMIT 1`,
     [code]
@@ -172,26 +185,39 @@ function rejectDeployed(res, deployed, deviceSerial) {
   });
 }
 
-async function rejectOpenOrPending(res, client, ttsplCode) {
+/**
+ * Anything that should stop a new support request for this laptop: a ticket
+ * that is still open, or an earlier request still sitting in the queue.
+ * Shared with the customer portal so both intakes apply the same rule.
+ */
+async function findConflictingSupportWork(client, ttsplCode) {
   const openTicket = await findOpenTicketForTtspl(client, ttsplCode);
   if (openTicket) {
-    return res.status(409).json({
-      success: false,
+    return {
+      status: 409,
       message: `A support ticket (T-${openTicket.id}) is already open for TTSPL ${ttsplCode}. Please wait until it is closed before submitting a new request.`,
       code: 'open_ticket_exists',
       ticket_id: openTicket.id,
-    });
+    };
   }
   const pendingReq = await findPendingQrRequestForTtspl(client, ttsplCode);
   if (pendingReq) {
-    return res.status(409).json({
-      success: false,
+    return {
+      status: 409,
       message: `A support request (#${pendingReq.id}) is already pending for TTSPL ${ttsplCode}. Our team will contact you shortly.`,
       code: 'pending_request_exists',
       request_id: pendingReq.id,
-    });
+    };
   }
   return null;
+}
+exports.findConflictingSupportWork = findConflictingSupportWork;
+
+async function rejectOpenOrPending(res, client, ttsplCode) {
+  const conflict = await findConflictingSupportWork(client, ttsplCode);
+  if (!conflict) return null;
+  const { status, ...body } = conflict;
+  return res.status(status).json({ success: false, ...body });
 }
 
 function parsePickupAddress(body, customerName, contactMobile) {
@@ -221,6 +247,14 @@ function parsePickupAddress(body, customerName, contactMobile) {
   };
 }
 
+/**
+ * Public pickup intake.
+ *
+ * Mirrors the complaint path: validate everything up front, then park the
+ * submission in support_requests as 'pending' for the Support team to review.
+ * The ticket and Return DC are created later by convertToTicket, so a public
+ * form submission can never put a pickup straight into the warehouse flow.
+ */
 async function createPublicPickup(req, res, client, ctx) {
   const { customer_name, company_name, issue_description, mobile } = ctx;
   const codes = collectSerialCodes(req.body || {});
@@ -259,7 +293,7 @@ async function createPublicPickup(req, res, client, ctx) {
 
   const firstCode = resolved[0].ttspl_id;
   const dup = await client.query(
-    `SELECT id, ticket_id FROM support_requests
+    `SELECT id FROM support_requests
       WHERE mobile_number = $1
         AND request_type = 'pickup'
         AND UPPER(TRIM(COALESCE(device_serial, ''))) = UPPER(TRIM($2))
@@ -271,100 +305,58 @@ async function createPublicPickup(req, res, client, ctx) {
     return res.status(200).json({
       success: true,
       request_type: 'pickup',
-      message: 'Your pickup request has been submitted. Our team will arrange collection.',
+      message: 'Your pickup request has been submitted. Our team will review it and arrange collection.',
       request_id: dup.rows[0].id,
-      ticket_id: dup.rows[0].ticket_id || undefined,
       duplicate: true,
     });
   }
 
-  const machines = resolved.map((row) => ({
-    serial_number: row.serial_number,
-    unique_serial_number: row.ttspl_id,
-    ttspl_id: row.ttspl_id,
-  }));
   const remarks = issue_description || 'Public pickup request';
   const extra = {
-    devices: machines.map((m) => m.ttspl_id),
+    devices: resolved.map((row) => row.ttspl_id),
+    // Serials are captured now so convert can rebuild the pickup without
+    // re-deriving them, while still re-checking ownership at that point.
+    machines: resolved.map((row) => ({
+      serial_number: row.serial_number,
+      unique_serial_number: row.ttspl_id,
+      ttspl_id: row.ttspl_id,
+    })),
     pickup_address: addrParsed.value,
     mobile_is_poc: addrParsed.mobileIsPoc,
   };
+  const crmCompany = resolved[0].company_name || resolved[0].customer_name || null;
 
-  const { executePickupWithReturnDc } = require('./supportController');
-  await client.query('BEGIN');
-  try {
-    const ticketRes = await client.query(
-      `INSERT INTO support_tickets (
-          customer_id, customer_name, customer_phone, status, created_by, last_activity_at,
-          priority, top_level_remarks, ticket_phone_override, ticket_address,
-          ticket_category, ttspl_id, serial_number, complaint_type
-       ) VALUES ($1,$2,$3,'in_progress',NULL,CURRENT_TIMESTAMP,'normal',$4,$5,$6,
-                 'pickup',$7,$8,'pickup')
-       RETURNING *`,
-      [
-        customerId,
-        customer_name,
-        mobile,
-        remarks,
-        mobile,
-        formatTicketAddress(addrParsed.value),
-        firstCode,
-        resolved[0].serial_number || null,
-      ]
-    );
-    const ticket = ticketRes.rows[0];
-    const result = await executePickupWithReturnDc(client, ticket, ticket.id, null, {
-      pickup_type: 'return',
-      pickup_address: addrParsed.value,
-      machines,
+  const ins = await client.query(
+    `INSERT INTO support_requests (
+       customer_name, mobile_number, company_name, issue_description,
+       device_serial, source, status, matched_customer_id, request_type, extra
+     ) VALUES ($1,$2,$3,$4,$5,'qr','pending',$6,'pickup',$7::jsonb)
+     RETURNING id, created_at`,
+    [
+      customer_name,
+      mobile,
+      company_name || crmCompany,
       remarks,
-    });
+      firstCode,
+      customerId,
+      JSON.stringify(extra),
+    ]
+  );
 
-    const crmCompany = resolved[0].company_name || resolved[0].customer_name || null;
-    const ins = await client.query(
-      `INSERT INTO support_requests (
-         customer_name, mobile_number, company_name, issue_description,
-         device_serial, source, status, matched_customer_id,
-         request_type, extra, ticket_id, converted_at
-       ) VALUES ($1,$2,$3,$4,$5,'qr','converted',$6,'pickup',$7::jsonb,$8,NOW())
-       RETURNING id, created_at`,
-      [
-        customer_name,
-        mobile,
-        company_name || crmCompany,
-        remarks,
-        firstCode,
-        customerId,
-        JSON.stringify(extra),
-        ticket.id,
-      ]
-    );
-    await client.query('COMMIT');
-
-    try { await regenerateReturnDcPdfByRdc(pool, result.rdc); } catch (pdfErr) {
-      console.warn('public pickup return DC pdf:', pdfErr.message);
-    }
-
-    return res.status(201).json({
-      success: true,
-      request_type: 'pickup',
-      message: `Pickup created for ${machines.length} laptop(s). Our team will arrange collection.`,
-      request_id: ins.rows[0].id,
-      ticket_id: ticket.id,
-      return_dc_number: result.rdc,
-      unit_count: machines.length,
-      created_at: ins.rows[0].created_at,
-      customer: {
-        customer_id: customerId,
-        name: resolved[0].customer_name,
-        company_name: resolved[0].company_name,
-      },
-      ttspl_ids: machines.map((m) => m.ttspl_id),
-    });
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  }
+  return res.status(201).json({
+    success: true,
+    request_type: 'pickup',
+    message: `Pickup request submitted for ${resolved.length} laptop(s). Our team will review it and arrange collection.`,
+    request_id: ins.rows[0].id,
+    unit_count: resolved.length,
+    created_at: ins.rows[0].created_at,
+    customer: {
+      customer_id: customerId,
+      name: resolved[0].customer_name,
+      company_name: resolved[0].company_name,
+    },
+    ttspl_ids: resolved.map((row) => row.ttspl_id),
+  });
 }
 
 exports.lookupPublicTtspl = async (req, res) => {
@@ -712,9 +704,107 @@ exports.updateRequestStatus = async (req, res) => {
 };
 
 /**
- * Convert QR request → support ticket (complaint).
- * Uses the same eligibility + open-ticket rules as CRM Support createTicket
- * so converted tickets land cleanly in the normal Support flow.
+ * Pickup convert: rebuild the parked pickup and run the same Return DC flow the
+ * CRM uses, so the ticket lands in the normal pickup workflow.
+ *
+ * Everything is re-validated here rather than trusted from the request row —
+ * a request can sit in the queue for days, during which a laptop may have been
+ * returned, reassigned to another customer, or pulled into another ticket.
+ */
+async function convertPickupRequest(client, req, row, priority) {
+  const extra = row.extra && typeof row.extra === 'object' ? row.extra : {};
+  const codes = (Array.isArray(extra.devices) && extra.devices.length
+    ? extra.devices
+    : [row.device_serial])
+    .map((code) => String(code || '').trim())
+    .filter(Boolean);
+
+  if (!codes.length) {
+    throw Object.assign(new Error('This pickup request has no laptop attached.'), { status: 400 });
+  }
+
+  const pickupAddress = extra.pickup_address && typeof extra.pickup_address === 'object'
+    ? extra.pickup_address
+    : null;
+  if (!pickupAddress?.address) {
+    throw Object.assign(new Error('This pickup request has no pickup address.'), { status: 400 });
+  }
+
+  const resolved = [];
+  for (const code of codes) {
+    const deployed = await resolveDeployedTtspl(client, code);
+    const check = describeDeployed(deployed, code);
+    if (!check.ok) {
+      throw Object.assign(new Error(check.message), { status: check.status, code: check.code });
+    }
+    const ttsplCode = deployed.ttspl_id || code;
+    const openTicket = await findOpenTicketForTtspl(client, ttsplCode);
+    if (openTicket) {
+      throw Object.assign(
+        new Error(`TTSPL ${ttsplCode} already has open ticket T-${openTicket.id}. Close it before creating this pickup.`),
+        { status: 409, code: 'open_ticket_exists' }
+      );
+    }
+    resolved.push({ ...deployed, ttspl_id: ttsplCode });
+  }
+
+  const customerId = Number(resolved[0].customer_id);
+  const mismatch = resolved.find((item) => Number(item.customer_id) !== customerId);
+  if (mismatch) {
+    throw Object.assign(
+      new Error(`All laptops must belong to the same customer. ${mismatch.ttspl_id} is now with a different customer.`),
+      { status: 400, code: 'customer_mismatch' }
+    );
+  }
+
+  const machines = resolved.map((item) => ({
+    serial_number: item.serial_number,
+    unique_serial_number: item.ttspl_id,
+    ttspl_id: item.ttspl_id,
+  }));
+  const remarks = String(row.issue_description || '').trim() || 'Public pickup request';
+
+  const ticketRes = await client.query(
+    `INSERT INTO support_tickets (
+        customer_id, customer_name, customer_phone, status, created_by, last_activity_at,
+        priority, top_level_remarks, ticket_phone_override, ticket_address,
+        ticket_category, ttspl_id, serial_number, complaint_type
+     ) VALUES ($1,$2,$3,'in_progress',$4,CURRENT_TIMESTAMP,$5,$6,$7,$8,
+               'pickup',$9,$10,'pickup')
+     RETURNING *`,
+    [
+      customerId,
+      resolved[0].company_name || resolved[0].customer_name || row.customer_name,
+      row.mobile_number,
+      req.user?.user_id || null,
+      priority,
+      remarks,
+      row.mobile_number,
+      formatTicketAddress(pickupAddress),
+      resolved[0].ttspl_id,
+      resolved[0].serial_number || null,
+    ]
+  );
+  const ticket = ticketRes.rows[0];
+
+  const { executePickupWithReturnDc } = require('./supportController');
+  const result = await executePickupWithReturnDc(client, ticket, ticket.id, req.user?.user_id || null, {
+    pickup_type: 'return',
+    pickup_address: pickupAddress,
+    machines,
+    remarks,
+  });
+
+  return { ticketId: ticket.id, customerId, rdc: result.rdc, unitCount: machines.length };
+}
+
+/**
+ * Convert QR request → support ticket.
+ *
+ * Complaints use the same eligibility + open-ticket rules as CRM Support
+ * createTicket; pickups additionally generate the Return DC. The branch is
+ * driven by the stored request_type, not the caller, so a pickup can only ever
+ * become a pickup ticket.
  * Body: { customer_id, priority?, ticket_category? }
  */
 exports.convertToTicket = async (req, res) => {
@@ -752,6 +842,38 @@ exports.convertToTicket = async (req, res) => {
     if (row.status === 'dismissed') {
       await client.query('ROLLBACK');
       return res.status(400).json({ success: false, message: 'Rejected requests cannot be converted to a ticket' });
+    }
+
+    if (row.request_type === 'pickup') {
+      const out = await convertPickupRequest(client, req, row, priority);
+      await client.query(
+        `UPDATE support_requests
+            SET status = 'converted',
+                ticket_id = $2,
+                matched_customer_id = $3,
+                converted_by = $4,
+                converted_at = NOW(),
+                updated_at = NOW()
+          WHERE id = $1`,
+        [id, out.ticketId, out.customerId, req.user?.user_id || null]
+      );
+      await client.query('COMMIT');
+
+      // PDF generation opens its own connection, so it has to follow the commit.
+      try {
+        await regenerateReturnDcPdfByRdc(pool, out.rdc);
+      } catch (pdfErr) {
+        console.warn('pickup convert return DC pdf:', pdfErr.message);
+      }
+
+      return res.status(201).json({
+        success: true,
+        ticket_id: out.ticketId,
+        ticket_number: `T-${out.ticketId}`,
+        return_dc_number: out.rdc,
+        unit_count: out.unitCount,
+        message: `Pickup ticket T-${out.ticketId} created with Return DC ${out.rdc}`,
+      });
     }
 
     const ttspl = String(row.device_serial || '').trim();

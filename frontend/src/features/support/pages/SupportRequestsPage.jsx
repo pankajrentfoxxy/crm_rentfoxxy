@@ -106,6 +106,10 @@ function RejectModal({ request, onClose, onRejected }) {
 }
 
 function ConvertModal({ request, onClose, onConverted }) {
+  const isPickup = request.request_type === 'pickup';
+  // Every laptop on a pickup must belong to one customer, and that customer is
+  // already resolved from the TTSPL bucket, so there is nothing to choose.
+  const customerLocked = isPickup && Boolean(request.matched_customer_id);
   const [customerId, setCustomerId] = useState(
     request.matched_customer_id ? String(request.matched_customer_id) : ''
   );
@@ -114,6 +118,11 @@ function ConvertModal({ request, onClose, onConverted }) {
   const [busy, setBusy] = useState(false);
   const [search, setSearch] = useState('');
   const [searching, setSearching] = useState(false);
+
+  const pickupDevices = Array.isArray(request.extra?.devices) && request.extra.devices.length
+    ? request.extra.devices
+    : [request.device_serial].filter(Boolean);
+  const pickupAddress = request.extra?.pickup_address || null;
 
   useEffect(() => {
     let cancelled = false;
@@ -159,7 +168,7 @@ function ConvertModal({ request, onClose, onConverted }) {
       const { data } = await api.post(`/support/requests/${request.id}/convert`, {
         customer_id: Number(customerId),
         priority,
-        ticket_category: 'complaint',
+        ticket_category: isPickup ? 'pickup' : 'complaint',
       });
       toast.success(data.message || `Ticket T-${data.ticket_id} created`);
       onConverted?.(data);
@@ -177,8 +186,10 @@ function ConvertModal({ request, onClose, onConverted }) {
       <div className="relative bg-white rounded-xl shadow-xl w-full max-w-lg p-5 max-h-[90vh] overflow-y-auto">
         <div className="flex items-start justify-between gap-2 mb-3">
           <div>
-            <h2 className="text-lg font-semibold">Create ticket</h2>
-            <p className="text-xs text-slate-500">From request #{request.id}</p>
+            <h2 className="text-lg font-semibold">{isPickup ? 'Create pickup ticket' : 'Create ticket'}</h2>
+            <p className="text-xs text-slate-500">
+              From {isPickup ? 'pickup ' : ''}request #{request.id}
+            </p>
           </div>
           <button type="button" onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X className="w-5 h-5" /></button>
         </div>
@@ -187,9 +198,31 @@ function ConvertModal({ request, onClose, onConverted }) {
           <p><span className="text-slate-500">Name:</span> {request.customer_name}</p>
           <p><span className="text-slate-500">Mobile:</span> {request.mobile_number}</p>
           {request.company_name ? <p><span className="text-slate-500">Company:</span> {request.company_name}</p> : null}
-          {request.device_serial ? <p><span className="text-slate-500">Device:</span> <span className="font-mono">{request.device_serial}</span></p> : null}
+          {isPickup ? (
+            <p>
+              <span className="text-slate-500">Laptops ({pickupDevices.length}):</span>{' '}
+              <span className="font-mono">{pickupDevices.join(', ') || '—'}</span>
+            </p>
+          ) : request.device_serial ? (
+            <p><span className="text-slate-500">Device:</span> <span className="font-mono">{request.device_serial}</span></p>
+          ) : null}
+          {pickupAddress ? (
+            <p>
+              <span className="text-slate-500">Pickup address:</span>{' '}
+              {[pickupAddress.address, pickupAddress.city, pickupAddress.state, pickupAddress.pincode]
+                .filter(Boolean).join(', ')}
+              {pickupAddress.phone ? ` · POC ${pickupAddress.phone}` : ''}
+            </p>
+          ) : null}
           <p className="text-slate-700 whitespace-pre-wrap pt-1">{request.issue_description}</p>
         </div>
+
+        {isPickup ? (
+          <p className="rounded-lg border border-violet-100 bg-violet-50 px-3 py-2 text-xs text-violet-900 mb-4">
+            Creating this ticket also generates the Return DC for {pickupDevices.length} laptop(s) and starts the
+            normal pickup workflow.
+          </p>
+        ) : null}
 
         <label className="block text-sm mb-3">
           <span className="text-xs font-semibold text-slate-600">Priority</span>
@@ -202,7 +235,16 @@ function ConvertModal({ request, onClose, onConverted }) {
 
         <div className="mb-3">
           <p className="text-xs font-semibold text-slate-600 mb-1.5">Link to customer *</p>
-          {matches.length ? (
+          {customerLocked ? (
+            <div className="rounded-lg border bg-slate-50 px-3 py-2 text-sm">
+              <strong>
+                {request.crm_customer_display || request.matched_company_name || request.matched_customer_name}
+              </strong>
+              <span className="block text-xs text-slate-500">
+                ID {request.matched_customer_id} · owner of the laptops on this pickup
+              </span>
+            </div>
+          ) : matches.length ? (
             <div className="space-y-1.5 mb-2 max-h-40 overflow-y-auto">
               {matches.map((c) => (
                 <label key={c.customer_id} className="flex items-start gap-2 rounded-lg border px-3 py-2 text-sm cursor-pointer hover:bg-slate-50">
@@ -223,26 +265,28 @@ function ConvertModal({ request, onClose, onConverted }) {
           ) : (
             <p className="text-xs text-amber-700 mb-2">No auto-match by mobile. Search and select a customer.</p>
           )}
-          <div className="flex gap-2">
-            <input
-              className="flex-1 border rounded-lg px-3 py-2 text-sm"
-              placeholder="Search customer name / phone…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); runSearch(); } }}
-            />
-            <button type="button" onClick={runSearch} disabled={searching} className="px-3 py-2 border rounded-lg text-sm inline-flex items-center gap-1">
-              {searching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-              Search
-            </button>
-          </div>
+          {customerLocked ? null : (
+            <div className="flex gap-2">
+              <input
+                className="flex-1 border rounded-lg px-3 py-2 text-sm"
+                placeholder="Search customer name / phone…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); runSearch(); } }}
+              />
+              <button type="button" onClick={runSearch} disabled={searching} className="px-3 py-2 border rounded-lg text-sm inline-flex items-center gap-1">
+                {searching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                Search
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" onClick={onClose} className="px-4 py-2 text-sm border rounded-lg">Cancel</button>
           <button type="button" disabled={busy || !customerId} onClick={submit} className="px-4 py-2 text-sm bg-[#534AB7] text-white rounded-lg disabled:opacity-50 inline-flex items-center gap-2">
             {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Ticket className="w-4 h-4" />}
-            Create ticket
+            {isPickup ? 'Create pickup ticket' : 'Create ticket'}
           </button>
         </div>
       </div>
