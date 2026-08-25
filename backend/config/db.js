@@ -27,6 +27,9 @@ const pool = new Pool({
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000,
+  // Abort clients that BEGIN and then stop sending queries. One of those can
+  // hold row locks, fill the pool, and make login time out.
+  options: '-c idle_in_transaction_session_timeout=30000',
 });
 
 pool.on('error', (err) => {

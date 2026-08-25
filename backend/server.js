@@ -216,19 +216,32 @@ server.listen(PORT, () => {
   const { ensureBillingEngineSchema } = require('./controllers/customerBillingController');
   const { ensureLeadCrmSchema } = require('./controllers/leadController');
   const { startBillingScheduler } = require('./services/billingSchedulerService');
-  ensureSupportSchema().catch((err) => console.error('Support schema ensure failed:', err.message));
-  ensureUserSchema().catch((err) => console.error('User schema ensure failed:', err.message));
-  ensureVendorManagementSchema().catch((err) => console.error('Vendor management schema failed:', err.message));
-  ensureVendorBillingSchema().catch((err) => console.error('Vendor billing schema failed:', err.message));
-  ensureSalesManagementSchema().catch((err) => console.error('Sales management schema failed:', err.message));
-  ensureCustomerManagementSchema().catch((err) => console.error('Customer management schema failed:', err.message));
-  ensureBillingEngineSchema().catch((err) => console.error('Billing engine schema failed:', err.message));
-  ensureLeadCrmSchema().catch((err) => console.error('Lead CRM schema ensure failed:', err.message));
   const { ensureAssetConfigurationSchema } = require('./controllers/assetConfigurationController');
-  ensureAssetConfigurationSchema().catch((err) => console.error('Asset configuration schema ensure failed:', err.message));
   const { ensureVendorRepairSchema } = require('./services/vendorRepairDcService');
-  ensureVendorRepairSchema().catch((err) => console.error('Vendor repair schema ensure failed:', err.message));
   const { initCache } = require('./utils/cacheService');
+  // Run schema checks one after another. Firing them all at once takes most of
+  // the pool and their ALTER TABLEs queue behind any open transaction.
+  (async () => {
+    const jobs = [
+      ['Support', ensureSupportSchema],
+      ['User', ensureUserSchema],
+      ['Vendor management', ensureVendorManagementSchema],
+      ['Vendor billing', ensureVendorBillingSchema],
+      ['Sales management', ensureSalesManagementSchema],
+      ['Customer management', ensureCustomerManagementSchema],
+      ['Billing engine', ensureBillingEngineSchema],
+      ['Lead CRM', ensureLeadCrmSchema],
+      ['Asset configuration', ensureAssetConfigurationSchema],
+      ['Vendor repair', ensureVendorRepairSchema],
+    ];
+    for (const [name, fn] of jobs) {
+      try {
+        await fn();
+      } catch (err) {
+        console.error(`${name} schema ensure failed:`, err.message);
+      }
+    }
+  })();
   initCache().catch((err) => console.error('Cache init failed:', err.message));
   startBillingScheduler();
 });
