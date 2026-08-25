@@ -16,15 +16,21 @@ const HANDOFF_PATH = '/dashboard';
 
 export function consumeImpersonationHandoff() {
   if (typeof window === 'undefined') return false;
-  if (window.location.pathname !== HANDOFF_PATH) return false;
   if (!window.location.hash) return false;
 
   const params = new URLSearchParams(window.location.hash.replace(/^#/, ''));
   const token = params.get('token');
 
+  // Accept the token on any path (dashboard, login, or a host rewrite) so a
+  // hand-off from crm.rentfoxxy.com still works on customer.rentfoxxy.com.
+  const nextPath =
+    window.location.pathname && window.location.pathname !== '/login'
+      ? window.location.pathname
+      : HANDOFF_PATH;
+
   // Strip the fragment either way, so a stale or malformed link does not leave a
   // dead token sitting in the address bar.
-  window.history.replaceState(null, '', HANDOFF_PATH);
+  window.history.replaceState(null, '', nextPath);
   if (!token) return false;
 
   localStorage.setItem('cp_token', token);

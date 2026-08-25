@@ -9,12 +9,13 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const pool = require('../config/db');
 const { ensureCredentialForEmail } = require('../services/authCredentialsService');
+const { getCustomerPortalUrl } = require('../utils/publicUrls');
 
 function portalUrls() {
   return {
     crm: process.env.FRONTEND_URL?.split(',')[0]?.trim() || 'http://localhost:3000',
     vendor: process.env.VENDOR_PORTAL_URL || 'http://localhost:3001',
-    customer: process.env.CUSTOMER_PORTAL_URL || 'http://localhost:3002',
+    customer: getCustomerPortalUrl(),
   };
 }
 

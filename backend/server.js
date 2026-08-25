@@ -26,6 +26,10 @@ const allowedOrigins = [
   'https://187.77.187.213',
   'http://crm.rentfoxxy.com',
   'https://crm.rentfoxxy.com',
+  'http://customer.rentfoxxy.com',
+  'https://customer.rentfoxxy.com',
+  'http://vendor.rentfoxxy.com',
+  'https://vendor.rentfoxxy.com',
   'http://staging.rentfoxxy.com',
   'https://staging.rentfoxxy.com'
 ];

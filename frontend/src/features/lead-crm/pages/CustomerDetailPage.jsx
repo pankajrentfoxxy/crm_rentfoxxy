@@ -124,7 +124,19 @@ function KycBadge({ status }) {
   const s = status || 'pending';
   return <span className={`px-2 py-1 rounded-full text-xs font-semibold ${map[s] || map.pending}`}>KYC: {s}</span>;
 }
-const PORTAL_URL = process.env.REACT_APP_CUSTOMER_PORTAL_URL || 'http://localhost:3002';
+const PRODUCTION_PORTAL_URL = 'https://customer.rentfoxxy.com';
+
+function resolveCustomerPortalUrl(fromApi) {
+  const configured = process.env.REACT_APP_CUSTOMER_PORTAL_URL || '';
+  const raw = String(fromApi || configured || '').replace(/\/+$/, '');
+  const isLocal = !raw || /localhost|127\.0\.0\.1/.test(raw);
+  const onRentfoxxyHost =
+    typeof window !== 'undefined' && /\.rentfoxxy\.com$/i.test(window.location.hostname);
+  if (isLocal && onRentfoxxyHost) return PRODUCTION_PORTAL_URL;
+  return raw || 'http://localhost:3002';
+}
+
+const PORTAL_URL = resolveCustomerPortalUrl();
 
 function customerField(customer, key) {
   if (!customer) return '';
@@ -361,7 +373,7 @@ export default function CustomerDetailPage() {
     try {
       const { data } = await loginAsCustomerPortal(id);
       if (!data?.token) throw new Error(data?.message || 'Could not start portal session');
-      const base = String(data.portal_url || PORTAL_URL).replace(/\/+$/, '');
+      const base = resolveCustomerPortalUrl(data.portal_url);
       // Token goes in the fragment so it stays out of server logs and Referer headers.
       const url = `${base}/dashboard#token=${encodeURIComponent(data.token)}`;
       if (tab) {

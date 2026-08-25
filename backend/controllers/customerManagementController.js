@@ -4,6 +4,7 @@ const bcrypt = require('bcryptjs');
 const pool = require('../config/db');
 const { sendCustomerPortalWelcome } = require('../services/emailQueueService');
 const { createImpersonationSession } = require('../services/customerPortalImpersonation');
+const { getCustomerPortalUrl } = require('../utils/publicUrls');
 const {
   DEPLOYED_WITH_CUSTOMER_STATUSES,
   displayDeployedStatus,
@@ -2677,7 +2678,7 @@ exports.enableCustomerPortal = async (req, res) => {
       await sendCustomerPortalWelcome({
         customerEmail: row.email,
         customerName: row.company_name || row.name,
-        portalUrl: process.env.CUSTOMER_PORTAL_URL || 'http://localhost:3002',
+        portalUrl: getCustomerPortalUrl(),
         tempPassword: null,
       });
       return res.json({ success: true, enabled: true, email_sent: true });
@@ -2724,7 +2725,7 @@ exports.enableCustomerPortal = async (req, res) => {
       await sendCustomerPortalWelcome({
         customerEmail: row.email,
         customerName: row.company_name || row.name,
-        portalUrl: process.env.CUSTOMER_PORTAL_URL || 'http://localhost:3002',
+        portalUrl: getCustomerPortalUrl(),
         tempPassword: newPassword,
       });
     }
@@ -2793,7 +2794,7 @@ exports.loginAsCustomerPortal = async (req, res) => {
       expires_at: expiresAt,
       ttl_minutes: ttlMinutes,
       read_only: true,
-      portal_url: process.env.CUSTOMER_PORTAL_URL || 'http://localhost:3002',
+      portal_url: getCustomerPortalUrl(),
       portal_enabled: row.portal_enabled === true,
       customer: {
         customer_id: row.customer_id,
