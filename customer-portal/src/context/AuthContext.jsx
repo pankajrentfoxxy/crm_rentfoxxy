@@ -47,6 +47,9 @@ export function AuthProvider({ children }) {
       customer,
       loading,
       isAuthenticated: !!customer && !!localStorage.getItem('cp_token'),
+      // Super-admin previews are read-only; the server rejects writes on these
+      // sessions, so the UI hides the actions rather than offering dead buttons.
+      readOnly: Boolean(customer?.impersonated),
       async login(email, password) {
         const { data } = await axios.post(
           `${getApiUrl()}/auth/login`,

@@ -1,10 +1,23 @@
 import axios from 'axios';
 
+/**
+ * Local dev: Cursor forwards 127.0.0.1:5001 to a different backend, while nodemon
+ * binds 0.0.0.0:5001. Hitting 127.0.0.1 (or `localhost`, which resolves to it)
+ * reaches the wrong server, which rejects every portal session as invalid. Use
+ * 127.0.0.2 to reach the local backend, matching the CRM frontend.
+ */
+function localDevApiHost() {
+  if (typeof window === 'undefined') return '127.0.0.2';
+  const pageHost = window.location.hostname;
+  if (pageHost.startsWith('192.168.')) return pageHost;
+  return '127.0.0.2';
+}
+
 export function getApiUrl() {
   if (process.env.REACT_APP_API_URL) return process.env.REACT_APP_API_URL;
   const host = window.location.hostname;
-  if (host === 'localhost' || host.startsWith('192.168.')) {
-    return `http://${host}:5001/api`;
+  if (host === 'localhost' || host === '127.0.0.1' || host.startsWith('192.168.')) {
+    return `http://${localDevApiHost()}:5001/api`;
   }
   if (typeof window !== 'undefined' && window.location?.origin) {
     return `${window.location.origin.replace(/\/$/, '')}/api`;

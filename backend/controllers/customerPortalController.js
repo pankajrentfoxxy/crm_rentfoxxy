@@ -5,6 +5,37 @@ const path = require('path');
 const pool = require('../config/db');
 const { DEPLOYED_WITH_CUSTOMER_STATUSES } = require('../services/customerDeployedAssets');
 const { validateIndianMobile, normalizeIndianMobile } = require('../utils/phoneValidation');
+const portalSvc = require('../services/customerPortalService');
+
+/**
+ * Document numbers arrive percent-encoded (SO%2F26-27%2F1023) and are sometimes
+ * double-encoded by proxies, so decode until stable.
+ */
+function decodeDocNumber(raw) {
+  let s = String(raw ?? '').trim();
+  for (let i = 0; i < 3; i += 1) {
+    let decoded;
+    try {
+      decoded = decodeURIComponent(s);
+    } catch {
+      break;
+    }
+    if (decoded === s) break;
+    s = decoded;
+  }
+  return s;
+}
+
+/** Query params shared by the filtered list endpoints. */
+function listFilters(query = {}) {
+  return {
+    page: query.page,
+    limit: query.limit,
+    search: (query.search || '').trim(),
+    date_from: query.date_from || '',
+    date_to: query.date_to || '',
+  };
+}
 
 const PORTAL_ITEM_TYPE_MAP = {
   'Replacement Request': 'replacement',
@@ -118,19 +149,57 @@ exports.me = async (req, res) => {
     if (!result.rows.length) {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
-    res.json({ success: true, ...result.rows[0] });
+    res.json({
+      success: true,
+      ...result.rows[0],
+      // Lets the portal show an "admin preview" banner and hide write actions
+      // that the server would reject anyway.
+      impersonated: Boolean(req.portalImpersonatedBy),
+      read_only: Boolean(req.portalImpersonatedBy),
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
+// GET /laptops?lifecycle=active|returned&search=&date_from=&date_to=&page=&limit=
 exports.listLaptops = async (req, res) => {
+  const customerId = req.customer.customer_id;
   try {
-    const customerId = req.customer.customer_id;
-    let rows = [];
+    const { laptops, pagination } = await portalSvc.listCustomerLaptops(customerId, {
+      ...listFilters(req.query),
+      lifecycle: req.query.lifecycle || 'active',
+    });
+    return res.json({
+      success: true,
+      pagination,
+      laptops: laptops.map((row) => ({
+        ttspl_id: row.ttspl_id || null,
+        serial_number: row.serial_number || null,
+        brand: row.brand || null,
+        model: row.model_name || null,
+        config: row.config,
+        processor: row.processor || null,
+        generation: row.generation || null,
+        ram: row.ram || null,
+        storage: row.storage || null,
+        dispatch_date: row.dispatch_date,
+        delivered_at: row.delivered_at || null,
+        returned_at: row.returned_at || null,
+        monthly_rate: parseFloat(row.rent_monthly_rate || 0),
+        dc_number: row.dc_number || null,
+        status: row.status || 'active',
+        lifecycle: row.lifecycle || 'active',
+      })),
+    });
+  } catch (err) {
+    // Older databases can miss columns the shared asset query relies on; fall
+    // back to the portal's own narrower query rather than failing the page.
+    console.warn('customerPortal listLaptops (shared query):', err.message);
+  }
 
-    // Authoritative source: assets currently held by this customer per the
-    // inventory state machine (customer_inventory is deprecated).
+  try {
+    let rows = [];
     try {
       const held = await pool.query(
         `SELECT COALESCE(vsn.inventory_asset_code, vsn.extra->>'ttspl_id') AS ttspl_id,
@@ -204,34 +273,47 @@ exports.listLaptops = async (req, res) => {
   }
 };
 
+// GET /orders?search=&date_from=&date_to=&order_type=&order_status=&delivery_status=&page=&limit=
 exports.listOrders = async (req, res) => {
   try {
-    const customerId = req.customer.customer_id;
-    const result = await pool.query(
-      `SELECT sales_order_number,
-              MIN(created_at) AS order_date,
-              MAX(quotation_type) AS quotation_type,
-              COUNT(*)::int AS line_count,
-              COALESCE(SUM(rate * quantity), 0) AS total_value,
-              MAX(status) AS status
-       FROM sales_order_lines
-       WHERE customer_id = $1
-       GROUP BY sales_order_number
-       ORDER BY MIN(created_at) DESC`,
-      [customerId]
-    );
-    res.json({
-      success: true,
-      orders: result.rows.map((r) => ({
-        sales_order_number: r.sales_order_number,
-        date: r.order_date,
-        type: r.quotation_type,
-        laptops: r.line_count,
-        total_value: parseFloat(r.total_value || 0),
-        status: r.status,
-      })),
+    const result = await portalSvc.listCustomerOrders(req.customer.customer_id, {
+      ...listFilters(req.query),
+      order_type: req.query.order_type || '',
+      order_status: req.query.order_status || '',
+      delivery_status: req.query.delivery_status || '',
+      entity_scope: req.query.entity_scope || '',
     });
+    res.json({ success: true, ...result });
   } catch (err) {
+    console.error('customerPortal listOrders:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// GET /orders/:soNumber — 404s for any order that is not this customer's.
+exports.getOrder = async (req, res) => {
+  try {
+    const order = await portalSvc.getCustomerOrder(
+      req.customer.customer_id,
+      decodeDocNumber(req.params[0] ?? req.params.soNumber)
+    );
+    if (!order) {
+      return res.status(404).json({ success: false, message: 'Order not found' });
+    }
+    res.json({ success: true, order });
+  } catch (err) {
+    console.error('customerPortal getOrder:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// GET /dashboard — the KPI counts behind the dashboard cards.
+exports.getDashboard = async (req, res) => {
+  try {
+    const kpis = await portalSvc.getCustomerDashboard(req.customer.customer_id);
+    res.json({ success: true, kpis });
+  } catch (err) {
+    console.error('customerPortal getDashboard:', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -317,19 +399,37 @@ exports.listCreditNotes = async (req, res) => {
   }
 };
 
+// GET /deliveries?search=&status=&date_from=&date_to=&page=&limit=
 exports.listDeliveries = async (req, res) => {
   try {
-    const result = await pool.query(
-      `SELECT DISTINCT ON (dc_number)
-         dc_number, sales_order_number AS so_number, created_at AS dispatch_date,
-         dispatch_mode, status, delivered_at, awb_number, courier_name, estimated_delivery
-       FROM delivery_challan_lines
-       WHERE customer_id = $1
-       ORDER BY dc_number, created_at DESC`,
-      [req.customer.customer_id]
+    const { deliveries, pagination } = await portalSvc.listCustomerDeliveries(
+      req.customer.customer_id,
+      { ...listFilters(req.query), status: req.query.status || '' }
     );
-    res.json({ success: true, deliveries: result.rows });
+    res.json({
+      success: true,
+      pagination,
+      deliveries: deliveries.map((d) => ({ ...d, so_number: d.sales_order_number })),
+    });
   } catch (err) {
+    console.error('customerPortal listDeliveries:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// GET /deliveries/:dcNumber — challan tracking for this customer's own DC.
+exports.getDelivery = async (req, res) => {
+  try {
+    const delivery = await portalSvc.getCustomerDelivery(
+      req.customer.customer_id,
+      decodeDocNumber(req.params[0] ?? req.params.dcNumber)
+    );
+    if (!delivery) {
+      return res.status(404).json({ success: false, message: 'Delivery challan not found' });
+    }
+    res.json({ success: true, delivery });
+  } catch (err) {
+    console.error('customerPortal getDelivery:', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -357,28 +457,28 @@ exports.raiseTicket = async (req, res) => {
 
     let dcNumber = null;
     let specs = {};
+    let assetSerial = null;
     if (ttspl_id) {
-      const dcRes = await client.query(
-        `SELECT dc_number FROM delivery_challan_lines dcl
-         LEFT JOIN vendor_serial_numbers vsn ON vsn.deleted_at IS NULL
-           AND (vsn.inventory_asset_code = $2 OR vsn.serial_number = $2)
-         WHERE dcl.customer_id = $1
-         LIMIT 1`,
-        [customerId, ttspl_id]
-      );
-      dcNumber = dcRes.rows[0]?.dc_number || null;
-
-      // Pull specs so support (and the eventual return QC ticket) has device details.
-      const sRes = await client.query(
-        `SELECT extra FROM vendor_serial_numbers
-         WHERE deleted_at IS NULL
-           AND (inventory_asset_code = $1 OR serial_number = $1 OR extra->>'ttspl_id' = $1)
-         LIMIT 1`,
-        [ttspl_id]
-      );
-      const ex = sRes.rows[0]?.extra || {};
-      specs = { brand: ex.brand || null, model: ex.model || ex.model_name || null,
-                ram: ex.ram || null, storage: ex.storage || null, generation: ex.generation || null };
+      // The device must currently be deployed with this customer, otherwise a
+      // portal user could raise a ticket against somebody else's laptop and read
+      // its specs back out of the response.
+      const asset = await portalSvc.findCustomerAsset(customerId, ttspl_id);
+      if (!asset) {
+        return res.status(400).json({
+          success: false,
+          message: 'That laptop is not registered against your account',
+        });
+      }
+      dcNumber = asset.dc_number || null;
+      assetSerial = asset.serial_number || null;
+      const ex = asset.extra || {};
+      specs = {
+        brand: asset.brand || ex.brand || null,
+        model: asset.model_name || ex.model || ex.model_name || null,
+        ram: asset.ram || ex.ram || null,
+        storage: asset.storage || ex.storage || null,
+        generation: asset.generation || ex.generation || null,
+      };
     }
 
     await client.query('BEGIN');
@@ -406,12 +506,13 @@ exports.raiseTicket = async (req, res) => {
 
     await client.query(
       `INSERT INTO support_ticket_items (
-         ticket_id, serial_number, unique_serial_number, item_type,
+         ticket_id, serial_number, unique_serial_number, ttspl_id, item_type,
          issue_category_label, remarks, status, otp_code,
          brand, model, ram, storage, generation
-       ) VALUES ($1,$2,$3,$4,$5,$6,'open',$7,$8,$9,$10,$11,$12)`,
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,'open',$8,$9,$10,$11,$12,$13)`,
       [
         ticketId,
+        assetSerial || ttspl_id || null,
         ttspl_id || null,
         ttspl_id || null,
         category,
@@ -438,43 +539,47 @@ exports.raiseTicket = async (req, res) => {
   }
 };
 
+// GET /tickets?search=&ttspl=&serial=&ticket_type=&status=&stage=&date_from=&date_to=&page=&limit=
 exports.listTickets = async (req, res) => {
   try {
-    const customerId = req.customer.customer_id;
-    let result;
-    try {
-      result = await pool.query(
-        `SELECT id AS ticket_id,
-                SPLIT_PART(COALESCE(top_level_remarks, ''), E'\n', 1) AS subject,
-                ticket_category AS type,
-                status,
-                created_at,
-                updated_at,
-                ttspl_id
-         FROM support_tickets
-         WHERE portal_customer_id = $1
-            OR (customer_id = $1 AND COALESCE(customer_portal_ticket, FALSE) = TRUE)
-         ORDER BY created_at DESC`,
-        [customerId]
-      );
-    } catch (colErr) {
-      if (!String(colErr.message || '').includes('does not exist')) throw colErr;
-      result = await pool.query(
-        `SELECT id AS ticket_id,
-                SPLIT_PART(COALESCE(top_level_remarks, ''), E'\n', 1) AS subject,
-                ticket_category AS type,
-                status,
-                created_at,
-                updated_at
-         FROM support_tickets
-         WHERE customer_id = $1
-         ORDER BY created_at DESC`,
-        [customerId]
-      );
-    }
-    res.json({ success: true, tickets: result.rows });
+    const { tickets, pagination } = await portalSvc.listCustomerTickets(
+      req.customer.customer_id,
+      {
+        ...listFilters(req.query),
+        ttspl: (req.query.ttspl || '').trim(),
+        serial: (req.query.serial || '').trim(),
+        ticket_type: req.query.ticket_type || '',
+        status: req.query.status || '',
+        stage: req.query.stage || '',
+      }
+    );
+    res.json({
+      success: true,
+      pagination,
+      // `type` is kept alongside `ticket_type` for the older portal ticket list.
+      tickets: tickets.map((t) => ({ ...t, type: t.ticket_type })),
+      stages: portalSvc.CUSTOMER_STAGE_LABELS,
+    });
   } catch (err) {
     console.error('customerPortal listTickets:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// GET /tickets/:ticketId — customer-facing progress only.
+exports.getTicket = async (req, res) => {
+  try {
+    const ticketId = parseInt(req.params.ticketId, 10);
+    if (!Number.isInteger(ticketId)) {
+      return res.status(400).json({ success: false, message: 'Invalid ticket id' });
+    }
+    const ticket = await portalSvc.getCustomerTicket(req.customer.customer_id, ticketId);
+    if (!ticket) {
+      return res.status(404).json({ success: false, message: 'Ticket not found' });
+    }
+    res.json({ success: true, ticket });
+  } catch (err) {
+    console.error('customerPortal getTicket:', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };

@@ -62,6 +62,8 @@ export const deleteCustomerAddress = (id, addressId) => api.delete(`/customer-ma
 export const setDefaultCustomerAddress = (id, addressId) => api.patch(`/customer-management/customers/${id}/addresses/${addressId}/default`);
 
 export const enableCustomerPortal = (id, data) => api.patch(`/customer-management/customers/${id}/portal-access`, data);
+/** Super admin only: mints a short-lived read-only customer portal session. */
+export const loginAsCustomerPortal = (id) => api.post(`/customer-management/customers/${id}/portal-login-as`);
 
 export const getCustomerDocuments = (customerId) => api.get(`/customer-documents/${customerId}`);
 export const uploadCustomerDocument = (customerId, formData) =>

@@ -3,6 +3,7 @@ const path = require('path');
 const bcrypt = require('bcryptjs');
 const pool = require('../config/db');
 const { sendCustomerPortalWelcome } = require('../services/emailQueueService');
+const { createImpersonationSession } = require('../services/customerPortalImpersonation');
 const {
   DEPLOYED_WITH_CUSTOMER_STATUSES,
   displayDeployedStatus,
@@ -1727,6 +1728,10 @@ async function queryCustomerActiveAssets(customerId, { search = '', from = '', t
   return { rows: rows.map(mapActiveAssetRow), total };
 }
 
+// Exposed so the customer portal serves the same deployed-asset rows as this
+// screen instead of maintaining a second copy of the query.
+exports.queryCustomerActiveAssets = queryCustomerActiveAssets;
+
 async function queryCustomerReturnedAssets(customerId, { search = '', from = '', to = '', limit, offset } = {}) {
   const params = [customerId];
   const searchSql = buildReturnedSearchSql(search, params);
@@ -1746,6 +1751,8 @@ async function queryCustomerReturnedAssets(customerId, { search = '', from = '',
   const { rows } = await pool.query(listSql, listParams);
   return { rows: rows.map(mapReturnedAssetRow), total };
 }
+
+exports.queryCustomerReturnedAssets = queryCustomerReturnedAssets;
 
 async function serialInCustomerReturnedHistory(client, customerId, serialId) {
   const { rows } = await client.query(
@@ -2729,6 +2736,74 @@ exports.enableCustomerPortal = async (req, res) => {
     });
   } catch (error) {
     console.error('enableCustomerPortal:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * POST /customers/:customerId/portal-login-as
+ *
+ * Mints a short-lived, read-only customer portal session for a super admin so
+ * they can see the portal exactly as the customer does. Works even when portal
+ * access is disabled, which is the main reason to use it — verifying what the
+ * customer will see before handing over credentials.
+ */
+exports.loginAsCustomerPortal = async (req, res) => {
+  try {
+    // Route middleware already restricts this to super admins; repeated here so
+    // a future routing change cannot silently widen access to impersonation.
+    if (req.user?.role !== 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only a super admin can open the customer portal as a customer',
+      });
+    }
+
+    const customerId = parseInt(req.params.customerId, 10);
+    if (!Number.isInteger(customerId) || customerId <= 0) {
+      return res.status(400).json({ success: false, message: 'Invalid customer id' });
+    }
+
+    const existing = await pool.query(
+      `SELECT customer_id, name, company_name, email, customer_type, portal_enabled
+         FROM customers WHERE customer_id = $1`,
+      [customerId]
+    );
+    if (!existing.rows.length) {
+      return res.status(404).json({ success: false, message: 'Customer not found' });
+    }
+    const row = existing.rows[0];
+    if (!isCustomerTypeAllowed(req.allowedCustomerTypes, row.customer_type)) {
+      return res.status(403).json({ success: false, message: 'Access denied: customer is outside your Customer Access scope' });
+    }
+
+    const { token, expiresAt, ttlMinutes } = await createImpersonationSession({
+      customerId,
+      actor: req.user,
+      req,
+    });
+
+    console.info(
+      `[portal-impersonation] user ${req.user?.user_id} (${req.user?.email || 'unknown'}) opened portal as customer ${customerId}`
+    );
+
+    res.json({
+      success: true,
+      token,
+      expires_at: expiresAt,
+      ttl_minutes: ttlMinutes,
+      read_only: true,
+      portal_url: process.env.CUSTOMER_PORTAL_URL || 'http://localhost:3002',
+      portal_enabled: row.portal_enabled === true,
+      customer: {
+        customer_id: row.customer_id,
+        name: row.name,
+        company_name: row.company_name,
+        email: row.email,
+      },
+    });
+  } catch (error) {
+    console.error('loginAsCustomerPortal:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 };

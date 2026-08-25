@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Copy, FileText, Loader2, Pencil } from 'lucide-react';
+import { ArrowLeft, Copy, ExternalLink, FileText, Loader2, Pencil } from 'lucide-react';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import { Button, SearchField, ListPagination } from '../../../components/ui/primitives';
@@ -8,7 +8,7 @@ import useDebouncedValue from '../../../hooks/useDebouncedValue';
 import TtsplHistoryDrawer from '../../floor-pipeline/components/TtsplHistoryDrawer';
 import {
   getCustomer, getCustomerLaptops, getCustomerAssetActivity, getCustomerAddresses, verifyCustomerKyc, enableCustomerPortal,
-  updateCustomerStatus, getCustomerTickets, getCustomerRentalSummary,
+  updateCustomerStatus, getCustomerTickets, getCustomerRentalSummary, loginAsCustomerPortal,
 } from '../leadCrmApi';
 import { formatCurrency, formatAssetCalendarDate as fmtAssetDate } from '../leadCrmUtils';
 import { getBackendOrigin } from '../../../utils/api';
@@ -209,7 +209,9 @@ export default function CustomerDetailPage() {
   const [ticketStatus, setTicketStatus] = useState('');
   const [ticketPagination, setTicketPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: TICKET_PAGE_SIZE });
   const [rentalSummary, setRentalSummary] = useState({ total_monthly_rent: 0, active_asset_count: 0 });
-  const { canEdit: canEditCustomerAssets } = usePermission();
+  const { canEdit: canEditCustomerAssets, user } = usePermission();
+  const isSuperAdmin = user?.role === 'super_admin';
+  const [portalPreviewBusy, setPortalPreviewBusy] = useState(false);
 
   const loadCustomer = useCallback(async () => {
     try {
@@ -348,6 +350,32 @@ export default function CustomerDetailPage() {
       toast.error(err.response?.data?.message || 'Portal update failed');
     } finally {
       setPortalBusy(false);
+    }
+  };
+
+  const handleOpenPortalAsCustomer = async () => {
+    // The tab has to be opened inside the click handler, before any await, or
+    // the browser treats it as an unsolicited popup and blocks it.
+    const tab = window.open('', '_blank');
+    setPortalPreviewBusy(true);
+    try {
+      const { data } = await loginAsCustomerPortal(id);
+      if (!data?.token) throw new Error(data?.message || 'Could not start portal session');
+      const base = String(data.portal_url || PORTAL_URL).replace(/\/+$/, '');
+      // Token goes in the fragment so it stays out of server logs and Referer headers.
+      const url = `${base}/dashboard#token=${encodeURIComponent(data.token)}`;
+      if (tab) {
+        tab.location = url;
+      } else {
+        toast.error('Allow pop-ups for this site to open the customer portal');
+        return;
+      }
+      toast.success(`Opened portal as ${customer.company_name || customer.name} — read-only for ${data.ttl_minutes} min`);
+    } catch (err) {
+      if (tab) tab.close();
+      toast.error(err.response?.data?.message || err.message || 'Could not open customer portal');
+    } finally {
+      setPortalPreviewBusy(false);
     }
   };
 
@@ -1011,6 +1039,26 @@ export default function CustomerDetailPage() {
           </PermissionGate>
           {!customer.portal_enabled && (
             <p className="text-xs text-gray-500">Enable portal access to let this customer view invoices, laptops, and raise support tickets.</p>
+          )}
+
+          {isSuperAdmin && (
+            <div className="border-t pt-4 space-y-2">
+              <p className="text-sm font-medium">Open portal as this customer</p>
+              <p className="text-xs text-gray-500">
+                Opens the customer portal in a new tab exactly as {customer.company_name || customer.name} sees it,
+                without needing their password. The session is read-only, expires in an hour, and is logged against your
+                account. Raising tickets and changing the password stay disabled.
+              </p>
+              <button
+                type="button"
+                disabled={portalPreviewBusy}
+                onClick={handleOpenPortalAsCustomer}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-purple-600 text-white rounded-lg disabled:opacity-50"
+              >
+                {portalPreviewBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <ExternalLink className="w-4 h-4" />}
+                {portalPreviewBusy ? 'Opening…' : 'Login to Customer Portal'}
+              </button>
+            </div>
           )}
         </div>
       )}

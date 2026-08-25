@@ -1,68 +1,141 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { Link } from 'react-router-dom';
-import { Laptop } from 'lucide-react';
-import { format } from 'date-fns';
-import api from '../utils/api';
+import DataTable from '../components/DataTable';
+import FilterBar from '../components/FilterBar';
+import Pagination from '../components/Pagination';
+import StatusBadge from '../components/StatusBadge';
+import useListQuery from '../hooks/useListQuery';
+import { useAuth } from '../context/AuthContext';
+import { fmtDate, inr } from '../utils/format';
 
-function inr(n) {
-  return `₹${Number(n || 0).toLocaleString('en-IN')}`;
-}
+const LIFECYCLE_TABS = [
+  { value: 'active', label: 'Currently with me' },
+  { value: 'returned', label: 'Returned' },
+];
 
 export default function LaptopsPage() {
-  const [laptops, setLaptops] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { readOnly } = useAuth();
+  const { rows, pagination, loading, error, filters, setFilters, setPage } = useListQuery('/laptops', {
+    defaults: { lifecycle: 'active' },
+    resultKey: 'laptops',
+  });
 
-  useEffect(() => {
-    api.get('/laptops')
-      .then(({ data }) => setLaptops(data.laptops || []))
-      .catch(() => setLaptops([]))
-      .finally(() => setLoading(false));
-  }, []);
+  const isReturned = filters.lifecycle === 'returned';
+
+  const columns = [
+    {
+      key: 'ttspl_id',
+      label: 'TTSPL ID',
+      mobilePrimary: true,
+      className: 'font-mono text-xs whitespace-nowrap',
+      render: (r) => r.ttspl_id || '—',
+    },
+    {
+      key: 'serial_number',
+      label: 'Serial Number',
+      className: 'font-mono text-xs',
+      render: (r) => r.serial_number || '—',
+    },
+    {
+      key: 'laptop',
+      label: 'Laptop',
+      render: (r) => [r.brand, r.model].filter(Boolean).join(' ') || '—',
+    },
+    {
+      key: 'config',
+      label: 'Configuration',
+      render: (r) => <span className="text-slate-600">{r.config || '—'}</span>,
+    },
+    {
+      key: 'dc_number',
+      label: 'DC Number',
+      render: (r) => (r.dc_number ? (
+        <Link
+          to={`/deliveries/${encodeURIComponent(r.dc_number)}`}
+          onClick={(e) => e.stopPropagation()}
+          className="font-mono text-xs text-brand hover:underline"
+        >
+          {r.dc_number}
+        </Link>
+      ) : <span className="text-slate-400">—</span>),
+    },
+    {
+      key: 'date',
+      label: isReturned ? 'Returned On' : 'Delivered On',
+      render: (r) => fmtDate(isReturned ? r.returned_at : (r.delivered_at || r.dispatch_date)),
+    },
+    {
+      key: 'monthly_rate',
+      label: 'Monthly Rate',
+      render: (r) => (r.monthly_rate ? inr(r.monthly_rate) : '—'),
+    },
+    { key: 'status', label: 'Status', render: (r) => <StatusBadge status={r.status} /> },
+    {
+      key: 'actions',
+      label: 'Actions',
+      mobileHidden: true,
+      render: (r) => (isReturned || readOnly ? <span className="text-slate-400 text-xs">—</span> : (
+        <div className="flex gap-1.5 whitespace-nowrap">
+          <Link
+            to={`/support/new?ttspl=${encodeURIComponent(r.ttspl_id || '')}`}
+            onClick={(e) => e.stopPropagation()}
+            className="text-xs px-2.5 py-1 border rounded-lg hover:bg-slate-50"
+          >
+            Raise Ticket
+          </Link>
+          <Link
+            to={`/support/new?ttspl=${encodeURIComponent(r.ttspl_id || '')}&type=${encodeURIComponent('Return Request')}`}
+            onClick={(e) => e.stopPropagation()}
+            className="text-xs px-2.5 py-1 border rounded-lg hover:bg-slate-50"
+          >
+            Return
+          </Link>
+        </div>
+      )),
+    },
+  ];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div>
         <h1 className="text-xl font-bold">My Laptops</h1>
-        <p className="text-sm text-slate-500">{laptops.length} active rentals</p>
+        <p className="text-sm text-slate-500 mt-1">Laptops deployed on your account</p>
       </div>
-      {loading ? (
-        <p className="text-slate-500 animate-pulse">Loading…</p>
-      ) : laptops.length === 0 ? (
-        <p className="text-slate-500 bg-white border rounded-xl p-8 text-center">No laptops on record yet.</p>
-      ) : (
-        <div className="grid md:grid-cols-2 gap-4">
-          {laptops.map((lap) => (
-            <div key={lap.ttspl_id || lap.dc_number} className="bg-white border rounded-xl p-5 shadow-sm space-y-2">
-              <div className="flex items-center gap-2 text-brand font-semibold">
-                <Laptop className="w-5 h-5" />
-                {lap.ttspl_id || '—'}
-              </div>
-              <p className="font-medium">{lap.brand} {lap.model}</p>
-              <p className="text-sm text-slate-600">{lap.config || '—'}</p>
-              <p className="text-xs text-slate-500">
-                Dispatched: {lap.dispatch_date ? format(new Date(lap.dispatch_date), 'dd MMM yyyy') : '—'}
-              </p>
-              <p className="text-sm">Monthly Rate: {inr(lap.monthly_rate)}/month</p>
-              <p className="text-xs text-slate-500">DC: {lap.dc_number || '—'}</p>
-              <span className="inline-flex px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-700 capitalize">{lap.status || 'active'}</span>
-              <div className="pt-2 flex items-center gap-4">
-                <Link
-                  to={`/support?ttspl=${encodeURIComponent(lap.ttspl_id || '')}`}
-                  className="text-sm text-brand font-semibold hover:underline"
-                >
-                  Raise Support Ticket
-                </Link>
-                <Link
-                  to={`/support?ttspl=${encodeURIComponent(lap.ttspl_id || '')}&type=${encodeURIComponent('Return Request')}`}
-                  className="text-sm text-amber-700 font-semibold hover:underline"
-                >
-                  Request Return
-                </Link>
-              </div>
-            </div>
-          ))}
-        </div>
+
+      <div className="flex gap-2">
+        {LIFECYCLE_TABS.map((tab) => (
+          <button
+            key={tab.value}
+            type="button"
+            onClick={() => setFilters({ ...filters, lifecycle: tab.value, page: 1 })}
+            className={`px-3 py-1.5 rounded-lg text-sm ${
+              filters.lifecycle === tab.value ? 'bg-brand text-white' : 'bg-white border'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      <FilterBar
+        value={filters}
+        onChange={setFilters}
+        searchPlaceholder="Search by TTSPL, serial, brand, model or DC…"
+      />
+
+      {error && (
+        <p className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">{error}</p>
       )}
+
+      <DataTable
+        columns={columns}
+        rows={rows}
+        loading={loading}
+        rowKey={(r) => r.ttspl_id || r.serial_number || r.dc_number}
+        emptyMessage={isReturned ? 'No returned laptops yet' : 'No laptops are currently assigned to you'}
+      />
+
+      <Pagination pagination={pagination} onChange={setPage} />
     </div>
   );
 }

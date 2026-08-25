@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../utils/api';
+import { useAuth } from '../context/AuthContext';
 
 export default function ProfilePage() {
+  const { readOnly } = useAuth();
   const [profile, setProfile] = useState(null);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -67,6 +69,14 @@ export default function ProfilePage() {
         ))}
       </div>
 
+      {readOnly ? (
+        <div className="bg-white border rounded-xl p-6 text-sm text-slate-500">
+          <h2 className="font-semibold text-slate-700">Change Password</h2>
+          <p className="mt-2">
+            Not available in an admin preview. Use Reset Password on the customer record in the CRM instead.
+          </p>
+        </div>
+      ) : (
       <form onSubmit={changePassword} className="bg-white border rounded-xl p-6 space-y-4">
         <h2 className="font-semibold">Change Password</h2>
         <label className="block text-sm">
@@ -88,6 +98,7 @@ export default function ProfilePage() {
           Update Password
         </button>
       </form>
+      )}
     </div>
   );
 }

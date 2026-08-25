@@ -4,7 +4,12 @@ import { BrowserRouter } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import App from './App';
 import { AuthProvider } from './context/AuthContext';
+import { consumeImpersonationHandoff } from './utils/impersonation';
 import './index.css';
+
+// Must run before AuthProvider mounts so the handed-over token is the one used
+// for the first /me call.
+consumeImpersonationHandoff();
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(

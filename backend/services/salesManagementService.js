@@ -573,6 +573,10 @@ async function listSalesOrdersGrouped({
     where += ` AND NOT (${soFullyDeliveredSql('sales_order_lines.sales_order_number')})`;
     where += ` AND ${fulfillmentSql(SO_FULFILLMENT_DISPATCHED_SQL, 'sales_order_lines.sales_order_number')} = 0`;
     where += ` AND ${fulfillmentSql(SO_FULFILLMENT_DELIVERED_SQL, 'sales_order_lines.sales_order_number')} = 0`;
+  } else if (normalizedStatus === 'active') {
+    // Anything still in flight: not cancelled and not yet fully delivered.
+    where += where ? ` AND ${soNotCancelledSql('sales_order_lines.sales_order_number')}` : `WHERE ${soNotCancelledSql('sales_order_lines.sales_order_number')}`;
+    where += ` AND NOT (${soFullyDeliveredSql('sales_order_lines.sales_order_number')})`;
   } else if (normalizedStatus === 'delivered') {
     where += where ? ` AND ${soNotCancelledSql('sales_order_lines.sales_order_number')}` : `WHERE ${soNotCancelledSql('sales_order_lines.sales_order_number')}`;
     where += ` AND (${soFullyDeliveredSql('sales_order_lines.sales_order_number')})`;

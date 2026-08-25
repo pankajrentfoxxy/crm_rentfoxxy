@@ -1,94 +1,171 @@
-import React, { useEffect, useState } from 'react';
-import { format } from 'date-fns';
-import api from '../utils/api';
+import React from 'react';
+import { Link } from 'react-router-dom';
+import DataTable from '../components/DataTable';
+import FilterBar from '../components/FilterBar';
+import Pagination from '../components/Pagination';
+import StatusBadge from '../components/StatusBadge';
+import useListQuery from '../hooks/useListQuery';
+import { fmtDate, inr } from '../utils/format';
 
-function inr(n) {
-  return `₹${Number(n || 0).toLocaleString('en-IN')}`;
-}
+const FILTER_FIELDS = [
+  {
+    key: 'order_type',
+    label: 'Order Type',
+    options: [
+      { value: '', label: 'All types' },
+      { value: 'standard', label: 'Sale / Rental / Demo' },
+      { value: 'replacement', label: 'Replacement' },
+    ],
+  },
+  {
+    key: 'entity_scope',
+    label: 'Category',
+    options: [
+      { value: '', label: 'All' },
+      { value: 'rental', label: 'Rental & Demo' },
+      { value: 'sale', label: 'Sale' },
+    ],
+  },
+  {
+    key: 'order_status',
+    label: 'Order Status',
+    options: [
+      { value: '', label: 'All statuses' },
+      { value: 'active', label: 'Active' },
+      { value: 'pending', label: 'Pending' },
+      { value: 'dispatched', label: 'Dispatched' },
+      { value: 'delivered', label: 'Delivered' },
+      { value: 'cancelled', label: 'Cancelled' },
+    ],
+  },
+  {
+    key: 'delivery_status',
+    label: 'Delivery Status',
+    options: [
+      { value: '', label: 'All' },
+      { value: 'not_dispatched', label: 'Not Dispatched' },
+      { value: 'in_transit', label: 'In Transit / Partial' },
+      { value: 'delivered', label: 'Delivered' },
+    ],
+  },
+];
 
-function statusClass(s) {
-  const v = String(s || '').toLowerCase();
-  if (v.includes('complete')) return 'bg-green-100 text-green-700';
-  if (v.includes('process')) return 'bg-amber-100 text-amber-700';
-  return 'bg-slate-100 text-slate-600';
+function ConfigCell({ items }) {
+  if (!items?.length) return <span className="text-slate-400">—</span>;
+  const [first, ...rest] = items;
+  return (
+    <div className="min-w-[180px]">
+      <p className="font-medium text-slate-800">{first.label}</p>
+      {first.config && <p className="text-xs text-slate-500">{first.config}</p>}
+      {rest.length > 0 && (
+        <p className="text-xs text-slate-400 mt-0.5">+{rest.length} more configuration{rest.length > 1 ? 's' : ''}</p>
+      )}
+    </div>
+  );
 }
 
 export default function OrdersPage() {
-  const [orders, setOrders] = useState([]);
-  const [expanded, setExpanded] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const { rows, pagination, loading, error, filters, setFilters, setPage } = useListQuery('/orders', {
+    resultKey: 'orders',
+  });
 
-  useEffect(() => {
-    api.get('/orders').then(({ data }) => setOrders(data.orders || [])).finally(() => setLoading(false));
-  }, []);
+  const columns = [
+    {
+      key: 'sales_order_number',
+      label: 'SO Number',
+      mobilePrimary: true,
+      className: 'font-mono text-xs whitespace-nowrap',
+    },
+    { key: 'order_type', label: 'Order Type', render: (r) => r.order_type },
+    { key: 'order_date', label: 'Order Date', render: (r) => fmtDate(r.order_date) },
+    {
+      key: 'items',
+      label: 'Laptop / Configuration',
+      render: (r) => <ConfigCell items={r.items} />,
+    },
+    { key: 'quantity', label: 'Qty', render: (r) => r.quantity || 0 },
+    {
+      key: 'dc_numbers',
+      label: 'DC Number',
+      render: (r) => (r.dc_numbers?.length ? (
+        <div className="space-y-0.5">
+          {r.dc_numbers.map((dc) => (
+            <Link
+              key={dc}
+              to={`/deliveries/${encodeURIComponent(dc)}`}
+              onClick={(e) => e.stopPropagation()}
+              className="block font-mono text-xs text-brand hover:underline"
+            >
+              {dc}
+            </Link>
+          ))}
+        </div>
+      ) : <span className="text-slate-400">—</span>),
+    },
+    {
+      key: 'delivery_status',
+      label: 'Delivery Status',
+      render: (r) => <StatusBadge status={r.delivery_status} />,
+    },
+    {
+      key: 'order_status',
+      label: 'Order Status',
+      render: (r) => <StatusBadge status={r.order_status} />,
+    },
+    {
+      key: 'payment_status',
+      label: 'Payment',
+      render: (r) => (
+        <div>
+          <StatusBadge status={r.payment_status} />
+          <p className="text-xs text-slate-500 mt-1">{inr(r.total_value)}</p>
+        </div>
+      ),
+    },
+    {
+      key: 'actions',
+      label: 'Actions',
+      mobileHidden: true,
+      render: (r) => (
+        <Link
+          to={`/orders/${encodeURIComponent(r.sales_order_number)}`}
+          onClick={(e) => e.stopPropagation()}
+          className="text-xs px-2.5 py-1 border rounded-lg hover:bg-slate-50 whitespace-nowrap"
+        >
+          View
+        </Link>
+      ),
+    },
+  ];
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-xl font-bold">My Orders</h1>
-
-      {/* Mobile cards */}
-      <div className="grid gap-3 md:hidden">
-        {loading ? (
-          <p className="p-8 text-center text-slate-500">Loading…</p>
-        ) : orders.length === 0 ? (
-          <p className="p-8 text-center text-slate-500">No orders found</p>
-        ) : orders.map((o) => (
-          <div key={o.sales_order_number} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <span className="font-mono text-xs font-semibold text-slate-900">{o.sales_order_number}</span>
-              <span className={`px-2 py-0.5 rounded-full text-xs capitalize ${statusClass(o.status)}`}>{o.status || 'pending'}</span>
-            </div>
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-              <span>{o.date ? format(new Date(o.date), 'dd MMM yyyy') : '—'}</span>
-              <span className="capitalize">{o.type || '—'}</span>
-              <span>{o.laptops} laptop(s)</span>
-            </div>
-            <p className="text-base font-bold text-slate-900 pt-2 border-t border-slate-100">{inr(o.total_value)}</p>
-          </div>
-        ))}
+    <div className="space-y-4">
+      <div>
+        <h1 className="text-xl font-bold">Orders</h1>
+        <p className="text-sm text-slate-500 mt-1">Every order placed on your account</p>
       </div>
 
-      <div className="hidden md:block bg-white rounded-xl border overflow-hidden">
-        {loading ? (
-          <p className="p-8 text-center text-slate-500">Loading…</p>
-        ) : orders.length === 0 ? (
-          <p className="p-8 text-center text-slate-500">No orders found</p>
-        ) : (
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
-              <tr>
-                {['SO #', 'Date', 'Type', 'Laptops', 'Amount', 'Status'].map((h) => <th key={h} className="p-3">{h}</th>)}
-              </tr>
-            </thead>
-            <tbody>
-              {orders.map((o) => (
-                <React.Fragment key={o.sales_order_number}>
-                  <tr
-                    className="border-t hover:bg-slate-50 cursor-pointer"
-                    onClick={() => setExpanded(expanded === o.sales_order_number ? null : o.sales_order_number)}
-                  >
-                    <td className="p-3 font-mono text-xs">{o.sales_order_number}</td>
-                    <td className="p-3">{o.date ? format(new Date(o.date), 'dd MMM yyyy') : '—'}</td>
-                    <td className="p-3 capitalize">{o.type || '—'}</td>
-                    <td className="p-3">{o.laptops}</td>
-                    <td className="p-3">{inr(o.total_value)}</td>
-                    <td className="p-3">
-                      <span className={`px-2 py-0.5 rounded-full text-xs capitalize ${statusClass(o.status)}`}>{o.status || 'pending'}</span>
-                    </td>
-                  </tr>
-                  {expanded === o.sales_order_number && (
-                    <tr className="bg-slate-50/50">
-                      <td colSpan={6} className="p-3 text-xs text-slate-600">
-                        Order {o.sales_order_number} · {o.laptops} line(s) · Total {inr(o.total_value)}
-                      </td>
-                    </tr>
-                  )}
-                </React.Fragment>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      <FilterBar
+        value={filters}
+        onChange={setFilters}
+        fields={FILTER_FIELDS}
+        searchPlaceholder="Search by SO number…"
+      />
+
+      {error && (
+        <p className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">{error}</p>
+      )}
+
+      <DataTable
+        columns={columns}
+        rows={rows}
+        loading={loading}
+        rowKey={(r) => r.sales_order_number}
+        rowLink={(r) => `/orders/${encodeURIComponent(r.sales_order_number)}`}
+        emptyMessage="No orders match these filters"
+      />
+
+      <Pagination pagination={pagination} onChange={setPage} />
     </div>
   );
 }

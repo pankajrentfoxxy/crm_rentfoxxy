@@ -22,7 +22,14 @@ async function customerPortalAuth(req, res, next) {
     }
 
     const session = sessionRes.rows[0];
-    if (!session.portal_enabled) {
+    // Sessions minted by a super admin from the CRM. Undefined on databases that
+    // predate the impersonation migration, which correctly reads as "not impersonated".
+    const impersonatedBy = session.impersonated_by ?? null;
+
+    // A super admin is allowed to preview a portal that is switched off — that is
+    // precisely when previewing is useful. The customer themselves still cannot
+    // log in, because /login checks portal_enabled before issuing a session.
+    if (!session.portal_enabled && !impersonatedBy) {
       return res.status(403).json({ success: false, message: 'Portal access disabled' });
     }
 
@@ -33,6 +40,7 @@ async function customerPortalAuth(req, res, next) {
       email: session.email,
     };
     req.portalToken = token;
+    req.portalImpersonatedBy = impersonatedBy;
     next();
   } catch (err) {
     console.error('customerPortalAuth:', err);
@@ -40,4 +48,20 @@ async function customerPortalAuth(req, res, next) {
   }
 }
 
-module.exports = { customerPortalAuth };
+/**
+ * Impersonated sessions are strictly read-only: an admin looking at the portal
+ * must not be able to raise tickets or change the password as the customer.
+ * Those actions belong in the CRM, under the admin's own identity.
+ */
+function blockImpersonatedWrites(req, res, next) {
+  if (req.portalImpersonatedBy) {
+    return res.status(403).json({
+      success: false,
+      message: 'This is a read-only admin preview of the customer portal. Perform this action from the CRM instead.',
+      read_only: true,
+    });
+  }
+  next();
+}
+
+module.exports = { customerPortalAuth, blockImpersonatedWrites };

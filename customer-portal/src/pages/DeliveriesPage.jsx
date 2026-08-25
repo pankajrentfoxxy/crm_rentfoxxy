@@ -1,88 +1,114 @@
-import React, { useEffect, useState } from 'react';
-import { format } from 'date-fns';
-import api from '../utils/api';
+import React from 'react';
+import { Link } from 'react-router-dom';
+import DataTable from '../components/DataTable';
+import FilterBar from '../components/FilterBar';
+import Pagination from '../components/Pagination';
+import StatusBadge from '../components/StatusBadge';
+import useListQuery from '../hooks/useListQuery';
+import { fmtDate } from '../utils/format';
 
-function statusClass(s) {
-  const v = String(s || '').toLowerCase();
-  if (v === 'delivered') return 'bg-green-100 text-green-700';
-  if (v.includes('transit')) return 'bg-amber-100 text-amber-700';
-  if (v === 'rejected') return 'bg-red-100 text-red-700';
-  return 'bg-slate-100 text-slate-600';
-}
+const FILTER_FIELDS = [
+  {
+    key: 'status',
+    label: 'Delivery Status',
+    options: [
+      { value: '', label: 'All statuses' },
+      { value: 'pending', label: 'Pending' },
+      { value: 'in_transit', label: 'In Transit' },
+      { value: 'delivered', label: 'Delivered' },
+      { value: 'rejected', label: 'Refused' },
+    ],
+  },
+];
 
 export default function DeliveriesPage() {
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { rows, pagination, loading, error, filters, setFilters, setPage } = useListQuery('/deliveries', {
+    resultKey: 'deliveries',
+  });
 
-  useEffect(() => {
-    api.get('/deliveries').then(({ data }) => setRows(data.deliveries || [])).finally(() => setLoading(false));
-  }, []);
+  const columns = [
+    {
+      key: 'dc_number',
+      label: 'DC Number',
+      mobilePrimary: true,
+      className: 'font-mono text-xs whitespace-nowrap',
+    },
+    {
+      key: 'sales_order_number',
+      label: 'SO Number',
+      render: (r) => (r.sales_order_number ? (
+        <Link
+          to={`/orders/${encodeURIComponent(r.sales_order_number)}`}
+          onClick={(e) => e.stopPropagation()}
+          className="font-mono text-xs text-brand hover:underline"
+        >
+          {r.sales_order_number}
+        </Link>
+      ) : <span className="text-slate-400">—</span>),
+    },
+    { key: 'created_at', label: 'Raised On', render: (r) => fmtDate(r.created_at) },
+    {
+      key: 'dispatch_mode',
+      label: 'Mode',
+      render: (r) => <span className="capitalize">{r.dispatch_mode || '—'}</span>,
+    },
+    {
+      key: 'tracking',
+      label: 'Tracking',
+      render: (r) => (
+        <div className="text-xs">
+          <p className="text-slate-700">{r.courier_name || '—'}</p>
+          {r.awb_number && <p className="font-mono text-slate-500">{r.awb_number}</p>}
+        </div>
+      ),
+    },
+    { key: 'dispatched_at', label: 'Dispatched', render: (r) => fmtDate(r.dispatched_at) },
+    { key: 'delivered_at', label: 'Delivered', render: (r) => fmtDate(r.delivered_at) },
+    { key: 'status', label: 'Status', render: (r) => <StatusBadge status={r.status} /> },
+    {
+      key: 'actions',
+      label: 'Actions',
+      mobileHidden: true,
+      render: (r) => (
+        <Link
+          to={`/deliveries/${encodeURIComponent(r.dc_number)}`}
+          onClick={(e) => e.stopPropagation()}
+          className="text-xs px-2.5 py-1 border rounded-lg hover:bg-slate-50 whitespace-nowrap"
+        >
+          Track
+        </Link>
+      ),
+    },
+  ];
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-xl font-bold">Delivery Status</h1>
-
-      {/* Mobile cards */}
-      <div className="grid gap-3 md:hidden">
-        {loading ? (
-          <p className="p-8 text-center text-slate-500">Loading…</p>
-        ) : rows.length === 0 ? (
-          <p className="p-8 text-center text-slate-500">No deliveries on record</p>
-        ) : rows.map((r) => (
-          <div key={r.dc_number} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <span className="font-mono text-xs font-semibold text-slate-900">{r.dc_number}</span>
-              <span className={`px-2 py-0.5 rounded-full text-xs capitalize ${statusClass(r.status)}`}>{r.status}</span>
-            </div>
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-              <span>SO {r.so_number || '—'}</span>
-              <span>{r.dispatch_date ? format(new Date(r.dispatch_date), 'dd MMM yyyy') : '—'}</span>
-              <span className="capitalize">{r.dispatch_mode || '—'}</span>
-            </div>
-            <p className="text-xs text-slate-600 pt-2 border-t border-slate-100">
-              {r.status === 'in_transit' && (r.courier_name || r.awb_number)
-                ? `${r.courier_name || ''} ${r.awb_number || ''}`.trim()
-                : r.delivered_at
-                  ? `Delivered ${format(new Date(r.delivered_at), 'dd MMM yyyy')}`
-                  : 'No tracking info'}
-            </p>
-          </div>
-        ))}
+    <div className="space-y-4">
+      <div>
+        <h1 className="text-xl font-bold">Deliveries</h1>
+        <p className="text-sm text-slate-500 mt-1">Track every challan raised against your orders</p>
       </div>
 
-      <div className="hidden md:block bg-white rounded-xl border overflow-x-auto">
-        {loading ? <p className="p-8 text-center text-slate-500">Loading…</p> : rows.length === 0 ? (
-          <p className="p-8 text-center text-slate-500">No deliveries on record</p>
-        ) : (
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 text-xs uppercase text-slate-500 text-left">
-              <tr>
-                {['DC #', 'SO #', 'Dispatch', 'Mode', 'Status', 'Tracking'].map((h) => <th key={h} className="p-3">{h}</th>)}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.dc_number} className="border-t">
-                  <td className="p-3 font-mono text-xs">{r.dc_number}</td>
-                  <td className="p-3 font-mono text-xs">{r.so_number || '—'}</td>
-                  <td className="p-3">{r.dispatch_date ? format(new Date(r.dispatch_date), 'dd MMM yyyy') : '—'}</td>
-                  <td className="p-3 capitalize">{r.dispatch_mode || '—'}</td>
-                  <td className="p-3">
-                    <span className={`px-2 py-0.5 rounded-full text-xs capitalize ${statusClass(r.status)}`}>{r.status}</span>
-                  </td>
-                  <td className="p-3 text-xs text-slate-600">
-                    {r.status === 'in_transit' && (r.courier_name || r.awb_number)
-                      ? `${r.courier_name || ''} ${r.awb_number || ''}`.trim()
-                      : r.delivered_at
-                        ? `Delivered ${format(new Date(r.delivered_at), 'dd MMM yyyy')}`
-                        : '—'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      <FilterBar
+        value={filters}
+        onChange={setFilters}
+        fields={FILTER_FIELDS}
+        searchPlaceholder="Search by DC number, SO number or AWB…"
+      />
+
+      {error && (
+        <p className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">{error}</p>
+      )}
+
+      <DataTable
+        columns={columns}
+        rows={rows}
+        loading={loading}
+        rowKey={(r) => r.dc_number}
+        rowLink={(r) => `/deliveries/${encodeURIComponent(r.dc_number)}`}
+        emptyMessage="No deliveries match these filters"
+      />
+
+      <Pagination pagination={pagination} onChange={setPage} />
     </div>
   );
 }
