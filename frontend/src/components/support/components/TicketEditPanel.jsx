@@ -183,7 +183,9 @@ export default function TicketEditPanel({ ticket, items, customerAddresses, tech
             <select className="w-full border rounded-lg px-3 py-3 min-h-[44px] text-base" value={row.assigned_to} onChange={(e) => setItemRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, assigned_to: e.target.value } : r)))}>
               <option value="">Assign technician</option>
               {technicians.map((t) => (
-                <option key={t.user_id} value={t.user_id}>{t.name} ({t.open_ticket_count || 0})</option>
+                <option key={t.user_id} value={t.user_id}>
+                  {t.assignee_kind === 'internal' ? `${t.name} (Internal)` : t.name} ({t.open_ticket_count || 0})
+                </option>
               ))}
             </select>
             ) : (

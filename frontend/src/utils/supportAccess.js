@@ -24,8 +24,20 @@ export function canAccessSupportModule(user, effectivePermissions) {
 
 export const isSupportTechnician = (user) => user?.role === 'support_tech';
 
+export const SUPPORT_TICKET_ASSIGNEE_PERMISSION = 'support_ticket_assignee';
+
 export const isSupportLead = (user) =>
   ['super_admin', 'admin', 'manager', 'support_lead'].includes(user?.role);
+
+export const isSupportTicketAssignee = (user) =>
+  Array.isArray(user?.permissions) && user.permissions.includes(SUPPORT_TICKET_ASSIGNEE_PERMISSION);
+
+/** Technician or internal assignee — only their assigned tickets, not lead tools. */
+export const isAssignedTicketsOnly = (user, isAssignedDataOnly) => {
+  if (!user || isSupportLead(user)) return false;
+  if (isSupportTechnician(user) || isSupportTicketAssignee(user)) return true;
+  return typeof isAssignedDataOnly === 'function' && isAssignedDataOnly('support_tickets');
+};
 
 /** Support lead/admin/manager or warehouse staff may close tickets. */
 export const canCloseSupportTicket = (user) =>

@@ -391,6 +391,20 @@ export const ticketHasUnassignedTechnicianSlots = (ticket) => (
   )
 );
 
+/** Ticket-list assign: any open item without an owner, including pending pickups. */
+export const ticketHasUnassignedAssigneeSlots = (ticket) => (
+  (ticket?.items || []).some(
+    (item) => !item.assigned_to
+      && !['resolved', 'closed', 'cancelled'].includes(item.status)
+  )
+);
+
+export const assigneeOptionLabel = (person) => {
+  if (!person) return '';
+  if (person.assignee_kind === 'internal') return `${person.name} (Internal)`;
+  return person.name;
+};
+
 export const resolveItemPickupKind = (item) => {
   if (!item || item.item_type !== 'pickup') return null;
   return item.pickup_type || (item.source_item_id ? 'repair' : 'return');

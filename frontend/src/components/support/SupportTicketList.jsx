@@ -4,7 +4,7 @@ import { Loader2, Search, Download, Plus, MessageSquare } from 'lucide-react';
 import api from '../../utils/api';
 import { canCloseSupportTicket, isSupportLead } from '../../utils/supportAccess';
 import { useAuth } from '../../context/AuthContext';
-import { displayStatus, formatRelative, formatTicketId, podUrl, ticketHasUnassignedTechnicianSlots, ticketPickupKind, ticketSubTypeLabel } from './utils';
+import { assigneeOptionLabel, displayStatus, formatRelative, formatTicketId, podUrl, ticketHasUnassignedAssigneeSlots, ticketPickupKind, ticketSubTypeLabel } from './utils';
 import TtsplHistoryDrawer from '../../features/floor-pipeline/components/TtsplHistoryDrawer';
 import { ListPagination } from '../../components/ui/primitives';
 
@@ -93,7 +93,7 @@ function assignedLabel(ticket) {
 }
 
 function isUnassigned(ticket) {
-  return ticketHasUnassignedTechnicianSlots(ticket);
+  return ticketHasUnassignedAssigneeSlots(ticket);
 }
 
 function IssueCommentPreview({ ticket }) {
@@ -480,7 +480,7 @@ export default function SupportTicketList() {
             <option value="unassigned">Unassigned</option>
             <option value="me">Me</option>
             {technicians.map((tech) => (
-              <option key={tech.user_id} value={String(tech.user_id)}>{tech.name}</option>
+              <option key={tech.user_id} value={String(tech.user_id)}>{assigneeOptionLabel(tech)}</option>
             ))}
           </select>
           <input type="date" value={dateFrom} onChange={(e) => patchParams({ date_from: e.target.value || null, page: null })} className="border border-slate-300 rounded-lg px-3 py-2 text-sm" />
@@ -502,7 +502,7 @@ export default function SupportTicketList() {
           <select value={bulkTech} onChange={(e) => setBulkTech(e.target.value)} className="border rounded px-2 py-1">
             <option value="">Assign to…</option>
             {technicians.map((tech) => (
-              <option key={tech.user_id} value={tech.user_id}>{tech.name}</option>
+              <option key={tech.user_id} value={tech.user_id}>{assigneeOptionLabel(tech)}</option>
             ))}
           </select>
           <button type="button" onClick={handleBulkAssign} disabled={!bulkTech} className="support-btn-primary text-sm py-1 px-3">
@@ -562,7 +562,7 @@ export default function SupportTicketList() {
                       onChange={(e) => { if (e.target.value) handleAssign(ticket.id, e.target.value); e.target.value = ''; }}
                     >
                       <option value="">Assign</option>
-                      {technicians.map((tech) => (<option key={tech.user_id} value={tech.user_id}>{tech.name}</option>))}
+                      {technicians.map((tech) => (<option key={tech.user_id} value={tech.user_id}>{assigneeOptionLabel(tech)}</option>))}
                     </select>
                   )}
                   {canCloseSupportTicket(user) && ticket.status !== 'closed' && (
@@ -657,7 +657,7 @@ export default function SupportTicketList() {
                           >
                             <option value="">Assign</option>
                             {technicians.map((tech) => (
-                              <option key={tech.user_id} value={tech.user_id}>{tech.name}</option>
+                              <option key={tech.user_id} value={tech.user_id}>{assigneeOptionLabel(tech)}</option>
                             ))}
                           </select>
                         )}

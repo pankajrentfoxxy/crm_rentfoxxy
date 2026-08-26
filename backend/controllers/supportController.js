@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
 const { findBlockingTicket, blockingTicketMessage } = require('../utils/floorTicketSerialGuard');
-const { isSupportLead, isSupportTechnician, canCloseSupportTicket, canCancelSupportTicket } = require('../middleware/supportAccess');
+const { isSupportLead, isSupportTechnician, canCloseSupportTicket, canCancelSupportTicket, hasSupportTicketAssigneeGrant } = require('../middleware/supportAccess');
 const { deriveItemCurrentStep } = require('../services/supportTicketFlow');
 const { ensureCustomerTables } = require('../services/customerInventoryErpSyncService');
 const supportQuery = require('../services/supportQuery');
@@ -911,7 +911,7 @@ const mapItemRow = (row, { showOtp, showWarehouseOtp }) => {
 
 const getTicketWithItems = async (ticketId, user) => {
     const leadView = isSupportLead(user);
-    const techView = isSupportTechnician(user);
+    const techView = isSupportTechnician(user) || hasSupportTicketAssigneeGrant(user);
 
     const ticketRes = await pool.query(
         `SELECT t.*, cb.name AS created_by_name, cx.name AS cancelled_by_name
@@ -1092,13 +1092,23 @@ exports.listTechnicians = async (req, res) => {
     try {
         const { rows } = await pool.query(
             `SELECT u.user_id, u.name, u.email, u.mobile_no, u.role, u.active,
+                CASE
+                  WHEN u.role IN ('support_tech', 'support_lead') THEN 'technician'
+                  ELSE 'internal'
+                END AS assignee_kind,
                 (SELECT COUNT(DISTINCT i.ticket_id)::int FROM support_ticket_items i
                     WHERE i.assigned_to = u.user_id AND i.status NOT IN ('resolved','closed')) AS open_ticket_count,
                 (SELECT COUNT(*)::int FROM support_ticket_items i
                     WHERE i.assigned_to = u.user_id AND i.status NOT IN ('resolved','closed')) AS open_item_count
              FROM users u
-             WHERE u.role IN ('support_tech', 'support_lead')
-             ORDER BY u.active DESC, u.name`
+             WHERE u.active = true
+               AND (
+                 u.role IN ('support_tech', 'support_lead')
+                 OR 'support_ticket_assignee' = ANY(COALESCE(u.permissions, ARRAY[]::text[]))
+               )
+             ORDER BY
+               CASE WHEN u.role IN ('support_tech', 'support_lead') THEN 0 ELSE 1 END,
+               u.name`
         );
         res.json({ success: true, technicians: rows });
     } catch (e) {
@@ -2361,17 +2371,17 @@ exports.assignTicketBulk = async (req, res) => {
         await assertTicketNotCancelled(client, ticketId);
         const { rows: eligible } = await client.query(
             `SELECT id, pickup_method, item_type, status FROM support_ticket_items
-             WHERE ticket_id = $1 AND assigned_to IS NULL AND status NOT IN ('resolved','closed')`,
+             WHERE ticket_id = $1 AND assigned_to IS NULL AND status NOT IN ('resolved','closed','cancelled')`,
             [ticketId]
         );
-        const toAssign = eligible.filter((row) => itemAllowsTechnicianAssign(row));
-        if (!toAssign.length) {
+        if (!eligible.length) {
             await client.query('ROLLBACK');
             return res.status(400).json({
                 success: false,
-                message: 'No items on this ticket can be assigned to a technician (courier/porter handling or pending dispatch).'
+                message: 'No unassigned items on this ticket.'
             });
         }
+        const toAssign = eligible;
         const ids = toAssign.map((r) => r.id);
         await client.query(
             `UPDATE support_ticket_items SET assigned_to = $2, updated_at = CURRENT_TIMESTAMP

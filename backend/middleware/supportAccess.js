@@ -1,3 +1,4 @@
+const pool = require('../config/db');
 const { hasPermission } = require('../services/permissionService');
 
 const SUPPORT_ROLES = ['admin', 'manager', 'super_admin', 'support_lead', 'support_tech'];
@@ -12,17 +13,29 @@ const SUPPORT_PARTS_CATALOG_SECTIONS = [
 
 const isSupportUser = (user) => user && SUPPORT_ROLES.includes(user.role);
 
+const SUPPORT_LEAD_ROLES = ['super_admin', 'admin', 'manager', 'support_lead'];
+const SUPPORT_TICKET_ASSIGNEE_PERMISSION = 'support_ticket_assignee';
+
 const isSupportLead = (user) =>
-  user && ['super_admin', 'admin', 'manager', 'support_lead'].includes(user.role);
+  Boolean(user && SUPPORT_LEAD_ROLES.includes(user.role));
 
 const canCloseSupportTicket = (user) =>
   user && (isSupportLead(user) || user.role === 'warehouse');
 
 /** Admin / super_admin / support_lead only — ERP migration ticket cancellation. */
 const canCancelSupportTicket = (user) =>
-  user && ['super_admin', 'admin', 'support_lead'].includes(user.role);
+  Boolean(user && ['super_admin', 'admin', 'support_lead'].includes(user.role));
 
 const isSupportTechnician = (user) => user && user.role === 'support_tech';
+
+const hasSupportTicketAssigneeGrant = (user) => {
+  const perms = Array.isArray(user?.permissions) ? user.permissions : [];
+  return perms.includes(SUPPORT_TICKET_ASSIGNEE_PERMISSION);
+};
+
+/** Internal viewer (not a field technician) who only sees tickets assigned to them. */
+const isAssignedTicketsOnly = (user) =>
+  Boolean(user && !isSupportLead(user) && (isSupportTechnician(user) || hasSupportTicketAssigneeGrant(user)));
 
 const hasCustomerInventoryAccess = (user) => {
     if (!user) return false;
@@ -45,6 +58,17 @@ const requireSupportAccess = async (req, res, next) => {
     }
 
     try {
+        const live = await pool.query(
+            'SELECT role, permissions FROM users WHERE user_id = $1',
+            [req.user.user_id]
+        );
+        if (live.rows[0]) {
+            req.user.role = live.rows[0].role;
+            req.user.permissions = Array.isArray(live.rows[0].permissions)
+                ? live.rows[0].permissions
+                : [];
+        }
+
         const allowed = await hasPermission(
             req.user.user_id,
             req.user.role,
@@ -90,6 +114,21 @@ const requireSupportTicketCancel = (req, res, next) => {
     return next();
 };
 
+async function resolveSupportAssigneeId(userId) {
+    const id = parseInt(userId, 10);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    const { rows } = await pool.query(
+        `SELECT user_id FROM users
+          WHERE user_id = $1 AND active = true
+            AND (
+              role IN ('support_tech', 'support_lead')
+              OR 'support_ticket_assignee' = ANY(COALESCE(permissions, ARRAY[]::text[]))
+            )`,
+        [id]
+    );
+    return rows[0]?.user_id || null;
+}
+
 module.exports = {
     SUPPORT_ROLES,
     SUPPORT_PARTS_CATALOG_SECTIONS,
@@ -98,9 +137,13 @@ module.exports = {
     canCloseSupportTicket,
     canCancelSupportTicket,
     isSupportTechnician,
+    isAssignedTicketsOnly,
+    hasSupportTicketAssigneeGrant,
+    SUPPORT_TICKET_ASSIGNEE_PERMISSION,
     hasCustomerInventoryAccess,
     requireSupportAccess,
     requireSupportLead,
     requireSupportTicketClose,
-    requireSupportTicketCancel
+    requireSupportTicketCancel,
+    resolveSupportAssigneeId,
 };

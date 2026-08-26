@@ -73,7 +73,7 @@ export default function AddWorkflowPhasePanel({ ticketId, customerId, sourceItem
                     <select className="support-field" value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)}>
                         <option value="">Unassigned</option>
                         {technicians.map((t) => (
-                            <option key={t.user_id} value={t.user_id}>{t.name}</option>
+                            <option key={t.user_id} value={t.user_id}>{t.assignee_kind === 'internal' ? `${t.name} (Internal)` : t.name}</option>
                         ))}
                     </select>
                 </label>

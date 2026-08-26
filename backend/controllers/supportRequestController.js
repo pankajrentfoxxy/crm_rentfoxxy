@@ -6,6 +6,7 @@ const {
   SUPPORT_TICKET_ELIGIBLE_STATUSES,
   checkSerialEligibleForSupportTicket,
 } = require('../services/supportSerialEligibility');
+const { resolveSupportAssigneeId } = require('../middleware/supportAccess');
 
 /** Match Support CRM create form address display (shipping preferred). */
 function formatTicketAddress(value) {
@@ -164,7 +165,7 @@ function describeDeployed(deployed, deviceSerial) {
       message: `TTSPL ${deployed.ttspl_id || deviceSerial} is not assigned to any customer. Support requests can only be raised for laptops currently with a customer.`,
     };
   }
-  if (!SUPPORT_TICKET_ELIGIBLE_STATUSES.includes(st) || !deployed.delivered_at) {
+  if (!SUPPORT_TICKET_ELIGIBLE_STATUSES.includes(st)) {
     return {
       ok: false,
       status: 400,
@@ -711,7 +712,7 @@ exports.updateRequestStatus = async (req, res) => {
  * a request can sit in the queue for days, during which a laptop may have been
  * returned, reassigned to another customer, or pulled into another ticket.
  */
-async function convertPickupRequest(client, req, row, priority) {
+async function convertPickupRequest(client, req, row, priority, assignedTo = null) {
   const extra = row.extra && typeof row.extra === 'object' ? row.extra : {};
   const codes = (Array.isArray(extra.devices) && extra.devices.length
     ? extra.devices
@@ -795,6 +796,15 @@ async function convertPickupRequest(client, req, row, priority) {
     remarks,
   });
 
+  if (assignedTo) {
+    await client.query(
+      `UPDATE support_ticket_items
+          SET assigned_to = $2, updated_at = CURRENT_TIMESTAMP
+        WHERE ticket_id = $1 AND assigned_to IS NULL`,
+      [ticket.id, assignedTo]
+    );
+  }
+
   return { ticketId: ticket.id, customerId, rdc: result.rdc, unitCount: machines.length };
 }
 
@@ -813,6 +823,13 @@ exports.convertToTicket = async (req, res) => {
     const id = Number(req.params.id);
     let customerId = Number(req.body?.customer_id);
     const priority = ['normal', 'high', 'urgent'].includes(req.body?.priority) ? req.body.priority : 'normal';
+    let assignedTo = null;
+    if (req.body?.assigned_to) {
+      assignedTo = await resolveSupportAssigneeId(req.body.assigned_to);
+      if (!assignedTo) {
+        return res.status(400).json({ success: false, message: 'Invalid assignee' });
+      }
+    }
     const category = ['complaint', 'replacement'].includes(req.body?.ticket_category)
       ? req.body.ticket_category
       : 'complaint';
@@ -845,7 +862,7 @@ exports.convertToTicket = async (req, res) => {
     }
 
     if (row.request_type === 'pickup') {
-      const out = await convertPickupRequest(client, req, row, priority);
+      const out = await convertPickupRequest(client, req, row, priority, assignedTo);
       await client.query(
         `UPDATE support_requests
             SET status = 'converted',
@@ -1010,9 +1027,9 @@ exports.convertToTicket = async (req, res) => {
     await client.query(
       `INSERT INTO support_ticket_items (
          ticket_id, serial_number, unique_serial_number, ttspl_id, item_type,
-         issue_category_label, remarks, status, otp_code,
+         issue_category_label, remarks, status, otp_code, assigned_to,
          brand, model, ram, storage, generation, processor
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,'open',$8,$9,$10,$11,$12,$13,$14)`,
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,'open',$8,$9,$10,$11,$12,$13,$14,$15)`,
       [
         ticketId,
         serial.serial_number || ttspl,
@@ -1022,6 +1039,7 @@ exports.convertToTicket = async (req, res) => {
         'QR support request',
         issueRemarks,
         String(Math.floor(100000 + Math.random() * 900000)),
+        assignedTo,
         specs.brand,
         specs.model,
         specs.ram,

@@ -480,7 +480,9 @@ export default function SupportTicketCreate() {
                         <select className="support-field support-field-compact" value={defaultAssignee} onChange={(e) => setDefaultAssignee(e.target.value)}>
                             <option value="">Unassigned</option>
                             {technicians.map((t) => (
-                                <option key={t.user_id} value={t.user_id}>{t.name}</option>
+                                <option key={t.user_id} value={t.user_id}>
+                                  {t.assignee_kind === 'internal' ? `${t.name} (Internal)` : t.name}
+                                </option>
                             ))}
                         </select>
                     </label>

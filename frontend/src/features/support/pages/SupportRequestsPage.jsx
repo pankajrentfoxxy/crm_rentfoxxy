@@ -118,6 +118,8 @@ function ConvertModal({ request, onClose, onConverted }) {
   const [busy, setBusy] = useState(false);
   const [search, setSearch] = useState('');
   const [searching, setSearching] = useState(false);
+  const [assignees, setAssignees] = useState([]);
+  const [assignedTo, setAssignedTo] = useState(request.prefill_assigned_to ? String(request.prefill_assigned_to) : '');
 
   const pickupDevices = Array.isArray(request.extra?.devices) && request.extra.devices.length
     ? request.extra.devices
@@ -136,6 +138,12 @@ function ConvertModal({ request, onClose, onConverted }) {
     })();
     return () => { cancelled = true; };
   }, [request.id]);
+
+  useEffect(() => {
+    api.get('/support/technicians')
+      .then((r) => setAssignees(r.data.technicians || []))
+      .catch(() => setAssignees([]));
+  }, []);
 
   const runSearch = async () => {
     const q = search.trim();
@@ -169,6 +177,7 @@ function ConvertModal({ request, onClose, onConverted }) {
         customer_id: Number(customerId),
         priority,
         ticket_category: isPickup ? 'pickup' : 'complaint',
+        assigned_to: assignedTo ? Number(assignedTo) : undefined,
       });
       toast.success(data.message || `Ticket T-${data.ticket_id} created`);
       onConverted?.(data);
@@ -223,6 +232,18 @@ function ConvertModal({ request, onClose, onConverted }) {
             normal pickup workflow.
           </p>
         ) : null}
+
+        <label className="block text-sm mb-3">
+          <span className="text-xs font-semibold text-slate-600">Assign to</span>
+          <select className="mt-1 w-full border rounded-lg px-3 py-2 text-sm" value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)}>
+            <option value="">Unassigned</option>
+            {assignees.map((person) => (
+              <option key={person.user_id} value={person.user_id}>
+                {person.assignee_kind === 'internal' ? `${person.name} (Internal)` : person.name}
+              </option>
+            ))}
+          </select>
+        </label>
 
         <label className="block text-sm mb-3">
           <span className="text-xs font-semibold text-slate-600">Priority</span>
@@ -393,6 +414,7 @@ export default function SupportRequestsPage() {
   const [detail, setDetail] = useState(null);
   const [convertReq, setConvertReq] = useState(null);
   const [rejectReq, setRejectReq] = useState(null);
+  const [assignees, setAssignees] = useState([]);
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [showQr, setShowQr] = useState(false);
 
@@ -423,6 +445,13 @@ export default function SupportRequestsPage() {
   }, [status, q, from, to]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!canAct) return;
+    api.get('/support/technicians')
+      .then((r) => setAssignees(r.data.technicians || []))
+      .catch(() => setAssignees([]));
+  }, [canAct]);
 
   useEffect(() => {
     let cancelled = false;
@@ -572,6 +601,23 @@ export default function SupportRequestsPage() {
                           <button type="button" onClick={() => setConvertReq(r)} className="text-xs text-indigo-700 hover:underline inline-flex items-center gap-1 mr-2">
                             <Ticket className="w-3.5 h-3.5" /> Create ticket
                           </button>
+                          <select
+                            className="text-xs border rounded px-1 py-0.5 max-w-[140px] mr-2"
+                            defaultValue=""
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              e.target.value = '';
+                              if (!value) return;
+                              setConvertReq({ ...r, prefill_assigned_to: value });
+                            }}
+                          >
+                            <option value="">Assign…</option>
+                            {assignees.map((person) => (
+                              <option key={person.user_id} value={person.user_id}>
+                                {person.assignee_kind === 'internal' ? `${person.name} (Internal)` : person.name}
+                              </option>
+                            ))}
+                          </select>
                           <button type="button" onClick={() => setRejectReq(r)} className="text-xs text-rose-700 hover:underline inline-flex items-center gap-1">
                             <Ban className="w-3.5 h-3.5" /> Reject
                           </button>

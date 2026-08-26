@@ -4,7 +4,7 @@ import { Loader2, Search, Plus, CheckCircle2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../utils/api';
 import { isSupportLead } from '../../utils/supportAccess';
-import { ticketHasUnassignedTechnicianSlots } from './utils';
+import { ticketHasUnassignedAssigneeSlots } from './utils';
 import { useAuth } from '../../context/AuthContext';
 import TicketCard from './components/TicketCard';
 import SupportTicketList from './SupportTicketList';
@@ -179,7 +179,7 @@ function SupportTicketsViewCards({ view = 'active', showFilters = true, splitSec
                     key={ticket.id}
                     ticket={ticket}
                     technicians={technicians}
-                    canAssign={isSupportLead(user) && ticketHasUnassignedTechnicianSlots(ticket)}
+                    canAssign={isSupportLead(user) && ticketHasUnassignedAssigneeSlots(ticket)}
                     onAssigned={handleAssign}
                   />
                 ))}

@@ -8,7 +8,8 @@ import {
   formatUpdatedLabel,
   initials,
   isUrgentPickup,
-  ticketHasUnassignedTechnicianSlots
+  assigneeOptionLabel,
+  ticketHasUnassignedAssigneeSlots
 } from '../utils';
 
 export default function TicketCard({ ticket, closed, technicians = [], canAssign, onAssigned }) {
@@ -18,7 +19,7 @@ export default function TicketCard({ ticket, closed, technicians = [], canAssign
   const status = displayStatus(ticket);
   const urgent = isUrgentPickup(ticket.items);
   const techs = [...new Map((ticket.items || []).filter((i) => i.assigned_to_name).map((i) => [i.assigned_to, i.assigned_to_name])).values()];
-  const canShowAssign = canAssign && ticketHasUnassignedTechnicianSlots(ticket);
+  const canShowAssign = canAssign && ticketHasUnassignedAssigneeSlots(ticket);
   const resolved = ticket.resolved_item_count || 0;
   const total = ticket.item_count || (ticket.items || []).length || 0;
   const hours = ticket.hours_since_last_update || 0;
@@ -95,7 +96,7 @@ export default function TicketCard({ ticket, closed, technicians = [], canAssign
           ) : canShowAssign ? (
             <div className="relative">
               <button type="button" className="support-btn-assign" disabled={assigning} onClick={() => setOpenAssign((v) => !v)}>
-                <Plus className="w-3.5 h-3.5" /> Assign technician
+                <Plus className="w-3.5 h-3.5" /> Assign
               </button>
               {openAssign && (
                 <div className="absolute z-20 mt-1 w-56 bg-white border border-slate-200 rounded-lg shadow-lg max-h-48 overflow-auto">
@@ -107,7 +108,7 @@ export default function TicketCard({ ticket, closed, technicians = [], canAssign
                       onClick={() => assignAll(t.user_id)}
                     >
                       <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-[10px]">{initials(t.name)}</span>
-                      <span className="text-sm">{t.name}</span>
+                      <span className="text-sm">{assigneeOptionLabel(t)}</span>
                       <span className="text-xs text-slate-500 ml-auto">({t.open_ticket_count || 0})</span>
                     </button>
                   ))}

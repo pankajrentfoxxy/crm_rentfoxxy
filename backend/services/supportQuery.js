@@ -1,5 +1,5 @@
 const pool = require('../config/db');
-const { isSupportLead, isSupportTechnician } = require('../middleware/supportAccess');
+const { isAssignedTicketsOnly } = require('../middleware/supportAccess');
 const { appendSupportAssignedFilter, scopeUserId } = require('./dataScopeService');
 
 const DEFAULT_OVERDUE_HOURS = 48;
@@ -360,7 +360,7 @@ const countTicketsByType = async (filters) => {
 const dashboardSummary = async (user) => {
     const settings = await getSettings();
     const oh = settings.overdue_threshold_hours;
-    const techOnly = isSupportTechnician(user) && !isSupportLead(user);
+    const techOnly = isAssignedTicketsOnly(user);
     const techId = user.user_id;
 
     const techTicketExists = techOnly
@@ -537,7 +537,7 @@ const countTicketsByStatus = async ({
 const navBadges = async (user) => {
     const settings = await getSettings();
     const oh = settings.overdue_threshold_hours;
-    if (isSupportTechnician(user) && !isSupportLead(user)) {
+    if (isAssignedTicketsOnly(user)) {
         const { rows } = await pool.query(
             `
             SELECT

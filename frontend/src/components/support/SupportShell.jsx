@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import api from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
-import { canAccessCustomerInventory, canCancelSupportTicket, isSupportLead, isSupportTechnician } from '../../utils/supportAccess';
+import { canAccessCustomerInventory, canCancelSupportTicket, isAssignedTicketsOnly, isSupportLead } from '../../utils/supportAccess';
 import usePermission from '../../hooks/usePermission';
 import './support.css';
 
@@ -21,11 +21,11 @@ function NavItem({ to, icon: Icon, label, badge, badgeDanger }) {
 }
 
 export default function SupportShell() {
-  const { user } = useAuth();
+  const { user, isAssignedDataOnly } = useAuth();
   const { canView } = usePermission();
   const location = useLocation();
   const [badges, setBadges] = useState({});
-  const techOnly = isSupportTechnician(user) && !isSupportLead(user);
+  const techOnly = isAssignedTicketsOnly(user, isAssignedDataOnly);
   const canCreate = isSupportLead(user);
   const showMyDeliveries = canView('technician_bucket');
 
@@ -78,7 +78,7 @@ export default function SupportShell() {
               <NavItem to="/support/tech-bucket" icon={Package} label="Parts bucket" />
 
               <div className="support-nav-label">Manage</div>
-              {(user?.role === 'admin' || user?.role === 'manager' || user?.role === 'support_lead') && (
+              {isSupportLead(user) && (
                 <NavItem to="/support/stats" icon={BarChart2} label="Stats & Reports" />
               )}
               <NavItem to="/support/technicians" icon={Users} label="Technicians" />

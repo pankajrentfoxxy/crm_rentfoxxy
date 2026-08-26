@@ -1,7 +1,7 @@
 import React from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { isSupportLead, isSupportTechnician, canCancelSupportTicket } from '../../utils/supportAccess';
+import { isSupportLead, canCancelSupportTicket, isAssignedTicketsOnly } from '../../utils/supportAccess';
 import CancelledTicketsPage from './CancelledTicketsPage';
 import SupportShell from './SupportShell';
 import SupportDashboard from './SupportDashboard';
@@ -20,8 +20,8 @@ import SupportRequestsPage from '../../features/support/pages/SupportRequestsPag
 import ChallanViewPage from '../../features/support/pages/ChallanViewPage';
 
 function SupportHomeRedirect() {
-  const { user } = useAuth();
-  if (isSupportTechnician(user) && !isSupportLead(user)) {
+  const { user, isAssignedDataOnly } = useAuth();
+  if (isAssignedTicketsOnly(user, isAssignedDataOnly)) {
     return <Navigate to="/support/my-tickets" replace />;
   }
   return <Navigate to="/support/overview" replace />;
@@ -35,7 +35,7 @@ function LeadOnly({ children }) {
 
 function StatsOnly({ children }) {
   const { user } = useAuth();
-  if (!['super_admin', 'admin', 'manager', 'support_lead'].includes(user?.role)) {
+  if (!isSupportLead(user)) {
     return <Navigate to="/support/overview" replace />;
   }
   return children;

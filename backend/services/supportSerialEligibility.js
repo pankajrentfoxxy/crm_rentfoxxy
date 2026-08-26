@@ -108,9 +108,6 @@ function eligibilityMessage({ serial, outboundDc, ticketCategory = 'ticket' }) {
   if (!SUPPORT_TICKET_ELIGIBLE_STATUSES.includes(st)) {
     return `${label} is not deployed with the customer (status: ${st || 'unknown'}). Cannot create a ${ticketCategory}.`;
   }
-  if (!serial.delivered_at) {
-    return `${label} has not been marked delivered to the customer yet. Cannot create a ${ticketCategory}.`;
-  }
   if (Number(serial.current_customer_id) !== Number(serial._customerId)) {
     return `${label} is not assigned to this customer. Cannot create a ${ticketCategory}.`;
   }
