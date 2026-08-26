@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import api from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
-import { canAccessCustomerInventory, canCancelSupportTicket, isAssignedTicketsOnly, isSupportLead } from '../../utils/supportAccess';
+import { canAccessCustomerInventory, canCancelSupportTicket, isAssignedTicketsOnly, isSupportLead, isWarehouseTicketLead } from '../../utils/supportAccess';
 import usePermission from '../../hooks/usePermission';
 import './support.css';
 
@@ -26,6 +26,7 @@ export default function SupportShell() {
   const location = useLocation();
   const [badges, setBadges] = useState({});
   const techOnly = isAssignedTicketsOnly(user, isAssignedDataOnly);
+  const warehouseLead = isWarehouseTicketLead(user);
   const canCreate = isSupportLead(user);
   const showMyDeliveries = canView('technician_bucket');
 
@@ -46,11 +47,15 @@ export default function SupportShell() {
             <nav>
               <div className="support-nav-label">Work</div>
               <NavItem to="/support/my-tickets" icon={ClipboardList} label="My tickets" badge={badges.my_open} badgeDanger />
-              {showMyDeliveries && (
+              {!warehouseLead && showMyDeliveries && (
                 <NavItem to="/sales-pipeline/my-deliveries" icon={Truck} label="My deliveries" />
               )}
-              <NavItem to="/support/my-pickups" icon={Truck} label="My pickups" />
-              <NavItem to="/support/tech-bucket" icon={Package} label="My parts" />
+              {!warehouseLead && (
+                <>
+                  <NavItem to="/support/my-pickups" icon={Truck} label="My pickups" />
+                  <NavItem to="/support/tech-bucket" icon={Package} label="My parts" />
+                </>
+              )}
               <NavItem to="/support/my-resolved" icon={CheckCircle2} label="Resolved by me" badge={badges.my_resolved} />
             </nav>
           ) : (
@@ -103,7 +108,7 @@ export default function SupportShell() {
             <NavLink to="/support/my-tickets" className={({ isActive }) => (isActive ? 'active' : '')}>
               <ClipboardList className="w-5 h-5" /> My tickets
             </NavLink>
-            {showMyDeliveries && (
+            {!warehouseLead && showMyDeliveries && (
               <NavLink to="/sales-pipeline/my-deliveries" className={({ isActive }) => (isActive ? 'active' : '')}>
                 <Truck className="w-5 h-5" /> Deliveries
               </NavLink>

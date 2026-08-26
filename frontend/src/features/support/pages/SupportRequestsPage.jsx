@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import QRCode from 'qrcode';
 import api from '../../../utils/api';
 import { isSupportLead } from '../../../utils/supportAccess';
+import { assigneeOptionLabel } from '../../../components/support/utils';
 import { useAuth } from '../../../context/AuthContext';
 
 function statusTone(status) {
@@ -239,7 +240,7 @@ function ConvertModal({ request, onClose, onConverted }) {
             <option value="">Unassigned</option>
             {assignees.map((person) => (
               <option key={person.user_id} value={person.user_id}>
-                {person.assignee_kind === 'internal' ? `${person.name} (Internal)` : person.name}
+                {assigneeOptionLabel(person)}
               </option>
             ))}
           </select>
@@ -614,7 +615,7 @@ export default function SupportRequestsPage() {
                             <option value="">Assign…</option>
                             {assignees.map((person) => (
                               <option key={person.user_id} value={person.user_id}>
-                                {person.assignee_kind === 'internal' ? `${person.name} (Internal)` : person.name}
+                                {assigneeOptionLabel(person)}
                               </option>
                             ))}
                           </select>

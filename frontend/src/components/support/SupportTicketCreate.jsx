@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, Check, ChevronDown, ChevronUp, Loader2, Search } from 'lucide-react';
 import api from '../../utils/api';
 import { formatIndianMobileInput, indianMobileError, normalizeIndianMobile } from '../../utils/phoneValidation';
-import { formatAddress } from './utils';
+import { assigneeOptionLabel, formatAddress } from './utils';
 import PickupSetupForm from './components/PickupSetupForm';
 import './support.css';
 
@@ -481,7 +481,7 @@ export default function SupportTicketCreate() {
                             <option value="">Unassigned</option>
                             {technicians.map((t) => (
                                 <option key={t.user_id} value={t.user_id}>
-                                  {t.assignee_kind === 'internal' ? `${t.name} (Internal)` : t.name}
+                                  {assigneeOptionLabel(t)}
                                 </option>
                             ))}
                         </select>

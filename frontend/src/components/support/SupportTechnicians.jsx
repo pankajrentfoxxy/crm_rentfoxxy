@@ -9,7 +9,7 @@ export default function SupportTechnicians() {
 
   useEffect(() => {
     api.get('/support/technicians')
-      .then((r) => setRows((r.data.technicians || []).filter((row) => row.assignee_kind !== 'internal')))
+      .then((r) => setRows((r.data.technicians || []).filter((row) => row.assignee_kind === 'technician')))
       .catch(() => setRows([]))
       .finally(() => setLoading(false));
   }, []);

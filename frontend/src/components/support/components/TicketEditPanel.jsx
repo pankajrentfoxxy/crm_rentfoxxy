@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import api from '../../../utils/api';
 import { formatIndianMobileInput, indianMobileError, normalizeIndianMobile } from '../../../utils/phoneValidation';
-import { formatAddress, itemAllowsTechnicianAssign } from '../utils';
+import { assigneeOptionLabel, formatAddress, itemAllowsTechnicianAssign } from '../utils';
 
 const emptyRow = () => ({
   key: `new-${Date.now()}-${Math.random()}`,
@@ -184,7 +184,7 @@ export default function TicketEditPanel({ ticket, items, customerAddresses, tech
               <option value="">Assign technician</option>
               {technicians.map((t) => (
                 <option key={t.user_id} value={t.user_id}>
-                  {t.assignee_kind === 'internal' ? `${t.name} (Internal)` : t.name} ({t.open_ticket_count || 0})
+                  {assigneeOptionLabel(t)} ({t.open_ticket_count || 0})
                 </option>
               ))}
             </select>

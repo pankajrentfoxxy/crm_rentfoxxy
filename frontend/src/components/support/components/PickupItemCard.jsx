@@ -21,7 +21,7 @@ import AssignmentHistoryList from './AssignmentHistoryList';
  * Assigned -> Reached (GPS) -> POD photo -> Customer OTP -> Warehouse e-sign.
  * Rendered for item_type='pickup' items that carry a pickup_type.
  */
-export default function PickupItemCard({ item, ticket, onRefresh, assignmentHistory = [] }) {
+export default function PickupItemCard({ item, ticket, onRefresh, assignmentHistory = [], isTicketLead = false }) {
   const { user } = useAuth();
   const [esignOpen, setEsignOpen] = useState(false);
   const [techSignOpen, setTechSignOpen] = useState(false);
@@ -42,7 +42,7 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
     finally { setBusy(false); }
   };
 
-  const lead = isSupportLead(user);
+  const lead = isTicketLead || isSupportLead(user);
   const tech = isSupportTechnician(user);
   const readOnly = ticket?.status === 'cancelled';
   const isWH = !readOnly && ['warehouse', 'admin', 'support_lead', 'manager', 'floor_manager', 'super_admin'].includes(user?.role);

@@ -4,7 +4,7 @@ import { Loader2, Search, Download, Plus, MessageSquare } from 'lucide-react';
 import api from '../../utils/api';
 import { canCloseSupportTicket, isSupportLead } from '../../utils/supportAccess';
 import { useAuth } from '../../context/AuthContext';
-import { assigneeOptionLabel, displayStatus, formatRelative, formatTicketId, podUrl, ticketHasUnassignedAssigneeSlots, ticketPickupKind, ticketSubTypeLabel } from './utils';
+import { assigneeOptionLabel, displayStatus, formatRelative, formatTicketId, podUrl, ticketCanChangeAssignee, ticketHasUnassignedAssigneeSlots, ticketPickupKind, ticketSubTypeLabel } from './utils';
 import TtsplHistoryDrawer from '../../features/floor-pipeline/components/TtsplHistoryDrawer';
 import { ListPagination } from '../../components/ui/primitives';
 
@@ -94,6 +94,22 @@ function assignedLabel(ticket) {
 
 function isUnassigned(ticket) {
   return ticketHasUnassignedAssigneeSlots(ticket);
+}
+
+function AssigneeSelect({ ticket, technicians, onAssign }) {
+  const unassigned = isUnassigned(ticket);
+  return (
+    <select
+      className="text-xs border rounded px-1 py-0.5 max-w-[140px]"
+      defaultValue=""
+      onChange={(e) => { if (e.target.value) onAssign(ticket.id, e.target.value); e.target.value = ''; }}
+    >
+      <option value="">{unassigned ? 'Assign' : 'Reassign'}</option>
+      {technicians.map((tech) => (
+        <option key={tech.user_id} value={tech.user_id}>{assigneeOptionLabel(tech)}</option>
+      ))}
+    </select>
+  );
 }
 
 function IssueCommentPreview({ ticket }) {
@@ -555,15 +571,10 @@ export default function SupportTicketList() {
                   <IssueCommentPreview ticket={ticket} />
                   <Link {...ticketLinkProps(ticket.id)} className="text-sm font-semibold text-blue-600 min-h-[36px] inline-flex items-center">View</Link>
                   {url && <a href={url} target="_blank" rel="noopener noreferrer" className="text-sm text-emerald-600 min-h-[36px] inline-flex items-center">POD</a>}
-                  {isSupportLead(user) && isUnassigned(ticket) && (
-                    <select
-                      className="text-xs border rounded-lg px-2 min-h-[36px] ml-auto"
-                      defaultValue=""
-                      onChange={(e) => { if (e.target.value) handleAssign(ticket.id, e.target.value); e.target.value = ''; }}
-                    >
-                      <option value="">Assign</option>
-                      {technicians.map((tech) => (<option key={tech.user_id} value={tech.user_id}>{assigneeOptionLabel(tech)}</option>))}
-                    </select>
+                  {isSupportLead(user) && ticketCanChangeAssignee(ticket) && (
+                    <span className="ml-auto">
+                      <AssigneeSelect ticket={ticket} technicians={technicians} onAssign={handleAssign} />
+                    </span>
                   )}
                   {canCloseSupportTicket(user) && ticket.status !== 'closed' && (
                     <button type="button" onClick={() => handleClose(ticket.id)} className="text-sm text-red-600 min-h-[36px] inline-flex items-center">Close</button>
@@ -649,17 +660,8 @@ export default function SupportTicketList() {
                             <a href={url} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline text-xs">POD</a>
                           ) : null;
                         })()}
-                        {isSupportLead(user) && isUnassigned(ticket) && (
-                          <select
-                            className="text-xs border rounded px-1 py-0.5 max-w-[100px]"
-                            defaultValue=""
-                            onChange={(e) => { if (e.target.value) handleAssign(ticket.id, e.target.value); e.target.value = ''; }}
-                          >
-                            <option value="">Assign</option>
-                            {technicians.map((tech) => (
-                              <option key={tech.user_id} value={tech.user_id}>{assigneeOptionLabel(tech)}</option>
-                            ))}
-                          </select>
+                        {isSupportLead(user) && ticketCanChangeAssignee(ticket) && (
+                          <AssigneeSelect ticket={ticket} technicians={technicians} onAssign={handleAssign} />
                         )}
                         {canCloseSupportTicket(user) && ticket.status !== 'closed' && (
                           <button type="button" onClick={() => handleClose(ticket.id)} className="text-xs text-red-600 hover:underline">

@@ -5,7 +5,7 @@ import toast from 'react-hot-toast';
 import TtsplHistoryDrawer from '../../features/floor-pipeline/components/TtsplHistoryDrawer';
 import api from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
-import { canCancelSupportTicket, canCloseSupportTicket, isSupportLead, isSupportTechnician } from '../../utils/supportAccess';
+import { canActAsTicketLead, canCancelSupportTicket, canCloseSupportTicket, isAssignedTicketsOnly, isSupportLead, isSupportTechnician, isSupportTicketAssignee } from '../../utils/supportAccess';
 import CancelTicketModal from './components/CancelTicketModal';
 import OtpInput from './components/OtpInput';
 import ItemStepper from './components/ItemStepper';
@@ -34,7 +34,9 @@ import {
   isMigratedPickupStuck,
   hasWarehouseReturnPickup,
   podUrl as podUrlFor,
-  compressImageFile
+  compressImageFile,
+  assigneeOptionLabel,
+  isFieldTechnicianAssignee,
 } from './utils';
 import './support.css';
 
@@ -71,6 +73,7 @@ function ItemCard({
   otpNote,
   workflowActions,
   assignmentHistory = [],
+  isTicketLead = false,
 }) {
   const { user } = useAuth();
   const [comment, setComment] = useState('');
@@ -78,7 +81,7 @@ function ItemCard({
   const [verifyInput, setVerifyInput] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const lead = isSupportLead(user);
+  const lead = isTicketLead || isSupportLead(user);
   const tech = isSupportTechnician(user);
   const st = item.effective_current_step || (item.assigned_to ? 'assigned' : 'unassigned');
   const canAct = ticket.status !== 'cancelled' && (lead || (tech && item.assigned_to === user.user_id));
@@ -159,6 +162,7 @@ function ItemCard({
             ticket={ticket}
             onRefresh={onRefresh}
             assignmentHistory={assignmentHistory}
+            isTicketLead={isTicketLead}
           />
         ) : (
         <SpecGrid item={item} />
@@ -208,8 +212,10 @@ function ItemCard({
                 disabled={busy}
               >
                 <option value="">Assign technician</option>
-                {technicians.map((t) => (
-                  <option key={t.user_id} value={t.user_id}>{t.assignee_kind === 'internal' ? `${t.name} (Internal)` : t.name}</option>
+                {technicians
+                  .filter((t) => isFieldTechnicianAssignee(t) || Number(t.user_id) === Number(item.assigned_to))
+                  .map((t) => (
+                  <option key={t.user_id} value={t.user_id}>{assigneeOptionLabel(t)}</option>
                 ))}
               </select>
             </div>
@@ -837,10 +843,11 @@ function PickupStatusBanner({ ticket, pickups, ticketId, isLead, onRefresh, assi
 export default function SupportTicketDetail() {
   const { ticketId } = useParams();
   const location = useLocation();
-  const { user } = useAuth();
+  const { user, isAssignedDataOnly } = useAuth();
+  const assignedOnly = isAssignedTicketsOnly(user, isAssignedDataOnly);
   const ticketsBackTo = location.state?.ticketsListSearch
     ? `/support/tickets?${location.state.ticketsListSearch}`
-    : '/support/tickets';
+    : (assignedOnly ? '/support/my-tickets' : '/support/tickets');
   const [data, setData] = useState(null);
   const [technicians, setTechnicians] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -894,7 +901,7 @@ export default function SupportTicketDetail() {
   }, [data?.ticket?.customer_id]);
 
   useEffect(() => {
-    if (!isSupportLead(user)) return;
+    if (!isSupportLead(user) && !isSupportTicketAssignee(user)) return;
     api.get('/support/technicians').then((r) => setTechnicians(r.data.technicians || [])).catch(() => setTechnicians([]));
     api.get('/support/categories').then((r) => setCategories(r.data.categories || [])).catch(() => setCategories([]));
   }, [user]);
@@ -960,6 +967,7 @@ export default function SupportTicketDetail() {
   } = data;
   const items = Array.isArray(rawItems) ? rawItems : [];
   const audit = Array.isArray(rawAudit) ? rawAudit : [];
+  const ticketLead = canActAsTicketLead(user, ticket, items);
   const isCancelled = ticket.status === 'cancelled';
   const resolvedCount = items.filter((i) => ['resolved', 'closed', 'inventory_updated'].includes(i.status)).length;
   const allResolved = items.length > 0 && resolvedCount === items.length;
@@ -976,11 +984,11 @@ export default function SupportTicketDetail() {
     if (c.outcome === 'replacement_required') return true;
     return replacementOrders.some((o) => o.source_item_id === c.id && o.status === 'cancelled');
   });
-  const canInitiateReplacement = isSupportLead(user) && eligibleForReplacement.length > 0;
+  const canInitiateReplacement = ticketLead && eligibleForReplacement.length > 0;
   const replacementActionLabel = ticket.return_dc_number && ticket.sales_order_number
     ? `Add to replacement (${eligibleForReplacement.length})`
     : 'Initiate replacement';
-  const canMoveToReplacement = isSupportLead(user) && complaintForReplacement
+  const canMoveToReplacement = ticketLead && complaintForReplacement
     && complaintForReplacement.outcome !== 'replacement_required'
     && !complaintForReplacement.replacement_flag_reason;
 
@@ -991,9 +999,9 @@ export default function SupportTicketDetail() {
     && replacementOrders.some((o) => o.status !== 'completed' && o.status !== 'cancelled');
   const showSwapTab = repairPickupsInWarehouse.length > 0
     || pickups.some((p) => p.status === 'swap_initiated');
-  const canOpenRepairSwap = isSupportLead(user) && showSwapTab && !hasActiveReplacementSo;
+  const canOpenRepairSwap = ticketLead && showSwapTab && !hasActiveReplacementSo;
   const warehouseReturnDone = hasWarehouseReturnPickup(pickups);
-  const canSendReplacementLaptop = isSupportLead(user) && !isCancelled && warehouseReturnDone;
+  const canSendReplacementLaptop = ticketLead && !isCancelled && warehouseReturnDone;
 
   const tabItems = tab === 'complaint'
     ? complaints
@@ -1010,7 +1018,7 @@ export default function SupportTicketDetail() {
   const activePickupExists = pickups.some((p) => !['resolved', 'closed', 'inventory_updated'].includes(p.status));
 
   const workflowForItem = (item) => {
-    if (!isSupportLead(user) || ticket.status === 'closed' || isCancelled) return null;
+    if (!ticketLead || ticket.status === 'closed' || isCancelled) return null;
     const resolved = ['resolved', 'closed'].includes(item.status);
     const actions = {
       onAddPhase: (type) => (type === 'pickup'
@@ -1063,10 +1071,10 @@ export default function SupportTicketDetail() {
   return (
     <div className="space-y-4 support-ticket-detail">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <Link to={ticketsBackTo} className="text-sm min-h-[44px] inline-flex items-center" style={{ color: 'var(--support-primary)' }}>← All tickets</Link>
+        <Link to={ticketsBackTo} className="text-sm min-h-[44px] inline-flex items-center" style={{ color: 'var(--support-primary)' }}>{assignedOnly ? '← My tickets' : '← All tickets'}</Link>
         <div className="flex flex-wrap gap-2">
           <button type="button" className="support-btn-outline lg:hidden min-h-[44px]" onClick={() => setMobileDetails(true)}>Details</button>
-          {isSupportLead(user) && !isCancelled && (
+          {ticketLead && !isCancelled && (
             <>
               {canMoveToReplacement && (
                 <button
@@ -1111,7 +1119,7 @@ export default function SupportTicketDetail() {
             <p className="font-semibold text-emerald-950 text-sm">Replacement Laptop Delivered — Ready to Initiate Pickup</p>
             <p className="text-xs text-emerald-900/80 mt-0.5">Faulty unit return pickup has not started yet.</p>
           </div>
-          {isSupportLead(user) && (
+          {ticketLead && (
             <button
               type="button"
               className="support-btn-primary min-h-[40px] text-sm shrink-0"
@@ -1157,7 +1165,7 @@ export default function SupportTicketDetail() {
         />
       )}
 
-      {editing && isSupportLead(user) && !isCancelled && (
+      {editing && ticketLead && !isCancelled && (
         <TicketEditPanel
           ticket={ticket}
           items={items}
@@ -1239,7 +1247,7 @@ export default function SupportTicketDetail() {
               replacementOrders={replacementOrders}
               pickups={pickups}
               ticketId={ticket.id}
-              isLead={isSupportLead(user)}
+              isLead={ticketLead}
               onRefresh={load}
               assignmentHistory={assignmentHistory}
             />
@@ -1251,7 +1259,7 @@ export default function SupportTicketDetail() {
               ticket={ticket}
               pickups={pickups}
               ticketId={ticket.id}
-              isLead={isSupportLead(user)}
+              isLead={ticketLead}
               onRefresh={load}
               assignmentHistory={assignmentHistory}
             />
@@ -1284,7 +1292,7 @@ export default function SupportTicketDetail() {
                 <NewReplacementOrderPanel
                   ticket={ticket}
                   ticketId={ticket.id}
-                  isLead={isSupportLead(user)}
+                  isLead={ticketLead}
                   onRefresh={load}
                   onCreated={() => setShowNewReplacement(false)}
                 />
@@ -1293,7 +1301,7 @@ export default function SupportTicketDetail() {
                 <ResendLaptopPanel
                   ticketId={ticket.id}
                   ticket={ticket}
-                  isLead={isSupportLead(user)}
+                  isLead={ticketLead}
                   onRefresh={load}
                   onDone={() => setShowResendLaptop(false)}
                 />
@@ -1311,7 +1319,7 @@ export default function SupportTicketDetail() {
             pickups={pickups}
             replacementOrders={replacementOrders}
             ticketId={ticket.id}
-            isLead={isSupportLead(user)}
+            isLead={ticketLead}
             onRefresh={load}
           />
 
@@ -1345,7 +1353,7 @@ export default function SupportTicketDetail() {
                   pickups={pickups}
                   replacementOrders={replacementOrders}
                   ticketId={ticket.id}
-                  isLead={isSupportLead(user)}
+                  isLead={ticketLead}
                   onRefresh={load}
                   onSwapCreated={() => setTab('replacement')}
                 />
@@ -1360,7 +1368,8 @@ export default function SupportTicketDetail() {
                   replacementOrder={(replacementOrders || []).find((o) => o.item_id === item.id)}
                   onRefresh={load}
                   technicians={technicians}
-                  canAssign={!isCancelled && isSupportLead(user) && itemAllowsTechnicianAssign(item)}
+                  canAssign={!isCancelled && ticketLead && itemAllowsTechnicianAssign(item)}
+                  isTicketLead={ticketLead}
                   otpNote={otpNote}
                   workflowActions={workflowForItem(item)}
                   assignmentHistory={assignmentHistory}
@@ -1447,8 +1456,8 @@ export default function SupportTicketDetail() {
             otpNote={otpNote}
             mobileOpen={mobileDetails}
             onCloseMobile={() => setMobileDetails(false)}
-            showLeadOtp={isSupportLead(user)}
-            onPriorityChange={!isCancelled && isSupportLead(user) ? onPriorityChange : null}
+            showLeadOtp={ticketLead}
+            onPriorityChange={!isCancelled && ticketLead ? onPriorityChange : null}
           />
         </div>
       </div>

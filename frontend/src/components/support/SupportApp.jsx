@@ -27,9 +27,19 @@ function SupportHomeRedirect() {
   return <Navigate to="/support/overview" replace />;
 }
 
+function AssignedQueueBlock({ children }) {
+  const { user, isAssignedDataOnly } = useAuth();
+  if (isAssignedTicketsOnly(user, isAssignedDataOnly)) {
+    return <Navigate to="/support/my-tickets" replace />;
+  }
+  return children;
+}
+
 function LeadOnly({ children }) {
-  const { user } = useAuth();
-  if (!isSupportLead(user)) return <Navigate to="/support/overview" replace />;
+  const { user, isAssignedDataOnly } = useAuth();
+  if (isAssignedTicketsOnly(user, isAssignedDataOnly) || !isSupportLead(user)) {
+    return <Navigate to={isAssignedTicketsOnly(user, isAssignedDataOnly) ? '/support/my-tickets' : '/support/overview'} replace />;
+  }
   return children;
 }
 
@@ -66,15 +76,15 @@ export default function SupportApp() {
     <Routes>
       <Route element={<SupportShell />}>
         <Route index element={<SupportHomeRedirect />} />
-        <Route path="overview" element={<SupportOverviewPage />} />
+        <Route path="overview" element={<AssignedQueueBlock><SupportOverviewPage /></AssignedQueueBlock>} />
         <Route path="dashboard" element={<Navigate to="/support/overview" replace />} />
         <Route path="stats" element={<StatsOnly><SupportStatsPage /></StatsOnly>} />
-        <Route path="tickets" element={<SupportTicketsView view="all" splitSections showFilters enhancedList />} />
-        <Route path="requests" element={<SupportRequestsPage />} />
-        <Route path="pending-assign" element={<SupportTicketsView view="pending_assign" showFilters />} />
-        <Route path="overdue" element={<SupportTicketsView view="overdue" showFilters />} />
-        <Route path="pickups" element={<SupportTicketsView view="pickups" showFilters />} />
-        <Route path="complaints" element={<SupportTicketsView view="complaints" showFilters />} />
+        <Route path="tickets" element={<AssignedQueueBlock><SupportTicketsView view="all" splitSections showFilters enhancedList /></AssignedQueueBlock>} />
+        <Route path="requests" element={<AssignedQueueBlock><SupportRequestsPage /></AssignedQueueBlock>} />
+        <Route path="pending-assign" element={<AssignedQueueBlock><SupportTicketsView view="pending_assign" showFilters /></AssignedQueueBlock>} />
+        <Route path="overdue" element={<AssignedQueueBlock><SupportTicketsView view="overdue" showFilters /></AssignedQueueBlock>} />
+        <Route path="pickups" element={<AssignedQueueBlock><SupportTicketsView view="pickups" showFilters /></AssignedQueueBlock>} />
+        <Route path="complaints" element={<AssignedQueueBlock><SupportTicketsView view="complaints" showFilters /></AssignedQueueBlock>} />
         <Route path="cancelled-tickets" element={<CancelSectionOnly><CancelledTicketsPage /></CancelSectionOnly>} />
         <Route path="my-tickets" element={<SupportTicketsView view="my_open" showFilters />} />
         <Route path="my-pickups" element={<MyDeliveriesPage movement="return" />} />

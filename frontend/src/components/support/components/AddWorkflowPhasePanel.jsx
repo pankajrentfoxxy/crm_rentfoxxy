@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Loader2, Plus, X } from 'lucide-react';
 import api from '../../../utils/api';
+import { assigneeOptionLabel } from '../utils';
 
 /** Add pickup or replacement phase items linked to a source complaint/replacement item. */
 export default function AddWorkflowPhasePanel({ ticketId, customerId, sourceItem, phaseType, onDone, onCancel }) {
@@ -73,7 +74,7 @@ export default function AddWorkflowPhasePanel({ ticketId, customerId, sourceItem
                     <select className="support-field" value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)}>
                         <option value="">Unassigned</option>
                         {technicians.map((t) => (
-                            <option key={t.user_id} value={t.user_id}>{t.assignee_kind === 'internal' ? `${t.name} (Internal)` : t.name}</option>
+                            <option key={t.user_id} value={t.user_id}>{assigneeOptionLabel(t)}</option>
                         ))}
                     </select>
                 </label>

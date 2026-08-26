@@ -399,11 +399,22 @@ export const ticketHasUnassignedAssigneeSlots = (ticket) => (
   )
 );
 
+/** Lead can assign or reassign while the ticket is still open. */
+export const ticketCanChangeAssignee = (ticket) => {
+  if (!ticket || ['closed', 'cancelled'].includes(String(ticket.status || ''))) return false;
+  const items = ticket.items || [];
+  if (!items.length) return true;
+  return items.some((item) => !['resolved', 'closed', 'cancelled'].includes(item.status));
+};
+
 export const assigneeOptionLabel = (person) => {
   if (!person) return '';
+  if (person.assignee_kind === 'warehouse') return `${person.name} (Warehouse)`;
   if (person.assignee_kind === 'internal') return `${person.name} (Internal)`;
   return person.name;
 };
+
+export const isFieldTechnicianAssignee = (person) => person?.assignee_kind === 'technician';
 
 export const resolveItemPickupKind = (item) => {
   if (!item || item.item_type !== 'pickup') return null;

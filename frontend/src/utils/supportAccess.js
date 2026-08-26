@@ -32,7 +32,26 @@ export const isSupportLead = (user) =>
 export const isSupportTicketAssignee = (user) =>
   Array.isArray(user?.permissions) && user.permissions.includes(SUPPORT_TICKET_ASSIGNEE_PERMISSION);
 
-/** Technician or internal assignee — only their assigned tickets, not lead tools. */
+/** Warehouse lead (not a field technician) — assigned-tickets view without tech nav. */
+export const isWarehouseTicketLead = (user) =>
+  Boolean(user && isSupportTicketAssignee(user) && !isSupportTechnician(user) && !isSupportLead(user));
+
+/** Warehouse lead: same ticket tools as support lead, but only tickets assigned to them. */
+export const ticketAssignedToUser = (ticket, items, user) => {
+  if (!user?.user_id) return false;
+  const list = items || ticket?.items || [];
+  return list.some((item) => Number(item.assigned_to) === Number(user.user_id));
+};
+
+export const canActAsTicketLead = (user, ticket, items) => {
+  if (isSupportLead(user)) return true;
+  return isSupportTicketAssignee(user) && ticketAssignedToUser(ticket, items, user);
+};
+
+/** Only real support leads may assign / reassign tickets from the list. */
+export const canAssignSupportTickets = (user) => isSupportLead(user);
+
+/** Technician or warehouse lead — only their assigned tickets, not the full queue. */
 export const isAssignedTicketsOnly = (user, isAssignedDataOnly) => {
   if (!user || isSupportLead(user)) return false;
   if (isSupportTechnician(user) || isSupportTicketAssignee(user)) return true;

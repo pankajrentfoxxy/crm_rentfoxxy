@@ -256,7 +256,7 @@ export default function PickupSetupForm({
             className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm mt-2"
           >
             <option value="">Select technician…</option>
-            {technicians.filter((t) => t.assignee_kind !== 'internal').map((t) => (
+            {technicians.filter((t) => t.assignee_kind === 'technician').map((t) => (
               <option key={t.user_id} value={t.user_id}>
                 {t.name}{t.mobile_no ? ` — ${t.mobile_no}` : ''}
               </option>

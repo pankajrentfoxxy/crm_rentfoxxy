@@ -2,7 +2,13 @@ const fs = require('fs');
 const path = require('path');
 const pool = require('../config/db');
 const { findBlockingTicket, blockingTicketMessage } = require('../utils/floorTicketSerialGuard');
-const { isSupportLead, isSupportTechnician, canCloseSupportTicket, canCancelSupportTicket, hasSupportTicketAssigneeGrant } = require('../middleware/supportAccess');
+const { isSupportLead, isSupportTechnician, canCloseSupportTicket, canCancelSupportTicket, hasSupportTicketAssigneeGrant, canManageAsTicketLead, isTicketAssignedToUser, isAssignedTicketsOnly } = require('../middleware/supportAccess');
+
+async function canLeadThisTicket(user, ticketId) {
+    if (isSupportLead(user)) return true;
+    if (!hasSupportTicketAssigneeGrant(user) || !ticketId) return false;
+    return isTicketAssignedToUser(ticketId, user.user_id);
+}
 const { deriveItemCurrentStep } = require('../services/supportTicketFlow');
 const { ensureCustomerTables } = require('../services/customerInventoryErpSyncService');
 const supportQuery = require('../services/supportQuery');
@@ -911,7 +917,8 @@ const mapItemRow = (row, { showOtp, showWarehouseOtp }) => {
 
 const getTicketWithItems = async (ticketId, user) => {
     const leadView = isSupportLead(user);
-    const techView = isSupportTechnician(user) || hasSupportTicketAssigneeGrant(user);
+    const warehouseLeadView = !leadView && hasSupportTicketAssigneeGrant(user);
+    const techView = isSupportTechnician(user) && !leadView && !warehouseLeadView;
 
     const ticketRes = await pool.query(
         `SELECT t.*, cb.name AS created_by_name, cx.name AS cancelled_by_name
@@ -964,6 +971,10 @@ const getTicketWithItems = async (ticketId, user) => {
     itemsSql += ' ORDER BY i.id ASC';
 
     const itemsRes = await pool.query(itemsSql, params);
+    if (warehouseLeadView) {
+        const assigned = itemsRes.rows.some((row) => Number(row.assigned_to) === Number(user.user_id));
+        if (!assigned) return null;
+    }
     if (techView && !leadView && itemsRes.rows.length === 0) {
         return null;
     }
@@ -1017,7 +1028,10 @@ const getTicketWithItems = async (ticketId, user) => {
         if (merged.item_type === 'pickup' && !merged.customer_otp_code && merged.otp_code) {
             merged.customer_otp_code = merged.otp_code;
         }
-        return mapItemRow(merged, { showOtp: leadView, showWarehouseOtp: leadView });
+        return mapItemRow(merged, {
+            showOtp: leadView || warehouseLeadView,
+            showWarehouseOtp: leadView || warehouseLeadView
+        });
     });
 
     const commentsByItem = {};
@@ -1050,7 +1064,7 @@ const getTicketWithItems = async (ticketId, user) => {
     }));
 
     let customerAddresses = [];
-    if (leadView) {
+    if (leadView || warehouseLeadView) {
         const custRes = await pool.query(
             'SELECT billing_address, shipping_address FROM existing_customer WHERE customer_id = $1',
             [ticket.customer_id]
@@ -1094,6 +1108,7 @@ exports.listTechnicians = async (req, res) => {
             `SELECT u.user_id, u.name, u.email, u.mobile_no, u.role, u.active,
                 CASE
                   WHEN u.role IN ('support_tech', 'support_lead') THEN 'technician'
+                  WHEN u.role = 'warehouse' THEN 'warehouse'
                   ELSE 'internal'
                 END AS assignee_kind,
                 (SELECT COUNT(DISTINCT i.ticket_id)::int FROM support_ticket_items i
@@ -1238,7 +1253,8 @@ exports.listTickets = async (req, res) => {
         const assignee = (req.query.assignee || '').trim();
         const dateFrom = (req.query.date_from || '').trim();
         const dateTo = (req.query.date_to || '').trim();
-        const assignedOnly = await isRestrictedToAssigned(req, 'support_tickets');
+        const assignedOnly = await isRestrictedToAssigned(req, 'support_tickets')
+            || isAssignedTicketsOnly(req.user);
         const data = await supportQuery.listTicketsEnriched({
             user: req.user,
             view,
@@ -1275,7 +1291,8 @@ exports.countTickets = async (req, res) => {
         const assignee = (req.query.assignee || '').trim();
         const dateFrom = (req.query.date_from || '').trim();
         const dateTo = (req.query.date_to || '').trim();
-        const assignedOnly = await isRestrictedToAssigned(req, 'support_tickets');
+        const assignedOnly = await isRestrictedToAssigned(req, 'support_tickets')
+            || isAssignedTicketsOnly(req.user);
         const counts = await supportQuery.countTicketsByType({
             user: req.user,
             view,
@@ -1304,7 +1321,8 @@ exports.countTicketsByStatus = async (req, res) => {
             dateFrom: req.query.date_from,
             dateTo: req.query.date_to,
         });
-        const assignedOnly = await isRestrictedToAssigned(req, 'support_tickets');
+        const assignedOnly = await isRestrictedToAssigned(req, 'support_tickets')
+            || isAssignedTicketsOnly(req.user);
         const counts = await supportQuery.countTicketsByStatus({
             user: req.user,
             assignedOnly,
@@ -1346,6 +1364,9 @@ exports.getNavBadges = async (req, res) => {
 };
 
 exports.createTicket = async (req, res) => {
+    if (!isSupportLead(req.user)) {
+        return res.status(403).json({ success: false, message: 'Only support lead can create tickets' });
+    }
     const {
         customer_id,
         customer_name,
@@ -1667,7 +1688,7 @@ exports.addComment = async (req, res) => {
     } catch (e) {
         return res.status(e.status || 500).json({ success: false, message: e.message });
     }
-    if (isSupportTechnician(req.user) && !isSupportLead(req.user) && item.assigned_to !== req.user.user_id) {
+    if (isSupportTechnician(req.user) && !canManageAsTicketLead(req.user) && item.assigned_to !== req.user.user_id) {
         return res.status(403).json({ success: false, message: 'Not assigned to this item' });
     }
 
@@ -1722,7 +1743,7 @@ exports.markWorkDone = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Item not found' });
         }
         const item = itemRes.rows[0];
-        if (item.assigned_to !== req.user.user_id && !isSupportLead(req.user)) {
+        if (item.assigned_to !== req.user.user_id && !(await canLeadThisTicket(req.user, item.ticket_id))) {
             return res.status(403).json({ success: false, message: 'Not assigned to this item' });
         }
         if (item.item_type === 'complaint' && item.outcome === 'fixed' && !item.pod_image_path) {
@@ -1765,7 +1786,7 @@ exports.uploadPod = async (req, res) => {
         return res.status(404).json({ success: false, message: 'Item not found' });
     }
     const item = itemRes.rows[0];
-    if (item.assigned_to !== req.user.user_id && !isSupportLead(req.user)) {
+    if (item.assigned_to !== req.user.user_id && !(await canLeadThisTicket(req.user, item.ticket_id))) {
         return res.status(403).json({ success: false, message: 'Not assigned to this item' });
     }
     // Phase 20 pickup flow: POD photo is taken at the customer site, after the
@@ -1828,7 +1849,7 @@ exports.verifyOtp = async (req, res) => {
         return res.status(404).json({ success: false, message: 'Item not found' });
     }
     const item = itemRes.rows[0];
-    if (item.assigned_to !== req.user.user_id && !isSupportLead(req.user)) {
+    if (item.assigned_to !== req.user.user_id && !(await canLeadThisTicket(req.user, item.ticket_id))) {
         return res.status(403).json({ success: false, message: 'Not assigned to this item' });
     }
     if (!item.pod_image_path) {
@@ -1935,7 +1956,7 @@ exports.logLoanMachine = async (req, res) => {
     if (item.item_type !== 'pickup') {
         return res.status(400).json({ success: false, message: 'Loan machine only for pickup items' });
     }
-    if (item.assigned_to !== req.user.user_id && !isSupportLead(req.user)) {
+    if (item.assigned_to !== req.user.user_id && !(await canLeadThisTicket(req.user, item.ticket_id))) {
         return res.status(403).json({ success: false, message: 'Not assigned to this item' });
     }
 
@@ -1992,7 +2013,7 @@ exports.schedulePickup = async (req, res) => {
             });
         }
     }
-    if (item.assigned_to !== req.user.user_id && !isSupportLead(req.user)) {
+    if (item.assigned_to !== req.user.user_id && !(await canLeadThisTicket(req.user, item.ticket_id))) {
         return res.status(403).json({ success: false, message: 'Not assigned to this item' });
     }
 
@@ -2023,7 +2044,7 @@ exports.schedulePickup = async (req, res) => {
 };
 
 exports.assignItem = async (req, res) => {
-    if (!isSupportLead(req.user)) {
+    if (!canManageAsTicketLead(req.user)) {
         return res.status(403).json({ success: false, message: 'Only team lead can assign technicians' });
     }
     const itemId = parseInt(req.params.itemId, 10);
@@ -2102,7 +2123,7 @@ exports.removePod = async (req, res) => {
         const item = itemRes.rows[0];
         const isAssignee = Number(item.assigned_to) === Number(req.user.user_id)
             || Number(item.pickup_assigned_to) === Number(req.user.user_id);
-        if (!isAssignee && !isSupportLead(req.user)) {
+        if (!isAssignee && !(await canLeadThisTicket(req.user, item.ticket_id))) {
             return res.status(403).json({ success: false, message: 'Not assigned to this item' });
         }
         if (item.otp_verified_at || item.customer_otp_verified_at) {
@@ -2263,7 +2284,7 @@ exports.checkDuplicateTicket = async (req, res) => {
 
 /** Add pickup / replacement phase items to an existing ticket (linked to complaint or replacement source). */
 exports.addWorkflowPhaseItems = async (req, res) => {
-    if (!isSupportLead(req.user)) {
+    if (!canManageAsTicketLead(req.user)) {
         return res.status(403).json({ success: false, message: 'Only team lead can add workflow phases' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -2370,18 +2391,25 @@ exports.assignTicketBulk = async (req, res) => {
         await client.query('BEGIN');
         await assertTicketNotCancelled(client, ticketId);
         const { rows: eligible } = await client.query(
-            `SELECT id, pickup_method, item_type, status FROM support_ticket_items
-             WHERE ticket_id = $1 AND assigned_to IS NULL AND status NOT IN ('resolved','closed','cancelled')`,
+            `SELECT id, pickup_method, item_type, status, assigned_to FROM support_ticket_items
+             WHERE ticket_id = $1 AND status NOT IN ('resolved','closed','cancelled')`,
             [ticketId]
         );
         if (!eligible.length) {
             await client.query('ROLLBACK');
             return res.status(400).json({
                 success: false,
-                message: 'No unassigned items on this ticket.'
+                message: 'No open items on this ticket to assign.'
             });
         }
-        const toAssign = eligible;
+        const toAssign = eligible.filter((row) => Number(row.assigned_to) !== Number(assignedTo));
+        if (!toAssign.length) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                success: false,
+                message: 'This ticket is already assigned to that person.'
+            });
+        }
         const ids = toAssign.map((r) => r.id);
         await client.query(
             `UPDATE support_ticket_items SET assigned_to = $2, updated_at = CURRENT_TIMESTAMP
@@ -2391,13 +2419,24 @@ exports.assignTicketBulk = async (req, res) => {
         for (const row of toAssign) {
             await syncPartRequestsTechForItem(client, row.id, assignedTo);
         }
+        const newName = await resolveUserDisplayName(client, assignedTo);
         for (const row of toAssign) {
+            const previousName = row.assigned_to
+                ? await resolveUserDisplayName(client, row.assigned_to)
+                : null;
+            const isReassign = Boolean(row.assigned_to);
             await logAudit(client, {
                 itemId: row.id,
                 ticketId,
                 userId: req.user.user_id,
-                action: 'technician_assigned',
-                detail: { assigned_to: assignedTo, bulk: true }
+                action: isReassign ? 'technician_reassigned' : 'technician_assigned',
+                detail: {
+                    assigned_to: assignedTo,
+                    previous_assigned_to: row.assigned_to || null,
+                    previous_assignee: previousName,
+                    new_assignee: newName,
+                    bulk: true,
+                }
             });
         }
         await bumpTicketActivity(client, ticketId);
@@ -2414,7 +2453,7 @@ exports.assignTicketBulk = async (req, res) => {
 };
 
 exports.updateTicket = async (req, res) => {
-    if (!isSupportLead(req.user)) {
+    if (!canManageAsTicketLead(req.user)) {
         return res.status(403).json({ success: false, message: 'Only team lead can edit tickets' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -2538,7 +2577,7 @@ exports.updateTicket = async (req, res) => {
 };
 
 exports.updatePickupAddress = async (req, res) => {
-    if (!isSupportLead(req.user)) {
+    if (!canManageAsTicketLead(req.user)) {
         return res.status(403).json({ success: false, message: 'Only team lead can edit pickup address' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -2639,7 +2678,7 @@ exports.logVisit = async (req, res) => {
     const itemRes = await pool.query('SELECT * FROM support_ticket_items WHERE id = $1', [itemId]);
     if (!itemRes.rows.length) return res.status(404).json({ success: false, message: 'Item not found' });
     const item = itemRes.rows[0];
-    if (item.assigned_to !== req.user.user_id && !isSupportLead(req.user)) {
+    if (item.assigned_to !== req.user.user_id && !(await canLeadThisTicket(req.user, item.ticket_id))) {
         return res.status(403).json({ success: false, message: 'Not assigned to this item' });
     }
 
@@ -2687,7 +2726,7 @@ exports.verifyTtspl = async (req, res) => {
     const itemRes = await pool.query('SELECT * FROM support_ticket_items WHERE id = $1', [itemId]);
     if (!itemRes.rows.length) return res.status(404).json({ success: false, message: 'Item not found' });
     const item = itemRes.rows[0];
-    if (item.assigned_to !== req.user.user_id && !isSupportLead(req.user)) {
+    if (item.assigned_to !== req.user.user_id && !(await canLeadThisTicket(req.user, item.ticket_id))) {
         return res.status(403).json({ success: false, message: 'Not assigned to this item' });
     }
 
@@ -2758,7 +2797,7 @@ exports.submitForPickup = async (req, res) => {
         if (item.item_type !== 'complaint') {
             throw Object.assign(new Error('Only complaint items can be picked up for warehouse repair'), { status: 400 });
         }
-        if (item.assigned_to !== req.user.user_id && !isSupportLead(req.user)) {
+        if (item.assigned_to !== req.user.user_id && !(await canLeadThisTicket(req.user, item.ticket_id))) {
             throw Object.assign(new Error('Not assigned to this item'), { status: 403 });
         }
 
@@ -2969,7 +3008,7 @@ exports.markVisited = exports.logVisit;
 // OTP in one step. For a technician dispatch the item lands in their laptop
 // bucket; for courier/porter it is tracked via the delivery register.
 exports.createPickupWithReturnDc = async (req, res) => {
-    if (!isSupportLead(req.user)) {
+    if (!canManageAsTicketLead(req.user)) {
         return res.status(403).json({ success: false, message: 'Support lead only' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -3158,7 +3197,7 @@ exports.technicianSignPickup = async (req, res) => {
         return res.status(400).json({ success: false, message: 'Only for pickup items' });
     }
     const isMine = it.pickup_assigned_to === req.user.user_id || it.assigned_to === req.user.user_id;
-    if (!isMine && !isSupportLead(req.user)) {
+    if (!isMine && !(await canLeadThisTicket(req.user, it.ticket_id))) {
         return res.status(403).json({ success: false, message: 'Not assigned to this pickup' });
     }
     if (!it.visited_at) {
@@ -3234,7 +3273,7 @@ exports.verifyPickupCustomerOtp = async (req, res) => {
     if (it.item_type !== 'pickup') {
         return res.status(400).json({ success: false, message: 'Only for pickup items' });
     }
-    if (it.assigned_to !== req.user.user_id && it.pickup_assigned_to !== req.user.user_id && !isSupportLead(req.user)) {
+    if (it.assigned_to !== req.user.user_id && it.pickup_assigned_to !== req.user.user_id && !(await canLeadThisTicket(req.user, it.ticket_id))) {
         return res.status(403).json({ success: false, message: 'Not assigned to this pickup' });
     }
     if (!it.pod_image_path && !it.proof_of_completion_path) {
@@ -3820,7 +3859,7 @@ exports.setOutcome = async (req, res) => {
     if (Number.isNaN(userId)) {
         return res.status(400).json({ success: false, message: 'Invalid user in token' });
     }
-    if (!isSupportLead(req.user)) {
+    if (!(await canLeadThisTicket(req.user, item.ticket_id))) {
         const assignedId = item.assigned_to != null ? parseInt(item.assigned_to, 10) : NaN;
         if (assignedId !== userId) {
             return res.status(403).json({ success: false, message: 'Not assigned to this item' });
@@ -3894,7 +3933,7 @@ exports.markPickedUp = async (req, res) => {
     const itemRes = await pool.query('SELECT * FROM support_ticket_items WHERE id = $1', [itemId]);
     if (!itemRes.rows.length) return res.status(404).json({ success: false, message: 'Item not found' });
     const item = itemRes.rows[0];
-    if (item.assigned_to !== req.user.user_id && !isSupportLead(req.user)) {
+    if (item.assigned_to !== req.user.user_id && !(await canLeadThisTicket(req.user, item.ticket_id))) {
         return res.status(403).json({ success: false, message: 'Not assigned to this item' });
     }
     await pool.query(
@@ -3920,7 +3959,7 @@ exports.getReplacementContext = async (req, res) => {
 };
 
 exports.moveComplaintToReplacement = async (req, res) => {
-    if (!isSupportLead(req.user)) {
+    if (!canManageAsTicketLead(req.user)) {
         return res.status(403).json({ success: false, message: 'Only support lead can move to replacement' });
     }
     const itemId = parseInt(req.params.itemId, 10);
@@ -3957,7 +3996,7 @@ exports.moveComplaintToReplacement = async (req, res) => {
 };
 
 exports.initiateReplacement = async (req, res) => {
-    if (!isSupportLead(req.user)) {
+    if (!canManageAsTicketLead(req.user)) {
         return res.status(403).json({ success: false, message: 'Only team lead can initiate replacement' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -4346,7 +4385,7 @@ async function cancelReplacementSalesOrder(client, soNumber, actor) {
 }
 
 exports.cancelReturnPickup = async (req, res) => {
-    if (!isSupportLead(req.user)) {
+    if (!canManageAsTicketLead(req.user)) {
         return res.status(403).json({ success: false, message: 'Only support lead can cancel return pickup' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -4575,7 +4614,7 @@ exports.cancelReturnPickup = async (req, res) => {
 
 /** Assign technician / courier / porter to an existing Return DC (created without dispatch). */
 exports.assignReturnPickupDispatch = async (req, res) => {
-    if (!isSupportLead(req.user)) {
+    if (!canManageAsTicketLead(req.user)) {
         return res.status(403).json({ success: false, message: 'Only support lead can assign pickup' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -4639,7 +4678,7 @@ exports.assignReturnPickupDispatch = async (req, res) => {
 
 /** Change return pickup assignee before pickup starts (technician / courier / porter). */
 exports.changeReturnPickupAssignment = async (req, res) => {
-    if (!isSupportLead(req.user)) {
+    if (!canManageAsTicketLead(req.user)) {
         return res.status(403).json({ success: false, message: 'Only support lead can change pickup assignment' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -4704,7 +4743,7 @@ exports.changeReturnPickupAssignment = async (req, res) => {
 };
 
 exports.updateReplacementOrder = async (req, res) => {
-    if (!isSupportLead(req.user)) {
+    if (!canManageAsTicketLead(req.user)) {
         return res.status(403).json({ success: false, message: 'Only team lead can update replacement orders' });
     }
     const orderId = parseInt(req.params.orderId, 10);
@@ -4742,7 +4781,7 @@ exports.updateReplacementOrder = async (req, res) => {
 };
 
 exports.deliverReplacement = async (req, res) => {
-    if (!isSupportLead(req.user)) {
+    if (!canManageAsTicketLead(req.user)) {
         return res.status(403).json({ success: false, message: 'Only team lead can complete replacement delivery' });
     }
     const orderId = parseInt(req.params.orderId, 10);
@@ -4897,7 +4936,7 @@ exports.getAvailableAssets = async (req, res) => {
 };
 
 exports.removeTicketItem = async (req, res) => {
-    if (!isSupportLead(req.user)) {
+    if (!canManageAsTicketLead(req.user)) {
         return res.status(403).json({ success: false, message: 'Only team lead can remove items' });
     }
     const itemId = parseInt(req.params.itemId, 10);
@@ -4923,7 +4962,7 @@ exports.getServiceDcEligibility = async (req, res) => {
 };
 
 exports.createServiceDc = async (req, res) => {
-    if (!isSupportLead(req.user)) {
+    if (!canManageAsTicketLead(req.user)) {
         return res.status(403).json({ success: false, message: 'Only support lead can create Service Delivery Challan' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -4985,7 +5024,7 @@ exports.getRepairSwapContext = async (req, res) => {
 };
 
 exports.initiateRepairSwap = async (req, res) => {
-    if (!isSupportLead(req.user)) {
+    if (!canManageAsTicketLead(req.user)) {
         return res.status(403).json({ success: false, message: 'Only support lead can initiate a repair swap' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -5054,7 +5093,7 @@ exports.getResendLaptopContext = async (req, res) => {
 };
 
 exports.initiateResendLaptop = async (req, res) => {
-    if (!isSupportLead(req.user)) {
+    if (!canManageAsTicketLead(req.user)) {
         return res.status(403).json({ success: false, message: 'Only support lead can resend a replacement laptop' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
@@ -5104,7 +5143,7 @@ exports.getReturnRedeliveryContext = async (req, res) => {
 };
 
 exports.initiateReturnRedelivery = async (req, res) => {
-    if (!isSupportLead(req.user)) {
+    if (!canManageAsTicketLead(req.user)) {
         return res.status(403).json({ success: false, message: 'Only support lead can create a replacement order' });
     }
     const ticketId = parseInt(req.params.ticketId, 10);
