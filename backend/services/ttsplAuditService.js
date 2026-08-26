@@ -98,10 +98,15 @@ async function resolveTtsplAsset(rawCode) {
   let vsnRes = await pool.query(
     `SELECT vsn.*,
             vpo.purchase_order_number,
-            v.business_name AS vendor_name
+            v.business_name AS vendor_name,
+            c.name AS customer_name,
+            c.company_name AS customer_company_name,
+            c.phone AS customer_phone,
+            c.email AS customer_email
      FROM vendor_serial_numbers vsn
      JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id
      LEFT JOIN vendors v ON v.vendor_id = vpo.vendor_id
+     LEFT JOIN customers c ON c.customer_id = vsn.current_customer_id
      WHERE vsn.deleted_at IS NULL
        AND (
          UPPER(COALESCE(vsn.inventory_asset_code, '')) = ANY($1::text[])
@@ -128,10 +133,15 @@ async function resolveTtsplAsset(rawCode) {
       vsnRes = await pool.query(
         `SELECT vsn.*,
                 vpo.purchase_order_number,
-                v.business_name AS vendor_name
+                v.business_name AS vendor_name,
+                c.name AS customer_name,
+                c.company_name AS customer_company_name,
+                c.phone AS customer_phone,
+                c.email AS customer_email
          FROM vendor_serial_numbers vsn
          JOIN vendor_purchase_orders vpo ON vpo.po_id = vsn.po_id
          LEFT JOIN vendors v ON v.vendor_id = vpo.vendor_id
+         LEFT JOIN customers c ON c.customer_id = vsn.current_customer_id
          WHERE vsn.deleted_at IS NULL AND UPPER(vsn.serial_number) = $1
          ORDER BY vsn.serial_id DESC
          LIMIT 1`,
@@ -288,6 +298,93 @@ async function fetchConfigHistory(ctx) {
   return res.rows;
 }
 
+async function fetchCustomerRow(customerId) {
+  if (!customerId) return null;
+  const r = await pool.query(
+    `SELECT customer_id, name, company_name, phone, email
+       FROM customers WHERE customer_id = $1`,
+    [customerId]
+  );
+  return r.rows[0] || null;
+}
+
+/** Last customer/DC/SO even after the laptop has been returned (current_* cleared). */
+async function fetchLastDeployment(ctx) {
+  const currentId = ctx.vsn?.current_customer_id || null;
+  let customer = currentId ? await fetchCustomerRow(currentId) : null;
+  let dcNumber = ctx.vsn?.current_dc_number || null;
+  let soNumber = null;
+
+  if (ctx.serialId) {
+    const soR = await pool.query(
+      `SELECT sos.sales_order_number, sos.dc_number, sol.customer_id, sol.customer_name,
+              sol.customer_mobile, sol.customer_email
+         FROM sales_order_serials sos
+         LEFT JOIN sales_order_lines sol ON sol.id = sos.line_id
+        WHERE sos.serial_id = $1
+        ORDER BY sos.created_at DESC
+        LIMIT 1`,
+      [ctx.serialId]
+    );
+    const so = soR.rows[0];
+    if (so) {
+      soNumber = so.sales_order_number || null;
+      dcNumber = dcNumber || so.dc_number || null;
+      if (!customer && so.customer_id) {
+        customer = await fetchCustomerRow(so.customer_id);
+        if (!customer) {
+          customer = {
+            customer_id: so.customer_id,
+            name: so.customer_name || null,
+            company_name: so.customer_name || null,
+            phone: so.customer_mobile || null,
+            email: so.customer_email || null,
+          };
+        }
+      }
+    }
+  }
+
+  if (!customer && (ctx.serialId || (ctx.aliases || []).length)) {
+    const tr = await pool.query(
+      `SELECT ist.customer_id, ist.dc_number
+         FROM inventory_status_transitions ist
+        WHERE (
+              ($1::int IS NOT NULL AND ist.serial_id = $1)
+              OR UPPER(COALESCE(ist.ttspl_id, '')) = ANY($2::text[])
+            )
+          AND ist.customer_id IS NOT NULL
+        ORDER BY ist.created_at DESC
+        LIMIT 1`,
+      [ctx.serialId || null, ctx.aliases || []]
+    );
+    if (tr.rows[0]?.customer_id) {
+      customer = await fetchCustomerRow(tr.rows[0].customer_id);
+      dcNumber = dcNumber || tr.rows[0].dc_number || null;
+    }
+  }
+
+  const display = customer?.company_name || customer?.name || ctx.vsn?.customer_company_name || ctx.vsn?.customer_name || null;
+  return {
+    is_current: Boolean(currentId),
+    customer_id: customer?.customer_id || currentId || null,
+    customer_name: customer?.name || ctx.vsn?.customer_name || null,
+    company_name: customer?.company_name || ctx.vsn?.customer_company_name || display,
+    phone: customer?.phone || ctx.vsn?.customer_phone || null,
+    email: customer?.email || ctx.vsn?.customer_email || null,
+    dc_number: dcNumber,
+    sales_order_number: soNumber,
+  };
+}
+
+function dcElemMatches(aliasSql) {
+  return `(
+    UPPER(elem) = ANY(${aliasSql}::text[])
+    OR UPPER(split_part(elem, '|', 2)) = ANY(${aliasSql}::text[])
+    OR UPPER(split_part(elem, '|', 3)) = ANY(${aliasSql}::text[])
+  )`;
+}
+
 async function buildSyntheticLifecycleEvents(ctx) {
   const events = [];
   const { vsn, serialId, canonicalTtspl, aliases, serialNumber } = ctx;
@@ -355,27 +452,45 @@ async function buildSyntheticLifecycleEvents(ctx) {
         metadata: {
           inventory_status: invSt,
           customer_id: vsn.current_customer_id,
+          customer_name: vsn.customer_company_name || vsn.customer_name || null,
           dc_number: vsn.current_dc_number,
           entity: vsn.current_entity
         }
       }));
     }
 
+    const last = ctx.lastDeployment || {};
+    const customerId = vsn.current_customer_id || last.customer_id || null;
+    const customerLabel = vsn.customer_company_name || vsn.customer_name || last.company_name || last.customer_name || null;
+    const dcNumber = vsn.current_dc_number || last.dc_number || null;
+    const soNumber = last.sales_order_number || null;
     if (vsn.dispatched_at) {
       events.push(makeSyntheticEvent({
         eventType: 'status_in_transit',
-        description: `Dispatched${vsn.current_dc_number ? ` on ${vsn.current_dc_number}` : ''}${vsn.dispatch_mode ? ` (${vsn.dispatch_mode})` : ''}`,
+        description: `Dispatched${dcNumber ? ` on ${dcNumber}` : ''}${vsn.dispatch_mode ? ` (${vsn.dispatch_mode})` : ''}${customerLabel ? ` — ${customerLabel}` : ''}`,
         createdAt: vsn.dispatched_at,
         vendorSerialId: serialId,
-        metadata: { dc_number: vsn.current_dc_number, dispatch_mode: vsn.dispatch_mode }
+        metadata: {
+          dc_number: dcNumber,
+          dispatch_mode: vsn.dispatch_mode,
+          customer_id: customerId,
+          customer_name: customerLabel,
+          sales_order_number: soNumber,
+        }
       }));
     }
     if (vsn.delivered_at) {
       events.push(makeSyntheticEvent({
         eventType: 'status_delivered',
-        description: `Delivered to customer${vsn.current_dc_number ? ` (${vsn.current_dc_number})` : ''}`,
+        description: `Delivered to ${customerLabel || 'customer'}${dcNumber ? ` (${dcNumber})` : ''}`,
         createdAt: vsn.delivered_at,
-        vendorSerialId: serialId
+        vendorSerialId: serialId,
+        metadata: {
+          dc_number: dcNumber,
+          customer_id: customerId,
+          customer_name: customerLabel,
+          sales_order_number: soNumber,
+        }
       }));
     }
     if (vsn.returned_at) {
@@ -421,9 +536,11 @@ async function buildSyntheticLifecycleEvents(ctx) {
       : Promise.resolve({ rows: [] }),
     serialId
       ? pool.query(
-        `SELECT ist.*, u.name AS actor_name
+        `SELECT ist.*, u.name AS actor_name,
+                c.name AS customer_name, c.company_name AS customer_company_name
          FROM inventory_status_transitions ist
          LEFT JOIN users u ON u.user_id = ist.actor_user_id
+         LEFT JOIN customers c ON c.customer_id = ist.customer_id
          WHERE ist.serial_id = $1
             OR UPPER(COALESCE(ist.ttspl_id, '')) = ANY($2::text[])
          ORDER BY ist.created_at ASC`,
@@ -467,7 +584,7 @@ async function buildSyntheticLifecycleEvents(ctx) {
     ),
     pool.query(
       `SELECT dcl.dc_number, dcl.sales_order_number, dcl.status, dcl.movement_type,
-              dcl.customer_name, dcl.created_at, dcl.updated_at, u.name AS created_by_name
+              dcl.customer_id, dcl.customer_name, dcl.created_at, dcl.updated_at, u.name AS created_by_name
        FROM delivery_challan_lines dcl
        LEFT JOIN users u ON u.user_id = dcl.created_by
        WHERE EXISTS (
@@ -476,15 +593,15 @@ async function buildSyntheticLifecycleEvents(ctx) {
              WHEN 'array' THEN dcl.serial_number
              ELSE '[]'::jsonb
            END
-         ) elem WHERE UPPER(elem) = ANY($1::text[])
+         ) elem WHERE ${dcElemMatches('$1')}
        )
        OR EXISTS (
          SELECT 1 FROM jsonb_array_elements_text(COALESCE(dcl.delivered_serial_numbers, '[]'::jsonb)) elem
-         WHERE UPPER(elem) = ANY($1::text[])
+         WHERE ${dcElemMatches('$1')}
        )
        OR EXISTS (
          SELECT 1 FROM jsonb_array_elements_text(COALESCE(dcl.pickuped_serial_numbers, '[]'::jsonb)) elem
-         WHERE UPPER(elem) = ANY($1::text[])
+         WHERE ${dcElemMatches('$1')}
        )
        ORDER BY dcl.created_at ASC`,
       [aliasArr]
@@ -499,11 +616,13 @@ async function buildSyntheticLifecycleEvents(ctx) {
       )
       : Promise.resolve({ rows: [] }),
     pool.query(
-      `SELECT st.id, st.status, st.created_at, sti.issue_category_label, sti.remarks
+      `SELECT st.id, st.status, st.created_at, st.customer_id, st.customer_name,
+              sti.issue_category_label, sti.remarks, sti.ttspl_id
        FROM support_ticket_items sti
        JOIN support_tickets st ON st.id = sti.ticket_id
        WHERE UPPER(COALESCE(sti.unique_serial_number, '')) = ANY($1::text[])
           OR UPPER(COALESCE(sti.serial_number, '')) = ANY($1::text[])
+          OR UPPER(COALESCE(sti.ttspl_id, '')) = ANY($1::text[])
        ORDER BY st.created_at ASC`,
       [aliasArr]
     )
@@ -552,6 +671,7 @@ async function buildSyntheticLifecycleEvents(ctx) {
         to: tr.to_status,
         dc_number: tr.dc_number,
         customer_id: tr.customer_id,
+        customer_name: tr.customer_company_name || tr.customer_name || null,
         entity: tr.entity_code
       }
     }));
@@ -620,7 +740,7 @@ async function buildSyntheticLifecycleEvents(ctx) {
       eventType: isReturn ? 'returned' : 'delivery_challan_created',
       description: isReturn
         ? `Return DC ${dc.dc_number} — ${dc.customer_name || 'customer'}`
-        : `Delivery challan ${dc.dc_number} created${dc.sales_order_number ? ` (SO ${dc.sales_order_number})` : ''}`,
+        : `Delivery challan ${dc.dc_number} created${dc.customer_name ? ` — ${dc.customer_name}` : ''}${dc.sales_order_number ? ` (SO ${dc.sales_order_number})` : ''}`,
       createdAt: dc.created_at,
       actorName: dc.created_by_name,
       vendorSerialId: serialId,
@@ -628,7 +748,9 @@ async function buildSyntheticLifecycleEvents(ctx) {
         dc_number: dc.dc_number,
         sales_order_number: dc.sales_order_number,
         status: dc.status,
-        movement_type: dc.movement_type
+        movement_type: dc.movement_type,
+        customer_id: dc.customer_id || null,
+        customer_name: dc.customer_name || null,
       }
     }));
     if (dc.status === 'delivered' && dc.updated_at) {
@@ -637,7 +759,7 @@ async function buildSyntheticLifecycleEvents(ctx) {
         description: `DC ${dc.dc_number} marked delivered`,
         createdAt: dc.updated_at,
         vendorSerialId: serialId,
-        metadata: { dc_number: dc.dc_number }
+        metadata: { dc_number: dc.dc_number, customer_name: dc.customer_name || null }
       }));
     }
   }
@@ -655,10 +777,16 @@ async function buildSyntheticLifecycleEvents(ctx) {
   for (const st of supportRes.rows) {
     events.push(makeSyntheticEvent({
       eventType: 'support_ticket',
-      description: `Support ticket #${st.id}${st.issue_category_label ? `: ${st.issue_category_label}` : ''}`,
+      description: `Support ticket T-${st.id}${st.issue_category_label ? `: ${st.issue_category_label}` : ''}${st.customer_name ? ` — ${st.customer_name}` : ''}`,
       createdAt: st.created_at,
       vendorSerialId: serialId,
-      metadata: { support_ticket_id: st.id, status: st.status, remarks: st.remarks }
+      metadata: {
+        support_ticket_id: st.id,
+        status: st.status,
+        remarks: st.remarks,
+        customer_id: st.customer_id,
+        customer_name: st.customer_name || null,
+      }
     }));
   }
 
@@ -718,11 +846,14 @@ async function getTtsplHistory(rawCode) {
     };
   }
 
+  const lastDeployment = await fetchLastDeployment(ctx);
+  ctx.lastDeployment = lastDeployment;
+
   const [persistedAudit, configHistory, synthetic, costSummary] = await Promise.all([
     fetchPersistedAuditLog(ctx),
     fetchConfigHistory(ctx),
     buildSyntheticLifecycleEvents(ctx),
-    computeCostSummary(ctx)
+    computeCostSummary(ctx),
   ]);
 
   const auditLog = mergeEvents(persistedAudit, synthetic);
@@ -734,7 +865,16 @@ async function getTtsplHistory(rawCode) {
     asset: {
       ttspl_id: ctx.canonicalTtspl,
       serial_id: ctx.serialId,
-      serial_number: ctx.serialNumber
+      serial_number: ctx.serialNumber,
+      customer_id: lastDeployment.customer_id,
+      customer_name: lastDeployment.customer_name,
+      company_name: lastDeployment.company_name,
+      phone: lastDeployment.phone,
+      email: lastDeployment.email,
+      customer_is_current: lastDeployment.is_current,
+      dc_number: lastDeployment.dc_number,
+      sales_order_number: lastDeployment.sales_order_number,
+      inventory_status: ctx.vsn?.inventory_status || null,
     }
   };
 }

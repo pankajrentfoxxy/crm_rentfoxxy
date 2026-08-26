@@ -6,6 +6,8 @@ import { detachAttachedPart, detachInstalledPartFromTtspl, getPartCostSummary } 
 import { EVENT_ICONS } from '../floorPipelineUi';
 import usePermission from '../../../hooks/usePermission';
 import DetachPartToInventoryModal from './DetachPartToInventoryModal';
+import { HistoryRefChips, LinkedHistoryText, customerDisplayName } from './TtsplHistoryRefs';
+import { Link } from 'react-router-dom';
 
 export default function TtsplHistoryDrawer({ ttsplId, open, onClose }) {
   const { canEdit } = usePermission();
@@ -18,10 +20,12 @@ export default function TtsplHistoryDrawer({ ttsplId, open, onClose }) {
   const [configHistory, setConfigHistory] = useState([]);
   const [costSummary, setCostSummary] = useState(null);
   const [partsBreakdown, setPartsBreakdown] = useState([]);
+  const [asset, setAsset] = useState(null);
 
   const loadHistory = useCallback(async () => {
     if (!ttsplId) return;
     setLoading(true);
+    setAsset(null);
     try {
       const [histRes, costRes] = await Promise.all([
         fetchTtsplHistory(ttsplId),
@@ -33,6 +37,7 @@ export default function TtsplHistoryDrawer({ ttsplId, open, onClose }) {
         setAuditLog([...(data.auditLog || [])].sort(byNewest));
         setConfigHistory([...(data.configHistory || [])].sort(byNewest));
         setCostSummary(data.costSummary || null);
+        setAsset(data.asset || null);
       }
       if (costRes?.data?.success) {
         const parts = [...(costRes.data.parts_breakdown || [])].sort(
@@ -85,6 +90,7 @@ export default function TtsplHistoryDrawer({ ttsplId, open, onClose }) {
 
   if (!open) return null;
 
+  const customerName = customerDisplayName(asset);
   const partsCost = costSummary?.parts_cost ?? configHistory.reduce((s, r) => s + (parseFloat(r.part_cost) || 0), 0);
   const baseCost = costSummary?.base_cost ?? 0;
   const totalCost = costSummary?.total_expense ?? costSummary?.total_cost ?? (partsCost + baseCost);
@@ -95,9 +101,27 @@ export default function TtsplHistoryDrawer({ ttsplId, open, onClose }) {
       <button type="button" className="absolute inset-0 bg-black/40" onClick={onClose} aria-label="Close" />
       <aside className="relative w-full max-w-[540px] bg-white shadow-xl flex flex-col max-h-full">
         <div className="flex items-center justify-between border-b px-4 py-3">
-          <div>
+          <div className="min-w-0 pr-3">
             <h2 className="font-semibold text-slate-900">TTSPL History</h2>
             <p className="font-mono text-sm text-blue-700">{ttsplId}</p>
+            {customerName ? (
+              <p className="text-sm text-slate-800 mt-1 truncate">
+                <span className="text-xs uppercase tracking-wide text-slate-500 mr-1">
+                  {asset?.customer_is_current === false ? 'Last customer' : 'Customer'}
+                </span>
+                {asset?.customer_id ? (
+                  <Link
+                    to={`/lead-crm/customers/${asset.customer_id}`}
+                    onClick={onClose}
+                    className="font-medium text-sky-700 hover:underline"
+                  >
+                    {customerName}
+                  </Link>
+                ) : (
+                  <span className="font-medium">{customerName}</span>
+                )}
+              </p>
+            ) : null}
           </div>
           <button type="button" onClick={onClose} className="p-2 rounded-lg hover:bg-slate-100">
             <X className="w-5 h-5" />
@@ -122,7 +146,8 @@ export default function TtsplHistoryDrawer({ ttsplId, open, onClose }) {
                         {new Date(ev.created_at).toLocaleString()}
                         {ev.actor_name_resolved || ev.actor_name ? ` · ${ev.actor_name_resolved || ev.actor_name}` : ''}
                       </p>
-                      <p className="text-sm text-slate-800 mt-0.5">{ev.description}</p>
+                      <LinkedHistoryText text={ev.description} metadata={ev.metadata} onNavigate={onClose} />
+                      <HistoryRefChips metadata={ev.metadata} onNavigate={onClose} />
                       {ev.metadata && Object.keys(ev.metadata).length ? (
                         <details className="mt-1 text-xs text-slate-600">
                           <summary className="cursor-pointer text-blue-600">Details</summary>
