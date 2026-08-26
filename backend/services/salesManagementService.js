@@ -1246,7 +1246,11 @@ async function listReturnDeliveryChallans({
          sti_rdc.ttspl_id,
          sti_tkt.ttspl_id,
          NULLIF(split_part(rl.serial_number->>0, '|', 3), '')
-       ) AS ttspl_id
+       ) AS ttspl_id,
+       COALESCE(
+         NULLIF(st.pickup_address->>'city', ''),
+         NULLIF(rl.customer_shipping_address->>'city', '')
+       ) AS city
      FROM delivery_challan_lines rl
      LEFT JOIN support_tickets st ON st.id = rl.support_ticket_id
      LEFT JOIN pickup_counts pc ON pc.return_dc_number = rl.dc_number
@@ -1278,6 +1282,187 @@ async function listReturnDeliveryChallans({
       totalPages: Math.max(1, Math.ceil(total / limit)),
     },
   };
+}
+
+function parseReturnAddress(raw) {
+  if (!raw) return {};
+  if (typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  if (typeof raw !== 'string') return {};
+  const text = raw.trim();
+  if (!text) return {};
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : { address: text };
+  } catch {
+    return { address: text };
+  }
+}
+
+function formatReturnAddressParts(raw) {
+  const a = parseReturnAddress(raw);
+  const street = a.address || a.address_line_1 || a.line1 || a.address_line || '';
+  const city = a.city || '';
+  const state = a.state || '';
+  const pincode = a.pincode != null && a.pincode !== '' ? String(a.pincode) : (a.zip_code || a.pin || '');
+  const line = [street, city, state, pincode].filter(Boolean).join(', ');
+  return { street, city, state, pincode, line };
+}
+
+function describeReturnLaptopLocation(row) {
+  const city = row.city || '';
+  const place = city || row.address || 'customer';
+  const mode = String(row.dispatch_mode || row.pickup_method || '').toLowerCase();
+  const assignee = row.assignee_name || '';
+  const courier = row.courier_name || '';
+  const awb = row.awb_number || '';
+  const porter = row.porter_tracking_id || '';
+
+  if (row.warehouse_esign_at || (row.warehouse_received_at && row.rdc_status === 'delivered')) {
+    return 'Warehouse received';
+  }
+  if (row.warehouse_received_at) {
+    return 'At warehouse — pending confirmation';
+  }
+  if (row.customer_otp_verified_at || row.picked_up_at) {
+    if (mode === 'courier' || courier) {
+      return `In transit to warehouse via courier${courier ? ` (${courier})` : ''}${awb ? ` · AWB ${awb}` : ''} — from ${place}`;
+    }
+    if (mode === 'porter' || porter) {
+      return `In transit to warehouse via porter${porter ? ` (${porter})` : ''} — from ${place}`;
+    }
+    if (assignee) {
+      return `In transit to warehouse with ${assignee} — from ${place}`;
+    }
+    return `Picked up — in transit to warehouse from ${place}`;
+  }
+  if (assignee) {
+    return `Pending pickup with ${assignee} at ${place}`;
+  }
+  if (mode === 'courier' || courier) {
+    return `Pending courier pickup${courier ? ` (${courier})` : ''} at ${place}`;
+  }
+  if (mode === 'porter' || porter) {
+    return `Pending porter pickup at ${place}`;
+  }
+  return `At customer — ${place}`;
+}
+
+async function listReturnDcLaptopExportRows({
+  search = '',
+  dateFrom,
+  dateTo,
+  status = 'in_transit',
+} = {}) {
+  const params = [];
+  const dateClauses = appendDateRangeClauses({
+    column: 'created_at', dateFrom, dateTo, params, tableAlias: 'rl',
+  });
+  const dateSql = dateClauses.length ? ` AND ${dateClauses.join(' AND ')}` : '';
+
+  let searchSql = '';
+  if (search) {
+    params.push(`%${search}%`);
+    const n = params.length;
+    searchSql = ` AND (
+      rl.dc_number ILIKE $${n}
+      OR rl.customer_name ILIKE $${n}
+      OR rl.sales_order_number ILIKE $${n}
+      OR rl.original_dc_number ILIKE $${n}
+      OR COALESCE(sti.ttspl_id, '') ILIKE $${n}
+      OR COALESCE(sti.serial_number, '') ILIKE $${n}
+      OR COALESCE(sti.unique_serial_number, '') ILIKE $${n}
+    )`;
+  }
+
+  const statusKey = String(status || 'in_transit').toLowerCase().replace(/-/g, '_');
+  let statusSql = '';
+  if (statusKey === 'delivered') {
+    statusSql = ` AND rl.status = 'delivered'`;
+  } else if (statusKey === 'in_transit') {
+    statusSql = ` AND COALESCE(rl.status, 'pending') NOT IN ('delivered', 'cancelled')`;
+  }
+
+  const { rows } = await pool.query(
+    `SELECT
+       rl.dc_number AS return_dc_number,
+       rl.customer_name,
+       rl.sales_order_number,
+       COALESCE(rl.original_dc_number, st.dc_number) AS original_dc_number,
+       rl.status AS rdc_status,
+       rl.created_at,
+       COALESCE(
+         pd.picked_up_at,
+         sti.picked_up_at,
+         pd.pickup_scheduled_at,
+         sti.pickup_scheduled_at,
+         rl.dispatched_at
+       ) AS pickup_date,
+       COALESCE(rl.dispatch_mode, sti.pickup_method) AS dispatch_mode,
+       sti.pickup_method,
+       COALESCE(sti.pickup_courier_name, rl.courier_name) AS courier_name,
+       COALESCE(sti.pickup_awb, rl.awb_number) AS awb_number,
+       rl.porter_tracking_id,
+       COALESCE(u.name, u.email) AS assignee_name,
+       COALESCE(
+         sti.ttspl_id,
+         sti.unique_serial_number,
+         NULLIF(split_part(rl.serial_number->>0, '|', 3), '')
+       ) AS ttspl,
+       COALESCE(
+         sti.serial_number,
+         NULLIF(split_part(rl.serial_number->>0, '|', 2), '')
+       ) AS serial_number,
+       COALESCE(sti.brand, rl.brand) AS brand,
+       COALESCE(sti.model, rl.model_name) AS model,
+       COALESCE(sti.pickup_type, st.complaint_type, 'return') AS pickup_type,
+       sti.picked_up_at,
+       sti.visited_at,
+       sti.customer_otp_verified_at,
+       sti.warehouse_received_at,
+       sti.warehouse_esign_at,
+       st.pickup_address AS ticket_pickup_address,
+       rl.customer_shipping_address,
+       st.ticket_address
+     FROM delivery_challan_lines rl
+     LEFT JOIN support_tickets st ON st.id = rl.support_ticket_id
+     LEFT JOIN support_ticket_items sti
+       ON sti.item_type = 'pickup'
+      AND (
+        sti.return_dc_number = rl.dc_number
+        OR (sti.return_dc_number IS NULL AND sti.ticket_id = rl.support_ticket_id)
+      )
+     LEFT JOIN users u ON u.user_id = COALESCE(sti.pickup_assigned_to, sti.assigned_to)
+     LEFT JOIN LATERAL (
+       SELECT MIN(p.picked_up_at) AS picked_up_at,
+              MIN(p.pickup_scheduled_at) AS pickup_scheduled_at
+         FROM support_ticket_items p
+        WHERE p.item_type = 'pickup'
+          AND (
+            p.return_dc_number = rl.dc_number
+            OR (p.return_dc_number IS NULL AND p.ticket_id = rl.support_ticket_id)
+          )
+     ) pd ON TRUE
+     WHERE rl.movement_type = 'return'${searchSql}${dateSql}${statusSql}
+     ORDER BY rl.created_at DESC NULLS LAST, rl.dc_number, sti.id NULLS LAST`,
+    params
+  );
+
+  return rows.map((row) => {
+    const addr = formatReturnAddressParts(
+      row.ticket_pickup_address || row.customer_shipping_address || row.ticket_address
+    );
+    const mapped = {
+      ...row,
+      city: addr.city,
+      state: addr.state,
+      pincode: addr.pincode,
+      address: addr.line,
+    };
+    return {
+      ...mapped,
+      current_location: describeReturnLaptopLocation(mapped),
+    };
+  });
 }
 
 /** Full Return DC detail — units, pickup items, POD, e-signatures, PDF. */
@@ -2301,6 +2486,7 @@ module.exports = {
   listDeliveryChallansGrouped,
   getDeliveryChallanLines,
   listReturnDeliveryChallans,
+  listReturnDcLaptopExportRows,
   getReturnDcDetail,
   healReturnDcPickupLinks,
   ensureReturnDcPickupItems,

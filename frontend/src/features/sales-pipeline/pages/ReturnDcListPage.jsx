@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { FileText, KeyRound, PackageCheck, RotateCcw, Search } from 'lucide-react';
+import { Download, FileText, KeyRound, PackageCheck, RotateCcw, Search } from 'lucide-react';
 import ReturnDcDetailModal from '../components/ReturnDcDetailModal';
-import { listReturnDCs } from '../salesPipelineApi';
-import { DC_STATUS_STYLES, formatDate, statusLabel } from '../salesPipelineUtils';
+import { exportReturnDcLaptops, listReturnDCs } from '../salesPipelineApi';
+import { DC_STATUS_STYLES, downloadBlob, formatDate, statusLabel } from '../salesPipelineUtils';
 import { getBackendOrigin } from '../../../utils/api';
 import { PageHeader, StatCard, Button, ResponsiveTable, DateRangeFilter } from '../../../components/ui/primitives';
 import { useUrlFilters, useDebouncedUrlSearch } from '../../../hooks/useUrlFilters';
@@ -31,6 +31,7 @@ export default function ReturnDcListPage() {
   const [stats, setStats] = useState({ total: 0, in_transit: 0, delivered: 0 });
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [detailRdc, setDetailRdc] = useState(null);
+  const [exporting, setExporting] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -54,6 +55,45 @@ export default function ReturnDcListPage() {
   }, [page, search, dateFrom, dateTo, tab]);
 
   useEffect(() => { load(); }, [load]);
+
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const res = await exportReturnDcLaptops({
+        search: search.trim() || undefined,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
+        status: tab || 'in_transit',
+      });
+      const type = res.headers['content-type'] || '';
+      if (type.includes('application/json')) {
+        const text = await res.data.text?.() || '';
+        let message = 'Export failed';
+        try { message = JSON.parse(text).message || message; } catch { /* keep */ }
+        throw new Error(message);
+      }
+      const disposition = res.headers['content-disposition'] || '';
+      const match = /filename="?([^"]+)"?/.exec(disposition);
+      const stamp = new Date().toISOString().slice(0, 10);
+      downloadBlob(
+        res.data,
+        match?.[1] || `return_dc_${tab || 'in_transit'}_laptops_${stamp}.xlsx`
+      );
+      toast.success('Laptop export downloaded');
+    } catch (e) {
+      let message = e.message || 'Failed to export laptops';
+      const data = e.response?.data;
+      if (data instanceof Blob) {
+        try {
+          const parsed = JSON.parse(await data.text());
+          message = parsed.message || message;
+        } catch { /* keep */ }
+      }
+      toast.error(message);
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const otpCell = (row) => {
     if (row.customer_otp_verified_at) {
@@ -102,6 +142,11 @@ export default function ReturnDcListPage() {
       render: (row) => formatDate(row.pickup_date) || <span className="text-xs text-gray-400">—</span>,
     },
     { key: 'customer_name', header: 'Customer' },
+    {
+      key: 'city',
+      header: 'City',
+      render: (row) => row.city || row.pickup_city || <span className="text-xs text-gray-400">—</span>,
+    },
     { key: 'units', header: 'Units', render: (row) => row.unit_count || row.quantity || 1 },
     {
       key: 'original_dc',
@@ -160,6 +205,7 @@ export default function ReturnDcListPage() {
           </span>
         </div>
         <p className="font-medium text-slate-800">{row.customer_name}</p>
+        {row.city && <p className="text-xs text-slate-600">{row.city}</p>}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
           <span>Created {formatDate(row.created_at)}</span>
           <span>Pickup {formatDate(row.pickup_date) || '—'}</span>
@@ -195,6 +241,16 @@ export default function ReturnDcListPage() {
         title="Return DC"
         subtitle="Return pickup challans (RDC series) — In Transit and Delivered"
         icon={RotateCcw}
+        actions={(
+          <Button
+            variant="secondary"
+            icon={Download}
+            loading={exporting}
+            onClick={handleExport}
+          >
+            {tab === 'in_transit' ? 'Export in-transit laptops' : 'Export laptops'}
+          </Button>
+        )}
       />
 
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">

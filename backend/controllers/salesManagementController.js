@@ -24,6 +24,7 @@ const {
   listDeliveryChallansGrouped,
   getDeliveryChallanLines,
   listReturnDeliveryChallans,
+  listReturnDcLaptopExportRows,
   getReturnDcDetail,
   getQuotationRemainingQty,
   getSalesOrderRemainingQty,
@@ -3816,6 +3817,93 @@ exports.listReturnDeliveryChallans = async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.exportReturnDcLaptops = async (req, res) => {
+  try {
+    const status = req.query.status || req.query.tab || 'in_transit';
+    const rows = await listReturnDcLaptopExportRows({
+      search: req.query.search || '',
+      dateFrom: req.query.date_from,
+      dateTo: req.query.date_to,
+      status,
+    });
+
+    const fmtDate = (d) => {
+      if (!d) return '';
+      const dt = new Date(d);
+      if (Number.isNaN(dt.getTime())) return '';
+      const dd = String(dt.getDate()).padStart(2, '0');
+      const mm = String(dt.getMonth() + 1).padStart(2, '0');
+      return `${dd}-${mm}-${dt.getFullYear()}`;
+    };
+
+    const columnOrder = [
+      'TTSPL',
+      'Serial Number',
+      'Brand',
+      'Model',
+      'Customer',
+      'City',
+      'State',
+      'Pincode',
+      'Pickup Address',
+      'Current Location',
+      'Dispatch Mode',
+      'Assigned To',
+      'Courier / AWB',
+      'RDC Number',
+      'Original DC',
+      'SO Number',
+      'Pickup Type',
+      'RDC Status',
+      'Pickup Date',
+      'Created',
+    ];
+
+    const orderedRows = rows.map((r) => {
+      const courierAwb = [r.courier_name, r.awb_number, r.porter_tracking_id].filter(Boolean).join(' · ');
+      return {
+        TTSPL: r.ttspl || '',
+        'Serial Number': r.serial_number || '',
+        Brand: r.brand || '',
+        Model: r.model || '',
+        Customer: r.customer_name || '',
+        City: r.city || '',
+        State: r.state || '',
+        Pincode: r.pincode || '',
+        'Pickup Address': r.address || '',
+        'Current Location': r.current_location || '',
+        'Dispatch Mode': r.dispatch_mode || r.pickup_method || '',
+        'Assigned To': r.assignee_name || '',
+        'Courier / AWB': courierAwb,
+        'RDC Number': r.return_dc_number || '',
+        'Original DC': r.original_dc_number || '',
+        'SO Number': r.sales_order_number || '',
+        'Pickup Type': r.pickup_type || '',
+        'RDC Status': r.rdc_status || '',
+        'Pickup Date': fmtDate(r.pickup_date),
+        Created: fmtDate(r.created_at),
+      };
+    });
+
+    const XLSX = require('xlsx');
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(orderedRows, { header: columnOrder });
+    ws['!cols'] = columnOrder.map((h) => ({
+      wch: h === 'Current Location' || h === 'Pickup Address' ? 48 : h === 'Customer' ? 28 : 16,
+    }));
+    XLSX.utils.book_append_sheet(wb, ws, 'In Transit Laptops');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const stamp = new Date().toISOString().slice(0, 10);
+    const fileStatus = String(status).replace(/[^a-z0-9_]/gi, '_') || 'in_transit';
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="return_dc_${fileStatus}_laptops_${stamp}.xlsx"`);
+    res.send(buf);
+  } catch (error) {
+    console.error('exportReturnDcLaptops:', error);
+    res.status(500).json({ success: false, message: error.message || 'Export failed' });
   }
 };
 
