@@ -52,14 +52,21 @@ async function sendOtp(client, woId, actorId, { phone, reason, resend } = {}) {
   );
   await audit(client, woId, resend ? 'RESENT' : 'SENT', actorId, { channel: 'WHATSAPP', recipient: maskPhone(dest), reason });
   const assignee = (await client.query('SELECT name FROM users WHERE user_id = $1', [wo.assigned_to])).rows[0];
-  await notifyEvent(client, {
-    eventCode: 'OTP_SENT_CUSTOMER',
-    ticketId: wo.ticket_id,
-    woId,
-    audiences: ['CUSTOMER'],
-    customer: { phone: dest },
-    vars: { otp, assignee_name: (assignee && assignee.name) || 'our engineer' },
-  }).catch((e) => console.error('otp notify:', e));
+  await client.query('SAVEPOINT otp_notify');
+  try {
+    await notifyEvent(client, {
+      eventCode: 'OTP_SENT_CUSTOMER',
+      ticketId: wo.ticket_id,
+      woId,
+      audiences: ['CUSTOMER'],
+      customer: { phone: dest },
+      vars: { otp, assignee_name: (assignee && assignee.name) || 'our engineer' },
+    });
+    await client.query('RELEASE SAVEPOINT otp_notify');
+  } catch (e) {
+    await client.query('ROLLBACK TO SAVEPOINT otp_notify');
+    console.error('otp notify:', e);
+  }
   return { otp_sent_to: maskPhone(dest), otp_expires_at: new Date(Date.now() + 15 * 60 * 1000) };
 }
 

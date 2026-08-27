@@ -5,8 +5,8 @@ import { Button, Modal, Mono, ProgressSegments, SerialScanInput, StatusPill } fr
 import { usePermission } from '../../../hooks/usePermission';
 import api from '../../../utils/api';
 import {
-  acceptWorkOrder, completeWorkOrder, enRouteWorkOrder, failWorkOrder,
-  getWorkOrder, onSiteWorkOrder, requestOtpBypass, resendWoOtp,
+  acceptWorkOrder, assignWorkOrder, completeWorkOrder, enRouteWorkOrder, failWorkOrder,
+  fetchQueueMeta, getWorkOrder, onSiteWorkOrder, requestOtpBypass, resendWoOtp,
   startWorkOrder, verifyWoOtp,
 } from '../supportV2Api';
 import { LABELS, newIdempotencyKey, woTypeLabel } from '../supportV2Utils';
@@ -44,11 +44,16 @@ export default function JobExecutionPage() {
   const [scanErr, setScanErr] = useState(null);
   const [otp, setOtp] = useState('');
   const [assetIdx, setAssetIdx] = useState(0);
+  const [owners, setOwners] = useState([]);
+  const [assignTech, setAssignTech] = useState('');
 
   const load = useCallback(() => {
     getWorkOrder(woId).then((r) => setData(r.data)).catch(() => toast.error('Job not found'));
   }, [woId]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    fetchQueueMeta().then((r) => setOwners(r.data?.owners || [])).catch(() => {});
+  }, []);
 
   const w = data?.wo;
   const assets = data?.assets || [];
@@ -172,6 +177,32 @@ export default function JobExecutionPage() {
             {ticket.contact_phone && <a className="underline" href={`tel:${ticket.contact_phone}`}>Call</a>}
           </div>
         </details>
+
+        {(w.status === 'PENDING_ASSIGNMENT' || !w.assigned_to) && (
+          <div className="rounded-lg border border-sup-line bg-white p-3 space-y-2">
+            <p className="text-[13px] font-semibold">Assign technician</p>
+            <select
+              value={assignTech}
+              onChange={(e) => setAssignTech(e.target.value)}
+              className="w-full border rounded px-2 py-2 text-[13px]"
+            >
+              <option value="">Pick technician</option>
+              {owners.map((u) => (
+                <option key={u.user_id} value={u.user_id}>{u.name}</option>
+              ))}
+            </select>
+            <Button
+              className="w-full min-h-[44px]"
+              disabled={!assignTech}
+              onClick={() => act(
+                () => assignWorkOrder(w.wo_id, { user_id: Number(assignTech) }),
+                'Technician assigned'
+              )}
+            >
+              Assign
+            </Button>
+          </div>
+        )}
 
         {gate && mine && (
           <Button className="w-full min-h-[44px]" onClick={() => act(gate.fn, gate.label)}>

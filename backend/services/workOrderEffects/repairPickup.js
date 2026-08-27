@@ -1,33 +1,21 @@
 'use strict';
 
 const inventorySM = require('../inventoryStateMachine');
-const { assertAssetPickupEligible } = require('../supportPickupEligibility');
+const { assertAssetPickupEligible, findBlockingOpenPickup } = require('../supportPickupEligibility');
 const { setCustomerInventoryState, startBillingHold } = require('../supportCustomerInventoryState');
 const { generateReturnDc, loadWoAssets } = require('../supportWoDocuments');
 const { logEvent } = require('../supportTicketStateService');
 const { createFloorTicketFromSupportPickup } = require('../grnTicketService');
-
-const OPEN_PICKUP = `('DRAFT','PENDING_ASSIGNMENT','ASSIGNED','ACCEPTED','EN_ROUTE','ON_SITE','IN_PROGRESS')`;
 
 async function onCreate(client, wo) {
   const assets = await loadWoAssets(client, wo.wo_id);
   for (const a of assets) {
     if (!a.serial_id) continue;
     await assertAssetPickupEligible(client, a.serial_id);
-    const open = await client.query(
-      `SELECT w.wo_number FROM support_work_orders w
-         JOIN support_work_order_assets l ON l.wo_id = w.wo_id
-         JOIN support_ticket_assets ta ON ta.line_id = l.line_id
-        WHERE ta.serial_id = $1
-          AND w.wo_type IN ('REPAIR_PICKUP','RETURN_PICKUP')
-          AND w.status IN ${OPEN_PICKUP}
-          AND w.wo_id <> $2
-        LIMIT 1`,
-      [a.serial_id, wo.wo_id]
-    );
-    if (open.rows[0]) {
+    const open = await findBlockingOpenPickup(client, a.serial_id, wo.wo_id);
+    if (open) {
       throw Object.assign(
-        new Error(`Open pickup ${open.rows[0].wo_number} already exists for this serial`),
+        new Error(`Open pickup ${open.wo_number} already exists on ${open.ticket_number} for this serial`),
         { status: 409 }
       );
     }

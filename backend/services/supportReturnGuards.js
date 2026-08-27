@@ -118,6 +118,18 @@ function validateGrade(body, chargeableTotal) {
   return { grade, photos };
 }
 
+async function tryOptionalQuery(client, sql, params) {
+  await client.query('SAVEPOINT optional_lookup');
+  try {
+    const result = await client.query(sql, params);
+    await client.query('RELEASE SAVEPOINT optional_lookup');
+    return result;
+  } catch {
+    await client.query('ROLLBACK TO SAVEPOINT optional_lookup');
+    return { rows: [] };
+  }
+}
+
 async function computeLockIn(client, serialId) {
   const r = await client.query(
     `SELECT serial_id, rent_start_date, rent_monthly_rate, rent_end_date, current_customer_id,
@@ -129,20 +141,17 @@ async function computeLockIn(client, serialId) {
   if (!s) return { locked: false, charge: 0 };
   let months = Number(s.extra && s.extra.locking_period);
   if (!Number.isFinite(months) || months <= 0) {
-    try {
-      const so = await client.query(
-        `SELECT soi.locking_period
-           FROM sales_order_items soi
-           JOIN sales_orders so ON so.id = soi.sales_order_id
-          WHERE so.customer_id = $1 AND soi.locking_period IS NOT NULL
-          ORDER BY so.created_at DESC NULLS LAST
-          LIMIT 1`,
-        [s.current_customer_id]
-      );
-      months = Number(so.rows[0] && so.rows[0].locking_period);
-    } catch {
-      months = 0;
-    }
+    const so = await tryOptionalQuery(
+      client,
+      `SELECT soi.locking_period
+         FROM sales_order_items soi
+         JOIN sales_orders so ON so.id = soi.sales_order_id
+        WHERE so.customer_id = $1 AND soi.locking_period IS NOT NULL
+        ORDER BY so.created_at DESC NULLS LAST
+        LIMIT 1`,
+      [s.current_customer_id]
+    );
+    months = Number(so.rows[0] && so.rows[0].locking_period);
   }
   const end = lockInEndDate(s.rent_start_date, months);
   const charge = earlyTerminationCharge({ rentMonthlyRate: s.rent_monthly_rate, lockInEnd: end });
@@ -156,14 +165,15 @@ async function computeLockIn(client, serialId) {
 }
 
 async function notifyOverdueInvoices(client, { customerId, ticketId, woId, actorId }) {
-  const overdue = await client.query(
-    `SELECT invoice_id, invoice_number, grand_total, due_date, status
+  const overdue = await tryOptionalQuery(
+    client,
+    `SELECT invoice_id, invoice_number, grand_total, status
        FROM customer_invoices
       WHERE customer_id = $1
         AND LOWER(COALESCE(status,'')) NOT IN ('paid','cancelled','waived','draft')
-        AND COALESCE(due_date, invoice_date + INTERVAL '15 days') < CURRENT_DATE`,
+        AND (invoice_date + INTERVAL '15 days') < CURRENT_DATE`,
     [customerId]
-  ).catch(() => ({ rows: [] }));
+  );
   if (!overdue.rows.length) return { overdue: false, count: 0 };
   await logEvent(client, {
     ticketId,
@@ -174,12 +184,14 @@ async function notifyOverdueInvoices(client, { customerId, ticketId, woId, actor
     summary: `Overdue invoices (${overdue.rows.length}) flagged — return not blocked`,
     detail: { invoice_ids: overdue.rows.map((x) => x.invoice_id) },
   });
-  const accounts = await client.query(
+  const accounts = await tryOptionalQuery(
+    client,
     `SELECT email FROM users
       WHERE role IN ('accounts','admin','super_admin')
         AND email IS NOT NULL AND email <> ''
-      LIMIT 8`
-  ).catch(() => ({ rows: [] }));
+      LIMIT 8`,
+    []
+  );
   for (const u of accounts.rows) {
     enqueueEmail({
       toEmail: u.email,

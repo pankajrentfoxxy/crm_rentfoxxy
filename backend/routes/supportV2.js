@@ -161,7 +161,10 @@ router.post('/work-orders/:woId/condition', editBucket, requireOwnWo(), requireW
 router.post('/work-orders/:woId/warehouse-receipt', editWhReceipt, returns.warehouseReceipt);
 router.get('/work-orders/:woId', viewWos, wos.getOne);
 router.patch('/work-orders/:woId', editWos, requireWoType('can_edit'), wos.patch);
-router.post('/work-orders/:woId/assign', editDispatch, wos.assign);
+router.post('/work-orders/:woId/assign', checkAnySectionPermission(
+  ['support_dispatch', 'support_work_orders', 'support_pickup_return'],
+  'edit'
+), wos.assign);
 router.post('/work-orders/:woId/accept', editBucket, requireOwnWo(), requireWoType('can_edit', { generalSection: 'support_bucket' }), withIdempotency, wos.accept);
 router.post('/work-orders/:woId/en-route', editBucket, requireOwnWo(), requireWoType('can_edit', { generalSection: 'support_bucket' }), withIdempotency, wos.enRoute);
 router.post('/work-orders/:woId/on-site', editBucket, requireOwnWo(), requireWoType('can_edit', { generalSection: 'support_bucket' }), withIdempotency, wos.onSite);

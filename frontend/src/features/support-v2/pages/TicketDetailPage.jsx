@@ -7,7 +7,7 @@ import {
 import PermissionGate from '../../../components/PermissionGate';
 import { usePermission } from '../../../hooks/usePermission';
 import {
-  assignTicket, cancelTicket, closeTicket, commentTicket, getTicket, linkTicket,
+  assignTicket, assignWorkOrder, cancelTicket, closeTicket, commentTicket, getTicket, linkTicket,
   overridePriority, pauseTicket, reopenTicket, resolveTicket, resumeTicket, fetchQueueMeta,
   waiveCollect,
 } from '../supportV2Api';
@@ -129,6 +129,7 @@ export default function TicketDetailPage() {
   const [linkDraft, setLinkDraft] = useState(null);
   const [reasonModal, setReasonModal] = useState(null);
   const [reasonText, setReasonText] = useState('');
+  const [assignTech, setAssignTech] = useState('');
 
   const load = useCallback(() => {
     getTicket(id).then((r) => setData(r.data)).catch(() => toast.error('Ticket not found'));
@@ -192,7 +193,35 @@ export default function TicketDetailPage() {
           else if (pendingAppr) { label = pendingAppr.label || 'A request is awaiting your approval.'; cta = 'Review request'; go = () => setTab('Approvals'); }
           else if (allResolved) { label = `All ${lines.length} machines resolved.`; cta = 'Close ticket'; go = () => act(() => closeTicket(t.ticket_id, {}), 'Closed'); }
           else if (assignedWo) { label = `${assignedWo.assigned_to_name || 'Technician'} is assigned on ${assignedWo.wo_number}.`; cta = 'View work order'; go = () => nav(`${SUPPORT_V2_BASE}/jobs/${assignedWo.wo_id}`); }
-          else if (pendingWo) { label = `${pendingWo.wo_number} has no technician.`; cta = 'Assign'; go = () => nav(`${SUPPORT_V2_BASE}/jobs/${pendingWo.wo_id}`); }
+          else if (pendingWo) {
+            return (
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-[10px] bg-sup-canvas2 px-3 py-2">
+                <span className="text-[12.5px]">{pendingWo.wo_number} has no technician.</span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    value={assignTech}
+                    onChange={(e) => setAssignTech(e.target.value)}
+                    className="border rounded px-2 py-1 text-[12px] min-w-[180px]"
+                  >
+                    <option value="">Pick technician</option>
+                    {owners.map((u) => (
+                      <option key={u.user_id} value={u.user_id}>{u.name}</option>
+                    ))}
+                  </select>
+                  <Button
+                    size="sm"
+                    disabled={!assignTech}
+                    onClick={() => act(
+                      () => assignWorkOrder(pendingWo.wo_id, { user_id: Number(assignTech) }),
+                      'Technician assigned'
+                    )}
+                  >
+                    Assign
+                  </Button>
+                </div>
+              </div>
+            );
+          }
           else if (!wos.length) { label = 'Classified, not scheduled.'; cta = 'Create work order'; go = () => setWoOpen(true); }
           return (
             <div className="mt-3 flex items-center justify-between gap-3 rounded-[10px] bg-sup-canvas2 px-3 py-2">

@@ -133,15 +133,26 @@ exports.slotAvailability = async (req, res) => {
     const from = req.query.date_from || new Date().toISOString().slice(0, 10);
     const siteKey = req.query.site_key || null;
     const users = await pool.query(
-      `SELECT DISTINCT u.user_id, u.name
-         FROM users u
-         LEFT JOIN support_group_members m ON m.user_id = u.user_id
-        WHERE COALESCE(u.active, TRUE) = TRUE
-          AND (
-            ($1::int IS NULL AND u.role IN ('support_tech','technician'))
-            OR m.group_id = $1
-          )
-        ORDER BY u.name`,
+      `WITH members AS (
+         SELECT DISTINCT u.user_id, u.name
+           FROM users u
+           JOIN support_group_members m ON m.user_id = u.user_id
+          WHERE COALESCE(u.active, TRUE) = TRUE
+            AND $1::int IS NOT NULL
+            AND m.group_id = $1
+            AND u.role IN ('support_tech','technician','support_lead')
+       ),
+       field AS (
+         SELECT DISTINCT u.user_id, u.name
+           FROM users u
+          WHERE COALESCE(u.active, TRUE) = TRUE
+            AND u.role IN ('support_tech','technician','support_lead')
+       )
+       SELECT user_id, name FROM members
+       UNION ALL
+       SELECT user_id, name FROM field
+        WHERE NOT EXISTS (SELECT 1 FROM members)
+       ORDER BY name`,
       [groupId]
     );
     const slots = [];

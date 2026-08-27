@@ -69,7 +69,9 @@ async function writeLog(db, row) {
 async function finishLog(db, logId, status, error) {
   await db.query(
     `UPDATE support_notification_log
-        SET status = $2, error = $3, sent_at = CASE WHEN $2 = 'SENT' THEN NOW() ELSE sent_at END
+        SET status = $2::varchar,
+            error = $3,
+            sent_at = CASE WHEN $2::varchar = 'SENT' THEN NOW() ELSE sent_at END
       WHERE log_id = $1`,
     [logId, status, error || null]
   );

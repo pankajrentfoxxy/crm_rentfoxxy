@@ -207,7 +207,7 @@ export default function CreateWorkOrderWizard({ ticket, lines, initialLineIds, o
                 <label>Technician
                   <select value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)} className="mt-1 w-full border rounded px-2 py-1.5">
                     <option value="">Pick a technician</option>
-                    {(avail?.users || owners).map((u) => (
+                    {(avail?.users?.length ? avail.users : owners).map((u) => (
                       <option key={u.user_id} value={u.user_id}>{u.name}{u.jobs_today != null ? ` · ${u.jobs_today} jobs today` : ''}{u.jobs_at_site ? ` · ${u.jobs_at_site} at this site` : ''}</option>
                     ))}
                   </select>
@@ -299,7 +299,7 @@ export default function CreateWorkOrderWizard({ ticket, lines, initialLineIds, o
         {step === 3 && (
           <div className="text-[13px] space-y-2">
             <p>
-              {method === 'TECHNICIAN' && `${(avail?.users || owners).find((u) => String(u.user_id) === String(assignedTo))?.name || 'A technician'} will visit ${ticket.site_label || 'the site'}${slots[0] ? ` on ${slots[0].date}, ${slots[0].start}–${slots[slots.length - 1].end}` : ''}, for ${lineIds.length} machine(s).`}
+              {method === 'TECHNICIAN' && `${(avail?.users?.length ? avail.users : owners).find((u) => String(u.user_id) === String(assignedTo))?.name || 'A technician'} will visit ${ticket.site_label || 'the site'}${slots[0] ? ` on ${slots[0].date}, ${slots[0].start}–${slots[slots.length - 1].end}` : ''}, for ${lineIds.length} machine(s).`}
               {method === 'COURIER' && `${courier} will ${directionFor(woType) === 'PICKUP_FROM_CUSTOMER' ? 'collect from' : 'deliver to'} ${ticket.site_label || 'the customer'} on ${pickupDate}.`}
               {method === 'REMOTE' && `Remote session (${window}) with ${ticket.contact_name || 'the contact'}.`}
             </p>
