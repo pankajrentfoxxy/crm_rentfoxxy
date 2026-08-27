@@ -37,7 +37,7 @@ export const vendorAccordionChildren = [
   { label: 'Purchase Orders', path: '/vendor-management/purchase-orders', section: 'vendor_management' },
   { label: 'Serial Numbers', path: '/vendor-management/serial-numbers', section: 'vendor_management' },
   { label: 'Replaced Products', path: '/vendor-management/replaced-products', section: 'vendor_management' },
-  { label: 'Vendor Repair DC', path: '/vendor-management/vendor-repair-dc', section: 'vendor_repair_dc' },
+  { label: 'Vendor Repair DC', path: '/vendor-management/vendor-repair-dc', section: 'vendor_repair_dc', sections: ['vendor_repair_dc', 'vendor_repair_dc_dispatch'] },
 ];
 
 /** Production accordion (formerly Floor & Quality).
@@ -284,7 +284,7 @@ export const MENU_GROUPS = [
     key: 'vendor',
     label: 'Vendor Management',
     items: [
-      { type: 'vendorAccordion', sections: ['vendor_management', 'vendor_repair_dc'], section: 'vendor_management', icon: Store, label: 'Vendor Management' },
+      { type: 'vendorAccordion', sections: ['vendor_management', 'vendor_repair_dc', 'vendor_repair_dc_dispatch'], section: 'vendor_management', icon: Store, label: 'Vendor Management' },
     ],
   },
   {
@@ -423,6 +423,7 @@ export function isMenuItemVisible(item, canView) {
 }
 
 export function isVendorChildVisible(child, canView) {
+  if (child.sections?.length) return child.sections.some((section) => canView(section));
   if (child.section) return canView(child.section);
   return canView('vendor_management');
 }

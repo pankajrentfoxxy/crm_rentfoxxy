@@ -256,6 +256,39 @@ function requestVisitAddress(extra) {
   return addr && typeof addr === 'object' ? addr : null;
 }
 
+function todayYmdIst() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+function parsePreferredVisitSchedule(body) {
+  const dateRaw = String(body.preferred_visit_date || body.visit_date || '').trim();
+  const timeRaw = String(body.preferred_visit_time || body.visit_time || '').trim();
+  if (!dateRaw) return { error: 'Preferred visit date is required' };
+  const dateMatch = dateRaw.match(/^(\d{4}-\d{2}-\d{2})$/);
+  if (!dateMatch) return { error: 'Enter a valid visit date' };
+  const visitDate = dateMatch[1];
+  if (visitDate < todayYmdIst()) {
+    return { error: 'Visit date cannot be in the past' };
+  }
+  let visitTime = null;
+  if (timeRaw) {
+    const timeMatch = timeRaw.match(/^(\d{2}):(\d{2})$/);
+    if (!timeMatch) return { error: 'Enter a valid visit time (HH:MM)' };
+    const hour = Number(timeMatch[1]);
+    const minute = Number(timeMatch[2]);
+    if (hour > 23 || minute > 59) return { error: 'Enter a valid visit time (HH:MM)' };
+    visitTime = `${timeMatch[1]}:${timeMatch[2]}`;
+  }
+  const scheduledAt = `${visitDate}T${visitTime || '09:00'}:00+05:30`;
+  return {
+    value: {
+      preferred_visit_date: visitDate,
+      preferred_visit_time: visitTime,
+      visit_scheduled_at: scheduledAt,
+    },
+  };
+}
+
 /**
  * Public pickup intake.
  *
@@ -493,6 +526,11 @@ exports.createPublicRequest = async (req, res) => {
       return res.status(400).json({ success: false, message: addrParsed.error });
     }
 
+    const scheduleParsed = parsePreferredVisitSchedule(body);
+    if (scheduleParsed.error) {
+      return res.status(400).json({ success: false, message: scheduleParsed.error });
+    }
+
     const deployed = await resolveDeployedTtspl(client, device_serial);
     const bad = rejectDeployed(res, deployed, device_serial);
     if (bad) return bad;
@@ -526,6 +564,7 @@ exports.createPublicRequest = async (req, res) => {
     const extra = {
       service_address: addrParsed.value,
       mobile_is_poc: addrParsed.mobileIsPoc,
+      ...scheduleParsed.value,
     };
 
     const ins = await client.query(
@@ -1027,6 +1066,8 @@ exports.convertToTicket = async (req, res) => {
     // Customer-facing issue only — meta stays on the support_request row.
     const issueRemarks = String(row.issue_description || '').trim();
 
+    const visitScheduledAt = reqExtra.visit_scheduled_at || null;
+
     // Same shape as CRM createTicket (complaint, open, unassigned) + autofilled address/contact.
     const ticketRes = await client.query(
       `INSERT INTO support_tickets (
@@ -1055,8 +1096,8 @@ exports.convertToTicket = async (req, res) => {
       `INSERT INTO support_ticket_items (
          ticket_id, serial_number, unique_serial_number, ttspl_id, item_type,
          issue_category_label, remarks, status, otp_code, assigned_to,
-         brand, model, ram, storage, generation, processor
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,'open',$8,$9,$10,$11,$12,$13,$14,$15)`,
+         brand, model, ram, storage, generation, processor, visit_scheduled_at
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,'open',$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
       [
         ticketId,
         serial.serial_number || ttspl,
@@ -1073,6 +1114,7 @@ exports.convertToTicket = async (req, res) => {
         specs.storage,
         specs.generation,
         specs.processor,
+        visitScheduledAt,
       ]
     );
 

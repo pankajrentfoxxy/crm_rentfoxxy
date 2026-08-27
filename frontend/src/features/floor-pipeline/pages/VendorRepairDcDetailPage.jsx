@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Download, Loader2, PenLine, Printer, RotateCcw } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext';
+import usePermission from '../../../hooks/usePermission';
 import { getBackendOrigin } from '../../../utils/api';
 import {
   downloadVendorRepairPdf,
@@ -128,7 +129,9 @@ export default function VendorRepairDcDetailPage() {
   const { dcNumber: rawDc } = useParams();
   const dcNumber = decodeURIComponent(rawDc || '');
   const { user } = useAuth();
+  const { canCreate, canEdit } = usePermission();
   const canProcess = WAREHOUSE_ROLES.has(user?.role);
+  const canDispatch = canCreate('vendor_repair_dc_dispatch') || canEdit('vendor_repair_dc_dispatch');
   const canOverrideHsn = user?.role === 'admin' || user?.role === 'super_admin';
   const [loading, setLoading] = useState(true);
   const [dc, setDc] = useState(null);
@@ -487,7 +490,7 @@ export default function VendorRepairDcDetailPage() {
           ) : null}
         </div>
         <div className="flex flex-wrap gap-2">
-          {canProcess && ['dispatched', 'partially_returned'].includes(dc.status) && !dc.vendor_delivered_at ? (
+          {canDispatch && ['dispatched', 'partially_returned'].includes(dc.status) && !dc.vendor_delivered_at ? (
             <button
               type="button"
               disabled={deliverBusy}
@@ -694,7 +697,7 @@ export default function VendorRepairDcDetailPage() {
 
       <div className="rounded-xl border bg-white p-4 text-sm space-y-2 print:hidden">
         <h3 className="font-semibold">Send to vendor</h3>
-        {dc.status === 'draft' && canProcess ? (
+        {dc.status === 'draft' && canDispatch ? (
           <>
             <VrdcDispatchFields
               shipBy={shipBy}
@@ -742,7 +745,7 @@ export default function VendorRepairDcDetailPage() {
         )}
       </div>
 
-      {canProcess && dc.status === 'draft' ? (
+      {canDispatch && dc.status === 'draft' ? (
         <div className="rounded-xl border bg-white p-4 space-y-3 print:hidden">
           <h3 className="font-semibold">Dispatch e-signatures</h3>
           <p className="text-xs text-slate-500">Warehouse signature and name are required. Vendor signature is optional.</p>
@@ -751,7 +754,7 @@ export default function VendorRepairDcDetailPage() {
               label="Warehouse e-sign"
               url={dc.warehouse_dispatch_esign_url}
               previewUrl={pendingWhDispatch}
-              canSign={canProcess}
+              canSign={canDispatch}
               onSign={() => setActiveSign('wh_dispatch')}
               signerName={whDispatchSignerName}
               onSignerNameChange={setWhDispatchSignerName}
@@ -760,7 +763,7 @@ export default function VendorRepairDcDetailPage() {
               label="Vendor e-sign"
               url={dc.vendor_dispatch_esign_url}
               previewUrl={pendingVendorDispatch}
-              canSign={canProcess}
+              canSign={canDispatch}
               onSign={() => setActiveSign('vendor_dispatch')}
               signerName={vendorDispatchSignerName}
               onSignerNameChange={setVendorDispatchSignerName}
@@ -817,7 +820,7 @@ export default function VendorRepairDcDetailPage() {
         </div>
       ) : null}
 
-      {canProcess && dc.status === 'dispatched' && dc.warehouse_dispatch_esign_url ? (
+      {canDispatch && dc.status === 'dispatched' && dc.warehouse_dispatch_esign_url ? (
         <div className="space-y-3 print:hidden">
           <div className="grid md:grid-cols-2 gap-3">
             <EsignBox label="Warehouse dispatch sign" url={dc.warehouse_dispatch_esign_url} signerName={dc.warehouse_dispatch_signer_name} />

@@ -28,6 +28,24 @@ async function requireDiagnosisFailedProcess(req, res, next) {
   });
 }
 
+/** Sign, confirm dispatch, and mark delivered on a Vendor Repair DC. */
+async function requireVendorRepairDispatch(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: 'Unauthorized' });
+  }
+  if (req.user.role === 'super_admin') return next();
+  const cache = req.permissionCache || (req.permissionCache = {});
+  const uid = req.user.user_id;
+  const role = req.user.role;
+  if (await hasPermission(uid, role, 'vendor_repair_dc_dispatch', 'can_create', cache)) return next();
+  if (await hasPermission(uid, role, 'vendor_repair_dc_dispatch', 'can_edit', cache)) return next();
+  if (svc.WAREHOUSE_ROLES.has(role)) return next();
+  return res.status(403).json({
+    success: false,
+    message: 'Vendor Repair DC — Sign, Dispatch & Delivery access required',
+  });
+}
+
 const { pickSpecFilters } = require('../utils/inventorySpecFilter');
 
 exports.listDiagnosisFailed = async (req, res) => {
@@ -529,3 +547,4 @@ exports.exportOutForRepairPdf = async (req, res) => {
 
 exports.requireWarehouse = requireWarehouse;
 exports.requireDiagnosisFailedProcess = requireDiagnosisFailedProcess;
+exports.requireVendorRepairDispatch = requireVendorRepairDispatch;

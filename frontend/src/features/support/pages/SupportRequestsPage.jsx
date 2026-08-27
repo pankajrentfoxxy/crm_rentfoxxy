@@ -19,6 +19,23 @@ function formatVisitAddress(extra) {
   return { line, phone: addr.phone || null, isPickup: Boolean(extra.pickup_address && !extra.service_address) };
 }
 
+function formatVisitSchedule(extra) {
+  if (!extra || typeof extra !== 'object' || !extra.preferred_visit_date) return null;
+  const date = extra.preferred_visit_date;
+  const time = extra.preferred_visit_time;
+  try {
+    const formattedDate = new Date(`${date}T12:00:00+05:30`).toLocaleDateString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      timeZone: 'Asia/Kolkata',
+    });
+    return time ? `${formattedDate} at ${time}` : formattedDate;
+  } catch {
+    return time ? `${date} at ${time}` : date;
+  }
+}
+
 function statusTone(status) {
   if (status === 'pending') return 'bg-amber-100 text-amber-800';
   if (status === 'reviewed') return 'bg-blue-100 text-blue-800';
@@ -135,6 +152,7 @@ function ConvertModal({ request, onClose, onConverted }) {
     ? request.extra.devices
     : [request.device_serial].filter(Boolean);
   const visitAddress = formatVisitAddress(request.extra);
+  const visitSchedule = formatVisitSchedule(request.extra);
 
   useEffect(() => {
     let cancelled = false;
@@ -224,6 +242,11 @@ function ConvertModal({ request, onClose, onConverted }) {
             </p>
           ) : request.device_serial ? (
             <p><span className="text-slate-500">Device:</span> <span className="font-mono">{request.device_serial}</span></p>
+          ) : null}
+          {visitSchedule ? (
+            <p>
+              <span className="text-slate-500">Preferred visit:</span> {visitSchedule}
+            </p>
           ) : null}
           {visitAddress ? (
             <p>
@@ -356,6 +379,15 @@ function DetailDrawer({ request, onClose, onConvert, onReject, canAct }) {
           {Array.isArray(request.extra?.devices) && request.extra.devices.length > 1 ? (
             <p><span className="text-slate-500">Laptops:</span> {request.extra.devices.join(', ')}</p>
           ) : null}
+          {(() => {
+            const schedule = formatVisitSchedule(request.extra);
+            if (!schedule) return null;
+            return (
+              <p>
+                <span className="text-slate-500">Preferred visit:</span> {schedule}
+              </p>
+            );
+          })()}
           {(() => {
             const addr = formatVisitAddress(request.extra);
             if (!addr) return null;

@@ -1,0 +1,28 @@
+#!/usr/bin/env node
+require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
+const pool = require('../config/db');
+
+async function main() {
+  const sqlPath = path.join(__dirname, '../migrations/208_vendor_repair_dc_dispatch_permission.sql');
+  const sql = fs.readFileSync(sqlPath, 'utf8');
+  console.log('Running 208_vendor_repair_dc_dispatch_permission.sql …');
+  await pool.query(sql);
+  const r = await pool.query(
+    `SELECT role, can_view, can_create, can_edit
+       FROM role_permissions
+      WHERE section = 'vendor_repair_dc_dispatch'
+      ORDER BY role`
+  );
+  console.log('Done. role grants:');
+  r.rows.forEach((row) => {
+    console.log(`  ${row.role}: view=${row.can_view} create=${row.can_create} edit=${row.can_edit}`);
+  });
+  process.exit(0);
+}
+
+main().catch((err) => {
+  console.error('Migration 208 failed:', err.message);
+  process.exit(1);
+});

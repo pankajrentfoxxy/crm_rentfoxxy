@@ -17,6 +17,7 @@ export const SECTION_ALIASES = {
   sales_orders_doc: ['sales_orders', 'sales_orders_doc', 'sales_orders_sale', 'sales_orders_rental'],
   sales_orders_sale: ['sales_orders_sale', 'sales_orders_doc', 'sales_orders'],
   sales_orders_rental: ['sales_orders_rental', 'sales_orders_doc', 'sales_orders'],
+  vendor_repair_dc: ['vendor_repair_dc', 'vendor_repair_dc_dispatch'],
 };
 
 /** Sidebar accordion / module umbrella → granular RBAC sections */
@@ -40,7 +41,7 @@ export const MODULE_CHILDREN = {
     'payment_records',
   ],
   floor_pipeline: ['floor_tickets', 'floor_ticket_config_edit', 'chip_level_repair', 'qc_management', 'dispatch_qc', 'pending_inventory', 'diagnosis_failed'],
-  vendor_management: ['vendor_repair_dc'],
+  vendor_management: ['vendor_repair_dc', 'vendor_repair_dc_dispatch'],
   inventory_management: ['customer_inventory', 'ttspl_history', 'inventory_master_data', 'inventory_asset_movement'],
   parts_management: [
     'parts_dashboard',
@@ -103,6 +104,7 @@ export const VENDOR_UMBRELLA_SECTIONS = [
   'vendor_management',
   'parts_procurement',
   'vendor_repair_dc',
+  'vendor_repair_dc_dispatch',
 ];
 
 /** @deprecated use VENDOR_UMBRELLA_SECTIONS */

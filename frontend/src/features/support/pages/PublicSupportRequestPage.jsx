@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Loader2, CheckCircle2, AlertTriangle, Plus, X,
-  Package, Wrench, MapPin,
+  Package, Wrench, MapPin, CalendarDays,
 } from 'lucide-react';
 import api from '../../../utils/api';
 import { INDIAN_STATES } from '../../../constants/indianStates';
@@ -19,6 +19,10 @@ const inputClass = (invalid) =>
       ? 'border-rose-400 focus:ring-rose-200 focus:border-rose-500'
       : 'border-slate-300 focus:ring-indigo-500 focus:border-indigo-500'
   }`;
+
+function todayYmdIst() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
 
 function FieldError({ children }) {
   if (!children) return null;
@@ -41,6 +45,8 @@ export default function PublicSupportRequestPage() {
     city: '',
     state: '',
     address: '',
+    preferred_visit_date: '',
+    preferred_visit_time: '',
   });
   const [devices, setDevices] = useState([]);
   const [deviceDraft, setDeviceDraft] = useState('');
@@ -170,6 +176,17 @@ export default function PublicSupportRequestPage() {
       next.address = isPickup ? 'Pickup address is required' : 'Service address is required';
     }
 
+    if (!isPickup) {
+      if (!form.preferred_visit_date.trim()) {
+        next.preferred_visit_date = 'Preferred visit date is required';
+      } else if (form.preferred_visit_date < todayYmdIst()) {
+        next.preferred_visit_date = 'Visit date cannot be in the past';
+      }
+      if (form.preferred_visit_time.trim() && !/^\d{2}:\d{2}$/.test(form.preferred_visit_time.trim())) {
+        next.preferred_visit_time = 'Enter a valid time (HH:MM)';
+      }
+    }
+
     setFieldErrors(next);
     const first = Object.values(next)[0];
     if (first) setError(first);
@@ -217,6 +234,10 @@ export default function PublicSupportRequestPage() {
       } else {
         payload.device_serial = form.device_serial.trim();
         payload.service_address = visitAddress;
+        payload.preferred_visit_date = form.preferred_visit_date.trim();
+        if (form.preferred_visit_time.trim()) {
+          payload.preferred_visit_time = form.preferred_visit_time.trim();
+        }
       }
       const { data } = await api.post('/support-public/request', payload);
       setDone(data);
@@ -230,7 +251,7 @@ export default function PublicSupportRequestPage() {
   const subtitle = useMemo(() => (
     isPickup
       ? 'Schedule a laptop pickup — add each TTSPL and the collection address.'
-      : 'Tell us what\'s wrong and where to visit — we\'ll get back to you shortly.'
+      : 'Tell us what\'s wrong, where to visit, and when — we\'ll get back to you shortly.'
   ), [isPickup]);
 
   return (
@@ -505,6 +526,40 @@ export default function PublicSupportRequestPage() {
                   <FieldError>{fieldErrors.address}</FieldError>
                 </label>
               </section>
+
+              {!isPickup ? (
+                <section className="space-y-3.5 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 flex items-center gap-1.5">
+                    <CalendarDays className="w-3.5 h-3.5" /> Preferred visit schedule
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <label className="block">
+                      <span className="text-xs font-semibold text-slate-600">Visit date *</span>
+                      <input
+                        type="date"
+                        className={inputClass(fieldErrors.preferred_visit_date)}
+                        value={form.preferred_visit_date}
+                        min={todayYmdIst()}
+                        onChange={(e) => set('preferred_visit_date', e.target.value)}
+                      />
+                      <FieldError>{fieldErrors.preferred_visit_date}</FieldError>
+                    </label>
+                    <label className="block">
+                      <span className="text-xs font-semibold text-slate-600">Visit time</span>
+                      <input
+                        type="time"
+                        className={inputClass(fieldErrors.preferred_visit_time)}
+                        value={form.preferred_visit_time}
+                        onChange={(e) => set('preferred_visit_time', e.target.value)}
+                      />
+                      <FieldError>{fieldErrors.preferred_visit_time}</FieldError>
+                      {!fieldErrors.preferred_visit_time ? (
+                        <span className="mt-1 block text-xs text-slate-400">Optional — we&apos;ll try to visit around this time</span>
+                      ) : null}
+                    </label>
+                  </div>
+                </section>
+              ) : null}
 
               <section>
                 <label className="block">
