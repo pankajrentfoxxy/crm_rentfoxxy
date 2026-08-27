@@ -1039,6 +1039,21 @@ export default function DeliveryChallanDetailPage() {
                   </ul>
                 </div>
               )}
+              {head.status === 'dispatch_ready' && (
+                <div className="text-sm space-y-2">
+                  <p className="text-sky-800 text-xs">
+                    Dispatch ready at the warehouse. Status stays here until Guard scans this DC QR on <strong>OUTWARD</strong> and submits. That submit sets In Transit and the dispatch date.
+                  </p>
+                  {canView('guard_gate_checking') ? (
+                    <Link
+                      to={`/guard/scanner?dir=outward&q=${encodeURIComponent(dcNumber)}`}
+                      className="inline-flex px-4 py-2 bg-orange-600 text-white rounded-lg text-sm hover:bg-orange-700"
+                    >
+                      Open outward gate scanner
+                    </Link>
+                  ) : null}
+                </div>
+              )}
               {head.status === 'pending' && (
                 <PermissionGate section="dispatch_ops" action="edit">
                   <p className="text-amber-700 text-xs">This DC is not dispatched yet.</p>

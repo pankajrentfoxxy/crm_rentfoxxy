@@ -790,6 +790,8 @@ function buildDeliveryChallanListWhere({
   }
   if (status === 'pending') {
     where += ` AND (d.status IS NULL OR d.status = 'pending')`;
+  } else if (status === 'dispatch_ready') {
+    where += ` AND d.status = 'dispatch_ready'`;
   } else if (status === 'in_transit') {
     where += ` AND d.status IN ('in_transit', 'shipped', 'reached')`;
   } else if (status && status !== 'all') {
@@ -839,6 +841,7 @@ async function listDeliveryChallansGrouped({
        SELECT
          COUNT(*)::int AS total,
          COUNT(*) FILTER (WHERE dc_status = 'pending')::int AS pending,
+         COUNT(*) FILTER (WHERE dc_status = 'dispatch_ready')::int AS dispatch_ready,
          COUNT(*) FILTER (WHERE dc_status IN ('in_transit', 'shipped', 'reached'))::int AS in_transit,
          COUNT(*) FILTER (WHERE dc_status = 'delivered')::int AS delivered,
          COUNT(*) FILTER (WHERE dc_status = 'rejected')::int AS rejected
@@ -884,6 +887,7 @@ async function listDeliveryChallansGrouped({
       total_laptops: laptopResult.rows[0]?.total_laptops || 0,
       total: statusRow.total || countResult.rows[0]?.total || 0,
       pending: statusRow.pending || 0,
+      dispatch_ready: statusRow.dispatch_ready || 0,
       in_transit: statusRow.in_transit || 0,
       delivered: statusRow.delivered || 0,
       rejected: statusRow.rejected || 0,
@@ -1816,7 +1820,7 @@ async function searchAvailableInventory({
   // Legacy ERP rows may still have inventory_status = in_repair after repair even
   // though qc_status is passed — treat any non-deployed QC-passed unit as pickable.
   const OFF_SHELF_INVENTORY_STATUSES = [
-    'reserved', 'in_transit', 'rented', 'on_demo', 'sold',
+    'reserved', 'dispatch_ready', 'in_transit', 'rented', 'on_demo', 'sold',
     'returned', 'scrapped', 'out_stock', 'qc_failed',
     'out_for_repare', 'out_for_return',
   ];

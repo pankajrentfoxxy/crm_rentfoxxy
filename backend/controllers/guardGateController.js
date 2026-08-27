@@ -54,7 +54,11 @@ exports.confirm = async (req, res) => {
     return res.status(status).json({ success: Boolean(result.ok), ...result });
   } catch (err) {
     console.error('guardGate.confirm', err);
-    return res.status(500).json({ success: false, message: 'Unable to confirm gate movement.' });
+    const dev = process.env.NODE_ENV !== 'production';
+    return res.status(500).json({
+      success: false,
+      message: dev && err.message ? err.message : 'Unable to confirm gate movement.',
+    });
   }
 };
 

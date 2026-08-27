@@ -9,16 +9,17 @@
  * longer drift apart.
  *
  * Canonical statuses:
- *   in_stock   — QC-passed, available to allocate
- *   reserved   — attached to a DC, not yet dispatched
- *   in_transit — dispatched, en route (courier)
- *   rented     — delivered under a rental agreement (Rentfoxxy), earning
- *   on_demo    — delivered as a free demo (Rentfoxxy), not yet billed
- *   sold       — delivered as a sale (Gorefurbo)
- *   returned   — came back from customer, pending QC re-entry
- *   in_repair  — on the floor / under repair
- *   qc_failed  — failed QC (may go back to vendor)
- *   scrapped   — dead asset, removed from circulation
+ *   in_stock        — QC-passed, available to allocate
+ *   reserved        — attached to an SO, not yet on a DC
+ *   dispatch_ready  — DC created, waiting at warehouse gate
+ *   in_transit      — guard confirmed outward, en route
+ *   rented          — delivered under a rental agreement (Rentfoxxy), earning
+ *   on_demo         — delivered as a free demo (Rentfoxxy), not yet billed
+ *   sold            — delivered as a sale (Gorefurbo)
+ *   returned        — came back from customer, pending QC re-entry
+ *   in_repair       — on the floor / under repair
+ *   qc_failed       — failed QC (may go back to vendor)
+ *   scrapped        — dead asset, removed from circulation
  */
 const pool = require('../config/db');
 const { logTtsplEvent } = require('./ttsplAuditService');
@@ -26,6 +27,7 @@ const { logTtsplEvent } = require('./ttsplAuditService');
 const STATUS = Object.freeze({
   IN_STOCK: 'in_stock',
   RESERVED: 'reserved',
+  DISPATCH_READY: 'dispatch_ready',
   IN_TRANSIT: 'in_transit',
   RENTED: 'rented',
   ON_DEMO: 'on_demo',
@@ -39,16 +41,17 @@ const STATUS = Object.freeze({
 // Allowed transitions. null-key entries are reachable from any state (admin
 // corrections still flow through here so they are audited).
 const ALLOWED = {
-  in_stock:   ['reserved', 'in_transit', 'in_repair', 'qc_failed', 'scrapped'], // in_transit = direct dispatch (no explicit reserve)
-  reserved:   ['in_transit', 'in_stock'],                 // in_stock = de-allocate
-  in_transit: ['rented', 'on_demo', 'sold', 'in_stock'],  // in_stock = dispatch rejected
-  on_demo:    ['rented', 'returned'],                     // keep -> rented, return
-  rented:     ['returned'],
-  sold:       ['returned'],                               // sales return / RMA
-  returned:   ['in_stock', 'in_repair', 'qc_failed', 'scrapped'],
-  in_repair:  ['in_stock', 'qc_failed', 'scrapped'],
-  qc_failed:  ['in_stock', 'in_repair', 'scrapped'],
-  scrapped:   [],
+  in_stock:        ['reserved', 'dispatch_ready', 'in_transit', 'in_repair', 'qc_failed', 'scrapped'],
+  reserved:        ['dispatch_ready', 'in_transit', 'in_stock'],
+  dispatch_ready:  ['in_transit', 'in_stock'],
+  in_transit:      ['rented', 'on_demo', 'sold', 'in_stock'],
+  on_demo:         ['rented', 'returned'],
+  rented:          ['returned'],
+  sold:            ['returned'],
+  returned:        ['in_stock', 'in_repair', 'qc_failed', 'scrapped'],
+  in_repair:       ['in_stock', 'qc_failed', 'scrapped'],
+  qc_failed:       ['in_stock', 'in_repair', 'scrapped'],
+  scrapped:        [],
 };
 
 const CANONICAL_STATUSES = new Set(Object.values(STATUS));
@@ -115,6 +118,9 @@ async function transitionAsset(db, {
 
   switch (toStatus) {
     case STATUS.RESERVED:
+      if (customerId !== null) add('current_customer_id', customerId);
+      break;
+    case STATUS.DISPATCH_READY:
       if (customerId !== null) add('current_customer_id', customerId);
       break;
     case STATUS.IN_TRANSIT:
@@ -212,9 +218,13 @@ const reserveForDc = (db, serialId, { dcNumber, customerId, entityCode, actorUse
   transitionAsset(db, { serialId, toStatus: STATUS.RESERVED, dcNumber, customerId, entityCode,
     reason: `Reserved on ${dcNumber}`, actorUserId, actorName });
 
+const markDispatchReady = (db, serialId, { dcNumber, customerId, entityCode, dispatchMode, rentMonthlyRate, actorUserId, actorName }) =>
+  transitionAsset(db, { serialId, toStatus: STATUS.DISPATCH_READY, dcNumber, customerId, entityCode,
+    dispatchMode, rentMonthlyRate, reason: `Dispatch ready on ${dcNumber}`, actorUserId, actorName });
+
 const markDispatched = (db, serialId, { dcNumber, customerId, entityCode, dispatchMode, rentMonthlyRate, actorUserId, actorName }) =>
   transitionAsset(db, { serialId, toStatus: STATUS.IN_TRANSIT, dcNumber, customerId, entityCode,
-    dispatchMode, rentMonthlyRate, reason: `Dispatched on ${dcNumber} (${dispatchMode})`, actorUserId, actorName });
+    dispatchMode, rentMonthlyRate, reason: `In transit on ${dcNumber} (${dispatchMode || 'gate'})`, actorUserId, actorName });
 
 /**
  * Deliver: pick the terminal state from the order type, compute rent start.
@@ -247,7 +257,7 @@ const markDelivered = async (db, serialId, {
       : null;
 
   if (!deliveryCorrection && !isAllowed(from, toStatus)) {
-    if ([STATUS.IN_STOCK, STATUS.RESERVED].includes(from)) {
+    if ([STATUS.IN_STOCK, STATUS.RESERVED, STATUS.DISPATCH_READY].includes(from)) {
       await markDispatched(client, serialId, {
         dcNumber, customerId, entityCode, dispatchMode, actorUserId, actorName,
       });
@@ -357,7 +367,7 @@ async function bridgeSupportReplacement(db, {
   if (newRow) {
     // A spare in stock (or reserved) must pass through in_transit before it can
     // become "rented" per the state machine's allowed transitions.
-    if (newRow.inventory_status === 'in_stock' || newRow.inventory_status === 'reserved') {
+    if (newRow.inventory_status === 'in_stock' || newRow.inventory_status === 'reserved' || newRow.inventory_status === 'dispatch_ready') {
       await markDispatched(db, newRow.serial_id, {
         dcNumber,
         customerId,
@@ -392,6 +402,7 @@ module.exports = {
   computeRentStart,
   deliveredStatusForType,
   reserveForDc,
+  markDispatchReady,
   markDispatched,
   markDelivered,
   markReturned,

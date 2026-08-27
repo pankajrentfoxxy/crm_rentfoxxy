@@ -40,6 +40,7 @@ export const TYPE_STYLES = {
 
 export const DC_STATUS_STYLES = {
   pending: 'bg-gray-100 text-gray-700',
+  dispatch_ready: 'bg-sky-100 text-sky-800',
   in_transit: 'bg-amber-100 text-amber-800',
   delivered: 'bg-emerald-100 text-emerald-800',
   rejected: 'bg-red-100 text-red-800',
@@ -63,7 +64,7 @@ export const DISPATCH_MODE_STYLES = {
 
 /** DC assignee can be changed while pending/assigned and before reached/delivered. */
 export function isDcAssignmentEditable(status) {
-  return ['pending', 'processing', 'in_transit', 'shipped'].includes(String(status || '').toLowerCase());
+  return ['pending', 'processing', 'dispatch_ready', 'in_transit', 'shipped'].includes(String(status || '').toLowerCase());
 }
 
 export function formatCurrency(n) {

@@ -11,7 +11,7 @@ import { listDCs } from '../salesPipelineApi';
 import { DC_STATUS_STYLES, DISPATCH_MODE_STYLES, formatDate, statusLabel, deliveryChallanDetailPath } from '../salesPipelineUtils';
 import { useUrlFilters, useDebouncedUrlSearch, listReturnState } from '../../../hooks/useUrlFilters';
 
-const TABS = ['all', 'pending', 'in_transit', 'delivered', 'rejected'];
+const TABS = ['all', 'pending', 'dispatch_ready', 'in_transit', 'delivered', 'rejected'];
 const PURPOSE_FILTERS = [
   { value: '', label: 'All types' },
   { value: 'standard', label: 'DC' },
@@ -41,6 +41,7 @@ export default function DeliveryChallanListPage() {
     total_laptops: 0,
     total: 0,
     pending: 0,
+    dispatch_ready: 0,
     in_transit: 0,
     delivered: 0,
     rejected: 0,
@@ -68,6 +69,7 @@ export default function DeliveryChallanListPage() {
         total_laptops: 0,
         total: res.data?.pagination?.total || list.length,
         pending: 0,
+        dispatch_ready: 0,
         in_transit: 0,
         delivered: 0,
         rejected: 0,
@@ -193,9 +195,10 @@ export default function DeliveryChallanListPage() {
         <StatCard label="Total Laptops" value={formatCount(stats.total_laptops)} tone="blue" />
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
         <StatCard label="Total" value={formatCount(stats.total)} tone="gray" />
         <StatCard label="Pending" value={formatCount(stats.pending)} tone="amber" />
+        <StatCard label="Dispatch Ready" value={formatCount(stats.dispatch_ready)} tone="blue" />
         <StatCard label="In Transit" value={formatCount(stats.in_transit)} tone="blue" />
         <StatCard label="Delivered" value={formatCount(stats.delivered)} tone="green" />
         <StatCard label="Rejected" value={formatCount(stats.rejected)} tone="red" />
