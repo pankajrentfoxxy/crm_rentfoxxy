@@ -365,7 +365,6 @@ export const itemAllowsTechnicianAssign = (item) => {
   if (!item) return true;
   const method = String(item.pickup_method || '').trim().toLowerCase();
   if (method === 'courier' || method === 'porter') return false;
-  if (item.item_type === 'pickup' && item.status === 'pending_dispatch') return false;
   if (item.item_type === 'complaint' && item.visited_at) return false;
   return true;
 };

@@ -10,6 +10,15 @@ import { isSupportLead } from '../../../utils/supportAccess';
 import { assigneeOptionLabel } from '../../../components/support/utils';
 import { useAuth } from '../../../context/AuthContext';
 
+function formatVisitAddress(extra) {
+  if (!extra || typeof extra !== 'object') return null;
+  const addr = extra.service_address || extra.pickup_address;
+  if (!addr || typeof addr !== 'object') return null;
+  const line = [addr.address, addr.city, addr.state, addr.pincode].filter(Boolean).join(', ');
+  if (!line) return null;
+  return { line, phone: addr.phone || null, isPickup: Boolean(extra.pickup_address && !extra.service_address) };
+}
+
 function statusTone(status) {
   if (status === 'pending') return 'bg-amber-100 text-amber-800';
   if (status === 'reviewed') return 'bg-blue-100 text-blue-800';
@@ -125,7 +134,7 @@ function ConvertModal({ request, onClose, onConverted }) {
   const pickupDevices = Array.isArray(request.extra?.devices) && request.extra.devices.length
     ? request.extra.devices
     : [request.device_serial].filter(Boolean);
-  const pickupAddress = request.extra?.pickup_address || null;
+  const visitAddress = formatVisitAddress(request.extra);
 
   useEffect(() => {
     let cancelled = false;
@@ -216,12 +225,11 @@ function ConvertModal({ request, onClose, onConverted }) {
           ) : request.device_serial ? (
             <p><span className="text-slate-500">Device:</span> <span className="font-mono">{request.device_serial}</span></p>
           ) : null}
-          {pickupAddress ? (
+          {visitAddress ? (
             <p>
-              <span className="text-slate-500">Pickup address:</span>{' '}
-              {[pickupAddress.address, pickupAddress.city, pickupAddress.state, pickupAddress.pincode]
-                .filter(Boolean).join(', ')}
-              {pickupAddress.phone ? ` · POC ${pickupAddress.phone}` : ''}
+              <span className="text-slate-500">{visitAddress.isPickup ? 'Pickup address:' : 'Service address:'}</span>{' '}
+              {visitAddress.line}
+              {visitAddress.phone ? ` · POC ${visitAddress.phone}` : ''}
             </p>
           ) : null}
           <p className="text-slate-700 whitespace-pre-wrap pt-1">{request.issue_description}</p>
@@ -348,18 +356,17 @@ function DetailDrawer({ request, onClose, onConvert, onReject, canAct }) {
           {Array.isArray(request.extra?.devices) && request.extra.devices.length > 1 ? (
             <p><span className="text-slate-500">Laptops:</span> {request.extra.devices.join(', ')}</p>
           ) : null}
-          {request.extra?.pickup_address ? (
-            <p>
-              <span className="text-slate-500">Pickup:</span>{' '}
-              {[
-                request.extra.pickup_address.address,
-                request.extra.pickup_address.city,
-                request.extra.pickup_address.state,
-                request.extra.pickup_address.pincode,
-              ].filter(Boolean).join(', ')}
-              {request.extra.pickup_address.phone ? ` · POC ${request.extra.pickup_address.phone}` : ''}
-            </p>
-          ) : null}
+          {(() => {
+            const addr = formatVisitAddress(request.extra);
+            if (!addr) return null;
+            return (
+              <p>
+                <span className="text-slate-500">{addr.isPickup ? 'Pickup:' : 'Service address:'}</span>{' '}
+                {addr.line}
+                {addr.phone ? ` · POC ${addr.phone}` : ''}
+              </p>
+            );
+          })()}
           <p><span className="text-slate-500">Submitted:</span> {formatWhen(request.created_at)}</p>
           <div>
             <p className="text-slate-500 mb-1">Issue</p>

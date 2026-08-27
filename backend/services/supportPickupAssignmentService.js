@@ -105,6 +105,72 @@ function isPickupAssignmentEditable(item, dcStatus) {
 }
 
 /**
+ * Ticket-list assign to a field technician is the pickup dispatch.
+ * Courier/porter pickups and already-started pickups are left alone.
+ */
+async function applyTechnicianPickupOnClient(client, { ticketId, technicianUserId }) {
+  const techId = parseInt(technicianUserId, 10);
+  if (!Number.isFinite(techId) || techId <= 0) return { applied: false };
+
+  const userRes = await client.query(
+    `SELECT user_id, role FROM users WHERE user_id = $1 LIMIT 1`,
+    [techId]
+  );
+  if (userRes.rows[0]?.role !== 'support_tech') return { applied: false };
+
+  const ticketRes = await client.query(
+    `SELECT id, return_dc_number FROM support_tickets WHERE id = $1`,
+    [ticketId]
+  );
+  const ticket = ticketRes.rows[0];
+  if (!ticket?.return_dc_number) return { applied: false };
+
+  const itemsRes = await client.query(
+    `SELECT * FROM support_ticket_items
+      WHERE ticket_id = $1 AND item_type = 'pickup' AND return_dc_number = $2`,
+    [ticketId, ticket.return_dc_number]
+  );
+  const pending = itemsRes.rows.filter((p) => {
+    if (pickupStarted(p)) return false;
+    if (['resolved', 'closed', 'inventory_updated', 'cancelled'].includes(String(p.status || ''))) {
+      return false;
+    }
+    const method = String(p.pickup_method || '').toLowerCase();
+    if (method === 'courier' || method === 'porter') return false;
+    return method === '' || method === 'technician' || method === 'inhouse'
+      || p.status === 'pending_dispatch' || !p.pickup_assigned_to;
+  });
+  if (!pending.length) return { applied: false };
+
+  const deliveryPersonId = await resolveTechnicianId(client, techId);
+
+  await client.query(
+    `UPDATE support_ticket_items SET
+        assigned_to = $3,
+        pickup_assigned_to = $3,
+        pickup_method = 'technician',
+        status = CASE WHEN status = 'pending_dispatch' THEN 'assigned' ELSE status END,
+        updated_at = NOW()
+     WHERE id = ANY($1::int[]) AND ticket_id = $2`,
+    [pending.map((p) => p.id), ticketId, techId]
+  );
+
+  await client.query(
+    `UPDATE delivery_challan_lines SET
+        dispatch_mode = 'inhouse',
+        ship_by = 'by_hand',
+        delivery_person_id = $2,
+        status = CASE WHEN COALESCE(status, 'pending') IN ('pending', 'processing') THEN 'in_transit' ELSE status END,
+        dispatched_at = COALESCE(dispatched_at, NOW()),
+        updated_at = NOW()
+     WHERE dc_number = $1 AND movement_type = 'return'`,
+    [ticket.return_dc_number, deliveryPersonId]
+  );
+
+  return { applied: true, return_dc_number: ticket.return_dc_number };
+}
+
+/**
  * Apply or change return pickup assignment (technician / courier / porter).
  * Updates support_ticket_items and linked return delivery_challan_lines.
  */
@@ -272,4 +338,5 @@ async function applyReturnPickupAssignment({ ticketId, body, allowChange = true 
 module.exports = {
   isPickupAssignmentEditable,
   applyReturnPickupAssignment,
+  applyTechnicianPickupOnClient,
 };

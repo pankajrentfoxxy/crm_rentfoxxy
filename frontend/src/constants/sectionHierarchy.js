@@ -39,7 +39,7 @@ export const MODULE_CHILDREN = {
     'delivery_my_deliveries',
     'payment_records',
   ],
-  floor_pipeline: ['floor_tickets', 'floor_ticket_config_edit', 'chip_level_repair', 'qc_management', 'dispatch_qc', 'pending_inventory'],
+  floor_pipeline: ['floor_tickets', 'floor_ticket_config_edit', 'chip_level_repair', 'qc_management', 'dispatch_qc', 'pending_inventory', 'diagnosis_failed'],
   vendor_management: ['vendor_repair_dc'],
   inventory_management: ['customer_inventory', 'ttspl_history', 'inventory_master_data', 'inventory_asset_movement'],
   parts_management: [
@@ -116,4 +116,5 @@ export const FLOOR_UMBRELLA_SECTIONS = [
   'qc_management',
   'dispatch_qc',
   'pending_inventory',
+  'diagnosis_failed',
 ];

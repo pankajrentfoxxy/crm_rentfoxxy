@@ -7,14 +7,26 @@ import { DC_STATUS_STYLES, downloadBlob, formatDate, statusLabel } from '../sale
 import { getBackendOrigin } from '../../../utils/api';
 import { PageHeader, StatCard, Button, ResponsiveTable, DateRangeFilter } from '../../../components/ui/primitives';
 import { useUrlFilters, useDebouncedUrlSearch } from '../../../hooks/useUrlFilters';
+import MultiSelectFilter from '../../lead-crm/components/MultiSelectFilter';
 
 const PAGE_SIZE = 25;
-const TABS = [
-  { id: 'in_transit', label: 'In Transit' },
-  { id: 'delivered', label: 'Delivered' },
-  { id: 'all', label: 'All' },
+const STATUS_OPTIONS = [
+  { value: 'pending', label: 'Pending' },
+  { value: 'in_transit', label: 'In Transit' },
+  { value: 'delivered', label: 'Delivered' },
+  { value: 'cancelled', label: 'Cancelled' },
 ];
-const RDC_FILTER_DEFAULTS = { page: 1, search: '', dateFrom: '', dateTo: '', tab: 'in_transit' };
+const RDC_FILTER_DEFAULTS = { page: 1, search: '', dateFrom: '', dateTo: '', statuses: '', tab: '' };
+
+function parseStatuses(raw, fallbackTab) {
+  const fromStatuses = String(raw || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => STATUS_OPTIONS.some((o) => o.value === s));
+  if (fromStatuses.length) return fromStatuses;
+  if (fallbackTab && STATUS_OPTIONS.some((o) => o.value === fallbackTab)) return [fallbackTab];
+  return [];
+}
 
 function pdfUrl(p) {
   if (!p) return null;
@@ -24,11 +36,13 @@ function pdfUrl(p) {
 
 export default function ReturnDcListPage() {
   const { filters, setFilters } = useUrlFilters(RDC_FILTER_DEFAULTS);
-  const { page, dateFrom, dateTo, tab } = filters;
+  const { page, dateFrom, dateTo, statuses, tab } = filters;
+  const selectedStatuses = parseStatuses(statuses, tab);
+  const statusParam = selectedStatuses.join(',') || 'all';
   const { searchInput, setSearchInput, debouncedSearch: search } = useDebouncedUrlSearch(filters, setFilters);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState({ total: 0, in_transit: 0, delivered: 0 });
+  const [stats, setStats] = useState({ total: 0, pending: 0, in_transit: 0, delivered: 0, cancelled: 0 });
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
   const [detailRdc, setDetailRdc] = useState(null);
   const [exporting, setExporting] = useState(false);
@@ -42,17 +56,17 @@ export default function ReturnDcListPage() {
         search: search.trim() || undefined,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
-        status: tab || 'in_transit',
+        status: statusParam,
       });
       setRows(res.data?.return_dcs || res.data?.rows || []);
-      setStats(res.data?.stats || { total: 0, in_transit: 0, delivered: 0 });
+      setStats(res.data?.stats || { total: 0, pending: 0, in_transit: 0, delivered: 0, cancelled: 0 });
       setPagination(res.data?.pagination || { page: 1, totalPages: 1, total: 0, limit: PAGE_SIZE });
     } catch {
       toast.error('Failed to load return DCs');
     } finally {
       setLoading(false);
     }
-  }, [page, search, dateFrom, dateTo, tab]);
+  }, [page, search, dateFrom, dateTo, statusParam]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -63,7 +77,7 @@ export default function ReturnDcListPage() {
         search: search.trim() || undefined,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
-        status: tab || 'in_transit',
+        status: statusParam,
       });
       const type = res.headers['content-type'] || '';
       if (type.includes('application/json')) {
@@ -77,7 +91,7 @@ export default function ReturnDcListPage() {
       const stamp = new Date().toISOString().slice(0, 10);
       downloadBlob(
         res.data,
-        match?.[1] || `return_dc_${tab || 'in_transit'}_laptops_${stamp}.xlsx`
+        match?.[1] || `return_dc_${selectedStatuses.join('_') || 'all'}_laptops_${stamp}.xlsx`
       );
       toast.success('Laptop export downloaded');
     } catch (e) {
@@ -239,7 +253,7 @@ export default function ReturnDcListPage() {
     <div className="p-4 md:p-6 max-w-7xl mx-auto">
       <PageHeader
         title="Return DC"
-        subtitle="Return pickup challans (RDC series) — In Transit and Delivered"
+        subtitle="Return pickup challans (RDC series) — filter by pending, in transit, delivered"
         icon={RotateCcw}
         actions={(
           <Button
@@ -248,57 +262,33 @@ export default function ReturnDcListPage() {
             loading={exporting}
             onClick={handleExport}
           >
-            {tab === 'in_transit' ? 'Export in-transit laptops' : 'Export laptops'}
+            Export laptops
           </Button>
         )}
       />
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
-        <StatCard
-          label="In Transit"
-          value={stats.in_transit}
-          tone="amber"
-          active={tab === 'in_transit'}
-          onClick={() => setFilters({ tab: 'in_transit', page: 1 })}
-        />
-        <StatCard
-          label="Delivered"
-          value={stats.delivered}
-          tone="green"
-          active={tab === 'delivered'}
-          onClick={() => setFilters({ tab: 'delivered', page: 1 })}
-        />
-        <StatCard
-          label="Total"
-          value={stats.total}
-          tone="gray"
-          active={tab === 'all'}
-          onClick={() => setFilters({ tab: 'all', page: 1 })}
-        />
-      </div>
-
-      <div className="flex flex-wrap gap-2 mb-4 border-b border-gray-200">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            onClick={() => setFilters({ tab: t.id, page: 1 })}
-            className={`px-4 py-2 text-sm -mb-px border-b-2 whitespace-nowrap ${
-              tab === t.id
-                ? 'border-blue-600 text-blue-700 font-medium'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            {t.label}
-            {t.id === 'in_transit' && stats.in_transit != null ? ` (${stats.in_transit})` : ''}
-            {t.id === 'delivered' && stats.delivered != null ? ` (${stats.delivered})` : ''}
-            {t.id === 'all' && stats.total != null ? ` (${stats.total})` : ''}
-          </button>
-        ))}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
+        <StatCard label="Pending" value={stats.pending} tone="amber" />
+        <StatCard label="In Transit" value={stats.in_transit} tone="blue" />
+        <StatCard label="Delivered" value={stats.delivered} tone="green" />
+        <StatCard label="Cancelled" value={stats.cancelled} tone="gray" />
+        <StatCard label="Total" value={stats.total} tone="gray" />
       </div>
 
       <div className="flex flex-wrap gap-3 mb-4">
-        <div className="relative flex-1 min-w-[220px]">
+        <div className="w-full sm:w-56">
+          <label className="block text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">Status</label>
+          <MultiSelectFilter
+            options={STATUS_OPTIONS}
+            value={selectedStatuses}
+            allLabel="All statuses"
+            onChange={(next) => setFilters({
+              statuses: next.length && next.length < STATUS_OPTIONS.length ? next.join(',') : '',
+              tab: '',
+            })}
+          />
+        </div>
+        <div className="relative flex-1 min-w-[220px] sm:mt-5">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
           <input
             type="search"

@@ -544,7 +544,9 @@ exports.getFloorNavCounts = async (req, res) => {
         qc_queue: (await canViewSection('qc_management')) ? (r.qc_queue || 0) : 0,
         chip_level: (await canViewSection('chip_level_repair')) ? (r.chip_level || 0) : 0,
         body_paint: (await canViewSection('floor_pipeline')) ? (r.body_paint || 0) : 0,
-        diagnosis_failed: (await canViewSection('floor_pipeline')) ? (r.diagnosis_failed || 0) : 0,
+        diagnosis_failed: (await canViewSection('diagnosis_failed') || await canViewSection('floor_pipeline'))
+          ? (r.diagnosis_failed || 0)
+          : 0,
         pending_inventory: pendingInventory,
       },
     });

@@ -30,6 +30,8 @@ export const FLOOR_TICKETS_BASE_SECTIONS = [
 ];
 
 export const FLOOR_DASHBOARD_SECTIONS = ['floor_pipeline'];
+export const DIAGNOSIS_FAILED_SECTIONS = ['diagnosis_failed'];
+export const DIAGNOSIS_FAILED_VIEW_SECTIONS = ['diagnosis_failed', 'floor_pipeline'];
 
 export function canAccessFloorStageFilter(stageFilter, canView) {
   if (!stageFilter) return true;
@@ -43,6 +45,7 @@ export function firstAllowedFloorTicketsPath(canView) {
   if (canView('chip_level_repair')) return '/floor-pipeline/tickets?stage=Chip+Level+Repair';
   if (canView('qc_management')) return '/floor-pipeline/tickets?stage=QC1,QC2';
   if (canView('pending_inventory')) return '/floor-pipeline/pending-inventory';
+  if (canView('diagnosis_failed')) return '/floor-pipeline/diagnosis-failed';
   if (canView('floor_pipeline')) return '/floor-pipeline/dashboard';
   return null;
 }

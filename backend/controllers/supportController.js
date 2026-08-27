@@ -29,7 +29,7 @@ const { nextDocumentNumber, ensureReturnDcPickupItems } = require('../services/s
 const { regenerateReturnDcPdf, regenerateReturnDcPdfByRdc } = require('../services/returnDcPdfService');
 const replacementFlow = require('../services/supportReplacementFlowService');
 const { preserveCustomerAssetsOnCancel, forceRestoreCustomerAssetsOnCancel } = require('../services/supportCancelInventoryService');
-const { applyReturnPickupAssignment } = require('../services/supportPickupAssignmentService');
+const { applyReturnPickupAssignment, applyTechnicianPickupOnClient } = require('../services/supportPickupAssignmentService');
 const {
     assertMachinesEligibleForSupport,
     assertSerialEligibleForSupportTicket,
@@ -1533,12 +1533,27 @@ exports.closeTicket = async (req, res) => {
              WHERE id = $1`,
             [ticketId, TICKET_CLOSED, req.user.user_id]
         );
+        // Force-close used to leave pickup/complaint lines as assigned/open.
+        // Those leftover rows still looked like an active ticket for the laptop
+        // and blocked a new complaint on the public request form.
+        const leftover = await client.query(
+            `UPDATE support_ticket_items
+                SET status = 'closed', updated_at = CURRENT_TIMESTAMP
+              WHERE ticket_id = $1
+                AND status NOT IN ('resolved', 'closed', 'inventory_updated', 'cancelled')
+              RETURNING id, item_type, status`,
+            [ticketId]
+        );
         await logAudit(client, {
             itemId: null,
             ticketId,
             userId: req.user.user_id,
             action: 'ticket_closed',
-            detail: { manual: true }
+            detail: {
+                manual: true,
+                force,
+                leftover_items_closed: leftover.rows.map((r) => r.id),
+            }
         });
         await client.query('COMMIT');
     } catch (e) {
@@ -2085,6 +2100,10 @@ exports.assignItem = async (req, res) => {
         );
         if (assignedTo) {
             await syncPartRequestsTechForItem(client, itemId, assignedTo);
+            await applyTechnicianPickupOnClient(client, {
+                ticketId: item.ticket_id,
+                technicianUserId: assignedTo,
+            });
         }
         const isReassign = item.assigned_to && assignedTo && item.assigned_to !== assignedTo;
         await logAudit(client, {
@@ -2419,6 +2438,10 @@ exports.assignTicketBulk = async (req, res) => {
         for (const row of toAssign) {
             await syncPartRequestsTechForItem(client, row.id, assignedTo);
         }
+        const pickupSync = await applyTechnicianPickupOnClient(client, {
+            ticketId,
+            technicianUserId: assignedTo,
+        });
         const newName = await resolveUserDisplayName(client, assignedTo);
         for (const row of toAssign) {
             const previousName = row.assigned_to
@@ -2442,6 +2465,11 @@ exports.assignTicketBulk = async (req, res) => {
         await bumpTicketActivity(client, ticketId);
         await recomputeTicketStatus(client, ticketId);
         await client.query('COMMIT');
+        if (pickupSync?.return_dc_number) {
+            try { await regenerateReturnDcPdfByRdc(pool, pickupSync.return_dc_number); } catch (pdfErr) {
+                console.error('[support] return DC pdf (ticket assign):', pdfErr.message);
+            }
+        }
     } catch (e) {
         await client.query('ROLLBACK');
         return res.status(500).json({ success: false, message: 'Failed to assign technicians' });

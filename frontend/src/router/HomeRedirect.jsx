@@ -14,6 +14,7 @@ const LANDING_ORDER = [
   ['qc_management', '/floor-pipeline/tickets?stage=QC1,QC2'],
   ['chip_level_repair', '/floor-pipeline/tickets?stage=Chip+Level+Repair'],
   ['floor_pipeline', '/floor-pipeline/dashboard'],
+  ['diagnosis_failed', '/floor-pipeline/diagnosis-failed'],
   ['ttspl_history', '/inventory-management/ttspl-history'],
   ['parts_dashboard', '/inventory-management/parts-dashboard'],
   ['parts_inventory', '/inventory-management/parts'],

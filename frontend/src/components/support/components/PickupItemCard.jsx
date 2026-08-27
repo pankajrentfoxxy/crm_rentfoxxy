@@ -29,6 +29,8 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
   const [busy, setBusy] = useState(false);
   const [changeAssigneeOpen, setChangeAssigneeOpen] = useState(false);
   const [changeBusy, setChangeBusy] = useState(false);
+  const [assignPickupOpen, setAssignPickupOpen] = useState(false);
+  const [assignPickupBusy, setAssignPickupBusy] = useState(false);
   const [addrEditing, setAddrEditing] = useState(false);
   const [addrSaving, setAddrSaving] = useState(false);
   const [addrForm, setAddrForm] = useState({
@@ -162,6 +164,27 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
       toast.error(e.response?.data?.message || 'Failed to update address');
     } finally {
       setAddrSaving(false);
+    }
+  };
+
+  const assignPendingPickup = async (form) => {
+    setAssignPickupBusy(true);
+    try {
+      await api.post(`/support/tickets/${ticket.id}/assign-return-pickup`, {
+        dispatch_mode: form.dispatch_mode,
+        technician_user_id: form.technician_user_id,
+        courier_name: form.courier_name,
+        awb_number: form.awb_number,
+        porter_tracking_id: form.porter_tracking_id,
+        porter_order_id: form.porter_order_id,
+      });
+      toast.success('Return pickup assigned');
+      setAssignPickupOpen(false);
+      onRefresh?.();
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Failed to assign pickup');
+    } finally {
+      setAssignPickupBusy(false);
     }
   };
 
@@ -383,13 +406,42 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
         </div>
       )}
 
-      {/* Awaiting pickup assignment */}
-      {es === 'pending_dispatch' && (
+      {/* Awaiting pickup assignment — only when nobody is assigned yet */}
+      {es === 'pending_dispatch' && !item.assigned_to && !item.pickup_assigned_to && (
         <div className="mx-4 mt-3 p-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-900">
           <p className="font-semibold">Awaiting pickup assignment</p>
           <p className="text-xs mt-1 text-amber-800">
-            Return DC {item.return_dc_number || ''} is created. Support lead will assign a technician or courier when ready.
+            Return DC {item.return_dc_number || ''} is created. Assign a technician, courier, or porter to start pickup.
+            {item.assigned_to && !item.pickup_method && !item.pickup_assigned_to ? (
+              <> Ticket assignee is set, but that is not a pickup dispatch yet.</>
+            ) : null}
           </p>
+          {lead && !readOnly && (
+            <div className="mt-3">
+              {!assignPickupOpen ? (
+                <button
+                  type="button"
+                  className="w-full py-2.5 text-sm font-semibold bg-amber-600 text-white rounded-xl"
+                  onClick={() => setAssignPickupOpen(true)}
+                >
+                  Assign pickup
+                </button>
+              ) : (
+                <div className="rounded-xl border border-amber-100 bg-white p-3">
+                  <PickupSetupForm
+                    ticket={ticket}
+                    dispatchOnly
+                    changeMode
+                    initialValues={pickupInitialValues}
+                    saving={assignPickupBusy}
+                    submitLabel="Assign pickup"
+                    onSubmit={assignPendingPickup}
+                    onCancel={() => setAssignPickupOpen(false)}
+                  />
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 

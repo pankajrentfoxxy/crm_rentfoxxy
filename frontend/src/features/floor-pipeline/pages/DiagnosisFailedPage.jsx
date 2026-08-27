@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Loader2, Truck } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext';
+import usePermission from '../../../hooks/usePermission';
 import { DateRangeFilter } from '../../../components/ui/primitives';
 import VendorSearchSelect from '../../vendor-management/components/VendorSearchSelect';
 import { fetchVendor } from '../../vendor-management/vendorManagementApi';
@@ -20,8 +21,6 @@ import { EMPTY_SPEC_FILTERS } from '../../inventory-management/inventorySpecFilt
 import useDebouncedSpecParams from '../../inventory-management/hooks/useDebouncedSpecParams';
 import { checkTtsplAndSerial } from '../../../utils/machineIdentityVerify';
 
-const WAREHOUSE_ROLES = new Set(['warehouse', 'admin', 'manager', 'super_admin', 'floor_manager', 'support_lead']);
-
 function fmtDate(v) {
   if (!v) return '—';
   return new Date(v).toLocaleDateString('en-IN');
@@ -38,8 +37,9 @@ function withStateLabel(vendor) {
 
 export default function DiagnosisFailedPage() {
   const { user } = useAuth();
+  const { canView, canCreate, canEdit } = usePermission();
   const navigate = useNavigate();
-  const canProcess = WAREHOUSE_ROLES.has(user?.role);
+  const canProcess = canCreate('diagnosis_failed') || canEdit('diagnosis_failed');
   const canOverrideHsn = user?.role === 'admin' || user?.role === 'super_admin';
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState([]);
@@ -260,7 +260,11 @@ export default function DiagnosisFailedPage() {
       });
       toast.success(data.message || 'Vendor DC created');
       setModalOpen(false);
-      navigate(`/vendor-management/vendor-repair-dc/${encodeURIComponent(data.dc_number)}`);
+      if (canView('vendor_repair_dc')) {
+        navigate(`/vendor-management/vendor-repair-dc/${encodeURIComponent(data.dc_number)}`);
+      } else {
+        load();
+      }
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to create DC');
     } finally {

@@ -10,6 +10,7 @@ import PendingInventoryPage from './pages/PendingInventoryPage';
 import ProductionQcReportPage from './pages/ProductionQcReportPage';
 import {
   canAccessFloorStageFilter,
+  DIAGNOSIS_FAILED_VIEW_SECTIONS,
   FLOOR_DASHBOARD_SECTIONS,
   FLOOR_TICKETS_BASE_SECTIONS,
   firstAllowedFloorTicketsPath,
@@ -57,7 +58,7 @@ export default function FloorPipelineApp() {
         )}
       />
       <Route path="tickets/:id" element={g(FLOOR_TICKETS_BASE_SECTIONS, <TicketDetailPage />)} />
-      <Route path="diagnosis-failed" element={g(FLOOR_DASHBOARD_SECTIONS, <DiagnosisFailedPage />)} />
+      <Route path="diagnosis-failed" element={g(DIAGNOSIS_FAILED_VIEW_SECTIONS, <DiagnosisFailedPage />)} />
       <Route
         path="pending-inventory"
         element={g(['pending_inventory'], <PendingInventoryPage />)}

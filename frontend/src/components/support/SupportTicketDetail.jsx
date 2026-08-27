@@ -790,7 +790,7 @@ function PickupStatusBanner({ ticket, pickups, ticketId, isLead, onRefresh, assi
       </div>
       {pendingAssign ? (
         <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>
-          Return DC <b>{ticket.return_dc_number}</b> created. Assign technician or courier from the replacement order section above when details are available.
+          Return DC <b>{ticket.return_dc_number}</b> created. Assign a technician, courier, or porter on the Pickup card (Assign pickup).
         </p>
       ) : active ? (
         <p className="text-sm" style={{ color: 'var(--color-text-secondary)' }}>

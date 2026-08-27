@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const svc = require('../services/vendorRepairDcService');
+const { hasPermission } = require('../services/permissionService');
 const { validateIndianMobile, normalizeIndianMobile } = require('../utils/phoneValidation');
 const path = require('path');
 const fs = require('fs');
@@ -7,6 +8,24 @@ const fs = require('fs');
 function requireWarehouse(req, res, next) {
   if (svc.WAREHOUSE_ROLES.has(req.user.role)) return next();
   return res.status(403).json({ success: false, message: 'Warehouse or admin access required' });
+}
+
+/** Create Out-for-Repair DC from Diagnosis Failed — RBAC, with legacy warehouse-role fallback. */
+async function requireDiagnosisFailedProcess(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: 'Unauthorized' });
+  }
+  if (req.user.role === 'super_admin') return next();
+  const cache = req.permissionCache || (req.permissionCache = {});
+  const uid = req.user.user_id;
+  const role = req.user.role;
+  if (await hasPermission(uid, role, 'diagnosis_failed', 'can_create', cache)) return next();
+  if (await hasPermission(uid, role, 'diagnosis_failed', 'can_edit', cache)) return next();
+  if (svc.WAREHOUSE_ROLES.has(role)) return next();
+  return res.status(403).json({
+    success: false,
+    message: 'Diagnosis Failed — Out for Repair access required',
+  });
 }
 
 const { pickSpecFilters } = require('../utils/inventorySpecFilter');
@@ -509,3 +528,4 @@ exports.exportOutForRepairPdf = async (req, res) => {
 };
 
 exports.requireWarehouse = requireWarehouse;
+exports.requireDiagnosisFailedProcess = requireDiagnosisFailedProcess;

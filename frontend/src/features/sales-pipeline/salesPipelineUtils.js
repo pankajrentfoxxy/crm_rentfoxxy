@@ -40,7 +40,10 @@ export const TYPE_STYLES = {
 
 export const DC_STATUS_STYLES = {
   pending: 'bg-gray-100 text-gray-700',
+  processing: 'bg-gray-100 text-gray-700',
   in_transit: 'bg-amber-100 text-amber-800',
+  shipped: 'bg-amber-100 text-amber-800',
+  reached: 'bg-blue-100 text-blue-800',
   delivered: 'bg-emerald-100 text-emerald-800',
   rejected: 'bg-red-100 text-red-800',
   cancelled: 'bg-slate-200 text-slate-700 line-through',

@@ -1626,14 +1626,9 @@ const ACTIVE_SELECT_SQL = `
 
 const RETURNED_FROM_SQL = `
   FROM delivery_challan_lines rl
-  LEFT JOIN LATERAL (
-    SELECT ttspl_id, unique_serial_number, serial_number, pickup_type,
-           proof_of_completion_path, pod_image_path, warehouse_esign_url, warehouse_received_at
-    FROM support_ticket_items
-    WHERE return_dc_number = rl.dc_number AND item_type = 'pickup'
-    ORDER BY id DESC
-    LIMIT 1
-  ) sti ON TRUE
+  LEFT JOIN support_ticket_items sti
+    ON sti.return_dc_number = rl.dc_number
+   AND sti.item_type = 'pickup'
   LEFT JOIN LATERAL (
     SELECT v.serial_id, v.serial_number, v.inventory_asset_code, v.extra, v.current_entity, v.rent_monthly_rate, v.delivered_at
     FROM vendor_serial_numbers v

@@ -177,7 +177,8 @@ export default function Layout({ children }) {
     canView('floor_pipeline') ||
     canView('floor_tickets') ||
     canView('chip_level_repair') ||
-    canView('qc_management');
+    canView('qc_management') ||
+    canView('diagnosis_failed');
   const { counts: floorCounts } = useFloorCounts(showFloorCounts);
 
   const showLeadCrmAccordion = canView('leads') || canView('follow_ups') || canView('customers');

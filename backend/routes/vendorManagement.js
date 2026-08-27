@@ -23,6 +23,15 @@ const authorize = [
   checkSectionPermission('vendor_management', 'view')
 ];
 
+/** Read-only vendor lookup for Out-for-Repair / Vendor Repair DC (no full Vendor Management). */
+const authorizeVendorRead = [
+  authMiddleware,
+  checkAnySectionPermission(
+    ['vendor_management', 'vendor_repair_dc', 'diagnosis_failed'],
+    'view'
+  ),
+];
+
 /** Spare Parts PO — Part Management RBAC (parts_procurement) or legacy vendor_management. */
 const authorizeSpareParts = [
   authMiddleware,
@@ -38,10 +47,10 @@ const vendorFiles = upload.fields([
 ]);
 
 // ---------- Vendors (Laravel VendorController equivalents) ----------------------------
-router.get('/vendors/info', authorize, vendors.lookupValidators, vendors.lookupVendor);
-router.get('/vendors', authorize, vendors.listValidators, vendors.listVendors);
+router.get('/vendors/info', authorizeVendorRead, vendors.lookupValidators, vendors.lookupVendor);
+router.get('/vendors', authorizeVendorRead, vendors.listValidators, vendors.listVendors);
 router.get('/vendors/:id/laptops', authorize, vendors.laptopsValidators, vendors.listVendorLaptops);
-router.get('/vendors/:id', authorize, vendors.getValidators, vendors.getVendor);
+router.get('/vendors/:id', authorizeVendorRead, vendors.getValidators, vendors.getVendor);
 router.post(
   '/vendors',
   authorize,
