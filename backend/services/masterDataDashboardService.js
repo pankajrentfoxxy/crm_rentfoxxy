@@ -4,7 +4,7 @@
  */
 const pool = require('../config/db');
 const { pickSpecFilters, buildSerialSpecFilter } = require('../utils/inventorySpecFilter');
-const { appendDateRangeClauses } = require('../utils/dateRangeFilter');
+const { appendDateRangeClauses, resolveMasterDateRange } = require('../utils/dateRangeFilter');
 const { DEPLOYED_WITH_CUSTOMER_STATUSES } = require('./customerDeployedAssets');
 const {
   buildDashboardCacheKey,
@@ -16,6 +16,25 @@ const {
 } = require('./masterDataCache');
 
 const CUSTOMER_STATUSES = DEPLOYED_WITH_CUSTOMER_STATUSES;
+
+/** Commercial classification for sale vs rental filters + price KPIs. */
+const SQL_IS_SALE = `(
+  s.inventory_status = 'sold'
+  OR LOWER(COALESCE(sos.quotation_type, '')) LIKE '%sale%'
+)`;
+
+const SQL_IS_RENTAL = `(
+  s.inventory_status <> 'sold'
+  AND LOWER(COALESCE(sos.quotation_type, '')) NOT LIKE '%sale%'
+  AND (
+    s.inventory_status IN ('rented', 'on_demo', 'reserved', 'in_transit', 'returned')
+    OR COALESCE(s.rent_monthly_rate, 0) > 0
+    OR LOWER(COALESCE(sos.quotation_type, '')) IN ('rental', 'demo')
+  )
+)`;
+
+/** Delivery / rent start / GRN receive — not row sync updated_at. */
+const MASTER_ACTIVITY_DATE_EXPR = 'COALESCE(s.delivered_at, s.rent_start_date, g.created_at, s.created_at)';
 
 const VENDOR_REPAIR_EXISTS = `
   EXISTS (
@@ -146,12 +165,20 @@ function buildMasterFilters(query = {}) {
     clauses.push(`LOWER(COALESCE(s.current_entity, '')) = $${params.length}`);
   }
 
+  const pricingType = String(query.pricing_type || query.pricingType || '').trim().toLowerCase();
+  if (pricingType === 'sale') {
+    clauses.push(SQL_IS_SALE);
+  } else if (pricingType === 'rental') {
+    clauses.push(SQL_IS_RENTAL);
+  }
+
+  const dateRange = resolveMasterDateRange(query);
   const dateClauses = appendDateRangeClauses({
-    column: 'updated_at',
-    dateFrom: query.date_from || query.dateFrom,
-    dateTo: query.date_to || query.dateTo,
+    expr: MASTER_ACTIVITY_DATE_EXPR,
+    dateFrom: dateRange.dateFrom,
+    dateTo: dateRange.dateTo,
     params,
-    tableAlias: 's',
+    timezone: 'Asia/Kolkata',
   });
   if (dateClauses.length) clauses.push(...dateClauses);
 
@@ -371,12 +398,17 @@ async function getKpis(query = {}) {
   // KPI cards are fleet-wide overview. Ignore list drill-down filters
   // (location / from_vendor / customer / vendor / status / stage) so values
   // stay correct when e.g. location=Customer is applied to the laptop table.
+  const dateRange = resolveMasterDateRange(query);
   const kpiQuery = {
     search: query.search,
-    date_from: query.date_from || query.dateFrom,
-    date_to: query.date_to || query.dateTo,
-    dateFrom: query.dateFrom,
-    dateTo: query.dateTo,
+    pricing_type: query.pricing_type || query.pricingType,
+    pricingType: query.pricingType || query.pricing_type,
+    date_mode: dateRange.dateMode || query.date_mode || query.dateMode,
+    month: dateRange.month || query.month,
+    date_from: dateRange.dateFrom,
+    date_to: dateRange.dateTo,
+    dateFrom: dateRange.dateFrom,
+    dateTo: dateRange.dateTo,
     ...pickSpecFilters(query),
   };
 
@@ -408,7 +440,14 @@ async function getKpis(query = {}) {
                 s.inventory_status = 'in_stock'
                 AND LOWER(COALESCE(s.qc_status, s.extra->>'status', '')) = 'passed'
               )
-          )::int AS total_qc_process
+          )::int AS total_qc_process,
+          COUNT(*) FILTER (WHERE ${SQL_IS_SALE})::int AS total_sale_units,
+          COUNT(*) FILTER (WHERE ${SQL_IS_RENTAL})::int AS total_rental_units,
+          COALESCE(SUM(COALESCE(sos.so_rate, 0)) FILTER (WHERE ${SQL_IS_SALE}), 0)::numeric AS total_sale_value,
+          COALESCE(SUM(COALESCE(s.rent_monthly_rate, sos.so_rate, 0)) FILTER (
+            WHERE ${SQL_IS_RENTAL}
+              AND s.inventory_status IN ('rented', 'on_demo', 'reserved', 'in_transit')
+          ), 0)::numeric AS total_monthly_rental_value
        ${FROM_SQL}
        ${joinSql}
        ${whereSql}`,
@@ -428,6 +467,10 @@ async function getKpis(query = {}) {
     total_from_vendors: k.total_from_vendors || 0,
     total_ready_to_rent_sale: k.total_ready_to_rent_sale || 0,
     total_qc_process: k.total_qc_process || 0,
+    total_sale_units: k.total_sale_units || 0,
+    total_rental_units: k.total_rental_units || 0,
+    total_sale_value: Number(k.total_sale_value || 0),
+    total_monthly_rental_value: Number(k.total_monthly_rental_value || 0),
   };
   await setCachedKpis(kpiKey, payload);
   return payload;
@@ -602,7 +645,7 @@ async function getFloorSummary() {
   return { stages };
 }
 
-async function getMasterDashboard(query = {}) {
+async function getMasterDashboardTab(query = {}) {
   const cacheKey = buildDashboardCacheKey(query);
   const cached = await getCachedDashboard(cacheKey);
   if (cached !== undefined) return cached;
@@ -611,25 +654,31 @@ async function getMasterDashboard(query = {}) {
 
   let payload;
   if (tab === 'customers') {
-    const [kpis, summary] = await Promise.all([getKpis(query), getCustomerSummary(query)]);
-    payload = { kpis, tab, ...summary };
+    payload = { tab, ...(await getCustomerSummary(query)) };
   } else if (tab === 'vendors') {
-    const [kpis, summary] = await Promise.all([getKpis(query), getVendorSummary(query)]);
-    payload = { kpis, tab, ...summary };
+    payload = { tab, ...(await getVendorSummary(query)) };
   } else if (tab === 'floor') {
-    const [kpis, summary] = await Promise.all([getKpis(query), getFloorSummary()]);
-    payload = { kpis, tab, ...summary };
+    payload = { tab, ...(await getFloorSummary()) };
   } else {
-    const [kpis, list] = await Promise.all([getKpis(query), listLaptops(query)]);
-    payload = { kpis, tab: 'laptops', ...list };
+    payload = { tab: 'laptops', ...(await listLaptops(query)) };
   }
 
   await setCachedDashboard(cacheKey, payload);
   return payload;
 }
 
+/** @deprecated Use getMasterDashboardTab + getKpis separately for faster loads. */
+async function getMasterDashboard(query = {}) {
+  const [kpis, tabPayload] = await Promise.all([
+    getKpis(query),
+    getMasterDashboardTab(query),
+  ]);
+  return { kpis, ...tabPayload };
+}
+
 module.exports = {
   getMasterDashboard,
+  getMasterDashboardTab,
   listLaptops,
   getKpis,
   CUSTOMER_STATUSES,

@@ -47,9 +47,14 @@ export function fetchCustomerAssets(params) {
   return api.get(`${base}/customer-assets`, { params });
 }
 
-/** Master Data Dashboard — KPIs + laptop / customer / vendor / floor tabs */
+/** Master Data Dashboard — tab payload (laptops / customers / vendors / floor) */
 export function fetchMasterDataDashboard(params) {
   return api.get(`${base}/master-data`, { params });
+}
+
+/** Master Data Dashboard — KPI cards (Redis-cached, separate from tab data) */
+export function fetchMasterDataKpis(params) {
+  return api.get(`${base}/master-data/kpis`, { params });
 }
 
 export function fetchSparePartsList(params) {

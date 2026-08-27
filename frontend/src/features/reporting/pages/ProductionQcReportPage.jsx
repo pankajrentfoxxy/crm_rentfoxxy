@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { ClipboardCheck, Download, Eye, Loader2, Search, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { PageHeader, Button, ResponsiveTable, DateRangeFilter } from '../../../components/ui/primitives';
+import { useAuth } from '../../../context/AuthContext';
 import { useUrlFilters, useDebouncedUrlSearch } from '../../../hooks/useUrlFilters';
 import InventorySpecMultiFilterBar from '../../inventory-management/components/InventorySpecMultiFilterBar';
 import {
@@ -74,7 +75,7 @@ function checkBadge(result) {
   return <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${cls}`}>{r}</span>;
 }
 
-function DetailModal({ historyId, onClose, onOpenAttempt }) {
+function DetailModal({ historyId, onClose, onOpenAttempt, showCustomerVendor }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [pdfBusy, setPdfBusy] = useState(false);
@@ -150,7 +151,9 @@ function DetailModal({ historyId, onClose, onOpenAttempt }) {
                 <div><p className="text-xs text-slate-500">TTSPL</p><p className="font-mono font-medium">{detail.ttspl_id || '—'}</p></div>
                 <div><p className="text-xs text-slate-500">Serial</p><p className="font-mono">{detail.serial_number || '—'}</p></div>
                 <div><p className="text-xs text-slate-500">Technician</p><p>{detail.technician_name || '—'}</p></div>
-                <div><p className="text-xs text-slate-500">Customer / Vendor</p><p>{detail.customer_vendor || '—'}</p></div>
+                {showCustomerVendor ? (
+                  <div><p className="text-xs text-slate-500">Customer / Vendor</p><p>{detail.customer_vendor || '—'}</p></div>
+                ) : null}
                 <div><p className="text-xs text-slate-500">QC Stage</p><p>{detail.qc_stage || '—'}</p></div>
                 <div><p className="text-xs text-slate-500">Status</p><p>{statusBadge(detail.qc_status)}</p></div>
                 <div><p className="text-xs text-slate-500">Checked At</p><p>{formatDateTime(detail.submitted_at)}</p></div>
@@ -236,6 +239,8 @@ function DetailModal({ historyId, onClose, onOpenAttempt }) {
 }
 
 export default function ProductionQcReportPage() {
+  const { user } = useAuth();
+  const showCustomerVendor = user?.role === 'admin' || user?.role === 'super_admin';
   const { filters, setFilters } = useUrlFilters(FILTER_DEFAULTS);
   const {
     page,
@@ -315,46 +320,53 @@ export default function ProductionQcReportPage() {
     }
   };
 
-  const columns = [
-    { key: 'ttspl', header: 'TTSPL', render: (r) => <span className="font-mono text-blue-700 font-semibold">{r.ttspl_id || '—'}</span> },
-    { key: 'serial', header: 'Serial', render: (r) => <span className="font-mono text-xs">{r.serial_number || '—'}</span> },
-    { key: 'tech', header: 'Technician', render: (r) => r.technician_name || '—' },
-    { key: 'party', header: 'Customer / Vendor', render: (r) => r.customer_vendor || '—' },
-    {
-      key: 'config',
-      header: 'Brand / Model',
-      render: (r) => [r.brand, r.model].filter(Boolean).join(' · ') || '—',
-    },
-    { key: 'stage', header: 'QC Stage', render: (r) => r.qc_stage || '—' },
-    { key: 'current', header: 'Current Stage', render: (r) => r.current_stage || '—' },
-    { key: 'when', header: 'QC Date & Time', render: (r) => formatDateTime(r.submitted_at) },
-    { key: 'status', header: 'QC Status', render: (r) => statusBadge(r.qc_status) },
-    {
-      key: 'remarks',
-      header: 'QC Remarks',
-      render: (r) => (
-        <span className="text-xs text-slate-600 line-clamp-2 max-w-[180px]">{r.qc_remarks || '—'}</span>
-      ),
-    },
-    {
-      key: 'attempt',
-      header: 'Attempt',
-      render: (r) => <span className="text-xs text-slate-500">#{r.attempt_no}</span>,
-    },
-    {
-      key: 'actions',
-      header: 'Actions',
-      render: (r) => (
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); setDetailId(r.history_id); }}
-          className="inline-flex items-center gap-1 text-xs text-blue-700 font-semibold hover:underline"
-        >
-          <Eye className="w-3.5 h-3.5" /> View Details
-        </button>
-      ),
-    },
-  ];
+  const columns = useMemo(() => {
+    const base = [
+      { key: 'ttspl', header: 'TTSPL', render: (r) => <span className="font-mono text-blue-700 font-semibold">{r.ttspl_id || '—'}</span> },
+      { key: 'serial', header: 'Serial', render: (r) => <span className="font-mono text-xs">{r.serial_number || '—'}</span> },
+      { key: 'tech', header: 'Technician', render: (r) => r.technician_name || '—' },
+    ];
+    if (showCustomerVendor) {
+      base.push({ key: 'party', header: 'Customer / Vendor', render: (r) => r.customer_vendor || '—' });
+    }
+    base.push(
+      {
+        key: 'config',
+        header: 'Brand / Model',
+        render: (r) => [r.brand, r.model].filter(Boolean).join(' · ') || '—',
+      },
+      { key: 'stage', header: 'QC Stage', render: (r) => r.qc_stage || '—' },
+      { key: 'current', header: 'Current Stage', render: (r) => r.current_stage || '—' },
+      { key: 'when', header: 'QC Date & Time', render: (r) => formatDateTime(r.submitted_at) },
+      { key: 'status', header: 'QC Status', render: (r) => statusBadge(r.qc_status) },
+      {
+        key: 'remarks',
+        header: 'QC Remarks',
+        render: (r) => (
+          <span className="text-xs text-slate-600 line-clamp-2 max-w-[180px]">{r.qc_remarks || '—'}</span>
+        ),
+      },
+      {
+        key: 'attempt',
+        header: 'Attempt',
+        render: (r) => <span className="text-xs text-slate-500">#{r.attempt_no}</span>,
+      },
+      {
+        key: 'actions',
+        header: 'Actions',
+        render: (r) => (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setDetailId(r.history_id); }}
+            className="inline-flex items-center gap-1 text-xs text-blue-700 font-semibold hover:underline"
+          >
+            <Eye className="w-3.5 h-3.5" /> View Details
+          </button>
+        ),
+      },
+    );
+    return base;
+  }, [showCustomerVendor]);
 
   const showingFrom = pagination.total ? (page - 1) * PAGE_SIZE + 1 : 0;
   const showingTo = Math.min(page * PAGE_SIZE, pagination.total || 0);
@@ -384,7 +396,7 @@ export default function ProductionQcReportPage() {
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <input
               type="search"
-              placeholder="Search TTSPL, serial, brand, model, customer…"
+              placeholder={showCustomerVendor ? 'Search TTSPL, serial, brand, model, customer…' : 'Search TTSPL, serial, brand, model…'}
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               className={`${FILTER_CTL} w-full pl-8`}
@@ -474,6 +486,7 @@ export default function ProductionQcReportPage() {
           historyId={detailId}
           onClose={() => setDetailId(null)}
           onOpenAttempt={(id) => setDetailId(id)}
+          showCustomerVendor={showCustomerVendor}
         />
       )}
     </div>

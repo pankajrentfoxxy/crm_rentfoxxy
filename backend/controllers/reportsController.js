@@ -2301,8 +2301,10 @@ exports.getProductionQcReport = async (req, res) => {
     try {
         const {
             listProductionQcReport,
+            canViewProductionQcCustomerVendor,
         } = require('../services/productionQcReportService');
-        const data = await listProductionQcReport(req.query);
+        const includeCustomerVendor = canViewProductionQcCustomerVendor(req.user);
+        const data = await listProductionQcReport(req.query, { includeCustomerVendor });
         res.json({ success: true, ...data });
     } catch (error) {
         console.error('getProductionQcReport error:', error);
@@ -2315,12 +2317,19 @@ exports.getProductionQcReport = async (req, res) => {
 
 exports.getProductionQcReportDetail = async (req, res) => {
     try {
-        const { getProductionQcReportDetail } = require('../services/productionQcReportService');
+        const {
+            getProductionQcReportDetail,
+            canViewProductionQcCustomerVendor,
+            redactProductionQcCustomerVendor,
+        } = require('../services/productionQcReportService');
         const detail = await getProductionQcReportDetail(req.params.historyId);
         if (!detail) {
             return res.status(404).json({ success: false, message: 'QC report not found' });
         }
-        res.json({ success: true, data: detail });
+        const payload = canViewProductionQcCustomerVendor(req.user)
+            ? detail
+            : redactProductionQcCustomerVendor(detail);
+        res.json({ success: true, data: payload });
     } catch (error) {
         console.error('getProductionQcReportDetail error:', error);
         res.status(500).json({
@@ -2332,15 +2341,19 @@ exports.getProductionQcReportDetail = async (req, res) => {
 
 exports.getProductionQcReportPdf = async (req, res) => {
     try {
-        const { listProductionQcReport } = require('../services/productionQcReportService');
+        const {
+            listProductionQcReport,
+            canViewProductionQcCustomerVendor,
+        } = require('../services/productionQcReportService');
         const { buildProductionQcListPdf } = require('../services/productionQcReportPdfService');
+        const includeCustomerVendor = canViewProductionQcCustomerVendor(req.user);
         const data = await listProductionQcReport({
             ...req.query,
             page: 1,
             limit: 2000,
             for_export: true,
-        });
-        const buf = await buildProductionQcListPdf(data.rows || [], req.query);
+        }, { includeCustomerVendor });
+        const buf = await buildProductionQcListPdf(data.rows || [], req.query, { includeCustomerVendor });
         const date = new Date().toISOString().slice(0, 10);
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="production-qc-report_${date}.pdf"`);
@@ -2356,13 +2369,21 @@ exports.getProductionQcReportPdf = async (req, res) => {
 
 exports.getProductionQcReportDetailPdf = async (req, res) => {
     try {
-        const { getProductionQcReportDetail } = require('../services/productionQcReportService');
+        const {
+            getProductionQcReportDetail,
+            canViewProductionQcCustomerVendor,
+            redactProductionQcCustomerVendor,
+        } = require('../services/productionQcReportService');
         const { buildProductionQcDetailPdf } = require('../services/productionQcReportPdfService');
+        const includeCustomerVendor = canViewProductionQcCustomerVendor(req.user);
         const detail = await getProductionQcReportDetail(req.params.historyId);
         if (!detail) {
             return res.status(404).json({ success: false, message: 'QC report not found' });
         }
-        const buf = await buildProductionQcDetailPdf(detail);
+        const payload = includeCustomerVendor
+            ? detail
+            : redactProductionQcCustomerVendor(detail);
+        const buf = await buildProductionQcDetailPdf(payload, { includeCustomerVendor });
         const ttspl = String(detail.ttspl_id || detail.history_id || 'qc').replace(/[^\w-]+/g, '_');
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader(
