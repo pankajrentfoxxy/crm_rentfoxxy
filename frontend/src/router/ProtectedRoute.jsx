@@ -44,7 +44,14 @@ export default function ProtectedRoute({
   }
 
   if (!allowed) {
+    if (user?.role === 'guard') {
+      return <Navigate to="/guard" replace />;
+    }
     return <Navigate to={fallback} replace />;
+  }
+
+  if (user?.role === 'guard' && !location.pathname.startsWith('/guard')) {
+    return <Navigate to="/guard" replace />;
   }
 
   if (isSupportTechnician(user)) {

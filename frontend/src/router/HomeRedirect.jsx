@@ -48,6 +48,9 @@ export default function HomeRedirect() {
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
   }
+  if (user?.role === 'guard') {
+    return <Navigate to="/guard" replace />;
+  }
   // Support technicians: land on delivery module when granted, else support tickets.
   if (user?.role === 'support_tech') {
     if (canView('technician_bucket')) return <Navigate to="/sales-pipeline/my-deliveries" replace />;

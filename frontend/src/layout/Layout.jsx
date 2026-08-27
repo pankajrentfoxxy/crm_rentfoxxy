@@ -346,6 +346,7 @@ export default function Layout({ children }) {
     lead_crm: showLeadCrmAccordion && leadCrmVisibleChildren.length > 0,
     sales_pipeline: showSalesPipelineAccordion && salesVisibleChildren.length > 0,
     dispatch: showDispatchAccordion && dispatchVisibleChildren.length > 0,
+    warehouse_gate: canView('guard_gate_checking'),
     floor_quality: floorVisibleChildren.length > 0,
     inventory: inventoryVisibleChildren.length > 0,
     part_management: partsVisibleChildren.length > 0,
@@ -414,6 +415,10 @@ export default function Layout({ children }) {
     if (isMenuItemVisible(child, canView)) addSearchRoute(child.label, child.path, 'Master Data');
   });
   if (showSupportNav2) addSearchRoute('Support', '/support', 'Support');
+  if (canView('guard_gate_checking')) {
+    addSearchRoute('Guard Scanner', '/guard/scanner', 'Warehouse Gate');
+    addSearchRoute('Gate Dashboard', '/guard', 'Warehouse Gate');
+  }
 
   const trimmedMenuQuery = menuQuery.trim().toLowerCase();
   const searchResults = trimmedMenuQuery

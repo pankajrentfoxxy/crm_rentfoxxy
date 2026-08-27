@@ -12,6 +12,7 @@ const ROLE_REDIRECTS = {
   admin: '/reports/manager-dashboard',
   manager: '/reports/manager-dashboard',
   dispatch: '/sales-pipeline/my-deliveries',
+  guard: '/guard',
 };
 
 const SUPPORT_ROLES = ['support', 'support_lead', 'support_tech'];
@@ -217,7 +218,8 @@ export default function Dashboard() {
   const role = user?.role;
   const redirectTarget = ROLE_REDIRECTS[role];
   const shouldRedirect = redirectTarget
-    && (role === 'dispatch' ? canView('technician_bucket') : canView('analytics_dashboard'));
+    && (role === 'guard'
+      || (role === 'dispatch' ? canView('technician_bucket') : canView('analytics_dashboard')));
 
   useEffect(() => {
     if (shouldRedirect) {

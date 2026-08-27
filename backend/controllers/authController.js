@@ -19,8 +19,35 @@ function resolveMobileNo(mobile_no, { required = false } = {}) {
 
 const MANAGEABLE_ROLES = [
   'team_member', 'team_lead', 'sales', 'floor_manager', 'procurement', 'qc', 'dispatch',
-  'manager', 'admin', 'support_lead', 'support_tech', 'accounts', 'warehouse', 'dispatch_qc',
+  'manager', 'admin', 'support_lead', 'support_tech', 'accounts', 'warehouse', 'dispatch_qc', 'guard',
 ];
+
+/** Canonical users.role CHECK — must include every CRM + portal role. */
+const USERS_ROLE_CHECK = [
+  'super_admin', 'admin', 'manager', 'team_member', 'team_lead', 'sales',
+  'floor_manager', 'procurement', 'qc', 'dispatch', 'warehouse', 'accounts',
+  'support_lead', 'support_tech', 'dispatch_qc', 'customer', 'vendor',
+  'technician', 'guard',
+];
+
+function checkConstraintMessage(error) {
+  if (error?.code !== '23514') return null;
+  const name = String(error.constraint || '');
+  const msg = String(error.message || '');
+  if (name === 'users_role_check' || /users_role_check/i.test(msg)) {
+    return 'This role is not enabled in the database yet. Restart the backend and try again.';
+  }
+  if (name === 'users_status_check' || /users_status_check/i.test(msg)) {
+    return 'Invalid user status.';
+  }
+  return error.detail || 'This value is not allowed.';
+}
+
+async function ensureUsersRoleCheck() {
+  const list = USERS_ROLE_CHECK.map((r) => `'${r}'`).join(', ');
+  await pool.query('ALTER TABLE public.users DROP CONSTRAINT IF EXISTS users_role_check');
+  await pool.query(`ALTER TABLE public.users ADD CONSTRAINT users_role_check CHECK (role IN (${list}))`);
+}
 const FLOOR_ROLES = ['team_member', 'team_lead', 'floor_manager', 'qc'];
 const CRM_EXCLUDED_ROLES = ['vendor', 'customer', 'technician'];
 const hasUserMgmtAccess = (user) => ['admin', 'manager', 'super_admin'].includes(user?.role);
@@ -48,6 +75,7 @@ const ROLE_DISPLAY_NAMES = {
   support_lead: 'Support Lead',
   support_tech: 'Support Technician',
   dispatch_qc: 'Dispatch QC',
+  guard: 'Guard',
 };
 
 const csvEscape = (value) => {
@@ -227,27 +255,36 @@ exports.register = async (req, res) => {
     });
   } catch (error) {
     console.error('Register error:', error);
-    if (error.code === '23514') {
-      return res.status(400).json({
-        success: false,
-        message: 'This role is not enabled in the database yet. Redeploy the backend so support user-role migration can run.'
-      });
+    if (error.code === '23505') {
+      return res.status(400).json({ success: false, message: 'A user with this email already exists' });
+    }
+    const checkMsg = checkConstraintMessage(error);
+    if (checkMsg) {
+      return res.status(400).json({ success: false, message: checkMsg });
     }
     res.status(500).json({
       success: false,
-      message: 'Server error during registration'
+      message: error.message || 'Server error during registration'
     });
   }
 };
 
 exports.ensureUserSchema = async () => {
-  const migrationFiles = ['028_support_user_roles.sql', '029_rbac_system.sql', '040_rbac_roles_module.sql', '041_application_sections.sql'];
+  const migrationFiles = [
+    '028_support_user_roles.sql',
+    '029_rbac_system.sql',
+    '040_rbac_roles_module.sql',
+    '041_application_sections.sql',
+    '207_guard_gate_checking.sql',
+  ];
   for (const file of migrationFiles) {
     const sqlPath = path.join(__dirname, '../migrations', file);
     if (!fs.existsSync(sqlPath)) continue;
     const sql = fs.readFileSync(sqlPath, 'utf8');
     await pool.query(sql);
   }
+  // 028/029 recreate users_role_check without newer roles; restore the full list last.
+  await ensureUsersRoleCheck();
 };
 
 const hasRbacUserMgmtAccess = (user) => ['admin', 'super_admin'].includes(user?.role);
@@ -797,7 +834,11 @@ exports.updateUser = async (req, res) => {
     if (error.code === '23505') {
       return res.status(400).json({ success: false, message: 'Email already in use' });
     }
-    res.status(500).json({ success: false, message: 'Server error updating user' });
+    const checkMsg = checkConstraintMessage(error);
+    if (checkMsg) {
+      return res.status(400).json({ success: false, message: checkMsg });
+    }
+    res.status(500).json({ success: false, message: error.message || 'Server error updating user' });
   }
 };
 

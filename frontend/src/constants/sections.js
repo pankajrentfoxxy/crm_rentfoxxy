@@ -95,6 +95,7 @@ export const APPLICATION_SECTIONS = [
   'user_permissions',
   'company_settings',
   'asset_configuration',
+  'guard_gate_checking',
 ];
 
 export const SECTION_LABELS = {
@@ -193,6 +194,7 @@ export const SECTION_LABELS = {
   user_permissions: 'User Permissions',
   company_settings: 'Company Settings',
   asset_configuration: 'Asset Configuration',
+  guard_gate_checking: 'Guard Gate Checking',
 };
 
 export const SECTION_GROUPS = {
@@ -224,7 +226,7 @@ export const SECTION_GROUPS = {
     'support_part_requests',
     'parts',
   ],
-  'Warehouse & Dispatch': ['warehouse', 'dispatch', 'dispatch_ops', 'dispatch_workflow', 'dispatch_pending_orders'],
+  'Warehouse & Dispatch': ['warehouse', 'dispatch', 'dispatch_ops', 'dispatch_workflow', 'dispatch_pending_orders', 'guard_gate_checking'],
   'Finance & Billing': [
     'customer_billing', 'vendor_billing_mgmt', 'credit_notes', 'debit_notes',
     'security_deposits', 'billing_dashboard', 'einvoice_ewb', 'dc_eway_bill',

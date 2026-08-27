@@ -14,13 +14,14 @@ export const CRM_ROLES = [
   'accounts',
   'support_lead',
   'support_tech',
-   'dispatch_qc'
+  'dispatch_qc',
+  'guard',
 ];
 
 export const MANAGEABLE_ROLES = [
   'team_member', 'team_lead', 'sales', 'floor_manager', 'procurement', 'qc',
   'dispatch', 'manager', 'admin', 'support_lead', 'support_tech', 'accounts', 'warehouse',
-  'dispatch_qc'
+  'dispatch_qc', 'guard'
 ];
 
 export const ROLE_DESCRIPTIONS = {
@@ -39,6 +40,7 @@ export const ROLE_DESCRIPTIONS = {
   support_lead: 'All support tickets, manage support team',
   support_tech: 'Own assigned support tickets',
   dispatch_qc: 'Dispatch QC',
+  guard: 'Warehouse gate scanner only. Cannot open sales, inventory, or finance.',
 };
 
 export const ROLE_DISPLAY_NAMES = {
@@ -57,6 +59,7 @@ export const ROLE_DISPLAY_NAMES = {
   support_lead: 'Support Lead',
   support_tech: 'Support Technician',
   dispatch_qc: 'Dispatch QC',
+  guard: 'Guard',
 };
 
 /** Roles that require team assignment */
@@ -78,4 +81,5 @@ export const ROLE_REFERENCE_ROWS = [
   { role: 'support_lead', access: 'All support tickets, team mgmt', cannot: 'Billing, floor, sales' },
   { role: 'support_tech', access: 'Own support tickets', cannot: 'Everything else' },
   { role: 'dispatch_qc', access: 'Dispatch QC', cannot: 'Everything else' },
+  { role: 'guard', access: 'Gate scanner, inward/outward validation', cannot: 'Sales, inventory, finance, customers' },
 ];
