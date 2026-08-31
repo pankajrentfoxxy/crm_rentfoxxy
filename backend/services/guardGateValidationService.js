@@ -1263,7 +1263,22 @@ async function resolveScan({ direction, scan, user }) {
   }
 
   const session = await openOrReuseSession(db, ctx, actor);
+  const fromDocument = Boolean(resolved.ctx) && !resolved.unitScan;
+  let autoVerified = 0;
+  if (fromDocument) {
+    autoVerified = await autoVerifyDocumentLaptops(db, { session, ctx, actor });
+  }
   const view = await sessionView(db, session, ctx);
+
+  let message = 'Verify laptop details before submitting this movement.';
+  if (autoSwitch) {
+    message = `Opened as ${ctx.direction.toUpperCase()} for this document.`;
+  }
+  if (autoVerified > 0) {
+    message = autoVerified === (ctx.laptops || []).length
+      ? `${autoVerified} laptop(s) verified from this document. Submit ${ctx.direction.toUpperCase()} to process.`
+      : `${autoVerified} of ${(ctx.laptops || []).length} laptop(s) verified from this document.`;
+  }
 
   return {
     ok: true,
@@ -1272,10 +1287,46 @@ async function resolveScan({ direction, scan, user }) {
     kind: 'verification',
     ...view,
     direction: ctx.direction,
-    message: autoSwitch
-      ? `Opened as ${ctx.direction.toUpperCase()} for this document.`
-      : 'Verify laptop details before submitting this movement.',
+    auto_verified: autoVerified,
+    message,
   };
+}
+
+async function autoVerifyDocumentLaptops(db, { session, ctx, actor }) {
+  const laptops = ctx.laptops || [];
+  let verified = 0;
+  for (const laptop of laptops) {
+    const serial = laptop.serial_id
+      ? await findSerialById(db, laptop.serial_id)
+      : await findSerial(db, laptop.ttspl || laptop.serial_number);
+    if (!serial) continue;
+    const scanned = await scanSerialIntoSession(db, {
+      session,
+      ctx,
+      serial,
+      actor,
+      awb: laptop.awb_number || session.awb_number,
+      scanRaw: laptop.ttspl || laptop.serial_number || serial.ttspl,
+    });
+    if (scanned.valid) verified += 1;
+  }
+  return verified;
+}
+
+async function findSerialById(db, serialId) {
+  const id = Number(serialId);
+  if (!id) return null;
+  const r = await db.query(
+    `SELECT serial_id, serial_number, inventory_status, qc_status, grn_id,
+            current_dc_number, current_customer_id,
+            COALESCE(inventory_asset_code, extra->>'ttspl_id') AS ttspl,
+            extra
+       FROM vendor_serial_numbers
+      WHERE deleted_at IS NULL AND serial_id = $1
+      LIMIT 1`,
+    [id]
+  );
+  return r.rows[0] || null;
 }
 
 async function scanSerialIntoSession(db, {

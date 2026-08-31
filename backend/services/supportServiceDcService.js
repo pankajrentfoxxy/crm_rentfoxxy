@@ -32,7 +32,8 @@ function buildSdcTracking(sdc, extras = {}) {
   const rank = sdcStatusRank(status);
   const outwardAt = sdc.dispatched_at || extras.gateAt || null;
   const outwardBy = extras.gateName || null;
-  const readyAt = extras.dispatchReadyAt || (status === 'dispatch_ready' ? sdc.updated_at : null);
+  const readyAt = extras.dispatchReadyAt
+    || (rank >= 20 ? (sdc.created_at || sdc.updated_at) : null);
 
   const steps = [
     {
@@ -472,21 +473,25 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
   const txnType = await resolveTxnTypeForDc(db, { salesOrderNumber, originalDcNumber });
   const hsnCode = resolveHsnForPersist({ transactionType: 'repair', role: null });
   const entityCode = entityForQuotationType(txnType === 'sale' ? 'sales' : 'rental');
-  // Pending until Dispatch QC passes; dispatch transitions happen via normal DC dispatch flow.
-  const dcStatus = 'pending';
+  // SDC is warehouse-ready on create. Guard outward submit moves it to in_transit.
+  const dcStatus = 'dispatch_ready';
+  const shipByValue = dispatchInfo.dcDispatchMode === 'inhouse' ? 'by_hand'
+    : dispatchInfo.dcDispatchMode === 'porter' ? 'by_porter'
+      : dispatchInfo.dcDispatchMode === 'courier' ? 'by_courier'
+        : null;
 
   await db.query(
     `INSERT INTO delivery_challan_lines
         (dc_number, movement_type, support_ticket_id, customer_id, customer_name, email,
          customer_shipping_address, brand, model_name, quantity, serial_number,
-         dispatch_mode, delivery_person_id, courier_name, awb_number,
+         dispatch_mode, ship_by, delivery_person_id, courier_name, awb_number,
          porter_tracking_id, porter_order_id,
          sales_order_number, original_dc_number, dc_purpose, remarks,
          status, created_by, created_at, updated_at,
          entity_code, hsn_code, pre_dispatch_qc_passed)
-     VALUES ($1,'outbound',$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16,
-             $17,$18,$19,$20,
-             $21,$22,NOW(),NOW(),$23,$24,FALSE)`,
+     VALUES ($1,'outbound',$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16,$17,
+             $18,$19,$20,$21,
+             $22,$23,NOW(),NOW(),$24,$25,TRUE)`,
     [
       sdcNumber,
       ticketId,
@@ -499,6 +504,7 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
       Math.max(1, entries.length),
       JSON.stringify(entries),
       dispatchInfo.dcDispatchMode,
+      shipByValue,
       dispatchInfo.techId,
       dispatchInfo.courierName,
       dispatchInfo.awbNumber,
@@ -515,6 +521,31 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
     ]
   );
 
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS dc_shipment_units (
+        id SERIAL PRIMARY KEY,
+        dc_number TEXT NOT NULL,
+        allocation_id INTEGER,
+        serial_id INTEGER,
+        serial_number TEXT,
+        ttspl_id TEXT,
+        courier_name TEXT DEFAULT 'BlueDart',
+        awb_number TEXT,
+        weight NUMERIC(10, 2),
+        remarks TEXT,
+        tracking_status TEXT,
+        tracking_status_type TEXT,
+        tracking_synced_at TIMESTAMPTZ,
+        received_by TEXT,
+        delivered_at TIMESTAMPTZ,
+        status TEXT NOT NULL DEFAULT 'in_transit',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+  } catch (_) { /* already exists */ }
+
   const itemIdsStamped = [];
   for (const row of selected) {
     await db.query(
@@ -525,13 +556,46 @@ async function createServiceDc(db, { ticketId, itemIds, dispatch, actor }) {
     );
     itemIdsStamped.push(row.item.id);
 
-    await inventorySM.reserveForDc(db, row.serial.serial_id, {
-      dcNumber: sdcNumber,
-      customerId: ticket.customer_id,
-      entityCode,
-      actorUserId: actor?.user_id,
-      actorName: actor?.name,
-    });
+    try {
+      await inventorySM.markDispatchReady(db, row.serial.serial_id, {
+        dcNumber: sdcNumber,
+        customerId: ticket.customer_id,
+        entityCode,
+        dispatchMode: dispatchInfo.dcDispatchMode,
+        actorUserId: actor?.user_id,
+        actorName: actor?.name,
+      });
+    } catch (dispErr) {
+      console.error('serviceDc.markDispatchReady', dispErr.message);
+      await db.query(
+        `UPDATE vendor_serial_numbers
+            SET inventory_status = 'dispatch_ready',
+                current_dc_number = $2,
+                dispatch_mode = COALESCE($3, dispatch_mode),
+                current_customer_id = COALESCE($4, current_customer_id),
+                status_changed_at = NOW(),
+                updated_at = NOW()
+          WHERE serial_id = $1`,
+        [row.serial.serial_id, sdcNumber, dispatchInfo.dcDispatchMode || null, ticket.customer_id || null]
+      );
+    }
+
+    try {
+      await db.query(
+        `INSERT INTO dc_shipment_units (
+           dc_number, serial_id, serial_number, ttspl_id,
+           courier_name, awb_number, status
+         ) VALUES ($1,$2,$3,$4,$5,$6,'dispatch_ready')`,
+        [
+          sdcNumber,
+          row.serial.serial_id,
+          row.serial.serial_number || null,
+          row.serial.inventory_asset_code || row.item.ttspl_id || null,
+          dispatchInfo.courierName || null,
+          dispatchInfo.awbNumber || null,
+        ]
+      );
+    } catch (_) { /* table may not exist */ }
   }
 
   await db.query(

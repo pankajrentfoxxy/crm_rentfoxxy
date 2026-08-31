@@ -6,8 +6,10 @@ import api from '../../../utils/api';
 import PickupSetupForm from './PickupSetupForm';
 import SdcTrackingTimeline from './SdcTrackingTimeline';
 import { uploadAssetUrl } from '../utils';
-import { replacementSalesOrderDetailPath } from '../../../features/sales-pipeline/salesOrderScope';
+import { replacementSalesOrderDetailPath, SO_PERMISSION_SECTIONS } from '../../../features/sales-pipeline/salesOrderScope';
+import { deliveryChallanDetailPath } from '../../../features/sales-pipeline/salesPipelineUtils';
 import CourierTrackingModal from '../../../features/sales-pipeline/components/CourierTrackingModal';
+import usePermission from '../../../hooks/usePermission';
 
 function dcPurposeLabel(purpose) {
   if (purpose === 'service_return') return 'Service Return';
@@ -37,6 +39,8 @@ function dispatchLabel(mode) {
 }
 
 export default function ServiceDcPanel({ ticket, pickups, replacementOrders = [], ticketId, isLead, onRefresh }) {
+  const { canView } = usePermission();
+  const canOpenDc = ['delivery_challans', ...SO_PERMISSION_SECTIONS].some((s) => canView(s));
   const [ctx, setCtx] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
@@ -151,13 +155,25 @@ export default function ServiceDcPanel({ ticket, pickups, replacementOrders = []
         <div className="space-y-2">
           {serviceDcs.map((sdc) => {
             const pdfUrl = uploadAssetUrl(sdc.pdf_path);
-            const dcPath = `/sales-pipeline/delivery-challans/${encodeURIComponent(sdc.dc_number)}`;
+            const dcTo = {
+              pathname: deliveryChallanDetailPath(sdc.dc_number),
+              state: { from: `/support/tickets/${ticketId}` },
+            };
             const mode = dispatchLabel(sdc.dispatch_mode);
             return (
               <div key={sdc.dc_number} className="rounded-lg border border-white bg-white/80 px-3 py-2 text-xs">
                 <div className="flex flex-wrap items-center gap-2">
                   <Truck className="w-3.5 h-3.5 text-teal-700" />
-                  <span className="font-mono font-semibold text-slate-900">{sdc.dc_number}</span>
+                  {canOpenDc ? (
+                    <Link
+                      to={dcTo}
+                      className="font-mono font-semibold text-teal-800 hover:underline"
+                    >
+                      {sdc.dc_number}
+                    </Link>
+                  ) : (
+                    <span className="font-mono font-semibold text-slate-900">{sdc.dc_number}</span>
+                  )}
                   <span className="rounded-full bg-teal-100 text-teal-800 px-2 py-0.5">{dcPurposeLabel(sdc.dc_purpose)}</span>
                   <span className="text-slate-600">{statusLabel(sdc.status)}</span>
                 </div>
@@ -174,7 +190,9 @@ export default function ServiceDcPanel({ ticket, pickups, replacementOrders = []
                 </p>
                 <SdcTrackingTimeline sdc={sdc} />
                 <div className="mt-2 flex flex-wrap gap-2">
-                  <Link to={dcPath} className="text-teal-700 hover:underline">View DC</Link>
+                  {canOpenDc ? (
+                    <Link to={dcTo} className="text-teal-700 hover:underline">View DC</Link>
+                  ) : null}
                   {pdfUrl && (
                     <a href={pdfUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-teal-700 hover:underline">
                       <FileText className="w-3.5 h-3.5" /> PDF
