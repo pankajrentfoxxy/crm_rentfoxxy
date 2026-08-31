@@ -154,6 +154,15 @@ export default function ReturnDcDetailModal({ rdcNumber, onClose, onUpdated }) {
                     <KeyRound className="w-3.5 h-3.5" /> OTP {detail.customer_otp_code}
                   </span>
                 ) : null}
+                {detail.gate_inward_at ? (
+                  <span className="px-2 py-1 rounded-full bg-emerald-100 text-emerald-700 inline-flex items-center gap-1 text-xs">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> Guard inward done
+                  </span>
+                ) : (
+                  <span className="px-2 py-1 rounded-full bg-amber-100 text-amber-800 text-xs font-semibold">
+                    Awaiting Guard inward
+                  </span>
+                )}
               </div>
 
               <div className="rounded-xl border border-orange-200 bg-orange-50/60 p-4">

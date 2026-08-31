@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { Loader2, RefreshCw } from 'lucide-react';
 import api from '../../../utils/api';
 import PickupSetupForm from './PickupSetupForm';
+import ReturnDcNumberLink from './ReturnDcNumberLink';
 import { replacementSalesOrderDetailPath } from '../../../features/sales-pipeline/salesOrderScope';
 
 function specLine(item) {
@@ -193,7 +194,9 @@ export default function RepairSwapPanel({
                 </p>
               )}
               {item.return_dc_number && (
-                <p className="text-xs text-slate-400 mt-0.5 font-mono">Repair RDC {item.return_dc_number} · in warehouse</p>
+                <p className="text-xs text-slate-400 mt-0.5 font-mono">
+                  Repair RDC <ReturnDcNumberLink rdcNumber={item.return_dc_number} /> · in warehouse
+                </p>
               )}
             </div>
           </label>

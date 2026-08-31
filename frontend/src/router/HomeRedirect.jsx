@@ -32,6 +32,8 @@ const LANDING_ORDER = [
   ['vendor_management', '/vendor-management/purchase-orders'],
   ['customer_billing', '/customer-billing/invoices'],
   ['vendor_billing_mgmt', '/vendor-billing/bills'],
+  ['guard_gate_checking', '/guard/scanner'],
+  ['gate_dashboard', '/guard'],
   ['support_tickets', '/support'],
   ['support_part_challan', '/support-parts/queue'],
   ['support_part_requests', '/support-parts/tech-bucket'],
@@ -49,7 +51,9 @@ export default function HomeRedirect() {
     return <Navigate to="/login" replace />;
   }
   if (user?.role === 'guard') {
-    return <Navigate to="/guard" replace />;
+    if (canView('guard_gate_checking')) return <Navigate to="/guard/scanner" replace />;
+    if (canView('gate_dashboard')) return <Navigate to="/guard" replace />;
+    return <Navigate to="/guard/scanner" replace />;
   }
   // Support technicians: land on delivery module when granted, else support tickets.
   if (user?.role === 'support_tech') {

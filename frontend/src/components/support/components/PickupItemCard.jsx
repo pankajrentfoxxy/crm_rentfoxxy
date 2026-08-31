@@ -1,8 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { MapPin, Camera, CheckCircle2, PenLine, X, FileText } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { MapPin, Camera, CheckCircle2, PenLine, X, FileText, ScanLine } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../../utils/api';
 import { useAuth } from '../../../context/AuthContext';
+import usePermission from '../../../hooks/usePermission';
 import { isSupportLead, isSupportTechnician } from '../../../utils/supportAccess';
 import { podUrl as podUrlFor, compressImageFile, uploadAssetUrl, isPickupAssignmentEditable } from '../utils';
 import { formatDeliveryAddressLine, parseDeliveryAddress } from '../../../features/sales-pipeline/salesPipelineUtils';
@@ -15,14 +17,16 @@ import {
 import { INDIAN_STATES } from '../../../constants/indianStates';
 import PickupSetupForm from './PickupSetupForm';
 import AssignmentHistoryList from './AssignmentHistoryList';
+import ReturnDcNumberLink from './ReturnDcNumberLink';
 
 /**
  * PickupItemCard — Phase 20 step-by-step pickup flow.
- * Assigned -> Reached (GPS) -> POD photo -> Customer OTP -> Warehouse e-sign.
+ * Assigned -> Reached (GPS) -> POD photo -> Customer OTP -> Guard inward -> Warehouse e-sign.
  * Rendered for item_type='pickup' items that carry a pickup_type.
  */
 export default function PickupItemCard({ item, ticket, onRefresh, assignmentHistory = [], isTicketLead = false }) {
   const { user } = useAuth();
+  const { canView } = usePermission();
   const [esignOpen, setEsignOpen] = useState(false);
   const [techSignOpen, setTechSignOpen] = useState(false);
   const [otpInput, setOtpInput] = useState('');
@@ -107,6 +111,15 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
   const podDone = !!(item.pod_image_path || item.proof_of_completion_path);
   const otpVerified = !!item.customer_otp_verified_at;
   const whDone = !!item.warehouse_received_at;
+  const needsGate = !!item.return_dc_number;
+  const gateDone = !!item.gate_inward_at;
+  const pickupReadyForWarehouse = isInhouse ? otpVerified : true;
+  const awaitingGate = needsGate && !gateDone && !whDone && pickupReadyForWarehouse;
+  const canWarehouseEsign = !whDone && isWH && pickupReadyForWarehouse && (!needsGate || gateDone);
+  const canOpenGuardScanner = canView('guard_gate_checking');
+  const guardScannerHref = item.return_dc_number
+    ? `/guard/scanner?dir=inward&q=${encodeURIComponent(item.return_dc_number)}`
+    : '/guard/scanner?dir=inward';
   const addr = parseDeliveryAddress(ticket?.pickup_address);
   const addrLine = formatDeliveryAddressLine(ticket?.pickup_address);
   const canEditAddress = lead && !readOnly;
@@ -205,6 +218,16 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full">{pickupTypeBadge}</span>
               <span className="text-xs bg-white/10 px-2 py-0.5 rounded-full">{dispatchBadge}</span>
+              {needsGate && !whDone && awaitingGate && (
+                <span className="text-xs bg-amber-400/90 text-amber-950 px-2 py-0.5 rounded-full font-semibold">
+                  Awaiting Guard inward
+                </span>
+              )}
+              {needsGate && !whDone && gateDone && (
+                <span className="text-xs bg-emerald-400/90 text-emerald-950 px-2 py-0.5 rounded-full font-semibold">
+                  Guard inward done
+                </span>
+              )}
             </div>
             <p className="font-bold text-lg mt-1.5 truncate">{item.brand} {item.model}</p>
             <p className="text-sm text-orange-100 font-mono">
@@ -212,9 +235,11 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
             </p>
           </div>
           {item.return_dc_number && (
-            <span className="shrink-0 text-xs bg-white/10 px-2 py-1 rounded-lg text-orange-50 font-mono">
-              {item.return_dc_number}
-            </span>
+            <ReturnDcNumberLink
+              rdcNumber={item.return_dc_number}
+              onUpdated={onRefresh}
+              className="shrink-0 text-xs bg-white/10 px-2 py-1 rounded-lg text-orange-50 font-mono"
+            />
           )}
         </div>
         <div className="flex flex-wrap gap-1.5 mt-2">
@@ -230,7 +255,16 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
           <div className="text-xs text-slate-600 space-y-0.5">
             {item.original_dc_number && <p>Original DC: <span className="font-mono font-semibold text-slate-800">{item.original_dc_number}</span></p>}
             {item.return_so_number && <p>Sales Order: <span className="font-mono font-semibold text-slate-800">{item.return_so_number}</span></p>}
-            {item.return_dc_number && <p>Return DC: <span className="font-mono font-semibold text-slate-800">{item.return_dc_number}</span></p>}
+            {item.return_dc_number && (
+              <p>
+                Return DC:{' '}
+                <ReturnDcNumberLink
+                  rdcNumber={item.return_dc_number}
+                  onUpdated={onRefresh}
+                  className="font-mono font-semibold text-slate-800"
+                />
+              </p>
+            )}
           </div>
           {returnDcPdfUrl && (
             <a href={returnDcPdfUrl} target="_blank" rel="noopener noreferrer"
@@ -558,7 +592,9 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
                 <p className="font-semibold text-sm">OTP verified — laptop picked up</p>
               </div>
               <p className="text-xs text-green-600 mt-1">
-                Carry the laptop to the warehouse. The warehouse team will e-sign to confirm receipt.
+                {needsGate && !gateDone
+                  ? 'Carry the laptop to the warehouse. Guard must scan this Return DC inward before warehouse e-sign.'
+                  : 'Carry the laptop to the warehouse. The warehouse team will e-sign to confirm receipt.'}
               </p>
             </div>
           )}
@@ -572,8 +608,48 @@ export default function PickupItemCard({ item, ticket, onRefresh, assignmentHist
         </div>
       )}
 
-      {/* Warehouse confirm (warehouse / lead) */}
-      {!whDone && isWH && (isInhouse ? otpVerified : true) && (
+      {awaitingGate && (
+        <div className="mx-4 mt-3 mb-1 p-3 bg-amber-50 border border-amber-200 rounded-xl">
+          <div className="flex items-center gap-2 text-amber-900">
+            <ScanLine className="w-5 h-5 text-amber-700" />
+            <p className="font-semibold text-sm">Awaiting Guard inward scan</p>
+          </div>
+          <p className="text-xs text-amber-800 mt-1">
+            Guard must scan Return DC{' '}
+            <ReturnDcNumberLink
+              rdcNumber={item.return_dc_number}
+              onUpdated={onRefresh}
+              className="font-mono font-semibold"
+            />{' '}
+            at the warehouse gate before e-sign.
+          </p>
+          {canOpenGuardScanner && (
+            <Link
+              to={guardScannerHref}
+              className="mt-2 inline-flex items-center gap-1.5 px-3 py-2 bg-amber-600 text-white rounded-lg text-xs font-semibold hover:bg-amber-700"
+            >
+              <ScanLine className="w-3.5 h-3.5" /> Open inward gate scanner
+            </Link>
+          )}
+        </div>
+      )}
+
+      {needsGate && gateDone && !whDone && (
+        <div className="mx-4 mt-3 mb-1 p-3 bg-emerald-50 border border-emerald-200 rounded-xl">
+          <div className="flex items-center gap-2 text-emerald-900">
+            <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+            <p className="font-semibold text-sm">Guard inward done — warehouse can e-sign</p>
+          </div>
+          {item.gate_inward_at && (
+            <p className="text-xs text-emerald-700 mt-1">
+              Scanned {new Date(item.gate_inward_at).toLocaleString('en-IN')}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Warehouse confirm (warehouse / lead) — only after Guard inward */}
+      {canWarehouseEsign && (
         <div className="p-4 pt-3">
           <button
             type="button" onClick={() => setEsignOpen(true)}

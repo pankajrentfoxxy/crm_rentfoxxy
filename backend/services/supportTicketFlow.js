@@ -46,7 +46,7 @@ const derivePickupStep = (item) => {
   const pickupType = item.pickup_type || (item.source_item_id ? 'repair' : 'return');
   const isRepair = pickupType === 'repair';
   // Phase 20: redesigned pickup flow is the default for every pickup item.
-  // Assigned -> Reached -> POD -> Customer OTP -> Warehouse confirmed.
+  // Assigned -> Reached -> POD -> Customer OTP -> Guard inward -> Warehouse confirmed.
   // Only the deprecated Phase 18 self-carry / loan-machine flow is treated as
   // legacy, and only when explicitly marked (so older tickets keep working).
   const isLegacy = !item.pickup_type
@@ -62,7 +62,15 @@ const derivePickupStep = (item) => {
     } else if (item.warehouse_received_at || CLOSED.has(item.status)) {
       return 'warehouse_confirmed';
     }
-    if (item.customer_otp_verified_at) return 'customer_otp';
+    const hasRdc = !!item.return_dc_number;
+    const gateDone = !!item.gate_inward_at;
+    if (item.customer_otp_verified_at) {
+      if (hasRdc && !gateDone) return 'gate_inward';
+      if (hasRdc && gateDone) return 'gate_inward_done';
+      return 'customer_otp';
+    }
+    const isCourierOrPorter = item.pickup_method === 'courier' || item.pickup_method === 'porter';
+    if (isCourierOrPorter && hasRdc && gateDone) return 'gate_inward_done';
     if (item.pod_image_path || item.proof_of_completion_path) return 'pod_uploaded';
     if (item.visited_at) return 'reached';
     return 'assigned';

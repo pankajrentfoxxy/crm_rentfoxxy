@@ -2,9 +2,13 @@ import React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { LayoutDashboard, LogOut, ScanLine, Shield } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import usePermission from '../../hooks/usePermission';
 
 export default function GuardLayout({ children }) {
   const { user, logout } = useAuth();
+  const { canView } = usePermission();
+  const canScanner = canView('guard_gate_checking');
+  const canDashboard = canView('gate_dashboard');
   const navigate = useNavigate();
 
   const handleLogout = () => {
@@ -33,29 +37,33 @@ export default function GuardLayout({ children }) {
           </button>
         </div>
         <nav className="max-w-lg mx-auto px-4 pb-2 flex gap-2">
-          <NavLink
-            to="/guard"
-            end
-            className={({ isActive }) =>
-              `flex-1 inline-flex items-center justify-center gap-1.5 py-2 rounded-lg text-sm font-medium ${
-                isActive ? 'bg-teal-500 text-white' : 'bg-slate-800 text-slate-300'
-              }`
-            }
-          >
-            <LayoutDashboard className="w-4 h-4" />
-            Today
-          </NavLink>
-          <NavLink
-            to="/guard/scanner"
-            className={({ isActive }) =>
-              `flex-1 inline-flex items-center justify-center gap-1.5 py-2 rounded-lg text-sm font-medium ${
-                isActive ? 'bg-teal-500 text-white' : 'bg-slate-800 text-slate-300'
-              }`
-            }
-          >
-            <ScanLine className="w-4 h-4" />
-            Scanner
-          </NavLink>
+          {canDashboard && (
+            <NavLink
+              to="/guard"
+              end
+              className={({ isActive }) =>
+                `flex-1 inline-flex items-center justify-center gap-1.5 py-2 rounded-lg text-sm font-medium ${
+                  isActive ? 'bg-teal-500 text-white' : 'bg-slate-800 text-slate-300'
+                }`
+              }
+            >
+              <LayoutDashboard className="w-4 h-4" />
+              Today
+            </NavLink>
+          )}
+          {canScanner && (
+            <NavLink
+              to="/guard/scanner"
+              className={({ isActive }) =>
+                `flex-1 inline-flex items-center justify-center gap-1.5 py-2 rounded-lg text-sm font-medium ${
+                  isActive ? 'bg-teal-500 text-white' : 'bg-slate-800 text-slate-300'
+                }`
+              }
+            >
+              <ScanLine className="w-4 h-4" />
+              Scanner
+            </NavLink>
+          )}
         </nav>
       </header>
       <main className="flex-1 max-w-lg mx-auto w-full px-4 py-4 pb-8">

@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { Loader2, PackagePlus } from 'lucide-react';
 import api from '../../../utils/api';
 import PickupSetupForm from './PickupSetupForm';
+import ReturnDcNumberLink from './ReturnDcNumberLink';
 import { replacementSalesOrderDetailPath } from '../../../features/sales-pipeline/salesOrderScope';
 
 function specLine(item) {
@@ -129,7 +130,7 @@ export default function NewReplacementOrderPanel({
             ) : null}
             . The faulty unit is already in the warehouse
             {ticket.return_dc_number ? (
-              <> from return DC <span className="font-mono">{ticket.return_dc_number}</span></>
+              <> from return DC <ReturnDcNumberLink rdcNumber={ticket.return_dc_number} className="font-mono" /></>
             ) : null}
             — no new Return DC needed.
           </p>

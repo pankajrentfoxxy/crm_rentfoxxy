@@ -1085,12 +1085,18 @@ function evaluateReturnDcWarehouseConfirm(pickupItems, units, dcl) {
     const isInhouse = i.pickup_method !== 'courier' && i.pickup_method !== 'porter';
     return isInhouse && !i.customer_otp_verified_at && !isDelivered;
   });
+  const gateBlocked = itemsToCheck.some((i) => i.return_dc_number && !i.gate_inward_at);
+
+  let warehouse_block_reason = null;
+  if (otpBlocked) {
+    warehouse_block_reason = 'Customer OTP must be verified before warehouse can confirm receipt (or mark Return DC delivered first).';
+  } else if (gateBlocked) {
+    warehouse_block_reason = 'Guard must scan this Return DC inward before warehouse e-sign.';
+  }
 
   return {
-    can_warehouse_confirm: !otpBlocked,
-    warehouse_block_reason: otpBlocked
-      ? 'Customer OTP must be verified before warehouse can confirm receipt (or mark Return DC delivered first).'
-      : null,
+    can_warehouse_confirm: !otpBlocked && !gateBlocked,
+    warehouse_block_reason,
     warehouse_receive_pending: true,
   };
 }
@@ -1593,6 +1599,9 @@ async function getReturnDcDetail(rdcNumber) {
     customer_otp_verified_at: pickupItems.length && pickupItems.every((i) => i.customer_otp_verified_at)
       ? pickupItems.find((i) => i.customer_otp_verified_at)?.customer_otp_verified_at
       : null,
+    gate_inward_at: pickupItems.length && pickupItems.every((i) => i.gate_inward_at)
+      ? pickupItems.find((i) => i.gate_inward_at)?.gate_inward_at
+      : null,
     pickup_items: pickupItems.map((i) => ({
       id: i.id,
       serial_number: i.serial_number,
@@ -1610,6 +1619,7 @@ async function getReturnDcDetail(rdcNumber) {
       warehouse_received_at: i.warehouse_received_at,
       warehouse_receiver_name: i.warehouse_receiver_name,
       customer_otp_verified_at: i.customer_otp_verified_at,
+      gate_inward_at: i.gate_inward_at,
       floor_ticket_id: i.floor_ticket_id,
     })),
     floor_ticket_ids: pickupItems.map((i) => i.floor_ticket_id).filter(Boolean),

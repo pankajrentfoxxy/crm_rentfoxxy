@@ -60,6 +60,7 @@ const ROLE_ROW_DEFAULTS = {
     ['part_vendor_repair', true, true, false],
     ['vendor_repair_dc', true, true, false],
     ['guard_gate_checking', true, true, false],
+    ['gate_dashboard', true, true, false],
     ['ttspl_history', false, false, false], ['warehouse', false, true, false], ['vendor_management', false, false, false],
     ['reports_access', false, false, false], ['production_qc_report', false, false, false],
     ['report_revenue', false, false, false], ['report_inventory', false, false, false],
@@ -98,9 +99,10 @@ const ROLE_ROW_DEFAULTS = {
   ],
   guard: [
     ['guard_gate_checking', true, true, false],
+    ['gate_dashboard', true, true, false],
   ],
   warehouse: [
-    ['dashboard', false, false, false], ['warehouse', true, true, false], ['guard_gate_checking', true, true, false], ['inventory', false, true, false],
+    ['dashboard', false, false, false], ['warehouse', true, true, false], ['guard_gate_checking', true, true, false], ['gate_dashboard', true, true, false], ['inventory', false, true, false],
     ['inventory_management', false, true, false], ['parts_inventory', true, true, false],
     ['parts_dashboard', false, false, false], ['parts_approval', false, true, false], ['parts_history', false, false, false],
     ['parts_discarded', true, true, false], ['scrap_challans', true, true, false],
@@ -115,6 +117,7 @@ const ROLE_ROW_DEFAULTS = {
     ['delivery_challans', false, true, false], ['delivery_register_management', false, true, false],
     ['technician_bucket', false, true, false],
     ['guard_gate_checking', true, true, false],
+    ['gate_dashboard', true, true, false],
     ['einvoice_ewb', true, true, false], ['customers', false, false, false],
   ],
   accounts: [

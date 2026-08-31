@@ -447,7 +447,30 @@ async function loadOutboundDc(db, dcNumber) {
   };
 }
 
+let pickupGateColsReady = false;
+async function ensurePickupGateInwardColumns(db) {
+  if (pickupGateColsReady) return;
+  await db.query(`
+    ALTER TABLE support_ticket_items
+      ADD COLUMN IF NOT EXISTS gate_inward_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS gate_inward_by INTEGER REFERENCES users (user_id),
+      ADD COLUMN IF NOT EXISTS gate_inward_session_id UUID
+  `);
+  pickupGateColsReady = true;
+}
+
+function isCourierOrPorterPickup(item) {
+  const method = String(item?.pickup_method || '').toLowerCase();
+  return method === 'courier' || method === 'porter';
+}
+
+function pickupReadyForGateInward(item) {
+  if (isCourierOrPorterPickup(item)) return true;
+  return !!(item.customer_otp_verified_at || item.picked_up_at || item.technician_esign_at);
+}
+
 async function loadReturnDc(db, rdcNumber) {
+  await ensurePickupGateInwardColumns(db);
   const r = await db.query(
     `SELECT dc_number, sales_order_number, customer_name, status, dc_purpose,
             movement_type, awb_number, porter_tracking_id, serial_number,
@@ -463,7 +486,8 @@ async function loadReturnDc(db, rdcNumber) {
   const items = await db.query(
     `SELECT id, ttspl_id, serial_number, unique_serial_number, pickup_type,
             warehouse_received_at, pickup_awb, pickup_courier_name,
-            return_dc_number
+            return_dc_number, pickup_method, customer_otp_verified_at,
+            picked_up_at, technician_esign_at, gate_inward_at
        FROM support_ticket_items
       WHERE return_dc_number = $1
          OR (ticket_id = $2 AND $2 IS NOT NULL AND item_type = 'pickup')
@@ -486,6 +510,8 @@ async function loadReturnDc(db, rdcNumber) {
     ? items.rows.every((i) => i.warehouse_received_at)
     : r.rows.every((row) => row.warehouse_received_at);
   const cancelled = r.rows.every((row) => CANCELLED_DC.has(String(row.status || '').toLowerCase()));
+  const gateInwardDone = items.rows.length > 0 && items.rows.every((i) => i.gate_inward_at);
+  const pickupReady = items.rows.length === 0 || items.rows.every(pickupReadyForGateInward);
 
   let active = true;
   let inactive_reason = null;
@@ -495,6 +521,12 @@ async function loadReturnDc(db, rdcNumber) {
   } else if (warehouseReceived) {
     active = false;
     inactive_reason = 'This return has already been received at the warehouse.';
+  } else if (gateInwardDone) {
+    active = false;
+    inactive_reason = 'Guard inward already recorded. Warehouse can now e-sign.';
+  } else if (!pickupReady) {
+    active = false;
+    inactive_reason = 'Technician has not completed customer pickup yet. Guard inward is after pickup.';
   }
 
   return {
@@ -1661,6 +1693,53 @@ async function applyOutwardGateInventory(db, { session, serialRows, actor }) {
   };
 }
 
+async function applyInwardReturnDcGate(client, { session, actor }) {
+  if (session.direction !== 'inward' || session.reference_type !== 'rdc') return;
+  const rdc = session.reference_number;
+  if (!rdc) return;
+
+  await ensurePickupGateInwardColumns(client);
+  const updated = await client.query(
+    `UPDATE support_ticket_items
+        SET gate_inward_at = COALESCE(gate_inward_at, NOW()),
+            gate_inward_by = COALESCE(gate_inward_by, $2),
+            gate_inward_session_id = COALESCE(gate_inward_session_id, $3),
+            updated_at = NOW()
+      WHERE return_dc_number = $1
+        AND item_type = 'pickup'
+      RETURNING id, ticket_id, gate_inward_at`,
+    [rdc, actor.userId, session.session_id]
+  );
+  if (!updated.rows.length) return;
+
+  const ticketIds = [...new Set(updated.rows.map((row) => row.ticket_id).filter(Boolean))];
+  if (ticketIds.length) {
+    await client.query(
+      `UPDATE support_tickets SET updated_at = NOW() WHERE id = ANY($1::int[])`,
+      [ticketIds]
+    );
+  }
+
+  for (const row of updated.rows) {
+    try {
+      await client.query(
+        `INSERT INTO support_ticket_item_audit (item_id, ticket_id, user_id, action, detail)
+         VALUES ($1, $2, $3, 'gate_inward', $4::jsonb)`,
+        [
+          row.id,
+          row.ticket_id,
+          actor.userId,
+          JSON.stringify({
+            return_dc_number: rdc,
+            session_id: session.session_id,
+            guard_name: actor.name || null,
+          }),
+        ]
+      );
+    } catch (_) { /* audit table may differ */ }
+  }
+}
+
 async function confirmSession({ sessionId, remarks, user }) {
   const db = pool;
   const actor = await getActor(db, user);
@@ -1762,6 +1841,10 @@ async function confirmSession({ sessionId, remarks, user }) {
       serialRows: stamped.rows,
       actor,
     });
+
+    if (remaining === 0) {
+      await applyInwardReturnDcGate(client, { session, actor });
+    }
 
     await client.query('COMMIT');
 

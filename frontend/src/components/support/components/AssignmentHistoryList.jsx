@@ -1,4 +1,5 @@
 import React from 'react';
+import ReturnDcNumberLink from './ReturnDcNumberLink';
 
 function actionLabel(action) {
   if (action === 'return_pickup_assignee_changed') return 'Pickup assignee changed';
@@ -36,7 +37,9 @@ export default function AssignmentHistoryList({ rows = [], compact = false }) {
               {row.reason ? ` · ${row.reason}` : ''}
             </p>
             {!compact && row.return_dc_number && (
-              <p className="text-gray-400 font-mono mt-0.5">{row.return_dc_number}</p>
+              <p className="text-gray-400 font-mono mt-0.5">
+                <ReturnDcNumberLink rdcNumber={row.return_dc_number} />
+              </p>
             )}
           </li>
         ))}
