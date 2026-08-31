@@ -5,8 +5,9 @@ import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
 import InvoiceStatusBadge from '../components/InvoiceStatusBadge';
 import SearchableSelect from '../../operation-management/components/SearchableSelect';
+import SearchableMultiSelect from '../../operation-management/components/SearchableMultiSelect';
 import { PageHeader, StatCard, Button } from '../../../components/ui/primitives';
-import { downloadInvoicePdf, generateInvoice, listInvoices, markInvoicePaid } from '../customerBillingApi';
+import { downloadInvoicePdf, generateInvoicesBulk, listInvoices, markInvoicePaid } from '../customerBillingApi';
 import api from '../../../utils/api';
 
 const TABS = ['all', 'draft', 'sent', 'paid', 'overdue'];
@@ -28,7 +29,13 @@ export default function InvoiceListPage() {
   const [searchDebounced, setSearchDebounced] = useState('');
   const [customers, setCustomers] = useState([]);
   const [genOpen, setGenOpen] = useState(false);
-  const [genForm, setGenForm] = useState({ customer_id: '', month: String(new Date().getMonth() || 12), year: String(new Date().getFullYear()) });
+  const [genLoading, setGenLoading] = useState(false);
+  const [genForm, setGenForm] = useState({
+    customer_ids: [],
+    all_billable: false,
+    month: String(new Date().getMonth() + 1),
+    year: String(new Date().getFullYear()),
+  });
 
   useEffect(() => {
     const t = setTimeout(() => setSearchDebounced(searchInput.trim()), 320);
@@ -78,18 +85,47 @@ export default function InvoiceListPage() {
     outstanding: summary.outstanding_total || 0,
   }), [summary]);
 
+  const allCustomersSelected = customerOptions.length > 0
+    && genForm.customer_ids.length === customerOptions.length;
+
+  const openGenerateModal = () => {
+    setGenForm({
+      customer_ids: [],
+      all_billable: false,
+      month: String(new Date().getMonth() + 1),
+      year: String(new Date().getFullYear()),
+    });
+    setGenOpen(true);
+  };
+
   const handleGenerate = async () => {
+    if (!genForm.all_billable && genForm.customer_ids.length === 0) {
+      toast.error('Select at least one customer, or choose “All billable customers”');
+      return;
+    }
+    setGenLoading(true);
     try {
-      await generateInvoice({
-        customer_id: Number(genForm.customer_id),
+      const res = await generateInvoicesBulk({
         month: Number(genForm.month),
         year: Number(genForm.year),
+        all: genForm.all_billable,
+        customer_ids: genForm.all_billable
+          ? undefined
+          : genForm.customer_ids.map((id) => Number(id)),
       });
-      toast.success('Invoice generated');
+      const s = res.data?.summary || {};
+      const parts = [];
+      if (s.created) parts.push(`${s.created} created`);
+      if (s.appended) parts.push(`${s.appended} updated`);
+      if (s.skipped) parts.push(`${s.skipped} skipped`);
+      if (s.errors) parts.push(`${s.errors} failed`);
+      toast.success(parts.length ? parts.join(', ') : 'No invoices generated');
       setGenOpen(false);
       load();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Generate failed');
+    } finally {
+      setGenLoading(false);
     }
   };
 
@@ -125,7 +161,7 @@ export default function InvoiceListPage() {
         icon={Receipt}
         actions={(
           <PermissionGate section="customer_billing" action="create">
-            <Button icon={Plus} onClick={() => setGenOpen(true)}>Generate Invoice</Button>
+            <Button icon={Plus} onClick={openGenerateModal}>Generate Invoice</Button>
           </PermissionGate>
         )}
       />
@@ -271,27 +307,94 @@ export default function InvoiceListPage() {
 
       {genOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <button type="button" className="absolute inset-0 bg-black/40" onClick={() => setGenOpen(false)} aria-label="Close" />
-          <div className="relative bg-white rounded-xl shadow-xl max-w-md w-full p-6 space-y-3">
-            <h3 className="font-semibold">Generate Invoice</h3>
-            <SearchableSelect
-              id="invoice-gen-customer"
-              label="Customer"
-              required
-              value={genForm.customer_id}
-              onChange={(v) => setGenForm((f) => ({ ...f, customer_id: v }))}
-              options={customerOptions}
-              placeholder="Select customer"
-            />
+          <button type="button" className="absolute inset-0 bg-black/40" onClick={() => !genLoading && setGenOpen(false)} aria-label="Close" />
+          <div className="relative bg-white rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4">
+            <h3 className="font-semibold text-lg">Generate Invoices</h3>
+            <p className="text-sm text-gray-500">
+              Select one or more customers, or run for all customers with active rental laptops.
+            </p>
+            <label className="flex items-start gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={genForm.all_billable}
+                onChange={(e) => setGenForm((f) => ({
+                  ...f,
+                  all_billable: e.target.checked,
+                  customer_ids: e.target.checked ? [] : f.customer_ids,
+                }))}
+                disabled={genLoading}
+              />
+              <span>
+                <span className="font-medium text-gray-800">All billable customers</span>
+                <span className="block text-xs text-gray-500 mt-0.5">
+                  Customers with rented/returned laptops and a rent start date
+                </span>
+              </span>
+            </label>
+            {!genForm.all_billable && (
+              <>
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={allCustomersSelected}
+                    onChange={() => setGenForm((f) => ({
+                      ...f,
+                      customer_ids: allCustomersSelected
+                        ? []
+                        : customerOptions.map((c) => c.value),
+                    }))}
+                    disabled={genLoading || !customerOptions.length}
+                  />
+                  <span className="font-medium text-gray-800">
+                    Select all customers ({customerOptions.length})
+                  </span>
+                </label>
+                <SearchableMultiSelect
+                  id="invoice-gen-customers"
+                  label="Customers"
+                  required
+                  value={genForm.customer_ids}
+                  onChange={(ids) => setGenForm((f) => ({ ...f, customer_ids: ids }))}
+                  options={customerOptions}
+                  placeholder="Select customers"
+                  countNoun="customer"
+                  emptyMessage="No customers found."
+                  disabled={genLoading}
+                />
+              </>
+            )}
             <div className="grid grid-cols-2 gap-2">
-              <select value={genForm.month} onChange={(e) => setGenForm((f) => ({ ...f, month: e.target.value }))} className="border rounded-lg px-3 py-2 text-sm">
+              <select
+                value={genForm.month}
+                onChange={(e) => setGenForm((f) => ({ ...f, month: e.target.value }))}
+                className="border rounded-lg px-3 py-2 text-sm"
+                disabled={genLoading}
+              >
                 {MONTHS.slice(1).map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
               </select>
-              <input type="number" value={genForm.year} onChange={(e) => setGenForm((f) => ({ ...f, year: e.target.value }))} className="border rounded-lg px-3 py-2 text-sm" />
+              <input
+                type="number"
+                value={genForm.year}
+                onChange={(e) => setGenForm((f) => ({ ...f, year: e.target.value }))}
+                className="border rounded-lg px-3 py-2 text-sm"
+                disabled={genLoading}
+              />
             </div>
-            <div className="flex gap-2 justify-end">
-              <button type="button" onClick={() => setGenOpen(false)} className="px-4 py-2 text-sm border rounded-lg">Cancel</button>
-              <button type="button" onClick={handleGenerate} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg">Generate</button>
+            <div className="flex gap-2 justify-end pt-1">
+              <button type="button" onClick={() => setGenOpen(false)} className="px-4 py-2 text-sm border rounded-lg" disabled={genLoading}>Cancel</button>
+              <button
+                type="button"
+                onClick={handleGenerate}
+                className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg disabled:opacity-60"
+                disabled={genLoading}
+              >
+                {genLoading
+                  ? 'Generating…'
+                  : genForm.all_billable
+                    ? 'Generate for all billable'
+                    : `Generate (${genForm.customer_ids.length || 0})`}
+              </button>
             </div>
           </div>
         </div>

@@ -24,6 +24,7 @@ export default function SearchableMultiSelect({
   id,
   maxSelections,
   emptyMessage = 'No options available.',
+  countNoun = 'item',
 }) {
   const rootRef = useRef(null);
   const triggerRef = useRef(null);
@@ -122,7 +123,7 @@ export default function SearchableMultiSelect({
   const triggerText =
     selectedValues.length === 0
       ? placeholder
-      : `${selectedValues.length} serial${selectedValues.length === 1 ? '' : 's'} selected`;
+      : `${selectedValues.length} ${countNoun}${selectedValues.length === 1 ? '' : 's'} selected`;
 
   const menu = open && menuStyle ? (
     <div

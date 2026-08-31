@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Building2, Download, Tags } from 'lucide-react';
 import { listSalesOrders } from '../../sales-pipeline/salesPipelineApi';
-import { bulkUpdateCustomerType, exportCustomersExcel, exportCustomerAssetsExcel, getCustomerIds, getCustomers, updateCustomerStatus } from '../leadCrmApi';
+import { bulkUpdateCustomerType, exportCustomersExcel, exportCustomerAssetsExcel, exportCustomerSaleAssets, getCustomerIds, getCustomers, updateCustomerStatus } from '../leadCrmApi';
 import CustomerFormDrawer from '../components/CustomerFormDrawer';
 import BulkCustomerTypeModal from '../components/BulkCustomerTypeModal';
 import { PageHeader, StatCard, Button, ResponsiveTable } from '../../../components/ui/primitives';
@@ -67,6 +67,7 @@ export default function CustomerListPage() {
   const [activeOrderCounts, setActiveOrderCounts] = useState({});
   const [exporting, setExporting] = useState(false);
   const [exportingAssets, setExportingAssets] = useState(false);
+  const [exportingSaleAssets, setExportingSaleAssets] = useState(false);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [selectedMeta, setSelectedMeta] = useState(() => new Map());
   const [selectAllMatching, setSelectAllMatching] = useState(false);
@@ -345,6 +346,32 @@ export default function CustomerListPage() {
     }
   };
 
+  const handleExportSaleAssets = async (format = 'xlsx') => {
+    setExportingSaleAssets(true);
+    try {
+      const response = await exportCustomerSaleAssets({ format });
+      const isCsv = format === 'csv';
+      const blob = new Blob([response.data], {
+        type: response.headers['content-type'] || (isCsv ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+      });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const disposition = response.headers['content-disposition'] || '';
+      const match = /filename="?([^"]+)"?/.exec(disposition);
+      a.href = url;
+      a.download = match?.[1] || (isCsv ? 'customer_sale_assets_export.csv' : 'customer_sale_assets_export.xlsx');
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success(isCsv ? 'Sale assets CSV downloaded' : 'Sale assets Excel downloaded');
+    } catch {
+      toast.error('Failed to export sale assets');
+    } finally {
+      setExportingSaleAssets(false);
+    }
+  };
+
   const removeFromSelection = (customerId) => {
     setSelectAllMatching(false);
     setSelectedIds((prev) => {
@@ -491,6 +518,16 @@ export default function CustomerListPage() {
             {canExportCustomers ? (
               <Button variant="secondary" icon={Download} disabled={exportingAssets} onClick={handleExportCustomerAssets}>
                 {exportingAssets ? 'Exporting...' : 'Export Customer Assets'}
+              </Button>
+            ) : null}
+            {canExportCustomers ? (
+              <Button variant="secondary" icon={Download} disabled={exportingSaleAssets} onClick={() => handleExportSaleAssets('xlsx')}>
+                {exportingSaleAssets ? 'Exporting...' : 'Export Sale Assets (Excel)'}
+              </Button>
+            ) : null}
+            {canExportCustomers ? (
+              <Button variant="secondary" icon={Download} disabled={exportingSaleAssets} onClick={() => handleExportSaleAssets('csv')}>
+                Export Sale Assets (CSV)
               </Button>
             ) : null}
             <Button icon={Plus} onClick={() => { setEditCustomer(null); setDrawerOpen(true); }}>Add Customer</Button>

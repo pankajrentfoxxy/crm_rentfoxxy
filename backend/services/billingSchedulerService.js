@@ -819,7 +819,17 @@ async function generateAllVendorBills(month, year) {
   });
 }
 
+function billingCronEnabled() {
+  const raw = String(process.env.BILLING_CRON_ENABLED ?? 'false').toLowerCase();
+  return raw === 'true' || raw === '1' || raw === 'on';
+}
+
 function startBillingScheduler() {
+  if (!billingCronEnabled()) {
+    billingLog.info('Billing cron disabled (BILLING_CRON_ENABLED=false) — use manual invoice APIs/scripts');
+    return;
+  }
+
   cron.schedule('1 0 1 * *', async () => {
     const now = new Date();
     const month = now.getMonth() + 1;

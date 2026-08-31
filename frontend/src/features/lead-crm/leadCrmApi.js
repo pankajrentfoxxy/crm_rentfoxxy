@@ -37,6 +37,8 @@ export const exportCustomersExcel = (params = {}) =>
   api.get('/customer-management/customers/export.xlsx', { params, responseType: 'blob' });
 export const exportCustomerAssetsExcel = () =>
   api.get('/customer-management/customers/assets/export.xlsx', { responseType: 'blob' });
+export const exportCustomerSaleAssets = (params = {}) =>
+  api.get('/customer-management/customers/sale-assets/export', { params, responseType: 'blob' });
 export const getCustomer = (id) => api.get(`/customer-management/customers/${id}`);
 export const createCustomer = (data) => api.post('/customer-management/customers', data);
 export const updateCustomer = (id, data) => api.put(`/customer-management/customers/${id}`, data);

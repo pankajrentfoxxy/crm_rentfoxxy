@@ -765,6 +765,152 @@ exports.exportCustomerAssetsExcel = async (req, res) => {
   }
 };
 
+/** Export customers with sale (non-rental) laptops held + sale price from the sale SO/DC. */
+exports.exportCustomerSaleAssets = async (req, res) => {
+  try {
+    const format = String(req.query.format || 'xlsx').trim().toLowerCase();
+    const { rows } = await pool.query(
+      `SELECT
+         c.customer_id,
+         COALESCE(c.company_name, c.name) AS customer_name,
+         c.email AS customer_email,
+         c.phone AS customer_phone,
+         c.gst_no AS customer_gst,
+         COALESCE(inv.brand, vsn.extra->>'brand', sale_line.brand) AS brand,
+         COALESCE(inv.model, vsn.extra->>'model', vsn.extra->>'model_name', sale_line.model_name) AS model,
+         COALESCE(inv.generation, vsn.extra->>'generation') AS generation,
+         COALESCE(inv.processor, vsn.extra->>'processor', sale_line.processor) AS processor,
+         COALESCE(inv.ram, vsn.extra->>'ram', sale_line.ram) AS ram,
+         COALESCE(inv.storage, vsn.extra->>'storage', sale_line.storage) AS storage,
+         COALESCE(NULLIF(vsn.inventory_asset_code, ''), vsn.extra->>'ttspl_id') AS ttspl,
+         vsn.serial_number,
+         vsn.inventory_status,
+         sale_line.rate AS sale_price,
+         sale_line.sales_order_number,
+         sale_line.dc_number,
+         sale_line.delivered_at
+       FROM vendor_serial_numbers vsn
+       JOIN customers c ON c.customer_id = vsn.current_customer_id
+       LEFT JOIN LATERAL (
+         SELECT inv.brand, inv.model, inv.processor, inv.generation, inv.ram, inv.storage
+           FROM inventory inv
+          WHERE inv.serial_number = vsn.serial_number
+             OR (
+               vsn.inventory_asset_code IS NOT NULL
+               AND inv.machine_number = vsn.inventory_asset_code
+             )
+          ORDER BY CASE WHEN inv.serial_number = vsn.serial_number THEN 0 ELSE 1 END,
+                   inv.inventory_id ASC
+          LIMIT 1
+       ) inv ON TRUE
+       INNER JOIN LATERAL (
+         SELECT sol.rate,
+                sol.sales_order_number,
+                sol.brand,
+                sol.model_name,
+                sol.processor,
+                sol.ram,
+                sol.storage,
+                dcl.dc_number,
+                COALESCE(dcl.delivered_at, dcl.delivery_completed_at) AS delivered_at
+           FROM delivery_challan_lines dcl
+           JOIN sales_order_lines sol ON sol.sales_order_number = dcl.sales_order_number
+           CROSS JOIN LATERAL jsonb_array_elements_text(
+             CASE WHEN jsonb_typeof(dcl.serial_number) = 'array' THEN dcl.serial_number ELSE '[]'::jsonb END
+           ) AS elem
+          WHERE dcl.customer_id = vsn.current_customer_id
+            AND COALESCE(dcl.movement_type, 'outbound') = 'outbound'
+            AND COALESCE(dcl.status, '') = 'delivered'
+            AND LOWER(COALESCE(sol.quotation_type, '')) IN ('sale', 'sales')
+            AND (
+              vsn.serial_id = NULLIF(REGEXP_REPLACE(split_part(elem, '|', 1), '[^0-9]', '', 'g'), '')::int
+              OR vsn.inventory_asset_code = NULLIF(split_part(elem, '|', 3), '')
+              OR vsn.serial_number = NULLIF(split_part(elem, '|', 2), '')
+            )
+          ORDER BY COALESCE(dcl.delivered_at, dcl.delivery_completed_at) DESC NULLS LAST, dcl.id DESC
+          LIMIT 1
+       ) sale_line ON TRUE
+      WHERE vsn.deleted_at IS NULL
+        AND vsn.current_customer_id IS NOT NULL
+        AND vsn.inventory_status = 'sold'
+      ORDER BY customer_name ASC, ttspl ASC NULLS LAST, vsn.serial_number ASC`
+    );
+
+    const columnOrder = [
+      'S.No',
+      'Customer ID',
+      'Customer Name',
+      'Email',
+      'Phone',
+      'GST Number',
+      'TTSPL',
+      'Serial Number',
+      'Brand',
+      'Model',
+      'Processor',
+      'Generation',
+      'RAM',
+      'Storage',
+      'Sale Price',
+      'SO Number',
+      'DC Number',
+      'Delivered Date',
+      'Asset Status',
+    ];
+
+    const fmtDate = (d) => {
+      if (!d) return '';
+      const dt = new Date(d);
+      if (Number.isNaN(dt.getTime())) return '';
+      const dd = String(dt.getDate()).padStart(2, '0');
+      const mm = String(dt.getMonth() + 1).padStart(2, '0');
+      return `${dd}-${mm}-${dt.getFullYear()}`;
+    };
+
+    const orderedRows = rows.map((r, idx) => ({
+      'S.No': idx + 1,
+      'Customer ID': r.customer_id,
+      'Customer Name': r.customer_name || '',
+      Email: r.customer_email || '',
+      Phone: r.customer_phone || '',
+      'GST Number': r.customer_gst || '',
+      TTSPL: r.ttspl || '',
+      'Serial Number': r.serial_number || '',
+      Brand: r.brand || '',
+      Model: r.model || '',
+      Processor: r.processor || '',
+      Generation: r.generation || '',
+      RAM: r.ram || '',
+      Storage: r.storage || '',
+      'Sale Price': r.sale_price != null ? Number(r.sale_price) : '',
+      'SO Number': r.sales_order_number || '',
+      'DC Number': r.dc_number || '',
+      'Delivered Date': fmtDate(r.delivered_at),
+      'Asset Status': r.inventory_status || 'sold',
+    }));
+
+    const XLSX = require('xlsx');
+    const ws = XLSX.utils.json_to_sheet(orderedRows, { header: columnOrder });
+
+    if (format === 'csv') {
+      const csv = XLSX.utils.sheet_to_csv(ws);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="customer_sale_assets_export.csv"');
+      return res.send(`\uFEFF${csv}`);
+    }
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Sale Customer Assets');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="customer_sale_assets_export.xlsx"');
+    return res.send(buf);
+  } catch (error) {
+    console.error('exportCustomerSaleAssets:', error);
+    res.status(500).json({ success: false, message: error.message || 'Export failed' });
+  }
+};
+
 exports.getCustomer = async (req, res) => {
   try {
     const customerId = parseInt(req.params.customerId, 10);
@@ -782,16 +928,7 @@ exports.getCustomer = async (req, res) => {
     if (!isCustomerTypeAllowed(req.allowedCustomerTypes, result.rows[0].customer_type)) {
       return res.status(403).json({ success: false, message: 'Access denied: customer is outside your Customer Access scope' });
     }
-    const addrRes = await pool.query(
-      `SELECT customer_address_id, customer_id, concern_person, mobile_no, address, city, state, pincode,
-              is_head_office, address_type, created_at, updated_at
-       FROM customer_addresses
-       WHERE customer_id = $1
-       ORDER BY is_head_office DESC, customer_address_id ASC`,
-      [customerId]
-    );
     const customer = formatCustomerRow(result.rows[0]);
-    customer.saved_addresses = addrRes.rows;
     res.json({ success: true, customer });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1419,11 +1556,26 @@ function mapActiveAssetRow(r) {
     r.pod_photo_url,
     r.pod_esign_url,
   ].filter(Boolean);
-  const { pod_file_path, pod_image_url, pod_photo_url, pod_esign_url, ...rest } = r;
   return {
-    ...rest,
-    status: displayDeployedStatus(rest.status),
+    serial_id: r.serial_id,
+    ttspl_id: r.ttspl_id,
+    serial_number: r.serial_number,
+    brand: r.brand,
+    model_name: r.model_name,
+    processor: r.processor,
+    generation: r.generation,
+    ram: r.ram,
+    storage: r.storage,
+    gpu: r.gpu,
+    screen_size: r.screen_size,
+    status: displayDeployedStatus(r.status),
+    entity_code: r.entity_code,
+    dc_number: r.dc_number,
+    dispatch_date: r.dispatch_date,
+    delivered_at: r.delivered_at,
+    rent_monthly_rate: r.rent_monthly_rate,
     lifecycle: 'active',
+    dc_pdf_path: r.dc_pdf_path || null,
     pod_files: [...new Set(podFiles)],
   };
 }
@@ -1434,9 +1586,22 @@ function mapReturnedAssetRow(r) {
     r.pod_image_path,
     r.warehouse_esign_url,
   ].filter(Boolean);
-  const { proof_of_completion_path, pod_image_path, warehouse_esign_url, ...rest } = r;
   return {
-    ...rest,
+    serial_id: r.serial_id,
+    ttspl_id: r.ttspl_id,
+    serial_number: r.serial_number,
+    brand: r.brand,
+    model_name: r.model_name,
+    processor: r.processor,
+    generation: r.generation,
+    ram: r.ram,
+    storage: r.storage,
+    gpu: r.gpu,
+    screen_size: r.screen_size,
+    dc_number: r.dc_number,
+    delivered_at: r.delivered_at,
+    returned_at: r.returned_at,
+    pickup_type: r.pickup_type,
     status: 'returned',
     lifecycle: 'returned',
     pod_files: [...new Set(podFiles)],
@@ -1471,6 +1636,38 @@ function buildReturnedSearchSql(search, params) {
   )`;
 }
 
+function parseCommaList(raw) {
+  return String(raw || '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+const RETURNED_PICKUP_TYPE_OPTIONS = ['return', 'repair', 'replacement'];
+
+function resolveActiveInventoryStatuses(raw) {
+  const selected = parseCommaList(raw);
+  if (!selected.length) return [...DEPLOYED_WITH_CUSTOMER_STATUSES];
+  const set = new Set();
+  for (const s of selected) {
+    if (DEPLOYED_WITH_CUSTOMER_STATUSES.includes(s)) set.add(s);
+    if (s === 'rented') set.add('out_stock');
+  }
+  return set.size ? [...set] : [...DEPLOYED_WITH_CUSTOMER_STATUSES];
+}
+
+function resolveReturnedPickupTypes(raw) {
+  const selected = parseCommaList(raw);
+  if (!selected.length) return [];
+  return selected.filter((s) => RETURNED_PICKUP_TYPE_OPTIONS.includes(s));
+}
+
+function buildReturnedPickupTypeSql(pickupTypes, params) {
+  if (!pickupTypes?.length) return '';
+  params.push(pickupTypes);
+  return ` AND COALESCE(sti.pickup_type, 'return') = ANY($${params.length}::text[])`;
+}
+
 // Delivery-date range filters. Delivery date is compared in IST so it matches
 // what the UI shows (timestamps are stored in UTC).
 function buildActiveDateSql(from, to, params) {
@@ -1482,12 +1679,97 @@ function buildActiveDateSql(from, to, params) {
 }
 
 function buildReturnedDateSql(from, to, params) {
-  const expr = "(COALESCE(rl.delivered_at, sti.warehouse_received_at, rl.created_at) AT TIME ZONE 'Asia/Kolkata')::date";
+  const expr = `(${RETURNED_AT_SQL} AT TIME ZONE 'Asia/Kolkata')::date`;
   let sql = '';
   if (from) { params.push(from); sql += ` AND ${expr} >= $${params.length}`; }
   if (to) { params.push(to); sql += ` AND ${expr} <= $${params.length}`; }
   return sql;
 }
+
+// Warehouse inward is the source of truth for customer return date; legacy rows without
+// warehouse receipt keep rl.delivered_at / rl.created_at for backward compatibility.
+const RETURN_WAREHOUSE_RECEIVED_AT_SQL = 'COALESCE(sti.warehouse_received_at, rl.warehouse_received_at)';
+const RETURNED_AT_SQL = 'COALESCE(sti.warehouse_received_at, rl.warehouse_received_at, rl.delivered_at, rl.created_at)';
+const RETURNED_BUCKET_ELIGIBLE_SQL = `(
+  ${RETURN_WAREHOUSE_RECEIVED_AT_SQL} IS NOT NULL
+  OR (
+    sti.warehouse_received_at IS NULL
+    AND rl.warehouse_received_at IS NULL
+    AND (rl.delivered_at IS NOT NULL OR LOWER(COALESCE(rl.status, '')) = 'delivered')
+  )
+)`;
+
+// Exclude a unit from Active when its return was fully received in the warehouse.
+const ACTIVE_EXCLUDE_WAREHOUSE_RETURNED_SQL = `
+    AND NOT EXISTS (
+      SELECT 1
+        FROM support_ticket_items sti_done
+        JOIN delivery_challan_lines rl_done ON rl_done.dc_number = sti_done.return_dc_number
+       WHERE sti_done.item_type = 'pickup'
+         AND rl_done.movement_type = 'return'
+         AND rl_done.customer_id = $1
+         AND COALESCE(rl_done.status, '') NOT IN ('cancelled')
+         AND sti_done.warehouse_received_at IS NOT NULL
+         AND (
+           sti_done.ttspl_id = vsn.inventory_asset_code
+           OR sti_done.unique_serial_number = vsn.inventory_asset_code
+           OR sti_done.serial_number = vsn.serial_number
+         )
+         AND NOT EXISTS (
+           SELECT 1
+             FROM delivery_challan_lines dcl_reout
+             CROSS JOIN LATERAL jsonb_array_elements_text(
+               CASE WHEN jsonb_typeof(dcl_reout.serial_number) = 'array'
+                    THEN dcl_reout.serial_number ELSE '[]'::jsonb END
+             ) AS out_elem
+            WHERE COALESCE(dcl_reout.movement_type, 'outbound') = 'outbound'
+              AND dcl_reout.customer_id = rl_done.customer_id
+              AND COALESCE(dcl_reout.status, '') = 'delivered'
+              AND (
+                vsn.inventory_asset_code = NULLIF(split_part(out_elem, '|', 3), '')
+                OR vsn.serial_number = NULLIF(split_part(out_elem, '|', 2), '')
+                OR NULLIF(REGEXP_REPLACE(split_part(out_elem, '|', 1), '[^0-9]', '', 'g'), '')::int = vsn.serial_id
+              )
+              AND COALESCE(dcl_reout.delivered_at, dcl_reout.delivery_completed_at, dcl_reout.created_at)
+                  > COALESCE(sti_done.warehouse_received_at, rl_done.delivered_at, rl_done.created_at)
+         )
+    )
+    AND NOT EXISTS (
+      SELECT 1
+        FROM delivery_challan_lines rl_legacy
+       WHERE rl_legacy.movement_type = 'return'
+         AND rl_legacy.customer_id = $1
+         AND COALESCE(rl_legacy.status, '') NOT IN ('cancelled')
+         AND rl_legacy.warehouse_received_at IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM support_ticket_items sti_x
+            WHERE sti_x.return_dc_number = rl_legacy.dc_number
+              AND sti_x.item_type = 'pickup'
+         )
+         AND (
+           vsn.inventory_asset_code = NULLIF(split_part(rl_legacy.serial_number->>0, '|', 3), '')
+           OR vsn.serial_number = NULLIF(split_part(rl_legacy.serial_number->>0, '|', 2), '')
+         )
+         AND NOT EXISTS (
+           SELECT 1
+             FROM delivery_challan_lines dcl_reout
+             CROSS JOIN LATERAL jsonb_array_elements_text(
+               CASE WHEN jsonb_typeof(dcl_reout.serial_number) = 'array'
+                    THEN dcl_reout.serial_number ELSE '[]'::jsonb END
+             ) AS out_elem
+            WHERE COALESCE(dcl_reout.movement_type, 'outbound') = 'outbound'
+              AND dcl_reout.customer_id = rl_legacy.customer_id
+              AND COALESCE(dcl_reout.status, '') = 'delivered'
+              AND (
+                vsn.inventory_asset_code = NULLIF(split_part(out_elem, '|', 3), '')
+                OR vsn.serial_number = NULLIF(split_part(out_elem, '|', 2), '')
+                OR NULLIF(REGEXP_REPLACE(split_part(out_elem, '|', 1), '[^0-9]', '', 'g'), '')::int = vsn.serial_id
+              )
+              AND COALESCE(dcl_reout.delivered_at, dcl_reout.delivery_completed_at, dcl_reout.created_at)
+                  > COALESCE(rl_legacy.warehouse_received_at, rl_legacy.delivered_at, rl_legacy.created_at)
+         )
+    )
+`;
 
 // Prefer OEM serial match over machine_number (TTSPL) to avoid duplicate rows when stale
 // inventory rows share a TTSPL code with a different physical unit.
@@ -1595,7 +1877,7 @@ const ACTIVE_FROM_SQL = `
               AND COALESCE(dcl_reout.delivered_at, dcl_reout.delivery_completed_at, dcl_reout.created_at)
                   > COALESCE(rl.delivered_at, rl.created_at)
          )
-    )
+    )${ACTIVE_EXCLUDE_WAREHOUSE_RETURNED_SQL}
 `;
 
 const ACTIVE_SELECT_SQL = `
@@ -1654,19 +1936,21 @@ const RETURNED_FROM_SQL = `
        AND dcl.status = 'delivered'
        AND NULLIF(REGEXP_REPLACE(split_part(elem, '|', 1), '[^0-9]', '', 'g'), '')::int = vsn.serial_id
        AND COALESCE(dcl.delivered_at, dcl.delivery_completed_at, dcl.created_at)
-           <= COALESCE(rl.delivered_at, sti.warehouse_received_at, rl.created_at)
+           <= ${RETURNED_AT_SQL}
      ORDER BY COALESCE(dcl.delivered_at, dcl.delivery_completed_at) DESC NULLS LAST
      LIMIT 1
   ) outbound ON TRUE
   WHERE rl.movement_type = 'return'
     AND rl.customer_id = $1
+    AND COALESCE(rl.status, '') NOT IN ('cancelled')
+    AND ${RETURNED_BUCKET_ELIGIBLE_SQL}
 `;
 
 const RETURNED_SELECT_SQL = `
   SELECT vsn.serial_id,
          rl.dc_number AS dc_number,
          rl.created_at,
-         COALESCE(rl.delivered_at, sti.warehouse_received_at, rl.created_at) AS returned_at,
+         ${RETURNED_AT_SQL} AS returned_at,
          outbound.delivered_at AS delivered_at,
          COALESCE(sti.ttspl_id, sti.unique_serial_number, vsn.inventory_asset_code,
                   vsn.extra->>'ttspl_id', NULLIF(split_part(rl.serial_number->>0, '|', 3), '')) AS ttspl_id,
@@ -1704,16 +1988,20 @@ async function countCustomerReturnedAssets(customerId) {
   return rows[0]?.total || 0;
 }
 
-async function queryCustomerActiveAssets(customerId, { search = '', from = '', to = '', limit, offset } = {}) {
-  const params = [customerId, DEPLOYED_WITH_CUSTOMER_STATUSES];
+async function queryCustomerActiveAssets(customerId, { search = '', from = '', to = '', statuses = '', limit, offset, skipCount = false } = {}) {
+  const statusList = resolveActiveInventoryStatuses(statuses);
+  const params = [customerId, statusList];
   const searchSql = buildActiveSearchSql(search, params);
   const dateSql = buildActiveDateSql(from, to, params);
   const fromWhere = `${ACTIVE_FROM_SQL}${searchSql}${dateSql}`;
 
-  const countR = await pool.query(`SELECT COUNT(*)::int AS total ${fromWhere}`, params);
-  const total = countR.rows[0]?.total || 0;
+  let total;
+  if (!skipCount) {
+    const countR = await pool.query(`SELECT COUNT(*)::int AS total ${fromWhere}`, params);
+    total = countR.rows[0]?.total || 0;
+  }
 
-  let listSql = `${ACTIVE_SELECT_SQL} ${fromWhere} ORDER BY vsn.delivered_at DESC NULLS LAST`;
+  let listSql = `${ACTIVE_SELECT_SQL} ${fromWhere} ORDER BY COALESCE(vsn.delivered_at, pod.delivery_completed_at) DESC NULLS LAST, vsn.serial_id DESC`;
   const listParams = [...params];
   if (limit != null) {
     listParams.push(limit, offset || 0);
@@ -1728,16 +2016,20 @@ async function queryCustomerActiveAssets(customerId, { search = '', from = '', t
 // screen instead of maintaining a second copy of the query.
 exports.queryCustomerActiveAssets = queryCustomerActiveAssets;
 
-async function queryCustomerReturnedAssets(customerId, { search = '', from = '', to = '', limit, offset } = {}) {
+async function queryCustomerReturnedAssets(customerId, { search = '', from = '', to = '', statuses = '', limit, offset, skipCount = false } = {}) {
   const params = [customerId];
   const searchSql = buildReturnedSearchSql(search, params);
   const dateSql = buildReturnedDateSql(from, to, params);
-  const fromWhere = `${RETURNED_FROM_SQL}${searchSql}${dateSql}`;
+  const pickupTypeSql = buildReturnedPickupTypeSql(resolveReturnedPickupTypes(statuses), params);
+  const fromWhere = `${RETURNED_FROM_SQL}${searchSql}${dateSql}${pickupTypeSql}`;
 
-  const countR = await pool.query(`SELECT COUNT(*)::int AS total ${fromWhere}`, params);
-  const total = countR.rows[0]?.total || 0;
+  let total;
+  if (!skipCount) {
+    const countR = await pool.query(`SELECT COUNT(*)::int AS total ${fromWhere}`, params);
+    total = countR.rows[0]?.total || 0;
+  }
 
-  let listSql = `${RETURNED_SELECT_SQL} ${fromWhere} ORDER BY rl.created_at DESC`;
+  let listSql = `${RETURNED_SELECT_SQL} ${fromWhere} ORDER BY ${RETURNED_AT_SQL} DESC NULLS LAST, rl.id DESC`;
   const listParams = [...params];
   if (limit != null) {
     listParams.push(limit, offset || 0);
@@ -1755,30 +2047,48 @@ async function serialInCustomerReturnedHistory(client, customerId, serialId) {
     `SELECT 1
        FROM delivery_challan_lines rl
        LEFT JOIN LATERAL (
-         SELECT sti.ttspl_id, sti.unique_serial_number, sti.serial_number
-           FROM support_ticket_items sti
-          WHERE sti.return_dc_number = rl.dc_number
-            AND sti.item_type = 'pickup'
-          ORDER BY sti.id DESC
-          LIMIT 1
-       ) sti ON TRUE
-       LEFT JOIN LATERAL (
-         SELECT v.serial_id
+         SELECT v.serial_id, v.inventory_asset_code, v.serial_number AS vsn_serial
            FROM vendor_serial_numbers v
           WHERE v.deleted_at IS NULL
             AND v.serial_id = $2
-            AND (
-              v.inventory_asset_code = NULLIF(split_part(rl.serial_number->>0, '|', 3), '')
-              OR v.serial_number = NULLIF(split_part(rl.serial_number->>0, '|', 2), '')
-              OR (sti.ttspl_id IS NOT NULL AND v.inventory_asset_code = sti.ttspl_id)
-              OR (sti.unique_serial_number IS NOT NULL AND v.inventory_asset_code = sti.unique_serial_number)
-              OR (sti.serial_number IS NOT NULL AND v.serial_number = sti.serial_number)
-            )
           LIMIT 1
        ) matched ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT sti.ttspl_id, sti.unique_serial_number, sti.serial_number,
+                sti.warehouse_received_at
+           FROM support_ticket_items sti
+          WHERE sti.return_dc_number = rl.dc_number
+            AND sti.item_type = 'pickup'
+            AND matched.serial_id IS NOT NULL
+            AND (
+              (sti.ttspl_id IS NOT NULL AND sti.ttspl_id = matched.inventory_asset_code)
+              OR (sti.unique_serial_number IS NOT NULL AND sti.unique_serial_number = matched.inventory_asset_code)
+              OR (sti.serial_number IS NOT NULL AND sti.serial_number = matched.vsn_serial)
+              OR matched.inventory_asset_code = NULLIF(split_part(rl.serial_number->>0, '|', 3), '')
+              OR matched.vsn_serial = NULLIF(split_part(rl.serial_number->>0, '|', 2), '')
+            )
+          ORDER BY sti.warehouse_received_at DESC NULLS LAST, sti.id DESC
+          LIMIT 1
+       ) sti ON TRUE
       WHERE rl.movement_type = 'return'
         AND rl.customer_id = $1
+        AND COALESCE(rl.status, '') NOT IN ('cancelled')
         AND matched.serial_id IS NOT NULL
+        AND (
+          matched.inventory_asset_code = NULLIF(split_part(rl.serial_number->>0, '|', 3), '')
+          OR matched.vsn_serial = NULLIF(split_part(rl.serial_number->>0, '|', 2), '')
+          OR sti.ttspl_id IS NOT NULL
+          OR sti.unique_serial_number IS NOT NULL
+          OR sti.serial_number IS NOT NULL
+        )
+        AND (
+          ${RETURN_WAREHOUSE_RECEIVED_AT_SQL} IS NOT NULL
+          OR (
+            sti.warehouse_received_at IS NULL
+            AND rl.warehouse_received_at IS NULL
+            AND (rl.delivered_at IS NOT NULL OR LOWER(COALESCE(rl.status, '')) = 'delivered')
+          )
+        )
       LIMIT 1`,
     [customerId, serialId]
   );
@@ -1795,35 +2105,56 @@ async function getCustomerReturnAssetContext(client, customerId, serialId, retur
   const { rows } = await client.query(
     `SELECT rl.dc_number,
             rl.delivered_at,
-            COALESCE(rl.delivered_at, sti.warehouse_received_at, rl.created_at) AS return_date
+            rl.warehouse_received_at,
+            sti.id AS pickup_item_id,
+            sti.warehouse_received_at AS pickup_warehouse_received_at,
+            ${RETURNED_AT_SQL} AS return_date
        FROM delivery_challan_lines rl
        LEFT JOIN LATERAL (
-         SELECT sti.ttspl_id, sti.unique_serial_number, sti.serial_number, sti.warehouse_received_at
-           FROM support_ticket_items sti
-          WHERE sti.return_dc_number = rl.dc_number
-            AND sti.item_type = 'pickup'
-          ORDER BY sti.id DESC
-          LIMIT 1
-       ) sti ON TRUE
-       LEFT JOIN LATERAL (
-         SELECT v.serial_id
+         SELECT v.serial_id, v.inventory_asset_code, v.serial_number AS vsn_serial
            FROM vendor_serial_numbers v
           WHERE v.deleted_at IS NULL
             AND v.serial_id = $2
-            AND (
-              v.inventory_asset_code = NULLIF(split_part(rl.serial_number->>0, '|', 3), '')
-              OR v.serial_number = NULLIF(split_part(rl.serial_number->>0, '|', 2), '')
-              OR (sti.ttspl_id IS NOT NULL AND v.inventory_asset_code = sti.ttspl_id)
-              OR (sti.unique_serial_number IS NOT NULL AND v.inventory_asset_code = sti.unique_serial_number)
-              OR (sti.serial_number IS NOT NULL AND v.serial_number = sti.serial_number)
-            )
           LIMIT 1
        ) matched ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT sti.id, sti.ttspl_id, sti.unique_serial_number, sti.serial_number,
+                sti.warehouse_received_at
+           FROM support_ticket_items sti
+          WHERE sti.return_dc_number = rl.dc_number
+            AND sti.item_type = 'pickup'
+            AND matched.serial_id IS NOT NULL
+            AND (
+              (sti.ttspl_id IS NOT NULL AND sti.ttspl_id = matched.inventory_asset_code)
+              OR (sti.unique_serial_number IS NOT NULL AND sti.unique_serial_number = matched.inventory_asset_code)
+              OR (sti.serial_number IS NOT NULL AND sti.serial_number = matched.vsn_serial)
+              OR matched.inventory_asset_code = NULLIF(split_part(rl.serial_number->>0, '|', 3), '')
+              OR matched.vsn_serial = NULLIF(split_part(rl.serial_number->>0, '|', 2), '')
+            )
+          ORDER BY sti.warehouse_received_at DESC NULLS LAST, sti.id DESC
+          LIMIT 1
+       ) sti ON TRUE
       WHERE rl.movement_type = 'return'
         AND rl.customer_id = $1
+        AND COALESCE(rl.status, '') NOT IN ('cancelled')
         AND matched.serial_id IS NOT NULL
+        AND (
+          matched.inventory_asset_code = NULLIF(split_part(rl.serial_number->>0, '|', 3), '')
+          OR matched.vsn_serial = NULLIF(split_part(rl.serial_number->>0, '|', 2), '')
+          OR sti.ttspl_id IS NOT NULL
+          OR sti.unique_serial_number IS NOT NULL
+          OR sti.serial_number IS NOT NULL
+        )
+        AND (
+          ${RETURN_WAREHOUSE_RECEIVED_AT_SQL} IS NOT NULL
+          OR (
+            sti.warehouse_received_at IS NULL
+            AND rl.warehouse_received_at IS NULL
+            AND (rl.delivered_at IS NOT NULL OR LOWER(COALESCE(rl.status, '')) = 'delivered')
+          )
+        )
         ${dcClause}
-      ORDER BY rl.created_at DESC
+      ORDER BY ${RETURNED_AT_SQL} DESC NULLS LAST, rl.id DESC
       LIMIT 1`,
     params
   );
@@ -1937,10 +2268,10 @@ exports.updateCustomerAsset = async (req, res) => {
               vsn.inventory_status, vsn.current_customer_id, vsn.rent_monthly_rate,
               vsn.current_dc_number, vsn.delivered_at, vsn.rent_start_date,
               vsn.dispatch_mode, vsn.dispatched_at,
-              inv.inventory_id, inv.brand AS inv_brand, inv.model AS inv_model,
-              inv.processor AS inv_processor, inv.generation AS inv_generation,
-              inv.ram AS inv_ram, inv.storage AS inv_storage, inv.gpu AS inv_gpu,
-              inv.screen_size AS inv_screen_size
+              inv.inventory_id, inv.inv_brand, inv.inv_model,
+              inv.inv_processor, inv.inv_generation,
+              inv.inv_ram, inv.inv_storage, inv.inv_gpu,
+              inv.inv_screen_size
          FROM vendor_serial_numbers vsn
          LEFT JOIN LATERAL (
            SELECT inv.inventory_id, inv.brand AS inv_brand, inv.model AS inv_model,
@@ -2123,19 +2454,27 @@ exports.updateCustomerAsset = async (req, res) => {
         await client.query('ROLLBACK');
         return res.status(400).json({ success: false, message: 'Return DC not found for this asset' });
       }
-      await client.query(
-        `UPDATE delivery_challan_lines
-            SET delivered_at = $1::timestamptz,
-                updated_at = NOW()
-          WHERE dc_number = $2
-            AND customer_id = $3
-            AND movement_type = 'return'`,
-        [
-          returnedAt ? `${returnedAt}T12:00:00.000Z` : null,
-          returnDcNumber,
-          customerId,
-        ]
-      );
+      const returnTs = returnedAt ? `${returnedAt}T12:00:00.000Z` : null;
+      if (returnCtx?.pickup_item_id) {
+        await client.query(
+          `UPDATE support_ticket_items
+              SET warehouse_received_at = $1::timestamptz,
+                  updated_at = NOW()
+            WHERE id = $2`,
+          [returnTs, returnCtx.pickup_item_id]
+        );
+      } else {
+        await client.query(
+          `UPDATE delivery_challan_lines
+              SET warehouse_received_at = $1::timestamptz,
+                  delivered_at = COALESCE($1::timestamptz, delivered_at),
+                  updated_at = NOW()
+            WHERE dc_number = $2
+              AND customer_id = $3
+              AND movement_type = 'return'`,
+          [returnTs, returnDcNumber, customerId]
+        );
+      }
     }
 
     let invRow = null;
@@ -2270,15 +2609,14 @@ exports.getCustomerLaptops = async (req, res) => {
     const dateRe = /^\d{4}-\d{2}-\d{2}$/;
     const from = dateRe.test((req.query.from || '').trim()) ? req.query.from.trim() : '';
     const to = dateRe.test((req.query.to || '').trim()) ? req.query.to.trim() : '';
-
-    const counts = {
-      active: await countCustomerActiveAssets(customerId),
-      returned: await countCustomerReturnedAssets(customerId),
-    };
+    const statuses = (req.query.status || req.query.statuses || '').trim();
 
     if (!paginate) {
-      const { rows: active } = await queryCustomerActiveAssets(customerId);
-      const { rows: returned } = await queryCustomerReturnedAssets(customerId);
+      const [{ rows: active }, { rows: returned }] = await Promise.all([
+        pool.query(`${ACTIVE_SELECT_SQL} ${ACTIVE_FROM_SQL} ORDER BY COALESCE(vsn.delivered_at, pod.delivery_completed_at) DESC NULLS LAST, vsn.serial_id DESC`, [customerId, DEPLOYED_WITH_CUSTOMER_STATUSES]).then((r) => ({ rows: r.rows.map(mapActiveAssetRow) })),
+        pool.query(`${RETURNED_SELECT_SQL} ${RETURNED_FROM_SQL} ORDER BY ${RETURNED_AT_SQL} DESC NULLS LAST, rl.id DESC`, [customerId]).then((r) => ({ rows: r.rows.map(mapReturnedAssetRow) })),
+      ]);
+      const counts = { active: active.length, returned: returned.length };
       return res.json({
         success: true,
         laptops: active,
@@ -2290,8 +2628,17 @@ exports.getCustomerLaptops = async (req, res) => {
 
     const offset = (page - 1) * limit;
     const result = lifecycle === 'returned'
-      ? await queryCustomerReturnedAssets(customerId, { search, from, to, limit, offset })
-      : await queryCustomerActiveAssets(customerId, { search, from, to, limit, offset });
+      ? await queryCustomerReturnedAssets(customerId, { search, from, to, statuses, limit, offset })
+      : await queryCustomerActiveAssets(customerId, { search, from, to, statuses, limit, offset });
+
+    const otherCountPromise = lifecycle === 'returned'
+      ? countCustomerActiveAssets(customerId)
+      : countCustomerReturnedAssets(customerId);
+    const otherTotal = await otherCountPromise;
+    const counts = {
+      active: lifecycle === 'active' ? result.total : otherTotal,
+      returned: lifecycle === 'returned' ? result.total : otherTotal,
+    };
 
     return res.json({
       success: true,
@@ -2344,6 +2691,7 @@ exports.exportCustomerLaptopsExcel = async (req, res) => {
     const dateRe = /^\d{4}-\d{2}-\d{2}$/;
     const from = dateRe.test((req.query.from || '').trim()) ? req.query.from.trim() : '';
     const to = dateRe.test((req.query.to || '').trim()) ? req.query.to.trim() : '';
+    const statuses = (req.query.status || req.query.statuses || '').trim();
 
     const custRes = await pool.query(
       `SELECT COALESCE(company_name, name) AS customer_name FROM customers WHERE customer_id = $1`,
@@ -2353,8 +2701,8 @@ exports.exportCustomerLaptopsExcel = async (req, res) => {
 
     const EXPORT_LIMIT = 20000;
     const result = lifecycle === 'returned'
-      ? await queryCustomerReturnedAssets(customerId, { search, from, to, limit: EXPORT_LIMIT, offset: 0 })
-      : await queryCustomerActiveAssets(customerId, { search, from, to, limit: EXPORT_LIMIT, offset: 0 });
+      ? await queryCustomerReturnedAssets(customerId, { search, from, to, statuses, limit: EXPORT_LIMIT, offset: 0 })
+      : await queryCustomerActiveAssets(customerId, { search, from, to, statuses, limit: EXPORT_LIMIT, offset: 0 });
 
     let sheetRows;
     let columnOrder;
@@ -2433,7 +2781,7 @@ exports.getCustomerTickets = async (req, res) => {
       return res.status(access.status).json({ success: false, message: access.message });
     }
 
-    const status = (req.query.status || '').trim();
+    const statusRaw = (req.query.status || req.query.statuses || '').trim();
     const search = (req.query.search || '').trim();
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
@@ -2442,9 +2790,10 @@ exports.getCustomerTickets = async (req, res) => {
     const params = [customerId];
     const conditions = ['t.customer_id = $1'];
 
-    if (status && status !== 'all') {
-      params.push(status);
-      conditions.push(`t.status = $${params.length}`);
+    const ticketStatuses = parseCommaList(statusRaw);
+    if (ticketStatuses.length) {
+      params.push(ticketStatuses);
+      conditions.push(`LOWER(t.status) = ANY($${params.length}::text[])`);
     }
 
     if (search) {

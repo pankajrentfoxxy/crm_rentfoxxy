@@ -18,6 +18,7 @@ import CustomerAddressesTab from '../components/CustomerAddressesTab';
 import CustomerAddressModal from '../components/CustomerAddressModal';
 import CustomerAssetEditModal from '../components/CustomerAssetEditModal';
 import CustomerAssetActivityFeed from '../components/CustomerAssetActivityFeed';
+import MultiSelectFilter from '../components/MultiSelectFilter';
 import usePermission from '../../../hooks/usePermission';
 
 const TABS = ['Profile', 'Addresses', 'Documents', 'Assets', 'Tickets', 'Orders', 'Lead Origin', 'Portal Access'];
@@ -31,12 +32,24 @@ const TAB_LEAD_ORIGIN = 6;
 const TAB_PORTAL = 7;
 const ASSET_PAGE_SIZE = 25;
 const TICKET_PAGE_SIZE = 20;
-const TICKET_STATUS_CHIPS = [
-  { key: '', label: 'All' },
-  { key: 'open', label: 'Open' },
-  { key: 'in_progress', label: 'In Progress' },
-  { key: 'closed', label: 'Closed' },
-  { key: 'cancelled', label: 'Cancelled' },
+const TICKET_STATUS_OPTIONS = [
+  { value: 'open', label: 'Open' },
+  { value: 'in_progress', label: 'In Progress' },
+  { value: 'closed', label: 'Closed' },
+  { value: 'cancelled', label: 'Cancelled' },
+];
+const ACTIVE_ASSET_STATUS_OPTIONS = [
+  { value: 'rented', label: 'Rented' },
+  { value: 'on_demo', label: 'On Demo' },
+  { value: 'sold', label: 'Sold' },
+  { value: 'reserved', label: 'Reserved' },
+  { value: 'dispatch_ready', label: 'Dispatch Ready' },
+  { value: 'in_transit', label: 'In Transit' },
+];
+const RETURNED_ASSET_STATUS_OPTIONS = [
+  { value: 'return', label: 'Return' },
+  { value: 'repair', label: 'Repair' },
+  { value: 'replacement', label: 'Replacement' },
 ];
 
 function formatTicketNumber(id) {
@@ -200,6 +213,7 @@ export default function CustomerDetailPage() {
   const assetSearch = useDebouncedValue(assetSearchInput.trim(), 320);
   const [assetFrom, setAssetFrom] = useState('');
   const [assetTo, setAssetTo] = useState('');
+  const [assetStatuses, setAssetStatuses] = useState([]);
   const [assetPagination, setAssetPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: ASSET_PAGE_SIZE });
   const [assetsLoading, setAssetsLoading] = useState(false);
   const [tab, setTab] = useState(0);
@@ -219,7 +233,7 @@ export default function CustomerDetailPage() {
   const [ticketPage, setTicketPage] = useState(1);
   const [ticketSearchInput, setTicketSearchInput] = useState('');
   const ticketSearch = useDebouncedValue(ticketSearchInput.trim(), 320);
-  const [ticketStatus, setTicketStatus] = useState('');
+  const [ticketStatuses, setTicketStatuses] = useState([]);
   const [ticketPagination, setTicketPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: TICKET_PAGE_SIZE });
   const [rentalSummary, setRentalSummary] = useState({ total_monthly_rent: 0, active_asset_count: 0 });
   const { canEdit: canEditCustomerAssets, user } = usePermission();
@@ -231,7 +245,6 @@ export default function CustomerDetailPage() {
       const res = await getCustomer(id);
       const row = res.data?.customer;
       setCustomer(row);
-      setSavedAddresses(row?.saved_addresses || []);
     } catch {
       toast.error('Failed to load customer');
     }
@@ -259,6 +272,7 @@ export default function CustomerDetailPage() {
         search: assetSearch || undefined,
         from: assetFrom || undefined,
         to: assetTo || undefined,
+        status: assetStatuses.length ? assetStatuses.join(',') : undefined,
       });
       setAssetRows(lapRes.data?.data || []);
       if (lapRes.data?.counts) setAssetCounts(lapRes.data.counts);
@@ -273,7 +287,7 @@ export default function CustomerDetailPage() {
     } finally {
       setAssetsLoading(false);
     }
-  }, [id, assetView, assetPage, assetSearch, assetFrom, assetTo]);
+  }, [id, assetView, assetPage, assetSearch, assetFrom, assetTo, assetStatuses]);
 
   const loadAssetActivity = useCallback(async () => {
     setAssetActivityLoading(true);
@@ -299,6 +313,7 @@ export default function CustomerDetailPage() {
         search: assetSearch || undefined,
         from: assetFrom || undefined,
         to: assetTo || undefined,
+        status: assetStatuses.length ? assetStatuses.join(',') : undefined,
       });
       toast.success(lifecycle === 'returned' ? 'Returned laptops export downloaded' : 'Rented laptops export downloaded');
     } catch {
@@ -316,7 +331,7 @@ export default function CustomerDetailPage() {
           page: ticketPage,
           limit: TICKET_PAGE_SIZE,
           search: ticketSearch || undefined,
-          status: ticketStatus || undefined,
+          status: ticketStatuses.length ? ticketStatuses.join(',') : undefined,
         }),
         getCustomerRentalSummary(id),
       ]);
@@ -337,7 +352,7 @@ export default function CustomerDetailPage() {
     } finally {
       setTicketsLoading(false);
     }
-  }, [id, ticketPage, ticketSearch, ticketStatus]);
+  }, [id, ticketPage, ticketSearch, ticketStatuses]);
 
   useEffect(() => { loadCustomer(); }, [loadCustomer]);
 
@@ -357,8 +372,9 @@ export default function CustomerDetailPage() {
     loadTickets();
   }, [tab, loadTickets]);
 
-  useEffect(() => { setAssetPage(1); }, [assetSearch, assetView, assetFrom, assetTo]);
-  useEffect(() => { setTicketPage(1); }, [ticketSearch, ticketStatus]);
+  useEffect(() => { setAssetPage(1); }, [assetSearch, assetView, assetFrom, assetTo, assetStatuses]);
+  useEffect(() => { setAssetStatuses([]); }, [assetView]);
+  useEffect(() => { setTicketPage(1); }, [ticketSearch, ticketStatuses]);
 
   const load = useCallback(async () => {
     await loadCustomer();
@@ -611,6 +627,17 @@ export default function CustomerDetailPage() {
           </div>
 
           <div className="flex flex-wrap items-end gap-3">
+            <label className="flex flex-col text-xs text-gray-500 min-w-[180px]">
+              Status
+              <div className="mt-1">
+                <MultiSelectFilter
+                  options={assetView === 'returned' ? RETURNED_ASSET_STATUS_OPTIONS : ACTIVE_ASSET_STATUS_OPTIONS}
+                  value={assetStatuses}
+                  onChange={setAssetStatuses}
+                  allLabel="All statuses"
+                />
+              </div>
+            </label>
             <label className="flex flex-col text-xs text-gray-500">
               Delivery date from
               <input
@@ -631,13 +658,13 @@ export default function CustomerDetailPage() {
                 className="mt-1 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700"
               />
             </label>
-            {(assetFrom || assetTo) && (
+            {(assetFrom || assetTo || assetStatuses.length > 0) && (
               <button
                 type="button"
-                onClick={() => { setAssetFrom(''); setAssetTo(''); }}
+                onClick={() => { setAssetFrom(''); setAssetTo(''); setAssetStatuses([]); }}
                 className="px-3 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50"
               >
-                Clear dates
+                Clear filters
               </button>
             )}
           </div>
@@ -847,21 +874,18 @@ export default function CustomerDetailPage() {
             className="max-w-md"
           />
 
-          <div className="flex flex-wrap gap-2">
-            {TICKET_STATUS_CHIPS.map((chip) => (
-              <button
-                key={chip.key || 'all'}
-                type="button"
-                onClick={() => setTicketStatus(chip.key)}
-                className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${
-                  ticketStatus === chip.key
-                    ? 'border-blue-500 bg-blue-50 text-blue-700'
-                    : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
-                }`}
-              >
-                {chip.label}
-              </button>
-            ))}
+          <div className="flex flex-wrap items-end gap-3 max-w-md">
+            <label className="flex flex-col text-xs text-gray-500 flex-1 min-w-[180px]">
+              Status
+              <div className="mt-1">
+                <MultiSelectFilter
+                  options={TICKET_STATUS_OPTIONS}
+                  value={ticketStatuses}
+                  onChange={setTicketStatuses}
+                  allLabel="All statuses"
+                />
+              </div>
+            </label>
           </div>
 
           {ticketsLoading ? (
