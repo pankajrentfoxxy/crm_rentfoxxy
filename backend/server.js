@@ -31,7 +31,9 @@ const allowedOrigins = [
   'http://vendor.rentfoxxy.com',
   'https://vendor.rentfoxxy.com',
   'http://staging.rentfoxxy.com',
-  'https://staging.rentfoxxy.com'
+  'https://staging.rentfoxxy.com',
+  'http://qa.rentfoxxy.com',
+  'https://qa.rentfoxxy.com'
 ];
 
 if (process.env.FRONTEND_URL) {

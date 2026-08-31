@@ -62,8 +62,23 @@ function looksLikeDocumentScan(value) {
   const s = String(value || '').trim();
   if (!s) return false;
   if (/RFXG1\|/i.test(s)) return true;
-  if (/^(G?DC|RDC|SDC|VRDC|GRN)[\/-]/i.test(s)) return true;
+  if (/^(G?DC|RDC|SDC|VRDC|GRN|SO)[\/-]/i.test(s)) return true;
   return false;
+}
+
+function pendingCheckHint(laptop, key) {
+  if (key === 'serial_number' && laptop?.serial_number) {
+    return `Scan ${laptop.serial_number} or ${laptop.ttspl || 'the laptop sticker'}`;
+  }
+  if (key === 'configuration') {
+    return laptop?.configuration
+      ? 'Confirmed from inventory when the laptop sticker is scanned'
+      : 'Scan the laptop sticker to confirm configuration';
+  }
+  if (key === 'movement_mode') {
+    return 'Confirmed from this DC when the laptop sticker is scanned';
+  }
+  return `Scan ${laptop?.ttspl || laptop?.serial_number || 'this laptop'} to validate`;
 }
 
 function sessionDirection(data) {
@@ -85,7 +100,13 @@ export default function GuardScannerPage() {
   const applySession = (data) => {
     const nextDir = sessionDirection(data);
     if (nextDir) setDirection(nextDir);
-    if (data?.session_id) setSession(data);
+    if (data?.session_id) {
+      setSession(data);
+      const current = searchParams.get('session');
+      if (current !== data.session_id) {
+        setSearchParams({ session: data.session_id, dir: nextDir || direction }, { replace: true });
+      }
+    }
   };
 
   const runResolve = useCallback(async (scanValue) => {
@@ -97,13 +118,28 @@ export default function GuardScannerPage() {
       const { data } = await resolveGateScan({ direction, scan });
       const nextDir = sessionDirection(data);
       if (nextDir) setDirection(nextDir);
-      if ((data?.kind === 'verification' || data?.valid) && data?.session_id) {
+      if (data?.session_id && (data?.kind === 'verification' || data?.kind === 'unit' || data?.valid)) {
         applySession(data);
-        setFlash({
-          tone: 'info',
-          title: nextDir ? `${String(nextDir).toUpperCase()} verification` : 'Verification',
-          message: data.message || 'Verify laptop details before submitting.',
-        });
+        if (data?.kind === 'unit' && data?.valid && data?.all_passed !== false) {
+          setFlash({
+            tone: 'success',
+            title: 'All checks passed',
+            message: data.message || 'Laptop verified.',
+          });
+        } else if (data?.kind === 'unit') {
+          setFlash({
+            tone: 'error',
+            title: 'Blocked',
+            message: data.message || 'Verification failed. Submit is disabled.',
+            checks: data.checks || null,
+          });
+        } else {
+          setFlash({
+            tone: 'info',
+            title: nextDir ? `${String(nextDir).toUpperCase()} verification` : 'Verification',
+            message: data.message || 'Now scan the laptop TTSPL or serial to verify.',
+          });
+        }
       } else if (data?.kind === 'direction_mismatch' && nextDir) {
         setSession(null);
         setFlash({
@@ -133,7 +169,8 @@ export default function GuardScannerPage() {
 
   const runUnitScan = useCallback(async (scanValue) => {
     const scan = String(scanValue || '').trim();
-    if (!scan || busy || !session?.session_id) return;
+    if (!scan || !session?.session_id) return;
+    if (busy) return;
     setBusy(true);
     setFlash(null);
     try {
@@ -188,13 +225,23 @@ export default function GuardScannerPage() {
 
   const requestedRef = useRef(false);
   useEffect(() => {
+    const existing = searchParams.get('session');
     const q = searchParams.get('q') || searchParams.get('t') || searchParams.get('ref');
+    if (existing && !requestedRef.current && !session) {
+      requestedRef.current = true;
+      getGateSession(existing)
+        .then(({ data }) => {
+          if (data?.session_id) applySession(data);
+        })
+        .catch(() => {});
+      return;
+    }
     if (q && !requestedRef.current) {
       requestedRef.current = true;
       setSearchParams({}, { replace: true });
       runResolve(q);
     }
-  }, [searchParams, setSearchParams, runResolve]);
+  }, [searchParams, setSearchParams, runResolve, session]);
 
   const handleConfirm = async () => {
     if (!session?.session_id || confirming || !session.can_confirm) return;
@@ -243,6 +290,7 @@ export default function GuardScannerPage() {
     setSession(null);
     setFlash(null);
     setCode('');
+    setSearchParams({}, { replace: true });
   };
 
   const movement = session?.movement;
@@ -408,7 +456,7 @@ export default function GuardScannerPage() {
                             <p className="text-[11px] text-slate-500">{row.message}</p>
                           ) : status === 'pending' ? (
                             <p className="text-[11px] text-slate-400">
-                              Scan {laptop.ttspl || laptop.serial_number || 'this laptop'} to validate
+                              {pendingCheckHint(laptop, key)}
                             </p>
                           ) : null}
                         </div>

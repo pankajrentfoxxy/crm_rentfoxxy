@@ -1,6 +1,16 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Camera, X } from 'lucide-react';
 import CameraScanner from './CameraScanner';
+
+function looksCompleteScan(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return false;
+  if (/^TTSPL\d{3,}$/i.test(s)) return true;
+  if (/^(G?DC|RDC|SDC|VRDC|GRN|SO)\/.+/i.test(s)) return true;
+  if (/RFXG1\|/i.test(s)) return true;
+  if (/^[A-Z0-9]{10,32}$/i.test(s) && !/\s/.test(s) && !/^TTSPL/i.test(s)) return true;
+  return false;
+}
 
 /**
  * Text input that accepts a USB "gun" scanner as well as typing, with an
@@ -24,6 +34,28 @@ export default function ScanField({
 }) {
   const [cameraOpen, setCameraOpen] = useState(false);
   const inputRef = useRef(null);
+  const debounceRef = useRef(null);
+  const onScanRef = useRef(onScan);
+  const lastEmittedRef = useRef('');
+  onScanRef.current = onScan;
+
+  useEffect(() => {
+    if (disabled) return undefined;
+    const text = String(value || '').trim();
+    if (!text) {
+      lastEmittedRef.current = '';
+      return undefined;
+    }
+    if (!looksCompleteScan(text) || lastEmittedRef.current === text) return undefined;
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      const next = String(value || '').trim();
+      if (!looksCompleteScan(next) || lastEmittedRef.current === next) return;
+      lastEmittedRef.current = next;
+      onScanRef.current?.(next);
+    }, 350);
+    return () => clearTimeout(debounceRef.current);
+  }, [value, disabled]);
 
   const handleCameraRead = useCallback((decoded) => {
     const text = String(decoded || '').trim();
@@ -54,7 +86,9 @@ export default function ScanField({
             if (e.key !== 'Enter') return;
             e.preventDefault();
             const text = String(value || '').trim();
-            if (text) onScan?.(text);
+            if (!text) return;
+            lastEmittedRef.current = text;
+            onScan?.(text);
           }}
         />
         {camera ? (

@@ -86,6 +86,9 @@ function classifyDocumentNumber(raw) {
   if (/^RDC/i.test(n)) return { docType: 'rdc', docNumber: original };
   if (/^SDC/i.test(n)) return { docType: 'sdc', docNumber: original };
   if (/^GRN/i.test(n)) return { docType: 'grn', docNumber: original };
+  if (/^SO[\/-]/i.test(n) || /^SO-\d/i.test(n)) {
+    return { docType: 'so', docNumber: original };
+  }
   if (/^(G?DC)[\/-]/i.test(n) || /^G?DC-\d/i.test(n)) {
     return { docType: 'dc', docNumber: original };
   }
@@ -666,8 +669,32 @@ async function loadGrn(db, rawNumber) {
   };
 }
 
+async function loadSalesOrder(db, soNumber) {
+  const wanted = String(soNumber || '').trim();
+  if (!wanted) return null;
+  const r = await db.query(
+    `SELECT dc_number, status
+       FROM delivery_challan_lines
+      WHERE sales_order_number = $1
+        AND COALESCE(movement_type, 'outbound') <> 'return'
+      ORDER BY
+        CASE LOWER(COALESCE(status, ''))
+          WHEN 'dispatch_ready' THEN 0
+          WHEN 'pending' THEN 1
+          WHEN 'processing' THEN 2
+          ELSE 3
+        END,
+        id DESC
+      LIMIT 1`,
+    [wanted]
+  );
+  if (!r.rows[0]) return null;
+  return loadOutboundDc(db, r.rows[0].dc_number);
+}
+
 async function loadDocument(db, docType, docNumber, preferredDirection) {
   if (docType === 'dc') return loadOutboundDc(db, docNumber);
+  if (docType === 'so') return loadSalesOrder(db, docNumber);
   if (docType === 'rdc') return loadReturnDc(db, docNumber);
   if (docType === 'sdc') return loadServiceDc(db, docNumber);
   if (docType === 'vrdc') return loadVendorRepairDc(db, docNumber, preferredDirection);
@@ -914,8 +941,8 @@ function laptopMatches(laptop, serial) {
   if (laptop.serial_id && serial.serial_id && Number(laptop.serial_id) === Number(serial.serial_id)) {
     return true;
   }
-  const a = normalizeCode(laptop.ttspl);
-  const b = normalizeTtspl(serial.ttspl || '');
+  const a = normalizeTtspl(laptop.ttspl || '') || normalizeCode(laptop.ttspl);
+  const b = normalizeTtspl(serial.ttspl || '') || normalizeCode(serial.ttspl);
   if (a && b && a === b) return true;
   const snA = normalizeCode(laptop.serial_number);
   const snB = normalizeCode(serial.serial_number);
@@ -1263,6 +1290,40 @@ async function resolveScan({ direction, scan, user }) {
   }
 
   const session = await openOrReuseSession(db, ctx, actor);
+
+  // Scanning a TTSPL / serial must also run laptop checks. Opening the DC/SO
+  // alone leaves Submit locked at 0/1 verified.
+  if (serial) {
+    const scanned = await scanSerialIntoSession(db, {
+      session,
+      ctx,
+      serial,
+      actor,
+      awb: session.awb_number,
+      scanRaw: raw,
+    });
+    return {
+      ok: true,
+      valid: scanned.valid,
+      all_passed: Boolean(scanned.all_passed),
+      processed: false,
+      kind: 'unit',
+      message: scanned.message
+        || (scanned.valid
+          ? 'Laptop verified. Submit when every laptop is green.'
+          : 'Laptop opened this movement but checks did not pass.'),
+      checks: scanned.checks || null,
+      laptop: scanned.laptop || laptopDto(serial, {
+        scanned: true,
+        verified: scanned.valid,
+        scan_result: scanned.valid ? 'valid' : 'invalid',
+        checks: scanned.checks || null,
+      }),
+      ...scanned.view,
+      direction: ctx.direction,
+    };
+  }
+
   const view = await sessionView(db, session, ctx);
 
   return {
@@ -1274,7 +1335,7 @@ async function resolveScan({ direction, scan, user }) {
     direction: ctx.direction,
     message: autoSwitch
       ? `Opened as ${ctx.direction.toUpperCase()} for this document.`
-      : 'Verify laptop details before submitting this movement.',
+      : 'Now scan the laptop TTSPL or serial to verify, then submit.',
   };
 }
 
