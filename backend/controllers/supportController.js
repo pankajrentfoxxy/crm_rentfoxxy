@@ -3752,6 +3752,9 @@ exports.confirmReturnDcWarehouseReceipt = async (req, res) => {
     if (!dcl) {
         return res.status(404).json({ success: false, message: 'Return DC not found' });
     }
+    if (String(dcl.status || '').toLowerCase() === 'cancelled') {
+        return res.status(400).json({ success: false, message: 'Return DC is cancelled — cannot confirm warehouse receipt' });
+    }
 
     const client = await pool.connect();
     try {

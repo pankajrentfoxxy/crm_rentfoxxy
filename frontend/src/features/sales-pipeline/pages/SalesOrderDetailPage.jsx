@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import PermissionGate from '../../../components/PermissionGate';
@@ -20,6 +20,7 @@ import { useAuth } from '../../../context/AuthContext';
 import { canEditSoLineRateConfig, canPartialCancelSalesOrder, canViewAnySection } from '../../../utils/permissionHelper';
 import usePermission from '../../../hooks/usePermission';
 import { formatConfig, formatCurrency, formatDate, salesOrderTypeLabel, salesOrderTypeStyle, salesOrderStatusLabel, deliveryChallanDetailTo, salesOrderDcNavState, parseDeliveryAddress, formatDeliveryAddressLine, deliveryAddressPhone, formatSupplyStateLabel, resolveSupplyStateFromShipping } from '../salesPipelineUtils';
+import useAutoRefresh from '../../floor-pipeline/hooks/useAutoRefresh';
 import { getSoScopeConfig, orderMatchesScope, salesOrderListPath, SO_SERIAL_EDIT_SECTIONS, SO_LAPTOPS_TAB_VIEW_SECTIONS } from '../salesOrderScope';
 
 function resolveSoNumber(params) {
@@ -112,6 +113,15 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
 
   useEffect(() => { load(); }, [load]);
 
+  useAutoRefresh(load);
+
+  const navigationKeyRef = useRef(location.key);
+  useEffect(() => {
+    if (navigationKeyRef.current === location.key) return;
+    navigationKeyRef.current = location.key;
+    load();
+  }, [location.key, load]);
+
   useEffect(() => {
     if (!visibleTabs.includes(tab)) setTab('overview');
   }, [visibleTabs, tab]);
@@ -164,8 +174,13 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
   const listPath = salesOrderListPath(resolvedScope);
   const cameFromElsewhere = Boolean(location.state?.from);
   const dcNavState = useMemo(
-    () => salesOrderDcNavState({ salesOrderNumber: soNumber, soScope: resolvedScope, returnTab: 'dcs' }),
-    [soNumber, resolvedScope]
+    () => (dcNumber) => salesOrderDcNavState({
+      salesOrderNumber: soNumber,
+      soScope: resolvedScope,
+      returnTab: tab,
+      dcNumber,
+    }),
+    [soNumber, resolvedScope, tab]
   );
 
   const handleCancel = useCallback(async () => {
@@ -410,7 +425,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
         </div>
       )}
 
-      {tab === 'laptops' && <SoSerialPanel soNumber={soNumber} />}
+      {tab === 'laptops' && <SoSerialPanel soNumber={soNumber} onSummaryChange={load} />}
 
       {tab === 'addresses' && <SoDeliveryAddressPanel soNumber={soNumber} />}
 
@@ -476,14 +491,14 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
               {dcs.map((dc) => (
                 <tr key={dc.dc_number}>
                   <td className="px-4 py-2 font-mono text-blue-700">
-                    <Link to={deliveryChallanDetailTo(dc.dc_number, dcNavState)}>{dc.dc_number}</Link>
+                    <Link to={deliveryChallanDetailTo(dc.dc_number, dcNavState(dc.dc_number))}>{dc.dc_number}</Link>
                   </td>
                   <td className="px-4 py-2">{formatDate(dc.created_at)}</td>
                   <td className="px-4 py-2 font-medium text-slate-800">{formatDate(dc.dispatched_at)}</td>
                   <td className="px-4 py-2">{dc.dispatch_mode || '—'}</td>
                   <td className="px-4 py-2">{dc.status || 'pending'}</td>
                   <td className="px-4 py-2">
-                    <Link to={deliveryChallanDetailTo(dc.dc_number, dcNavState)} className="text-blue-600 text-xs">View</Link>
+                    <Link to={deliveryChallanDetailTo(dc.dc_number, dcNavState(dc.dc_number))} className="text-blue-600 text-xs">View</Link>
                   </td>
                 </tr>
               ))}
@@ -506,7 +521,7 @@ export default function SalesOrderDetailPage({ scope: scopeProp }) {
       )}
 
       <PaymentModal open={paymentOpen} soNumber={soNumber} onClose={() => setPaymentOpen(false)} onSaved={load} />
-      <DCForm open={dcOpen} onClose={() => setDcOpen(false)} prefillSo={soNumber} soScope={resolvedScope} />
+      <DCForm open={dcOpen} onClose={() => setDcOpen(false)} onSaved={load} prefillSo={soNumber} soScope={resolvedScope} returnTab={tab} />
       <SoLineRateEditModal
         open={Boolean(editRateLine)}
         line={editRateLine}

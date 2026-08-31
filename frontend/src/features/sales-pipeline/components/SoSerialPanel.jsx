@@ -146,7 +146,7 @@ function AttachPicker({ soNumber, line, onAttached, onTicketCreated }) {
   );
 }
 
-export default function SoSerialPanel({ soNumber }) {
+export default function SoSerialPanel({ soNumber, onSummaryChange }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [editLine, setEditLine] = useState(null);
@@ -169,12 +169,17 @@ export default function SoSerialPanel({ soNumber }) {
 
   useEffect(() => { load(); }, [load]);
 
+  const refresh = useCallback(async () => {
+    await load();
+    onSummaryChange?.();
+  }, [load, onSummaryChange]);
+
   const detach = async (allocId) => {
     if (!window.confirm('Detach this laptop and cancel its QC ticket?')) return;
     try {
       await detachSoSerial(soNumber, allocId);
       toast.success('Laptop detached');
-      load();
+      refresh();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Detach failed');
     }
@@ -263,7 +268,7 @@ export default function SoSerialPanel({ soNumber }) {
               <AttachPicker
                 soNumber={soNumber}
                 line={line}
-                onAttached={load}
+                onAttached={refresh}
                 onTicketCreated={setAssignModal}
               />
             </PermissionGate>
@@ -275,13 +280,13 @@ export default function SoSerialPanel({ soNumber }) {
         open={Boolean(editLine)}
         line={editLine}
         onClose={() => setEditLine(null)}
-        onSaved={load}
+        onSaved={refresh}
       />
       <SoLineRateEditModal
         open={Boolean(editRateLine)}
         line={editRateLine}
         onClose={() => setEditRateLine(null)}
-        onSaved={load}
+        onSaved={refresh}
       />
       <DispatchQcAssignModal
         open={Boolean(assignModal)}
@@ -289,7 +294,7 @@ export default function SoSerialPanel({ soNumber }) {
         ticket={assignModal?.ticket}
         serial={assignModal?.serial}
         onClose={() => setAssignModal(null)}
-        onAssigned={load}
+        onAssigned={refresh}
       />
     </div>
   );

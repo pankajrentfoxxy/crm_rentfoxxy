@@ -70,6 +70,11 @@ export default function ReturnDcListPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    const q = String(search || '').trim();
+    if (/^RDC\d+$/i.test(q)) setDetailRdc(q.toUpperCase());
+  }, [search]);
+
   const handleExport = async () => {
     setExporting(true);
     try {

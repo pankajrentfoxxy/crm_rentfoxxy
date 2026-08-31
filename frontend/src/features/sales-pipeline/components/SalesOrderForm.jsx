@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { X, Eye } from 'lucide-react';
 import toast from 'react-hot-toast';
 import AssetDetailsForm, { emptyLineItem, lineItemsToPayload } from '../../operation-management/components/AssetDetailsForm';
@@ -12,7 +13,7 @@ import {
   formatCurrency, sumLines, formatConfig, lineTotal, typeLabel, countLaptops,
   computeGstBreakdown, resolveSupplyStateFromShipping, formatSupplyStateLabel,
 } from '../salesPipelineUtils';
-import { getSoScopeConfig, orderMatchesScope } from '../salesOrderScope';
+import { getSoScopeConfig, orderMatchesScope, salesOrderDetailPath } from '../salesOrderScope';
 import { applyPincodeAutofill } from '../../../utils/pincodeLookup';
 import {
   customerTypeMismatchMessage,
@@ -108,6 +109,7 @@ function linesFromSo(soLines) {
 }
 
 export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotation, scope, editSoNumber }) {
+  const navigate = useNavigate();
   const isEdit = Boolean(editSoNumber);
   const scopeConfig = getSoScopeConfig(scope);
   const defaultType = scopeConfig?.defaultQuotationType || 'rental';
@@ -405,18 +407,23 @@ export default function SalesOrderForm({ open, onClose, onSaved, prefillQuotatio
         wfh_employee_phone: wfhEmployee.employee_phone || undefined,
         ...lineItemsToPayload(lines),
       };
+      let createdSoNumber = null;
       if (isEdit) {
         await updateSalesOrder(editSoNumber, payload);
         toast.success('Sales order updated');
       } else {
-        await createSalesOrder({
+        const res = await createSalesOrder({
           sales_order_number: meta?.sales_order_number,
           ...payload,
         });
+        createdSoNumber = res.data?.sales_order_number || meta?.sales_order_number || null;
         toast.success('Sales order created');
       }
-      onSaved?.();
+      onSaved?.(createdSoNumber);
       onClose();
+      if (!isEdit && createdSoNumber) {
+        navigate(salesOrderDetailPath(createdSoNumber, scope));
+      }
     } catch (err) {
       toast.error(err.response?.data?.message || 'Save failed');
     } finally {

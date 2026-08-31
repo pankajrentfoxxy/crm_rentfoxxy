@@ -1042,6 +1042,9 @@ function isIncompleteWarehouseReceive(item, returnCustomerId = null) {
 }
 
 function evaluateReturnDcWarehouseConfirm(pickupItems, units, dcl) {
+  if (String(dcl?.status || '').toLowerCase() === 'cancelled') {
+    return { can_warehouse_confirm: false, warehouse_block_reason: null, warehouse_receive_pending: false };
+  }
   const returnCustomerId = dcl?.customer_id ?? null;
   const pendingItems = (pickupItems || []).filter(
     (i) => !i.warehouse_received_at || isIncompleteWarehouseReceive(i, returnCustomerId)
@@ -1285,23 +1288,26 @@ async function listReturnDeliveryChallans({
        COALESCE(sti_rdc.customer_otp_verified_at, sti_tkt.customer_otp_verified_at) AS customer_otp_verified_at,
        COALESCE(sti_rdc.warehouse_received_at, sti_tkt.warehouse_received_at) AS warehouse_received_at,
        (
-         COALESCE(sti_rdc.warehouse_received_at, sti_tkt.warehouse_received_at) IS NULL
-         OR (
-           COALESCE(sti_rdc.warehouse_received_at, sti_tkt.warehouse_received_at) IS NOT NULL
-           AND COALESCE(sti_rdc.warehouse_esign_at, sti_tkt.warehouse_esign_at) IS NULL
-           AND COALESCE(sti_rdc.warehouse_esign_url, sti_tkt.warehouse_esign_url) IS NULL
+         LOWER(COALESCE(rl.status, '')) <> 'cancelled'
+         AND (
+           COALESCE(sti_rdc.warehouse_received_at, sti_tkt.warehouse_received_at) IS NULL
+           OR (
+             COALESCE(sti_rdc.warehouse_received_at, sti_tkt.warehouse_received_at) IS NOT NULL
+             AND COALESCE(sti_rdc.warehouse_esign_at, sti_tkt.warehouse_esign_at) IS NULL
+             AND COALESCE(sti_rdc.warehouse_esign_url, sti_tkt.warehouse_esign_url) IS NULL
+           )
+           OR COALESCE(sti_rdc.floor_ticket_id, sti_tkt.floor_ticket_id) IS NULL
+           OR EXISTS (
+             SELECT 1 FROM vendor_serial_numbers v_pending
+              WHERE v_pending.deleted_at IS NULL
+                AND (
+                  v_pending.inventory_asset_code = COALESCE(sti_rdc.ttspl_id, sti_tkt.ttspl_id, NULLIF(split_part(rl.serial_number->>0, '|', 3), ''))
+                  OR v_pending.serial_number = COALESCE(sti_rdc.serial_number, sti_tkt.serial_number, NULLIF(split_part(rl.serial_number->>0, '|', 2), ''))
+                )
+                AND v_pending.current_customer_id = rl.customer_id
+                AND COALESCE(v_pending.inventory_status, '') IN ('rented','on_demo','in_transit','out_stock')
+            )
          )
-         OR COALESCE(sti_rdc.floor_ticket_id, sti_tkt.floor_ticket_id) IS NULL
-         OR EXISTS (
-           SELECT 1 FROM vendor_serial_numbers v_pending
-            WHERE v_pending.deleted_at IS NULL
-              AND (
-                v_pending.inventory_asset_code = COALESCE(sti_rdc.ttspl_id, sti_tkt.ttspl_id, NULLIF(split_part(rl.serial_number->>0, '|', 3), ''))
-                OR v_pending.serial_number = COALESCE(sti_rdc.serial_number, sti_tkt.serial_number, NULLIF(split_part(rl.serial_number->>0, '|', 2), ''))
-              )
-              AND v_pending.current_customer_id = rl.customer_id
-              AND COALESCE(v_pending.inventory_status, '') IN ('rented','on_demo','in_transit','out_stock')
-          )
        ) AS warehouse_receive_pending,
        COALESCE(
          sti_rdc.ttspl_id,

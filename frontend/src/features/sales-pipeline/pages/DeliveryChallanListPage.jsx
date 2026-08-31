@@ -10,6 +10,7 @@ import QcStatusBadge from '../components/QcStatusBadge';
 import { listDCs } from '../salesPipelineApi';
 import { DC_STATUS_STYLES, DISPATCH_MODE_STYLES, formatDate, statusLabel, deliveryChallanDetailPath } from '../salesPipelineUtils';
 import { useUrlFilters, useDebouncedUrlSearch, listReturnState } from '../../../hooks/useUrlFilters';
+import useAutoRefresh from '../../floor-pipeline/hooks/useAutoRefresh';
 
 const TABS = ['all', 'pending', 'in_transit', 'delivered', 'rejected'];
 const PURPOSE_FILTERS = [
@@ -81,6 +82,7 @@ export default function DeliveryChallanListPage() {
   }, [tab, page, search, dateFrom, dateTo, purpose]);
 
   useEffect(() => { load(); }, [load]);
+  useAutoRefresh(load);
 
   const formatCount = (n) => Number(n || 0).toLocaleString('en-IN');
 
@@ -257,7 +259,7 @@ export default function DeliveryChallanListPage() {
         onPageChange={(p) => setFilters({ page: p })}
       />
 
-      <DCForm open={dcDrawer} onClose={() => setDcDrawer(false)} />
+      <DCForm open={dcDrawer} onClose={() => setDcDrawer(false)} onSaved={load} />
       <DispatchModal
         open={Boolean(dispatchDc)}
         dcNumber={dispatchDc}

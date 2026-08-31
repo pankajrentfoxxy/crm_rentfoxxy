@@ -25,6 +25,29 @@ function ttsplList(ids) {
   try { const p = JSON.parse(ids); return Array.isArray(p) ? p : []; } catch { return []; }
 }
 
+function CreditNoteLinks({ row, className = 'text-xs space-y-1' }) {
+  const dc = row.return_dc_number || null;
+  const supportId = row.support_ticket_id || (row.source === 'return_pickup' ? row.return_ticket_id : null);
+  if (!dc && !supportId) return null;
+  return (
+    <div className={className}>
+      {dc && (
+        <Link
+          to={`/sales-pipeline/return-dc?search=${encodeURIComponent(dc)}`}
+          className="block text-blue-600 hover:underline"
+        >
+          {dc}
+        </Link>
+      )}
+      {supportId && (
+        <Link to={`/support/tickets/${supportId}`} className="block text-blue-600 hover:underline">
+          Support ticket #{supportId}
+        </Link>
+      )}
+    </div>
+  );
+}
+
 export default function CreditNotesPage() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -93,6 +116,7 @@ export default function CreditNotesPage() {
               <p className="font-medium text-slate-800">{r.customer_name}</p>
               <p className="text-sm text-slate-600">{r.reason}</p>
               {ttspls.length > 0 && <p className="text-xs text-slate-500">Laptop: {ttspls.join(', ')}</p>}
+              <CreditNoteLinks row={r} className="text-xs space-y-0.5" />
               {r.invoice_number && <p className="text-xs text-slate-400">Applied in {r.invoice_number}</p>}
               <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
                 <span className="text-base font-bold text-slate-900">{fmt(r.amount)}</span>
@@ -163,11 +187,7 @@ export default function CreditNotesPage() {
                       <Clock className="w-3 h-3" /> Laptop history
                     </button>
                   )}
-                  {r.return_ticket_id && (
-                    <Link to={`/floor-pipeline/tickets/${r.return_ticket_id}`} className="block text-blue-600 hover:underline">
-                      Return ticket #{r.return_ticket_id}
-                    </Link>
-                  )}
+                  <CreditNoteLinks row={r} />
                 </td>
                 <td className="px-4 py-3">
                   {r.status === 'pending' && (

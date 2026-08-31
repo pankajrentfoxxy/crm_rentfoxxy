@@ -1,14 +1,22 @@
 /**
- * Reconcile vendor_serial_numbers deployment anchors (current_customer_id, DC, status)
- * from delivered outbound delivery challans. Fixes ERP-migrated units stuck on out_stock
- * without a customer link.
+ * Reconcile vendor_serial_numbers deployment anchors (current_customer_id, DC, status,
+ * delivered_at) from delivered outbound delivery challans. Fixes ERP-migrated units stuck
+ * on out_stock without a customer link, and corrects delivered_at when it drifted from DC POD.
  */
 const pool = require('../config/db');
 const inventorySM = require('./inventoryStateMachine');
+const { rentStartForSerial } = require('./deliveryDateService');
 
 const DC_SERIAL_ELEMENTS_SQL = `
   CROSS JOIN LATERAL jsonb_array_elements_text(
-    CASE WHEN jsonb_typeof(dcl.serial_number) = 'array' THEN dcl.serial_number ELSE '[]'::jsonb END
+    CASE
+      WHEN jsonb_typeof(dcl.delivered_serial_numbers) = 'array'
+       AND jsonb_array_length(dcl.delivered_serial_numbers) > 0
+        THEN dcl.delivered_serial_numbers
+      WHEN jsonb_typeof(dcl.serial_number) = 'array'
+        THEN dcl.serial_number
+      ELSE '[]'::jsonb
+    END
   ) AS elem
 `;
 
@@ -18,6 +26,14 @@ function parseDcSerialElemSql(alias = 'elem') {
     serialNumber: `NULLIF(split_part(${alias}, '|', 2), '')`,
     ttspl: `NULLIF(split_part(${alias}, '|', 3), '')`,
   };
+}
+
+function isDateOnlyMismatch(inventoryDeliveredAt, dcDeliveredAt) {
+  if (!dcDeliveredAt) return false;
+  if (!inventoryDeliveredAt) return true;
+  const inv = new Date(inventoryDeliveredAt).toISOString().slice(0, 10);
+  const dc = new Date(dcDeliveredAt).toISOString().slice(0, 10);
+  return inv !== dc;
 }
 
 async function fetchDeploymentGaps(db, { customerId = null } = {}) {
@@ -74,6 +90,8 @@ async function fetchDeploymentGaps(db, { customerId = null } = {}) {
        vsn.inventory_status,
        vsn.current_customer_id,
        vsn.current_dc_number,
+       vsn.delivered_at AS inventory_delivered_at,
+       vsn.dispatched_at AS inventory_dispatched_at,
        COALESCE(sos_qt.quotation_type, sol_qt.quotation_type, 'rental') AS quotation_type
      FROM latest_outbound lo
      JOIN vendor_serial_numbers vsn ON vsn.serial_id = lo.serial_id AND vsn.deleted_at IS NULL
@@ -104,6 +122,17 @@ async function fetchDeploymentGaps(db, { customerId = null } = {}) {
          vsn.current_customer_id IS DISTINCT FROM lo.customer_id
          OR vsn.current_dc_number IS DISTINCT FROM lo.dc_number
          OR vsn.inventory_status IN ('out_stock', 'in_stock', 'passed', 'returned')
+         OR (
+           vsn.current_customer_id = lo.customer_id
+           AND vsn.current_dc_number = lo.dc_number
+           AND vsn.inventory_status IN ('rented', 'sold', 'on_demo')
+           AND COALESCE(lo.delivered_at, lo.delivery_completed_at) IS NOT NULL
+           AND (
+             vsn.delivered_at IS NULL
+             OR (vsn.delivered_at AT TIME ZONE 'Asia/Kolkata')::date IS DISTINCT FROM
+                (COALESCE(lo.delivered_at, lo.delivery_completed_at) AT TIME ZONE 'Asia/Kolkata')::date
+           )
+         )
        )
      ORDER BY lo.customer_id, lo.delivered_at DESC`,
     params
@@ -118,6 +147,44 @@ async function syncDeployedAssets(db, { customerId = null, actorName = 'deployed
 
   for (const row of gaps) {
     try {
+      const targetStatus = inventorySM.deliveredStatusForType(row.quotation_type);
+      const dcDeliveredAt = row.delivered_at || null;
+      const alreadyDeployed = row.inventory_status === targetStatus
+        && Number(row.current_customer_id) === Number(row.customer_id)
+        && String(row.current_dc_number || '') === String(row.dc_number || '');
+
+      if (alreadyDeployed && isDateOnlyMismatch(row.inventory_delivered_at, dcDeliveredAt)) {
+        const rentStart = rentStartForSerial({
+          dispatchMode: row.dispatch_mode || 'courier',
+          dispatchedAt: row.inventory_dispatched_at,
+          deliveredAt: dcDeliveredAt,
+          inventoryStatus: row.inventory_status,
+        });
+        await client.query(
+          `UPDATE vendor_serial_numbers
+              SET delivered_at = $1,
+                  rent_start_date = COALESCE($2, rent_start_date),
+                  updated_at = NOW()
+            WHERE serial_id = $3`,
+          [
+            dcDeliveredAt,
+            rentStart ? rentStart.toISOString().slice(0, 10) : null,
+            row.serial_id,
+          ]
+        );
+        results.push({
+          serial_id: row.serial_id,
+          serial_number: row.serial_number,
+          customer_id: row.customer_id,
+          dc_number: row.dc_number,
+          ok: true,
+          mode: 'date_correction',
+          from: row.inventory_status,
+          to: row.inventory_status,
+        });
+        continue;
+      }
+
       const needsOverride = row.inventory_status === 'returned';
       const result = await inventorySM.markDelivered(client, row.serial_id, {
         quotationType: row.quotation_type,
@@ -125,7 +192,7 @@ async function syncDeployedAssets(db, { customerId = null, actorName = 'deployed
         customerId: row.customer_id,
         entityCode: row.entity_code || null,
         dispatchMode: row.dispatch_mode || 'courier',
-        deliveredAt: row.delivered_at || new Date(),
+        deliveredAt: dcDeliveredAt || new Date(),
         actorUserId: null,
         actorName,
         allowOverride: needsOverride,
@@ -136,6 +203,7 @@ async function syncDeployedAssets(db, { customerId = null, actorName = 'deployed
         customer_id: row.customer_id,
         dc_number: row.dc_number,
         ok: true,
+        mode: 'status_sync',
         from: result.from,
         to: result.to,
       });
